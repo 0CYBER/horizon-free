@@ -225,6 +225,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - knockback: the host hits the guest three times, then the guest the host, two seconds apart: each
              hit slides the victim as far as vanilla's does, 1.989 blocks (a guest's server-side
              velocity settles between hits; it used to add up, so each push went further).
+- villagers: the guest sees each villager's and zombie villager's type, profession and level as the
+             host has them, and an unemployed villager that takes a composter becomes a farmer on
+             the guest too (the guest used to draw every villager as an unemployed plains one).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -5432,6 +5435,65 @@ def check_knockback(host, guest, out):
 
 CHECKS += ['knockback']
 CHECK_FNS.update(knockback=check_knockback)
+
+
+def check_villagers(host, guest, out):
+    """Villager.DATA_VILLAGER_DATA and ZombieVillager's reach the guest: summoned villagers show
+    their type, profession and level, and an unemployed villager that takes a composter placed
+    afterwards turns into a farmer on the guest too (VillagerProfessionLayer draws from that data)."""
+    gx, gy, gz = (int(v // 1) for v in pos_of(guest))
+    x, y, z = gx, gy, gz + 5
+    tag = 'vs_villager'
+    summoned = [('villager', -2, 'desert', 'librarian', 3), ('villager', 0, 'snow', 'weaponsmith', 5),
+                ('zombie_villager', 2, 'taiga', 'cleric', 2), ('villager', 4, 'plains', 'none', 1)]
+
+    def villagers(game):
+        return {e['id']: e['villager'] for e in game.raw('entities', 16)['entities'] if 'villager' in e}
+
+    seen = {}
+    try:
+        host('command', command='time set 2000')
+        host('command', command=f'fill {x - 4} {y - 1} {z - 3} {x + 6} {y - 1} {z + 4} minecraft:stone')
+        host('command', command=f'fill {x - 4} {y} {z - 3} {x + 6} {y + 3} {z + 4} minecraft:air')
+        for kind, dx, t, p, level in summoned:
+            # The unemployed one keeps its AI to take the job.
+            ai = '' if p == 'none' else 'NoAI:1b,Invulnerable:1b,'
+            host('command', command=f'summon minecraft:{kind} {x + dx + 0.5} {y} {z + 0.5} {{Tags:["{tag}"],{ai}'
+                                    f'PersistenceRequired:1b,Rotation:[180f,0f],'
+                                    f'VillagerData:{{type:"minecraft:{t}",profession:"minecraft:{p}",level:{level}}}}}')
+        guest.wait(20)
+        seen['summoned'] = {'host': villagers(host), 'guest': villagers(guest)}
+        host('command', command=f'setblock {x + 5} {y} {z + 2} minecraft:composter')
+        for waited in range(10, 1210, 10):
+            guest.wait(10)
+            farmers = [i for i, v in villagers(host).items() if v['profession'] == 'farmer']
+            if farmers:
+                seen['ticks to the job'] = waited
+                break
+        guest.wait(10)
+        seen['job'] = {'host': villagers(host), 'guest': villagers(guest)}
+        guest('command', command=f'tp @s {x + 1.5} {y} {z - 2.5} 0 10')
+        guest.wait(10)
+        guest.shot(out, 'villagers')
+    finally:
+        host('command', command=f'kill @e[tag={tag}]')
+        host('command', command=f'fill {x - 4} {y} {z - 3} {x + 6} {y + 3} {z + 4} minecraft:air')
+        host('command', command='time set day')
+    host_view, guest_view = seen['summoned']['host'], seen['summoned']['guest']
+    for _, _, t, p, level in summoned:
+        want = {'type': t, 'profession': p, 'level': level}
+        ids = [i for i, v in host_view.items() if v == want]
+        assert ids, f'the host lacks {want}: {seen}'
+        assert guest_view.get(ids[0]) == want, f'the guest sees {guest_view.get(ids[0])} for {want}: {seen}'
+    farmers = [i for i, v in seen['job']['host'].items() if v['profession'] == 'farmer']
+    assert farmers, f'no villager took the job: {seen}'
+    assert seen['job']['guest'].get(farmers[0]) == seen['job']['host'][farmers[0]], \
+        f'the guest missed the new job: {seen}'
+    return seen
+
+
+CHECKS += ['villagers']
+CHECK_FNS.update(villagers=check_villagers)
 
 
 if __name__ == '__main__':
