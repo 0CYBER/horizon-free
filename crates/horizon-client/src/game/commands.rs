@@ -1098,9 +1098,11 @@ impl Game<'_> {
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
                     m.position = v;
                     m.previous = v;
-                    if let Some([yaw, _]) = rotation {
+                    if let Some([yaw, pitch]) = rotation {
                         m.yaw = yaw;
                         m.body_yaw = yaw;
+                        // Entity.setXRot clamps to -90..90.
+                        m.head_pitch = pitch.clamp(-90.0, 90.0);
                     }
                 }
             }
