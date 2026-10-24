@@ -584,6 +584,18 @@ mod tests {
     }
 
     #[test]
+    fn locals_may_hide_a_sampler() {
+        let fsh = "#version 120\nuniform sampler2D specular;\nstruct M { float specular; };\n\
+                   float f(float x) { float specular = x * 2.0; return specular; }\n\
+                   void main() { M m = M(0.5); gl_FragColor = texture2D(specular, vec2(0.5)) * f(m.specular); }\n";
+        program(
+            &[("composite.vsh", VSH_120), ("composite.fsh", fsh)],
+            Target::Buffers,
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    }
+
+    #[test]
     fn errors_point_at_the_pack_file_and_line() {
         let fsh =
             "#version 120\n#include \"/lib/bad.glsl\"\nvoid main() { gl_FragColor = vec4(f()); }\n";
