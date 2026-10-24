@@ -598,6 +598,19 @@ impl Game<'_> {
             let value = match c {
                 // Read past, not decoded: the item keeps its prototype's value.
                 Component::Raw(_) => continue,
+                // Trim materials and patterns are synced registries, as enchantments are.
+                Component::Trim { material, pattern } => {
+                    let (Some(material), Some(pattern)) = (
+                        r.registries.name("minecraft:trim_material", *material),
+                        r.registries.name("minecraft:trim_pattern", *pattern),
+                    ) else {
+                        continue;
+                    };
+                    Tag::compound([
+                        ("material", Tag::String(material.into())),
+                        ("pattern", Tag::String(pattern.into())),
+                    ])
+                }
                 Component::Int(v) if *kind == component::RARITY => {
                     let rarity = ["common", "uncommon", "rare", "epic"];
                     Tag::String(rarity.get(*v as usize).copied().unwrap_or("common").into())
