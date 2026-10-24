@@ -197,13 +197,14 @@ pub fn set_up_in(root: &Path, version: &Path, tag: &str, game_version: &str) -> 
     Ok(())
 }
 
-/// A release folder without the launcher's own files (its prepared copy and install marker).
+/// A release folder without the launcher's own files (its prepared copy, install marker and the
+/// game's macOS app bundle).
 fn copy_release(from: &Path, to: &Path) -> std::io::Result<()> {
     fs::create_dir_all(to)?;
     for entry in fs::read_dir(from)? {
         let entry = entry?;
         let name = entry.file_name();
-        if name == ".local" || name == ".installed" {
+        if name == ".local" || name == ".installed" || name == "Horizon.app" {
             continue;
         }
         let target = to.join(&name);

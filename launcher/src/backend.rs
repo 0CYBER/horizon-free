@@ -1524,7 +1524,7 @@ pub fn append_game_args(cmd: &mut Command) {
 pub fn client_command(tag: &str) -> Command {
     let home = game_home();
     let _ = fs::create_dir_all(&home);
-    let mut cmd = Command::new(version_dir(tag).join(CLIENT));
+    let mut cmd = Command::new(client_program(tag));
     cmd.current_dir(home).arg("--resources").arg(resources(tag));
     // PipeWire remembers volume and mute per application name. The game's own name is
     // "PipeWire ALSA [horizon-client]", shared with development and test runs, where
@@ -1536,6 +1536,18 @@ pub fn client_command(tag: &str) -> Command {
         );
     }
     cmd
+}
+
+/// The game's program: on macOS the one inside the version's Horizon.app, so the Dock and Cmd+Tab
+/// show Horizon's name and icon (game_app.rs); the bare binary elsewhere, or if that fails.
+fn client_program(tag: &str) -> PathBuf {
+    let dir = version_dir(tag);
+    #[cfg(target_os = "macos")]
+    match crate::game_app::ensure(&dir) {
+        Ok(program) => return program,
+        Err(e) => eprintln!("Starting the game outside {}: {e}", crate::game_app::APP),
+    }
+    dir.join(CLIENT)
 }
 
 pub fn server_command(tag: &str, folder: &Path) -> Command {
