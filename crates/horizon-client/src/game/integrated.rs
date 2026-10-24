@@ -496,6 +496,22 @@ impl Game<'_> {
         out
     }
 
+    /// Run `f` with the owner's level in place (the server holds one per
+    /// dimension), then put back the level that was.
+    pub(super) fn in_owner_level<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let owner = self.serving.as_ref().map(|s| s.owner);
+        let dim = self.lan.as_ref().and_then(|h| {
+            let g = h.hub.guests.iter().find(|g| Some(g.uuid) == owner)?;
+            Some(super::Dim::from_id(&g.dimension))
+        });
+        let back = dim.and_then(|d| self.enter_command_level(d));
+        let out = f(self);
+        if let Some(back) = back {
+            self.enter_command_level(back);
+        }
+        out
+    }
+
     /// The window's requests, between two ticks.
     fn run_tasks(&mut self) {
         let tasks: Vec<Task> = match &self.serving {
