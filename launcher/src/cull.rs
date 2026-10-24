@@ -3,7 +3,7 @@
 use gpui::{
     div, point, px, size, Bounds, Div, IntoElement, ParentElement, Pixels, ScrollHandle, Styled,
 };
-use std::{cell::RefCell, ops::Range, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
 const ESTIMATED_HEIGHT: f32 = 96.;
 /// Until the enclosing scroll area completes its first layout.
@@ -23,7 +23,8 @@ struct Drawn {
 #[derive(Debug)]
 enum Span {
     Row(usize),
-    Space { rows: Range<usize>, height: Pixels },
+    /// Hidden rows, this tall together.
+    Space(Pixels),
 }
 
 impl Cull {
@@ -60,7 +61,7 @@ impl Cull {
             .map(|span| match span {
                 // The wrapper includes the row's margin in its measured height.
                 Span::Row(index) => div().flex().flex_col().flex_none().child(row(*index)),
-                Span::Space { height, .. } => div().flex_none().h(*height),
+                Span::Space(height) => div().flex_none().h(*height),
             })
             .collect::<Vec<_>>();
         let state = self.0.clone();
@@ -104,18 +105,10 @@ impl Drawn {
             let bounds = Bounds::new(point(view.left(), top), size(view.size.width, height));
             if !away(bounds, view) || keep(index) {
                 spans.push(Span::Row(index));
-            } else if let Some(Span::Space {
-                rows,
-                height: total,
-            }) = spans.last_mut()
-            {
-                rows.end = index + 1;
+            } else if let Some(Span::Space(total)) = spans.last_mut() {
                 *total += height;
             } else {
-                spans.push(Span::Space {
-                    rows: index..index + 1,
-                    height,
-                });
+                spans.push(Span::Space(height));
             }
             top += height;
         }
@@ -139,7 +132,7 @@ impl Drawn {
                     changed |= (*height - bounds.size.height).abs() > px(0.5);
                     *height = bounds.size.height;
                 }
-                Span::Space { .. } => changed |= !away(*bounds, view),
+                Span::Space(_) => changed |= !away(*bounds, view),
             }
         }
         self.top = bounds.first().map_or(view.top(), Bounds::top);
@@ -167,7 +160,7 @@ mod tests {
             .iter()
             .filter_map(|span| match span {
                 Span::Row(index) => Some(*index),
-                Span::Space { .. } => None,
+                Span::Space(_) => None,
             })
             .collect()
     }
@@ -230,13 +223,7 @@ mod tests {
         let mut state = Drawn::default();
         let view = at(0., 500., 600.);
         state.plan(view, px(0.), 100, 8., |_| false);
-        let spans = vec![
-            Span::Row(0),
-            Span::Space {
-                rows: 1..100,
-                height: px(10_296.),
-            },
-        ];
+        let spans = vec![Span::Row(0), Span::Space(px(10_296.))];
         assert!(state.record(
             &spans,
             &[at(0., 240., 600.), at(240., 10_296., 600.)],

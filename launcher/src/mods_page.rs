@@ -311,17 +311,18 @@ impl Launcher {
                                 .ok_or_else(|| format!("{} isn't set up.", p.source.label()))
                                 .and_then(|source| {
                                     java::check_project(&home, &*source, &p, everything, &|_| {})
-                                })
-                                .map(|(version, check)| {
-                                    let _ = tx.send(Event::Loaded(
-                                        super::mods_project::Loaded::Checked(
-                                            (p.source, p.id.clone()),
-                                            version.id,
-                                            check.verdict,
-                                        ),
-                                    ));
-                                    Box::new(check)
                                 });
+                            // The project's page, if open, shows the verdict beside its version.
+                            if let Ok((version, check)) = &result {
+                                let key = (p.source, p.id.clone());
+                                let _ =
+                                    tx.send(Event::Loaded(super::mods_project::Loaded::Checked(
+                                        key,
+                                        version.id.clone(),
+                                        check.verdict,
+                                    )));
+                            }
+                            let result = result.map(|(_, check)| Box::new(check));
                             let _ = tx.send(Event::Checked((p.source, p.id), result));
                         }
                     });
