@@ -9,7 +9,10 @@ use std::sync::OnceLock;
 
 use crate::payload::System;
 
-fn command_output(program: &str, args: &[&str]) -> Option<String> {
+/// What `program args` prints, trimmed, when it succeeds and prints something. On Windows the
+/// program opens no console window: a GUI launcher or a game started without one would flash a
+/// terminal for every probe.
+pub fn command_output(program: &str, args: &[&str]) -> Option<String> {
     let mut command = std::process::Command::new(program);
     command.args(args);
     #[cfg(windows)]

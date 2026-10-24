@@ -14,16 +14,17 @@ pub struct Jdk {
 
 const TIMEOUT: Duration = Duration::from_secs(3600);
 
-/// Exporters and JDK probes write to pipes or log files, never to a new terminal.
+/// Exporters and JDK probes write to pipes or log files: on Windows they open no terminal.
 fn command(program: impl AsRef<OsStr>) -> Command {
-    let mut command = Command::new(program);
-    command.stdin(Stdio::null());
+    let command = Command::new(program);
     #[cfg(windows)]
-    {
+    let command = {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut command = command;
         command.creation_flags(CREATE_NO_WINDOW);
-    }
+        command
+    };
     command
 }
 

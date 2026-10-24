@@ -160,6 +160,7 @@ impl Perf {
         &self.report
     }
 
+    /// Takes the machine's details into the report once their thread has them.
     fn poll_hardware(&mut self) {
         let Some(receiver) = &self.hardware else {
             return;
@@ -173,12 +174,7 @@ impl Perf {
                 self.dirty = true;
             }
             Err(TryRecvError::Empty) => {}
-            Err(TryRecvError::Disconnected) => {
-                self.hardware = None;
-                eprintln!(
-                    "The launcher could not collect its performance report's machine details."
-                );
-            }
+            Err(TryRecvError::Disconnected) => self.hardware = None,
         }
     }
 
