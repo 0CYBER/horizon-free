@@ -38,7 +38,7 @@ use horizon_protocol::{
         play::{self, Clientbound as C, Serverbound as S},
     },
     registry::{Builtin, DimensionType, Dynamic, ceil_log2},
-    text::{Language, format_java, plain},
+    text::{Language, plain},
 };
 use horizon_world::{
     nbt::Tag,
@@ -694,11 +694,14 @@ impl Game<'_> {
         }
         Some(stack)
     }
-    pub(super) fn chat_line(&mut self, text: String) {
+    /// A line in the connection's chat, with its styles, click and hover
+    /// events (ChatComponent.addMessage).
+    pub(super) fn chat_line(&mut self, content: horizon_client::text::Text) {
+        let text = content.plain();
         log::info!("[chat] {text}");
         self.ui.chat.add(
             &self.gui.atlas,
-            horizon_client::text::Text::literal(text.clone()),
+            content,
             None,
             self.ticks,
             self.screen == Screen::Chat,
@@ -2381,42 +2384,27 @@ impl Game<'_> {
                 }
             }
             C::SystemChat(p) => {
-                let text = plain(
-                    &p.content,
-                    &self
-                        .remote
-                        .as_ref()
-                        .map(|r| r.lang.clone())
-                        .unwrap_or_default(),
-                );
-                // ChatListener.handleOverlay.
+                // The component as sent, translated in the client's own
+                // language. ChatListener.handleOverlay for the action bar.
+                let text = remote_text(&p.content);
                 if p.overlay {
-                    self.titles.set_overlay(remote_text(&p.content), false);
+                    self.titles.set_overlay(text, false);
                 } else {
                     self.chat_line(text);
                 }
             }
             C::PlayerChat(p) => {
-                let lang = self
-                    .remote
-                    .as_ref()
-                    .map(|r| r.lang.clone())
-                    .unwrap_or_default();
+                use horizon_client::scoreboard::tag_to_json;
                 let content = p
                     .unsigned_content
                     .as_ref()
-                    .map_or_else(|| p.content.clone(), |t| plain(t, &lang));
-                let line = self.format_chat(&p.chat_type, &content);
+                    .map_or_else(|| serde_json::Value::from(p.content.as_str()), tag_to_json);
+                let line = self.format_chat(&p.chat_type, content);
                 self.chat_line(line);
             }
             C::DisguisedChat(p) => {
-                let lang = self
-                    .remote
-                    .as_ref()
-                    .map(|r| r.lang.clone())
-                    .unwrap_or_default();
-                let content = plain(&p.message, &lang);
-                let line = self.format_chat(&p.chat_type, &content);
+                let content = horizon_client::scoreboard::tag_to_json(&p.message);
+                let line = self.format_chat(&p.chat_type, content);
                 self.chat_line(line);
             }
             C::PlayerInfoUpdate(p) => {
@@ -2848,11 +2836,17 @@ impl Game<'_> {
         true
     }
     /// ChatType decoration: `chat.translation_key` with sender/content parameters.
-    fn format_chat(&self, bound: &play::ChatTypeBound, content: &str) -> String {
+    /// ChatType.Bound.decorate: the chat type's translation, with the
+    /// sender, the target and the message as its parameters, in its style.
+    fn format_chat(
+        &self,
+        bound: &play::ChatTypeBound,
+        content: serde_json::Value,
+    ) -> horizon_client::text::Text {
+        use horizon_client::scoreboard::{comp_text, tag_to_json};
         let Some(r) = self.remote.as_ref() else {
-            return content.to_owned();
+            return comp_text(&content);
         };
-        let sender = plain(&bound.name, &r.lang);
         let decoration = r
             .registries
             .data("minecraft:chat_type", bound.chat_type)
@@ -2861,30 +2855,31 @@ impl Game<'_> {
             Some(Tag::String(s)) => s.to_string_lossy(),
             _ => "chat.type.text".into(),
         };
-        let params: Vec<String> = match decoration.and_then(|d| d.get("parameters")) {
+        let parameter = |name: &str| match name {
+            "sender" => tag_to_json(&bound.name),
+            "target" => bound
+                .target
+                .as_ref()
+                .map_or_else(|| serde_json::Value::from(""), tag_to_json),
+            _ => content.clone(),
+        };
+        let with: Vec<serde_json::Value> = match decoration.and_then(|d| d.get("parameters")) {
             Some(Tag::List(list)) => list
                 .iter()
                 .map(|p| match p {
-                    Tag::String(s) => match s.to_string_lossy().as_str() {
-                        "sender" => sender.clone(),
-                        "target" => bound
-                            .target
-                            .as_ref()
-                            .map(|t| plain(t, &r.lang))
-                            .unwrap_or_default(),
-                        _ => content.to_owned(),
-                    },
-                    _ => String::new(),
+                    Tag::String(s) => parameter(&s.to_string_lossy()),
+                    _ => serde_json::Value::from(""),
                 })
                 .collect(),
-            _ => vec![sender, content.to_owned()],
+            _ => vec![parameter("sender"), parameter("content")],
         };
-        let pattern = r
-            .lang
-            .get(&key)
-            .cloned()
-            .unwrap_or_else(|| "<%s> %s".into());
-        format_java(&pattern, &params)
+        let mut component = match decoration.and_then(|d| d.get("style")) {
+            Some(style @ Tag::Compound(_)) => tag_to_json(style),
+            _ => serde_json::json!({}),
+        };
+        component["translate"] = key.into();
+        component["with"] = with.into();
+        comp_text(&component)
     }
     fn remote_item_data(&mut self, id: i32, stack: &Option<Stack>) {
         let Some(stack) = self.to_stack(stack) else {
@@ -4692,7 +4687,9 @@ impl Game<'_> {
                 self.send(S::ContainerClose(play::ContainerClose {
                     container: p.container,
                 }));
-                self.chat_line(format!("(Horizon cannot show {menu} screens yet)"));
+                self.chat_line(horizon_client::text::Text::literal(format!(
+                    "(Horizon cannot show {menu} screens yet)"
+                )));
                 return;
             }
         };

@@ -68,6 +68,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - feedback:  the guest's command feedback names the guest and shows the numbers;
 - chat:      a line the host sends reaches the guest's event log (`wait-for chat`), and on the
              server thread the host window's too;
+- styles:    a styled tellraw reaches the host and the guest (each its own) with its colour, bold, click and hover
+             events; each player's /give tells them of the Diamonds! advancement before the give's
+             own message, and never echoes their command back to them as `[Name: ...]`;
 - effects:   a beacon's power reaches every player in range, the host and the guest;
 - distance:  (--server-thread) the server follows the host's render distance, past vanilla's 32 too
              (IntegratedServer.tickServer), and the guest's chunks follow the server's (#804)
@@ -221,7 +224,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
 
 
 class Game:
@@ -1462,8 +1465,8 @@ def check_loom(host, guest, out):
 
 def own_reply(event):
     """A chat event that answers the guest's own command. On the server thread the guest also gets
-    its own command's `[Guest: ...]` operator broadcast, a moment later, which an answer to the next
-    command must not be taken for."""
+    its own command's `[Guest: ...]` operator broadcast before #1373, a moment later, which an answer
+    to the next command must not be taken for."""
     return event.get('event') == 'chat' and not event.get('text', '').startswith(f'[{GUEST_NAME}: ')
 
 
@@ -2026,6 +2029,69 @@ def check_chat(host, guest, out):
             for g in ((guest, host) if SERVER_THREAD else (guest,))}
     guest.shot(out, 'chat')
     return seen
+
+
+def styled_parts(component):
+    """Every component in a chat line's tree (the line, its `extra` and `with` parts)."""
+    if isinstance(component, dict):
+        yield component
+        for key in ('extra', 'with'):
+            for part in component.get(key) or []:
+                yield from styled_parts(part)
+    elif isinstance(component, list):
+        for part in component:
+            yield from styled_parts(part)
+
+
+def check_styles(host, guest, out):
+    # ChatComponent keeps what the server sent: the style, the click and the hover event.
+    stamp = f'STYLE {int(time.time())}'
+    line = {'text': stamp, 'color': 'green', 'bold': True,
+            'click_event': {'action': 'suggest_command', 'command': '/say clicked'},
+            'hover_event': {'action': 'show_text', 'value': 'Tip'}}
+    seen = {}
+    for g in (host, guest):
+        # Each to itself: tellraw reaches only the player whose command it is here.
+        since = g.raw('events')['last']
+        g('command', command='tellraw @s ' + json.dumps(line))
+        g.raw('wait-for', 'chat', stamp, '--timeout', 10, '--since', since)
+        part = next((p for c in g.raw('messages', 10)['styled'] for p in styled_parts(c)
+                     if stamp in str(p.get('text', ''))), None) or {}
+        seen[g.name] = {k: part.get(k) for k in ('color', 'bold', 'click_event', 'hover_event')}
+        hover = seen[g.name]['hover_event'] or {}
+        seen[g.name]['hover_event'] = [hover.get('action'), 'Tip' in str(hover.get('value'))]
+    # InventoryChangeTrigger fires inside /give, before its message; the operator echo
+    # (broadcastToAdmins) skips the player whose command it was.
+    order = {}
+    for g in (host, guest):
+        for command in ('advancement revoke @s everything', 'clear @s'):
+            g('command', command=command)
+        g.wait(5)
+        since = g.raw('events')['last']
+        g('command', command='give @s minecraft:diamond')
+        g.raw('wait-for', 'chat', 'Diamonds!', '--timeout', 10, '--since', since)
+        g.wait(20)
+        chat = g.raw('messages', 8)['chat']
+        name = GUEST_NAME if g is guest else host.player
+        gave = next((i for i, l in enumerate(chat) if l.startswith('Gave 1 [Diamond]')), None)
+        made = next((i for i, l in enumerate(chat) if '[Diamonds!]' in l), None)
+        echo = [l for l in chat if l.startswith(f'[{name}: ')]
+        # Newest first: the give's message is newer than the advancement's.
+        order[g.name] = {'gave': gave, 'advancement': made, 'echo': echo}
+    guest.raw('key', 't', 'tap')
+    guest.wait(5)
+    guest.shot(out, 'styles')
+    guest.raw('key', 'esc', 'tap')
+    want = {'color': 'green', 'bold': True,
+            'click_event': {'action': 'suggest_command', 'command': '/say clicked'},
+            'hover_event': ['show_text', True]}
+    for name, got in seen.items():
+        assert got == want, f'{name} styled line: {got}'
+    for name, o in order.items():
+        assert o['gave'] is not None and o['advancement'] is not None, f'{name} chat: {o}'
+        assert o['gave'] < o['advancement'], f'{name}: the give came before the advancement: {o}'
+        assert not o['echo'], f'{name} heard its own command: {o}'
+    return {'styles': seen, 'order': order}
 
 
 def png_rows(path):
@@ -4303,7 +4369,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'sign': check_sign, 'damage': check_damage, 'mobs': check_mobs,
              'hazards': check_hazards, 'pvp': check_pvp, 'respawn': check_respawn,
              'containers': check_containers, 'feedback': check_feedback, 'titles': check_titles,
-             'chat': check_chat, 'machines': check_machines, 'brewing': check_brewing,
+             'chat': check_chat, 'styles': check_styles, 'machines': check_machines, 'brewing': check_brewing,
              'loom': check_loom, 'stonecutter': check_stonecutter, 'grindstone': check_grindstone,
              'anvil': check_anvil, 'smithing': check_smithing, 'enchanting': check_enchanting,
              'beacon': check_beacon, 'crafter': check_crafter, 'lectern': check_lectern,

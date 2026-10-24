@@ -450,7 +450,7 @@ impl Game<'_> {
         // Connected to a server (single player's own included), the chat on
         // screen is the connection's: the game's own messages join it.
         if self.remote.is_some() {
-            self.chat_line(text.plain());
+            self.chat_line(text);
             return;
         }
         let focused = self.screen == Screen::Chat;
@@ -681,6 +681,16 @@ impl Game<'_> {
         let draws = screen.draw(&m, mouse, blink, background);
         horizon_client::screen_draw::paint(batch, &self.gui.atlas, &draws);
         self.ui.chat_screen = Some(screen);
+        // The hovered message part's tooltip, one row per line of its text.
+        if let Some(hover) = self.ui.chat.hover_at(
+            &self.gui.atlas.font,
+            batch.height as i32,
+            f64::from(self.cursor.0),
+            f64::from(self.cursor.1),
+        ) {
+            let lines = hover_rows(&hover);
+            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
+        }
     }
     /// Advance the overworld clock (ServerClockManager.tick) when
     /// `advance_time` allows it.
@@ -948,4 +958,27 @@ fn write_difficulty(world: &std::path::Path, difficulty: u8) -> horizon_client::
 /// commands are allowed, else `ALL` (0).
 fn owner_permission(allow_commands: bool) -> u8 {
     if allow_commands { 4 } else { 0 }
+}
+
+/// A hover text's rows for the tooltip: split at line breaks, each in the
+/// colour of its first styled character (white without one).
+fn hover_rows(hover: &horizon_client::text::Text) -> Vec<(String, u32)> {
+    let mut rows = vec![(String::new(), None)];
+    for (c, style) in hover.resolve_legacy().chars() {
+        if c == '\n' {
+            rows.push((String::new(), None));
+            continue;
+        }
+        let row = rows.last_mut().expect("one row");
+        if row.0.is_empty() {
+            row.1 = style.color;
+        }
+        row.0.push(c);
+    }
+    rows.into_iter()
+        .map(|(text, color)| {
+            let [_, r, g, b] = color.unwrap_or(0xFF_FFFF).to_be_bytes();
+            (text, horizon_client::hud::rgba(r, g, b, 255))
+        })
+        .collect()
 }
