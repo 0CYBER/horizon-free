@@ -45,7 +45,9 @@ Every part of an API has one level, shown in its reference and its surface page.
 | Needs | a design note | a generated reference, a guide section, an example, compatibility tests | the same, plus one line of real use without a break |
 
 - **Promotion.** Experimental → preview when it has what the table asks. Preview → stable when real users (a published
-  mod, a host's script, an agent's tool) used it for a whole line and nothing broke; Ludovic decides that step.
+  mod, a host's script, an agent's tool) used it for a whole line and nothing broke. The maintainers' orchestrator
+  proposes the promotion with the evidence (the compatibility tests, the complete docs, that line of use) and Ludovic
+  approves it.
 - **Horizon-only by design.** An API is stable only for what Horizon itself does; a vanilla concept it exposes (a block
   id, a command, a `server.properties` key) changes when vanilla changes it, with a version port
   ([version-ports.md](../version-ports.md)), and the changelog says so.
@@ -86,7 +88,8 @@ Deprecations and breaking changes are in bold. The release notes of the game rel
 | --- | --- | --- |
 | Mod API: `log`, `game`, `chat`, `hud`, `storage`, `events` | preview | 0.1.0 |
 | Content mods (`registries`: data-driven blocks and items) | preview | manifest `api = "0.2"` |
-| Block entities for code mods (draft #1189) | experimental | manifest `api = "0.4"` |
+| Server mods (events, world, server commands) | not started | manifest `api = "0.3"`, experimental first |
+| Script mods (Lua run by an interpreter mod, [mods.md](mods.md#ways-in)) | not started | |
 | `cargo horizon-mod` (`new`, `build`, `run`), `horizon-mod-sdk` | preview | 0.1.0 |
 | Shader API | not started | |
 | `horizon-ctl` commands and MCP tools | preview | none yet (unversioned) |

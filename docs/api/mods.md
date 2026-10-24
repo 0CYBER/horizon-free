@@ -46,27 +46,50 @@ call, 4 MiB of storage, fuel per call).
 - `crates/horizon-mods/tests/guest`: a mod that misbehaves on command (spins, panics, grows its memory), for the
   sandbox tests.
 
+## Ways in
+
+One API (the WIT world) and one sandbox (WebAssembly), whatever the mod is written in. Every way in produces a
+component for the same world, checked against the same capabilities and given the same limits; there is no second
+scripting runtime in the game.
+
+| Way in | For | Status | Template and example |
+| --- | --- | --- | --- |
+| Rust | most mods; the fastest | first-class: the SDK, `cargo horizon-mod` | `cargo horizon-mod new`, `coords-hud` |
+| Lua scripts | people who don't want a compiler | planned: a script mod whose code is a `.lua` file, run by Horizon's own interpreter mod | planned, with the same example as Rust |
+| C, C++, Zig | authors of those languages | to evaluate: bindings generated from the WIT, built without WASI | one each if it passes |
+| Go (TinyGo), AssemblyScript, JavaScript / TypeScript | authors of those languages | to evaluate: each needs its toolchain to emit a component without WASI imports, or an interpreter mod as for Lua | one each if it passes |
+
+- **Scripts run inside the sandbox.** The Lua interpreter is itself a WebAssembly mod, built in Rust with the SDK and
+  shipped by Horizon. A script mod's manifest names the interpreter and its own capabilities; the game links the
+  interpreter with only those, so a script can do exactly what a compiled mod with the same manifest can.
+- **Hot reload.** The game keeps the interpreter compiled and loads the script into a fresh instance when the file
+  changes, without restarting the game; what it saved with `storage` survives, as for dev mods.
+- **Measured, not guessed.** Each way in is listed with its measured cost on the same tick-heavy example (time and
+  fuel per tick, memory, load time) against Rust, and a language is supported only with a template, an example and a
+  test that builds and loads it in CI.
+
 ## Stability
 
 Preview ([stability.md](stability.md)): API 0.1 and content 0.2 are served together; a mod built for 0.1.0 keeps
-loading on every 0.1.x game. Block entities (draft #1189, `api = "0.4"`) are experimental.
+loading on every 0.1.x game. Server mods come as their own line, `api = "0.3"`, experimental first.
 
 ## Not there yet
 
 What real mods need next, in the order modpacks and servers need it:
 
-- **Server mods**: the same component running on the server thread and the dedicated server, with world events (block
+- **Server mods** (`api = "0.3"`): the same component running on the server thread and the dedicated server, with world events (block
   broken or placed, entity spawned or killed, player joined or left), game rules and server commands with typed
   arguments.
 - **World and blocks**: read blocks, block states and biomes in loaded chunks; change them through the server's block
   log, so clients and the parity harnesses see vanilla's updates.
 - **Items and inventories**: the player's inventory, held item and open container; item stacks with components.
 - **Entities**: query and change entities near a position; spawn from a mod's own entity types (data first).
-- **Block entities and menus**: ticking machines with slots and their screens (draft #1189 is the first step).
+- **Block entities and menus**: ticking machines with slots and their screens.
 - **Screens and UI**: widgets built from vanilla's, a screen the mod owns, a settings page under Options > Mods.
 - **Networking**: a channel between a mod's two halves, client and server, typed by the mod's own WIT.
 - **Config**: typed settings the game shows and stores for the mod, on the server too.
 - **Keys and the crosshair target**: keybinds in Controls; what the player is looking at.
+- **Script mods and other languages**: see [Ways in](#ways-in).
 - **SDK**: a headless test runner (load a mod, feed it ticks and events, assert on its output, no window), templates
   per kind of mod, typed wrappers in the SDK for every interface. Dev mods already reload when rebuilt.
 

@@ -6,7 +6,7 @@ Horizon is built to be built on. Mods, shaders, agents, server panels, launchers
 
 | Surface | For | Today | Stability |
 | --- | --- | --- | --- |
-| **Mods** | mod authors | Rust compiled to sandboxed WebAssembly: read the player and the clock, chat, a HUD panel, storage, commands, tick and frame hooks; data-driven blocks and items | preview |
+| **Mods** | mod authors | Rust compiled to sandboxed WebAssembly: read the player and the clock, chat, a HUD panel, storage, commands, tick and frame hooks; data-driven blocks and items. Lua scripts, run in the same sandbox, are planned | preview |
 | **Shaders** | shader authors | a new shader API in WGSL is being designed: stages with typed inputs, options, reload on save, a debug overlay | planned |
 | **Agent control** | AI agents, scripts, tests | `horizon-ctl` and its MCP server: 96 commands to watch and play the game | preview |
 | **Servers** | hosts, panels, bots | `horizon-server`'s commands, `server.toml` and a local HTTP control API | stable |
