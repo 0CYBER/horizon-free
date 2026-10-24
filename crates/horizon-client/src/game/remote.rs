@@ -143,6 +143,9 @@ pub(super) struct Remote {
     /// Item entities waiting for their item data.
     pending_items: HashMap<i32, [f64; 3]>,
     health: (f32, i32, f32),
+    /// `LocalPlayer.flashOnSetHealth`: set by the first health the server
+    /// sends; from then on a drop starts the hurt animation.
+    flash_on_set_health: bool,
     game_mode: i32,
     pub chat: Vec<(String, Instant)>,
     /// Lines received since joining, for the control socket's events.
@@ -411,6 +414,7 @@ impl Game<'_> {
             head_lerps: HashMap::new(),
             pending_items: HashMap::new(),
             health: (20.0, 20, 5.0),
+            flash_on_set_health: false,
             game_mode: 0,
             chat: Vec::new(),
             chat_received: 0,
@@ -2128,14 +2132,24 @@ impl Game<'_> {
             // ClientPacketListener.handleDamageEvent: LivingEntity.handleDamageEvent
             // jolts the walk animation and restarts the hurt flash. Its hurt
             // sound comes as a sound from Horizon's host, which plays it itself.
+            // This player's own hurt tilt and flash come from the server too
+            // (sent to the player itself): its own moves never hurt it.
             C::DamageEvent(p) => {
-                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
+                if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
+                    if let Some(pl) = self.player.as_mut() {
+                        pl.health.animate_hurt();
+                    }
+                } else if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
                     m.limb_speed = 1.5;
                     m.hurt_time = 10;
                 }
             }
             C::HurtAnimation(p) => {
-                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
+                if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
+                    if let Some(pl) = self.player.as_mut() {
+                        pl.health.animate_hurt();
+                    }
+                } else if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
                     m.hurt_time = 10;
                 }
             }
@@ -2201,9 +2215,14 @@ impl Game<'_> {
                 self.remote_world_options_difficulty(self.ui.difficulty, p.locked);
             }
             C::GameRuleValues(p) => self.remote_world_options_rules(p.entries),
+            // ClientPacketListener.handleSetHealth: LocalPlayer.hurtTo.
             C::SetHealth(p) => {
-                if let Some(r) = self.remote.as_mut() {
+                let flash = self.remote.as_mut().is_some_and(|r| {
                     r.health = (p.health, p.food, p.saturation);
+                    std::mem::replace(&mut r.flash_on_set_health, true)
+                });
+                if flash && let Some(pl) = self.player.as_mut() {
+                    pl.health.flash_health_change(p.health);
                 }
                 self.apply_remote_health();
                 if p.health <= 0.0 && self.screen != Screen::Dead && self.player.is_some() {
@@ -3176,6 +3195,7 @@ impl Game<'_> {
             );
             player.velocity = Vec3::ZERO;
         } else if !dead && !riding {
+            player.client_side = true;
             player.velocity = player.velocity.add_vector(pushed);
             MotionWorld {
                 entities: &entity_collisions,
@@ -3219,7 +3239,7 @@ impl Game<'_> {
                 _ => {}
             }
         }
-        // The server owns health and hunger: undo local food/fall changes.
+        // The server owns health and hunger.
         self.apply_remote_health();
         self.tick_avatar(before, false);
         // The player's own model (third person, the inventory's preview).
