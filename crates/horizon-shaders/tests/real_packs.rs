@@ -8,7 +8,8 @@ use std::time::Instant;
 use std::collections::BTreeMap;
 
 use horizon_shaders::{
-    Lang, Macros, Pack, Properties, Target, discover, preprocess, translate_composite,
+    Lang, Macros, Pack, Properties, Target, dimension_folder, discover, load_post, preprocess,
+    translate_composite,
 };
 
 #[test]
@@ -156,6 +157,21 @@ fn real_packs_read() {
         causes.sort_by_key(|c| std::cmp::Reverse(c.1));
         for (cause, n) in causes.iter().take(6) {
             println!("    {n} x {cause}");
+        }
+        // The post-processing set of each dimension, as the game loads it.
+        for id in [0, -1, 1] {
+            let start = std::time::Instant::now();
+            let folder = dimension_folder(&pack, id);
+            let post = load_post(&pack, &folder, &shaders, &Macros::standard());
+            println!(
+                "  dimension {id} (folder `{folder}`): {} post programs, {} notes, {:.0} ms",
+                post.programs.len(),
+                post.notes.len() + post.config.notes.len(),
+                start.elapsed().as_secs_f64() * 1000.0
+            );
+            for n in post.notes.iter().chain(&post.config.notes).take(5) {
+                println!("    {n}");
+            }
         }
         assert!(!shaders.entries.is_empty(), "{}: no keys read", f.name);
         read += 1;
