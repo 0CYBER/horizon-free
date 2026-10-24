@@ -54,6 +54,8 @@ struct Pass {
     flip: u16,
     /// Buffers sampled, for the bind group cache key.
     reads: u16,
+    /// Buffers written.
+    written: u16,
     groups: HashMap<u16, wgpu::BindGroup>,
 }
 
@@ -84,6 +86,13 @@ pub struct PackPost {
     nearest: wgpu::Sampler,
     repeat: wgpu::Sampler,
     blit: (wgpu::RenderPipeline, wgpu::BindGroupLayout),
+    /// The blit also writes depthtex0 (some program reads it) and clears these buffers.
+    blit_depth: bool,
+    blit_clears: Vec<usize>,
+    /// Buffers cleared in passes of their own (more than the blit's eight attachments).
+    other_clears: Vec<usize>,
+    /// The blit's bindings, for the world target of this size.
+    blit_group: Option<([u32; 2], wgpu::BindGroup)>,
     /// Shows colortex0 when the pack has no `final` (OQ-5).
     copy: (wgpu::RenderPipeline, wgpu::BindGroupLayout),
     uniforms: FrameUniforms,
@@ -285,6 +294,18 @@ fn target(format: wgpu::TextureFormat) -> Option<wgpu::ColorTargetState> {
     })
 }
 
+fn attach(
+    view: &wgpu::TextureView,
+    ops: wgpu::Operations<wgpu::Color>,
+) -> Option<wgpu::RenderPassColorAttachment<'_>> {
+    Some(wgpu::RenderPassColorAttachment {
+        view,
+        resolve_target: None,
+        depth_slice: None,
+        ops,
+    })
+}
+
 impl PackPost {
     /// Builds the pipelines of `post` for a screen of `screen` format.
     pub fn new(
@@ -471,19 +492,55 @@ impl PackPost {
                 writes,
                 flip,
                 reads,
+                written,
                 groups: HashMap::new(),
             });
         }
+        // A clear only matters when a program reads the buffer before one writes all of it
+        // (composite passes cover their whole target); the others are skipped.
+        let mut cleared = Vec::new();
+        for b in 1..BUFFERS {
+            let bit = 1u16 << b;
+            let first = passes
+                .iter()
+                .find(|p| (p.reads | p.flip | p.written) & bit != 0);
+            if clears[b].is_some()
+                && first.is_some_and(|p| p.reads & bit != 0 || p.written & bit == 0)
+            {
+                cleared.push(b);
+            }
+        }
+        let blit_depth = passes
+            .iter()
+            .any(|p| p.samplers.iter().any(|s| s.source == Source::Depth));
+        let room = 8 - 1 - usize::from(blit_depth);
+        let other_clears = cleared.split_off(room.min(cleared.len()));
         let float = wgpu::TextureSampleType::Float { filterable: true };
+        let mut blit_targets = vec![target(formats[0])];
+        if blit_depth {
+            blit_targets.push(target(wgpu::TextureFormat::R32Float));
+        }
+        // Cleared by the pass's load operation; the shader writes nothing there.
+        blit_targets.extend(cleared.iter().map(|&b| {
+            Some(wgpu::ColorTargetState {
+                format: formats[b],
+                blend: None,
+                write_mask: wgpu::ColorWrites::empty(),
+            })
+        }));
         let blit = helper(
             device,
             "vs_full",
-            "fs_blit",
+            if blit_depth {
+                "fs_blit"
+            } else {
+                "fs_blit_color"
+            },
             &[
                 texture_entry(0, float),
                 texture_entry(1, wgpu::TextureSampleType::Depth),
             ],
-            &[target(formats[0]), target(wgpu::TextureFormat::R32Float)],
+            &blit_targets,
         );
         let copy = helper(
             device,
@@ -507,6 +564,10 @@ impl PackPost {
             formats,
             clears,
             used,
+            blit_depth,
+            blit_clears: cleared,
+            other_clears,
+            blit_group: None,
             main: 0,
             targets: None,
             noise: noise(device, queue),
@@ -638,30 +699,27 @@ impl PackPost {
                 ..Default::default()
             });
         }
-        // The clears, eight buffers to a pass; colortex0 is the world.
-        let clears: Vec<(usize, [f32; 4])> = (1..BUFFERS)
-            .filter(|&i| targets.color[i].is_some())
-            .filter_map(|i| Some((i, self.clears[i]?)))
-            .collect();
-        for chunk in clears.chunks(8) {
+        let clear_op = |b: usize| {
+            let c = self.clears[b].unwrap_or_default();
+            wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color {
+                    r: c[0].into(),
+                    g: c[1].into(),
+                    b: c[2].into(),
+                    a: c[3].into(),
+                }),
+                store: wgpu::StoreOp::Store,
+            }
+        };
+        // Overwritten whole: clearing lets a tiled GPU skip loading the old content.
+        let overwrite = wgpu::Operations {
+            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            store: wgpu::StoreOp::Store,
+        };
+        for chunk in self.other_clears.chunks(8) {
             let attachments: Vec<_> = chunk
                 .iter()
-                .map(|&(i, c)| {
-                    Some(wgpu::RenderPassColorAttachment {
-                        view: view(self.main, i, false).expect("used buffer"),
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: c[0].into(),
-                                g: c[1].into(),
-                                b: c[2].into(),
-                                a: c[3].into(),
-                            }),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })
-                })
+                .map(|&b| attach(view(self.main, b, false).expect("used buffer"), clear_op(b)))
                 .collect();
             encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Shader pack clear"),
@@ -670,41 +728,45 @@ impl PackPost {
             });
         }
 
-        // The world into colortex0 and depthtex0, flipped to GL's rows.
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Shader pack world"),
-            layout: &self.blit.1,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(world),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(world_depth),
-                },
-            ],
-        });
-        fn attachment(view: &wgpu::TextureView) -> Option<wgpu::RenderPassColorAttachment<'_>> {
-            Some(wgpu::RenderPassColorAttachment {
-                view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })
+        // The world into colortex0 and depthtex0, flipped to GL's rows, and the clears.
+        if self.blit_group.as_ref().is_none_or(|g| g.0 != size) {
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Shader pack world"),
+                layout: &self.blit.1,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(world),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(world_depth),
+                    },
+                ],
+            });
+            self.blit_group = Some((size, group));
         }
         {
-            let colortex0 = view(self.main, 0, false).expect("colortex0");
+            let mut attachments = vec![attach(
+                view(self.main, 0, false).expect("colortex0"),
+                overwrite,
+            )];
+            if self.blit_depth {
+                attachments.push(attach(&targets.depth, overwrite));
+            }
+            for &b in &self.blit_clears {
+                attachments.push(attach(
+                    view(self.main, b, false).expect("used buffer"),
+                    clear_op(b),
+                ));
+            }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Shader pack world"),
-                color_attachments: &[attachment(colortex0), attachment(&targets.depth)],
+                color_attachments: &attachments,
                 ..Default::default()
             });
             pass.set_pipeline(&self.blit.0);
-            pass.set_bind_group(0, &group, &[]);
+            pass.set_bind_group(0, self.blit_group.as_ref().map(|g| &g.1), &[]);
             pass.draw(0..3, 0..1);
         }
 
@@ -780,7 +842,7 @@ impl PackPost {
             });
             let mut attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = Vec::new();
             if final_pass {
-                attachments.push(attachment(screen));
+                attachments.push(attach(screen, overwrite));
                 shown = true;
             } else {
                 for &(location, buffer) in &pass.writes {
@@ -788,7 +850,8 @@ impl PackPost {
                     if attachments.len() <= l {
                         attachments.resize(l + 1, None);
                     }
-                    attachments[l] = view(self.main, buffer, true).and_then(attachment);
+                    attachments[l] =
+                        view(self.main, buffer, true).and_then(|v| attach(v, overwrite));
                 }
             }
             {
@@ -822,7 +885,7 @@ impl PackPost {
             });
             let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Shader pack colortex0"),
-                color_attachments: &[attachment(screen)],
+                color_attachments: &[attach(screen, overwrite)],
                 ..Default::default()
             });
             rp.set_pipeline(&self.copy.0);
