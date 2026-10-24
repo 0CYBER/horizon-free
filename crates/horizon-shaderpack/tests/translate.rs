@@ -7,7 +7,7 @@ use horizon_shaderpack::{
     include::Inlined,
     preprocess::{Environment, preprocess},
     program_name,
-    translate::{Link, Translated, translate},
+    translate::{Geometry, Link, Translated, translate},
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -438,6 +438,95 @@ void main() {{
         io(&vs, true).get("clouds_iriswind"),
         io(&fs, false).get("clouds_iriswind")
     );
+}
+
+/// A `gbuffers_*` program over Horizon's geometry: its attributes are
+/// globals the glue fills before `main`, its bindings in group 2, and its
+/// fragment discards below Iris's alpha test. A `case` ending in `return`
+/// (Photon's displacement) isn't a fall-through for naga.
+#[test]
+fn geometry_programs_take_their_attributes_from_the_glue() {
+    let glue = Geometry {
+        vertex_glue: "layout(location = 0) in vec3 hz_position;
+layout(std430, set = 3, binding = 0) readonly buffer HzTable { int hz_table[]; };
+vec4 hz_pos;
+void hz_vertex() { hz_pos = vec4(hz_position, 1.0) + float(hz_table[0]); }"
+            .into(),
+        attributes: [
+            ("iris_Vertex".to_owned(), "hz_pos".to_owned()),
+            (
+                "mc_Entity".to_owned(),
+                "vec4(8.0, -1.0, 0.0, 0.0)".to_owned(),
+            ),
+        ]
+        .into(),
+        alpha_test: Some(0.1),
+    };
+    let mut link = Link {
+        set: 2,
+        geometry: Some(glue),
+        ..Link::default()
+    };
+    let vs = run(
+        Stage::Vertex,
+        "uniform sampler2D noisetex;
+attribute vec4 mc_Entity;
+attribute vec2 mc_midTexCoord;
+varying vec2 uv;
+vec3 sway(vec3 p, int id) {
+    switch (id) {
+        case 8:
+            return p + 1.0;
+        case 9:
+        case 10:
+            return p - 1.0;
+        default:
+            return p;
+    }
+}
+void main() {
+    uv = gl_MultiTexCoord0.xy + mc_midTexCoord;
+    gl_Position = gl_ModelViewProjectionMatrix * vec4(sway(gl_Vertex.xyz, int(mc_Entity.x)), 1.0);
+}
+",
+        &mut link,
+    )
+    .unwrap();
+    for wanted in [
+        "hz_vertex();",
+        "mc_Entity = vec4(vec4(8.0, -1.0, 0.0, 0.0));",
+        "iris_Vertex = vec4(hz_pos);",
+        "mc_midTexCoord = vec2(0);",
+        "set = 2, binding = 0) uniform IrisUniforms",
+    ] {
+        assert!(vs.glsl.contains(wanted), "{wanted}\n{}", vs.glsl);
+    }
+    // Horizon's vertex input is the only one.
+    assert_eq!(
+        io(&vs, false).into_keys().collect::<Vec<_>>(),
+        ["hz_position"]
+    );
+    reparse(&vs.wgsl).unwrap();
+    let fs = run(
+        Stage::Fragment,
+        "uniform sampler2D gtexture;
+varying vec2 uv;
+void main() {
+    /* DRAWBUFFERS:02 */
+    gl_FragData[0] = texture2D(gtexture, uv);
+    gl_FragData[1] = vec4(1.0);
+}
+",
+        &mut link,
+    )
+    .unwrap();
+    assert!(
+        fs.glsl.contains("if (!(iris_FragData0.a > 0.1)) discard;"),
+        "{}",
+        fs.glsl
+    );
+    assert!(fs.glsl.contains("set = 2, binding = "), "{}", fs.glsl);
+    reparse(&fs.wgsl).unwrap();
 }
 
 /// A fragment output narrower than its four-channel target (Steadfast's
