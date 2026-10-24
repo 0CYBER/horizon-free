@@ -6,11 +6,13 @@
 //!   the mod; run `build` again and the game reloads it.
 //! - `check <file> [--json]`: what the registry checks of a submission
 //!   (`.hmod`, `.hpack`, resource pack `.zip`), with a trial run for a mod.
+//! - `registry build|review|check|list`: the registry repository's CI.
 use horizon_mods::{
     Manifest, Package,
     manifest::{MANIFEST, component_imports, componentize},
 };
 mod check;
+mod registry;
 
 use std::{
     path::{Path, PathBuf},
@@ -33,7 +35,8 @@ fn main() -> ExitCode {
         }),
         Some("run") => run(&args[1..]),
         Some("check") => check(&args[1..]),
-        _ => Err("usage: cargo horizon-mod new <path> | build [--debug] | run [--game <horizon-client>] [-- <game args>] | check <file> [--kind <kind>] [--key <public key> --signature <file.minisig>] [--json]".into()),
+        Some("registry") => registry::main(&args[1..]),
+        _ => Err("usage: cargo horizon-mod new <path> | build [--debug] | run [--game <horizon-client>] [-- <game args>] | check <file> [--kind <kind>] [--key <public key> --signature <file.minisig>] [--json] | registry build|review|check|list".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
