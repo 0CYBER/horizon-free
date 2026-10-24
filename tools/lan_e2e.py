@@ -222,6 +222,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
              spider's bite poisons them (#1480, #1484).
 - cursor:    the host and the guest each close their inventory with a stack on the cursor: it
              goes back into their inventory, none is thrown and the cursor is empty (#1283).
+- knockback: the host hits the guest three times, then the guest the host, two seconds apart: each
+             hit slides the victim as far as vanilla's does, 1.989 blocks (a guest's server-side
+             velocity settles between hits; it used to add up, so each push went further).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -5291,6 +5294,50 @@ def check_digging(host, guest, out):
 
 CHECKS += ['digging']
 CHECK_FNS.update(digging=check_digging)
+
+
+# How far a plain wooden sword hit slides a standing player in vanilla: LivingEntity.knockback(0.4) from
+# the server copy's (0, -0.0784, 0), then the victim's own client.
+VANILLA_PUSH = 1.989
+
+
+def check_knockback(host, guest, out):
+    if dead(guest):
+        guest.raw('respawn')
+        guest.wait(40)
+    host('command', command='gamerule pvp true')
+    for g in (host, guest):
+        g('command', command='gamemode survival')
+        g('command', command='item replace entity @s weapon.mainhand with minecraft:wooden_sword')
+        g('command', command='effect give @s minecraft:resistance 1000 4 true')
+    face_each_other(host, guest)
+    pushes = {}
+    try:
+        for name, attacker, victim in (('host hits guest', host, guest), ('guest hits host', guest, host)):
+            # The victim is never teleported (a teleport resets its velocity): the attacker steps up to it from
+            # the west, then the east, then the west again.
+            for side in (-3, 3, -3):
+                vx, vy, vz = pos_of(victim)
+                attacker('command', command=f'tp @s {vx + side:.2f} {vy:.2f} {vz:.2f}')
+                attacker.wait(40)  # a full charge, and the last push long settled
+                attacker.raw('look-at', f'{vx:.2f}', f'{vy + 1.6:.2f}', f'{vz:.2f}')
+                attacker.wait(5)
+                before = pos_of(victim)
+                attacker.raw('attack')
+                victim.wait(30)
+                after = pos_of(victim)
+                pushes.setdefault(name, []).append(round(math.dist(before[0::2], after[0::2]), 3))
+            attacker.shot(out, 'knockback-' + name.replace(' ', '-'))
+    finally:
+        for g in (host, guest):
+            g('command', command='effect clear @s minecraft:resistance')
+    for name, distances in pushes.items():
+        assert all(abs(d - VANILLA_PUSH) < 0.03 for d in distances), f'{name}: not {VANILLA_PUSH} each time: {pushes}'
+    return pushes
+
+
+CHECKS += ['knockback']
+CHECK_FNS.update(knockback=check_knockback)
 
 
 if __name__ == '__main__':
