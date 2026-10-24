@@ -29,7 +29,10 @@ pub(super) struct Stage<'p> {
     pub(super) ins: Vec<Var>,
     pub(super) outs: Vec<Var>,
     /// Vertex inputs, now private globals, and the value our `main` gives each.
-    pub(super) attributes: Vec<(String, String)>,
+    /// Vertex inputs: name, our composite value, type.
+    pub(super) attributes: Vec<(String, String, String)>,
+    /// A gbuffers-style program: the matrices are the frame's, not the quad's.
+    pub(super) gbuffers: bool,
     /// The pack's fragment outputs, declared again with their locations.
     pub(super) frag_outs: Vec<(u32, String)>,
     /// The pack's functions that take samplers: which parameters are samplers.
@@ -119,6 +122,7 @@ impl<'p> Stage<'p> {
             sampler_functions: HashMap::new(),
             outputs: BTreeSet::new(),
             frag_coord: false,
+            gbuffers: false,
             replaced: HashMap::new(),
             inits: Vec::new(),
             errors: Vec::new(),
@@ -315,7 +319,7 @@ impl<'p> Stage<'p> {
                 "uniform" => self.uniforms.push((name, format!("{ty}{array}"), ty_at)),
                 _ if input && !fragment => {
                     let value = attribute_value(&name, &ty);
-                    self.attributes.push((name, value));
+                    self.attributes.push((name, value, ty.clone()));
                     self.removed.pop();
                     // A private global of ours now: `in`/`attribute` and qualifiers go.
                     for &w in &words[..k] {

@@ -18,12 +18,22 @@ impl Stage<'_> {
              vec3 hz_modf(vec3 x, out vec3 i) { i = trunc(x); return x - i; }\n\
              vec4 hz_modf(vec4 x, out vec4 i) { i = trunc(x); return x - i; }\n\
              struct hz_FogParameters { vec4 color; float density; float start; float end; float scale; };\n\
-             hz_FogParameters hz_Fog;\n\
-             const mat4 hz_ModelViewMatrix = mat4(1.0); const mat4 hz_ProjectionMatrix = mat4(2.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, -1.0, -1.0, 0.0, 1.0);\n\
+             hz_FogParameters hz_Fog;\n",
+        );
+        if self.gbuffers {
+            // Set by our `main` from the frame's matrices (gbuffers.rs).
+            p.push_str(
+                "mat4 hz_ModelViewMatrix; mat4 hz_ProjectionMatrix; mat4 hz_ModelViewProjectionMatrix;\n\
+                 mat4 hz_ModelViewMatrixInverse; mat4 hz_ProjectionMatrixInverse; mat3 hz_NormalMatrix; mat4 hz_TextureMatrix[8];\n",
+            );
+        } else {
+            p.push_str(
+                "const mat4 hz_ModelViewMatrix = mat4(1.0); const mat4 hz_ProjectionMatrix = mat4(2.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, -1.0, -1.0, 0.0, 1.0);\n\
                  const mat4 hz_ModelViewProjectionMatrix = hz_ProjectionMatrix; const mat4 hz_ModelViewMatrixInverse = mat4(1.0); const mat3 hz_NormalMatrix = mat3(1.0);\n\
                  const mat4 hz_ProjectionMatrixInverse = mat4(0.5, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.5, 0.5, 0.0, 1.0);\n\
                  const mat4 hz_TextureMatrix[8] = mat4[8](mat4(1.0), mat4(1.0), mat4(1.0), mat4(1.0), mat4(1.0), mat4(1.0), mat4(1.0), mat4(1.0));\n",
-        );
+            );
+        }
         if self.kind == ShaderStage::Vertex {
             p.push_str(
                 "const vec2 hz_quad[6] = vec2[6](vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 1.0));\n\
