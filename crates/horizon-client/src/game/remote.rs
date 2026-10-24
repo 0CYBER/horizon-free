@@ -2557,6 +2557,7 @@ impl Game<'_> {
                 self.drop_remote_chunks_out_of_range();
             }
             C::BlockEntityData(p) => self.remote_block_entity_data(p.pos, p.kind, &p.tag),
+            C::OpenSignEditor(p) => self.remote_open_sign_editor(p),
             // handleSetSpawn: ClientLevel.setRespawnData, which spawn compasses point at.
             C::SetDefaultSpawnPosition(p) => {
                 let [x, y, z] = p.pos.pos;

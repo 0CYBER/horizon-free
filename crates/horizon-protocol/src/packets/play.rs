@@ -461,6 +461,10 @@ packet!(OpenScreen { container: i32 => VarInt, menu: i32 => VarInt, title: Tag =
 // ClientboundMountScreenOpenPacket: a horse's or llama's inventory, with its
 // chest's columns (`getInventoryColumns`).
 packet!(MountScreenOpen { container: i32 => VarInt, columns: i32 => VarInt, entity: i32 => Int });
+packet!(
+    /// ClientboundOpenSignEditorPacket: the sign whose side the player edits.
+    OpenSignEditor { pos: [i32; 3] => Pos, front: bool => SignSide }
+);
 packet!(PlayerAbilities { flags: i8 => Byte, flying_speed: f32 => Float, walking_speed: f32 => Float });
 /// MessageSignature.Packed: an index into the last-seen cache or a full signature.
 pub struct PackedSignature;
@@ -1617,6 +1621,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     MerchantOffers(MerchantOffers) = MERCHANT_OFFERS,
     MountScreenOpen(MountScreenOpen) = MOUNT_SCREEN_OPEN,
     OpenScreen(OpenScreen) = OPEN_SCREEN,
+    OpenSignEditor(OpenSignEditor) = OPEN_SIGN_EDITOR,
     Ping(Ping) = PING,
     PongResponse(crate::packets::status::Ping) = PONG_RESPONSE,
     PlayerAbilities(PlayerAbilities) = PLAYER_ABILITIES,
@@ -1918,6 +1923,38 @@ packet!(
     RenameItem { name: String => Str }
 );
 packet!(
+    /// ServerboundSignUpdatePacket: the four lines the player wrote on a side.
+    SignUpdate { pos: [i32; 3] => Pos, lines: [String; 4] => SignLines, front: bool => SignSide }
+);
+/// SignTextSlot.STREAM_CODEC: VarInt 0 for the back, 1 for the front (any
+/// other id reads as the back, ByIdMap's ZERO strategy).
+pub struct SignSide;
+impl Codec<bool> for SignSide {
+    fn read(r: &mut Reader) -> Result<bool> {
+        Ok(r.varint()? == 1)
+    }
+    fn write(v: &bool, w: &mut Writer) {
+        w.varint(i32::from(*v));
+    }
+}
+/// `stringUtf8(384)` in `fixedSizeList(4)`: four lines, no count.
+pub struct SignLines;
+impl Codec<[String; 4]> for SignLines {
+    fn read(r: &mut Reader) -> Result<[String; 4]> {
+        Ok([
+            r.string(384)?,
+            r.string(384)?,
+            r.string(384)?,
+            r.string(384)?,
+        ])
+    }
+    fn write(v: &[String; 4], w: &mut Writer) {
+        for line in v {
+            w.string(line);
+        }
+    }
+}
+packet!(
     /// ServerboundSetBeaconPacket: `BeaconMenu.updateEffects`, each power an
     /// optional `mob_effect` id.
     SetBeacon { primary: Option<i32> => Opt<VarInt>, secondary: Option<i32> => Opt<VarInt> }
@@ -2024,6 +2061,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     SetBeacon(SetBeacon) = SET_BEACON,
     SetCarriedItem(SetCarriedItem) = SET_CARRIED_ITEM,
     SetCreativeModeSlot(SetCreativeModeSlot) = SET_CREATIVE_MODE_SLOT,
+    SignUpdate(SignUpdate) = SIGN_UPDATE,
     UseItem(UseItem) = USE_ITEM,
     UseItemOn(UseItemOn) = USE_ITEM_ON,
 });
@@ -2747,5 +2785,30 @@ mod tests {
             patch: Some(patch),
         });
         round_trip(p, Clientbound::encode, Clientbound::decode);
+    }
+
+    #[test]
+    fn sign_packets_match_vanilla_stream_codecs() {
+        // ClientboundOpenSignEditorPacket: BlockPos, then SignTextSlot as a VarInt (FRONT is 1).
+        let open = Clientbound::OpenSignEditor(OpenSignEditor {
+            pos: [1, 2, 3],
+            front: true,
+        });
+        let body = open.encode();
+        assert_eq!(
+            body[1..9],
+            crate::buf::pack_block_pos([1, 2, 3]).to_be_bytes()
+        );
+        assert_eq!(body[9..], [1]);
+        round_trip(open, Clientbound::encode, Clientbound::decode);
+        // ServerboundSignUpdatePacket: BlockPos, four strings with no count, then the slot.
+        let update = Serverbound::SignUpdate(SignUpdate {
+            pos: [-4, 70, 9],
+            lines: ["Hi".into(), String::new(), "x".into(), String::new()],
+            front: false,
+        });
+        let body = update.encode();
+        assert_eq!(body[9..], [2, b'H', b'i', 0, 1, b'x', 0, 0]);
+        round_trip(update, Serverbound::encode, Serverbound::decode);
     }
 }
