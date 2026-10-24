@@ -7,7 +7,8 @@ screen (the same screen as vanilla's) or in game, and every loader reloads from 
 ## How it works
 
 `packs.rs` finds the packs (`FolderRepositorySource`: folders and zips, plus the built-in Programmer Art and High
-Contrast), reads `pack.mcmeta` (format range, overlays, filters) and builds one overlay directory that layers the
+Contrast, which only the asset index holds: preparation copies them, `horizon-prepare packs` repairs older resources),
+reads `pack.mcmeta` (format range, overlays, filters) and builds one overlay directory that layers the
 selected packs over the prepared vanilla resources, later packs winning. Files vanilla reads as a resource *stack*
 (language files, `sounds.json`, font definitions, atlas definitions) are merged layer by layer as vanilla merges them.
 Every loader then reads that one tree; `game/packs.rs` (`reload_packs`) reloads all of them in game, as
