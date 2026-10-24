@@ -1,12 +1,13 @@
 //! The sign editing screen (`SignEditScreen` / `HangingSignEditScreen`):
 //! opened when a sign is placed, four lines limited to the sign's line
 //! width, Up/Down/Enter move between lines, Escape or Done closes.
-use super::Game;
+use super::{Game, lan::LanHost};
 use horizon_client::{
     containers::BlockEntity,
     hud::{HudBatch, rgba},
     signs::wood_type,
 };
+use horizon_protocol::packets::play::{self, Clientbound as C, Serverbound as S};
 use std::time::Instant;
 use winit::{
     event::{ElementState, KeyEvent},
@@ -33,13 +34,94 @@ impl Game<'_> {
         self.right = false;
         self.capture(false);
     }
+    /// `AbstractSignEditScreen.removed`: a server's client sends what it
+    /// wrote (ServerboundSignUpdatePacket); the window's own world keeps it
+    /// and sends it to its guests (`sendBlockUpdated`).
     pub(super) fn close_sign_editor(&mut self) {
         if let Some(edit) = self.sign_edit.take() {
-            self.world
-                .modified
-                .insert((edit.pos.0 >> 4, edit.pos.2 >> 4));
+            if self.remote.is_some() {
+                if let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get(&edit.pos) {
+                    let side = if edit.front { &sign.front } else { &sign.back };
+                    self.send(S::SignUpdate(play::SignUpdate {
+                        pos: [edit.pos.0, edit.pos.1, edit.pos.2],
+                        lines: side.lines.clone(),
+                        front: edit.front,
+                    }));
+                }
+            } else {
+                self.mark_block_entity_updated(edit.pos);
+            }
         }
         self.capture(true);
+    }
+    /// `ServerPlayer.openTextEdit` for the guest whose action opened a sign:
+    /// the block, then the editor, on its client, and the guest may write on it.
+    pub(super) fn lan_open_sign_editor(&mut self, host: &mut LanHost, conn: u32, edit: SignEditor) {
+        let pos = [edit.pos.0, edit.pos.1, edit.pos.2];
+        let state = self.world.block(pos[0], pos[1], pos[2]).0 as i32;
+        host.hub
+            .send_to(conn, &C::BlockUpdate(play::BlockUpdate { pos, state }));
+        host.hub.send_to(
+            conn,
+            &C::OpenSignEditor(play::OpenSignEditor {
+                pos,
+                front: edit.front,
+            }),
+        );
+        host.play.entry(conn).or_default().sign_editing = Some(pos);
+    }
+    /// `ServerGamePacketListenerImpl.handleSignUpdate`: the lines, formatting
+    /// codes stripped, go on the sign the guest may write on unless it is
+    /// waxed (`SignBlockEntity.updateSignText`); a guest gone out of reach
+    /// may no longer write (`playerIsTooFarAwayToEdit`).
+    pub(super) fn lan_sign_update(&mut self, host: &mut LanHost, conn: u32, p: play::SignUpdate) {
+        let Some(g) = host.hub.guest(conn) else {
+            return;
+        };
+        let near = super::lan_stations::within_reach(g, p.pos);
+        let Some(play) = host.play.get_mut(&conn) else {
+            return;
+        };
+        if !near {
+            play.sign_editing = None;
+        }
+        if play.sign_editing != Some(p.pos) {
+            log::warn!("{} just tried to change non-editable sign", g.name);
+            return;
+        }
+        let key = (p.pos[0], p.pos[1], p.pos[2]);
+        let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get_mut(&key) else {
+            return;
+        };
+        if sign.waxed {
+            return;
+        }
+        let side = if p.front {
+            &mut sign.front
+        } else {
+            &mut sign.back
+        };
+        for (line, new) in side.lines.iter_mut().zip(&p.lines) {
+            *line = horizon_client::clipboard::strip_formatting(new);
+        }
+        play.sign_editing = None;
+        self.mark_block_entity_updated(key);
+    }
+    /// `ClientPacketListener.handleOpenSignEditor`: the editor on a sign this
+    /// client has.
+    pub(super) fn remote_open_sign_editor(&mut self, p: play::OpenSignEditor) {
+        let key = (p.pos[0], p.pos[1], p.pos[2]);
+        if matches!(
+            self.world.block_entities.get(&key),
+            Some(BlockEntity::Sign(_))
+        ) {
+            self.open_sign_editor(key, p.front);
+        } else {
+            log::warn!(
+                "ignoring openTextEdit on a block that is no sign at {:?}",
+                p.pos
+            );
+        }
     }
     pub(super) fn sign_edit_key(&mut self, event: &KeyEvent) {
         if event.state != ElementState::Pressed {

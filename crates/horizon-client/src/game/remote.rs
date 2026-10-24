@@ -641,6 +641,22 @@ impl Game<'_> {
                     ("mob_factor", Tag::Float(v[5].to_bits())),
                 ]),
                 Component::Profile(p) => profile_tag(p),
+                // ItemStackTemplate.CODEC: id, count and components.
+                Component::Stacks(stacks) => Tag::List(
+                    stacks
+                        .iter()
+                        .map(|t| {
+                            let mut entries = vec![
+                                ("id", Tag::String(self.item_name(t.item).as_ref().into())),
+                                ("count", Tag::Int(t.count)),
+                            ];
+                            if let Some(c) = self.protocol_components(t) {
+                                entries.push(("components", c));
+                            }
+                            Tag::compound(entries)
+                        })
+                        .collect(),
+                ),
                 Component::CustomModelData {
                     floats,
                     flags,
@@ -2557,6 +2573,8 @@ impl Game<'_> {
                 self.drop_remote_chunks_out_of_range();
             }
             C::BlockEntityData(p) => self.remote_block_entity_data(p.pos, p.kind, &p.tag),
+            C::OpenSignEditor(p) => self.remote_open_sign_editor(p),
+            C::OpenBook(p) => self.remote_open_book(p.hand),
             // handleSetSpawn: ClientLevel.setRespawnData, which spawn compasses point at.
             C::SetDefaultSpawnPosition(p) => {
                 let [x, y, z] = p.pos.pos;
@@ -3129,6 +3147,12 @@ impl Game<'_> {
             .as_ref()
             .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
         player.fluids.fast_lava = self.dim == Dim::Nether;
+        let glider = self.glider_worn();
+        let Some(player) = self.player.as_mut() else {
+            return Ok(());
+        };
+        player.glider = glider;
+        let was_gliding = player.fall_flying;
         let dead = self.screen == Screen::Dead;
         // LivingEntity.isImmobile: a sleeper lies still in the bed.
         if let Some(head) = self.sleeping {
@@ -3153,6 +3177,9 @@ impl Game<'_> {
         // LocalPlayer.onUpdateAbilities: flight turned on or off (a double
         // jump, a spectator, landing) is sent to the server.
         let flying = player.flying;
+        // LocalPlayer.aiStep: a glide this client started is sent to the
+        // server (ServerboundPlayerCommandPacket START_FALL_FLYING).
+        let started_gliding = player.fall_flying && !was_gliding;
         let events = std::mem::take(&mut player.events);
         self.previous_eye = self.eye;
         self.eye += (player.dimensions.eye_height - self.eye) * 0.5;
@@ -3190,6 +3217,14 @@ impl Game<'_> {
         if flying != was_flying {
             self.send(S::PlayerAbilities(play::PlayerAbilitiesRequest {
                 flags: if flying { 2 } else { 0 },
+            }));
+        }
+        if started_gliding {
+            let id = self.remote.as_ref().map_or(0, |r| r.entity_id);
+            self.send(S::PlayerCommand(play::PlayerCommand {
+                id,
+                action: 6,
+                data: 0,
             }));
         }
         self.remote_send_state(input);
@@ -4010,19 +4045,58 @@ impl Game<'_> {
             return false;
         };
         // MultiPlayerGameMode.useItem runs the use here too: food starts
-        // being eaten (Consumable.startConsuming).
+        // being eaten (Consumable.startConsuming), a book and quill opens.
         self.with_hand(hand, |g| g.start_eating(&info));
-        // BowItem.use: startUsingItem here too (with an arrow, or in creative), so that letting
-        // go sends RELEASE_USE_ITEM (Minecraft.handleKeybinds) and the server shoots.
-        if &*held.item == "minecraft:bow" {
-            self.with_hand(hand, |g| {
-                if g.using.is_none() && (g.creative || g.projectile_slot("minecraft:bow").is_some())
-                {
-                    g.using = Some((g.held_slot(), 0));
-                }
-            });
+        if self.with_hand(hand, |g| g.remote_use_book(&held)) {
+            return true;
         }
+        self.with_hand(hand, |g| g.remote_start_held_use(&held));
         item_has_use(&info)
+    }
+
+    /// `Item.use` runs on the client too (MultiPlayerGameMode.useItem): an
+    /// item held in use until the button lets go starts being used here, so
+    /// that letting go sends RELEASE_USE_ITEM (Minecraft.handleKeybinds) and
+    /// the server ends the use: a bow or a trident is let go, a crossbow's
+    /// charge ends, a shield is lowered, a spyglass stops scoping. Their
+    /// sounds, loaded arrows and thrown tridents come from the server.
+    fn remote_start_held_use(&mut self, held: &ItemStack) {
+        if self.using.is_some() {
+            return;
+        }
+        let start = match &*held.item {
+            // BowItem.use: with an arrow, or in creative.
+            "minecraft:bow" => self.creative || self.projectile_slot("minecraft:bow").is_some(),
+            // CrossbowItem.use: charging when not charged and with ammunition;
+            // a charged one shoots on the server.
+            "minecraft:crossbow" => {
+                held.data().is_none_or(|d| d.charged.is_empty())
+                    && (self.creative || self.projectile_slot("minecraft:crossbow").is_some())
+            }
+            // TridentItem.use: not about to break, Riptide only in water or rain.
+            "minecraft:trident" => {
+                self.use_trident(held);
+                return;
+            }
+            // SpyglassItem.use (its sound is the server's).
+            "minecraft:spyglass" => true,
+            // ShieldItem.use: anything that blocks attacks, off cooldown.
+            _ => {
+                self.raise_shield(self.held_slot());
+                return;
+            }
+        };
+        if start {
+            self.using = Some((self.held_slot(), 0));
+        }
+    }
+    /// Whether `stack` stays in use until the button lets go (bows,
+    /// crossbows, tridents, spyglasses, shields): its use only counts ticks here.
+    fn held_until_released(&self, stack: &ItemStack) -> bool {
+        matches!(
+            &*stack.item,
+            "minecraft:bow" | "minecraft:crossbow" | "minecraft:trident" | "minecraft:spyglass"
+        ) || self.blocks_attacks(stack).is_some()
     }
 
     /// The rest of Minecraft.startUseItem once the main hand's target passed:
@@ -4043,7 +4117,8 @@ impl Game<'_> {
         }
         self.remote_use_item(Hand::Off);
     }
-    /// `LivingEntity.updatingUsingItem` on a server client: a drawn bow, and a
+    /// `LivingEntity.updatingUsingItem` on a server client: an item held in
+    /// use (`held_until_released`), and a
     /// consumable's eating animation and its crumbs. The server eats it and
     /// sends the stack, the hunger and the sounds.
     fn remote_tick_using(&mut self) {
@@ -4051,8 +4126,9 @@ impl Game<'_> {
             return;
         };
         let stack = self.stack_in(slot).cloned();
-        // A drawn bow: held until the button lets go (or another slot is picked).
-        if stack.as_ref().is_some_and(|s| &*s.item == "minecraft:bow") {
+        // A drawn bow, a charging crossbow, a raised shield...: held until
+        // the button lets go (or another slot is picked).
+        if stack.as_ref().is_some_and(|s| self.held_until_released(s)) {
             self.using = (slot == self.selected || slot == super::shield::OFFHAND_SLOT)
                 .then_some((slot, ticks + 1));
             return;

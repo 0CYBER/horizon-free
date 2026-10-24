@@ -1817,6 +1817,16 @@ impl Game<'_> {
         self.stack_in_mut(self.held_slot())
     }
     /// The slot of the hand that acts: the selected one, or `OFFHAND_SLOT`.
+    /// `LivingEntity.canGlideUsing`: a glider in the chest slot that will
+    /// not break with its next point of wear.
+    fn glider_worn(&self) -> bool {
+        self.armor[1].as_ref().is_some_and(|s| {
+            self.res
+                .items()
+                .get(&s.item)
+                .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
+        })
+    }
     fn held_slot(&self) -> usize {
         match self.hand {
             Hand::Main => self.selected,
@@ -1993,6 +2003,28 @@ impl Game<'_> {
         particle.set_power(0.2);
         particle.scale(0.6);
         self.particles.push(particle);
+    }
+    /// `Player.dropEquipment` for the player who died: unless keep_inventory
+    /// is on, `destroyVanishingCursedItems`, then `Inventory.dropAll` from
+    /// `at` (the eyes less 0.3): slots 0..36, armor feet to head (36..39),
+    /// the off hand (40), each thrown in a random direction.
+    fn drop_inventory(&mut self, at: [f64; 3]) {
+        if self.ui.rules.bool("keep_inventory") {
+            return;
+        }
+        let mut stacks: Vec<ItemStack> =
+            self.inventory.iter_mut().filter_map(Option::take).collect();
+        stacks.extend(self.armor.iter_mut().rev().filter_map(Option::take));
+        stacks.extend(self.offhand.take());
+        stacks.retain(|s| s.enchantment_level("minecraft:vanishing_curse") == 0);
+        self.apply_equipment();
+        for stack in stacks {
+            let r = &mut self.world.random;
+            let strength = f64::from(r.next_float()) * 0.5;
+            let angle = f64::from(r.next_float()) * std::f64::consts::TAU;
+            let v = [-angle.sin() * strength, 0.2, angle.cos() * strength];
+            self.spawn_item(stack, at, v, 40);
+        }
     }
     fn spawn_item(
         &mut self,
@@ -3649,16 +3681,8 @@ impl Game<'_> {
         // Switching hotbar slots only ends a main-hand use.
         let hand_changed = slot != self.selected && slot != shield::OFFHAND_SLOT;
         if !self.right || hand_changed || self.screen != Screen::Playing {
-            if &*stack.item == "minecraft:bow" && !hand_changed {
-                self.release_bow(ticks);
-            }
-            if &*stack.item == "minecraft:spyglass" {
-                self.stop_spyglass();
-            }
-            if &*stack.item == "minecraft:trident" && !hand_changed {
-                self.release_trident(ticks);
-            }
             self.using = None;
+            self.release_used_item(&stack, ticks, hand_changed);
             return;
         }
         let Some(info) = self.res.items().get(&stack.item).cloned() else {
@@ -3712,6 +3736,17 @@ impl Game<'_> {
             self.finish_consuming(&info, consumable, &stack);
         } else {
             self.using = Some((slot, ticks));
+        }
+    }
+    /// `LivingEntity.releaseUsingItem` (`Item.releaseUsing`) for `stack`,
+    /// used for `ticks`, its hand acting: a bow or a trident lets go (not
+    /// when its hand changed), a spyglass stops scoping.
+    pub(super) fn release_used_item(&mut self, stack: &ItemStack, ticks: u32, hand_changed: bool) {
+        match &*stack.item {
+            "minecraft:bow" if !hand_changed => self.release_bow(ticks),
+            "minecraft:trident" if !hand_changed => self.release_trident(ticks),
+            "minecraft:spyglass" => self.stop_spyglass(),
+            _ => {}
         }
     }
     fn tick_mining(&mut self) -> Result<()> {
@@ -3803,7 +3838,12 @@ impl Game<'_> {
         }
         self.crack_particle(crack.0, crack.1, state);
         let m = self.mining.as_mut().ok_or("mining")?;
-        if m.progress >= 1.0 {
+        // ServerPlayerGameMode breaks a player's block at once only when it is instant (START's
+        // insta-mine); otherwise it waits for the client's STOP_DESTROY_BLOCK
+        // (`guest_stop_digging`), never breaking it on its own count. Breaking it here would
+        // take the block from under the player's crack before the player's client predicts the
+        // break, so it gets neither particles nor sound.
+        if m.progress >= 1.0 && (self.lan_acting.is_none() || m.ticks == 1) {
             let pos = m.pos;
             self.mining = None;
             self.break_block(pos)?;
@@ -3937,13 +3977,7 @@ impl Game<'_> {
             .as_ref()
             .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
         player.pitch = self.pitch;
-        // LivingEntity.canGlideUsing: a glider in its slot that will not break next.
-        player.glider = self.armor[1].as_ref().is_some_and(|s| {
-            self.res
-                .items()
-                .get(&s.item)
-                .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
-        });
+        player.glider = self.glider_worn();
         // A saved death already dropped inventory/XP and counted the death.
         if player.health.dead_or_dying() {
             self.screen = Screen::Dead;
@@ -4021,6 +4055,7 @@ impl Game<'_> {
         let riding = self.riding.is_some();
         let ghast_collisions = self.happy_ghast_player_collisions();
         let spin_targets = self.spin_targets();
+        let glider = self.glider_worn();
         let Some(player) = self.player.as_mut() else {
             // A dedicated server has no local player: the world still runs.
             if self.options.dedicated.is_some() {
@@ -4063,13 +4098,7 @@ impl Game<'_> {
             .as_ref()
             .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
         player.pitch = self.pitch;
-        // LivingEntity.canGlideUsing: a glider in its slot that will not break next.
-        player.glider = self.armor[1].as_ref().is_some_and(|s| {
-            self.res
-                .items()
-                .get(&s.item)
-                .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
-        });
+        player.glider = glider;
         // LocalPlayer.modifyInput: walking while using an item.
         player.item_use_speed = self
             .using
@@ -4306,20 +4335,8 @@ impl Game<'_> {
                 .experience
                 .death_reward(self.ui.rules.bool("keep_inventory") || self.spectator());
             self.spawn_orbs(feet, reward);
-            if !self.creative && !self.ui.rules.bool("keep_inventory") {
-                // Inventory.dropAll: slots 0..36, armor feet to head (36..39), off hand (40).
-                let mut stacks: Vec<ItemStack> =
-                    self.inventory.iter_mut().filter_map(Option::take).collect();
-                stacks.extend(self.armor.iter_mut().rev().filter_map(Option::take));
-                stacks.extend(self.offhand.take());
-                self.apply_equipment();
-                for stack in stacks {
-                    let r = &mut self.world.random;
-                    let strength = f64::from(r.next_float()) * 0.5;
-                    let angle = f64::from(r.next_float()) * std::f64::consts::TAU;
-                    let v = [-angle.sin() * strength, 0.2, angle.cos() * strength];
-                    self.spawn_item(stack, at, v, 40);
-                }
+            if !self.spectator() {
+                self.drop_inventory(at);
             }
             self.audio
                 .play("minecraft:entity.player.death", Some(at), 1.0, 1.0);

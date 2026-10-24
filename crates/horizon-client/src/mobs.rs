@@ -2277,7 +2277,7 @@ mod sensor_scan_tests {
     use horizon_core::geometry::Vec3;
     use serde_json::json;
 
-    fn kind() -> Arc<MobType> {
+    pub(super) fn kind() -> Arc<MobType> {
         Arc::new(MobType {
             id: "minecraft:cow".into(),
             species: Species::Cow,
@@ -2481,56 +2481,9 @@ mod sensor_scan_tests {
 }
 #[cfg(test)]
 mod push_tests {
+    use super::sensor_scan_tests::kind;
     use super::*;
     use horizon_core::geometry::Vec3;
-    use serde_json::json;
-
-    fn kind() -> Arc<MobType> {
-        Arc::new(MobType {
-            id: "minecraft:cow".into(),
-            species: Species::Cow,
-            width: 0.9,
-            height: 1.4,
-            eye_height: 1.3,
-            category: "creature".into(),
-            max_health: 10.0,
-            speed: 0.2,
-            flying_speed: 0.4,
-            attack_damage: 0.0,
-            attack_knockback: 0.0,
-            follow_range: 16.0,
-            step_height: 0.6,
-            armor: 0.0,
-            armor_toughness: 0.0,
-            knockback_resistance: 0.0,
-            jump_strength: 0.42,
-            attributes: Arc::default(),
-            gravity: 0.08,
-            safe_fall_distance: 3.0,
-            fall_damage_multiplier: 1.0,
-            water_efficiency: 0.0,
-            water_slowdown: 0.8,
-            air_speed: 0.02,
-            baby_scale: 0.5,
-            head_rot_speed: 10.0,
-            max_head_x_rot: 40.0,
-            max_head_y_rot: 75.0,
-            ambient_interval: 120,
-            flags: Flags {
-                animal: true,
-                ..Default::default()
-            },
-            model: Arc::new(Part::parse("root", &json!({}))),
-            layers: HashMap::new(),
-            texture: String::new(),
-            brain: Brain::Passive,
-            anim: Anim::Rabbit,
-            sounds: [""; 3],
-            step_sound: None,
-            food: Arc::default(),
-            tempt: Arc::default(),
-        })
-    }
 
     /// The pending pushes as one list, scanned for each mob, as before.
     fn take_old(events: &mut Vec<MobEvent>, from: usize, pending: &mut Vec<(u32, Vec3)>) {

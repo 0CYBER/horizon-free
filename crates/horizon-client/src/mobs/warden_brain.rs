@@ -14,9 +14,10 @@
 //! shuffle seed.
 use super::{
     Mob, MobEvent, MobWorld, Who,
+    brain::Timed,
     goals::Cx,
     path::Path,
-    villager_brain::{Slot, Tracker, Visible, WalkTarget},
+    villager_brain::{Slot, Tracker, Visible, WalkTarget, compute_path, reached},
     warden::{self, Pose},
 };
 use horizon_core::{
@@ -142,31 +143,6 @@ impl Memories {
         self.sonic_boom_cooldown.tick();
         self.sonic_boom_sound_cooldown.tick();
         self.sonic_boom_sound_delay.tick();
-    }
-}
-
-/// `Behavior`'s bookkeeping: running, and until when.
-#[derive(Clone, Debug)]
-struct Timed {
-    running: bool,
-    end: i64,
-    min: i32,
-    max: i32,
-}
-impl Timed {
-    fn new(min: i32, max: i32) -> Self {
-        Self {
-            running: false,
-            end: 0,
-            min,
-            max,
-        }
-    }
-    /// `Behavior.tryStart`'s duration draw (made even when it cannot vary).
-    fn begin(&mut self, cx: &mut Bx) {
-        self.running = true;
-        let d = self.min + cx.lr.next_int_bound(self.max + 1 - self.min).unwrap_or(0);
-        self.end = cx.now + i64::from(d);
     }
 }
 
@@ -383,6 +359,10 @@ fn brain(m: &Mob) -> Option<&Brain> {
 pub(super) fn mem(m: &mut Mob) -> &mut Memories {
     &mut m.extra.warden.as_mut().expect("a warden").brain.mem
 }
+/// `CANT_REACH_WALK_TARGET_SINCE`, for `compute_path`.
+fn cant_reach(m: &mut Mob) -> &mut Slot<i64> {
+    &mut mem(m).cant_reach_walk_target_since
+}
 pub(super) fn mem_ref(m: &Mob) -> Option<&Memories> {
     brain(m).map(|b| &b.mem)
 }
@@ -558,9 +538,6 @@ fn find_closest(m: &mut Mob, w: &MobWorld, filter: impl Fn(&Mob, Who) -> bool) -
 fn block_of(p: Vec3) -> [i32; 3] {
     [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32]
 }
-fn manhattan(a: [i32; 3], b: [i32; 3]) -> i32 {
-    (a[0] - b[0]).abs() + (a[1] - b[1]).abs() + (a[2] - b[2]).abs()
-}
 fn dist_sqr(a: [i32; 3], b: [i32; 3]) -> i64 {
     (0..3).map(|i| i64::from(a[i] - b[i]).pow(2)).sum()
 }
@@ -606,57 +583,6 @@ fn tracker_visible(m: &mut Mob, w: &MobWorld, t: Tracker) -> bool {
         }
         _ => true,
     }
-}
-/// `MoveToTargetSink.reachedTarget`.
-fn reached(m: &Mob, w: &MobWorld, walk: &WalkTarget) -> bool {
-    walk.target
-        .block(w)
-        .is_some_and(|p| manhattan(p, block_of(m.position)) <= walk.close)
-}
-/// `MoveToTargetSink.tryComputePath`.
-fn compute_path(
-    m: &mut Mob,
-    cx: &mut Bx,
-    walk: &WalkTarget,
-    path: &mut Option<Path>,
-    speed: &mut f32,
-) -> bool {
-    let Some(target) = walk.target.block(cx.w) else {
-        return false;
-    };
-    *path = m.create_path_to(cx.w, target, 0);
-    *speed = walk.speed;
-    if reached(m, cx.w, walk) {
-        mem(m).cant_reach_walk_target_since.clear();
-    } else {
-        let can_reach = path.as_ref().is_some_and(|p| p.reached);
-        let mm = mem(m);
-        if can_reach {
-            mm.cant_reach_walk_target_since.clear();
-        } else if !mm.cant_reach_walk_target_since.present() {
-            mm.cant_reach_walk_target_since.set(cx.now);
-        }
-        if path.is_some() {
-            return true;
-        }
-        let to = [
-            f64::from(target[0]) + 0.5,
-            f64::from(target[1]),
-            f64::from(target[2]) + 0.5,
-        ];
-        if let Some(step) =
-            m.default_random_pos_towards(cx.w, 10, 7, to, f64::from(std::f32::consts::FRAC_PI_2))
-        {
-            let p = [
-                step[0].floor() as i32,
-                step[1].floor() as i32,
-                step[2].floor() as i32,
-            ];
-            *path = m.create_path_to(cx.w, p, 0);
-            return path.is_some();
-        }
-    }
-    false
 }
 fn same_path(a: Option<&Path>, b: Option<&Path>) -> bool {
     match (a, b) {
@@ -710,7 +636,7 @@ impl B {
                 if !swim_condition(m) {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 true
             }
             B::SetWardenLookTarget(r) => one(r, || {
@@ -732,7 +658,7 @@ impl B {
                 if !mem(m).look_target.present() {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 true
             }
             B::MoveToTargetSink {
@@ -755,9 +681,9 @@ impl B {
                     return false;
                 };
                 let reached = reached(m, cx.w, &walk);
-                if !reached && compute_path(m, cx, &walk, path, speed) {
+                if !reached && compute_path(m, cx.w, cx.now, &walk, path, speed, cant_reach) {
                     *last_target = walk.target.block(cx.w);
-                    t.begin(cx);
+                    t.begin(cx.lr, cx.now);
                     // start
                     mem(m).path.set_opt(path.clone());
                     m.nav_move_to_path(path.clone(), f64::from(*speed));
@@ -775,7 +701,7 @@ impl B {
                 if !mm.is_emerging.present() || mm.walk_target.present() {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 warden::set_pose(m, Pose::Emerging);
                 sound(m, "entity.warden.emerge", 5.0, 1.0, cx.events);
                 true
@@ -791,7 +717,7 @@ impl B {
                 if !(m.on_ground || liquid) {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 if m.on_ground {
                     warden::set_pose(m, Pose::Digging);
                     sound(m, "entity.warden.dig", 5.0, 1.0, cx.events);
@@ -872,7 +798,7 @@ impl B {
                 true
             }),
             B::DoNothing(t) => {
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 true
             }
             B::GoToDisturbance(r) => one(r, || {
@@ -907,7 +833,7 @@ impl B {
                 {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 sound(m, "entity.warden.sniff", 5.0, 1.0, cx.events);
                 true
             }
@@ -919,7 +845,7 @@ impl B {
                 let Some(target) = mm.roar_target.value() else {
                     return false;
                 };
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 let mm = mem(m);
                 mm.roar_sound_delay.set_ttl((), ROAR_SOUND_DELAY);
                 mm.walk_target.clear();
@@ -1004,7 +930,7 @@ impl B {
                 if !close {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 let mm = mem(m);
                 mm.attack_cooling_down
                     .set_ttl(true, i64::from(SONIC_DURATION));
@@ -1092,7 +1018,7 @@ impl B {
                     && let Some(walk) = mem(m).walk_target.value()
                     && let Some(now_target) = walk.target.block(cx.w)
                     && dist_sqr(now_target, last) > 4
-                    && compute_path(m, cx, &walk, path, speed)
+                    && compute_path(m, cx.w, cx.now, &walk, path, speed, cant_reach)
                 {
                     *last_target = Some(now_target);
                     mem(m).path.set_opt(path.clone());
