@@ -22,8 +22,10 @@ results, and the scaled and locked copies a take makes), the lectern (over the
 block entity: its page buttons, clamped to the book's pages, and Take Book,
 with the inventory compared too) and the
 server's furnace menus over their block entities (`*_be`: a new input restarts
-cooking, other clicks keep its progress). After
-every click the slots, carried stack, data slots and drops are compared.
+cooking, other clicks keep its progress). Bundles (empty, partly and fully
+loaded, nested) are among the stacks and often in hand, for BundleItem's click
+overrides. After every click the slots, carried stack, data slots, drops and
+the player's sounds are compared.
 """
 import argparse
 import json
@@ -37,6 +39,8 @@ except ImportError:
 MENUS = {'inventory': 46, 'crafting': 46, 'chest1': 45, 'chest2': 54, 'chest3': 63, 'chest4': 72, 'chest5': 81,
          'chest6': 90, 'hopper': 41, 'dispenser': 45, 'shulker': 63, 'furnace': 39, 'blast_furnace': 39, 'smoker': 39, 'brewing': 41, 'crafter': 46,
          'crafter_be': 46, 'loom': 40, 'stonecutter': 38, 'grindstone': 39, 'anvil': 39, 'smithing': 40, 'enchanting': 38, 'beacon': 37, 'cartography': 39, 'lectern': 1, 'furnace_be': 39, 'blast_furnace_be': 39, 'smoker_be': 39}
+# Where a carried bundle is common: the containers that hold anything.
+BUNDLE_MENUS = {'inventory', 'chest1', 'chest3', 'shulker', 'hopper', 'dispenser'}
 DATA = {'furnace': 4, 'blast_furnace': 4, 'smoker': 4, 'brewing': 4, 'crafter': 10, 'crafter_be': 10, 'loom': 1,
         'stonecutter': 1, 'enchanting': 10, 'beacon': 3, 'lectern': 1,
         'furnace_be': 4, 'blast_furnace_be': 4, 'smoker_be': 4}
@@ -91,8 +95,10 @@ def snbt(item, count, damage=0, curse=False, potion=None):
 
 
 class Gen:
-    def __init__(self, rng, items):
+    def __init__(self, rng, items, bundles=None):
         self.rng = rng
+        # Bundles come from their own generator, so the other stacks stay as they were.
+        self.bundles = bundles or random.Random(0)
         self.items = items
         self.pool = ['minecraft:' + c for c in COMMON if 'minecraft:' + c in items]
         self.all = [k for k, v in items.items() if k != 'minecraft:air' and 'bundle' not in k
@@ -108,7 +114,37 @@ class Gen:
             damage = rng.randrange(1, info['minecraft:max_damage'])
         count = 1 if top == 1 else rng.choice([1, 1, 2, top, top, top - 1, rng.randrange(1, top + 1)])
         potion = rng.choice(['minecraft:water', 'minecraft:awkward', 'minecraft:healing', 'minecraft:thick']) if item.endswith('potion') and rng.random() < 0.8 else None
-        return snbt(item, max(1, count), damage, curse=rng.random() < 0.15 and 'equippable' in json.dumps(info), potion=potion)
+        stack = snbt(item, max(1, count), damage, curse=rng.random() < 0.15 and 'equippable' in json.dumps(info), potion=potion)
+        return self.bundle() if self.bundles.random() < 0.06 else stack
+
+    def bundle(self, room=64):
+        """A bundle, empty or holding up to its weight (in 64ths: 1 per item of a
+        64-stack, 4 of a 16-stack, 64 of a tool), now and then another bundle."""
+        return self.loaded_bundle(room)[0]
+
+    def loaded_bundle(self, room):
+        rng = self.bundles
+        color = rng.choice(['', '', 'red_', 'light_blue_'])
+        inside, used = [], 0
+        for _ in range(rng.choice([0, 0, 1, 1, 2, 3, 5])):
+            if room == 64 and rng.random() < 0.1:
+                # A nested bundle weighs its contents plus 1/16.
+                if room - used > 4:
+                    nested, weight = self.loaded_bundle(min(room - used - 4, 16))
+                    inside.append(nested)
+                    used += weight + 4
+                continue
+            item = rng.choice(self.pool)
+            top = self.items[item].get('minecraft:max_stack_size', 64)
+            unit = 64 // top
+            if unit > room - used or 'shulker_box' in item:
+                continue
+            most = min(top, (room - used) // unit)
+            count = min(most, rng.choice([1, 1, 2, rng.randrange(1, most + 1)]))
+            used += count * unit
+            inside.append(snbt(item, count))
+        body = ',components:{"minecraft:bundle_contents":[%s]}' % ','.join(inside) if inside else ''
+        return '{id:"minecraft:%sbundle",count:1%s}' % (color, body), used
 
     def slots(self, size, density):
         return [self.stack() if self.rng.random() < density else '-' for _ in range(size)]
@@ -333,7 +369,7 @@ def main():
     vanilla.compile('ParityData', 'VanillaMenuOracle')
     items = json.loads((lib.RESOURCES / 'items.json').read_text())
     rng = random.Random(args.seed)
-    g = Gen(rng, items)
+    g = Gen(rng, items, random.Random(args.seed + 1))
     cases = []
     chosen = args.menus.split(',') if args.menus else list(MENUS)
     for n in range(args.cases):
@@ -442,6 +478,9 @@ def main():
                    'anvil': g.anvil_stack, 'smithing': g.smith_stack}.get(menu, g.stack)() if rng.random() < 0.5 else '-'
         if carried_food is not None:
             carried = carried_food
+        elif menu in BUNDLE_MENUS and g.bundles.random() < 0.3:
+            # A bundle in hand, emptied into slots and filled from them.
+            carried = g.bundle()
         if menu == 'lectern':
             carried = '-'
         extra = {}

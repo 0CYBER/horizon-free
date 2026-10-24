@@ -37,7 +37,7 @@ def require_sounds():
 
 
 def run_harness(name, oracle, example, inputs_text, extra_sources=(), java_args=(), rust_args=(), scope='', timeout=1800):
-    """Run oracle and example on inputs; returns the number of matched lines."""
+    """Run oracle and the client probe `example` on inputs; returns the number of matched lines."""
     require_sounds()
     lock, jars, _ = base.verify_artifacts()
     libraries = baking.client_libraries()
@@ -46,7 +46,7 @@ def run_harness(name, oracle, example, inputs_text, extra_sources=(), java_args=
     report = build / 'report.json'
     report.unlink(missing_ok=True)
     oracle_path = lab.ROOT / f'mods/horizon/src/test/java/dev/horizonlab/parity/{oracle}.java'
-    example_path = lab.ROOT / f'crates/horizon-client/examples/{example}.rs'
+    example_path = lab.ROOT / f'crates/horizon-client/examples/probe/{example}.rs'
     sources = [*COMMON_SOURCES, oracle_path, example_path, *[Path(s) for s in extra_sources]]
     tested = base.source_hashes(sources)
     inputs = build / 'inputs.txt'
@@ -65,10 +65,10 @@ def run_harness(name, oracle, example, inputs_text, extra_sources=(), java_args=
     dependencies = os.pathsep.join(map(str, [jars['client'], *libraries]))
     run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-sourcepath', lab.ROOT / 'mods/horizon/src/test/java',
          '-cp', dependencies, '-d', classes, oracle_path], 'compile-java')
-    run(['cargo', 'build', '--locked', '-p', 'horizon-client', '--example', example], 'compile-rust')
+    run(['cargo', 'build', '--locked', '-p', 'horizon-client', '--example', 'probe'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1'], cwd=lab.ROOT))
-    binary = Path(metadata['target_directory']) / 'debug/examples' / (example + ('.exe' if os.name == 'nt' else ''))
-    run([binary, *rust_args, inputs, build / 'rust.txt'], 'rust')
+    binary = Path(metadata['target_directory']) / 'debug/examples' / ('probe.exe' if os.name == 'nt' else 'probe')
+    run([binary, example, *rust_args, inputs, build / 'rust.txt'], 'rust')
     env = dict(os.environ, ALSOFT_DRIVERS='null')
     run(['java', '-Xmx1G', '-cp', str(classes) + os.pathsep + dependencies, f'dev.horizonlab.parity.{oracle}', *java_args, inputs, build / 'client.txt'],
         'client', env=env)

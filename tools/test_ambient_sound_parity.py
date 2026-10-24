@@ -177,7 +177,7 @@ def main():
         'ambient', 'VanillaAmbientOracle', 'ambient_fixture', ''.join(l + '\n' for l in lines),
         extra_sources=[h.lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaSoundRig.java',
                        h.lab.ROOT / 'crates/horizon-client/src/ambience.rs',
-                       h.lab.ROOT / 'crates/horizon-client/examples/audio_common/mod.rs'],
+                       h.lab.ROOT / 'crates/horizon-client/examples/probe/audio_common/mod.rs'],
         java_args=[h.RESOURCES], rust_args=[h.RESOURCES],
         scope='Real LocalPlayer.updateIsUnderwater, UnderwaterAmbientSoundHandler and BiomeAmbientSoundsHandler (loop cross-fades, additions, '
               'cave mood sampling, moodiness and the mood sound position) with UnderLiquidAmbientSoundInstance/UnderLiquidSubSound/LoopSoundInstance '

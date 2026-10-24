@@ -104,7 +104,7 @@ impl Game<'_> {
     }
     /// `AbstractHorse.mobInteract`. Returns whether the click was used.
     pub(super) fn interact_mount(&mut self, index: usize, item: &str) -> bool {
-        let held = self.inventory[self.selected].clone();
+        let held = self.held().cloned();
         let m = &self.mobs[index];
         let species = m.species();
         // A server player rides it already (`isVehicle`: no seat, no feeding).

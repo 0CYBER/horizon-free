@@ -70,7 +70,7 @@ def main():
     sources = [Path(__file__), lab.ROOT/'tools/test_native_client.py', lab.ROOT/'tools/test_rust_parity.py',
                lab.ROOT/'tools/lab.py', lab.ROOT/'tools/prepare_native_client.py', oracle, *helpers,
                lab.ROOT/'Cargo.toml', lab.ROOT/'Cargo.lock',
-               lab.ROOT/'crates/horizon-client/examples/scene_collision_probe.rs']
+               lab.ROOT/'crates/horizon-client/examples/probe/scene_collision_probe.rs']
     for crate in ['horizon-core', 'horizon-world', 'horizon-assets', 'horizon-client']:
         sources += [lab.ROOT/'crates'/crate/'Cargo.toml', *sorted((lab.ROOT/'crates'/crate/'src').rglob('*.rs'))]
     tested = base.source_hashes(sources)
@@ -82,16 +82,16 @@ def main():
     dependencies = os.pathsep.join(map(str, libraries))
     run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-cp',
          str(jars['server'])+os.pathsep+dependencies, '-d', classes, oracle, *helpers], 'compile-java')
-    run(['cargo', 'build', '--locked', '-p', 'horizon-client', '--example', 'scene_collision_probe'], 'compile-rust')
+    run(['cargo', 'build', '--locked', '-p', 'horizon-client', '--example', 'probe'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1'], cwd=lab.ROOT))
-    executable = Path(metadata['target_directory'])/'debug/examples'/('scene_collision_probe.exe' if os.name == 'nt' else 'scene_collision_probe')
+    executable = Path(metadata['target_directory'])/'debug/examples'/('probe.exe' if os.name=='nt' else 'probe')
     cases = []
     for radius in [1, 2]:
         build = root/str(radius); build.mkdir(exist_ok=True)
         fixtures = list(corpus(radius))
         (build/'inputs.txt').write_text(''.join(json.dumps(f, separators=(',', ':'))+'\n' for f in fixtures))
         input_hash = lab.digest(build/'inputs.txt', 'sha256')
-        run([executable, resources, build, radius], f'rust-{radius}')
+        run([executable, 'scene_collision_probe',resources, build, radius], f'rust-{radius}')
         scene_hash = lab.digest(build/'scene.json', 'sha256')
         references = []
         for side, jar in jars.items():

@@ -75,7 +75,7 @@ def main():
     placement_helper=oracle.with_name("VanillaPlacementOracle.java")
     sources=[oracle,helper,placement_helper,Path(__file__),lab.ROOT/"tools/test_rust_parity.py",lab.ROOT/"tools/test_worldgen_parity.py",lab.ROOT/"tools/lab.py",lab.ROOT/"Cargo.toml",lab.ROOT/"Cargo.lock",
              lab.ROOT/"crates/horizon-core/Cargo.toml",lab.ROOT/"crates/horizon-world/Cargo.toml",
-             *sorted((lab.ROOT/"crates/horizon-core/src").rglob("*.rs")),*sorted((lab.ROOT/"crates/horizon-world/src").rglob("*.rs")),lab.ROOT/"crates/horizon-world/examples/feature_region_fixture.rs"]
+             *sorted((lab.ROOT/"crates/horizon-core/src").rglob("*.rs")),*sorted((lab.ROOT/"crates/horizon-world/src").rglob("*.rs")),lab.ROOT/"crates/horizon-world/examples/probe/feature_region_fixture.rs"]
     tested_sources=base.source_hashes(sources)
     classes=build/"classes";classes.mkdir(exist_ok=True)
     def run(command,name):
@@ -107,10 +107,10 @@ def main():
     height_inputs=build/'heights.json';height_inputs.write_text(json.dumps(heights,separators=(',',':')))
     fixture_paths=[height_inputs,zone_inputs,inputs,build/"tags.json",build/"fluid-tags.json",build/"facts-client.json",build/"facts-server.json"]
     tested_fixtures=base.source_hashes(fixture_paths)
-    run(["cargo","build","--release","-p","horizon-world","--example","feature_region_fixture"],"compile-rust")
+    run(["cargo","build","--release","-p","horizon-world","--example","probe"],"compile-rust")
     metadata=json.loads(subprocess.check_output(["cargo","metadata","--no-deps","--format-version","1"],cwd=lab.ROOT,text=True))
-    binary=Path(metadata["target_directory"])/"release/examples"/("feature_region_fixture.exe" if os.name=="nt" else "feature_region_fixture")
-    run([binary,build],"rust")
+    binary=Path(metadata["target_directory"])/"release/examples"/("probe.exe" if os.name=="nt" else "probe")
+    run([binary,"feature_region_fixture",build],"rust")
     references=[]
     for side,jar in jars.items():
         java(side,side,build)
