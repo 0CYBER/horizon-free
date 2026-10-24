@@ -433,6 +433,13 @@ pub fn stack_to_network(
     enchantment_id: impl Fn(&str) -> Option<i32>,
     s: &Option<ItemStack>,
 ) -> Option<Stack> {
+    network_stack(&item_id, &enchantment_id, s)
+}
+fn network_stack(
+    item_id: &dyn Fn(&str) -> i32,
+    enchantment_id: &dyn Fn(&str) -> Option<i32>,
+    s: &Option<ItemStack>,
+) -> Option<Stack> {
     let s = s.as_ref()?;
     let mut stack = Stack::new(item_id(&s.item), s.count as i32);
     if s.damage > 0 {
@@ -486,6 +493,18 @@ pub fn stack_to_network(
             stack.added.push((
                 horizon_protocol::item::component::MAP_POST_PROCESSING,
                 horizon_protocol::item::Component::Int(i32::from(mode)),
+            ));
+        }
+        // A loaded crossbow's ammunition.
+        if !d.charged.is_empty() {
+            let charged = d
+                .charged
+                .iter()
+                .filter_map(|c| network_stack(item_id, enchantment_id, &Some(c.clone())))
+                .collect();
+            stack.added.push((
+                horizon_protocol::item::component::CHARGED_PROJECTILES,
+                horizon_protocol::item::Component::Stacks(charged),
             ));
         }
         // The books a lectern shows and a guest reads.

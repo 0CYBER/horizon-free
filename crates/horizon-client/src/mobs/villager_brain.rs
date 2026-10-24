@@ -11,6 +11,7 @@
 //! `Brain::shuffle_seed` when the brain is built.
 use super::{
     Mob, MobEvent, MobWorld, Species, Who,
+    brain::{Timed, living_near},
     path::{Path, PathNode},
 };
 use horizon_core::{
@@ -341,6 +342,10 @@ fn brain_mut(m: &mut Mob) -> &mut Brain {
 fn mem(m: &mut Mob) -> &mut Memories {
     &mut brain_mut(m).mem
 }
+/// `CANT_REACH_WALK_TARGET_SINCE`, for `compute_path`.
+fn cant_reach(m: &mut Mob) -> &mut Slot<i64> {
+    &mut mem(m).cant_reach_walk_target_since
+}
 fn mem_ref(m: &Mob) -> Option<&Memories> {
     brain(m).map(|b| &b.mem)
 }
@@ -565,22 +570,7 @@ const FOLLOW_RANGE: f64 = 16.0;
 /// `NearestLivingEntitySensor`: everything alive within the follow range,
 /// nearest first.
 fn sense_living(m: &mut Mob, w: &MobWorld) {
-    let r = m.attrs.follow_range;
-    let area = m.bounds().inflate(Vec3::new(r, r, r));
-    let mut found: Vec<(Who, f64)> = Vec::new();
-    for o in w.others_near(area) {
-        if o.id != m.id && o.alive && o.bounds.intersects(area) {
-            found.push((Who::Mob(o.id), m.distance_sqr(o.position)));
-        }
-    }
-    if let Some(p) = &w.player
-        && p.alive
-        && p.bounds.intersects(area)
-    {
-        found.push((Who::Player, m.distance_sqr(p.position)));
-    }
-    found.sort_by(|a, b| a.1.total_cmp(&b.1));
-    let list: Vec<Who> = found.into_iter().map(|(w, _)| w).collect();
+    let list = living_near(m, w);
     let mm = mem(m);
     mm.mobs.set_list(list.clone());
     mm.visible_mobs.set(Visible {
@@ -790,34 +780,6 @@ fn sense_golem(m: &mut Mob, w: &MobWorld) {
 }
 
 // ---- Behaviours ---------------------------------------------------------
-
-/// `Behavior`'s bookkeeping: running, and until when.
-#[derive(Clone, Debug)]
-struct Timed {
-    running: bool,
-    end: i64,
-    min: i32,
-    max: i32,
-}
-impl Timed {
-    fn new(min: i32, max: i32) -> Self {
-        Self {
-            running: false,
-            end: 0,
-            min,
-            max,
-        }
-    }
-    /// `Behavior.tryStart`'s duration draw.
-    fn begin(&mut self, cx: &mut Bx) {
-        self.running = true;
-        let bound = self.max.wrapping_add(1).wrapping_sub(self.min);
-        let d = self
-            .min
-            .wrapping_add(cx.lr.next_int_bound(bound).unwrap_or(0));
-        self.end = cx.now + i64::from(d);
-    }
-}
 
 /// The POI types villagers use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1498,18 +1460,18 @@ impl B {
                 if !swim_condition(m) {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 true
             }
             B::LookAtTargetSink(t) => {
                 if !mem(m).look_target.present() {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 true
             }
             B::PanicTrigger(t) => {
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 // VillagerPanicTrigger.start
                 if panic_condition(m) {
                     if !brain_mut(m).is_active(Act::Panic) {
@@ -1542,9 +1504,9 @@ impl B {
                 }
                 let walk = mm.walk_target.value().unwrap();
                 let reached = reached(m, cx.w, &walk);
-                if !reached && compute_path(m, cx, &walk, path, speed) {
+                if !reached && compute_path(m, cx.w, cx.now, &walk, path, speed, cant_reach) {
                     *last_target = walk.target.block(cx.w);
-                    t.begin(cx);
+                    t.begin(cx.lr, cx.now);
                     // start
                     mem(m).path.set_opt(path.clone());
                     m.nav_move_to_path(path.clone(), f64::from(*speed));
@@ -1561,7 +1523,7 @@ impl B {
                 if !follow_trading_condition(m, cx.w) {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 follow_trading_player(m);
                 true
             }
@@ -1573,7 +1535,7 @@ impl B {
                 if !matches!(a, Act::Idle | Act::Work | Act::Play) {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 true
             }
             B::JumpOnBed {
@@ -1590,7 +1552,7 @@ impl B {
                 if mm.walk_target.present() || !m.is_baby() {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 *bed = Some(nearest);
                 *time_left = 100;
                 *jumps = 3 + cx.lr.next_int_bound(4).unwrap_or(0);
@@ -1599,7 +1561,7 @@ impl B {
                 true
             }
             B::DoNothing(t) => {
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 true
             }
             B::GiveGiftToHero {
@@ -1618,7 +1580,7 @@ impl B {
                     *until_next -= 1;
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 *given = false;
                 *started = now;
                 let mm = mem(m);
@@ -1630,7 +1592,7 @@ impl B {
                 if !mem(m).interaction_target.present() || !show_trades_condition(m, cx.w) {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 // start
                 if let Some(target) = mem(m).interaction_target.value() {
                     mem(m).look_target.set(Tracker::Entity(target, true));
@@ -1646,7 +1608,7 @@ impl B {
                 if !villager_target_valid(m, cx.w, Mem::InteractionTarget) {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 let target = mem(m).interaction_target.value().unwrap();
                 lock_gaze(m, target, cx);
                 true
@@ -1659,7 +1621,7 @@ impl B {
                 if !breeding_possible(m, cx.w) {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 let target = mem(m).breed_target.value().unwrap();
                 lock_gaze(m, target, cx);
                 *birth = now + 275 + i64::from(m.random.next_int_bound(50).unwrap_or(0));
@@ -1680,7 +1642,7 @@ impl B {
                 if !closer_to_center(site, m.position, 1.73) {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 // start
                 let mm = mem(m);
                 mm.last_worked_at_poi.set(now);
@@ -1709,7 +1671,7 @@ impl B {
                 *valid = farmland_around(m, cx.w);
                 *target = pick_farmland(valid, cx);
                 let Some(p) = *target else { return false };
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 if now > *next_ok {
                     let mm = mem(m);
                     mm.look_target.set(Tracker::Block(p));
@@ -2288,7 +2250,7 @@ impl B {
                 {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 if now > *next_ok {
                     if super::villager::start_sleeping(m, home, w) {
                         mem(m).last_slept.set(now);
@@ -2609,7 +2571,7 @@ impl B {
                 {
                     return false;
                 }
-                t.begin(cx);
+                t.begin(cx.lr, cx.now);
                 true
             }
             B::LocateHidingPlace {
@@ -2769,7 +2731,7 @@ impl B {
                     && let Some(now_target) = walk.target.block(cx.w)
                 {
                     let d = manhattan_sq(now_target, last);
-                    if d > 4 && compute_path(m, cx, &walk, path, speed) {
+                    if d > 4 && compute_path(m, cx.w, cx.now, &walk, path, speed, cant_reach) {
                         *last_target = Some(now_target);
                         mem(m).path.set_opt(path.clone());
                         m.nav_move_to_path(path.clone(), f64::from(*speed));
@@ -3141,33 +3103,37 @@ fn tracker_visible(m: &mut Mob, w: &MobWorld, t: Tracker) -> bool {
     }
 }
 /// `MoveToTargetSink.reachedTarget`.
-fn reached(m: &Mob, w: &MobWorld, walk: &WalkTarget) -> bool {
+pub(super) fn reached(m: &Mob, w: &MobWorld, walk: &WalkTarget) -> bool {
     walk.target
         .block(w)
         .is_some_and(|p| manhattan(p, block_of(m.position)) <= walk.close)
 }
-/// `MoveToTargetSink.tryComputePath`.
-fn compute_path(
+/// `MoveToTargetSink.tryComputePath`, for the brains on these memories
+/// (villager, monster, warden): `cant_reach` is the brain's
+/// `CANT_REACH_WALK_TARGET_SINCE`.
+pub(super) fn compute_path(
     m: &mut Mob,
-    cx: &mut Bx,
+    w: &MobWorld,
+    now: i64,
     walk: &WalkTarget,
     path: &mut Option<Path>,
     speed: &mut f32,
+    cant_reach: fn(&mut Mob) -> &mut Slot<i64>,
 ) -> bool {
-    let Some(target) = walk.target.block(cx.w) else {
+    let Some(target) = walk.target.block(w) else {
         return false;
     };
-    *path = m.create_path_to(cx.w, target, 0);
+    *path = m.create_path_to(w, target, 0);
     *speed = walk.speed;
-    if reached(m, cx.w, walk) {
-        mem(m).cant_reach_walk_target_since.clear();
+    if reached(m, w, walk) {
+        cant_reach(m).clear();
     } else {
         let can_reach = path.as_ref().is_some_and(|p| p.reached);
-        let mm = mem(m);
+        let since = cant_reach(m);
         if can_reach {
-            mm.cant_reach_walk_target_since.clear();
-        } else if !mm.cant_reach_walk_target_since.present() {
-            mm.cant_reach_walk_target_since.set(cx.now);
+            since.clear();
+        } else if !since.present() {
+            since.set(now);
         }
         if path.is_some() {
             return true;
@@ -3178,14 +3144,14 @@ fn compute_path(
             f64::from(target[2]) + 0.5,
         ];
         if let Some(step) =
-            m.default_random_pos_towards(cx.w, 10, 7, to, f64::from(std::f32::consts::FRAC_PI_2))
+            m.default_random_pos_towards(w, 10, 7, to, f64::from(std::f32::consts::FRAC_PI_2))
         {
             let p = [
                 step[0].floor() as i32,
                 step[1].floor() as i32,
                 step[2].floor() as i32,
             ];
-            *path = m.create_path_to(cx.w, p, 0);
+            *path = m.create_path_to(w, p, 0);
             return path.is_some();
         }
     }

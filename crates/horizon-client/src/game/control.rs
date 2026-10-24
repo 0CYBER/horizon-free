@@ -232,6 +232,13 @@ impl Game<'_> {
             "key" => {
                 let key = key_code(arg(1)?).ok_or_else(|| format!("unknown key {}", words[1]))?;
                 self.require_world()?;
+                // The sign editor takes raw presses (Enter, arrows, Backspace, Escape).
+                if self.sign_edit.is_some() {
+                    if arg(2)? != "up" {
+                        self.sign_input(Some(key), None);
+                    }
+                    return ok();
+                }
                 // A held edit modifier (`key super down`) and A/C/V/X: the
                 // open book's Select All, Copy, Paste or Cut.
                 if self.book.is_some() && arg(2)? != "up" {
@@ -524,6 +531,10 @@ impl Game<'_> {
                     self.book_type(text);
                     return ok();
                 }
+                if self.sign_edit.is_some() {
+                    self.sign_input(None, Some(text));
+                    return ok();
+                }
                 match self.screen {
                     Screen::Chat => self.chat_type(text),
                     Screen::CommandBlock => self.command_block_type(text),
@@ -549,7 +560,7 @@ impl Game<'_> {
                     }
                     _ => {
                         return Err(
-                            "type needs the chat screen (key t tap), the language search, the creative search, the anvil or World Options".into(),
+                            "type needs the chat screen (key t tap), a sign or book, the language search, the creative search, the anvil or World Options".into(),
                         );
                     }
                 }

@@ -3,9 +3,10 @@
 //! pixels, 1024 characters, 100 pages), signing it into a written book,
 //! reading written books, and lecterns (placing a book, turning its pages
 //! with a redstone pulse, the comparator output and taking the book).
-use super::Game;
+use super::{Game, lan::LanHost};
 use horizon_client::{
     containers::{BlockEntity, Lectern},
+    first_person::Hand,
     hud::{HudBatch, rgba},
     item_data::WrittenBook,
     items::ItemStack,
@@ -14,6 +15,7 @@ use horizon_client::{
     ui,
 };
 use horizon_core::position::BlockPos;
+use horizon_protocol::packets::play::{self, Clientbound as C, Serverbound as S};
 use horizon_world::level::flags as level_flags;
 use std::time::Instant;
 use winit::{
@@ -48,9 +50,32 @@ impl Game<'_> {
     fn book_lines(&self, page: &str) -> Vec<Text> {
         self.gui.atlas.font.split(&Text::literal(page), 114.0)
     }
-    /// `WritableBookItem.use` / `WrittenBookItem.use`.
+    /// `WritableBookItem.use` / `WrittenBookItem.use` (`Player.openItemGui`).
+    /// A server's player writes in its own client's editor
+    /// (`LocalPlayer.openItemGui`), and reads on its own client once told to
+    /// (`ServerPlayer.openItemGui`'s ClientboundOpenBookPacket).
     pub(super) fn use_book(&mut self, stack: &ItemStack) -> bool {
-        let screen = match &*stack.item {
+        let written = match &*stack.item {
+            "minecraft:writable_book" => false,
+            "minecraft:written_book" => true,
+            _ => return false,
+        };
+        if self.lan_acting.is_some() {
+            if written {
+                let hand = i32::from(self.hand == Hand::Off);
+                self.guest_packets
+                    .push(C::OpenBook(play::OpenBook { hand }));
+            }
+        } else if let Some(screen) = self.book_screen(stack) {
+            self.open_book(screen);
+        }
+        self.swing_arm();
+        true
+    }
+    /// The screen a book in hand opens: `BookEditScreen` for a book and
+    /// quill, `BookViewScreen` for a written book.
+    fn book_screen(&self, stack: &ItemStack) -> Option<BookScreen> {
+        Some(match &*stack.item {
             "minecraft:writable_book" => {
                 let mut pages = stack
                     .data()
@@ -77,11 +102,30 @@ impl Game<'_> {
                 page: 0,
                 lectern: None,
             },
-            _ => return false,
-        };
-        self.open_book(screen);
-        self.swing_arm();
+            _ => return None,
+        })
+    }
+    /// `MultiPlayerGameMode.useItem`'s own use of a book and quill on a
+    /// server's client: its editor opens here at once.
+    pub(super) fn remote_use_book(&mut self, stack: &ItemStack) -> bool {
+        if &*stack.item != "minecraft:writable_book" {
+            return false;
+        }
+        if let Some(screen) = self.book_screen(stack) {
+            self.open_book(screen);
+        }
         true
+    }
+    /// `ClientPacketListener.handleOpenBook`: the written book in that hand.
+    pub(super) fn remote_open_book(&mut self, hand: i32) {
+        let hand = if hand == 1 { Hand::Off } else { Hand::Main };
+        let screen = self.with_hand(hand, |g| {
+            let stack = g.held().filter(|s| &*s.item == "minecraft:written_book")?;
+            g.book_screen(&stack.clone())
+        });
+        if let Some(screen) = screen {
+            self.open_book(screen);
+        }
     }
     fn open_book(&mut self, screen: BookScreen) {
         self.book = Some(screen);
@@ -104,7 +148,9 @@ impl Game<'_> {
         self.book = None;
         self.capture(true);
     }
-    /// `BookEditScreen.saveChanges`: trailing empty pages dropped.
+    /// `BookEditScreen.saveChanges` and `BookSignScreen`'s Sign and Close:
+    /// trailing empty pages dropped, the book in hand updated here and, on a
+    /// server's client, sent (ServerboundEditBookPacket).
     fn save_book(&mut self, sign: bool) {
         let Some(BookScreen::Edit {
             slot, pages, title, ..
@@ -116,28 +162,58 @@ impl Game<'_> {
         while pages.len() > 1 && pages.last().is_some_and(String::is_empty) {
             pages.pop();
         }
-        if let Some(stack) = self.stack_in_mut(slot).as_mut()
-            && &*stack.item == "minecraft:writable_book"
-        {
-            if sign {
-                let mut written = ItemStack::new("minecraft:written_book", 1);
-                written.data_mut().written = Some(WrittenBook {
-                    title: title.trim().to_owned(),
-                    author: super::chat::PLAYER_NAME.to_owned(),
-                    generation: 0,
-                    pages,
-                });
-                *stack = written;
-            } else {
-                stack.data_mut().writable_pages = if pages.iter().all(String::is_empty) {
-                    Vec::new()
-                } else {
-                    pages
-                };
-                stack.tidy();
-            }
+        let title = sign.then(|| title.trim().to_owned());
+        if self.remote.is_some() {
+            self.send(S::EditBook(play::EditBook {
+                slot: slot as i32,
+                pages: pages.clone(),
+                title: title.clone(),
+            }));
         }
+        self.write_book(slot, pages, title);
         self.capture(true);
+    }
+    /// The book and quill at `slot` takes the pages, or with a title becomes
+    /// the written book its writer signed.
+    fn write_book(&mut self, slot: usize, pages: Vec<String>, title: Option<String>) {
+        let author = self
+            .lan_acting_name
+            .clone()
+            .unwrap_or_else(|| super::chat::PLAYER_NAME.to_owned());
+        let Some(stack) = self
+            .stack_in_mut(slot)
+            .as_mut()
+            .filter(|s| &*s.item == "minecraft:writable_book")
+        else {
+            return;
+        };
+        if let Some(title) = title {
+            let mut written = ItemStack::new("minecraft:written_book", 1);
+            written.data_mut().written = Some(WrittenBook {
+                title,
+                author,
+                generation: 0,
+                pages,
+            });
+            *stack = written;
+        } else {
+            stack.data_mut().writable_pages = if pages.iter().all(String::is_empty) {
+                Vec::new()
+            } else {
+                pages
+            };
+            stack.tidy();
+        }
+    }
+    /// `ServerGamePacketListenerImpl.handleEditBook`: a guest's book in a
+    /// hotbar slot or its off hand (`updateBookContents`, `signBook`).
+    pub(super) fn lan_edit_book(&mut self, host: &mut LanHost, conn: u32, p: play::EditBook) {
+        if !((0..9).contains(&p.slot) || p.slot == super::shield::OFFHAND_SLOT as i32) {
+            return;
+        }
+        self.as_guest(host, conn, |g| {
+            g.write_book(p.slot as usize, p.pages, p.title)
+        });
     }
     pub(super) fn book_key(&mut self, event: &KeyEvent) {
         if event.state != ElementState::Pressed {
@@ -519,7 +595,26 @@ impl Game<'_> {
                 Some(key) => self.lectern_button(key, 3),
                 None => return Err("not a lectern".into()),
             },
-            Some("done") => self.close_book(),
+            // The book and quill's buttons: Sign, then Sign and Close; Done
+            // (which saves), then Cancel.
+            Some("sign") => match self.book.as_mut() {
+                Some(BookScreen::Edit {
+                    signing: true,
+                    title,
+                    ..
+                }) if !title.trim().is_empty() => self.save_book(true),
+                Some(BookScreen::Edit { signing, .. }) => *signing = true,
+                _ => return Err("not a book and quill".into()),
+            },
+            Some("done") => match self.book.as_mut() {
+                Some(BookScreen::Edit { signing: true, .. }) => {
+                    if let Some(BookScreen::Edit { signing, .. }) = self.book.as_mut() {
+                        *signing = false;
+                    }
+                }
+                Some(BookScreen::Edit { .. }) => self.save_book(false),
+                _ => self.close_book(),
+            },
             Some(other) => return Err(format!("unknown book button {other}").into()),
         }
         Ok(match &self.book {
