@@ -1,8 +1,8 @@
 # Settings worth knowing
 
-Horizon plays like vanilla out of the box. This page covers the settings that are different or new: graphics, distant terrain, shader packs, resource packs, controllers and a few optional extras.
+Horizon plays like vanilla out of the box. This page covers the settings that are different or new: graphics, distant terrain, resource packs, controllers and a few optional extras.
 
-The game's menus are vanilla's. Horizon adds its own settings to vanilla's **Options** screen the way mods do: **Horizon Settings...** and **Mods...** take the last two buttons of the grid. **Horizon Settings** opens Graphics, Advanced Graphics, Shader Packs, Controller Settings, Extras and Mods, each a screen of vanilla's buttons and sliders. The graphics and shader pack buttons are also at the top of **Video Settings**, and Controller Settings at the bottom of **Controls**.
+The game's menus are vanilla's. Horizon adds its own settings to vanilla's **Options** screen the way mods do: **Horizon Settings...** and **Mods...** take the last two buttons of the grid. **Horizon Settings** opens Graphics, Advanced Graphics, Controller Settings, Extras and Mods, each a screen of vanilla's buttons and sliders. The graphics buttons are also at the top of **Video Settings**, and Controller Settings at the bottom of **Controls**.
 
 ![Video Settings, with Horizon's graphics buttons at the top](/media/settings-800.webp)
 
@@ -42,17 +42,13 @@ The change applies at the next start. If Vulkan gives you trouble, try DirectX 1
 
 ## Shader packs
 
-Shader packs are **experimental**. Put a pack's folder in the `shaderpacks` folder of the game folder (see [Install](/docs/install#first-launch) for where that is), then choose it in **Options, Video Settings, Shader Packs** (or **Options, Horizon Settings, Shader Packs**). With no pack selected the game draws exactly what vanilla draws. A pack that fails to load shows why in red and leaves the normal picture on.
-
-Horizon can run the full-screen effects of Java shader packs (OptiFine and Iris packs: colour grading, bloom, sky and fog effects). It does not run their geometry and shadow passes yet, so packs do not look as they do in Iris. Horizon also has its own shader pack format, in WGSL, with a `pack.toml` manifest, options and hot reload. It has full-screen passes too; stages that draw the world's terrain and shadows are planned. The details are in the [shader pack notes](https://github.com/ludovic111/horizon/blob/main/docs/shader-packs.md).
-
-The **Shader Packs** page shows the full path of the `shaderpacks` folder with an **Open Folder** button, then one switch per pack. Turning a pack on picks it, and turning it off gives the vanilla picture. Packs tested so far: BSL, Complementary Reimagined, Steadfast and Sildur's Vibrant Extreme draw their full-screen passes; Bliss, Bloop, Noble, Photon and Rethinking Voxels do not load yet. To find packs, the launcher's **Mods** page installs shader packs from Modrinth (see [Mods and data packs](/docs/mods#finding-resource-packs-shader-packs-and-modpacks)).
+Shader packs have been removed for now. They will come back later, written again from scratch. Packs in your `shaderpacks` folder are left where they are.
 
 ## Resource packs
 
 Java Edition resource packs work. Put the folder or `.zip` in the `resourcepacks` folder of the game folder and pick it on the **Resource Packs** screen, which is vanilla's screen. The game reloads every loader from the pack, as vanilla does.
 
-The launcher's **Mods** page can download them from Modrinth (see [Mods and data packs](/docs/mods#finding-resource-packs-shader-packs-and-modpacks)).
+The launcher's **Mods** page can download them from Modrinth (see [Mods and data packs](/docs/mods#finding-resource-packs-and-modpacks)).
 
 [Resource packs: what works](https://github.com/ludovic111/horizon/blob/main/docs/resource-packs.md) lists everything a 26.3 resource pack can change and whether Horizon honours it.
 

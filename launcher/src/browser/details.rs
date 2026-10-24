@@ -75,7 +75,7 @@ impl Environment {
 pub struct Filters {
     /// Every one of these categories (`decoration`, `worldgen`...).
     pub categories: Vec<String>,
-    /// One loader (`neoforge`, `fabric`, `iris`...), in place of the kind's defaults.
+    /// One loader (`neoforge`, `fabric`...), in place of the kind's defaults.
     pub loader: Option<String>,
     /// One Minecraft version, in place of the one Horizon plays.
     pub game_version: Option<String>,
@@ -279,12 +279,10 @@ pub fn modrinth_tags(
     }
 }
 
-/// The loaders a kind lists by default, when no loader is picked: Java mod loaders for mods,
-/// Iris and OptiFine for shader packs (unless `everything`).
-pub fn default_loaders(kind: Kind, everything: bool) -> Vec<&'static str> {
+/// The loaders a kind lists by default, when no loader is picked: Java mod loaders for mods.
+pub fn default_loaders(kind: Kind) -> Vec<&'static str> {
     match kind {
         Kind::Mod => super::java::LOADERS.to_vec(),
-        Kind::ShaderPack if !everything => vec!["iris", "optifine"],
         _ => Vec::new(),
     }
 }
@@ -339,7 +337,7 @@ mod tests {
         ]);
         let loaders = json!([
             {"name": "fabric", "supported_project_types": ["mod", "modpack"]},
-            {"name": "iris", "supported_project_types": ["shader"]}
+            {"name": "minecraft", "supported_project_types": ["resourcepack"]}
         ]);
         let versions = json!([
             {"version": "26.3", "version_type": "release"},

@@ -8,7 +8,7 @@ Questions and ideas are welcome on [Discord](https://discord.gg/HcTeMZxe5E). Bug
 
 [github.com/ludovic111/horizon](https://github.com/ludovic111/horizon) holds the game, the launcher and this website, plus the tools, tests and docs that build, check and release them.
 
-- `crates/` is the game, as Rust crates: the client, the server, the world and protocol code, the mod system, the shader pack reader, the design tokens and more.
+- `crates/` is the game, as Rust crates: the client, the server, the world and protocol code, the mod system, the design tokens and more.
 - `launcher/` is the launcher, a GPUI app with its own Cargo workspace.
 - `website/` is this site and its documentation, in `website/docs/`.
 - `tools/` holds the parity harness drivers, the parity runner, the release tools and the self-check.

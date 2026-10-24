@@ -65,12 +65,7 @@ fn project(id: &str, kind: Kind) -> Project {
         license: "MIT".into(),
         kind,
         game_versions: vec![GAME.into()],
-        loaders: vec![if kind == Kind::ShaderPack {
-            "iris"
-        } else {
-            "minecraft"
-        }
-        .into()],
+        loaders: vec!["minecraft".into()],
     }
 }
 
@@ -217,13 +212,6 @@ fn nothing_is_installed_when_a_check_fails() {
     assert!(remove(&home, "good").is_err());
     assert!(home.join("resourcepacks/good-1.zip").exists());
 
-    // What doesn't run is refused before anything is asked for.
-    let mut canvas = project("canvas", Kind::ShaderPack);
-    canvas.loaders = vec!["canvas".into()];
-    fake.add(canvas.clone());
-    assert!(install(&fake, &canvas, true, &home, NONE)
-        .unwrap_err()
-        .contains("doesn't run"));
     let pack = project("pack", Kind::Modpack);
     assert!(plan(&fake, &pack, false)
         .unwrap_err()
@@ -232,14 +220,9 @@ fn nothing_is_installed_when_a_check_fails() {
 }
 
 #[test]
-fn shader_packs_go_to_their_folder_and_modpacks_download_checked() {
+fn modpacks_download_checked() {
     let home = home("kinds");
     let mut fake = Fake::default();
-    fake.add(project("bsl", Kind::ShaderPack));
-    fake.release("bsl", "10", &[], b"shaders", false);
-    install(&fake, &fake.project("bsl").unwrap(), false, &home, NONE).unwrap();
-    assert!(home.join("shaderpacks/bsl-10.zip").is_file());
-
     fake.add(project("atm", Kind::Modpack));
     fake.release("atm", "1", &[], b"mrpack", false);
     let downloads = home.join("downloads");
@@ -330,5 +313,29 @@ fn java_mods_are_ported_turned_on_refused_on_clashes_and_removed() {
         fs::read_to_string(home.join("horizon-mods.txt")).unwrap(),
         ""
     );
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
+fn shader_packs_older_launchers_installed_are_left_alone() {
+    let home = home("old-shader-pack");
+    fs::create_dir_all(home.join("shaderpacks")).unwrap();
+    fs::write(home.join("shaderpacks/old-pack.zip"), b"shaders").unwrap();
+    let entry = |kind: &str, file: &str| {
+        serde_json::json!({
+            "source": "modrinth", "project": file, "slug": file, "title": file, "kind": kind,
+            "version": "1", "number": "1", "file": file, "checksum": "SHA-512:00", "page": ""
+        })
+    };
+    let manifest = serde_json::json!({ "entries": [
+        entry("shader-pack", "shaderpacks/old-pack.zip"),
+        entry("resource-pack", "resourcepacks/faithful-1.zip"),
+    ]});
+    fs::write(home.join("mod-browser.json"), manifest.to_string()).unwrap();
+    let installed = Installed::load(&home);
+    assert_eq!(installed.entries.len(), 1);
+    assert_eq!(installed.entries[0].kind, Kind::ResourcePack);
+    installed.save(&home).unwrap();
+    assert!(home.join("shaderpacks/old-pack.zip").is_file());
     fs::remove_dir_all(&home).unwrap();
 }

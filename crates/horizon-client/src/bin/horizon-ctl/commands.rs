@@ -147,7 +147,6 @@ const PAGES: Ty = Ty::Enum(&[
     "graphics-advanced",
     "extras",
     "horizon",
-    "shader-packs",
     "agent",
 ]);
 

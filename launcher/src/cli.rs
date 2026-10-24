@@ -205,7 +205,6 @@ enum ModsCmd {
 enum KindArg {
     Mod,
     Resource,
-    Shader,
     Modpack,
 }
 
@@ -339,7 +338,7 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<ModpackCmd>,
     },
-    /// The mod browser: Java mods, resource packs, shader packs and modpacks from Modrinth
+    /// The mod browser: Java mods, resource packs and modpacks from Modrinth
     /// (CurseForge support is coming soon), each file checked against its checksum
     /// (docs/mod-browser.md)
     Mods {
@@ -1100,7 +1099,6 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
         } => {
             let kind = match kind {
                 KindArg::Resource => Kind::ResourcePack,
-                KindArg::Shader => Kind::ShaderPack,
                 KindArg::Modpack => Kind::Modpack,
                 KindArg::Mod => Kind::Mod,
             };

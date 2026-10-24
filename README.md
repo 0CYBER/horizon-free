@@ -45,7 +45,7 @@ The [documentation](https://playhorizon.dev/docs/) covers each of these.
 
 - **The game:** singleplayer with vanilla's world generation, mobs, villagers, raids, redstone, every command, the HUD and the recipe book, on saves in vanilla's format. Worlds from 1.8 to 26.2 are upgraded as vanilla does. [Status table](#project-status).
 - **Horizon's own extras:** new menus (vanilla's are one setting away), graphics presets, distant terrain up to 1024 chunks, controller support, optional zoom, minimap and more, all off by default where they would change the vanilla look. See [Settings](https://playhorizon.dev/docs/settings).
-- **Resource packs, shader packs and data packs:** resource packs work, Java shader packs run their full-screen effects (experimental), and data packs load functions, predicates and item modifiers.
+- **Resource packs and data packs:** resource packs work, and data packs load functions, predicates and item modifiers.
 - **Playing with others:** invite friends from the pause menu's Friends button with a code, Open to LAN, and joining offline-mode servers. Horizon cannot sign in to a Microsoft account yet, so it cannot join servers that check accounts. See [Multiplayer](https://playhorizon.dev/docs/multiplayer).
 - **Mods:** Horizon has its own mod system (Rust compiled to WebAssembly). Java mod jars do not run. See [Mods and data packs](https://playhorizon.dev/docs/mods).
 
@@ -57,7 +57,7 @@ Screenshots, captured in the Rust client itself with vanilla assets and no mods 
   </tr>
   <tr>
     <td width="50%"><img src="docs/media/survival.webp" alt="Survival at dusk: a zombie walks up, with the hotbar, health, hunger and experience"></td>
-    <td width="50%"><img src="docs/media/settings.webp" alt="Vanilla's Video Settings screen with Horizon's own buttons at the top: Horizon Graphics, Advanced Graphics and Shader Packs"></td>
+    <td width="50%"><img src="docs/media/settings.webp" alt="Vanilla's Video Settings screen with Horizon's own buttons at the top: Horizon Graphics and Advanced Graphics"></td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/media/village.webp" alt="A plains village among savanna hills, with farms, villagers and an iron golem"></td>

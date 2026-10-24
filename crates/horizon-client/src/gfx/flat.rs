@@ -640,36 +640,26 @@ impl Flat {
         pass.set_bind_group(0, group, &[]);
         pass.dispatch_workgroups((*count).min(GROUP_LIMIT), count.div_ceil(GROUP_LIMIT), 1);
     }
-    /// The bind group layout of the draws' group 1 (block slots, slot
-    /// origins).
-    pub fn draw_layout(&self) -> &wgpu::BindGroupLayout {
-        &self.draw_layout
-    }
 
     /// Draws `calls` with a flat pipeline set and `vertices` giving each
-    /// page's vertex buffer; `page` binds what else a page's draws need (a
-    /// Java pack's terrain reads the page's vertices).
+    /// page's vertex buffer.
     pub fn draw<'a>(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         calls: &[Call],
         vertices: impl Fn(u32) -> &'a wgpu::Buffer,
-        page: impl Fn(&mut wgpu::RenderPass<'_>, u32),
     ) {
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
         for call in calls {
             self.bind_page(pass, call.page, &vertices);
-            page(pass, call.page);
             pass.draw_indexed(call.first..call.first + call.count, 0, 0..1);
         }
     }
-    /// Draws phase 2's calls, as `flatten_phase2` left them; `page` as in
-    /// [`Self::draw`].
+    /// Draws phase 2's calls, as `flatten_phase2` left them.
     pub fn draw_phase2<'a>(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         vertices: impl Fn(u32) -> &'a wgpu::Buffer,
-        page: impl Fn(&mut wgpu::RenderPass<'_>, u32),
     ) {
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
         for (k, call) in self.calls[self.phase1_calls..self.solid_calls]
@@ -677,7 +667,6 @@ impl Flat {
             .enumerate()
         {
             self.bind_page(pass, call.page, &vertices);
-            page(pass, call.page);
             pass.draw_indexed_indirect(&self.phase2_calls, k as u64 * 20);
         }
     }
