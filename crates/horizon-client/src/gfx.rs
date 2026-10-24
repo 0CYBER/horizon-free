@@ -3402,10 +3402,15 @@ impl Renderer {
         };
         self.uploads
             .buffer(&mut encoder, &self.globals, 0, bytemuck::bytes_of(&globals));
+        // Vanilla keeps the view bob in the world's PoseStack, not in the
+        // projection, and packs reconstruct view positions from the depth
+        // buffer and multiply by `inverse_view` (`gbufferModelViewInverse`):
+        // with the bob in the projection instead, everything they rebuild —
+        // reflections, AO, godrays — slid along with the walk bob.
         let pack_uniform = shader_pack_uniform(
             frame,
-            view,
-            world_projection(frame.fov_degrees, aspect, frame.depth_far) * frame.bob,
+            frame.bob * view,
+            world_projection(frame.fov_degrees, aspect, frame.depth_far),
             sun,
             fog_color,
             globals.fog,
