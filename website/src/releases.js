@@ -50,8 +50,12 @@ export function sections(body) {
 // An item without its pull request references: "Riptide (#123, fixes #45)" -> "Riptide".
 export const plainItem = (item) => item.replace(/\s*\((?:#\d+|fixes #\d+|[^()]*#\d+[^()]*)\)\s*/g, " ").replace(/\s+/g, " ").trim();
 
+// A game release's notes open with an HTML block sending people to the launcher (PLAYERS in tools/release_train.py):
+// GitHub's latest release is the game's. This site has its own download button, so it leaves the block out.
+export const notesText = (body) => (body || "").replace(/^<h3>Want to play\?[^\n]*(?:\r?\n)*/, "");
+
 // The notes' first sentence, for a release with no title line and no sections ("Rebuilt from the latest main.").
-const firstLine = (body) => ((body || "").split(/\r?\n/).find((l) => l.trim() && !/^#/.test(l)) || "").trim().replace(/[.:]$/, "");
+const firstLine = (body) => (notesText(body).split(/\r?\n/).find((l) => l.trim() && !/^#/.test(l)) || "").trim().replace(/[.:]$/, "");
 
 const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
@@ -135,7 +139,7 @@ function releaseHtml(r, open) {
                 ${o.text ? `<p class="release-counts">${escape(o.text)}</p>` : ""}
                 ${top.length ? `<ul>${top.map((t) => `<li>${inline(t)}</li>`).join("")}</ul>` : ""}
               </div>` : ""}
-              <div class="prose">${markdown(r.body || "") || "<p>No notes for this release.</p>"}</div>
+              <div class="prose">${markdown(notesText(r.body)) || "<p>No notes for this release.</p>"}</div>
               ${downloads ? `<div class="release-downloads"><p class="eyebrow">Downloads</p><ul>${downloads}</ul></div>` : ""}
               <p class="release-github"><a href="${escape(r.html_url)}">This release on GitHub</a></p>
             </div>
