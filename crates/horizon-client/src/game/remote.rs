@@ -3109,6 +3109,7 @@ impl Game<'_> {
             // must continue, as well as moves into the unloaded area.
             if let Some(r) = self.remote.as_ref()
                 && r.loaded_sent
+                && !self.pause
             {
                 let input = r.last_input;
                 self.remote_send_state(input);
@@ -3243,7 +3244,9 @@ impl Game<'_> {
                 data: 0,
             }));
         }
-        self.remote_send_state(input);
+        if !self.pause {
+            self.remote_send_state(input);
+        }
         Ok(())
     }
 
