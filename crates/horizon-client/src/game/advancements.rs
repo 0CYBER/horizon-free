@@ -886,14 +886,15 @@ pub(super) fn adv_name(a: &adv::Advancement) -> Text {
         _ => text::GREEN,
     };
     // Advancement.decorateName: the title in the frame's colour (styles
-    // merged into it), a new line and the description.
+    // merged into it), then a new line and the description after the
+    // title's own siblings.
     let coloured = text_of(&d.title).with_color(color);
     let mut component = coloured.component();
     if let Some(o) = component.as_object_mut() {
-        o.insert(
-            "extra".into(),
-            serde_json::json!(["\n", text_of(&d.description).component()]),
-        );
+        let extra = o.entry("extra").or_insert_with(|| serde_json::json!([]));
+        if let Some(extra) = extra.as_array_mut() {
+            extra.extend(["\n".into(), text_of(&d.description).component()]);
+        }
     }
     let tooltip = coloured
         .append("\n")
@@ -1100,6 +1101,32 @@ mod tests {
             text_of(&serde_json::json!({"translate": "advancements.story.root.title"})),
             Text::translate("advancements.story.root.title", &[])
         );
+    }
+
+    #[test]
+    fn chat_hover_keeps_the_titles_siblings_before_the_description() {
+        let a = adv::Advancement {
+            id: "quests:board".into(),
+            parent: None,
+            display: Some(adv::Display {
+                icon: "minecraft:book".into(),
+                title: serde_json::json!({"text": "", "extra": ["Quest ", "Board"]}),
+                description: serde_json::json!("Open the board"),
+                frame: Frame::Task,
+                background: None,
+                show_toast: true,
+                announce: true,
+                hidden: false,
+            }),
+            criteria: Vec::new(),
+            requirements: Vec::new(),
+            rewards: adv::Rewards::default(),
+        };
+        // The JSON a client receives, not just the local spans.
+        let name = adv_name(&a).component();
+        let hover = &name["with"][0]["hover_event"]["value"];
+        let sent = horizon_client::scoreboard::comp_text(hover);
+        assert_eq!(sent.plain(), "Quest Board\nOpen the board");
     }
 
     #[test]
