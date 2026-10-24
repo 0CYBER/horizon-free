@@ -1562,6 +1562,8 @@ struct Game<'a> {
     score: scoreboard::ScoreState,
     fns: functions::FnState,
     bosses: bossbars::BossState,
+    /// `Hud.bossOverlay`: the bars this window is showing.
+    boss_overlay: horizon_client::boss_overlay::BossOverlay,
     exec: commands::execute::ExecState,
     rand_sequences: horizon_client::random_sequences::RandomSequences,
     border: horizon_client::worldborder::WorldBorder,
@@ -4060,6 +4062,8 @@ impl Game<'_> {
         self.track_experience_display();
         // `/tick freeze` stops the world but not the player.
         let running = self.clock.world_runs();
+        // GameRenderer.tick: a wither's bar darkens the world, then fades.
+        self.boss_overlay.tick_darken(running);
         if running {
             self.world.game_time += 1;
             if self.ui.rules.bool("advance_weather") {
@@ -4435,6 +4439,8 @@ impl Game<'_> {
             });
             horizon_client::spans::time("tick_particles", || self.tick_particles());
         }
+        // ServerBossEvent broadcasts, after this level's entities have ticked.
+        self.publish_boss_bars();
         // Minecraft.handleKeybinds: held use repeats only while no item is in
         // use (a raised shield or a drawn bow places and uses nothing).
         if self.right
@@ -7952,6 +7958,8 @@ impl Game<'_> {
         self.session_lock = None;
         horizon_client::crash::clear_detail("World");
         self.debug_charts.reset();
+        self.boss_overlay.reset();
+        self.bosses = Default::default();
         self.streaming.paused = true;
         self.world = World::new(self.res.facts().air, 0);
         self.player = None;
@@ -10095,7 +10103,7 @@ impl Game<'_> {
                 if !self.settings.horizon.fog
                     && !underwater
                     && self.darkness_fog().is_none()
-                    && !self.dragon_bar_shown()
+                    && !self.boss_overlay.should_create_world_fog()
                     && self.potions.effects.get("blindness").is_none()
                     && fog.environmental_end >= (self.streaming.radius * 16) as f32
                 {
@@ -10166,6 +10174,9 @@ impl Game<'_> {
             darkness: self.darkness_lighting(alpha as f32),
             night_vision: self.night_vision_intensity(),
             block_flicker: self.fog.block_light_flicker,
+            boss_darken: self
+                .boss_overlay
+                .darken_amount(self.clock.fraction() as f32),
             menu_blur: self.menu_blur(),
         };
         let result = match self.renderer.as_mut() {
@@ -11953,6 +11964,7 @@ impl<'a> Game<'a> {
             score: Default::default(),
             fns: Default::default(),
             bosses: Default::default(),
+            boss_overlay: Default::default(),
             exec: Default::default(),
             rand_sequences: Default::default(),
             border: Default::default(),
@@ -12680,6 +12692,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         darkness: (0.0, 0.0),
         night_vision: 0.0,
         block_flicker: 0.0,
+        boss_darken: 0.0,
         menu_blur: None,
     }
 }
