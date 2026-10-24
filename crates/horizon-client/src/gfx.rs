@@ -2159,7 +2159,7 @@ impl Renderer {
                     cull::Cull::new(&device, config.format.remove_srgb_suffix(), depth_test);
                 cull.always = cull_env.as_deref() == Ok("all");
                 if !cull.always && adapter.get_info().backend == wgpu::Backend::Metal {
-                    cull.min_draws = cull::TILED_MIN_DRAWS;
+                    cull.min_sections = cull::TILED_MIN_SECTIONS;
                 }
                 cull
             });
@@ -3131,7 +3131,7 @@ impl Renderer {
             .cull
             .as_mut()
             .filter(|c| {
-                self.cull_on && !frame.title && self.multi_draw && self.section_draws >= c.min_draws
+                self.cull_on && !frame.title && self.multi_draw && visible.len() >= c.min_sections
             })
             .and_then(|cull| cull.begin(&self.device).then_some(cull));
         self.phase2_draws.clear();
@@ -3533,7 +3533,9 @@ impl Renderer {
         }
         let flat_frame = match &mut self.flat {
             Some(flat)
-                if self.flat_on && !self.draws.is_empty() && self.draws.len() >= flat.min_draws =>
+                if self.flat_on
+                    && !self.draws.is_empty()
+                    && self.drawn_sections >= flat.min_sections =>
             {
                 let sections = &self.sections;
                 let lods = &self.lods;
