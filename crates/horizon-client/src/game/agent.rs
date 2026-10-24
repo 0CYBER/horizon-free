@@ -678,6 +678,8 @@ impl Game<'_> {
         json!({
             "chat": self.remote_chat(n).unwrap_or_else(|| self.ui.chat.recent_lines(n)),
             "order": "newest first",
+            // The chat lines as drawn: colours, click and hover events.
+            "styled": self.ui.chat.recent_components(n),
             "title": (titles.time > 0).then(|| titles.title.as_ref().map(|t| t.plain())).flatten(),
             "subtitle": (titles.time > 0).then(|| titles.subtitle.as_ref().map(|t| t.plain())).flatten(),
             "actionbar": (titles.overlay_time > 0).then(|| titles.overlay.as_ref().map(|t| t.plain())).flatten(),
