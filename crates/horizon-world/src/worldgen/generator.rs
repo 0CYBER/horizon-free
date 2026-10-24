@@ -1510,7 +1510,15 @@ where
         self.pipeline.generation()
     }
     fn noise_biome(&mut self, quart: [i32; 3]) -> BiomeId {
-        self.noise_biomes(&[quart])[0]
+        if let Some(&id) = self.worker.structure_biomes.get(&quart) {
+            return id;
+        }
+        let id = self.noise_biomes(&[quart])[0];
+        if self.worker.structure_biomes.len() >= 1 << 16 {
+            self.worker.structure_biomes.clear();
+        }
+        self.worker.structure_biomes.insert(quart, id);
+        id
     }
     fn noise_biomes(&mut self, quarts: &[[i32; 3]]) -> Vec<BiomeId> {
         let mut resolver = self.pipeline.source.resolver(
@@ -1710,6 +1718,10 @@ pub(super) struct WorkerState {
     /// Seed/dimension-bound lookups avoid the shared mutex for overlapping
     /// carver neighborhoods. Bounded independently of the shared cache.
     carver_biomes: HashMap<(i32, i32), BiomeId>,
+    /// Noise biomes asked one at a time by structure placement checks
+    /// (`StartContext::noise_biome`): several structures test the same
+    /// quarts, column checks whole columns, and each is a full climate sample.
+    structure_biomes: HashMap<[i32; 3], BiomeId>,
     timings: StageTimings,
     heights: HashMap<(i32, i32, u8), i32>,
     /// Decorate with structure pieces only (for structure parity checks).
@@ -2544,6 +2556,7 @@ impl OverworldGenerator {
                 biome_context: SamplerContext::cached(),
                 carver_context: SamplerContext::default(),
                 carver_biomes: HashMap::new(),
+                structure_biomes: HashMap::new(),
                 timings: StageTimings::default(),
                 structures_only: false,
                 structure_mobs: None,
