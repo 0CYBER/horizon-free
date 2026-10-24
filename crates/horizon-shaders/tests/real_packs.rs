@@ -5,7 +5,7 @@
 use std::path::Path;
 use std::time::Instant;
 
-use horizon_shaders::{Lang, Pack, discover};
+use horizon_shaders::{Lang, Macros, Pack, Properties, discover};
 
 #[test]
 #[ignore = "needs HORIZON_TEST_SHADER_PACKS"]
@@ -22,21 +22,37 @@ fn real_packs_read() {
     for f in found.iter().filter(|f| f.problem.is_none()) {
         let start = Instant::now();
         let pack = Pack::open(&f.path).unwrap();
-        let properties = pack.read_text("shaders.properties");
+        let macros = Macros::standard();
+        let shaders = Properties::parse(
+            &pack.read_text("shaders.properties").unwrap_or_default(),
+            &macros,
+        );
+        let ids: Vec<Properties> = ["block", "item", "entity", "dimension"]
+            .iter()
+            .filter_map(|n| pack.read_text(&format!("{n}.properties")))
+            .map(|t| Properties::parse(&t, &macros))
+            .collect();
         let lang = Lang::load(&pack, "en_us");
+        let elapsed = start.elapsed();
         println!(
-            "{}: {} files at the root, shaders.properties {} bytes, lang {}, {:.2} ms",
+            "{}: shaders.properties {} keys ({} notes), {} id files {} keys ({} notes), lang {}, {:.2} ms",
             f.name,
-            pack.list("").len(),
-            properties.as_ref().map_or(0, String::len),
+            shaders.entries.len(),
+            shaders.notes.len(),
+            ids.len(),
+            ids.iter().map(|p| p.entries.len()).sum::<usize>(),
+            ids.iter().map(|p| p.notes.len()).sum::<usize>(),
             if lang == Lang::default() {
                 "none"
             } else {
                 "read"
             },
-            start.elapsed().as_secs_f64() * 1000.0
+            elapsed.as_secs_f64() * 1000.0
         );
-        assert!(properties.is_some(), "{}: no shaders.properties", f.name);
+        for n in &shaders.notes {
+            println!("  shaders.properties:{}: {}", n.line, n.message);
+        }
+        assert!(!shaders.entries.is_empty(), "{}: no keys read", f.name);
         read += 1;
     }
     assert!(read > 0, "no packs under {}", dir.display());
