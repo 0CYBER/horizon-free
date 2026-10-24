@@ -690,39 +690,55 @@ impl Game<'_> {
         }
     }
     /// `AbstractMinecart.push(player)` when the player walks into a cart.
+    /// `AbstractMinecart.push` from each player walking into a cart
+    /// (`LivingEntity.pushEntities`): the window's player and every server
+    /// player (single player's own on its server thread, LAN guests). A
+    /// player in a vehicle pushes nothing here. The quarter push the player
+    /// gets back only moves the server's copy of it (`Entity.push` marks
+    /// `needsSync`, which `ServerEntity` sends to the other players only),
+    /// so no player feels it.
     fn push_carts(&mut self) {
-        let player = self.player.as_ref().map(|p| p.position);
-        let riding = self.riding;
-        for i in 0..self.carts.len() {
-            if Some(self.carts[i].id) == riding {
-                continue;
+        // (feet, height)
+        let mut pushers: Vec<(Vec3, f64)> = Vec::new();
+        if self.riding.is_none()
+            && let Some(p) = self.player.as_ref()
+        {
+            pushers.push((p.position, 1.8));
+        }
+        if let Some(host) = self.lan.as_ref() {
+            for g in host.hub.guests.iter().filter(|g| {
+                host.hub.here(g) && g.loaded && !g.dead && !g.spectator() && g.vehicle.is_none()
+            }) {
+                let [x, y, z] = g.position;
+                let height = if g.sneaking { 1.5 } else { 1.8 };
+                pushers.push((Vec3::new(x, y, z), height));
             }
-            if let Some(pp) = player {
+        }
+        for (pp, height) in pushers {
+            for i in 0..self.carts.len() {
                 let bb = self.carts[i].bounds();
                 let (lo, hi) = (bb.min_position(), bb.max_position());
                 let touching = pp.x + 0.3 > lo.x
                     && pp.x - 0.3 < hi.x
                     && pp.z + 0.3 > lo.z
                     && pp.z - 0.3 < hi.z
-                    && pp.y + 1.8 > lo.y
+                    && pp.y + height > lo.y
                     && pp.y < hi.y;
-                if touching && riding.is_none() {
-                    let c = &mut self.carts[i];
-                    let (mut xa, mut za) = (pp.x - c.position.x, pp.z - c.position.z);
-                    let dd = xa * xa + za * za;
-                    if dd >= 1.0e-4 {
-                        let d = dd.sqrt();
-                        let pow = (1.0 / d).min(1.0);
-                        xa = xa / d * pow * f64::from(0.1f32) * 0.5;
-                        za = za / d * pow * f64::from(0.1f32) * 0.5;
-                        c.velocity.x -= xa;
-                        c.velocity.z -= za;
-                        if let Some(p) = self.player.as_mut() {
-                            p.velocity.x += xa / 4.0;
-                            p.velocity.z += za / 4.0;
-                        }
-                    }
+                if !touching {
+                    continue;
                 }
+                let c = &mut self.carts[i];
+                let (mut xa, mut za) = (pp.x - c.position.x, pp.z - c.position.z);
+                let dd = xa * xa + za * za;
+                if dd < 1.0e-4 {
+                    continue;
+                }
+                let d = dd.sqrt();
+                let pow = (1.0 / d).min(1.0);
+                xa = xa / d * pow * f64::from(0.1f32) * 0.5;
+                za = za / d * pow * f64::from(0.1f32) * 0.5;
+                c.velocity.x -= xa;
+                c.velocity.z -= za;
             }
         }
     }
