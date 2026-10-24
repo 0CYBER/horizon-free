@@ -236,21 +236,25 @@ impl Component {
                     hidden: (0..n).map(|_| r.varint()).collect::<Result<_>>()?,
                 }
             }
+            // ArmorTrim.STREAM_CODEC: two holders, each a reference's id plus
+            // one. A direct material or pattern has no registry name: read past.
+            TRIM => {
+                let start = r.position();
+                skip::component(TRIM, r)?;
+                let bytes = r.since(start);
+                let mut ids = Reader::new(bytes);
+                match (ids.varint(), ids.varint()) {
+                    (Ok(material @ 1..), Ok(pattern @ 1..)) if ids.remaining() == 0 => Self::Trim {
+                        material: material - 1,
+                        pattern: pattern - 1,
+                    },
+                    _ => Self::Raw(bytes.to_vec()),
+                }
+            }
             other => {
                 let start = r.position();
                 skip::component(other, r)?;
-                let bytes = r.since(start);
-                // Two references: each holder is just its id plus one.
-                let mut ids = Reader::new(bytes);
-                match (other, ids.varint(), ids.varint()) {
-                    (TRIM, Ok(material @ 1..), Ok(pattern @ 1..)) if ids.remaining() == 0 => {
-                        Self::Trim {
-                            material: material - 1,
-                            pattern: pattern - 1,
-                        }
-                    }
-                    _ => Self::Raw(bytes.to_vec()),
-                }
+                Self::Raw(r.since(start).to_vec())
             }
         })
     }
@@ -668,8 +672,9 @@ mod tests {
     #[test]
     fn components_read_past_keep_their_bytes() {
         // Vanilla 26.3's encoding (tools/test_item_wire_parity.py) of a chestplate's
-        // armour trim (decoded: both holders are references), a banner's patterns (one direct), a pot's sherds and a stew's
-        // effects: one server's inventory, recipe book and advancements had them.
+        // armour trim (decoded: both holders are references), a banner's patterns
+        // (one direct), a pot's sherds and a stew's effects: one server's
+        // inventory, recipe book and advancements had them.
         for (hex, kind) in [
             ("01bd0801003a0502", 58),
             ("01890b01004a02200e000b6d696e6563726166743a7801790b", 74),
