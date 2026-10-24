@@ -2779,17 +2779,21 @@ impl Renderer {
             i += run;
         }
     }
-    /// Horizon's terrain, solid or `translucent`, with a Java pack's
-    /// geometry pipelines (`java_terrain::DrawTerrain`): the frame's flat
-    /// draws or its section draws, each page with its group 3.
+    /// One `layer` of Horizon's terrain with a Java pack's geometry
+    /// pipelines (`java_terrain::DrawTerrain`): the frame's flat draws or its
+    /// section draws, each page with its group 3. `draws` are the frame's
+    /// phase 1 solid draws, all its solid draws and its translucent ones;
+    /// `culling` tells whether phase 2's come from occlusion culling.
     fn draw_java_terrain(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
-        translucent: bool,
+        layer: java_terrain::Layer,
         pipelines: &java_terrain::TerrainPipelines,
         flat_frame: bool,
-        draws: [u32; 2],
+        draws: [u32; 3],
+        culling: bool,
     ) {
+        use java_terrain::Layer;
         let page = |pass: &mut wgpu::RenderPass<'_>, page: u32| {
             if let Some(Some((_, group))) = self.java_pages.get(page as usize) {
                 pass.set_bind_group(3, group, &[]);
@@ -2797,27 +2801,39 @@ impl Renderer {
         };
         pass.set_bind_group(2, pipelines.group, &[]);
         match (self.flat.as_ref().filter(|_| flat_frame), pipelines.flat) {
+            // Without occlusion culling, phase 1 is every solid call.
             (Some(flat), Some(pipeline)) => {
+                let vertices = |p| self.arena.buffer(p);
                 pass.set_pipeline(pipeline);
-                let calls = if translucent {
-                    &flat.calls[flat.solid_calls..]
-                } else {
-                    &flat.calls[..flat.solid_calls]
-                };
-                flat.draw(pass, calls, |p| self.arena.buffer(p), page);
+                match layer {
+                    Layer::Solid => {
+                        flat.draw(pass, &flat.calls[..flat.phase1_calls], vertices, page)
+                    }
+                    Layer::Revealed if culling => flat.draw_phase2(pass, vertices, page),
+                    Layer::Revealed => {}
+                    Layer::Translucent => {
+                        flat.draw(pass, &flat.calls[flat.solid_calls..], vertices, page)
+                    }
+                }
             }
             (Some(_), None) => {}
             (None, _) => {
+                let [phase1, solid, translucent_draws] = draws;
+                let cull = self.cull.as_ref().filter(|_| culling);
+                let (indirect, base, first, count) = match (layer, cull) {
+                    (Layer::Solid, Some(_)) => (&self.indirect, 0, 0, phase1),
+                    (Layer::Solid, None) => (&self.indirect, 0, 0, solid),
+                    (Layer::Revealed, Some(c)) => (&c.phase2, phase1, phase1, solid - phase1),
+                    (Layer::Revealed, None) => return,
+                    (Layer::Translucent, _) => (&self.indirect, 0, solid, translucent_draws),
+                };
+                if count == 0 {
+                    return;
+                }
                 pass.set_pipeline(pipelines.instanced);
                 pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.set_vertex_buffer(1, self.instances.slice(..));
-                let [solid, translucent_draws] = draws;
-                let (first, count) = if translucent {
-                    (solid, translucent_draws)
-                } else {
-                    (0, solid)
-                };
-                self.draw_sections_with(pass, &self.indirect, 0, first, count, page);
+                self.draw_sections_with(pass, indirect, base, first, count, page);
             }
         }
     }
@@ -3423,8 +3439,8 @@ impl Renderer {
             .inverse()
             .transform_point3(Vec3::ZERO);
         // A Java pack that draws the terrain (`gfx/java_terrain.rs`): the
-        // world pass leaves it out, and occlusion culling (which tests
-        // against its depth) is off.
+        // world pass leaves it out, and occlusion culling tests against the
+        // pack's depth (`Cull::test_gl`).
         let java_terrain = !frame.title
             && self.java_table.is_some()
             && matches!(&self.pack, Some(Pack::Java(j)) if j.draws_terrain(frame.shader.dimension));
@@ -3435,11 +3451,7 @@ impl Renderer {
             .cull
             .as_mut()
             .filter(|c| {
-                self.cull_on
-                    && !frame.title
-                    && self.multi_draw
-                    && self.section_draws >= c.min_draws
-                    && !java_terrain
+                self.cull_on && !frame.title && self.multi_draw && self.section_draws >= c.min_draws
             })
             .and_then(|cull| cull.begin(&self.device).then_some(cull));
         self.phase2_draws.clear();
@@ -4084,7 +4096,7 @@ impl Renderer {
                             );
                             pass.set_bind_group(0, &self.group, &[]);
                             pass.set_pipeline(&flat.solid);
-                            flat.draw_phase2(&mut pass, vertices);
+                            flat.draw_phase2(&mut pass, vertices, |_, _| {});
                         }
                         None => flat.draw(
                             &mut pass,
@@ -4308,11 +4320,21 @@ impl Renderer {
             && let Some(mut stages) = self.pack.take()
         {
             // The pack's terrain programs draw with the frame's draws.
-            let draws = [solid_draws, translucent_draws];
+            let draws = [phase1_draws, solid_draws, translucent_draws];
             let draw = |render: &mut wgpu::RenderPass<'_>,
-                        translucent: bool,
+                        layer: java_terrain::Layer,
                         pipelines: &java_terrain::TerrainPipelines| {
-                self.draw_java_terrain(render, translucent, pipelines, flat_frame, draws);
+                self.draw_java_terrain(render, layer, pipelines, flat_frame, draws, culling);
+            };
+            let cull = self.cull.as_ref().filter(|_| culling && solid_draws > 0);
+            let occlusion = |encoder: &mut wgpu::CommandEncoder, depth: &wgpu::TextureView| {
+                if let Some(cull) = cull {
+                    cull.test_gl(&self.device, encoder, depth);
+                    // The flat path's phase 2: the calls the test saw.
+                    if let Some(flat) = self.flat.as_ref().filter(|_| flat_frame) {
+                        flat.flatten_phase2(encoder);
+                    }
+                }
             };
             let world = java_terrain::JavaWorld {
                 sprites: &self.sprite_textures,
@@ -4321,6 +4343,9 @@ impl Renderer {
                 animated: &self.animated,
                 lightmap: &self.lightmap_view,
                 draw: &draw,
+                occlusion: cull
+                    .is_some()
+                    .then_some(&occlusion as &java_terrain::OcclusionTest),
             };
             let output = match &mut stages {
                 Pack::Horizon(stages) => stages.run(

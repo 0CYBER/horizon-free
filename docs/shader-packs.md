@@ -416,6 +416,11 @@ sprite arrays (animated sprites copied in each frame), `lightmap` is Horizon's l
 and fragments under alpha 0.1 are discarded (`alphaTestRef`). `RGBA16` targets are 16-bit unorm where the GPU can
 render them (Chocapic13' packs its G-buffer into them; half floats broke it).
 
+Occlusion culling works as in Horizon's world pass where the GPU has it: the pack's terrain program draws the
+sections the last test saw, the boxes of the others are tested against that depth (in OpenGL's layout, in a pass of
+their own since the pack's targets vary; on Metal the test reads the depth in the shader, as Horizon's does), and the
+pack's program then draws the ones in sight, flat draws included.
+
 What makes Horizon look like OpenGL to the pack:
 
 - **Layout.** The translator ends every vertex shader by flipping `gl_Position.y` and moving depth from `[-w, w]` to
@@ -452,8 +457,7 @@ depth read as far. Horizon's world goes into the target the pack's `gbuffers_ter
 to) draws to first: `colortex0` for most packs, `colortex1` for MakeUp. Not supported yet: images and compute (`.csh`;
 a pack that needs them doesn't load), mipmapped targets (`colortexNMipmapEnabled` is read but ignored), `.dat` and
 resource-location custom textures (PNG files in the pack only); shadow matrices are identity. With the pack's terrain:
-entities, the sky, the hand, weather and clouds are still Horizon's (in that first target only), GPU occlusion culling
-is off, block ids come from sprite names rather than block states, distant (LOD) terrain doesn't repeat its textures,
+entities, the sky, the hand, weather and clouds are still Horizon's (in that first target only), block ids come from sprite names rather than block states, distant (LOD) terrain doesn't repeat its textures,
 and only the overworld has been checked.
 
 ### Compatibility
