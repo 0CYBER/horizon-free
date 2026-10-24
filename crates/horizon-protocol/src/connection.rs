@@ -6,7 +6,7 @@
 use crate::{Error, Result, buf::Reader, crypto::Cfb8, frame};
 use std::{
     io::{Read, Write},
-    net::{Shutdown, TcpStream, ToSocketAddrs},
+    net::{Shutdown, SocketAddr, TcpStream, ToSocketAddrs},
     sync::{
         Arc, Condvar, Mutex,
         atomic::{AtomicI64, Ordering},
@@ -180,6 +180,13 @@ pub struct ConnWriter {
     pub threshold: Option<usize>,
     counters: Arc<Counters>,
 }
+/// InetAddress.getByName with Java's default `java.net.preferIPv6Addresses=false`: IPv4 addresses
+/// first, whatever order the system resolver gives (macOS puts IPv6 first). A server whose IPv6
+/// address doesn't answer the game still lets vanilla in over IPv4.
+fn ipv4_first(mut addrs: Vec<SocketAddr>) -> Vec<SocketAddr> {
+    addrs.sort_by_key(SocketAddr::is_ipv6);
+    addrs
+}
 /// Both halves before the split.
 pub struct Connection {
     pub reader: ConnReader,
@@ -187,10 +194,12 @@ pub struct Connection {
 }
 impl Connection {
     pub fn connect(host: &str, port: u16, timeout: Duration) -> Result<Self> {
-        let addrs: Vec<_> = (host, port)
-            .to_socket_addrs()
-            .map_err(|e| Error::new(format!("Unknown host {host}: {e}")))?
-            .collect();
+        let addrs = ipv4_first(
+            (host, port)
+                .to_socket_addrs()
+                .map_err(|e| Error::new(format!("Unknown host {host}: {e}")))?
+                .collect(),
+        );
         let mut last = Error::new(format!("Unknown host {host}"));
         for addr in addrs {
             match TcpStream::connect_timeout(&addr, timeout) {
@@ -314,6 +323,26 @@ impl ConnWriter {
 mod tests {
     use super::*;
     use std::net::TcpListener;
+
+    #[test]
+    fn ipv4_addresses_come_first_in_resolver_order() {
+        let a = |s: &str| s.parse::<SocketAddr>().unwrap();
+        let resolved = vec![
+            a("[2001:db8::1]:25565"),
+            a("192.0.2.1:25565"),
+            a("[2001:db8::2]:25565"),
+            a("10.0.0.1:25565"),
+        ];
+        assert_eq!(
+            ipv4_first(resolved),
+            [
+                a("192.0.2.1:25565"),
+                a("10.0.0.1:25565"),
+                a("[2001:db8::1]:25565"),
+                a("[2001:db8::2]:25565"),
+            ]
+        );
+    }
 
     #[test]
     fn loopback_with_compression_and_encryption() {
