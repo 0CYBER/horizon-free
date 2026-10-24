@@ -2,7 +2,7 @@
 //! seconds, reporting packet counts and any decode failures. A differential
 //! check of the codecs against a real vanilla server:
 //!
-//!     cargo run -p horizon-protocol --example probe -- 127.0.0.1:25565 [seconds] [registries.json]
+//!     cargo run -p horizon-protocol --example protocol_probe -- 127.0.0.1:25565 [seconds] [registries.json]
 use horizon_protocol::{
     PROTOCOL_VERSION, State,
     connection::Connection,

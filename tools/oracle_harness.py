@@ -32,12 +32,12 @@ def compile_oracle(build, oracle_name, jars, libraries, java_major):
 
 def build_probe(build, example):
     """Build the horizon-client probe binary; returns the command that runs probe `example`."""
-    run_logged(['cargo', 'build', '--locked', '-p', 'horizon-client', '--example', 'probe'],
+    run_logged(['cargo', 'build', '--locked', '-p', 'horizon-client', '--example', 'client_probe'],
                build, 'compile-rust-' + example, env=dict(os.environ, CARGO_BUILD_JOBS='3'))
     import json
     metadata = json.loads(subprocess.check_output(
         ['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1'], cwd=lab.ROOT))
-    return [Path(metadata['target_directory']) / 'debug/examples/probe', example]
+    return [Path(metadata['target_directory']) / 'debug/examples/client_probe', example]
 
 
 def java_run(build, classes, dependencies, main_class, args, name, jvm=()):

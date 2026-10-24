@@ -67,8 +67,8 @@ def main():
         with (build/(name+'.log')).open('w',encoding='utf-8') as log:base.run(list(map(str,command)),stdout=log,stderr=subprocess.STDOUT)
     dependencies=os.pathsep.join(map(str,libraries))
     run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'),'-cp',str(jars['server'])+os.pathsep+dependencies,'-d',classes,*oracles],'compile-java')
-    run(['cargo','build','--release','-p','horizon-world','--example','probe'],'compile-rust')
-    metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],cwd=lab.ROOT,text=True));binary=Path(metadata['target_directory'])/'release/examples'/('probe.exe' if os.name=='nt' else 'probe');run([binary,'material_extension_fixture',build],'rust');references=[]
+    run(['cargo','build','--release','-p','horizon-world','--example','world_probe'],'compile-rust')
+    metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],cwd=lab.ROOT,text=True));binary=Path(metadata['target_directory'])/'release/examples'/('world_probe.exe' if os.name=='nt' else 'world_probe');run([binary,'material_extension_fixture',build],'rust');references=[]
     for side,jar in jars.items():
         run(['java','-Xmx512M','-cp',os.pathsep.join([str(classes),str(jar),dependencies]),'dev.horizonlab.parity.VanillaMaterialExtensionOracle',side,build],side)
         reference=build/f'{side}.txt';matched=base.compare(reference,build/'rust.txt');references.append({'side':side,'jar_sha256':lab.digest(jar,'sha256'),'output_sha256':lab.digest(reference,'sha256'),'matched_output_lines':matched});print(f'{side}: {matched:,} material-extension output lines match Rust',flush=True)
