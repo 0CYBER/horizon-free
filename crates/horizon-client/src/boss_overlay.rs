@@ -1,6 +1,11 @@
 //! `BossHealthOverlay` and `LerpingBossEvent`: the boss bars a client is
 //! showing, in the order their add packets arrived.
-use crate::{hud_overlays::BossBar, text::Text};
+use crate::{
+    hud_overlays::BossBar,
+    scoreboard::{comp_text, tag_to_json},
+    text::Text,
+};
+use horizon_protocol::packets::play::{BossAction, BossEvent};
 
 /// `LerpingBossEvent.LERP_MILLISECONDS`.
 const LERP_MS: u128 = 100;
@@ -57,61 +62,62 @@ impl BossOverlay {
     pub fn reset(&mut self) {
         *self = Self::default();
     }
-    /// `Handler.add`. An id already shown keeps its place.
-    pub fn add(
-        &mut self,
-        id: u128,
-        name: Text,
-        progress: f32,
-        color: u8,
-        overlay: u8,
-        darken: bool,
-        music: bool,
-        fog: bool,
-        now: u128,
-    ) {
-        let event = Event {
-            id,
+    /// `ClientboundBossEventPacket.dispatch` into `BossHealthOverlay`'s
+    /// handler. An id already shown keeps its place when added again.
+    pub fn apply(&mut self, packet: &BossEvent, now: u128) {
+        // An ordinal past the enum shows as its last value.
+        let color = |c: i32| c.clamp(0, 6) as u8;
+        let overlay = |o: i32| o.clamp(0, 4) as u8;
+        let id = packet.id;
+        if let BossAction::Add {
             name,
             progress,
-            target: progress,
-            set_at: now,
-            color: color.min(6),
-            overlay: overlay.min(4),
+            color: c,
+            overlay: o,
             darken,
             music,
             fog,
+        } = &packet.action
+        {
+            let event = Event {
+                id,
+                name: comp_text(&tag_to_json(name)),
+                progress: *progress,
+                target: *progress,
+                set_at: now,
+                color: color(*c),
+                overlay: overlay(*o),
+                darken: *darken,
+                music: *music,
+                fog: *fog,
+            };
+            match self.events.iter_mut().find(|e| e.id == id) {
+                Some(slot) => *slot = event,
+                None => self.events.push(event),
+            }
+            return;
+        }
+        if let BossAction::Remove = packet.action {
+            self.events.retain(|e| e.id != id);
+            return;
+        }
+        let Some(e) = self.events.iter_mut().find(|e| e.id == id) else {
+            return;
         };
-        if let Some(slot) = self.events.iter_mut().find(|e| e.id == id) {
-            *slot = event;
-        } else {
-            self.events.push(event);
-        }
-    }
-    pub fn remove(&mut self, id: u128) {
-        self.events.retain(|e| e.id != id);
-    }
-    pub fn set_progress(&mut self, id: u128, progress: f32, now: u128) {
-        if let Some(e) = self.events.iter_mut().find(|e| e.id == id) {
-            e.set_progress(progress, now);
-        }
-    }
-    pub fn set_name(&mut self, id: u128, name: Text) {
-        if let Some(e) = self.events.iter_mut().find(|e| e.id == id) {
-            e.name = name;
-        }
-    }
-    pub fn set_style(&mut self, id: u128, color: u8, overlay: u8) {
-        if let Some(e) = self.events.iter_mut().find(|e| e.id == id) {
-            e.color = color.min(6);
-            e.overlay = overlay.min(4);
-        }
-    }
-    pub fn set_properties(&mut self, id: u128, darken: bool, music: bool, fog: bool) {
-        if let Some(e) = self.events.iter_mut().find(|e| e.id == id) {
-            e.darken = darken;
-            e.music = music;
-            e.fog = fog;
+        match &packet.action {
+            BossAction::UpdateProgress { progress } => e.set_progress(*progress, now),
+            BossAction::UpdateName { name } => e.name = comp_text(&tag_to_json(name)),
+            BossAction::UpdateStyle {
+                color: c,
+                overlay: o,
+            } => {
+                e.color = color(*c);
+                e.overlay = overlay(*o);
+            }
+            BossAction::UpdateProperties { darken, music, fog } => {
+                (e.darken, e.music, e.fog) = (*darken, *music, *fog);
+            }
+            BossAction::Add { .. } | BossAction::Remove => {}
         }
     }
     /// `GameRenderer.tick` while the level runs.
@@ -157,26 +163,54 @@ impl BossOverlay {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use horizon_world::nbt::Tag;
+
+    fn add(id: u128, name: &str, progress: f32, darken: bool, fog: bool) -> BossEvent {
+        BossEvent {
+            id,
+            action: BossAction::Add {
+                name: Tag::String(name.into()),
+                progress,
+                color: 5,
+                overlay: 0,
+                darken,
+                music: false,
+                fog,
+            },
+        }
+    }
+    fn progress(id: u128, progress: f32) -> BossEvent {
+        BossEvent {
+            id,
+            action: BossAction::UpdateProgress { progress },
+        }
+    }
 
     #[test]
     fn progress_lerps_over_a_tenth_of_a_second() {
         let mut overlay = BossOverlay::default();
-        overlay.add(1, Text::literal("W"), 0.0, 5, 0, true, false, false, 0);
-        overlay.set_progress(1, 1.0, 0);
+        overlay.apply(&add(1, "W", 0.0, true, false), 0);
+        overlay.apply(&progress(1, 1.0), 0);
         assert!((overlay.bars(50)[0].progress - 0.5).abs() < 1.0e-5);
         assert!((overlay.bars(100)[0].progress - 1.0).abs() < 1.0e-5);
         // A new target starts from the value on screen.
-        overlay.set_progress(1, 0.0, 50);
+        overlay.apply(&progress(1, 0.0), 50);
         assert!((overlay.bars(150)[0].progress - 0.0).abs() < 1.0e-5);
     }
 
     #[test]
     fn darken_ramps_and_fades() {
         let mut overlay = BossOverlay::default();
-        overlay.add(1, Text::literal("W"), 1.0, 5, 0, true, false, false, 0);
+        overlay.apply(&add(1, "W", 1.0, true, false), 0);
         overlay.tick_darken(true);
         assert!((overlay.darken_amount(1.0) - 0.05).abs() < 1.0e-5);
-        overlay.remove(1);
+        overlay.apply(
+            &BossEvent {
+                id: 1,
+                action: BossAction::Remove,
+            },
+            0,
+        );
         overlay.tick_darken(true);
         assert!((overlay.darken - 0.0375).abs() < 1.0e-5);
         assert!(!overlay.should_play_music());
@@ -185,9 +219,11 @@ mod tests {
     #[test]
     fn bars_keep_arrival_order() {
         let mut overlay = BossOverlay::default();
-        overlay.add(2, Text::literal("b"), 1.0, 0, 0, false, true, true, 0);
-        overlay.add(1, Text::literal("a"), 1.0, 0, 0, false, false, false, 0);
-        overlay.add(2, Text::literal("c"), 0.5, 1, 2, false, true, true, 0);
+        overlay.apply(&add(2, "b", 1.0, false, true), 0);
+        overlay.apply(&add(1, "a", 1.0, false, false), 0);
+        overlay.apply(&add(2, "c", 0.5, false, true), 0);
+        // An update for a bar this client never got is ignored.
+        overlay.apply(&progress(9, 0.5), 0);
         let names: Vec<_> = overlay
             .bars(0)
             .into_iter()
@@ -195,7 +231,13 @@ mod tests {
             .collect();
         assert_eq!(names, ["c", "a"]);
         assert!(overlay.should_create_world_fog());
-        overlay.remove(2);
+        overlay.apply(
+            &BossEvent {
+                id: 2,
+                action: BossAction::Remove,
+            },
+            0,
+        );
         assert!(!overlay.should_create_world_fog());
     }
 }

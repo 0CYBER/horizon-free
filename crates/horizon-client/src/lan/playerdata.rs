@@ -27,6 +27,11 @@ pub fn uuid_ints(uuid: u128) -> [i32; 4] {
         uuid as i32,
     ]
 }
+/// `UUIDUtil.uuidFromIntArray`.
+pub fn ints_uuid(ints: [i32; 4]) -> u128 {
+    ints.iter()
+        .fold(0, |acc, &i| acc << 32 | u128::from(i as u32))
+}
 
 /// Whether a saved file exists for this player.
 pub fn exists(world: &Path, uuid: u128) -> bool {

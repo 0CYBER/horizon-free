@@ -9,7 +9,7 @@ use horizon_client::{
     command::{Arg, Context},
     mobs::Species,
     save,
-    scoreboard::{self as sb, Comp, comp_text, json_to_tag, tag_to_json},
+    scoreboard::{self as sb, Comp, json_to_tag},
     scoreboard_cmd::format_list,
     text::Text,
 };
@@ -23,7 +23,7 @@ pub(super) struct BossState {
     pub bars: BossBars,
     loaded: bool,
     /// What each viewer was last sent, so a change becomes one packet.
-    sent: HashMap<u128, HashMap<u128, Sent>>,
+    sent: HashMap<u128, HashMap<u128, Offer>>,
 }
 
 fn num(n: impl std::fmt::Display) -> Text {
@@ -418,12 +418,11 @@ impl Game<'_> {
         let mut packets = Vec::new();
         for viewer in &viewers {
             let desired = self.boss_events_for(viewer);
-            let changes = self.diff_boss_events(viewer, &desired);
-            if viewer.local {
-                apply_local(&mut self.boss_overlay, &changes, now);
-            } else if let Some(conn) = viewer.conn {
-                for change in changes {
-                    packets.push((conn, boss_packet(change)));
+            for event in self.diff_boss_events(viewer, desired) {
+                if viewer.local {
+                    self.boss_overlay.apply(&event, now);
+                } else if let Some(conn) = viewer.conn {
+                    packets.push((conn, C::BossEvent(event)));
                 }
             }
         }
@@ -446,7 +445,7 @@ impl Game<'_> {
         if local && let Some(p) = &self.player {
             let ints = self.level.player_uuid.unwrap_or_else(|| self.acting_uuid());
             out.push(Viewer {
-                uuid: ints_to_uuid(ints),
+                uuid: horizon_client::lan::playerdata::ints_uuid(ints),
                 ints,
                 at: [p.position.x, p.position.y, p.position.z],
                 alive: !p.health.dead_or_dying(),
@@ -552,8 +551,8 @@ impl Game<'_> {
                 id: b.uuid,
                 name: json_to_tag(&b.name),
                 progress: b.progress(),
-                color: color_index(&b.color) as u8,
-                overlay: style_index(&b.style) as u8,
+                color: color_index(&b.color),
+                overlay: style_index(&b.style),
                 darken: b.darken,
                 music: b.music,
                 fog: b.fog,
@@ -562,108 +561,66 @@ impl Game<'_> {
         }
         out
     }
-    fn diff_boss_events(&mut self, viewer: &Viewer, desired: &[Offer]) -> Vec<Change> {
+    /// The packets that take `viewer` from what it was last sent to `desired`
+    /// (`ServerBossEvent`'s broadcasts).
+    fn diff_boss_events(&mut self, viewer: &Viewer, desired: Vec<Offer>) -> Vec<play::BossEvent> {
         let full = viewer.local;
         let dim = self.dim;
         let sent = self.bosses.sent.entry(viewer.uuid).or_default();
-        let mut changes = Vec::new();
-        let gone: Vec<u128> = sent
-            .iter()
-            .filter(|(id, prev)| {
-                let owned = full || prev.scope == Scope::Global || prev.scope == Scope::Level(dim);
-                owned && !desired.iter().any(|e| e.id == **id)
-            })
-            .map(|(id, _)| *id)
-            .collect();
-        for id in gone {
-            sent.remove(&id);
-            changes.push(Change::Remove(id));
-        }
-        for event in desired {
-            let snap = event.snap();
-            match sent.get(&event.id).map(|s| s.snap.clone()) {
-                None => {
-                    sent.insert(
-                        event.id,
-                        Sent {
-                            snap,
-                            scope: event.scope,
-                        },
-                    );
-                    changes.push(Change::Add(event.clone()));
-                }
-                Some(prev) => {
-                    if prev.progress != snap.progress {
-                        changes.push(Change::Progress(event.id, snap.progress));
-                    }
-                    if prev.name != snap.name {
-                        changes.push(Change::Name(event.id, snap.name.clone()));
-                    }
-                    if prev.color != snap.color || prev.overlay != snap.overlay {
-                        changes.push(Change::Style(event.id, snap.color, snap.overlay));
-                    }
-                    if prev.darken != snap.darken
-                        || prev.music != snap.music
-                        || prev.fog != snap.fog
-                    {
-                        changes.push(Change::Properties(
-                            event.id,
-                            snap.darken,
-                            snap.music,
-                            snap.fog,
-                        ));
-                    }
-                    sent.insert(
-                        event.id,
-                        Sent {
-                            snap,
-                            scope: event.scope,
-                        },
-                    );
-                }
+        let mut out = Vec::new();
+        let event = |id, action| play::BossEvent { id, action };
+        sent.retain(|id, prev| {
+            let owned = full || prev.scope == Scope::Global || prev.scope == Scope::Level(dim);
+            let keep = !owned || desired.iter().any(|e| e.id == *id);
+            if !keep {
+                out.push(event(*id, BossAction::Remove));
             }
+            keep
+        });
+        for offer in desired {
+            let Some(prev) = sent.get(&offer.id) else {
+                out.push(event(
+                    offer.id,
+                    BossAction::Add {
+                        name: offer.name.clone(),
+                        progress: offer.progress,
+                        color: offer.color,
+                        overlay: offer.overlay,
+                        darken: offer.darken,
+                        music: offer.music,
+                        fog: offer.fog,
+                    },
+                ));
+                sent.insert(offer.id, offer);
+                continue;
+            };
+            let id = offer.id;
+            if prev.progress != offer.progress {
+                let progress = offer.progress;
+                out.push(event(id, BossAction::UpdateProgress { progress }));
+            }
+            if prev.name != offer.name {
+                let name = offer.name.clone();
+                out.push(event(id, BossAction::UpdateName { name }));
+            }
+            if (prev.color, prev.overlay) != (offer.color, offer.overlay) {
+                let (color, overlay) = (offer.color, offer.overlay);
+                out.push(event(id, BossAction::UpdateStyle { color, overlay }));
+            }
+            if (prev.darken, prev.music, prev.fog) != (offer.darken, offer.music, offer.fog) {
+                let (darken, music, fog) = (offer.darken, offer.music, offer.fog);
+                out.push(event(
+                    id,
+                    BossAction::UpdateProperties { darken, music, fog },
+                ));
+            }
+            sent.insert(id, offer);
         }
-        changes
+        out
     }
     /// `ClientPacketListener.handleBossUpdate`.
-    pub(super) fn apply_boss_event(&mut self, packet: play::BossEvent) {
-        let now = boss_overlay::now_millis();
-        let ord = |v: i32| v.clamp(0, 255) as u8;
-        match packet.action {
-            BossAction::Add {
-                name,
-                progress,
-                color,
-                overlay,
-                darken,
-                music,
-                fog,
-            } => self.boss_overlay.add(
-                packet.id,
-                component_text(&name),
-                progress,
-                ord(color),
-                ord(overlay),
-                darken,
-                music,
-                fog,
-                now,
-            ),
-            BossAction::Remove => self.boss_overlay.remove(packet.id),
-            BossAction::UpdateProgress { progress } => {
-                self.boss_overlay.set_progress(packet.id, progress, now)
-            }
-            BossAction::UpdateName { name } => {
-                self.boss_overlay.set_name(packet.id, component_text(&name))
-            }
-            BossAction::UpdateStyle { color, overlay } => {
-                self.boss_overlay
-                    .set_style(packet.id, ord(color), ord(overlay))
-            }
-            BossAction::UpdateProperties { darken, music, fog } => self
-                .boss_overlay
-                .set_properties(packet.id, darken, music, fog),
-        }
+    pub(super) fn apply_boss_event(&mut self, packet: &play::BossEvent) {
+        self.boss_overlay.apply(packet, boss_overlay::now_millis());
     }
 }
 
@@ -673,47 +630,26 @@ fn insecure_uuid(random: &mut impl RandomSource) -> u128 {
     let least = random.next_long() & 4_611_686_018_427_387_903 | i64::MIN;
     ((most as u64 as u128) << 64) | (least as u64 as u128)
 }
-fn ints_to_uuid(ints: [i32; 4]) -> u128 {
-    ints.iter()
-        .fold(0u128, |acc, &i| (acc << 32) | u128::from(i as u32))
-}
 fn translate_tag(key: &str) -> Tag {
     Tag::compound([("translate", Tag::String(key.into()))])
 }
-fn color_index(color: &str) -> usize {
+fn color_index(color: &str) -> i32 {
     bossbar::COLORS
         .iter()
         .position(|c| *c == color)
-        .unwrap_or(6)
+        .unwrap_or(6) as i32
 }
-fn style_index(style: &str) -> usize {
+fn style_index(style: &str) -> i32 {
     bossbar::STYLES
         .iter()
         .position(|s| *s == style)
-        .unwrap_or(0)
-}
-fn component_text(tag: &Tag) -> Text {
-    comp_text(&tag_to_json(tag))
+        .unwrap_or(0) as i32
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Scope {
     Global,
     Level(Dim),
-}
-#[derive(Clone)]
-struct Snap {
-    name: Tag,
-    progress: f32,
-    color: u8,
-    overlay: u8,
-    darken: bool,
-    music: bool,
-    fog: bool,
-}
-struct Sent {
-    snap: Snap,
-    scope: Scope,
 }
 struct Viewer {
     uuid: u128,
@@ -725,92 +661,16 @@ struct Viewer {
     conn: Option<u32>,
     view_chunks: i32,
 }
-#[derive(Clone)]
+/// A boss event as one viewer should see it, and as it was last sent.
 struct Offer {
     id: u128,
     name: Tag,
     progress: f32,
-    color: u8,
-    overlay: u8,
+    /// `BossBarColor` and `BossBarOverlay` ordinals.
+    color: i32,
+    overlay: i32,
     darken: bool,
     music: bool,
     fog: bool,
     scope: Scope,
-}
-impl Offer {
-    fn snap(&self) -> Snap {
-        Snap {
-            name: self.name.clone(),
-            progress: self.progress,
-            color: self.color,
-            overlay: self.overlay,
-            darken: self.darken,
-            music: self.music,
-            fog: self.fog,
-        }
-    }
-}
-enum Change {
-    Add(Offer),
-    Remove(u128),
-    Progress(u128, f32),
-    Name(u128, Tag),
-    Style(u128, u8, u8),
-    Properties(u128, bool, bool, bool),
-}
-fn apply_local(overlay: &mut boss_overlay::BossOverlay, changes: &[Change], now: u128) {
-    for change in changes {
-        match change {
-            Change::Add(e) => overlay.add(
-                e.id,
-                component_text(&e.name),
-                e.progress,
-                e.color,
-                e.overlay,
-                e.darken,
-                e.music,
-                e.fog,
-                now,
-            ),
-            Change::Remove(id) => overlay.remove(*id),
-            Change::Progress(id, progress) => overlay.set_progress(*id, *progress, now),
-            Change::Name(id, name) => overlay.set_name(*id, component_text(name)),
-            Change::Style(id, color, overlay_style) => {
-                overlay.set_style(*id, *color, *overlay_style)
-            }
-            Change::Properties(id, darken, music, fog) => {
-                overlay.set_properties(*id, *darken, *music, *fog)
-            }
-        }
-    }
-}
-fn boss_packet(change: Change) -> C {
-    let (id, action) = match change {
-        Change::Add(e) => (
-            e.id,
-            BossAction::Add {
-                name: e.name,
-                progress: e.progress,
-                color: i32::from(e.color),
-                overlay: i32::from(e.overlay),
-                darken: e.darken,
-                music: e.music,
-                fog: e.fog,
-            },
-        ),
-        Change::Remove(id) => (id, BossAction::Remove),
-        Change::Progress(id, progress) => (id, BossAction::UpdateProgress { progress }),
-        Change::Name(id, name) => (id, BossAction::UpdateName { name }),
-        Change::Style(id, color, overlay) => (
-            id,
-            BossAction::UpdateStyle {
-                color: i32::from(color),
-                overlay: i32::from(overlay),
-            },
-        ),
-        Change::Properties(id, darken, music, fog) => {
-            (id, BossAction::UpdateProperties { darken, music, fog })
-        }
-    };
-    C::BossEvent(play::BossEvent { id, action })
 }
