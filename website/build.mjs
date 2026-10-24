@@ -231,7 +231,7 @@ const siteFooter = `    <footer class="footer">
       <div class="container">
         <div class="footer-bar">
           <span class="footer-mark">Made in the open, in Rust.</span>
-          <nav class="footer-links" aria-label="Elsewhere"><a href="/">Home</a><a href="/releases">Releases</a><a href="/benchmarks">Benchmarks</a><a href="/docs/">Docs</a><a href="https://github.com/${REPO}">GitHub</a><a href="/privacy">Privacy</a><a href="/LEGAL.md">Assets</a></nav>
+          <nav class="footer-links" aria-label="Elsewhere"><a href="/">Home</a><a href="/releases">Releases</a><a href="/benchmarks">Benchmarks</a><a href="/docs/">Docs</a><a href="/docs/how-horizon-is-built">How it's built</a><a href="https://github.com/${REPO}">GitHub</a><a href="/privacy">Privacy</a><a href="/LEGAL.md">Assets</a></nav>
         </div>
       </div>
       <p class="footer-word" aria-hidden="true">horizon</p>
