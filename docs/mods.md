@@ -137,10 +137,17 @@ proposal, no profiling. Its cranelift backend generates native code for x86-64
 and ARM64 on Windows, macOS and Linux, which is why one `.hmod` serves them
 all.
 
+The game links it only with its `mods` feature: every release build turns it
+on (`release.yml`), and a build from source needs
+`cargo build --release -p horizon-client --features mods` to run code mods.
+Without it (the tests and probes) wasmtime and cranelift aren't built, a
+quarter of a clean build; content mods still load, and the game logs why the
+code mods don't start.
+
 ### Performance
 
 Measured on the Mac mini (M4 Pro), release build, `cargo test -p
-horizon-mods --release --test sandbox -- --ignored --nocapture`:
+horizon-mods --features runtime,pack --release --test sandbox -- --ignored --nocapture`:
 
 | | per call |
 |---|---|
@@ -180,7 +187,8 @@ chat (`Mod Test Guest stopped: it took too long (an endless loop?)`), marks it
 on the Mods page and carries on; the other mods keep running. Host functions
 clip what a mod hands back (chat lines per call, HUD lines and lengths). Tests:
 `crates/horizon-mods/tests/sandbox.rs` (an endless loop, a panic and a 1 GiB
-allocation, next to a healthy mod).
+allocation, next to a healthy mod; `cargo test -p horizon-mods --features
+runtime,pack`).
 
 ## Playing with mods
 

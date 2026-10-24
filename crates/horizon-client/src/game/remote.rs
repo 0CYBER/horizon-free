@@ -38,7 +38,7 @@ use horizon_protocol::{
         play::{self, Clientbound as C, Serverbound as S},
     },
     registry::{Builtin, DimensionType, Dynamic, ceil_log2},
-    text::{Language, format_java, plain},
+    text::{Language, plain},
 };
 use horizon_world::{
     nbt::Tag,
@@ -641,6 +641,22 @@ impl Game<'_> {
                     ("mob_factor", Tag::Float(v[5].to_bits())),
                 ]),
                 Component::Profile(p) => profile_tag(p),
+                // ItemStackTemplate.CODEC: id, count and components.
+                Component::Stacks(stacks) => Tag::List(
+                    stacks
+                        .iter()
+                        .map(|t| {
+                            let mut entries = vec![
+                                ("id", Tag::String(self.item_name(t.item).as_ref().into())),
+                                ("count", Tag::Int(t.count)),
+                            ];
+                            if let Some(c) = self.protocol_components(t) {
+                                entries.push(("components", c));
+                            }
+                            Tag::compound(entries)
+                        })
+                        .collect(),
+                ),
                 Component::CustomModelData {
                     floats,
                     flags,
@@ -694,11 +710,14 @@ impl Game<'_> {
         }
         Some(stack)
     }
-    pub(super) fn chat_line(&mut self, text: String) {
+    /// A line in the connection's chat, with its styles, click and hover
+    /// events (ChatComponent.addMessage).
+    pub(super) fn chat_line(&mut self, content: horizon_client::text::Text) {
+        let text = content.plain();
         log::info!("[chat] {text}");
         self.ui.chat.add(
             &self.gui.atlas,
-            horizon_client::text::Text::literal(text.clone()),
+            content,
             None,
             self.ticks,
             self.screen == Screen::Chat,
@@ -2381,42 +2400,27 @@ impl Game<'_> {
                 }
             }
             C::SystemChat(p) => {
-                let text = plain(
-                    &p.content,
-                    &self
-                        .remote
-                        .as_ref()
-                        .map(|r| r.lang.clone())
-                        .unwrap_or_default(),
-                );
-                // ChatListener.handleOverlay.
+                // The component as sent, translated in the client's own
+                // language. ChatListener.handleOverlay for the action bar.
+                let text = remote_text(&p.content);
                 if p.overlay {
-                    self.titles.set_overlay(remote_text(&p.content), false);
+                    self.titles.set_overlay(text, false);
                 } else {
                     self.chat_line(text);
                 }
             }
             C::PlayerChat(p) => {
-                let lang = self
-                    .remote
-                    .as_ref()
-                    .map(|r| r.lang.clone())
-                    .unwrap_or_default();
+                use horizon_client::scoreboard::tag_to_json;
                 let content = p
                     .unsigned_content
                     .as_ref()
-                    .map_or_else(|| p.content.clone(), |t| plain(t, &lang));
-                let line = self.format_chat(&p.chat_type, &content);
+                    .map_or_else(|| serde_json::Value::from(p.content.as_str()), tag_to_json);
+                let line = self.format_chat(&p.chat_type, content);
                 self.chat_line(line);
             }
             C::DisguisedChat(p) => {
-                let lang = self
-                    .remote
-                    .as_ref()
-                    .map(|r| r.lang.clone())
-                    .unwrap_or_default();
-                let content = plain(&p.message, &lang);
-                let line = self.format_chat(&p.chat_type, &content);
+                let content = horizon_client::scoreboard::tag_to_json(&p.message);
+                let line = self.format_chat(&p.chat_type, content);
                 self.chat_line(line);
             }
             C::PlayerInfoUpdate(p) => {
@@ -2569,6 +2573,8 @@ impl Game<'_> {
                 self.drop_remote_chunks_out_of_range();
             }
             C::BlockEntityData(p) => self.remote_block_entity_data(p.pos, p.kind, &p.tag),
+            C::OpenSignEditor(p) => self.remote_open_sign_editor(p),
+            C::OpenBook(p) => self.remote_open_book(p.hand),
             // handleSetSpawn: ClientLevel.setRespawnData, which spawn compasses point at.
             C::SetDefaultSpawnPosition(p) => {
                 let [x, y, z] = p.pos.pos;
@@ -2848,11 +2854,17 @@ impl Game<'_> {
         true
     }
     /// ChatType decoration: `chat.translation_key` with sender/content parameters.
-    fn format_chat(&self, bound: &play::ChatTypeBound, content: &str) -> String {
+    /// ChatType.Bound.decorate: the chat type's translation, with the
+    /// sender, the target and the message as its parameters, in its style.
+    fn format_chat(
+        &self,
+        bound: &play::ChatTypeBound,
+        content: serde_json::Value,
+    ) -> horizon_client::text::Text {
+        use horizon_client::scoreboard::{comp_text, tag_to_json};
         let Some(r) = self.remote.as_ref() else {
-            return content.to_owned();
+            return comp_text(&content);
         };
-        let sender = plain(&bound.name, &r.lang);
         let decoration = r
             .registries
             .data("minecraft:chat_type", bound.chat_type)
@@ -2861,30 +2873,31 @@ impl Game<'_> {
             Some(Tag::String(s)) => s.to_string_lossy(),
             _ => "chat.type.text".into(),
         };
-        let params: Vec<String> = match decoration.and_then(|d| d.get("parameters")) {
+        let parameter = |name: &str| match name {
+            "sender" => tag_to_json(&bound.name),
+            "target" => bound
+                .target
+                .as_ref()
+                .map_or_else(|| serde_json::Value::from(""), tag_to_json),
+            _ => content.clone(),
+        };
+        let with: Vec<serde_json::Value> = match decoration.and_then(|d| d.get("parameters")) {
             Some(Tag::List(list)) => list
                 .iter()
                 .map(|p| match p {
-                    Tag::String(s) => match s.to_string_lossy().as_str() {
-                        "sender" => sender.clone(),
-                        "target" => bound
-                            .target
-                            .as_ref()
-                            .map(|t| plain(t, &r.lang))
-                            .unwrap_or_default(),
-                        _ => content.to_owned(),
-                    },
-                    _ => String::new(),
+                    Tag::String(s) => parameter(&s.to_string_lossy()),
+                    _ => serde_json::Value::from(""),
                 })
                 .collect(),
-            _ => vec![sender, content.to_owned()],
+            _ => vec![parameter("sender"), parameter("content")],
         };
-        let pattern = r
-            .lang
-            .get(&key)
-            .cloned()
-            .unwrap_or_else(|| "<%s> %s".into());
-        format_java(&pattern, &params)
+        let mut component = match decoration.and_then(|d| d.get("style")) {
+            Some(style @ Tag::Compound(_)) => tag_to_json(style),
+            _ => serde_json::json!({}),
+        };
+        component["translate"] = key.into();
+        component["with"] = with.into();
+        comp_text(&component)
     }
     fn remote_item_data(&mut self, id: i32, stack: &Option<Stack>) {
         let Some(stack) = self.to_stack(stack) else {
@@ -3134,6 +3147,12 @@ impl Game<'_> {
             .as_ref()
             .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
         player.fluids.fast_lava = self.dim == Dim::Nether;
+        let glider = self.glider_worn();
+        let Some(player) = self.player.as_mut() else {
+            return Ok(());
+        };
+        player.glider = glider;
+        let was_gliding = player.fall_flying;
         let dead = self.screen == Screen::Dead;
         // LivingEntity.isImmobile: a sleeper lies still in the bed.
         if let Some(head) = self.sleeping {
@@ -3158,6 +3177,9 @@ impl Game<'_> {
         // LocalPlayer.onUpdateAbilities: flight turned on or off (a double
         // jump, a spectator, landing) is sent to the server.
         let flying = player.flying;
+        // LocalPlayer.aiStep: a glide this client started is sent to the
+        // server (ServerboundPlayerCommandPacket START_FALL_FLYING).
+        let started_gliding = player.fall_flying && !was_gliding;
         let events = std::mem::take(&mut player.events);
         self.previous_eye = self.eye;
         self.eye += (player.dimensions.eye_height - self.eye) * 0.5;
@@ -3195,6 +3217,14 @@ impl Game<'_> {
         if flying != was_flying {
             self.send(S::PlayerAbilities(play::PlayerAbilitiesRequest {
                 flags: if flying { 2 } else { 0 },
+            }));
+        }
+        if started_gliding {
+            let id = self.remote.as_ref().map_or(0, |r| r.entity_id);
+            self.send(S::PlayerCommand(play::PlayerCommand {
+                id,
+                action: 6,
+                data: 0,
             }));
         }
         self.remote_send_state(input);
@@ -3739,7 +3769,10 @@ impl Game<'_> {
         horizon_client::interaction_input::use_on_target(&mut RemoteUseWorld(self), entity);
     }
 
-    fn remote_use_entity(&mut self) -> bool {
+    /// `Minecraft.startUseItem`'s entity turn for `hand`: Interact goes to
+    /// the server, and whether the click ends there is what this client's
+    /// copy of the entity answers (`MultiPlayerGameMode.interact`).
+    fn remote_use_entity(&mut self, hand: Hand) -> bool {
         let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
         // A boat, minecart, item frame, armor stand or painting nearer than
         // any mob: the server uses it (AbstractBoat.interact boards it).
@@ -3747,6 +3780,10 @@ impl Game<'_> {
             && self.mob_hit().is_none_or(|(_, d)| hit.distance < d)
             && self.before_block(hit.distance)
         {
+            // The main hand's turn takes it; there is no off hand turn.
+            if hand == Hand::Off {
+                return false;
+            }
             self.send(S::Interact(play::Interact {
                 id: hit.id,
                 hand: 0,
@@ -3762,18 +3799,18 @@ impl Game<'_> {
             let id = self.mobs[i].id as i32;
             self.send(S::Interact(play::Interact {
                 id,
-                hand: 0,
+                hand: hand_id(hand),
                 location: [0.0, 1.0, 0.0],
                 secondary: sneaking,
             }));
-            // Player.interactOn: another player passes, and the held item is
-            // used instead (Minecraft.startUseItem).
+            // Player.interactOn: another player passes, and so does a mob
+            // the held item means nothing to: the item is used instead.
             let player = self
                 .remote
                 .as_ref()
                 .is_some_and(|r| r.level_players.contains_key(&id));
-            if !player {
-                self.swing_arm();
+            if !player && self.remote_mob_takes(i, hand) {
+                self.with_hand(hand, Game::swing_arm);
                 return true;
             }
         }
@@ -4008,19 +4045,58 @@ impl Game<'_> {
             return false;
         };
         // MultiPlayerGameMode.useItem runs the use here too: food starts
-        // being eaten (Consumable.startConsuming).
+        // being eaten (Consumable.startConsuming), a book and quill opens.
         self.with_hand(hand, |g| g.start_eating(&info));
-        // BowItem.use: startUsingItem here too (with an arrow, or in creative), so that letting
-        // go sends RELEASE_USE_ITEM (Minecraft.handleKeybinds) and the server shoots.
-        if &*held.item == "minecraft:bow" {
-            self.with_hand(hand, |g| {
-                if g.using.is_none() && (g.creative || g.projectile_slot("minecraft:bow").is_some())
-                {
-                    g.using = Some((g.held_slot(), 0));
-                }
-            });
+        if self.with_hand(hand, |g| g.remote_use_book(&held)) {
+            return true;
         }
+        self.with_hand(hand, |g| g.remote_start_held_use(&held));
         item_has_use(&info)
+    }
+
+    /// `Item.use` runs on the client too (MultiPlayerGameMode.useItem): an
+    /// item held in use until the button lets go starts being used here, so
+    /// that letting go sends RELEASE_USE_ITEM (Minecraft.handleKeybinds) and
+    /// the server ends the use: a bow or a trident is let go, a crossbow's
+    /// charge ends, a shield is lowered, a spyglass stops scoping. Their
+    /// sounds, loaded arrows and thrown tridents come from the server.
+    fn remote_start_held_use(&mut self, held: &ItemStack) {
+        if self.using.is_some() {
+            return;
+        }
+        let start = match &*held.item {
+            // BowItem.use: with an arrow, or in creative.
+            "minecraft:bow" => self.creative || self.projectile_slot("minecraft:bow").is_some(),
+            // CrossbowItem.use: charging when not charged and with ammunition;
+            // a charged one shoots on the server.
+            "minecraft:crossbow" => {
+                held.data().is_none_or(|d| d.charged.is_empty())
+                    && (self.creative || self.projectile_slot("minecraft:crossbow").is_some())
+            }
+            // TridentItem.use: not about to break, Riptide only in water or rain.
+            "minecraft:trident" => {
+                self.use_trident(held);
+                return;
+            }
+            // SpyglassItem.use (its sound is the server's).
+            "minecraft:spyglass" => true,
+            // ShieldItem.use: anything that blocks attacks, off cooldown.
+            _ => {
+                self.raise_shield(self.held_slot());
+                return;
+            }
+        };
+        if start {
+            self.using = Some((self.held_slot(), 0));
+        }
+    }
+    /// Whether `stack` stays in use until the button lets go (bows,
+    /// crossbows, tridents, spyglasses, shields): its use only counts ticks here.
+    fn held_until_released(&self, stack: &ItemStack) -> bool {
+        matches!(
+            &*stack.item,
+            "minecraft:bow" | "minecraft:crossbow" | "minecraft:trident" | "minecraft:spyglass"
+        ) || self.blocks_attacks(stack).is_some()
     }
 
     /// The rest of Minecraft.startUseItem once the main hand's target passed:
@@ -4030,12 +4106,19 @@ impl Game<'_> {
         if self.remote_use_item(Hand::Main) {
             return;
         }
-        if !self.entity_targeted() && self.remote_use_block(Hand::Off) {
+        // The off hand's turn: the entity again, or the block.
+        let off_target = if self.entity_targeted() {
+            self.remote_use_entity(Hand::Off)
+        } else {
+            self.remote_use_block(Hand::Off)
+        };
+        if off_target {
             return;
         }
         self.remote_use_item(Hand::Off);
     }
-    /// `LivingEntity.updatingUsingItem` on a server client: a drawn bow, and a
+    /// `LivingEntity.updatingUsingItem` on a server client: an item held in
+    /// use (`held_until_released`), and a
     /// consumable's eating animation and its crumbs. The server eats it and
     /// sends the stack, the hunger and the sounds.
     fn remote_tick_using(&mut self) {
@@ -4043,8 +4126,9 @@ impl Game<'_> {
             return;
         };
         let stack = self.stack_in(slot).cloned();
-        // A drawn bow: held until the button lets go (or another slot is picked).
-        if stack.as_ref().is_some_and(|s| &*s.item == "minecraft:bow") {
+        // A drawn bow, a charging crossbow, a raised shield...: held until
+        // the button lets go (or another slot is picked).
+        if stack.as_ref().is_some_and(|s| self.held_until_released(s)) {
             self.using = (slot == self.selected || slot == super::shield::OFFHAND_SLOT)
                 .then_some((slot, ticks + 1));
             return;
@@ -4679,7 +4763,9 @@ impl Game<'_> {
                 self.send(S::ContainerClose(play::ContainerClose {
                     container: p.container,
                 }));
-                self.chat_line(format!("(Horizon cannot show {menu} screens yet)"));
+                self.chat_line(horizon_client::text::Text::literal(format!(
+                    "(Horizon cannot show {menu} screens yet)"
+                )));
                 return;
             }
         };
@@ -5135,7 +5221,7 @@ struct RemoteUseWorld<'g, 'a>(&'g mut Game<'a>);
 
 impl horizon_client::interaction_input::TargetUseWorld for RemoteUseWorld<'_, '_> {
     fn use_entity(&mut self) -> bool {
-        self.0.remote_use_entity()
+        self.0.remote_use_entity(Hand::Main)
     }
     fn use_block(&mut self) -> bool {
         self.0.remote_use_block(Hand::Main)

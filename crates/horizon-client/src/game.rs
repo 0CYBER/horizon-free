@@ -123,6 +123,7 @@ mod raids;
 mod recipe_book;
 mod remote;
 mod remote_mob_data;
+mod remote_mob_use;
 mod remote_objects;
 mod remote_projectiles;
 mod remote_stations;
@@ -505,6 +506,9 @@ enum FallStep {
 enum GuestUse {
     OnBlock(Hand),
     Item(Hand),
+    /// `handleInteract`: `Player.interactOn` with the hand, nothing else (the
+    /// client sends UseItem itself when the entity passed).
+    Entity(Hand),
 }
 
 /// The client world as seen by the vanilla block-behaviour library.
@@ -1813,6 +1817,16 @@ impl Game<'_> {
         self.stack_in_mut(self.held_slot())
     }
     /// The slot of the hand that acts: the selected one, or `OFFHAND_SLOT`.
+    /// `LivingEntity.canGlideUsing`: a glider in the chest slot that will
+    /// not break with its next point of wear.
+    fn glider_worn(&self) -> bool {
+        self.armor[1].as_ref().is_some_and(|s| {
+            self.res
+                .items()
+                .get(&s.item)
+                .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
+        })
+    }
     fn held_slot(&self) -> usize {
         match self.hand {
             Hand::Main => self.selected,
@@ -1989,6 +2003,28 @@ impl Game<'_> {
         particle.set_power(0.2);
         particle.scale(0.6);
         self.particles.push(particle);
+    }
+    /// `Player.dropEquipment` for the player who died: unless keep_inventory
+    /// is on, `destroyVanishingCursedItems`, then `Inventory.dropAll` from
+    /// `at` (the eyes less 0.3): slots 0..36, armor feet to head (36..39),
+    /// the off hand (40), each thrown in a random direction.
+    fn drop_inventory(&mut self, at: [f64; 3]) {
+        if self.ui.rules.bool("keep_inventory") {
+            return;
+        }
+        let mut stacks: Vec<ItemStack> =
+            self.inventory.iter_mut().filter_map(Option::take).collect();
+        stacks.extend(self.armor.iter_mut().rev().filter_map(Option::take));
+        stacks.extend(self.offhand.take());
+        stacks.retain(|s| s.enchantment_level("minecraft:vanishing_curse") == 0);
+        self.apply_equipment();
+        for stack in stacks {
+            let r = &mut self.world.random;
+            let strength = f64::from(r.next_float()) * 0.5;
+            let angle = f64::from(r.next_float()) * std::f64::consts::TAU;
+            let v = [-angle.sin() * strength, 0.2, angle.cos() * strength];
+            self.spawn_item(stack, at, v, 40);
+        }
     }
     fn spawn_item(
         &mut self,
@@ -3239,6 +3275,9 @@ impl Game<'_> {
         // A guest's use packets name one hand and touch no entity: the client
         // sends one per hand and part of its click, and Interact for entities.
         let guest = self.guest_use;
+        if let Some(GuestUse::Entity(hand)) = guest {
+            return Ok(self.with_hand(hand, Game::interact_entity)?.then_some(hand));
+        }
         let on_block = matches!(guest, Some(GuestUse::OnBlock(_)));
         if !on_block
             && self.riding.is_some()
@@ -3247,14 +3286,7 @@ impl Game<'_> {
         {
             return Ok(Some(Hand::Main));
         }
-        if guest.is_none()
-            && (self.interact_frame()
-                || self.interact_armor_stand()
-                || self.interact_boat()
-                || self.interact_cart()
-                || self.interact_mob()?
-                || self.interact_knot())
-        {
+        if guest.is_none() && self.interact_entity()? {
             return Ok(Some(Hand::Main));
         }
         // An EntityHitResult may fall through to Item.use, never to useItemOn.
@@ -3264,15 +3296,32 @@ impl Game<'_> {
             self.pick()
         };
         let hands = match guest {
-            Some(GuestUse::OnBlock(hand) | GuestUse::Item(hand)) => vec![hand],
+            Some(GuestUse::OnBlock(hand) | GuestUse::Item(hand) | GuestUse::Entity(hand)) => {
+                vec![hand]
+            }
             None => Hand::BOTH.to_vec(),
         };
+        let entity = guest.is_none() && self.entity_targeted();
         for hand in hands {
+            // The off hand's turn starts on the entity too (Minecraft.startUseItem).
+            if entity && hand == Hand::Off && self.with_hand(hand, Game::interact_entity)? {
+                return Ok(Some(hand));
+            }
             if self.with_hand(hand, |game| game.use_hand(block_hit.as_ref()))? {
                 return Ok(Some(hand));
             }
         }
         Ok(None)
+    }
+    /// `Player.interactOn` for the entity under the crosshair with the
+    /// acting hand: whether it took the click.
+    fn interact_entity(&mut self) -> Result<bool> {
+        Ok(self.interact_frame()
+            || self.interact_armor_stand()
+            || self.interact_boat()
+            || self.interact_cart()
+            || self.interact_mob()?
+            || self.interact_knot())
     }
     /// One hand's turn in `startUseItem`: `useItemOn` the block aimed at,
     /// then `useItem`. Whether the click ends here (it acted or failed).
@@ -3632,16 +3681,8 @@ impl Game<'_> {
         // Switching hotbar slots only ends a main-hand use.
         let hand_changed = slot != self.selected && slot != shield::OFFHAND_SLOT;
         if !self.right || hand_changed || self.screen != Screen::Playing {
-            if &*stack.item == "minecraft:bow" && !hand_changed {
-                self.release_bow(ticks);
-            }
-            if &*stack.item == "minecraft:spyglass" {
-                self.stop_spyglass();
-            }
-            if &*stack.item == "minecraft:trident" && !hand_changed {
-                self.release_trident(ticks);
-            }
             self.using = None;
+            self.release_used_item(&stack, ticks, hand_changed);
             return;
         }
         let Some(info) = self.res.items().get(&stack.item).cloned() else {
@@ -3695,6 +3736,17 @@ impl Game<'_> {
             self.finish_consuming(&info, consumable, &stack);
         } else {
             self.using = Some((slot, ticks));
+        }
+    }
+    /// `LivingEntity.releaseUsingItem` (`Item.releaseUsing`) for `stack`,
+    /// used for `ticks`, its hand acting: a bow or a trident lets go (not
+    /// when its hand changed), a spyglass stops scoping.
+    pub(super) fn release_used_item(&mut self, stack: &ItemStack, ticks: u32, hand_changed: bool) {
+        match &*stack.item {
+            "minecraft:bow" if !hand_changed => self.release_bow(ticks),
+            "minecraft:trident" if !hand_changed => self.release_trident(ticks),
+            "minecraft:spyglass" => self.stop_spyglass(),
+            _ => {}
         }
     }
     fn tick_mining(&mut self) -> Result<()> {
@@ -3786,7 +3838,12 @@ impl Game<'_> {
         }
         self.crack_particle(crack.0, crack.1, state);
         let m = self.mining.as_mut().ok_or("mining")?;
-        if m.progress >= 1.0 {
+        // ServerPlayerGameMode breaks a player's block at once only when it is instant (START's
+        // insta-mine); otherwise it waits for the client's STOP_DESTROY_BLOCK
+        // (`guest_stop_digging`), never breaking it on its own count. Breaking it here would
+        // take the block from under the player's crack before the player's client predicts the
+        // break, so it gets neither particles nor sound.
+        if m.progress >= 1.0 && (self.lan_acting.is_none() || m.ticks == 1) {
             let pos = m.pos;
             self.mining = None;
             self.break_block(pos)?;
@@ -3920,13 +3977,7 @@ impl Game<'_> {
             .as_ref()
             .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
         player.pitch = self.pitch;
-        // LivingEntity.canGlideUsing: a glider in its slot that will not break next.
-        player.glider = self.armor[1].as_ref().is_some_and(|s| {
-            self.res
-                .items()
-                .get(&s.item)
-                .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
-        });
+        player.glider = self.glider_worn();
         // A saved death already dropped inventory/XP and counted the death.
         if player.health.dead_or_dying() {
             self.screen = Screen::Dead;
@@ -4004,6 +4055,7 @@ impl Game<'_> {
         let riding = self.riding.is_some();
         let ghast_collisions = self.happy_ghast_player_collisions();
         let spin_targets = self.spin_targets();
+        let glider = self.glider_worn();
         let Some(player) = self.player.as_mut() else {
             // A dedicated server has no local player: the world still runs.
             if self.options.dedicated.is_some() {
@@ -4046,13 +4098,7 @@ impl Game<'_> {
             .as_ref()
             .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
         player.pitch = self.pitch;
-        // LivingEntity.canGlideUsing: a glider in its slot that will not break next.
-        player.glider = self.armor[1].as_ref().is_some_and(|s| {
-            self.res
-                .items()
-                .get(&s.item)
-                .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
-        });
+        player.glider = glider;
         // LocalPlayer.modifyInput: walking while using an item.
         player.item_use_speed = self
             .using
@@ -4289,20 +4335,8 @@ impl Game<'_> {
                 .experience
                 .death_reward(self.ui.rules.bool("keep_inventory") || self.spectator());
             self.spawn_orbs(feet, reward);
-            if !self.creative && !self.ui.rules.bool("keep_inventory") {
-                // Inventory.dropAll: slots 0..36, armor feet to head (36..39), off hand (40).
-                let mut stacks: Vec<ItemStack> =
-                    self.inventory.iter_mut().filter_map(Option::take).collect();
-                stacks.extend(self.armor.iter_mut().rev().filter_map(Option::take));
-                stacks.extend(self.offhand.take());
-                self.apply_equipment();
-                for stack in stacks {
-                    let r = &mut self.world.random;
-                    let strength = f64::from(r.next_float()) * 0.5;
-                    let angle = f64::from(r.next_float()) * std::f64::consts::TAU;
-                    let v = [-angle.sin() * strength, 0.2, angle.cos() * strength];
-                    self.spawn_item(stack, at, v, 40);
-                }
+            if !self.spectator() {
+                self.drop_inventory(at);
             }
             self.audio
                 .play("minecraft:entity.player.death", Some(at), 1.0, 1.0);
@@ -5482,6 +5516,20 @@ impl Game<'_> {
             Some(true)
         })
     }
+    /// A sound a menu click made the player play (a bundle's insert or
+    /// remove): `Entity.playSound` at the player.
+    pub(super) fn player_menu_sound(&mut self, sound: &str) {
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let at = [p.position.x, p.position.y, p.position.z];
+        let (volume, pitch) = if sound == horizon_client::bundle::INSERT_FAIL {
+            (1.0, 1.0)
+        } else {
+            (0.8, 0.8 + self.world.random.next_float() * 0.4)
+        };
+        self.audio.play(sound, Some(at), volume, pitch);
+    }
     /// The open menu as the verified engine (`horizon_client::menu`): the
     /// game's slots are copied in, `run` acts on it, and the slots, carried
     /// stack, menu data and drops are copied back when it returns Some(true)
@@ -5871,6 +5919,11 @@ impl Game<'_> {
         let carried = menu.carried.take();
         let dropped = std::mem::take(&mut menu.dropped);
         let sounds = std::mem::take(&mut menu.sounds);
+        // A bundle's sounds are the player's own (`Entity.playSound`): the
+        // client plays them as it clicks, predicting or not.
+        for sound in std::mem::take(&mut menu.player_sounds) {
+            self.player_menu_sound(sound);
+        }
         let crafted = std::mem::take(&mut menu.crafted);
         let equipped = std::mem::take(&mut menu.equipped);
         for (i, stack) in after.into_iter().enumerate() {
@@ -6112,6 +6165,17 @@ impl Game<'_> {
                     self.inv_drag = Some((i32::from(right), Vec::new()));
                 }
                 None => {}
+            }
+            return;
+        }
+        // mouseClicked: an empty hand's PICKUP is the menu's click at once
+        // (a right click on a bundle takes its first stack out).
+        if let (Some(input), Some(_)) = (input, slot)
+            && self.remote.is_none()
+            && self.menu_click(slot, i32::from(right), input)
+        {
+            if let Some(key) = self.container {
+                self.container_changed(key);
             }
             return;
         }
@@ -8799,20 +8863,15 @@ impl Game<'_> {
         );
         let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
         let deg = |d: f32| d.to_radians();
-        if self.held_map_geometry(to_world, attacks[0], inverse_heights[0], packed, &mut out) {
-            return out;
-        }
         let shown = self.hands_to_render();
         let used_hand = self.used_hand();
         let spinning = self
             .player
             .as_ref()
             .is_some_and(|p| p.auto_spin_attack_ticks > 0);
-        for (i, (hand, item)) in Hand::BOTH
-            .into_iter()
-            .zip(self.visible_hand_items())
-            .enumerate()
-        {
+        let items = self.visible_hand_items();
+        let off_hand_empty = items[1].is_none();
+        for (i, (hand, item)) in Hand::BOTH.into_iter().zip(items).enumerate() {
             if !shown[i] {
                 continue;
             }
@@ -8875,6 +8934,26 @@ impl Game<'_> {
                 );
                 continue;
             };
+            if let Some(id) = maps::map_id(&stack) {
+                use horizon_client::first_person::{MapHold, one_handed_map_pose};
+                match MapHold::of(hand, off_hand_empty) {
+                    MapHold::TwoHanded => self.two_handed_map_geometry(
+                        to_world,
+                        attack,
+                        inverse_height,
+                        id,
+                        packed,
+                        &mut out,
+                    ),
+                    MapHold::OneHanded => self.held_map(
+                        to_world * one_handed_map_pose(left, inverse_height, attack),
+                        id,
+                        packed,
+                        &mut out,
+                    ),
+                }
+                continue;
+            }
             let mut owner = self.player_owner(Some(&stack));
             // The other hand may hold an equal stack: only the used
             // hand's item is in use, only the main hand's selected.

@@ -65,6 +65,7 @@ SHARED = Path(os.environ.get("PARITY_SHARED") or (LOCAL / "minecraft").resolve()
 MACHINE_JOBS = int(os.environ.get("PARITY_MACHINE_JOBS") or max(1, (os.cpu_count() or 4) // 2))
 HOST = socket.gethostname().split(".")[0]
 DEFAULT_MEMORY = 3 << 30  # assumed peak for a harness that never ran here
+FAILURE_TAILS, FAILURE_TAIL_LINES = 10, 30  # the summary prints the end of the first failures' logs
 
 
 def harness_settings(path):
@@ -1361,8 +1362,17 @@ def main():
     failed = sorted(name for name, record in results.items() if record["status"] != "pass")
     finished_run(failed)
     print(f"\n{len(results) - len(failed)} passed, {len(failed)} failed in {elapsed / 60:.1f} min.")
-    for name in failed:
-        print(f"  {name}: {STATE_DIR / 'logs' / (name + '.log')}")
+    for index, name in enumerate(failed):
+        log = STATE_DIR / 'logs' / (name + '.log')
+        print(f"  {name}: {log}")
+        # The end of a harness's output says why it failed, and CI shows only this output.
+        if index < FAILURE_TAILS:
+            try:
+                lines = log.read_text(encoding='utf-8', errors='replace').splitlines()[-FAILURE_TAIL_LINES:]
+            except OSError:
+                lines = []
+            for line in lines:
+                print(f"    {line[:300]}")
     return 1 if failed else 0
 
 

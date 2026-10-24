@@ -30,6 +30,8 @@ use winit::keyboard::KeyCode;
 /// Per-guest state of the gameplay code that lives outside `Guest`.
 #[derive(Default)]
 pub(super) struct GuestPlay {
+    /// The sign this guest may write on (`SignBlockEntity.playerWhoMayEdit`).
+    pub(super) sign_editing: Option<[i32; 3]>,
     mining: Option<Mining>,
     destroy_delay: u32,
     using: Option<(usize, u32)>,
@@ -87,7 +89,7 @@ pub(super) struct GuestCommand {
     conn: u32,
     command: String,
     permission: u8,
-    /// An integrated server's: no admin feedback or level teleports (yet).
+    /// An integrated server's: no level teleports (yet).
     integrated: bool,
 }
 
@@ -160,6 +162,9 @@ impl GuestPlay {
 
 struct ItemRules<'a>(&'a horizon_client::items::Items);
 impl Rules for ItemRules<'_> {
+    fn items(&self) -> &horizon_client::items::Items {
+        self.0
+    }
     fn max_stack(&self, item: &str) -> u32 {
         self.0.get(item).map_or(64, |i| i.max_stack)
     }
@@ -256,6 +261,7 @@ impl Game<'_> {
         motion.pitch = g.pitch;
         motion.sprinting = g.sprinting;
         motion.may_fly = g.creative() || g.game_mode == SPECTATOR;
+        motion.flying = g.flying;
         motion.invulnerable = motion.may_fly;
         let _ = motion.set_health(g.health, false);
         motion.health.food.food = g.food;
@@ -510,7 +516,8 @@ impl Game<'_> {
         std::mem::swap(&mut self.mount, &mut play.mount);
         self.container = container;
         self.screen = screen;
-        self.sign_edit = host_sign;
+        // A sign the guest's placement opened (SignBlock.openTextEdit).
+        let guest_sign = std::mem::replace(&mut self.sign_edit, host_sign);
         // A lectern the guest's use opened (LecternBlock.openScreen).
         let guest_lectern = match std::mem::replace(&mut self.book, host_book) {
             Some(super::books::BookScreen::View {
@@ -648,6 +655,9 @@ impl Game<'_> {
         }
         if let Some(station) = opened_station {
             self.lan_station_opened(host, conn, station);
+        }
+        if let Some(edit) = guest_sign {
+            self.lan_open_sign_editor(host, conn, edit);
         }
         if let Some(key) = guest_lectern {
             self.lan_open_lectern(host, conn, key);
@@ -862,14 +872,20 @@ impl Game<'_> {
                         self.as_guest(host, conn, |g| g.drop_held(a.action == 4));
                     }
                 }
+                // RELEASE_USE_ITEM: ServerPlayer.releaseUsingItem, with the
+                // hand of the item in use acting.
                 6 => {
                     self.as_guest(host, conn, |g| {
-                        if let Some((slot, ticks)) = g.using.take()
-                            && g.stack_in(slot)
-                                .is_some_and(|s| &*s.item == "minecraft:bow")
-                        {
-                            g.release_bow(ticks);
-                        }
+                        let Some(hand) = g.used_hand() else {
+                            return;
+                        };
+                        g.with_hand(hand, |g| {
+                            if let Some((slot, ticks)) = g.using.take()
+                                && let Some(stack) = g.stack_in(slot).cloned()
+                            {
+                                g.release_used_item(&stack, ticks, false);
+                            }
+                        });
                     });
                 }
                 // SWAP_ITEM_WITH_OFFHAND: the hands swap and the item in use stops
@@ -974,9 +990,14 @@ impl Game<'_> {
                     .look_at_entity(host, gi, p.id, Some(p.location))
                     .is_some()
                 {
+                    // handleInteract: the entity and that hand only; a click the
+                    // entity passes comes back as UseItem.
+                    let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
                     let swung = self.as_guest(host, conn, |g| {
+                        g.guest_use = Some(GuestUse::Entity(hand));
                         let swings = g.swings_started;
                         let _ = g.use_item();
+                        g.guest_use = None;
                         g.swings_started != swings
                     });
                     self.lan_swing_back(host, conn, swung);
@@ -1021,10 +1042,13 @@ impl Game<'_> {
                     g.open_ridden_mount_menu();
                 });
             }
+            S::PlayerCommand(p) if p.action == 6 => self.lan_start_gliding(host, conn),
             S::ContainerButtonClick(p) => {
                 self.lan_station_button(host, conn, p.container, p.button);
             }
             S::RenameItem(p) => self.lan_station_rename(host, conn, &p.name),
+            S::SignUpdate(p) => self.lan_sign_update(host, conn, p),
+            S::EditBook(p) => self.lan_edit_book(host, conn, p),
             S::ContainerSlotStateChanged(p) => {
                 self.lan_crafter_slot_state(host, conn, p.container, p.slot, p.enabled);
             }
@@ -1414,6 +1438,8 @@ impl Game<'_> {
                 // A teleport into another level happens before its feedback is sent.
                 self.run_level_teleports(&mut host);
             }
+            // What the command earned is announced before its feedback.
+            self.announce_guest_advancements(&mut host);
             for line in lines {
                 host.hub.send_to(
                     c.conn,
@@ -1423,9 +1449,8 @@ impl Game<'_> {
                     }),
                 );
             }
-            if !c.integrated {
-                self.send_admin_feedback(&mut host, Some(c.conn));
-            }
+            // The other operators hear of it; never the player whose command it was.
+            self.send_admin_feedback(&mut host, Some(c.conn));
             self.lan = Some(host);
         }
     }
@@ -1718,6 +1743,9 @@ impl Game<'_> {
                 }
                 .death_reward(self.ui.rules.bool("keep_inventory") || g.game_mode == SPECTATOR);
                 let (name, uuid) = (g.name.clone(), g.uuid);
+                // ServerPlayer.die: dropAllDeathLoot unless a spectator, from the eyes less 0.3.
+                let drops = (g.game_mode != SPECTATOR)
+                    .then(|| [at[0], at[1] + g.eye_height() - 0.3, at[2]]);
                 let cause = host.play.get_mut(&conn).and_then(|p| p.death_cause.take());
                 let message = match cause {
                     // ServerPlayer.die: the death message, to everyone unless
@@ -1751,6 +1779,9 @@ impl Game<'_> {
                 );
                 // LivingEntity.die: the death animation, the dying player included.
                 host.hub.entity_event(id, 3, at);
+                if let Some(eyes) = drops {
+                    self.as_guest(host, conn, |game| game.drop_inventory(eyes));
+                }
                 self.spawn_orbs(at, reward);
             }
         }
@@ -1814,7 +1845,7 @@ impl Game<'_> {
 
     /// `PlayerList.broadcastSystemMessage` of the advancements guests made
     /// (their own actions, commands and ticks).
-    fn announce_guest_advancements(&mut self, host: &mut LanHost) {
+    pub(super) fn announce_guest_advancements(&mut self, host: &mut LanHost) {
         for text in std::mem::take(&mut self.adv.announced) {
             host.hub
                 .system_message(horizon_client::lan::data::component_nbt(&text.component()));
@@ -1837,6 +1868,13 @@ impl Game<'_> {
     /// sounds are heard at the guest.
     fn guest_server_tick(&mut self, host: &mut LanHost, conn: u32) {
         self.guest_vehicle_tick(host, conn);
+        // The last move's fall stands in for the server's delta movement.
+        let fell = host
+            .hub
+            .guest_mut(conn)
+            .and_then(|g| g.moves.last().map(|m| m.0[1]))
+            .unwrap_or(0.0);
+        self.guest_glide_tick(host, conn, fell);
         let Some(g) = host.hub.guest_mut(conn) else {
             return;
         };
@@ -1952,6 +1990,87 @@ impl Game<'_> {
         for sound in sounds.into_iter().flatten() {
             self.player_hurt_sound(sound, at);
         }
+    }
+
+    /// ServerGamePacketListenerImpl.handlePlayerCommand START_FALL_FLYING:
+    /// `Player.tryToStartFallFlying`, or else `stopFallFlying` (a second
+    /// start while gliding ends the glide, as in vanilla).
+    fn lan_start_gliding(&mut self, host: &mut LanHost, conn: u32) {
+        let Some(g) = host.hub.guest_mut(conn) else {
+            return;
+        };
+        let start = !g.fall_flying && self.guest_can_glide(host, conn) == Some(true);
+        let in_liquid = self
+            .as_guest(host, conn, |game| {
+                game.player
+                    .as_ref()
+                    .is_some_and(|p| p.fluids.was_touching_water || p.is_in_lava())
+            })
+            .unwrap_or(true);
+        if let Some(g) = host.hub.guest_mut(conn) {
+            g.fall_flying = start && !in_liquid;
+        }
+    }
+
+    /// `Player.canGlide`: not flying, airborne, not riding, no levitation, and
+    /// a glider that its next point of wear won't break.
+    fn guest_can_glide(&mut self, host: &mut LanHost, conn: u32) -> Option<bool> {
+        let g = host.hub.guest_mut(conn)?;
+        if g.flying || g.on_ground || g.vehicle.is_some() {
+            return Some(false);
+        }
+        self.as_guest(host, conn, |game| {
+            game.glider_worn() && game.potions.effects.get("levitation").is_none()
+        })
+    }
+
+    /// `LivingEntity.updateFallFlying` on the server, once a tick for a
+    /// gliding guest: the glide ends once `canGlide` fails; otherwise every
+    /// 20th tick wears the glider by one, and every 10th is an
+    /// `elytra_glide` game event. Entity.checkFallDistanceAccumulation runs
+    /// first: a glide that isn't diving keeps the fall distance at 1.
+    fn guest_glide_tick(&mut self, host: &mut LanHost, conn: u32, fell: f64) {
+        let Some(g) = host.hub.guest_mut(conn) else {
+            return;
+        };
+        if !g.fall_flying {
+            if let Some(m) = g.motion.as_mut() {
+                m.fall_fly_ticks = 0;
+            }
+            return;
+        }
+        let creative = g.creative();
+        if let Some(m) = g.motion.as_mut()
+            && fell > -0.5
+            && m.fall_distance > 1.0
+        {
+            m.fall_distance = 1.0;
+        }
+        if self.guest_can_glide(host, conn) != Some(true) {
+            if let Some(g) = host.hub.guest_mut(conn) {
+                g.fall_flying = false;
+            }
+            return;
+        }
+        self.as_guest(host, conn, |game| {
+            let Some(p) = game.player.as_mut() else {
+                return;
+            };
+            p.fall_fly_ticks += 1;
+            let next = p.fall_fly_ticks + 1;
+            let at = [p.position.x, p.position.y, p.position.z];
+            if next % 10 != 0 {
+                return;
+            }
+            if (next / 10) % 2 == 0
+                && !creative
+                && let Some(elytra) = game.armor[1].as_mut()
+            {
+                elytra.damage += 1;
+            }
+            let ctx = game.player_context(None);
+            game.post_game_event("minecraft:elytra_glide", at, ctx);
+        });
     }
 
     /// `Player.isInWall`: a suffocating block in the 0.48-wide box at the

@@ -18,7 +18,8 @@ horizon-protocol = { path = "../horizon-protocol" }
 horizon-server-files = { path = "../horizon-server-files" }
 horizon-friends = { path = "../horizon-friends" }
 # Horizon mods: sandboxed WebAssembly components, off unless installed and turned on (docs/mods.md).
-horizon-mods = { path = "../horizon-mods" }
+# Their runtime is the `mods` feature.
+horizon-mods = { path = "../horizon-mods", default-features = false }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "wgsl"] }
 winit = "0.30.13"
 pollster = "0.4"
@@ -78,6 +79,9 @@ default = ["audio", "controllers"]
 audio = ["dep:cpal"]
 # Controllers: gilrs, and the DualSense's own output. Without it only `horizon-ctl pad`'s virtual pad.
 controllers = ["dep:gilrs", "dep:horizon-dualsense"]
+# Runs code mods (wasmtime and cranelift: a quarter of a clean build). On in every release build
+# (release.yml); the tests and probes don't need it. Content mods load without it.
+mods = ["horizon-mods/runtime"]
 # Records the call sites of mob random draws (`mob_ai_probe` traces).
 rng-trace = ["horizon-core/rng-trace"]
 
