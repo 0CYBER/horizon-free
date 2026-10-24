@@ -13,6 +13,7 @@
 use super::{
     Game, Options, PackResources, Resources, UiResources,
     lan::{LanSettings, Owner},
+    world_loading::WorldRequest,
 };
 use horizon_client::{
     Result,
@@ -287,13 +288,13 @@ impl Game<'_> {
         tasks: Receiver<Task>,
         ready: &Sender<Ready>,
     ) -> Result<()> {
-        self.open_world(
+        self.load_world(WorldRequest::new(
             &launch.folder,
             launch.name.as_deref(),
             launch.seed,
             launch.creative,
             launch.create.as_ref(),
-        )?;
+        )?)?;
         let saved = Box::new(self.level.clone());
         // Math.max(2, options.renderDistance): past vanilla's 32 when the
         // window's render distance is (Horizon's options go to 64).
