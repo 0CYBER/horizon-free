@@ -4,6 +4,8 @@ pub mod agents;
 pub mod backend;
 pub mod browser;
 pub mod desktop;
+#[cfg(unix)]
+pub mod game_app;
 pub mod heads;
 pub mod modpacks;
 pub mod mojang;
