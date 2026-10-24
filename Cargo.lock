@@ -1493,7 +1493,6 @@ dependencies = [
 name = "horizon-mods"
 version = "0.1.0"
 dependencies = [
- "horizon-mods",
  "log",
  "serde",
  "serde_json",

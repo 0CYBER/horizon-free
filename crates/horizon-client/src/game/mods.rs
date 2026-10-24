@@ -2,43 +2,76 @@
 //! their tick, frame, chat and command hooks, their HUD panels and what
 //! they print. With no mod on, `horizon_mods::Mods` holds no engine and
 //! every hook here returns after one check.
-use super::{Game, Screen};
+//!
+//! Code mods run only in builds with the `mods` feature (release builds):
+//! without it the game links no wasmtime, and every hook does nothing.
+//! Content mods (`content_root`) load in every build.
+use super::Game;
 use horizon_client::{
     command::{Dispatcher, vanilla},
-    extras::Corner,
-    extras_hud::{self, Corners},
+    extras_hud::Corners,
     hud::HudBatch,
-    mod_list::{self, Installed},
-    text::{self, Text},
+    mod_list,
 };
-use horizon_mods::{Clock, Mods, Output, Player, Snapshot, Status};
-use std::{
-    path::PathBuf,
-    time::{Duration, Instant},
+use std::{path::PathBuf, time::Duration};
+#[cfg(feature = "mods")]
+use {
+    super::Screen,
+    horizon_client::{
+        extras::Corner,
+        extras_hud,
+        mod_list::Installed,
+        text::{self, Text},
+    },
+    horizon_mods::{Clock, Mods, Output, Player, Snapshot, Status},
+    std::time::Instant,
 };
 
 #[derive(Default)]
 pub(super) struct ModsState {
-    pub(super) mods: Mods,
+    #[cfg(feature = "mods")]
+    mods: Mods,
     /// `--dev-mod PATH`: always on, reloaded when rebuilt.
     pub(super) dev: Vec<PathBuf>,
     /// When dev mods were last checked for a rebuild.
+    #[cfg(feature = "mods")]
     checked: Option<Instant>,
     /// The chat's command tree while a running mod owns commands.
+    #[cfg(feature = "mods")]
     tree: Option<Dispatcher>,
 }
 impl ModsState {
     /// The chat's command tree: vanilla's, plus the running mods' commands.
     pub(super) fn dispatcher(&self) -> &Dispatcher {
-        self.tree
-            .as_ref()
-            .unwrap_or_else(|| vanilla::game_dispatcher())
+        #[cfg(feature = "mods")]
+        if let Some(tree) = &self.tree {
+            return tree;
+        }
+        vanilla::game_dispatcher()
+    }
+    /// Whether a mod runs: the chat keeps its lines for them.
+    pub(super) fn running(&self) -> bool {
+        #[cfg(feature = "mods")]
+        if self.mods.is_running() {
+            return true;
+        }
+        false
+    }
+    /// Whether a mod draws a HUD panel.
+    pub(super) fn has_panels(&self) -> bool {
+        #[cfg(feature = "mods")]
+        if self.mods.panels().next().is_some() {
+            return true;
+        }
+        false
     }
 }
 /// How often dev mods are checked for a rebuild.
+#[cfg(feature = "mods")]
 const RELOAD_CHECK: Duration = Duration::from_secs(1);
 
 /// A vanilla command name: mods may not take it.
+#[cfg(feature = "mods")]
 fn vanilla_command(name: &str) -> bool {
     let d = vanilla::game_dispatcher();
     d.nodes[0]
@@ -112,6 +145,30 @@ pub(super) fn content_root(
     }
 }
 
+/// A build without the `mods` feature: no mod runs.
+#[cfg(not(feature = "mods"))]
+impl Game<'_> {
+    /// Says why the installed and dev mods don't run.
+    pub(super) fn start_mods(&mut self) {
+        let dir = Self::options_path().with_file_name(mod_list::DIR);
+        let found = horizon_mods::find(&dir).len() + self.mods.dev.len();
+        if found > 0 {
+            log::warn!(
+                "Horizon: {found} mod(s) not started: this build has no mod runtime (build with --features mods)"
+            );
+        }
+    }
+    pub(super) fn sync_mods(&mut self) {}
+    pub(super) fn tick_mods(&mut self) {}
+    pub(super) fn mods_frame(&mut self, _elapsed: Duration) {}
+    pub(super) fn mod_command(&mut self, _command: &str) -> bool {
+        false
+    }
+    pub(super) fn mods_chat(&mut self, _line: &str) {}
+    pub(super) fn draw_mod_panels(&self, _batch: &mut HudBatch, _corners: &mut Corners) {}
+}
+
+#[cfg(feature = "mods")]
 impl Game<'_> {
     /// Reads `horizon-mods/` and the dev mods, and starts the ones turned on.
     pub(super) fn start_mods(&mut self) {
