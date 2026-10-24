@@ -1602,6 +1602,8 @@ impl Mob {
                 | Species::Fox
                 | Species::Panda
         );
+        // The PathNavigation constructor: the base follow range.
+        mob.ai.nav.max_visited_nodes = (mob.kind.follow_range * 16.0).floor() as i32;
         ai::register(&mut mob);
         mob
     }

@@ -559,7 +559,10 @@ fn refresh(m: &mut Mob, a: Attr) {
     match a {
         Attr::MaxHealth => m.attrs.max_health = value(m, a) as f32,
         Attr::MovementSpeed => m.attrs.speed = base_with_modifiers(m, a),
-        Attr::FollowRange => m.attrs.follow_range = value(m, a),
+        Attr::FollowRange => {
+            m.attrs.follow_range = value(m, a);
+            m.update_max_visited_nodes();
+        }
         Attr::AttackDamage => m.attrs.attack_damage = value(m, a) as f32,
         Attr::KnockbackResistance => m.attrs.knockback_resistance = value(m, a),
         Attr::SpawnReinforcements => m.attrs.spawn_reinforcements = value(m, a),

@@ -50,7 +50,7 @@ pub fn is_illager(s: &Seen) -> bool {
     )
 }
 pub fn register(m: &mut Mob) {
-    m.ai.nav.required_path_length = 40.0;
+    m.set_required_path_length(40.0);
     let tempt = m.kind.tempt.clone();
     let trader = is_trader(m);
     if trader {

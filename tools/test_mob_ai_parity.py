@@ -275,6 +275,16 @@ def scenarios():
                                 'mob minecraft:cod 2.5 -62 0.5 0 13 persistent noai'])
     add('axolotl_play_dead', 300, [POOL, 'player 12.5 -60 0.5', 'mob minecraft:axolotl 0.5 -62 0.5 0 28 persistent']
         + [f'hurt {t} 0' for t in range(4, 160, 12)])
+    # A jobless villager outside a stone box, its composter inside and the doorway on the far
+    # side: the path around needs more than the 256 nodes of the follow range (16 * 16); the
+    # villager's setRequiredPathLength(48) raises PathFinder.maxVisitedNodes to 768.
+    add('villager_job_in_box', 300, [
+        'fill -4 -60 -4 4 -58 4 minecraft:stone',
+        'fill -3 -60 -3 3 -58 3 minecraft:air',
+        'fill -4 -60 0 -4 -59 0 minecraft:air',
+        'block 0 -60 0 minecraft:composter',
+        'mob minecraft:villager 10.5 -60 0.5 90 54 persistent',
+    ])
     return s
 
 

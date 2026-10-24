@@ -46,7 +46,7 @@ pub fn register(m: &mut Mob) {
     // Villager's constructor: its brain does everything, it has no goals.
     m.ai.nav.can_open_doors = true;
     m.ai.nav.can_float = true;
-    m.ai.nav.required_path_length = 48.0;
+    m.set_required_path_length(48.0);
 }
 
 /// `LivingEntity.addParticlesAroundSelf`: five particles about the body.
