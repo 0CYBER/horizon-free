@@ -2,7 +2,7 @@
 //! and the landscape behind Home (the vanilla grass block is `browser::images::grass_block`).
 //! GPUI samples images smoothly, so every image is baked at the window's scale with each texel a
 //! whole block of device pixels, and drawn at exactly its size: the edges stay sharp. Each image
-//! is made once per appearance and scale, then reused.
+//! is reused until its appearance, scale or landscape width changes.
 use gpui::RenderImage;
 use horizon_theme as tokens;
 use std::collections::HashMap;
@@ -11,8 +11,15 @@ use std::sync::Arc;
 /// What an image is, to find it again.
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum Key {
-    Stone { dark: bool, scale: u32 },
-    Scene { dark: bool, scale: u32 },
+    Stone {
+        dark: bool,
+        scale: u32,
+    },
+    Scene {
+        dark: bool,
+        scale: u32,
+        width: usize,
+    },
 }
 
 #[derive(Default)]
@@ -24,7 +31,8 @@ pub struct Art {
 pub const STONE: f32 = tokens::TILE_TEXEL * (tokens::TILE_TEXELS * 4) as f32;
 /// Home's landscape: texels of this many logical pixels, and its size in texels.
 pub const SCENE_TEXEL: f32 = 6.;
-pub const SCENE_SIZE: (usize, usize) = (220, 56);
+pub const SCENE_HEIGHT: usize = 56;
+const MIN_SCENE_WIDTH: f32 = 10.;
 
 impl Art {
     /// The page's stone texture, for a window at `scale`.
@@ -42,20 +50,33 @@ impl Art {
             .clone()
     }
 
-    /// Home's landscape: a sunset in the dark appearance, a dawn in the light one.
-    pub fn scene(&mut self, dark: bool, scale: f32) -> Arc<RenderImage> {
+    /// Home's landscape at the banner's width, without stretching its square texels.
+    /// Only the current size is retained, so resizing cannot accumulate large images.
+    pub fn scene(&mut self, dark: bool, scale: f32, width: f32) -> (Arc<RenderImage>, f32) {
+        let width = (width / SCENE_TEXEL).ceil().max(MIN_SCENE_WIDTH) as usize;
         let key = Key::Scene {
             dark,
             scale: scale_key(scale),
+            width,
         };
-        self.made
+        if !self.made.contains_key(&key) {
+            self.made.retain(|key, _| matches!(key, Key::Stone { .. }));
+        }
+        let image = self
+            .made
             .entry(key)
             .or_insert_with(|| {
-                let (w, h) = SCENE_SIZE;
                 let palette = if dark { &SUNSET } else { &DAWN };
-                bake(&opaque(&scene(palette, 3, w, h)), w, h, SCENE_TEXEL, scale)
+                bake(
+                    &opaque(&scene(palette, 3, width, SCENE_HEIGHT)),
+                    width,
+                    SCENE_HEIGHT,
+                    SCENE_TEXEL,
+                    scale,
+                )
             })
-            .clone()
+            .clone();
+        (image, width as f32 * SCENE_TEXEL)
     }
 }
 
@@ -319,5 +340,33 @@ mod tests {
         let image = bake(&opaque(&[0x112233; 4]), 2, 2, 4., 2.);
         let size = image.size(0);
         assert_eq!((size.width.0, size.height.0), (16, 16));
+    }
+
+    #[test]
+    fn landscape_fills_the_banner_at_narrow_and_wide_window_sizes() {
+        let mut art = Art::default();
+        for banner_width in [696., 916., 1633.] {
+            let (image, drawn_width) = art.scene(true, 2., banner_width);
+            assert!(drawn_width >= banner_width);
+            assert!(drawn_width - banner_width < SCENE_TEXEL);
+            assert_eq!(image.size(0).width.0, (drawn_width * 2.) as i32);
+            assert_eq!(
+                image.size(0).height.0,
+                (SCENE_HEIGHT as f32 * SCENE_TEXEL * 2.) as i32
+            );
+        }
+    }
+
+    #[test]
+    fn resizing_replaces_the_landscape_and_preserves_the_stone_cache() {
+        let mut art = Art::default();
+        let stone = art.stone(0x0f0d17, true, 1.);
+        let (first, _) = art.scene(true, 1., 900.);
+        let (reused, _) = art.scene(true, 1., 900.);
+        assert!(Arc::ptr_eq(&first, &reused));
+        let (resized, _) = art.scene(true, 1., 1500.);
+        assert!(!Arc::ptr_eq(&first, &resized));
+        assert_eq!(art.made.len(), 2);
+        assert!(Arc::ptr_eq(&stone, &art.stone(0x0f0d17, true, 1.)));
     }
 }

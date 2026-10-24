@@ -19,12 +19,13 @@ mod perf;
 mod scrollbar;
 mod servers_page;
 mod theme;
+mod titlebar;
 
 use gpui::{
     actions, div, ease_out_quint, prelude::*, px, relative, size, Animation, AnimationExt,
     AnyElement, App, Application, Bounds, ClickEvent, Context, Div, ElementId, FocusHandle,
     FontWeight, Hsla, KeyBinding, KeyDownEvent, Menu, MenuItem, PathPromptOptions, SharedString,
-    Stateful, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions,
+    Stateful, Subscription, Window, WindowBounds, WindowOptions,
 };
 use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
@@ -1313,11 +1314,10 @@ fn megabytes(bytes: u64) -> String {
 // ----- Pages -------------------------------------------------------------------------------------
 
 impl Launcher {
-    /// The top bar: the mark and the name over the sidebar, the pages with their icons, then
-    /// the account playing and the Settings button.
+    /// The top bar: the pages with their icons, then the account and Settings.
     fn topbar(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let mut nav = div().flex().h_full().gap(px(2.));
+        let mut nav = div().flex().flex_none().h_full().gap(px(2.));
         for (page, label, icon) in Page::ALL {
             if page == Page::Settings {
                 continue;
@@ -1372,6 +1372,8 @@ impl Launcher {
         let account = keyboard(div().id("account"), &t)
             .relative()
             .flex()
+            .min_w_0()
+            .max_w(px(180.))
             .items_center()
             .gap(px(10.))
             .h(px(40.))
@@ -1395,8 +1397,10 @@ impl Launcher {
                 div()
                     .flex()
                     .flex_col()
+                    .min_w_0()
                     .child(
                         blocks::pixel(14., FontWeight::MEDIUM)
+                            .truncate()
                             .text_color(t.ink)
                             .child(name),
                     )
@@ -1448,25 +1452,12 @@ impl Launcher {
             .bg(t.side)
             .border_b_2()
             .border_color(t.outline)
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .gap(px(10.))
-                    .w(px(theme::SIDEBAR - 18.))
-                    .child(mark(24., &t))
-                    .child(
-                        blocks::pixel(20., FontWeight::SEMIBOLD)
-                            .text_color(t.ink)
-                            .child("HORIZON"),
-                    ),
-            )
             .child(nav)
             .child(
                 div()
                     .ml_auto()
                     .flex()
+                    .flex_none()
                     .items_center()
                     .gap(px(8.))
                     .child(account)
@@ -1835,7 +1826,7 @@ impl Launcher {
         wrap
     }
 
-    fn play_page(&mut self, cx: &mut Context<Self>) -> Div {
+    fn play_page(&mut self, banner_width: f32, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let Some(tag) = self.selected().cloned() else {
             // No hero without a version: the page starts below the top bar like the others.
@@ -1994,7 +1985,7 @@ impl Launcher {
 
         // The banner: Horizon's landscape (`art.rs`) under a veil of the page colour, the hero and
         // the Play row over it. It reaches the content's edges and the top bar.
-        let scene = self.art.scene(t.dark, self.scale);
+        let (scene, scene_width) = self.art.scene(t.dark, self.scale, banner_width);
         let veil = |angle: f32, from: f32, to: f32, at: f32| {
             div()
                 .absolute()
@@ -2007,15 +1998,14 @@ impl Launcher {
                     gpui::linear_color_stop(t.page.opacity(to), at),
                 ))
         };
-        let (w, h) = art::SCENE_SIZE;
         let banner = div()
             .relative()
             .flex()
             .flex_col()
             .justify_end()
             .min_h(px(340.))
-            .mx(px(-32.))
-            .px(px(32.))
+            .mx(px(-theme::PAGE_GUTTER))
+            .px(px(theme::PAGE_GUTTER))
             .pb(px(28.))
             .gap(px(24.))
             .overflow_hidden()
@@ -2027,8 +2017,8 @@ impl Launcher {
                     .absolute()
                     .bottom_0()
                     .left_0()
-                    .w(px(w as f32 * art::SCENE_TEXEL))
-                    .h(px(h as f32 * art::SCENE_TEXEL)),
+                    .w(px(scene_width))
+                    .h(px(art::SCENE_HEIGHT as f32 * art::SCENE_TEXEL)),
             )
             .child(veil(90., 0.82, 0., 0.62))
             .child(veil(180., 0., 0.75, 1.))
@@ -3251,8 +3241,10 @@ impl Render for Launcher {
         self.friend_focused = self.friend_focus.is_focused(window);
         self.mods.note_focus(window);
         self.args_focused = self.args_focus.is_focused(window);
+        let size = window.viewport_size();
+        let banner_width = f32::from(size.width) - theme::SIDEBAR - scrollbar::GUTTER;
         let content = match self.page {
-            Page::Play => self.play_page(cx),
+            Page::Play => self.play_page(banner_width, cx),
             Page::Versions => self.versions_page(cx),
             Page::Mods => self.mods_page(cx),
             Page::Servers => self.servers_page(cx),
@@ -3265,7 +3257,6 @@ impl Render for Launcher {
             .w_full()
             // Let the page shrink inside the padded flex row so long notices can wrap.
             .min_w_0()
-            .max_w(px(1152.))
             .child(content)
             .with_animation(
                 ElementId::named_usize("page", self.switches),
@@ -3277,7 +3268,6 @@ impl Render for Launcher {
         if self.opening.is_none() && window.focused(cx).is_none() {
             window.focus(&self.root_focus);
         }
-        let size = window.viewport_size();
         let stone = self.art.stone(t.page_rgb, t.dark, window.scale_factor());
         let topbar = self.topbar(cx);
         let sidebar = self.sidebar(cx);
@@ -3333,7 +3323,9 @@ impl Render for Launcher {
                                         .child(
                                             div()
                                                 .flex()
-                                                .px(px(32.))
+                                                .w_full()
+                                                .min_w_0()
+                                                .px(px(theme::PAGE_GUTTER))
                                                 .pt(px(if self.page == Page::Play {
                                                     0.
                                                 } else {
@@ -3411,7 +3403,13 @@ impl Render for Launcher {
                     }),
             );
         }
-        root
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .bg(t.side)
+            .children(titlebar::render(&t, window))
+            .child(root.flex_1().min_h_0())
     }
 }
 
@@ -3533,10 +3531,7 @@ fn main() {
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     window_min_size: Some(size(px(960.), px(600.))),
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("Horizon".into()),
-                        ..Default::default()
-                    }),
+                    titlebar: Some(titlebar::options()),
                     app_id: Some("horizon-launcher".into()),
                     ..Default::default()
                 },

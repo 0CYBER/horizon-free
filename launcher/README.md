@@ -97,6 +97,10 @@ page `servers.json` (the list), `servers/<name>/` (the servers created there) an
 Long pages, dialogs, the server console and data previews have a visible scrollbar when
 their content overflows. Drag the thumb or click the track to navigate without a mouse wheel.
 
+Pages and Home's landscape fill the window as it resizes. Windows uses a matching title
+bar with native dragging, resizing, Snap,
+minimize, maximize/restore and close; macOS and Linux keep their system title bars.
+
 ## Updates
 
 The launcher looks for a newer Horizon release when it starts and every 30 minutes while it
