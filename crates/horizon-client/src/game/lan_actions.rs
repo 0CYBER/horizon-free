@@ -1713,6 +1713,17 @@ impl Game<'_> {
                         g.use_delay -= 1;
                     }
                 });
+                // ServerPlayerGameMode.handleBlockBreakAction: a creative
+                // player's START breaks the block once (destroyAndAck) and
+                // leaves nothing being destroyed; its client sends no STOP.
+                // Kept, the dig broke whatever was put there next, every
+                // destroy delay, for as long as the player broke nothing else.
+                if digging.is_some()
+                    && host.hub.guests[gi].creative()
+                    && let Some(play) = host.play.get_mut(&conn)
+                {
+                    play.digging = None;
+                }
             }
             // Player.tick: a different main-hand item resets the attack
             // strength, and detectEquipmentUpdates gives the guest its modifiers.

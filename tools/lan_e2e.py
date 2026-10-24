@@ -5296,6 +5296,100 @@ CHECKS += ['digging']
 CHECK_FNS.update(digging=check_digging)
 
 
+def check_vehicles(host, guest, out):
+    """The host and the guest each (#1551):
+    - in creative, break a block and have it put back: the server's dig ends with the break
+      (ServerPlayerGameMode.handleBlockBreakAction), so the block stays;
+    - land on a boat on the ground and stand on it (AbstractBoat.canBeCollidedWith);
+    - sit in a boat that lava reaches: lavaHurt twice a tick breaks it at once, and the rider is out;
+    - see a minecart in lava break, and a TNT minecart in lava prime and go off;
+    - stand half in a minecart off rails and push it away (AbstractMinecart.push from the server's
+      player)."""
+    result = {}
+    spots = apart(host, guest)
+    for label, player in (('host', host), ('guest', guest)):
+        x, y, z = spots[label]
+        seen = result[label] = {}
+        near = lambda kind, at: [o for o in host('status')['objects'] if o['kind'].endswith(kind)
+                                 and abs(o['position'][0] - at[0]) < 2 and abs(o['position'][2] - at[2]) < 2]
+        try:
+            cell = (x, y + 1, z + 2)
+            player('command', command='gamemode creative')
+            player('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} minecraft:stone')
+            player.wait(5)
+            player.raw('look-at', f'{x + 0.5:.2f}', f'{y + 1.5:.2f}', f'{z + 2.5:.2f}')
+            player.raw('mouse', 'left', 'click')
+            player.wait(5)
+            seen['broken'] = host.raw('block', *cell).get('block')
+            player('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} minecraft:stone')
+            player.wait(20)
+            seen['put_back'] = [g.raw('block', *cell).get('block') for g in (host, player)]
+            player('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} minecraft:air')
+
+            player('command', command='gamemode survival')
+            player('command', command='effect give @s minecraft:fire_resistance 300 0 true')
+            boat_at = (x + 0.5, y, z + 3.5)
+            player('command', command=f'summon minecraft:oak_boat {boat_at[0]} {y} {boat_at[2]}')
+            player.wait(10)
+            player('command', command=f'tp @s {boat_at[0]} {y + 1.2:.2f} {boat_at[2]}')
+            player.wait(20)
+            seen['on_boat'] = [round(pos_of(player)[1] - y, 3), round(server_player(host, player)['position'][1] - y, 3)]
+
+            player('command', command=f'tp @s {x + 0.5} {y} {z + 1.5} 0 0')
+            player.wait(10)
+            board(player, 'oak_boat', boat_at)
+            player('command', command=f'setblock {x} {y} {z + 3} minecraft:lava')
+            player.wait(10)
+            seen['rider'] = {'riding': player('status').get('riding'), 'boats': len(near('oak_boat', boat_at))}
+
+            player('command', command='gamemode creative')
+            player('command', command=f'summon minecraft:minecart {boat_at[0]} {y} {boat_at[2]}')
+            player.wait(10)
+            seen['minecart_in_lava'] = len(near('minecart', boat_at))
+            booms = player('status')['heard'].get('minecraft:entity.generic.explode', 0)
+            player('command', command=f'summon minecraft:tnt_minecart {boat_at[0]} {y} {boat_at[2]}')
+            player.wait(60)
+            seen['tnt_minecart'] = {'left': len(near('tnt_minecart', boat_at)),
+                                    'booms': player('status')['heard'].get('minecraft:entity.generic.explode', 0) - booms}
+
+            player('command', command=f'fill {x - 3} {y} {z - 3} {x + 4} {y + 3} {z + 6} minecraft:air')
+            player('command', command=f'fill {x - 3} {y - 1} {z - 3} {x + 4} {y - 1} {z + 6} minecraft:stone')
+            player('command', command='gamemode survival')
+            cart_at = (x + 0.5, y, z + 1.6)
+            player('command', command=f'summon minecraft:minecart {cart_at[0]} {y} {cart_at[2]}')
+            player.wait(10)
+            before = near('minecart', cart_at)[0]['position']
+            # Half into the cart from the north: it is pushed south until they are apart.
+            player('command', command=f'tp @s {x + 0.5} {y} {before[2] - 0.4:.2f} 0 0')
+            player.wait(20)
+            after = near('minecart', cart_at)[0]['position']
+            seen['cart_pushed'] = round(after[2] - before[2], 3)
+            player.shot(out, f'vehicles-{label}')
+        finally:
+            player('command', command='kill @e[type=minecraft:minecart]')
+            player('command', command='kill @e[type=minecraft:oak_boat]')
+            player('command', command='kill @e[type=minecraft:item]')
+            player('command', command=f'fill {x - 3} {y} {z - 3} {x + 4} {y + 3} {z + 6} minecraft:air')
+            player('command', command=f'fill {x - 3} {y - 1} {z - 3} {x + 4} {y - 1} {z + 6} minecraft:stone')
+            player('command', command='effect clear @s')
+            player('command', command='gamemode survival')
+            player('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+            player.wait(5)
+    for label, seen in result.items():
+        assert seen['broken'] == 'minecraft:air', f'{label}: the creative click broke nothing: {seen}'
+        assert seen['put_back'] == ['minecraft:stone'] * 2, f'{label}: the server kept digging: {seen}'
+        assert all(0.5 < dy < 0.65 for dy in seen['on_boat']), f'{label}: not standing on the boat: {seen}'
+        assert seen['rider'] == {'riding': None, 'boats': 0}, f'{label}: lava left the boat or its rider: {seen}'
+        assert seen['minecart_in_lava'] == 0, f'{label}: a minecart outlived lava: {seen}'
+        assert seen['tnt_minecart'] == {'left': 0, 'booms': 1}, f'{label}: the TNT minecart in lava: {seen}'
+        assert seen['cart_pushed'] > 0.1, f'{label}: the minecart stayed in the player: {seen}'
+    return result
+
+
+CHECKS += ['vehicles']
+CHECK_FNS.update(vehicles=check_vehicles)
+
+
 # How far a plain wooden sword hit slides a standing player in vanilla: LivingEntity.knockback(0.4) from
 # the server copy's (0, -0.0784, 0), then the victim's own client.
 VANILLA_PUSH = 1.989

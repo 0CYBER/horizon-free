@@ -3081,7 +3081,7 @@ impl Game<'_> {
         self.sleep_timer = super::tick_sleep_timer(self.sleep_timer, self.sleeping.is_some());
         // Gui.tick: the titles, the action bar and the held item's name.
         self.tick_hud();
-        let ghast_collisions = self.happy_ghast_player_collisions();
+        let entity_collisions = self.player_entity_collisions();
         let pushed = self.remote_pushes();
         let Some(player) = self.player.as_mut() else {
             return Ok(());
@@ -3165,7 +3165,7 @@ impl Game<'_> {
         } else if !dead && !riding {
             player.velocity = player.velocity.add_vector(pushed);
             MotionWorld {
-                entities: &ghast_collisions,
+                entities: &entity_collisions,
                 player,
                 scene: &mut self.world,
                 assets: &self.pack.assets,

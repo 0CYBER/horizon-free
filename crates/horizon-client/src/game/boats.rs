@@ -183,13 +183,18 @@ impl BoatModels {
 }
 impl Game<'_> {
     fn fluid_height(&self, x: i32, y: i32, z: i32) -> Option<(f32, bool)> {
+        self.fluid_height_of(x, y, z, Some(Fluid::Water))
+    }
+    /// `FluidState.getHeight` and whether it is a source, for `fluid` or,
+    /// with `None`, any fluid (`ClipContext.Fluid.ANY`).
+    fn fluid_height_of(&self, x: i32, y: i32, z: i32, fluid: Option<Fluid>) -> Option<(f32, bool)> {
         let f = self.res.facts().get(self.world.block(x, y, z));
-        if f.fluid != Fluid::Water {
+        if f.fluid == Fluid::None || fluid.is_some_and(|want| f.fluid != want) {
             return None;
         }
         let above = self.res.facts().get(self.world.block(x, y + 1, z));
         // FluidState.getHeight: 1 under the same fluid, else amount / 9.
-        let height = if above.fluid == Fluid::Water {
+        let height = if above.fluid == f.fluid {
             1.0
         } else {
             f32::from(f.fluid_level) / 9.0
@@ -461,6 +466,59 @@ impl Game<'_> {
             let b = self.boats[i].clone();
             self.boats[i] = self.tick_boat(b, false);
         }
+        // AbstractBoat.tick's applyEffectsFromBlocks, on the server for every
+        // boat, the client-driven ones too.
+        let mut i = 0;
+        while i < self.boats.len() {
+            let p = self.boats[i].position;
+            let skip = Some(self.boats[i].id) == self.riding
+                || !ticking(p.x.floor() as i32, p.z.floor() as i32);
+            if skip || !self.boat_lava_tick(i) {
+                i += 1;
+            }
+        }
+    }
+    /// `LavaFluid.entityInside` (`lavaHurt`) from the two
+    /// `applyEffectsFromBlocks` calls in `AbstractBoat.tick`: twice 40
+    /// damage, so lava breaks a boat on its first tick inside, and the fire
+    /// `lavaIgnite` lights never gets to burn it. True when the boat broke.
+    fn boat_lava_tick(&mut self, i: usize) -> bool {
+        if !self.in_lava(self.boats[i].bounds()) {
+            return false;
+        }
+        for _ in 0..2 {
+            let p = self.boats[i].position;
+            let broke = self.hurt_boat(i, 4.0, false);
+            self.lava_hurt_sound([p.x, p.y, p.z]);
+            if broke {
+                return true;
+            }
+        }
+        false
+    }
+    /// `Entity.lavaHurt`'s sound once the hurt went through.
+    pub(super) fn lava_hurt_sound(&mut self, at: [f64; 3]) {
+        let pitch = 2.0 + self.world.random.next_float() * 0.4;
+        self.audio
+            .play("minecraft:entity.generic.burn", Some(at), 0.4, pitch);
+    }
+    /// Whether a vehicle's box, deflated by 1e-5, reaches into lava below its
+    /// surface (`Entity.collidedWithFluid`).
+    pub(super) fn in_lava(&self, bb: Aabb) -> bool {
+        let (lo, hi) = (bb.min_position(), bb.max_position());
+        let e = 1.0e-5;
+        for x in (lo.x + e).floor() as i32..=(hi.x - e).floor() as i32 {
+            for y in (lo.y + e).floor() as i32..=(hi.y - e).floor() as i32 {
+                for z in (lo.z + e).floor() as i32..=(hi.z - e).floor() as i32 {
+                    if let Some((height, _)) = self.fluid_height_of(x, y, z, Some(Fluid::Lava))
+                        && lo.y + e < f64::from(y) + f64::from(height)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
     /// The player's tick while riding: steer, tick the boat, sit in it.
     pub(super) fn tick_riding(&mut self, keys: Keys) -> horizon_client::Result<()> {
@@ -489,6 +547,9 @@ impl Game<'_> {
             p.fall_distance = 0.0;
         }
         self.boats[i] = b;
+        if self.boat_lava_tick(i) {
+            self.riding = None;
+        }
         Ok(())
     }
     /// `getDismountLocationForPassenger`: in front of the player if there is
@@ -534,7 +595,8 @@ impl Game<'_> {
         };
         let dir = view_vector(self.yaw, self.pitch);
         let reach = self.reach();
-        // ClipContext.Fluid.ANY: the first water surface or block along the ray.
+        // ClipContext.Fluid.ANY: the first fluid surface (water or lava) or
+        // block along the ray.
         let block = self.pick().map(|h| {
             (
                 h.point,
@@ -544,7 +606,7 @@ impl Game<'_> {
                     .sqrt(),
             )
         });
-        let mut water = None;
+        let mut fluid = None;
         let mut t = 0.0;
         while t < reach {
             let p: [f64; 3] = std::array::from_fn(|a| eye[a] + dir[a] * t);
@@ -553,15 +615,15 @@ impl Game<'_> {
                 p[1].floor() as i32,
                 p[2].floor() as i32,
             );
-            if let Some((h, _)) = self.fluid_height(x, y, z)
+            if let Some((h, _)) = self.fluid_height_of(x, y, z, None)
                 && p[1] <= f64::from(y) + f64::from(h)
             {
-                water = Some(([p[0], f64::from(y) + f64::from(h), p[2]], t));
+                fluid = Some(([p[0], f64::from(y) + f64::from(h), p[2]], t));
                 break;
             }
             t += 0.05;
         }
-        let hit = match (block, water) {
+        let hit = match (block, fluid) {
             (Some(b), Some(w)) => {
                 if w.1 < b.1 {
                     w.0
@@ -682,15 +744,23 @@ impl Game<'_> {
             return false;
         }
         self.vehicle_attack_sounds();
+        self.hurt_boat(i, damage, self.creative);
+        self.swing_arm();
+        true
+    }
+    /// `VehicleEntity.hurtServer`: wobble, add the damage and break past 40
+    /// (`creative`: a creative player's hit removes it without drops).
+    /// True when the boat was removed.
+    pub(super) fn hurt_boat(&mut self, i: usize, damage: f32, creative: bool) -> bool {
         let b = &mut self.boats[i];
         b.hurt_dir = -b.hurt_dir;
         b.hurt_time = 10;
         b.damage += damage * 10.0;
-        let destroyed = self.creative || b.damage > 40.0;
+        let destroyed = creative || b.damage > 40.0;
         if destroyed {
             let b = self.boats.remove(i);
             let at = [b.position.x, b.position.y, b.position.z];
-            if !self.creative && self.ui.rules.bool("entity_drops") {
+            if !creative && self.ui.rules.bool("entity_drops") {
                 // ChestBoat.destroy: chestVehicleDestroyed spills the contents.
                 for stack in b.items.iter().flatten() {
                     self.spawn_item(stack.clone(), at, super::dispenser::new_item_motion(), 10);
@@ -709,8 +779,7 @@ impl Game<'_> {
                 );
             }
         }
-        self.swing_arm();
-        true
+        destroyed
     }
     /// AbstractBoatRenderer.
     pub(super) fn boat_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {

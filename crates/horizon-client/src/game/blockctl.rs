@@ -59,6 +59,30 @@ impl Game<'_> {
     }
     /// Block commands; None when `words[0]` is not one of them.
     pub(super) fn block_command(&mut self, words: &[&str]) -> Result<Option<Value>> {
+        let ours = matches!(
+            words.first(),
+            Some(&("setblock" | "fill" | "getblock" | "container"))
+        );
+        // Single player on its server thread: the world is the server's, so
+        // the command runs there, in the owner's level, and the client hears
+        // of it like any change.
+        if ours && let Some(server) = &self.integrated {
+            let owned: Vec<String> = words.iter().map(|w| (*w).to_owned()).collect();
+            return server
+                .call(move |g| {
+                    let words: Vec<&str> = owned.iter().map(String::as_str).collect();
+                    g.in_owner_level(|g| g.block_command(&words).map_err(|e| e.to_string()))
+                })
+                .ok_or("the integrated server stopped")?
+                .map_err(Into::into);
+        }
+        // Another server's world changes only through its own commands, which
+        // it checks as the player's; `getblock` and `container` read what this
+        // client has of it.
+        if self.remote.is_some() && matches!(words.first(), Some(&("setblock" | "fill"))) {
+            self.send_chat(&format!("/{}", words.join(" ")));
+            return Ok(Some(json!({ "ok": true, "sent": true })));
+        }
         let int = |i: usize| -> Result<i32> {
             Ok(words
                 .get(i)

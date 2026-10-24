@@ -4102,7 +4102,7 @@ impl Game<'_> {
             self.tick_riding(keys)?;
         }
         let riding = self.riding.is_some();
-        let ghast_collisions = self.happy_ghast_player_collisions();
+        let entity_collisions = self.player_entity_collisions();
         let spin_targets = self.spin_targets();
         self.sync_player_body();
         let Some(player) = self.player.as_mut() else {
@@ -4149,7 +4149,7 @@ impl Game<'_> {
         );
         if !riding {
             MotionWorld {
-                entities: &ghast_collisions,
+                entities: &entity_collisions,
                 player,
                 scene: &mut self.world,
                 assets: &self.pack.assets,

@@ -686,40 +686,53 @@ impl Game<'_> {
             }
         }
     }
-    /// `AbstractMinecart.push(player)` when the player walks into a cart.
+    /// `AbstractMinecart.push` from each player walking into a cart
+    /// (`LivingEntity.pushEntities`): the window's player and every server
+    /// player (single player's own on its server thread, LAN guests). A
+    /// player in a vehicle pushes nothing here. The quarter push the player
+    /// gets back only moves the server's copy of it (`Entity.push` marks
+    /// `needsSync`, which `ServerEntity` sends to the other players only),
+    /// so no player feels it.
     fn push_carts(&mut self) {
-        let player = self.player.as_ref().map(|p| p.position);
-        let riding = self.riding;
-        for i in 0..self.carts.len() {
-            if Some(self.carts[i].id) == riding {
-                continue;
+        if self.carts.is_empty() {
+            return;
+        }
+        // (feet, box)
+        let mut pushers: Vec<(Vec3, Aabb)> = Vec::new();
+        if self.riding.is_none()
+            && let Some(p) = self.player.as_ref()
+        {
+            pushers.push((p.position, p.bounds()));
+        }
+        if let Some(host) = self.lan.as_ref() {
+            for g in host.hub.guests.iter().filter(|g| {
+                host.hub.here(g) && g.loaded && !g.dead && !g.spectator() && g.vehicle.is_none()
+            }) {
+                let [x, y, z] = g.position;
+                let height = if g.sneaking { 1.5 } else { 1.8 };
+                let bb = Aabb::new(
+                    Vec3::new(x - 0.3, y, z - 0.3),
+                    Vec3::new(x + 0.3, y + height, z + 0.3),
+                );
+                pushers.push((Vec3::new(x, y, z), bb));
             }
-            if let Some(pp) = player {
-                let bb = self.carts[i].bounds();
-                let (lo, hi) = (bb.min_position(), bb.max_position());
-                let touching = pp.x + 0.3 > lo.x
-                    && pp.x - 0.3 < hi.x
-                    && pp.z + 0.3 > lo.z
-                    && pp.z - 0.3 < hi.z
-                    && pp.y + 1.8 > lo.y
-                    && pp.y < hi.y;
-                if touching && riding.is_none() {
-                    let c = &mut self.carts[i];
-                    let (mut xa, mut za) = (pp.x - c.position.x, pp.z - c.position.z);
-                    let dd = xa * xa + za * za;
-                    if dd >= 1.0e-4 {
-                        let d = dd.sqrt();
-                        let pow = (1.0 / d).min(1.0);
-                        xa = xa / d * pow * f64::from(0.1f32) * 0.5;
-                        za = za / d * pow * f64::from(0.1f32) * 0.5;
-                        c.velocity.x -= xa;
-                        c.velocity.z -= za;
-                        if let Some(p) = self.player.as_mut() {
-                            p.velocity.x += xa / 4.0;
-                            p.velocity.z += za / 4.0;
-                        }
-                    }
+        }
+        for (feet, bb) in pushers {
+            for c in &mut self.carts {
+                if !bb.intersects(c.bounds()) {
+                    continue;
                 }
+                let (mut xa, mut za) = (feet.x - c.position.x, feet.z - c.position.z);
+                let dd = xa * xa + za * za;
+                if dd < f64::from(1.0e-4f32) {
+                    continue;
+                }
+                let d = dd.sqrt();
+                let pow = (1.0 / d).min(1.0);
+                xa = xa / d * pow * f64::from(0.1f32) * 0.5;
+                za = za / d * pow * f64::from(0.1f32) * 0.5;
+                c.velocity.x -= xa;
+                c.velocity.z -= za;
             }
         }
     }
@@ -797,7 +810,7 @@ impl Game<'_> {
         let ridden = self.guest_vehicles();
         // By id: an exploding cart can destroy or prime others mid-loop.
         let ids: Vec<u32> = self.carts.iter().map(|c| c.id).collect();
-        for id in ids {
+        for &id in &ids {
             let Some(i) = self.carts.iter().position(|c| c.id == id) else {
                 continue;
             };
@@ -822,6 +835,33 @@ impl Game<'_> {
             } else {
                 self.carts.remove(i);
             }
+        }
+        // On the server for every cart, the ridden ones too.
+        for id in ids {
+            if let Some(i) = self.carts.iter().position(|c| c.id == id) {
+                let p = self.carts[i].position;
+                if ticking(p.x.floor() as i32, p.z.floor() as i32) {
+                    self.cart_lava_tick(id);
+                }
+            }
+        }
+    }
+    /// `lavaHurt` twice a tick in lava: from `LavaFluid.entityInside` in the
+    /// behaviour's `applyEffectsFromBlocks`, then from `AbstractMinecart.tick`'s
+    /// own `isInLava`. The second breaks the cart, or primes a TNT minecart
+    /// (`MinecartTNT.destroy` for a fire source). A cart has no `baseTick`,
+    /// so the fire `lavaIgnite` lights never burns it.
+    fn cart_lava_tick(&mut self, id: u32) {
+        for _ in 0..2 {
+            let Some(i) = self.carts.iter().position(|c| c.id == id) else {
+                return;
+            };
+            if !self.in_lava(self.carts[i].bounds()) {
+                return;
+            }
+            let p = self.carts[i].position;
+            self.hurt_cart(i, 4.0, false, true);
+            self.lava_hurt_sound([p.x, p.y, p.z]);
         }
     }
     /// `ClientPacketListener.postAddEntitySoundInstance` for the carts that
