@@ -32,8 +32,8 @@ Two more Java servers, both dev-only downloads into .local/server-bench/jars (ne
   SHA-256 it publishes, with Paper's own defaults except `connection-throttle` (off: the bots all join from
   one address). Paperclip patches the pinned server jar (your copy, put in
   its cache so nothing is fetched from Mojang).
-- `fabric`: the pinned vanilla server on the pinned Fabric loader (packs/fabric.lock.json) with Lithium from
-  packs/mods.lock.json (and Fabric API only if Lithium asks for it), checked against the lock's SHA-512.
+- `fabric`: the pinned vanilla server on the pinned Fabric loader (tools/benchmark-deps/fabric.lock.json) with Lithium from
+  tools/benchmark-deps/mods.lock.json (and Fabric API only if Lithium asks for it), checked against the lock's SHA-512.
 Both run with the same heap as vanilla (`--heap`).
 """
 
@@ -190,8 +190,8 @@ def paper_jar():
 
 
 def fabric_mods():
-    """Lithium from packs/mods.lock.json, plus Fabric API if Lithium depends on it (checked, cached)."""
-    lock = json.loads((ROOT / 'packs/mods.lock.json').read_text())
+    """Lithium from tools/benchmark-deps/mods.lock.json, plus Fabric API if Lithium depends on it (checked, cached)."""
+    lock = json.loads((ROOT / 'tools/benchmark-deps/mods.lock.json').read_text())
     def fetch(name):
         project = lock['projects'][name]
         return runtime.fetch(project['url'], JARS / project['filename'], project['hashes']['sha512'], 'sha512')

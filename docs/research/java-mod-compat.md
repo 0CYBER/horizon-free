@@ -177,7 +177,6 @@ To be written as `docs/porting-from-fabric.md` once API 0.2 lands:
 - NeoForge documentation (`docs.neoforged.net`): events, registries,
   networking.
 - Modrinth's most-downloaded Fabric mods, for the porting list.
-- Horizon's own Java test mod (`mods/horizon`, built by `tools/build_mod.py`
-  and the CI `portable-mod` job) is a Fabric mod used by the benchmarks and
-  parity oracles: it shows the Mixin pattern (`FrameHookMixin`) this page
-  describes, and stays a developer tool, not a player-facing mod.
+- Horizon's Fabric benchmark instrumentation (`mods/horizon/src/bench/`) remains
+  a developer tool for Java comparisons. The former Java optimization mod is
+  [retired](../java-packs.md); the parity oracles remain in `mods/horizon/src/test/`.

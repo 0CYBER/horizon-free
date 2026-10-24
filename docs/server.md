@@ -467,7 +467,7 @@ reproducible by anyone, and show the same gameplay on both sides.
   - Horizon (`horizon-server`);
   - vanilla 26.3 (the owner's `server.jar`);
   - Paper (a jar the owner downloads; Paper's defaults are kept, and noted as non-vanilla);
-  - optionally Fabric + Lithium (the old starter's setup, via the pinned `packs/mods.lock.json`).
+  - optionally Fabric + Lithium (via the pinned `tools/benchmark-deps/mods.lock.json`).
 
   Java servers run on Java 25 with `-Xms` = `-Xmx` (the same heap for all, 4 GB by default), and the heap is
   reported.

@@ -48,4 +48,4 @@ To play, use [the launcher](../launcher/README.md); the project site is [playhor
 
 ## The earlier Java track (no longer developed)
 
-- [Java performance packs](java-packs.md), with [Vulkan on your Mac](vulkan.md), [collector comparisons](collectors.md), [profiling](profiling.md), [process memory](process-memory.md) and [tick state](tick-state.md). The Fabric server starter is retired: [host a server](hosting.md) with horizon-server.
+- [Retired Java performance packs](java-packs.md); [JFR analysis for Java comparisons](profiling.md).

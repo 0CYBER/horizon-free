@@ -27,7 +27,7 @@ file selects ~103.
 | 10 | Launcher (124) | `launcher/src/` (`main.rs`, `backend.rs`, `cli.rs`, `mcp.rs`, `servers_page.rs`) | `cd launcher && cargo test`; `python3 tools/launcher_mcp_e2e.py` |
 | 11 | Mob types and species (117) | `L/mobs.rs`, `L/mobs/species.rs`, `L/mobs/data.rs`, `L/mobs/living.rs`, `L/mobs/drops.rs`, `L/mobs/gear.rs` | mob_attributes, entity_attribute, entity_death_loot, mob_ai |
 | 12 | Guests' actions on a server (98) | `G/lan_actions.rs` (`fn as_guest`, `fn tick_guests`), `G/lan_{attributes,pvp,chat,crafting,stations,trading,mount_menu,waypoints}.rs` | server_player_combat, server_player_damage, server_player_targets, lan_e2e (all) |
-| 13 | Modpack porting, mod content (97) | `crates/horizon-port-pack/`, `L/mod_content.rs`, `tools/port_*.py`, `packs/` | `cargo test -p horizon-port-pack`; `python3 tools/mod_port_harness.py` |
+| 13 | Modpack porting, mod content (97) | `crates/horizon-port-pack/`, `L/mod_content.rs`, `tools/port_*.py` | `cargo test -p horizon-port-pack`; `python3 tools/mod_port_harness.py` |
 | 14 | Mob AI (96) | `L/mobs/ai.rs`, `goals.rs`, `brain.rs`, `*_brain.rs`, `nav.rs`, `path.rs`, `control.rs` | mob_ai (probe `examples/mob_ai_probe.rs`; known failure on main: drowned_*, #290) |
 | 15 | Items and item use (96) | `L/items.rs`, `L/item_data.rs`, `G/hand.rs`, `G/consume.rs`, `G/potions.rs`, `L/effects.rs`; game.rs `fn use_hand`, `fn use_item` | use_item_on, item_use, item_use_lifecycle, consumable, consume_effect, status_effect |
 | 16 | Options and settings screens (93) | `L/options_ui.rs`, `G/options.rs`, `L/settings.rs`, `L/options_file.rs`, `L/graphics_ui.rs`, `L/graphics.rs` | options, toggle_keys |

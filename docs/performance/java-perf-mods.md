@@ -49,7 +49,7 @@ Source: [FerriteCore's summary of its changes](https://github.com/malte0811/Ferr
 | String deduplication in model locations | Duplicate `String`s from the constructor's round-trips | No `ModelResourceLocation` objects, so the round-trip doesn't exist | **n/a** |
 | Partly loaded chunk NBT kept between loading steps | The whole tag is kept | Chunks are decoded into Horizon's own structures | **n/a** |
 
-Horizon's process memory is tracked against vanilla in `docs/process-memory.md`.
+Horizon's process memory is tracked against vanilla in [comparison benchmarks](../benchmark.md).
 
 ## ImmediatelyFast (client draw submission)
 
