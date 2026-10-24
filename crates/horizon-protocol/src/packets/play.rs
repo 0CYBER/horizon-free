@@ -2880,10 +2880,11 @@ mod tests {
 
     #[test]
     fn unknown_packets_keep_their_payload() {
-        let p = Clientbound::decode(crate::ids::play::clientbound::BOSS_EVENT, &[1, 2, 3]).unwrap();
+        let p =
+            Clientbound::decode(crate::ids::play::clientbound::PLAYER_LOOK_AT, &[1, 2, 3]).unwrap();
         assert_eq!(
             p,
-            Clientbound::Unknown(crate::ids::play::clientbound::BOSS_EVENT, vec![1, 2, 3])
+            Clientbound::Unknown(crate::ids::play::clientbound::PLAYER_LOOK_AT, vec![1, 2, 3])
         );
         assert_eq!(p.encode()[1..], [1, 2, 3]);
     }
@@ -2980,6 +2981,7 @@ mod tests {
         w.varint(101);
         assert!(BookPages::read(&mut Reader::new(&w.data)).is_err());
     }
+    #[test]
     fn boss_event_round_trips() {
         let add = Clientbound::BossEvent(BossEvent {
             id: 0x0123_4567_89ab_cdef_fedc_ba98_7654_3210,
