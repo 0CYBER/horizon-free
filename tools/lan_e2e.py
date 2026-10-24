@@ -275,8 +275,7 @@ class Game:
         (self.work / '.local/horizon-client').mkdir(parents=True)
         os.symlink(resources, self.work / '.local/horizon-client' / lab.VERSION)
         self.socket = self.work / 'c.sock'
-        env = game_env(os.environ.get('VSCREEN', 'lan-e2e'))
-        env['HORIZON_HOME'] = str(self.work / 'home')
+        env = game_env(os.environ.get('VSCREEN', 'lan-e2e'), home=self.work / 'home')
         self.d = Cli(ctl, self.socket, self.work, env)
         self.d.name = name
 

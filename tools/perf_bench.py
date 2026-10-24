@@ -400,7 +400,7 @@ def run_horizon(args, distance):
     for carry in dev_mods(args):
         command += ["--dev-mod", str(carry)]
     # Benchmark runs stay out of the live count and send nothing (docs/telemetry.md).
-    env = dict(os.environ, HORIZON_NO_AUDIO="1", HORIZON_TELEMETRY_URL="off")
+    env = lab.game_env(HORIZON_TELEMETRY_URL="off")
     if args.warm:
         # A first start to the title screen builds what later starts reuse (the content-mod
         # root, the block behaviour snapshot). It is not measured: players see it once.
