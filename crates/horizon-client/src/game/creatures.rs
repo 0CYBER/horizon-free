@@ -1007,6 +1007,11 @@ impl Game<'_> {
                 MobEvent::SetBlock { pos, state } => {
                     self.world.set(pos[0], pos[1], pos[2], state)?
                 }
+                MobEvent::SetDoorOpen { pos, open } => {
+                    let pos = BlockPos::new(pos[0], pos[1], pos[2]);
+                    self.with_level(|b, level, ticks| b.set_door_open(level, ticks, pos, open));
+                    self.process_level_events()?;
+                }
                 MobEvent::SetBlockName { pos, name, effect } => {
                     if effect {
                         let old = self.world.block(pos[0], pos[1], pos[2]);

@@ -2260,6 +2260,7 @@ impl B {
                 }
                 t.begin(cx.lr, cx.now);
                 if now > *next_ok {
+                    close_doors(m, cx, None, None);
                     if super::villager::start_sleeping(m, home, w) {
                         mem(m).last_slept.set(now);
                     }
@@ -3500,7 +3501,74 @@ fn walk_to_block_memory(
 }
 /// `InteractWithDoor`: open the doors on the path, close the ones passed.
 fn interact_with_doors(m: &mut Mob, cx: &mut Bx, from: PathNode, to: PathNode) {
-    let _ = (m, cx, from, to);
+    let (from, to) = ([from.x, from.y, from.z], [to.x, to.y, to.z]);
+    // The door being left is remembered even when it is open already; the
+    // one ahead only when this villager opens it.
+    for (p, always) in [(from, true), (to, false)] {
+        let Some(open) = door_open(cx.w, p) else {
+            continue;
+        };
+        if !open {
+            cx.events.push(MobEvent::SetDoorOpen { pos: p, open: true });
+        }
+        if always || !open {
+            remember_door(m, p);
+        }
+    }
+    close_doors(m, cx, Some(from), Some(to));
+}
+/// Whether the block at `p` is a door mobs open (`MOB_INTERACTABLE_DOORS`), and
+/// then whether it is open.
+fn door_open(w: &MobWorld, p: [i32; 3]) -> Option<bool> {
+    let name = w.block_name(p[0], p[1], p[2]);
+    (name.ends_with("_door") && w.has_tag("minecraft:mob_interactable_doors", name))
+        .then(|| w.prop(p[0], p[1], p[2], "open") == Some("true"))
+}
+fn remember_door(m: &mut Mob, p: [i32; 3]) {
+    let doors = &mut mem(m).doors_to_close;
+    match doors.get_mut() {
+        Some(list) if list.contains(&p) => {}
+        Some(list) => list.push(p),
+        None => doors.set(vec![p]),
+    }
+}
+/// `InteractWithDoor.closeDoorsThatIHaveOpenedOrPassedThrough`: the remembered
+/// doors other than the two of the step being taken are forgotten, and closed
+/// when still open, near (3 blocks) and no other villager within 2 blocks of
+/// one is passing through it.
+fn close_doors(m: &mut Mob, cx: &mut Bx, from: Option<[i32; 3]>, to: Option<[i32; 3]>) {
+    let Some(doors) = mem(m).doors_to_close.get().cloned() else {
+        return;
+    };
+    let near = mem(m).mobs.value().unwrap_or_default();
+    let mut kept = Vec::new();
+    for door in doors {
+        if from == Some(door) || to == Some(door) {
+            kept.push(door);
+            continue;
+        }
+        if !closer_to_center(door, m.position, 3.0) || door_open(cx.w, door) != Some(true) {
+            continue;
+        }
+        let passing = near.iter().any(|&who| {
+            let Who::Mob(id) = who else { return false };
+            cx.w.seen(id).is_some_and(|s| {
+                s.species == Species::Villager
+                    && closer_to_center(door, s.position, 2.0)
+                    && s.villager
+                        .as_ref()
+                        .and_then(|v| v.path_nodes)
+                        .is_some_and(|(prev, next)| prev.is_some_and(|p| p == door || next == door))
+            })
+        });
+        if !passing {
+            cx.events.push(MobEvent::SetDoorOpen {
+                pos: door,
+                open: false,
+            });
+        }
+    }
+    mem(m).doors_to_close.set(kept);
 }
 /// The scan order of POI candidates (before the nearest-first sort).
 fn pois_scan_order(_m: &Mob, found: &[(Poi, [i32; 3])]) -> Vec<usize> {
