@@ -207,7 +207,7 @@ impl Launcher {
 
 /// Runs a client's add command; (went well, what it said).
 fn run_add(program: &str, args: &[String]) -> (bool, String) {
-    match std::process::Command::new(agents::locate(program))
+    match horizon_launcher::process::command(agents::locate(program))
         .args(args)
         .output()
     {

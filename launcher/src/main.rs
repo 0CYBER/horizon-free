@@ -1,12 +1,15 @@
 //! Horizon launcher: installs Horizon builds, prepares them from the player's own Minecraft,
 //! and starts the client or a dedicated server.
 
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 mod agents_page;
 mod art;
 mod blocks;
 mod cli;
 mod cli_tools;
 mod collection;
+mod console;
 mod cull;
 mod game_tools;
 mod internet;
@@ -3517,6 +3520,10 @@ fn menus() -> Vec<Menu> {
 }
 
 fn main() {
+    if let Err(error) = console::attach_for_cli() {
+        eprintln!("Could not restore the launcher's terminal streams: {error}");
+        std::process::exit(1);
+    }
     perf::process_started();
     backend::exe_path();
     if let Some(code) = cli::run() {

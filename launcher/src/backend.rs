@@ -943,7 +943,7 @@ pub fn default_minecraft_dir() -> Option<PathBuf> {
 }
 
 fn found(program: &str, arg: &str) -> bool {
-    Command::new(program)
+    crate::process::command(program)
         .arg(arg)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1239,14 +1239,14 @@ pub fn sounds(tag: &str, minecraft: &Path, log: &dyn Fn(String)) {
     let own = horizon_prepare::sources_sha256(&dir.join(PREPARER_CRATE)).as_deref()
         == Some(horizon_prepare::SOURCES_SHA256);
     let binary = preparer_binary(&dir).filter(|binary| {
-        !own && Command::new(binary)
+        !own && crate::process::command(binary)
             .arg("--help")
             .output()
             .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("horizon-prepare sounds"))
     });
     log("Copying the sounds from your Minecraft install".into());
     let result = match binary {
-        Some(binary) => Command::new(binary)
+        Some(binary) => crate::process::command(binary)
             .current_dir(&dir)
             .arg("sounds")
             .arg("--root")
@@ -1877,16 +1877,10 @@ fn parse_version_output(out: &str) -> Option<&str> {
 /// The version of the launcher binary now at `path`, which is not this process's once another
 /// update (the command line, another window) has replaced the file.
 fn installed_launcher_version(path: &Path) -> Option<String> {
-    let mut cmd = Command::new(path);
+    let mut cmd = crate::process::command(path);
     cmd.arg("--version")
         .stdin(Stdio::null())
         .stderr(Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
     let out = cmd.output().ok()?;
     parse_version_output(&String::from_utf8_lossy(&out.stdout)).map(String::from)
 }
@@ -2220,6 +2214,7 @@ impl Running {
 }
 
 pub fn spawn(job: Job, mut cmd: Command, tx: Sender<Msg>) -> Result<Running, String> {
+    crate::process::hide_console(&mut cmd);
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

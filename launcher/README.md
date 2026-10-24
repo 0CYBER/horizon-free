@@ -131,7 +131,12 @@ and `horizon-launcher-windows-x64.zip`, never marked latest. The version is buil
 
 ## Command line
 
-The same binary is a command-line tool; without a subcommand it opens the window.
+The same binary is a command-line tool; without a subcommand it opens the window. On Windows it
+is a windowed program, so a desktop start opens no terminal; a subcommand writes to the terminal
+it was typed in, or to the pipes and files it was given (MCP keeps its stdio). Interactive `cmd`
+and PowerShell don't wait for a windowed program: they show the prompt again before its output
+and don't set `%ERRORLEVEL%` / `$LASTEXITCODE`. Scripts that need the exit code use
+`start /wait horizon-launcher …` or `Start-Process -Wait`, or read its output through a pipe.
 
     horizon-launcher versions [--installed]       releases on GitHub, or what is installed (* = selected)
     horizon-launcher install <tag|latest>
@@ -254,8 +259,8 @@ Each session writes its own measurements to `benchmarks/launcher-<time>-session.
 launcher's data folder, in the [benchmark report format](../docs/benchmark-report.md): start to the
 first frame, the release list fetch, installs and updates (download and unpack), preparing, Play to
 the game's first frame, memory, UI frame times and the binary's size, with the machine's CPU, RAM
-and OS. Attach it to an issue about the launcher being slow. `horizon-launcher benchmark` measures
-on purpose: it starts the launcher `--repeats` times (5; the first start is the cold one, as far
+and OS (read on a thread after the first frame: on Windows those queries take seconds). Attach it
+to an issue about the launcher being slow. `horizon-launcher benchmark` measures on purpose: it starts the launcher `--repeats` times (5; the first start is the cold one, as far
 as the OS's file cache allows), switches pages for a few seconds in each, rests 3 seconds to
 measure idle CPU, fetches the release list 3 times, and writes one report there with means and
 95% confidence intervals. Its window has to be on a screen that is awake. Session logs stay on

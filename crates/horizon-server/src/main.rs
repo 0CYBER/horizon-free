@@ -10,6 +10,7 @@ mod http;
 mod init;
 mod lists;
 mod panel;
+mod process;
 mod service;
 mod settings;
 mod signals;
