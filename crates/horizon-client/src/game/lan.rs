@@ -411,6 +411,9 @@ impl Game<'_> {
                     "game_mode": g.game_mode,
                     // ItemCooldowns: the ticks the shield an axe disabled stays down.
                     "shield_cooldown": h.play.get(&g.conn).map_or(0, |p| p.shield_cooldown),
+                    // The item the server has this guest using: its slot and ticks.
+                    "using": h.play.get(&g.conn).and_then(|p| p.using())
+                        .map(|(slot, ticks)| json!({ "slot": slot, "ticks": ticks })),
                     "sneaking": g.sneaking,
                     // The server's Elytra glide (shared flag 7).
                     "fall_flying": g.fall_flying,

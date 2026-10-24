@@ -871,14 +871,20 @@ impl Game<'_> {
                         self.as_guest(host, conn, |g| g.drop_held(a.action == 4));
                     }
                 }
+                // RELEASE_USE_ITEM: ServerPlayer.releaseUsingItem, with the
+                // hand of the item in use acting.
                 6 => {
                     self.as_guest(host, conn, |g| {
-                        if let Some((slot, ticks)) = g.using.take()
-                            && g.stack_in(slot)
-                                .is_some_and(|s| &*s.item == "minecraft:bow")
-                        {
-                            g.release_bow(ticks);
-                        }
+                        let Some(hand) = g.used_hand() else {
+                            return;
+                        };
+                        g.with_hand(hand, |g| {
+                            if let Some((slot, ticks)) = g.using.take()
+                                && let Some(stack) = g.stack_in(slot).cloned()
+                            {
+                                g.release_used_item(&stack, ticks, false);
+                            }
+                        });
                     });
                 }
                 // SWAP_ITEM_WITH_OFFHAND: the hands swap and the item in use stops
