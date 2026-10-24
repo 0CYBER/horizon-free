@@ -1554,7 +1554,7 @@ impl Title {
     }
 }
 /// SystemToast's 32-pixel background keeps the notice icon and borders intact.
-fn toast_background(atlas: &HudAtlas, batch: &mut HudBatch, x: f32, width: f32) {
+pub fn toast_background(atlas: &HudAtlas, batch: &mut HudBatch, x: f32, width: f32) {
     let Some(rect) = atlas.sprites.get("gui/sprites/toast/system").copied() else {
         return;
     };

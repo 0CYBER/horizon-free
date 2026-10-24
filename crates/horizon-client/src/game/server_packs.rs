@@ -12,10 +12,11 @@ use horizon_client::{
     scoreboard::{comp_text, tag_to_json},
     server_packs::{Prompt, ServerPacks, action, download, parse_sha1, valid_url},
     text::{Text, named_color},
+    toasts::Slide,
     ui,
 };
 use horizon_protocol::{packets::configuration::ResourcePackPush, servers};
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::mpsc::Receiver};
 
 /// `ClientCommonPacketListenerImpl.PackConfirmScreen`: the packs it asks
 /// about, whether the last one is required, and the server's message.
@@ -75,6 +76,32 @@ pub(super) struct ServerPackState {
     user: (String, u128),
     /// The packs loaded on top of the player's own, bottom first.
     pub(super) active: Vec<packs::Pack>,
+    /// `packDownloadNotifier` (`PackDownloadNotificationComponent`): the
+    /// toast while packs download; `downloadFinished` hides it, a failed
+    /// batch turns it into `download.pack.failed` until it slides out.
+    toast: Option<PackToast>,
+    toast_rx: Option<Receiver<download::Progress>>,
+}
+/// The download toast: vanilla's `SystemToast` `download.pack.title` with the
+/// running progress, `download.pack.failed` when a batch fails.
+#[derive(Default)]
+struct PackToast {
+    slide: Slide,
+    /// `downloadedBytes`: the bytes the request in flight has written.
+    bytes: u64,
+    /// Its Content-Length — the progress is a percent, else a byte count.
+    size: Option<u64>,
+    failed: bool,
+}
+/// `Unit.humanReadable`, for `download.pack.progress.bytes`.
+fn human_readable(bytes: u64) -> String {
+    const UNITS: [&str; 7] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
+    let (mut value, mut unit) = (bytes as f64, 0);
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
 }
 
 fn saves() -> PathBuf {
@@ -89,6 +116,8 @@ impl Game<'_> {
         let state = &mut self.server_packs;
         state.user = user;
         state.prompt = None;
+        state.toast = None;
+        state.toast_rx = None;
         let Some(address) = address else {
             state.address = None;
             state.packs.local_world();
@@ -103,6 +132,8 @@ impl Game<'_> {
     /// `Minecraft.clearDownloadedResourcePacks`: every server pack goes at once.
     pub(super) fn server_packs_disconnect(&mut self) {
         self.server_packs.prompt = None;
+        self.server_packs.toast = None;
+        self.server_packs.toast_rx = None;
         self.server_packs.packs.disconnect();
         self.tick_server_packs();
     }
@@ -197,9 +228,55 @@ impl Game<'_> {
     /// that finished, the ones to start, a resource reload when the active
     /// packs change, and the statuses for the server.
     pub(super) fn tick_server_packs(&mut self) {
+        // SystemToast.update: the toast slides for 5000 ms fully shown.
+        if let Some(toast) = &mut self.server_packs.toast {
+            let (sound, finished) = toast.slide.update_now(|fully| fully < 5000);
+            if let Some(sound) = sound {
+                self.audio.play(
+                    if sound {
+                        "minecraft:ui.toast.in"
+                    } else {
+                        "minecraft:ui.toast.out"
+                    },
+                    None,
+                    1.0,
+                    1.0,
+                );
+            }
+            if finished {
+                self.server_packs.toast = None;
+            }
+        }
         // A reload waits for the world's resources (`reload_packs`).
         if self.rest_loader.is_some() || self.world_loader.is_some() {
             return;
+        }
+        let progress = self
+            .server_packs
+            .toast_rx
+            .as_ref()
+            .map(|rx| rx.try_iter().collect::<Vec<_>>())
+            .unwrap_or_default();
+        for p in progress {
+            let toast = &mut self.server_packs.toast;
+            match p {
+                download::Progress::RequestStart(size) => {
+                    if let Some(t) = toast {
+                        t.bytes = 0;
+                        t.size = size;
+                    }
+                }
+                download::Progress::Bytes(done) => {
+                    if let Some(t) = toast {
+                        t.bytes = done;
+                    }
+                }
+                download::Progress::Finished => {
+                    if toast.as_ref().is_some_and(|t| !t.failed) {
+                        self.server_packs.toast = None;
+                    }
+                }
+            }
         }
         let finished = self
             .server_packs
@@ -208,7 +285,16 @@ impl Game<'_> {
             .map(download::Queue::finished)
             .unwrap_or_default();
         for batch in finished {
+            let failed = !batch.failed.is_empty();
             self.server_packs.packs.downloaded(batch);
+            if failed {
+                // PackDownloadNotificationComponent.onFailure: the failure
+                // toast replaces the progress one and stays its 5 seconds.
+                self.server_packs.toast = Some(PackToast {
+                    failed: true,
+                    ..PackToast::default()
+                });
+            }
         }
         while self.server_packs.packs.wants_tick() {
             let tick = self.server_packs.packs.tick();
@@ -238,6 +324,10 @@ impl Game<'_> {
                 Ok(queue) => state.queue = Some(queue),
                 Err(e) => {
                     log::error!("Horizon: failed to open the download queue: {e}");
+                    state.toast = Some(PackToast {
+                        failed: true,
+                        ..PackToast::default()
+                    });
                     let failed = requests.iter().map(|r| r.id).collect();
                     state.packs.downloaded(horizon_client::server_packs::Batch {
                         downloaded: Vec::new(),
@@ -248,8 +338,12 @@ impl Game<'_> {
             }
         }
         let headers = download::headers(&state.user.0, state.user.1);
+        // PackDownloadNotificationComponent: a toast follows the download.
+        let (progress, rx) = std::sync::mpsc::channel();
+        state.toast = Some(PackToast::default());
+        state.toast_rx = Some(rx);
         if let Some(queue) = &state.queue {
-            queue.download(requests, headers);
+            queue.download(requests, headers, progress);
         }
     }
     /// `DownloadedPackSource.startReload`: the packs on top of the player's
@@ -296,6 +390,47 @@ impl Game<'_> {
         prompt
             .layout(atlas, (w, h))
             .draw(batch, atlas, self.cursor, [&yes, &no]);
+    }
+    /// `PackDownloadNotificationComponent`'s toast: `download.pack.title`
+    /// with the running progress, or `download.pack.failed` alone.
+    pub(super) fn draw_pack_toast(&self, batch: &mut HudBatch) {
+        let Some(toast) = &self.server_packs.toast else {
+            return;
+        };
+        let atlas = &self.gui.atlas;
+        let t = |key: &str| Text::translate(key, &[]).plain();
+        let title = if toast.failed {
+            t("download.pack.failed")
+        } else {
+            t("download.pack.title")
+        };
+        let body = (!toast.failed).then(|| {
+            if let Some(size) = toast.size.filter(|s| *s > 0) {
+                Text::tr(
+                    "download.pack.progress.percent",
+                    &[&(toast.bytes * 100 / size)],
+                )
+                .plain()
+            } else {
+                Text::tr(
+                    "download.pack.progress.bytes",
+                    &[&human_readable(toast.bytes)],
+                )
+                .plain()
+            }
+        });
+        let width = body.as_ref().map_or_else(
+            || HudBatch::text_width(atlas, &title),
+            |body| HudBatch::text_width(atlas, &title).max(HudBatch::text_width(atlas, body)),
+        );
+        let width = width.ceil().max(160.0) + 30.0;
+        // Toast.xPos: in from the right edge by the visible portion.
+        let x = batch.width - width * toast.slide.portion;
+        horizon_client::title::toast_background(atlas, batch, x, width);
+        batch.text(atlas, &title, x + 18.0, 7.0, u32::MAX, false);
+        if let Some(body) = &body {
+            batch.text(atlas, body, x + 18.0, 19.0, u32::MAX, false);
+        }
     }
     /// A left click on the prompt: its answer when it hit a button.
     pub(super) fn pack_prompt_click(&mut self) -> Result<()> {
