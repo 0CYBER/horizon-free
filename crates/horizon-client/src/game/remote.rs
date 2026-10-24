@@ -733,6 +733,9 @@ impl Game<'_> {
             self.ticks,
             self.screen == Screen::Chat,
         );
+        if self.mods.running() {
+            self.mods_chat(&text);
+        }
         if let Some(r) = self.remote.as_mut() {
             r.chat.push((text, Instant::now()));
             r.chat_received += 1;
@@ -3041,6 +3044,8 @@ impl Game<'_> {
     /// One client tick while connected (Minecraft.tick with a ClientLevel).
     pub(super) fn tick_remote(&mut self) -> Result<()> {
         self.tick_remote_level()?;
+        // Client mods tick on any server, single player's own included.
+        self.tick_mods();
         // Minecraft.tick sends this even when the player cannot tick yet,
         // including while waiting for chunks. Keep it outside early returns.
         if self.remote.as_ref().is_some_and(|r| r.joined) {
