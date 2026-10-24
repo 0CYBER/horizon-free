@@ -326,6 +326,7 @@ mod tests {
             name: "a.jar".into(),
             size: 1,
             sha512: sha512.map(str::to_owned),
+            sha256: None,
             sha1: sha1.map(str::to_owned),
             primary: true,
         };
