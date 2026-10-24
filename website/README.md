@@ -22,12 +22,14 @@ src/404.html       the not-found page
 src/privacy.html   what the launcher can send when players allow it, retention, deletion (/privacy)
 src/releases.html  every release, newest first, with what it adds and fixes, its notes and downloads (/releases)
 src/benchmarks.html Horizon against vanilla 26.3 on our machines, the hardware picker, players' results (/benchmarks)
+src/mods.html      the registry's list (/mods) and a page per project (/mods/<id>), one template
 src/docs.html      the template of every documentation page (/docs/...), with its left navigation
 src/tokens.css     the design tokens, generated from crates/horizon-theme (do not edit)
 src/style.css      every style, on top of the tokens
 src/main.js        the home page: download buttons, recent releases, links, contributors, nav, tabs, lightbox, motion
 src/chrome.js      the light/dark switch, the phone menu and GitHub fetching, shared by the pages
 src/releases-page.js  the Releases page: the channel filter and the refresh from GitHub
+src/mods.js        the registry's markup (list, project page), shared by build and page; mods-page.js: the filter, the search, the refresh
 src/benchmarks-page.js  the Benchmarks page: players' results from the telemetry server, the picker
 src/bench.js       the Benchmarks tables, shared by build and page
 src/hardware.js    the spec table estimates use (GPU TFLOPS and bandwidth, CPU single-thread score)
@@ -48,14 +50,15 @@ shots/             (gitignored) full-page screenshots at 360–1920 px, a 1250×
 
 ## What comes from where
 
-- **Built in** (`build.mjs`): the parity table, its score, harness count and audit date,
+- **Built in** (`build.mjs`): Horizon's registry (`/mods`, one page per project) from the index ludovic111/horizon-mods
+  publishes (`HORIZON_MOD_INDEX=<file>` builds from a test index; docs/api/mod-index.md); the parity table, its score, harness count and audit date,
   all from `README.md`; the documentation pages (`/docs`) from `website/docs/`; the Discord and Sponsor links from
   `launcher/links.json`; the latest releases and the contributors (`/repos/ludovic111/horizon/contributors`,
   bots left out, the owner first), when GitHub answers; without an answer the build still succeeds and
   the Contributors block and its menu entries stay hidden until the page loads them. Locally these come from
   the checkout; on Railway, which builds only this folder, from `main` on GitHub. The build
   fails if the README has no parity table, so a broken README never deploys.
-- **Fetched by the page**: the releases (the download button picks the newest
+- **Fetched by the page**: the registry's index (a project merged after the build shows at once), the releases (the download button picks the newest
   `launcher-v*` release's asset for the visitor's OS, the home page lists the newest game releases, and
   the Releases page reloads its list when GitHub has a newer release), players' benchmark results
   (`GET https://telemetry.playhorizon.dev/v1/benchmarks/summary`, 3-second timeout), the contributors (avatars come from `avatars.githubusercontent.com`),

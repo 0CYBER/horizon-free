@@ -741,3 +741,51 @@ code { border-radius: 0; background: var(--well); box-shadow: 0 0 0 1px var(--ou
   .release-detail { padding-left: 0; margin-left: 0; }
   .machine { padding: 16px; }
 }
+
+/* The registry (/mods): a search and the kind filter, rows as panels, then a page per project. */
+.mod-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
+.mod-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-top: 32px; }
+.mod-tools .release-filter { margin-top: 0; }
+.mod-search {
+  height: 36px; min-width: min(320px, 100%); padding: 0 12px; font: var(--text-ui) / 1 var(--sans); color: var(--ink);
+  background: var(--well); border: var(--block-outline) solid var(--outline); border-radius: 0;
+}
+.mod-search:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.mod-list { display: grid; gap: 8px; }
+.mod-row {
+  display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 14px 20px;
+  background: var(--panel); border: var(--block-outline) solid var(--outline); box-shadow: var(--panel-edges); color: var(--ink); text-decoration: none;
+}
+.mod-row:hover { background: var(--raised); }
+.mod-row:hover .mod-name { color: var(--accent); }
+.mod-icon {
+  display: grid; place-items: center; width: 48px; height: 48px; flex: none; image-rendering: pixelated;
+  font: 600 22px / 1 var(--pixel); color: var(--ink); background: var(--well); box-shadow: 0 0 0 var(--block-outline) var(--outline);
+}
+.mod-text { display: grid; gap: 4px; min-width: 0; }
+.mod-name { font: 500 var(--text-heading) / 1.2 var(--pixel); }
+.mod-summary { color: var(--muted); font-size: var(--text-ui); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mod-side { display: grid; justify-items: end; gap: 6px; }
+.mod-side .badge { margin-right: 0; }
+.mod-version { font: var(--text-micro) / 1.4 var(--mono); letter-spacing: var(--text-micro-tracking); color: var(--muted); }
+.mod-empty a { color: var(--accent); }
+.badge-signed { background: color-mix(in srgb, var(--success) 22%, var(--panel)); color: var(--ink); }
+.badge-unsigned { background: color-mix(in srgb, var(--warn) 24%, var(--panel)); color: var(--ink); }
+.mod-page { display: grid; gap: 16px; max-width: calc(var(--measure) + 240px); }
+.mod-page .heading { margin-top: 24px; }
+.mod-head { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 24px; align-items: start; }
+.mod-head .mod-icon { width: 96px; height: 96px; font-size: 44px; }
+.mod-head .page-title { margin-top: 0; }
+.mod-badges { margin-top: 16px; }
+.mod-caps, .mod-steps, .mod-versions { display: grid; gap: 8px; padding-left: 20px; font-size: var(--text-ui); }
+.mod-caps li::marker, .mod-steps li::marker { color: var(--accent); }
+.mod-file { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px; font-size: var(--text-ui); }
+.mod-file dt { color: var(--muted); }
+.mod-file code, .mod-steps code { font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
+.mod-links { display: flex; flex-wrap: wrap; gap: 24px; margin-top: 24px; }
+@media (max-width: 640px) {
+  .mod-row { grid-template-columns: 40px minmax(0, 1fr); }
+  .mod-side { grid-column: 2; justify-items: start; }
+  .mod-icon { width: 40px; height: 40px; }
+  .mod-head { grid-template-columns: 1fr; }
+}
