@@ -75,9 +75,9 @@ def main():
         with (build/(name+'.log')).open('w') as log:subprocess.run(list(map(str,command)),cwd=lab.ROOT,check=True,timeout=3600,stdout=log,stderr=subprocess.STDOUT)
     dependencies=os.pathsep.join(map(str,libraries))
     run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'),'-cp',str(jars['server'])+os.pathsep+dependencies,'-d',classes,oracle],'compile-java')
-    run(['cargo','build','--release','-p','horizon-world','--example','probe'],'compile-rust')
+    run(['cargo','build','--release','-p','horizon-world','--example','world_probe'],'compile-rust')
     metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],cwd=lab.ROOT,text=True))
-    binary=Path(metadata['target_directory'])/'release/examples'/('probe.exe' if os.name=='nt' else 'probe')
+    binary=Path(metadata['target_directory'])/'release/examples'/('world_probe.exe' if os.name=='nt' else 'world_probe')
     run([binary,'block_entity_storage_fixture',inputs,build/'rust.txt'],'rust')
     references=[]
     for side,jar in jars.items():

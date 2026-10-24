@@ -411,7 +411,12 @@ impl Game<'_> {
                     "game_mode": g.game_mode,
                     // ItemCooldowns: the ticks the shield an axe disabled stays down.
                     "shield_cooldown": h.play.get(&g.conn).map_or(0, |p| p.shield_cooldown),
+                    // The item the server has this guest using: its slot and ticks.
+                    "using": h.play.get(&g.conn).and_then(|p| p.using())
+                        .map(|(slot, ticks)| json!({ "slot": slot, "ticks": ticks })),
                     "sneaking": g.sneaking,
+                    // The server's Elytra glide (shared flag 7).
+                    "fall_flying": g.fall_flying,
                     "sleeping": g.bed,
                     "health": g.health,
                     // The server's body: its air supply and golden hearts.
@@ -870,6 +875,7 @@ impl Game<'_> {
                     .collect();
                 self.lan_riding(host_entity, &guests, &mut host.hub.riding);
                 self.lan_entities(host_entity, &host.mob_players, &mut host.hub, &mut states);
+                self.lan_hook_states(host_entity, &host.play, &host.hub, &mut states);
             } else {
                 states.clear();
             }
@@ -1006,6 +1012,8 @@ impl Game<'_> {
         drop(holding);
         lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
         self.lan = Some(host);
+        // A mace's wind burst from a guest's attack.
+        let _ = self.flush_wind_bursts();
     }
 
     fn lan_guest_joined(
@@ -1061,6 +1069,7 @@ impl Game<'_> {
             }
             // A dedicated server has no host player.
             self.lan_entities(None, &host.mob_players, &mut host.hub, &mut theirs);
+            self.lan_hook_states(None, &host.play, &host.hub, &mut theirs);
             theirs.as_slice()
         } else {
             entities

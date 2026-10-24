@@ -47,6 +47,8 @@ pub(super) struct Creatures {
     pub pearl_cooldown: u32,
     /// The wind charge's use cooldown (ticks).
     pub wind_cooldown: u32,
+    /// Wind bursts from a guest's turn, waiting for it to end (game/wind.rs).
+    pub wind_bursts: Vec<super::wind::Burst>,
     /// Ticks left of the elder guardian's apparition (MobAppearanceParticle).
     pub elder_apparition: i32,
     /// The wandering trader spawner's clock.
@@ -1005,6 +1007,11 @@ impl Game<'_> {
                 MobEvent::SetBlock { pos, state } => {
                     self.world.set(pos[0], pos[1], pos[2], state)?
                 }
+                MobEvent::SetDoorOpen { pos, open } => {
+                    let pos = BlockPos::new(pos[0], pos[1], pos[2]);
+                    self.with_level(|b, level, ticks| b.set_door_open(level, ticks, pos, open));
+                    self.process_level_events()?;
+                }
                 MobEvent::SetBlockName { pos, name, effect } => {
                     if effect {
                         let old = self.world.block(pos[0], pos[1], pos[2]);
@@ -1778,7 +1785,7 @@ impl Game<'_> {
                 _ => self.projectile_hit(&p, hit)?,
             }
         }
-        Ok(())
+        self.flush_wind_bursts()
     }
     /// `projectile_hit` for a projectile the guest `conn` shot, run as them;
     /// as the host's when they have left.
@@ -2413,13 +2420,14 @@ impl Game<'_> {
                     self.spawn_item(rest, self.eye_position().unwrap_or([0.0; 3]), [0.0; 3], 40);
                 }
             } else {
-                self.inventory[self.selected] = Some(filled);
+                *self.held_mut() = Some(filled);
             }
             self.swing_arm();
             return Ok(true);
         }
         let creative = self.creative;
-        let selected = self.selected;
+        // The hand's slot (Player.interactOn passes the hand).
+        let selected = self.held_slot();
         if self.interact_zombie_villager(index, &item) {
             return Ok(true);
         }
@@ -2451,10 +2459,10 @@ impl Game<'_> {
         // PiglinAi.mobInteract: hand over something gold to admire.
         if self.mobs[index].alive() && self.give_piglin(index, &item) {
             self.swing_arm();
-            if !creative && let Some(stack) = self.inventory[selected].as_mut() {
+            if !creative && let Some(stack) = self.stack_in_mut(selected).as_mut() {
                 stack.count -= 1;
                 if stack.count == 0 {
-                    self.inventory[selected] = None;
+                    *self.stack_in_mut(selected) = None;
                 }
             }
             return Ok(true);
@@ -2765,11 +2773,11 @@ impl Game<'_> {
         }
         if consume
             && !creative
-            && let Some(stack) = self.inventory[selected].as_mut()
+            && let Some(stack) = self.stack_in_mut(selected).as_mut()
         {
             stack.count -= 1;
             if stack.count == 0 {
-                self.inventory[selected] = None;
+                *self.stack_in_mut(selected) = None;
             }
         }
         if let Some(g) = give {
@@ -2779,8 +2787,8 @@ impl Game<'_> {
                 damage: 0,
                 extra: None,
             };
-            if self.inventory[selected].is_none() {
-                self.inventory[selected] = Some(stack);
+            if self.stack_in(selected).is_none() {
+                *self.stack_in_mut(selected) = Some(stack);
             } else if let Some(rest) = self.give(stack) {
                 let at = self.eye_position().unwrap_or(center);
                 self.spawn_item(rest, at, [0.0, 0.0, 0.0], 40);
@@ -2812,13 +2820,17 @@ impl Game<'_> {
         if self.creative {
             return;
         }
-        if let Some(stack) = self.inventory[self.selected].as_mut()
-            && let Some(info) = self.res.items().get(&stack.item)
-            && info.max_damage > 0
+        let slot = self.held_slot();
+        let max_damage = self
+            .held()
+            .and_then(|s| self.res.items().get(&s.item))
+            .map_or(0, |i| i.max_damage);
+        if max_damage > 0
+            && let Some(stack) = self.stack_in_mut(slot).as_mut()
         {
             stack.damage += 1;
-            if stack.damage >= info.max_damage {
-                self.inventory[self.selected] = None;
+            if stack.damage >= max_damage {
+                *self.stack_in_mut(slot) = None;
             }
         }
     }

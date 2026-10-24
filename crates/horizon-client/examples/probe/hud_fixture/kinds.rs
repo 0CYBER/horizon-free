@@ -306,6 +306,7 @@ fn chat(c: &Value, h: i32, atlas: &HudAtlas) -> Vec<GuiDraw> {
         height_focused: option("chatHeightFocused"),
         height_unfocused: option("chatHeightUnfocused"),
         line_spacing: option("chatLineSpacing"),
+        colors: c["chatColors"].as_bool().unwrap_or(true),
     };
     for m in c["messages"].as_array().into_iter().flatten() {
         // GuiMessageTag indicator colours: systemSinglePlayer and chatError.

@@ -489,12 +489,16 @@ impl ServerEntity {
             // A value back at its default is left out of the state, but the
             // clients still hold the old one: Entity's shared flags and pose go
             // back to 0 (a player standing up again, a mob no longer on fire),
-            // a sleeper's bed to none.
+            // a sleeper's bed to none, an item frame's item to empty and its
+            // rotation to 0 (ItemFrame.DATA_ITEM and DATA_ROTATION).
+            let frame = e.kind.ends_with("item_frame");
             for (index, kind, _) in &self.meta {
                 let default = match (*index, *kind) {
                     (0, serializer::BYTE) => Value::Byte(0),
                     (6, serializer::POSE) => Value::Id(0),
                     (14, serializer::OPTIONAL_BLOCK_POS) => Value::OptPos(None),
+                    (9, serializer::ITEM_STACK) if frame => Value::Item(None),
+                    (10, serializer::INT) if frame => Value::Int(0),
                     _ => match e.defaults.iter().find(|d| (d.0, d.1) == (*index, *kind)) {
                         Some(d) => d.2.clone(),
                         None => continue,
@@ -1104,6 +1108,39 @@ mod tests {
             ]
         );
         assert!(changes(&mut s, &e).is_empty());
+    }
+
+    #[test]
+    fn an_emptied_item_frame_sends_its_empty_item_and_rotation() {
+        let mut e = state(0.0);
+        e.kind = "minecraft:item_frame".into();
+        let mut s = added(&e);
+        changes(&mut s, &e);
+        e.meta = vec![
+            (
+                9,
+                serializer::ITEM_STACK,
+                Value::Item(Some(Stack::new(5, 1))),
+            ),
+            (10, serializer::INT, Value::Int(3)),
+        ];
+        changes(&mut s, &e);
+        // Punched out (ItemFrame.removeFramedMap, setItem(EMPTY)): both back to the default.
+        e.meta.clear();
+        let data = changes(&mut s, &e)
+            .into_iter()
+            .find_map(|p| match p {
+                play::Clientbound::SetEntityData(d) => Some(d),
+                _ => None,
+            })
+            .expect("the empty frame is sent");
+        assert_eq!(
+            data.values,
+            vec![
+                (9, serializer::ITEM_STACK, Value::Item(None)),
+                (10, serializer::INT, Value::Int(0)),
+            ]
+        );
     }
 
     #[test]

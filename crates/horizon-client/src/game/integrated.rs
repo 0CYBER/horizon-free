@@ -6,12 +6,10 @@
 //! the world's options) with [`Integrated::call`], as vanilla's client calls
 //! into its `IntegratedServer`.
 //!
-//! Opt-in again (`--server-thread` or `HORIZON_SERVER_THREAD=1`) until a
-//! server's players reach parity with the in-frame world: on the server
-//! thread, signs open no editor, books don't open, a totem doesn't save its
-//! holder and death keeps the inventory (#1380, #1366, #1292, #1284 and the
-//! other `[server-thread]` issues). LAN guests and dedicated servers use the
-//! same code either way.
+//! On by default. `--in-frame` (or `--no-server-thread`, or
+//! `HORIZON_SERVER_THREAD=0`) runs the world in the frame instead, the
+//! escape hatch. LAN guests and dedicated servers use the same code either
+//! way.
 use super::{
     Game, Options, PackResources, Resources, UiResources,
     lan::{LanSettings, Owner},
@@ -468,8 +466,10 @@ impl Game<'_> {
                 host = self.lan.take().expect("a command puts the hub back");
                 self.leave_guest(&mut host, swap);
                 host.hub.sync_all_effects();
-                // A teleport into another level happens before its feedback is sent.
+                // A teleport into another level happens before its feedback is
+                // sent, and what the command earned is announced before it too.
                 self.run_level_teleports(&mut host);
+                self.announce_guest_advancements(&mut host);
                 for line in lines {
                     out.push(line.plain());
                     host.hub.send_to(

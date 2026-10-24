@@ -41,7 +41,7 @@ pub fn main(names: &[&str], run: fn(&str) -> Option<ExitCode>) -> ExitCode {
     let name = std::env::args().nth(1).unwrap_or_default();
     run(&name).unwrap_or_else(|| {
         eprintln!(
-            "usage: probe <name> [arguments...]\nprobes: {}",
+            "usage: client_probe <name> [arguments...]\nprobes: {}",
             names.join(" ")
         );
         ExitCode::from(2)

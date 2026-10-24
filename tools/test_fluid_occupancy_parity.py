@@ -57,7 +57,7 @@ def main():
     with (build/'inputs.txt').open('w') as output:
         for f in corpus(info):output.write(json.dumps(f,separators=(',',':'))+'\n');count+=1
     fixture_paths=[build/n for n in ['inputs.txt','info.json','block-registry.nbt']];fixtures=base.source_hashes(fixture_paths)
-    run(['cargo','build','--locked','--release','-p','horizon-world','--example','probe'],'compile-rust');metadata=json.loads(subprocess.check_output(['cargo','metadata','--locked','--no-deps','--format-version','1'],cwd=lab.ROOT));binary=Path(metadata['target_directory'])/'release/examples'/('probe.exe' if os.name=='nt' else 'probe');run([binary,'fluid_occupancy_fixture',build],'rust');references=[]
+    run(['cargo','build','--locked','--release','-p','horizon-world','--example','world_probe'],'compile-rust');metadata=json.loads(subprocess.check_output(['cargo','metadata','--locked','--no-deps','--format-version','1'],cwd=lab.ROOT));binary=Path(metadata['target_directory'])/'release/examples'/('world_probe.exe' if os.name=='nt' else 'world_probe');run([binary,'fluid_occupancy_fixture',build],'rust');references=[]
     for side,jar in jars.items():
         java(side,side);matched=base.compare(build/(side+'.txt'),build/'rust.txt');references.append(dict(side=side,jar_sha256=lab.digest(jar,'sha256'),output_sha256=lab.digest(build/(side+'.txt'),'sha256'),matched_output_lines=matched));print(f'{side}: {matched:,} fluid-occupancy output lines match Rust',flush=True)
     base.ensure_sources_unchanged(sources,tested);base.ensure_sources_unchanged(fixture_paths,fixtures)

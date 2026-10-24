@@ -120,7 +120,7 @@ def main():
     run(['java', '-Xmx1G', '-cp', str(classes) + os.pathsep + dependencies,
          'dev.horizonlab.parity.VanillaBlockEntityTickerOracle', inputs, build / 'vanilla.txt'], 'vanilla')
     run(['cargo', 'run', '--quiet', '--profile', 'fast', '-p', 'horizon-client', '--example',
-         'probe', '--', 'block_entity_tickers_fixture', inputs, build / 'rust.txt'], 'rust')
+         'client_probe', '--', 'block_entity_tickers_fixture', inputs, build / 'rust.txt'], 'rust')
     matched = base.compare(build / 'vanilla.txt', build / 'rust.txt')
     ticks = sum(1 for line in lines if line == 'tick')
     listed = sum(len(line.split()) - 1 for line in (build / 'vanilla.txt').read_text().splitlines())

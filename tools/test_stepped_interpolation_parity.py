@@ -94,7 +94,7 @@ def main():
                     'dev.horizonlab.parity.VanillaSteppedInterpolationOracle', str(events), str(build / 'vanilla.txt')],
                    check=True)
     subprocess.run(['cargo', 'run', '--quiet', '--release', '-p', 'horizon-world', '--example',
-                    'probe', '--', 'stepped_interpolation_fixture', str(events), str(build / 'rust.txt')], cwd=lab.ROOT, check=True)
+                    'world_probe', '--', 'stepped_interpolation_fixture', str(events), str(build / 'rust.txt')], cwd=lab.ROOT, check=True)
     matched = base.compare(build / 'vanilla.txt', build / 'rust.txt')
     print(f'Stepped interpolation parity passed: {matched} entity positions and rotations match vanilla')
 

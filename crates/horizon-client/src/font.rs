@@ -102,7 +102,8 @@ enum Provider {
 /// One font (`FontSet`): its providers and the glyphs resolved so far.
 struct FontSet {
     providers: Vec<Provider>,
-    glyphs: HashMap<char, Glyph>,
+    /// Every char drawn looks up here, so the hasher is Fx, not SipHash.
+    glyphs: crate::fast_hash::FxHashMap<char, Glyph>,
     /// `glyphsByWidth` for obfuscated text (built on first use).
     by_width: Option<HashMap<u32, Vec<char>>>,
 }
@@ -647,7 +648,7 @@ impl Font {
             .collect();
         FontSet {
             providers,
-            glyphs: HashMap::new(),
+            glyphs: Default::default(),
             by_width: None,
         }
     }

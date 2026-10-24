@@ -2,13 +2,14 @@
 //! a folder holding `shaders/`, or a `.zip`. `horizon-shaderpack` translates
 //! their full-screen programs (`begin`, `prepare`, `deferred`, `composite`,
 //! `final`) to WGSL, and `gfx/java_stages.rs` runs them over Horizon's world
-//! as Iris runs them over its own. Geometry programs (`gbuffers_*`,
-//! `shadow`) don't run yet: the world is drawn by Horizon.
+//! as Iris runs them over its own. Of the geometry programs, the terrain's
+//! (`gbuffers_terrain`, `gbuffers_water` and their fallbacks) draw Horizon's
+//! terrain (`gfx/java_terrain.rs`); the rest of the world is Horizon's.
 use horizon_shaderpack::{
     JavaPack,
-    pipeline::{Directives, Program, TargetSettings},
+    pipeline::{Directives, GeometryProgram, Pass, Program, TargetSettings},
     preprocess::Environment,
-    properties::SkyDirectives,
+    properties::{Blend, SkyDirectives},
     uniforms::CustomUniforms,
 };
 use std::{
@@ -36,6 +37,27 @@ pub struct JavaFolder {
     /// `sunPathRotation`, `eyeBrightnessHalflife`, `wetnessHalflife` and
     /// `drynessHalflife`.
     pub directives: Directives,
+    /// The programs Horizon's solid and translucent terrain are drawn with,
+    /// each translated for instanced and flat draws (`variants[0]`).
+    pub terrain: Option<GeometryProgram>,
+    pub water: Option<GeometryProgram>,
+    /// How many of `passes` run before translucent terrain (`begin*`,
+    /// `prepare*`, `deferred*`).
+    pub translucent_at: usize,
+    pub flipped_after_translucent: BTreeSet<u32>,
+    /// Each draw buffer's blending in `terrain` and `water`.
+    pub terrain_blends: Vec<Option<wgpu::BlendState>>,
+    pub water_blends: Vec<Option<wgpu::BlendState>>,
+    /// The shadow map's programs over Horizon's solid and translucent
+    /// terrain (instanced draws only), drawn after `begin*`, into
+    /// `shadowcolor` targets set by `shadow_targets`.
+    pub shadow: Option<GeometryProgram>,
+    pub shadow_water: Option<GeometryProgram>,
+    pub shadow_targets: Vec<TargetSettings>,
+    pub shadow_blends: Vec<Option<wgpu::BlendState>>,
+    pub shadow_water_blends: Vec<Option<wgpu::BlendState>>,
+    /// How many of `passes` run before the shadow map (`begin*`).
+    pub shadow_at: usize,
 }
 
 /// The key of `texture.noise` (`noisetex`) in [`JavaPasses::custom_textures`].
@@ -60,6 +82,8 @@ pub struct JavaPasses {
     pub uniforms: CustomUniforms,
     /// What the pack keeps of the vanilla sky (`clouds`, `sun`, `moon`).
     pub sky: SkyDirectives,
+    /// `block.properties`: block name → `mc_Entity` id.
+    pub block_ids: BTreeMap<String, i32>,
     /// `texture.<stage>.<sampler>` and `texture.noise` images, by
     /// `"<stage>.<sampler>"` and [`NOISE_KEY`].
     pub custom_textures: BTreeMap<String, crate::shader_pack::Rgba>,
@@ -144,6 +168,64 @@ pub fn load(
         if passes.is_empty() && final_pass.is_none() {
             continue;
         }
+        // A geometry program that doesn't translate leaves that terrain to
+        // Horizon, with a warning.
+        let geometry_with = |pass: &Option<horizon_shaderpack::pipeline::Pass>,
+                             alpha_test,
+                             flat: &[bool]| {
+            let pass = pass.as_ref()?;
+            let glues: Vec<_> = flat
+                .iter()
+                .map(|&flat| crate::gfx::java_terrain::glue(flat, alpha_test))
+                .collect();
+            match pack.compile_geometry(pass, &plan.targets, &values, &env, &properties, &glues) {
+                Ok(program) => Some(program),
+                Err(e) => {
+                    log::warn!("Horizon: shader pack {}: {e}", pass.program);
+                    None
+                }
+            }
+        };
+        let geometry = |pass: &Option<horizon_shaderpack::pipeline::Pass>, alpha_test| {
+            geometry_with(pass, alpha_test, &[false, true])
+        };
+        // Iris's alpha test of cutout terrain (`AlphaTests.ONE_TENTH_ALPHA`).
+        let terrain = geometry(&plan.terrain, Some(0.1));
+        let water = terrain.as_ref().and_then(|_| geometry(&plan.water, None));
+        // The shadow map draws only with the pack's terrain, and only from
+        // instanced draws (the flat draws hold what the camera sees).
+        let shadow = terrain
+            .as_ref()
+            .and_then(|_| geometry_with(&plan.shadow, Some(0.1), &[false]));
+        let shadow_water = shadow
+            .as_ref()
+            .and_then(|_| geometry_with(&plan.shadow_water, None, &[false]));
+        let translucent_at = early.clone().count() + plan.deferred.len();
+        let blends = |g: &Option<GeometryProgram>, default| {
+            g.as_ref().map_or_else(Vec::new, |g| {
+                pass_blends(&g.program.pass, &g.program.draw_buffers, default)
+            })
+        };
+        let terrain_blends = blends(&terrain, None);
+        // Iris's shadow programs don't blend (`BlendModeOverride.OFF`).
+        let shadow_blends = blends(&shadow, None);
+        let shadow_water_blends = blends(&shadow_water, None);
+        // Vanilla's translucent blending (`BlendFunction.TRANSLUCENT`).
+        let water_blends = blends(
+            &water,
+            Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::SrcAlpha,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            }),
+        );
         folders.push(JavaFolder {
             folder: name.to_owned(),
             targets: plan.targets,
@@ -154,6 +236,18 @@ pub fn load(
             final_pass,
             flipped_at_end: plan.flipped_at_end,
             directives: plan.directives,
+            terrain,
+            water,
+            translucent_at,
+            flipped_after_translucent: plan.flipped_after_translucent,
+            terrain_blends,
+            water_blends,
+            shadow,
+            shadow_water,
+            shadow_targets: plan.shadow_targets,
+            shadow_blends,
+            shadow_water_blends,
+            shadow_at: plan.begin.len(),
         });
     }
     if folders.is_empty() {
@@ -184,11 +278,69 @@ pub fn load(
     for problem in &uniforms.problems {
         log::warn!("Horizon: shader pack custom uniform {problem}");
     }
+    let block_ids = pack.block_ids(&values, &env).unwrap_or_else(|e| {
+        log::warn!("Horizon: shader pack {e}");
+        BTreeMap::new()
+    });
     Ok(JavaPasses {
         folders,
         uniforms,
         sky: properties.sky(),
         custom_textures,
+        block_ids,
+    })
+}
+
+/// Each draw buffer's blending, as Iris's `BlendModeOverride`:
+/// `blend.<program>.<buffer>`, else `blend.<program>`, else `default`
+/// (none for full-screen passes, vanilla's for the geometry programs).
+pub(crate) fn pass_blends(
+    pass: &Pass,
+    draw_buffers: &[u32],
+    default: Option<wgpu::BlendState>,
+) -> Vec<Option<wgpu::BlendState>> {
+    let all = pass.blend.as_ref().map_or(default, blend_state);
+    draw_buffers
+        .iter()
+        .map(|i| {
+            pass.buffer_blends
+                .iter()
+                .find(|(b, _)| b == i)
+                .map_or(all, |(_, b)| blend_state(b))
+        })
+        .collect()
+}
+
+/// A `blend.*` value as wgpu's blending (`off`: none). The factors are the
+/// GL ones `ShaderProperties` accepts.
+pub(crate) fn blend_state(blend: &Blend) -> Option<wgpu::BlendState> {
+    let Blend::Factors(factors) = blend else {
+        return None;
+    };
+    let factor = |name: &str| {
+        use wgpu::BlendFactor as F;
+        match name {
+            "ZERO" => F::Zero,
+            "SRC_COLOR" => F::Src,
+            "ONE_MINUS_SRC_COLOR" => F::OneMinusSrc,
+            "DST_COLOR" => F::Dst,
+            "ONE_MINUS_DST_COLOR" => F::OneMinusDst,
+            "SRC_ALPHA" => F::SrcAlpha,
+            "ONE_MINUS_SRC_ALPHA" => F::OneMinusSrcAlpha,
+            "DST_ALPHA" => F::DstAlpha,
+            "ONE_MINUS_DST_ALPHA" => F::OneMinusDstAlpha,
+            "SRC_ALPHA_SATURATE" => F::SrcAlphaSaturated,
+            _ => F::One,
+        }
+    };
+    let component = |src: &str, dst: &str| wgpu::BlendComponent {
+        src_factor: factor(src),
+        dst_factor: factor(dst),
+        operation: wgpu::BlendOperation::Add,
+    };
+    Some(wgpu::BlendState {
+        color: component(&factors[0], &factors[1]),
+        alpha: component(&factors[2], &factors[3]),
     })
 }
 
@@ -242,8 +394,21 @@ mod tests {
             .folders
             .iter()
             .flat_map(|f| f.passes.iter().chain(&f.final_pass));
+        let geometry = pack.folders.iter().flat_map(|f| {
+            f.terrain
+                .iter()
+                .chain(&f.water)
+                .chain(&f.shadow)
+                .chain(&f.shadow_water)
+        });
         passes
             .flat_map(|p| [(p, &p.vertex, "vsh"), (p, &p.fragment, "fsh")])
+            .chain(geometry.flat_map(|g| {
+                let p = &g.program;
+                [(p, &p.vertex, "vsh"), (p, &p.fragment, "fsh")]
+                    .into_iter()
+                    .chain(g.variants.iter().map(move |v| (p, v, "vsh (flat)")))
+            }))
             .find_map(|(p, t, ext)| {
                 let e = naga::front::wgsl::parse_str(&t.wgsl).err()?;
                 Some(format!(
@@ -283,7 +448,15 @@ mod tests {
                         .iter()
                         .map(|f| {
                             let n = f.passes.len() + usize::from(f.final_pass.is_some());
-                            format!("{} {n} passes", f.folder)
+                            let geometry: Vec<&str> = f
+                                .terrain
+                                .iter()
+                                .chain(&f.water)
+                                .chain(&f.shadow)
+                                .chain(&f.shadow_water)
+                                .map(|g| g.program.pass.program.as_str())
+                                .collect();
+                            format!("{} {n} passes, terrain {geometry:?}", f.folder)
                         })
                         .collect();
                     println!("{name}: loads ({})", folders.join(", "));

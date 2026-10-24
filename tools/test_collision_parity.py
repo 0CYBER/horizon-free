@@ -51,9 +51,9 @@ def main():
         result.check_returncode()
         return result.stdout
     expected = counts(java("server", "generate"))
-    test_rust_parity.run(["cargo", "build", "--release", "-p", "horizon-world", "--example", "probe"])
+    test_rust_parity.run(["cargo", "build", "--release", "-p", "horizon-world", "--example", "world_probe"])
     metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=lab.ROOT, text=True))
-    binary = Path(metadata["target_directory"]) / "release/examples" / ("probe.exe" if os.name=="nt" else "probe")
+    binary = Path(metadata["target_directory"]) / "release/examples" / ("world_probe.exe" if os.name=="nt" else "world_probe")
     actual = counts(subprocess.check_output([str(binary), "collision_fixture", str(base)], cwd=lab.ROOT, text=True))
     if actual != expected:
         raise AssertionError(f"Collision coverage differs: vanilla={expected}, Rust={actual}")

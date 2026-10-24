@@ -82,9 +82,9 @@ def main():
     dependencies = os.pathsep.join(map(str, libraries))
     run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-cp',
          str(jars['server'])+os.pathsep+dependencies, '-d', classes, oracle, *helpers], 'compile-java')
-    run(['cargo', 'build', '--locked', '-p', 'horizon-client', '--example', 'probe'], 'compile-rust')
+    run(['cargo', 'build', '--locked', '-p', 'horizon-client', '--example', 'client_probe'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1'], cwd=lab.ROOT))
-    executable = Path(metadata['target_directory'])/'debug/examples'/('probe.exe' if os.name=='nt' else 'probe')
+    executable = Path(metadata['target_directory'])/'debug/examples'/('client_probe.exe' if os.name=='nt' else 'client_probe')
     cases = []
     for radius in [1, 2]:
         build = root/str(radius); build.mkdir(exist_ok=True)

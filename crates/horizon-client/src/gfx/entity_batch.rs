@@ -2,11 +2,14 @@
 use super::Vertex;
 
 /// Entity materials by a quad's overlay (`Vertex::layer`), in draw order:
-/// ordinary entities, breaking cracks (11), translucent breaking cracks (12)
-/// and the boat water mask (13, `RenderPipelines.WATER_MASK`).
-const MATERIALS: usize = 4;
+/// ordinary entities, breaking cracks (11), translucent breaking cracks (12),
+/// the boat water mask (13, `RenderPipelines.WATER_MASK`) and entity shadows
+/// (14, `RenderPipelines.ENTITY_SHADOW`).
+const MATERIALS: usize = 5;
 /// The overlay of depth-only quads that hide water (`RenderTypes.waterMask`).
 pub const WATER_MASK_OVERLAY: u32 = 13;
+/// The overlay of entity shadow quads (`RenderTypes.entityShadow`).
+pub const SHADOW_OVERLAY: u32 = 14;
 
 #[derive(Default)]
 pub(super) struct EntityBatch {
@@ -37,6 +40,7 @@ impl EntityBatch {
                 11 => 1,
                 12 => 2,
                 WATER_MASK_OVERLAY => 3,
+                SHADOW_OVERLAY => 4,
                 _ => 0,
             };
             self.buckets[material][counts[material]] = index;
@@ -88,12 +92,13 @@ mod tests {
     ) -> (Vec<Vertex>, [u32; MATERIALS]) {
         let mut combined = Vec::with_capacity(entities.len() + additive.len() + hand.len());
         let mut counts = [0; MATERIALS];
-        for (i, layer) in [0, 11, 12, 13].into_iter().enumerate() {
+        for (i, layer) in [0, 11, 12, 13, 14].into_iter().enumerate() {
             for quad in entities.as_chunks::<4>().0 {
                 let material = match quad[0].layer {
                     11 => 11,
                     12 => 12,
                     13 => 13,
+                    14 => 14,
                     _ => 0,
                 };
                 if material == layer {
@@ -113,7 +118,7 @@ mod tests {
                 pos: [index as f32, 2.0, 3.0],
                 uv: [index as f32, 5.0],
                 layer: if mixed {
-                    [7, 11, 12, 4, 13, 0][index / 4 % 6]
+                    [7, 11, 14, 12, 4, 13, 0][index / 4 % 7]
                 } else {
                     0
                 },

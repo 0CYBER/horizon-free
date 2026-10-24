@@ -45,7 +45,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// Locations, bindings and uniforms shared by the programs of one pass: a
 /// pass's vertex program is translated first, its fragment program second.
-#[derive(Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct Link {
     /// Varying name → location (split matrices and arrays as `name#i`).
     pub varyings: BTreeMap<String, u32>,
@@ -64,6 +64,27 @@ pub struct Link {
     /// 16). Once any is named, comparison samplers share `iris_compare` and
     /// integer ones `iris_nearest`; textures not named keep `{name}_s`.
     pub shared_samplers: BTreeMap<String, String>,
+    /// The bind group of the pack's bindings (0; 2 for geometry programs,
+    /// whose first groups are Horizon's).
+    pub set: u32,
+    /// Set for `gbuffers_*` programs drawn over Horizon's own geometry.
+    pub geometry: Option<Geometry>,
+}
+
+/// How a `gbuffers_*` program runs over Horizon's geometry: its vertex
+/// attributes aren't inputs but globals the glue fills from Horizon's
+/// vertices before the program's `main`.
+#[derive(Clone, Debug, Default)]
+pub struct Geometry {
+    /// GLSL put before the vertex program: Horizon's vertex inputs and
+    /// buffers, and a `void hz_vertex()` run first in `main`.
+    pub vertex_glue: String,
+    /// Each attribute's value as a `vec4` expression of the glue
+    /// (`iris_Vertex`, `mc_Entity`, `vaUV0`...). Others are zero.
+    pub attributes: BTreeMap<String, String>,
+    /// Iris's alpha test: the fragment is discarded unless output 0's
+    /// alpha is above it.
+    pub alpha_test: Option<f32>,
 }
 
 impl Link {
@@ -385,6 +406,7 @@ pub fn translate(
         .parse(&options, &glsl)
         .map_err(|e| first_lines(&e.emit_to_string(&glsl)))?;
     unpad_private_arrays(&mut module);
+    end_returning_cases(&mut module);
     let info = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),
@@ -401,6 +423,49 @@ pub fn translate(
         wgsl,
         interface: legaliser.interface,
     })
+}
+
+/// A `case` that ends with `return` or `discard` rather than `break`
+/// (Photon's displacement) is a fall-through one to naga's GLSL front end,
+/// which its WGSL writer refuses: nothing falls through it.
+fn end_returning_cases(module: &mut naga::Module) {
+    fn block(b: &mut naga::Block) {
+        for s in b.iter_mut() {
+            match s {
+                naga::Statement::Block(inner) => block(inner),
+                naga::Statement::If { accept, reject, .. } => {
+                    block(accept);
+                    block(reject);
+                }
+                naga::Statement::Loop {
+                    body, continuing, ..
+                } => {
+                    block(body);
+                    block(continuing);
+                }
+                naga::Statement::Switch { cases, .. } => {
+                    for case in cases {
+                        block(&mut case.body);
+                        if case.fall_through
+                            && matches!(
+                                case.body.last(),
+                                Some(naga::Statement::Return { .. } | naga::Statement::Kill)
+                            )
+                        {
+                            case.fall_through = false;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    for (_, f) in module.functions.iter_mut() {
+        block(&mut f.body);
+    }
+    for e in &mut module.entry_points {
+        block(&mut e.function.body);
+    }
 }
 
 /// Built-in functions naga folds in `const` initialisers.
@@ -634,6 +699,8 @@ struct Legaliser<'a> {
     mat2_ctor: bool,
     /// Constants turned into globals ([`needs_runtime`]).
     runtime_constants: HashSet<String>,
+    /// Geometry programs: each attribute's type, for the glue.
+    attribute_types: BTreeMap<String, String>,
 }
 
 fn var(name: &str) -> ast::Expr {
@@ -952,6 +1019,7 @@ impl<'a> Legaliser<'a> {
             gather: false,
             mat2_ctor: false,
             runtime_constants: HashSet::new(),
+            attribute_types: BTreeMap::new(),
         }
     }
 
@@ -1043,7 +1111,8 @@ impl<'a> Legaliser<'a> {
                 show_declaration(&mut text, d, &mut FormattingState::default())
                     .map_err(|e| e.to_string())?;
                 self.header.push(format!(
-                    "layout({kind}, set = 0, binding = {binding}) {}",
+                    "layout({kind}, set = {}, binding = {binding}) {}",
+                    self.link.set,
                     text.trim()
                 ));
                 Ok(false)
@@ -1099,7 +1168,8 @@ impl<'a> Legaliser<'a> {
                 for (name, _) in &names {
                     let t = self.link.binding(&format!("{name}_t"));
                     self.header.push(format!(
-                        "layout(set = 0, binding = {t}) uniform {texture} {name}_t;"
+                        "layout(set = {}, binding = {t}) uniform {texture} {name}_t;",
+                        self.link.set
                     ));
                     let shared = &self.link.shared_samplers;
                     let var = if shared.is_empty() {
@@ -1117,7 +1187,8 @@ impl<'a> Legaliser<'a> {
                     if self.sampler_vars.insert(var.clone()) {
                         let s = self.link.binding(&var);
                         self.header.push(format!(
-                            "layout(set = 0, binding = {s}) uniform {sampler} {var};"
+                            "layout(set = {}, binding = {s}) uniform {sampler} {var};",
+                            self.link.set
                         ));
                     }
                     self.interface
@@ -1156,7 +1227,8 @@ impl<'a> Legaliser<'a> {
                         .unwrap_or_else(|| "rgba8".to_owned());
                     let binding = self.link.binding(name);
                     layout.push(format!(
-                        "layout({f}, set = 0, binding = {binding}) {memory}uniform {ty} {name};"
+                        "layout({f}, set = {}, binding = {binding}) {memory}uniform {ty} {name};",
+                        self.link.set
                     ));
                     self.interface.images.push((name.clone(), f));
                 }
@@ -1199,10 +1271,8 @@ impl<'a> Legaliser<'a> {
             for (i, (name, array)) in names.iter().enumerate() {
                 let full_array = format!("{ty_array}{array}");
                 if input {
-                    let at = Link::location(&mut self.link.attributes, name);
-                    self.header.push(format!(
-                        "layout(location = {at}) in {ty} {name}{full_array};"
-                    ));
+                    let decl = self.attribute(&ty, name, &full_array);
+                    self.header.push(decl);
                     self.interface.attributes.insert(name.clone());
                 } else if !varying {
                     let at = explicit
@@ -1670,9 +1740,8 @@ impl<'a> Legaliser<'a> {
                 let ty = LEGACY_ATTRIBUTES.iter().find(|(a, _)| *a == n).unwrap().1;
                 let renamed = n.replacen("gl_", "iris_", 1);
                 if self.interface.attributes.insert(renamed.clone()) {
-                    let at = Link::location(&mut self.link.attributes, &renamed);
-                    self.header
-                        .push(format!("layout(location = {at}) in {ty} {renamed};"));
+                    let decl = self.attribute(ty, &renamed, "");
+                    self.header.push(decl);
                 }
                 renamed
             }
@@ -1691,6 +1760,21 @@ impl<'a> Legaliser<'a> {
             let at = Link::location(&mut self.link.varyings, name);
             self.header
                 .push(format!("layout(location = {at}) {dir} {ty} {name};"));
+        }
+    }
+
+    /// A vertex attribute's declaration: an input, or for geometry programs
+    /// a global the glue fills ([`Geometry`]).
+    fn attribute(&mut self, ty: &str, name: &str, array: &str) -> String {
+        match &self.link.geometry {
+            Some(_) => {
+                self.attribute_types.insert(name.to_owned(), ty.to_owned());
+                format!("{ty} {name}{array};")
+            }
+            None => {
+                let at = Link::location(&mut self.link.attributes, name);
+                format!("layout(location = {at}) in {ty} {name}{array};")
+            }
         }
     }
 
@@ -1959,9 +2043,8 @@ impl<'a> Legaliser<'a> {
                 continue;
             }
             if attribute && self.stage == Stage::Vertex {
-                let at = Link::location(&mut self.link.attributes, name);
-                self.header
-                    .push(format!("layout(location = {at}) in {ty} {name};"));
+                let decl = self.attribute(ty, name, "");
+                self.header.push(decl);
                 self.interface.attributes.insert(name.to_owned());
             } else if !attribute {
                 self.link.uniform(name, format!("{ty} {name}"))?;
@@ -1970,6 +2053,42 @@ impl<'a> Legaliser<'a> {
         }
         if !self.errors.is_empty() {
             return Err(self.errors.join("\n"));
+        }
+        if let Some(geometry) = &self.link.geometry {
+            match self.stage {
+                Stage::Vertex => {
+                    // The glue first, then the attributes from it, before
+                    // the global initialisers (which may read them).
+                    let mut first = vec!["hz_vertex();".to_owned()];
+                    for (name, ty) in &self.attribute_types {
+                        first.push(match geometry.attributes.get(name) {
+                            Some(value) => format!("{name} = {ty}({value});"),
+                            None => format!("{name} = {ty}(0);"),
+                        });
+                    }
+                    self.prologue.splice(0..0, first);
+                }
+                Stage::Fragment => {
+                    if let (Some(reference), Some(name)) =
+                        (geometry.alpha_test, self.interface.outputs.get(&0))
+                    {
+                        let written = format!("iris_out_{name}");
+                        let name = if self.declared.contains(&written)
+                            || self
+                                .header
+                                .iter()
+                                .any(|h| h.ends_with(&format!(" {written};")))
+                        {
+                            written
+                        } else {
+                            name.clone()
+                        };
+                        self.epilogue
+                            .push(format!("if (!({name}.a > {reference:?})) discard;"));
+                    }
+                }
+                _ => {}
+            }
         }
         if self.stage == Stage::Vertex {
             // GL's clip space to wgpu's: y flipped, so texture row 0 stays
@@ -1982,6 +2101,10 @@ impl<'a> Legaliser<'a> {
         }
         let mut out = String::from("#version 450 core\n");
         out.push_str(HELPERS);
+        if let (Some(geometry), Stage::Vertex) = (&self.link.geometry, self.stage) {
+            out.push_str(&geometry.vertex_glue);
+            out.push('\n');
+        }
         if self.modulo {
             out.push_str(&modulo_helpers());
         }
@@ -1995,7 +2118,10 @@ impl<'a> Legaliser<'a> {
             out.push_str(MAT2_HELPERS);
         }
         if !self.link.uniforms.is_empty() {
-            out.push_str("layout(std140, set = 0, binding = 0) uniform IrisUniforms {\n");
+            out.push_str(&format!(
+                "layout(std140, set = {}, binding = 0) uniform IrisUniforms {{\n",
+                self.link.set
+            ));
             for (_, decl) in &self.link.uniforms {
                 out.push_str(&format!("    {decl};\n"));
             }

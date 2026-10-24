@@ -131,23 +131,6 @@ pub struct Mods {
     out: Vec<Output>,
 }
 
-/// The `.hmod` files and mod folders in `dir`, by name.
-pub fn find(dir: &Path) -> Vec<PathBuf> {
-    let Ok(read) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut found: Vec<PathBuf> = read
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            p.extension().is_some_and(|e| e == "hmod")
-                || p.join(crate::manifest::MANIFEST).is_file()
-        })
-        .collect();
-    found.sort();
-    found
-}
-
 impl Mods {
     /// Reads every mod at `paths` and starts those `enabled` says are on.
     /// A command that `reserved` (vanilla's commands) or an earlier mod

@@ -335,6 +335,12 @@ impl Game<'_> {
             Some(Ticker::Shulker { .. }) => v["lid"] = json!(self.block_anim(pos, 1.0).shulker.0),
             _ => {}
         }
+        // The lines of a sign, as this client has them.
+        if let Some(horizon_client::containers::BlockEntity::Sign(sign)) =
+            self.world.block_entities.get(&(pos[0], pos[1], pos[2]))
+        {
+            v["sign"] = json!({ "front": sign.front.lines, "back": sign.back.lines });
+        }
         v
     }
     pub(super) fn stack_value(&self, s: &ItemStack) -> Value {
@@ -457,6 +463,7 @@ impl Game<'_> {
                 "velocity": [p.velocity.x, p.velocity.y, p.velocity.z],
                 "on_ground": p.ground.on_ground,
                 "flying": p.flying,
+                "fall_flying": p.fall_flying,
                 "sneaking": self.keys.contains(&KeyCode::ShiftLeft),
                 "sprinting": self.keys.contains(&KeyCode::ControlLeft),
                 "health": p.health.health(),
@@ -678,6 +685,8 @@ impl Game<'_> {
         json!({
             "chat": self.remote_chat(n).unwrap_or_else(|| self.ui.chat.recent_lines(n)),
             "order": "newest first",
+            // The chat lines as drawn: colours, click and hover events.
+            "styled": self.ui.chat.recent_components(n),
             "title": (titles.time > 0).then(|| titles.title.as_ref().map(|t| t.plain())).flatten(),
             "subtitle": (titles.time > 0).then(|| titles.subtitle.as_ref().map(|t| t.plain())).flatten(),
             "actionbar": (titles.overlay_time > 0).then(|| titles.overlay.as_ref().map(|t| t.plain())).flatten(),

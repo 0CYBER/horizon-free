@@ -2,6 +2,7 @@
 //! bobbing, lure and bite timers, open water, hooking mobs, retrieving the
 //! `gameplay/fishing` loot) and `FishingHookRenderer` (bobber and line).
 use super::{Game, view_vector};
+use horizon_client::lan::{entity::States, hub::Hub};
 use horizon_client::{
     blocks::Fluid,
     collisions::SceneCollisions,
@@ -15,7 +16,10 @@ use horizon_core::{
     geometry::{Aabb, Vec3, trig},
     random::RandomSource,
 };
-use std::sync::Arc;
+use horizon_protocol::entity_data::{Value, serializer};
+use std::{collections::HashMap, sync::Arc};
+
+use super::lan_actions::GuestPlay;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum State {
@@ -24,6 +28,8 @@ enum State {
     Hooked(u32),
 }
 pub(super) struct Hook {
+    /// Its entity id, which a server's players track it under.
+    id: u32,
     position: Vec3,
     previous: Vec3,
     velocity: Vec3,
@@ -114,7 +120,9 @@ impl Game<'_> {
             );
             // A spawned hook's start position is its feet: centre the box on the eye.
             let start = Vec3::new(start.x, start.y - SIZE / 2.0, start.z);
+            self.next_entity += 1;
             self.hook = Some(Hook {
+                id: self.next_entity,
                 position: start,
                 previous: start,
                 velocity: v,
@@ -562,12 +570,17 @@ impl Game<'_> {
             lerp(h.previous.z, h.position.z),
         ))
     }
-    /// FishingHookRenderer: the bobber, a camera-facing half-block quad
-    /// centred on the hook.
+    /// FishingHookRenderer: the bobbers (this player's and the others' a
+    /// server tracks), camera-facing half-block quads centred on the hooks.
     pub(super) fn fishing_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
-        let Some(p) = self.hook_position(alpha) else {
+        let hooks: Vec<glam::DVec3> = self
+            .hook_position(alpha)
+            .into_iter()
+            .chain(self.remote_hook_ends(alpha).into_iter().map(|(h, _)| h))
+            .collect();
+        if hooks.is_empty() {
             return;
-        };
+        }
         let Some(r) = self
             .gui
             .atlas
@@ -577,56 +590,57 @@ impl Game<'_> {
         else {
             return;
         };
-        let light = self
-            .world
-            .light(p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
-        let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
         let forward = glam::DVec3::from_array(view_vector(self.yaw, self.pitch));
         let right = forward.cross(glam::DVec3::Y).normalize_or_zero();
         let up = right.cross(forward).normalize_or_zero();
         let s = 0.25;
-        let corners = [
-            p - right * s - up * s,
-            p + right * s - up * s,
-            p + right * s + up * s,
-            p - right * s + up * s,
-        ];
         let uv = [[r.u0, r.v1], [r.u1, r.v1], [r.u1, r.v0], [r.u0, r.v0]];
-        for (v, uv) in corners.iter().zip(uv) {
-            out.push(Vertex {
-                normal: [0; 4],
-                pos: (*v - camera).as_vec3().to_array(),
-                uv,
-                layer: 0,
-                color: 0xFFFF_FFFF,
-                light: packed,
-            });
+        for p in hooks {
+            let light =
+                self.world
+                    .light(p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
+            let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
+            let corners = [
+                p - right * s - up * s,
+                p + right * s - up * s,
+                p + right * s + up * s,
+                p - right * s + up * s,
+            ];
+            for (v, uv) in corners.iter().zip(uv) {
+                out.push(Vertex {
+                    normal: [0; 4],
+                    pos: (*v - camera).as_vec3().to_array(),
+                    uv,
+                    layer: 0,
+                    color: 0xFFFF_FFFF,
+                    light: packed,
+                });
+            }
         }
     }
-    /// FishingHookRenderer: the line, 16 black `lines` segments sagging from
-    /// a quarter block above the hook to the rod in the player's hand,
+    /// FishingHookRenderer: each line, 16 black `lines` segments sagging
+    /// from a quarter block above the hook to the rod in its owner's hand,
     /// `width` pixels wide (`Window.getAppropriateLineWidth`).
     pub(super) fn fishing_line(&self, alpha: f64, size: [u32; 2]) -> Vec<Line> {
-        let (Some(hook), Some(hand)) = (
-            self.hook_position(alpha),
-            self.rod_hand_position(alpha, size),
-        ) else {
-            return Vec::new();
-        };
-        let offset = (hand - (hook + glam::DVec3::new(0.0, 0.25, 0.0))).as_vec3();
-        let point = |a: f32| {
-            let y = offset.y * (a * a + a) * 0.5 + 0.25;
-            hook + glam::Vec3::new(offset.x * a, y, offset.z * a).as_dvec3()
-        };
+        let own = self
+            .hook_position(alpha)
+            .zip(self.rod_hand_position(alpha, size));
         let width = horizon_client::gfx::outline_width(size[0]);
-        (0..16)
-            .map(|i| Line {
+        let mut lines = Vec::new();
+        for (hook, hand) in own.into_iter().chain(self.remote_hook_ends(alpha)) {
+            let offset = (hand - (hook + glam::DVec3::new(0.0, 0.25, 0.0))).as_vec3();
+            let point = |a: f32| {
+                let y = offset.y * (a * a + a) * 0.5 + 0.25;
+                hook + glam::Vec3::new(offset.x * a, y, offset.z * a).as_dvec3()
+            };
+            lines.extend((0..16).map(|i| Line {
                 start: point(i as f32 / 16.0).to_array(),
                 end: point((i + 1) as f32 / 16.0).to_array(),
                 color: 0xFF00_0000,
                 width,
-            })
-            .collect()
+            }));
+        }
+        lines
     }
     /// `FishingHookRenderer.getPlayerHandPos`: on the near plane in first
     /// person, beside the body otherwise.
@@ -694,6 +708,20 @@ impl Game<'_> {
     }
 }
 impl Game<'_> {
+    /// The hooks drawn here, with their owners' ids (0 for this player's own).
+    pub(super) fn hooks_status(&self) -> Vec<serde_json::Value> {
+        let at = |p: Vec3| [p.x, p.y, p.z];
+        let own = self.hook.iter().map(|h| (h.id, 0, h.position));
+        let others = self
+            .remote_hooks
+            .iter()
+            .map(|h| (h.id, h.owner, h.position));
+        own.chain(others)
+            .map(|(id, owner, p)| {
+                serde_json::json!({"id": id, "kind": "minecraft:fishing_bobber", "owner": owner, "position": at(p)})
+            })
+            .collect()
+    }
     /// The hook for `horizon-ctl status`.
     pub(super) fn hook_status(&self) -> Option<serde_json::Value> {
         let h = self.hook.as_ref()?;
@@ -704,5 +732,177 @@ impl Game<'_> {
             "hooked_in": h.time_until_hooked,
             "open_water": h.open_water,
         }))
+    }
+}
+
+/// A hook a server tracks to this client (`FishingHook.recreateFromPacket`)
+/// that another player cast: drawn where the server puts it, its line
+/// running to that player's hand.
+pub(super) struct RemoteHook {
+    id: u32,
+    owner: u32,
+    position: Vec3,
+    previous: Vec3,
+}
+
+impl Hook {
+    /// This client's own hook as its server tracks it: drawn, never ticked here.
+    fn remote(id: u32, at: Vec3) -> Self {
+        Self {
+            id,
+            position: at,
+            previous: at,
+            velocity: Vec3::ZERO,
+            state: State::Flying,
+            life: 0,
+            on_ground: false,
+            nibble: 0,
+            time_until_lured: 0,
+            time_until_hooked: 0,
+            fish_angle: 0.0,
+            out_of_water: 0,
+            open_water: true,
+            luck: 0,
+            lure: 0,
+        }
+    }
+    /// `FishingHook`'s entity for the players tracking it: the owner's id in
+    /// its add packet, DATA_HOOKED_ENTITY (the hooked id plus one) and
+    /// DATA_BITING when they differ from their defaults.
+    fn track(&self, owner: i32, out: &mut States) {
+        let p = self.position;
+        let e = out.add(
+            self.id as i32,
+            super::lan::entity_uuid(self.id),
+            "minecraft:fishing_bobber",
+        );
+        e.position = [p.x, p.y, p.z];
+        e.velocity = [self.velocity.x, self.velocity.y, self.velocity.z];
+        e.on_ground = self.on_ground;
+        e.data = owner;
+        if let State::Hooked(id) = self.state {
+            e.meta.push((8, serializer::INT, Value::Int(id as i32 + 1)));
+        }
+        if self.nibble > 0 {
+            e.meta.push((9, serializer::BOOLEAN, Value::Bool(true)));
+        }
+    }
+}
+
+impl Game<'_> {
+    /// The hooks guests track: the host's and each guest's in the level.
+    pub(super) fn lan_hook_states(
+        &self,
+        host_entity: Option<i32>,
+        play: &HashMap<u32, GuestPlay>,
+        hub: &Hub,
+        out: &mut States,
+    ) {
+        if let (Some(h), Some(owner)) = (&self.hook, host_entity) {
+            h.track(owner, out);
+        }
+        for g in hub.guests.iter().filter(|g| hub.here(g)) {
+            if let Some(h) = play.get(&g.conn).and_then(|p| p.hook.as_ref()) {
+                h.track(g.entity_id, out);
+            }
+        }
+    }
+
+    /// `handleAddEntity` for a fishing bobber: this player's own becomes its
+    /// hook (`Player.fishing`), another player's is drawn on its line to them.
+    pub(super) fn spawn_remote_hook(&mut self, id: u32, at: Vec3, owner: i32) {
+        let own = self.remote.as_ref().map(|r| r.entity_id);
+        if own == Some(owner) {
+            self.hook = Some(Hook::remote(id, at));
+        } else {
+            self.remote_hooks.push(RemoteHook {
+                id,
+                owner: owner as u32,
+                position: at,
+                previous: at,
+            });
+        }
+    }
+
+    /// One tick of interpolation for the hooks a server tracks.
+    pub(super) fn step_remote_hooks(&mut self, mut step: impl FnMut(u32, Vec3) -> Vec3) {
+        if self.remote.is_none() {
+            return;
+        }
+        if let Some(h) = self.hook.as_mut() {
+            h.previous = h.position;
+            h.position = step(h.id, h.position);
+        }
+        for h in &mut self.remote_hooks {
+            h.previous = h.position;
+            h.position = step(h.id, h.position);
+        }
+    }
+
+    /// `FishingHook.onSyncedDataUpdated`: this player's hook is biting
+    /// (DATA_BITING), which `status` shows as a nibble.
+    pub(super) fn remote_hook_data(&mut self, id: u32, values: &[(u8, i32, Value)]) {
+        let Some(h) = self
+            .hook
+            .as_mut()
+            .filter(|h| h.id == id && self.remote.is_some())
+        else {
+            return;
+        };
+        for (index, _, value) in values {
+            if let (9, Value::Bool(biting)) = (index, value) {
+                h.nibble = i32::from(*biting);
+            }
+        }
+    }
+
+    pub(super) fn remove_remote_hook(&mut self, id: u32) {
+        if self.remote.is_some() && self.hook.as_ref().is_some_and(|h| h.id == id) {
+            self.hook = None;
+        }
+        self.remote_hooks.retain(|h| h.id != id);
+    }
+
+    pub(super) fn clear_remote_hooks(&mut self) {
+        if self.remote.is_some() {
+            self.hook = None;
+        }
+        self.remote_hooks.clear();
+    }
+
+    /// Other players' hooks: the bobber and its line to the owner's hand
+    /// (`FishingHookRenderer.getPlayerHandPos` in third person), as
+    /// (hook, hand) this frame.
+    fn remote_hook_ends(&self, alpha: f64) -> Vec<(glam::DVec3, glam::DVec3)> {
+        let lerp = |a: Vec3, b: Vec3| {
+            glam::DVec3::new(
+                a.x + (b.x - a.x) * alpha,
+                a.y + (b.y - a.y) * alpha,
+                a.z + (b.z - a.z) * alpha,
+            )
+        };
+        self.remote_hooks
+            .iter()
+            .filter_map(|h| {
+                let owner = self.mobs.iter().find(|m| m.id == h.owner)?;
+                let feet = lerp(owner.previous, owner.position);
+                let body = horizon_client::camera::lerp(
+                    alpha as f32,
+                    owner.previous_body_yaw,
+                    owner.body_yaw,
+                );
+                let angle = f64::from(body * (std::f64::consts::PI / 180.0) as f32);
+                let (sin, cos) = (f64::from(trig::sin(angle)), f64::from(trig::cos(angle)));
+                // The right arm; a crouching owner's eyes are lower.
+                let eye = owner.eye_y() - owner.position.y;
+                let hand = feet
+                    + glam::DVec3::new(
+                        -cos * 0.35 - sin * 0.8,
+                        eye - 0.45,
+                        -sin * 0.35 + cos * 0.8,
+                    );
+                Some((lerp(h.previous, h.position), hand))
+            })
+            .collect()
     }
 }

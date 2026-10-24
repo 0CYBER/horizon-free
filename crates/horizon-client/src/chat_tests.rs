@@ -285,3 +285,45 @@ fn ask_server_nodes_wait_for_the_servers_completions() {
     screen.type_text(&m, &c, "/bossbar get pt");
     assert_eq!(screen.take_request(), None);
 }
+
+#[test]
+fn legacy_codes_colour_the_line_or_vanish_without_chat_colours() {
+    let mut chat = Chat::default();
+    let red = Text::literal("\u{a7}cRED");
+    let shown = chat.displayed(&red);
+    assert_eq!(shown.plain(), "RED");
+    assert!(shown.chars().all(|(_, s)| s.color == Some(0xFF5555)));
+    chat.options.colors = false;
+    let shown = chat.displayed(&red);
+    assert_eq!(shown.plain(), "RED");
+    assert!(shown.chars().all(|(_, s)| s.color.is_none()));
+    // A lone section sign or an unknown code stays as written.
+    assert_eq!(
+        chat.displayed(&Text::literal("a\u{a7}zb")).plain(),
+        "a\u{a7}zb"
+    );
+}
+
+#[test]
+fn a_server_component_keeps_its_click_and_hover_events() {
+    let font = font();
+    let json = serde_json::json!({
+        "text": "CLICK", "color": "green", "bold": true,
+        "click_event": {"action": "suggest_command", "command": "/say clicked"},
+        "hover_event": {"action": "show_text", "value": {"text": "Tip", "color": "aqua"}},
+    });
+    let line = crate::component::to_text(&json, &mut |s| Text::literal(s));
+    let mut chat = Chat::default();
+    add(&mut chat, &font, line);
+    let x = 4.0 + f64::from(font.width("CL"));
+    let Some(ClickEvent::SuggestCommand(command)) = chat.click_at(&font, 360, x, 315.0) else {
+        panic!("the line must suggest its command");
+    };
+    assert_eq!(command, "/say clicked");
+    let hover = chat.hover_at(&font, 360, x, 315.0).expect("a hover text");
+    assert_eq!(hover.plain(), "Tip");
+    assert_eq!(hover.spans[0].style.color, Some(text::AQUA));
+    // Past the (bold, so wider) text, nothing.
+    let past = 4.0 + f64::from(font.width("CLICK")) + 20.0;
+    assert!(chat.hover_at(&font, 360, past, 315.0).is_none());
+}

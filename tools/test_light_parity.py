@@ -92,7 +92,7 @@ def main():
         dimension = run / 'world'
     for extra in (['--chunks', '0', '0', '2', '3'], ['--incremental', '100']):
         status = subprocess.run(['cargo', 'run', '--quiet', '--profile', 'fast', '-p', 'horizon-client',
-                                 '--example', 'probe', '--', 'light_parity', str(RESOURCES), str(dimension), *extra],
+                                 '--example', 'client_probe', '--', 'light_parity', str(RESOURCES), str(dimension), *extra],
                                 cwd=ROOT).returncode
         if status:
             sys.exit('light mismatch against vanilla')

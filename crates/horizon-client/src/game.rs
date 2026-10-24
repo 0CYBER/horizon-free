@@ -123,6 +123,7 @@ mod raids;
 mod recipe_book;
 mod remote;
 mod remote_mob_data;
+mod remote_mob_use;
 mod remote_objects;
 mod remote_projectiles;
 mod remote_stations;
@@ -284,11 +285,9 @@ struct Options {
     benchmark: Option<String>,
     /// `--dev-mod PATH` (repeatable): mods always on and reloaded when rebuilt.
     dev_mods: Vec<PathBuf>,
-    /// `--server-thread` or `HORIZON_SERVER_THREAD=1`: single player runs on an
-    /// integrated server thread (game/integrated.rs), as vanilla's does. Off by
-    /// default again until a server's players reach parity with the in-frame
-    /// world (signs, books, totems, keep_inventory...); `--no-server-thread`
-    /// keeps it off.
+    /// Single player runs on an integrated server thread (game/integrated.rs),
+    /// as vanilla's does: the default. `--in-frame` (or `--no-server-thread`,
+    /// or `HORIZON_SERVER_THREAD=0`) runs the world in the frame instead.
     server_thread: bool,
     /// Set on the integrated server's own options: it draws nothing, so it skips meshing.
     integrated: bool,
@@ -346,7 +345,7 @@ impl Options {
             dev_mods: Vec::new(),
             // The command harness (HORIZON_COMMAND_SCRIPT) drives the world
             // itself, without the event loop: it stays in the frame.
-            server_thread: std::env::var("HORIZON_SERVER_THREAD").is_ok_and(|v| v == "1")
+            server_thread: std::env::var("HORIZON_SERVER_THREAD").map_or(true, |v| v != "0")
                 && std::env::var_os("HORIZON_COMMAND_SCRIPT").is_none(),
             integrated: false,
         };
@@ -356,7 +355,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A Horizon mod (.hmod or folder) to develop: always on, reloaded when rebuilt\n  --server-thread         Run single player's world on its server thread (not at parity yet)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
+                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A Horizon mod (.hmod or folder) to develop: always on, reloaded when rebuilt\n  --in-frame              Run single player's world in the frame, not on its server thread\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
                         horizon_core::VANILLA_VERSION
                     );
                     return Ok(None);
@@ -371,7 +370,7 @@ impl Options {
                 "--offscreen" => o.offscreen = true,
                 "--control" => o.control = Some(horizon_client::control::default_path()),
                 "--server-thread" => o.server_thread = true,
-                "--no-server-thread" => o.server_thread = false,
+                "--in-frame" | "--no-server-thread" => o.server_thread = false,
                 _ => {
                     let value = args
                         .next()
@@ -505,6 +504,9 @@ enum FallStep {
 enum GuestUse {
     OnBlock(Hand),
     Item(Hand),
+    /// `handleInteract`: `Player.interactOn` with the hand, nothing else (the
+    /// client sends UseItem itself when the entity passed).
+    Entity(Hand),
 }
 
 /// The client world as seen by the vanilla block-behaviour library.
@@ -1442,6 +1444,8 @@ struct Game<'a> {
     mount_menu: mount_menu::MountMenu,
     /// The player's fishing hook.
     hook: Option<fishing::Hook>,
+    /// The other players' hooks a server tracks to this client.
+    remote_hooks: Vec<fishing::RemoteHook>,
     tridents: Vec<trident::ThrownTrident>,
     rockets: Vec<fireworks::Rocket>,
     /// Ominous trial spawners' item spawners.
@@ -1813,6 +1817,65 @@ impl Game<'_> {
         self.stack_in_mut(self.held_slot())
     }
     /// The slot of the hand that acts: the selected one, or `OFFHAND_SLOT`.
+    /// `LivingEntity.canGlideUsing`: a glider in the chest slot that will
+    /// not break with its next point of wear.
+    fn glider_worn(&self) -> bool {
+        self.armor[1].as_ref().is_some_and(|s| {
+            self.res
+                .items()
+                .get(&s.item)
+                .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
+        })
+    }
+    /// What the window decides for its player's body every tick, in frame and
+    /// on a server alike: the look (Player.travel steers sprint-swimming by
+    /// the pitch), Auto Jump (LocalPlayer.sendPosition), the slowdown of an
+    /// item in use (LocalPlayer.modifyInput), the helmet's Respiration
+    /// (decreaseAirSupply), the wings, leather boots on powder snow
+    /// (PowderSnowBlock.canEntityWalkOnPowderSnow), freeze-immune wear
+    /// (LivingEntity.canFreeze) and the dimension's FAST_LAVA.
+    pub(crate) fn sync_player_body(&mut self) {
+        let glider = self.glider_worn();
+        let item_use_speed = self
+            .using
+            .and_then(|(slot, _)| {
+                if slot == shield::OFFHAND_SLOT {
+                    self.offhand.as_ref()
+                } else {
+                    self.inventory.get(slot)?.as_ref()
+                }
+            })
+            .and_then(|s| self.res.items().get(&s.item))
+            .map(|i| i.use_speed);
+        let respiration = self.armor[0]
+            .as_ref()
+            .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
+        let leather_boots = self.armor[3]
+            .as_ref()
+            .is_some_and(|s| &*s.item == "minecraft:leather_boots");
+        let immune = self
+            .res
+            .items()
+            .item_tags
+            .get("minecraft:freeze_immune_wearables");
+        let freeze_immune = self
+            .armor
+            .iter()
+            .flatten()
+            .any(|s| immune.is_some_and(|t| t.contains(&*s.item)));
+        let Some(player) = self.player.as_mut() else {
+            return;
+        };
+        player.yaw = self.yaw;
+        player.pitch = self.pitch;
+        player.auto_jump_enabled = self.settings.auto_jump;
+        player.item_use_speed = item_use_speed;
+        player.respiration = respiration;
+        player.glider = glider;
+        player.leather_boots = leather_boots;
+        player.freeze_immune = freeze_immune;
+        player.fluids.fast_lava = self.dim == Dim::Nether;
+    }
     fn held_slot(&self) -> usize {
         match self.hand {
             Hand::Main => self.selected,
@@ -1989,6 +2052,28 @@ impl Game<'_> {
         particle.set_power(0.2);
         particle.scale(0.6);
         self.particles.push(particle);
+    }
+    /// `Player.dropEquipment` for the player who died: unless keep_inventory
+    /// is on, `destroyVanishingCursedItems`, then `Inventory.dropAll` from
+    /// `at` (the eyes less 0.3): slots 0..36, armor feet to head (36..39),
+    /// the off hand (40), each thrown in a random direction.
+    fn drop_inventory(&mut self, at: [f64; 3]) {
+        if self.ui.rules.bool("keep_inventory") {
+            return;
+        }
+        let mut stacks: Vec<ItemStack> =
+            self.inventory.iter_mut().filter_map(Option::take).collect();
+        stacks.extend(self.armor.iter_mut().rev().filter_map(Option::take));
+        stacks.extend(self.offhand.take());
+        stacks.retain(|s| s.enchantment_level("minecraft:vanishing_curse") == 0);
+        self.apply_equipment();
+        for stack in stacks {
+            let r = &mut self.world.random;
+            let strength = f64::from(r.next_float()) * 0.5;
+            let angle = f64::from(r.next_float()) * std::f64::consts::TAU;
+            let v = [-angle.sin() * strength, 0.2, angle.cos() * strength];
+            self.spawn_item(stack, at, v, 40);
+        }
     }
     fn spawn_item(
         &mut self,
@@ -3239,6 +3324,9 @@ impl Game<'_> {
         // A guest's use packets name one hand and touch no entity: the client
         // sends one per hand and part of its click, and Interact for entities.
         let guest = self.guest_use;
+        if let Some(GuestUse::Entity(hand)) = guest {
+            return Ok(self.with_hand(hand, Game::interact_entity)?.then_some(hand));
+        }
         let on_block = matches!(guest, Some(GuestUse::OnBlock(_)));
         if !on_block
             && self.riding.is_some()
@@ -3247,14 +3335,7 @@ impl Game<'_> {
         {
             return Ok(Some(Hand::Main));
         }
-        if guest.is_none()
-            && (self.interact_frame()
-                || self.interact_armor_stand()
-                || self.interact_boat()
-                || self.interact_cart()
-                || self.interact_mob()?
-                || self.interact_knot())
-        {
+        if guest.is_none() && self.interact_entity()? {
             return Ok(Some(Hand::Main));
         }
         // An EntityHitResult may fall through to Item.use, never to useItemOn.
@@ -3264,15 +3345,32 @@ impl Game<'_> {
             self.pick()
         };
         let hands = match guest {
-            Some(GuestUse::OnBlock(hand) | GuestUse::Item(hand)) => vec![hand],
+            Some(GuestUse::OnBlock(hand) | GuestUse::Item(hand) | GuestUse::Entity(hand)) => {
+                vec![hand]
+            }
             None => Hand::BOTH.to_vec(),
         };
+        let entity = guest.is_none() && self.entity_targeted();
         for hand in hands {
+            // The off hand's turn starts on the entity too (Minecraft.startUseItem).
+            if entity && hand == Hand::Off && self.with_hand(hand, Game::interact_entity)? {
+                return Ok(Some(hand));
+            }
             if self.with_hand(hand, |game| game.use_hand(block_hit.as_ref()))? {
                 return Ok(Some(hand));
             }
         }
         Ok(None)
+    }
+    /// `Player.interactOn` for the entity under the crosshair with the
+    /// acting hand: whether it took the click.
+    fn interact_entity(&mut self) -> Result<bool> {
+        Ok(self.interact_frame()
+            || self.interact_armor_stand()
+            || self.interact_boat()
+            || self.interact_cart()
+            || self.interact_mob()?
+            || self.interact_knot())
     }
     /// One hand's turn in `startUseItem`: `useItemOn` the block aimed at,
     /// then `useItem`. Whether the click ends here (it acted or failed).
@@ -3632,16 +3730,8 @@ impl Game<'_> {
         // Switching hotbar slots only ends a main-hand use.
         let hand_changed = slot != self.selected && slot != shield::OFFHAND_SLOT;
         if !self.right || hand_changed || self.screen != Screen::Playing {
-            if &*stack.item == "minecraft:bow" && !hand_changed {
-                self.release_bow(ticks);
-            }
-            if &*stack.item == "minecraft:spyglass" {
-                self.stop_spyglass();
-            }
-            if &*stack.item == "minecraft:trident" && !hand_changed {
-                self.release_trident(ticks);
-            }
             self.using = None;
+            self.release_used_item(&stack, ticks, hand_changed);
             return;
         }
         let Some(info) = self.res.items().get(&stack.item).cloned() else {
@@ -3695,6 +3785,17 @@ impl Game<'_> {
             self.finish_consuming(&info, consumable, &stack);
         } else {
             self.using = Some((slot, ticks));
+        }
+    }
+    /// `LivingEntity.releaseUsingItem` (`Item.releaseUsing`) for `stack`,
+    /// used for `ticks`, its hand acting: a bow or a trident lets go (not
+    /// when its hand changed), a spyglass stops scoping.
+    pub(super) fn release_used_item(&mut self, stack: &ItemStack, ticks: u32, hand_changed: bool) {
+        match &*stack.item {
+            "minecraft:bow" if !hand_changed => self.release_bow(ticks),
+            "minecraft:trident" if !hand_changed => self.release_trident(ticks),
+            "minecraft:spyglass" => self.stop_spyglass(),
+            _ => {}
         }
     }
     fn tick_mining(&mut self) -> Result<()> {
@@ -3786,7 +3887,12 @@ impl Game<'_> {
         }
         self.crack_particle(crack.0, crack.1, state);
         let m = self.mining.as_mut().ok_or("mining")?;
-        if m.progress >= 1.0 {
+        // ServerPlayerGameMode breaks a player's block at once only when it is instant (START's
+        // insta-mine); otherwise it waits for the client's STOP_DESTROY_BLOCK
+        // (`guest_stop_digging`), never breaking it on its own count. Breaking it here would
+        // take the block from under the player's crack before the player's client predicts the
+        // break, so it gets neither particles nor sound.
+        if m.progress >= 1.0 && (self.lan_acting.is_none() || m.ticks == 1) {
             let pos = m.pos;
             self.mining = None;
             self.break_block(pos)?;
@@ -3920,13 +4026,7 @@ impl Game<'_> {
             .as_ref()
             .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
         player.pitch = self.pitch;
-        // LivingEntity.canGlideUsing: a glider in its slot that will not break next.
-        player.glider = self.armor[1].as_ref().is_some_and(|s| {
-            self.res
-                .items()
-                .get(&s.item)
-                .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
-        });
+        player.glider = self.glider_worn();
         // A saved death already dropped inventory/XP and counted the death.
         if player.health.dead_or_dying() {
             self.screen = Screen::Dead;
@@ -3979,7 +4079,7 @@ impl Game<'_> {
         if self.use_delay > 0 {
             self.use_delay -= 1;
         }
-        self.apply_totem();
+        self.tick_totem();
         self.update_totem_ready();
         self.tick_command_extras();
         self.tick_mods();
@@ -4004,6 +4104,7 @@ impl Game<'_> {
         let riding = self.riding.is_some();
         let ghast_collisions = self.happy_ghast_player_collisions();
         let spin_targets = self.spin_targets();
+        self.sync_player_body();
         let Some(player) = self.player.as_mut() else {
             // A dedicated server has no local player: the world still runs.
             if self.options.dedicated.is_some() {
@@ -4035,52 +4136,10 @@ impl Game<'_> {
         if !riding {
             self.previous_position = player.position;
         }
-        player.yaw = self.yaw;
         let spectator = self.mode == horizon_client::command::args::GameMode::Spectator;
         player.may_fly = self.creative || spectator;
-        // LocalPlayer.sendPosition: autoJumpEnabled follows the option.
-        player.auto_jump_enabled = self.settings.auto_jump;
         player.invulnerable = self.creative || spectator;
         player.spectator = spectator;
-        player.respiration = self.armor[0]
-            .as_ref()
-            .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
-        player.pitch = self.pitch;
-        // LivingEntity.canGlideUsing: a glider in its slot that will not break next.
-        player.glider = self.armor[1].as_ref().is_some_and(|s| {
-            self.res
-                .items()
-                .get(&s.item)
-                .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
-        });
-        // LocalPlayer.modifyInput: walking while using an item.
-        player.item_use_speed = self
-            .using
-            .and_then(|(slot, _)| {
-                if slot == shield::OFFHAND_SLOT {
-                    self.offhand.as_ref()
-                } else {
-                    self.inventory.get(slot)?.as_ref()
-                }
-            })
-            .and_then(|s| self.res.items().get(&s.item))
-            .map(|i| i.use_speed);
-        // PowderSnowBlock.canEntityWalkOnPowderSnow and LivingEntity.canFreeze.
-        player.leather_boots = self.armor[3]
-            .as_ref()
-            .is_some_and(|s| &*s.item == "minecraft:leather_boots");
-        let immune = self
-            .res
-            .items()
-            .item_tags
-            .get("minecraft:freeze_immune_wearables");
-        player.freeze_immune = self
-            .armor
-            .iter()
-            .flatten()
-            .any(|s| immune.is_some_and(|t| t.contains(&*s.item)));
-        // The dimension's FAST_LAVA: the Nether's lava pushes harder.
-        player.fluids.fast_lava = self.dim == Dim::Nether;
         player.spin_targets = spin_targets;
         let grounded = player.ground.on_ground;
         let before = (
@@ -4258,7 +4317,7 @@ impl Game<'_> {
             }
         }
         self.powder_snow_fire()?;
-        self.apply_totem();
+        self.tick_totem();
         let Some(player) = self.player.as_mut() else {
             return Ok(());
         };
@@ -4289,20 +4348,8 @@ impl Game<'_> {
                 .experience
                 .death_reward(self.ui.rules.bool("keep_inventory") || self.spectator());
             self.spawn_orbs(feet, reward);
-            if !self.creative && !self.ui.rules.bool("keep_inventory") {
-                // Inventory.dropAll: slots 0..36, armor feet to head (36..39), off hand (40).
-                let mut stacks: Vec<ItemStack> =
-                    self.inventory.iter_mut().filter_map(Option::take).collect();
-                stacks.extend(self.armor.iter_mut().rev().filter_map(Option::take));
-                stacks.extend(self.offhand.take());
-                self.apply_equipment();
-                for stack in stacks {
-                    let r = &mut self.world.random;
-                    let strength = f64::from(r.next_float()) * 0.5;
-                    let angle = f64::from(r.next_float()) * std::f64::consts::TAU;
-                    let v = [-angle.sin() * strength, 0.2, angle.cos() * strength];
-                    self.spawn_item(stack, at, v, 40);
-                }
+            if !self.spectator() {
+                self.drop_inventory(at);
             }
             self.audio
                 .play("minecraft:entity.player.death", Some(at), 1.0, 1.0);
@@ -5482,6 +5529,20 @@ impl Game<'_> {
             Some(true)
         })
     }
+    /// A sound a menu click made the player play (a bundle's insert or
+    /// remove): `Entity.playSound` at the player.
+    pub(super) fn player_menu_sound(&mut self, sound: &str) {
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let at = [p.position.x, p.position.y, p.position.z];
+        let (volume, pitch) = if sound == horizon_client::bundle::INSERT_FAIL {
+            (1.0, 1.0)
+        } else {
+            (0.8, 0.8 + self.world.random.next_float() * 0.4)
+        };
+        self.audio.play(sound, Some(at), volume, pitch);
+    }
     /// The open menu as the verified engine (`horizon_client::menu`): the
     /// game's slots are copied in, `run` acts on it, and the slots, carried
     /// stack, menu data and drops are copied back when it returns Some(true)
@@ -5871,6 +5932,11 @@ impl Game<'_> {
         let carried = menu.carried.take();
         let dropped = std::mem::take(&mut menu.dropped);
         let sounds = std::mem::take(&mut menu.sounds);
+        // A bundle's sounds are the player's own (`Entity.playSound`): the
+        // client plays them as it clicks, predicting or not.
+        for sound in std::mem::take(&mut menu.player_sounds) {
+            self.player_menu_sound(sound);
+        }
         let crafted = std::mem::take(&mut menu.crafted);
         let equipped = std::mem::take(&mut menu.equipped);
         for (i, stack) in after.into_iter().enumerate() {
@@ -5956,6 +6022,37 @@ impl Game<'_> {
         }
         true
     }
+    /// `CreativeModeInventoryScreen.keyPressed` on the search tab: a hotbar
+    /// key over a slot swaps before the search box sees it.
+    fn search_tab_hotbar_key(&mut self, code: KeyCode) -> bool {
+        use horizon_client::creative::{Hover, search_key_swaps};
+        let hotbar_key = HOTBAR_DIGITS.contains(&code);
+        let numeric = hotbar_key || NUMERIC_KEYS.contains(&code);
+        if !numeric {
+            return false;
+        }
+        let Some(size) = self
+            .renderer
+            .as_ref()
+            .map(|r| [r.config.width, r.config.height])
+        else {
+            return false;
+        };
+        let batch = HudBatch::new(size);
+        let hover = match self.slot_at(&batch, self.cursor.0, self.cursor.1) {
+            None => Hover::Nothing,
+            Some(slot) if slot >= Creative::DISPLAY => {
+                let first = self.creative_screen.first_row(&self.pack.names);
+                let shown = self.creative_screen.items(&self.pack.names).len();
+                Hover::Display {
+                    filled: first * 9 + slot - Creative::DISPLAY < shown,
+                }
+            }
+            Some(_) => Hover::Slot,
+        };
+        search_key_swaps(numeric, hotbar_key, hover, self.carried.is_some())
+            && self.inventory_hotkey(code)
+    }
     /// Number keys, F and Q over a slot of the open menu: SWAP with a hotbar
     /// slot or the off hand, THROW one or the whole stack.
     fn inventory_hotkey(&mut self, key: KeyCode) -> bool {
@@ -5971,19 +6068,7 @@ impl Game<'_> {
         let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
             return false;
         };
-        let digit = [
-            KeyCode::Digit1,
-            KeyCode::Digit2,
-            KeyCode::Digit3,
-            KeyCode::Digit4,
-            KeyCode::Digit5,
-            KeyCode::Digit6,
-            KeyCode::Digit7,
-            KeyCode::Digit8,
-            KeyCode::Digit9,
-        ]
-        .iter()
-        .position(|k| *k == key);
+        let digit = HOTBAR_DIGITS.iter().position(|k| *k == key);
         let done = match (digit, key) {
             (Some(n), _) => self.menu_click(Some(slot), n as i32, Input::Swap),
             (None, KeyCode::KeyF) => self.menu_click(Some(slot), 40, Input::Swap),
@@ -6112,6 +6197,17 @@ impl Game<'_> {
                     self.inv_drag = Some((i32::from(right), Vec::new()));
                 }
                 None => {}
+            }
+            return;
+        }
+        // mouseClicked: an empty hand's PICKUP is the menu's click at once
+        // (a right click on a bundle takes its first stack out).
+        if let (Some(input), Some(_)) = (input, slot)
+            && self.remote.is_none()
+            && self.menu_click(slot, i32::from(right), input)
+        {
+            if let Some(key) = self.container {
+                self.container_changed(key);
             }
             return;
         }
@@ -8799,20 +8895,15 @@ impl Game<'_> {
         );
         let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
         let deg = |d: f32| d.to_radians();
-        if self.held_map_geometry(to_world, attacks[0], inverse_heights[0], packed, &mut out) {
-            return out;
-        }
         let shown = self.hands_to_render();
         let used_hand = self.used_hand();
         let spinning = self
             .player
             .as_ref()
             .is_some_and(|p| p.auto_spin_attack_ticks > 0);
-        for (i, (hand, item)) in Hand::BOTH
-            .into_iter()
-            .zip(self.visible_hand_items())
-            .enumerate()
-        {
+        let items = self.visible_hand_items();
+        let off_hand_empty = items[1].is_none();
+        for (i, (hand, item)) in Hand::BOTH.into_iter().zip(items).enumerate() {
             if !shown[i] {
                 continue;
             }
@@ -8875,6 +8966,26 @@ impl Game<'_> {
                 );
                 continue;
             };
+            if let Some(id) = maps::map_id(&stack) {
+                use horizon_client::first_person::{MapHold, one_handed_map_pose};
+                match MapHold::of(hand, off_hand_empty) {
+                    MapHold::TwoHanded => self.two_handed_map_geometry(
+                        to_world,
+                        attack,
+                        inverse_height,
+                        id,
+                        packed,
+                        &mut out,
+                    ),
+                    MapHold::OneHanded => self.held_map(
+                        to_world * one_handed_map_pose(left, inverse_height, attack),
+                        id,
+                        packed,
+                        &mut out,
+                    ),
+                }
+                continue;
+            }
             let mut owner = self.player_owner(Some(&stack));
             // The other hand may hold an equal stack: only the used
             // hand's item is in use, only the main hand's selected.
@@ -10268,6 +10379,11 @@ impl Game<'_> {
                 if (self.screen == Screen::Inventory
                     || (self.screen == Screen::Creative && !self.creative_screen.tab().search))
                     && self.inventory_hotkey(key) => {}
+            // The search tab's number keys (scripted presses; the window's
+            // keys reach search_tab_hotbar_key before the search box).
+            _ if self.screen == Screen::Creative
+                && self.creative_screen.tab().search
+                && self.search_tab_hotbar_key(key) => {}
             KeyCode::KeyT if self.screen == Screen::Inventory => self.recipe_focus_search(),
             KeyCode::KeyT if self.screen == Screen::Playing => self.open_chat(""),
             // key.advancements.
@@ -11139,7 +11255,11 @@ impl ApplicationHandler for Game<'_> {
                         && event.state == ElementState::Pressed
                         && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
                 {
-                    if let Some(shortcut) = self.edit_shortcut(&event) {
+                    if let PhysicalKey::Code(key) = event.physical_key
+                        && self.search_tab_hotbar_key(key)
+                    {
+                        // The hovered slot took the key (`ignoreTextInput`).
+                    } else if let Some(shortcut) = self.edit_shortcut(&event) {
                         self.creative_search_shortcut(shortcut);
                     } else {
                         let backspace = event.physical_key == PhysicalKey::Code(KeyCode::Backspace);
@@ -11296,7 +11416,17 @@ impl ApplicationHandler for Game<'_> {
                     // For the "I'm playing" ping: an atomic, sent on when it changes.
                     horizon_client::heartbeat::set_lan(self.is_published());
                     let steps = self.clock.advance(elapsed);
-                    for _ in 0..steps {
+                    // The world ticking in the frame: once its ticks took a
+                    // tick's length, the rest are dropped (`FixedStep::tick_fits`).
+                    let in_frame = self.remote.is_none();
+                    let mut spent = Duration::ZERO;
+                    for step in 0..steps {
+                        if in_frame && !self.clock.tick_fits(spent) {
+                            if let Some(warning) = self.clock.drop_ticks(steps - step) {
+                                log::warn!("{warning}");
+                            }
+                            break;
+                        }
                         let started = Instant::now();
                         if self.title.is_none() && !self.pause {
                             let tick = Instant::now();
@@ -11313,6 +11443,7 @@ impl ApplicationHandler for Game<'_> {
                         self.tick_music();
                         self.tick_sound_engine();
                         self.clock.record(started.elapsed());
+                        spent += started.elapsed();
                         if let Some(report) = self.clock.take_sprint_report() {
                             self.sprint_report(&report);
                         }
@@ -11789,6 +11920,7 @@ impl<'a> Game<'a> {
             recipe_ui: Default::default(),
             mount_menu: Default::default(),
             hook: None,
+            remote_hooks: Vec::new(),
             tridents: Vec::new(),
             rockets: Vec::new(),
             ominous_spawners: Vec::new(),
@@ -12065,6 +12197,33 @@ impl Game<'_> {
         Ok(())
     }
 }
+
+/// `key.hotbar.1` to `key.hotbar.9` in a menu.
+const HOTBAR_DIGITS: [KeyCode; 9] = [
+    KeyCode::Digit1,
+    KeyCode::Digit2,
+    KeyCode::Digit3,
+    KeyCode::Digit4,
+    KeyCode::Digit5,
+    KeyCode::Digit6,
+    KeyCode::Digit7,
+    KeyCode::Digit8,
+    KeyCode::Digit9,
+];
+/// The other keys `InputConstants.Key.getNumericKeyValue` gives a digit.
+const NUMERIC_KEYS: [KeyCode; 11] = [
+    KeyCode::Digit0,
+    KeyCode::Numpad0,
+    KeyCode::Numpad1,
+    KeyCode::Numpad2,
+    KeyCode::Numpad3,
+    KeyCode::Numpad4,
+    KeyCode::Numpad5,
+    KeyCode::Numpad6,
+    KeyCode::Numpad7,
+    KeyCode::Numpad8,
+    KeyCode::Numpad9,
+];
 
 const STAGES: u32 = 10;
 const STAGE_LINES: [&str; 10] = [
