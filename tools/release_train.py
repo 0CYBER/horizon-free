@@ -7,9 +7,9 @@
     python3 tools/release_train.py gate --kind game --smoke dist/smoke-test.json [--blockers]   # before publishing
 
 A kind releases when a pull request merged into main since its last published release changed one of its
-player-facing paths (GAME_PATHS, LAUNCHER_PATHS) and the newest of them merged at least DEBOUNCE ago (a burst
-of merges becomes one release), or the oldest at least MAX_WAIT ago (merges that never pause still ship), or when one
-of those pull requests is labelled release-now. Pull requests labelled skip-release (work players don't see) don't count
+player-facing paths (GAME_PATHS, LAUNCHER_PATHS), once BATCH of them are waiting and the newest merged at least
+DEBOUNCE ago (a burst of merges becomes one release), or once the oldest has waited MAX_WAIT (a lone fix still ships),
+or at once when one of those pull requests is labelled release-now. Pull requests labelled skip-release (work players don't see) don't count
 towards a release and aren't listed in the notes. RELEASES_PAUSED=1 (a repository variable) stops automatic releases,
 and an open issue labelled release-blocker stops game releases, even forced ones, until it is closed.
 
@@ -40,9 +40,11 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = os.environ.get("GITHUB_REPOSITORY", "ludovic111/horizon")
-# Releases ship constantly: a merge starts a release within minutes, once its wave of merges has settled.
+# Releases ship in batches, so players get a few releases a day rather than one per merge: BATCH player-facing pull
+# requests, settled for DEBOUNCE, or whatever is waiting once the oldest has waited MAX_WAIT.
+BATCH = 5
 DEBOUNCE = dt.timedelta(minutes=5)
-MAX_WAIT = dt.timedelta(minutes=20)
+MAX_WAIT = dt.timedelta(hours=6)
 # Kept as typed in release titles, where the clauses after the first are lowercased.
 PROPER = {"Horizon", "Horizon's", "Minecraft", "Mojang", "Microsoft", "Java", "Xbox", "PlayStation", "Steam", "Windows",
           "Linux", "LAN", "Kira", "Discord", "Wayland", "Hyprland", "F3", "GUI", "UI"}
@@ -288,7 +290,13 @@ def decision(kind, prs, now, paused=False, force=False, new_line=None, blockers=
         return False, "no merged pull request changed what players run"
     if urgent:
         return True, "release-now: " + ", ".join(f"#{pr['number']}" for pr in urgent)
-    if merged and now - max(merged) < DEBOUNCE and now - min(merged) < MAX_WAIT:
+    if merged and now - min(merged) >= MAX_WAIT:
+        return True, f"{len(counted)} pull requests changed what players run; the oldest has waited {MAX_WAIT.seconds // 3600} hours"
+    if len(counted) < BATCH:
+        wait = MAX_WAIT - (now - min(merged)) if merged else MAX_WAIT
+        return False, (f"{len(counted)} of {BATCH} pull requests: waiting for more, or {wait.seconds // 60 + 1} more "
+                       "minutes for the oldest")
+    if merged and now - max(merged) < DEBOUNCE:
         wait = DEBOUNCE - (now - max(merged))
         return False, f"{len(counted)} pull requests: waiting {wait.seconds // 60 + 1} more minutes for merges to settle"
     return True, f"{len(counted)} pull requests changed what players run"

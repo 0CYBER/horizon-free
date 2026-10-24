@@ -1,8 +1,8 @@
 name: release
 # Automatic game releases (docs/release-flow.md). After every green `checks` run on main, every 10 minutes (so a
 # release waiting for merges to settle goes out without another merge) and by hand, tools/release_train.py decides:
-# a release when pull requests merged since the last one changed what players run and the newest merged 5 minutes
-# ago (the oldest 20 minutes ago, if merges never pause), or at once for a pull request labelled release-now.
+# a release when 5 pull requests merged since the last one changed what players run and the newest merged 5 minutes
+# ago, or when the oldest has waited 6 hours, or at once for a pull request labelled release-now.
 # RELEASES_PAUSED=1 (repository variable) stops them; so does an open issue labelled release-blocker, forced runs too.
 # Builds Linux (an older Ubuntu, so the binary runs on any recent distribution and on NixOS through nix-ld) and
 # Windows on GitHub, macOS on the Mac mini's runner (MAC_RUNNER=macos-latest sends it to GitHub), then
