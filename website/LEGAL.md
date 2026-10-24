@@ -56,7 +56,7 @@ by `scripts/assets.mjs`.
 | Files in `public/media/` | Source | What it shows |
 | --- | --- | --- |
 | `launcher*.webp` | `docs/media/launcher-play.png` | The Horizon launcher's Play page (no background image) |
-| `settings*.webp` | `docs/media/settings-simple.png` | Video Settings, with Horizon's graphics and shader pack buttons at the top |
+| `settings*.webp` | `docs/media/settings-simple.png` | Video Settings, with Horizon's graphics buttons at the top |
 | `sunset*.webp`, `village*.webp`, `survival*.webp`, `nether*.webp`, `night*.webp`, `underwater*.webp` | `docs/media/<name>.jpg` | In-game views of one fixed-seed world; none shows a Mojang logo or splash text |
 
 Horizon's interface in these images is Horizon's original work (MIT). The block, mob and

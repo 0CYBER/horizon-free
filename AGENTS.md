@@ -43,7 +43,6 @@ Game workspace (root `Cargo.toml`); `launcher/` and `crates/horizon-telemetry-se
 | `horizon-server` | `horizon-server`: `server.toml`, CLI, supervisor of the headless game ([docs/hosting.md](docs/hosting.md)) |
 | `horizon-server-files` | `server.properties`, eula, ops/whitelist/bans, usercache |
 | `horizon-friends`, `horizon-relay` | Play with Friends: invite codes, encrypted tunnel, the relay ([docs/play-with-friends.md](docs/play-with-friends.md)) |
-| `horizon-shaderpack` | OptiFine/Iris packs: preprocessor, GLSL → WGSL ([docs/shader-packs.md](docs/shader-packs.md)) |
 | `horizon-mods`, `horizon-mod-sdk`, `cargo-horizon-mod` | Sandboxed WebAssembly mods: runtime, SDK + WIT, `cargo horizon-mod` ([docs/mods.md](docs/mods.md)) |
 | `horizon-port-pack` | Porting Java modpacks ([docs/modpacks.md](docs/modpacks.md)) |
 | `horizon-theme` | Design tokens and fonts for the launcher, the game's own menus and the website |
@@ -126,7 +125,6 @@ python3 tools/agent_control_e2e.py         # horizon-ctl / MCP end to end
 | Input | game.rs `fn window_event`, `fn key_pressed`, `fn play_mouse`; L: `keybinds.rs`, `keymapping.rs`, `key_names.rs`, `mouse.rs`, `input.rs`, `interaction_input.rs`, `gamepad.rs`, `osk.rs`, `clipboard.rs`; G: `pad.rs`, `pad_menu.rs` |
 | Audio | L: `audio.rs` (mixer), `sound_engine.rs`, `sound_events.rs`, `music.rs`, `ambience.rs`; G: `music.rs`, `subtitle_hud.rs` |
 | Resource packs | L: `packs.rs` + `packs/`, `pack_screen.rs`, `atlas_sources.rs`, `sprites.rs`, `mipmap.rs`, `model_library.rs`, `font.rs`, `lang.rs`; crate `horizon-assets`; G: `packs.rs` |
-| Shader packs | L: `shader_pack.rs` (Horizon WGSL packs), `java_pack.rs` + crate `horizon-shaderpack` (Iris/OptiFine), `gfx/pack_stages.rs`, `gfx/java_stages.rs`; G: `shader_packs.rs` |
 | Agent control | L: `control.rs` (socket), `bin/horizon-ctl/`; G: `control.rs`, `agent.rs`, `events.rs`, `ui_control.rs` ([docs/agent-control.md](docs/agent-control.md)) |
 | Mods | crate `horizon-mods`; G: `mods.rs`; L: `mod_content.rs`, `mod_list.rs` |
 | Horizon extras, settings | L: `extras.rs`, `graphics.rs`, `settings.rs`, `minimap.rs`; G: `extras.rs`, `tweaks.rs`, `options.rs` |

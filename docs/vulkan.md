@@ -1,7 +1,7 @@
 # Compare the Vulkan renderer on your Mac
 
 The `vulkan` profile asks Minecraft 26.3 to use its existing Vulkan backend, with
-its original OpenGL fallback. It uses balanced mods/distances and omits Iris.
+its original OpenGL fallback. It uses balanced mods/distances.
 The game renderer handles the backend; this project has not written a separate
 Metal renderer. The benchmark records the actual backend and driver.
 
@@ -23,7 +23,7 @@ Use the viewer's actual backend field: OpenGL fallback is an OpenGL result.
 After the isolated test works, `foreground-first` and `foreground-vulkan` compare
 the two backends with the same combined terrain controls. Their 120 FPS adaptive
 goal controls background duty cycle; rendering remains uncapped in pack options.
-Do not add Iris or shaders to one side of an isolated backend comparison.
+Do not add shaders to one side of an isolated backend comparison.
 
 Linux software rendering checks reached the actual Vulkan backend, rendered the
 demo world and recorded matching CSV/JSON frame/tick samples. An unavailable

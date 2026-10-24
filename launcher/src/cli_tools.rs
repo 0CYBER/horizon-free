@@ -393,14 +393,15 @@ mod tests {
         assert_eq!(schema["inputSchema"]["properties"]["text"]["type"], "array");
         let kinds = &schema["inputSchema"]["properties"]["kind"]["enum"];
         assert!(
-            kinds.as_array().unwrap().contains(&json!("shader")),
+            kinds.as_array().unwrap().contains(&json!("modpack"))
+                && !kinds.as_array().unwrap().contains(&json!("shader")),
             "{kinds}"
         );
         assert_eq!(
             search
-                .argv(&json!({ "text": ["fresh", "animations"], "kind": "shader", "everything": true }))
+                .argv(&json!({ "text": ["fresh", "animations"], "kind": "resource", "everything": true }))
                 .unwrap(),
-            ["mods", "search", "--kind=shader", "--everything", "fresh", "animations"]
+            ["mods", "search", "--kind=resource", "--everything", "fresh", "animations"]
         );
         let run = tool("servers_run");
         assert_eq!(

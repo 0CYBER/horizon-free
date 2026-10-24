@@ -134,7 +134,7 @@ interfaces listed in [mods.md](../mods.md#planned-interfaces).
 | **Mouse Tweaks / Inventory Profiles Next** | drag and sort inventory | built in or SDK mod | `inventory-read` + a sanctioned click API |
 | **Continuity / CIT** | connected and custom item textures | built into the renderer (pack formats) | none: resource-pack features |
 | **Distant Horizons** | low-detail far terrain | a Horizon renderer feature, not a mod | none |
-| **Iris + shader packs** | shaders | a Horizon renderer feature (wgpu shader pipeline), later | none |
+| **Shader packs** | shaders | removed for now; a clean-room Horizon renderer feature, later | none |
 | **Simple Voice Chat** | proximity voice | server + client mod | `server`, `net`, audio (later) |
 
 ### 3. A porting guide (outline)

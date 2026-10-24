@@ -608,6 +608,7 @@ impl Game<'_> {
                 lang: Arc::new(horizon_client::net::load_language(&self.options.resources)),
                 log_ips: props.log_ips,
             }),
+            resource_pack: props.resource_pack.clone(),
         };
         let config = HubConfig {
             default_game_mode: game_mode,

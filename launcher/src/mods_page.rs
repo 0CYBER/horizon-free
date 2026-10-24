@@ -1,5 +1,5 @@
-//! The Mods page: search Modrinth (CurseForge: coming soon) for Java mods, modpacks, resource
-//! packs and shader packs, see where each comes from and how well it runs (a Java mod's jar is
+//! The Mods page: search Modrinth (CurseForge: coming soon) for Java mods, modpacks and resource
+//! packs, see where each comes from and how well it runs (a Java mod's jar is
 //! checked first), install it with its checksum checked, and update or remove what was installed
 //! (`horizon_launcher::browser`). Imported modpacks are listed on its Modpacks tab.
 use super::servers_page::{type_key, Key};
@@ -12,11 +12,10 @@ use horizon_port_pack::check::Check;
 use std::collections::HashMap;
 
 /// The kinds, as the Mods page's tabs: name and icon.
-const KINDS: [(PackKind, &str, &str); 4] = [
+const KINDS: [(PackKind, &str, &str); 3] = [
     (PackKind::Mod, "Mods", "box"),
     (PackKind::Modpack, "Modpacks", "archive"),
     (PackKind::ResourcePack, "Resource packs", "image"),
-    (PackKind::ShaderPack, "Shader packs", "zap"),
 ];
 /// Java mods checked at once.
 const CHECKING: usize = 2;
@@ -391,12 +390,9 @@ impl Launcher {
                             }
                         ));
                     }
-                    let turn_on = match p.kind {
-                        PackKind::ShaderPack => "Video Settings > Shader Packs",
-                        _ => "Options > Resource Packs",
-                    };
                     Ok(format!(
-                        "Installed {}, checksums checked. Turn it on in the game: {turn_on}.",
+                        "Installed {}, checksums checked. Turn it on in the game: Options > \
+                         Resource Packs.",
                         names.join(", ")
                     ))
                 });
@@ -479,7 +475,7 @@ impl Launcher {
         }
         let header = page_header(
             "Mods",
-            "Java mods, modpacks, resource packs and shader packs. Horizon ports what a Java mod \
+            "Java mods, modpacks and resource packs. Horizon ports what a Java mod \
              carries (blocks, items, recipes, worldgen) and says before you install what runs. \
              Each file is checked against its source's checksum before it reaches your game \
              folder.",
