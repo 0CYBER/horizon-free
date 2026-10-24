@@ -166,16 +166,13 @@ mod axolotl_parity_tests {
             ] {
                 let mut expected = LegacyRandom::new(seed);
                 let mut actual = LegacyRandom::new(seed);
-                // The second draw is intentionally consumed even though
-                // the fixed 4.0 / 14.0 threshold always makes this branch
-                // true. Removing it changes the native RNG sequence.
-                let first_gate = !no_ai && expected.next_int_bound(3).unwrap() == 0;
-                let result = if first_gate {
-                    let _second_draw = expected.next_int_bound(3).unwrap();
-                    water && entity && !already
-                } else {
-                    false
-                };
+                let result = !no_ai
+                    && expected.next_int_bound(3).unwrap() == 0
+                    && ((expected.next_int_bound(3).unwrap() as f32) < 2.0 || 4.0f32 / 14.0 < 0.5)
+                    && 2.0 < 4.0
+                    && water
+                    && entity
+                    && !already;
                 assert_eq!(
                     roll_play_dead(&mut actual, no_ai, 4.0, 14.0, 2.0, water, entity, already),
                     result

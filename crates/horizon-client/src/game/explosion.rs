@@ -306,7 +306,7 @@ impl Game<'_> {
             {
                 outcome = o;
             }
-            if !spectator && (!creative || !flying) {
+            if !spectator && !(creative && flying) {
                 p.velocity = Vec3::new(
                     p.velocity.x + dir[0] * power,
                     p.velocity.y + dir[1] * power,
