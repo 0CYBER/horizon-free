@@ -1446,6 +1446,8 @@ struct Game<'a> {
     mount_menu: mount_menu::MountMenu,
     /// The player's fishing hook.
     hook: Option<fishing::Hook>,
+    /// The other players' hooks a server tracks to this client.
+    remote_hooks: Vec<fishing::RemoteHook>,
     tridents: Vec<trident::ThrownTrident>,
     rockets: Vec<fireworks::Rocket>,
     /// Ominous trial spawners' item spawners.
@@ -11907,6 +11909,7 @@ impl<'a> Game<'a> {
             recipe_ui: Default::default(),
             mount_menu: Default::default(),
             hook: None,
+            remote_hooks: Vec::new(),
             tridents: Vec::new(),
             rockets: Vec::new(),
             ominous_spawners: Vec::new(),
