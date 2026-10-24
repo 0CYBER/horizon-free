@@ -3,5 +3,6 @@
   { "group": "Playing", "pages": ["settings", "multiplayer", "troubleshooting"] },
   { "group": "Hosting", "pages": ["hosting"] },
   { "group": "Going further", "pages": ["modpacks", "mods", "performance", "agents"] },
+  { "group": "Build on Horizon", "pages": ["apis"] },
   { "group": "Project", "pages": ["contributing", "faq"] }
 ]
