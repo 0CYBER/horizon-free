@@ -2558,6 +2558,7 @@ impl Game<'_> {
             }
             C::BlockEntityData(p) => self.remote_block_entity_data(p.pos, p.kind, &p.tag),
             C::OpenSignEditor(p) => self.remote_open_sign_editor(p),
+            C::OpenBook(p) => self.remote_open_book(p.hand),
             // handleSetSpawn: ClientLevel.setRespawnData, which spawn compasses point at.
             C::SetDefaultSpawnPosition(p) => {
                 let [x, y, z] = p.pos.pos;
@@ -4011,8 +4012,11 @@ impl Game<'_> {
             return false;
         };
         // MultiPlayerGameMode.useItem runs the use here too: food starts
-        // being eaten (Consumable.startConsuming).
+        // being eaten (Consumable.startConsuming), a book and quill opens.
         self.with_hand(hand, |g| g.start_eating(&info));
+        if self.with_hand(hand, |g| g.remote_use_book(&held)) {
+            return true;
+        }
         // BowItem.use: startUsingItem here too (with an arrow, or in creative), so that letting
         // go sends RELEASE_USE_ITEM (Minecraft.handleKeybinds) and the server shoots.
         if &*held.item == "minecraft:bow" {
