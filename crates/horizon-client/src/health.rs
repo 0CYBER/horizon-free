@@ -298,6 +298,7 @@ impl PlayerMotion {
             blocking,
             blocked: 0.0,
             block_sound: false,
+            knocked: false,
             totem: totem_ready,
             totem_fired: false,
         };
@@ -313,6 +314,7 @@ impl PlayerMotion {
             hurt,
             blocked: environment.blocked,
             sound: environment.block_sound,
+            knockback: environment.knocked,
         };
         if environment.totem_fired {
             h.totem_used = true;
@@ -373,6 +375,8 @@ pub(crate) struct Environment<'a> {
     pub(crate) blocking: Option<Blocking>,
     pub(crate) blocked: f32,
     pub(crate) block_sound: bool,
+    /// `dealDefaultKnockback` ran: a fresh hit, not fully blocked.
+    pub(crate) knocked: bool,
     /// LivingEntity.checkTotemDeathProtection: a totem is held / was used.
     pub(crate) totem: bool,
     pub(crate) totem_fired: bool,
@@ -435,6 +439,9 @@ pub struct BlockOutcome {
     pub blocked: f32,
     /// `BlocksAttacks.onBlocked` ran (the block sound plays).
     pub sound: bool,
+    /// The hit knocks the player back (`dealDefaultKnockback`): not one in
+    /// the hurt cooldown, nor one the shield took whole.
+    pub knockback: bool,
 }
 struct MatchedSets;
 impl horizon_world::blocking_rules::TypeMatchWorld for MatchedSets {
@@ -667,9 +674,11 @@ impl HurtWorld for Environment<'_> {
         *self.sync_velocity = true;
         Ok(())
     }
+    /// The caller applies it: these sources carry no entity or position.
     fn knockback(&mut self, _: &mut State, _: f32, _: bool) -> io::Result<()> {
+        self.knocked = true;
         Ok(())
-    } // no entity or position on these sources
+    }
     fn death_protection(&mut self, _: &mut State) -> io::Result<bool> {
         if !self.totem
             || self
@@ -761,6 +770,37 @@ impl ServerPlayerHurtWorld for Environment<'_> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_hit_in_the_hurt_cooldown_knocks_nobody_back() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let resources = crate::motion::MotionResources::load(&root, &assets).unwrap();
+        let mut player =
+            crate::motion::PlayerMotion::new(&resources, horizon_core::geometry::Vec3::ZERO)
+                .unwrap();
+        let (health, rules) = (&resources.health, super::HealthRules::default());
+        let id = health.damage.id("minecraft:mob_attack").unwrap();
+        let mut hit = |amount| {
+            player
+                .hurt_blocking(health, rules, id, amount, None)
+                .unwrap()
+        };
+        let first = hit(1.0);
+        assert!(first.hurt && first.knockback);
+        // A stronger hit inside the cooldown hurts by the difference only
+        // (LivingEntity.hurtServer), with no dealDefaultKnockback.
+        let second = hit(2.0);
+        assert!(second.hurt && !second.knockback);
+        // A weaker one doesn't hurt at all.
+        let third = hit(1.5);
+        assert!(!third.hurt && !third.knockback);
+    }
+
     #[test]
     fn hurt_sounds_follow_damage_effects() {
         // DamageEffects: HURT, THORNS, DROWNING, BURNING, POKING, FREEZING.

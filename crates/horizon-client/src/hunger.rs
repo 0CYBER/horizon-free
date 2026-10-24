@@ -156,6 +156,7 @@ impl FoodWorld for TickWorld<'_> {
             blocking: None,
             blocked: 0.0,
             block_sound: false,
+            knocked: false,
             totem: false,
             totem_fired: false,
         };
