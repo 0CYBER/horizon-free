@@ -1640,6 +1640,14 @@ impl<R: RandomSource> MaterialSurfaceQueries for SurfaceQueries<'_, '_, R> {
         self.possible.clone()
     }
     fn biome(&mut self, p: BlockPos) -> Result<Option<Arc<str>>, MaterialRuleError> {
+        Ok(self
+            .biome_id(p)?
+            .map(|id| self.pipeline.data.biome_names[id as usize].clone()))
+    }
+    fn biome_index(&self, name: &str) -> Option<Option<u32>> {
+        Some(self.pipeline.data.biome_id(name).map(|id| id.0))
+    }
+    fn biome_id(&mut self, p: BlockPos) -> Result<Option<u32>, MaterialRuleError> {
         let data = &self.pipeline.data;
         let id = match &mut self.biome {
             Biomes::Region(region) => match self
@@ -1659,7 +1667,7 @@ impl<R: RandomSource> MaterialSurfaceQueries for SurfaceQueries<'_, '_, R> {
                 data.biome_id(name).ok_or(MaterialRuleError::MissingBiome)?
             }
         };
-        Ok(Some(data.biome_names[id.0 as usize].clone()))
+        Ok(Some(id.0))
     }
     fn cold_enough_to_snow(
         &mut self,
