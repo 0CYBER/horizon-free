@@ -663,11 +663,13 @@ impl Flat {
             pass.draw_indexed(call.first..call.first + call.count, 0, 0..1);
         }
     }
-    /// Draws phase 2's calls, as `flatten_phase2` left them.
+    /// Draws phase 2's calls, as `flatten_phase2` left them; `page` as in
+    /// [`Self::draw`].
     pub fn draw_phase2<'a>(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         vertices: impl Fn(u32) -> &'a wgpu::Buffer,
+        page: impl Fn(&mut wgpu::RenderPass<'_>, u32),
     ) {
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
         for (k, call) in self.calls[self.phase1_calls..self.solid_calls]
@@ -675,6 +677,7 @@ impl Flat {
             .enumerate()
         {
             self.bind_page(pass, call.page, &vertices);
+            page(pass, call.page);
             pass.draw_indexed_indirect(&self.phase2_calls, k as u64 * 20);
         }
     }

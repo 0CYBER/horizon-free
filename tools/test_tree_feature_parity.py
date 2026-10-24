@@ -135,9 +135,9 @@ def main():
             output.write(json.dumps(fixture,separators=(',',':'))+'\n');count+=1
     fixtures=[inputs,*sorted(build.glob('*.nbt')),*[p for p in sorted(build.glob('*.json')) if p.name!='report.json']];tested_fixtures=fixture_hashes(fixtures)
     print(f'Prepared {count:,} feature fixtures',flush=True)
-    run(['cargo','build','--release','-p','horizon-world','--example','probe'],'compile-rust')
+    run(['cargo','build','--release','-p','horizon-world','--example','world_probe'],'compile-rust')
     metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],cwd=lab.ROOT,text=True))
-    binary=Path(metadata['target_directory'])/'release/examples'/('probe.exe' if os.name=='nt' else 'probe')
+    binary=Path(metadata['target_directory'])/'release/examples'/('world_probe.exe' if os.name=='nt' else 'world_probe')
     run([binary,'tree_feature_fixture',build],'rust');references=[]
     for side,jar in jars.items():
         java('VanillaTreeFeatureOracle',side,side,build);matched=base.compare(build/(side+'.txt'),build/'rust.txt');print(f'{side}: {matched:,} tree/ore output lines match Rust',flush=True)

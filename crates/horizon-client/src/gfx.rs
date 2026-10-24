@@ -35,7 +35,7 @@ fn entity_shader() -> String {
 mod entity_batch;
 mod weather;
 use entity_batch::EntityBatch;
-pub use entity_batch::WATER_MASK_OVERLAY;
+pub use entity_batch::{SHADOW_OVERLAY, WATER_MASK_OVERLAY};
 
 /// Window.getAppropriateLineWidth, in framebuffer pixels.
 pub fn outline_width(width: u32) -> f32 {
@@ -159,6 +159,18 @@ struct Globals {
     dynamic_lights: [[f32; 4]; crate::dynamic_light::MAX],
 }
 pub type SectionKey = (i32, i32, i32);
+/// The sections a Java pack's shadow map draws ([`Renderer`]'s `shadow`).
+#[derive(Default)]
+struct ShadowList {
+    visible: Vec<resident::Visible>,
+    draws: Vec<[u32; 5]>,
+    pages: Vec<(u32, Option<u32>)>,
+    /// How many of `draws` are solid.
+    solid: u32,
+    indirect: Option<wgpu::Buffer>,
+    capacity: u64,
+}
+
 struct SectionGpu {
     /// Arena page and first vertex in it: solid quads, then translucent ones.
     page: u32,
@@ -376,6 +388,7 @@ pub struct Renderer {
     entity_pipeline: wgpu::RenderPipeline,
     weather: weather::Weather,
     crumbling_pipeline: wgpu::RenderPipeline,
+    shadow_blob_pipeline: wgpu::RenderPipeline,
     /// `RenderPipelines.WATER_MASK`: depth writes only, no colour.
     water_mask_pipeline: wgpu::RenderPipeline,
     cloud_pipeline: wgpu::RenderPipeline,
@@ -479,6 +492,10 @@ pub struct Renderer {
     /// built, and their pages.
     phase2_draws: Vec<[u32; 5]>,
     phase2_pages: Vec<(u32, Option<u32>)>,
+    /// A Java pack's shadow map (`gfx/java_terrain.rs`): the sections in
+    /// the light's view, their draws (solid then translucent, instances
+    /// after the camera's), and the indirect buffer they're uploaded to.
+    shadow: ShadowList,
     /// Each section's solid draws, to group them by arena page.
     solid_runs: page_runs::PageRuns,
     phase2_runs: page_runs::PageRuns,
@@ -1830,6 +1847,26 @@ impl Renderer {
             CRUMBLING_BLEND,
             false,
         );
+        // RenderPipelines.ENTITY_SHADOW: translucent, depth test without
+        // writes. The quads lie on the block tops like vanilla's, but the
+        // terrain under them snaps to the subpixel grid at other vertices, so
+        // at a slant their depths differ by up to 1/256 of a pixel's depth
+        // slope and whole shadows failed the test. The bias covers that and
+        // the rounding, and stays below the 0.001 a model's feet sit higher
+        // (1/27 of a pixel's slope at the 16-block shadow range in 720p).
+        let shadow_blob_pipeline = entity_pipeline(
+            "Entity shadows",
+            None,
+            false,
+            wgpu::CompareFunction::GreaterEqual,
+            wgpu::DepthBiasState {
+                constant: 16,
+                slope_scale: 0.015,
+                clamp: 0.0,
+            },
+            alpha_blend,
+            false,
+        );
         let cloud_pipeline = entity_pipeline(
             "Clouds",
             Some(wgpu::Face::Back),
@@ -2349,6 +2386,7 @@ impl Renderer {
             entity_pipeline,
             weather,
             crumbling_pipeline,
+            shadow_blob_pipeline,
             water_mask_pipeline,
             cloud_pipeline,
             cloud_mesh: Default::default(),
@@ -2424,6 +2462,7 @@ impl Renderer {
             draw_pages: Vec::new(),
             phase2_draws: Vec::new(),
             phase2_pages: Vec::new(),
+            shadow: ShadowList::default(),
             solid_runs: page_runs::PageRuns::default(),
             phase2_runs: page_runs::PageRuns::default(),
             block_entities: HashMap::new(),
@@ -2757,10 +2796,25 @@ impl Renderer {
         count: u32,
         page_group: impl Fn(&mut wgpu::RenderPass<'_>, u32),
     ) {
+        let list = (&self.draws[..], &self.draw_pages[..]);
+        self.draw_list(pass, indirect, list, base, first, count, page_group);
+    }
+    /// [`Self::draw_sections_with`] over another list of draws and pages.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_list(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        indirect: &wgpu::Buffer,
+        (draws, pages): (&[[u32; 5]], &[(u32, Option<u32>)]),
+        base: u32,
+        first: u32,
+        count: u32,
+        page_group: impl Fn(&mut wgpu::RenderPass<'_>, u32),
+    ) {
         let (mut i, end) = (first as usize, (first + count) as usize);
         while i < end {
-            let (page, index_page) = self.draw_pages[i];
-            let run = self.draw_pages[i..end]
+            let (page, index_page) = pages[i];
+            let run = pages[i..end]
                 .iter()
                 .take_while(|&&p| p == (page, index_page))
                 .count();
@@ -2772,52 +2826,91 @@ impl Renderer {
                 let offset = (i - base as usize) as u64 * 20;
                 pass.multi_draw_indexed_indirect(indirect, offset, run as u32);
             } else {
-                for d in &self.draws[i..i + run] {
+                for d in &draws[i..i + run] {
                     pass.draw_indexed(d[2]..d[2] + d[0], d[3] as i32, d[4]..d[4] + 1);
                 }
             }
             i += run;
         }
     }
-    /// Horizon's terrain, solid or `translucent`, with a Java pack's
-    /// geometry pipelines (`java_terrain::DrawTerrain`): the frame's flat
-    /// draws or its section draws, each page with its group 3.
+    /// One `layer` of Horizon's terrain with a Java pack's geometry
+    /// pipelines (`java_terrain::DrawTerrain`): the frame's flat draws or its
+    /// section draws, each page with its group 3. `draws` are the frame's
+    /// phase 1 solid draws, all its solid draws and its translucent ones;
+    /// `culling` tells whether phase 2's come from occlusion culling.
     fn draw_java_terrain(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
-        translucent: bool,
+        layer: java_terrain::Layer,
         pipelines: &java_terrain::TerrainPipelines,
         flat_frame: bool,
-        draws: [u32; 2],
+        draws: [u32; 3],
+        culling: bool,
     ) {
+        use java_terrain::Layer;
         let page = |pass: &mut wgpu::RenderPass<'_>, page: u32| {
             if let Some(Some((_, group))) = self.java_pages.get(page as usize) {
                 pass.set_bind_group(3, group, &[]);
             }
         };
+        if matches!(layer, Layer::ShadowSolid | Layer::ShadowTranslucent) {
+            let shadow = &self.shadow;
+            let all = shadow.draws.len() as u32;
+            let (first, count) = if layer == Layer::ShadowSolid {
+                (0, shadow.solid)
+            } else {
+                (shadow.solid, all - shadow.solid)
+            };
+            // Without multi-draw the draws are read from the list.
+            let indirect = shadow.indirect.as_ref().unwrap_or(&self.indirect);
+            if count == 0 {
+                return;
+            }
+            pass.set_bind_group(2, pipelines.group, &[]);
+            pass.set_pipeline(pipelines.instanced);
+            pass.set_vertex_buffer(1, self.instances.slice(..));
+            let list = (&shadow.draws[..], &shadow.pages[..]);
+            self.draw_list(pass, indirect, list, 0, first, count, page);
+            return;
+        }
         pass.set_bind_group(2, pipelines.group, &[]);
         match (self.flat.as_ref().filter(|_| flat_frame), pipelines.flat) {
+            // Without occlusion culling, phase 1 is every solid call.
             (Some(flat), Some(pipeline)) => {
+                let vertices = |p| self.arena.buffer(p);
                 pass.set_pipeline(pipeline);
-                let calls = if translucent {
-                    &flat.calls[flat.solid_calls..]
-                } else {
-                    &flat.calls[..flat.solid_calls]
-                };
-                flat.draw(pass, calls, |p| self.arena.buffer(p), page);
+                match layer {
+                    Layer::Solid => {
+                        flat.draw(pass, &flat.calls[..flat.phase1_calls], vertices, page)
+                    }
+                    Layer::Revealed if culling => flat.draw_phase2(pass, vertices, page),
+                    Layer::Revealed => {}
+                    Layer::Translucent => {
+                        flat.draw(pass, &flat.calls[flat.solid_calls..], vertices, page)
+                    }
+                    // Drawn from the shadow list, above.
+                    Layer::ShadowSolid | Layer::ShadowTranslucent => {}
+                }
             }
             (Some(_), None) => {}
             (None, _) => {
+                let [phase1, solid, translucent_draws] = draws;
+                let cull = self.cull.as_ref().filter(|_| culling);
+                let (indirect, base, first, count) = match (layer, cull) {
+                    (Layer::Solid, Some(_)) => (&self.indirect, 0, 0, phase1),
+                    (Layer::Solid, None) => (&self.indirect, 0, 0, solid),
+                    (Layer::Revealed, Some(c)) => (&c.phase2, phase1, phase1, solid - phase1),
+                    (Layer::Revealed, None) => return,
+                    (Layer::Translucent, _) => (&self.indirect, 0, solid, translucent_draws),
+                    (Layer::ShadowSolid | Layer::ShadowTranslucent, _) => return,
+                };
+                if count == 0 {
+                    return;
+                }
                 pass.set_pipeline(pipelines.instanced);
                 pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.set_vertex_buffer(1, self.instances.slice(..));
-                let [solid, translucent_draws] = draws;
-                let (first, count) = if translucent {
-                    (solid, translucent_draws)
-                } else {
-                    (0, solid)
-                };
-                self.draw_sections_with(pass, &self.indirect, 0, first, count, page);
+                self.draw_sections_with(pass, indirect, base, first, count, page);
             }
         }
     }
@@ -3388,8 +3481,59 @@ impl Renderer {
             visible_lods.sort_unstable_by_key(|v| (v.distance, v.key));
         }
         self.drawn_sections = visible.len() + visible_lods.len();
-        if self.drawn_sections as u64 > self.instance_capacity {
-            self.instance_capacity = (self.drawn_sections as u64).next_power_of_two();
+        // A Java pack's shadow map: the sections in the light's orthographic
+        // box, whatever the camera sees (Iris turns cave culling off too).
+        let mut shadow_visible = std::mem::take(&mut self.shadow.visible);
+        shadow_visible.clear();
+        let shadow_view = match &self.pack {
+            Some(Pack::Java(j)) if !frame.title && self.java_table.is_some() => j.shadow_view(
+                frame.shader.dimension,
+                &java_stages::JavaFrame {
+                    eye_light: frame.shader.eye_light,
+                    sun_angle: frame.sky.sun_angle,
+                    moon_angle: frame.sky.moon_angle,
+                },
+                camera.as_vec3(),
+            ),
+            _ => None,
+        };
+        if let Some((light_view, [half, near, far])) = shadow_view {
+            // Inside when `plane · (p, 1) >= 0`: |x|, |y| <= half and the
+            // eye depth between the near and far planes (GL looks down -z).
+            let (x, y, z) = (light_view.row(0), light_view.row(1), light_view.row(2));
+            let planes = [
+                Vec4::W * half - x,
+                Vec4::W * half + x,
+                Vec4::W * half - y,
+                Vec4::W * half + y,
+                -z - Vec4::W * near,
+                z + Vec4::W * far,
+            ];
+            // Toward the light: the light's view looks down its -z.
+            let light = z.truncate().normalize_or_zero();
+            let casts = |k: SectionKey| {
+                let min = DVec3::new(
+                    f64::from(k.0 * 16),
+                    f64::from(crate::chunk::MIN_Y + k.1 * 16),
+                    f64::from(k.2 * 16),
+                ) - camera;
+                let min = min.as_vec3();
+                view.casts_into(min, min + Vec3::splat(16.0), light)
+            };
+            crate::spans::time("shadow visibility", || {
+                self.sections.visible(
+                    camera,
+                    (frame.detail_distance / 16.0) as i32,
+                    &Frustum { planes },
+                    casts,
+                    |_, _| false,
+                    &mut shadow_visible,
+                )
+            });
+        }
+        let instances = self.drawn_sections + shadow_visible.len();
+        if instances as u64 > self.instance_capacity {
+            self.instance_capacity = (instances as u64).next_power_of_two();
             self.instances = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Section origins"),
                 size: self.instance_capacity * 16,
@@ -3404,8 +3548,63 @@ impl Renderer {
             visible
                 .iter()
                 .map(|v| section_instance(v.origin))
-                .chain(visible_lods.iter().map(|v| lod::instance(v.origin))),
+                .chain(visible_lods.iter().map(|v| lod::instance(v.origin)))
+                .chain(shadow_visible.iter().map(|v| section_instance(v.origin))),
         );
+        // The shadow map's draws: every solid quad (no face is culled), then
+        // the translucent ones in the order the camera's sort left them.
+        let shadow = &mut self.shadow;
+        shadow.draws.clear();
+        shadow.pages.clear();
+        for pass in [false, true] {
+            for (j, v) in shadow_visible.iter().enumerate() {
+                let s = self.sections.get(v.slot);
+                let instance = (self.drawn_sections + j) as u32;
+                match (pass, s.sorted_indices) {
+                    (false, _) if s.solid > 0 => {
+                        shadow
+                            .draws
+                            .push([s.solid * 6, 1, 0, s.start as u32, instance]);
+                        shadow.pages.push((s.page, None));
+                    }
+                    (true, Some((index_page, index_start))) if s.translucent > 0 => {
+                        let first = s.start + u64::from(s.solid) * 4;
+                        shadow.draws.push([
+                            s.translucent * 6,
+                            1,
+                            index_start as u32,
+                            first as u32,
+                            instance,
+                        ]);
+                        shadow.pages.push((s.page, Some(index_page)));
+                    }
+                    _ => {}
+                }
+            }
+            if !pass {
+                shadow.solid = shadow.draws.len() as u32;
+            }
+        }
+        if self.multi_draw && !shadow.draws.is_empty() {
+            if shadow.draws.len() as u64 > shadow.capacity || shadow.indirect.is_none() {
+                shadow.capacity = (shadow.draws.len() as u64).next_power_of_two();
+                shadow.indirect = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Java shader pack shadow draws"),
+                    size: shadow.capacity * 20,
+                    usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            }
+            if let Some(indirect) = &shadow.indirect {
+                self.uploads.buffer(
+                    &mut encoder,
+                    indirect,
+                    0,
+                    bytemuck::cast_slice(&shadow.draws),
+                );
+            }
+        }
+        shadow.visible = shadow_visible;
         if !self.origins.is_empty() {
             self.uploads.buffer(
                 &mut encoder,
@@ -3423,8 +3622,8 @@ impl Renderer {
             .inverse()
             .transform_point3(Vec3::ZERO);
         // A Java pack that draws the terrain (`gfx/java_terrain.rs`): the
-        // world pass leaves it out, and occlusion culling (which tests
-        // against its depth) is off.
+        // world pass leaves it out, and occlusion culling tests against the
+        // pack's depth (`Cull::test_gl`).
         let java_terrain = !frame.title
             && self.java_table.is_some()
             && matches!(&self.pack, Some(Pack::Java(j)) if j.draws_terrain(frame.shader.dimension));
@@ -3435,11 +3634,7 @@ impl Renderer {
             .cull
             .as_mut()
             .filter(|c| {
-                self.cull_on
-                    && !frame.title
-                    && self.multi_draw
-                    && self.section_draws >= c.min_draws
-                    && !java_terrain
+                self.cull_on && !frame.title && self.multi_draw && self.section_draws >= c.min_draws
             })
             .and_then(|cull| cull.begin(&self.device).then_some(cull));
         self.phase2_draws.clear();
@@ -3670,6 +3865,7 @@ impl Renderer {
             crumbling_quads,
             translucent_crumbling_quads,
             water_mask_quads,
+            shadow_quads,
         ] = self.entity_batch.update(
             frame.entities,
             frame.additive,
@@ -3677,8 +3873,11 @@ impl Renderer {
             frame.see_through,
         );
         let weather_quads = frame.weather.len() as u32 / 4;
-        let world_quads =
-            entity_quads + crumbling_quads + translucent_crumbling_quads + water_mask_quads;
+        let world_quads = entity_quads
+            + crumbling_quads
+            + translucent_crumbling_quads
+            + water_mask_quads
+            + shadow_quads;
         let cloud_quads = if let Some(input) = &frame.clouds {
             let (rebuilt, uniform) =
                 crate::spans::time("clouds", || self.cloud_mesh.prepare(input));
@@ -4084,7 +4283,7 @@ impl Renderer {
                             );
                             pass.set_bind_group(0, &self.group, &[]);
                             pass.set_pipeline(&flat.solid);
-                            flat.draw_phase2(&mut pass, vertices);
+                            flat.draw_phase2(&mut pass, vertices, |_, _| {});
                         }
                         None => flat.draw(
                             &mut pass,
@@ -4149,6 +4348,17 @@ impl Renderer {
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(0..crumbling_quads * 6, (entity_quads * 4) as i32, 0..1);
+                pass.set_bind_group(0, &self.group, &[]);
+            }
+            if shadow_quads > 0 {
+                pass.set_pipeline(&self.shadow_blob_pipeline);
+                pass.set_bind_group(0, &self.entity_group, &[]);
+                pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                pass.draw_indexed(
+                    0..shadow_quads * 6,
+                    ((world_quads - shadow_quads) * 4) as i32,
+                    0..1,
+                );
                 pass.set_bind_group(0, &self.group, &[]);
             }
             // BoatRenderer's water patch (RenderTypes.waterMask): depth only,
@@ -4308,11 +4518,21 @@ impl Renderer {
             && let Some(mut stages) = self.pack.take()
         {
             // The pack's terrain programs draw with the frame's draws.
-            let draws = [solid_draws, translucent_draws];
+            let draws = [phase1_draws, solid_draws, translucent_draws];
             let draw = |render: &mut wgpu::RenderPass<'_>,
-                        translucent: bool,
+                        layer: java_terrain::Layer,
                         pipelines: &java_terrain::TerrainPipelines| {
-                self.draw_java_terrain(render, translucent, pipelines, flat_frame, draws);
+                self.draw_java_terrain(render, layer, pipelines, flat_frame, draws, culling);
+            };
+            let cull = self.cull.as_ref().filter(|_| culling && solid_draws > 0);
+            let occlusion = |encoder: &mut wgpu::CommandEncoder, depth: &wgpu::TextureView| {
+                if let Some(cull) = cull {
+                    cull.test_gl(&self.device, encoder, depth);
+                    // The flat path's phase 2: the calls the test saw.
+                    if let Some(flat) = self.flat.as_ref().filter(|_| flat_frame) {
+                        flat.flatten_phase2(encoder);
+                    }
+                }
             };
             let world = java_terrain::JavaWorld {
                 sprites: &self.sprite_textures,
@@ -4321,6 +4541,9 @@ impl Renderer {
                 animated: &self.animated,
                 lightmap: &self.lightmap_view,
                 draw: &draw,
+                occlusion: cull
+                    .is_some()
+                    .then_some(&occlusion as &java_terrain::OcclusionTest),
             };
             let output = match &mut stages {
                 Pack::Horizon(stages) => stages.run(
@@ -4664,6 +4887,22 @@ impl Frustum {
             p.truncate().dot(v) + p.w < 0.0
         })
     }
+    /// Whether the camera-relative box `min..max`, lit from the direction
+    /// `light` (toward the light), can cast a shadow inside: its shadow is
+    /// the box swept away from the light, which stays outside a plane the
+    /// box is outside of unless the sweep crosses it (Iris's advanced
+    /// shadow culling, conservatively).
+    pub fn casts_into(&self, min: Vec3, max: Vec3, light: Vec3) -> bool {
+        !self.planes.iter().any(|p| {
+            let v = Vec3::new(
+                if p.x >= 0.0 { max.x } else { min.x },
+                if p.y >= 0.0 { max.y } else { min.y },
+                if p.z >= 0.0 { max.z } else { min.z },
+            );
+            p.truncate().dot(v) + p.w < 0.0 && p.truncate().dot(light) >= 0.0
+        })
+    }
+
     /// Whether the camera-relative box `min..max` is entirely inside. Then
     /// `intersects` accepts every box within it: each plane's distance only
     /// grows from this box's nearest corner to the inner box's farthest, and
@@ -4771,6 +5010,31 @@ fn frustum(m: Mat4) -> [Vec4; 6] {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn shadow_casters_are_the_boxes_whose_shadow_can_reach_the_view() {
+        use glam::Vec3;
+        // Looking north (-z) from the origin, level.
+        let m = super::world_projection(70.0, 16.0 / 9.0, 256.0)
+            * crate::camera::view_matrix(180.0, 0.0);
+        let view = super::Frustum {
+            planes: super::frustum(m),
+        };
+        let cube =
+            |x: f32, y: f32, z: f32| (Vec3::new(x, y, z), Vec3::new(x + 16.0, y + 16.0, z + 16.0));
+        let noon = Vec3::Y;
+        // In view: casts.
+        let (min, max) = cube(-8.0, -8.0, -64.0);
+        assert!(view.intersects(min, max) && view.casts_into(min, max, noon));
+        // Far above the view, the sun overhead: its shadow falls into it.
+        let (min, max) = cube(-8.0, 200.0, -64.0);
+        assert!(!view.intersects(min, max) && view.casts_into(min, max, noon));
+        // Behind the camera: its shadow falls straight down, behind it too.
+        let (min, max) = cube(-8.0, -8.0, 32.0);
+        assert!(!view.casts_into(min, max, noon));
+        // The same box with a low sun behind the camera (south): it does.
+        assert!(view.casts_into(min, max, Vec3::new(0.0, 0.2, 1.0).normalize()));
+    }
+
+    #[test]
     fn surface_is_8_bit_and_not_srgb() {
         use super::surface_format;
         use wgpu::TextureFormat::{Bgra8Unorm, Bgra8UnormSrgb, Rgba8Unorm, Rgba16Float};
@@ -4826,14 +5090,14 @@ mod tests {
                 normal: [0; 4],
             }; 4]
         };
-        let entities: Vec<_> = [(0, 0), (4, 1), (11, 2), (7, 3), (4, 4), (12, 7)]
+        let entities: Vec<_> = [(0, 0), (14, 9), (4, 1), (11, 2), (7, 3), (4, 4), (12, 7)]
             .into_iter()
             .flat_map(|(layer, id)| quad(layer, id))
             .collect();
         let mut batch = super::EntityBatch::default();
         let counts = batch.update(&entities, &quad(3, 5), &quad(0, 6), &quad(0, 8));
         let vertices = &batch.combined;
-        assert_eq!(counts, [4, 1, 1, 0]);
+        assert_eq!(counts, [4, 1, 1, 0, 1]);
         assert_eq!(
             vertices
                 .as_chunks::<4>()
@@ -4841,7 +5105,7 @@ mod tests {
                 .iter()
                 .map(|q| q[0].light)
                 .collect::<Vec<_>>(),
-            [0, 1, 3, 4, 2, 7, 5, 6, 8]
+            [0, 1, 3, 4, 2, 7, 9, 5, 6, 8]
         );
     }
     #[test]

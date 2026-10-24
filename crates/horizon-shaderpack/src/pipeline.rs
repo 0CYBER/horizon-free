@@ -333,6 +333,74 @@ pub struct Passes {
     /// The program its translucent terrain is drawn with
     /// ([`WATER_PROGRAMS`]), after `deferred`.
     pub water: Option<Pass>,
+    /// The programs the shadow map's solid and translucent terrain are
+    /// drawn with ([`SHADOW_PROGRAMS`], [`SHADOW_WATER_PROGRAMS`]), after
+    /// `begin`. Their draw buffers are `shadowcolor` targets.
+    pub shadow: Option<Pass>,
+    pub shadow_water: Option<Pass>,
+    /// `shadowcolor0..7`: white and cleared each frame unless the pack
+    /// says otherwise.
+    pub shadow_targets: Vec<TargetSettings>,
+}
+
+/// The programs Iris draws the shadow map's solid terrain with. Horizon's
+/// solid layer holds cutout blocks too, so `shadow_cutout` (with its alpha
+/// test) comes first.
+pub const SHADOW_PROGRAMS: &[&str] = &["shadow_cutout", "shadow", "shadow_solid"];
+
+/// The programs Iris draws the shadow map's translucent terrain with.
+pub const SHADOW_WATER_PROGRAMS: &[&str] = &["shadow_water", "shadow"];
+
+/// How many `shadowcolor` targets Iris has.
+pub const MAX_SHADOW_COLOR_BUFFERS: u32 = 8;
+
+/// `shadowcolor<N>Format`, `Clear` and `ClearColor` from `fragments`.
+pub fn shadow_target_settings<'a>(
+    fragments: impl IntoIterator<Item = &'a str>,
+) -> Vec<TargetSettings> {
+    let mut targets = vec![
+        TargetSettings {
+            clear_color: Some([1.0; 4]),
+            ..TargetSettings::default()
+        };
+        MAX_SHADOW_COLOR_BUFFERS as usize
+    ];
+    let key = |key: &str, suffix: &str| {
+        let i: u32 = key
+            .strip_prefix("shadowcolor")?
+            .strip_suffix(suffix)?
+            .parse()
+            .ok()?;
+        (i < MAX_SHADOW_COLOR_BUFFERS).then_some(i as usize)
+    };
+    for fragment in fragments {
+        for c in const_directives(fragment) {
+            match c.ty {
+                "int" => {
+                    if let Some(i) = key(&c.key, "Format") {
+                        let format = c.value.to_uppercase();
+                        if TEXTURE_FORMATS.contains(&format.as_str()) {
+                            targets[i].format = format;
+                        }
+                    }
+                }
+                "bool" => {
+                    if let (Some(i), Ok(clear)) = (key(&c.key, "Clear"), c.value.parse()) {
+                        targets[i].clear = clear;
+                    }
+                }
+                "vec4" => {
+                    if let (Some(i), Some(color)) =
+                        (key(&c.key, "ClearColor"), parse_vec4(&c.value))
+                    {
+                        targets[i].clear_color = Some(color);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    targets
 }
 
 /// The programs Iris draws solid terrain with, the first the pack has
@@ -368,6 +436,8 @@ pub struct Directives {
     pub wetness_half_life: f32,
     /// `drynessHalflife`, tenths of a second: `wetness` smoothing when dry.
     pub dryness_half_life: f32,
+    /// The shadow map's directives.
+    pub shadow: ShadowDirectives,
 }
 
 impl Default for Directives {
@@ -377,6 +447,35 @@ impl Default for Directives {
             eye_brightness_half_life: 10.0,
             wetness_half_life: 600.0,
             dryness_half_life: 200.0,
+            shadow: ShadowDirectives::default(),
+        }
+    }
+}
+
+/// The shadow map's `const` directives (`PackShadowDirectives`), with
+/// Iris's defaults.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShadowDirectives {
+    /// `shadowMapResolution`: the shadow targets' width and height.
+    pub resolution: u32,
+    /// `shadowDistance`: half the side of the orthographic projection.
+    pub distance: f32,
+    /// `shadowNearPlane` and `shadowFarPlane` (`ShadowMatrices.NEAR`/`FAR`).
+    pub near: f32,
+    pub far: f32,
+    /// `shadowIntervalSize`: the light's view snaps to a grid this size as
+    /// the camera moves, so shadows don't shimmer.
+    pub interval: f32,
+}
+
+impl Default for ShadowDirectives {
+    fn default() -> Self {
+        Self {
+            resolution: 1024,
+            distance: 160.0,
+            near: -100.05,
+            far: 156.0,
+            interval: 2.0,
         }
     }
 }
@@ -392,6 +491,13 @@ impl Directives {
                 match (c.ty, c.key.as_str(), value) {
                     ("float", "sunPathRotation", Ok(v)) => out.sun_path_rotation = v,
                     ("float", "eyeBrightnessHalflife", Ok(v)) => out.eye_brightness_half_life = v,
+                    ("int", "shadowMapResolution", Ok(v)) if v >= 1.0 => {
+                        out.shadow.resolution = v as u32;
+                    }
+                    ("float", "shadowDistance", Ok(v)) => out.shadow.distance = v,
+                    ("float", "shadowNearPlane", Ok(v)) => out.shadow.near = v,
+                    ("float", "shadowFarPlane", Ok(v)) => out.shadow.far = v,
+                    ("float", "shadowIntervalSize", Ok(v)) => out.shadow.interval = v,
                     ("float", "wetnessHalflife", Ok(v)) => out.wetness_half_life = v,
                     ("float", "drynessHalflife", Ok(v)) => out.dryness_half_life = v,
                     _ => {}
@@ -517,6 +623,7 @@ impl JavaPack {
         }
         let mut out = Passes {
             targets: target_settings(sources.iter().map(String::as_str), properties),
+            shadow_targets: shadow_target_settings(sources.iter().map(String::as_str)),
             directives: Directives::read(sources.iter().map(String::as_str)),
             ..Passes::default()
         };
@@ -559,6 +666,7 @@ impl JavaPack {
         };
         let mut flipped = BTreeSet::new();
         out.begin = run(&groups[0], "begin_pre", &mut flipped)?;
+        let flipped_after_begin = flipped.clone();
         out.prepare = run(&groups[1], "prepare_pre", &mut flipped)?;
         out.flipped_after_prepare = flipped.clone();
         // Iris's fallbacks for terrain (`ProgramFallbackResolver`).
@@ -598,6 +706,8 @@ impl JavaPack {
         };
         out.terrain = geometry(TERRAIN_PROGRAMS, &out.flipped_after_prepare)?;
         out.water = geometry(WATER_PROGRAMS, &out.flipped_after_translucent)?;
+        out.shadow = geometry(SHADOW_PROGRAMS, &flipped_after_begin)?;
+        out.shadow_water = geometry(SHADOW_WATER_PROGRAMS, &flipped_after_begin)?;
         if exists("final") {
             let prog = path("final");
             let (blend, buffer_blends) = resolve_blends(&prog);
@@ -900,6 +1010,30 @@ mod tests {
         assert_eq!(d.eye_brightness_half_life, 4.0);
         assert_eq!(d.wetness_half_life, 300.0);
         assert_eq!(d.dryness_half_life, 200.0, "the default");
+    }
+
+    #[test]
+    fn shadow_directives_and_targets() {
+        let text = "\
+const int shadowMapResolution = 2048;
+const float shadowDistance = 128.0;
+const float shadowIntervalSize = 3.0;
+const bool shadowcolor0Clear = false;
+const int shadowcolor1Format = RGBA16;
+const vec4 shadowcolor1ClearColor = vec4(0.0, 0.0, 0.0, 0.0);
+";
+        let d = Directives::read([text]);
+        assert_eq!(d.shadow.resolution, 2048);
+        assert_eq!(d.shadow.distance, 128.0);
+        assert_eq!(d.shadow.interval, 3.0);
+        assert_eq!(d.shadow.near, ShadowDirectives::default().near);
+        let targets = shadow_target_settings([text]);
+        assert!(!targets[0].clear);
+        assert_eq!(targets[1].format, "RGBA16");
+        assert_eq!(targets[1].clear_color, Some([0.0; 4]));
+        // Iris clears the others to white.
+        assert_eq!(targets[2].clear_color, Some([1.0; 4]));
+        assert!(targets[2].clear);
     }
 
     #[test]

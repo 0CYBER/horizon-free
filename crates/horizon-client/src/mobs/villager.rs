@@ -46,7 +46,7 @@ pub fn register(m: &mut Mob) {
     // Villager's constructor: its brain does everything, it has no goals.
     m.ai.nav.can_open_doors = true;
     m.ai.nav.can_float = true;
-    m.ai.nav.required_path_length = 48.0;
+    m.set_required_path_length(48.0);
 }
 
 /// `LivingEntity.addParticlesAroundSelf`: five particles about the body.
@@ -613,6 +613,144 @@ pub fn meet(
         to: mobs[b].position,
         gossiped: ready,
     }
+}
+/// `Villager.spawnGolemIfNeeded` up to the spawn: villager `i` wants a golem
+/// and so do at least `needed` of the villagers whose boxes meet its own grown
+/// by 10 blocks. Returns all of those villagers: once the golem stands, they
+/// remember it ([`super::villager_brain::golem_detected`]).
+pub fn golem_summoners(mobs: &[Mob], i: usize, now: i64, needed: usize) -> Option<Vec<usize>> {
+    if !ext(&mobs[i]).is_some_and(|e| e.wants_golem(now)) {
+        return None;
+    }
+    let area = mobs[i]
+        .bounds()
+        .inflate(horizon_core::geometry::Vec3::new(10.0, 10.0, 10.0));
+    let near: Vec<usize> = mobs
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| {
+            m.species() == Species::Villager && !m.removed && m.bounds().intersects(area)
+        })
+        .map(|(j, _)| j)
+        .collect();
+    let wanting = near
+        .iter()
+        .filter(|&&j| ext(&mobs[j]).is_some_and(|e| e.wants_golem(now)))
+        .take(5)
+        .count();
+    (wanting >= needed).then_some(near)
+}
+/// `SpawnUtil.Strategy.LEGACY_IRON_GOLEM`'s refused floors.
+fn golem_floor_ok(name: &str) -> bool {
+    !matches!(
+        name,
+        "minecraft:cobweb"
+            | "minecraft:cactus"
+            | "minecraft:glass_pane"
+            | "minecraft:conduit"
+            | "minecraft:ice"
+            | "minecraft:tnt"
+            | "minecraft:glowstone"
+            | "minecraft:beacon"
+            | "minecraft:sea_lantern"
+            | "minecraft:frosted_ice"
+            | "minecraft:tinted_glass"
+            | "minecraft:glass"
+    ) && !name.ends_with("_stained_glass_pane")
+        && !name.ends_with("_stained_glass")
+        && !name.ends_with("leaves")
+}
+/// One attempt of `SpawnUtil.trySpawnMob(IRON_GOLEM, ..., 8 across, 6 up and
+/// down, LEGACY_IRON_GOLEM)`: a column drawn near `start`, searched down from
+/// 6 above for a solid floor (or powder snow) under air or a liquid block.
+/// Returns the block the golem would stand in.
+fn golem_attempt<L: super::spawn_rules::SpawnLevel>(
+    l: &L,
+    start: [i32; 3],
+    random: &mut impl RandomSource,
+) -> Option<[i32; 3]> {
+    let dx = random.next_int_bound(17).unwrap_or(8) - 8;
+    let dz = random.next_int_bound(17).unwrap_or(8) - 8;
+    let (x, z) = (start[0] + dx, start[2] + dz);
+    let name = |y: i32| -> &str { &l.facts().get(l.state(x, y, z)).name };
+    let mut y = start[1] + 6;
+    let mut above = l.state(x, y, z);
+    for _ in 0..=12 {
+        y -= 1;
+        let here = l.state(x, y, z);
+        let above_name = &*l.facts().get(above).name;
+        // BlockState.liquid(): a water or lava block (not a waterlogged one).
+        let open = l.facts().is_air(above)
+            || above_name == "minecraft:water"
+            || above_name == "minecraft:lava";
+        let solid = l.mob_data().state(here).flags & super::data::SOLID != 0
+            || name(y) == "minecraft:powder_snow";
+        if golem_floor_ok(name(y)) && open && solid {
+            return Some([x, y + 1, z]);
+        }
+        above = here;
+    }
+    None
+}
+/// `IronGolem.checkSpawnObstruction`: a floor with a full top face, its feet
+/// free whatever fluid is there, and the two blocks above free.
+fn golem_fits<L: super::spawn_rules::SpawnLevel>(l: &L, [x, y, z]: [i32; 3]) -> bool {
+    use super::spawn_rules::is_valid_empty_spawn;
+    // entityCanStandOn: Block.isFaceFull(collision shape, UP).
+    let floor = l.mob_data().state(l.state(x, y - 1, z));
+    let stands = floor.flags & super::data::STURDY_TOP != 0 && floor.top >= 1.0;
+    // isValidEmptySpawnBlock with Fluids.EMPTY: open water is free too.
+    let feet = is_valid_empty_spawn(Species::IronGolem, l, x, y, z)
+        || &*l.facts().get(l.state(x, y, z)).name == "minecraft:water";
+    stands
+        && feet
+        && is_valid_empty_spawn(Species::IronGolem, l, x, y + 1, z)
+        && is_valid_empty_spawn(Species::IronGolem, l, x, y + 2, z)
+}
+/// `SpawnUtil.trySpawnMob(IRON_GOLEM, MOB_SUMMONED, level, start, 10, 8, 6,
+/// LEGACY_IRON_GOLEM, false)`: up to ten columns tried. In each spot found
+/// `create` makes the golem (`EntityType.create`: the yaw drawn here, then its
+/// `finalizeSpawn` draws, see [`finalize_summoned_golem`]); it is kept only
+/// when `IronGolem.checkSpawnObstruction` passes, and discarded otherwise.
+pub fn summon_golem<L: super::spawn_rules::SpawnLevel, R: RandomSource, T>(
+    l: &L,
+    start: [i32; 3],
+    random: &mut R,
+    mut create: impl FnMut(&mut R, horizon_core::geometry::Vec3, f32) -> T,
+) -> Option<T> {
+    for _ in 0..10 {
+        let Some([x, y, z]) = golem_attempt(l, start, random) else {
+            continue;
+        };
+        // Mth.wrapDegrees(nextFloat() * 360).
+        let mut yaw = random.next_float() * 360.0;
+        if yaw >= 180.0 {
+            yaw -= 360.0;
+        }
+        let at =
+            horizon_core::geometry::Vec3::new(f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5);
+        let golem = create(random, at, yaw);
+        if golem_fits(l, [x, y, z]) {
+            return Some(golem);
+        }
+    }
+    None
+}
+/// `Mob.finalizeSpawn` for a summoned iron golem, from the level's random:
+/// the follow range spawn bonus and left-handedness.
+pub fn finalize_summoned_golem(m: &mut Mob, random: &mut impl RandomSource) {
+    use super::finalize::{Attr, Op, add_modifier, has_modifier};
+    if !has_modifier(m, Attr::FollowRange, "minecraft:random_spawn_bonus") {
+        let bonus = random.triangle(0.0, 0.114_850_000_000_000_01);
+        add_modifier(
+            m,
+            Attr::FollowRange,
+            "minecraft:random_spawn_bonus",
+            bonus,
+            Op::AddMultipliedBase,
+        );
+    }
+    m.extra.left_handed = random.next_float() < 0.05;
 }
 /// `PoiManager.take(HOME, ..., 48)`: the nearest bed head not `claimed`
 /// (`free_head`: a bed head that is not occupied).

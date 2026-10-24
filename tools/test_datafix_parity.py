@@ -72,11 +72,11 @@ def java_classpath():
 
 
 def build_rust():
-    subprocess.run(['cargo', 'build', '--locked', '--release', '-p', 'horizon-world', '--example', 'probe'],
+    subprocess.run(['cargo', 'build', '--locked', '--release', '-p', 'horizon-world', '--example', 'world_probe'],
                    cwd=ROOT, check=True)
     meta = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1'],
                                               cwd=ROOT))
-    return Path(meta['target_directory']) / 'release' / 'examples' / 'probe'
+    return Path(meta['target_directory']) / 'release' / 'examples' / 'world_probe'
 
 
 def run_vanilla(classpath, world, out, target=None):

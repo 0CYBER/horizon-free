@@ -145,7 +145,7 @@ def main():
            '-cp', dependencies, '-d', str(classes), str(java_root / 'dev/horizonlab/parity/VanillaPortalOracle.java')])
     h.run(['java', '-Xmx3G', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.VanillaPortalOracle',
            str(resources), str(work / 'cases.jsonl'), str(work / 'native.txt')])
-    h.run(['cargo', 'run', '-q', '--release', '-p', 'horizon-world', '--example', 'probe', '--',
+    h.run(['cargo', 'run', '-q', '--release', '-p', 'horizon-world', '--example', 'world_probe', '--',
            'portal_travel_fixture', str(resources), str(work / 'cases.jsonl'), str(work / 'rust.txt')], cwd=lab.ROOT)
     native = h.split_cases((work / 'native.txt').read_text(), ())
     rust = h.split_cases((work / 'rust.txt').read_text(), ())

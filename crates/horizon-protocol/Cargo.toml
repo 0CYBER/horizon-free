@@ -17,5 +17,10 @@ sha1 = "0.10"
 # Secure chat: SHA256withRSA message signatures.
 sha2 = "0.10"
 
+# Its own name, not `probe`: Cargo copies every crate's examples into one target/<profile>/examples.
+[[example]]
+name = "protocol_probe"
+path = "examples/probe.rs"
+
 [lints]
 workspace = true

@@ -79,7 +79,7 @@ def origins(build, classes, dependencies, all_seeds):
     vanilla_out = build / 'origins-vanilla.txt'
     oh.run_logged(['java', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.VanillaWorldSpawnOracle',
                    vanilla_out, *all_seeds], build, 'origins-vanilla')
-    rust = subprocess.run([target_dir() / 'examples/probe', 'spawn_origin', RESOURCES, *map(str, all_seeds)],
+    rust = subprocess.run([target_dir() / 'examples/world_probe', 'spawn_origin', RESOURCES, *map(str, all_seeds)],
                           capture_output=True, text=True, check=True, cwd=lab.ROOT).stdout
     vanilla = vanilla_out.read_text()
     parse = lambda text: {int(l.split()[0]): tuple(map(int, l.split()[1:])) for l in text.splitlines() if l}
@@ -121,7 +121,7 @@ def main():
     oh.run_logged(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-nowarn', '-cp', dependencies,
                    '-d', classes, lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaWorldSpawnOracle.java'],
                   build, 'compile-java')
-    oh.run_logged(['cargo', 'build', '--release', '-p', 'horizon-world', '--example', 'probe'], build, 'compile-probe')
+    oh.run_logged(['cargo', 'build', '--release', '-p', 'horizon-world', '--example', 'world_probe'], build, 'compile-probe')
     all_seeds = parity_shard.shard(args.seed or seeds(args.random))
     started = time.time()
 

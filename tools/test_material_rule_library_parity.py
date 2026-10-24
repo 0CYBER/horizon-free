@@ -79,8 +79,8 @@ def main():
     if facts!=json.loads((build/'facts-client.json').read_text()):raise ValueError('reference block metadata differs')
     fixtures=list(corpus(bundle['rules'],bundle['biomes']));inputs=build/'inputs.txt';inputs.write_text(''.join(json.dumps(f,separators=(',',':'))+'\n' for f in fixtures),encoding='utf-8')
     fixture_paths=[inputs,build/'facts-client.json',build/'facts-server.json',*[build/(field+'.json') for field in bundle]];tested_fixtures=base.source_hashes(fixture_paths)
-    run(['cargo','build','--release','-p','horizon-world','--example','probe'],'compile-rust')
-    metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],cwd=lab.ROOT,text=True));binary=Path(metadata['target_directory'])/'release/examples'/('probe.exe' if os.name=='nt' else 'probe')
+    run(['cargo','build','--release','-p','horizon-world','--example','world_probe'],'compile-rust')
+    metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],cwd=lab.ROOT,text=True));binary=Path(metadata['target_directory'])/'release/examples'/('world_probe.exe' if os.name=='nt' else 'world_probe')
     run([binary,'material_condition_fixture',build],'rust');references=[]
     for side,jar in jars.items():
         java(side,'VanillaMaterialConditionOracle',side,build);reference=build/f'{side}.txt';matched=base.compare(reference,build/'rust.txt')

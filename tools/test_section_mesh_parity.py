@@ -502,9 +502,9 @@ def main():
     dependencies = os.pathsep.join(map(str, [jars['client'], *baking.client_libraries()]))
     run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'), '-cp', dependencies, '-d', classes, oracle, *helpers], 'compile-java')
     env_jobs = os.environ.get('CARGO_BUILD_JOBS', '3')
-    run(['cargo', 'build', '--locked', '--profile', 'fast', '-j', env_jobs, '-p', 'horizon-client', '--example', 'probe'], 'compile-rust')
+    run(['cargo', 'build', '--locked', '--profile', 'fast', '-j', env_jobs, '-p', 'horizon-client', '--example', 'client_probe'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1'], cwd=lab.ROOT))
-    binary = Path(metadata['target_directory']) / 'fast/examples' / ('probe.exe' if os.name=='nt' else 'probe')
+    binary = Path(metadata['target_directory']) / 'fast/examples' / ('client_probe.exe' if os.name=='nt' else 'client_probe')
     java = ['java', '-Xmx2G', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.VanillaSectionMeshOracle']
     run([binary, 'section_mesh_fixture',resources, inputs, BUILD / 'rust.jsonl'], 'rust')
     run([*java, inputs, BUILD / 'client.jsonl', resources], 'client')

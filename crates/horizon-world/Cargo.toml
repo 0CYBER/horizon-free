@@ -25,5 +25,10 @@ path = "src/main.rs"
 name = "horizon-worldgen-parity"
 path = "src/bin/worldgen_parity.rs"
 
+# Its own name, not `probe`: Cargo copies every crate's examples into one target/<profile>/examples.
+[[example]]
+name = "world_probe"
+path = "examples/probe/main.rs"
+
 [lints]
 workspace = true
