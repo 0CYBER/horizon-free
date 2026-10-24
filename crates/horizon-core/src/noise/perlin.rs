@@ -207,6 +207,104 @@ impl PerlinNoise {
                 let mut previous_y = i32::MIN;
                 let mut xz_dots = [0.0_f32; 8];
                 let mut y_gradients = [0.0_f32; 8];
+                let column = &mut buffer[index..index + size_y];
+                let mut y = 0;
+                while y < size_y {
+                    let sample = &ys[y];
+                    if previous_y != sample.cell {
+                        let gradients = self.gradients_at(p, q, sample.cell, cell_z);
+                        for i in 0..8 {
+                            xz_dots[i] = gradients[i][0] * (dx - (i & 1) as f32)
+                                + gradients[i][2] * (dz - ((i >> 2) & 1) as f32);
+                            y_gradients[i] = gradients[i][1];
+                        }
+                        previous_y = sample.cell;
+                    }
+                    // Batch independent Y samples for LLVM's portable SIMD
+                    // lowering; boundaries and tails use the scalar path.
+                    if y + 4 <= size_y && ys[y + 1..y + 4].iter().all(|s| s.cell == sample.cell) {
+                        add_four(
+                            &mut column[y..y + 4],
+                            &ys[y..y + 4],
+                            xz_dots,
+                            y_gradients,
+                            fade_x,
+                            fade_z,
+                            amplitude,
+                        );
+                        y += 4;
+                        continue;
+                    }
+                    let out = &mut column[y];
+                    let dy = sample.offset;
+                    let values = std::array::from_fn(|i| {
+                        xz_dots[i] + y_gradients[i] * (dy - ((i >> 1) & 1) as f32)
+                    });
+                    *out += amplitude * lerp3([fade_x, sample.fade, fade_z], values);
+                    y += 1;
+                }
+                index += size_y;
+            }
+        }
+        Ok(())
+    }
+    #[cfg(test)]
+    fn add_volume_scalar(
+        &self,
+        buffer: &mut [f32],
+        volume: DensityVolume,
+        xz_scale: f64,
+        y_scale: f64,
+        amplitude: f32,
+        fudge_y_scale: Option<f64>,
+    ) -> Result<(), DensityError> {
+        if buffer.len() < volume.size() {
+            return Err(DensityError::BufferTooShort);
+        }
+        let [size_x, size_y, size_z] = volume.sizes();
+        // Every X/Z column walks the same Y coordinates, so their cells, offsets
+        // and fades are computed once per volume instead of once per column.
+        let mut stack = [YSample::default(); STACK_Y];
+        let mut heap = Vec::new();
+        let ys = if size_y <= STACK_Y {
+            &mut stack[..size_y]
+        } else {
+            heap.resize(size_y, YSample::default());
+            &mut heap[..]
+        };
+        for (y, sample) in ys.iter_mut().enumerate() {
+            let input_y = f64::from(volume.coordinate(1, y)) * y_scale;
+            let shifted_y = wrap(input_y) + self.table.offsets[1];
+            let cell = floor_i32(shifted_y);
+            let dy = shifted_y - f64::from(cell);
+            *sample = YSample {
+                cell,
+                fade: smoothstep(dy as f32),
+                offset: match fudge_y_scale {
+                    Some(scale) => (dy - compute_fudge_y(input_y, dy, scale)) as f32,
+                    None => dy as f32,
+                },
+            };
+        }
+        let ys = &*ys;
+        let mut index = 0;
+        for z in 0..size_z {
+            let shifted_z =
+                wrap(f64::from(volume.coordinate(2, z)) * xz_scale) + self.table.offsets[2];
+            let cell_z = floor_i32(shifted_z);
+            let dz = (shifted_z - f64::from(cell_z)) as f32;
+            let fade_z = smoothstep(dz);
+            for x in 0..size_x {
+                let shifted_x =
+                    wrap(f64::from(volume.coordinate(0, x)) * xz_scale) + self.table.offsets[0];
+                let cell_x = floor_i32(shifted_x);
+                let dx = (shifted_x - f64::from(cell_x)) as f32;
+                let fade_x = smoothstep(dx);
+                let p = self.table.permute(cell_x);
+                let q = self.table.permute(cell_x.wrapping_add(1));
+                let mut previous_y = i32::MIN;
+                let mut xz_dots = [0.0_f32; 8];
+                let mut y_gradients = [0.0_f32; 8];
                 for (sample, out) in ys.iter().zip(&mut buffer[index..index + size_y]) {
                     if previous_y != sample.cell {
                         let gradients = self.gradients_at(p, q, sample.cell, cell_z);
@@ -311,4 +409,129 @@ fn compute_fudge_y(input_y: f64, relative_y: f64, scale: f64) -> f64 {
         relative_y
     };
     f64::from(floor_i32(limited_y / scale + f64::from(1e-7_f32))) * scale
+}
+
+// Keep four independent Y lanes visible to SLP without requiring unsafe
+// intrinsics or a platform-specific target feature. Scalar lowering remains
+// valid on every supported platform, and each lane retains the FP order.
+#[inline]
+fn add_four(
+    out: &mut [f32],
+    ys: &[YSample],
+    dots: [f32; 8],
+    gradients: [f32; 8],
+    fade_x: f32,
+    fade_z: f32,
+    amplitude: f32,
+) {
+    let dy: [f32; 4] = std::array::from_fn(|lane| ys[lane].offset);
+    let fy: [f32; 4] = std::array::from_fn(|lane| ys[lane].fade);
+    let values: [[f32; 4]; 8] = std::array::from_fn(|i| {
+        std::array::from_fn(|lane| dots[i] + gradients[i] * (dy[lane] - ((i >> 1) & 1) as f32))
+    });
+    for lane in 0..4 {
+        out[lane] += amplitude * lerp3([fade_x, fy[lane], fade_z], values.map(|v| v[lane]));
+    }
+}
+
+#[cfg(test)]
+mod simd_tests {
+    use super::*;
+    use crate::random::LegacyRandom;
+    use std::hint::black_box;
+
+    #[test]
+    fn volume_bitwise_scalar_reference() {
+        let scales = [
+            0.0,
+            -0.0,
+            0.001,
+            -0.001,
+            0.125,
+            -0.5,
+            1.0,
+            4.0,
+            1e100,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+        ];
+        let amplitudes = [
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+            f32::from_bits(1),
+        ];
+        for seed in [0, -1, 1234, i64::MIN] {
+            let noise = PerlinNoise::new(&mut LegacyRandom::new(seed));
+            for height in [1, 2, 3, 4, 5, 7, 8, 9, 31, 64, 65, 97] {
+                for (case, &scale) in scales.iter().enumerate() {
+                    let minimum = [
+                        [-17, -64, 49],
+                        [i32::MAX, i32::MIN, -16777216],
+                        [16777216, 33554431, -33554432],
+                    ][case % 3];
+                    let volume = DensityVolume::new(
+                        [2, height, 2],
+                        minimum,
+                        [4, if case % 3 == 0 { i32::MAX } else { 1 }, 16],
+                    )
+                    .unwrap();
+                    for fudge in [None, Some(0.125), Some(-0.25), Some(0.0), Some(f64::NAN)] {
+                        let initial = [0.0, -0.0, 1.5, f32::from_bits(1)];
+                        let mut a: Vec<_> =
+                            (0..volume.size() + 3).map(|i| initial[i % 4]).collect();
+                        let mut b = a.clone();
+                        let amplitude = amplitudes[case % amplitudes.len()];
+                        noise
+                            .add_volume_scalar(&mut a, volume, scale, scale, amplitude, fudge)
+                            .unwrap();
+                        noise
+                            .add_volume(&mut b, volume, scale, scale, amplitude, fudge)
+                            .unwrap();
+                        for (i, (a, b)) in a.iter().zip(&b).enumerate() {
+                            assert_eq!(
+                                a.to_bits(),
+                                b.to_bits(),
+                                "seed={seed} height={height} scale={scale} fudge={fudge:?} index={i}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn microkernel() {
+        let noise = PerlinNoise::new(&mut LegacyRandom::new(1234));
+        let volume = DensityVolume::new([5, 49, 5], [-16, -64, 32], [4, 8, 4]).unwrap();
+        for scale in [0.001, 0.01, 0.1, 1.0] {
+            for scalar in [true, false] {
+                let mut buf = vec![0.0; volume.size()];
+                let start = std::time::Instant::now();
+                for _ in 0..50000 {
+                    if scalar {
+                        noise
+                            .add_volume_scalar(black_box(&mut buf), volume, scale, scale, 0.5, None)
+                            .unwrap();
+                    } else {
+                        noise
+                            .add_volume(black_box(&mut buf), volume, scale, scale, 0.5, None)
+                            .unwrap();
+                    }
+                }
+                println!(
+                    "scale={scale} scalar={scalar} seconds={:.6}",
+                    start.elapsed().as_secs_f64()
+                );
+                black_box(buf);
+            }
+        }
+    }
 }
