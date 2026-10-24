@@ -436,11 +436,9 @@ mod tests {
             lines.borrow_mut().push(l.to_string())
         })
         .unwrap();
-        assert!(
-            fs::read(target.join("assets/pack.mcmeta"))
-                .unwrap()
-                .starts_with(b"{\"language\"")
-        );
+        assert!(fs::read(target.join("assets/pack.mcmeta"))
+            .unwrap()
+            .starts_with(b"{\"language\""));
         assert_eq!(
             fs::read(target.join("assets/minecraft/lang/fr_fr.json")).unwrap(),
             b"{}"
