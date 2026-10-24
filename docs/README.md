@@ -46,6 +46,6 @@ To play, use [the launcher](../launcher/README.md); the project site is [playhor
 - [Collision geometry](collision-geometry.md): shapes, collision, movement and fluids.
 - [Face visibility](face-visibility.md): which model faces the mesher emits.
 
-## The earlier Java track (no longer developed)
+## Java comparison profiling
 
 - [JFR analysis for Java comparisons](profiling.md).
