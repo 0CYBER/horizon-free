@@ -45,6 +45,15 @@ pub fn local() -> bool {
 
 static LOADED: Mutex<Option<(Instant, Arc<Index>)>> = Mutex::new(None);
 
+/// The index read last in this run, without asking the network: for what must not wait.
+pub fn known_index() -> Option<Arc<Index>> {
+    LOADED
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|(_, index)| index.clone())
+}
+
 /// The index: the one fetched in the last ten minutes, else fetched again (and kept in the game
 /// folder), else the copy kept last time.
 pub fn index() -> Result<Arc<Index>, String> {
