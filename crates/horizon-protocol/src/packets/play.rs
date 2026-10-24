@@ -13,8 +13,8 @@ use crate::{
     packets::{
         Empty,
         configuration::{
-            ClientInformation, CustomPayload, Disconnect, KeepAlive, Ping, ResourcePackPush,
-            ResourcePackResponse, UpdateTags,
+            ClientInformation, CustomPayload, Disconnect, KeepAlive, Ping, ResourcePackPop,
+            ResourcePackPush, ResourcePackResponse, UpdateTags,
         },
         login::Property,
     },
@@ -1640,6 +1640,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     RemoveEntities(RemoveEntities) = REMOVE_ENTITIES,
     RemoveMobEffect(RemoveMobEffect) = REMOVE_MOB_EFFECT,
     ResetScore(ResetScore) = RESET_SCORE,
+    ResourcePackPop(ResourcePackPop) = RESOURCE_PACK_POP,
     ResourcePackPush(ResourcePackPush) = RESOURCE_PACK_PUSH,
     Respawn(Respawn) = RESPAWN,
     RotateHead(RotateHead) = ROTATE_HEAD,

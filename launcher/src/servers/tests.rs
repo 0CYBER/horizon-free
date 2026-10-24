@@ -58,6 +58,7 @@ fn programs_are_laid_out_as_install_sh_does() {
     fs::write(version.join(PROGRAM), "server").unwrap();
     fs::write(version.join("horizon-client"), "game").unwrap();
     fs::write(version.join(".installed"), "").unwrap();
+    crate::game_app::ensure(&version).unwrap();
     fs::write(
         version.join(".local/horizon-client/26.3/horizon-resources.json"),
         "{}",
@@ -70,6 +71,8 @@ fn programs_are_laid_out_as_install_sh_does() {
         "server"
     );
     assert!(!rt.join("releases/v1/.installed").exists());
+    // The game's macOS bundle is the launcher's, not the server's.
+    assert!(!rt.join("releases/v1/Horizon.app").exists());
     // The release finds the game files where horizon-server looks: .local beside it.
     assert!(rt
         .join("current/.local/horizon-client/26.3/horizon-resources.json")

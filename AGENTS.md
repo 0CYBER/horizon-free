@@ -47,7 +47,7 @@ Game workspace (root `Cargo.toml`); `launcher/` and `crates/horizon-telemetry-se
 | `horizon-port-pack` | Porting Java modpacks ([docs/modpacks.md](docs/modpacks.md)) |
 | `horizon-theme` | Design tokens and fonts for the launcher, the game's own menus and the website |
 | `horizon-telemetry`, `horizon-telemetry-server`, `horizon-bench` | Opt-in data collection, its ingest server, the benchmark report format |
-| `horizon-dualsense`, `horizon-threads`, `horizon-release-sign`, `horizon-bots`, `voxel-kernels`, `xtask` | DualSense output, thread priorities, signed release checksums, load-test bots, occupancy kernels, repo tasks |
+| `horizon-dualsense`, `horizon-threads`, `horizon-release-sign`, `horizon-bots`, `xtask` | DualSense output, thread priorities, signed release checksums, load-test bots, repo tasks |
 | `launcher/` | GPUI launcher: `main.rs` (UI), `backend.rs` (installs, updates), `cli.rs`, `mcp.rs`, `*_page.rs` |
 
 Other top-level folders: `tools/` (harnesses and dev scripts), `tests/` (Python unit tests: `python3 -m

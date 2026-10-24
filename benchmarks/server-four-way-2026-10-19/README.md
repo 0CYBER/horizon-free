@@ -131,8 +131,8 @@ average) and reached the ThinkPad over the tailnet.
   It ran with Paper's defaults except `connection-throttle: -1` in `bukkit.yml`. Every bot connects from one
   address, and the default throttle (4 s) refused all but the first. Paperclip patched the pinned server jar
   from its cache. Same Java and heap.
-- Fabric + Lithium: the pinned server jar on Fabric loader 0.19.5 (`packs/fabric.lock.json`) with Lithium
-  `mc26.3-0.26.2-fabric` (`packs/mods.lock.json`, checked against its SHA-512). Lithium needs no Fabric API.
+- Fabric + Lithium: the pinned server jar on Fabric loader 0.19.5 (`tools/benchmark-deps/fabric.lock.json`) with Lithium
+  `mc26.3-0.26.2-fabric` (`tools/benchmark-deps/mods.lock.json`, checked against its SHA-512). Lithium needs no Fabric API.
   Same Java and heap.
 
 The Paper and Fabric jars are dev-only downloads into `.local/server-bench/jars` and are never committed or
