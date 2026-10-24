@@ -3402,11 +3402,10 @@ impl Renderer {
         };
         self.uploads
             .buffer(&mut encoder, &self.globals, 0, bytemuck::bytes_of(&globals));
-        // Vanilla keeps the view bob in the world's PoseStack, not in the
-        // projection, and packs reconstruct view positions from the depth
-        // buffer and multiply by `inverse_view` (`gbufferModelViewInverse`):
-        // with the bob in the projection instead, everything they rebuild —
-        // reflections, AO, godrays — slid along with the walk bob.
+        // Vanilla multiplies the bob into the projection (GameRenderer.renderLevel);
+        // Iris moves it into the model-view for packs (MixinModelViewBobbing), whose
+        // depth reconstruction expects a plain perspective `gbufferProjection`.
+        // `projection * view` is the same either way.
         let pack_uniform = shader_pack_uniform(
             frame,
             frame.bob * view,
