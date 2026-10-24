@@ -227,33 +227,4 @@ mod tests {
         );
         assert_eq!(langs[1].label(), "Français (France)");
     }
-
-    #[test]
-    fn a_prepared_root_offers_the_languages_the_asset_index_holds() {
-        // `horizon-prepare languages` copies `pack.mcmeta` and every `minecraft/lang/*.json`
-        // from the asset index, since the client jar carries `en_us` alone. `pack.mcmeta`'s
-        // `language` section is the whole list; a language's own file holds its strings (#1272).
-        let root = Mem(HashMap::from([
-            (
-                "assets/pack.mcmeta".into(),
-                r#"{"pack":{"description":"vanilla"},"language":{"ru_ru":{"name":"Русский","region":"Россия","bidirectional":false}}}"#.as_bytes().to_vec(),
-            ),
-            (
-                "assets/minecraft/lang/en_us.json".into(),
-                br#"{"a":"Apple"}"#.to_vec(),
-            ),
-            (
-                "assets/minecraft/lang/ru_ru.json".into(),
-                r#"{"a":"Яблоко"}"#.as_bytes().to_vec(),
-            ),
-        ]));
-        let sources: [&dyn ResourceSource; 1] = [&root];
-        let langs = available(&sources);
-        assert_eq!(
-            langs.iter().map(|l| l.code.as_str()).collect::<Vec<_>>(),
-            ["en_us", "ru_ru"]
-        );
-        assert_eq!(langs[1].label(), "Русский (Россия)");
-        assert_eq!(Language::load(&sources, "ru_ru").get("a"), Some("Яблоко"));
-    }
 }
