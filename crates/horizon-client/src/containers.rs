@@ -382,7 +382,7 @@ impl Providers {
         );
         Self { ints, floats }
     }
-    fn eval(&self, v: &Value, fast: bool, table: &HashMap<String, Value>, depth: u32) -> f64 {
+    fn eval(v: &Value, fast: bool, table: &HashMap<String, Value>, depth: u32) -> f64 {
         if depth > 16 {
             return 0.0;
         }
@@ -390,10 +390,10 @@ impl Providers {
             Value::Number(n) => n.as_f64().unwrap_or(0.0),
             Value::String(name) => table
                 .get(name)
-                .map_or(0.0, |v| self.eval(v, fast, table, depth + 1)),
+                .map_or(0.0, |v| Self::eval(v, fast, table, depth + 1)),
             Value::Object(o) => {
                 let f =
-                    |k: &str| self.eval(o.get(k).unwrap_or(&Value::Null), fast, table, depth + 1);
+                    |k: &str| Self::eval(o.get(k).unwrap_or(&Value::Null), fast, table, depth + 1);
                 match o.get("type").and_then(Value::as_str).unwrap_or("") {
                     "minecraft:div" => {
                         let r = f("right");
@@ -425,14 +425,14 @@ impl Providers {
     }
     /// A plain `context_int_provider` value or reference (no context conditions).
     pub fn int_value(&self, v: &Value) -> i32 {
-        self.eval(v, false, &self.ints, 0) as i32
+        Self::eval(v, false, &self.ints, 0) as i32
     }
     /// A plain `context_float_provider` value or reference; `default` when absent.
     pub fn float_value(&self, v: &Value, default: f32) -> f32 {
         if v.is_null() {
             default
         } else {
-            self.eval(v, false, &self.floats, 0) as f32
+            Self::eval(v, false, &self.floats, 0) as f32
         }
     }
     #[cfg(test)]
@@ -446,14 +446,14 @@ impl Providers {
         items
             .get(&stack.item)
             .and_then(|i| i.fuel.as_ref())
-            .map_or(0, |(time, _)| self.eval(time, fast, &self.ints, 0) as i32)
+            .map_or(0, |(time, _)| Self::eval(time, fast, &self.ints, 0) as i32)
     }
     pub fn speed(&self, items: &Items, stack: &ItemStack, fast: bool) -> f32 {
         items
             .get(&stack.item)
             .and_then(|i| i.fuel.as_ref())
             .map_or(1.0, |(_, speed)| {
-                self.eval(speed, fast, &self.floats, 0) as f32
+                Self::eval(speed, fast, &self.floats, 0) as f32
             })
     }
 }

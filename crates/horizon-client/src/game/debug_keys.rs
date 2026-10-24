@@ -38,7 +38,7 @@ impl DebugHost for Host<'_, '_> {
         // the menu as it always has (key_pressed).
         let g = &mut *self.game;
         if without_menu && g.screen == Screen::Playing {
-            g.pause_menu = !(g.has_singleplayer_server() && !g.is_published());
+            g.pause_menu = !g.has_singleplayer_server() || g.is_published();
             g.screen = Screen::Paused;
             g.capture(false);
             g.mining = None;

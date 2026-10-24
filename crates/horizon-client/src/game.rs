@@ -1741,10 +1741,10 @@ impl Game<'_> {
             let state = self.world.block(pos[0], pos[1], pos[2]);
             let f = self.res.facts().get(state);
             if !self.res.facts().is_air(state)
-                && !(f.fluid != Fluid::None
-                    && !f.waterlogged
-                    && &*f.name != "minecraft:kelp"
-                    && f.render_shape != horizon_client::blocks::RenderShape::Model)
+                && (f.fluid == Fluid::None
+                    || f.waterlogged
+                    || &*f.name == "minecraft:kelp"
+                    || f.render_shape == horizon_client::blocks::RenderShape::Model)
                 && !matches!(
                     &*f.name,
                     "minecraft:water" | "minecraft:lava" | "minecraft:bubble_column"
@@ -3510,7 +3510,7 @@ impl Game<'_> {
             return Ok(true);
         }
         // Block foods attempt placement before starting consumption.
-        if !on_block && !(info.block.is_some() && block_hit.is_some()) && self.start_eating(&info) {
+        if !on_block && (info.block.is_none() || block_hit.is_none()) && self.start_eating(&info) {
             return Ok(true);
         }
         // BoatItem.use also performs its own fluid/block raycast.

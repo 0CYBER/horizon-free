@@ -205,7 +205,9 @@ impl Game<'_> {
             return;
         };
         let [x, y, z] = p.position;
-        if !(x.is_finite() && y.is_finite() && z.is_finite())
+        if !x.is_finite()
+            || !y.is_finite()
+            || !z.is_finite()
             || !p.yaw.is_finite()
             || !p.pitch.is_finite()
         {

@@ -1,6 +1,6 @@
 //! Chat, the command registries and the per-world state behind commands
 //! (game rules, the world clock, difficulty), bound to the game.
-use super::{Dim, Game, Screen};
+use super::{Game, Screen};
 use horizon_client::{
     chat::{Chat, ChatAction, ChatScreen, Commands, SYSTEM_INDICATOR},
     command::Registries,
@@ -695,10 +695,7 @@ impl Game<'_> {
     /// Advance the overworld clock (ServerClockManager.tick) when
     /// `advance_time` allows it.
     pub(super) fn advance_clock(&mut self) {
-        if !self.ui.rules.bool("advance_time")
-            || self.ui.clock.paused
-            || self.dim == Dim::Nether && false
-        {
+        if !self.ui.rules.bool("advance_time") || self.ui.clock.paused {
             return;
         }
         let c = &mut self.ui.clock;

@@ -2777,8 +2777,8 @@ impl B {
                 let on_or_over = jumpable(here) || jumpable([here[0], here[1] - 1, here[2]]);
                 let still = m.is_baby()
                     && bed.is_some_and(jumpable)
-                    && !(!on_or_over && *time_left <= 0)
-                    && !(on_or_over && *jumps <= 0);
+                    && (on_or_over || *time_left > 0)
+                    && (!on_or_over || *jumps > 0);
                 if !still {
                     self.do_stop(m, cx);
                     return;
@@ -3171,7 +3171,7 @@ fn follow_trading_condition(m: &Mob, w: &MobWorld) -> bool {
     m.extra.flag2
         && m.alive()
         && !m.fluids.in_water
-        && !(m.hurt_time > 0)
+        && m.hurt_time <= 0
         && w.player
             .as_ref()
             .is_some_and(|p| m.distance_sqr(p.position) <= 16.0)

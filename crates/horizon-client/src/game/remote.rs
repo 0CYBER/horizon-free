@@ -544,7 +544,7 @@ impl Game<'_> {
     /// (`LivingEntity.forceAddEffect`): the effect replaces any of its kind.
     /// Other entities' effects are not shown.
     fn remote_effect(&mut self, p: &play::UpdateMobEffect) {
-        if !self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
+        if self.remote.as_ref().is_none_or(|r| r.entity_id != p.id) {
             return;
         }
         let Some(id) = self.remote_effect_id(p.effect) else {
@@ -4318,8 +4318,7 @@ impl Game<'_> {
     /// Keys with a multiplayer meaning; returns true when consumed.
     pub(super) fn remote_key(&mut self, key: KeyCode) -> Result<bool> {
         if self.screen != Screen::Playing {
-            if key == KeyCode::KeyE && self.screen == Screen::Inventory
-                || key == KeyCode::Escape && self.screen == Screen::Inventory
+            if (key == KeyCode::KeyE || key == KeyCode::Escape) && self.screen == Screen::Inventory
             {
                 self.remote_close_container();
                 self.screen = Screen::Playing;
