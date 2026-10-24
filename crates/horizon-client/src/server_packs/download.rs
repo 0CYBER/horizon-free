@@ -34,16 +34,18 @@ pub fn headers(name: &str, uuid: u128) -> Vec<(&'static str, String)> {
     ]
 }
 
-/// `DownloadProgressListener`, on the channel a download was given.
-#[derive(Clone, Copy, Debug)]
+/// `HttpUtil.DownloadProgressListener`, on the channel a batch was given.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Progress {
-    /// `requestStart`: a request began; its Content-Length when the
-    /// response said one.
-    RequestStart(Option<u64>),
-    /// `downloadedBytes`: the bytes this request has written so far.
+    /// `requestStart`: the batch's next request begins.
+    RequestStart,
+    /// `downloadStart`: the response came, with its Content-Length if it
+    /// said one.
+    DownloadStart(Option<u64>),
+    /// `downloadedBytes`: what this request has written so far.
     Bytes(u64),
-    /// `downloadFinished`: the batch ran, whatever it downloaded.
-    Finished,
+    /// `requestFinished`: whether it succeeded.
+    RequestFinished(bool),
 }
 
 type Job = (Vec<Request>, Vec<(&'static str, String)>, Sender<Progress>);
@@ -97,7 +99,9 @@ fn run(
     let mut batch = Batch::default();
     for request in requests {
         let id = horizon_protocol::crypto::uuid_string(request.id);
+        let _ = progress.send(Progress::RequestStart);
         let result = download_file(&dir.join(&id), request, headers, MAX_SIZE, progress);
+        let _ = progress.send(Progress::RequestFinished(result.is_ok()));
         // DownloadQueue.LogEntry, its fields in the codec's order.
         let mut entry = vec![
             ("id", serde_json::Value::from(id)),
@@ -137,7 +141,6 @@ fn run(
             Err(_) => batch.failed.push(request.id),
         }
     }
-    let _ = progress.send(Progress::Finished);
     batch
 }
 
@@ -225,6 +228,7 @@ pub fn download_file(
         .header("Content-Length")
         .and_then(|v| v.trim().parse::<u64>().ok());
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let _ = progress.send(Progress::DownloadStart(size));
     if let Some(size) = size
         && size > max_size
     {
@@ -232,7 +236,6 @@ pub fn download_file(
             "Filesize is bigger than maximum allowed (file is {size}, limit is {max_size})"
         ));
     }
-    let _ = progress.send(Progress::RequestStart(size));
     let mut input = response.into_reader();
     let mut report = |written: u64| {
         let _ = progress.send(Progress::Bytes(written));
@@ -473,6 +476,7 @@ mod tests {
         let dir = scratch();
         let (url, server) = serve("200 OK", b"zip".to_vec());
         let queue = Queue::open(dir.clone()).unwrap();
+        let (progress, events) = channel();
         let id = 0x5b2c_7a4e_1f3d_4c8b_9a6e_2d4f_8b1c_3e5a;
         queue.download(
             vec![Request {
@@ -481,7 +485,7 @@ mod tests {
                 sha1: None,
             }],
             Vec::new(),
-            channel().0,
+            progress,
         );
         let batch = loop {
             if let Some(b) = queue.finished().pop() {
@@ -494,6 +498,16 @@ mod tests {
             .join("5b2c7a4e-1f3d-4c8b-9a6e-2d4f8b1c3e5a")
             .join(sha1(b"zip"));
         assert_eq!(batch.downloaded, [(id, file)]);
+        // HttpUtil.downloadFile's listener calls, in order.
+        assert_eq!(
+            events.iter().collect::<Vec<_>>(),
+            [
+                Progress::RequestStart,
+                Progress::DownloadStart(Some(3)),
+                Progress::Bytes(3),
+                Progress::RequestFinished(true),
+            ]
+        );
         let log = fs::read_to_string(dir.join("log.json")).unwrap();
         let entry: serde_json::Value = serde_json::from_str(log.trim()).unwrap();
         assert_eq!(entry["id"], "5b2c7a4e-1f3d-4c8b-9a6e-2d4f8b1c3e5a");

@@ -5034,7 +5034,7 @@ impl Game<'_> {
             Screen::Playing | Screen::Options | Screen::Win => {}
         }
         self.draw_toasts(&mut batch);
-        self.draw_pack_toast(&mut batch);
+        self.draw_pack_toasts(&mut batch);
         self.remote_hud(&mut batch);
         self.draw_sign_editor(&mut batch);
         self.draw_book(&mut batch);
