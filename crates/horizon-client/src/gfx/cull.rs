@@ -108,14 +108,6 @@ fn fs_box_early(in: Box) -> @location(0) vec4<f32> {
     see(in.test);
     return vec4(0.0);
 }
-
-// fs_box_early against a Java shader pack's depth (`vs_box_gl`), in a pass
-// without colour targets.
-@fragment
-@early_depth_test(force)
-fn fs_box_early_depth(in: Box) {
-    see(in.test);
-}
 ";
 
 /// The test's depth texture binding (`InShader`), for the view it was made with.
@@ -126,8 +118,6 @@ struct DepthGroup {
 
 pub struct Cull {
     pipeline: wgpu::RenderPipeline,
-    /// [`Self::test_gl`]'s: a depth-only pass in OpenGL's layout.
-    gl_pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     group: Option<Group>,
     depth_test: DepthTest,
@@ -271,76 +261,55 @@ impl Cull {
             bind_group_layouts: &[Some(&layout), depth_layout.as_ref()],
             ..Default::default()
         });
-        // `gl`: a Java shader pack's depth (`test_gl`), in OpenGL's layout
-        // (y flipped, and with it the faces' winding; 0 near), without a
-        // colour target. In the shader (`InShader`): no colour target, and
-        // the depth attached read only (a pass needs an attachment), its
-        // test left to the shader.
-        let pipeline = |label, gl: bool| {
-            let color_target = [Some(wgpu::ColorTargetState {
-                format: color,
-                blend: None,
-                write_mask: wgpu::ColorWrites::empty(),
-            })];
-            let (fragment_entry, targets, depth_compare) = match (depth_test, gl) {
-                (DepthTest::Early, false) => (
-                    "fs_box_early",
-                    &color_target[..],
-                    wgpu::CompareFunction::GreaterEqual,
-                ),
-                (DepthTest::Early, true) => (
-                    "fs_box_early_depth",
-                    &[][..],
-                    wgpu::CompareFunction::LessEqual,
-                ),
-                (DepthTest::InShader, false) => ("fs_box", &[][..], wgpu::CompareFunction::Always),
-                (DepthTest::InShader, true) => {
-                    ("fs_box_gl", &[][..], wgpu::CompareFunction::Always)
-                }
-            };
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &module,
-                    entry_point: Some(if gl { "vs_box_gl" } else { "vs_box" }),
-                    compilation_options: Default::default(),
-                    buffers: &[],
-                },
-                primitive: wgpu::PrimitiveState {
-                    cull_mode: Some(wgpu::Face::Back),
-                    front_face: if gl {
-                        wgpu::FrontFace::Cw
-                    } else {
-                        wgpu::FrontFace::Ccw
-                    },
-                    ..Default::default()
-                },
-                // The pass's depth test (reversed in the world pass, OpenGL's
-                // in a Java pack's), without writes.
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: Some(false),
-                    depth_compare: Some(depth_compare),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: Default::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &module,
-                    entry_point: Some(fragment_entry),
-                    compilation_options: Default::default(),
-                    targets,
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
+        // In the shader (`InShader`): no colour target, and the depth
+        // attached read only (a pass needs an attachment), its test left to
+        // the shader.
+        let color_target = [Some(wgpu::ColorTargetState {
+            format: color,
+            blend: None,
+            write_mask: wgpu::ColorWrites::empty(),
+        })];
+        let (fragment_entry, targets, depth_compare) = match depth_test {
+            DepthTest::Early => (
+                "fs_box_early",
+                &color_target[..],
+                wgpu::CompareFunction::GreaterEqual,
+            ),
+            DepthTest::InShader => ("fs_box", &[][..], wgpu::CompareFunction::Always),
         };
-        let gl_pipeline = pipeline("Section culling, OpenGL layout", true);
-        let pipeline = pipeline("Section culling", false);
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Section culling"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs_box"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            // The world pass's reversed depth test, without writes.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(depth_compare),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some(fragment_entry),
+                compilation_options: Default::default(),
+                targets,
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         Self {
             pipeline,
-            gl_pipeline,
             layout,
             group: None,
             depth_test,
@@ -583,51 +552,6 @@ impl Cull {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, group, &[]);
         pass.set_bind_group(1, depth, &[]);
-        pass.draw(0..36, 0..self.test_data.len() as u32);
-    }
-
-    /// [`Self::test`] for a Java shader pack that draws the terrain
-    /// (`gfx/java_stages.rs`): in a pass of its own against `depth`, the
-    /// pack's depth after phase 1 in OpenGL's layout (y up, 0 near), attached
-    /// read only, and also read by the shader where the test runs there
-    /// (`InShader`).
-    pub fn test_gl(
-        &self,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-        depth: &wgpu::TextureView,
-    ) {
-        let Some(Group { group, .. }) = &self.group else {
-            return;
-        };
-        if self.test_data.is_empty() {
-            return;
-        }
-        let depth_group = self.depth_layout.as_ref().map(|layout| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Section culling depth, Java shader pack"),
-                layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(depth),
-                }],
-            })
-        });
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Section culling, Java shader pack"),
-            color_attachments: &[],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: depth,
-                depth_ops: None,
-                stencil_ops: None,
-            }),
-            ..Default::default()
-        });
-        pass.set_pipeline(&self.gl_pipeline);
-        pass.set_bind_group(0, group, &[]);
-        if let Some(depth) = &depth_group {
-            pass.set_bind_group(1, depth, &[]);
-        }
         pass.draw(0..36, 0..self.test_data.len() as u32);
     }
 
