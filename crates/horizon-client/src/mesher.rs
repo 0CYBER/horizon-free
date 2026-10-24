@@ -5,6 +5,7 @@
 //! follow `FluidRenderer` (see `fluid`).
 mod fluid;
 mod lighting;
+mod sides;
 use crate::{
     assets::{Assets, RenderAssets},
     biome::Biomes,
@@ -20,6 +21,7 @@ use horizon_world::{
     fluid::{FluidKind, FluidState},
     registry::BlockStateId,
 };
+pub use sides::Sides;
 use std::sync::Arc;
 
 /// An entity, item and effect vertex (the entity pipelines), with a face
@@ -114,6 +116,9 @@ mod vertex_tests {
 }
 pub struct SectionMesh {
     pub solid: Vec<TerrainVertex>,
+    /// The buckets `solid` is sorted in by the side its quads face
+    /// (`sort_solid`; empty until then).
+    pub sides: Sides,
     pub translucent: Vec<TerrainVertex>,
     /// VisGraph: bit `a * 6 + b` is set when faces `a` and `b` (Direction
     /// order) are connected through non-opaque blocks.
@@ -127,10 +132,18 @@ impl Default for SectionMesh {
     fn default() -> Self {
         Self {
             solid: Vec::new(),
+            sides: Sides::default(),
             translucent: Vec::new(),
             visibility: ALL_VISIBLE,
             block_entities: Vec::new(),
         }
+    }
+}
+impl SectionMesh {
+    /// Sorts the solid quads by the side they face, for the renderer to
+    /// leave out those facing away from the eye (`sides`).
+    pub fn sort_solid(&mut self) {
+        self.sides = sides::sort(&mut self.solid);
     }
 }
 pub const ALL_VISIBLE: u64 = (1 << 36) - 1;
@@ -798,6 +811,7 @@ impl Mesher<'_> {
                 }
             }
         }
+        out.sort_solid();
         out
     }
     /// `BlockColors` tint source `index`, or `None` for an untinted (-1) layer.
