@@ -639,6 +639,58 @@ impl ShaderProperties {
     }
 }
 
+/// `block.properties` (`block.<id>=<blocks>`), preprocessed as
+/// `shaders.properties` is: each block's id by its name without namespace
+/// (`oak_leaves`). A block listed with a state (`grass_block:snowy=true`)
+/// takes that id only when no entry names it without one; numeric ids
+/// (before 1.13) are skipped.
+pub fn block_ids(
+    text: &str,
+    env: &Environment,
+    options: &OptionSet,
+    values: &OptionValues,
+) -> Result<BTreeMap<String, i32>, String> {
+    let properties = Properties::parse(&preprocess(text, env, options, values)?);
+    let mut plain = BTreeMap::new();
+    let mut with_state = BTreeMap::new();
+    for (key, value) in properties.iter() {
+        let Some(Ok(id)) = key.strip_prefix("block.").map(str::parse::<i32>) else {
+            continue;
+        };
+        for entry in value.split_whitespace() {
+            let entry = entry.strip_prefix("minecraft:").unwrap_or(entry);
+            if entry.contains(':') && entry.split(':').nth(1).is_some_and(|s| s.contains('=')) {
+                let name = entry.split(':').next().unwrap_or(entry);
+                with_state.entry(name.to_owned()).or_insert(id);
+            } else if !entry.chars().all(|c| c.is_ascii_digit()) && !entry.contains('=') {
+                plain.insert(entry.to_owned(), id);
+            }
+        }
+    }
+    for (name, id) in with_state {
+        plain.entry(name).or_insert(id);
+    }
+    Ok(plain)
+}
+
+/// The block a block sprite (`minecraft:block/oak_log_top`) belongs to in
+/// `ids` ([`block_ids`]): the block named like it, else the longest one its
+/// name starts with followed by `_` (`oak_log`, `water` for `water_still`).
+pub fn sprite_block_id(sprite: &str, ids: &BTreeMap<String, i32>) -> Option<i32> {
+    let name = sprite.rsplit(['/', ':']).next()?;
+    if let Some(&id) = ids.get(name) {
+        return Some(id);
+    }
+    let mut end = name.len();
+    while let Some(cut) = name[..end].rfind('_') {
+        if let Some(&id) = ids.get(&name[..cut]) {
+            return Some(id);
+        }
+        end = cut;
+    }
+    None
+}
+
 /// Iris's `BooleanParser`: options joined by `!`, `&&`, `||` and brackets,
 /// `&&` binding tighter. `true`/`1` and `false`/`0` are literals; a name that
 /// isn't a boolean option is true; a malformed expression is true.
@@ -755,6 +807,42 @@ mod tests {
         a.bools.values().for_each(|o| set.add_bool(o));
         a.strings.values().for_each(|o| set.add_string(o));
         set
+    }
+
+    /// `block.properties` as Chocapic13' writes it, and sprites matched to
+    /// its blocks.
+    #[test]
+    fn block_ids_and_the_sprites_of_their_blocks() {
+        let text = "\
+#if MC_VERSION >= 11300
+block.10001= minecraft:wheat minecraft:short_grass
+block.10003 = minecraft:oak_leaves \\
+  minecraft:vine
+block.10006 = minecraft:grass_block:snowy=true minecraft:snow
+block.8 = minecraft:water
+block.2 = minecraft:grass_block
+#else
+block.10001= 6 31
+#endif
+layer.translucent=minecraft:glass
+";
+        let env = Environment {
+            defines: vec![("MC_VERSION".into(), "260300".into())],
+        };
+        let ids = block_ids(text, &env, &OptionSet::default(), &OptionValues::default()).unwrap();
+        assert_eq!(ids.get("vine"), Some(&10003));
+        // The stateless entry wins over the snowy one.
+        assert_eq!(ids.get("grass_block"), Some(&2));
+        assert!(!ids.contains_key("6") && !ids.contains_key("glass"));
+        for (sprite, id) in [
+            ("minecraft:block/oak_leaves", Some(10003)),
+            ("minecraft:block/water_still", Some(8)),
+            ("minecraft:block/grass_block_top", Some(2)),
+            ("minecraft:block/wheat_stage7", Some(10001)),
+            ("minecraft:block/stone", None),
+        ] {
+            assert_eq!(sprite_block_id(sprite, &ids), id, "{sprite}");
+        }
     }
 
     #[test]

@@ -31,12 +31,13 @@ def compile_oracle(build, oracle_name, jars, libraries, java_major):
 
 
 def build_probe(build, example):
-    run_logged(['cargo', 'build', '--locked', '-p', 'horizon-client', '--example', example],
+    """Build the horizon-client probe binary; returns the command that runs probe `example`."""
+    run_logged(['cargo', 'build', '--locked', '-p', 'horizon-client', '--example', 'probe'],
                build, 'compile-rust-' + example, env=dict(os.environ, CARGO_BUILD_JOBS='3'))
     import json
     metadata = json.loads(subprocess.check_output(
         ['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1'], cwd=lab.ROOT))
-    return Path(metadata['target_directory']) / 'debug/examples' / example
+    return [Path(metadata['target_directory']) / 'debug/examples/probe', example]
 
 
 def java_run(build, classes, dependencies, main_class, args, name, jvm=()):
@@ -64,13 +65,13 @@ def differential(name, oracle, probe, make_input, scope, sources=(), expected_li
     all_sources = [Path(__file__).resolve(), lab.ROOT / 'tools/oracle_harness.py', lab.ROOT / 'tools/test_rust_parity.py',
                    lab.ROOT / 'tools/lab.py', oracle_path, lab.ROOT / 'Cargo.toml', lab.ROOT / 'Cargo.lock',
                    lab.ROOT / 'crates/horizon-client/Cargo.toml', lab.ROOT / 'crates/horizon-client/src/lib.rs',
-                   lab.ROOT / f'crates/horizon-client/examples/{probe}.rs', *map(Path, sources)]
+                   lab.ROOT / f'crates/horizon-client/examples/probe/{probe}.rs', *map(Path, sources)]
     tested = base.source_hashes(all_sources)
     input_path, units = make_input(build)
     input_hash = lab.digest(input_path, 'sha256') if input_path.is_file() else None
     classes, dependencies, _ = compile_oracle(build, oracle, jars, libraries, lock['minecraft']['java_major'])
-    binary = build_probe(build, probe)
-    run_logged([binary, input_path, build / 'rust.txt'], build, 'rust')
+    command = build_probe(build, probe)
+    run_logged([*command, input_path, build / 'rust.txt'], build, 'rust')
     java_run(build, classes, dependencies, oracle, [input_path, build / 'client.txt'], 'client')
     try:
         matched = base.compare(build / 'client.txt', build / 'rust.txt')

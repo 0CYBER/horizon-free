@@ -24,7 +24,8 @@ Both are off by default. With no pack selected the renderer draws exactly what i
 | Java shader packs: full-screen pass plan (`horizon_shaderpack::pipeline`: `DRAWBUFFERS`/`RENDERTARGETS`, `colortexN` formats and clearing, buffer flips, `blend.*`) | done: planned for the three test packs |
 | Java shader packs: full-screen passes drawn (`java_pack.rs`, `gfx/java_stages.rs`: `begin`, `prepare`, `deferred*`, `composite*`, `final` over Horizon's world) | first slice: BSL and Complementary run (below); `depthtex1`/`depthtex2` before translucent geometry, `blend.*`, PNG `texture.<stage>.*` and `texture.noise` |
 | Java shader packs: custom uniforms (`horizon_shaderpack::uniforms`), `sunPathRotation`, `clouds`/`sun`/`moon`, eye light, `wetness` | done for the full-screen passes (below) |
-| Java shader packs: `gbuffers_*`, `shadow`, `.dat` and resource-location textures, images, compute | planned |
+| Java shader packs: `gbuffers_terrain`, `gbuffers_water` (`gfx/java_terrain.rs`: Horizon's terrain fed to the pack's programs) | first slice: MakeUp Ultra Fast, Chocapic13' and BSL draw their own terrain and water (below) |
+| Java shader packs: other `gbuffers_*`, `shadow`, `.dat` and resource-location textures, images, compute | planned |
 
 ## How the renderer draws a frame today
 
@@ -396,6 +397,25 @@ Picking one translates every planned pass of each dimension folder (`java_pack.r
 4. `final` draws into a target that replaces the world's picture, where Horizon packs' `composite` output goes: the
    hand, menus and HUD are drawn over it.
 
+When the pack has a `gbuffers_terrain` (or `textured_lit`, `textured`, `basic`, the program Iris falls back to), the
+pack draws the terrain itself (`gfx/java_terrain.rs`): Horizon's world pass skips its own solid and translucent
+terrain, then
+
+- at step 2, after Horizon's sky, entities and the rest enter `colortex0` and depth, the pack's terrain program draws
+  every visible section into its `RENDERTARGETS` (the side the next pass reads), tested against that depth; the
+  depth is then copied into `depthtex0` and `depthtex1`;
+- before the first `composite`, as Iris does, `gbuffers_water` (or the terrain program) draws the translucent
+  layer with the pack's `blend.*` or vanilla's blending; the depth goes into `depthtex0` only.
+
+The pack's vertex program reads Horizon's own terrain vertices (the arena pages, instanced or flat draws): a glue
+function written before `main` decodes them into Iris's attributes (`vaPosition`/`gl_Vertex` relative to the camera,
+`gl_Color` with vanilla's face shading undone, `gl_MultiTexCoord0/1`, the normal and `at_tangent` from the quad's
+four corners, `mc_midTexCoord`, `at_midBlock`), and `mc_Entity.x` is the block's id from the pack's
+`block.properties`, matched to the sprite's block by name. `gtexture`/`texture` is a 2D atlas built from Horizon's
+sprite arrays (animated sprites copied in each frame), `lightmap` is Horizon's lightmap with Iris's texture matrix,
+and fragments under alpha 0.1 are discarded (`alphaTestRef`). `RGBA16` targets are 16-bit unorm where the GPU can
+render them (Chocapic13' packs its G-buffer into them; half floats broke it).
+
 What makes Horizon look like OpenGL to the pack:
 
 - **Layout.** The translator ends every vertex shader by flipping `gl_Position.y` and moving depth from `[-w, w]` to
@@ -426,12 +446,15 @@ What makes Horizon look like OpenGL to the pack:
 
 Measured on the Mac mini (M4 Pro) with the packs' default options: BSL v10.1.8 and Complementary Reimagined r5.9.3
 grade and light Horizon's world as their post-processing would. Sildur's Vibrant v2.02 draws only its sky: its
-`deferred` reads the albedo `gbuffers_*` write to `colortex4`. Without `gbuffers_*` and `shadow`, no pack has its
-shadows, water or sky look yet; Distant Horizons' and Voxy's depth read as far. Horizon's world goes into the target
-the pack's `gbuffers_terrain` (or the program Iris falls back to) draws to first: `colortex0` for most packs,
-`colortex1` for MakeUp. Not supported yet: images and compute (`.csh`; a pack that needs them doesn't load),
-mipmapped targets (`colortexNMipmapEnabled` is read but ignored), `.dat` and resource-location custom textures (PNG
-files in the pack only); shadow matrices are identity.
+`deferred` reads the albedo `gbuffers_*` write to `colortex4` (not checked again since the terrain programs run).
+Without the other `gbuffers_*` and `shadow`, no pack has its shadows or sky look yet; Distant Horizons' and Voxy's
+depth read as far. Horizon's world goes into the target the pack's `gbuffers_terrain` (or the program Iris falls back
+to) draws to first: `colortex0` for most packs, `colortex1` for MakeUp. Not supported yet: images and compute (`.csh`;
+a pack that needs them doesn't load), mipmapped targets (`colortexNMipmapEnabled` is read but ignored), `.dat` and
+resource-location custom textures (PNG files in the pack only); shadow matrices are identity. With the pack's terrain:
+entities, the sky, the hand, weather and clouds are still Horizon's (in that first target only), GPU occlusion culling
+is off, block ids come from sprite names rather than block states, distant (LOD) terrain doesn't repeat its textures,
+and only the overworld has been checked.
 
 ### Compatibility
 
@@ -439,19 +462,19 @@ Tested on 2026-10-22 on the Mac mini (M4 Pro, Metal) with each pack's default op
 the authors' pages (dev-only test inputs, kept outside the repository). "Loads" means every pass the pack enables for
 the overworld, Nether and End is preprocessed, translated and validated, as the game does when the pack is picked
 (`java_pack::tests::real_packs_load` with `HORIZON_TEST_SHADERPACKS`); "drawn" means it was also picked in the game
-and screenshotted. Only full-screen passes run (above), so no pack has its own terrain, water, shadows or sky yet.
-The MakeUp, Chocapic13' and Photon rows are from 2026-10-23, on Metal and on Vulkan (RTX 4080).
+and screenshotted. Full-screen passes, `gbuffers_terrain` and `gbuffers_water` run (above); no pack has its own
+shadows, entities or sky yet.
 
 | Pack | Version | Result | First thing that stops it |
 | --- | --- | --- | --- |
-| BSL | v10.1.8 | drawn: 26 passes | |
+| BSL | v10.1.8 | drawn: 26 passes and its terrain and water programs | |
 | Complementary Reimagined | r5.9.3 | drawn: 27 passes | |
 | Complementary Unbound | r5.8 | loads: 27 passes | |
 | Sildur's Vibrant Extreme | 2.02 | drawn: 18 passes, only its sky (above) | |
 | Steadfast | 0.8.0 | drawn: 3 passes | |
-| MakeUp Ultra Fast | 9.6 | drawn: 6 passes, its fog, light shafts and grade over Horizon's world | |
-| Chocapic13' | V9 High | drawn: 16 passes; its default TAA upscaling shrinks the world in its `gbuffers_*` vertex programs, which don't run, so the picture is magnified 1/0.7: turn TAA Upscaling off in its settings | |
-| Photon | v1.4 | loads: 27 passes; draws black: it lights the scene from the G-buffer its `gbuffers_*` write | |
+| Chocapic13' | V9 High | drawn: 16 passes and its terrain and water programs | |
+| MakeUp Ultra Fast | 9.6 | drawn: 6 passes and its terrain and water programs | |
+| Photon | v1.4 | loads: 27 passes and its terrain and water programs; draws black | its sky and light come from a compute pass and `.dat` look-up tables, not loaded yet |
 | Bliss | 2.1.2 | fails | `world0/composite1.fsh`: a vector component passed to an `inout` parameter (WGSL can't point at one) |
 | Bloop | 1.8.0-Alpha-3 | fails | `world0/prepare1.fsh`: `mat2(vec4)` and other constructors naga's GLSL front end refuses |
 | Noble | v1.9.9 | fails (Apple and NVIDIA) | `world0/deferred4.vsh`: a `vec3[9][9]` varying (nested arrays between stages) |
@@ -492,9 +515,9 @@ What the translator does for these packs, as Iris (JCPP and its GLSL transformer
 3. **Full-screen programs**: `deferred*`, `composite*`, `final` with `colortex0..15` (formats from the pack),
    `depthtex0..2`, `noisetex` and the uniforms (most are already computed for the world shaders). This alone runs
    Sildur's and BSL post-processing over Horizon's own world.
-4. **`gbuffers_terrain`, `gbuffers_water`, `gbuffers_sky*`**: Horizon's terrain vertices extended with Iris's
-   attributes (`mc_Entity` from `block.properties`, `mc_midTexCoord`, `at_tangent`, lightmap), a second set of
-   terrain pipelines writing the pack's render targets.
+4. **`gbuffers_terrain`, `gbuffers_water`** (done, above), **`gbuffers_sky*`**: Horizon's terrain vertices decoded
+   into Iris's attributes (`mc_Entity` from `block.properties`, `mc_midTexCoord`, `at_tangent`, lightmap), a second
+   set of terrain pipelines writing the pack's render targets.
 5. **Entities, block entities, hand, weather, clouds, particles** `gbuffers_*`.
 6. **Shadow pass**: terrain and entities from the sun into `shadowtex0/1` and `shadowcolor0/1`, culled from the
    light's view, with the pack's distortion.

@@ -4,7 +4,7 @@
 Builds a scene of slabs, stairs, snow layers, trapdoors, lanterns, glass,
 leaves, water and glowstone in a fresh vanilla world, lets the vanilla light
 engine settle, stops the server so the SkyLight/BlockLight arrays are saved,
-then relights every saved chunk with `examples/light_parity` and requires every
+then relights every saved chunk with `examples/probe/light_parity` and requires every
 value to agree. The example also replays block edits through the incremental
 `light::relight` and checks them against a full relight.
 
@@ -92,7 +92,7 @@ def main():
         dimension = run / 'world'
     for extra in (['--chunks', '0', '0', '2', '3'], ['--incremental', '100']):
         status = subprocess.run(['cargo', 'run', '--quiet', '--profile', 'fast', '-p', 'horizon-client',
-                                 '--example', 'light_parity', '--', str(RESOURCES), str(dimension), *extra],
+                                 '--example', 'probe', '--', 'light_parity', str(RESOURCES), str(dimension), *extra],
                                 cwd=ROOT).returncode
         if status:
             sys.exit('light mismatch against vanilla')

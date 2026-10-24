@@ -110,7 +110,7 @@ def main():
     counts={key:len(value) for key,value in bundle.items()};bundle['rules'].update(synthetic_rules())
     for name,value in bundle.items():(build/(name+'.json')).write_text(json.dumps(value,separators=(',',':')),encoding='utf-8')
     folder=lab.ROOT/'mods/horizon/src/test/java/dev/horizonlab/parity';oracles=[folder/(name+'.java') for name in ['VanillaMaterialStageOracle','VanillaMaterialConditionOracle','VanillaAnchorOracle','VanillaBiomeTemperatureOracle','VanillaHeightmapOracle','VanillaBiomeExport']]
-    sources=[*oracles,Path(__file__),*[lab.ROOT/'tools'/name for name in ['test_material_condition_parity.py','test_biome_temperature_parity.py','test_worldgen_parity.py','test_rust_parity.py','lab.py']],lab.ROOT/'Cargo.toml',lab.ROOT/'Cargo.lock',lab.ROOT/'crates/horizon-core/Cargo.toml',lab.ROOT/'crates/horizon-world/Cargo.toml',*sorted((lab.ROOT/'crates/horizon-core/src').rglob('*.rs')),*sorted((lab.ROOT/'crates/horizon-world/src').rglob('*.rs')),lab.ROOT/'crates/horizon-world/examples/material_stage_fixture.rs']
+    sources=[*oracles,Path(__file__),*[lab.ROOT/'tools'/name for name in ['test_material_condition_parity.py','test_biome_temperature_parity.py','test_worldgen_parity.py','test_rust_parity.py','lab.py']],lab.ROOT/'Cargo.toml',lab.ROOT/'Cargo.lock',lab.ROOT/'crates/horizon-core/Cargo.toml',lab.ROOT/'crates/horizon-world/Cargo.toml',*sorted((lab.ROOT/'crates/horizon-core/src').rglob('*.rs')),*sorted((lab.ROOT/'crates/horizon-world/src').rglob('*.rs')),lab.ROOT/'crates/horizon-world/examples/probe/material_stage_fixture.rs']
     tested_sources=base.source_hashes(sources);classes=build/'classes';classes.mkdir(exist_ok=True)
     def run(command,name):
         with (build/(name+'.log')).open('w',encoding='utf-8') as log:base.run(list(map(str,command)),stdout=log,stderr=subprocess.STDOUT)
@@ -132,7 +132,7 @@ def main():
         f['top_queries']=top_queries(f);f['carving']=carving_fixture(f,facts)
     inputs=build/'inputs.txt';inputs.write_text(''.join(json.dumps(f,separators=(',',':'))+'\n' for f in fixtures),encoding='utf-8')
     fixture_paths=[inputs,*preset_exports,build/'facts-client.json',build/'facts-server.json',*[build/(name+'.json') for name in bundle]];tested_fixtures=base.source_hashes(fixture_paths)
-    run(['cargo','build','--release','-p','horizon-world','--example','material_stage_fixture'],'compile-rust');metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],cwd=lab.ROOT,text=True));binary=Path(metadata['target_directory'])/'release/examples'/('material_stage_fixture.exe' if os.name=='nt' else 'material_stage_fixture');run([binary,build],'rust')
+    run(['cargo','build','--release','-p','horizon-world','--example','probe'],'compile-rust');metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],cwd=lab.ROOT,text=True));binary=Path(metadata['target_directory'])/'release/examples'/('probe.exe' if os.name=='nt' else 'probe');run([binary,'material_stage_fixture',build],'rust')
     with (build/'rust.txt').open() as stream:
         if any((line.startswith('surface ') or line.startswith('top ') or line.startswith('carving ') or line.startswith('generatedcarving ')) and line.endswith(' error\n') for line in stream):raise AssertionError('valid surface fixture failed; inspect private Rust log')
     references=[]

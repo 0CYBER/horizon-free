@@ -589,6 +589,7 @@ impl Settings {
             height_focused: f64::from(self.chat_height_focused),
             height_unfocused: f64::from(self.chat_height_unfocused),
             line_spacing: f64::from(self.chat_line_spacing),
+            colors: self.chat_colors,
         }
     }
 }

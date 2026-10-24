@@ -789,7 +789,7 @@ def main():
     if args.sprint_input:helpers.append(oracle.with_name('VanillaSprintInputOracle.java'))
     sources=[Path(__file__),lab.ROOT/'tools/test_native_client.py',lab.ROOT/'tools/test_rust_parity.py',lab.ROOT/'tools/lab.py',
              lab.ROOT/'tools/prepare_native_client.py',oracle,*helpers,lab.ROOT/'Cargo.toml',lab.ROOT/'Cargo.lock',
-             lab.ROOT/'crates/horizon-client/examples/scene_motion_probe.rs']
+             lab.ROOT/'crates/horizon-client/examples/probe/scene_motion_probe.rs']
     for crate in ['horizon-core','horizon-world','horizon-assets','horizon-client']:
         sources += [lab.ROOT/'crates'/crate/'Cargo.toml',*sorted((lab.ROOT/'crates'/crate/'src').rglob('*.rs'))]
     if args.sprint_input:sources.append(lab.ROOT/'tools/test_model_baking_parity.py')
@@ -807,16 +807,16 @@ def main():
     damage_dir=build/'damage';damage_dir.mkdir(exist_ok=True)
     for target, source in [('types.json','damage-types.json'),('tags.json','damage-tags.json')]:
         (damage_dir/target).write_bytes((resources/source).read_bytes())
-    run(['cargo','build','--locked','-p','horizon-client','--example','scene_motion_probe'],'compile-rust')
+    run(['cargo','build','--locked','-p','horizon-client','--example','probe'],'compile-rust')
     metadata=json.loads(subprocess.check_output(['cargo','metadata','--locked','--no-deps','--format-version','1'],cwd=lab.ROOT))
-    binary=Path(metadata['target_directory'])/'debug/examples'/('scene_motion_probe.exe' if os.name=='nt' else 'scene_motion_probe')
-    run([binary,resources,build,'--describe'],'describe')
+    binary=Path(metadata['target_directory'])/'debug/examples'/('probe.exe' if os.name=='nt' else 'probe')
+    run([binary,'scene_motion_probe',resources,build,'--describe'],'describe')
     references=[]
     for side,jar in jars.items():
         run(['java','-Xmx768M','-cp',os.pathsep.join([str(classes),str(jar),dependencies]),
              'dev.horizonlab.parity.VanillaSceneMotionOracle',side,build,resources],side)
         replay_hash=lab.digest(build/('inputs-'+side+'.txt'),'sha256')
-        run([binary,resources,build,side],'rust-'+side)
+        run([binary,'scene_motion_probe',resources,build,side],'rust-'+side)
         if replay_hash!=lab.digest(build/('inputs-'+side+'.txt'),'sha256'):raise AssertionError('Identity replay changed')
         matched=base.compare(build/(side+'.txt'),build/('rust-'+side+'.txt'))
         if matched!=expected_lines:raise AssertionError('Incomplete motion output')
