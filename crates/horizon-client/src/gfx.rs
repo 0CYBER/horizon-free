@@ -35,7 +35,7 @@ fn entity_shader() -> String {
 mod entity_batch;
 mod weather;
 use entity_batch::EntityBatch;
-pub use entity_batch::WATER_MASK_OVERLAY;
+pub use entity_batch::{SHADOW_OVERLAY, WATER_MASK_OVERLAY};
 
 /// Window.getAppropriateLineWidth, in framebuffer pixels.
 pub fn outline_width(width: u32) -> f32 {
@@ -388,6 +388,7 @@ pub struct Renderer {
     entity_pipeline: wgpu::RenderPipeline,
     weather: weather::Weather,
     crumbling_pipeline: wgpu::RenderPipeline,
+    shadow_blob_pipeline: wgpu::RenderPipeline,
     /// `RenderPipelines.WATER_MASK`: depth writes only, no colour.
     water_mask_pipeline: wgpu::RenderPipeline,
     cloud_pipeline: wgpu::RenderPipeline,
@@ -1846,6 +1847,26 @@ impl Renderer {
             CRUMBLING_BLEND,
             false,
         );
+        // RenderPipelines.ENTITY_SHADOW: translucent, depth test without
+        // writes. The quads lie on the block tops like vanilla's, but the
+        // terrain under them snaps to the subpixel grid at other vertices, so
+        // at a slant their depths differ by up to 1/256 of a pixel's depth
+        // slope and whole shadows failed the test. The bias covers that and
+        // the rounding, and stays below the 0.001 a model's feet sit higher
+        // (1/27 of a pixel's slope at the 16-block shadow range in 720p).
+        let shadow_blob_pipeline = entity_pipeline(
+            "Entity shadows",
+            None,
+            false,
+            wgpu::CompareFunction::GreaterEqual,
+            wgpu::DepthBiasState {
+                constant: 16,
+                slope_scale: 0.015,
+                clamp: 0.0,
+            },
+            alpha_blend,
+            false,
+        );
         let cloud_pipeline = entity_pipeline(
             "Clouds",
             Some(wgpu::Face::Back),
@@ -2365,6 +2386,7 @@ impl Renderer {
             entity_pipeline,
             weather,
             crumbling_pipeline,
+            shadow_blob_pipeline,
             water_mask_pipeline,
             cloud_pipeline,
             cloud_mesh: Default::default(),
@@ -3843,6 +3865,7 @@ impl Renderer {
             crumbling_quads,
             translucent_crumbling_quads,
             water_mask_quads,
+            shadow_quads,
         ] = self.entity_batch.update(
             frame.entities,
             frame.additive,
@@ -3850,8 +3873,11 @@ impl Renderer {
             frame.see_through,
         );
         let weather_quads = frame.weather.len() as u32 / 4;
-        let world_quads =
-            entity_quads + crumbling_quads + translucent_crumbling_quads + water_mask_quads;
+        let world_quads = entity_quads
+            + crumbling_quads
+            + translucent_crumbling_quads
+            + water_mask_quads
+            + shadow_quads;
         let cloud_quads = if let Some(input) = &frame.clouds {
             let (rebuilt, uniform) =
                 crate::spans::time("clouds", || self.cloud_mesh.prepare(input));
@@ -4322,6 +4348,17 @@ impl Renderer {
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(0..crumbling_quads * 6, (entity_quads * 4) as i32, 0..1);
+                pass.set_bind_group(0, &self.group, &[]);
+            }
+            if shadow_quads > 0 {
+                pass.set_pipeline(&self.shadow_blob_pipeline);
+                pass.set_bind_group(0, &self.entity_group, &[]);
+                pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                pass.draw_indexed(
+                    0..shadow_quads * 6,
+                    ((world_quads - shadow_quads) * 4) as i32,
+                    0..1,
+                );
                 pass.set_bind_group(0, &self.group, &[]);
             }
             // BoatRenderer's water patch (RenderTypes.waterMask): depth only,
@@ -5053,14 +5090,14 @@ mod tests {
                 normal: [0; 4],
             }; 4]
         };
-        let entities: Vec<_> = [(0, 0), (4, 1), (11, 2), (7, 3), (4, 4), (12, 7)]
+        let entities: Vec<_> = [(0, 0), (14, 9), (4, 1), (11, 2), (7, 3), (4, 4), (12, 7)]
             .into_iter()
             .flat_map(|(layer, id)| quad(layer, id))
             .collect();
         let mut batch = super::EntityBatch::default();
         let counts = batch.update(&entities, &quad(3, 5), &quad(0, 6), &quad(0, 8));
         let vertices = &batch.combined;
-        assert_eq!(counts, [4, 1, 1, 0]);
+        assert_eq!(counts, [4, 1, 1, 0, 1]);
         assert_eq!(
             vertices
                 .as_chunks::<4>()
@@ -5068,7 +5105,7 @@ mod tests {
                 .iter()
                 .map(|q| q[0].light)
                 .collect::<Vec<_>>(),
-            [0, 1, 3, 4, 2, 7, 5, 6, 8]
+            [0, 1, 3, 4, 2, 7, 9, 5, 6, 8]
         );
     }
     #[test]
