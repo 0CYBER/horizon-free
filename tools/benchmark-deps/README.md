@@ -5,6 +5,5 @@ and `tools/server_bench.py` (Fabric + Lithium). `tools/runtime.py` downloads and
 the pinned Fabric libraries. Game files still come from the user's own Minecraft install.
 
 `mods.lock.json` pins Sodium, Lithium, FerriteCore, ImmediatelyFast and Fabric API with
-publisher URLs and hashes. `fabric.lock.json` pins the loader and its libraries. These
-are developer benchmark inputs, not distributable Horizon packs. The former Horizon
-Java optimization mod and its pack profiles are retired; see `docs/java-packs.md`.
+publisher URLs and hashes. `fabric.lock.json` pins the loader and its libraries.
+These are developer benchmark inputs.

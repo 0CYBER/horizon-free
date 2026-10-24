@@ -178,5 +178,4 @@ To be written as `docs/porting-from-fabric.md` once API 0.2 lands:
   networking.
 - Modrinth's most-downloaded Fabric mods, for the porting list.
 - Horizon's Fabric benchmark instrumentation (`mods/horizon/src/bench/`) remains
-  a developer tool for Java comparisons. The former Java optimization mod is
-  [retired](../java-packs.md); the parity oracles remain in `mods/horizon/src/test/`.
+  a developer tool for Java comparisons. The parity oracles live in `mods/horizon/src/test/`.

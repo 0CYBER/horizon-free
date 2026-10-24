@@ -48,4 +48,4 @@ To play, use [the launcher](../launcher/README.md); the project site is [playhor
 
 ## The earlier Java track (no longer developed)
 
-- [Retired Java performance packs](java-packs.md); [JFR analysis for Java comparisons](profiling.md).
+- [JFR analysis for Java comparisons](profiling.md).
