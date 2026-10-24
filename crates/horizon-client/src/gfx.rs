@@ -177,8 +177,6 @@ struct SectionGpu {
     start: u64,
     solid: u32,
     translucent: u32,
-    /// The solid quads by facing: back-facing groups are skipped.
-    faces: crate::mesher::FaceGroups,
     sort: translucency::SortState,
     sorted_indices: Option<(u32, u64)>,
     /// Its id for flat draws (`flat::Flat::add`), when they are on.
@@ -2751,7 +2749,6 @@ impl Renderer {
             start,
             solid,
             translucent,
-            faces: mesh.faces,
             sort: translucency::SortState::new(
                 mesh.translucent
                     .as_chunks::<4>()
@@ -3621,10 +3618,6 @@ impl Renderer {
         // as one list of indirect draws over the section arena.
         self.draws.clear();
         self.draw_pages.clear();
-        // The eye, camera-relative: view bobbing moves it off the camera.
-        let eye = (frame.bob * crate::camera::view_matrix(frame.yaw, frame.pitch))
-            .inverse()
-            .transform_point3(Vec3::ZERO);
         // A Java pack that draws the terrain (`gfx/java_terrain.rs`): the
         // world pass leaves it out, and occlusion culling tests against the
         // pack's depth (`Cull::test_gl`).
@@ -3655,14 +3648,11 @@ impl Renderer {
             };
             let start = draws.len();
             let instances = u32::from(first_phase);
-            let mut indices = 0;
-            // Only the solid groups that can face the eye.
-            s.faces.ranges(eye - Vec3::from(v.origin), |first, quads| {
-                let first = s.start + u64::from(first) * 4;
-                draws.push([quads * 6, instances, 0, first as u32, i as u32]);
+            let indices = s.solid * 6;
+            if indices > 0 {
+                draws.push([indices, instances, 0, s.start as u32, i as u32]);
                 pages.push((s.page, None));
-                indices += quads * 6;
-            });
+            }
             let runs = if first_phase {
                 &mut self.solid_runs
             } else {
@@ -3699,12 +3689,16 @@ impl Renderer {
         for (i, v) in visible_lods.iter().enumerate() {
             let s = &self.lods[&v.key].mesh;
             let start = self.draws.len();
-            s.faces.ranges(eye - Vec3::from(v.origin), |first, quads| {
-                let first = s.start + u64::from(first) * 4;
-                self.draws
-                    .push([quads * 6, 1, 0, first as u32, (visible.len() + i) as u32]);
+            if s.solid > 0 {
+                self.draws.push([
+                    s.solid * 6,
+                    1,
+                    0,
+                    s.start as u32,
+                    (visible.len() + i) as u32,
+                ]);
                 self.draw_pages.push((s.page, None));
-            });
+            }
             self.solid_runs
                 .push(v.distance, s.page, start, self.draws.len() - start, [0; 3]);
         }

@@ -3,7 +3,6 @@
 //! `ModelBlockRenderer`/`BlockModelLighter` (smooth light, ambient occlusion,
 //! cardinal shading, tint sources, block offsets; see `lighting`). Fluids
 //! follow `FluidRenderer` (see `fluid`).
-mod facing;
 mod fluid;
 mod lighting;
 use crate::{
@@ -13,7 +12,6 @@ use crate::{
     chunk::{Chunk, MIN_Y},
     models::catalog::BakedFace,
 };
-pub use facing::{FaceGroups, GROUPS as FACE_GROUPS};
 use horizon_core::{
     biome::BiomeZoom, geometry::Direction, position::BlockPos, random::position_seed,
 };
@@ -116,8 +114,6 @@ mod vertex_tests {
 }
 pub struct SectionMesh {
     pub solid: Vec<TerrainVertex>,
-    /// `solid`'s quads by the side they face (`facing`).
-    pub faces: FaceGroups,
     pub translucent: Vec<TerrainVertex>,
     /// VisGraph: bit `a * 6 + b` is set when faces `a` and `b` (Direction
     /// order) are connected through non-opaque blocks.
@@ -131,7 +127,6 @@ impl Default for SectionMesh {
     fn default() -> Self {
         Self {
             solid: Vec::new(),
-            faces: FaceGroups::default(),
             translucent: Vec::new(),
             visibility: ALL_VISIBLE,
             block_entities: Vec::new(),
@@ -698,12 +693,6 @@ pub struct Mesher<'a> {
 impl Mesher<'_> {
     /// `region[dz][dx]` are the chunks around the meshed column (centre 1,1).
     pub fn mesh(&mut self, region: &[[Option<&Chunk>; 3]; 3], sy: i32) -> SectionMesh {
-        let mut out = self.tesselate(region, sy);
-        out.faces = facing::group(&mut out.solid);
-        out
-    }
-    /// The section's quads in model order, before `facing::group`.
-    pub(crate) fn tesselate(&mut self, region: &[[Option<&Chunk>; 3]; 3], sy: i32) -> SectionMesh {
         let mut out = SectionMesh::default();
         let center = region[1][1].expect("centre chunk");
         let section = &center.sections[sy as usize];

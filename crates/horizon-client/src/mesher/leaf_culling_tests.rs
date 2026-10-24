@@ -42,7 +42,7 @@ fn leaf_culling_removes_only_internal_leaf_and_root_faces() {
             cutout_leaves,
             cull_leaves,
         }
-        .tesselate(&region, (0 - MIN_Y) / 16)
+        .mesh(&region, (0 - MIN_Y) / 16)
         .solid
     };
 
