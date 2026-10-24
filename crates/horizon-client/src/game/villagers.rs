@@ -5,34 +5,13 @@ use super::Game;
 use horizon_client::{
     gossip::{self, GossipType},
     items::ItemStack,
-    mobs::{Mob, Species, spawning, villager},
+    mobs::{Mob, Species, spawning, villager, villager_brain},
 };
-use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_core::geometry::Vec3;
 
 fn block_of(p: Vec3) -> [i32; 3] {
     [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32]
 }
-/// `SpawnUtil.Strategy.LEGACY_IRON_GOLEM`: what a golem will not land on.
-fn golem_floor_ok(name: &str) -> bool {
-    !matches!(
-        name,
-        "minecraft:cobweb"
-            | "minecraft:cactus"
-            | "minecraft:glass_pane"
-            | "minecraft:conduit"
-            | "minecraft:ice"
-            | "minecraft:tnt"
-            | "minecraft:glowstone"
-            | "minecraft:beacon"
-            | "minecraft:sea_lantern"
-            | "minecraft:frosted_ice"
-            | "minecraft:tinted_glass"
-            | "minecraft:glass"
-    ) && !name.ends_with("_stained_glass_pane")
-        && !name.ends_with("_stained_glass")
-        && !name.ends_with("leaves")
-}
-
 impl Game<'_> {
     fn villager_index(&self, id: u32) -> Option<usize> {
         self.mobs
@@ -76,88 +55,46 @@ impl Game<'_> {
             return;
         };
         let now = self.world.game_time;
-        if !villager::ext(&self.mobs[i]).is_some_and(|e| e.wants_golem(now)) {
+        let Some(near) = villager::golem_summoners(&self.mobs, i, now, needed) else {
             return;
-        }
-        let at = self.mobs[i].position;
-        let nearby: Vec<usize> = self
-            .mobs
-            .iter()
-            .enumerate()
-            .filter(|(_, m)| {
-                m.species() == Species::Villager
-                    && m.alive()
-                    && (m.position.x - at.x).abs() <= 10.0
-                    && (m.position.y - at.y).abs() <= 10.0
-                    && (m.position.z - at.z).abs() <= 10.0
-            })
-            .map(|(j, _)| j)
-            .collect();
-        let wanting = nearby
-            .iter()
-            .filter(|j| villager::ext(&self.mobs[**j]).is_some_and(|e| e.wants_golem(now)))
-            .take(5)
-            .count();
-        if wanting < needed {
-            return;
-        }
-        if self.try_spawn_iron_golem(block_of(at)) {
-            for j in nearby {
-                villager::ext_mut(&mut self.mobs[j]).golem_until = now + 599;
+        };
+        if self.try_spawn_iron_golem(block_of(self.mobs[i].position)) {
+            for j in near {
+                villager_brain::golem_detected(&mut self.mobs[j], now);
             }
         }
     }
-    /// `SpawnUtil.trySpawnMob(IRON_GOLEM, ..., 10 attempts, 8 across, 6 up
-    /// and down, LEGACY_IRON_GOLEM)`.
+    /// `SpawnUtil.trySpawnMob(IRON_GOLEM, ...)`: a golem near `start`, with
+    /// the ambient sound `trySpawnMob` plays.
     fn try_spawn_iron_golem(&mut self, start: [i32; 3]) -> bool {
-        for _ in 0..10 {
-            let r = &mut self.world.random;
-            let dx = r.next_int_bound(17).unwrap_or(8) - 8;
-            let dz = r.next_int_bound(17).unwrap_or(8) - 8;
-            let (x, z) = (start[0] + dx, start[2] + dz);
-            let mut y = start[1] + 6;
-            let mut above = self.world.block(x, y, z);
-            let mut found = None;
-            for _ in 0..=12 {
-                y -= 1;
-                let here = self.world.block(x, y, z);
-                let f = self.res.facts().get(here);
-                let above_f = self.res.facts().get(above);
-                let air_or_liquid = self.res.facts().is_air(above)
-                    || above_f.fluid != horizon_client::blocks::Fluid::None;
-                let solid =
-                    self.res.mob_data().state(here).flags & horizon_client::mobs::data::SOLID != 0
-                        || f.name.as_ref() == "minecraft:powder_snow";
-                if golem_floor_ok(&f.name) && air_or_liquid && solid {
-                    found = Some(y + 1);
-                    break;
-                }
-                above = here;
-            }
-            let Some(y) = found else { continue };
-            // IronGolem.checkSpawnRules: a floor and three free blocks.
-            let free = |g: &Self, yy: i32| {
-                g.res.mob_data().state(g.world.block(x, yy, z)).flags
-                    & horizon_client::mobs::data::VALID_EMPTY_SPAWN
-                    != 0
-            };
-            if !(0..4).all(|k| free(self, y + k)) {
-                continue;
-            }
-            let at = [f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5];
-            if let Some(id) = self.spawn_mob_for("minecraft:iron_golem", at, false, true)
-                && let Some(m) = self.mobs.iter_mut().find(|m| m.id == id)
-            {
-                let sound = m.kind.sounds[0];
-                if !sound.is_empty() {
-                    let at = m.center();
-                    self.audio
-                        .play(&format!("minecraft:{sound}"), Some(at), 1.0, 1.0);
-                }
-                return true;
-            }
+        let Some(kind) = self.res.mob_types().get("minecraft:iron_golem").cloned() else {
+            return false;
+        };
+        let id = self.next_entity + 1;
+        let mut random = self.world.random.clone();
+        let golem = villager::summon_golem(
+            &self.mob_world_base(&[]),
+            start,
+            &mut random,
+            |random, at, yaw| {
+                let mut m = Mob::new(id, kind.clone(), at, yaw);
+                villager::finalize_summoned_golem(&mut m, random);
+                m
+            },
+        );
+        self.world.random = random;
+        let Some(golem) = golem else {
+            return false;
+        };
+        self.next_entity = id;
+        let sound = golem.kind.sounds[0];
+        if !sound.is_empty() {
+            let at = golem.center();
+            self.audio
+                .play(&format!("minecraft:{sound}"), Some(at), 1.0, 1.0);
         }
-        false
+        self.mobs.push(golem);
+        true
     }
 
     /// `VillagerMakeLove.tryToGiveBirth`: both eat, a free bed within 48

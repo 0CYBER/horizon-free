@@ -285,6 +285,22 @@ def scenarios():
         'block 0 -60 0 minecraft:composter',
         'mob minecraft:villager 10.5 -60 0.5 90 54 persistent',
     ])
+    # Villagers that slept today and saw no golem summon an iron golem (Villager.spawnGolemIfNeeded):
+    # five gossiping (TradeWithVillager, at tick 200 here), or three panicking at a zombie in a pen
+    # (VillagerPanicTrigger, at tick 100 by night). They all remember it (GOLEM_DETECTED_RECENTLY).
+    # Under a glass roof three blocks up the golem still fits (IronGolem.checkSpawnObstruction);
+    # on dirt paths it cannot stand. The scenarios stop on the summoning tick: the golem's own AI
+    # (MoveBackToVillageGoal, GolemRandomStrollInVillageGoal) is not ported yet.
+    golem_callers = [f'mob minecraft:villager {x} -60 {z} {r} {seed} persistent slept=1' for x, z, r, seed in
+                     [(0.5, 0.5, 0, 81), (2.5, 0.5, 180, 82), (0.5, 2.5, 90, 83), (2.5, 2.5, 270, 84), (1.5, -1.5, 0, 85)]]
+    add('villager_golem_gossip', 200, ['player 14.5 -60 0.5'] + golem_callers, 'time=100')
+    add('villager_golem_roof', 200, ['fill -10 -57 -12 13 -57 13 minecraft:glass', 'player 14.5 -60 0.5'] + golem_callers,
+        'time=100')
+    add('villager_golem_paths', 400, ['fill -10 -61 -12 13 -61 13 minecraft:dirt_path', 'player 14.5 -60 0.5'] + golem_callers,
+        'time=100')
+    add('villager_golem_panic', 100, ['fill -2 -60 -3 4 -60 4 minecraft:oak_fence', 'fill -1 -60 -2 3 -60 3 minecraft:air',
+                                      'player 14.5 -60 0.5'] + golem_callers[:3]
+        + ['mob minecraft:zombie 6.5 -60 0.5 90 86 persistent noai'], 'time=18000')
     return s
 
 
