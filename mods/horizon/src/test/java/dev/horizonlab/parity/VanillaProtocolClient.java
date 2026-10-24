@@ -65,6 +65,7 @@ import net.minecraft.network.protocol.game.ServerboundAcceptTeleportationPacket;
 import net.minecraft.network.protocol.game.ServerboundChatCommandPacket;
 import net.minecraft.network.protocol.game.ServerboundChatPacket;
 import net.minecraft.network.protocol.game.ServerboundChunkBatchReceivedPacket;
+import net.minecraft.network.protocol.game.ServerboundClientTickEndPacket;
 import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
 import net.minecraft.network.protocol.game.ServerboundPlayerLoadedPacket;
 import net.minecraft.network.protocol.handshake.ClientIntent;
@@ -484,6 +485,8 @@ public final class VanillaProtocolClient {
         // When the dead player sent a command (ServerGamePacketListenerImpl.handleChatCommand runs it
         // whether the player is alive or not); it respawns once the reply came, or 3 s later.
         long deadCommandAt = 0;
+        // When the client last sent where it is.
+        long positionAt = 0;
         while (System.currentTimeMillis() < deadline) {
             Received r;
             try {
@@ -536,6 +539,7 @@ public final class VanillaProtocolClient {
                     // acceptance alone, as the 26.3 client sends.
                     if (!respawning && step < ENTITIES) {
                         send(new ServerboundMovePlayerPacket.PosRot(position.position(), position.yRot(), position.xRot(), false, false));
+                        positionAt = now;
                     }
                     if (!loaded) {
                         send(new ServerboundPlayerLoadedPacket());
@@ -634,6 +638,17 @@ public final class VanillaProtocolClient {
                 if (packet instanceof net.minecraft.network.protocol.game.ClientboundCommandsPacket p && counts.get(r.type) == 1) {
                     commandTree(p);
                 }
+            }
+            if (entities == null && loaded && deadCommandAt == 0 && now - positionAt >= 1000) {
+                // LocalPlayer.sendPosition: once its level is loaded the 26.3 client sends where it is
+                // every 20 ticks even standing still, and the server then checks again which entities the
+                // player sees (ChunkMap.move). An entity whose chunk was sent after the player's last move,
+                // such as the villager when the first chunks come late, is paired at the next one. The tick
+                // end first (Minecraft.tick sends one every tick): a server takes one position per client tick.
+                // Until the death: from then on the steps wait only on entities spawned for the player.
+                send(ServerboundClientTickEndPacket.INSTANCE);
+                send(new ServerboundMovePlayerPacket.Pos(position.position(), false, false));
+                positionAt = now;
             }
             if (entities != null && loaded && lastChunk > 0 && now - lastChunk > 3000 && step == 0) {
                 // Entity mode: the harness's console summons the scene once it reads this
