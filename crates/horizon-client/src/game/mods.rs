@@ -342,6 +342,19 @@ impl Game<'_> {
                 }
                 Output::Feedback { text, error: false } => Text::literal(text),
                 Output::Feedback { text, error: true } => Text::literal(text).with_color(text::RED),
+                // Vanilla's commands only: a mod running a mod command could loop.
+                Output::Command { line } => {
+                    let name = line.split(' ').next().unwrap_or_default();
+                    // As handle_chat_input, without the chat history.
+                    if !vanilla_command(name) {
+                        // dropped
+                    } else if self.remote.is_some() {
+                        self.send_chat(&format!("/{line}"));
+                    } else {
+                        self.run_command(&line);
+                    }
+                    continue;
+                }
                 Output::Stopped { name, reason } => {
                     self.list_mods();
                     self.sync_mod_commands();

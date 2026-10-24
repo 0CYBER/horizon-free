@@ -69,16 +69,19 @@ pub enum Capability {
     Chat,
     Hud,
     Storage,
+    /// Runs vanilla commands as the player, with the player's permissions.
+    Command,
     /// New blocks and items from the mod's `data/` (API 0.2): no WIT
     /// interface, the game reads them before the world loads.
     Registries,
 }
 impl Capability {
-    pub const ALL: [Capability; 5] = [
+    pub const ALL: [Capability; 6] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
         Capability::Storage,
+        Capability::Command,
         Capability::Registries,
     ];
     /// The WIT interface it grants, in `horizon:mods`.
@@ -88,6 +91,7 @@ impl Capability {
             Capability::Chat => "chat",
             Capability::Hud => "hud",
             Capability::Storage => "storage",
+            Capability::Command => "command",
             Capability::Registries => "registries",
         }
     }
@@ -98,6 +102,7 @@ impl Capability {
             Capability::Chat => "show you chat messages",
             Capability::Hud => "draw text on your screen",
             Capability::Storage => "save its own settings to disk",
+            Capability::Command => "run commands as you, with your permissions",
             Capability::Registries => "add blocks and items to your worlds",
         }
     }
@@ -128,6 +133,7 @@ impl fmt::Display for Capability {
             Capability::Chat => "chat",
             Capability::Hud => "hud",
             Capability::Storage => "storage",
+            Capability::Command => "command",
             Capability::Registries => "registries",
         };
         f.write_str(name)
@@ -365,6 +371,10 @@ capabilities = ["game-read", "hud"]
         assert_eq!(
             storage,
             Err("uses capability storage, missing from horizon-mod.toml".into())
+        );
+        assert_eq!(
+            m.check_imports(["horizon:mods/command@0.1.0"]),
+            Err("uses capability command, missing from horizon-mod.toml".into())
         );
         let with_storage = EXAMPLE.replace("\"hud\"", "\"hud\", \"storage\"");
         let m = Manifest::parse(&with_storage).unwrap();

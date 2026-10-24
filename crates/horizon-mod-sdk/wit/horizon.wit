@@ -86,6 +86,14 @@ interface storage {
     delete: func(key: string);
 }
 
+/// Capability `command`: vanilla commands run as the player, with the
+/// player's permissions, after the hook call returns (8 per call). A mod's
+/// own commands are not run this way.
+interface command {
+    /// `line` without its slash; its feedback goes to the chat as if typed.
+    run: func(line: string);
+}
+
 /// What the game calls. Only the hooks `init` asks for are ever called.
 interface events {
     record registration {
@@ -117,5 +125,6 @@ world horizon-mod {
     import chat;
     import hud;
     import storage;
+    import command;
     export events;
 }
