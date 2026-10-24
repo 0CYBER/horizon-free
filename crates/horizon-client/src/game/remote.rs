@@ -193,6 +193,9 @@ pub(super) struct Remote {
     /// the oldest of them first waited (`poll_remote`).
     backlog: VecDeque<Event>,
     backlog_since: Option<Instant>,
+    /// `ClientboundTransferPacket`'s target: when the connection ends the
+    /// game connects here, the stored cookies carried over (`TransferState`).
+    transfer: Option<String>,
 }
 
 /// The time a frame spends on chunk packets before it leaves the rest of
@@ -257,14 +260,25 @@ fn number_format(f: &play::NumberFormat) -> horizon_client::scoreboard::NumberFo
 impl Game<'_> {
     /// Leave the title for a server (ConnectScreen): an empty world fed by the connection.
     pub(super) fn connect_server(&mut self, address: &str, name: &str) -> Result<()> {
+        self.connect_server_with_cookies(address, name, None)
+    }
+    /// `connect_server` carrying a transfer's stored server cookies
+    /// (`TransferState`); None on an ordinary join.
+    pub(super) fn connect_server_with_cookies(
+        &mut self,
+        address: &str,
+        name: &str,
+        cookies: Option<horizon_client::net::Cookies>,
+    ) -> Result<()> {
         if self.defer_world_entry(super::PendingWorldEntry::Server {
             address: address.to_owned(),
             name: name.to_owned(),
+            cookies: cookies.clone(),
         })? {
             return Ok(());
         }
         self.join_world_rest()?;
-        if let Err(error) = self.join_server(address, name, None) {
+        if let Err(error) = self.join_server(address, name, None, cookies) {
             log::warn!("Horizon: could not join server: {error}");
             if self.title.is_none() {
                 self.title = Some(horizon_client::title::Title::new(
@@ -285,13 +299,14 @@ impl Game<'_> {
         pipe: horizon_protocol::connection::Pipe,
         name: &str,
     ) -> Result<()> {
-        self.join_server("local", name, Some(pipe))
+        self.join_server("local", name, Some(pipe), None)
     }
     fn join_server(
         &mut self,
         address: &str,
         name: &str,
         local: Option<horizon_protocol::connection::Pipe>,
+        cookies: Option<horizon_client::net::Cookies>,
     ) -> Result<()> {
         self.perf.world_opening();
         let root = self.options.resources.clone();
@@ -323,7 +338,17 @@ impl Game<'_> {
             Some(pipe) => Session::connect_local(pipe, name, view, lang.clone()),
             None => {
                 self.extras_connecting(address, name);
-                Session::connect(address, name, auth.clone(), view, lang.clone())
+                match cookies {
+                    Some(cookies) => Session::connect_transferred(
+                        address,
+                        name,
+                        auth.clone(),
+                        view,
+                        lang.clone(),
+                        cookies,
+                    ),
+                    None => Session::connect(address, name, auth.clone(), view, lang.clone()),
+                }
             }
         };
         let player_type = super::perspective::player_type(&root);
@@ -446,6 +471,7 @@ impl Game<'_> {
             chunk_center: (0, 0),
             backlog: VecDeque::new(),
             backlog_since: None,
+            transfer: None,
         });
         // The level's TickRateManager follows the server's ticking packets.
         self.clock = horizon_client::clock::FixedStep::client();
@@ -867,6 +893,11 @@ impl Game<'_> {
                     }
                 }
                 Event::Reconfigured(registries) => self.set_registries(registries),
+                Event::Transfer { host, port } => {
+                    if let Some(r) = self.remote.as_mut() {
+                        r.transfer = Some(format!("{host}:{port}"));
+                    }
+                }
                 Event::PackPush(p) => self.handle_pack_push(p),
                 Event::PackPop(id) => self.handle_pack_pop(id),
                 Event::DecodeError(e) => {
@@ -882,6 +913,20 @@ impl Game<'_> {
                     from_server,
                 } => {
                     log::info!("Horizon: disconnected: {reason}");
+                    // ClientboundTransferPacket left a target: connect there
+                    // instead of showing the disconnect, the stored cookies
+                    // carried over (ClientCommonPacketListenerImpl.
+                    // handleTransfer → ConnectScreen.startConnecting).
+                    let transfer = self.remote.as_mut().and_then(|r| {
+                        r.transfer.take().map(|address| {
+                            (address, r.session.name.clone(), r.session.cookies.clone())
+                        })
+                    });
+                    if let Some((address, name, cookies)) = transfer {
+                        self.leave_server(None)?;
+                        self.connect_server_with_cookies(&address, &name, Some(cookies))?;
+                        return Ok(());
+                    }
                     let retry = self.reconnect_after(&reason, from_server);
                     self.leave_server(Some(reason))?;
                     self.offer_reconnect(retry);
