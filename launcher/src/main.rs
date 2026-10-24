@@ -367,6 +367,9 @@ impl Launcher {
             self.switches += 1;
             self.content_scroll = Scrollbar::default();
             self.long_list = cull::Cull::default();
+            if page == Page::Mods {
+                self.mods.reset_lists();
+            }
         }
         self.picker_open = false;
     }
@@ -2909,7 +2912,7 @@ impl Launcher {
                 ))
             }
             Load::Ready(r) if r.is_empty() => return page.child(centered("No releases yet.", &t)),
-            Load::Ready(r) => r.clone(),
+            Load::Ready(r) => r,
         };
         // A hundred releases: only the rows near the screen are drawn.
         let keep = |i: usize| {
@@ -3146,7 +3149,7 @@ impl Launcher {
                     ),
                 )
             }
-            Load::Ready(r) => r.clone(),
+            Load::Ready(r) => r,
         };
         let list = self.long_list.clone().column(
             &self.content_scroll.handle,

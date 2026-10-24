@@ -50,6 +50,7 @@ impl Launcher {
         self.pack_busy = false;
         match result {
             Ok(pack) => {
+                self.mods.report_list.reset();
                 self.pack_open = Some(pack.slug.clone());
                 self.packs.retain(|p| p.slug != pack.slug);
                 self.packs.push(*pack);
@@ -127,6 +128,7 @@ impl Launcher {
     /// Reads the imported packs, once (the sidebar and the Modpacks tab both show them).
     pub(super) fn load_packs(&mut self) {
         if self.packs_loaded.is_none() {
+            self.mods.report_list.reset();
             self.packs = modpacks::list();
             if self.pack_open.is_none() {
                 self.pack_open = self.packs.first().map(|p| p.slug.clone());
@@ -193,6 +195,7 @@ impl Launcher {
                     button(format!("open-{slug}"), "Open", Kind::Ghost, &t)
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             this.pack_open = Some(slug.clone());
+                            this.mods.report_list.reset();
                             cx.notify();
                         }))
                         .into_any_element()
@@ -317,6 +320,7 @@ impl Launcher {
                     Ok(()) => {
                         this.packs.retain(|p| p.slug != slug);
                         this.pack_open = this.packs.first().map(|p| p.slug.clone());
+                        this.mods.report_list.reset();
                     }
                     Err(e) => this.pack_error = Some(e),
                 }
@@ -354,12 +358,13 @@ impl Launcher {
             move |value, _, cx| {
                 let _ = this.update(cx, |this, cx| {
                     this.pack_filter = value;
+                    this.mods.report_list.reset();
                     cx.notify();
                 });
             }
         });
-        let mut list = div().flex().flex_col();
-        for (i, r) in rows.iter().enumerate() {
+        let row = |i: usize| {
+            let r = rows[i];
             let color = match r.status {
                 Status::Ported => t.success,
                 Status::Partial => t.accent,
@@ -372,7 +377,7 @@ impl Launcher {
                 format!("{}  ({})", r.name, r.key)
             };
             let detail = format!("{} · {} · {}: {}", r.class, r.tier, r.license, r.reason);
-            list = list.child(index_row(
+            index_row(
                 i + 1,
                 name,
                 Some(detail.into_any_element()),
@@ -383,8 +388,15 @@ impl Launcher {
                         .into_any_element(),
                 ),
                 &t,
-            ));
-        }
+            )
+        };
+        let list = self.mods.report_list.column(
+            &self.content_scroll.handle,
+            rows.len(),
+            8.,
+            |_| false,
+            row,
+        );
         Some(
             div()
                 .flex()
