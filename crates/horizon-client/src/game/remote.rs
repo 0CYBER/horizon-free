@@ -3175,7 +3175,10 @@ impl Game<'_> {
                 f64::from(head[2]) + 0.5,
             );
             player.velocity = Vec3::ZERO;
-        } else if !dead && !riding {
+        } else if !dead && !riding && !self.pause {
+            // Minecraft.tick skips the level while the game is paused: the window's own
+            // copy stands still too, so air, hunger and fall prediction do not run ahead
+            // of the paused server (#1592).
             player.velocity = player.velocity.add_vector(pushed);
             MotionWorld {
                 entities: &entity_collisions,

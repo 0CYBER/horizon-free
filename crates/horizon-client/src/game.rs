@@ -4147,7 +4147,7 @@ impl Game<'_> {
             [player.velocity.x, player.velocity.y, player.velocity.z],
             [player.position.x, player.position.y, player.position.z],
         );
-        if !riding {
+        if !riding && !self.pause {
             MotionWorld {
                 entities: &entity_collisions,
                 player,
