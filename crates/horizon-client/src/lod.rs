@@ -689,7 +689,7 @@ impl Lod {
                                 }
                                 let finer = finer.remove(&key).unwrap_or_default();
                                 let input = snapshot.mesh_input(key, finer);
-                                let mesh = mesher.mesh(
+                                let mut mesh = mesher.mesh(
                                     input.key,
                                     &input.columns(),
                                     &covered,
@@ -698,6 +698,7 @@ impl Lod {
                                     &input.neighbors,
                                     &input.finer,
                                 );
+                                mesh.sort_solid();
                                 meshes.push((input.key, mesh));
                             }
                             Done::Mesh {

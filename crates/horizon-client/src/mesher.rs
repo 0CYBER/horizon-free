@@ -116,8 +116,9 @@ mod vertex_tests {
 }
 pub struct SectionMesh {
     pub solid: Vec<TerrainVertex>,
-    /// The buckets `solid` is sorted in by the side its quads face
-    /// (`sort_solid`; empty until then).
+    /// The buckets `solid` is sorted in by the side its quads face: empty
+    /// until `sort_solid`, which the meshing workers call; `solid` is in
+    /// model order before.
     pub sides: Sides,
     pub translucent: Vec<TerrainVertex>,
     /// VisGraph: bit `a * 6 + b` is set when faces `a` and `b` (Direction
@@ -811,7 +812,6 @@ impl Mesher<'_> {
                 }
             }
         }
-        out.sort_solid();
         out
     }
     /// `BlockColors` tint source `index`, or `None` for an untinted (-1) layer.

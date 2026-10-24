@@ -507,7 +507,8 @@ impl Streaming {
                                         biomes: &context.biomes,
                                         visibility,
                                     };
-                                    let mesh = mesher.mesh(&borrow(&region), sy);
+                                    let mut mesh = mesher.mesh(&borrow(&region), sy);
+                                    mesh.sort_solid();
                                     faces = Some((context.tables.clone(), mesher.visibility));
                                     Done::Meshed(x, sy, z, mesh, seq)
                                 }

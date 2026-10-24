@@ -67,7 +67,7 @@ impl Mesher {
         neighbors: &[Vec<EdgeColumn>; 4],
         finer: &[TileKey],
     ) -> SectionMesh {
-        let mut mesh = mesh_columns_with_edges(
+        mesh_columns_with_edges(
             key,
             columns,
             covered,
@@ -75,9 +75,7 @@ impl Mesher {
             neighbors,
             finer,
             |span, direction| self.material(span, direction, context),
-        );
-        mesh.sort_solid();
-        mesh
+        )
     }
     fn material(&mut self, span: &Span, direction: Direction, context: &WorkerContext) -> Material {
         let styles = *self
