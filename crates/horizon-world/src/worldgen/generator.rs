@@ -1474,10 +1474,33 @@ where
         self.worker.heights.insert((x, z, kind as u8), h);
         h
     }
+    /// JigsawPlacement.couldStructureExistInColumn: one resolver for the
+    /// column (createResolverForChunk, a bulk climate volume of 1 x n x 1
+    /// quarts, as the biome stage samples a chunk), then each quart from the
+    /// bottom. One volume costs about what a few single climate samples do;
+    /// a column without a valid biome took one sample per quart (~500 in To
+    /// The Max).
     fn column_has_valid_biome(&mut self, x: i32, z: i32, min_y: i32, max_y: i32) -> bool {
-        use super::structure::start::StartContext;
-        ((min_y >> 2)..=(max_y >> 2)).any(|qy| {
-            let id = self.noise_biome([x >> 2, qy, z >> 2]);
+        let (qx, qz, qmin, qmax) = (x >> 2, z >> 2, min_y >> 2, max_y >> 2);
+        if qmin > qmax {
+            return false;
+        }
+        let pipeline = self.pipeline;
+        let mut resolver = pipeline.source.resolver(
+            &pipeline.climate,
+            pipeline.router.get(RouterField::Erosion).as_ref(),
+        );
+        let context = &mut self.worker.biome_context;
+        let volume = resolver
+            .prepare_volume(context, [qx, qmin, qz], [1, qmax - qmin + 1, 1])
+            .ok()
+            .flatten();
+        (qmin..=qmax).any(|qy| {
+            let id = resolver
+                .sample_prepared(context, volume.as_ref(), [qx, qy, qz])
+                .ok()
+                .and_then(|name| pipeline.data.biome_id(name))
+                .unwrap_or(BiomeId(0));
             self.valid.contains(&id)
         })
     }
