@@ -174,7 +174,15 @@ pub fn cpu_seconds(pid: u32) -> Option<f64> {
 }
 
 fn output(program: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(program).args(args).output().ok()?;
+    let mut command = Command::new(program);
+    command.args(args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let out = command.output().ok()?;
     let text = String::from_utf8(out.stdout).ok()?.trim().to_owned();
     (out.status.success() && !text.is_empty()).then_some(text)
 }

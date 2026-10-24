@@ -97,6 +97,12 @@ page `servers.json` (the list), `servers/<name>/` (the servers created there) an
 Long pages, dialogs, the server console and data previews have a visible scrollbar when
 their content overflows. Drag the thumb or click the track to navigate without a mouse wheel.
 
+On Windows, desktop launches and background tools run without terminal windows. Preparation
+and server logs still reach the launcher, and CLI commands keep their terminal or redirected
+input and output, including MCP.
+Hardware details for performance reports are collected in the background after the first
+frame, so Windows hardware queries do not delay the window opening.
+
 ## Updates
 
 The launcher looks for a newer Horizon release when it starts and every 30 minutes while it
