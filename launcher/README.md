@@ -258,6 +258,12 @@ measure idle CPU, fetches the release list 3 times, and writes one report there 
 your machine; a `benchmark` report is uploaded, dated to the day, only if you allowed benchmark
 uploads ([data collection](../docs/telemetry.md)).
 
+Long lists on Mods (results, installed entries, coverage reports and project versions), Versions
+and Patch notes build only nearby rows, including on their first frame. Variable row heights
+are measured as they enter view; hidden ranges share spacers in the existing page scrollbar.
+On Windows, `cargo test --bin horizon-launcher desktop_list_renders_the_viewport_after_scrollbar_jumps
+-- --ignored` checks 10,000 rows of different heights in a real GPUI window (requires an awake desktop/GPU).
+
 ## Building
 
     cargo build --release
