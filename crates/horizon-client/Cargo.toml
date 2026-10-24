@@ -27,6 +27,8 @@ bytemuck = { version = "1.24", features = ["derive"] }
 glam = "0.30"
 png = "0.18"
 sha2 = "0.10.9"
+# Server resource packs are checked and cached by their SHA-1, as vanilla does.
+sha1 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["raw_value"] }
 # Shader packs: pack.toml, and WGSL checked before it reaches wgpu.

@@ -1441,6 +1441,7 @@ dependencies = [
  "rustix 1.1.5",
  "serde",
  "serde_json",
+ "sha1",
  "sha2",
  "symphonia",
  "toml",
