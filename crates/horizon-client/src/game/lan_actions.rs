@@ -1277,10 +1277,24 @@ impl Game<'_> {
         id: i32,
         location: Option<[f64; 3]>,
     ) -> Option<([f64; 3], [f64; 3])> {
+        let eye = {
+            let g = &host.hub.guests[gi];
+            [g.position[0], g.position[1] + g.eye_height(), g.position[2]]
+        };
         let object = || {
             let (lo, hi, origin) = self.object_target(id)?;
             let middle = [0, 1, 2].map(|k| (lo[k] + hi[k]) / 2.0);
             let Some(l) = location else {
+                // A boat's mobs sit over its middle: aim low at its near
+                // side, so the ray meets the boat before them (the server
+                // attacks the entity it is sent).
+                let carries = u32::try_from(id).is_ok_and(|v| {
+                    self.boats.iter().any(|b| b.id == v) && !self.boat_mobs(v).is_empty()
+                });
+                if carries {
+                    let near = |k: usize| eye[k].clamp(lo[k] + 0.01, hi[k] - 0.01);
+                    return Some([near(0), lo[1] + 0.05, near(2)]);
+                }
                 return Some(middle);
             };
             let point = [0, 1, 2].map(|k| origin[k] + l[k]);
@@ -1311,7 +1325,6 @@ impl Game<'_> {
             }
         };
         let g = &mut host.hub.guests[gi];
-        let eye = [g.position[0], g.position[1] + g.eye_height(), g.position[2]];
         let d = [centre[0] - eye[0], centre[1] - eye[1], centre[2] - eye[2]];
         let horizontal = (d[0] * d[0] + d[2] * d[2]).sqrt();
         g.yaw = (-d[0].atan2(d[2])).to_degrees() as f32;
