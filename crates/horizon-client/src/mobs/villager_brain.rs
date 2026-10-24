@@ -779,6 +779,14 @@ fn sense_golem(m: &mut Mob, w: &MobWorld) {
     }
 }
 
+/// `GolemSensor.golemDetected`: a golem was summoned near this villager;
+/// for 599 ticks it wants no other.
+pub fn golem_detected(m: &mut Mob, now: i64) {
+    mem(m).golem_detected_recently.set_ttl(true, 599);
+    // What `sync` derives from the memory.
+    super::villager::ext_mut(m).golem_until = now + 599 + 1;
+}
+
 // ---- Behaviours ---------------------------------------------------------
 
 /// The POI types villagers use.
