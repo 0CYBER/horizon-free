@@ -596,6 +596,8 @@ impl Game<'_> {
                 continue;
             };
             let value = match c {
+                // Read past, not decoded: the item keeps its prototype's value.
+                Component::Raw(_) => continue,
                 Component::Int(v) if *kind == component::RARITY => {
                     let rarity = ["common", "uncommon", "rare", "epic"];
                     Tag::String(rarity.get(*v as usize).copied().unwrap_or("common").into())

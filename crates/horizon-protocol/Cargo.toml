@@ -22,5 +22,9 @@ sha2 = "0.10"
 name = "protocol_probe"
 path = "examples/probe.rs"
 
+[[example]]
+name = "item_wire_probe"
+path = "examples/item_wire_probe.rs"
+
 [lints]
 workspace = true
