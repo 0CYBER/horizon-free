@@ -1829,6 +1829,55 @@ impl Game<'_> {
                 .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
         })
     }
+    /// What the window decides for its player's body every tick, in frame and
+    /// on a server alike: the look (Player.travel steers sprint-swimming by
+    /// the pitch), Auto Jump (LocalPlayer.sendPosition), the slowdown of an
+    /// item in use (LocalPlayer.modifyInput), the helmet's Respiration
+    /// (decreaseAirSupply), the wings, leather boots on powder snow
+    /// (PowderSnowBlock.canEntityWalkOnPowderSnow), freeze-immune wear
+    /// (LivingEntity.canFreeze) and the dimension's FAST_LAVA.
+    pub(crate) fn sync_player_body(&mut self) {
+        let glider = self.glider_worn();
+        let item_use_speed = self
+            .using
+            .and_then(|(slot, _)| {
+                if slot == shield::OFFHAND_SLOT {
+                    self.offhand.as_ref()
+                } else {
+                    self.inventory.get(slot)?.as_ref()
+                }
+            })
+            .and_then(|s| self.res.items().get(&s.item))
+            .map(|i| i.use_speed);
+        let respiration = self.armor[0]
+            .as_ref()
+            .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
+        let leather_boots = self.armor[3]
+            .as_ref()
+            .is_some_and(|s| &*s.item == "minecraft:leather_boots");
+        let immune = self
+            .res
+            .items()
+            .item_tags
+            .get("minecraft:freeze_immune_wearables");
+        let freeze_immune = self
+            .armor
+            .iter()
+            .flatten()
+            .any(|s| immune.is_some_and(|t| t.contains(&*s.item)));
+        let Some(player) = self.player.as_mut() else {
+            return;
+        };
+        player.yaw = self.yaw;
+        player.pitch = self.pitch;
+        player.auto_jump_enabled = self.settings.auto_jump;
+        player.item_use_speed = item_use_speed;
+        player.respiration = respiration;
+        player.glider = glider;
+        player.leather_boots = leather_boots;
+        player.freeze_immune = freeze_immune;
+        player.fluids.fast_lava = self.dim == Dim::Nether;
+    }
     fn held_slot(&self) -> usize {
         match self.hand {
             Hand::Main => self.selected,
@@ -4057,7 +4106,7 @@ impl Game<'_> {
         let riding = self.riding.is_some();
         let ghast_collisions = self.happy_ghast_player_collisions();
         let spin_targets = self.spin_targets();
-        let glider = self.glider_worn();
+        self.sync_player_body();
         let Some(player) = self.player.as_mut() else {
             // A dedicated server has no local player: the world still runs.
             if self.options.dedicated.is_some() {
@@ -4089,46 +4138,10 @@ impl Game<'_> {
         if !riding {
             self.previous_position = player.position;
         }
-        player.yaw = self.yaw;
         let spectator = self.mode == horizon_client::command::args::GameMode::Spectator;
         player.may_fly = self.creative || spectator;
-        // LocalPlayer.sendPosition: autoJumpEnabled follows the option.
-        player.auto_jump_enabled = self.settings.auto_jump;
         player.invulnerable = self.creative || spectator;
         player.spectator = spectator;
-        player.respiration = self.armor[0]
-            .as_ref()
-            .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
-        player.pitch = self.pitch;
-        player.glider = glider;
-        // LocalPlayer.modifyInput: walking while using an item.
-        player.item_use_speed = self
-            .using
-            .and_then(|(slot, _)| {
-                if slot == shield::OFFHAND_SLOT {
-                    self.offhand.as_ref()
-                } else {
-                    self.inventory.get(slot)?.as_ref()
-                }
-            })
-            .and_then(|s| self.res.items().get(&s.item))
-            .map(|i| i.use_speed);
-        // PowderSnowBlock.canEntityWalkOnPowderSnow and LivingEntity.canFreeze.
-        player.leather_boots = self.armor[3]
-            .as_ref()
-            .is_some_and(|s| &*s.item == "minecraft:leather_boots");
-        let immune = self
-            .res
-            .items()
-            .item_tags
-            .get("minecraft:freeze_immune_wearables");
-        player.freeze_immune = self
-            .armor
-            .iter()
-            .flatten()
-            .any(|s| immune.is_some_and(|t| t.contains(&*s.item)));
-        // The dimension's FAST_LAVA: the Nether's lava pushes harder.
-        player.fluids.fast_lava = self.dim == Dim::Nether;
         player.spin_targets = spin_targets;
         let grounded = player.ground.on_ground;
         let before = (
