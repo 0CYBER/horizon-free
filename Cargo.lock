@@ -1434,6 +1434,7 @@ dependencies = [
 name = "horizon-shaders"
 version = "0.1.0"
 dependencies = [
+ "horizon-core",
  "zip",
 ]
 

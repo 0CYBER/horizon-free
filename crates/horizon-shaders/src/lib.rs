@@ -5,11 +5,16 @@
 //! - [`Pack`]: a pack as a folder or a zip, with paths relative to its `shaders` folder (spec 1.1).
 //! - [`discover`]: the packs in a `shaderpacks` folder.
 //! - [`Lang`]: the pack's translated names (8.4).
+//! - [`Macros`] and [`eval_condition`]: the macros packs test, and the `#if` arithmetic (1.5).
 
+mod condition;
 mod discover;
 mod lang;
+mod macros;
 mod pack;
 
+pub use condition::eval_condition;
 pub use discover::{Found, discover};
 pub use lang::Lang;
+pub use macros::{MC_VERSION, Macros};
 pub use pack::{Pack, PackError};
