@@ -138,7 +138,6 @@ mod screens;
 mod sculk;
 mod sculk_fixture;
 mod server_travel;
-mod shader_packs;
 mod shield;
 mod sign_edit;
 mod sniffers;
@@ -1199,8 +1198,6 @@ struct Game<'a> {
     modifiers: winit::keyboard::ModifiersState,
     /// The window's fullscreen request and reported state.
     fullscreen: horizon_client::window::FullscreenState,
-    /// The selected Horizon shader pack (`game/shader_packs.rs`).
-    shader_packs: shader_packs::ShaderPacks,
     /// MouseHandler's accumulated look and wheel state.
     mouse: MouseLook,
     /// An agent moved the mouse (`mouse-move`) since the pointer was last
@@ -7434,30 +7431,17 @@ impl Game<'_> {
         self.tick_player_model();
         Ok(())
     }
-    /// What the loaded Java shader pack changes in this dimension's vanilla
-    /// sky (`sunPathRotation`, `clouds`, `sun`, `moon`); `None` without one.
-    fn java_sky(&self) -> Option<(f32, horizon_shaderpack::properties::SkyDirectives)> {
-        self.shader_packs.java_sky(match self.dim {
-            Dim::Overworld => 0,
-            Dim::Nether => -1,
-            Dim::End => 1,
-        })
-    }
     /// SkyRenderer.renderSunMoonAndStars: bodies on a frame rotated Y -90 then X by angle.
-    /// A Java pack's `sunPathRotation` tilts it about Z in between, and its
-    /// `sun = false` / `moon = false` leave those out, as Iris does. Returns
-    /// the sun and moon quads, and the stars' frame and brightness (the
-    /// renderer keeps their geometry, built once).
+    /// Returns the sun and moon quads, and the stars' frame and brightness
+    /// (the renderer keeps their geometry, built once).
     fn celestial_geometry(
         &self,
         sky: &horizon_client::environment::Sky,
     ) -> (Vec<Vertex>, Option<(glam::Mat4, f32)>) {
         let mut out = Vec::new();
         let atlas = &self.gui.atlas;
-        let (tilt, keep) = self.java_sky().unwrap_or_default();
         let frame = |angle: f32| {
             glam::Mat4::from_rotation_y((-90.0f32).to_radians())
-                * glam::Mat4::from_rotation_z(tilt.to_radians())
                 * glam::Mat4::from_rotation_x(angle.to_radians())
         };
         let mut body = |name: &str, angle: f32, size: f32, color: u32| {
@@ -7479,14 +7463,12 @@ impl Game<'_> {
                 });
             }
         };
-        if keep.sun {
-            body(
-                "environment/celestial/sun",
-                sky.sun_angle,
-                30.0,
-                0xFFFF_FFFF,
-            );
-        }
+        body(
+            "environment/celestial/sun",
+            sky.sun_angle,
+            30.0,
+            0xFFFF_FFFF,
+        );
         let phases = [
             "full_moon",
             "waning_gibbous",
@@ -7498,14 +7480,12 @@ impl Game<'_> {
             "waxing_gibbous",
         ];
         let phase = phases[(self.world.day_time / 24000).rem_euclid(8) as usize];
-        if keep.moon {
-            body(
-                &format!("environment/celestial/moon/{phase}"),
-                sky.moon_angle,
-                20.0,
-                0xFFFF_FFFF,
-            );
-        }
+        body(
+            &format!("environment/celestial/moon/{phase}"),
+            sky.moon_angle,
+            20.0,
+            0xFFFF_FFFF,
+        );
         // SkyRenderer.renderStars: the static star buffer on the same frame.
         let stars =
             (sky.star_brightness > 0.0).then(|| (frame(sky.star_angle), sky.star_brightness));
@@ -9821,7 +9801,6 @@ impl Game<'_> {
             }
             return Ok(false);
         }
-        self.poll_shader_pack();
         let Some(size) = self
             .renderer
             .as_ref()
@@ -10034,18 +10013,6 @@ impl Game<'_> {
             self.dragon_fireball_geometry(camera, alpha, &mut dragon);
             entities.extend(dragon);
         }
-        // A Java pack's `clouds` replaces the cloud option (`renderClouds`:
-        // "false", "fast", "true"), as Iris overrides `getCloudsType`.
-        let clouds_mode = {
-            use horizon_shaderpack::properties::CloudSetting;
-            match self.java_sky().and_then(|(_, sky)| sky.clouds) {
-                Some(CloudSetting::Off) => "false",
-                Some(CloudSetting::Fast) => "fast",
-                Some(CloudSetting::Fancy) => "true",
-                None => self.settings.clouds.as_str(),
-            }
-            .to_owned()
-        };
         let (celestial, stars) = if title {
             (Vec::new(), None)
         } else if self.dim == Dim::Overworld
@@ -10089,7 +10056,6 @@ impl Game<'_> {
         let frame = Frame {
             weather: &weather,
             weather_time: horizon_client::weather::Time::new(self.world.game_time, alpha as f32),
-            shader: self.shader_inputs(camera, alpha as f32),
             nether_lighting: self.dim == Dim::Nether,
             camera,
             yaw,
@@ -10137,7 +10103,7 @@ impl Game<'_> {
             hud: &hud,
             clouds: (!title
                 && self.dim == Dim::Overworld
-                && horizon_client::clouds::visible(&clouds_mode, sky.cloud_color[3]))
+                && horizon_client::clouds::visible(&self.settings.clouds, sky.cloud_color[3]))
             .then(|| self.gui.atlas.sprites.get("horizon/white"))
             .flatten()
             .map(|white| horizon_client::clouds::Input {
@@ -10147,7 +10113,7 @@ impl Game<'_> {
                 time: self.world.game_time,
                 partial_tick: alpha,
                 range: self.settings.cloud_range,
-                fast: clouds_mode == "fast",
+                fast: self.settings.clouds == "fast",
                 color: sky.cloud_color,
             }),
             entities: &entities,
@@ -10864,9 +10830,6 @@ impl ApplicationHandler for Game<'_> {
             match event {
                 WindowEvent::CloseRequested => {
                     self.pending_save.as_mut().unwrap().quit = true;
-                }
-                WindowEvent::DroppedFile(path) => {
-                    self.drop_shader_pack(&path);
                 }
                 WindowEvent::Focused(focused) => {
                     self.focused = focused;
@@ -11750,7 +11713,6 @@ impl<'a> Game<'a> {
             focused: true,
             modifiers: winit::keyboard::ModifiersState::empty(),
             fullscreen: horizon_client::window::FullscreenState::new(false),
-            shader_packs: Default::default(),
             mouse: MouseLook::default(),
             agent_pointer: false,
             smooth_camera: false,
@@ -12709,7 +12671,6 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         night_vision: 0.0,
         block_flicker: 0.0,
         menu_blur: None,
-        shader: Default::default(),
     }
 }
 

@@ -32,7 +32,7 @@ The launcher's **Settings** page has a **Logs** row with an **Open** button. On 
 - **"Not prepared" or "Minecraft 26.3 was not found".** Play 26.3 once in the official Minecraft launcher, or point the launcher at your Minecraft folder (**Choose…** next to Minecraft folder on the Play page), then choose **Prepare** again.
 - **Preparation says Java 25 is needed.** Update the launcher: it then uses the Java the Minecraft launcher downloaded for 26.3, or downloads it from Mojang. If it still can't (no internet, say), install a Java 25 JDK, for example Eclipse Temurin 25.
 - **Slow or stuttering.** Lower the render distance, turn LOD off, or pick the **Performance** preset. The performance overlay (Video, Advanced, Overlay) shows what is slow.
-- **A resource or shader pack broke something.** Switch it off, or take it out of its folder.
+- **A resource pack broke something.** Switch it off, or take it out of its folder.
 
 ## Reporting a bug
 

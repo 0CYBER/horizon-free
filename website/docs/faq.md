@@ -52,7 +52,7 @@ Linux x86-64, macOS on Apple Silicon and Windows x64. See [supported systems](/d
 
 ## Are shader packs supported?
 
-In part. Horizon runs the full-screen effects of Java shader packs, not their geometry and shadow passes yet. See [Settings](/docs/settings#shader-packs).
+Not right now. They have been removed, and will come back later, written again from scratch. See [Settings](/docs/settings#shader-packs).
 
 ## Does Horizon collect data?
 

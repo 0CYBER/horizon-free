@@ -51,9 +51,6 @@ public final class DistantTerrainSettingsTest {
         check(DistantTerrainSettings.read(missing).equals(Map.of("dh_capture_status", "unavailable")));
         var changedApi = proxy(IDhApiConfig.class, (p, method, values) -> { throw new NoSuchMethodError(); });
         check(DistantTerrainSettings.read(changedApi).equals(Map.of("dh_capture_status", "unavailable")));
-        check(ShaderSettings.read(false).equals(Map.of("iris_capture_status", "not_installed", "iris_shaders_enabled", false)));
-        // Test classpath deliberately omits Iris; it must report unavailable rather than assume disabled.
-        check(ShaderSettings.read(true).equals(Map.of("iris_capture_status", "unavailable")));
-        System.out.println("Effective terrain settings and absent/unsupported shader APIs checked.");
+        System.out.println("Effective terrain settings and absent/unsupported terrain APIs checked.");
     }
 }
