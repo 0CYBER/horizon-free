@@ -6,7 +6,7 @@ packs, see how well each one runs before installing it, and install it with its 
 
 ## What it offers
 
-Horizon doesn't run Java code ([research/java-mod-compat.md](research/java-mod-compat.md)). It ports what a Java mod
+Horizon doesn't run Java code ([mods.md](mods.md)). It ports what a Java mod
 carries as data (blocks, items, recipes, loot tables, tags, worldgen, textures, names) with `horizon-port-pack`, and
 says before install which of the mod's features that leaves out. Horizon `.hmod` mods aren't on Modrinth or CurseForge
 yet (Modrinth has no `horizon` loader).

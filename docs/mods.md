@@ -3,8 +3,9 @@
 Horizon gets its own mod system, written in Rust and run in a sandbox, plus
 two ways to bring over what Java players use: native Horizon ports of popular
 mods and the data-driven parts of packs and mods. Fabric and NeoForge jars do
-**not** run as they are: [research/java-mod-compat.md](research/java-mod-compat.md)
-explains why and what we do instead.
+**not** run as they are: their code calls and patches Minecraft's Java classes, and
+Horizon has none. What carries over is the data and assets inside a jar
+([modpacks.md](modpacks.md)).
 
 Mods are **off and absent by default**. A fresh install has no `horizon-mods`
 folder, loads no runtime and plays exactly like vanilla 26.3.
@@ -102,7 +103,7 @@ name (the mod reads it as `args`; API 0.1 has no way to declare argument types).
 ### Planned interfaces
 
 Each is a new capability, added in a 0.x minor version so older mods keep
-loading. Ordered by what the first native ports need ([research](research/java-mod-compat.md#port-first)):
+loading. Ordered by what the first native ports need:
 
 | Interface | For | Notes |
 |---|---|---|
