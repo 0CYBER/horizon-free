@@ -68,6 +68,7 @@ mod flat;
 pub mod lightning;
 mod lod;
 mod occlusion;
+mod pack_post;
 pub mod pack_uniforms;
 mod page_runs;
 pub mod panorama;
@@ -88,6 +89,7 @@ fn world_pass_after_culling<'e>(
     encoder: &'e mut wgpu::CommandEncoder,
     view: &wgpu::TextureView,
     depth: &wgpu::TextureView,
+    keep_depth: bool,
 ) -> wgpu::RenderPass<'e> {
     encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("Horizon world, after culling"),
@@ -104,7 +106,12 @@ fn world_pass_after_culling<'e>(
             view: depth,
             depth_ops: Some(wgpu::Operations {
                 load: wgpu::LoadOp::Load,
-                store: wgpu::StoreOp::Discard,
+                // A shader pack reads it as depthtex0.
+                store: if keep_depth {
+                    wgpu::StoreOp::Store
+                } else {
+                    wgpu::StoreOp::Discard
+                },
             }),
             stencil_ops: None,
         }),
@@ -459,6 +466,8 @@ pub struct Renderer {
     occlusion: occlusion::Occlusion,
     /// Resolution scale and FXAA (Horizon settings).
     world_post: world_post::Post,
+    /// The shader pack's post-processing, and the dimension (legacy id) it was loaded for.
+    pack_post: Option<(i32, Option<pack_post::PackPost>)>,
     pub hud: HudRenderer,
     /// Vanilla's menu background blur, made on first use.
     menu_blur: Option<crate::menu_blur::MenuBlur>,
@@ -2303,6 +2312,7 @@ impl Renderer {
             block_entity_revision: next_block_entity_revision(),
             occlusion: occlusion::Occlusion::new(crate::chunk::MIN_Y, crate::chunk::HEIGHT / 16),
             world_post,
+            pack_post: None,
             hud,
             menu_blur: None,
             info,
@@ -2720,6 +2730,32 @@ impl Renderer {
     pub fn set_world_post(&mut self, scale: f32, antialias: bool) {
         self.world_post.scale = scale.clamp(0.25, 2.0);
         self.world_post.antialias = antialias;
+    }
+    /// Runs `post` over the world from now on (`None`: no pack), for the dimension `dimension`.
+    /// Returns the programs that run and the notes of loading them.
+    pub fn set_shader_pack(
+        &mut self,
+        dimension: i32,
+        pack: Option<horizon_shaders::Post>,
+    ) -> Option<(Vec<String>, Vec<String>)> {
+        let post = pack.map(|post| {
+            pack_post::PackPost::new(
+                &self.device,
+                &self.queue,
+                post,
+                self.config.format.remove_srgb_suffix(),
+            )
+        });
+        let report = post.as_ref().map(|p| {
+            let programs = p.programs().into_iter().map(str::to_owned).collect();
+            (programs, p.notes.clone())
+        });
+        self.pack_post = Some((dimension, post));
+        report
+    }
+    /// The dimension the shader pack was last set for.
+    pub fn shader_pack_dimension(&self) -> Option<i32> {
+        self.pack_post.as_ref().map(|p| p.0)
     }
     /// The Mipmap Levels option: block textures sample at most `levels`
     /// reduced copies (0: none).
@@ -3582,9 +3618,12 @@ impl Renderer {
             timer.begin(&mut encoder);
         }
         // The world's targets: the screen, or the scaled target of `post`.
-        let scaled = self
-            .world_post
-            .prepare(&self.device, [self.config.width, self.config.height]);
+        let pack_post = !frame.title && self.pack_post.as_ref().is_some_and(|p| p.1.is_some());
+        let scaled = self.world_post.prepare(
+            &self.device,
+            [self.config.width, self.config.height],
+            pack_post,
+        );
         let (world_view, world_depth) = match &scaled {
             Some((color, depth)) => (color, depth),
             None => (&view_target, &self.depth),
@@ -3621,8 +3660,8 @@ impl Renderer {
                     view: world_depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(0.0),
-                        // Phase 2 of occlusion culling draws over it.
-                        store: if cull.is_some() {
+                        // Phase 2 of occlusion culling draws over it; a shader pack reads it.
+                        store: if cull.is_some() || pack_post {
                             wgpu::StoreOp::Store
                         } else {
                             wgpu::StoreOp::Discard
@@ -3681,7 +3720,12 @@ impl Renderer {
                             drop(pass);
                             cull.test_pass(&mut encoder);
                             flat.flatten_phase2(&mut encoder);
-                            pass = world_pass_after_culling(&mut encoder, world_view, world_depth);
+                            pass = world_pass_after_culling(
+                                &mut encoder,
+                                world_view,
+                                world_depth,
+                                pack_post,
+                            );
                             pass.set_bind_group(0, &self.group, &[]);
                             pass.set_pipeline(&flat.solid);
                             flat.draw_phase2(&mut pass, vertices);
@@ -3705,7 +3749,12 @@ impl Renderer {
                             cull.test(&mut pass);
                             drop(pass);
                             cull.test_pass(&mut encoder);
-                            pass = world_pass_after_culling(&mut encoder, world_view, world_depth);
+                            pass = world_pass_after_culling(
+                                &mut encoder,
+                                world_view,
+                                world_depth,
+                                pack_post,
+                            );
                             pass.set_bind_group(0, &self.group, &[]);
                             pass.set_pipeline(&self.solid);
                             pass.set_index_buffer(
@@ -3864,7 +3913,24 @@ impl Renderer {
                 );
             }
         }
-        if scaled.is_some() {
+        if let Some((color, depth)) = &scaled
+            && pack_post
+            && let Some((_, Some(post))) = &mut self.pack_post
+        {
+            let size = self.world_post.size().unwrap_or([1, 1]);
+            post.run(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                color,
+                depth,
+                &view_target,
+                frame,
+                &frame.pack,
+                size,
+                [self.config.width, self.config.height],
+            );
+        } else if scaled.is_some() {
             self.world_post.finish(&mut encoder, &view_target);
         }
         if hand_quads > 0 {
