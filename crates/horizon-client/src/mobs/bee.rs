@@ -1046,7 +1046,7 @@ impl Goal for GrowCrop {
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         // The 0.3 roll comes only after the crop count: it draws randomness.
-        let usable = !get(m).is_some_and(|b| b.crops_grown >= 10)
+        let usable = get(m).is_none_or(|b| b.crops_grown < 10)
             && m.random.next_float() >= 0.3
             && has_nectar(m)
             && hive_valid(m, cx.w);

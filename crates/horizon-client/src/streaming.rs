@@ -641,6 +641,12 @@ impl Streaming {
         });
         self.shared.ready.notify_one();
     }
+    // Proto arrays are large; keep ownership of the incoming heap allocation
+    // instead of moving all nine chunks onto a transient stack frame.
+    #[expect(
+        clippy::boxed_local,
+        reason = "keep nine large Proto values heap resident"
+    )]
     fn receive_decorated(&mut self, x: i32, z: i32, region: Box<[Proto; 9]>) {
         self.generation_scan.exhausted = false;
         self.decorating -= 1;

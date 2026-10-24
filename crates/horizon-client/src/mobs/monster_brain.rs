@@ -712,7 +712,7 @@ impl B {
                             .is_some_and(|l| l.contains(&Who::Player));
                     !reachable
                 };
-                if !(can_attack(m, cx.w, target) && !tired && alive && !stop_when) {
+                if !can_attack(m, cx.w, target) || tired || !alive || stop_when {
                     set_attack_target(m, None);
                 }
                 *running = true;

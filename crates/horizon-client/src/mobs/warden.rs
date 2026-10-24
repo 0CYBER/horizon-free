@@ -457,7 +457,7 @@ pub fn can_receive_vibration(m: &Mob, _now: i64, ctx: &Context) -> bool {
         && m.alive()
         && !st.brain.mem.vibration_cooldown.present()
         && !digging_or_emerging(m)
-        && !(ctx.living && !ctx.targetable)
+        && (!ctx.living || ctx.targetable)
 }
 /// `VibrationSystem.Listener.handleGameEvent` for the warden: a free
 /// listener within 16 blocks of its eyes schedules what it can hear.

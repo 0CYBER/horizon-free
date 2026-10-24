@@ -27,6 +27,12 @@ const CRYSTAL_IDS: u32 = SPECIAL + 16;
 const FIGHT_FILE: &str = "data/minecraft/ender_dragon_fight.dat";
 const MAX_HEALTH: f32 = 200.0;
 
+/// Preserve the ordered double comparisons from vanilla: a NaN squared
+/// distance fails both comparisons and must not be treated as out of range.
+fn target_distance_outside_range(distance_squared: f64) -> bool {
+    !distance_squared.is_nan() && !(100.0..=22500.0).contains(&distance_squared)
+}
+
 #[derive(Default)]
 pub(super) struct Fight {
     loaded: bool,
@@ -1286,7 +1292,7 @@ impl Game<'_> {
                 clockwise,
             } => {
                 let dt = far(*target);
-                if dt < 100.0 || dt > 22500.0 || collided {
+                if target_distance_outside_range(dt) || collided {
                     let done = path.as_ref().is_some_and(|p| p.0.done());
                     let mut chosen = false;
                     if done {
@@ -1356,7 +1362,7 @@ impl Game<'_> {
                     *target = Some(Vec3::new(pp.x, pp.y + ho, pp.z));
                 }
                 let dt = far(*target);
-                if dt < 100.0 || dt > 22500.0 {
+                if target_distance_outside_range(dt) {
                     if path.as_ref().is_none_or(|p| p.0.done()) {
                         *path = self.ring_path(clockwise).map(PathBox);
                     }
@@ -1393,7 +1399,7 @@ impl Game<'_> {
             }
             Phase::LandingApproach { path, target } => {
                 let dt = far(*target);
-                if dt < 100.0 || dt > 22500.0 || collided {
+                if target_distance_outside_range(dt) || collided {
                     if path.as_ref().is_none_or(|p| p.0.done()) {
                         let current = self.closest_node(pos.x, pos.y, pos.z);
                         // NEAR_EGG_TARGETING: the enemy nearest the egg.
@@ -1577,7 +1583,7 @@ impl Game<'_> {
                     }
                 } else {
                     let dt = far(*target);
-                    if dt < 100.0 || dt > 22500.0 {
+                    if target_distance_outside_range(dt) {
                         *since += 1;
                     }
                 }
@@ -3262,5 +3268,19 @@ mod tests {
         assert_eq!(t.map(|p| p.who), Some(FightWho::Guest(8)));
         let t = nearest_enemy(&players, false, Vec3::new(9.0, 64.0, 0.0), None, |_| true);
         assert_eq!(t.map(|p| p.who), Some(FightWho::Host));
+    }
+    #[test]
+    fn target_distance_respects_nan_and_exact_boundaries() {
+        for (distance, expected) in [
+            (f64::NAN, false),
+            (f64::NEG_INFINITY, true),
+            (99.0, true),
+            (100.0, false),
+            (22500.0, false),
+            (22501.0, true),
+            (f64::INFINITY, true),
+        ] {
+            assert_eq!(super::target_distance_outside_range(distance), expected);
+        }
     }
 }

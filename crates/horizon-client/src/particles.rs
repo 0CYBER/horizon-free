@@ -3223,7 +3223,7 @@ impl ParticleEngine {
             } => {
                 p.base_tick(level);
                 let (fluid, source) = level.fluid_source(ParticleLevel::block_at(p.position));
-                if !p.removed && !(fluid == Fluid::Water && source) {
+                if !(p.removed || (fluid == Fluid::Water && source)) {
                     p.removed = true;
                 }
                 if !p.removed && p.position[1] >= y_end {

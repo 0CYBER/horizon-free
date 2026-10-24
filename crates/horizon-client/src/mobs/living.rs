@@ -167,9 +167,9 @@ impl MobWorld<'_> {
                     let Ok(block) = self.collision.collision_block(state) else {
                         continue;
                     };
-                    if !block.large_collision_shape
-                        && !block.moving_piston
-                        && !(column && meets(Axis::Y, y))
+                    if !(block.large_collision_shape
+                        || block.moving_piston
+                        || (column && meets(Axis::Y, y)))
                     {
                         continue;
                     }

@@ -405,7 +405,7 @@ pub fn tick(
     }
     // Mob.tickHeadTurn -> BodyRotationControl.clientTick (a frozen
     // creaking's waits).
-    if m.alive() && !(super::creaking::is_creaking(m) && !super::creaking::can_move(m)) {
+    if m.alive() && (!super::creaking::is_creaking(m) || super::creaking::can_move(m)) {
         m.body_rotation_tick();
     }
     events.append(&mut m.outbox);
@@ -752,8 +752,8 @@ impl Mob {
     pub fn pushable(&self) -> bool {
         self.alive()
             && !matches!(self.species(), Species::Bat | Species::Shulker)
-            && !(self.kind.flags.climber && self.climbing)
-            && !(self.species() == Species::Creaking && !super::creaking::can_move(self))
+            && (!self.kind.flags.climber || !self.climbing)
+            && (self.species() != Species::Creaking || super::creaking::can_move(self))
     }
 }
 /// LivingEntity.onClimbable for the pusher (Spider.onClimbable: climbing a wall).
@@ -780,7 +780,7 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     let self_pushable = m.alive()
         && m.species() != Species::Shulker
         && !on_climbable(m, w)
-        && !(m.species() == Species::Creaking && !super::creaking::can_move(m));
+        && (m.species() != Species::Creaking || super::creaking::can_move(m));
     let mut targets: Vec<(Who, Vec3)> = Vec::new();
     if let Some(p) = &w.player
         // Entity.push: passengers of the same vehicle never push each other.
