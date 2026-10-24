@@ -141,7 +141,6 @@ public final class HorizonClient implements ClientModInitializer {
             try { context.putAll(DistantTerrainSettings.read()); }
             catch (RuntimeException | LinkageError unavailable) { context.put("dh_capture_status", "unavailable"); }
         } else context.put("dh_capture_status", "not_installed");
-        context.putAll(ShaderSettings.read(loader.isModLoaded("iris")));
         return context;
     }
 
@@ -191,7 +190,7 @@ public final class HorizonClient implements ClientModInitializer {
                 changed.add(setting.getKey());
         }
         for (String setting : recording.context.keySet()) {
-            if ((setting.startsWith("dh_") || setting.startsWith("iris_")) && !end.containsKey(setting))
+            if (setting.startsWith("dh_") && !end.containsKey(setting))
                 changed.add(setting);
         }
         recording.context.put("visual_settings_end", end);

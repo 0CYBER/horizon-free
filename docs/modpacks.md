@@ -59,7 +59,7 @@ was downloaded.
 | **library** | APIs and code shared by other mods (Architectury, Curios, GeckoLib, Kotlin for Forge, Balm...) | no: maps to the Horizon API or the SDK | **80** |
 | **integration** | glue between two other mods (JEI plugins, AE2 ↔ Mekanism, Create add-on wiring) | after both sides are ported | **44** |
 | **client-ui** | client-only screens, HUDs, tooltips, maps, recipe viewers | yes: client API, or built in | **32** |
-| **other** | pack tooling and engine features: KubeJS, Almost Unified, Iris/shaders, CTM, crash/version tools | no: folded into the pipeline or the engine | **25** |
+| **other** | pack tooling and engine features: KubeJS, Almost Unified, shader mods, CTM, crash/version tools | no: folded into the pipeline or the engine | **25** |
 | **performance** | Sodium, FerriteCore, ModernFix, ImmediatelyFast, spark, AI and recipe speed-ups | no: Horizon is the replacement | **16** |
 | **server-only** | admin and server features: ranks, essentials, backups, claims, spawn control | yes: server API | **11** |
 | | | | **495** |

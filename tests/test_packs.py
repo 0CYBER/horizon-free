@@ -74,13 +74,7 @@ class PackTests(unittest.TestCase):
             if name != "config/horizon-profile.txt":
                 self.assertEqual(files[name], value, name)
         self.assertNotIn("config/DistantHorizons.toml", files)
-        self.assertNotIn("config/iris.properties", files)
         self.assertNotIn("distanthorizons", candidate["mods"])
-        self.assertNotIn("iris", candidate["mods"])
-
-    def test_missing_exact_iris_sodium_dependency_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "Missing pinned dependency"):
-            build_pack.validate_selection(build_pack.read_lock(), ["iris"])
 
     def test_dispatch_experiment_does_not_enable_other_controllers(self):
         for name, profile in build_pack.PROFILES.items():
@@ -105,7 +99,6 @@ class PackTests(unittest.TestCase):
             self.assertEqual(options["renderDistance"], "12")
             self.assertEqual(options["maxFps"], "260")
             self.assertEqual(json.loads(options["preferredGraphicsBackend"]), backend)
-            self.assertNotIn("config/iris.properties", files)
 
     def test_tick_membership_experiment_preserves_visual_and_worker_settings(self):
         original = build_pack.overrides("m2-balanced", b"fixture")
@@ -384,11 +377,11 @@ class ComparisonTests(unittest.TestCase):
         candidate["mods"] = list(reversed(candidate["mods"]))
         self.assertFalse(compare_benchmarks.software_warnings(baseline, candidate))
         candidate["mods"].remove("horizonlab@0.16.0")
-        candidate["mods"].extend(["horizonlab@0.17.0", "iris@1.11.7"])
+        candidate["mods"].extend(["horizonlab@0.17.0", "lithium@0.24.1"])
         result = compare_benchmarks.compare(baseline, candidate)
         self.assertEqual(result["mismatches"], [])
         self.assertIn("Only baseline: horizonlab@0.16.0.", result["warnings"])
-        self.assertIn("Only candidate: horizonlab@0.17.0, iris@1.11.7.", result["warnings"])
+        self.assertIn("Only candidate: horizonlab@0.17.0, lithium@0.24.1.", result["warnings"])
         for field in ["java_vendor", "java_vm_name", "java_runtime_version"]:
             candidate[field] = "Different implementation"
             self.assertTrue(any(f"Software {field} differs" in warning
@@ -425,16 +418,15 @@ class ComparisonTests(unittest.TestCase):
         result = compare_benchmarks.compare(baseline, candidate)
         self.assertTrue(any("not captured" in warning for warning in result["warnings"]))
 
-    def test_terrain_quality_and_shader_changes_cannot_look_like_equal_workloads(self):
+    def test_terrain_quality_changes_cannot_look_like_equal_workloads(self):
         baseline = self.report()
         baseline.update(dh_capture_status="available", dh_lod_radius_chunks=128, dh_horizontal_quality="MEDIUM",
-                        iris_capture_status="available", iris_shaders_enabled=False, dh_thread_count=2, world_difficulty="NORMAL")
+                        dh_thread_count=2, world_difficulty="NORMAL")
         candidate = copy.deepcopy(baseline)
-        candidate.update(dh_lod_radius_chunks=256, iris_shaders_enabled=True, iris_shader_pack="Example pack",
-                         dh_thread_count=1, world_difficulty="PEACEFUL", visual_settings_changed=["render_distance"])
+        candidate.update(dh_lod_radius_chunks=256, dh_thread_count=1, world_difficulty="PEACEFUL",
+                         visual_settings_changed=["render_distance"])
         result = compare_benchmarks.compare(baseline, candidate)
         self.assertTrue(any("dh_lod_radius_chunks" in field for field in result["mismatches"]))
-        self.assertTrue(any("iris_shaders_enabled" in field for field in result["mismatches"]))
         self.assertTrue(any("world_difficulty" in field for field in result["mismatches"]))
         self.assertTrue(any("dh_thread_count differs" in warning for warning in result["warnings"]))
         self.assertTrue(any("changed between capture boundaries" in warning for warning in result["warnings"]))

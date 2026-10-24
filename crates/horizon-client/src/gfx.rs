@@ -65,12 +65,9 @@ mod arena;
 mod cull;
 mod end_sky;
 mod flat;
-pub(crate) mod java_stages;
-pub(crate) mod java_terrain;
 pub mod lightning;
 mod lod;
 mod occlusion;
-mod pack_stages;
 mod page_runs;
 pub mod panorama;
 mod resident;
@@ -90,7 +87,6 @@ fn world_pass_after_culling<'e>(
     encoder: &'e mut wgpu::CommandEncoder,
     view: &wgpu::TextureView,
     depth: &wgpu::TextureView,
-    pack: bool,
 ) -> wgpu::RenderPass<'e> {
     encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("Horizon world, after culling"),
@@ -107,11 +103,7 @@ fn world_pass_after_culling<'e>(
             view: depth,
             depth_ops: Some(wgpu::Operations {
                 load: wgpu::LoadOp::Load,
-                store: if pack {
-                    wgpu::StoreOp::Store
-                } else {
-                    wgpu::StoreOp::Discard
-                },
+                store: wgpu::StoreOp::Discard,
             }),
             stencil_ops: None,
         }),
@@ -159,18 +151,6 @@ struct Globals {
     dynamic_lights: [[f32; 4]; crate::dynamic_light::MAX],
 }
 pub type SectionKey = (i32, i32, i32);
-/// The sections a Java pack's shadow map draws ([`Renderer`]'s `shadow`).
-#[derive(Default)]
-struct ShadowList {
-    visible: Vec<resident::Visible>,
-    draws: Vec<[u32; 5]>,
-    pages: Vec<(u32, Option<u32>)>,
-    /// How many of `draws` are solid.
-    solid: u32,
-    indirect: Option<wgpu::Buffer>,
-    capacity: u64,
-}
-
 struct SectionGpu {
     /// Arena page and first vertex in it: solid quads, then translucent ones.
     page: u32,
@@ -291,28 +271,6 @@ pub struct Frame<'a> {
     /// `Screen.extractBlurredBackground`: blur the frame by this radius
     /// (`menuBackgroundBlurriness`) before the screen is drawn over it.
     pub menu_blur: Option<f32>,
-    /// What a shader pack's `Frame` uniform reads beyond the rest of the frame.
-    pub shader: ShaderInputs,
-}
-/// A shader pack's view of the game this frame (docs/shader-packs.md, `Frame`).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ShaderInputs {
-    /// `Level.getRainLevel` and `getThunderLevel` at the partial tick.
-    pub rain: f32,
-    pub thunder: f32,
-    /// The camera's fog type: 0 air, 1 water, 2 lava, 3 powder snow.
-    pub submerged: u8,
-    /// 0 overworld, -1 the Nether, 1 the End.
-    pub dimension: i8,
-    pub has_sky_light: bool,
-    /// `DimensionType.moonPhase`, 0..=7.
-    pub moon_phase: u8,
-    /// The time of day as a fraction (0 sunrise, 0.25 noon) and the partial tick.
-    pub day_fraction: f32,
-    pub partial_tick: f32,
-    /// The block and sky light (0..15) of the block holding the camera
-    /// entity's eyes; no sky light without a sky.
-    pub eye_light: [u8; 2],
 }
 /// One frame of the world border wall (`WorldBorderRenderer.render`).
 #[derive(Clone, Debug)]
@@ -380,11 +338,6 @@ pub struct Renderer {
     /// (`crosshair_globals`).
     crosshair_group: wgpu::BindGroup,
     crosshair_globals: wgpu::Buffer,
-    shadow_pipeline: wgpu::RenderPipeline,
-    shadow_entity_pipeline: wgpu::RenderPipeline,
-    shadow_globals: wgpu::Buffer,
-    shadow_group: wgpu::BindGroup,
-    shadow_entity_group: wgpu::BindGroup,
     entity_pipeline: wgpu::RenderPipeline,
     weather: weather::Weather,
     crumbling_pipeline: wgpu::RenderPipeline,
@@ -492,10 +445,6 @@ pub struct Renderer {
     /// built, and their pages.
     phase2_draws: Vec<[u32; 5]>,
     phase2_pages: Vec<(u32, Option<u32>)>,
-    /// A Java pack's shadow map (`gfx/java_terrain.rs`): the sections in
-    /// the light's view, their draws (solid then translucent, instances
-    /// after the camera's), and the indirect buffer they're uploaded to.
-    shadow: ShadowList,
     /// Each section's solid draws, to group them by arena page.
     solid_runs: page_runs::PageRuns,
     phase2_runs: page_runs::PageRuns,
@@ -507,17 +456,6 @@ pub struct Renderer {
     occlusion: occlusion::Occlusion,
     /// Resolution scale and FXAA (Horizon settings).
     world_post: world_post::Post,
-    /// The selected shader pack's stages (Horizon setting; none by default).
-    pack: Option<Pack>,
-    /// A Java pack's terrain programs (`gfx/java_terrain.rs`): their page
-    /// groups' layout, the glue's table, each arena page's group.
-    java_page_layout: wgpu::BindGroupLayout,
-    /// The device renders to and filters 16-bit normalized formats.
-    java_norm16: bool,
-    java_table: Option<wgpu::Buffer>,
-    java_pages: Vec<Option<(wgpu::Buffer, wgpu::BindGroup)>>,
-    /// The sprite layers and mip levels `animate` wrote this frame.
-    animated: Vec<(u32, u32)>,
     pub hud: HudRenderer,
     /// Vanilla's menu background blur, made on first use.
     menu_blur: Option<crate::menu_blur::MenuBlur>,
@@ -866,10 +804,7 @@ async fn open_device(
             | cull::Cull::features(&adapter)
             | (adapter.features()
                 & (wgpu::Features::INDIRECT_FIRST_INSTANCE
-                    | wgpu::Features::MAPPABLE_PRIMARY_BUFFERS
-                    // Java shader packs' 16-bit colour targets.
-                    | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
-                    | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES));
+                    | wgpu::Features::MAPPABLE_PRIMARY_BUFFERS));
         let driver = format!("{} {}", info.driver, info.driver_info);
         startup_step(format_args!(
             "requesting the device (driver {}) with features [{features}] and the adapter's \
@@ -1342,38 +1277,6 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let shadow_globals = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Shader pack shadow globals"),
-            size: std::mem::size_of::<Globals>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Terrain shadow"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_terrain"),
-                compilation_options: Default::default(),
-                buffers: &terrain_buffers,
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: tri,
-                cull_mode: Some(wgpu::Face::Back),
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            fragment: None,
-            multiview_mask: None,
-            cache: None,
-        });
         let prepared = prepared.unwrap_or_else(|| {
             PreparedTextures::new(sprite_pixels, sprite_size, layers, sprite_mips, forcefield)
         });
@@ -1399,10 +1302,8 @@ impl Renderer {
                         sample_count: 1,
                         dimension: wgpu::TextureDimension::D2,
                         format: wgpu::TextureFormat::Rgba8Unorm,
-                        // COPY_SRC: animated sprites into a Java pack's atlas.
                         usage: wgpu::TextureUsages::TEXTURE_BINDING
                             | wgpu::TextureUsages::COPY_DST
-                            | wgpu::TextureUsages::COPY_SRC
                             | wgpu::TextureUsages::STORAGE_BINDING,
                         view_formats: &[],
                     },
@@ -1484,16 +1385,6 @@ impl Renderer {
             "Debug crosshair resources",
             &bindings,
             &crosshair_globals,
-            &sprite_views,
-            &sprite_sampler,
-            &lightmap_view,
-            &lightmap_sampler,
-        );
-        let shadow_group = terrain_group(
-            &device,
-            "Shader pack shadow terrain resources",
-            &bindings,
-            &shadow_globals,
             &sprite_views,
             &sprite_sampler,
             &lightmap_view,
@@ -1660,32 +1551,6 @@ impl Renderer {
                 },
             ],
         });
-        let shadow_entity_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Shader pack shadow entity resources"),
-            layout: &entity_bindings,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: shadow_globals.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&atlas_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&atlas_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&lightmap_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
-                },
-            ],
-        });
         let entity_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Entity layout"),
             bind_group_layouts: &[Some(&entity_bindings)],
@@ -1796,32 +1661,6 @@ impl Renderer {
                 wgpu::ColorWrites::ALL,
             )
         };
-        let shadow_entity_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Entity shadow"),
-                layout: Some(&entity_layout),
-                vertex: wgpu::VertexState {
-                    module: &entity_shader,
-                    entry_point: Some("vs_entity"),
-                    compilation_options: Default::default(),
-                    buffers: &entity_vertex,
-                },
-                primitive: wgpu::PrimitiveState {
-                    cull_mode: None,
-                    ..Default::default()
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: Default::default(),
-                fragment: None,
-                multiview_mask: None,
-                cache: None,
-            });
         // RenderPipelines.WATER_MASK: the boat's water patch writes depth only.
         let water_mask_pipeline = entity_pipeline_with(
             "Water mask",
@@ -2266,8 +2105,6 @@ impl Renderer {
             std::mem::size_of::<TerrainVertex>() as u64,
             1 << 20,
         );
-        let java_page_layout = java_terrain::page_layout(&device);
-        let java_norm16 = java_terrain::norm16_targets(&adapter, &device);
         // Sections as one index list per frame where multi-draw is emulated.
         let flat = flat::wanted(&adapter, &device).then(|| {
             let buffers = [Some(wgpu::VertexBufferLayout {
@@ -2378,11 +2215,6 @@ impl Renderer {
             debug_line_capacity: 4096,
             crosshair_group,
             crosshair_globals,
-            shadow_pipeline,
-            shadow_entity_pipeline,
-            shadow_globals,
-            shadow_group,
-            shadow_entity_group,
             entity_pipeline,
             weather,
             crumbling_pipeline,
@@ -2462,19 +2294,12 @@ impl Renderer {
             draw_pages: Vec::new(),
             phase2_draws: Vec::new(),
             phase2_pages: Vec::new(),
-            shadow: ShadowList::default(),
             solid_runs: page_runs::PageRuns::default(),
             phase2_runs: page_runs::PageRuns::default(),
             block_entities: HashMap::new(),
             block_entity_revision: next_block_entity_revision(),
             occlusion: occlusion::Occlusion::new(crate::chunk::MIN_Y, crate::chunk::HEIGHT / 16),
             world_post,
-            pack: None,
-            java_page_layout,
-            java_norm16,
-            java_table: None,
-            java_pages: Vec::new(),
-            animated: Vec::new(),
             hud,
             menu_blur: None,
             info,
@@ -2784,33 +2609,7 @@ impl Renderer {
         first: u32,
         count: u32,
     ) {
-        self.draw_sections_with(pass, indirect, base, first, count, |_, _| {});
-    }
-    /// [`Self::draw_sections`]; `page` binds what else a page's draws need.
-    fn draw_sections_with(
-        &self,
-        pass: &mut wgpu::RenderPass<'_>,
-        indirect: &wgpu::Buffer,
-        base: u32,
-        first: u32,
-        count: u32,
-        page_group: impl Fn(&mut wgpu::RenderPass<'_>, u32),
-    ) {
-        let list = (&self.draws[..], &self.draw_pages[..]);
-        self.draw_list(pass, indirect, list, base, first, count, page_group);
-    }
-    /// [`Self::draw_sections_with`] over another list of draws and pages.
-    #[allow(clippy::too_many_arguments)]
-    fn draw_list(
-        &self,
-        pass: &mut wgpu::RenderPass<'_>,
-        indirect: &wgpu::Buffer,
-        (draws, pages): (&[[u32; 5]], &[(u32, Option<u32>)]),
-        base: u32,
-        first: u32,
-        count: u32,
-        page_group: impl Fn(&mut wgpu::RenderPass<'_>, u32),
-    ) {
+        let (draws, pages) = (&self.draws[..], &self.draw_pages[..]);
         let (mut i, end) = (first as usize, (first + count) as usize);
         while i < end {
             let (page, index_page) = pages[i];
@@ -2819,7 +2618,6 @@ impl Renderer {
                 .take_while(|&&p| p == (page, index_page))
                 .count();
             pass.set_vertex_buffer(0, self.arena.buffer(page).slice(..));
-            page_group(pass, page);
             let indices = index_page.map_or(&self.indices, |p| self.sorted_indices.buffer(p));
             pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
             if self.multi_draw {
@@ -2831,127 +2629,6 @@ impl Renderer {
                 }
             }
             i += run;
-        }
-    }
-    /// One `layer` of Horizon's terrain with a Java pack's geometry
-    /// pipelines (`java_terrain::DrawTerrain`): the frame's flat draws or its
-    /// section draws, each page with its group 3. `draws` are the frame's
-    /// phase 1 solid draws, all its solid draws and its translucent ones;
-    /// `culling` tells whether phase 2's come from occlusion culling.
-    fn draw_java_terrain(
-        &self,
-        pass: &mut wgpu::RenderPass<'_>,
-        layer: java_terrain::Layer,
-        pipelines: &java_terrain::TerrainPipelines,
-        flat_frame: bool,
-        draws: [u32; 3],
-        culling: bool,
-    ) {
-        use java_terrain::Layer;
-        let page = |pass: &mut wgpu::RenderPass<'_>, page: u32| {
-            if let Some(Some((_, group))) = self.java_pages.get(page as usize) {
-                pass.set_bind_group(3, group, &[]);
-            }
-        };
-        if matches!(layer, Layer::ShadowSolid | Layer::ShadowTranslucent) {
-            let shadow = &self.shadow;
-            let all = shadow.draws.len() as u32;
-            let (first, count) = if layer == Layer::ShadowSolid {
-                (0, shadow.solid)
-            } else {
-                (shadow.solid, all - shadow.solid)
-            };
-            // Without multi-draw the draws are read from the list.
-            let indirect = shadow.indirect.as_ref().unwrap_or(&self.indirect);
-            if count == 0 {
-                return;
-            }
-            pass.set_bind_group(2, pipelines.group, &[]);
-            pass.set_pipeline(pipelines.instanced);
-            pass.set_vertex_buffer(1, self.instances.slice(..));
-            let list = (&shadow.draws[..], &shadow.pages[..]);
-            self.draw_list(pass, indirect, list, 0, first, count, page);
-            return;
-        }
-        pass.set_bind_group(2, pipelines.group, &[]);
-        match (self.flat.as_ref().filter(|_| flat_frame), pipelines.flat) {
-            // Without occlusion culling, phase 1 is every solid call.
-            (Some(flat), Some(pipeline)) => {
-                let vertices = |p| self.arena.buffer(p);
-                pass.set_pipeline(pipeline);
-                match layer {
-                    Layer::Solid => {
-                        flat.draw(pass, &flat.calls[..flat.phase1_calls], vertices, page)
-                    }
-                    Layer::Revealed if culling => flat.draw_phase2(pass, vertices, page),
-                    Layer::Revealed => {}
-                    Layer::Translucent => {
-                        flat.draw(pass, &flat.calls[flat.solid_calls..], vertices, page)
-                    }
-                    // Drawn from the shadow list, above.
-                    Layer::ShadowSolid | Layer::ShadowTranslucent => {}
-                }
-            }
-            (Some(_), None) => {}
-            (None, _) => {
-                let [phase1, solid, translucent_draws] = draws;
-                let cull = self.cull.as_ref().filter(|_| culling);
-                let (indirect, base, first, count) = match (layer, cull) {
-                    (Layer::Solid, Some(_)) => (&self.indirect, 0, 0, phase1),
-                    (Layer::Solid, None) => (&self.indirect, 0, 0, solid),
-                    (Layer::Revealed, Some(c)) => (&c.phase2, phase1, phase1, solid - phase1),
-                    (Layer::Revealed, None) => return,
-                    (Layer::Translucent, _) => (&self.indirect, 0, solid, translucent_draws),
-                    (Layer::ShadowSolid | Layer::ShadowTranslucent, _) => return,
-                };
-                if count == 0 {
-                    return;
-                }
-                pass.set_pipeline(pipelines.instanced);
-                pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.set_vertex_buffer(1, self.instances.slice(..));
-                self.draw_sections_with(pass, indirect, base, first, count, page);
-            }
-        }
-    }
-    /// Each arena page's group for a Java pack's terrain programs: its
-    /// vertices and the glue's table.
-    fn prepare_java_pages(&mut self) {
-        let Some(table) = &self.java_table else {
-            return;
-        };
-        let count = self.arena.page_count() as usize;
-        self.java_pages.resize_with(count, || None);
-        let limit = self.device.limits().max_storage_buffer_binding_size;
-        for page in 0..count {
-            if !self.arena.has_page(page as u32) {
-                self.java_pages[page] = None;
-                continue;
-            }
-            let buffer = self.arena.buffer(page as u32);
-            if matches!(&self.java_pages[page], Some((b, _)) if b == buffer) {
-                continue;
-            }
-            let size = buffer.size().min(limit / 4 * 4);
-            let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Java shader pack terrain page"),
-                layout: &self.java_page_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                            buffer,
-                            offset: 0,
-                            size: std::num::NonZeroU64::new(size),
-                        }),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: table.as_entire_binding(),
-                    },
-                ],
-            });
-            self.java_pages[page] = Some((buffer.clone(), group));
         }
     }
     fn release_section(&mut self, key: SectionKey) {
@@ -3036,61 +2713,6 @@ impl Renderer {
             self.release_section(key);
         }
     }
-    /// Run `pack`'s stages over the world from now on (`None`: no pack, the
-    /// vanilla frame). On error the previous pack stays. `sprite_layers`
-    /// names the block sprites, for a Java pack's `block.properties`.
-    pub fn set_shader_pack(
-        &mut self,
-        pack: Option<&crate::shader_pack::ShaderPack>,
-        sprite_layers: &std::collections::BTreeMap<String, u32>,
-    ) -> Result<()> {
-        let format = self.config.format.remove_srgb_suffix();
-        let layouts = java_stages::GeometryLayouts {
-            flat: self.flat.as_ref().map(|f| f.draw_layout()),
-            page: &self.java_page_layout,
-        };
-        let table = pack.and_then(|p| p.java.as_ref()).map(|java| {
-            let table = java_terrain::table(sprite_layers, &java.block_ids);
-            wgpu::util::DeviceExt::create_buffer_init(
-                &self.device,
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some("Java shader pack terrain table"),
-                    contents: bytemuck::cast_slice(&table),
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                },
-            )
-        });
-        self.pack = match pack {
-            Some(pack) => Some(match &pack.java {
-                Some(java) => Pack::Java(java_stages::JavaStages::new(
-                    &self.device,
-                    &self.queue,
-                    format,
-                    &pack.id,
-                    java,
-                    &layouts,
-                    self.java_norm16,
-                )?),
-                None => Pack::Horizon(pack_stages::PackStages::new(
-                    &self.device,
-                    &self.queue,
-                    format,
-                    pack,
-                )?),
-            }),
-            None => None,
-        };
-        self.java_table = table;
-        self.java_pages.clear();
-        Ok(())
-    }
-    /// The folder name of the pack `set_shader_pack` gave.
-    pub fn shader_pack_id(&self) -> Option<&str> {
-        self.pack.as_ref().map(|p| match p {
-            Pack::Horizon(p) => p.id.as_str(),
-            Pack::Java(p) => p.id.as_str(),
-        })
-    }
     /// Horizon's resolution scale (world pixels per window pixel) and FXAA.
     pub fn set_world_post(&mut self, scale: f32, antialias: bool) {
         self.world_post.scale = scale.clamp(0.25, 2.0);
@@ -3115,16 +2737,6 @@ impl Renderer {
             "Horizon terrain resources",
             &self.terrain_layout,
             &self.globals,
-            &views,
-            &self.sprite_sampler,
-            &self.lightmap_view,
-            &self.lightmap_sampler,
-        );
-        self.shadow_group = terrain_group(
-            &self.device,
-            "Shader pack shadow terrain resources",
-            &self.terrain_layout,
-            &self.shadow_globals,
             &views,
             &self.sprite_sampler,
             &self.lightmap_view,
@@ -3222,15 +2834,6 @@ impl Renderer {
     }
     fn animate(&mut self, encoder: &mut wgpu::CommandEncoder, tick: u64) {
         self.animations.animate(encoder, &mut self.uploads, tick);
-        // A Java pack's atlas copies what changed, every level.
-        let levels = self.mip_levels;
-        self.animated.clear();
-        self.animated.extend(
-            self.animations
-                .changed
-                .iter()
-                .flat_map(|&layer| (0..levels).map(move |level| (layer, level))),
-        );
     }
     pub fn render(&mut self, frame: &Frame) -> Result<bool> {
         let rendered = self.draw_frame(frame);
@@ -3402,19 +3005,6 @@ impl Renderer {
         };
         self.uploads
             .buffer(&mut encoder, &self.globals, 0, bytemuck::bytes_of(&globals));
-        // Vanilla multiplies the bob into the projection (GameRenderer.renderLevel);
-        // Iris moves it into the model-view for packs (MixinModelViewBobbing), whose
-        // depth reconstruction expects a plain perspective `gbufferProjection`.
-        // `projection * view` is the same either way.
-        let pack_uniform = shader_pack_uniform(
-            frame,
-            frame.bob * view,
-            world_projection(frame.fov_degrees, aspect, frame.depth_far),
-            sun,
-            fog_color,
-            globals.fog,
-            globals.fog_ends,
-        );
         // GameRenderer.render3dHud: the hand's projection at hudFov, with the
         // bob in its pose rather than the projection (same product).
         let hand_projection = Mat4::from_cols_array(&crate::camera::hand_projection(
@@ -3485,57 +3075,7 @@ impl Renderer {
             visible_lods.sort_unstable_by_key(|v| (v.distance, v.key));
         }
         self.drawn_sections = visible.len() + visible_lods.len();
-        // A Java pack's shadow map: the sections in the light's orthographic
-        // box, whatever the camera sees (Iris turns cave culling off too).
-        let mut shadow_visible = std::mem::take(&mut self.shadow.visible);
-        shadow_visible.clear();
-        let shadow_view = match &self.pack {
-            Some(Pack::Java(j)) if !frame.title && self.java_table.is_some() => j.shadow_view(
-                frame.shader.dimension,
-                &java_stages::JavaFrame {
-                    eye_light: frame.shader.eye_light,
-                    sun_angle: frame.sky.sun_angle,
-                    moon_angle: frame.sky.moon_angle,
-                },
-                camera.as_vec3(),
-            ),
-            _ => None,
-        };
-        if let Some((light_view, [half, near, far])) = shadow_view {
-            // Inside when `plane · (p, 1) >= 0`: |x|, |y| <= half and the
-            // eye depth between the near and far planes (GL looks down -z).
-            let (x, y, z) = (light_view.row(0), light_view.row(1), light_view.row(2));
-            let planes = [
-                Vec4::W * half - x,
-                Vec4::W * half + x,
-                Vec4::W * half - y,
-                Vec4::W * half + y,
-                -z - Vec4::W * near,
-                z + Vec4::W * far,
-            ];
-            // Toward the light: the light's view looks down its -z.
-            let light = z.truncate().normalize_or_zero();
-            let casts = |k: SectionKey| {
-                let min = DVec3::new(
-                    f64::from(k.0 * 16),
-                    f64::from(crate::chunk::MIN_Y + k.1 * 16),
-                    f64::from(k.2 * 16),
-                ) - camera;
-                let min = min.as_vec3();
-                view.casts_into(min, min + Vec3::splat(16.0), light)
-            };
-            crate::spans::time("shadow visibility", || {
-                self.sections.visible(
-                    camera,
-                    (frame.detail_distance / 16.0) as i32,
-                    &Frustum { planes },
-                    casts,
-                    |_, _| false,
-                    &mut shadow_visible,
-                )
-            });
-        }
-        let instances = self.drawn_sections + shadow_visible.len();
+        let instances = self.drawn_sections;
         if instances as u64 > self.instance_capacity {
             self.instance_capacity = (instances as u64).next_power_of_two();
             self.instances = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -3552,63 +3092,8 @@ impl Renderer {
             visible
                 .iter()
                 .map(|v| section_instance(v.origin))
-                .chain(visible_lods.iter().map(|v| lod::instance(v.origin)))
-                .chain(shadow_visible.iter().map(|v| section_instance(v.origin))),
+                .chain(visible_lods.iter().map(|v| lod::instance(v.origin))),
         );
-        // The shadow map's draws: every solid quad (no face is culled), then
-        // the translucent ones in the order the camera's sort left them.
-        let shadow = &mut self.shadow;
-        shadow.draws.clear();
-        shadow.pages.clear();
-        for pass in [false, true] {
-            for (j, v) in shadow_visible.iter().enumerate() {
-                let s = self.sections.get(v.slot);
-                let instance = (self.drawn_sections + j) as u32;
-                match (pass, s.sorted_indices) {
-                    (false, _) if s.solid > 0 => {
-                        shadow
-                            .draws
-                            .push([s.solid * 6, 1, 0, s.start as u32, instance]);
-                        shadow.pages.push((s.page, None));
-                    }
-                    (true, Some((index_page, index_start))) if s.translucent > 0 => {
-                        let first = s.start + u64::from(s.solid) * 4;
-                        shadow.draws.push([
-                            s.translucent * 6,
-                            1,
-                            index_start as u32,
-                            first as u32,
-                            instance,
-                        ]);
-                        shadow.pages.push((s.page, Some(index_page)));
-                    }
-                    _ => {}
-                }
-            }
-            if !pass {
-                shadow.solid = shadow.draws.len() as u32;
-            }
-        }
-        if self.multi_draw && !shadow.draws.is_empty() {
-            if shadow.draws.len() as u64 > shadow.capacity || shadow.indirect.is_none() {
-                shadow.capacity = (shadow.draws.len() as u64).next_power_of_two();
-                shadow.indirect = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("Java shader pack shadow draws"),
-                    size: shadow.capacity * 20,
-                    usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }));
-            }
-            if let Some(indirect) = &shadow.indirect {
-                self.uploads.buffer(
-                    &mut encoder,
-                    indirect,
-                    0,
-                    bytemuck::cast_slice(&shadow.draws),
-                );
-            }
-        }
-        shadow.visible = shadow_visible;
         if !self.origins.is_empty() {
             self.uploads.buffer(
                 &mut encoder,
@@ -3625,12 +3110,6 @@ impl Renderer {
         let eye = (frame.bob * crate::camera::view_matrix(frame.yaw, frame.pitch))
             .inverse()
             .transform_point3(Vec3::ZERO);
-        // A Java pack that draws the terrain (`gfx/java_terrain.rs`): the
-        // world pass leaves it out, and occlusion culling tests against the
-        // pack's depth (`Cull::test_gl`).
-        let java_terrain = !frame.title
-            && self.java_table.is_some()
-            && matches!(&self.pack, Some(Pack::Java(j)) if j.draws_terrain(frame.shader.dimension));
         // Occlusion culling leaves the sections its last result did not see
         // to phase 2, after the others, with instance counts of 0. Whether
         // the frame has draws enough goes by the last one's.
@@ -4092,14 +3571,6 @@ impl Renderer {
                 bytemuck::cast_slice(&self.draws),
             );
         }
-        if java_terrain {
-            self.prepare_java_pages();
-            if let Some(table) = &self.java_table {
-                let nether = i32::from(frame.shader.dimension == -1);
-                self.queue
-                    .write_buffer(table, 4, bytemuck::bytes_of(&nether));
-            }
-        }
         let view_target = target_texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.config.format.remove_srgb_suffix()),
             ..Default::default()
@@ -4108,44 +3579,9 @@ impl Renderer {
             timer.begin(&mut encoder);
         }
         // The world's targets: the screen, or the scaled target of `post`.
-        let pack = self.pack.is_some() && !frame.title;
-        // What the pack reads beyond the world's colour and depth: each costs
-        // a pass (the shadow map, the G-buffer) or a copy (the opaque depth).
-        let (shadow_cfg, gbuffer, opaque_depth) = match self.pack.as_ref().filter(|_| pack) {
-            Some(Pack::Horizon(s)) => (
-                s.needs_shadow.then_some((s.shadow_res, s.shadow_dist)),
-                s.needs_gbuffer,
-                s.needs_opaque_depth,
-            ),
-            Some(Pack::Java(s)) => (None, false, s.reads_opaque_depth),
-            None => (None, false, false),
-        };
-        if let Some((shadow_res, shadow_dist)) = shadow_cfg {
-            self.world_post
-                .prepare_shadow(&self.device, shadow_res, shadow_dist, sun, -sun);
-            let shadow_globals = Globals {
-                view_proj: (self.world_post.shadow_proj * self.world_post.shadow_view)
-                    .to_cols_array_2d(),
-                ..globals
-            };
-            self.uploads.buffer(
-                &mut encoder,
-                &self.shadow_globals,
-                0,
-                bytemuck::bytes_of(&shadow_globals),
-            );
-        } else {
-            self.world_post.shadow_active = false;
-        }
-        let scaled = self.world_post.prepare(
-            &self.device,
-            [self.config.width, self.config.height],
-            pack,
-            world_post::Extras {
-                opaque_depth,
-                gbuffer,
-            },
-        );
+        let scaled = self
+            .world_post
+            .prepare(&self.device, [self.config.width, self.config.height]);
         let (world_view, world_depth) = match &scaled {
             Some((color, depth)) => (color, depth),
             None => (&view_target, &self.depth),
@@ -4154,36 +3590,6 @@ impl Renderer {
             cull.bind_depth(&self.device, world_depth);
         }
         let cull = self.cull.as_ref().filter(|_| culling && solid_draws > 0);
-        if shadow_cfg.is_some() {
-            let shadow_view = self.world_post.shadow_depth().clone();
-            let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Horizon shadow"),
-                color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &shadow_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(0.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                ..Default::default()
-            });
-            if solid_draws > 0 && !flat_frame {
-                shadow_pass.set_bind_group(0, &self.shadow_group, &[]);
-                shadow_pass.set_pipeline(&self.shadow_pipeline);
-                shadow_pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
-                shadow_pass.set_vertex_buffer(1, self.instances.slice(..));
-                self.draw_sections(&mut shadow_pass, &self.indirect, 0, 0, solid_draws);
-            }
-            if entity_quads > 0 {
-                shadow_pass.set_pipeline(&self.shadow_entity_pipeline);
-                shadow_pass.set_bind_group(0, &self.shadow_entity_group, &[]);
-                shadow_pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
-                shadow_pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
-                shadow_pass.draw_indexed(0..entity_quads * 6, 0, 0..1);
-            }
-        }
         {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: world_view,
@@ -4212,9 +3618,8 @@ impl Renderer {
                     view: world_depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(0.0),
-                        // A shader pack reads the world's depth, and
-                        // phase 2 of occlusion culling draws over it.
-                        store: if pack || cull.is_some() {
+                        // Phase 2 of occlusion culling draws over it.
+                        store: if cull.is_some() {
                             wgpu::StoreOp::Store
                         } else {
                             wgpu::StoreOp::Discard
@@ -4261,7 +3666,6 @@ impl Renderer {
                 }
             }
             match self.flat.as_ref().filter(|_| flat_frame) {
-                _ if java_terrain => {}
                 Some(flat) => {
                     pass.set_pipeline(&flat.solid);
                     let vertices = |p| self.arena.buffer(p);
@@ -4269,32 +3673,17 @@ impl Renderer {
                         // As below: phase 1, the test, then phase 2's draws
                         // that the test saw, copied after it.
                         Some(cull) => {
-                            flat.draw(
-                                &mut pass,
-                                &flat.calls[..flat.phase1_calls],
-                                vertices,
-                                |_, _| {},
-                            );
+                            flat.draw(&mut pass, &flat.calls[..flat.phase1_calls], vertices);
                             cull.test(&mut pass);
                             drop(pass);
                             cull.test_pass(&mut encoder);
                             flat.flatten_phase2(&mut encoder);
-                            pass = world_pass_after_culling(
-                                &mut encoder,
-                                world_view,
-                                world_depth,
-                                pack,
-                            );
+                            pass = world_pass_after_culling(&mut encoder, world_view, world_depth);
                             pass.set_bind_group(0, &self.group, &[]);
                             pass.set_pipeline(&flat.solid);
-                            flat.draw_phase2(&mut pass, vertices, |_, _| {});
+                            flat.draw_phase2(&mut pass, vertices);
                         }
-                        None => flat.draw(
-                            &mut pass,
-                            &flat.calls[..flat.solid_calls],
-                            vertices,
-                            |_, _| {},
-                        ),
+                        None => flat.draw(&mut pass, &flat.calls[..flat.solid_calls], vertices),
                     }
                     pass.set_bind_group(0, &self.group, &[]);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -4313,12 +3702,7 @@ impl Renderer {
                             cull.test(&mut pass);
                             drop(pass);
                             cull.test_pass(&mut encoder);
-                            pass = world_pass_after_culling(
-                                &mut encoder,
-                                world_view,
-                                world_depth,
-                                pack,
-                            );
+                            pass = world_pass_after_culling(&mut encoder, world_view, world_depth);
                             pass.set_bind_group(0, &self.group, &[]);
                             pass.set_pipeline(&self.solid);
                             pass.set_index_buffer(
@@ -4406,43 +3790,12 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.debug_line_buffer.slice(..));
                 pass.draw(0..4, debug_depth..debug_depth + debug_top);
             }
-            if opaque_depth {
-                drop(pass);
-                self.world_post.capture_opaque_depth(&mut encoder);
-                let attachments = [Some(wgpu::RenderPassColorAttachment {
-                    view: world_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })];
-                pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Horizon world, translucent"),
-                    color_attachments: &attachments,
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: world_depth,
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
-                    }),
-                    ..Default::default()
-                });
-                pass.set_bind_group(0, &self.group, &[]);
-            }
             match self.flat.as_ref().filter(|_| flat_frame) {
-                _ if java_terrain => {}
                 Some(flat) => {
                     pass.set_pipeline(&flat.translucent);
-                    flat.draw(
-                        &mut pass,
-                        &flat.calls[flat.solid_calls..],
-                        |p| self.arena.buffer(p),
-                        |_, _| {},
-                    );
+                    flat.draw(&mut pass, &flat.calls[flat.solid_calls..], |p| {
+                        self.arena.buffer(p)
+                    });
                     pass.set_bind_group(0, &self.group, &[]);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                 }
@@ -4508,80 +3861,7 @@ impl Renderer {
                 );
             }
         }
-        if gbuffer && scaled.is_some() {
-            self.world_post.build_gbuffer(
-                &self.queue,
-                &mut encoder,
-                &pack_uniform,
-                frame.shader.eye_light,
-                frame.shader.rain,
-            );
-        }
-        if pack
-            && let (Some((color, depth)), Some(size)) = (&scaled, self.world_post.size())
-            && let Some(mut stages) = self.pack.take()
-        {
-            // The pack's terrain programs draw with the frame's draws.
-            let draws = [phase1_draws, solid_draws, translucent_draws];
-            let draw = |render: &mut wgpu::RenderPass<'_>,
-                        layer: java_terrain::Layer,
-                        pipelines: &java_terrain::TerrainPipelines| {
-                self.draw_java_terrain(render, layer, pipelines, flat_frame, draws, culling);
-            };
-            let cull = self.cull.as_ref().filter(|_| culling && solid_draws > 0);
-            let occlusion = |encoder: &mut wgpu::CommandEncoder, depth: &wgpu::TextureView| {
-                if let Some(cull) = cull {
-                    cull.test_gl(&self.device, encoder, depth);
-                    // The flat path's phase 2: the calls the test saw.
-                    if let Some(flat) = self.flat.as_ref().filter(|_| flat_frame) {
-                        flat.flatten_phase2(encoder);
-                    }
-                }
-            };
-            let world = java_terrain::JavaWorld {
-                sprites: &self.sprite_textures,
-                split: sprite_split(),
-                levels: self.mipmaps,
-                animated: &self.animated,
-                lightmap: &self.lightmap_view,
-                draw: &draw,
-                occlusion: cull
-                    .is_some()
-                    .then_some(&occlusion as &java_terrain::OcclusionTest),
-            };
-            let output = match &mut stages {
-                Pack::Horizon(stages) => stages.run(
-                    &self.device,
-                    &self.queue,
-                    &mut encoder,
-                    color,
-                    depth,
-                    size,
-                    &self.world_post,
-                    pack_uniform,
-                    frame.shader.eye_light,
-                ),
-                Pack::Java(stages) => stages.run(
-                    &self.device,
-                    &self.queue,
-                    &mut encoder,
-                    color,
-                    depth,
-                    size,
-                    &self.world_post,
-                    pack_uniform,
-                    java_stages::JavaFrame {
-                        eye_light: frame.shader.eye_light,
-                        sun_angle: frame.sky.sun_angle,
-                        moon_angle: frame.sky.moon_angle,
-                    },
-                    java_terrain.then_some(&world),
-                ),
-            };
-            self.world_post
-                .finish_with(&mut encoder, &view_target, output);
-            self.pack = Some(stages);
-        } else if scaled.is_some() {
+        if scaled.is_some() {
             self.world_post.finish(&mut encoder, &view_target);
         }
         if hand_quads > 0 {
@@ -4891,22 +4171,6 @@ impl Frustum {
             p.truncate().dot(v) + p.w < 0.0
         })
     }
-    /// Whether the camera-relative box `min..max`, lit from the direction
-    /// `light` (toward the light), can cast a shadow inside: its shadow is
-    /// the box swept away from the light, which stays outside a plane the
-    /// box is outside of unless the sweep crosses it (Iris's advanced
-    /// shadow culling, conservatively).
-    pub fn casts_into(&self, min: Vec3, max: Vec3, light: Vec3) -> bool {
-        !self.planes.iter().any(|p| {
-            let v = Vec3::new(
-                if p.x >= 0.0 { max.x } else { min.x },
-                if p.y >= 0.0 { max.y } else { min.y },
-                if p.z >= 0.0 { max.z } else { min.z },
-            );
-            p.truncate().dot(v) + p.w < 0.0 && p.truncate().dot(light) >= 0.0
-        })
-    }
-
     /// Whether the camera-relative box `min..max` is entirely inside. Then
     /// `intersects` accepts every box within it: each plane's distance only
     /// grows from this box's nearest corner to the inner box's farthest, and
@@ -4925,66 +4189,6 @@ impl Frustum {
 /// Vanilla's `Projection`: reversed depth (near maps to 1, far to 0, tests
 /// are GREATER_THAN_OR_EQUAL), which keeps far faces a hair apart, like
 /// fire_side's 0.01 pixel in front of its block, from z-fighting.
-/// The prelude's `Frame` (`shader_pack_prelude.wgsl`); `resolution` and the
-/// time are filled per stage.
-fn shader_pack_uniform(
-    frame: &Frame,
-    view: Mat4,
-    projection: Mat4,
-    sun: Vec3,
-    fog_color: [f32; 4],
-    fog: [f32; 4],
-    fog_ends: [f32; 4],
-) -> pack_stages::FrameUniform {
-    let s = frame.shader;
-    let sky = frame.sky.sky_color;
-    pack_stages::FrameUniform {
-        view: view.to_cols_array_2d(),
-        projection: projection.to_cols_array_2d(),
-        inverse_view: view.inverse().to_cols_array_2d(),
-        inverse_projection: projection.inverse().to_cols_array_2d(),
-        camera_position: [
-            frame.camera.x as f32,
-            frame.camera.y as f32,
-            frame.camera.z as f32,
-            0.0,
-        ],
-        time: [0.0, 0.0, s.day_fraction, s.partial_tick],
-        sun: [sun.x, sun.y, sun.z, frame.sky.sun_angle.to_radians()],
-        moon: [-sun.x, -sun.y, -sun.z, f32::from(s.moon_phase)],
-        sky_color: [sky[0], sky[1], sky[2], 1.0],
-        fog_color,
-        fog: [fog[0], fog[1], fog_ends[0], fog_ends[1]],
-        weather: [s.rain, s.thunder, 0.0, 0.0],
-        camera_state: [
-            f32::from(s.submerged),
-            frame.night_vision,
-            frame.darkness.1,
-            0.0,
-        ],
-        view_params: [
-            0.05,
-            frame.depth_far,
-            frame.distance,
-            frame.fov_degrees.to_radians(),
-        ],
-        dimension: [
-            f32::from(s.dimension),
-            f32::from(u8::from(s.has_sky_light)),
-            0.0,
-            0.0,
-        ],
-        ..Default::default()
-    }
-}
-
-/// The selected shader pack on the GPU: a Horizon pack's WGSL stages, or a
-/// Java pack's translated programs.
-enum Pack {
-    Horizon(pack_stages::PackStages),
-    Java(java_stages::JavaStages),
-}
-
 /// The section the camera is in.
 fn camera_section(camera: DVec3) -> SectionKey {
     (
@@ -5013,31 +4217,6 @@ fn frustum(m: Mat4) -> [Vec4; 6] {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn shadow_casters_are_the_boxes_whose_shadow_can_reach_the_view() {
-        use glam::Vec3;
-        // Looking north (-z) from the origin, level.
-        let m = super::world_projection(70.0, 16.0 / 9.0, 256.0)
-            * crate::camera::view_matrix(180.0, 0.0);
-        let view = super::Frustum {
-            planes: super::frustum(m),
-        };
-        let cube =
-            |x: f32, y: f32, z: f32| (Vec3::new(x, y, z), Vec3::new(x + 16.0, y + 16.0, z + 16.0));
-        let noon = Vec3::Y;
-        // In view: casts.
-        let (min, max) = cube(-8.0, -8.0, -64.0);
-        assert!(view.intersects(min, max) && view.casts_into(min, max, noon));
-        // Far above the view, the sun overhead: its shadow falls into it.
-        let (min, max) = cube(-8.0, 200.0, -64.0);
-        assert!(!view.intersects(min, max) && view.casts_into(min, max, noon));
-        // Behind the camera: its shadow falls straight down, behind it too.
-        let (min, max) = cube(-8.0, -8.0, 32.0);
-        assert!(!view.casts_into(min, max, noon));
-        // The same box with a low sun behind the camera (south): it does.
-        assert!(view.casts_into(min, max, Vec3::new(0.0, 0.2, 1.0).normalize()));
-    }
-
     #[test]
     fn surface_is_8_bit_and_not_srgb() {
         use super::surface_format;
@@ -5155,11 +4334,7 @@ mod tests {
         );
         assert!(files.len() >= 10, "{files:?}");
         for path in files {
-            let mut text = std::fs::read_to_string(&path).unwrap();
-            // Api 2's prelude follows api 1's (`shader_pack::ShaderPack::load`).
-            if path.ends_with("shader_pack_prelude_api2.wgsl") {
-                text = format!("{}\n{text}", crate::shader_pack::PRELUDE);
-            }
+            let text = std::fs::read_to_string(&path).unwrap();
             // entity.wgsl comes after the overlay's constants (entity_shader).
             let module = naga::front::wgsl::parse_str(&text)
                 .or_else(|_| {

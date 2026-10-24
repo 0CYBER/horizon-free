@@ -15,11 +15,9 @@ yet (Modrinth has no `horizon` loader).
 |---|---|---|
 | Java mods (Fabric, NeoForge, Forge, Quilt) | ported into `horizon-mods/<mod id>/` and turned on | Checked from its jar before install: **Works**, **Partly** or **Doesn't run** ([below](#java-mods)) |
 | Resource packs | `resourcepacks/` beside `options.txt` | **Works** when made for 26.3 ([resource-packs.md](resource-packs.md) lists what Horizon reads). Older packs are **Partly**: they load with vanilla's compatibility warning |
-| Shader packs (Iris, OptiFine) | `shaderpacks/` | **Partly**: translated to WGSL, the full-screen passes draw and the world and shadow passes don't yet ([shader-packs.md](shader-packs.md)). Packs for other loaders (Canvas, core-shader packs) **don't run** and can't be installed |
 | Modpacks (`.mrpack`, CurseForge zip) | the Modpacks page's import | **Partly**: Horizon runs the mods it can port, from the player's own downloads ([modpacks.md](modpacks.md)) |
 
-By default a search shows only what runs: Java mods made for 26.3, resource packs made for 26.3, shader packs for Iris
-or OptiFine, and every modpack. **Show everything** lists the rest of the kind too, each marked with how well it runs; what doesn't run is
+By default a search shows only what runs: Java mods made for 26.3, resource packs made for 26.3, and every modpack. **Show everything** lists the rest of the kind too, each marked with how well it runs; what doesn't run is
 never offered for install.
 
 ## Java mods
@@ -76,7 +74,7 @@ start); the hedge places and its recipe crafts 4.
 
 ## The Mods page
 
-The launcher's **Mods** page has the four kinds as tabs (Mods, Modpacks, Resource packs, Shader packs), a search field (Enter searches), **Show everything** and
+The launcher's **Mods** page has the three kinds as tabs (Mods, Modpacks, Resource packs), a search field (Enter searches), **Show everything** and
 the source: Modrinth, with **CurseForge (coming soon)** beside it, disabled. Each result is an index row: its summary, author,
 downloads, source and licence, how well it runs (and why), **Page** (the project's page on its source) and
 **Install** (**Import** for a modpack). The Modpacks tab lists the imported packs first, with their coverage
@@ -127,8 +125,7 @@ same name the player put there is never overwritten.
 
 - **Install** picks the newest version that runs, then its required dependencies, checked before any download: a
   dependency that isn't a pack Horizon loads (a Java mod) stops the install. Dependencies go in first. A resource
-  pack still has to be turned on in the game's Resource Packs screen, and a shader pack in Video Settings > Shader
-  Packs, as in vanilla and Iris.
+  pack still has to be turned on in the game's Resource Packs screen, as in vanilla.
 - **Update** installs the newer version and removes the old file.
 - **Remove** deletes the file and its entry. Packs installed as dependencies stay.
 - **A modpack** is downloaded (checked the same way) into `ports/downloads/`, imported, and ported straight away

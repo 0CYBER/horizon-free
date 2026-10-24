@@ -21,10 +21,10 @@ mod servers_page;
 mod theme;
 
 use gpui::{
-    div, ease_out_quint, prelude::*, px, relative, size, Animation, AnimationExt, AnyElement, App,
-    Application, Bounds, ClickEvent, Context, Div, ElementId, FocusHandle, FontWeight, Hsla,
-    KeyDownEvent, PathPromptOptions, SharedString, Stateful, Subscription, TitlebarOptions, Window,
-    WindowBounds, WindowOptions,
+    actions, div, ease_out_quint, prelude::*, px, relative, size, Animation, AnimationExt,
+    AnyElement, App, Application, Bounds, ClickEvent, Context, Div, ElementId, FocusHandle,
+    FontWeight, Hsla, KeyBinding, KeyDownEvent, Menu, MenuItem, PathPromptOptions, SharedString,
+    Stateful, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions,
 };
 use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
@@ -42,7 +42,7 @@ use theme::Theme;
 enum Page {
     Play,
     Versions,
-    /// Mods, resource and shader packs, and modpacks (imported ones and the browser's).
+    /// Mods, resource packs and modpacks (imported ones and the browser's).
     Mods,
     Servers,
     Notes,
@@ -3458,6 +3458,44 @@ impl Launcher {
     }
 }
 
+actions!(horizon_launcher, [Quit, CloseWindow]);
+
+/// What closing the last window does: stop the servers this launcher started, send the telemetry,
+/// exit. A game that is running keeps running. Cmd+Q goes through here too.
+fn shut_down(cx: &mut App) {
+    servers_page::stop_on_quit();
+    telemetry::send_before_exit();
+    cx.quit()
+}
+
+/// The macOS shortcuts: Cmd+Q quits, Cmd+W closes the window.
+#[cfg(target_os = "macos")]
+fn key_bindings() -> Vec<KeyBinding> {
+    vec![
+        KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-w", CloseWindow, None),
+    ]
+}
+
+#[cfg(not(target_os = "macos"))]
+fn key_bindings() -> Vec<KeyBinding> {
+    Vec::new()
+}
+
+/// The menu bar on macOS, where "Quit" belongs to the app menu.
+fn menus() -> Vec<Menu> {
+    vec![
+        Menu {
+            name: "Horizon Launcher".into(),
+            items: vec![MenuItem::action("Quit Horizon Launcher", Quit)],
+        },
+        Menu {
+            name: "Window".into(),
+            items: vec![MenuItem::action("Close Window", CloseWindow)],
+        },
+    ]
+}
+
 fn main() {
     perf::process_started();
     backend::exe_path();
@@ -3478,6 +3516,18 @@ fn main() {
                     Cow::Borrowed(horizon_theme::fonts::PIXEL_BOLD),
                 ])
                 .expect("bundled fonts");
+            cx.bind_keys(key_bindings());
+            cx.on_action(|_: &Quit, cx| shut_down(cx));
+            // The key press is being handled inside the window, so the window can only be
+            // removed once that update has finished.
+            cx.on_action(|_: &CloseWindow, cx| {
+                cx.defer(|cx| {
+                    for window in cx.windows() {
+                        let _ = window.update(cx, |_, window, _| window.remove_window());
+                    }
+                })
+            });
+            cx.set_menus(menus());
             let bounds = Bounds::centered(None, size(px(1180.), px(760.)), cx);
             cx.open_window(
                 WindowOptions {
@@ -3493,18 +3543,36 @@ fn main() {
                 |window, cx| cx.new(|cx| Launcher::new(window, cx)),
             )
             .expect("window");
-            cx.on_window_closed(|cx| {
-                servers_page::stop_on_quit();
-                telemetry::send_before_exit();
-                cx.quit()
-            })
-            .detach();
+            cx.on_window_closed(shut_down).detach();
             cx.activate(true);
         });
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cmd_q_quits_and_cmd_w_closes_the_window() {
+        use super::{key_bindings, CloseWindow, Quit};
+        use gpui::{Keymap, Keystroke};
+        let keymap = Keymap::new(key_bindings());
+        let key = |s: &str| [Keystroke::parse(s).unwrap()];
+        let (hit, _) = keymap.bindings_for_input(&key("cmd-q"), &[]);
+        assert!(hit.iter().any(|b| b.action().partial_eq(&Quit)));
+        let (hit, _) = keymap.bindings_for_input(&key("cmd-w"), &[]);
+        assert!(hit.iter().any(|b| b.action().partial_eq(&CloseWindow)));
+    }
+
+    #[test]
+    fn the_app_menu_has_quit() {
+        let menus = super::menus();
+        assert_eq!(menus[0].name, "Horizon Launcher");
+        assert!(matches!(
+            &menus[0].items[0],
+            gpui::MenuItem::Action { name, .. } if name == "Quit Horizon Launcher"
+        ));
+    }
+
     #[test]
     fn the_offline_name_is_read_from_its_key() {
         use super::player_name;

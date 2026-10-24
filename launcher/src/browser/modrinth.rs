@@ -11,7 +11,6 @@ pub struct Modrinth;
 fn project_type(kind: Kind) -> &'static str {
     match kind {
         Kind::ResourcePack => "resourcepack",
-        Kind::ShaderPack => "shader",
         Kind::Modpack => "modpack",
         Kind::Mod => "mod",
     }
@@ -36,7 +35,7 @@ pub(super) fn facets(query: &Query) -> String {
     }
     let loaders: Vec<String> = match &f.loader {
         Some(l) => vec![format!("categories:{l}")],
-        None => details::default_loaders(query.kind, query.everything)
+        None => details::default_loaders(query.kind)
             .iter()
             .map(|l| format!("categories:{l}"))
             .collect(),

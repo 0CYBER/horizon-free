@@ -6,7 +6,7 @@ Horizon has its own mod system, written for Horizon and not compatible with Java
 
 Horizon mods are written in Rust, compiled to WebAssembly and run in a sandbox. A mod can only do what it asks for and you allow, and a mod that crashes is switched off without taking the game down.
 
-> **Early.** The mod system is new. There is no store for Horizon mods yet: they are files to put in a folder. The launcher's **Mods** page (see below) finds resource packs, shader packs and modpacks, not `.hmod` mods.
+> **Early.** The mod system is new. There is no store for Horizon mods yet: they are files to put in a folder. The launcher's **Mods** page (see below) finds resource packs and modpacks, not `.hmod` mods.
 
 **Playing with mods**
 
@@ -32,9 +32,9 @@ cargo horizon-mod run
 
 `run` builds the mod and starts the game with it. After an edit, `cargo horizon-mod build` rebuilds it and the running game reloads it. The full guide, with the API, the manifest and the roadmap, is [docs/mods.md](https://github.com/ludovic111/horizon/blob/main/docs/mods.md). Java mod jars don't run in Horizon: their code calls and patches Minecraft's Java classes, and Horizon has none. What carries over is the data and assets inside a jar ([modpacks](https://github.com/ludovic111/horizon/blob/main/docs/modpacks.md)).
 
-## Finding resource packs, shader packs and modpacks
+## Finding resource packs and modpacks
 
-The launcher's **Mods** page (launcher 0.17 and newer) searches [Modrinth](https://modrinth.com) for what Horizon can load: resource packs, Java shader packs and modpacks. Each result says how well it runs in Horizon (**Works**, **Partly**, or **Doesn't run**), and by default the page shows only what runs. **Install** downloads the file, checks it against the checksum Modrinth lists and refuses anything that does not match, then puts it in the right folder, with the packs it needs. **Update** and **Remove** are there too. A resource pack still has to be turned on in the game's Resource Packs screen, and a shader pack in Video, Shader Packs. A modpack is imported on the [Modpacks page](/docs/modpacks).
+The launcher's **Mods** page (launcher 0.17 and newer) searches [Modrinth](https://modrinth.com) for what Horizon can load: resource packs and modpacks. Each result says how well it runs in Horizon (**Works**, **Partly**, or **Doesn't run**), and by default the page shows only what runs. **Install** downloads the file, checks it against the checksum Modrinth lists and refuses anything that does not match, then puts it in the right folder, with the packs it needs. **Update** and **Remove** are there too. A resource pack still has to be turned on in the game's Resource Packs screen. A modpack is imported on the [Modpacks page](/docs/modpacks).
 
 CurseForge support is coming soon: the page shows it, but doesn't search it yet. The same things work from a terminal: `horizon-launcher mods search`, `install`, `update` and `remove`.
 
