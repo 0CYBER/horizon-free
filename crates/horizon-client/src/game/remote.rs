@@ -305,6 +305,16 @@ impl Game<'_> {
         // A signed-in account always plays under its own name.
         let auth = horizon_client::auth::current();
         let name = auth.as_ref().map_or(name, |a| a.name.as_str());
+        let user = auth.as_ref().map_or_else(
+            || {
+                (
+                    name.to_owned(),
+                    horizon_protocol::crypto::offline_uuid(name),
+                )
+            },
+            |a| (a.name.clone(), a.uuid),
+        );
+        self.server_packs_connect(local.is_none().then_some(address), user);
         let session = match local {
             Some(pipe) => Session::connect_local(pipe, name, view, lang.clone()),
             None => {
@@ -453,6 +463,7 @@ impl Game<'_> {
         if let Some(mut r) = self.remote.take() {
             r.session.disconnect();
         }
+        self.server_packs_disconnect();
         // Single player's server thread saves the world before the title shows.
         let single_player = match self.integrated.take() {
             Some(server) => {
@@ -827,6 +838,8 @@ impl Game<'_> {
                     }
                 }
                 Event::Reconfigured(registries) => self.set_registries(registries),
+                Event::PackPush(p) => self.handle_pack_push(p),
+                Event::PackPop(id) => self.handle_pack_pop(id),
                 Event::DecodeError(e) => {
                     if let Some(r) = self.remote.as_mut() {
                         r.decode_errors += 1;

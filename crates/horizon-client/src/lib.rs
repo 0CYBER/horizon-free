@@ -41,6 +41,7 @@ pub mod command;
 pub mod command_block;
 pub mod command_storage;
 pub mod component;
+pub mod confirm_screen;
 pub mod container_screen;
 pub mod containers;
 pub mod control;
