@@ -121,11 +121,13 @@ impl Game<'_> {
         let bonus = if knockback_attack { 0.5 } else { 0.0 };
         (enchanted / 2.0 + bonus, knockback_attack)
     }
-    /// `causeExtraKnockback`'s direction, `(sin yRot, -cos yRot)`: the target
-    /// flies where the attacker looks, not away from it.
+    /// `causeExtraKnockback`'s direction, `(sin yRot, -cos yRot)` from Mth's
+    /// sine table: the target flies where the attacker looks, not away from
+    /// it (straight along an axis when the attacker faces one).
     pub(super) fn extra_knockback_direction(&self) -> (f64, f64) {
-        let yaw = self.yaw.to_radians();
-        (f64::from(yaw.sin()), -f64::from(yaw.cos()))
+        use horizon_core::geometry::trig;
+        let yaw = f64::from(self.yaw * trig::DEG_TO_RAD);
+        (f64::from(trig::sin(yaw)), -f64::from(trig::cos(yaw)))
     }
     /// The attacker's side of `causeExtraKnockback` as the attacking client
     /// sees it: the server's player stops sprinting, and its flag reaches the
