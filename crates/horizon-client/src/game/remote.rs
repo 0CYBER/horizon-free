@@ -3249,9 +3249,10 @@ impl Game<'_> {
         player.flying_speed = a.flying_speed;
     }
     /// The local player's share of every touching entity's
-    /// `LivingEntity.pushEntities`: on a client `EntitySelector.pushableBy`
-    /// lets entities push only the local player, so the server never sends
-    /// these pushes. `doPush(player)` is `player.push(entity)`.
+    /// `LivingEntity.pushEntities`, and of the boats' pushes: on a client
+    /// `EntitySelector.pushableBy` lets entities push only the local player,
+    /// so the server never sends these pushes. `doPush(player)` is
+    /// `player.push(entity)`.
     fn remote_pushes(&self) -> Vec3 {
         let (Some(p), Some(r)) = (self.player.as_ref(), self.remote.as_ref()) else {
             return Vec3::ZERO;
@@ -3309,6 +3310,26 @@ impl Game<'_> {
             xa *= f64::from(0.05_f32);
             za *= f64::from(0.05_f32);
             push = Vec3::new(push.x - xa, push.y, push.z - za);
+        }
+        // AbstractBoat.push(player) from the boat's own tick (its box grown
+        // by 0.2 sideways) and from the player's pushEntities (its box).
+        let player_team = teams.of(Who::Player);
+        let area = Vec3::new(f64::from(0.2_f32), f64::from(-0.01_f32), f64::from(0.2_f32));
+        for b in self.boats.iter().filter(|b| self.riding != Some(b.id)) {
+            let bb = b.bounds();
+            let times = usize::from(
+                bounds.intersects(bb.inflate(area))
+                    && horizon_client::scoreboard::pushable_by(None, player_team, true),
+            ) + usize::from(
+                bounds.intersects(bb)
+                    && horizon_client::scoreboard::pushable_by(player_team, None, true),
+            );
+            if times > 0
+                && super::boat_passengers::boat_pushes(bb, bounds, false)
+                && let Some(v) = super::boat_passengers::push_impulse(b.position, p.position)
+            {
+                push = push.add_vector(v.scale(times as f64));
+            }
         }
         push
     }

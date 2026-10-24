@@ -96,7 +96,8 @@ impl Boat {
             Vec3::new(p.x + w, p.y + HEIGHT, p.z + w),
         )
     }
-    /// Under water or flowing water (`isEyeInFluid(WATER)` for its seats).
+    /// `isUnderWater`; it stands in for `canAddPassenger`'s
+    /// `isEyeInFluid(WATER)` too.
     pub fn under_water(&self) -> bool {
         matches!(self.status, Status::UnderWater | Status::UnderFlowingWater)
     }

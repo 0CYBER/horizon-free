@@ -36,7 +36,7 @@ fn moved_by_push(m: &Mob) -> bool {
 }
 /// `Entity.push(Entity)`: the push `other` gets from `this` (which takes the
 /// opposite one), or None when they stand on nearly the same spot.
-fn push_impulse(this: Vec3, other: Vec3) -> Option<Vec3> {
+pub(super) fn push_impulse(this: Vec3, other: Vec3) -> Option<Vec3> {
     let (mut xa, mut za) = (other.x - this.x, other.z - this.z);
     let mut dd = xa.abs().max(za.abs());
     if dd < f64::from(0.01_f32) {
@@ -51,7 +51,7 @@ fn push_impulse(this: Vec3, other: Vec3) -> Option<Vec3> {
 }
 /// `AbstractBoat.push`: another boat is pushed while it is lower than this
 /// boat's top, anything else while its feet are no higher than the boat's.
-fn boat_pushes(boat: Aabb, other: Aabb, other_is_boat: bool) -> bool {
+pub(super) fn boat_pushes(boat: Aabb, other: Aabb, other_is_boat: bool) -> bool {
     if other_is_boat {
         other.min_position().y < boat.max_position().y
     } else {
@@ -179,9 +179,9 @@ impl Game<'_> {
     /// The end of `AbstractBoat.tick` on the server for boat `i`: each
     /// entity it touches gets in (a mob, while no player steers) or is
     /// pushed apart from it, and `LivingEntity.pushEntities` of each mob and
-    /// player touching it pushes the two apart once more. The player's own
-    /// share of a push only reaches the server's copy of it, which its
-    /// client never feels, so players are not moved here.
+    /// player touching it pushes the two apart once more. Only the window's
+    /// own player is moved here: a server's players are pushed by their
+    /// clients, which tick the boats near them (`remote_pushes`).
     pub(super) fn boat_contacts(&mut self, i: usize) {
         let (id, bb, max) = {
             let b = &self.boats[i];
@@ -194,7 +194,9 @@ impl Game<'_> {
         ));
         let mut count = self.boat_passengers(id);
         // getControllingPassenger is a player: one rides it (players sit first).
-        let pick_up = self.boat_players(id) == 0 && !self.boats[i].under_water();
+        let pick_up = self.boat_players(id) == 0;
+        // canAddPassenger, which startRiding asks after the checks below.
+        let room = !self.boats[i].under_water();
         // (mob, touched by the boat's sweep, its own pushEntities reaches the boat)
         let teams = self.mob_teams();
         let mobs: Vec<(usize, bool, bool)> = (0..self.mobs.len())
@@ -214,13 +216,14 @@ impl Game<'_> {
             })
             .collect();
         let player_team = teams.of(Who::Player);
-        let players: Vec<(Aabb, bool, bool)> = self
+        let players: Vec<(Aabb, bool, bool, bool)> = self
             .players_outside(id)
             .into_iter()
             .map(|(pb, own)| {
                 let team = if own { player_team } else { None };
                 (
                     pb,
+                    own,
                     pb.intersects(area) && pushable_by(None, team, true),
                     pb.intersects(bb) && pushable_by(team, None, true),
                 )
@@ -239,13 +242,18 @@ impl Game<'_> {
                         .mob_data()
                         .entity_has("minecraft:cannot_be_pushed_onto_boats", &m.kind.id);
                 if boards {
-                    // Entity.canRide: not while its boarding cooldown runs.
-                    if m.extra.boarding_cooldown <= 0 {
+                    // startRiding fails quietly (no push) while the mob's
+                    // boarding cooldown runs (Entity.canRide) or the boat
+                    // is under water.
+                    if room && m.extra.boarding_cooldown <= 0 {
                         let m = &mut self.mobs[j];
                         m.extra.mount = Some(id);
                         m.extra.passenger = true;
                         m.ai.nav.stop();
+                        let mob = m.id;
                         count += 1;
+                        // Mob.startRiding drops its lead.
+                        self.break_leash(mob, true, false);
                     }
                     continue;
                 }
@@ -255,14 +263,19 @@ impl Game<'_> {
                 self.boat_push_mob(i, j, count);
             }
         }
-        for (pb, touched, pushes) in players {
+        for (pb, own, touched, pushes) in players {
+            let Some(v) = push_impulse(self.boats[i].position, pb.center())
+                .filter(|_| boat_pushes(bb, pb, false))
+            else {
+                continue;
+            };
             for _ in 0..usize::from(touched) + usize::from(pushes) {
-                let b = &mut self.boats[i];
-                if count == 0
-                    && boat_pushes(bb, pb, false)
-                    && let Some(v) = push_impulse(b.position, pb.center())
-                {
+                if count == 0 {
+                    let b = &mut self.boats[i];
                     b.velocity = b.velocity.subtract(v);
+                }
+                if own && let Some(p) = self.player.as_mut() {
+                    p.velocity = p.velocity.add_vector(v);
                 }
             }
         }
