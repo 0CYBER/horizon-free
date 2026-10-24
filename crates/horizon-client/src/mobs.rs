@@ -987,6 +987,12 @@ pub enum MobEvent {
         pos: [i32; 3],
         state: horizon_world::registry::BlockStateId,
     },
+    /// `DoorBlock.setOpen` by a mob (`InteractWithDoor`): the door opens or
+    /// closes, both halves, with its sound and game event.
+    SetDoorOpen {
+        pos: [i32; 3],
+        open: bool,
+    },
     /// Destroy a block, dropping nothing (sheep eating grass becomes dirt via SetBlock).
     BreakBlock {
         pos: [i32; 3],

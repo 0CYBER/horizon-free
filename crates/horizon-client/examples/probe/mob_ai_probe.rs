@@ -1323,6 +1323,31 @@ pub fn main() -> horizon_client::Result<()> {
                     world.set(at[0], at[1], at[2], registry.resolve(&st)?)?;
                 }
             }
+            // Doors villagers opened or closed (DoorBlock.setOpen), both halves.
+            let doors: Vec<([i32; 3], bool)> = events
+                .iter()
+                .filter_map(|e| match e {
+                    MobEvent::SetDoorOpen { pos, open } => Some((*pos, *open)),
+                    _ => None,
+                })
+                .collect();
+            for (at, open) in doors {
+                let Some(half) = registry
+                    .state(world.block(at[0], at[1], at[2]))
+                    .and_then(|s| s.properties.get("half").cloned())
+                else {
+                    continue;
+                };
+                let other = if half == "lower" { 1 } else { -1 };
+                for y in [at[1], at[1] + other] {
+                    if let Some(mut st) = registry.state(world.block(at[0], y, at[2])).cloned()
+                        && st.properties.contains_key("open")
+                    {
+                        st.properties.insert("open".to_owned(), open.to_string());
+                        world.set(at[0], y, at[2], registry.resolve(&st)?)?;
+                    }
+                }
+            }
             mobs.append(&mut born);
             mobs.append(&mut added);
             for e in &heart_events {

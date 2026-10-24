@@ -245,7 +245,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'doors', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
 
 
 class Game:
@@ -4140,6 +4140,54 @@ def check_growth(host, guest, out):
     return detail
 
 
+def check_doors(host, guest, out):
+    """A villager shut in a room opens its oak door on its way to a free composter outside
+    (InteractWithDoor), takes the composter as its job site and closes the door behind it; the
+    guest sees the door open and close again."""
+    gx, gy, gz = (int(v // 1) for v in pos_of(guest))
+    x, y, z = gx + 4, gy, gz - 8
+    lower, upper, composter, marker = (x + 2, y, z), (x + 2, y + 1, z), (x + 7, y, z), (x + 7, y, z + 2)
+    tag = 'dg_door_villager'
+    farmer = (f'execute if entity @e[type=minecraft:villager,tag={tag},'
+              f'nbt={{VillagerData:{{profession:"minecraft:farmer"}}}}] run setblock {marker[0]} {marker[1]} {marker[2]} '
+              'minecraft:gold_block')
+    seen = {'opened': False, 'farmer': False, 'closed': None}
+    try:
+        host('command', command='time set 2000')
+        host('command', command=f'fill {x - 3} {y - 1} {z - 3} {x + 9} {y - 1} {z + 3} minecraft:stone')
+        host('command', command=f'fill {x - 3} {y} {z - 3} {x + 9} {y + 3} {z + 3} minecraft:air')
+        host('command', command=f'fill {x - 2} {y} {z - 2} {x + 2} {y + 2} {z + 2} minecraft:oak_planks')
+        host('command', command=f'fill {x - 1} {y} {z - 1} {x + 1} {y + 1} {z + 1} minecraft:air')
+        for (bx, by, bz), half in ((lower, 'lower'), (upper, 'upper')):
+            host('command', command=f'setblock {bx} {by} {bz} minecraft:oak_door[facing=east,half={half},'
+                                    'hinge=left,open=false,powered=false]')
+        host('command', command=f'setblock {composter[0]} {composter[1]} {composter[2]} minecraft:composter')
+        host('command', command=f'summon minecraft:villager {x + 0.5} {y} {z + 0.5} {{Tags:["{tag}"],'
+                                'PersistenceRequired:1b,VillagerData:{profession:"minecraft:none",level:1,'
+                                'type:"minecraft:plains"}}')
+        for _ in range(120):
+            guest.wait(10)
+            seen['opened'] = seen['opened'] or state_of(guest, lower, 'open') == 'true'
+            host('command', command=farmer)
+            if host.raw('block', *marker).get('block') == 'minecraft:gold_block':
+                seen['farmer'] = True
+                break
+        seen['closed'] = wait_state(guest, lower, 'open', 'false', 200) == 'false'
+        seen['server_door'] = state_of(host, lower, 'open')
+        guest.raw('look-at', f'{lower[0] + 0.5:.2f}', f'{lower[1] + 1:.2f}', f'{lower[2] + 0.5:.2f}')
+        guest.wait(10)
+        guest.shot(out, 'doors')
+    finally:
+        host('command', command=f'kill @e[type=minecraft:villager,tag={tag}]')
+        host('command', command=f'fill {x - 3} {y} {z - 3} {x + 9} {y + 3} {z + 3} minecraft:air')
+        host('command', command='time set day')
+    assert seen['opened'], f'the villager never opened its door: {seen}'
+    assert seen['farmer'], f'the villager did not take the composter outside: {seen}'
+    assert seen['closed'] and seen['server_door'] == 'false', f'the villager left its door open: {seen}'
+    return seen
+
+
+
 def check_light(host, guest, out):
     gx, gy, gz = (int(v // 1) for v in pos_of(guest))
     results = {}
@@ -4401,7 +4449,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'eat': check_eat, 'eating': check_eating, 'xp': check_xp,
              'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
              'light': check_light, 'plates': check_plates, 'swings': check_swings,
-             'cracks': check_cracks, 'time': check_time, 'growth': check_growth,
+             'cracks': check_cracks, 'time': check_time, 'growth': check_growth, 'doors': check_doors,
              'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect,
              'barter': check_barter, 'worn': check_worn, 'kills': check_kills,
              'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder,
