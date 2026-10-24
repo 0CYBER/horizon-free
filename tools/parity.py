@@ -679,7 +679,10 @@ def clear_large_outputs(name, trace):
                 top = path.relative_to(local).parts[0]
             except (ValueError, IndexError):
                 continue
-            if top not in OWN_DIRECTORIES:
+            # Only the harness's own directory: another harness running beside it may be writing
+            # large files in a directory this one merely read (decorated_region compiles its oracle
+            # into chunk-generation-parity while chunk_generation writes its dumps there).
+            if top not in OWN_DIRECTORIES and top.startswith(name.replace("_", "-")):
                 directories.add(local / top)
     for directory in directories:
         for file in (directory.rglob("*") if directory.is_dir() else []):

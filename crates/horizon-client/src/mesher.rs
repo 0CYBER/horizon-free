@@ -230,8 +230,6 @@ fn visibility(pad: &Padded, info: &[Info]) -> u64 {
     result
 }
 #[cfg(test)]
-mod leaf_culling_tests;
-#[cfg(test)]
 mod particle_tests;
 #[cfg(test)]
 mod visibility_tests;
@@ -277,7 +275,6 @@ struct Info {
     overlay: bool,
     /// `LeavesBlock`: with opaque leaves the faces between two leaf blocks are skipped.
     leaves: bool,
-    mangrove_roots: bool,
     blocks_flow: bool,
     ice: bool,
     sturdy: u8,
@@ -440,7 +437,6 @@ impl MeshTables {
                 legacy_solid: s.legacy_solid,
                 overlay: s.has_class("HalfTransparentBlock") || s.has_class("LeavesBlock"),
                 leaves: s.has_class("LeavesBlock"),
-                mangrove_roots: s.has_class("MangroveRootsBlock"),
                 blocks_flow: assets.blocks_fluid_flow.contains(&*s.name),
                 ice: s.has_class("IceBlock"),
                 sturdy: s.sturdy_full,
@@ -692,8 +688,6 @@ pub struct Mesher<'a> {
     pub smooth_lighting: bool,
     /// The `cutoutLeaves` option (fancy graphics); off makes leaves opaque.
     pub cutout_leaves: bool,
-    /// Cull shared leaf and mangrove-root faces, including transparent leaves.
-    pub cull_leaves: bool,
 }
 impl Mesher<'_> {
     /// `region[dz][dx]` are the chunks around the meshed column (centre 1,1).
@@ -773,12 +767,9 @@ impl Mesher<'_> {
                         let [dx, dy, dz] = d.normal();
                         let neighbor = pad.blocks[pi(x + dx, y + dy, z + dz)];
                         let other = &info[neighbor as usize];
-                        // Adapted from CullLeaves (MIT); see THIRD_PARTY_NOTICES.md.
-                        let shared_foliage = (state.leaves
-                            && other.leaves
-                            && (!self.cutout_leaves || self.cull_leaves))
-                            || (self.cull_leaves && state.mangrove_roots && other.mangrove_roots);
-                        visible[d as usize] = !shared_foliage
+                        // LeavesBlock.skipRendering with opaque leaves.
+                        let opaque_leaves = !self.cutout_leaves && state.leaves && other.leaves;
+                        visible[d as usize] = !opaque_leaves
                             && self
                                 .visibility
                                 .should_render_face(

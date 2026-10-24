@@ -21,7 +21,7 @@ One game is started per window size (1280x720 and 1920x1080 by default) and rend
 - **Warm-up excluded.** Each scene's flight starts only after its chunks are loaded and drawn and 2 seconds have passed; the load itself is reported separately. JIT warm-up of the JVM during the first scene is part of vanilla's real behaviour and is not removed.
 - **The same statistics code.** Horizon returns its raw frame times (`horizon-ctl fly ... raw`) and the vanilla mod writes its own; `stats()` in the driver computes every figure for both.
 - **Vanilla as players run it.** Your own 26.3 client jar and libraries (as the official launcher installs them for your OS), the official launcher's default JVM arguments (`-Xmx2G` and its G1 options), Java 25. The game's assets index is not used, so neither game plays sound (Horizon runs with `HORIZON_NO_AUDIO=1`, vanilla with OpenAL's null device); textures, models and shaders come from the client jar as usual.
-- **Performance mods.** `--game vanilla-mods` adds the Fabric builds for 26.3 of Sodium, Lithium, FerriteCore and ImmediatelyFast, the versions pinned with their hashes in `packs/mods.lock.json` (downloaded from Modrinth, never committed), plus Fabric API if one of them needs it.
+- **Performance mods.** `--game vanilla-mods` adds the Fabric builds for 26.3 of Sodium, Lithium, FerriteCore and ImmediatelyFast, the versions pinned with their hashes in `tools/benchmark-deps/mods.lock.json` (downloaded from Modrinth, never committed), plus Fabric API if one of them needs it.
 
 ## Known caveats
 

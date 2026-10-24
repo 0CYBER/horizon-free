@@ -126,13 +126,8 @@ pub fn status_of(cli: Option<PathBuf>) -> State {
     let Some(cli) = cli else {
         return State::Missing;
     };
-    let mut command = Command::new(&cli);
+    let mut command = crate::process::command(&cli);
     command.args(["status", "--json"]);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
     let out = match command.output() {
         Ok(out) => out,
         Err(e) => return State::Off(e.to_string()),

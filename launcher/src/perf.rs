@@ -9,10 +9,11 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use horizon_bench::{App, Frames, Kind, Report};
+use horizon_bench::{App, Frames, Hardware, Kind, Report};
 
 /// The first thing `main` does; every start time counts from here.
 pub fn process_started() -> Instant {
@@ -35,14 +36,36 @@ pub struct Perf {
     dirty: bool,
     /// Off for the windows `horizon-launcher benchmark` starts: they report to it instead.
     log: bool,
+    /// Machine probes run after the first frame, never while opening the window.
+    hardware: Option<Receiver<Machine>>,
+}
+
+#[derive(Debug)]
+struct Machine {
+    hardware: Hardware,
+    power: Option<String>,
+    load_average: Option<f64>,
+}
+
+impl Machine {
+    fn detect() -> Self {
+        Self {
+            hardware: Hardware::detect(),
+            power: horizon_bench::power_source().map(str::to_owned),
+            load_average: horizon_bench::load_average(),
+        }
+    }
 }
 
 impl Perf {
     pub fn new(scenario: &str) -> Perf {
-        let mut report = Report::new(Kind::Launcher, app());
+        let hardware = Hardware {
+            os: std::env::consts::OS.to_owned(),
+            arch: std::env::consts::ARCH.to_owned(),
+            ..Hardware::default()
+        };
+        let mut report = Report::with_hardware(Kind::Launcher, app(), hardware);
         report.conditions.scenario = Some(scenario.to_owned());
-        report.conditions.power = horizon_bench::power_source().map(str::to_owned);
-        report.conditions.load_avg_1m = horizon_bench::load_average();
         let path = crate::backend::data_dir().join("benchmarks").join(format!(
             "launcher-{}-{scenario}.json",
             report
@@ -61,6 +84,7 @@ impl Perf {
             saved: Instant::now(),
             dirty: false,
             log: true,
+            hardware: None,
         };
         if let Some(bytes) = binary_bytes() {
             perf.record("launcher.binary_bytes", bytes);
@@ -89,6 +113,12 @@ impl Perf {
         if first {
             self.first_frame = Some(now);
             self.record_since("launcher.start_ms", process_started());
+            let (sender, receiver) = mpsc::channel();
+            self.hardware = Some(receiver);
+            std::thread::spawn(move || {
+                // The window may close before the optional report details finish.
+                let _ = sender.send(Machine::detect());
+            });
         } else if let Some(gap) = self.last_frame.map(|t| now - t).filter(|g| *g < IDLE_GAP) {
             self.ui_frames.push(gap.as_secs_f32() * 1000.0);
         }
@@ -102,6 +132,7 @@ impl Perf {
 
     /// Samples memory and writes the report when something changed, at most every few seconds.
     pub fn tick(&mut self) {
+        self.poll_hardware();
         if self.saved.elapsed() < Duration::from_secs(5) {
             return;
         }
@@ -118,6 +149,7 @@ impl Perf {
     }
 
     pub fn report(&mut self) -> &Report {
+        self.poll_hardware();
         for (name, values) in &self.values {
             self.report.metric(name, values);
         }
@@ -126,6 +158,24 @@ impl Perf {
             .collect();
         self.report.created = horizon_bench::utc_now();
         &self.report
+    }
+
+    /// Takes the machine's details into the report once their thread has them.
+    fn poll_hardware(&mut self) {
+        let Some(receiver) = &self.hardware else {
+            return;
+        };
+        match receiver.try_recv() {
+            Ok(machine) => {
+                self.report.hardware = machine.hardware;
+                self.report.conditions.power = machine.power;
+                self.report.conditions.load_avg_1m = machine.load_average;
+                self.hardware = None;
+                self.dirty = true;
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => self.hardware = None,
+        }
     }
 
     pub fn save(&mut self) {
@@ -380,6 +430,41 @@ fn binary_bytes() -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn performance_tracking_starts_without_hardware_probes() {
+        let mut perf = Perf::new("test");
+        perf.keep_local_log(false);
+        assert!(perf.hardware.is_none());
+        assert_eq!(perf.report.hardware.os, std::env::consts::OS);
+        assert!(perf.report.hardware.cpu.is_none());
+        assert!(perf.report.conditions.power.is_none());
+    }
+
+    #[test]
+    fn background_hardware_details_preserve_recorded_metrics() {
+        let mut perf = Perf::new("test");
+        perf.keep_local_log(false);
+        perf.record("launcher.start_ms", 125.);
+        let (sender, receiver) = mpsc::channel();
+        perf.hardware = Some(receiver);
+        assert_eq!(perf.report().metrics["launcher.start_ms"].mean, 125.);
+        sender
+            .send(Machine {
+                hardware: Hardware {
+                    cpu: Some("Detected CPU".into()),
+                    ..Hardware::default()
+                },
+                power: Some("ac".into()),
+                load_average: Some(0.5),
+            })
+            .unwrap();
+        let report = perf.report();
+        assert_eq!(report.hardware.cpu.as_deref(), Some("Detected CPU"));
+        assert_eq!(report.conditions.power.as_deref(), Some("ac"));
+        assert_eq!(report.metrics["launcher.start_ms"].mean, 125.);
+        assert!(perf.hardware.is_none());
+    }
 
     #[test]
     fn the_first_frame_is_the_start_and_close_frames_are_ui_frames() {

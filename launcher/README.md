@@ -97,6 +97,10 @@ page `servers.json` (the list), `servers/<name>/` (the servers created there) an
 Long pages, dialogs, the server console and data previews have a visible scrollbar when
 their content overflows. Drag the thumb or click the track to navigate without a mouse wheel.
 
+Pages and Home's landscape fill the window as it resizes. Windows uses a matching title
+bar with native dragging, resizing, Snap,
+minimize, maximize/restore and close; macOS and Linux keep their system title bars.
+
 ## Updates
 
 The launcher looks for a newer Horizon release when it starts and every 30 minutes while it
@@ -127,7 +131,12 @@ and `horizon-launcher-windows-x64.zip`, never marked latest. The version is buil
 
 ## Command line
 
-The same binary is a command-line tool; without a subcommand it opens the window.
+The same binary is a command-line tool; without a subcommand it opens the window. On Windows it
+is a windowed program, so a desktop start opens no terminal; a subcommand writes to the terminal
+it was typed in, or to the pipes and files it was given (MCP keeps its stdio). Interactive `cmd`
+and PowerShell don't wait for a windowed program: they show the prompt again before its output
+and don't set `%ERRORLEVEL%` / `$LASTEXITCODE`. Scripts that need the exit code use
+`start /wait horizon-launcher …` or `Start-Process -Wait`, or read its output through a pipe.
 
     horizon-launcher versions [--installed]       releases on GitHub, or what is installed (* = selected)
     horizon-launcher install <tag|latest>
@@ -250,13 +259,19 @@ Each session writes its own measurements to `benchmarks/launcher-<time>-session.
 launcher's data folder, in the [benchmark report format](../docs/benchmark-report.md): start to the
 first frame, the release list fetch, installs and updates (download and unpack), preparing, Play to
 the game's first frame, memory, UI frame times and the binary's size, with the machine's CPU, RAM
-and OS. Attach it to an issue about the launcher being slow. `horizon-launcher benchmark` measures
-on purpose: it starts the launcher `--repeats` times (5; the first start is the cold one, as far
+and OS (read on a thread after the first frame: on Windows those queries take seconds). Attach it
+to an issue about the launcher being slow. `horizon-launcher benchmark` measures on purpose: it starts the launcher `--repeats` times (5; the first start is the cold one, as far
 as the OS's file cache allows), switches pages for a few seconds in each, rests 3 seconds to
 measure idle CPU, fetches the release list 3 times, and writes one report there with means and
 95% confidence intervals. Its window has to be on a screen that is awake. Session logs stay on
 your machine; a `benchmark` report is uploaded, dated to the day, only if you allowed benchmark
 uploads ([data collection](../docs/telemetry.md)).
+
+Long lists on Mods (results, installed entries, coverage reports and project versions), Versions
+and Patch notes build only nearby rows, including on their first frame. Variable row heights
+are measured as they enter view; hidden ranges share spacers in the existing page scrollbar.
+On Windows, `cargo test --bin horizon-launcher desktop_list_renders_the_viewport_after_scrollbar_jumps
+-- --ignored` checks 10,000 rows of different heights in a real GPUI window (requires an awake desktop/GPU).
 
 ## Building
 

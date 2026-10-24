@@ -40,6 +40,15 @@ probe against Horizon, and compares their outputs. There are about 290 of them.
 Never commit game files, decompiled source or prepared resources (`.local/`): `tools/check_public_tree.py` rejects
 them (`git config core.hooksPath .githooks` runs it before every commit).
 
+## Only original code
+
+Horizon's code is written from Minecraft 26.3 itself and from public documentation, never from another mod, loader
+or renderer. Don't read, copy, translate or paraphrase the source of Iris, OptiFine, Sodium or any other project,
+and don't send code an AI tool wrote from it. Their user documentation and file formats are fine to read, and their
+packs and mods are fine to run and observe. Shader packs were removed on 24 October 2026 (#1561) because their code
+had been written from another project's source; they come back only as a clean-room rewrite from a written
+description of the pack format.
+
 ## Before asking for review
 
 Run the self-check and paste the block it prints into your pull request:

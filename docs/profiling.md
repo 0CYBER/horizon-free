@@ -1,7 +1,7 @@
 # Find the next bottleneck
 
-Frame and tick recordings describe player-visible timings. A private Java Flight
-Recorder capture helps identify the code doing work or allocating objects. Use
+For Java comparison runs, a private Java Flight Recorder capture helps identify
+the code doing work or allocating objects. Use
 native Java 25, with `jcmd` and `java` from a JDK. Keep normal benchmark runs separate
 from profiling runs because sampling adds overhead.
 
@@ -53,8 +53,7 @@ allocated bytes or proving that one object type owns most of the allocation.
 GC pause totals/maximum use top-level `jdk.GCPhasePause`, excluding nested phases
 and concurrent collection-cycle duration. `gc_cycles` is a separate count.
 `heap_used_peak_at_gc_bytes` considers recorded GC heap summaries and can miss
-peaks between collections. It is separate from the game's once-per-second heap
-and process-RSS measurements.
+peaks between collections. It is separate from externally sampled process RSS.
 
 The reader ignores unselected event types and never extracts properties or
 arguments. `event_span_seconds` is the span of all observed event timestamps,
@@ -70,12 +69,5 @@ python3 tools/test_jfr.py
 This creates a real JDK recording of bounded allocations and GC, then compares
 the reader's counter differences, observation counts, GC counts and heap summaries
 against `jfr print --json`. It also verifies escaped thread names and that sampled
-weights do not appear as numeric allocation totals. CI runs it on Windows, Linux
-and Apple Silicon macOS. The reader was independently checked against the older
+weights do not appear as numeric allocation totals. The manual `jfr-analysis` CI job runs both collector fixtures on the Linux game runner. The reader was independently checked against the older
 real-game profile's JDK JSON export for 85 threads.
-
-The post-queue software-rendered profile confirms remaining allocations on the
-integrated-server and chunk-meshing threads. It is not a matched comparison with
-the older capture: world/cache state, heap and object-header flags differ. It
-cannot establish M2 frame gains. Mac captures are needed before choosing a larger
-renderer or native-kernel replacement.

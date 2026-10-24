@@ -24,6 +24,7 @@ pub const CONTROL: f32 = 34.;
 /// The top bar, and the sidebar of instances and servers.
 pub const TOPBAR: f32 = 56.;
 pub const SIDEBAR: f32 = 248.;
+pub const PAGE_GUTTER: f32 = 32.;
 
 /// Motion: short and eased out, never bouncy.
 pub const QUICK: Duration = tokens::QUICK.duration();

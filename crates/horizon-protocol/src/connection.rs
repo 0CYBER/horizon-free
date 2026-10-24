@@ -180,9 +180,9 @@ pub struct ConnWriter {
     pub threshold: Option<usize>,
     counters: Arc<Counters>,
 }
-/// InetAddress.getByName with Java's default `java.net.preferIPv6Addresses=false`: IPv4 addresses
-/// first, whatever order the system resolver gives (macOS puts IPv6 first). A server whose IPv6
-/// address doesn't answer the game still lets vanilla in over IPv4.
+/// `InetAddress.getByName` under Java's default `java.net.preferIPv6Addresses=false`: IPv4
+/// addresses first, whatever order the system resolver gives (macOS lists IPv6 first). Vanilla
+/// connects to that first address only; the rest stay here as fallbacks.
 fn ipv4_first(mut addrs: Vec<SocketAddr>) -> Vec<SocketAddr> {
     addrs.sort_by_key(SocketAddr::is_ipv6);
     addrs
@@ -194,12 +194,20 @@ pub struct Connection {
 }
 impl Connection {
     pub fn connect(host: &str, port: u16, timeout: Duration) -> Result<Self> {
-        let addrs = ipv4_first(
-            (host, port)
-                .to_socket_addrs()
-                .map_err(|e| Error::new(format!("Unknown host {host}: {e}")))?
-                .collect(),
-        );
+        let addrs: Vec<_> = (host, port)
+            .to_socket_addrs()
+            .map_err(|e| Error::new(format!("Unknown host {host}: {e}")))?
+            .collect();
+        Self::connect_addresses(host, addrs, timeout)
+    }
+    /// Minecraft's SRV redirect applies to the socket destination only. Callers
+    /// keep the player's original host and port in the protocol handshake.
+    pub fn connect_server(host: &str, port: u16, timeout: Duration) -> Result<Self> {
+        let addrs = crate::resolver::resolve(host, port)?;
+        Self::connect_addresses(host, addrs, timeout)
+    }
+    fn connect_addresses(host: &str, addrs: Vec<SocketAddr>, timeout: Duration) -> Result<Self> {
+        let addrs = ipv4_first(addrs);
         let mut last = Error::new(format!("Unknown host {host}"));
         for addr in addrs {
             match TcpStream::connect_timeout(&addr, timeout) {

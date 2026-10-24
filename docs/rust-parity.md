@@ -54,7 +54,6 @@ across 1,441,816 state pairs, including all pinned suppression-rule families.
 Animation metadata, frame sequences and tick-state selection now have native
 differential coverage, including all bundled animated texture metadata. GPU
 interpolation and game-loop synchronization remain unfinished.
-The playable Java performance packs remain available during development.
 
 ## Completion criteria and playable builds
 
