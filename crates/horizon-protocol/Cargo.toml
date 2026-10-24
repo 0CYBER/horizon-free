@@ -16,9 +16,10 @@ getrandom = "0.3"
 sha1 = "0.10"
 # Secure chat: SHA256withRSA message signatures.
 sha2 = "0.10"
-# Minecraft SRV redirects, using the system DNS configuration.
-hickory-resolver = "0.25.2"
-tokio = { version = "1", features = ["rt", "time"] }
+
+# The name servers of Windows' network adapters, for Minecraft SRV redirects.
+[target.'cfg(windows)'.dependencies]
+ipconfig = "0.3.4"
 
 # Its own name, not `probe`: Cargo copies every crate's examples into one target/<profile>/examples.
 [[example]]

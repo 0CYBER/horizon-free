@@ -1,65 +1,44 @@
 //! Minecraft server DNS redirects (`ServerRedirectHandler` / `ServerNameResolver`).
-//! Only the default port uses SRV; no record or a failed query leaves the
-//! original address in use. The protocol handshake still uses that address.
+//! Port 25565 asks for `_minecraft._tcp.<host>`'s SRV record; no record or a
+//! failed query leaves the original address in use. The protocol handshake
+//! still uses that original address.
 use crate::{Error, Result};
-use std::{
-    net::{IpAddr, SocketAddr, ToSocketAddrs},
-    time::Duration,
-};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 
-pub(crate) fn resolve(host: &str, port: u16, timeout: Duration) -> Result<Vec<SocketAddr>> {
-    resolve_with(
-        host,
-        port,
-        |name| srv_redirect(name, timeout),
-        |host, port| {
-            (host, port)
-                .to_socket_addrs()
-                .map(|addrs| addrs.collect())
-                .map_err(|e| Error::new(format!("Unknown host {host}: {e}")))
-        },
-    )
+mod dns;
+
+pub(crate) fn resolve(host: &str, port: u16) -> Result<Vec<SocketAddr>> {
+    resolve_with(host, port, srv_redirect, |host, port| {
+        (host, port)
+            .to_socket_addrs()
+            .map(|addrs| addrs.collect())
+            .map_err(|e| Error::new(format!("Unknown host {host}: {e}")))
+    })
 }
 
 fn resolve_with(
     host: &str,
     port: u16,
-    mut srv: impl FnMut(&str) -> Option<(String, u16)>,
-    mut addresses: impl FnMut(&str, u16) -> Result<Vec<SocketAddr>>,
+    srv: impl FnOnce(&str) -> Option<(String, u16)>,
+    addresses: impl FnOnce(&str, u16) -> Result<Vec<SocketAddr>>,
 ) -> Result<Vec<SocketAddr>> {
+    // Vanilla also asks for `_minecraft._tcp.127.0.0.1`, which never has a
+    // record: IP literals and localhost skip the query.
     if port == 25565
         && host.parse::<IpAddr>().is_err()
         && host != "localhost"
         && let Some((target, target_port)) =
             srv(&format!("_minecraft._tcp.{}.", host.trim_end_matches('.')))
     {
-        // Do not follow another SRV record at the target. Vanilla resolves its
-        // addresses directly, and does not fall back if the target is unknown.
+        // No second SRV lookup at the target, and no fallback to the original
+        // host when the target is unknown.
         return addresses(&target, target_port);
     }
     addresses(host, port)
 }
 
-fn srv_redirect(name: &str, timeout: Duration) -> Option<(String, u16)> {
-    // Runs only on the blocking ping/login worker, never the render thread.
-    // Use the system's configured resolvers, not a public fallback.
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .ok()?;
-    runtime.block_on(async {
-        let mut builder = hickory_resolver::TokioResolver::builder_tokio().ok()?;
-        builder.options_mut().attempts = 1;
-        builder.options_mut().timeout = timeout;
-        let resolver = builder.build();
-        let records = tokio::time::timeout(timeout, resolver.srv_lookup(name))
-            .await
-            .ok()?
-            .ok()?;
-        // ServerRedirectHandler uses the first record, not weighted balancing.
-        let record = records.iter().next()?;
-        Some((record.target().to_utf8(), record.port()))
-    })
+fn srv_redirect(name: &str) -> Option<(String, u16)> {
+    dns::query_srv(name, &dns::system_name_servers(), dns::SERVER_TIMEOUT)
 }
 
 #[cfg(test)]
@@ -157,7 +136,7 @@ mod tests {
         let connection = crate::connection::Connection::connect_server(
             "127.0.0.1",
             address.port(),
-            Duration::from_secs(1),
+            std::time::Duration::from_secs(1),
         )
         .unwrap();
         let (accepted, _) = listener.accept().unwrap();

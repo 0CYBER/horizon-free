@@ -196,7 +196,7 @@ impl Connection {
     /// Minecraft's SRV redirect applies to the socket destination only. Callers
     /// keep the player's original host and port in the protocol handshake.
     pub fn connect_server(host: &str, port: u16, timeout: Duration) -> Result<Self> {
-        let addrs = crate::resolver::resolve(host, port, timeout)?;
+        let addrs = crate::resolver::resolve(host, port)?;
         Self::connect_addresses(host, addrs, timeout)
     }
     fn connect_addresses(
