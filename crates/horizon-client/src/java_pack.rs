@@ -48,6 +48,16 @@ pub struct JavaFolder {
     /// Each draw buffer's blending in `terrain` and `water`.
     pub terrain_blends: Vec<Option<wgpu::BlendState>>,
     pub water_blends: Vec<Option<wgpu::BlendState>>,
+    /// The shadow map's programs over Horizon's solid and translucent
+    /// terrain (instanced draws only), drawn after `begin*`, into
+    /// `shadowcolor` targets set by `shadow_targets`.
+    pub shadow: Option<GeometryProgram>,
+    pub shadow_water: Option<GeometryProgram>,
+    pub shadow_targets: Vec<TargetSettings>,
+    pub shadow_blends: Vec<Option<wgpu::BlendState>>,
+    pub shadow_water_blends: Vec<Option<wgpu::BlendState>>,
+    /// How many of `passes` run before the shadow map (`begin*`).
+    pub shadow_at: usize,
 }
 
 /// The key of `texture.noise` (`noisetex`) in [`JavaPasses::custom_textures`].
@@ -160,9 +170,14 @@ pub fn load(
         }
         // A geometry program that doesn't translate leaves that terrain to
         // Horizon, with a warning.
-        let geometry = |pass: &Option<horizon_shaderpack::pipeline::Pass>, alpha_test| {
+        let geometry_with = |pass: &Option<horizon_shaderpack::pipeline::Pass>,
+                             alpha_test,
+                             flat: &[bool]| {
             let pass = pass.as_ref()?;
-            let glues = [false, true].map(|flat| crate::gfx::java_terrain::glue(flat, alpha_test));
+            let glues: Vec<_> = flat
+                .iter()
+                .map(|&flat| crate::gfx::java_terrain::glue(flat, alpha_test))
+                .collect();
             match pack.compile_geometry(pass, &plan.targets, &values, &env, &properties, &glues) {
                 Ok(program) => Some(program),
                 Err(e) => {
@@ -171,9 +186,20 @@ pub fn load(
                 }
             }
         };
+        let geometry = |pass: &Option<horizon_shaderpack::pipeline::Pass>, alpha_test| {
+            geometry_with(pass, alpha_test, &[false, true])
+        };
         // Iris's alpha test of cutout terrain (`AlphaTests.ONE_TENTH_ALPHA`).
         let terrain = geometry(&plan.terrain, Some(0.1));
         let water = terrain.as_ref().and_then(|_| geometry(&plan.water, None));
+        // The shadow map draws only with the pack's terrain, and only from
+        // instanced draws (the flat draws hold what the camera sees).
+        let shadow = terrain
+            .as_ref()
+            .and_then(|_| geometry_with(&plan.shadow, Some(0.1), &[false]));
+        let shadow_water = shadow
+            .as_ref()
+            .and_then(|_| geometry_with(&plan.shadow_water, None, &[false]));
         let translucent_at = early.clone().count() + plan.deferred.len();
         let blends = |g: &Option<GeometryProgram>, default| {
             g.as_ref().map_or_else(Vec::new, |g| {
@@ -181,6 +207,9 @@ pub fn load(
             })
         };
         let terrain_blends = blends(&terrain, None);
+        // Iris's shadow programs don't blend (`BlendModeOverride.OFF`).
+        let shadow_blends = blends(&shadow, None);
+        let shadow_water_blends = blends(&shadow_water, None);
         // Vanilla's translucent blending (`BlendFunction.TRANSLUCENT`).
         let water_blends = blends(
             &water,
@@ -213,6 +242,12 @@ pub fn load(
             flipped_after_translucent: plan.flipped_after_translucent,
             terrain_blends,
             water_blends,
+            shadow,
+            shadow_water,
+            shadow_targets: plan.shadow_targets,
+            shadow_blends,
+            shadow_water_blends,
+            shadow_at: plan.begin.len(),
         });
     }
     if folders.is_empty() {
@@ -359,10 +394,13 @@ mod tests {
             .folders
             .iter()
             .flat_map(|f| f.passes.iter().chain(&f.final_pass));
-        let geometry = pack
-            .folders
-            .iter()
-            .flat_map(|f| f.terrain.iter().chain(&f.water));
+        let geometry = pack.folders.iter().flat_map(|f| {
+            f.terrain
+                .iter()
+                .chain(&f.water)
+                .chain(&f.shadow)
+                .chain(&f.shadow_water)
+        });
         passes
             .flat_map(|p| [(p, &p.vertex, "vsh"), (p, &p.fragment, "fsh")])
             .chain(geometry.flat_map(|g| {
@@ -414,6 +452,8 @@ mod tests {
                                 .terrain
                                 .iter()
                                 .chain(&f.water)
+                                .chain(&f.shadow)
+                                .chain(&f.shadow_water)
                                 .map(|g| g.program.pass.program.as_str())
                                 .collect();
                             format!("{} {n} passes, terrain {geometry:?}", f.folder)
