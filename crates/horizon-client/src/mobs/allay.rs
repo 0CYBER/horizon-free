@@ -26,7 +26,7 @@ pub fn register(m: &mut Mob) {
     };
     m.ai.nav.kind = NavKind::Flying;
     // FlyingPathNavigation.setRequiredPathLength(48).
-    m.ai.nav.required_path_length = 48.0;
+    m.set_required_path_length(48.0);
     let g = &mut m.ai.goals;
     g.add(0, Panic::new(2.5));
     g.add(1, Fetch);

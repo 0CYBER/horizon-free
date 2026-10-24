@@ -1054,6 +1054,7 @@ impl Game<'_> {
             let r = &mut self.world.random;
             let bonus = r.triangle(0.0, 0.11485000000000001);
             mob.attrs.follow_range += mob.kind.follow_range * bonus;
+            mob.update_max_visited_nodes();
             let _left_handed = r.next_float() < 0.05;
             if !self.warden_fits(&mob) {
                 continue;
