@@ -1727,6 +1727,9 @@ impl Game<'_> {
                 }
                 .death_reward(self.ui.rules.bool("keep_inventory") || g.game_mode == SPECTATOR);
                 let (name, uuid) = (g.name.clone(), g.uuid);
+                // ServerPlayer.die: dropAllDeathLoot unless a spectator, from the eyes less 0.3.
+                let drops = (g.game_mode != SPECTATOR)
+                    .then(|| [at[0], at[1] + g.eye_height() - 0.3, at[2]]);
                 let cause = host.play.get_mut(&conn).and_then(|p| p.death_cause.take());
                 let message = match cause {
                     // ServerPlayer.die: the death message, to everyone unless
@@ -1760,6 +1763,9 @@ impl Game<'_> {
                 );
                 // LivingEntity.die: the death animation, the dying player included.
                 host.hub.entity_event(id, 3, at);
+                if let Some(eyes) = drops {
+                    self.as_guest(host, conn, |game| game.drop_inventory(eyes));
+                }
                 self.spawn_orbs(at, reward);
             }
         }

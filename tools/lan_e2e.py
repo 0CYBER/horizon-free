@@ -189,6 +189,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - totem:     the host and the guest each take a lethal hit holding a totem of undying in the off
              hand, then the main hand: the server uses it up and keeps them alive at 1 health with its
              effects, and each side hears the totem once (entity event 35) (#1292).
+- keepinv:   the host and the guest each die holding diamonds and wearing a helmet: with keep_inventory
+             off both drop where they died and the player respawns without them; with it on nothing
+             drops and the player keeps them (#1284).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -4517,8 +4520,57 @@ def check_totem(host, guest, out):
     return seen
 
 
-CHECKS += ['totem']
-CHECK_FNS.update(totem=check_totem)
+def check_keep_inventory(host, guest, out):
+    """ServerPlayer.die's dropAllDeathLoot for each player (Player.dropEquipment): with keep_inventory
+    off, the diamonds and the helmet a player dies with lie where it died and it respawns with
+    neither; with it on, nothing drops and it respawns with both (#1284)."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    seen = {}
+    host('command', command=f'setworldspawn {hx} {hy} {hz}')
+    host('command', command='gamerule respawn_radius 0')
+    try:
+        for keep in ('false', 'true'):
+            host('command', command=f'gamerule keep_inventory {keep}')
+            for game, dz in ((host, -3), (guest, 3)):
+                # 14 blocks from the world spawn: nothing dropped is picked up on respawning.
+                x, z = hx + 14, hz + dz
+                host('command', command=f'fill {x - 2} {hy - 1} {z - 1} {x + 2} {hy - 1} {z + 1} minecraft:stone')
+                host('command', command=f'fill {x - 2} {hy} {z - 1} {x + 2} {hy + 2} {z + 1} minecraft:air')
+                host('command', command='kill @e[type=minecraft:item]')
+                game('command', command='gamemode survival')
+                game('command', command='clear @s')
+                game('command', command='give @s minecraft:diamond 7')
+                game('command', command='item replace entity @s armor.head with minecraft:iron_helmet')
+                game('command', command=f'tp @s {x + 0.5} {hy} {z + 0.5}')
+                game.wait(20)
+                game('command', command='kill @s')
+                game.wait(30)
+                dropped = sorted((e['item']['item'], e['item']['count'])
+                                 for e in game.raw('entities', 8, 'minecraft:item')['entities'])
+                game.shot(out, f'keepinv-{keep}')
+                respawn_when_ready(game)
+                game.wait(40)
+                back_to_game(game)
+                seen[f'{game.name}-keep-{keep}'] = {
+                    'dropped': dropped,
+                    'kept': {item: server_count(game, item) for item in ('diamond', 'iron_helmet')}}
+    finally:
+        host('command', command='gamerule keep_inventory false')
+        host('command', command='gamerule respawn_radius 10')
+        host('command', command='kill @e[type=minecraft:item]')
+        for game in (host, guest):
+            game('command', command='clear @s')
+        face_each_other(host, guest)
+    for case, s in seen.items():
+        want = ({'dropped': [], 'kept': {'diamond': 7, 'iron_helmet': 1}} if case.endswith('true') else
+                {'dropped': [('minecraft:diamond', 7), ('minecraft:iron_helmet', 1)],
+                 'kept': {'diamond': 0, 'iron_helmet': 0}})
+        assert s == want, f'{case}: {seen}'
+    return seen
+
+
+CHECKS += ['totem', 'keepinv']
+CHECK_FNS.update(totem=check_totem, keepinv=check_keep_inventory)
 
 
 if __name__ == '__main__':
