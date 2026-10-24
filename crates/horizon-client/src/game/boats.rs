@@ -43,8 +43,6 @@ pub(super) struct Boat {
     pub hurt_time: i32,
     pub hurt_dir: i32,
     pub damage: f32,
-    /// `Entity.remainingFireTicks`: lava sets a boat alight for 15 seconds.
-    pub fire_ticks: i32,
     pub paddles: [f32; 2],
     pub paddling: [bool; 2],
     /// left, right, up, down
@@ -79,7 +77,6 @@ impl Boat {
             hurt_time: 0,
             hurt_dir: 1,
             damage: 0.0,
-            fire_ticks: 0,
             paddles: [0.0; 2],
             paddling: [false; 2],
             input: [false; 4],
@@ -186,13 +183,13 @@ impl BoatModels {
 }
 impl Game<'_> {
     fn fluid_height(&self, x: i32, y: i32, z: i32) -> Option<(f32, bool)> {
-        self.fluid_height_of(x, y, z, false)
+        self.fluid_height_of(x, y, z, Some(Fluid::Water))
     }
-    /// `FluidState.getHeight` and whether it is a source; water only,
-    /// unless `lava` too (`ClipContext.Fluid.ANY`).
-    fn fluid_height_of(&self, x: i32, y: i32, z: i32, lava: bool) -> Option<(f32, bool)> {
+    /// `FluidState.getHeight` and whether it is a source, for `fluid` or,
+    /// with `None`, any fluid (`ClipContext.Fluid.ANY`).
+    fn fluid_height_of(&self, x: i32, y: i32, z: i32, fluid: Option<Fluid>) -> Option<(f32, bool)> {
         let f = self.res.facts().get(self.world.block(x, y, z));
-        if f.fluid != Fluid::Water && !(lava && f.fluid == Fluid::Lava) {
+        if f.fluid == Fluid::None || fluid.is_some_and(|want| f.fluid != want) {
             return None;
         }
         let above = self.res.facts().get(self.world.block(x, y + 1, z));
@@ -469,78 +466,59 @@ impl Game<'_> {
             let b = self.boats[i].clone();
             self.boats[i] = self.tick_boat(b, false);
         }
-        // applyEffectsFromBlocks runs on the server for every boat, the
-        // client-driven ones too; a boat lava destroys leaves the list.
+        // AbstractBoat.tick's applyEffectsFromBlocks, on the server for every
+        // boat, the client-driven ones too.
         let mut i = 0;
         while i < self.boats.len() {
             let p = self.boats[i].position;
             let skip = Some(self.boats[i].id) == self.riding
                 || !ticking(p.x.floor() as i32, p.z.floor() as i32);
-            if skip || !self.boat_fire_tick(i) {
+            if skip || !self.boat_lava_tick(i) {
                 i += 1;
             }
         }
     }
-    /// The fire half of `Entity.baseTick` and `LavaFluid.entityInside`
-    /// (`lavaIgnite`, then `lavaHurt`) after the boat moved. True when the
-    /// boat was destroyed and removed.
-    fn boat_fire_tick(&mut self, i: usize) -> bool {
-        let (lava, water) = self.hull_fluids(self.boats[i].bounds());
-        let b = &mut self.boats[i];
-        if water {
-            b.fire_ticks = 0;
-        }
-        let mut burn = 0.0;
-        if b.fire_ticks > 0 {
-            if b.fire_ticks % 20 == 0 && !lava {
-                burn = 1.0;
-            }
-            b.fire_ticks -= 1;
-        }
-        if burn > 0.0 && self.hurt_boat(i, burn, false) {
-            return true;
-        }
-        if !lava {
+    /// `LavaFluid.entityInside` (`lavaHurt`) from the two
+    /// `applyEffectsFromBlocks` calls in `AbstractBoat.tick`: twice 40
+    /// damage, so lava breaks a boat on its first tick inside, and the fire
+    /// `lavaIgnite` lights never gets to burn it. True when the boat broke.
+    fn boat_lava_tick(&mut self, i: usize) -> bool {
+        if !self.in_lava(self.boats[i].bounds()) {
             return false;
         }
-        let b = &mut self.boats[i];
-        b.fire_ticks = b.fire_ticks.max(300);
-        let at = [b.position.x, b.position.y, b.position.z];
+        for _ in 0..2 {
+            let p = self.boats[i].position;
+            let broke = self.hurt_boat(i, 4.0, false);
+            self.lava_hurt_sound([p.x, p.y, p.z]);
+            if broke {
+                return true;
+            }
+        }
+        false
+    }
+    /// `Entity.lavaHurt`'s sound once the hurt went through.
+    pub(super) fn lava_hurt_sound(&mut self, at: [f64; 3]) {
         let pitch = 2.0 + self.world.random.next_float() * 0.4;
         self.audio
             .play("minecraft:entity.generic.burn", Some(at), 0.4, pitch);
-        self.hurt_boat(i, 4.0, false)
     }
-    /// Whether a vehicle's box (deflated by 1e-5, as `applyEffectsFromBlocks`)
-    /// is inside lava, and whether it touches water.
-    pub(super) fn hull_fluids(&self, bb: Aabb) -> (bool, bool) {
+    /// Whether a vehicle's box, deflated by 1e-5, reaches into lava below its
+    /// surface (`Entity.collidedWithFluid`).
+    pub(super) fn in_lava(&self, bb: Aabb) -> bool {
         let (lo, hi) = (bb.min_position(), bb.max_position());
         let e = 1.0e-5;
-        let (mut lava, mut water) = (false, false);
         for x in (lo.x + e).floor() as i32..=(hi.x - e).floor() as i32 {
             for y in (lo.y + e).floor() as i32..=(hi.y - e).floor() as i32 {
                 for z in (lo.z + e).floor() as i32..=(hi.z - e).floor() as i32 {
-                    let f = self.res.facts().get(self.world.block(x, y, z));
-                    if f.fluid == Fluid::None {
-                        continue;
-                    }
-                    let above = self.res.facts().get(self.world.block(x, y + 1, z));
-                    let height = if above.fluid == f.fluid {
-                        1.0
-                    } else {
-                        f64::from(f.fluid_level) / 9.0
-                    };
-                    if lo.y + e < f64::from(y) + height {
-                        match f.fluid {
-                            Fluid::Lava => lava = true,
-                            Fluid::Water => water = true,
-                            _ => {}
-                        }
+                    if let Some((height, _)) = self.fluid_height_of(x, y, z, Some(Fluid::Lava))
+                        && lo.y + e < f64::from(y) + f64::from(height)
+                    {
+                        return true;
                     }
                 }
             }
         }
-        (lava, water)
+        false
     }
     /// The player's tick while riding: steer, tick the boat, sit in it.
     pub(super) fn tick_riding(&mut self, keys: Keys) -> horizon_client::Result<()> {
@@ -569,7 +547,7 @@ impl Game<'_> {
             p.fall_distance = 0.0;
         }
         self.boats[i] = b;
-        if self.boat_fire_tick(i) {
+        if self.boat_lava_tick(i) {
             self.riding = None;
         }
         Ok(())
@@ -637,7 +615,7 @@ impl Game<'_> {
                 p[1].floor() as i32,
                 p[2].floor() as i32,
             );
-            if let Some((h, _)) = self.fluid_height_of(x, y, z, true)
+            if let Some((h, _)) = self.fluid_height_of(x, y, z, None)
                 && p[1] <= f64::from(y) + f64::from(h)
             {
                 fluid = Some(([p[0], f64::from(y) + f64::from(h), p[2]], t));
