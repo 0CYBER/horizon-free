@@ -466,20 +466,42 @@ def narrow_rust_sources(sources, scope):
 
 
 PROBE_SOURCE = re.compile(r"/examples/probe/(?:(support)/)?(\w+)\.rs$")
+# Each crate's probe example (crates/<crate>/examples/probe) and its target name. Until 2026-10-24 they were all
+# `probe`, and Cargo copies every crate's examples into one <profile>/examples/: a harness could run the binary
+# another harness had just copied there.
+PROBE_TARGETS = {"horizon-client": "client_probe", "horizon-protocol": "protocol_probe", "horizon-world": "world_probe"}
+OLD_PROBE_SOURCE = re.compile(r"crates/([\w-]+)/examples/probe[/.]")
 
 
 def probes_run(commands):
-    """The probes a harness ran through a crate's probe binary: `probe <name> ...`, or
-    `cargo run --example probe -- <name> ...`."""
+    """The probes a harness ran through a crate's probe binary: `world_probe <name> ...`, or
+    `cargo run --example world_probe -- <name> ...`."""
     names = set()
     for arguments in commands:
-        program = Path(arguments[0]).name if arguments else ""
-        if program in ("probe", "probe.exe") and len(arguments) > 1:
+        program = Path(arguments[0]).name.removesuffix(".exe") if arguments else ""
+        if program in PROBE_TARGETS.values() and len(arguments) > 1:
             names.add(arguments[1])
-        elif program == "cargo" and "--" in arguments and "probe" in arguments[:arguments.index("--")] \
-                and len(arguments) > arguments.index("--") + 1:
+        elif program == "cargo" and "--" in arguments and len(arguments) > arguments.index("--") + 1 \
+                and any(kind == "example" and name in PROBE_TARGETS.values() for kind, name, *_ in artifacts_of(arguments)):
             names.add(arguments[arguments.index("--") + 1])
     return names
+
+
+def recorded_artifacts(record):
+    """A harness record's artifacts, with the shared `probe` target of records from before 2026-10-24 renamed to
+    its crate's own (PROBE_TARGETS): the crate the record's `-p` selection names, else the one whose probe sources
+    the harness depended on. The prebuild would otherwise drop them as targets that no longer exist."""
+    artifacts = []
+    for artifact in record.get("artifacts", []):
+        if artifact[:2] != ["example", "probe"]:
+            artifacts.append(artifact)
+            continue
+        selection = artifact[3] if len(artifact) > 3 else []
+        crates = [value for flag, value in zip(selection, selection[1:]) if flag == "-p" and value in PROBE_TARGETS] \
+            or sorted({match.group(1) for path in record.get("dependencies", [])
+                       if (match := OLD_PROBE_SOURCE.match(path)) and match.group(1) in PROBE_TARGETS})
+        artifacts += [["example", PROBE_TARGETS[crate], *artifact[2:]] for crate in crates] or [artifact]
+    return artifacts
 
 
 def only_probes_run(paths, names):
@@ -1323,7 +1345,7 @@ def main():
         if not record or "artifacts" not in record:
             template = SHARED / "dependencies" / f"{name}.json"
             record = json.loads(template.read_text(encoding="utf-8")) if template.exists() else {}
-        for artifact in record.get("artifacts", []):
+        for artifact in recorded_artifacts(record):
             if artifact not in artifacts:
                 artifacts.append(artifact)
     config = host_config()

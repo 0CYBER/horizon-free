@@ -39,6 +39,10 @@ fn setup(m: &mut Mob, baby: bool) {
     m.ai.look.wanted = [0.0; 3];
     m.ai.look.cooldown = 0;
     m.extra.counter2 = 0;
+    // The new navigation's PathNavigation constructor.
+    m.ai.nav.required_path_length = 16.0;
+    m.ai.nav.max_visited_nodes =
+        (super::finalize::base_value(m, super::finalize::Attr::FollowRange) * 16.0).floor() as i32;
     if baby {
         m.ai.look.kind = LookKind::Default;
         m.ai.mov.kind = MoveKind::Flying {
@@ -48,7 +52,7 @@ fn setup(m: &mut Mob, baby: bool) {
         // BabyFlyingPathNavigation.
         m.ai.nav.kind = NavKind::Flying;
         m.ai.nav.can_float = true;
-        m.ai.nav.required_path_length = 48.0;
+        m.set_required_path_length(48.0);
         return;
     }
     if was == 1 {

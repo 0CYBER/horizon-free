@@ -50,7 +50,8 @@ def cargo_example(package, example, *args, profile=None):
     command = ['cargo', 'run', '-q', '-j3']
     if profile:
         command += ['--profile', profile]
-    command += ['-p', package, '--example', 'probe', '--', example, *map(str, args)]
+    probe = package.removeprefix('horizon-') + '_probe'  # each crate's probe example: client_probe, world_probe
+    command += ['-p', package, '--example', probe, '--', example, *map(str, args)]
     subprocess.run(command, check=True, cwd=lab.ROOT)
 
 

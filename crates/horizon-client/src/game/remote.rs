@@ -3139,19 +3139,10 @@ impl Game<'_> {
             [player.position.x, player.position.y, player.position.z],
         );
         let was_flying = player.flying;
-        player.yaw = self.yaw;
-        // As the window's own tick has them: the helmet's Respiration
-        // (decreaseAirSupply) and the dimension's FAST_LAVA, the Nether's
-        // stronger lava current.
-        player.respiration = self.armor[0]
-            .as_ref()
-            .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
-        player.fluids.fast_lava = self.dim == Dim::Nether;
-        let glider = self.glider_worn();
+        self.sync_player_body();
         let Some(player) = self.player.as_mut() else {
             return Ok(());
         };
-        player.glider = glider;
         let was_gliding = player.fall_flying;
         let dead = self.screen == Screen::Dead;
         // LivingEntity.isImmobile: a sleeper lies still in the bed.

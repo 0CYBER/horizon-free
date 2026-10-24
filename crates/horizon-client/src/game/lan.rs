@@ -875,6 +875,7 @@ impl Game<'_> {
                     .collect();
                 self.lan_riding(host_entity, &guests, &mut host.hub.riding);
                 self.lan_entities(host_entity, &host.mob_players, &mut host.hub, &mut states);
+                self.lan_hook_states(host_entity, &host.play, &host.hub, &mut states);
             } else {
                 states.clear();
             }
@@ -1068,6 +1069,7 @@ impl Game<'_> {
             }
             // A dedicated server has no host player.
             self.lan_entities(None, &host.mob_players, &mut host.hub, &mut theirs);
+            self.lan_hook_states(None, &host.play, &host.hub, &mut theirs);
             theirs.as_slice()
         } else {
             entities

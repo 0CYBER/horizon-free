@@ -69,12 +69,18 @@ impl Game<'_> {
         let lo = Vec3::new(f.pos[0] - half, f.pos[1], f.pos[2] - half);
         let hi = Vec3::new(f.pos[0] + half, f.pos[1] + 0.8, f.pos[2] + half);
         let b = horizon_core::geometry::Aabb::new(lo, hi);
-        if let Some(p) = self.player_view()
-            && p.alive
-            && p.bounds.intersects(b)
-        {
-            self.mob_hits_player_kind(6.0, f.pos, "minecraft:indirect_magic");
-        }
+        // Every player in the box, the server's players too.
+        let pos = f.pos;
+        let bite = move |g: &mut Self| {
+            if let Some(p) = g.player_view()
+                && p.alive
+                && p.bounds.intersects(b)
+            {
+                g.mob_hits_player_kind(6.0, pos, "minecraft:indirect_magic");
+            }
+        };
+        bite(self);
+        self.each_guest_hit(bite);
         for m in &mut self.mobs {
             let ally = matches!(
                 m.species(),

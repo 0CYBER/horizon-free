@@ -51,12 +51,12 @@ def main():
 
     print("Generating vanilla world-data fixtures...", flush=True)
     print(java("server", "generate").split("HORIZON_WORLD_GENERATED")[-1].strip(), flush=True)
-    run(["cargo", "build", "--release", "-p", "horizon-world", "--bin", "horizon-world", "--example", "probe"], base / "compile-rust.log")
+    run(["cargo", "build", "--release", "-p", "horizon-world", "--bin", "horizon-world", "--example", "world_probe"], base / "compile-rust.log")
     metadata = json.loads(run(["cargo", "metadata", "--no-deps", "--format-version", "1"]))
     target = Path(metadata["target_directory"]) / "release"
     suffix = ".exe" if os.name == "nt" else ""
     binary = target / ("horizon-world" + suffix)
-    run([target / "examples" / ("probe" + suffix), "world_fixture", base], base / "rust-fixture.log")
+    run([target / "examples" / ("world_probe" + suffix), "world_fixture", base], base / "rust-fixture.log")
     for network in [False, True]:
         kind = "network" if network else "nbt"
         output = base / "rust" / kind

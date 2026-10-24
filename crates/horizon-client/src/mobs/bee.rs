@@ -138,7 +138,7 @@ pub fn register(m: &mut Mob) {
     };
     m.ai.nav.kind = NavKind::Flying;
     m.ai.nav.can_open_doors = false;
-    m.ai.nav.required_path_length = 48.0;
+    m.set_required_path_length(48.0);
     m.set_malus(PathType::Fire, -1.0);
     m.set_malus(PathType::Water, -1.0);
     m.set_malus(PathType::WaterBorder, 16.0);

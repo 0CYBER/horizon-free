@@ -163,8 +163,8 @@ def main():
         completed.check_returncode()
         return completed.stdout
     data_java("server", "generate")
-    test_rust_parity.run(["cargo", "build", "--release", "-p", "horizon-world", "--example", "probe"])
-    fixture = Path(metadata["target_directory"]) / "release/examples" / ("probe.exe" if os.name=="nt" else "probe")
+    test_rust_parity.run(["cargo", "build", "--release", "-p", "horizon-world", "--example", "world_probe"])
+    fixture = Path(metadata["target_directory"]) / "release/examples" / ("world_probe.exe" if os.name=="nt" else "world_probe")
     test_rust_parity.run([str(fixture), "tick_fixture", str(base)])
     references = []
     for side, jar in jars.items():

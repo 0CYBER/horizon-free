@@ -71,9 +71,9 @@ class Oracle:
 
 
 def rust_binary():
-    subprocess.run(['cargo', 'build', '--release', '-q', '-p', 'horizon-world', '--example', 'probe'], check=True, cwd=lab.ROOT)
+    subprocess.run(['cargo', 'build', '--release', '-q', '-p', 'horizon-world', '--example', 'world_probe'], check=True, cwd=lab.ROOT)
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))
-    return Path(metadata['target_directory']) / 'release/examples/probe'
+    return Path(metadata['target_directory']) / 'release/examples/world_probe'
 
 
 def run_rust(binary, out, seed, dimension, rects, scan=False):
