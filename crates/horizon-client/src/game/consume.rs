@@ -128,7 +128,7 @@ impl Game<'_> {
         if self.state_in_tag(avoid, ground) {
             return false;
         }
-        let entities = self.happy_ghast_player_collisions();
+        let entities = self.player_entity_collisions();
         let Some(player) = self.player.as_mut() else {
             return false;
         };
