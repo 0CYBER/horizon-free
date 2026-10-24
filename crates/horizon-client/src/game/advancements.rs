@@ -1051,17 +1051,10 @@ impl Game<'_> {
         }
     }
 }
-/// A text component from advancement JSON (`translate` or `text`).
+/// An advancement's title or description: a whole component (ComponentSerialization.CODEC),
+/// with its siblings and styles, as a plugin's `{"text":"","extra":[...]}` needs.
 pub(super) fn text_of(v: &Value) -> Text {
-    if let Some(key) = v["translate"].as_str() {
-        Text::translate(key, &[])
-    } else if let Some(s) = v["text"].as_str() {
-        Text::literal(s)
-    } else if let Some(s) = v.as_str() {
-        Text::literal(s)
-    } else {
-        Text::empty()
-    }
+    horizon_client::scoreboard::comp_text(v)
 }
 
 #[cfg(test)]
@@ -1093,6 +1086,20 @@ mod tests {
             }
         }
         (seen, None)
+    }
+
+    #[test]
+    fn titles_keep_their_siblings_and_styles() {
+        let title = text_of(&serde_json::json!({
+            "text": "",
+            "extra": [{"text": "Quest ", "color": "gold"}, "Board"],
+        }));
+        assert_eq!(title.plain(), "Quest Board");
+        assert_eq!(title.spans[0].style.color, Some(horizon_client::text::GOLD));
+        assert_eq!(
+            text_of(&serde_json::json!({"translate": "advancements.story.root.title"})),
+            Text::translate("advancements.story.root.title", &[])
+        );
     }
 
     #[test]
