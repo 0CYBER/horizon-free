@@ -218,6 +218,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - body:      the host and the guest each walk while drawing a bow (slowed), stand on powder snow
              with leather boots (held up) and without (sinking), and sprint-swim looking down
              (diving): their own client decides it (#1278, #1296, #1303).
+- strikes:   a bolt strikes the host and the guest standing in water and hurts them, and a cave
+             spider's bite poisons them (#1480, #1484).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -5076,6 +5078,64 @@ def check_body(host, guest, out):
 
 CHECKS += ['body']
 CHECK_FNS.update(body=check_body)
+
+
+def check_strikes(host, guest, out):
+    """What a mob or the sky does to every player in reach, the server's players too (#1480,
+    #1484): a bolt striking a player standing in water costs them health (Entity.thunderHit), and
+    a cave spider's bite poisons them (CaveSpider.doHurtTarget on Normal)."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    seen = {}
+    try:
+        host('command', command='difficulty normal')
+        host('command', command='time set 18000')
+        for game, dz in ((host, -5), (guest, 5)):
+            x, z = hx, hz + dz
+            host('command', command=f'fill {x - 3} {hy - 1} {z - 3} {x + 3} {hy + 3} {z + 3} minecraft:stone')
+            host('command', command=f'fill {x - 2} {hy} {z - 2} {x + 2} {hy + 3} {z + 2} minecraft:air')
+            host('command', command=f'fill {x - 2} {hy} {z - 2} {x + 2} {hy} {z + 2} minecraft:water')
+            game('command', command='gamemode survival')
+            game('command', command='clear @s')
+            game('command', command='effect clear @s')
+            game('command', command='effect give @s minecraft:instant_health 1 5')
+            game('command', command=f'tp @s {x + 0.5} {hy} {z + 0.5}')
+            game.wait(20)
+            before = game('state')['player'].get('health')
+            game('command', command=f'summon minecraft:lightning_bolt {x + 0.5} {hy} {z + 0.5}')
+            game.wait(20)
+            s = {'bolt': (before, game('state')['player'].get('health'))}
+            host('command', command=f'summon minecraft:cave_spider {x + 1.5} {hy} {z + 0.5}')
+            poisoned = False
+            for _ in range(40):
+                game.wait(5)
+                if 'poison' in effect_ids(game):
+                    poisoned = True
+                    break
+            s['poisoned'] = poisoned
+            s['bitten'] = game('state')['player'].get('health')
+            host('command', command='kill @e[type=minecraft:cave_spider]')
+            game.wait(5)
+            game.shot(out, 'strikes')
+            host('command', command=f'fill {x - 3} {hy - 1} {z - 3} {x + 3} {hy + 3} {z + 3} minecraft:air')
+            host('command', command=f'fill {x - 3} {hy - 1} {z - 3} {x + 3} {hy - 1} {z + 3} minecraft:stone')
+            seen[game.name] = s
+    finally:
+        host('command', command='kill @e[type=minecraft:cave_spider]')
+        host('command', command='time set day')
+        for game in (host, guest):
+            back_to_game(game)
+            game('command', command='effect clear @s')
+            game('command', command='effect give @s minecraft:instant_health 1 5')
+        face_each_other(host, guest)
+    for name, s in seen.items():
+        a, b = s['bolt']
+        assert a is not None and b is not None and a - b >= 3, f'{name} struck by lightning: {seen}'
+        assert s['poisoned'], f'{name} bitten by a cave spider: {seen}'
+    return seen
+
+
+CHECKS += ['strikes']
+CHECK_FNS.update(strikes=check_strikes)
 
 
 def check_digging(host, guest, out):
