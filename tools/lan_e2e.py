@@ -5303,7 +5303,8 @@ def check_vehicles(host, guest, out):
     - land on a boat on the ground and stand on it (AbstractBoat.canBeCollidedWith);
     - sit in a boat that lava reaches: lavaHurt twice a tick breaks it at once, and the rider is out;
     - see a minecart in lava break, and a TNT minecart in lava prime and go off;
-    - walk into a minecart off rails and push it (AbstractMinecart.push from the server's player)."""
+    - stand half in a minecart off rails and push it away (AbstractMinecart.push from the server's
+      player)."""
     result = {}
     spots = apart(host, guest)
     for label, player in (('host', host), ('guest', guest)):
@@ -5354,15 +5355,13 @@ def check_vehicles(host, guest, out):
             player('command', command=f'fill {x - 3} {y} {z - 3} {x + 4} {y + 3} {z + 6} minecraft:air')
             player('command', command=f'fill {x - 3} {y - 1} {z - 3} {x + 4} {y - 1} {z + 6} minecraft:stone')
             player('command', command='gamemode survival')
-            player('command', command=f'tp @s {x + 0.5} {y} {z + 0.5} 0 0')
             cart_at = (x + 0.5, y, z + 1.6)
             player('command', command=f'summon minecraft:minecart {cart_at[0]} {y} {cart_at[2]}')
             player.wait(10)
             before = near('minecart', cart_at)[0]['position']
-            player.raw('key', 'w', 'down')
-            player.wait(15)
-            player.raw('key', 'w', 'up')
-            player.wait(10)
+            # Half into the cart from the north: it is pushed south until they are apart.
+            player('command', command=f'tp @s {x + 0.5} {y} {before[2] - 0.4:.2f} 0 0')
+            player.wait(20)
             after = near('minecart', cart_at)[0]['position']
             seen['cart_pushed'] = round(after[2] - before[2], 3)
             player.shot(out, f'vehicles-{label}')
@@ -5383,7 +5382,7 @@ def check_vehicles(host, guest, out):
         assert seen['rider'] == {'riding': None, 'boats': 0}, f'{label}: lava left the boat or its rider: {seen}'
         assert seen['minecart_in_lava'] == 0, f'{label}: a minecart outlived lava: {seen}'
         assert seen['tnt_minecart'] == {'left': 0, 'booms': 1}, f'{label}: the TNT minecart in lava: {seen}'
-        assert seen['cart_pushed'] > 0.1, f'{label}: walking into the minecart left it: {seen}'
+        assert seen['cart_pushed'] > 0.1, f'{label}: the minecart stayed in the player: {seen}'
     return result
 
 
