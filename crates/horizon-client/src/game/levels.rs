@@ -296,7 +296,7 @@ impl Game<'_> {
             self.update_dedicated_streaming();
             self.update_world();
             result = if paused {
-                self.tick_lan();
+                self.tick_lan(true);
                 Ok(())
             } else if k == 0 {
                 self.tick()
