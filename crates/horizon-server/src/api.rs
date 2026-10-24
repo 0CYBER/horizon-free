@@ -32,7 +32,10 @@ const LOG_LINES: usize = 2000;
 const METRICS: usize = 600;
 
 /// One endpoint of the control API: what the reference (docs/api/server-reference.md) says about it.
-#[cfg_attr(not(test), expect(dead_code, reason = "only the reference reads all of it"))]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the reference reads all of it")
+)]
 pub struct Route {
     pub method: &'static str,
     pub path: &'static str,
