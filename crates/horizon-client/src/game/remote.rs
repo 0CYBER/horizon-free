@@ -596,6 +596,28 @@ impl Game<'_> {
         out.tidy();
         Some(out)
     }
+    /// A wire `FireworkExplosion` as vanilla's NBT codec writes it
+    /// (`FireworkExplosion.Shape`'s BY_ID order).
+    fn fireworks_tag(e: &horizon_protocol::item::FireworkExplosion) -> Tag {
+        const SHAPES: [&str; 5] = ["small_ball", "large_ball", "star", "creeper", "burst"];
+        let ints = |c: &[i32]| Tag::List(c.iter().map(|c| Tag::Int(*c)).collect());
+        Tag::compound([
+            (
+                "shape",
+                Tag::String(
+                    SHAPES
+                        .get(e.shape.max(0) as usize)
+                        .copied()
+                        .unwrap_or("small_ball")
+                        .into(),
+                ),
+            ),
+            ("colors", ints(&e.colors)),
+            ("fade_colors", ints(&e.fade)),
+            ("has_trail", Tag::Byte(i8::from(e.trail))),
+            ("has_twinkle", Tag::Byte(i8::from(e.twinkle))),
+        ])
+    }
     /// The item's patched components as vanilla's `components` compound.
     fn protocol_components(&self, s: &Stack) -> Option<Tag> {
         use horizon_protocol::item::{Component, component};
@@ -633,6 +655,14 @@ impl Game<'_> {
                     ("pages", Tag::List(b.pages.clone())),
                     ("resolved", Tag::Byte(i8::from(b.resolved))),
                 ]),
+                Component::Fireworks { flight, explosions } => Tag::compound([
+                    ("flight_duration", Tag::Byte(*flight as i8)),
+                    (
+                        "explosions",
+                        Tag::List(explosions.iter().map(Self::fireworks_tag).collect()),
+                    ),
+                ]),
+                Component::FireworkExplosion(e) => Self::fireworks_tag(e),
                 Component::Enchantments(list) => {
                     // Enchantments are a synced (data-driven) registry: the
                     // ids index the server's RegistryData, not the builtin
@@ -717,6 +747,24 @@ impl Game<'_> {
             stack.added.push((
                 horizon_protocol::item::component::DAMAGE,
                 horizon_protocol::item::Component::Int(s.damage as i32),
+            ));
+        }
+        if let Some((flight, explosions)) = s.data().and_then(|d| d.fireworks.clone()) {
+            stack.added.push((
+                horizon_protocol::item::component::FIREWORKS,
+                horizon_protocol::item::Component::Fireworks {
+                    flight: i32::from(flight),
+                    explosions: explosions
+                        .iter()
+                        .map(|e| horizon_protocol::item::FireworkExplosion {
+                            shape: e.shape as i32,
+                            colors: e.colors.iter().map(|c| *c as i32).collect(),
+                            fade: e.fade.iter().map(|c| *c as i32).collect(),
+                            trail: e.trail,
+                            twinkle: e.twinkle,
+                        })
+                        .collect(),
+                },
             ));
         }
         Some(stack)

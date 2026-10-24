@@ -25,9 +25,12 @@ pub(super) struct Rocket {
     pub(super) velocity: Vec3,
     life: i32,
     lifetime: i32,
-    explosions: Vec<FireworkExplosion>,
+    pub(super) explosions: Vec<FireworkExplosion>,
     /// Boosting the player (attachedToEntity).
     pub(super) attached: bool,
+    /// `DATA_ATTACHED_TO_TARGET`: the server entity the rocket follows;
+    /// boosting happens when it is the local player.
+    pub(super) attached_to: Option<u32>,
     /// `DATA_SHOT_AT_ANGLE` (dispensers): constant velocity, exploding on
     /// the first block it hits.
     pub(super) angled: bool,
@@ -48,6 +51,7 @@ impl Rocket {
             lifetime: i32::MAX,
             explosions,
             attached: false,
+            attached_to: None,
             angled: false,
             item,
         }
@@ -63,7 +67,7 @@ impl Rocket {
         (self.position, self.velocity)
     }
 }
-fn fireworks_of(stack: &ItemStack) -> (u8, Vec<FireworkExplosion>) {
+pub(super) fn fireworks_of(stack: &ItemStack) -> (u8, Vec<FireworkExplosion>) {
     // The item's default component: flight 1, no explosions.
     stack
         .data()
@@ -89,6 +93,7 @@ impl Game<'_> {
             lifetime,
             explosions,
             attached,
+            attached_to: None,
             angled: false,
             item: stack.clone(),
         }
