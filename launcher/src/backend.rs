@@ -282,11 +282,6 @@ pub fn releases() -> Result<Vec<Release>, String> {
     Ok(parse_releases(&release_list()?, ASSET, is_game_tag))
 }
 
-/// Published launcher releases (`launcher-v…`), newest first, with this platform's archive.
-pub fn launcher_releases() -> Result<Vec<Release>, String> {
-    Ok(launcher_releases_in(&release_list()?))
-}
-
 /// The launcher releases in `list` (the newest 100 releases). Game releases come out several times
 /// a day, so the newest launcher release can be older than all of those: then the newest
 /// `launcher@` and `launcher-v` tags are looked up one by one (a draft's tag is skipped: it has no
