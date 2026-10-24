@@ -2,39 +2,36 @@
 //! and the landscape behind Home (the vanilla grass block is `browser::images::grass_block`).
 //! GPUI samples images smoothly, so every image is baked at the window's scale with each texel a
 //! whole block of device pixels, and drawn at exactly its size: the edges stay sharp. Each image
-//! is made once per appearance and scale, then reused.
-use gpui::RenderImage;
+//! is made once per appearance and scale, then reused; Home's landscape is made again only when
+//! the window grows wider than it.
+use gpui::{RenderImage, Window};
 use horizon_theme as tokens;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// What an image is, to find it again.
-#[derive(Clone, PartialEq, Eq, Hash)]
-enum Key {
-    Stone { dark: bool, scale: u32 },
-    Scene { dark: bool, scale: u32 },
-}
-
 #[derive(Default)]
 pub struct Art {
-    made: HashMap<Key, Arc<RenderImage>>,
+    /// The stone texture for each appearance and scale.
+    stones: HashMap<(bool, u32), Arc<RenderImage>>,
+    /// Home's landscape: its appearance and scale, and its width in texels.
+    scene: Option<((bool, u32), usize, Arc<RenderImage>)>,
+    /// Landscapes replaced since the last frame, still in the window's sprite atlas.
+    replaced: Vec<Arc<RenderImage>>,
 }
 
 /// The stone texture comes in squares of this many logical pixels (4 by 4 tiles).
 pub const STONE: f32 = tokens::TILE_TEXEL * (tokens::TILE_TEXELS * 4) as f32;
-/// Home's landscape: texels of this many logical pixels, and its size in texels.
+/// Home's landscape: texels of this many logical pixels, and its height in texels. Its width
+/// grows in steps of `SCENE_STEP` texels, so resizing a window rarely makes another.
 pub const SCENE_TEXEL: f32 = 6.;
-pub const SCENE_SIZE: (usize, usize) = (220, 56);
+pub const SCENE_HEIGHT: usize = 56;
+const SCENE_STEP: usize = 64;
 
 impl Art {
     /// The page's stone texture, for a window at `scale`.
     pub fn stone(&mut self, page: u32, dark: bool, scale: f32) -> Arc<RenderImage> {
-        let key = Key::Stone {
-            dark,
-            scale: scale_key(scale),
-        };
-        self.made
-            .entry(key)
+        self.stones
+            .entry((dark, scale_key(scale)))
             .or_insert_with(|| {
                 let n = tokens::TILE_TEXELS * 4;
                 bake(&opaque(&stone(page, n)), n, n, tokens::TILE_TEXEL, scale)
@@ -42,20 +39,30 @@ impl Art {
             .clone()
     }
 
-    /// Home's landscape: a sunset in the dark appearance, a dawn in the light one.
-    pub fn scene(&mut self, dark: bool, scale: f32) -> Arc<RenderImage> {
-        let key = Key::Scene {
-            dark,
-            scale: scale_key(scale),
-        };
-        self.made
-            .entry(key)
-            .or_insert_with(|| {
-                let (w, h) = SCENE_SIZE;
-                let palette = if dark { &SUNSET } else { &DAWN };
-                bake(&opaque(&scene(palette, 3, w, h)), w, h, SCENE_TEXEL, scale)
-            })
-            .clone()
+    /// Home's landscape, at least `width` logical pixels wide (the banner clips the rest), and
+    /// its width: a sunset in the dark appearance, a dawn in the light one.
+    pub fn scene(&mut self, dark: bool, scale: f32, width: f32) -> (Arc<RenderImage>, f32) {
+        let key = (dark, scale_key(scale));
+        let texels = (width / SCENE_TEXEL).ceil().max(1.) as usize;
+        if !matches!(&self.scene, Some((k, w, _)) if *k == key && *w >= texels) {
+            let w = texels.next_multiple_of(SCENE_STEP);
+            let palette = if dark { &SUNSET } else { &DAWN };
+            let texels = opaque(&scene(palette, 3, w, SCENE_HEIGHT));
+            let image = bake(&texels, w, SCENE_HEIGHT, SCENE_TEXEL, scale);
+            if let Some((_, _, old)) = self.scene.replace((key, w, image)) {
+                self.replaced.push(old);
+            }
+        }
+        let (_, w, image) = self.scene.as_ref().expect("made above");
+        (image.clone(), *w as f32 * SCENE_TEXEL)
+    }
+
+    /// Frees the landscapes replaced since the last frame: GPUI keeps an image in the window's
+    /// sprite atlas until it is dropped there.
+    pub fn free_replaced(&mut self, window: &mut Window) {
+        for image in self.replaced.drain(..) {
+            let _ = window.drop_image(image);
+        }
     }
 }
 
@@ -199,8 +206,14 @@ pub const DAWN: Palette = Palette {
 
 /// A blocky landscape, `w` by `h` texels: banded sky, a sun half set behind the far hills and cut
 /// into slices like Horizon's mark, flat clouds, three ridges of hills and a few square trees.
+/// Each part draws from its own generator from left to right, so a wider landscape only adds
+/// columns: the first `w` are the same at every width, and a resized window keeps its view.
 pub fn scene(p: &Palette, seed: u32, w: usize, h: usize) -> Vec<u32> {
-    let mut rng = Rng(seed.wrapping_mul(0x2545_f491) | 1);
+    let mut seeds = Rng(seed.wrapping_mul(0x2545_f491) | 1);
+    let mut rng = || {
+        seeds.next();
+        Rng(seeds.0)
+    };
     let mut out = vec![0; w * h];
     let horizon = h * 62 / 100;
     let band = horizon as f32 / p.sky.len() as f32;
@@ -223,20 +236,23 @@ pub fn scene(p: &Palette, seed: u32, w: usize, h: usize) -> Vec<u32> {
             }
         }
     };
-    for _ in 0..4 {
-        let cx = (rng.next() * w as f32) as isize;
-        let cy = (horizon as f32 * (0.12 + rng.next() * 0.4)) as isize;
-        let cw = 10 + (rng.next() * 14.) as usize;
-        let under = p.sky[((cy as f32 / band) as usize + 1).min(p.sky.len() - 1)];
-        let c = mix(under, 0xffffff, 0.12);
-        rect(&mut out, cx, cy, cw, 2, c);
-        rect(&mut out, cx + 3, cy - 2, cw.saturating_sub(6), 2, c);
+    // Four clouds in every stretch of `CLOUDS` texels.
+    const CLOUDS: usize = 220;
+    let mut clouds = rng();
+    for stretch in 0..w.div_ceil(CLOUDS) {
+        for _ in 0..4 {
+            let cx = (stretch * CLOUDS) as isize + (clouds.next() * CLOUDS as f32) as isize;
+            let cy = (horizon as f32 * (0.12 + clouds.next() * 0.4)) as isize;
+            let cw = 10 + (clouds.next() * 14.) as usize;
+            let under = p.sky[((cy as f32 / band) as usize + 1).min(p.sky.len() - 1)];
+            let c = mix(under, 0xffffff, 0.12);
+            rect(&mut out, cx, cy, cw, 2, c);
+            rect(&mut out, cx + 3, cy - 2, cw.saturating_sub(6), 2, c);
+        }
     }
+    // The sun, where it was when the landscape had one width (two thirds of 220 texels).
     let r = (h as f32 * 0.2) as isize;
-    let (cx, cy) = (
-        (w as f32 * 0.68) as isize,
-        horizon as isize - (h as f32 * 0.11) as isize,
-    );
+    let (cx, cy) = (149, horizon as isize - (h as f32 * 0.11) as isize);
     for dy in -r..=0 {
         let half = ((r * r - dy * dy) as f32).sqrt().round() as isize;
         let t = (dy + r) as f32 / r as f32;
@@ -251,7 +267,7 @@ pub fn scene(p: &Palette, seed: u32, w: usize, h: usize) -> Vec<u32> {
             rect(&mut out, cx - half, cy + dy, (half * 2) as usize, 1, c);
         }
     }
-    let ridge = |rng: &mut Rng, base: f32, amp: f32, rough: f32| -> Vec<usize> {
+    let ridge = |mut rng: Rng, base: f32, amp: f32, rough: f32| -> Vec<usize> {
         let (mut y, mut v) = (base, 0.);
         (0..w)
             .map(|x| {
@@ -277,7 +293,7 @@ pub fn scene(p: &Palette, seed: u32, w: usize, h: usize) -> Vec<u32> {
     ];
     let mut near = Vec::new();
     for (c, base, amp, rough, top) in layers {
-        let hs = ridge(&mut rng, base, amp, rough);
+        let hs = ridge(rng(), base, amp, rough);
         for (x, &y) in hs.iter().enumerate() {
             for yy in y.min(h)..h {
                 out[yy * w + x] = c;
@@ -288,9 +304,12 @@ pub fn scene(p: &Palette, seed: u32, w: usize, h: usize) -> Vec<u32> {
         }
         near = hs;
     }
-    for _ in 0..w / 26 {
-        let tx = 4 + (rng.next() * (w - 10) as f32) as isize;
-        let ty = near[tx as usize] as isize;
+    // A tree somewhere in every 26 texels of the near hills.
+    let mut trees = rng();
+    for cell in 0..w.div_ceil(26) {
+        let tx = cell * 26 + 2 + (trees.next() * 22.) as usize;
+        let Some(&ty) = near.get(tx) else { break };
+        let (tx, ty) = (tx as isize, ty as isize);
         rect(&mut out, tx - 2, ty - 8, 5, 5, p.trees);
         rect(&mut out, tx - 1, ty - 10, 3, 2, p.trees);
         rect(&mut out, tx, ty - 3, 1, 3, p.trees);
@@ -319,5 +338,40 @@ mod tests {
         let image = bake(&opaque(&[0x112233; 4]), 2, 2, 4., 2.);
         let size = image.size(0);
         assert_eq!((size.width.0, size.height.0), (16, 16));
+    }
+
+    #[test]
+    fn the_landscape_covers_the_banner_and_is_made_again_only_when_it_grows() {
+        let mut art = Art::default();
+        let stone = art.stone(0x0f0d17, true, 2.);
+        let (first, drawn) = art.scene(true, 2., 700.);
+        assert!(drawn >= 700.);
+        assert_eq!(first.size(0).width.0, (drawn * 2.) as i32);
+        assert_eq!(
+            first.size(0).height.0,
+            (SCENE_HEIGHT as f32 * SCENE_TEXEL * 2.) as i32
+        );
+        // A step wide: a few pixels more or a narrower window keep it.
+        for width in [drawn, 400.] {
+            assert!(Arc::ptr_eq(&first, &art.scene(true, 2., width).0));
+        }
+        let (wider, wider_drawn) = art.scene(true, 2., 1900.);
+        assert!(!Arc::ptr_eq(&first, &wider) && wider_drawn >= 1900.);
+        assert!(Arc::ptr_eq(&art.replaced[0], &first));
+        assert!(Arc::ptr_eq(&stone, &art.stone(0x0f0d17, true, 2.)));
+    }
+
+    #[test]
+    fn a_wider_landscape_only_adds_columns() {
+        let (h, narrow, wide) = (SCENE_HEIGHT, 150, 400);
+        let a = scene(&SUNSET, 3, narrow, h);
+        let b = scene(&SUNSET, 3, wide, h);
+        for y in 0..h {
+            assert_eq!(
+                a[y * narrow..(y + 1) * narrow],
+                b[y * wide..y * wide + narrow],
+                "row {y}"
+            );
+        }
     }
 }
