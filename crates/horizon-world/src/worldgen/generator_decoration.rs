@@ -291,10 +291,13 @@ impl Decoration {
         let mut biomes = Vec::with_capacity(9);
         let (min_y, height) = (region[4].terrain.min_y(), region[4].terrain.height());
         for chunk in region.iter_mut() {
+            // A one-section stand-in while the region holds the terrain: it
+            // is swapped back below, and allocating the full height for nine
+            // stand-ins per region cost more than some features.
             let empty = super::terrain::TerrainChunk::new(
                 chunk.position(),
                 min_y,
-                height,
+                16,
                 data.registry(),
                 data.block_states().clone(),
             )
@@ -335,6 +338,7 @@ impl Decoration {
             behaviours: data.behaviours.as_deref(),
             // WorldGenRegion.isOutsideBuildHeight: the level's range, not the noise's.
             build: (min_y, min_y + height),
+            shape_ticks: std::cell::RefCell::new(crate::level::Ticks::new(0)),
         };
         let mut stats = DecorateStats::default();
         let blocks = self.blocks;
@@ -465,6 +469,8 @@ struct World<'a> {
     behaviours: Option<&'a crate::level::Behaviours>,
     /// Inclusive minimum and exclusive maximum build height.
     build: (i32, i32),
+    /// The tick capture `shape_update` passes to `updateShape`.
+    shape_ticks: std::cell::RefCell<crate::level::Ticks>,
 }
 /// Read-only `LevelAccess` view of the decoration region for
 /// `BlockState.updateShape` (writes go through `World::set_block`).
@@ -519,8 +525,10 @@ impl World<'_> {
             random: horizon_core::random::LegacyRandom::new(0),
         };
         // The ticks updateShape schedules (LeavesBlock re-measuring its
-        // distance, waterlogged blocks' fluid) go to the proto chunks.
-        let mut ticks = crate::level::Ticks::new(0);
+        // distance, waterlogged blocks' fluid) go to the proto chunks. While
+        // capturing, scheduling leaves the rest of `Ticks` untouched, so the
+        // region keeps one instead of building one per update.
+        let mut ticks = self.shape_ticks.borrow_mut();
         ticks.capture = Some(Vec::new());
         let updated = behaviours.update_shape(
             &mut level,
@@ -563,10 +571,36 @@ impl DecorationWorld for World<'_> {
             .map_err(|_| RegionError::InvalidChunks)?
             >> 4)
     }
+    /// `BiomeRegion::present_in_chunk`: the distinct ids, ascending, from a
+    /// bitset instead of sorting every quart of the column.
     fn chunk_biomes(&mut self, chunk: ChunkPos) -> Result<Vec<BiomeId>, RegionError> {
-        self.biomes
-            .present_in_chunk(chunk)
-            .map_err(RegionError::Biome)
+        let biomes = self.biomes.chunk(chunk).map_err(RegionError::Biome)?;
+        let mut seen: Vec<u64> = Vec::new();
+        let mut last = None;
+        let mut section = 0;
+        while let Some(values) = biomes.section(section) {
+            for &id in values {
+                if last == Some(id) {
+                    continue;
+                }
+                last = Some(id);
+                let word = id.0 as usize / 64;
+                if seen.len() <= word {
+                    seen.resize(word + 1, 0);
+                }
+                seen[word] |= 1 << (id.0 % 64);
+            }
+            section += 1;
+        }
+        let mut out = Vec::new();
+        for (word, &bits) in seen.iter().enumerate() {
+            let mut bits = bits;
+            while bits != 0 {
+                out.push(BiomeId(word as u32 * 64 + bits.trailing_zeros()));
+                bits &= bits - 1;
+            }
+        }
+        Ok(out)
     }
     fn set_currently_generating(&mut self, _: Option<FeatureIdentity>) -> Result<(), RegionError> {
         Ok(())
