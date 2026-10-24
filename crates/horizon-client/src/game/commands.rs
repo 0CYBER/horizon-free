@@ -1783,8 +1783,12 @@ impl Game<'_> {
             self.level_set(pos, state)
                 .map_err(|e| CommandError::new(Text::literal(e.to_string())))?;
         }
+        // HopperBlock.onPlace can change the state while it is being placed (a powered
+        // hopper arrives `enabled=false`); vanilla keeps the block entity, so compare the block.
+        let placed = self.world.block(pos[0], pos[1], pos[2]);
+        let kept = self.res.facts().get(placed).name == new;
         if old != new
-            && self.world.block(pos[0], pos[1], pos[2]) == state
+            && kept
             && let Some(entity) = horizon_client::containers::BlockEntity::for_block(&new)
         {
             self.world.block_entities.insert(key, entity);
