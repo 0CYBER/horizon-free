@@ -45,6 +45,6 @@ To play, use [the launcher](../launcher/README.md); the project site is [playhor
 - [Collision geometry](collision-geometry.md): shapes, collision, movement and fluids.
 - [Face visibility](face-visibility.md): which model faces the mesher emits.
 
-## The earlier Java track (no longer developed)
+## Java comparison profiling
 
-- [Java performance packs](java-packs.md), with [Vulkan on your Mac](vulkan.md), [collector comparisons](collectors.md), [profiling](profiling.md), [process memory](process-memory.md) and [tick state](tick-state.md). The Fabric server starter is retired: [host a server](hosting.md) with horizon-server.
+- [JFR analysis for Java comparisons](profiling.md).

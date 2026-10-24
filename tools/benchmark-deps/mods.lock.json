@@ -3,8 +3,6 @@
   "minecraft": "26.3",
   "java_major": 25,
   "fabric_loader": "0.19.5",
-  "pack_version": "0.21.0",
-  "options_data_version": 5023,
   "projects": {
     "sodium": {
       "slug": "sodium",
@@ -50,31 +48,6 @@
       "hashes": {
         "sha512": "4d7fee66132eedc71feab9390b92c95d7058edbdad0fecfac1d836a2950b97a7ca463afbede61c7ef361ce65e1f927ab9e89dde5bf2e0e0ce486afb5c5dbee40",
         "sha1": "dd5a4ec2c68d7601d8bce9076f789c55a5f8bef3"
-      },
-      "dependencies": [],
-      "client_side": "optional",
-      "server_side": "optional"
-    },
-    "distanthorizons": {
-      "slug": "distanthorizons",
-      "project_id": "uCdwusMi",
-      "version_id": "TGgEbP9A",
-      "version": "3.3.4-26.3",
-      "game_versions": [
-        "26.3"
-      ],
-      "loaders": [
-        "fabric",
-        "neoforge"
-      ],
-      "license": "LGPL-3.0-only",
-      "source": "https://gitlab.com/distant-horizons-team/distant-horizons",
-      "url": "https://cdn.modrinth.com/data/uCdwusMi/versions/TGgEbP9A/DistantHorizons-3.3.4-26.3-fabric-neoforge.jar",
-      "filename": "DistantHorizons-3.3.4-26.3-fabric-neoforge.jar",
-      "size": 28476894,
-      "hashes": {
-        "sha512": "0b90b1b08d99974bfc3c8e86b2ceb252e2f91715ed66b925004c28335fb44e1bddbbb6b8043e4d4d53c87ed247789cd1788b1ba4e3f4394efe154e0c59cff236",
-        "sha1": "310c0363068dfae18e91f799ed671a591b6ad49a"
       },
       "dependencies": [],
       "client_side": "optional",
@@ -131,37 +104,6 @@
       "dependencies": [],
       "client_side": "optional",
       "server_side": "optional"
-    },
-    "entityculling": {
-      "slug": "entityculling",
-      "project_id": "NNAgCjsB",
-      "version_id": "F4loCvYt",
-      "version": "1.11.2",
-      "game_versions": [
-        "26.3"
-      ],
-      "loaders": [
-        "fabric"
-      ],
-      "license": "LicenseRef-tr7zw-Protective-License",
-      "source": "https://github.com/tr7zw/EntityCulling",
-      "url": "https://cdn.modrinth.com/data/NNAgCjsB/versions/F4loCvYt/entityculling-fabric-1.11.2-mc26.3.jar",
-      "filename": "entityculling-fabric-1.11.2-mc26.3.jar",
-      "size": 1508273,
-      "hashes": {
-        "sha1": "f2196e803fe77cfbb62c4a2acb64803d98b4f61c",
-        "sha512": "c5d8947cb022f8baed4bf17e38ca598c56b8049871e7e47fb462bcecc9bc01e7eb75290494199fcb1aa73f5e37f93a296211ba78c9dd2a5bff30d5eed497ebcc"
-      },
-      "dependencies": [
-        {
-          "version_id": null,
-          "project_id": "P7dR8mSH",
-          "file_name": null,
-          "dependency_type": "required"
-        }
-      ],
-      "client_side": "required",
-      "server_side": "unsupported"
     },
     "immediatelyfast": {
       "slug": "immediatelyfast",

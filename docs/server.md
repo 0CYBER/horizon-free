@@ -7,8 +7,7 @@ should beat vanilla, Paper and Fabric + Lithium on TPS/MSPT, RAM, CPU, chunk gen
 Gameplay stays vanilla: there are no Paper-style rule changes unless the owner turns one on.
 
 This page covers what the server does today (measured), the design of `horizon-server`, and what ships for the
-first working version (2026-10-23). It replaced the Java/Fabric starter (`docs/server-quickstart.txt`,
-`tools/server.py`, retired on 2026-10-19). The owner's guide is docs/hosting.md, also at
+first working version (2026-10-23). The owner's guide is docs/hosting.md, also at
 https://playhorizon.dev/server.
 
 ## 1. Today
@@ -467,7 +466,7 @@ reproducible by anyone, and show the same gameplay on both sides.
   - Horizon (`horizon-server`);
   - vanilla 26.3 (the owner's `server.jar`);
   - Paper (a jar the owner downloads; Paper's defaults are kept, and noted as non-vanilla);
-  - optionally Fabric + Lithium (the old starter's setup, via the pinned `packs/mods.lock.json`).
+  - optionally Fabric + Lithium (via the pinned `tools/benchmark-deps/mods.lock.json`).
 
   Java servers run on Java 25 with `-Xms` = `-Xmx` (the same heap for all, 4 GB by default), and the heap is
   reported.
