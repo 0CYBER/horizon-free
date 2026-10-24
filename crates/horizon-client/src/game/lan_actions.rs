@@ -82,6 +82,8 @@ pub(super) struct GuestPlay {
     /// (`LivingEntity.collectEquipmentChanges`).
     modifiers: Vec<(String, String)>,
     equipped: Option<Vec<Option<ItemStack>>>,
+    /// The guest's cast fishing hook (`Player.fishing`).
+    pub(super) hook: Option<super::fishing::Hook>,
 }
 
 /// A guest's command waiting for the hub (`LanHost::commands`).
@@ -345,6 +347,7 @@ impl Game<'_> {
         std::mem::swap(&mut self.adv.unlocked, &mut g.recipes_unlocked);
         std::mem::swap(&mut self.level.recipe_book, &mut g.recipe_book);
         std::mem::swap(&mut self.stats, &mut play.stats);
+        std::mem::swap(&mut self.hook, &mut play.hook);
         let adv_loaded = std::mem::replace(&mut self.adv.loaded, true);
         let last_inventory = std::mem::replace(&mut self.adv.last_inventory, play.last_inventory);
         let death_cause = std::mem::replace(&mut self.ui.death_cause, play.death_cause.take());
@@ -552,6 +555,7 @@ impl Game<'_> {
         std::mem::swap(&mut self.adv.unlocked, &mut g.recipes_unlocked);
         std::mem::swap(&mut self.level.recipe_book, &mut g.recipe_book);
         std::mem::swap(&mut self.stats, &mut play.stats);
+        std::mem::swap(&mut self.hook, &mut play.hook);
         self.adv.loaded = adv_loaded;
         play.last_inventory = std::mem::replace(&mut self.adv.last_inventory, last_inventory);
         let stat_events = std::mem::take(&mut play.stats.events);
@@ -1055,20 +1059,14 @@ impl Game<'_> {
             S::SetBeacon(p) => self.lan_station_beacon(host, conn, p.primary, p.secondary),
             S::SelectTrade(p) => self.lan_select_trade(host, conn, p.item),
             S::ContainerClose(p) if self.lan_merchant_closed(host, conn, Some(p.container)) => {
-                let g = &mut host.hub.guests[gi];
-                if let Some(c) = g.carried.take() {
-                    self.drop_guest_items(host, gi, vec![c]);
-                }
+                self.guest_carried_back(host, gi);
             }
             S::ContainerClose(p)
                 if self.lan_crafting_closed(host, conn, Some(p.container))
                     || self.lan_station_closed(host, conn, Some(p.container))
                     || self.lan_mount_closed(host, conn, Some(p.container)) =>
             {
-                let g = &mut host.hub.guests[gi];
-                if let Some(c) = g.carried.take() {
-                    self.drop_guest_items(host, gi, vec![c]);
-                }
+                self.guest_carried_back(host, gi);
             }
             S::ContainerClick(p) => {
                 let rules = ItemRules(self.res.items());
@@ -1084,10 +1082,7 @@ impl Game<'_> {
                     self.guest_container_closed(host, conn);
                 }
                 host.hub.container_closed(conn, p.container);
-                let g = &mut host.hub.guests[gi];
-                if let Some(c) = g.carried.take() {
-                    self.drop_guest_items(host, gi, vec![c]);
-                }
+                self.guest_carried_back(host, gi);
             }
             S::ChatCommand(c) => self.guest_chat_command(host, conn, &c.command),
             S::ChatCommandSigned(p) => self.guest_signed_command(host, conn, p),
@@ -1232,6 +1227,17 @@ impl Game<'_> {
             }
         }
         Some(out)
+    }
+
+    /// `AbstractContainerMenu.removed`: what a closing player held on the
+    /// cursor goes back into their inventory (`placeItemBackInInventory`,
+    /// dropped only if it doesn't fit), and their client's cursor empties
+    /// with the inventory it is sent.
+    fn guest_carried_back(&mut self, host: &mut LanHost, gi: usize) {
+        if let Some(c) = host.hub.guests[gi].carried.take() {
+            self.lan_place_back(host, gi, vec![c]);
+            host.hub.send_inventory(gi);
+        }
     }
 
     pub(super) fn drop_guest_items(&mut self, host: &LanHost, gi: usize, stacks: Vec<ItemStack>) {
@@ -1720,16 +1726,23 @@ impl Game<'_> {
             // PlayerAdvancements.flushDirty.
             let sleeping = host.hub.guests[gi].sleeping;
             self.as_guest(host, conn, |g| {
+                g.tick_fishing();
+                g.tick_maps();
                 g.count_tick_stats(sleeping);
                 g.tick_advancements();
                 g.update_player_attributes();
             });
+            self.lan_map_updates(host, conn);
             host.hub.flush_progress(conn);
             self.guest_dig_feedback(host, conn);
             self.guest_pickups(host, gi);
             self.guest_orbs(host, gi);
             if host.hub.guests[gi].health <= 0.0 && !host.hub.guests[gi].dead {
                 self.guest_forget_digging(host, conn);
+                // FishingHook.shouldStopFishing: its owner is dead.
+                if let Some(play) = host.play.get_mut(&conn) {
+                    play.hook = None;
+                }
             }
             let g = &mut host.hub.guests[gi];
             if g.health <= 0.0 && !g.dead {

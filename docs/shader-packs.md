@@ -25,7 +25,8 @@ Both are off by default. With no pack selected the renderer draws exactly what i
 | Java shader packs: full-screen passes drawn (`java_pack.rs`, `gfx/java_stages.rs`: `begin`, `prepare`, `deferred*`, `composite*`, `final` over Horizon's world) | first slice: BSL and Complementary run (below); `depthtex1`/`depthtex2` before translucent geometry, `blend.*`, PNG `texture.<stage>.*` and `texture.noise` |
 | Java shader packs: custom uniforms (`horizon_shaderpack::uniforms`), `sunPathRotation`, `clouds`/`sun`/`moon`, eye light, `wetness` | done for the full-screen passes (below) |
 | Java shader packs: `gbuffers_terrain`, `gbuffers_water` (`gfx/java_terrain.rs`: Horizon's terrain fed to the pack's programs) | first slice: MakeUp Ultra Fast, Chocapic13' and BSL draw their own terrain and water (below) |
-| Java shader packs: other `gbuffers_*`, `shadow`, `.dat` and resource-location textures, images, compute | planned |
+| Java shader packs: `shadow` programs (`gfx/java_stages.rs`: the shadow map from Horizon's terrain) | first slice: terrain shadows for MakeUp Ultra Fast, Chocapic13' and BSL (below) |
+| Java shader packs: other `gbuffers_*`, entity shadows, `shadowcomp`, `.dat` and resource-location textures, images, compute | planned |
 
 ## How the renderer draws a frame today
 
@@ -416,6 +417,30 @@ sprite arrays (animated sprites copied in each frame), `lightmap` is Horizon's l
 and fragments under alpha 0.1 are discarded (`alphaTestRef`). `RGBA16` targets are 16-bit unorm where the GPU can
 render them (Chocapic13' packs its G-buffer into them; half floats broke it).
 
+Occlusion culling works as in Horizon's world pass where the GPU has it: the pack's terrain program draws the
+sections the last test saw, the boxes of the others are tested against that depth (in OpenGL's layout, in a pass of
+their own since the pack's targets vary; on Metal the test reads the depth in the shader, as Horizon's does), and the
+pack's program then draws the ones in sight, flat draws included.
+
+When the pack has a `shadow` program (`shadow_cutout`, `shadow` or `shadow_solid` for the solid layer, which holds
+cutout blocks; `shadow_water` or `shadow` for the translucent one), it draws a shadow map after `begin*`, as Iris's
+`ShadowRenderer`:
+
+- the light's matrices are Iris's `ShadowMatrices`: `shadowModelView` turns camera-relative positions toward the sun
+  (the moon at night) with the pack's `sunPathRotation`, snapped to `shadowIntervalSize`; `shadowProjection` is
+  orthographic, `shadowDistance` each way, between `shadowNearPlane` and `shadowFarPlane` (Iris's defaults when the
+  pack sets none); the shadow programs get them as `gl_ModelViewMatrix` and `gl_ProjectionMatrix`;
+- the renderer draws every section inside that box whose shadow can reach the camera's view (the box swept away
+  from the light against the view's planes, as Iris's advanced shadow culling), from its own list (cave culling is
+  off as in Iris, and no face is culled), solid then translucent, instanced draws only;
+- `shadowtex0` holds all of it, `shadowtex1` the depth before translucent terrain; both are bound as depth textures
+  for `sampler2DShadow` (linear comparison, Iris's hardware filtering) and as float copies for `sampler2D` reads;
+- `shadowcolor0..7` are `shadowMapResolution` square in their `shadowcolor<N>Format`, cleared each frame to
+  `shadowcolor<N>ClearColor` (white by default) unless `shadowcolor<N>Clear` is false.
+
+A shadow program that doesn't translate or that wgpu refuses leaves the pack without its shadow map, with a warning:
+the terrain programs still run and every `shadowtex` reads as far (nothing in shadow).
+
 What makes Horizon look like OpenGL to the pack:
 
 - **Layout.** The translator ends every vertex shader by flipping `gl_Position.y` and moving depth from `[-w, w]` to
@@ -447,14 +472,15 @@ What makes Horizon look like OpenGL to the pack:
 Measured on the Mac mini (M4 Pro) with the packs' default options: BSL v10.1.8 and Complementary Reimagined r5.9.3
 grade and light Horizon's world as their post-processing would. Sildur's Vibrant v2.02 draws only its sky: its
 `deferred` reads the albedo `gbuffers_*` write to `colortex4` (not checked again since the terrain programs run).
-Without the other `gbuffers_*` and `shadow`, no pack has its shadows or sky look yet; Distant Horizons' and Voxy's
-depth read as far. Horizon's world goes into the target the pack's `gbuffers_terrain` (or the program Iris falls back
-to) draws to first: `colortex0` for most packs, `colortex1` for MakeUp. Not supported yet: images and compute (`.csh`;
-a pack that needs them doesn't load), mipmapped targets (`colortexNMipmapEnabled` is read but ignored), `.dat` and
-resource-location custom textures (PNG files in the pack only); shadow matrices are identity. With the pack's terrain:
-entities, the sky, the hand, weather and clouds are still Horizon's (in that first target only), GPU occlusion culling
-is off, block ids come from sprite names rather than block states, distant (LOD) terrain doesn't repeat its textures,
-and only the overworld has been checked.
+Without the other `gbuffers_*`, no pack has its own sky yet, and only terrain casts shadows; Distant Horizons' and
+Voxy's depth read as far. Horizon's world goes into the target the pack's `gbuffers_terrain` (or the program Iris falls
+back to) draws to first: `colortex0` for most packs, `colortex1` for MakeUp. Not supported yet: images and compute
+(`.csh`; a pack that needs them doesn't load), mipmapped targets (`colortexNMipmapEnabled` is read but ignored), `.dat`
+and resource-location custom textures (PNG files in the pack only), `shadowcomp` passes, `shadowMapFov` (a perspective
+shadow map), `shadow.culling` and `shadowDistanceRenderMul` (the box above is the only bound). With the pack's terrain:
+entities, the sky, the hand, weather and clouds are still Horizon's (in that first target only), block ids come from
+sprite names rather than block states, distant (LOD) terrain doesn't repeat its textures, and only the overworld has
+been checked.
 
 ### Compatibility
 
@@ -462,8 +488,8 @@ Tested on 2026-10-22 on the Mac mini (M4 Pro, Metal) with each pack's default op
 the authors' pages (dev-only test inputs, kept outside the repository). "Loads" means every pass the pack enables for
 the overworld, Nether and End is preprocessed, translated and validated, as the game does when the pack is picked
 (`java_pack::tests::real_packs_load` with `HORIZON_TEST_SHADERPACKS`); "drawn" means it was also picked in the game
-and screenshotted. Full-screen passes, `gbuffers_terrain` and `gbuffers_water` run (above); no pack has its own
-shadows, entities or sky yet.
+and screenshotted. Full-screen passes, `gbuffers_terrain`, `gbuffers_water` and the terrain's shadow map run
+(above); no pack has its own entities or sky yet.
 
 | Pack | Version | Result | First thing that stops it |
 | --- | --- | --- | --- |
@@ -519,7 +545,7 @@ What the translator does for these packs, as Iris (JCPP and its GLSL transformer
    into Iris's attributes (`mc_Entity` from `block.properties`, `mc_midTexCoord`, `at_tangent`, lightmap), a second
    set of terrain pipelines writing the pack's render targets.
 5. **Entities, block entities, hand, weather, clouds, particles** `gbuffers_*`.
-6. **Shadow pass**: terrain and entities from the sun into `shadowtex0/1` and `shadowcolor0/1`, culled from the
-   light's view, with the pack's distortion.
+6. **Shadow pass** (terrain done, above): entities and block entities from the sun into `shadowtex0/1` and
+   `shadowcolor0/1`, culled from the light's view, with the pack's distortion; `shadowcomp`.
 7. **The rest**: custom textures, compute programs and images, per-dimension
    folders, `entity.properties`/`item.properties`.

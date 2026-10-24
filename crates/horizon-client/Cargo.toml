@@ -85,6 +85,11 @@ mods = ["horizon-mods/runtime"]
 # Records the call sites of mob random draws (`mob_ai_probe` traces).
 rng-trace = ["horizon-core/rng-trace"]
 
+# Its own name, not `probe`: Cargo copies every crate's examples into one target/<profile>/examples.
+[[example]]
+name = "client_probe"
+path = "examples/probe/main.rs"
+
 [lints]
 workspace = true
 

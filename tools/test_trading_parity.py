@@ -219,8 +219,8 @@ def main():
     if args.java_only:
         print(f'{len(vanilla)} oracle lines')
         return
-    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'probe'], 'compile-rust')
-    binary = lab.cargo_target() / 'release/examples/probe'
+    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'client_probe'], 'compile-rust')
+    binary = lab.cargo_target() / 'release/examples/client_probe'
     run([binary, 'trading_fixture', resources, inputs, build / 'server.txt', build / 'rust.txt'], 'rust')
     rust = (build / 'rust.txt').read_text().splitlines()
     bad = [(a, b) for a, b in zip(vanilla, rust) if a != b]

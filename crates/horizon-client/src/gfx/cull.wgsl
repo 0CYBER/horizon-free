@@ -52,6 +52,10 @@ fn corner(origin: vec3<f32>, c: u32) -> vec3<f32> {
 // section fail the depth test against the final depth, which is only nearer.
 @vertex
 fn vs_box(@builtin(vertex_index) v: u32, @builtin(instance_index) t: u32) -> Box {
+    return box_vertex(v, t);
+}
+
+fn box_vertex(v: u32, t: u32) -> Box {
     let origin = origins[tests[t].x].xyz;
     var out: Box;
     out.test = t;
@@ -86,6 +90,15 @@ fn vs_box(@builtin(vertex_index) v: u32, @builtin(instance_index) t: u32) -> Box
     return out;
 }
 
+// The same box in OpenGL's layout, for a Java shader pack's terrain depth
+// (gfx/java_stages.rs): y flipped, depth from 0 near to 1 far.
+@vertex
+fn vs_box_gl(@builtin(vertex_index) v: u32, @builtin(instance_index) t: u32) -> Box {
+    var out = box_vertex(v, t);
+    out.position = vec4(out.position.x, -out.position.y, out.position.w - out.position.z, out.position.w);
+    return out;
+}
+
 // The box is seen at this fragment: store the stamp, and give its phase 2
 // draws their instance.
 fn see(t: u32) {
@@ -108,6 +121,15 @@ fn see(t: u32) {
 @fragment
 fn fs_box(in: Box) {
     if in.position.z >= textureLoad(depth, vec2<u32>(in.position.xy), 0) {
+        see(in.test);
+    }
+}
+
+// fs_box against a Java shader pack's depth in OpenGL's layout (`vs_box_gl`):
+// less or equal passing.
+@fragment
+fn fs_box_gl(in: Box) {
+    if in.position.z <= textureLoad(depth, vec2<u32>(in.position.xy), 0) {
         see(in.test);
     }
 }

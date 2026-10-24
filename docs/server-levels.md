@@ -26,10 +26,9 @@ the other dimensions' levels as `Parked` values and swaps one into place (`enter
 The packets of a guest are read in its own level's pass (`Hub::tick_level`), so its actions and
 commands run with its level in place.
 
-The window's own game (single player's default, `--no-server-thread`, `HORIZON_SERVER_THREAD=0`, and the
-command harness) keeps one level, which follows its player (`enter_dimension`). LAN guests of a world run
-that way stay in the host's dimension. It is the default again only until the server thread reaches parity
-(`--server-thread` or `HORIZON_SERVER_THREAD=1` opts in), so it gets no multi-level work.
+The window's own game (`--in-frame`, `--no-server-thread`, `HORIZON_SERVER_THREAD=0`, and the command
+harness) keeps one level, which follows its player (`enter_dimension`). LAN guests of a world run that way
+stay in the host's dimension. That mode is the escape hatch, so it gets no multi-level work.
 
 ## One code path for both
 

@@ -210,6 +210,18 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - wind:      the host and the guest each throw a wind charge at their feet: the server's burst
              launches them about six blocks up (the push in ClientboundExplodePacket) and they land
              unhurt (#1386).
+- fishing:   the host and the guest each cast a fishing rod: the hook stays out on the server and
+             both sides draw it and it reels back in from the ground, and in open water a fish
+             bites and reeling in catches it (#1348).
+- maps:      the host and the guest each make a map and hold it: their client draws the terrain
+             around them and their marker, from the server's map data (#1382).
+- body:      the host and the guest each walk while drawing a bow (slowed), stand on powder snow
+             with leather boots (held up) and without (sinking), and sprint-swim looking down
+             (diving): their own client decides it (#1278, #1296, #1303).
+- strikes:   a bolt strikes the host and the guest standing in water and hurts them, and a cave
+             spider's bite poisons them (#1480, #1484).
+- cursor:    the host and the guest each close their inventory with a stack on the cursor: it
+             goes back into their inventory, none is thrown and the cursor is empty (#1283).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -4925,6 +4937,360 @@ def check_wind(host, guest, out):
 
 CHECKS += ['wind']
 CHECK_FNS.update(wind=check_wind)
+
+
+def bobbers(game):
+    """The fishing bobbers this side draws, as (owner) ids: 0 for its own player's."""
+    return [q.get('owner') for q in game('status')['projectiles'] if q['kind'] == 'minecraft:fishing_bobber']
+
+
+def check_fishing(host, guest, out):
+    """FishingHook for each player, on the server: a cast hook stays out (ticked by the server and
+    tracked to the clients as a fishing bobber under its owner), lands on the ground and reels back
+    in; cast into open water with Lure III, a fish bites and reeling in
+    during the bite catches it for 1 (#1348)."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    host('command', command='weather clear')
+    seen = {}
+    try:
+        for game, other, dz in ((host, guest, -5), (guest, host, 5)):
+            x, z = hx, hz + dz
+            host('command', command=f'fill {x - 1} {hy - 1} {z - 1} {x + 14} {hy - 1} {z + 1} minecraft:stone')
+            host('command', command=f'fill {x - 1} {hy} {z - 1} {x + 14} {hy + 4} {z + 1} minecraft:air')
+            game('command', command='gamemode survival')
+            game('command', command='clear @s')
+            game('command', command='item replace entity @s weapon.mainhand with minecraft:fishing_rod')
+            game('command', command=f'tp @s {x + 0.5} {hy} {z + 0.5} -90 0')
+            game.wait(10)
+            # On the ground: the floor four blocks ahead.
+            game.raw('look-at', f'{x + 4.5:.2f}', f'{hy:.2f}', f'{z + 0.5:.2f}')
+            game.raw('use-item')
+            game.wait(40)
+            s = {'own': bobbers(game), 'other': bobbers(other)}
+            game.shot(out, 'fishing-cast')
+            game.raw('use-item')
+            game.wait(10)
+            s['reeled'] = {'own': bobbers(game), 'damage': (game('state').get('held') or {}).get('damage')}
+            # Open water: a pool 7x7 and 3 deep, ahead.
+            host('command', command=f'fill {x + 3} {hy - 3} {z - 3} {x + 9} {hy - 1} {z + 3} minecraft:water')
+            game('command', command='item replace entity @s weapon.mainhand with minecraft:fishing_rod[enchantments={lure:3}]')
+            game.wait(10)
+            game.raw('look-at', f'{x + 6.5:.2f}', f'{hy - 1:.2f}', f'{z + 0.5:.2f}')
+            game.raw('use-item')
+            bit = None
+            for t in range(0, 900, 5):
+                game.wait(5)
+                if (game('status').get('fishing') or {}).get('nibble', 0) > 0:
+                    bit = t
+                    break
+            game.raw('use-item')
+            game.wait(40)
+            counts = game.raw('inventory')['counts']
+            s['caught'] = {'bit': bit is not None,
+                           'damage': (game('state').get('held') or {}).get('damage'),
+                           'items': sum(counts.values()) - 1}
+            game.shot(out, 'fishing-caught')
+            host('command', command=f'fill {x + 3} {hy - 3} {z - 3} {x + 9} {hy - 2} {z + 3} minecraft:stone')
+            host('command', command=f'fill {x + 3} {hy - 1} {z - 3} {x + 9} {hy - 1} {z + 3} minecraft:stone')
+            seen[game.name] = s
+    finally:
+        host('command', command='kill @e[type=minecraft:item]')
+        for game in (host, guest):
+            game('command', command='clear @s')
+        face_each_other(host, guest)
+    for name, s in seen.items():
+        other = guest if name == 'host' else host
+        assert s['own'] == [0], f'{name}: {seen}'
+        # The in-frame host draws only its own hook.
+        if other is guest or SERVER_THREAD:
+            assert len(s['other']) == 1 and s['other'][0] != 0, f'{name}: {seen}'
+        # FishingHook.retrieve costs 2 on the ground, but a resting hook's onGround
+        # alternates every tick on the server (Entity.move with no vertical motion
+        # clears it, the next tick's gravity sets it again): 2 or nothing.
+        assert s['reeled']['own'] == [] and s['reeled']['damage'] in (None, 0, 2), f'{name}: {seen}'
+        assert s['caught']['bit'] and s['caught']['damage'] == 1 and s['caught']['items'] >= 1, f'{name}: {seen}'
+    return seen
+
+
+CHECKS += ['fishing']
+CHECK_FNS.update(fishing=check_fishing)
+
+
+def check_maps(host, guest, out):
+    """MapItem.update for each player, on the server: a map the player makes and holds reveals the
+    terrain around them and shows their marker, which reach their client in
+    ClientboundMapItemDataPacket (#1382)."""
+    seen = {}
+    try:
+        for game in (host, guest):
+            game('command', command='gamemode survival')
+            game('command', command='clear @s')
+            game('command', command='item replace entity @s weapon.mainhand with minecraft:map')
+            x, y, z = pos_of(game)
+            game.raw('look-at', f'{x + 5:.2f}', f'{y + 1.6:.2f}', f'{z:.2f}')
+            game.wait(5)
+            game.raw('use-item')
+            # 16 ticks sweep every column once; the marker goes out every 5th tick.
+            game.wait(60)
+            maps = game('status').get('maps', [])
+            game.raw('look-at', f'{x + 1:.2f}', f'{y:.2f}', f'{z:.2f}')
+            game.wait(5)
+            game.shot(out, 'maps-held')
+            seen[game.name] = [{'pixels': m['pixels'], 'decorations': m['decorations']} for m in maps]
+    finally:
+        for game in (host, guest):
+            game('command', command='clear @s')
+        face_each_other(host, guest)
+    for name, maps in seen.items():
+        # Revealed out to the server's view distance, at least a 32-block disk.
+        assert len(maps) == 1 and maps[0]['pixels'] > 3000, f'{name}: {seen}'
+        assert maps[0]['decorations'] == ['map/decorations/player'], f'{name}: {seen}'
+    return seen
+
+
+CHECKS += ['maps']
+CHECK_FNS.update(maps=check_maps)
+
+
+def check_body(host, guest, out):
+    """What each player's own client decides for its body (#1278, #1303, #1296): walking while
+    drawing a bow is slowed to a fifth (LocalPlayer.modifyInput), sprint-swimming follows the look
+    down (Player.travel's look angle) and leather boots hold on powder snow
+    (PowderSnowBlock.canEntityWalkOnPowderSnow)."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    seen = {}
+
+    def walked(game, x, z, use):
+        game('command', command=f'tp @s {x + 0.5} {hy} {z + 0.5} -90 0')
+        game.wait(10)
+        if use:
+            game.raw('mouse', 'right', 'down')
+            game.wait(5)
+        a = pos_of(game)
+        game.raw('move', 'forward', '0.8')
+        game.wait(10)
+        b = pos_of(game)
+        game.raw('mouse', 'right', 'up')
+        game.wait(5)
+        return round(math.dist((a[0], a[2]), (b[0], b[2])), 2)
+
+    try:
+        for game, dz in ((host, -4), (guest, 4)):
+            x, z = hx, hz + dz
+            host('command', command=f'fill {x - 1} {hy - 1} {z - 1} {x + 10} {hy - 1} {z + 1} minecraft:stone')
+            host('command', command=f'fill {x - 1} {hy} {z - 1} {x + 10} {hy + 3} {z + 1} minecraft:air')
+            game('command', command='gamemode survival')
+            game('command', command='clear @s')
+            game('command', command='effect clear @s')
+            s = {'walk': walked(game, x, z, False)}
+            game('command', command='item replace entity @s weapon.mainhand with minecraft:bow')
+            game('command', command='give @s minecraft:arrow 4')
+            game.wait(5)
+            s['drawing'] = walked(game, x, z, True)
+            game('command', command='clear @s')
+            # Powder snow under the feet: leather boots stand on it, bare feet sink.
+            host('command', command=f'setblock {x + 3} {hy - 1} {z} minecraft:powder_snow')
+            for boots in ('leather_boots', 'air'):
+                game('command', command=f'item replace entity @s armor.feet with minecraft:{boots}')
+                game('command', command=f'tp @s {x + 3.5} {hy} {z + 0.5} -90 0')
+                game.wait(30)
+                s[boots] = round(pos_of(game)[1] - hy, 2)
+            host('command', command=f'setblock {x + 3} {hy - 1} {z} minecraft:stone')
+            # Deep water: sprint-swimming while looking down dives.
+            wx, wz = x, z + 2 * (1 if dz > 0 else -1) * 3
+            host('command', command=f'fill {wx - 1} {hy - 14} {wz - 2} {wx + 12} {hy + 2} {wz + 2} minecraft:stone')
+            host('command', command=f'fill {wx} {hy - 13} {wz - 1} {wx + 11} {hy - 1} {wz + 1} minecraft:water')
+            game.wait(10)
+            game('command', command=f'tp @s {wx + 1.5} {hy - 6} {wz + 0.5} -90 60')
+            game.wait(10)
+            a = pos_of(game)
+            game.raw('move', 'forward', '1.5', '--sprint')
+            game.wait(5)
+            s['dive'] = round(pos_of(game)[1] - a[1], 2)
+            game('command', command=f'tp @s {x + 0.5} {hy} {z + 0.5} -90 0')
+            game.wait(5)
+            host('command', command=f'fill {wx - 1} {hy - 14} {wz - 2} {wx + 12} {hy + 2} {wz + 2} minecraft:air')
+            host('command', command=f'fill {wx - 1} {hy - 14} {wz - 2} {wx + 12} {hy - 1} {wz + 2} minecraft:stone')
+            game.shot(out, 'body')
+            seen[game.name] = s
+    finally:
+        for game in (host, guest):
+            back_to_game(game)
+            game.raw('mouse', 'right', 'up')
+            game('command', command='clear @s')
+        face_each_other(host, guest)
+    for name, s in seen.items():
+        assert s['walk'] > 2.5 and s['drawing'] < s['walk'] * 0.4, f'{name} drawing a bow: {seen}'
+        assert s['leather_boots'] > -0.01 and s['air'] < -0.5, f'{name} powder snow: {seen}'
+        assert s['dive'] < -2, f'{name} sprint-swimming down: {seen}'
+    return seen
+
+
+CHECKS += ['body']
+CHECK_FNS.update(body=check_body)
+
+
+def check_strikes(host, guest, out):
+    """What a mob or the sky does to every player in reach, the server's players too (#1480,
+    #1484): a bolt striking a player standing in water costs them health (Entity.thunderHit), and
+    a cave spider's bite poisons them (CaveSpider.doHurtTarget on Normal)."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    seen = {}
+    try:
+        host('command', command='difficulty normal')
+        host('command', command='time set 18000')
+        for game, dz in ((host, -5), (guest, 5)):
+            x, z = hx, hz + dz
+            host('command', command=f'fill {x - 3} {hy - 1} {z - 3} {x + 3} {hy + 3} {z + 3} minecraft:stone')
+            host('command', command=f'fill {x - 2} {hy} {z - 2} {x + 2} {hy + 3} {z + 2} minecraft:air')
+            host('command', command=f'fill {x - 2} {hy} {z - 2} {x + 2} {hy} {z + 2} minecraft:water')
+            game('command', command='gamemode survival')
+            game('command', command='clear @s')
+            game('command', command='effect clear @s')
+            game('command', command='effect give @s minecraft:instant_health 1 5')
+            game('command', command=f'tp @s {x + 0.5} {hy} {z + 0.5}')
+            game.wait(20)
+            before = game('state')['player'].get('health')
+            game('command', command=f'summon minecraft:lightning_bolt {x + 0.5} {hy} {z + 0.5}')
+            game.wait(20)
+            s = {'bolt': (before, game('state')['player'].get('health'))}
+            host('command', command=f'summon minecraft:cave_spider {x + 1.5} {hy} {z + 0.5}')
+            poisoned = False
+            for _ in range(40):
+                game.wait(5)
+                if 'poison' in effect_ids(game):
+                    poisoned = True
+                    break
+            s['poisoned'] = poisoned
+            s['bitten'] = game('state')['player'].get('health')
+            host('command', command='kill @e[type=minecraft:cave_spider]')
+            game.wait(5)
+            game.shot(out, 'strikes')
+            host('command', command=f'fill {x - 3} {hy - 1} {z - 3} {x + 3} {hy + 3} {z + 3} minecraft:air')
+            host('command', command=f'fill {x - 3} {hy - 1} {z - 3} {x + 3} {hy - 1} {z + 3} minecraft:stone')
+            seen[game.name] = s
+    finally:
+        host('command', command='kill @e[type=minecraft:cave_spider]')
+        host('command', command='time set day')
+        for game in (host, guest):
+            back_to_game(game)
+            game('command', command='effect clear @s')
+            game('command', command='effect give @s minecraft:instant_health 1 5')
+        face_each_other(host, guest)
+    for name, s in seen.items():
+        a, b = s['bolt']
+        assert a is not None and b is not None and a - b >= 3, f'{name} struck by lightning: {seen}'
+        assert s['poisoned'], f'{name} bitten by a cave spider: {seen}'
+    return seen
+
+
+CHECKS += ['strikes']
+CHECK_FNS.update(strikes=check_strikes)
+
+
+def check_cursor(host, guest, out):
+    """Closing the inventory with a stack on the cursor puts it back into the player's inventory
+    (AbstractContainerMenu.removed, placeItemBackInInventory) and empties the cursor, for each
+    player: nothing is thrown out and no copy stays on the cursor (#1283)."""
+    seen = {}
+    try:
+        for game in (host, guest):
+            game('command', command='clear @s')
+            host('command', command='kill @e[type=minecraft:item]')
+            game('command', command='item replace entity @s hotbar.0 with minecraft:diamond 7')
+            game.wait(10)
+            game.raw('open-inventory')
+            game.raw('wait-for', 'screen', 'inventory', '--timeout', 10)
+            game.raw('click-slot', 0)
+            game.wait(5)
+            held = (game('inventory').get('carried') or {}).get('count')
+            game.raw('key', 'esc', 'tap')
+            game.wait(40)
+            inv = game('inventory')
+            seen[game.name] = {'held': held, 'carried': inv.get('carried'),
+                               'client': inv['counts'].get('minecraft:diamond', 0),
+                               'server': server_count(game, 'diamond'),
+                               'thrown': len(game.raw('entities', 8, 'minecraft:item')['entities'])}
+    finally:
+        for game in (host, guest):
+            back_to_game(game)
+            game('command', command='clear @s')
+        host('command', command='kill @e[type=minecraft:item]')
+    for name, s in seen.items():
+        assert s == {'held': 7, 'carried': None, 'client': 7, 'server': 7, 'thrown': 0}, f'{name}: {seen}'
+    return seen
+
+
+CHECKS += ['cursor']
+CHECK_FNS.update(cursor=check_cursor)
+
+
+def check_digging(host, guest, out):
+    """The server breaks a block a player digs only once that player's client is done
+    (ServerPlayerGameMode: STOP_DESTROY_BLOCK, or the delayed destroy), never on its own count, so
+    the player's client always breaks it first, with its particles and sound. The guest holds
+    attack across a wall of six oak logs with a copper axe and hears each one break; then it digs
+    stone with a wooden pickaxe and its game stalls for a second halfway: the stone is still there
+    on both sides when it resumes, and the guest's own crack finishes it."""
+    gx, gy, gz = (int(v // 1) for v in pos_of(guest))
+    x, y, z = gx + 3, gy, gz + 4
+    heard = lambda sound: guest('status')['heard'].get(sound, 0)
+    at = lambda b: (f'{b[0] + 0.02:.2f}', f'{b[1] + 0.5:.2f}', f'{b[2] + 0.5:.2f}')
+    guest('command', command='gamemode survival')
+    guest('command', command='item replace entity @s weapon.mainhand with minecraft:copper_axe')
+    host('command', command=f'fill {x - 2} {y - 1} {z - 2} {x + 4} {y + 3} {z + 2} minecraft:air')
+    host('command', command=f'fill {x - 2} {y - 1} {z - 2} {x + 4} {y - 1} {z + 2} minecraft:stone')
+    host('command', command=f'fill {x + 2} {y} {z - 1} {x + 2} {y + 1} {z + 1} minecraft:oak_log')
+    guest('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+    guest.wait(30)
+    logs = [(x + 2, y + dy, z + dz) for dz in (-1, 0, 1) for dy in (0, 1)]
+    before = heard('minecraft:block.wood.break')
+    guest.raw('look-at', *at(logs[0]))
+    guest.raw('mouse', 'left', 'down')
+    left = list(logs)
+    deadline = time.time() + 20
+    while left and time.time() < deadline:
+        if guest.raw('block', *left[0]).get('block') != 'minecraft:oak_log':
+            left.pop(0)
+            if left:
+                guest.raw('look-at', *at(left[0]))
+    guest.raw('mouse', 'left', 'up')
+    guest.wait(10)
+    seen = {'logs_left': left, 'log_breaks_heard': heard('minecraft:block.wood.break') - before}
+
+    # Stone with a wooden pickaxe: 23 ticks. The guest stalls for a second after about 8.
+    stone = (x + 2, y, z)
+    guest('command', command='item replace entity @s weapon.mainhand with minecraft:wooden_pickaxe')
+    host('command', command=f'setblock {stone[0]} {stone[1]} {stone[2]} minecraft:stone')
+    guest.wait(10)
+    before = heard('minecraft:block.stone.break')
+    guest.raw('look-at', *at(stone))
+    guest.raw('mouse', 'left', 'down')
+    time.sleep(0.4)
+    os.kill(guest.pid, signal.SIGSTOP)
+    try:
+        time.sleep(1.0)
+    finally:
+        os.kill(guest.pid, signal.SIGCONT)
+    resumed = {'guest': guest.raw('block', *stone).get('block'), 'server': host.raw('block', *stone).get('block'),
+               'mining': guest('state').get('mining')}
+    # Let go once it breaks: past it the crosshair reaches the floor.
+    deadline = time.time() + 5
+    while guest.raw('block', *stone).get('block') == 'minecraft:stone' and time.time() < deadline:
+        pass
+    guest.raw('mouse', 'left', 'up')
+    guest.wait(10)
+    seen.update(resumed=resumed, stone_after=host.raw('block', *stone).get('block'),
+                stone_breaks_heard=heard('minecraft:block.stone.break') - before)
+    guest.shot(out, 'digging')
+    assert not left and seen['log_breaks_heard'] == 6, f'the server broke logs before the guest did: {seen}'
+    assert resumed['guest'] == resumed['server'] == 'minecraft:stone', f'the server broke the stone while the guest stalled: {seen}'
+    assert seen['stone_after'] == 'minecraft:air' and seen['stone_breaks_heard'] == 1, f'the guest did not break the stone: {seen}'
+    return seen
+
+
+CHECKS += ['digging']
+CHECK_FNS.update(digging=check_digging)
 
 
 if __name__ == '__main__':

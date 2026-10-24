@@ -26,7 +26,7 @@ pub const DROPPING_NO_ITEM: u8 = 4;
 pub const WEATHER: [&str; 4] = ["unaffected", "exposed", "weathered", "oxidized"];
 
 pub fn register(m: &mut Mob) {
-    m.ai.nav.required_path_length = 48.0;
+    m.set_required_path_length(48.0);
     m.ai.nav.can_open_doors = true;
     m.persistent = true;
     // nextWeatheringTick starts unset (-1); waxed is -2.

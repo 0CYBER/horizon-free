@@ -204,9 +204,29 @@ pub fn page_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
-/// Draws Horizon's terrain with a pack's pipelines: the solid layer or the
-/// translucent one. Set by the renderer, which owns the sections.
-pub type DrawTerrain<'a> = dyn Fn(&mut wgpu::RenderPass<'_>, bool, &TerrainPipelines<'_>) + 'a;
+/// Which of Horizon's terrain draws a pack's program draws.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Layer {
+    /// The solid sections: all of them, or with occlusion culling
+    /// ([`JavaWorld::occlusion`]) the ones the last test saw (phase 1).
+    Solid,
+    /// With occlusion culling, the solid sections the test after phase 1
+    /// found in sight (phase 2).
+    Revealed,
+    Translucent,
+    /// The shadow map's sections ([`super::Renderer`]'s shadow list), solid
+    /// then translucent.
+    ShadowSolid,
+    ShadowTranslucent,
+}
+
+/// Draws Horizon's terrain with a pack's pipelines. Set by the renderer,
+/// which owns the sections.
+pub type DrawTerrain<'a> = dyn Fn(&mut wgpu::RenderPass<'_>, Layer, &TerrainPipelines<'_>) + 'a;
+
+/// Occlusion culling's test between [`Layer::Solid`] and
+/// [`Layer::Revealed`], against the pack's depth (OpenGL's layout).
+pub type OcclusionTest<'a> = dyn Fn(&mut wgpu::CommandEncoder, &wgpu::TextureView) + 'a;
 
 /// What the renderer binds to draw with a pack's geometry program: the
 /// pipeline of its draw path and the pack's group (group 2). Group 1 is the
@@ -229,6 +249,8 @@ pub struct JavaWorld<'a> {
     pub animated: &'a [(u32, u32)],
     pub lightmap: &'a wgpu::TextureView,
     pub draw: &'a DrawTerrain<'a>,
+    /// Set when the frame culls solid sections by occlusion.
+    pub occlusion: Option<&'a OcclusionTest<'a>>,
 }
 
 const ATLAS: &str = r#"

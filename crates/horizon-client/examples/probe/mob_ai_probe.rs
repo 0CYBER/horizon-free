@@ -293,6 +293,47 @@ fn spawn_seed(index: usize) -> i64 {
     1000 + 7919 * index as i64
 }
 
+/// `Villager.spawnGolemIfNeeded` for villager `a`, the game's way: the golem
+/// draws from the level's random and joins the scenario's mobs next tick,
+/// seeded as the oracle seeds what a tick spawned.
+fn summon_golem(
+    mobs: &mut [Mob],
+    a: usize,
+    needed: usize,
+    w: &MobWorld,
+    types: &MobTypes,
+    born: &mut Vec<Mob>,
+    level_random: &mut LegacyRandom,
+) {
+    use horizon_client::mobs::{villager, villager_brain};
+    let Some(near) = villager::golem_summoners(mobs, a, w.game_time, needed) else {
+        return;
+    };
+    let kind = Arc::new(
+        types
+            .types
+            .get("minecraft:iron_golem")
+            .expect("iron golem")
+            .clone(),
+    );
+    let index = mobs.len() + born.len();
+    let p = mobs[a].position;
+    let start = [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32];
+    let golem = villager::summon_golem(w, start, level_random, |random, at, yaw| {
+        let mut m = Mob::new(100_000 + index as u32, kind.clone(), at, yaw);
+        villager::finalize_summoned_golem(&mut m, random);
+        m
+    });
+    let Some(mut golem) = golem else {
+        return;
+    };
+    golem.random = LegacyRandom::new(spawn_seed(index));
+    born.push(golem);
+    for j in near {
+        villager_brain::golem_detected(&mut mobs[j], w.game_time);
+    }
+}
+
 /// Villager events that act at once in vanilla (`TradeWithVillager` and
 /// `VillagerMakeLove` write the other villager directly).
 fn villager_events(
@@ -304,6 +345,7 @@ fn villager_events(
     items: &Items,
     born: &mut Vec<Mob>,
     day_time: i64,
+    level_random: &mut LegacyRandom,
 ) {
     use horizon_client::mobs::villager;
     let index = |mobs: &[Mob], id: u32| {
@@ -314,6 +356,7 @@ fn villager_events(
     while i < events.len() {
         match events[i] {
             MobEvent::VillagerMeet { mob, other } => {
+                events.remove(i);
                 if let (Some(a), Some(b)) = (index(mobs, mob), index(mobs, other)) {
                     let meeting = villager::meet(mobs, a, b, w.game_time, |item| {
                         items.get(item).map_or(64, |i| i.max_stack)
@@ -322,8 +365,16 @@ fn villager_events(
                         meeting.thrown.is_empty(),
                         "villagers toss items: not modelled here"
                     );
+                    if meeting.gossiped {
+                        summon_golem(mobs, a, 5, w, types, born, level_random);
+                    }
                 }
+            }
+            MobEvent::GolemCheck { mob, needed } => {
                 events.remove(i);
+                if let Some(a) = index(mobs, mob) {
+                    summon_golem(mobs, a, needed, w, types, born, level_random);
+                }
             }
             MobEvent::VillagerBirth {
                 parent,
@@ -1167,6 +1218,7 @@ pub fn main() -> horizon_client::Result<()> {
                     &items,
                     &mut born,
                     s.time,
+                    &mut scratch,
                 );
                 horizon_client::mobs::warden::hear_mob_events(&mut mobs, &events, from, &w);
                 // Melee hits on other mobs land during the attacker's tick

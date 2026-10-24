@@ -76,9 +76,9 @@ def main():
     registries=build/'registries.json';registries.write_text(json.dumps(bundle,separators=(',',':')),encoding='utf-8')
     fixtures=list(corpus(bundle));inputs=build/'inputs.txt';inputs.write_text(''.join(json.dumps(f,separators=(',',':'))+'\n' for f in fixtures),encoding='utf-8')
     fixture_paths=[inputs,registries,*exports];tested_fixtures=base.source_hashes(fixture_paths)
-    run(["cargo","build","--release","-p","horizon-world","--example","probe"],"compile-rust")
+    run(["cargo","build","--release","-p","horizon-world","--example","world_probe"],"compile-rust")
     metadata=json.loads(subprocess.check_output(["cargo","metadata","--no-deps","--format-version","1"],cwd=lab.ROOT,text=True))
-    binary=Path(metadata["target_directory"])/"release/examples"/("probe.exe" if os.name=="nt" else "probe")
+    binary=Path(metadata["target_directory"])/"release/examples"/("world_probe.exe" if os.name=="nt" else "world_probe")
     run([binary,"biome_generation_fixture",build],"rust")
     references=[]
     for side,jar in jars.items():

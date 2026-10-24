@@ -133,7 +133,7 @@ def execute(name, cases, args, facts, origin_of=None):
                     '-cp', dependencies, '-d', str(classes), str(java_root / 'dev/horizonlab/parity/VanillaBlockUpdateOracle.java')])
     run(['java', '-Xmx2G', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.VanillaBlockUpdateOracle',
                     str(resources), str(work / 'cases.jsonl'), str(work / 'native.txt')])
-    run(['cargo', 'run', '-q', '--release', '-p', 'horizon-world', '--example', 'probe', '--',
+    run(['cargo', 'run', '-q', '--release', '-p', 'horizon-world', '--example', 'world_probe', '--',
                     'block_update_fixture', str(resources), str(work / 'cases.jsonl'), str(work / 'rust.txt')], cwd=lab.ROOT, env={**os.environ, 'CARGO_BUILD_JOBS': '3'})
     ignore = tuple(prefix + ' ' for prefix in args.ignore.split(',') if prefix)
     native = split_cases((work / 'native.txt').read_text(), ignore)
