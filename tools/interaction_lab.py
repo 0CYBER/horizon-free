@@ -50,7 +50,7 @@ def cargo_example(package, example, *args, profile=None):
     command = ['cargo', 'run', '-q', '-j3']
     if profile:
         command += ['--profile', profile]
-    command += ['-p', package, '--example', example, '--', *map(str, args)]
+    command += ['-p', package, '--example', 'probe', '--', example, *map(str, args)]
     subprocess.run(command, check=True, cwd=lab.ROOT)
 
 

@@ -9,7 +9,7 @@ EntitySelector.pushableBy predicate (collision rules), Entity.isInvisibleTo
 (name tag visibility, with a stand-in client for the viewer, camera and F1) on
 stand-in entities, for every combination of two teams' options, the three
 entities' teams (none, either team) and the flags involved.
-`examples/team_rules_fixture` answers from `horizon_client::scoreboard`.
+`examples/probe/team_rules_fixture` answers from `horizon_client::scoreboard`.
 
   test_team_rules_parity.py [--count N]
 """
@@ -84,10 +84,10 @@ def main():
          PARITY / 'VanillaTeamRulesOracle.java'], 'compile-java')
     run(['java', '-Xmx1G', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.VanillaTeamRulesOracle',
          inputs, build / 'vanilla.jsonl'], 'vanilla')
-    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'team_rules_fixture'], 'compile-rust')
+    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'probe'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))
-    binary = Path(metadata['target_directory']) / 'release/examples' / ('team_rules_fixture.exe' if os.name == 'nt' else 'team_rules_fixture')
-    run([binary, inputs, build / 'rust.jsonl'], 'rust')
+    binary = Path(metadata['target_directory']) / 'release/examples' / ('probe.exe' if os.name=='nt' else 'probe')
+    run([binary, 'team_rules_fixture',inputs, build / 'rust.jsonl'], 'rust')
     vanilla = [json.loads(l) for l in (build / 'vanilla.jsonl').read_text().splitlines()]
     rust = [json.loads(l) for l in (build / 'rust.jsonl').read_text().splitlines()]
     assert len(vanilla) == len(rust) == len(chosen)

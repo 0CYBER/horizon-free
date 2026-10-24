@@ -61,7 +61,8 @@ jobs:
         if: steps.rust.outputs.required != 'false'
         run: |
           cargo +stable fmt --all -- --check
-          cargo +stable clippy --workspace --all-targets -- -D warnings
+          # With the game's code mods (on in every release build, off by default).
+          cargo +stable clippy --workspace --all-targets --features horizon-client/mods -- -D warnings
           # The server build (released as horizon-engine): the game without sound or controllers.
           cargo +stable clippy -p horizon-client --all-targets --no-default-features -- -D warnings
       # Libraries, binaries and integration tests, then doc tests: not the ~275 examples, which clippy above already
@@ -69,8 +70,8 @@ jobs:
       - name: Test Rust core and voxel kernel correctness
         if: steps.rust.outputs.required != 'false'
         run: |
-          cargo +stable test --workspace --lib --bins --tests
-          cargo +stable test --workspace --doc
+          cargo +stable test --workspace --lib --bins --tests --features horizon-client/mods,horizon-mods/pack
+          cargo +stable test --workspace --doc --features horizon-client/mods,horizon-mods/pack
   parity:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/parity.yml

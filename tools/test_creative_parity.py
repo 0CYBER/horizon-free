@@ -7,7 +7,7 @@ tab built by vanilla's CreativeModeTabs over the vanilla data pack's
 registries), then what the vanilla client shows: every tab's display items
 and, for each search query, CreativeModeInventoryScreen.refreshSearchResults'
 items, searched through the client's own SessionSearchTrees.
-examples/creative_search_fixture loads the export into
+examples/probe/creative_search_fixture loads the export into
 horizon_client::creative::Creative. The tabs it shows (id, title, icon,
 position, every stack with its components), the search tab's stacks and the
 results of every query must agree. The queries are QUERIES below, then every

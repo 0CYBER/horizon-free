@@ -29,10 +29,14 @@ pub struct ChatOptions {
     pub height_focused: f64,
     pub height_unfocused: f64,
     pub line_spacing: f64,
+    /// Chat Colors (`chatColors`): legacy `§` codes format the text, or are
+    /// left out.
+    pub colors: bool,
 }
 impl Default for ChatOptions {
     fn default() -> Self {
         Self {
+            colors: true,
             opacity: 1.0,
             background_opacity: 0.5,
             scale: 1.0,
@@ -136,7 +140,8 @@ impl Chat {
     }
     fn add_lines(&mut self, atlas: &HudAtlas, message: &Message, focused: bool) {
         let width = self.max_width();
-        for line in atlas.font.wrap_components(&message.content, width) {
+        let content = self.displayed(&message.content);
+        for line in atlas.font.wrap_components(&content, width) {
             if focused && self.scroll > 0 {
                 self.new_since_scroll = true;
                 self.scroll_by(1, focused);
@@ -151,6 +156,16 @@ impl Chat {
             );
         }
         self.lines.truncate(100);
+    }
+    /// What a message's lines wrap (ComponentRenderUtils.wrapComponents):
+    /// without Chat Colors its `§` codes are stripped (stripColor); with
+    /// them the font draws them as formatting.
+    fn displayed(&self, content: &Text) -> Text {
+        if self.options.colors {
+            content.resolve_legacy()
+        } else {
+            content.strip_legacy()
+        }
     }
     /// Re-wrap after a width or scale change (ChatComponent.rescaleChat).
     pub fn rescale(&mut self, atlas: &HudAtlas) {
@@ -308,6 +323,21 @@ impl Chat {
         x: f64,
         y: f64,
     ) -> Option<ClickEvent> {
+        self.style_at(font, height, x, y)?.click
+    }
+    /// The hover text under a GUI-space cursor while chat is focused
+    /// (ChatScreen.render's `renderComponentHoverEffect`).
+    pub fn hover_at(&self, font: &crate::font::Font, height: i32, x: f64, y: f64) -> Option<Text> {
+        self.style_at(font, height, x, y)?.hover.map(|h| *h)
+    }
+    /// ChatComponent.getClickedComponentStyleAt.
+    fn style_at(
+        &self,
+        font: &crate::font::Font,
+        height: i32,
+        x: f64,
+        y: f64,
+    ) -> Option<crate::text::Style> {
         let scale = self.options.scale as f32;
         let mut x = x / f64::from(scale) - 4.0;
         let bottom = hud_layout::floor((height - 40) as f32 / scale);
@@ -324,7 +354,7 @@ impl Chat {
         for (c, style) in content.chars() {
             x -= f64::from(font.advance(c, style));
             if x < 0.0 {
-                return style.click.clone();
+                return Some(style.clone());
             }
         }
         None
@@ -335,6 +365,14 @@ impl Chat {
             .iter()
             .take(n)
             .map(|m| m.content.plain())
+            .collect()
+    }
+    /// The newest messages as components, styles included (control socket).
+    pub fn recent_components(&self, n: usize) -> Vec<serde_json::Value> {
+        self.messages
+            .iter()
+            .take(n)
+            .map(|m| m.content.component())
             .collect()
     }
 }

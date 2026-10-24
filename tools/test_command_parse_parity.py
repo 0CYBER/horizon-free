@@ -64,9 +64,9 @@ def main():
     registries = json.loads((build / 'registries.json').read_text())
     corpus = corpus_module.corpus(tree, registries)
     (build / 'corpus.txt').write_text(''.join(line + '\n' for line in corpus), encoding='utf-8')
-    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'command_parse_fixture'], 'compile-rust')
+    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'probe'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))
-    binary = Path(metadata['target_directory']) / 'release/examples' / ('command_parse_fixture.exe' if os.name == 'nt' else 'command_parse_fixture')
+    binary = Path(metadata['target_directory']) / 'release/examples' / ('probe.exe' if os.name=='nt' else 'probe')
     resources = lab.RESOURCES
     total_failures = 0
     summary = []
@@ -79,7 +79,7 @@ def main():
         if not (stamp.exists() and stamp.read_text() == digest and (level_dir / 'vanilla.jsonl').exists()):
             java('run', str(level_dir), str(build / 'corpus.txt'), str(permission))
             stamp.write_text(digest)
-        run([binary, resources, build / 'registries.json', build / 'corpus.txt', str(permission), level_dir / 'rust.jsonl'], f'rust{permission}')
+        run([binary, 'command_parse_fixture',resources, build / 'registries.json', build / 'corpus.txt', str(permission), level_dir / 'rust.jsonl'], f'rust{permission}')
         failures = compare(level_dir / 'vanilla.jsonl', level_dir / 'rust.jsonl', args.limit)
         count = sum(1 for _ in (level_dir / 'vanilla.jsonl').open())
         print(f'permission {permission}: {count - failures}/{count} commands match', flush=True)

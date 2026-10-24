@@ -8,7 +8,7 @@ all, history up and down, Tab and Shift+Tab through suggestions, Escape)
 and clicks (on the suggestion list, on the input). The Java oracle
 (VanillaChatScreenOracle) drives a real ChatScreen, whose CommandSuggestions
 parse with vanilla's client command tree and ask the server's dispatcher
-for the suggestions a node leaves to it; examples/chat_screen_fixture runs
+for the suggestions a node leaves to it; examples/probe/chat_screen_fixture runs
 horizon_client::chat::ChatScreen on Horizon's dispatcher. After the actions
 the input's value, cursor, selection and scroll and the screen's GUI calls
 (the input background, the EditBox with its argument colouring, cursor,

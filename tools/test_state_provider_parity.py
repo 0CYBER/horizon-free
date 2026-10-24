@@ -309,7 +309,7 @@ def main():
     lock,jars,libraries=base.verify_artifacts()
     oracle=lab.ROOT/'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaStateProviderOracle.java'
     helpers=[oracle.with_name(name+'.java') for name in ['VanillaBlockStateCodecOracle','VanillaHeightmapOracle','VanillaMaterialConditionOracle','VanillaBiomeTemperatureOracle','VanillaAnchorOracle','VanillaBlockPropertiesOracle','VanillaBlockSupportOracle','VanillaBlockSurvivalOracle','VanillaCollisionOracle']]
-    sources=[oracle,*helpers,lab.ROOT/'tools/test_block_survival_parity.py',lab.ROOT/'tools/test_biome_temperature_parity.py',lab.ROOT/'tools/test_material_condition_parity.py',lab.ROOT/'tools/test_worldgen_parity.py',Path(__file__),lab.ROOT/'tools/test_rust_parity.py',lab.ROOT/'tools/lab.py',lab.ROOT/'Cargo.toml',lab.ROOT/'Cargo.lock',lab.ROOT/'crates/horizon-core/Cargo.toml',lab.ROOT/'crates/horizon-world/Cargo.toml',*sorted((lab.ROOT/'crates/horizon-core/src').rglob('*.rs')),*sorted((lab.ROOT/'crates/horizon-world/src').rglob('*.rs')),lab.ROOT/'crates/horizon-world/examples/state_provider_fixture.rs']
+    sources=[oracle,*helpers,lab.ROOT/'tools/test_block_survival_parity.py',lab.ROOT/'tools/test_biome_temperature_parity.py',lab.ROOT/'tools/test_material_condition_parity.py',lab.ROOT/'tools/test_worldgen_parity.py',Path(__file__),lab.ROOT/'tools/test_rust_parity.py',lab.ROOT/'tools/lab.py',lab.ROOT/'Cargo.toml',lab.ROOT/'Cargo.lock',lab.ROOT/'crates/horizon-core/Cargo.toml',lab.ROOT/'crates/horizon-world/Cargo.toml',*sorted((lab.ROOT/'crates/horizon-core/src').rglob('*.rs')),*sorted((lab.ROOT/'crates/horizon-world/src').rglob('*.rs')),lab.ROOT/'crates/horizon-world/examples/probe/state_provider_fixture.rs']
     tested_sources=base.source_hashes(sources)
     environment={'minecraft':lock['minecraft']['version'],'manifest_sha1':lock['minecraft']['manifest_sha1'],'platform':platform.platform(),'java':subprocess.check_output(['java','--version'],text=True).splitlines()[0],'rustc':subprocess.check_output(['rustc','--version'],text=True).strip(),'dependencies':{str(path):lab.digest(path,'sha256') for path in [*jars.values(),*libraries]}}
     checkpoint=survival.load_checkpoint(checkpoint_path,tested_sources,environment) if args.resume else None
@@ -371,9 +371,9 @@ def main():
                 output.write(json.dumps(fixture,separators=(',',':'))+'\n')
                 fixture_count+=1;requested_samples+=len(fixture['states'])*fixture['repeats']*2
         fixture_paths=[inputs,build/'survival-extra-definitions.json',build/'survival-placement-classes.json',build/'survival-support-tags.json',build/'survival-classes.json',build/'survival-rules.json',build/'cached-support.nbt',build/'support-cached-states.json',build/'block-properties.nbt',build/'cached-collision.nbt',build/'biomes.json',build/'biome_tags.json',build/'fluid-tags.json',build/'catalog.json',build/'providers.json',build/'tags.json',build/'facts-client.json',build/'facts-server.json'];tested_fixtures=base.source_hashes(fixture_paths)
-        run(['cargo','build','--release','-p','horizon-world','--example','state_provider_fixture'],'compile-rust')
+        run(['cargo','build','--release','-p','horizon-world','--example','probe'],'compile-rust')
         metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],cwd=lab.ROOT,text=True))
-        binary=Path(metadata['target_directory'])/'release/examples'/('state_provider_fixture.exe' if os.name=='nt' else 'state_provider_fixture')
+        binary=Path(metadata['target_directory'])/'release/examples'/('probe.exe' if os.name=='nt' else 'probe')
         counts={'block_states':len(facts['states']),'blocks':len(facts['defaults']),'integer_properties':len(facts['integers']),'codec_inputs':fixture_count,'provider_types':10,'named_providers':len(catalog_resources),'rule_predicate_types':16,'survival_supported_blocks':len(survival_rules),'survival_supported_states':sum(s['id'] in survival_rules for s in facts['states']),'support_cached_states':len(support_states),'support_dynamic_states':len(facts['states'])-len(support_states),'biomes':len(biomes),'biome_tag_files':len(biome_tags),'fluid_tag_files':len(fluid_tags),'bundled_provider_definitions':len(provider_resources),'block_tag_files':len(tags),'requested_samples':requested_samples}
         base.ensure_sources_unchanged(sources,tested_sources)
         checkpoint={'schema':1,'environment':environment,'sources_sha256':tested_sources,'fixtures_sha256':{str(lab.ROOT/name):digest for name,digest in tested_fixtures.items()},'artifacts_sha256':{str(path):lab.digest(path,'sha256') for path in [binary,*sorted(classes.rglob('*.class'))]},'binary':str(binary),'counts':counts,'outputs':{}}
@@ -386,7 +386,7 @@ def main():
             checkpoint['outputs'][name]=lab.digest(output,'sha256')
             survival.save_checkpoint(checkpoint_path,checkpoint)
             print(f'{name}: completed output checkpointed',flush=True)
-    stage('rust',lambda:run([checkpoint['binary'],build],'rust'));references=[]
+    stage('rust',lambda:run([checkpoint['binary'],'state_provider_fixture',build],'rust'));references=[]
     for side,jar in jars.items():
         stage(side,lambda:java(side,side,build));reference=build/f'{side}.txt';matched=base.compare(reference,build/'rust.txt')
         references.append({'side':side,'jar_sha256':lab.digest(jar,'sha256'),'output_sha256':lab.digest(reference,'sha256'),'matched_output_lines':matched})

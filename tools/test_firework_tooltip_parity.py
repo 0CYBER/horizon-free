@@ -4,7 +4,7 @@
 Random rockets (flight durations 0 to 3 and higher, up to six explosions, runs of equal ones) and stars, with dye and
 custom colours, fade colours, trails and twinkles, some without the component (a rocket's default) and some whose
 tooltip_display hides it. Vanilla prints what `Fireworks.addToTooltip` and `FireworkExplosion.addToTooltip` add
-(VanillaFireworkTooltipOracle); Horizon what `item_tooltip::firework_lines` gives (examples/firework_tooltip_fixture).
+(VanillaFireworkTooltipOracle); Horizon what `item_tooltip::firework_lines` gives (examples/probe/firework_tooltip_fixture).
 """
 import random
 try:

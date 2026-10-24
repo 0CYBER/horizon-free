@@ -6,7 +6,7 @@ a loom screen and menu whose state comes from the case (inputs present, the
 selectable patterns, the selected one, the scroller, the result banner or
 the six-layer error, the mouse over a pattern button) and CrafterScreen's
 background, disabled slots and redstone arrow, recording every
-GuiGraphicsExtractor call; examples/screen_layout_fixture lays out the same
+GuiGraphicsExtractor call; examples/probe/screen_layout_fixture lays out the same
 state with horizon_client::screen_layout, which the game paints. The ordered
 call lists must agree.
 """

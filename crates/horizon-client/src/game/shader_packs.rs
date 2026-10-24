@@ -69,7 +69,7 @@ impl Game<'_> {
             }
         };
         if let Some(r) = self.renderer.as_mut()
-            && let Err(e) = r.set_shader_pack(pack.as_ref())
+            && let Err(e) = r.set_shader_pack(pack.as_ref(), &self.pack.render.sprite_layers)
         {
             return self.shader_pack_error(&id, &e.to_string());
         }
@@ -79,7 +79,10 @@ impl Game<'_> {
     /// Give the loaded pack to the renderer (also after it is rebuilt).
     pub(super) fn apply_shader_pack(&mut self) -> horizon_client::Result<()> {
         match self.renderer.as_mut() {
-            Some(r) => r.set_shader_pack(self.shader_packs.pack.as_ref()),
+            Some(r) => r.set_shader_pack(
+                self.shader_packs.pack.as_ref(),
+                &self.pack.render.sprite_layers,
+            ),
             None => Ok(()),
         }
     }

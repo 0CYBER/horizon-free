@@ -85,7 +85,7 @@ def main():
     helper=oracle.with_name("VanillaPlacementOracle.java")
     state_helper=oracle.with_name("VanillaBlockStateCodecOracle.java")
     sources=[oracle,helper,state_helper,Path(__file__),lab.ROOT/"tools/test_worldgen_parity.py",lab.ROOT/"tools/test_rust_parity.py",lab.ROOT/"tools/lab.py",lab.ROOT/"Cargo.toml",lab.ROOT/"Cargo.lock",lab.ROOT/"crates/horizon-core/Cargo.toml",lab.ROOT/"crates/horizon-world/Cargo.toml",
-             *sorted((lab.ROOT/"crates/horizon-core/src").rglob("*.rs")),*sorted((lab.ROOT/"crates/horizon-world/src").rglob("*.rs")),lab.ROOT/"crates/horizon-world/examples/feature_catalog_fixture.rs"]
+             *sorted((lab.ROOT/"crates/horizon-core/src").rglob("*.rs")),*sorted((lab.ROOT/"crates/horizon-world/src").rglob("*.rs")),lab.ROOT/"crates/horizon-world/examples/probe/feature_catalog_fixture.rs"]
     tested_sources=base.source_hashes(sources)
     fixtures=list(corpus());inputs=build/"inputs.txt";inputs.write_text("".join(json.dumps(f,separators=(",",":"))+"\n" for f in fixtures),encoding="utf-8")
     resources=build/"catalog.json";resources.write_text(json.dumps(catalog(),separators=(",",":")),encoding="utf-8")
@@ -100,10 +100,10 @@ def main():
         fixture_paths.append(path)
     if json.loads((build/"facts-client.json").read_text())!=json.loads((build/"facts-server.json").read_text()):raise ValueError("reference feature block states differ")
     tested_fixtures=base.source_hashes(fixture_paths)
-    run(["cargo","build","--release","-p","horizon-world","--example","feature_catalog_fixture"],"compile-rust")
+    run(["cargo","build","--release","-p","horizon-world","--example","probe"],"compile-rust")
     metadata=json.loads(subprocess.check_output(["cargo","metadata","--no-deps","--format-version","1"],cwd=lab.ROOT,text=True))
-    binary=Path(metadata["target_directory"])/"release/examples"/("feature_catalog_fixture.exe" if os.name=="nt" else "feature_catalog_fixture")
-    run([binary,build],"rust")
+    binary=Path(metadata["target_directory"])/"release/examples"/("probe.exe" if os.name=="nt" else "probe")
+    run([binary,"feature_catalog_fixture",build],"rust")
     references=[]
     for side,jar in jars.items():
         reference=build/f"{side}.txt"

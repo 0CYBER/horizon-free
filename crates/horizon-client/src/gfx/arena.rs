@@ -65,8 +65,11 @@ pub struct Arena {
 }
 
 impl Arena {
+    /// Vertices; also storage, which a Java shader pack's terrain programs
+    /// read a quad's corners from (`gfx/java_terrain.rs`).
     pub fn new(device: &wgpu::Device, stride: u64, capacity: u64) -> Self {
-        Self::with_usage(device, stride, capacity, wgpu::BufferUsages::VERTEX)
+        let usage = wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE;
+        Self::with_usage(device, stride, capacity, usage)
     }
     /// Sorted translucent indices; `storage` when compute passes read them.
     pub fn indices(device: &wgpu::Device, capacity: u64, storage: bool) -> Self {
@@ -144,6 +147,10 @@ impl Arena {
     /// The most vertices a page holds.
     pub fn page_vertices(&self) -> u64 {
         self.page_limit
+    }
+    /// One past the last page index.
+    pub fn page_count(&self) -> u32 {
+        self.pages.len() as u32
     }
     pub fn has_page(&self, page: u32) -> bool {
         self.pages.get(page as usize).is_some_and(Option::is_some)

@@ -12,7 +12,7 @@ use crate::{
     options::OptionValues,
     preprocess::Environment,
     properties::{Blend, LEGACY_TARGETS, ShaderProperties},
-    translate::{Link, Translated},
+    translate::{Geometry, Link, Translated},
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -327,7 +327,32 @@ pub struct Passes {
     /// next frame starts unflipped.
     pub flipped_at_end: BTreeSet<u32>,
     pub directives: Directives,
+    /// The program Horizon's solid terrain is drawn with
+    /// ([`TERRAIN_PROGRAMS`]), before `deferred`.
+    pub terrain: Option<Pass>,
+    /// The program its translucent terrain is drawn with
+    /// ([`WATER_PROGRAMS`]), after `deferred`.
+    pub water: Option<Pass>,
 }
+
+/// The programs Iris draws solid terrain with, the first the pack has
+/// (`ProgramId.Terrain`'s fallbacks).
+pub const TERRAIN_PROGRAMS: &[&str] = &[
+    "gbuffers_terrain",
+    "gbuffers_textured_lit",
+    "gbuffers_textured",
+    "gbuffers_basic",
+];
+
+/// The programs Iris draws translucent terrain with (`ProgramId.Water`'s
+/// fallbacks).
+pub const WATER_PROGRAMS: &[&str] = &[
+    "gbuffers_water",
+    "gbuffers_terrain",
+    "gbuffers_textured_lit",
+    "gbuffers_textured",
+    "gbuffers_basic",
+];
 
 /// The `const` directives of a program folder that aren't about targets
 /// (`PackDirectives`), read from the same programs in the same order.
@@ -554,6 +579,25 @@ impl JavaPack {
         out.flipped_after_translucent = flipped.clone();
         out.composite = run(&groups[3], "composite_pre", &mut flipped)?;
         out.flipped_at_end = flipped;
+        // Geometry writes the side the next passes read.
+        let geometry = |chain: &[&str], flipped: &BTreeSet<u32>| {
+            let Some(name) = chain.iter().find(|n| exists(n)) else {
+                return Ok::<_, String>(None);
+            };
+            let text = fragment(name)?;
+            let (blend, buffer_blends) = resolve_blends(&path(name));
+            Ok(Some(Pass {
+                program: path(name),
+                draw_buffers: draw_buffers(&text).map_err(|e| format!("{}: {e}", path(name)))?,
+                reads_alt: flipped.clone(),
+                mipmapped: BTreeSet::new(),
+                scale: 1.0,
+                blend,
+                buffer_blends,
+            }))
+        };
+        out.terrain = geometry(TERRAIN_PROGRAMS, &out.flipped_after_prepare)?;
+        out.water = geometry(WATER_PROGRAMS, &out.flipped_after_translucent)?;
         if exists("final") {
             let prog = path("final");
             let (blend, buffer_blends) = resolve_blends(&prog);
@@ -610,6 +654,70 @@ impl JavaPack {
             fragment,
             draw_buffers,
             link,
+        })
+    }
+}
+
+/// A geometry program translated: the program (its vertex with the first
+/// glue), and its vertex with each other glue.
+pub struct GeometryProgram {
+    pub program: Program,
+    pub variants: Vec<Translated>,
+}
+
+impl JavaPack {
+    /// Translate geometry program `pass` (`gbuffers_*`) to run over
+    /// Horizon's geometry: its bindings in group 2, its attributes from
+    /// each of `glues` (the vertex program is translated once per glue).
+    #[allow(clippy::too_many_arguments)]
+    pub fn compile_geometry(
+        &self,
+        pass: &Pass,
+        targets: &[TargetSettings],
+        values: &OptionValues,
+        env: &Environment,
+        properties: &ShaderProperties,
+        glues: &[Geometry],
+    ) -> Result<GeometryProgram, String> {
+        let (first, rest) = glues
+            .split_first()
+            .ok_or("a geometry program needs a glue")?;
+        let mut link = Link {
+            image_formats: properties.image_formats(),
+            shared_samplers: shared_samplers(targets),
+            set: 2,
+            geometry: Some(first.clone()),
+            ..Link::default()
+        };
+        let vertex = self.translate(&format!("{}.vsh", pass.program), values, env, &mut link)?;
+        let fragment = self.translate(&format!("{}.fsh", pass.program), values, env, &mut link)?;
+        let mut variants = Vec::new();
+        for glue in rest {
+            let mut other = link.clone();
+            other.geometry = Some(glue.clone());
+            variants.push(self.translate(
+                &format!("{}.vsh", pass.program),
+                values,
+                env,
+                &mut other,
+            )?);
+            if other.uniforms != link.uniforms || other.bindings != link.bindings {
+                return Err(format!("{}: its variants bind differently", pass.program));
+            }
+        }
+        let draw_buffers = match &pass.draw_buffers {
+            Some(buffers) => buffers.clone(),
+            None => (0..fragment.interface.outputs.keys().max().map_or(1, |m| m + 1)).collect(),
+        };
+        Ok(GeometryProgram {
+            program: Program {
+                pass: pass.clone(),
+                vertex,
+                fragment,
+                draw_buffers,
+                link,
+            },
+            variants,
         })
     }
 }

@@ -93,7 +93,7 @@ def run(corpus, build_name, source_file, scope):
     if args.prepare:lab.prepare()
     lock,jars,libraries=base.verify_artifacts();oracle=lab.ROOT/'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaSimpleBlockOracle.java'
     helpers=[oracle.with_name(name+'.java') for name in ['VanillaPlacementOracle','VanillaBlockSurvivalOracle','VanillaBlockPropertiesOracle','VanillaBlockSupportOracle','VanillaBlockStateCodecOracle','VanillaCollisionOracle','VanillaHeightmapOracle']]
-    sources=[oracle,*helpers,Path(__file__),Path(source_file),*[lab.ROOT/'tools'/name for name in ['test_block_survival_parity.py','test_worldgen_parity.py','test_rust_parity.py','lab.py']],lab.ROOT/'Cargo.toml',lab.ROOT/'Cargo.lock',lab.ROOT/'crates/horizon-core/Cargo.toml',lab.ROOT/'crates/horizon-world/Cargo.toml',*sorted((lab.ROOT/'crates/horizon-core/src').rglob('*.rs')),*sorted((lab.ROOT/'crates/horizon-world/src').rglob('*.rs')),lab.ROOT/'crates/horizon-world/examples/simple_block_fixture.rs']
+    sources=[oracle,*helpers,Path(__file__),Path(source_file),*[lab.ROOT/'tools'/name for name in ['test_block_survival_parity.py','test_worldgen_parity.py','test_rust_parity.py','lab.py']],lab.ROOT/'Cargo.toml',lab.ROOT/'Cargo.lock',lab.ROOT/'crates/horizon-core/Cargo.toml',lab.ROOT/'crates/horizon-world/Cargo.toml',*sorted((lab.ROOT/'crates/horizon-core/src').rglob('*.rs')),*sorted((lab.ROOT/'crates/horizon-world/src').rglob('*.rs')),lab.ROOT/'crates/horizon-world/examples/probe/simple_block_fixture.rs']
     tested_sources=base.source_hashes(sources);classes=build/'classes';classes.mkdir(exist_ok=True)
     def run(command,name):
         with (build/(name+'.log')).open('w',encoding='utf-8') as log:subprocess.run(list(map(str,command)),cwd=lab.ROOT,check=True,timeout=3600,stdout=log,stderr=subprocess.STDOUT)
@@ -116,9 +116,9 @@ def run(corpus, build_name, source_file, scope):
     with inputs.open('w',encoding='utf-8') as output:
         for fixture in corpus(facts,placement):output.write(json.dumps(fixture,separators=(',',':'))+'\n');fixture_count+=1
     fixtures=[inputs,*sorted(build.glob('*.nbt')),*[p for p in sorted(build.glob('*.json')) if p.name!='report.json']];tested_fixtures=base.source_hashes(fixtures);print(f'Prepared {fixture_count:,} placement fixtures',flush=True)
-    run(['cargo','build','--release','-p','horizon-world','--example','simple_block_fixture'],'compile-rust')
-    metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],cwd=lab.ROOT,text=True));binary=Path(metadata['target_directory'])/'release/examples'/('simple_block_fixture.exe' if os.name=='nt' else 'simple_block_fixture')
-    run([binary,build],'rust');references=[]
+    run(['cargo','build','--release','-p','horizon-world','--example','probe'],'compile-rust')
+    metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],cwd=lab.ROOT,text=True));binary=Path(metadata['target_directory'])/'release/examples'/('probe.exe' if os.name=='nt' else 'probe')
+    run([binary,'simple_block_fixture',build],'rust');references=[]
     for side,jar in jars.items():
         java(side,side,build);matched=base.compare(build/(side+'.txt'),build/'rust.txt');print(f'{side}: {matched:,} {label} output lines match Rust',flush=True)
         references.append({'side':side,'jar_sha256':lab.digest(jar,'sha256'),'output_sha256':lab.digest(build/(side+'.txt'),'sha256'),'matched_output_lines':matched})
