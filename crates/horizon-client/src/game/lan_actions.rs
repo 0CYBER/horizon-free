@@ -595,6 +595,11 @@ impl Game<'_> {
             // A teleport (commands, a pearl) moves the guest; a pearl's is
             // sent even to where they stand (ServerPlayer.teleport).
             let at = [m.position.x, m.position.y, m.position.z];
+            // A hit with extra knockback stopped the guest's sprint
+            // (Player.causeExtraKnockback's setSprinting(false)).
+            if !m.sprinting {
+                g.sprinting = false;
+            }
             m.sprinting = false;
             let teleported = std::mem::take(&mut m.teleported);
             let moved: f64 = (0..3).map(|k| (at[k] - g.position[k]).powi(2)).sum();
@@ -1322,8 +1327,11 @@ impl Game<'_> {
             return;
         }
         if let Some(victim) = Self::pvp_victim(host, conn, id) {
-            if let Some(Some(strike)) = self.as_guest(host, conn, |g| g.pvp_strike()) {
-                self.pvp_land(host, victim, &strike);
+            if let Some(Some(strike)) = self.as_guest(host, conn, |g| g.pvp_strike())
+                && self.pvp_land(host, victim, &strike)
+                && strike.stops_sprint()
+            {
+                self.as_guest(host, conn, |g| g.stop_sprint_after_extra_knockback());
             }
             return;
         }

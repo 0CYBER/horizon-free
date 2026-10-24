@@ -1477,16 +1477,7 @@ impl Hub {
         attributes: Vec<play::AttributeSnapshot>,
     ) -> EntityState {
         let (sneaking, sprinting, gliding, sleeping) = flags;
-        let mut shared = 0i8;
-        if sneaking {
-            shared |= 0x02;
-        }
-        if sprinting {
-            shared |= 0x08;
-        }
-        if gliding {
-            shared |= -128;
-        }
+        let shared = shared_flags(sneaking, sprinting, gliding);
         let pose = if sleeping {
             2
         } else if gliding {
@@ -1763,6 +1754,18 @@ impl Hub {
                     values,
                 }));
             }
+        }
+        // ServerEntity.sendDirtyEntityData: the shared flags go to the player
+        // too, so the sprint a hit stops (Player.causeExtraKnockback) stops
+        // on its client.
+        let g = &mut self.guests[i];
+        let shared = shared_flags(g.sneaking, g.sprinting, g.fall_flying);
+        if shared != g.sent_shared {
+            g.sent_shared = shared;
+            g.send(&C::SetEntityData(play::SetEntityData {
+                id: g.entity_id,
+                values: vec![(0, serializer::BYTE, Value::Byte(shared))],
+            }));
         }
         // Sent when the health or the food level changes, or the saturation
         // reaches or leaves zero; a dead player's health of 0 too.
@@ -2480,6 +2483,7 @@ impl Hub {
         g.sent_health = None;
         g.sent_xp = None;
         g.sent_air = (300, 0.0);
+        g.sent_shared = 0;
         let (cx, cz) = g.chunk();
         g.send(&C::SetChunkCacheCenter(play::SetChunkCacheCenter {
             x: cx,
@@ -2517,6 +2521,21 @@ fn ticking_state(rate: f32, frozen: bool) -> C {
     w.f32(rate);
     w.bool(frozen);
     raw(ids::TICKING_STATE, w.data)
+}
+
+/// Entity.DATA_SHARED_FLAGS_ID of a player: crouching, sprinting, gliding.
+fn shared_flags(sneaking: bool, sprinting: bool, gliding: bool) -> i8 {
+    let mut shared = 0i8;
+    if sneaking {
+        shared |= 0x02;
+    }
+    if sprinting {
+        shared |= 0x08;
+    }
+    if gliding {
+        shared |= -128;
+    }
+    shared
 }
 
 #[cfg(test)]
