@@ -14,19 +14,24 @@ interface log {
         warn,
         error,
     }
+    /// One line in the game's log as `[mod <id>] message`, at that level.
     write: func(level: level, message: string);
 }
 
 /// Capability `game-read`: the local player and the world clock.
 interface game {
     record player {
+        /// Feet position, in blocks.
         x: f64,
         y: f64,
         z: f64,
         /// Degrees, as F3 shows them.
         yaw: f32,
+        /// Degrees: -90 looks straight up, 90 straight down.
         pitch: f32,
+        /// Hit points as vanilla counts them: 20 is full health without effects.
         health: f32,
+        /// 0 to 20, as the hunger bar.
         food: u32,
         /// `minecraft:overworld`, `minecraft:the_nether`, ...
         dimension: string,
@@ -39,6 +44,7 @@ interface game {
     }
     /// None on the title screen.
     get-player: func() -> option<player>;
+    /// None on the title screen.
     get-clock: func() -> option<clock>;
 }
 
@@ -58,11 +64,14 @@ interface hud {
         bottom-right,
     }
     record line {
+        /// Plain text, up to 256 characters.
         text: string,
         /// 0xRRGGBB.
         color: u32,
     }
+    /// Replaces the mod's panel: up to 16 lines in that corner of the screen.
     set-panel: func(corner: corner, lines: list<line>);
+    /// Removes the mod's panel.
     clear: func();
 }
 
@@ -92,10 +101,13 @@ interface events {
     }
     /// Once, after loading. An error keeps the mod off and is shown.
     init: func() -> result<registration, string>;
+    /// Each game tick while in a world, with the game's tick counter.
     tick: func(tick: u64);
+    /// Each rendered frame, with the seconds since the last one.
     frame: func(seconds: f32);
     /// `/name args`: ok(some(text)) is shown as feedback, err(text) in red.
     command: func(name: string, args: string) -> result<option<string>, string>;
+    /// Each chat line the player receives, as plain text.
     chat: func(text: string);
 }
 

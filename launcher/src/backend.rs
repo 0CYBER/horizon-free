@@ -943,7 +943,7 @@ pub fn default_minecraft_dir() -> Option<PathBuf> {
 }
 
 fn found(program: &str, arg: &str) -> bool {
-    Command::new(program)
+    crate::process::command(program)
         .arg(arg)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1239,14 +1239,14 @@ pub fn sounds(tag: &str, minecraft: &Path, log: &dyn Fn(String)) {
     let own = horizon_prepare::sources_sha256(&dir.join(PREPARER_CRATE)).as_deref()
         == Some(horizon_prepare::SOURCES_SHA256);
     let binary = preparer_binary(&dir).filter(|binary| {
-        !own && Command::new(binary)
+        !own && crate::process::command(binary)
             .arg("--help")
             .output()
             .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("horizon-prepare sounds"))
     });
     log("Copying the sounds from your Minecraft install".into());
     let result = match binary {
-        Some(binary) => Command::new(binary)
+        Some(binary) => crate::process::command(binary)
             .current_dir(&dir)
             .arg("sounds")
             .arg("--root")
@@ -1524,7 +1524,7 @@ pub fn append_game_args(cmd: &mut Command) {
 pub fn client_command(tag: &str) -> Command {
     let home = game_home();
     let _ = fs::create_dir_all(&home);
-    let mut cmd = Command::new(version_dir(tag).join(CLIENT));
+    let mut cmd = Command::new(client_program(tag));
     cmd.current_dir(home).arg("--resources").arg(resources(tag));
     // PipeWire remembers volume and mute per application name. The game's own name is
     // "PipeWire ALSA [horizon-client]", shared with development and test runs, where
@@ -1536,6 +1536,18 @@ pub fn client_command(tag: &str) -> Command {
         );
     }
     cmd
+}
+
+/// The game's program: on macOS the one inside the version's Horizon.app, so the Dock and Cmd+Tab
+/// show Horizon's name and icon (game_app.rs); the bare binary elsewhere, or if that fails.
+fn client_program(tag: &str) -> PathBuf {
+    let dir = version_dir(tag);
+    #[cfg(target_os = "macos")]
+    match crate::game_app::ensure(&dir) {
+        Ok(program) => return program,
+        Err(e) => eprintln!("Starting the game outside {}: {e}", crate::game_app::APP),
+    }
+    dir.join(CLIENT)
 }
 
 pub fn server_command(tag: &str, folder: &Path) -> Command {
@@ -1865,16 +1877,10 @@ fn parse_version_output(out: &str) -> Option<&str> {
 /// The version of the launcher binary now at `path`, which is not this process's once another
 /// update (the command line, another window) has replaced the file.
 fn installed_launcher_version(path: &Path) -> Option<String> {
-    let mut cmd = Command::new(path);
+    let mut cmd = crate::process::command(path);
     cmd.arg("--version")
         .stdin(Stdio::null())
         .stderr(Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
     let out = cmd.output().ok()?;
     parse_version_output(&String::from_utf8_lossy(&out.stdout)).map(String::from)
 }
@@ -2208,6 +2214,7 @@ impl Running {
 }
 
 pub fn spawn(job: Job, mut cmd: Command, tx: Sender<Msg>) -> Result<Running, String> {
+    crate::process::hide_console(&mut cmd);
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

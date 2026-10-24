@@ -95,7 +95,7 @@ fn display_offset(kind: CartKind) -> f64 {
     if kind == CartKind::Hopper { 1.0 } else { 6.0 }
 }
 /// The minecart's passenger attachment minus Player.DEFAULT_VEHICLE_ATTACHMENT.
-const SEAT: f64 = 0.1875 - 0.6;
+pub(super) const SEAT: f64 = 0.1875 - 0.6;
 /// The placeholder container key under which an open cart's items live.
 pub(super) const CART_KEY_Y: i32 = -100_000;
 

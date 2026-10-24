@@ -10,7 +10,6 @@ use serde_json::{Value, json};
 use std::{
     io::Read,
     path::{Path, PathBuf},
-    process::Command,
     time::{Duration, Instant},
 };
 
@@ -206,7 +205,7 @@ fn point(link: &Path, target: &Path) -> std::io::Result<()> {
     if link.exists() || link.symlink_metadata().is_ok() {
         std::fs::remove_dir(link)?;
     }
-    let status = Command::new("cmd")
+    let status = crate::process::command("cmd")
         .arg("/C")
         .arg("mklink")
         .arg("/J")
@@ -474,7 +473,7 @@ pub fn unpack(install: &Install, archive: &Path, tag: &str) -> Result<PathBuf, S
             // tar is on every Linux and macOS, and on Windows 10 and later. The files are the
             // user's, not the archive's owners: as root in a user namespace (an unprivileged LXC
             // or rootless container) taking those fails, and as plain root they'd be strangers'.
-            let status = Command::new("tar")
+            let status = crate::process::command("tar")
                 .arg("--no-same-owner")
                 .arg("-xzf")
                 .arg(archive)
@@ -1058,7 +1057,7 @@ mod tests {
         std::fs::write(inner.join("horizon-server"), "v2").unwrap();
         std::fs::write(inner.join("horizon-engine"), "engine").unwrap();
         let archive = source.join("horizon-server-linux-x86_64.tar.gz");
-        let status = Command::new("tar")
+        let status = std::process::Command::new("tar")
             .arg("-czf")
             .arg(&archive)
             .arg("-C")

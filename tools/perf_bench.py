@@ -24,7 +24,7 @@ Games:
                 mod (mods/horizon/src/bench), built here; nothing of the game
                 is redistributed
   vanilla-mods  the same + Sodium, Lithium, FerriteCore and ImmediatelyFast
-                (pinned in packs/mods.lock.json)
+                (pinned in tools/benchmark-deps/mods.lock.json)
   neoforge      Minecraft 1.21.1 on NeoForge (dev-only, tools/neoforge_oracle.py
                 installs it under .local/neoforge-oracle) + a driver mod
                 (mods/horizon/src/neoforge-bench) + the jars of --mod-jars and
@@ -524,9 +524,9 @@ def build_bench_mod(jars):
 
 def perf_mod_jars():
     """Sodium, Lithium, FerriteCore and ImmediatelyFast for 26.3 (downloaded from
-    Modrinth, checked against packs/mods.lock.json, never committed), plus
+    Modrinth, checked against tools/benchmark-deps/mods.lock.json, never committed), plus
     Fabric API when one of them needs it."""
-    lock = json.loads((ROOT / "packs/mods.lock.json").read_text())
+    lock = json.loads((ROOT / "tools/benchmark-deps/mods.lock.json").read_text())
     jars, needs_api = [], False
     for name in PERF_MODS:
         project = lock["projects"][name]
@@ -866,7 +866,7 @@ def app(args):
         jars = [j.name for f in filter(None, (args.mod_jars, args.deps)) for j in sorted(Path(f).glob("*.jar"))]
         return {"name": "minecraft", "version": "1.21.1",
                 "mods": [{"name": "neoforge", "version": neoforge_oracle.NEOFORGE}] + [{"name": j} for j in jars]}
-    lock = json.loads((ROOT / "packs/mods.lock.json").read_text())
+    lock = json.loads((ROOT / "tools/benchmark-deps/mods.lock.json").read_text())
     mods = [{"name": "fabric-loader", "version": lock["fabric_loader"]}]
     if args.game == "vanilla-mods":
         mods += [{"name": n, "version": lock["projects"][n]["version"]} for n in PERF_MODS]

@@ -82,8 +82,10 @@ impl Game<'_> {
             }
             return true;
         }
-        // Screens with a text box take every key press first
-        // (EditBox.keyPressed); releases still reach KeyboardHandler.
+        // Vanilla types into a focused EditBox through charTyped, which no
+        // debug key can swallow. Here the character comes with the key press,
+        // so a screen with a focused text box takes every press first;
+        // releases still reach KeyboardHandler.
         let typing = matches!(
             self.screen,
             Screen::Chat | Screen::Options | Screen::WorldOptions | Screen::CommandBlock
@@ -91,7 +93,11 @@ impl Game<'_> {
             || self.book.is_some()
             || (self.screen == Screen::Creative && self.creative_screen.tab().search)
             || self.recipe_search_focused()
-            || self.station_typing();
+            || self.station_typing()
+            || self
+                .title
+                .as_mut()
+                .is_some_and(|t| t.focused_field().is_some());
         // Container screens use Escape, the inventory key and the hotbar and
         // drop keys first; any other screen closes on Escape.
         let screen_key = match self.screen {
