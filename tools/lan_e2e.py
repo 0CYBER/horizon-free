@@ -207,6 +207,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
              and scope with a spyglass: each use starts on their own client and on the server, and
              letting go ends it on both (RELEASE_USE_ITEM), so the shield lowers, the trident flies
              and the loaded crossbow fires on the next use (#1300, #1281, #1282, #1301).
+- wind:      the host and the guest each throw a wind charge at their feet: the server's burst
+             launches them about six blocks up (the push in ClientboundExplodePacket) and they land
+             unhurt (#1386).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -4824,6 +4827,56 @@ def check_held_use(host, guest, out):
 
 CHECKS += ['helduse']
 CHECK_FNS.update(helduse=check_held_use)
+
+
+def check_wind(host, guest, out):
+    """A wind charge each player throws at its own feet (ServerExplosion with TRIGGER_BLOCK): the
+    server's burst pushes the thrower through its ClientboundExplodePacket (hitPlayers), which
+    launches it about six blocks up, and onExplosionHit spares it the fall damage where it lands
+    (#1386)."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    host('command', command='gamerule natural_health_regeneration false')
+    seen = {}
+    try:
+        for game, dz in ((host, -4), (guest, 4)):
+            x, z = hx, hz + dz
+            host('command', command=f'fill {x - 2} {hy - 1} {z - 2} {x + 2} {hy - 1} {z + 2} minecraft:stone')
+            host('command', command=f'fill {x - 2} {hy} {z - 2} {x + 2} {hy + 10} {z + 2} minecraft:air')
+            game('command', command='gamemode survival')
+            game('command', command='clear @s')
+            game('command', command='effect clear @s')
+            game('command', command='effect give @s minecraft:instant_health 1 5 true')
+            game('command', command='give @s minecraft:wind_charge 2')
+            game('command', command=f'tp @s {x + 0.5} {hy} {z + 0.5} 0 90')
+            game.wait(20)
+            start = pos_of(game)[1]
+            game.raw('use-item')
+            peak = start
+            for _ in range(30):
+                game.wait(2)
+                peak = max(peak, pos_of(game)[1])
+            game.wait(40)
+            game.shot(out, 'wind')
+            me = own(game)
+            seen[game.name] = {'rose': round(peak - start, 1),
+                               'landed': round(me['position'][1] - start, 1),
+                               'health': me['health'],
+                               'server_health': server_player(host, game)['health'],
+                               'charges': server_count(game, 'wind_charge')}
+    finally:
+        host('command', command='gamerule natural_health_regeneration true')
+        for game in (host, guest):
+            game('command', command='clear @s')
+        face_each_other(host, guest)
+    for name, s in seen.items():
+        # Vanilla rises about 6 blocks from a charge at the feet.
+        assert 4 < s['rose'] < 8 and s['landed'] == 0, f'{name}: {seen}'
+        assert s['health'] == 20 and s['server_health'] == 20 and s['charges'] == 1, f'{name}: {seen}'
+    return seen
+
+
+CHECKS += ['wind']
+CHECK_FNS.update(wind=check_wind)
 
 
 if __name__ == '__main__':
