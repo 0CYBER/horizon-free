@@ -268,8 +268,13 @@ fn run(
                 target
             }
         };
-        let c =
-            Connection::connect(&host, port, Duration::from_secs(10)).map_err(|e| e.to_string())?;
+        let c = if address.starts_with(FRIEND) {
+            // The friends relay supplies a concrete endpoint, not a Minecraft hostname.
+            Connection::connect(&host, port, Duration::from_secs(10))
+        } else {
+            Connection::connect_server(&host, port, Duration::from_secs(10))
+        }
+        .map_err(|e| e.to_string())?;
         (host, port, c)
     };
     *shared_counters.lock().unwrap() = Some(c.reader.counters.clone());
@@ -559,7 +564,7 @@ pub fn load_language(resources: &std::path::Path) -> Language {
 pub fn ping(address: &str, timeout: Duration) -> Result<(serde_json::Value, u128), String> {
     use horizon_protocol::packets::status;
     let (host, port) = parse_address(address).ok_or("Invalid address")?;
-    let mut c = Connection::connect(&host, port, timeout).map_err(|e| e.to_string())?;
+    let mut c = Connection::connect_server(&host, port, timeout).map_err(|e| e.to_string())?;
     c.reader
         .set_read_timeout(Some(timeout))
         .map_err(|e| e.to_string())?;
