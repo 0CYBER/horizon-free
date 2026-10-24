@@ -17,7 +17,7 @@ pub mod pyjson;
 mod sounds;
 mod survival;
 
-pub use sounds::{fonts, panorama, sounds};
+pub use sounds::{fonts, packs, panorama, sounds};
 
 use pyjson::Value;
 use sha2::Digest;
@@ -692,7 +692,7 @@ fn steps(
     }
 
     // The JAR holds only gray 1x1 panorama placeholders and an empty Unifont
-    // include. Import the indexed ones afterwards, including on reruns that just
+    // include, and none of the built-in packs. Import the indexed ones afterwards, including on reruns that just
     // extracted the JAR again. They are optional when preparing from
     // already-imported JARs.
     sounds::optional_assets(repo, minecraft, run.log);
