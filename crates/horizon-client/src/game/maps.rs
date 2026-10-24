@@ -918,21 +918,17 @@ impl Game<'_> {
             );
         }
     }
-    /// `renderTwoHandedMap`: the held map (main hand, empty off hand) in view space.
-    pub(super) fn held_map_geometry(
+    /// `renderTwoHandedMap`: map `id` held in both hands, in view space (the
+    /// arms under it are not drawn).
+    pub(super) fn two_handed_map_geometry(
         &mut self,
         to_world: glam::Mat4,
         attack: f32,
         inverse_height: f32,
+        id: i32,
         light: u32,
         out: &mut Vec<Vertex>,
-    ) -> bool {
-        let Some(id) = self.inventory[self.selected].as_ref().and_then(map_id) else {
-            return false;
-        };
-        if self.offhand.is_some() {
-            return false;
-        }
+    ) {
         let deg = |d: f32| d.to_radians();
         let sqrt_attack = attack.sqrt();
         let y_swing = -0.2 * (attack * std::f32::consts::PI).sin();
@@ -949,10 +945,16 @@ impl Game<'_> {
             ))
             * glam::Mat4::from_rotation_x(deg(tilt * -85.0));
         let swing = (sqrt_attack * std::f32::consts::PI).sin();
-        // renderMap: background (with 7-pixel border) then the map.
         let m = base
             * glam::Mat4::from_rotation_x(deg(swing * 20.0))
-            * glam::Mat4::from_scale(glam::Vec3::splat(2.0))
+            * glam::Mat4::from_scale(glam::Vec3::splat(2.0));
+        self.held_map(m, id, light, out);
+    }
+    /// `renderMap`: map `id` at pose `m`, its background (with a 7-pixel
+    /// border) then the map.
+    pub(super) fn held_map(&mut self, m: glam::Mat4, id: i32, light: u32, out: &mut Vec<Vertex>) {
+        let deg = |d: f32| d.to_radians();
+        let m = m
             * glam::Mat4::from_rotation_y(deg(180.0))
             * glam::Mat4::from_rotation_z(deg(180.0))
             * glam::Mat4::from_scale(glam::Vec3::splat(0.38))
@@ -984,7 +986,6 @@ impl Game<'_> {
         if has_data {
             self.map_vertices(id, m, light, out);
         }
-        true
     }
 }
 
