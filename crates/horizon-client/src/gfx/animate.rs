@@ -51,9 +51,6 @@ pub(super) struct SpriteAnimator {
     pipeline: wgpu::ComputePipeline,
     /// Edge of the arrays' layers.
     size: u32,
-    /// The sprite layers (across the arrays) the last `animate` rewrote, at
-    /// every mip level: a Java pack's atlas copies them.
-    pub changed: Vec<u32>,
 }
 
 impl SpriteAnimator {
@@ -208,7 +205,6 @@ impl SpriteAnimator {
             jobs,
             pipeline,
             size,
-            changed: Vec::new(),
         }
     }
 
@@ -220,7 +216,6 @@ impl SpriteAnimator {
         uploads: &mut Uploads,
         tick: u64,
     ) {
-        self.changed.clear();
         if self.collect(tick) == 0 {
             return;
         }
@@ -256,7 +251,6 @@ impl SpriteAnimator {
                 continue;
             }
             sprite.shown = Some(blend);
-            self.changed.push(sprite.animation.layer);
             let job = [
                 sprite.layer,
                 sprite.frames[blend.frame],

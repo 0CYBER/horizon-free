@@ -636,11 +636,12 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
             } else {
                 "entity/zombie_villager"
             };
-            let baby = if m.is_baby() { "baby/" } else { "" };
+            // VillagerProfessionLayer: a baby's type texture is in `baby/`.
+            let group = if m.is_baby() { "baby" } else { "type" };
             push(
                 &mut v,
                 &model,
-                &format!("{folder}/type/{baby}{t}"),
+                &format!("{folder}/{group}/{t}"),
                 white,
                 false,
             );
@@ -1098,9 +1099,11 @@ fn render_visible(
         let mut poses = Poses::new(&part);
         anim::setup(m, &s, &mut poses, &data.animations);
         if matches!(m.species(), Species::Villager | Species::ZombieVillager)
-            && let Some((folder, variant)) = layer.texture.split_once("/type/")
+            && let Some((folder, variant)) = layer
+                .texture
+                .split_once("/type/")
+                .or_else(|| layer.texture.split_once("/baby/"))
         {
-            let variant = variant.strip_prefix("baby/").unwrap_or(variant);
             let profession = PROFESSIONS[m.extra.variant2 as usize % PROFESSIONS.len()];
             data.villager_hats
                 .read()
@@ -1274,6 +1277,44 @@ pub fn held_item_transform(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// VillagerProfessionLayer's textures (type, or baby for a baby;
+    /// profession; level) of every villager and zombie villager are in the
+    /// prepared resources: a missing one draws nothing.
+    #[test]
+    fn villager_layers_name_textures_that_exist() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("entity-models.json").exists() {
+            return;
+        }
+        let types = super::super::MobTypes::load(&root).unwrap();
+        for kind in ["minecraft:villager", "minecraft:zombie_villager"] {
+            let kind = std::sync::Arc::new(types.types[kind].clone());
+            for baby in [false, true] {
+                for t in 0..VILLAGER_TYPES.len() {
+                    for p in 0..PROFESSIONS.len() {
+                        let mut m =
+                            Mob::new(1, kind.clone(), horizon_core::geometry::Vec3::ZERO, 0.0);
+                        m.extra.age = if baby { -24000 } else { 0 };
+                        (m.extra.variant, m.extra.variant2, m.extra.variant3) =
+                            (t as u8, p as u8, 5);
+                        let layers = layers(&m);
+                        let group = if baby { "/baby/" } else { "/type/" };
+                        assert!(
+                            layers.iter().any(|l| l.texture.contains(group)),
+                            "{kind:?} baby={baby}: no {group} layer"
+                        );
+                        for layer in layers {
+                            let png = root
+                                .join(format!("assets/minecraft/textures/{}.png", layer.texture));
+                            assert!(png.is_file(), "missing {}", png.display());
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn sulfur_cube_opaque_core_is_submitted_before_its_translucent_shell() {

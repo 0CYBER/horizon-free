@@ -252,9 +252,6 @@ pub struct Graphics {
     /// or behind other windows, and half the worker threads. Off by default;
     /// it changes when frames are drawn, never what they show or the ticks.
     pub battery: bool,
-    /// The Horizon shader pack in `shaderpacks/` (its folder name); empty:
-    /// none, the vanilla picture (docs/shader-packs.md).
-    pub shader_pack: String,
     /// The graphics API (Windows only; see `GraphicsApi`).
     pub api: GraphicsApi,
 }
@@ -280,7 +277,6 @@ impl Default for Graphics {
             resolution_scale: 100,
             fxaa: false,
             battery: false,
-            shader_pack: String::new(),
             api: GraphicsApi::Auto,
         }
     }
@@ -332,7 +328,6 @@ impl Graphics {
                 "resolutionScale" => g.resolution_scale = number(g.resolution_scale).clamp(50, 200),
                 "fxaa" => g.fxaa = flag(g.fxaa),
                 "batteryMode" => g.battery = flag(g.battery),
-                "shaderPack" => g.shader_pack = value.to_string(),
                 "graphicsApi" => g.api = GraphicsApi::from_name(value).unwrap_or_default(),
                 "overlay" => {
                     g.overlay = match value {
@@ -348,7 +343,7 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\ncullLeaves:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nbatteryMode:{}\nshaderPack:{}\ngraphicsApi:{}\n",
+            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\ncullLeaves:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nbatteryMode:{}\ngraphicsApi:{}\n",
             self.preset.name(),
             self.lod_distance,
             self.far_detail.name(),
@@ -375,7 +370,6 @@ impl Graphics {
             self.resolution_scale,
             bool_text(self.fxaa),
             bool_text(self.battery),
-            self.shader_pack,
             self.api.name(),
         )
     }
@@ -469,13 +463,17 @@ mod tests {
             resolution_scale: 75,
             fxaa: true,
             battery: true,
-            shader_pack: "horizon-sample".into(),
             api: GraphicsApi::Dx12,
         };
         assert_eq!(Graphics::parse(&g.serialize()), g);
         assert_eq!(Graphics::parse(""), Graphics::default());
-        // The old menus' Simple / Advanced choice is ignored.
+        // The old menus' Simple / Advanced choice is ignored, and so is the
+        // shader pack older versions saved.
         assert_eq!(Graphics::parse("level:advanced\n"), Graphics::default());
+        assert_eq!(
+            Graphics::parse("shaderPack:Pack.zip\n"),
+            Graphics::default()
+        );
         assert_eq!(
             Graphics::parse("workers:abc\nsky:maybe\ncullLeaves:maybe\nentityCulling:maybe\n"),
             Graphics::default()

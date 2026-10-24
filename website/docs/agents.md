@@ -10,7 +10,7 @@ Everything you can do with the mouse and keyboard, through commands instead of c
   - install, remove and prepare versions;
   - start the game, alone or with a world, or a server;
   - your settings and the extra game arguments;
-  - the mod browser (mods, resource packs, shader packs, modpacks), imported modpacks and hosted servers;
+  - the mod browser (mods, resource packs, modpacks), imported modpacks and hosted servers;
   - your accounts (names only), logs and crash reports, patch notes, the data collection settings and the benchmark.
 - **In the game:**
   - read what is on screen (every button, slider, field and slot, by name), click and type;
@@ -94,7 +94,7 @@ The same commands, for scripts and terminals. `--json` prints JSON.
 - Install the newest: `horizon-launcher install latest`
 - Play a world: `horizon-launcher play --world "My world"`
 - Change a setting: `horizon-launcher settings install-new-versions on`
-- Find a shader pack: `horizon-launcher mods search --kind shader sildurs`
+- Find a resource pack: `horizon-launcher mods search --kind resource faithful`
 - Read the game's log: `horizon-launcher logs`
 - Turn No AI on: `horizon-launcher no-ai on`
 - Start a game agents control: `horizon-ctl launch --world Test`

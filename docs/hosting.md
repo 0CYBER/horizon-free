@@ -165,6 +165,8 @@ hardcore = false
 # Any other server.properties key, spelled as vanilla spells it:
 [properties]
 # spawn-protection = 16
+# resource-pack = "https://example.com/pack.zip"   # offered to players as they join; with
+# resource-pack-sha1, require-resource-pack and resource-pack-prompt, as on vanilla
 
 [engine]
 path = ""                    # the game program; empty: the one beside horizon-server

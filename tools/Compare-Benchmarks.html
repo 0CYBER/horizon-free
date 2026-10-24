@@ -30,7 +30,7 @@
 </main>
 <script>
 'use strict';
-const SETTINGS=['minecraft','kind','os','os_version','architecture','gpu','graphics_backend','graphics_driver','server_runtime_kind','client_graphics_capture_status','java_version','heap_max_bytes','framebuffer_width','framebuffer_height','render_distance','simulation_distance','vsync','fps_limit','graphics_preset','ambient_occlusion','improved_transparency','mipmap_levels','entity_distance_scaling','entity_shadows','particles','clouds','cloud_range','fov','world_difficulty','dh_capture_status','dh_rendering_enabled','dh_renderer_mode','dh_lod_radius_chunks','dh_horizontal_quality','dh_vertical_quality','dh_max_horizontal_resolution','dh_transparency','dh_lod_shading','dh_lod_only_mode','dh_camera_quality_dropoff','dh_ambient_occlusion','iris_capture_status','iris_shaders_enabled','iris_shader_pack'];
+const SETTINGS=['minecraft','kind','os','os_version','architecture','gpu','graphics_backend','graphics_driver','server_runtime_kind','client_graphics_capture_status','java_version','heap_max_bytes','framebuffer_width','framebuffer_height','render_distance','simulation_distance','vsync','fps_limit','graphics_preset','ambient_occlusion','improved_transparency','mipmap_levels','entity_distance_scaling','entity_shadows','particles','clouds','cloud_range','fov','world_difficulty','dh_capture_status','dh_rendering_enabled','dh_renderer_mode','dh_lod_radius_chunks','dh_horizontal_quality','dh_vertical_quality','dh_max_horizontal_resolution','dh_transparency','dh_lod_shading','dh_lod_only_mode','dh_camera_quality_dropoff','dh_ambient_occlusion'];
 const state={baseline:null,candidate:null},generation={baseline:0,candidate:0};
 let comparison=null,chartData=null;
 const $=id=>document.getElementById(id);
@@ -115,7 +115,7 @@ function compareReports(a,b){
   if(a.kind!==b.kind)throw Error('Compare frame runs with frame runs, or tick runs with tick runs.');
   const differences=SETTINGS.filter(key=>JSON.stringify(a[key])!==JSON.stringify(b[key])).map(key=>({setting:key,baseline:a[key]??null,candidate:b[key]??null}));
   if(a.kind==='ticks'&&a.peak_players!==b.peak_players)differences.push({setting:'peak_players',baseline:a.peak_players??null,candidate:b.peak_players??null});
-  const warnings=['World, camera route, shaders and terrain-cache warm-up still need to match. These are not verified by the captured settings.'];
+  const warnings=['World, camera route and terrain-cache warm-up still need to match. These are not verified by the captured settings.'];
   warnings.push(...softwareWarnings(a,b));
   if(a.kind==='ticks'){
     warnings.push(...serverContextWarnings(a,b));
@@ -131,7 +131,6 @@ function compareReports(a,b){
     }
     for(const [label,r] of [['Baseline',a],['Candidate',b]]){
       if(!['available','not_installed'].includes(r.dh_capture_status))warnings.push(label+' distant-terrain configuration was not captured; quality equivalence is unknown.');
-      if(!['available','not_installed'].includes(r.iris_capture_status))warnings.push(label+' Iris state was not captured; shader equivalence is unknown.');
       if(Array.isArray(r.visual_settings_changed)&&r.visual_settings_changed.length){
         differences.push({setting:label+' visual settings changed during recording',baseline:label==='Baseline'?r.visual_settings_changed:null,candidate:label==='Candidate'?r.visual_settings_changed:null});
         warnings.push(label+' visual settings changed between capture boundaries: '+r.visual_settings_changed.join(', ')+'.');
@@ -188,7 +187,6 @@ function renderDetails(side){
   if(r.kind==='frames'){
     fields.push(['Distant terrain',r.dh_capture_status==='not_installed'?'Not installed':r.dh_capture_status==='available'?(r.dh_rendering_enabled?'Enabled':'Disabled')+' · '+r.dh_lod_radius_chunks+' chunk radius · '+r.dh_horizontal_quality+'/'+r.dh_vertical_quality+' quality · '+r.dh_max_horizontal_resolution+' resolution':'Not captured']);
     if(number(r.dh_thread_count))fields.push(['Terrain workers',r.dh_thread_count+' · runtime ratio at start '+format(r.dh_runtime_ratio)+(number(r.visual_settings_end?.dh_runtime_ratio)?' / end '+format(r.visual_settings_end.dh_runtime_ratio):'')]);
-    fields.push(['Iris shaders',r.iris_capture_status==='not_installed'?'Not installed':r.iris_capture_status==='available'?r.iris_shaders_enabled?'Enabled · '+(r.iris_shader_pack||'pack name unavailable'):'Disabled':'Not captured']);
     if(number(r.fov))fields.push(['Field of view',format(r.fov)]);
     if(r.world_difficulty)fields.push(['World difficulty',r.world_difficulty]);
     fields.push(['Frame limit',r.fps_limit_unlimited===true||(r.minecraft==='26.3'&&number(r.fps_limit)&&r.fps_limit>=260)?'Uncapped':number(r.fps_limit)?r.fps_limit+' FPS':'not captured']);

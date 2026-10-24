@@ -3,12 +3,15 @@
 //! `onSyncedDataUpdated`): what a client draws from it rather than from its
 //! own simulation, which a client of a server doesn't run.
 use super::Game;
+use horizon_client::mobs::render::{PROFESSIONS, VILLAGER_TYPES};
 use horizon_client::mobs::{Mob, Species, tame};
 use horizon_protocol::entity_data::Value;
+use horizon_protocol::registry::Builtin;
 
 /// The values `apply` takes from one SetEntityData packet, by vanilla's entry
 /// indices (Entity 0..=7, LivingEntity 8..=14, Mob 15, then the subclasses).
-fn apply(m: &mut Mob, values: &[(u8, i32, Value)]) {
+/// `builtin` names the ids of built-in registries.
+fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin) {
     let species = m.species();
     let baby = super::lan::baby_index(&m.kind.id);
     for (index, _, value) in values {
@@ -42,16 +45,45 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)]) {
             (Species::Slime | Species::MagmaCube, 18, Value::Int(size)) => {
                 m.extra.size = (*size).clamp(1, 127);
             }
+            // Villager.DATA_VILLAGER_DATA and ZombieVillager's (after
+            // Zombie's three): what VillagerProfessionLayer draws.
+            (Species::Villager, 19, Value::Ids(data))
+            | (Species::ZombieVillager, 20, Value::Ids(data)) => villager_data(m, data, builtin),
             _ => {}
         }
     }
 }
 
+/// VillagerData as the network sends it: the type and the profession by
+/// their built-in registry ids, then the level.
+fn villager_data(m: &mut Mob, data: &[i32], builtin: &Builtin) {
+    let &[kind, profession, level] = data else {
+        return;
+    };
+    let index = |registry: &str, id: i32, names: &[&str]| {
+        let name = builtin
+            .get(registry)?
+            .name(id)?
+            .strip_prefix("minecraft:")?;
+        names.iter().position(|n| *n == name).map(|i| i as u8)
+    };
+    if let Some(t) = index("minecraft:villager_type", kind, &VILLAGER_TYPES) {
+        m.extra.variant = t;
+    }
+    if let Some(p) = index("minecraft:villager_profession", profession, &PROFESSIONS) {
+        m.extra.variant2 = p;
+    }
+    m.extra.variant3 = level.clamp(0, i32::from(u8::MAX)) as u8;
+}
+
 impl Game<'_> {
     /// SetEntityData for a mob of the server's.
     pub(super) fn remote_mob_data(&mut self, id: i32, values: &[(u8, i32, Value)]) {
+        let Some(r) = &self.remote else {
+            return;
+        };
         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id as u32) {
-            apply(m, values);
+            apply(m, values, &r.builtin);
         }
     }
 }
@@ -72,11 +104,23 @@ mod tests {
 
     /// A mob of the prepared resources' type `kind`, as a client spawns it
     /// (None without the resources).
-    fn mob(kind: &str) -> Option<Mob> {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+    fn root() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.local/horizon-client")
-            .join(horizon_core::VANILLA_VERSION);
-        let types = horizon_client::mobs::MobTypes::load(&root).ok()?;
+            .join(horizon_core::VANILLA_VERSION)
+    }
+
+    /// The prepared resources' built-in registries (empty without them).
+    fn builtin() -> Builtin {
+        Builtin::load(&root().join("registries.json")).unwrap_or_default()
+    }
+
+    fn apply(m: &mut Mob, values: &[(u8, i32, Value)]) {
+        super::apply(m, values, &builtin());
+    }
+
+    fn mob(kind: &str) -> Option<Mob> {
+        let types = horizon_client::mobs::MobTypes::load(&root()).ok()?;
         let t = std::sync::Arc::new(types.types.get(kind)?.clone());
         let mut m = Mob::new(1, t, horizon_core::geometry::Vec3::ZERO, 0.0);
         client_defaults(&mut m);
@@ -132,5 +176,46 @@ mod tests {
         assert_eq!((m.fire_ticks, m.health, m.extra.size), (1, 12.5, 4));
         apply(&mut m, &[(0, s::BYTE, Value::Byte(0))]);
         assert_eq!(m.fire_ticks, 0);
+    }
+
+    #[test]
+    fn a_villager_takes_its_type_profession_and_level() {
+        let Some(mut m) = mob("minecraft:villager") else {
+            return;
+        };
+        let registries = builtin();
+        let id = |registry: &str, name: &str| registries.get(registry)?.id(name);
+        let (Some(desert), Some(farmer), Some(librarian)) = (
+            id("minecraft:villager_type", "minecraft:desert"),
+            id("minecraft:villager_profession", "minecraft:farmer"),
+            id("minecraft:villager_profession", "minecraft:librarian"),
+        ) else {
+            return;
+        };
+        let name = |m: &Mob| {
+            (
+                VILLAGER_TYPES[m.extra.variant as usize],
+                PROFESSIONS[m.extra.variant2 as usize],
+                m.extra.variant3,
+            )
+        };
+        apply(
+            &mut m,
+            &[(19, s::VILLAGER_DATA, Value::Ids(vec![desert, farmer, 2]))],
+        );
+        assert_eq!(name(&m), ("desert", "farmer", 2));
+        // A job taken later: only the profession and the level change.
+        apply(
+            &mut m,
+            &[(19, s::VILLAGER_DATA, Value::Ids(vec![desert, librarian, 5]))],
+        );
+        assert_eq!(name(&m), ("desert", "librarian", 5));
+        // A zombie villager's data comes after Zombie's three entries.
+        let mut z = mob("minecraft:zombie_villager").unwrap();
+        apply(
+            &mut z,
+            &[(20, s::VILLAGER_DATA, Value::Ids(vec![desert, farmer, 3]))],
+        );
+        assert_eq!(name(&z), ("desert", "farmer", 3));
     }
 }

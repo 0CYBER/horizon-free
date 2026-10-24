@@ -34,7 +34,6 @@ PROFILES = {
     "foreground-vulkan": {"title": "Foreground-first Vulkan experiment", "mods": CORE + ["distanthorizons"], "render": 12, "lod": 128, "heap": 6144, "adaptive": True, "pacing": True, "queue_wait": True, "dispatch_retry": True, "tick_dedup": True, "target_fps": 120, "backend": "vulkan"},
     "low-memory": {"title": "Low memory", "mods": CORE, "render": 8, "lod": 0, "heap": 3072},
     "far-distance": {"title": "Far distance", "mods": CORE + ["distanthorizons"], "render": 12, "lod": 256, "heap": 8192},
-    "cinematic": {"title": "Cinematic (optional)", "mods": CORE + ["distanthorizons", "iris", "complementary-reimagined"], "render": 12, "lod": 128, "heap": 6144},
     "vulkan": {"title": "Vulkan experiment", "mods": CORE + ["distanthorizons"], "render": 12, "lod": 128, "heap": 6144, "backend": "vulkan"},
 }
 
@@ -51,7 +50,7 @@ def validate_selection(lock, selection):
         entry = projects[name]
         if lock["minecraft"] not in entry["game_versions"]:
             raise ValueError(f"Wrong game version: {name}")
-        if not entry["filename"].endswith(".zip") and "fabric" not in entry["loaders"]:
+        if "fabric" not in entry["loaders"]:
             raise ValueError(f"Wrong loader: {name}")
         if Path(entry["filename"]).name != entry["filename"] or "\\" in entry["filename"]:
             raise ValueError(f"Unsafe filename: {name}")
@@ -68,7 +67,7 @@ def validate_selection(lock, selection):
 
 
 def mod_path(entry):
-    return ("shaderpacks/" if entry["filename"].endswith(".zip") else "mods/") + entry["filename"]
+    return "mods/" + entry["filename"]
 
 
 def options(profile):
@@ -111,9 +110,6 @@ def overrides(profile_name, mod_bytes):
         if not config.exists():
             raise FileNotFoundError(f"Missing verified DH profile config: {config}")
         files["config/DistantHorizons.toml"] = config.read_bytes()
-    if profile_name == "cinematic":
-        # Start with shaders disabled: users explicitly select their visual/performance budget.
-        files["config/iris.properties"] = b"enableShaders=false\nshaderPack=ComplementaryReimagined_r5.9.3.zip\n"
     return files
 
 

@@ -53,7 +53,7 @@ Start the client.
 - `--world`: Open or create this world (a folder under saves) at once
 - `--creative`: Creative mode for a new world
 - `--join`: Join a friend's world with its invite code
-- `--arg`: An extra argument for the game, passed through as-is (repeatable), for example --in-frame
+- `--arg`: An extra argument for the game, passed through as-is (repeatable), for example --server-thread
 
 MCP: `play`, then the `game_*` tools.
 
@@ -143,7 +143,7 @@ MCP: `settings`.
 
 ## `horizon-launcher game-args`
 
-Show or set the extra arguments the game starts with (for example --in-frame); quotes group a word with spaces in it.
+Show or set the extra arguments the game starts with (for example --server-thread); quotes group a word with spaces in it.
 
     horizon-launcher game-args [ARGS]
 
@@ -321,7 +321,7 @@ Search for packs Horizon loads.
     horizon-launcher mods search [TEXT]...
 
 - `TEXT`
-- `--kind` (mod, resource, shader, modpack)
+- `--kind` (mod, resource, modpack)
 - `--everything`: Also what was made for other versions or runs only partly, each marked
 - `--source` (modrinth, curseforge)
 

@@ -1,9 +1,9 @@
 //! What the browser installed into the game folder, and installing, updating and removing it.
 //!
-//! `mod-browser.json` beside `options.txt` lists each file the browser put in `resourcepacks/`
-//! or `shaderpacks/`, and each Java mod it ported into `horizon-mods/`: where it came from, its
-//! version and its checksum. Files the player put
-//! there themselves are never touched: the browser only replaces or removes what it lists.
+//! `mod-browser.json` beside `options.txt` lists each file the browser put in `resourcepacks/`,
+//! and each Java mod it ported into `horizon-mods/`: where it came from, its version and its
+//! checksum. Files the player put there themselves are never touched: the browser only replaces
+//! or removes what it lists.
 use super::{pick, safe_name, Kind, Project, Source, SourceId, Support, Version};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -43,7 +43,18 @@ pub struct Entry {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Installed {
+    /// An entry this launcher can't read (a shader pack, which older launchers installed) is
+    /// left out, and its file left where it is.
+    #[serde(deserialize_with = "readable_entries")]
     pub entries: Vec<Entry>,
+}
+
+fn readable_entries<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Entry>, D::Error> {
+    let entries = Vec::<serde_json::Value>::deserialize(d)?;
+    Ok(entries
+        .into_iter()
+        .filter_map(|e| serde_json::from_value(e).ok())
+        .collect())
 }
 
 impl Installed {

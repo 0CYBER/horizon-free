@@ -139,6 +139,9 @@ pub struct NetConfig {
     /// Online mode: players are authenticated (none on a LAN world).
     pub online: Option<Arc<OnlineMode>>,
     pub log: Option<NetLog>,
+    /// server.properties `resource-pack`: offered to every player during
+    /// configuration (a dedicated server's; MinecraftServer.getServerResourcePack).
+    pub resource_pack: Option<crate::server::properties::ResourcePackInfo>,
 }
 impl NetConfig {
     /// MinecraftServer.enforceSecureProfile.
@@ -164,6 +167,7 @@ impl NetConfig {
             gate: None,
             online: None,
             log: None,
+            resource_pack: None,
         }
     }
 }
