@@ -240,7 +240,7 @@ impl Game<'_> {
             && harm
             && match victim {
                 Victim::Host => land(self),
-                Victim::Guest(conn) => self.guest_hit_by(host, conn, land).unwrap_or(false),
+                Victim::Guest(conn) => self.guest_struck_by(host, conn, land).unwrap_or(false),
             };
         let sound = match (hurt, s.crit, s.scale > 0.9) {
             (false, ..) => "minecraft:entity.player.attack.nodamage",

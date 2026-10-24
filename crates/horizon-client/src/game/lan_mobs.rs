@@ -213,7 +213,9 @@ impl Game<'_> {
 
 impl Game<'_> {
     /// Hurt a guest: `f` runs as them, and the knockback it gave reaches
-    /// their client (`hurtMarked`: ClientboundSetEntityMotionPacket).
+    /// their client. A hurt marks the velocity (Entity.markHurt), which goes
+    /// out once the guest's server copy has travelled (`guest_server_tick`);
+    /// a push with no hurt goes out at once.
     pub(super) fn guest_hit_by<R>(
         &mut self,
         host: &mut LanHost,
@@ -223,16 +225,47 @@ impl Game<'_> {
         let (result, pushed) = self.as_guest(host, conn, |g| {
             let before = g.player.as_ref().map(|p| p.velocity);
             let result = f(g);
-            let after = g.player.as_ref().map(|p| p.velocity);
-            (result, after.filter(|v| Some(*v) != before))
+            let pushed = g
+                .player
+                .as_ref()
+                .filter(|p| !p.health.sync_velocity && Some(p.velocity) != before)
+                .map(|p| p.velocity);
+            (result, pushed)
         })?;
-        if let (Some(v), Some(g)) = (pushed, host.hub.guest(conn)) {
+        self.send_guest_motion(host, conn, pushed);
+        Some(result)
+    }
+
+    /// A player's melee hit on a guest (Player.causeExtraKnockback on a
+    /// ServerPlayer): a hurt that marked the velocity sends it at once, and
+    /// the server's copy goes back to the velocity it had before the hit.
+    pub(super) fn guest_struck_by<R>(
+        &mut self,
+        host: &mut LanHost,
+        conn: u32,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> Option<R> {
+        let (result, sent) = self.as_guest(host, conn, |g| {
+            let before = g.player.as_ref().map(|p| p.velocity);
+            let result = f(g);
+            let sent = g.player.as_mut().zip(before).and_then(|(p, before)| {
+                std::mem::take(&mut p.health.sync_velocity)
+                    .then(|| std::mem::replace(&mut p.velocity, before))
+            });
+            (result, sent)
+        })?;
+        self.send_guest_motion(host, conn, sent);
+        Some(result)
+    }
+
+    /// ClientboundSetEntityMotionPacket to a guest about themselves.
+    pub(super) fn send_guest_motion(&self, host: &LanHost, conn: u32, velocity: Option<Vec3>) {
+        if let (Some(v), Some(g)) = (velocity, host.hub.guest(conn)) {
             g.send(&C::SetEntityMotion(play::SetEntityMotion {
                 id: g.entity_id,
                 velocity: [v.x, v.y, v.z],
             }));
         }
-        Some(result)
     }
 }
 

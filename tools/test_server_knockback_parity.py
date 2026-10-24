@@ -56,8 +56,6 @@ PROPERTIES = {
     'pause-when-empty-seconds': '-1',
 }
 # Cases Horizon still gets wrong, and why.
-VELOCITY = ("a guest's server-side velocity never travels and a hit is sent before it would: each knockback starts "
-            "from the last one's (ServerPlayer's travel, ServerEntity.sendChanges, Player.causeExtraKnockback)")
 SPRINT = "the server never sends a guest its own sprint flag, so a sprint hit doesn't stop the attacker's sprint"
 YAW = "the extra knockback's direction comes from f32 sin/cos, not Mth's sine table (z is -2e-8 a block, not 0)"
 KNOWN = {
@@ -65,16 +63,9 @@ KNOWN = {
     'cow-knockback-2': YAW,
     'zombie-sprint': f'{SPRINT}; {YAW}',
     'zombie-knockback-2': YAW,
-    'pvp-plain': VELOCITY,
-    'pvp-sprint': f'{VELOCITY}; {SPRINT}',
-    'pvp-knockback-2': VELOCITY,
-    'pvp-crit': VELOCITY,
-    'pvp-netherite': VELOCITY,
-    'pvp-twice': VELOCITY,
-    'pvp-sprint-twice': f'{VELOCITY}; {SPRINT}',
-    'pvp-mace': f'{VELOCITY}; a smash on a player runs none of MaceItem.hurtEnemy (the attacker\'s fall goes on)',
-    'pvp-cooldown': f'{VELOCITY}; a hit inside the hurt cooldown still knocks back (LivingEntity.hurtServer)',
-    'zombie-hits-bob': VELOCITY,
+    'pvp-sprint': SPRINT,
+    'pvp-sprint-twice': SPRINT,
+    'pvp-mace': "a smash on a player runs none of MaceItem.hurtEnemy (the attacker's fall goes on)",
 }
 
 A = (0.5, -60.0, 0.5)  # Alice, facing east (yaw -90)
