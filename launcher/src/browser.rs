@@ -3,9 +3,8 @@
 //! matches (docs/mod-browser.md).
 //!
 //! Offered: Java mods (Fabric, NeoForge, Forge), whose content Horizon ports and whose jar is
-//! checked before install ([`java`]), modpacks (imported and ported), resource packs
-//! (`resourcepacks/`) and Java shader packs (`shaderpacks/`, Iris and OptiFine). Java code itself
-//! doesn't run in Horizon (docs/mods.md).
+//! checked before install ([`java`]), modpacks (imported and ported) and resource packs
+//! (`resourcepacks/`). Java code itself doesn't run in Horizon (docs/mods.md).
 pub mod curseforge;
 pub mod details;
 pub mod download;
@@ -25,25 +24,18 @@ pub const GAME: &str = "26.3";
 #[serde(rename_all = "kebab-case")]
 pub enum Kind {
     ResourcePack,
-    ShaderPack,
     Modpack,
     /// A Java mod: its content is ported ([`java`]).
     Mod,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 4] = [
-        Kind::Mod,
-        Kind::Modpack,
-        Kind::ResourcePack,
-        Kind::ShaderPack,
-    ];
+    pub const ALL: [Kind; 3] = [Kind::Mod, Kind::Modpack, Kind::ResourcePack];
 
     pub fn label(self) -> &'static str {
         match self {
             Kind::Mod => "Mods",
             Kind::ResourcePack => "Resource packs",
-            Kind::ShaderPack => "Shader packs",
             Kind::Modpack => "Modpacks",
         }
     }
@@ -53,7 +45,6 @@ impl Kind {
     pub fn folder(self) -> Option<&'static str> {
         match self {
             Kind::ResourcePack => Some("resourcepacks"),
-            Kind::ShaderPack => Some("shaderpacks"),
             Kind::Modpack | Kind::Mod => None,
         }
     }
@@ -123,7 +114,7 @@ pub struct Project {
     pub icon: Option<String>,
     pub license: String,
     pub kind: Kind,
-    /// The Minecraft versions its files list, and the loaders (`iris`, `optifine`, `minecraft`...).
+    /// The Minecraft versions its files list, and the loaders (`fabric`, `neoforge`, `minecraft`...).
     pub game_versions: Vec<String>,
     pub loaders: Vec<String>,
 }
@@ -186,8 +177,8 @@ impl Version {
 pub struct Query {
     pub text: String,
     pub kind: Kind,
-    /// Off: only what runs (made for [`GAME`], Iris or OptiFine shaders). On: everything of the
-    /// kind, each result marked with how well it runs.
+    /// Off: only what runs (made for [`GAME`]). On: everything of the kind, each result marked
+    /// with how well it runs.
     pub everything: bool,
     pub offset: usize,
     pub limit: usize,
@@ -250,9 +241,6 @@ pub fn source(id: SourceId) -> Option<Box<dyn Source>> {
     sources().into_iter().find(|s| s.id() == id)
 }
 
-/// The loaders a Java shader pack may name that Horizon translates.
-const SHADER_LOADERS: [&str; 2] = ["iris", "optifine"];
-
 /// How well a project of `kind` made for `game_versions` and `loaders` runs in Horizon.
 pub fn support(kind: Kind, game_versions: &[String], loaders: &[String]) -> Support {
     match kind {
@@ -266,20 +254,6 @@ pub fn support(kind: Kind, game_versions: &[String], loaders: &[String]) -> Supp
                 ))
             } else {
                 Support::Partial("Lists no Minecraft version.".into())
-            }
-        }
-        Kind::ShaderPack => {
-            if loaders.iter().any(|l| SHADER_LOADERS.contains(&l.as_str())) {
-                Support::Partial(
-                    "Java shader packs are translated: their full-screen passes draw, the world \
-                     and shadow passes don't yet (BSL and Complementary tested)."
-                        .into(),
-                )
-            } else {
-                let named = loaders.first().map(String::as_str).unwrap_or("unknown");
-                Support::No(format!(
-                    "A shader pack for {named}: Horizon runs Iris and OptiFine packs only."
-                ))
             }
         }
         Kind::Modpack => {
@@ -351,7 +325,7 @@ pub fn pick(kind: Kind, versions: &[Version], everything: bool) -> Option<&Versi
     }
     let runs = |v: &&Version| match support(kind, &v.game_versions, &v.loaders) {
         Support::Works => true,
-        // A modpack's version is for its own Minecraft; any shader pack Horizon translates.
+        // A modpack's version is for its own Minecraft.
         Support::Partial(_) => kind != Kind::ResourcePack,
         Support::No(_) => false,
     };

@@ -25,9 +25,9 @@ The opening, then Play ([clip](docs/opening.webm)):
   or another installed Horizon version, so the original Minecraft install is
   only required when no valid imported copy exists.
 - **Mods**: search Modrinth (CurseForge support is coming soon) for resource
-  packs, Iris/OptiFine shader packs and modpacks, each marked Works, Partly or Doesn't run in
+  packs and modpacks, each marked Works, Partly or Doesn't run in
   Horizon; Java mod jars are never offered. Install puts a pack and what it needs in
-  `resourcepacks/` or `shaderpacks/` only after its SHA-512 matches, and a
+  `resourcepacks/` only after its SHA-512 matches, and a
   modpack goes to the Modpacks page; installed packs show their source and checksum, with Update
   and Remove ([docs/mod-browser.md](../docs/mod-browser.md)).
 - **Modpacks**: import a Java modpack (a Modrinth `.mrpack`, a CurseForge zip, or a Prism,

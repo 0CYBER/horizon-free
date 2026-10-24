@@ -13,7 +13,7 @@ MATCH_FIELDS = ("minecraft", "kind", "os", "os_version", "architecture", "gpu", 
                 "clouds", "cloud_range", "fov", "world_difficulty", "dh_capture_status", "dh_rendering_enabled", "dh_renderer_mode",
                 "dh_lod_radius_chunks", "dh_horizontal_quality", "dh_vertical_quality", "dh_max_horizontal_resolution",
                 "dh_transparency", "dh_lod_shading", "dh_lod_only_mode", "dh_camera_quality_dropoff",
-                "dh_ambient_occlusion", "iris_capture_status", "iris_shaders_enabled", "iris_shader_pack")
+                "dh_ambient_occlusion")
 
 TICK_STATE_FIELDS = ("configured_tick_rate", "frozen", "stepping", "sprinting", "runs_game_elements")
 
@@ -117,7 +117,7 @@ def compare(baseline, candidate):
         raise ValueError("Compare frames with frames, or ticks with ticks")
     mismatches = [f"{key}: {baseline.get(key)!r} vs {candidate.get(key)!r}" for key in MATCH_FIELDS
                   if baseline.get(key) != candidate.get(key)]
-    warnings = ["World, route, warm-up, shader state and LOD cache must also match; these are not verified by this tool."]
+    warnings = ["World, route, warm-up and LOD cache must also match; these are not verified by this tool."]
     warnings.extend(software_warnings(baseline, candidate))
     if baseline["kind"] == "ticks":
         warnings.extend(server_context_warnings(baseline, candidate))
@@ -133,8 +133,6 @@ def compare(baseline, candidate):
         for name, report in [("baseline", baseline), ("candidate", candidate)]:
             if report.get("dh_capture_status") not in ["available", "not_installed"]:
                 warnings.append(f"{name} distant-terrain configuration was not captured; quality equivalence is unknown.")
-            if report.get("iris_capture_status") not in ["available", "not_installed"]:
-                warnings.append(f"{name} Iris state was not captured; shader equivalence is unknown.")
             if report.get("visual_settings_changed"):
                 mismatches.append(f"{name} visual settings changed during recording")
                 warnings.append(f"{name} visual settings changed between capture boundaries: {report['visual_settings_changed']!r}.")

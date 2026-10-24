@@ -589,7 +589,6 @@ impl Game<'_> {
                     "credits" => Page::Credits,
                     "horizon" => Page::Horizon,
                     "agent" => Page::Agent,
-                    "shader-packs" => Page::ShaderPacks,
                     other => return Err(format!("unknown options page {other}").into()),
                 };
                 if self.screen == Screen::Playing && self.title.is_none() {

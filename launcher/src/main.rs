@@ -42,7 +42,7 @@ use theme::Theme;
 enum Page {
     Play,
     Versions,
-    /// Mods, resource and shader packs, and modpacks (imported ones and the browser's).
+    /// Mods, resource packs and modpacks (imported ones and the browser's).
     Mods,
     Servers,
     Notes,

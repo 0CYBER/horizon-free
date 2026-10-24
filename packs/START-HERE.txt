@@ -24,8 +24,8 @@ Use Java 25 matching your CPU architecture. No Rust compilation is required.
 PROFILES
 - m2-balanced: 12 chunks of full-detail terrain plus 128 chunks of distant LOD.
   Sodium, Lithium, FerriteCore, ImmediatelyFast, EntityCulling, Distant Horizons.
-  Recommended first test for your 16 GB M2 Pro. OpenGL, shaders not installed.
-- core-performance: 12 full-detail chunks, no distant LOD or shaders, with Sodium,
+  Recommended first test for your 16 GB M2 Pro. OpenGL.
+- core-performance: 12 full-detail chunks, no distant LOD, with Sodium,
   Lithium, FerriteCore, ImmediatelyFast and EntityCulling. After a first balanced smoke test,
   compare this against baseline to test the core mods at the same view and
   simulation distances.
@@ -100,11 +100,8 @@ PROFILES
   For a matched comparison set both instances to the same render distance.
 - far-distance: 12 full-detail plus 256 LOD chunks. Start with 8192 MiB ONLY on
   machines with enough physical RAM; this is not the recommended 16 GB Mac pack.
-- cinematic: M2 pack plus Iris and Complementary Reimagined. Shaders start OFF.
-  Video Settings > Shader Packs lets you enable them. They cost GPU time; Mac
-  driver limitations may cause visual issues. Try after the balanced pack works.
-- vulkan: experimental Vulkan preference with the game's OpenGL fallback,
-  no Iris. Test independently against OpenGL; faster is hardware-dependent.
+- vulkan: experimental Vulkan preference with the game's OpenGL fallback.
+  Test independently against OpenGL; faster is hardware-dependent.
 
 All profiles retain simulation distance 12 and normal 20 TPS. These are initial
 budgets, not promises of identical speed on every CPU/GPU. More distant LOD uses
@@ -181,9 +178,9 @@ from their publishers with pinned hashes. No decompiled Minecraft is distributed
 Source, build commands and measured validation:
 https://github.com/ludovic111/Horizon
 
-TERRAIN / SHADER COMPARISONS
-Version 0.12 records actual DH radius/quality, worker count/duty cycle, Iris state
-and field of view at capture boundaries. If visual settings changed, the viewer
+TERRAIN COMPARISONS
+Version 0.12 records actual DH radius/quality, worker count/duty cycle and field
+of view at capture boundaries. If visual settings changed, the viewer
 flags the run. Older reports without these fields cannot establish quality
 equivalence. Snapshots cannot detect a change that was restored before the end,
 and do not prove that all requested distant terrain finished rendering.

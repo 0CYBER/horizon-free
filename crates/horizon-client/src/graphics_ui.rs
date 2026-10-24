@@ -39,7 +39,6 @@ pub enum H {
     ResolutionScale,
     Antialiasing,
     BatteryMode,
-    ShaderPack,
     GraphicsApi,
 }
 
@@ -112,18 +111,13 @@ pub fn rows(level: Level) -> Vec<Row> {
         "Waits for the display's refresh: no tearing, a little latency.",
     );
     let gui = v(Opt::GuiScale, None, "Size of menus and the HUD.");
-    let shader_pack = h(
-        H::ShaderPack,
-        High,
-        "Redraws the world with a pack from the shaderpacks folder. Off is vanilla.",
-    );
     let preset = h(
         H::Preset,
         None,
         "Sets the options below together. Changing one makes it Custom.",
     );
     let mut rows = match level {
-        Level::Simple => vec![preset, render, lod, far, fov, fps, vsync, gui, shader_pack],
+        Level::Simple => vec![preset, render, lod, far, fov, fps, vsync, gui],
         Level::Advanced => vec![
             Row::Header("Rendering"),
             render,
@@ -251,7 +245,6 @@ pub fn rows(level: Level) -> Vec<Row> {
                 None,
                 "Lowers the frame rate when minimised, or idle too.",
             ),
-            shader_pack,
             Row::Header("Preferences"),
             v(Opt::ViewBobbing, None, "Sways the view while walking."),
             v(Opt::ChunkFade, None, "Fades newly loaded chunks in."),
@@ -381,10 +374,6 @@ impl H {
             H::Antialiasing => labelled("Anti-aliasing", if g.fxaa { "FXAA" } else { "Off" }),
             H::BatteryMode => labelled("Battery Mode", on_off(g.battery)),
             H::GraphicsApi => labelled("Graphics API", g.api.label()),
-            H::ShaderPack => match g.shader_pack.as_str() {
-                "" => labelled("Shader Pack", "Off"),
-                id => labelled("Shader Pack", id),
-            },
             H::Overlay => labelled(
                 "Performance Overlay",
                 match g.overlay {
@@ -527,7 +516,6 @@ impl Item {
                     | H::PresentMode
                     | H::Workers
                     | H::BatteryMode
-                    | H::ShaderPack
                     | H::GraphicsApi
             ) | Item::Vanilla(
                 Opt::GuiScale
@@ -557,8 +545,6 @@ pub enum Action {
     Changed,
     OpenAdvanced,
     OpenSimple,
-    /// The Shader Pack row: the Shader Packs page (where packs are picked).
-    OpenShaderPacks,
     Done,
 }
 
@@ -784,9 +770,6 @@ impl GraphicsUi {
             }
             return match wd.target {
                 Target::Button(action) => vec![Action::ButtonClick, action],
-                Target::Item(Item::Horizon(H::ShaderPack)) => {
-                    vec![Action::ButtonClick, Action::OpenShaderPacks]
-                }
                 Target::Item(item) => {
                     if item.slider(s).is_some() {
                         self.dragging = Some(item);
@@ -992,44 +975,6 @@ mod tests {
             Item::Vanilla(Opt::RenderDistance).label(&s).plain(),
             format!("Full Detail Distance: {near} chunks")
         );
-    }
-
-    #[test]
-    fn the_shader_pack_row_is_off_by_default_and_outside_presets() {
-        let mut s = Settings::default();
-        let row = Item::Horizon(H::ShaderPack);
-        assert_eq!(row.label(&s).plain(), "Shader Pack: Off");
-        assert!(
-            rows(Level::Advanced)
-                .iter()
-                .any(|r| matches!(r, Row::Setting(x) if x.item == row))
-        );
-        s.horizon.shader_pack = "horizon-sample".into();
-        assert_eq!(row.label(&s).plain(), "Shader Pack: horizon-sample");
-        // The row opens the Shader Packs page, where packs are picked.
-        let mut ui = GraphicsUi::default();
-        let find = |ui: &mut GraphicsUi| {
-            let (widgets, ..) = ui.layout(Level::Advanced, 854.0, 480.0);
-            widgets
-                .into_iter()
-                .find(|w| matches!(w.target, Target::Item(i) if i == row))
-                .unwrap()
-        };
-        ui.scroll = find(&mut ui).y - GraphicsUi::bounds(480.0).0 - 4.0;
-        let w = find(&mut ui);
-        assert_eq!(
-            ui.click(
-                Level::Advanced,
-                &mut s,
-                (w.x + 1.0, w.y + 1.0),
-                (854.0, 480.0),
-                [854, 480],
-                false,
-                false
-            ),
-            [Action::ButtonClick, Action::OpenShaderPacks]
-        );
-        assert_eq!(s.horizon.shader_pack, "horizon-sample");
     }
 
     #[test]

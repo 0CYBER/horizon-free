@@ -22,7 +22,6 @@ pub struct CurseForge {
 fn class(kind: Kind) -> u64 {
     match kind {
         Kind::ResourcePack => 12,
-        Kind::ShaderPack => 6552,
         Kind::Modpack => 4471,
         Kind::Mod => 6,
     }
@@ -87,7 +86,7 @@ pub(super) fn search_url(query: &Query) -> String {
     url
 }
 
-/// CurseForge mixes Minecraft versions and loader names (`Iris`, `OptiFine`, `NeoForge`) in one
+/// CurseForge mixes Minecraft versions and loader names (`Fabric`, `NeoForge`) in one
 /// list: digits first is a version, the rest are loaders, in lowercase as Modrinth names them.
 fn split_versions(list: &Value) -> (Vec<String>, Vec<String>) {
     let mut versions = Vec::new();
@@ -122,19 +121,7 @@ pub(super) fn parse_mod(m: &Value) -> Option<Project> {
             .map(|v| Value::String(v.to_owned()))
             .collect(),
     );
-    let (game_versions, mut loaders) = split_versions(&latest);
-    // A shader pack's files name its loader; the index often doesn't.
-    if kind == Kind::ShaderPack && loaders.is_empty() {
-        let (_, own) = split_versions(&Value::Array(
-            m["latestFiles"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .flat_map(|f| f["gameVersions"].as_array().cloned().unwrap_or_default())
-                .collect(),
-        ));
-        loaders = own;
-    }
+    let (game_versions, loaders) = split_versions(&latest);
     Some(Project {
         source: SourceId::CurseForge,
         id: m["id"].as_u64()?.to_string(),

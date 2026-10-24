@@ -200,7 +200,7 @@ impl Game<'_> {
             }
             Action::Copy => self.friends_copy(),
             Action::Stop => self.friends_stop(),
-            // The system browser, as the Shader Packs page opens its folder.
+            // The system browser, as the folder buttons open their folders.
             Action::Help => {
                 if let Some(url) = &view.help {
                     super::packs::open_folder(std::path::Path::new(url));
