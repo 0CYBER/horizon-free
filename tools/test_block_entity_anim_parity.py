@@ -9,7 +9,7 @@ on a stand-in client level, then per scripted step applies the block event
 (triggerEvent), runs the entity's own client ticker and the renderer's
 extractRenderState, printing the fields, the level calls the tick made
 (neighbour updates, entity pushes/queries, sounds, particles) and the render
-state. `examples/block_entity_anim_fixture` replays the steps through
+state. `examples/probe/block_entity_anim_fixture` replays the steps through
 `horizon_client::block_entity_anim` and derives the render state from the
 `BlockAnim` Horizon's renderer reads. Lines must match exactly (floats as bits).
 
@@ -279,8 +279,8 @@ def main():
          *(PARITY / f'{n}.java' for n in ('ParityData', 'VanillaBlockEntityAnimOracle'))], 'compile-java')
     run(['java', '-Xmx2G', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.VanillaBlockEntityAnimOracle',
          inputs, build / 'vanilla.txt'], 'vanilla')
-    run(['cargo', 'run', '--quiet', '--profile', 'fast', '-p', 'horizon-client', '--example', 'block_entity_anim_fixture', '--',
-         resources, inputs, build / 'rust.txt'], 'rust')
+    run(['cargo', 'run', '--quiet', '--profile', 'fast', '-p', 'horizon-client', '--example', 'probe', '--',
+         'block_entity_anim_fixture', resources, inputs, build / 'rust.txt'], 'rust')
 
     def split(path):
         result, current = {}, None

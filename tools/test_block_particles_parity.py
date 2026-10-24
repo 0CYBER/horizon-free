@@ -13,7 +13,7 @@ def main():
     resources = lab.RESOURCES
     build = lab.LOCAL / "block-particles-parity"
     build.mkdir(exist_ok=True)
-    paths = [lab.ROOT / p for p in ["tools/test_block_particles_parity.py", "tools/test_breaking_model_parity.py", "tools/oracle_harness.py", "tools/lab.py", "crates/horizon-client/src/particles.rs", "crates/horizon-client/src/game.rs", "crates/horizon-client/src/blocks.rs", "crates/horizon-client/src/mesher.rs", "crates/horizon-client/examples/block_particles_fixture.rs", "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaBlockParticlesOracle.java", "crates/horizon-core/src/random.rs", "Cargo.lock", "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaGameplayFactsExporter.java"]]
+    paths = [lab.ROOT / p for p in ["tools/test_block_particles_parity.py", "tools/test_breaking_model_parity.py", "tools/oracle_harness.py", "tools/lab.py", "crates/horizon-client/src/particles.rs", "crates/horizon-client/src/game.rs", "crates/horizon-client/src/blocks.rs", "crates/horizon-client/src/mesher.rs", "crates/horizon-client/examples/probe/block_particles_fixture.rs", "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaBlockParticlesOracle.java", "crates/horizon-core/src/random.rs", "Cargo.lock", "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaGameplayFactsExporter.java"]]
     tested = base.source_hashes(paths)
     rows = [dict(case=i, seed=(-1 if i % 2 else 1) * i * 987654321, **row) for i, row in enumerate(breaking.cases(resources))]
     rows[0]["seed"] = -(2**63)
@@ -21,8 +21,8 @@ def main():
     inputs = build / "inputs.jsonl"
     inputs.write_text("".join(json.dumps(row)+"\n" for row in rows))
     classes, dependencies, _ = harness.compile_oracle(build, "VanillaBlockParticlesOracle", jars, baking.client_libraries(), lock["minecraft"]["java_major"])
-    binary = harness.build_probe(build, "block_particles_fixture")
-    harness.run_logged([binary, resources, inputs, build / "rust.jsonl"], build, "rust")
+    command = harness.build_probe(build, "block_particles_fixture")
+    harness.run_logged([*command, resources, inputs, build / "rust.jsonl"], build, "rust")
     harness.java_run(build, classes, dependencies, "VanillaBlockParticlesOracle", [inputs, build / "client.jsonl"], "client")
     count = hits = burst = 0
     max_error = 0.0

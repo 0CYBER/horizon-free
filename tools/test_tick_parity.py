@@ -145,7 +145,7 @@ def main():
     inputs.write_text("\n".join(commands) + "\n", encoding="utf-8")
     oracle = lab.ROOT / "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaTickOracle.java"
     data_oracle = oracle.with_name("VanillaTickDataOracle.java")
-    sources = [oracle, data_oracle, Path(__file__).resolve(), lab.ROOT / "tools/test_rust_parity.py", lab.ROOT / "Cargo.toml", lab.ROOT / "Cargo.lock", lab.ROOT / "crates/horizon-core/Cargo.toml", lab.ROOT / "crates/horizon-world/Cargo.toml", *sorted((lab.ROOT / "crates/horizon-core/src").rglob("*.rs")), *sorted((lab.ROOT / "crates/horizon-world/src").rglob("*.rs")), lab.ROOT / "crates/horizon-world/examples/tick_fixture.rs"]
+    sources = [oracle, data_oracle, Path(__file__).resolve(), lab.ROOT / "tools/test_rust_parity.py", lab.ROOT / "Cargo.toml", lab.ROOT / "Cargo.lock", lab.ROOT / "crates/horizon-core/Cargo.toml", lab.ROOT / "crates/horizon-world/Cargo.toml", *sorted((lab.ROOT / "crates/horizon-core/src").rglob("*.rs")), *sorted((lab.ROOT / "crates/horizon-world/src").rglob("*.rs")), lab.ROOT / "crates/horizon-world/examples/probe/tick_fixture.rs"]
     tested_sources = test_rust_parity.source_hashes(sources)
     classes = base / "classes"
     classes.mkdir()
@@ -163,9 +163,9 @@ def main():
         completed.check_returncode()
         return completed.stdout
     data_java("server", "generate")
-    test_rust_parity.run(["cargo", "build", "--release", "-p", "horizon-world", "--example", "tick_fixture"])
-    fixture = Path(metadata["target_directory"]) / "release/examples" / ("tick_fixture.exe" if os.name == "nt" else "tick_fixture")
-    test_rust_parity.run([str(fixture), str(base)])
+    test_rust_parity.run(["cargo", "build", "--release", "-p", "horizon-world", "--example", "probe"])
+    fixture = Path(metadata["target_directory"]) / "release/examples" / ("probe.exe" if os.name=="nt" else "probe")
+    test_rust_parity.run([str(fixture), "tick_fixture", str(base)])
     references = []
     for side, jar in jars.items():
         reference = base / f"vanilla-{side}.txt"
