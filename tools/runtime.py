@@ -26,7 +26,6 @@ def fetch(url, path, checksum, algorithm="sha1"):
             time.sleep(attempt + 1)
 
 
-
 def fabric_libraries():
     profile = json.loads((ROOT / "tools/benchmark-deps/fabric.lock.json").read_text())
     jars = []
