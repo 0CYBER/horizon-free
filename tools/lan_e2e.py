@@ -199,6 +199,10 @@ address. The script then checks, from both sides, what a guest's game used to ge
              (ServerboundEditBookPacket), read the written book the server gave them
              (ClientboundOpenBookPacket), then drop it: the other side sees its title, author and
              page (#1366).
+- elytra:    the host and the guest, high up with an Elytra on, jump in the air and glide
+             (ServerboundPlayerCommandPacket START_FALL_FLYING): both their client and the server
+             have them gliding, they go forward far more than down, and the glide ends on both once
+             they land (#1288).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -4666,6 +4670,57 @@ def check_books(host, guest, out):
 
 CHECKS += ['totem', 'keepinv', 'signs', 'books']
 CHECK_FNS.update(totem=check_totem, keepinv=check_keep_inventory, signs=check_signs, books=check_books)
+
+
+def check_elytra(host, guest, out):
+    """LivingEntity.updateFallFlying for each player: a jump while falling with an Elytra on starts a
+    glide that the server takes too (Player.tryToStartFallFlying), the glide carries the player
+    forward rather than down, and landing ends it on both sides (canGlide fails on the ground)."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    seen = {}
+    try:
+        for game, dx in ((host, -2), (guest, 2)):
+            x, z = hx + dx, hz
+            host('command', command=f'fill {x - 1} {hy - 1} {z - 1} {x + 1} {hy - 1} {z + 1} minecraft:stone')
+            host('command', command=f'fill {x - 1} {hy} {z - 1} {x + 1} {hy + 3} {z + 1} minecraft:air')
+            game('command', command='gamemode survival')
+            game('command', command='clear @s')
+            game('command', command='effect give @s minecraft:resistance 60 4 true')
+            game('command', command='item replace entity @s armor.chest with minecraft:elytra')
+            game('command', command=f'tp @s {x + 0.5} {hy + 60} {z + 0.5} 0 0')
+            game.wait(6)
+            start = pos_of(game)
+            game.raw('key', 'space', 'down')
+            game.wait(1)
+            game.raw('key', 'space', 'up')
+            game.wait(30)
+            end = pos_of(game)
+            glide = {'client': own(game).get('fall_flying'),
+                     'server': server_player(host, game).get('fall_flying'),
+                     'forward': round(math.hypot(end[0] - start[0], end[2] - start[2]), 1),
+                     'down': round(start[1] - end[1], 1)}
+            game.shot(out, 'elytra')
+            game('command', command=f'tp @s {x + 0.5} {hy + 1} {z + 0.5}')
+            game.wait(30)
+            landed = {'on_ground': own(game).get('on_ground'),
+                      'client': own(game).get('fall_flying'),
+                      'server': server_player(host, game).get('fall_flying')}
+            seen[game.name] = {'glide': glide, 'landed': landed}
+    finally:
+        for game in (host, guest):
+            game('command', command='clear @s')
+            game('command', command='effect clear @s')
+        face_each_other(host, guest)
+    for name, s in seen.items():
+        g, l = s['glide'], s['landed']
+        # Falling alone covers about 25 blocks in those 30 ticks and goes nowhere.
+        assert g['client'] and g['server'] and g['forward'] > 8 and g['down'] < 20, f'{name} glide: {seen}'
+        assert l['on_ground'] and not l['client'] and not l['server'], f'{name} landed: {seen}'
+    return seen
+
+
+CHECKS += ['elytra']
+CHECK_FNS.update(elytra=check_elytra)
 
 
 if __name__ == '__main__':
