@@ -159,12 +159,19 @@ into place only after `horizon_mods::index::check_file` passes (size, SHA-256, t
 has a key, the file's own manifest against the index). A mod becomes `horizon-mods/<id>.hmod`, turned on;
 `mods disable` and `mods enable` switch it in `horizon-mods.txt`. When the index takes a file down, the launcher turns
 it off the next time it reads the index or starts the game, says why, and refuses to install it or turn it back on.
-Horizon modpacks (`.hpack`) and shader packs are listed by the index but not installed by this launcher yet.
+A Horizon modpack (`.hpack`) installs as its own profile (`browser/horizon/pack.rs`): `horizon-packs/<id>/` holds the
+checked pack, `pack.json` and `home/`, the profile's game folder, where each of the pack's mods is downloaded and checked
+like any registry mod and turned on or off as the pack says; its overrides (settings, resource packs, a mod's saved
+settings) are copied in on the first install only, so the player's changes survive updates. A pack whose mod was taken
+down installs nothing. It is listed on the Modpacks tab with **Play** and **Remove**, and plays like an imported pack
+(`modpacks::apply_profile`). Shader packs are listed by the index but not installed by this launcher yet.
 
 ```sh
 horizon-launcher mods search --source horizon --kind mod coords   # with whether it is signed and what it may do
 horizon-launcher mods install --source horizon coords_hud
 horizon-launcher mods disable coords_hud
+horizon-launcher mods install --source horizon cozy               # a modpack: its own profile
+horizon-launcher modpack play cozy
 ```
 
 

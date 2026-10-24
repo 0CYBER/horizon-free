@@ -111,12 +111,13 @@ fn fetch_index() -> Result<(Index, String), String> {
 }
 
 /// The browser's kind for a registry kind; None for one the launcher doesn't install yet
-/// (Horizon modpacks and shader packs, kinds newer than this launcher).
+/// (shader packs, kinds newer than this launcher).
 fn kind_of(kind: &index::Kind) -> Option<Kind> {
     match kind {
         index::Kind::Mod => Some(Kind::Mod),
         index::Kind::ResourcePack => Some(Kind::ResourcePack),
-        index::Kind::Modpack | index::Kind::Shader | index::Kind::Other(_) => None,
+        index::Kind::Modpack => Some(Kind::Modpack),
+        index::Kind::Shader | index::Kind::Other(_) => None,
     }
 }
 
@@ -259,6 +260,23 @@ impl Source for Registry {
                 body.push_str(&format!("- May {}\n", c.describe()));
             }
         }
+        if let Some(v) = newest.filter(|v| !v.requires.is_empty()) {
+            body.push_str(
+                "\n\n## Its mods\n\nInstalled with it into its own profile, each checked:\n\n",
+            );
+            for r in &v.requires {
+                let found = index
+                    .project(&r.id)
+                    .and_then(|m| Some((m, m.versions.iter().find(|w| w.version == r.version)?)));
+                let Some((m, w)) = found else { continue };
+                let may: Vec<&str> = w.capabilities.iter().map(|c| c.describe()).collect();
+                let may = match may.is_empty() {
+                    true => String::new(),
+                    false => format!(": may {}", may.join(", ")),
+                };
+                body.push_str(&format!("- {} {}{may}\n", m.name, w.version));
+            }
+        }
         Ok(Details {
             body,
             links: vec![
@@ -325,9 +343,7 @@ fn relative(kind: Kind, id: &str, file_name: &str) -> Result<String, String> {
     match kind {
         Kind::Mod => Ok(format!("{}/{id}.hmod", java::MODS_DIR)),
         Kind::ResourcePack => Ok(format!("resourcepacks/{file_name}")),
-        Kind::Modpack => {
-            Err("Modpacks from Horizon's registry install from the Modpacks page.".into())
-        }
+        Kind::Modpack => Err("A modpack installs as its own profile (pack::install).".into()),
     }
 }
 
@@ -352,17 +368,37 @@ fn install_from(
     let p = index
         .project(&project.id)
         .ok_or_else(|| format!("{} isn't in Horizon's registry.", project.title))?;
-    let v = p
-        .versions
+    let v = newest(index, p)?;
+    install_version(index, local, p, v, home, progress).map(|e| vec![e])
+}
+
+/// A project's newest version for this game that wasn't taken down.
+fn newest<'a>(index: &Index, p: &'a index::Project) -> Result<&'a index::Version, String> {
+    p.versions
         .iter()
         .find(|v| v.game == GAME && index.revoked(&p.id, &v.file.sha256).is_none())
-        .ok_or_else(|| format!("{} has no version for {GAME} to install.", project.title))?;
+        .ok_or_else(|| format!("{} has no version for {GAME} to install.", p.name))
+}
+
+/// Installs version `v` of the registry's mod or resource pack `p` into the game folder `home`.
+fn install_version(
+    index: &Index,
+    local: bool,
+    p: &index::Project,
+    v: &index::Version,
+    home: &Path,
+    progress: &dyn Fn(&str, f32),
+) -> Result<installed::Entry, String> {
+    let project = project_of(p).ok_or_else(|| format!("{} can't be installed here.", p.name))?;
+    if let Some(r) = index.revoked(&p.id, &v.file.sha256) {
+        return Err(format!("{} was taken down: {}", p.name, r.reason));
+    }
     let relative = relative(project.kind, &p.id, &v.file.name)?;
     let mut list = installed::Installed::load(home);
     let ours = |e: &installed::Entry| e.source == SourceId::Horizon && e.project == p.id;
     let old = list.entries.iter().find(|e| ours(e)).cloned();
     if old.as_ref().is_some_and(|o| o.version == v.version) {
-        return Ok(vec![old.expect("checked")]);
+        return Ok(old.expect("checked"));
     }
     let target = home.join(&relative);
     let taken_by = list.entries.iter().find(|e| !ours(e) && e.file == relative);
@@ -416,7 +452,7 @@ fn install_from(
     list.entries.retain(|e| !ours(e));
     list.entries.push(entry.clone());
     list.save(home)?;
-    Ok(vec![entry])
+    Ok(entry)
 }
 
 /// The mod id of an installed mod (`horizon-mods/<id>` or `horizon-mods/<id>.hmod`).
@@ -465,8 +501,12 @@ pub fn before_play(home: &Path) {
     if !from_registry {
         return;
     }
-    let kept = fs::read_to_string(home.join(CACHE)).ok();
-    if let Some(index) = kept.and_then(|t| Index::parse(&t).ok()) {
+    let kept = fs::read_to_string(crate::backend::game_home().join(CACHE)).ok();
+    let parse = |t: String| match local() {
+        true => Index::parse_local(&t).ok(),
+        false => Index::parse(&t).ok(),
+    };
+    if let Some(index) = kept.and_then(parse) {
         for line in turn_off_revoked(&index, home) {
             eprintln!("{line}");
         }
@@ -479,5 +519,6 @@ pub fn before_play(home: &Path) {
     });
 }
 
+pub mod pack;
 #[cfg(test)]
 mod tests;

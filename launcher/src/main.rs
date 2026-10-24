@@ -202,6 +202,8 @@ struct Launcher {
     /// The Modpacks page: the imported packs (read when the page first opens), the one shown,
     /// the report's filter, and the pipeline step running now with its log.
     packs: Vec<horizon_launcher::modpacks::Imported>,
+    /// Modpacks installed from Horizon's registry, each its own profile.
+    registry_packs: Vec<horizon_launcher::browser::horizon::pack::Installed>,
     packs_loaded: Option<Instant>,
     pack_open: Option<String>,
     pack_filter: Option<horizon_port_pack::report::Status>,
@@ -326,6 +328,7 @@ impl Launcher {
             play_pressed: None,
             bench: perf::Bench::from_env(),
             packs: Vec::new(),
+            registry_packs: Vec::new(),
             packs_loaded: None,
             pack_open: None,
             pack_filter: None,
