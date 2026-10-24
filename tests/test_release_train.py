@@ -120,15 +120,20 @@ class ReleaseTrainTests(unittest.TestCase):
     def test_decision(self):
         minute = dt.timedelta(minutes=1)
         decide = lambda prs, **kw: train.decision("game", prs, NOW, **kw)[0]
-        self.assertTrue(decide([pr(1, merged=6 * minute)]), "settled for the debounce")
-        self.assertFalse(decide([pr(1, merged=2 * minute)]), "merged moments ago")
-        self.assertFalse(decide([pr(1, merged=15 * minute), pr(2, merged=2 * minute)]), "a burst still merging")
-        self.assertTrue(decide([pr(1, merged=21 * minute), pr(2, merged=minute)]), "merges that never pause still ship")
+        hour = 60 * minute
+        five = lambda newest: [pr(n, merged=newest + n * minute) for n in range(5)]
+        self.assertTrue(decide(five(6 * minute)), "a batch, settled for the debounce")
+        self.assertFalse(decide(five(2 * minute)), "a batch still merging")
+        self.assertFalse(decide(five(6 * minute)[:4]), "not yet a batch")
+        self.assertFalse(decide([pr(1, merged=5 * hour)]), "a lone fix waits for others")
+        self.assertTrue(decide([pr(1, merged=6 * hour)]), "until the oldest has waited 6 hours")
+        self.assertTrue(decide([pr(1, merged=7 * hour), pr(2, merged=minute)]), "merges that never pause still ship")
+        self.assertFalse(decide([pr(n, merged=6 * minute) for n in range(4)] + [pr(9, labels=["skip-release"])]),
+                         "work players don't see doesn't fill a batch")
         self.assertTrue(decide([pr(1, labels=["release-now"], merged=minute)]))
         self.assertFalse(decide([pr(1, paths=[])]), "nothing players run")
         self.assertFalse(decide([pr(1, labels=["skip-release"])]))
         self.assertFalse(decide([pr(1, labels=["release-now", "skip-release"])]))
-        self.assertFalse(decide([pr(1, merged=3 * minute), pr(2, labels=["skip-release"], merged=minute)]), "the settled one waits for nothing")
         self.assertFalse(decide([pr(1)], paused=True))
         self.assertTrue(decide([], paused=True, force=True))
 
