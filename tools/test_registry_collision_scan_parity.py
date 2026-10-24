@@ -96,9 +96,9 @@ def main():
     fixture_paths = [build/name for name in ['inputs.txt', 'facts.json', 'definitions.json',
                                             'block-registry.nbt', 'cached-collision.nbt', 'tags.json']]
     fixtures = base.source_hashes(fixture_paths)
-    run(['cargo', 'build', '--locked', '--release', '-p', 'horizon-world', '--example', 'probe'], 'compile-rust')
+    run(['cargo', 'build', '--locked', '--release', '-p', 'horizon-world', '--example', 'world_probe'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1'], cwd=lab.ROOT))
-    binary = Path(metadata['target_directory'])/'release/examples'/('probe.exe' if os.name=='nt' else 'probe')
+    binary = Path(metadata['target_directory'])/'release/examples'/('world_probe.exe' if os.name=='nt' else 'world_probe')
     run([binary, 'registry_collision_scan_fixture', build], 'rust');references = []
     for side, jar in jars.items():
         java(side, side)

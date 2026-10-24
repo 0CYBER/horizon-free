@@ -105,7 +105,7 @@ def main():
     subprocess.run(['java', '-Xmx2G', '-cp', str(classes) + os.pathsep + dependencies,
                     'dev.horizonlab.parity.VanillaBlockPlacementOracle', str(resources), str(work / 'cases.jsonl'),
                     str(work / 'native.txt')], check=True)
-    subprocess.run(['cargo', 'run', '-q', '-j2', '--release', '-p', 'horizon-world', '--example', 'probe', '--',
+    subprocess.run(['cargo', 'run', '-q', '-j2', '--release', '-p', 'horizon-world', '--example', 'world_probe', '--',
                     'level_place_fixture', str(resources), str(work / 'cases.jsonl'), str(work / 'rust.txt')], check=True, cwd=lab.ROOT)
     native = (work / 'native.txt').read_text().splitlines()
     rust = (work / 'rust.txt').read_text().splitlines()

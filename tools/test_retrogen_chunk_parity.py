@@ -74,9 +74,9 @@ def main():
     (build/"tags.json").write_text(json.dumps(tags,separators=(",",":")),encoding="utf-8")
     fixture_paths=[inputs,build/"tags.json",build/"facts-client.json",build/"facts-server.json"]
     tested_fixtures=base.source_hashes(fixture_paths)
-    run(["cargo","build","--release","-p","horizon-world","--example","probe"],"compile-rust")
+    run(["cargo","build","--release","-p","horizon-world","--example","world_probe"],"compile-rust")
     metadata=json.loads(subprocess.check_output(["cargo","metadata","--no-deps","--format-version","1"],cwd=lab.ROOT,text=True))
-    binary=Path(metadata["target_directory"])/"release/examples"/("probe.exe" if os.name=="nt" else "probe")
+    binary=Path(metadata["target_directory"])/"release/examples"/("world_probe.exe" if os.name=="nt" else "world_probe")
     run([binary,"chunk_stage_fixture",build],"rust")
     references=[]
     for side,jar in jars.items():

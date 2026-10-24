@@ -50,7 +50,8 @@ class ParityRunnerTests(unittest.TestCase):
         ])
 
     def test_a_probe_binary_depends_only_on_the_probes_it_ran(self):
-        commands = [["/t/release/examples/probe", "a_fixture", "/dir"], ["cargo", "run", "--example", "probe", "--", "b_fixture"]]
+        commands = [["/t/release/examples/world_probe", "a_fixture", "/dir"],
+                    ["cargo", "run", "-p", "horizon-client", "--example", "client_probe", "--", "b_fixture"]]
         self.assertEqual(parity.probes_run(commands), {"a_fixture", "b_fixture"})
         with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity, "ROOT", Path(temp)):
             probe = Path(temp, "crates/w/examples/probe")
@@ -66,6 +67,40 @@ class ParityRunnerTests(unittest.TestCase):
             self.assertEqual(parity.only_probes_run(["crates/w/src/lib.rs", *paths], {"a_fixture", "b_fixture"}),
                              ["crates/w/src/lib.rs", *paths[:2], *paths[3:6], paths[8]])
             self.assertEqual(parity.only_probes_run(paths, set()), paths)
+
+    def test_probe_names_are_each_crates_own_target(self):
+        self.assertEqual(parity.probes_run([
+            ["C:/t/debug/examples/client_probe.exe", "a_fixture"],
+            ["cargo", "run", "--release", "--example=world_probe", "--", "b_fixture", "x"],
+            ["/t/release/examples/probe", "old_fixture"],  # the shared name before 2026-10-24
+            ["cargo", "run", "--example", "probe", "--", "old_fixture"],
+            ["/t/release/examples/mod_port_probe", "not_a_fixture"],
+            ["cargo", "run", "--example", "mod_port_probe", "--", "not_a_fixture"],
+            ["cargo", "build", "--example", "world_probe"],
+        ]), {"a_fixture", "b_fixture"})
+
+    def test_records_of_the_shared_probe_name_build_their_crates_probe(self):
+        record = {"dependencies": ["crates/horizon-world/examples/probe/a_fixture.rs", "crates/horizon-world/src/lib.rs"],
+                  "artifacts": [["example", "probe", "release", ["-p", "horizon-client"], True],
+                                ["example", "probe", "release"],  # no selection: the crate of its probe sources
+                                ["example", "probe", "release", ["-p", "horizon-core", "-p", "horizon-world"], True],
+                                ["bin", "horizon-world", "release", ["-p", "horizon-world"], False]]}
+        artifacts = parity.recorded_artifacts(record)
+        self.assertEqual(artifacts, [["example", "client_probe", "release", ["-p", "horizon-client"], True],
+                                     ["example", "world_probe", "release"],
+                                     ["example", "world_probe", "release", ["-p", "horizon-core", "-p", "horizon-world"], True],
+                                     ["bin", "horizon-world", "release", ["-p", "horizon-world"], False]])
+        packages = {("example", "client_probe"): "horizon-client", ("example", "world_probe"): "horizon-world",
+                    ("bin", "horizon-world"): "horizon-world"}
+        self.assertEqual(parity.prebuild_commands(artifacts, packages), [
+            ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-client", "--example", "client_probe"],
+            ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-core", "-p", "horizon-world",
+             "--example", "world_probe"],
+            ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-world", "--bin", "horizon-world"],
+            ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-world", "--example", "world_probe"],
+        ])
+        self.assertEqual(parity.recorded_artifacts({"artifacts": [["example", "probe", "release"]]}),
+                         [["example", "probe", "release"]])  # no crate to tell: left to its harness
 
     def test_java_sources_include_classes_pulled_from_the_sourcepath(self):
         with tempfile.TemporaryDirectory() as temp:

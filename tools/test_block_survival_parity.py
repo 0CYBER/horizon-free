@@ -236,9 +236,9 @@ def main():
                 output.write(json.dumps(fixture,separators=(',',':'))+'\n');fixture_count+=1
         fixture_paths=[inputs,build/'survival-extra-definitions.json',build/'fluid-tags.json',build/'survival-placement-classes.json',build/'survival-support-tags.json',build/'facts.json',build/'survival-classes.json',build/'survival-rules.json',build/'tags.json',build/'block-registry.nbt',build/'cached-collision.nbt',build/'block-properties.nbt',build/'cached-support.nbt']
         tested_fixtures=base.source_hashes(fixture_paths)
-        run(['cargo','build','--release','-p','horizon-world','--example','probe'],'compile-rust')
+        run(['cargo','build','--release','-p','horizon-world','--example','world_probe'],'compile-rust')
         metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],cwd=lab.ROOT,text=True))
-        binary=Path(metadata['target_directory'])/'release/examples'/('probe.exe' if os.name=='nt' else 'probe')
+        binary=Path(metadata['target_directory'])/'release/examples'/('world_probe.exe' if os.name=='nt' else 'world_probe')
         base.ensure_sources_unchanged(sources,tested_sources)
         checkpoint={'schema':1,'environment':environment,'sources_sha256':tested_sources,'fixtures_sha256':{str(lab.ROOT/name):digest for name,digest in tested_fixtures.items()},'artifacts_sha256':{str(path):lab.digest(path,'sha256') for path in [binary,*sorted(classes.rglob('*.class'))]},'binary':str(binary),'counts':{'supported_blocks':len(definitions),'supported_states':sum(state['id'] in definitions for state in facts['states']),'survival_rules':len(set(definitions.values())),'survival_rule_kinds':len({rule.split(':',1)[0] for rule in definitions.values()}),'fluid_tag_files':len(fluid_tags),'fixtures':fixture_count},'outputs':{}}
         save_checkpoint(checkpoint_path,checkpoint)

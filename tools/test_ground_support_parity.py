@@ -78,10 +78,10 @@ def main():
             for f in corpus():output.write(json.dumps(f,separators=(',',':'))+'\n');count+=1
         counts[name]=count;fixture_paths.append(path)
     fixtures=base.source_hashes(fixture_paths)
-    run(['cargo','build','--locked','--release','-p','horizon-world','--example','probe'],'compile-rust')
+    run(['cargo','build','--locked','--release','-p','horizon-world','--example','world_probe'],'compile-rust')
     metadata=json.loads(subprocess.check_output(['cargo','metadata','--locked','--no-deps','--format-version','1'],cwd=lab.ROOT))
     for group,name in zip(['selection','state'],names):
-        binary=Path(metadata['target_directory'])/'release/examples'/('probe.exe' if os.name=='nt' else 'probe');run([binary,name,build/group],'rust-'+group)
+        binary=Path(metadata['target_directory'])/'release/examples'/('world_probe.exe' if os.name=='nt' else 'world_probe');run([binary,name,build/group],'rust-'+group)
     references=[]
     for side,jar in jars.items():
         results=[]
