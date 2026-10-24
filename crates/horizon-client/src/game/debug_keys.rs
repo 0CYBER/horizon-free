@@ -20,6 +20,15 @@ use winit::keyboard::KeyCode;
 const YELLOW: u32 = 0xFF_FF55;
 const RED: u32 = 0xFF_5555;
 
+/// Title text fields receive presses before debug shortcuts, but releases must
+/// still clear a debug modifier held before the field gained focus.
+fn title_takes_text_key(
+    title: Option<&mut horizon_client::title::Title>,
+    action: KeyAction,
+) -> bool {
+    action != KeyAction::Release && title.is_some_and(|title| title.focused_field().is_some())
+}
+
 /// The game as `KeyboardHandler` sees it while it runs one key event.
 struct Host<'g, 'a> {
     game: &'g mut Game<'a>,
@@ -84,10 +93,12 @@ impl Game<'_> {
         }
         // Screens with a text box take every key press first
         // (EditBox.keyPressed); releases still reach KeyboardHandler.
-        let typing = matches!(
-            self.screen,
-            Screen::Chat | Screen::Options | Screen::WorldOptions | Screen::CommandBlock
-        ) || self.sign_edit.is_some()
+        let typing = title_takes_text_key(self.title.as_mut(), action)
+            || matches!(
+                self.screen,
+                Screen::Chat | Screen::Options | Screen::WorldOptions | Screen::CommandBlock
+            )
+            || self.sign_edit.is_some()
             || self.book.is_some()
             || (self.screen == Screen::Creative && self.creative_screen.tab().search)
             || self.recipe_search_focused()
@@ -811,5 +822,50 @@ impl Game<'_> {
             );
         }
         g
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_client::{
+        multiplayer::Screen as ServerScreen,
+        title::{Mode, Title},
+    };
+
+    #[test]
+    fn server_fields_take_debug_bound_text_keys_but_not_releases() {
+        let root = std::env::temp_dir().join(format!("horizon-debug-title-{}", std::process::id()));
+        let mut title = Title::new(root.join("saves"), &root);
+        for screen in [
+            ServerScreen::Direct {
+                address: String::new(),
+            },
+            ServerScreen::Edit {
+                index: None,
+                name: String::new(),
+                address: String::new(),
+                focus: 0,
+            },
+            ServerScreen::Edit {
+                index: Some(0),
+                name: String::new(),
+                address: String::new(),
+                focus: 1,
+            },
+            ServerScreen::friend(),
+        ] {
+            title.mode = Mode::Multiplayer(screen);
+            for action in [KeyAction::Press, KeyAction::Repeat] {
+                assert!(title_takes_text_key(Some(&mut title), action));
+            }
+            assert!(!title_takes_text_key(Some(&mut title), KeyAction::Release));
+            // A period bound to the debug modifier must reach the field.
+            title.type_text("mc.example.org");
+            assert_eq!(title.focused_field().unwrap().1, "mc.example.org");
+        }
+        title.mode = Mode::Main;
+        assert!(!title_takes_text_key(Some(&mut title), KeyAction::Press));
+        assert!(!title_takes_text_key(None, KeyAction::Press));
     }
 }
