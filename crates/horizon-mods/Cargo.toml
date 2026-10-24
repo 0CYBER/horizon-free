@@ -19,13 +19,16 @@ wit-component = { version = "0.239", optional = true }
 wit-parser = { version = "0.239", optional = true }
 
 [features]
-default = ["runtime"]
-# Loads and runs mods; without it only manifests and packaging (cargo horizon-mod).
+# Loads and runs mods (the game's `mods` feature); without it only manifests,
+# content and packaging. Off by default so builds that don't run mods (the
+# game's tests and probes) skip wasmtime and cranelift.
 runtime = ["dep:wasmtime"]
 pack = ["dep:wit-component", "dep:wit-parser"]
 
-[dev-dependencies]
-horizon-mods = { path = ".", features = ["pack"] }
+# Runs real mods: `cargo test -p horizon-mods --features runtime,pack`.
+[[test]]
+name = "sandbox"
+required-features = ["runtime", "pack"]
 
 [lints]
 workspace = true

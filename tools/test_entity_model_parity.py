@@ -4,7 +4,7 @@
 The Java oracle bakes each vanilla model layer, builds the model's own render
 state class with the generated walk/age/head/attack inputs (plus per-species
 state fields), runs the real `setupAnim` and writes every part's pose.
-`examples/entity_anim_fixture` replays the same inputs through Horizon's
+`examples/probe/entity_anim_fixture` replays the same inputs through Horizon's
 `mobs::anim::setup` and the loaded model tree; the two must agree on every part
 pose and on the baked polygon count and vertex sums.
 
@@ -364,8 +364,8 @@ def main():
     run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-cp', dependencies, '-d', classes, oracle], 'compile-java')
     run(['java', '-Xmx1G', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.VanillaEntityAnimOracle',
          inputs, build / 'vanilla.jsonl', jars['client']], 'vanilla')
-    run(['cargo', 'run', '--quiet', '--profile', 'fast', '-p', 'horizon-client', '--example', 'entity_anim_fixture', '--',
-         resources, build / 'vanilla.jsonl', build / 'rust.jsonl'], 'rust')
+    run(['cargo', 'run', '--quiet', '--profile', 'fast', '-p', 'horizon-client', '--example', 'probe', '--',
+         'entity_anim_fixture', resources, build / 'vanilla.jsonl', build / 'rust.jsonl'], 'rust')
     vanilla = [json.loads(l) for l in (build / 'vanilla.jsonl').read_text().splitlines()]
     rust = [json.loads(l) for l in (build / 'rust.jsonl').read_text().splitlines()]
     assert len(vanilla) == len(rust), (len(vanilla), len(rust))

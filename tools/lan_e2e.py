@@ -68,6 +68,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - feedback:  the guest's command feedback names the guest and shows the numbers;
 - chat:      a line the host sends reaches the guest's event log (`wait-for chat`), and on the
              server thread the host window's too;
+- styles:    a styled tellraw reaches the host and the guest (each its own) with its colour, bold, click and hover
+             events; each player's /give tells them of the Diamonds! advancement before the give's
+             own message, and never echoes their command back to them as `[Name: ...]`;
 - effects:   a beacon's power reaches every player in range, the host and the guest;
 - distance:  (--server-thread) the server follows the host's render distance, past vanilla's 32 too
              (IntegratedServer.tickServer), and the guest's chunks follow the server's (#804)
@@ -142,6 +145,11 @@ address. The script then checks, from both sides, what a guest's game used to ge
              it (#1222).
 - frames:    the host and the guest each put a diamond in an item frame and turn it, and put a
              helmet on an armor stand and take it back (#1222).
+- hands:     the host and the guest each, at a cow that cares for none of it: draw a bow and shoot, and
+             let go of a golden apple at once without eating it (the click goes on to the item);
+             milk the cow with a bucket in the off hand and feed it wheat from the off hand; and
+             punch the diamond out of an item frame, which then shows empty on both sides (#1350,
+             #1355, #1362).
 - mounts:    the host and the guest each open a tamed horse's, donkey's and llama's inventory
              (shift + right click, then the inventory key while riding), put on a saddle, armour
              or a carpet and fill the chest by shift-clicking.
@@ -247,7 +255,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
 
 
 class Game:
@@ -1488,8 +1496,8 @@ def check_loom(host, guest, out):
 
 def own_reply(event):
     """A chat event that answers the guest's own command. On the server thread the guest also gets
-    its own command's `[Guest: ...]` operator broadcast, a moment later, which an answer to the next
-    command must not be taken for."""
+    its own command's `[Guest: ...]` operator broadcast before #1373, a moment later, which an answer
+    to the next command must not be taken for."""
     return event.get('event') == 'chat' and not event.get('text', '').startswith(f'[{GUEST_NAME}: ')
 
 
@@ -2052,6 +2060,69 @@ def check_chat(host, guest, out):
             for g in ((guest, host) if SERVER_THREAD else (guest,))}
     guest.shot(out, 'chat')
     return seen
+
+
+def styled_parts(component):
+    """Every component in a chat line's tree (the line, its `extra` and `with` parts)."""
+    if isinstance(component, dict):
+        yield component
+        for key in ('extra', 'with'):
+            for part in component.get(key) or []:
+                yield from styled_parts(part)
+    elif isinstance(component, list):
+        for part in component:
+            yield from styled_parts(part)
+
+
+def check_styles(host, guest, out):
+    # ChatComponent keeps what the server sent: the style, the click and the hover event.
+    stamp = f'STYLE {int(time.time())}'
+    line = {'text': stamp, 'color': 'green', 'bold': True,
+            'click_event': {'action': 'suggest_command', 'command': '/say clicked'},
+            'hover_event': {'action': 'show_text', 'value': 'Tip'}}
+    seen = {}
+    for g in (host, guest):
+        # Each to itself: tellraw reaches only the player whose command it is here.
+        since = g.raw('events')['last']
+        g('command', command='tellraw @s ' + json.dumps(line))
+        g.raw('wait-for', 'chat', stamp, '--timeout', 10, '--since', since)
+        part = next((p for c in g.raw('messages', 10)['styled'] for p in styled_parts(c)
+                     if stamp in str(p.get('text', ''))), None) or {}
+        seen[g.name] = {k: part.get(k) for k in ('color', 'bold', 'click_event', 'hover_event')}
+        hover = seen[g.name]['hover_event'] or {}
+        seen[g.name]['hover_event'] = [hover.get('action'), 'Tip' in str(hover.get('value'))]
+    # InventoryChangeTrigger fires inside /give, before its message; the operator echo
+    # (broadcastToAdmins) skips the player whose command it was.
+    order = {}
+    for g in (host, guest):
+        for command in ('advancement revoke @s everything', 'clear @s'):
+            g('command', command=command)
+        g.wait(5)
+        since = g.raw('events')['last']
+        g('command', command='give @s minecraft:diamond')
+        g.raw('wait-for', 'chat', 'Diamonds!', '--timeout', 10, '--since', since)
+        g.wait(20)
+        chat = g.raw('messages', 8)['chat']
+        name = GUEST_NAME if g is guest else host.player
+        gave = next((i for i, l in enumerate(chat) if l.startswith('Gave 1 [Diamond]')), None)
+        made = next((i for i, l in enumerate(chat) if '[Diamonds!]' in l), None)
+        echo = [l for l in chat if l.startswith(f'[{name}: ')]
+        # Newest first: the give's message is newer than the advancement's.
+        order[g.name] = {'gave': gave, 'advancement': made, 'echo': echo}
+    guest.raw('key', 't', 'tap')
+    guest.wait(5)
+    guest.shot(out, 'styles')
+    guest.raw('key', 'esc', 'tap')
+    want = {'color': 'green', 'bold': True,
+            'click_event': {'action': 'suggest_command', 'command': '/say clicked'},
+            'hover_event': ['show_text', True]}
+    for name, got in seen.items():
+        assert got == want, f'{name} styled line: {got}'
+    for name, o in order.items():
+        assert o['gave'] is not None and o['advancement'] is not None, f'{name} chat: {o}'
+        assert o['gave'] < o['advancement'], f'{name}: the give came before the advancement: {o}'
+        assert not o['echo'], f'{name} heard its own command: {o}'
+    return {'styles': seen, 'order': order}
 
 
 def png_rows(path):
@@ -3707,6 +3778,88 @@ def check_frames(host, guest, out):
     return result
 
 
+def check_hands(host, guest, out):
+    """#1350, #1355, #1362: right clicks a cow passes go on to the item, the off hand gets its
+    turn on the cow, and a frame punched empty is empty for everyone."""
+    result = {}
+    spots = apart(host, guest)
+    for label, player, other in (('host', host, guest), ('guest', guest, host)):
+        x, y, z = spots[label]
+        player('command', command='gamemode survival')
+        player('command', command='clear @s')
+        player('command', command='effect clear @s')
+        # A cow two blocks ahead that stays put, and a framed diamond on a wall behind the player.
+        player('command', command=f'summon minecraft:cow {x + 0.5} {y} {z + 3.5} {{NoAI:1b}}')
+        player('command', command=f'fill {x - 1} {y} {z - 2} {x + 1} {y + 2} {z - 2} minecraft:stone')
+        player('command', command=f'summon minecraft:item_frame {x + 0.5} {y + 1.5} {z - 0.97} '
+               f'{{block_pos:[I;{x},{y + 1},{z - 1}],Facing:3b,Item:{{id:"minecraft:diamond",count:1}}}}')
+        player.wait(20)
+        counts = lambda: player('inventory')['counts']
+        aim_cow = lambda: player.raw('look-at', f'{x + 0.5:.2f}', f'{y + 0.8:.2f}', f'{z + 3.5:.2f}')
+        try:
+            player('command', command='give @s minecraft:bow')
+            player('command', command='give @s minecraft:arrow 6')
+            player.wait(5)
+            player.raw('select', 'minecraft:bow')
+            aim_cow()
+            assert player('looking_at')['kind'] == 'entity', f'the {label} does not aim at the cow'
+            # Half drawn: a full draw is a crit, up to 10 damage (AbstractArrow.onHitEntity), which
+            # kills the 10 health cow one shot in five. Under 20 ticks the arrow does at most 6.
+            player.raw('mouse', 'right', 'down')
+            player.wait(10)
+            drawn = player('state')['using']
+            player.raw('mouse', 'right', 'up')
+            player.wait(20)
+            assert drawn, f'the {label}\'s bow is not drawn at the cow'
+            assert counts().get('minecraft:arrow') == 5, f'the {label} shot no arrow: {counts()}'
+            aim_cow()
+            cow = player('looking_at').get('entity') or {}
+            assert cow.get('health', 0) > 0, f'the {label}\'s arrow killed the cow: {cow}'
+            player('command', command='clear @s')
+            player('command', command='give @s minecraft:golden_apple')
+            player.wait(5)
+            player.raw('select', 'minecraft:golden_apple')
+            aim_cow()
+            player.raw('mouse', 'right', 'down')
+            player.wait(5)
+            player.raw('mouse', 'right', 'up')
+            player.wait(40)
+            assert counts().get('minecraft:golden_apple') == 1, f'the {label} ate the apple let go of: {counts()}'
+            # The main hand empty, a bucket and then wheat in the off hand.
+            player('command', command='clear @s')
+            player('command', command='item replace entity @s weapon.offhand with minecraft:bucket')
+            player.wait(5)
+            aim_cow()
+            player.raw('mouse', 'right', 'click')
+            player.wait(15)
+            offhand = player('inventory')['offhand']
+            assert offhand and offhand['item'] == 'minecraft:milk_bucket', f'the {label}\'s off hand holds {offhand}'
+            player('command', command='item replace entity @s weapon.offhand with minecraft:wheat 3')
+            player.wait(5)
+            aim_cow()
+            player.raw('mouse', 'right', 'click')
+            player.wait(15)
+            offhand = player('inventory')['offhand']
+            assert offhand and offhand['count'] == 2, f'the {label}\'s cow ate no off hand wheat: {offhand}'
+            # The framed diamond, punched out.
+            frame = [o for o in player('status')['objects'] if o['kind'].endswith('item_frame')
+                     and o['position'] == [x, y + 1, z - 1]]
+            assert frame and frame[0]['item'] == 'minecraft:diamond', f'the {label} sees the frame as {frame}'
+            player.raw('look-at', f'{x + 0.5:.2f}', f'{y + 1.5:.2f}', f'{z - 0.95:.2f}')
+            player.raw('mouse', 'left', 'click')
+            player.wait(20)
+            for side, game in ((label, player), ('other side', other)):
+                seen = [o for o in game('status')['objects'] if o['kind'].endswith('item_frame')
+                        and o['position'] == [x, y + 1, z - 1]]
+                assert seen and seen[0].get('item') is None, f'the {side} sees the punched frame as {seen}'
+            result[label] = {'bow': 'shot', 'apple': 'kept', 'off hand': 'milked, fed', 'frame': 'emptied'}
+        finally:
+            player('command', command=f'kill @e[type=!minecraft:player,x={x - 3},y={y - 1},z={z - 3},dx=6,dy=4,dz=8]')
+            player('command', command=f'fill {x - 1} {y} {z - 2} {x + 1} {y + 2} {z - 2} minecraft:air')
+            player('command', command='clear @s')
+    return result
+
+
 # Animals a player rides: (kind, summon NBT, what readies it, what is held to ride, the test
 # while riding). `move` walks forward, `jump` charges the horse's jump bar, `rise` holds jump on
 # a happy ghast, `sit` only rides (a llama goes where it likes).
@@ -4247,7 +4400,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'sign': check_sign, 'damage': check_damage, 'mobs': check_mobs,
              'hazards': check_hazards, 'pvp': check_pvp, 'respawn': check_respawn,
              'containers': check_containers, 'feedback': check_feedback, 'titles': check_titles,
-             'chat': check_chat, 'machines': check_machines, 'brewing': check_brewing,
+             'chat': check_chat, 'styles': check_styles, 'machines': check_machines, 'brewing': check_brewing,
              'loom': check_loom, 'stonecutter': check_stonecutter, 'grindstone': check_grindstone,
              'anvil': check_anvil, 'smithing': check_smithing, 'enchanting': check_enchanting,
              'beacon': check_beacon, 'crafter': check_crafter, 'lectern': check_lectern,
@@ -4262,7 +4415,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect,
              'barter': check_barter, 'worn': check_worn, 'kills': check_kills,
              'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder,
-             'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames,
+             'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames, 'hands': check_hands,
              'lightning': check_lightning, 'riding': check_riding, 'mounts': check_mounts,
              'worldspawn': check_world_spawn, 'beds': check_beds, 'shield': check_shield, 'deathmining': check_death_mining,
              'contacts': check_contacts, 'absorption': check_absorption, 'breath': check_breath,

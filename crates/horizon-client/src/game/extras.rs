@@ -237,7 +237,7 @@ impl Game<'_> {
     /// the caller). The top left corner gives way to the debug screen.
     pub(super) fn draw_extras(&mut self, batch: &mut HudBatch) {
         let e = &self.settings.extras;
-        let mod_panels = self.mods.mods.panels().next().is_some();
+        let mod_panels = self.mods.has_panels();
         if !e.fps && !e.keystrokes && !e.minimap && !mod_panels {
             return;
         }

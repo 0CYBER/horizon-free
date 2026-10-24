@@ -481,7 +481,7 @@ def main():
     oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaSectionMeshOracle.java'
     helpers = [oracle.with_name(n + '.java') for n in ['VanillaCuboidModelOracle', 'VanillaHeightmapOracle']]
     sources = [Path(__file__), lab.ROOT / 'tools/lab.py', lab.ROOT / 'tools/test_rust_parity.py', oracle, *helpers,
-               lab.ROOT / 'Cargo.toml', lab.ROOT / 'Cargo.lock', lab.ROOT / 'crates/horizon-client/examples/section_mesh_fixture.rs']
+               lab.ROOT / 'Cargo.toml', lab.ROOT / 'Cargo.lock', lab.ROOT / 'crates/horizon-client/examples/probe/section_mesh_fixture.rs']
     for crate in ['horizon-core', 'horizon-world', 'horizon-assets', 'horizon-client']:
         sources += [lab.ROOT / 'crates' / crate / 'Cargo.toml', *sorted((lab.ROOT / 'crates' / crate / 'src').rglob('*.rs'))]
     tested = base.source_hashes(sources)
@@ -502,14 +502,14 @@ def main():
     dependencies = os.pathsep.join(map(str, [jars['client'], *baking.client_libraries()]))
     run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'), '-cp', dependencies, '-d', classes, oracle, *helpers], 'compile-java')
     env_jobs = os.environ.get('CARGO_BUILD_JOBS', '3')
-    run(['cargo', 'build', '--locked', '--profile', 'fast', '-j', env_jobs, '-p', 'horizon-client', '--example', 'section_mesh_fixture'], 'compile-rust')
+    run(['cargo', 'build', '--locked', '--profile', 'fast', '-j', env_jobs, '-p', 'horizon-client', '--example', 'probe'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1'], cwd=lab.ROOT))
-    binary = Path(metadata['target_directory']) / 'fast/examples' / ('section_mesh_fixture.exe' if os.name == 'nt' else 'section_mesh_fixture')
+    binary = Path(metadata['target_directory']) / 'fast/examples' / ('probe.exe' if os.name=='nt' else 'probe')
     java = ['java', '-Xmx2G', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.VanillaSectionMeshOracle']
-    run([binary, resources, inputs, BUILD / 'rust.jsonl'], 'rust')
+    run([binary, 'section_mesh_fixture',resources, inputs, BUILD / 'rust.jsonl'], 'rust')
     run([*java, inputs, BUILD / 'client.jsonl', resources], 'client')
     run([*java, 'facts', BUILD / 'client-facts.jsonl', resources], 'client-facts')
-    run([binary, resources, 'facts', BUILD / 'rust-facts.jsonl'], 'rust-facts')
+    run([binary, 'section_mesh_fixture',resources, 'facts', BUILD / 'rust-facts.jsonl'], 'rust-facts')
     report = {'schema': 1, 'minecraft': lock['minecraft']['version'], 'platform': platform.platform(),
               'scenes': len(rows), 'client_quads': 0, 'rust_quads': 0, 'matched_quads': 0, 'identical_quads': 0,
               'categories': {}, 'examples': {}, 'per_scene': {}, 'facts': {}}

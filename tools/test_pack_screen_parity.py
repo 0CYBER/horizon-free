@@ -14,7 +14,7 @@ records every GuiGraphicsExtractor call of the screen shown at the end
 (widgets, list backgrounds, scissor, separators, scroll bars, entries with
 their incompatibility tint, hover overlay and arrows, the selection
 outline, the search box, the buttons and their tooltip);
-examples/pack_screen_fixture runs horizon_client::pack_screen, which the
+examples/probe/pack_screen_fixture runs horizon_client::pack_screen, which the
 game's pack screen is, through the same actions. The call lists must agree.
 
   test_pack_screen_parity.py [--count N] [--detail N]

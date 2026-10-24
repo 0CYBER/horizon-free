@@ -137,6 +137,48 @@ pub fn item_pose(left: bool, inverse_height: f32, attack: f32, pose: ItemPose) -
     m
 }
 
+/// How `submitArmWithItem` holds a stack with a `minecraft:map_id`: in both
+/// hands when it is the main hand's and the off hand is empty
+/// (`renderTwoHandedMap`), else in its own hand (`renderOneHandedMap`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapHold {
+    TwoHanded,
+    OneHanded,
+}
+impl MapHold {
+    pub fn of(hand: Hand, off_hand_empty: bool) -> Self {
+        if hand == Hand::Main && off_hand_empty {
+            Self::TwoHanded
+        } else {
+            Self::OneHanded
+        }
+    }
+}
+
+/// `renderOneHandedMap` up to `renderMap`: the pose of a map in the hand on
+/// the `left` or right arm (the arm under it is not drawn).
+pub fn one_handed_map_pose(left: bool, inverse_height: f32, attack: f32) -> glam::Mat4 {
+    use glam::{Mat4, Vec3};
+    use horizon_core::geometry::trig::Mth;
+    let invert = if left { -1.0 } else { 1.0 };
+    let pi = std::f32::consts::PI;
+    let root = attack.sqrt();
+    let x_swing = (root * pi).msin();
+    Mat4::from_translation(Vec3::new(invert * 0.125, -0.125, 0.0))
+        * Mat4::from_translation(Vec3::new(
+            invert * 0.51,
+            -0.08 + inverse_height * -1.2,
+            -0.75,
+        ))
+        * Mat4::from_translation(Vec3::new(
+            invert * -0.5 * x_swing,
+            0.4 * (root * std::f32::consts::TAU).msin() - 0.3 * x_swing,
+            -0.3 * (attack * pi).msin(),
+        ))
+        * Mat4::from_rotation_x((x_swing * -45.0).to_radians())
+        * Mat4::from_rotation_y((invert * x_swing * -30.0).to_radians())
+}
+
 /// `FirstPersonHandsAndItems.evaluateWhichHandsToRender`: whether the main
 /// and the off hand show, from what each holds (item and whether it is a
 /// charged crossbow) and the item in use with its hand. A bow or crossbow
@@ -818,6 +860,84 @@ mod tests {
 #[cfg(test)]
 mod item_pose_tests {
     use super::*;
+    #[test]
+    fn a_map_is_two_handed_only_in_the_main_hand_with_an_empty_off_hand() {
+        assert_eq!(MapHold::of(Hand::Main, true), MapHold::TwoHanded);
+        assert_eq!(MapHold::of(Hand::Main, false), MapHold::OneHanded);
+        assert_eq!(MapHold::of(Hand::Off, true), MapHold::OneHanded);
+        assert_eq!(MapHold::of(Hand::Off, false), MapHold::OneHanded);
+    }
+    #[test]
+    fn one_handed_maps_follow_render_one_handed_map() {
+        // PoseStack.last().pose() from vanilla's renderOneHandedMap
+        // transforms (column-major), for (left, inverse height, attack).
+        let cases: [(bool, f32, f32, [f32; 16]); 3] = [
+            (
+                false,
+                0.0,
+                0.0,
+                [
+                    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, -0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.635, -0.205,
+                    -0.75, 1.0,
+                ],
+            ),
+            (
+                true,
+                0.25,
+                0.3,
+                [
+                    0.86894435,
+                    -0.34686038,
+                    -0.35302067,
+                    0.0,
+                    0.0,
+                    0.713303,
+                    -0.70085573,
+                    0.0,
+                    0.4949098,
+                    0.6090046,
+                    0.61982065,
+                    0.0,
+                    -0.1406033,
+                    -0.9197687,
+                    -0.9926984,
+                    1.0,
+                ],
+            ),
+            (
+                false,
+                0.6,
+                0.85,
+                [
+                    0.9919303,
+                    0.024030307,
+                    0.12448644,
+                    0.0,
+                    0.0,
+                    0.9818737,
+                    -0.18953651,
+                    0.0,
+                    -0.12678458,
+                    0.18800701,
+                    0.97395027,
+                    0.0,
+                    0.5136029,
+                    -1.1862278,
+                    -0.88621765,
+                    1.0,
+                ],
+            ),
+        ];
+        for (left, inverse_height, attack, want) in cases {
+            let got = one_handed_map_pose(left, inverse_height, attack).to_cols_array();
+            for (g, w) in got.iter().zip(want) {
+                assert!(
+                    (g - w).abs() < 1e-5,
+                    "{left} {inverse_height} {attack}: {got:?}"
+                );
+            }
+        }
+    }
     #[test]
     fn ranged_draw_uses_native_charge_curves_and_caps() {
         for (ticks, stretch) in [

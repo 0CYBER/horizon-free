@@ -56,7 +56,7 @@ def main():
     lock,jars,libraries=base.verify_artifacts();build=lab.LOCAL/'rust-block-landing-parity';build.mkdir(exist_ok=True);report_path=build/'report.json';report_path.unlink(missing_ok=True)
     root=lab.ROOT/'mods/horizon/src/test/java/dev/horizonlab/parity'
     oracles=[root/(n+'.java') for n in ['VanillaBlockLandingOracle','VanillaMovementRegistryOracle','VanillaHeightmapOracle','VanillaCollisionOracle']]
-    sources=[*oracles,Path(__file__),lab.ROOT/'tools/test_rust_parity.py',lab.ROOT/'tools/lab.py',lab.ROOT/'Cargo.toml',lab.ROOT/'Cargo.lock',lab.ROOT/'crates/horizon-world/examples/block_landing_fixture.rs']
+    sources=[*oracles,Path(__file__),lab.ROOT/'tools/test_rust_parity.py',lab.ROOT/'tools/lab.py',lab.ROOT/'Cargo.toml',lab.ROOT/'Cargo.lock',lab.ROOT/'crates/horizon-world/examples/probe/block_landing_fixture.rs']
     for crate in ['horizon-core','horizon-world']:sources += [lab.ROOT/'crates'/crate/'Cargo.toml',*sorted((lab.ROOT/'crates'/crate/'src').rglob('*.rs'))]
     tested=base.source_hashes(sources);classes=build/'classes';classes.mkdir(exist_ok=True);dependencies=os.pathsep.join(map(str,libraries))
     def run(command,name):
@@ -69,9 +69,9 @@ def main():
     with (build/'inputs.txt').open('w') as output:
         for f in corpus(states,definitions):output.write(json.dumps(f,separators=(',',':'))+'\n');count+=1
     fixture_paths=[build/n for n in ['inputs.txt','landing-states.json','landing-definitions.json','movement-properties.nbt','block-registry.nbt','cached-collision.nbt']];fixtures=base.source_hashes(fixture_paths)
-    run(['cargo','build','--locked','--release','-p','horizon-world','--example','block_landing_fixture'],'compile-rust')
-    metadata=json.loads(subprocess.check_output(['cargo','metadata','--locked','--no-deps','--format-version','1'],cwd=lab.ROOT));binary=Path(metadata['target_directory'])/'release/examples'/('block_landing_fixture.exe' if os.name=='nt' else 'block_landing_fixture')
-    run([binary,build],'rust');references=[]
+    run(['cargo','build','--locked','--release','-p','horizon-world','--example','probe'],'compile-rust')
+    metadata=json.loads(subprocess.check_output(['cargo','metadata','--locked','--no-deps','--format-version','1'],cwd=lab.ROOT));binary=Path(metadata['target_directory'])/'release/examples'/('probe.exe' if os.name=='nt' else 'probe')
+    run([binary,'block_landing_fixture',build],'rust');references=[]
     for side,jar in jars.items():
         java(side,side);matched=base.compare(build/(side+'.txt'),build/'rust.txt');references.append(dict(side=side,jar_sha256=lab.digest(jar,'sha256'),output_sha256=lab.digest(build/(side+'.txt'),'sha256'),matched_output_lines=matched));print(f'{side}: {matched:,} registered block landing lines match',flush=True)
     base.ensure_sources_unchanged(sources,tested);base.ensure_sources_unchanged(fixture_paths,fixtures)

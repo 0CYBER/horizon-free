@@ -7,7 +7,7 @@ Each case loads sections (every block state fills one, alone, so each state's ow
 ticking and a non-ticking state), ticks, sets and removes randomly ticking blocks (leaving them in the palette), and
 ticks again. Vanilla runs ServerLevel.tickChunk's section loop on real sections with the real getBlockRandomPos
 (VanillaRandomTickSectionsOracle); Horizon runs Behaviours::tick_chunk_random with the game's RandomTickSections
-(examples/random_tick_sections_probe). Both print every drawn position, whether its block and its fluid tick
+(examples/probe/random_tick_sections_probe). Both print every drawn position, whether its block and its fluid tick
 randomly, and the final randValue.
 """
 import itertools
