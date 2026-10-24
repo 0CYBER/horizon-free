@@ -1990,6 +1990,15 @@ impl Game<'_> {
                                 }
                                 self.sleeping = *bed;
                             }
+                            // Entity.DATA_SHARED_FLAGS_ID's sprinting bit: the
+                            // server stops the sprint after a hit's extra
+                            // knockback (the flag only, as assignValues sets
+                            // it: the speed modifier and wasSprinting stay).
+                            (0, Value::Byte(flags)) => {
+                                if let Some(pl) = self.player.as_mut() {
+                                    pl.sprinting = flags & 0x08 != 0;
+                                }
+                            }
                             // Entity.DATA_AIR_SUPPLY_ID and
                             // Player.DATA_PLAYER_ABSORPTION_ID: the bubbles
                             // and golden hearts the server's player has.

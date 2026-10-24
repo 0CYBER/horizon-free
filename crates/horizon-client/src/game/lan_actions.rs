@@ -595,6 +595,11 @@ impl Game<'_> {
             // A teleport (commands, a pearl) moves the guest; a pearl's is
             // sent even to where they stand (ServerPlayer.teleport).
             let at = [m.position.x, m.position.y, m.position.z];
+            // A hit with extra knockback stopped the guest's sprint
+            // (Player.causeExtraKnockback's setSprinting(false)).
+            if !m.sprinting {
+                g.sprinting = false;
+            }
             m.sprinting = false;
             let teleported = std::mem::take(&mut m.teleported);
             let moved: f64 = (0..3).map(|k| (at[k] - g.position[k]).powi(2)).sum();
@@ -1322,8 +1327,11 @@ impl Game<'_> {
             return;
         }
         if let Some(victim) = Self::pvp_victim(host, conn, id) {
-            if let Some(Some(strike)) = self.as_guest(host, conn, |g| g.pvp_strike()) {
-                self.pvp_land(host, victim, &strike);
+            if let Some(Some(strike)) = self.as_guest(host, conn, |g| g.pvp_strike())
+                && self.pvp_land(host, victim, &strike)
+                && strike.stops_sprint()
+            {
+                self.as_guest(host, conn, |g| g.stop_sprint_after_extra_knockback());
             }
             return;
         }
@@ -1922,7 +1930,7 @@ impl Game<'_> {
             let (rules, motion) = (game.world.health_rules, game.motion);
             let health = &motion.health;
             let Some(player) = game.player.as_mut() else {
-                return Vec::new();
+                return (Vec::new(), None);
             };
             let mut w = MotionWorld {
                 entities: &[],
@@ -1998,21 +2006,43 @@ impl Game<'_> {
             game.border_damage();
             game.tick_mob_effects();
             let Some(player) = game.player.as_mut() else {
-                return Vec::new();
+                return (Vec::new(), None);
             };
             let _ = player.peaceful_regeneration(rules);
             let _ = player.food_tick(health, rules);
             events.append(&mut player.events);
-            events
+            let _ = MotionWorld {
+                entities: &[],
+                player,
+                scene: &mut game.world,
+                assets: &game.pack.assets,
+                collision_binding: game.collision,
+                resources: game.motion,
+            }
+            .server_travel();
+            // A hurt since the last tick marked the velocity (Entity.markHurt):
+            // ServerEntity.sendChanges sends it as it is after this travel.
+            let marked = std::mem::take(&mut player.health.sync_velocity);
+            let sounds = events
                 .into_iter()
                 .filter_map(|e| match e {
                     MotionEvent::HurtSound(sound) => Some(sound),
                     _ => None,
                 })
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            (sounds, marked.then_some(player.velocity))
         });
-        for sound in sounds.into_iter().flatten() {
+        let Some((sounds, marked)) = sounds else {
+            return;
+        };
+        for sound in sounds {
             self.player_hurt_sound(sound, at);
+        }
+        if let (Some(v), Some(g)) = (marked, host.hub.guest(conn)) {
+            g.send(&C::SetEntityMotion(play::SetEntityMotion {
+                id: g.entity_id,
+                velocity: [v.x, v.y, v.z],
+            }));
         }
     }
 
