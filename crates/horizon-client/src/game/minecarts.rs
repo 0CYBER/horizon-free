@@ -79,6 +79,8 @@ pub(super) struct Minecart {
     pub hurt_time: i32,
     pub hurt_dir: i32,
     pub damage: f32,
+    /// `Entity.remainingFireTicks`: lava sets a cart alight for 15 seconds.
+    pub fire_ticks: i32,
     pub items: Vec<Option<ItemStack>>,
     /// Furnace minecarts: fuel ticks and the push direction.
     pub fuel: i32,
@@ -177,6 +179,7 @@ impl Minecart {
             hurt_time: 0,
             hurt_dir: 1,
             damage: 0.0,
+            fire_ticks: 0,
             items: vec![None; kind.slots()],
             fuel: 0,
             push: [0.0; 2],
@@ -823,6 +826,50 @@ impl Game<'_> {
                 self.carts.remove(i);
             }
         }
+        // applyEffectsFromBlocks runs on the server for every cart, the
+        // ridden ones too.
+        let ids: Vec<u32> = self.carts.iter().map(|c| c.id).collect();
+        for id in ids {
+            if let Some(i) = self.carts.iter().position(|c| c.id == id) {
+                let p = self.carts[i].position;
+                if ticking(p.x.floor() as i32, p.z.floor() as i32) {
+                    self.cart_fire_tick(i);
+                }
+            }
+        }
+    }
+    /// The fire half of `Entity.baseTick` and `LavaFluid.entityInside`
+    /// (`lavaIgnite`, then `lavaHurt`) for one cart, through
+    /// `VehicleEntity.hurtServer`: lava breaks a cart on its second tick in
+    /// it, and primes a TNT minecart (`damageSourceIgnitesTnt`).
+    fn cart_fire_tick(&mut self, i: usize) {
+        let (lava, water) = self.hull_fluids(self.carts[i].bounds());
+        let id = self.carts[i].id;
+        let c = &mut self.carts[i];
+        if water {
+            c.fire_ticks = 0;
+        }
+        let mut burn = false;
+        if c.fire_ticks > 0 {
+            burn = c.fire_ticks % 20 == 0 && !lava;
+            c.fire_ticks -= 1;
+        }
+        if burn {
+            self.hurt_cart(i, 1.0, false, true);
+        }
+        if !lava {
+            return;
+        }
+        let Some(i) = self.carts.iter().position(|c| c.id == id) else {
+            return;
+        };
+        let c = &mut self.carts[i];
+        c.fire_ticks = c.fire_ticks.max(300);
+        let at = [c.position.x, c.position.y, c.position.z];
+        let pitch = 2.0 + self.world.random.next_float() * 0.4;
+        self.audio
+            .play("minecraft:entity.generic.burn", Some(at), 0.4, pitch);
+        self.hurt_cart(i, 4.0, false, true);
     }
     /// `ClientPacketListener.postAddEntitySoundInstance` for the carts that
     /// joined the level since the last tick, and `LocalPlayer.startRiding`'s
