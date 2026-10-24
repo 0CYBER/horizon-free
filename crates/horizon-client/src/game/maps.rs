@@ -4,7 +4,7 @@
 //! shading, the dithered edge), the player marker, `data/minecraft/maps/<id>.dat` and
 //! `maps/last_id.dat`, the 128x128 texture in an atlas slot, the two-handed
 //! first-person view and maps in item frames.
-use super::Game;
+use super::{Game, lan::LanHost};
 use horizon_client::{
     blocks::{Fluid, MAP_COLORS},
     hud::{MAP_SLOTS, Rect},
@@ -14,13 +14,48 @@ use horizon_client::{
 use horizon_world::nbt::Tag;
 use std::collections::HashMap;
 
-/// A decoration: sprite, map position (-128..127, half pixels) and rotation (0..15).
+/// A decoration: sprite, map position (-128..127, half pixels) and rotation
+/// (0..15), and the player it marks (an item's own decorations mark none).
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Decoration {
     pub sprite: &'static str,
     pub x: i8,
     pub y: i8,
     pub rot: u8,
+    pub holder: Option<u32>,
+}
+/// The host among a map's holders (the guests are their connections).
+const HOST: u32 = u32::MAX;
+/// A player carrying a map, or seeing it framed
+/// (`MapItemSavedData.HoldingPlayer`): the column sweep's step, and what
+/// changed since the last `ClientboundMapItemDataPacket` it was sent.
+struct Holder {
+    who: u32,
+    /// The last tick it carried the map, and saw it framed.
+    carried: i64,
+    framed: i64,
+    step: i32,
+    /// The changed pixels' box (min x, min y, max x, max y).
+    dirty: Option<[i32; 4]>,
+    decorations: bool,
+    tick: u32,
+}
+impl Holder {
+    fn new(who: u32) -> Self {
+        Self {
+            who,
+            carried: 0,
+            framed: 0,
+            step: 0,
+            dirty: Some([0, 0, 127, 127]),
+            decorations: true,
+            tick: 0,
+        }
+    }
+    /// Still carrying the map, or seeing it framed (frames tick every 10).
+    fn holds(&self, now: i64) -> bool {
+        self.carried + 1 >= now || self.framed + 10 >= now
+    }
 }
 pub(super) struct MapData {
     pub center: [i32; 2],
@@ -31,8 +66,7 @@ pub(super) struct MapData {
     pub unlimited: bool,
     pub colors: Vec<u8>,
     pub decorations: Vec<Decoration>,
-    /// HoldingPlayer.step for the column sweep.
-    step: i32,
+    holders: Vec<Holder>,
     /// Changed since the last save / texture upload.
     dirty: bool,
     texture_dirty: bool,
@@ -51,7 +85,7 @@ impl MapData {
             unlimited: false,
             colors: vec![0; 128 * 128],
             decorations: Vec::new(),
-            step: 0,
+            holders: Vec::new(),
             dirty: true,
             texture_dirty: true,
         }
@@ -64,7 +98,127 @@ impl MapData {
         self.colors[i] = color;
         self.dirty = true;
         self.texture_dirty = true;
+        // setColorsDirty: every holder's next packet carries it.
+        for h in &mut self.holders {
+            h.dirty = Some(match h.dirty {
+                Some([x0, y0, x1, y1]) => [x0.min(x), y0.min(y), x1.max(x), y1.max(y)],
+                None => [x, y, x, y],
+            });
+        }
         true
+    }
+    /// `tickCarriedBy`'s holder for `who`, added when new.
+    fn holder(&mut self, who: u32) -> &mut Holder {
+        let i = match self.holders.iter().position(|h| h.who == who) {
+            Some(i) => i,
+            None => {
+                self.holders.push(Holder::new(who));
+                self.holders.len() - 1
+            }
+        };
+        &mut self.holders[i]
+    }
+    /// The holders that no longer carry the map nor see it framed go, and
+    /// their markers with them (`tickCarriedBy`'s removeDecoration).
+    fn drop_holders(&mut self, now: i64) {
+        self.holders.retain(|h| h.holds(now));
+        let holders = &self.holders;
+        let before = self.decorations.len();
+        self.decorations
+            .retain(|d| d.holder.is_none_or(|w| holders.iter().any(|h| h.who == w)));
+        if self.decorations.len() != before {
+            self.decorations_changed();
+        }
+    }
+    /// setDecorationsDirty.
+    fn decorations_changed(&mut self) {
+        for h in &mut self.holders {
+            h.decorations = true;
+        }
+    }
+    /// `addDecoration` / `removeDecoration` for `holder`'s marker: in place,
+    /// so that the order (the drawing order) stays.
+    fn set_marker(&mut self, holder: u32, marker: Option<Decoration>) {
+        let i = self
+            .decorations
+            .iter()
+            .position(|d| d.holder == Some(holder));
+        let changed = match (i, marker) {
+            (Some(i), Some(d)) if self.decorations[i] == d => false,
+            (Some(i), Some(d)) => {
+                self.decorations[i] = d;
+                true
+            }
+            (Some(i), None) => {
+                self.decorations.remove(i);
+                true
+            }
+            (None, Some(d)) => {
+                self.decorations.push(d);
+                true
+            }
+            (None, None) => false,
+        };
+        if changed {
+            self.decorations_changed();
+        }
+    }
+    /// `HoldingPlayer.nextUpdatePacket` for `who`: the changed pixels, and
+    /// the decorations (at most every 5th call while they changed).
+    fn update_packet(
+        &mut self,
+        id: i32,
+        who: u32,
+        kind: impl Fn(&str) -> Option<i32>,
+    ) -> Option<horizon_protocol::packets::play::MapItemData> {
+        use horizon_protocol::packets::play::{MapDecoration, MapItemData, MapPatch};
+        let h = self.holders.iter_mut().find(|h| h.who == who)?;
+        let patch = h.dirty.take().map(|[x0, y0, x1, y1]| {
+            let (width, height) = (x1 + 1 - x0, y1 + 1 - y0);
+            let mut colors = Vec::with_capacity((width * height) as usize);
+            for y in 0..height {
+                for x in 0..width {
+                    colors.push(self.colors[(x0 + x + (y0 + y) * 128) as usize]);
+                }
+            }
+            MapPatch {
+                start_x: x0,
+                start_y: y0,
+                width,
+                height,
+                colors,
+            }
+        });
+        let decorations = if h.decorations && {
+            let due = h.tick % 5 == 0;
+            h.tick += 1;
+            due
+        } {
+            h.decorations = false;
+            Some(
+                self.decorations
+                    .iter()
+                    .filter_map(|d| {
+                        Some(MapDecoration {
+                            kind: kind(decoration_type(d.sprite)?)?,
+                            x: d.x,
+                            y: d.y,
+                            rot: d.rot as i8,
+                            name: None,
+                        })
+                    })
+                    .collect(),
+            )
+        } else {
+            None
+        };
+        (patch.is_some() || decorations.is_some()).then_some(MapItemData {
+            map_id: id,
+            scale: self.scale as i8,
+            locked: self.locked,
+            decorations,
+            patch,
+        })
     }
     fn to_nbt(&self) -> Tag {
         let flag = |b: bool| Tag::Byte(i8::from(b));
@@ -112,7 +266,7 @@ impl MapData {
             unlimited: int("unlimitedTracking").unwrap_or(0) != 0,
             colors,
             decorations: Vec::new(),
-            step: 0,
+            holders: Vec::new(),
             dirty: false,
             texture_dirty: true,
         })
@@ -143,36 +297,48 @@ fn packed_rgba(packed: u8) -> [u8; 4] {
 pub(super) fn map_id(stack: &ItemStack) -> Option<i32> {
     stack.data().and_then(|d| d.map_id)
 }
-/// `MapDecorationTypes`: the sprite of a decoration type that a
-/// `minecraft:map_decorations` entry can name.
+/// `MapDecorationTypes` Horizon draws: (type, sprite).
+const DECORATION_TYPES: [(&str, &str); 24] = [
+    ("player", "map/decorations/player"),
+    ("frame", "map/decorations/frame"),
+    ("red_marker", "map/decorations/red_marker"),
+    ("blue_marker", "map/decorations/blue_marker"),
+    ("target_x", "map/decorations/target_x"),
+    ("target_point", "map/decorations/target_point"),
+    ("player_off_map", "map/decorations/player_off_map"),
+    ("player_off_limits", "map/decorations/player_off_limits"),
+    ("mansion", "map/decorations/woodland_mansion"),
+    ("monument", "map/decorations/ocean_monument"),
+    ("red_x", "map/decorations/red_x"),
+    ("village_desert", "map/decorations/desert_village"),
+    ("village_plains", "map/decorations/plains_village"),
+    ("village_savanna", "map/decorations/savanna_village"),
+    ("village_snowy", "map/decorations/snowy_village"),
+    ("village_taiga", "map/decorations/taiga_village"),
+    ("jungle_temple", "map/decorations/jungle_temple"),
+    ("swamp_hut", "map/decorations/swamp_hut"),
+    ("trial_chambers", "map/decorations/trial_chambers"),
+    ("abandoned_camp", "map/decorations/abandoned_camp"),
+    ("ancient_city", "map/decorations/ancient_city"),
+    ("desert_pyramid", "map/decorations/desert_pyramid"),
+    ("mineshaft", "map/decorations/mineshaft"),
+    ("ocean_ruin_warm", "map/decorations/warm_ocean_ruins"),
+];
+/// The sprite of a decoration type that a `minecraft:map_decorations`
+/// entry or a server's packet names.
 fn decoration_sprite(id: &str) -> Option<&'static str> {
-    Some(match id.strip_prefix("minecraft:").unwrap_or(id) {
-        "player" => "map/decorations/player",
-        "frame" => "map/decorations/frame",
-        "red_marker" => "map/decorations/red_marker",
-        "blue_marker" => "map/decorations/blue_marker",
-        "target_x" => "map/decorations/target_x",
-        "target_point" => "map/decorations/target_point",
-        "player_off_map" => "map/decorations/player_off_map",
-        "player_off_limits" => "map/decorations/player_off_limits",
-        "mansion" => "map/decorations/woodland_mansion",
-        "monument" => "map/decorations/ocean_monument",
-        "red_x" => "map/decorations/red_x",
-        "village_desert" => "map/decorations/desert_village",
-        "village_plains" => "map/decorations/plains_village",
-        "village_savanna" => "map/decorations/savanna_village",
-        "village_snowy" => "map/decorations/snowy_village",
-        "village_taiga" => "map/decorations/taiga_village",
-        "jungle_temple" => "map/decorations/jungle_temple",
-        "swamp_hut" => "map/decorations/swamp_hut",
-        "trial_chambers" => "map/decorations/trial_chambers",
-        "abandoned_camp" => "map/decorations/abandoned_camp",
-        "ancient_city" => "map/decorations/ancient_city",
-        "desert_pyramid" => "map/decorations/desert_pyramid",
-        "mineshaft" => "map/decorations/mineshaft",
-        "ocean_ruin_warm" => "map/decorations/warm_ocean_ruins",
-        _ => return None,
-    })
+    let name = id.strip_prefix("minecraft:").unwrap_or(id);
+    DECORATION_TYPES
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, sprite)| *sprite)
+}
+/// The type a decoration's sprite stands for, as its registry names it.
+fn decoration_type(sprite: &str) -> Option<&'static str> {
+    DECORATION_TYPES
+        .iter()
+        .find(|(_, s)| *s == sprite)
+        .map(|(name, _)| *name)
 }
 /// `minecraft:map_decorations` of a map item: (sprite, x, z, rotation), in
 /// the component's order.
@@ -275,12 +441,29 @@ impl Game<'_> {
         }
         self.maps.data.get_mut(&id)
     }
-    /// `ClientboundMapItemDataPacket.handle`: the server's colours for a map
-    /// this client does not own (lobby map art, a framed map on a wall).
+    /// `ClientboundMapItemDataPacket.handle`: the server's colours and
+    /// decorations for a map (one carried or framed on a server).
     pub(super) fn remote_map_item_data(
         &mut self,
         p: &horizon_protocol::packets::play::MapItemData,
     ) {
+        let decorations = p.decorations.as_ref().map(|list| {
+            let types = self
+                .remote
+                .as_ref()
+                .and_then(|r| r.builtin.get("minecraft:map_decoration_type"));
+            list.iter()
+                .filter_map(|d| {
+                    Some(Decoration {
+                        sprite: decoration_sprite(types?.name(d.kind)?)?,
+                        x: d.x,
+                        y: d.y,
+                        rot: (d.rot & 15) as u8,
+                        holder: None,
+                    })
+                })
+                .collect()
+        });
         let dimension = self.dimension_id();
         let map = self
             .maps
@@ -288,6 +471,9 @@ impl Game<'_> {
             .entry(p.map_id)
             .or_insert_with(|| MapData::fresh(0.0, 0.0, p.scale.max(0) as u8, dimension));
         map.locked = p.locked;
+        if let Some(decorations) = decorations {
+            map.decorations = decorations;
+        }
         let Some(patch) = &p.patch else {
             map.dirty = false;
             return;
@@ -566,10 +752,14 @@ impl Game<'_> {
             .collect();
         let (yaw, dim) = (self.yaw, self.dimension_id());
         let (nether, game_time) = (self.dim == super::Dim::Nether, self.world.game_time);
+        // The guest whose turn it is, else the host.
+        let me = self.lan_acting.unwrap_or(HOST);
         for (id, targets) in carried {
             let Some(m) = self.map(id) else { continue };
+            m.holder(me).carried = game_time;
+            m.drop_holders(game_time);
             // tickCarriedBy: the player marker while tracking in this dimension.
-            m.decorations.clear();
+            let mut marker = None;
             if m.tracking && m.dimension == dim {
                 let s = f64::from(1 << m.scale);
                 let dx = ((p.x - f64::from(m.center[0])) / s) as f32;
@@ -596,18 +786,19 @@ impl Game<'_> {
                 } else {
                     None
                 };
-                if let Some(sprite) = sprite {
-                    m.decorations.push(Decoration {
-                        sprite,
-                        x: clamp(dx),
-                        y: clamp(dz),
-                        rot,
-                    });
-                }
+                marker = sprite.map(|sprite| Decoration {
+                    sprite,
+                    x: clamp(dx),
+                    y: clamp(dz),
+                    rot,
+                    holder: Some(me),
+                });
             }
+            m.set_marker(me, marker);
             // The item's MAP_DECORATIONS (an explorer map's target), added
             // after the players as addDecoration would.
             let s = (1 << m.scale) as f32;
+            let mut items: Vec<Decoration> = Vec::new();
             for (sprite, x, z, rotation) in targets {
                 let dx = (x - f64::from(m.center[0])) as f32 / s;
                 let dz = (z - f64::from(m.center[1])) as f32 / s;
@@ -620,14 +811,93 @@ impl Game<'_> {
                     x: clamp_map_coordinate(dx),
                     y: clamp_map_coordinate(dz),
                     rot: decoration_rotation(nether, game_time, f64::from(rotation)),
+                    holder: None,
                 };
-                if !m.decorations.contains(&d) {
-                    m.decorations.push(d);
+                if !items.contains(&d) {
+                    items.push(d);
                 }
+            }
+            if !m
+                .decorations
+                .iter()
+                .filter(|d| d.holder.is_none())
+                .eq(items.iter())
+            {
+                m.decorations.retain(|d| d.holder.is_some());
+                m.decorations.extend(items);
+                m.decorations_changed();
             }
         }
         for id in held {
             self.update_map(id);
+        }
+    }
+    /// The maps the player carries, for `status`: how many of their pixels
+    /// are drawn, and their decorations.
+    pub(super) fn maps_status(&self) -> Vec<serde_json::Value> {
+        self.inventory
+            .iter()
+            .chain(std::iter::once(&self.offhand))
+            .flatten()
+            .filter_map(map_id)
+            .filter_map(|id| {
+                let m = self.maps.data.get(&id)?;
+                Some(serde_json::json!({
+                    "id": id,
+                    "pixels": m.colors.iter().filter(|&&c| c != 0).count(),
+                    "decorations": m.decorations.iter().map(|d| d.sprite).collect::<Vec<_>>(),
+                }))
+            })
+            .collect()
+    }
+    /// `ServerPlayer.synchronizeSpecialItemUpdates` for each map the guest
+    /// carries, and every 10 ticks (`ServerEntity.sendChanges`) for each map
+    /// framed in the level: a `ClientboundMapItemDataPacket` when something
+    /// changed since the guest's last one.
+    pub(super) fn lan_map_updates(&mut self, host: &LanHost, conn: u32) {
+        let Some(g) = host.hub.guest(conn) else {
+            return;
+        };
+        let mut ids: Vec<i32> = g
+            .inventory
+            .iter()
+            .chain(std::iter::once(&g.offhand))
+            .flatten()
+            .filter_map(map_id)
+            .collect();
+        let now = self.world.game_time;
+        if now % 10 == 0 && host.hub.here(g) {
+            let framed: Vec<i32> = self
+                .item_frames
+                .iter()
+                .filter_map(|f| f.item.as_ref().and_then(map_id))
+                .collect();
+            for id in framed {
+                if let Some(m) = self.map(id) {
+                    m.holder(conn).framed = now;
+                    ids.push(id);
+                }
+            }
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        let kind = |name: &str| {
+            host.hub.registry_id(
+                "minecraft:map_decoration_type",
+                &format!("minecraft:{name}"),
+            )
+        };
+        for id in ids {
+            if let Some(p) = self
+                .maps
+                .data
+                .get_mut(&id)
+                .and_then(|m| m.update_packet(id, conn, kind))
+            {
+                g.send(&horizon_protocol::packets::play::Clientbound::MapItemData(
+                    p,
+                ));
+            }
         }
     }
     /// `MapItem.update` for the player holding map `id`.
@@ -651,8 +921,9 @@ impl Game<'_> {
         if nether {
             radius /= 2;
         }
-        m.step += 1;
-        let step = m.step;
+        let h = m.holder(self.lan_acting.unwrap_or(HOST));
+        h.step += 1;
+        let step = h.step;
         let mut changes: Vec<(i32, i32, u8)> = Vec::new();
         let mut consecutive = false;
         for img_x in px - radius + 1..px + radius {

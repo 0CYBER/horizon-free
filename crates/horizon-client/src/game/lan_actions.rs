@@ -1725,10 +1725,12 @@ impl Game<'_> {
             let sleeping = host.hub.guests[gi].sleeping;
             self.as_guest(host, conn, |g| {
                 g.tick_fishing();
+                g.tick_maps();
                 g.count_tick_stats(sleeping);
                 g.tick_advancements();
                 g.update_player_attributes();
             });
+            self.lan_map_updates(host, conn);
             host.hub.flush_progress(conn);
             self.guest_dig_feedback(host, conn);
             self.guest_pickups(host, gi);
