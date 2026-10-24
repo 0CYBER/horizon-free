@@ -206,6 +206,9 @@ pub struct Guest {
     /// (Entity.DATA_AIR_SUPPLY_ID, Player.DATA_PLAYER_ABSORPTION_ID); their
     /// defaults until either changes.
     pub sent_air: (i32, f32),
+    /// The shared flags (Entity.DATA_SHARED_FLAGS_ID) the player's client was
+    /// last sent about itself.
+    pub sent_shared: i8,
     /// Where the player last died (Player.lastDeathLocation), sent with the respawn.
     pub last_death: Option<[i32; 3]>,
     /// The last action sequence to acknowledge at the next tick (-1: none).
@@ -336,6 +339,7 @@ impl Guest {
             sent_health: None,
             sent_xp: None,
             sent_air: (300, 0.0),
+            sent_shared: 0,
             last_death: None,
             ack_up_to: std::cell::Cell::new(-1),
             sent_selected: 0,

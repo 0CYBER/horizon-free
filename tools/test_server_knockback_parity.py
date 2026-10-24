@@ -56,15 +56,12 @@ PROPERTIES = {
     'pause-when-empty-seconds': '-1',
 }
 # Cases Horizon still gets wrong, and why.
-SPRINT = "the server never sends a guest its own sprint flag, so a sprint hit doesn't stop the attacker's sprint"
 YAW = "the extra knockback's direction comes from f32 sin/cos, not Mth's sine table (z is -2e-8 a block, not 0)"
 KNOWN = {
-    'cow-sprint': f'{SPRINT}; {YAW}',
+    'cow-sprint': YAW,
     'cow-knockback-2': YAW,
-    'zombie-sprint': f'{SPRINT}; {YAW}',
+    'zombie-sprint': YAW,
     'zombie-knockback-2': YAW,
-    'pvp-sprint': SPRINT,
-    'pvp-sprint-twice': SPRINT,
     'pvp-mace': "a smash on a player runs none of MaceItem.hurtEnemy (the attacker's fall goes on)",
 }
 
