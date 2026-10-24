@@ -24,8 +24,8 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
 - Horizon-only features follow [docs/design-system.md](docs/design-system.md) and are off by default where
   they would change the vanilla look.
 - Small PRs (< ~500 lines). Labels: `feature` (players get something new), `skip-release` (they see no
-  change), none for a fix. Agents never add `release-now`: the maintainer decides it. Every merge to main ships
-  ([docs/release-flow.md](docs/release-flow.md)).
+  change), none for a fix. Agents never add `release-now`: the maintainer decides it. Merges ship in batches of 5, or after
+  6 hours ([docs/release-flow.md](docs/release-flow.md)).
 - Contributors first: `gh pr list --state open --search <area>` before you start; never duplicate theirs.
 
 ## Crates
@@ -151,19 +151,19 @@ python3 tools/agent_control_e2e.py         # horizon-ctl / MCP end to end
 
 ## The two single-player paths
 
-1. **In-frame (default since #1428):** the window's `Game` ticks the world itself, one level that follows
-   the player (`fn enter_dimension`). This is what Stable players run and what harnesses test.
-2. **Server thread (`--server-thread` or `HORIZON_SERVER_THREAD=1`):** `game/integrated.rs` runs a second
-   `Game` (`serving`) on a "Server thread" with one level per dimension; the window joins it as a client
-   through memory (`remote`), exactly as a LAN guest or a dedicated server's player does. Not at parity yet:
-   open `[server-thread]` issues list the gaps.
+1. **Server thread (default since #1514):** `game/integrated.rs` runs a second `Game` (`serving`) on a
+   "Server thread" with one level per dimension; the window joins it as a client through memory (`remote`),
+   exactly as a LAN guest or a dedicated server's player does. This is what players run. Open
+   `[server-thread]` issues list the gaps left.
+2. **In-frame (`--in-frame`, `--no-server-thread` or `HORIZON_SERVER_THREAD=0`):** the window's `Game` ticks
+   the world itself, one level that follows the player (`fn enter_dimension`). Most harnesses test this path.
 
 LAN guests and dedicated servers always use the server code, so a fix there serves both. Test both paths
 when you touch player-facing gameplay:
 
 ```sh
-cargo run --profile fast -p horizon-client -- --resources .local/horizon-client/26.3 --world T                   # in-frame
-cargo run --profile fast -p horizon-client -- --resources .local/horizon-client/26.3 --world T --server-thread   # server thread
+cargo run --profile fast -p horizon-client -- --resources .local/horizon-client/26.3 --world T               # server thread
+cargo run --profile fast -p horizon-client -- --resources .local/horizon-client/26.3 --world T --in-frame    # in-frame
 python3 tools/lan_e2e.py --check <name>                  # host in-frame, guest is a server client
 python3 tools/lan_e2e.py --server-thread --check <name>  # host on its server thread (portals, levels, distance, lava need it)
 python3 tools/parity.py dedicated_server server_entities server_player_damage
