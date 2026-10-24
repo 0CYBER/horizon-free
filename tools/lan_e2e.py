@@ -220,6 +220,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              (diving): their own client decides it (#1278, #1296, #1303).
 - strikes:   a bolt strikes the host and the guest standing in water and hurts them, and a cave
              spider's bite poisons them (#1480, #1484).
+- cursor:    the host and the guest each close their inventory with a stack on the cursor: it
+             goes back into their inventory, none is thrown and the cursor is empty (#1283).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -5136,6 +5138,43 @@ def check_strikes(host, guest, out):
 
 CHECKS += ['strikes']
 CHECK_FNS.update(strikes=check_strikes)
+
+
+def check_cursor(host, guest, out):
+    """Closing the inventory with a stack on the cursor puts it back into the player's inventory
+    (AbstractContainerMenu.removed, placeItemBackInInventory) and empties the cursor, for each
+    player: nothing is thrown out and no copy stays on the cursor (#1283)."""
+    seen = {}
+    try:
+        for game in (host, guest):
+            game('command', command='clear @s')
+            host('command', command='kill @e[type=minecraft:item]')
+            game('command', command='item replace entity @s hotbar.0 with minecraft:diamond 7')
+            game.wait(10)
+            game.raw('open-inventory')
+            game.raw('wait-for', 'screen', 'inventory', '--timeout', 10)
+            game.raw('click-slot', 0)
+            game.wait(5)
+            held = (game('inventory').get('carried') or {}).get('count')
+            game.raw('key', 'esc', 'tap')
+            game.wait(40)
+            inv = game('inventory')
+            seen[game.name] = {'held': held, 'carried': inv.get('carried'),
+                               'client': inv['counts'].get('minecraft:diamond', 0),
+                               'server': server_count(game, 'diamond'),
+                               'thrown': len(game.raw('entities', 8, 'minecraft:item')['entities'])}
+    finally:
+        for game in (host, guest):
+            back_to_game(game)
+            game('command', command='clear @s')
+        host('command', command='kill @e[type=minecraft:item]')
+    for name, s in seen.items():
+        assert s == {'held': 7, 'carried': None, 'client': 7, 'server': 7, 'thrown': 0}, f'{name}: {seen}'
+    return seen
+
+
+CHECKS += ['cursor']
+CHECK_FNS.update(cursor=check_cursor)
 
 
 def check_digging(host, guest, out):
