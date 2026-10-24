@@ -4,7 +4,7 @@ use super::Game;
 use horizon_client::{
     hud::HudAtlas,
     lang,
-    pack_screen::{Compat, PackInfo, Source as PackSource},
+    pack_screen::{self, Compat, PackInfo, Source as PackSource},
     packs::{self, Pack, Position},
     text::{Style, Text},
 };
@@ -53,14 +53,15 @@ fn info(p: &Pack) -> PackInfo {
             PackSource::Default
         },
         compat: p.compatibility,
-        icon: p.icon,
+        icon: p.icon_png().as_deref().and_then(pack_screen::load_icon),
         required: false,
         position: Position::Top,
         fixed: false,
     }
 }
-/// The vanilla pack: required, at the bottom (`BuiltInPackSource`).
-fn vanilla_info() -> PackInfo {
+/// The vanilla pack: required, at the bottom (`BuiltInPackSource`), with the
+/// client JAR's `pack.png` that the prepared resources hold.
+fn vanilla_info(vanilla: &Path) -> PackInfo {
     PackInfo {
         id: "vanilla".into(),
         title: Text::translate("resourcePack.vanilla.name", &[]),
@@ -68,7 +69,10 @@ fn vanilla_info() -> PackInfo {
         description_style: Style::default(),
         source: PackSource::BuiltIn,
         compat: Compat::Compatible,
-        icon: true,
+        icon: std::fs::read(vanilla.join("pack.png"))
+            .ok()
+            .as_deref()
+            .and_then(pack_screen::load_icon),
         required: true,
         position: Position::Bottom,
         fixed: false,
@@ -80,7 +84,7 @@ pub(super) fn pack_infos(vanilla: &Path) -> Vec<PackInfo> {
         .iter()
         .map(info)
         .collect();
-    infos.push(vanilla_info());
+    infos.push(vanilla_info(vanilla));
     infos
 }
 impl Game<'_> {

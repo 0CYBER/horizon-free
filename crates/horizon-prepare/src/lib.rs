@@ -676,13 +676,15 @@ fn steps(
     }
 
     // The playable client needs every client asset (textures, models, fonts, GUI)
-    // and every data-pack resource (worldgen, recipes, loot tables, tags).
+    // and every data-pack resource (worldgen, recipes, loot tables, tags), and
+    // the vanilla pack's icon (`pack.png`) for the pack screen.
     (run.log)("Copying the client's assets and data");
     let mut count = 0usize;
     let mut client = open_zip(&run.client)?;
     let version = pyjson::loads(&zip_text(&mut client, "version.json")?)?;
     for name in zip_names(&client) {
-        if !(name.starts_with("assets/") || name.starts_with("data/")) || name.ends_with('/') {
+        let wanted = name.starts_with("assets/") || name.starts_with("data/") || name == "pack.png";
+        if !wanted || name.ends_with('/') {
             continue;
         }
         let relative = member_path(&name, "Invalid resource path")?;
