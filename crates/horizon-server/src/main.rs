@@ -10,6 +10,8 @@ mod http;
 mod init;
 mod lists;
 mod panel;
+#[cfg(test)]
+mod reference;
 mod service;
 mod settings;
 mod signals;
