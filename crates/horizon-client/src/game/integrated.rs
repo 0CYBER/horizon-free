@@ -12,6 +12,7 @@
 //! way.
 use super::{
     Game, Options, PackResources, Resources, UiResources,
+    execution_role::ExecutionRole,
     lan::{LanSettings, Owner},
 };
 use horizon_client::{
@@ -26,7 +27,6 @@ use horizon_protocol::connection::Pipe;
 use horizon_protocol::{crypto::offline_uuid, text::translatable};
 use std::{
     net::TcpListener,
-    path::Path,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU32, Ordering},
@@ -170,11 +170,6 @@ struct Launch {
     player: String,
 }
 
-/// Whether this world opens on a server thread: asked for.
-pub(super) fn wanted(options: &Options, _world: &Path) -> bool {
-    options.server_thread && options.dedicated.is_none()
-}
-
 impl Game<'_> {
     /// `Minecraft.hasSingleplayerServer`: a world of this window's own, run
     /// in the frame or on its server thread.
@@ -215,9 +210,10 @@ impl Game<'_> {
         };
         let mut options = self.options.clone();
         // A server without a console: no local player, no window, no control socket.
+        // Compatibility for gameplay checks outside startup/world loading.
         options.dedicated = Some(Vec::new());
         options.server_thread = false;
-        options.integrated = true;
+        options.execution_role = ExecutionRole::IntegratedServer;
         options.control = None;
         options.benchmark = None;
         options.frames = None;

@@ -250,7 +250,7 @@ pub(super) fn make_streaming(
     streaming.nether_shading = dim == Dim::Nether;
     // A server draws nothing: neither the integrated server nor the
     // dedicated one meshes sections.
-    streaming.mesh = !options.integrated && options.dedicated.is_none();
+    streaming.mesh = options.execution_role.is_client();
     Ok((streaming, save, locator))
 }
 
