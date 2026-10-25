@@ -521,6 +521,22 @@ fn network_stack(
                 horizon_protocol::item::Component::Int(i32::from(mode)),
             ));
         }
+        // PotionContents: the potion by its `minecraft:potion` id.
+        if let Some(id) = (d.potion.as_deref()).and_then(|potion| {
+            synced_id(
+                "minecraft:potion",
+                &horizon_world::datafix::dynamic::namespaced(potion),
+            )
+        }) {
+            stack.added.push((
+                horizon_protocol::item::component::POTION_CONTENTS,
+                horizon_protocol::item::Component::Potion {
+                    potion: Some(id),
+                    color: None,
+                    rest: Vec::new(),
+                },
+            ));
+        }
         // A loaded crossbow's ammunition.
         if !d.charged.is_empty() {
             let charged = d
@@ -572,6 +588,24 @@ fn network_stack(
 mod tests {
     use super::*;
     use horizon_protocol::item::{Component, component};
+
+    #[test]
+    fn potions_go_as_potion_registry_ids() {
+        let synced_id = |registry: &str, name: &str| match (registry, name) {
+            ("minecraft:potion", "minecraft:swiftness") => Some(14),
+            _ => None,
+        };
+        let potion = ItemStack::new("minecraft:splash_potion", 1).with_potion("swiftness");
+        let stack = stack_to_network(|_| 7, synced_id, &Some(potion)).unwrap();
+        assert_eq!(
+            stack.component(component::POTION_CONTENTS),
+            Some(&Component::Potion {
+                potion: Some(14),
+                color: None,
+                rest: Vec::new(),
+            })
+        );
+    }
 
     #[test]
     fn trims_go_as_synced_registry_references() {

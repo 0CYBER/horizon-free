@@ -1231,6 +1231,13 @@ impl Game<'_> {
                 }
             }
         }
+        if let Some(Component::Potion {
+            potion: Some(id), ..
+        }) = s.component(component::POTION_CONTENTS)
+            && let Some(potion) = host.hub.registry_name("minecraft:potion", *id)
+        {
+            out = out.with_potion(potion);
+        }
         Some(out)
     }
 
