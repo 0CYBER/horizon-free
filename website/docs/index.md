@@ -30,4 +30,5 @@ There is no build for Intel Macs, 32-bit systems, or ARM Linux and Windows. The 
 - **Playing:** [install and first launch](/docs/install), [settings worth knowing](/docs/settings), [multiplayer](/docs/multiplayer) and [what to do when something breaks](/docs/troubleshooting).
 - **Hosting:** [host a server](/docs/hosting), from the launcher or the command line.
 - **Going further:** [modpacks](/docs/modpacks), [mods and data packs](/docs/mods) and [performance](/docs/performance).
+- **Making mods:** [make a mod](/docs/make-a-mod), from the first line of code to the registry, and the [Mod API](/docs/api/mods).
 - **Helping out:** [contribute](/docs/contributing) and the [FAQ](/docs/faq).

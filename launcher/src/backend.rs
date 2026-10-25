@@ -1103,6 +1103,34 @@ fn with_java(cmd: &mut Command, home: &Path) {
     }
 }
 
+/// The Minecraft folder a preparation whose game files are imported already reads: the sounds,
+/// the title panorama, the fonts and the languages come from its asset store. It is the one
+/// `resolve` found, linked into the official layout for another launcher's files; without one, the
+/// chosen folder, and the preparation goes without them, saying so. Before, such a preparation
+/// read the chosen folder as it was, which a Prism Launcher or Modrinth App install does not
+/// keep its assets in: the game was silent and its title screen grey.
+fn assets_folder(
+    resolved: Result<sources::Resolved, String>,
+    chosen: &Path,
+    version: &str,
+    log: &dyn Fn(String),
+) -> PathBuf {
+    match resolved {
+        Ok(sources::Resolved::Folder(dir)) => dir,
+        Ok(sources::Resolved::NotFound(_)) => {
+            log(format!(
+                "Minecraft {version}'s assets were not found in any launcher folder: the game \
+                 will be silent and the title screen plain"
+            ));
+            chosen.to_path_buf()
+        }
+        Err(e) => {
+            log(format!("Minecraft {version}'s assets: {e}"));
+            chosen.to_path_buf()
+        }
+    }
+}
+
 /// Checks what the preparation needs and picks how to run it. PLAY.txt describes the same
 /// steps: the player's own launcher install, the server jar from that version's own json, and
 /// Java (and Python, for versions before horizon-prepare). Also returns the Minecraft folder
@@ -1117,9 +1145,8 @@ pub fn preparer(
     let dir = version_dir(tag);
     let reused = horizon_prepare::artifacts::reuse_imported(&dir, &|line| log(line.to_string()))?;
     let chosen = minecraft.to_path_buf();
-    let minecraft = if reused {
-        minecraft.to_path_buf()
-    } else {
+    // Resolved even when the game files are reused: the assets still come from the install.
+    let minecraft = {
         let pins = read_json(&dir.join("research-lock.json"))
             .and_then(|lock| sources::Pins::read(&lock))
             .ok_or("The version's research-lock.json doesn't pin the Minecraft files")?;
@@ -1139,12 +1166,17 @@ pub fn preparer(
             Ok(body)
         };
         let linked = data_dir().join("linked-minecraft");
-        match sources::resolve(minecraft, &pins, &known, &linked, &fetch, log)? {
-            sources::Resolved::Folder(dir) => dir,
-            sources::Resolved::NotFound(checked) => {
-                let not_found = sources::not_found(&version, &checked, minecraft);
-                download_for_owner(&pins, &own, &fetch, log).map_err(|e| not_found + &e)?;
-                own
+        let resolved = sources::resolve(minecraft, &pins, &known, &linked, &fetch, log);
+        if reused {
+            assets_folder(resolved, &chosen, &version, log)
+        } else {
+            match resolved? {
+                sources::Resolved::Folder(dir) => dir,
+                sources::Resolved::NotFound(checked) => {
+                    let not_found = sources::not_found(&version, &checked, minecraft);
+                    download_for_owner(&pins, &own, &fetch, log).map_err(|e| not_found + &e)?;
+                    own
+                }
             }
         }
     };
@@ -1636,6 +1668,7 @@ pub fn need_prepared(tag: &str) -> Result<(), String> {
 pub fn client(tag: &str) -> Result<Command, String> {
     need_prepared(tag)?;
     complete_packs(tag);
+    crate::browser::horizon::before_play(&game_home());
     let mut cmd = client_command(tag);
     // A sign-in that can't be renewed (no network, expired) still lets the game start, offline.
     if let Err(e) = crate::account::attach_session(&mut cmd, &game_home()) {
@@ -2351,6 +2384,53 @@ mod java_tests;
 mod tests {
     use super::*;
     use std::cmp::Ordering::*;
+
+    /// A preparation that reuses the imported game files still reads the assets from the
+    /// launcher that has them: a Prism Launcher instance's are in the launcher root, linked into
+    /// the official layout (jan.sonki on Discord: silent, grey title screen since 0.2.48).
+    #[test]
+    fn reused_imports_take_the_assets_from_the_launcher_that_has_them() {
+        let dir =
+            std::env::temp_dir().join(format!("horizon-reused-assets-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let client = b"fake client jar";
+        let manifest = br#"{"id": "26.3"}"#;
+        let write = |path: &str, data: &[u8]| {
+            let path = dir.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, data).unwrap();
+        };
+        let prism = "PrismLauncher";
+        write(
+            &format!("{prism}/libraries/com/mojang/minecraft/26.3/minecraft-26.3-client.jar"),
+            client,
+        );
+        write(&format!("{prism}/assets/indexes/34.json"), b"{}");
+        let instance = dir.join(prism).join("instances/26.3/minecraft");
+        fs::create_dir_all(&instance).unwrap();
+        let pins = sources::Pins::read(&serde_json::json!({ "minecraft": {
+            "version": "26.3",
+            "client_sha1": sources::sha1_hex(client),
+            "manifest_sha1": sources::sha1_hex(manifest),
+        }}))
+        .unwrap();
+        let linked = dir.join("linked");
+        let fetch = |_: &str| Ok(manifest.to_vec());
+        let lines = std::cell::RefCell::new(Vec::new());
+        let log = |line: String| lines.borrow_mut().push(line);
+        let resolved = sources::resolve(&instance, &pins, &[], &linked, &fetch, &log);
+        let folder = assets_folder(resolved, &instance, "26.3", &log);
+        assert_eq!(folder, linked);
+        assert!(folder.join("assets/indexes/34.json").is_file());
+
+        // Nothing found: the chosen folder, and a line saying what the game will lack.
+        let empty = dir.join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        let resolved = sources::resolve(&empty, &pins, &[], &linked, &fetch, &log);
+        assert_eq!(assets_folder(resolved, &empty, "26.3", &log), empty);
+        assert!(lines.borrow().last().unwrap().contains("will be silent"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn resources_without_sounds_are_reported() {

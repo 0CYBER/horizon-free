@@ -23,6 +23,14 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin) {
             // LivingEntity.DATA_HEALTH_ID: the boss bars and the death
             // animation follow it.
             (9, Value::Float(health)) => m.health = *health,
+            // Mob.DATA_MOB_FLAGS_ID: no AI 1, left-handed 2, aggressive 4.
+            // Mob.isAggressive draws the illagers' and skeletons' attack
+            // poses and the vindicator's axe.
+            (15, Value::Byte(flags)) => {
+                m.no_ai = flags & 1 != 0;
+                m.extra.left_handed = flags & 2 != 0;
+                m.ai.aggressive = flags & 4 != 0;
+            }
             (i, Value::Bool(b)) if Some(i) == baby => m.extra.age = if *b { -1 } else { 0 },
             _ => {}
         }
@@ -176,6 +184,19 @@ mod tests {
         assert_eq!((m.fire_ticks, m.health, m.extra.size), (1, 12.5, 4));
         apply(&mut m, &[(0, s::BYTE, Value::Byte(0))]);
         assert_eq!(m.fire_ticks, 0);
+    }
+
+    #[test]
+    fn mob_flags_turn_aggression_on_and_off() {
+        let Some(mut m) = mob("minecraft:vindicator") else {
+            return;
+        };
+        apply(&mut m, &[(15, s::BYTE, Value::Byte(4 | 2))]);
+        assert!(m.ai.aggressive && m.extra.left_handed && !m.no_ai);
+        assert!(horizon_client::mobs::illager::shows_item(&m));
+        apply(&mut m, &[(15, s::BYTE, Value::Byte(0))]);
+        assert!(!m.ai.aggressive && !m.extra.left_handed);
+        assert!(!horizon_client::mobs::illager::shows_item(&m));
     }
 
     #[test]

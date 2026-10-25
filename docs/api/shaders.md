@@ -81,7 +81,8 @@ the same way every time (files in path order, fixed dates), so a pack's SHA-256 
 
 - [shaders-reference.md](shaders-reference.md): every stage's signature, input and output structs, resources and
   helpers, the frame's fields with their units, option types and limits, generated from `crates/horizon-shader-api`.
-- The guide and an example pack come with `horizon-shader check`.
+- [The guide](../shaders.md): making a pack with `horizon-shader new`, `check` and `pack`; the templates and the
+  example pack (`crates/horizon-shader-api/packs/golden_hour`).
 
 ## Stability
 
@@ -95,6 +96,8 @@ stages with options and hot reload, then the overlay, lighting, sky and shadow s
 
 ## Changelog
 
+- 2026-10-25: `horizon-shader` (`new`, `check`, `pack`), three templates, the example pack and the guide.
+- 2026-10-25: the check (naga validation, signatures, options, budgets, SPIR-V/Metal/HLSL translation).
 - 2026-10-25: the stages of API 0.1 (sky, material, post), their inputs and the generated reference.
 - 2026-10-25: the pack format, schema 1: `horizon-shaders.toml` and the `.hshader` package.
 - 2026-10-24: the earlier shader pack code was removed; this API is designed from scratch.
