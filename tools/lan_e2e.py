@@ -5496,5 +5496,56 @@ CHECKS += ['villagers']
 CHECK_FNS.update(villagers=check_villagers)
 
 
+def check_spectator_travel(host, guest, out):
+    """Player.tick's spectator noPhysics survives a replacement body after dimension travel (#1299)."""
+    players = (host, guest) if SERVER_THREAD else (host,)
+    seen = {}
+    for game in players:
+        home = pos_of(game)
+        game('command', command='gamemode spectator')
+        game.wait(10)
+        try:
+            for dimension in (NETHER, OVERWORLD):
+                game('command', command=f'execute in {dimension} run tp @s .5 102 .5 0 0')
+                there = wait_dimension(game, dimension, 600)
+                assert there.get('dimension') == dimension, f'{game.name} stayed in {there.get("dimension")}'
+                # A replacement body arrives before its chunks; fill needs the whole corridor loaded.
+                for _ in range(30):
+                    if all(game.raw('block', *pos).get('loaded') for pos in ((-2, 101, -1), (2, 105, 16))):
+                        break
+                    game.wait(20)
+                game('command', command='fill -2 101 -1 2 105 16 minecraft:air')
+                game('command', command='fill -2 101 3 2 105 3 minecraft:stone')
+                game.wait(10)
+                wall = game.raw('block', 0, 102, 3)
+                assert wall.get('loaded') and wall.get('block') == 'minecraft:stone', f'wall: {wall}'
+                label = f'spectator-{dimension.removeprefix("minecraft:")}'
+                game.shot(out, f'{label}-before')
+                game.raw('key', 'w', 'down')
+                game.wait(20)
+                game.raw('key', 'w', 'up')
+                game.wait(10)
+                state = game('state')
+                client = state['player']
+                server = server_player(host, game)
+                seen[f'{game.name}-{dimension}'] = {'client': client['position'], 'server': server['position']}
+                game.shot(out, f'{label}-after')
+                assert state.get('gamemode') == 'spectator' and client['flying'], f'{game.name} lost spectator flight'
+                assert client['position'][2] > 4 and server['position'][2] > 4, \
+                    f'{game.name} collides after travel to {dimension}: {seen}'
+                game('command', command='fill -2 101 3 2 105 3 minecraft:air')
+        finally:
+            game.raw('key', 'w', 'up')
+            game('command', command=f'execute in {OVERWORLD} run tp @s {home[0]:.2f} {home[1]:.2f} {home[2]:.2f}')
+            wait_dimension(game, OVERWORLD, 600)
+            game('command', command='gamemode survival')
+            game.wait(20)
+    return seen
+
+
+CHECKS += ['spectator-travel']
+CHECK_FNS.update({'spectator-travel': check_spectator_travel})
+
+
 if __name__ == '__main__':
     main()
