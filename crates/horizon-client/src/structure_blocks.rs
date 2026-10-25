@@ -128,6 +128,44 @@ fn text(nbt: &Compound, key: &str) -> Option<String> {
     }
 }
 
+/// `BannerBlockEntity.loadAdditional`: the `patterns` layers and the custom
+/// name a structure template saves with its banner (the End cities' tower
+/// tops place black triangles this way).
+fn banner_from_nbt(nbt: &Compound) -> crate::containers::Banner {
+    crate::containers::Banner {
+        layers: crate::banner::layers_from_nbt(nbt.get(&JavaString::from("patterns"))),
+        name: text(nbt, "CustomName"),
+        components: match nbt.get(&JavaString::from("components")) {
+            Some(Tag::Compound(c)) => c.clone(),
+            _ => Compound::new(),
+        },
+    }
+}
+
+/// The client block entity for one of a chunk's generated block entities,
+/// before a container's loot is unpacked.
+fn generated_block_entity(block: &str, nbt: &Compound) -> Option<BlockEntity> {
+    let mut entity = BlockEntity::for_block(block)?;
+    let tag = Tag::Compound(nbt.clone());
+    // MonsterRoomFeature and the structures' setEntityId.
+    if let BlockEntity::Spawner(s) = &mut entity {
+        **s = crate::mobs::spawner::Spawner::load(&tag);
+    }
+    if let BlockEntity::TrialSpawner(s) = &mut entity {
+        **s = crate::mobs::trial_spawner::TrialSpawner::load(&tag);
+    }
+    if let BlockEntity::Vault(v) = &mut entity {
+        **v = crate::vault::Vault::load(&tag);
+    }
+    // StructureTemplate.placeInWorld hands the template's block entity NBT to
+    // the level, so `BannerBlockEntity.loadAdditional` keeps the banner's
+    // patterns (the End cities' black triangles) and its name.
+    if let BlockEntity::Banner(b) = &mut entity {
+        *b = banner_from_nbt(nbt);
+    }
+    Some(entity)
+}
+
 /// Client block entities for the generated block entities of a chunk.
 pub fn block_entities(
     chunk: &ProtoChunk,
@@ -137,19 +175,9 @@ pub fn block_entities(
     for (pos, nbt) in &chunk.block_entities {
         let [x, y, z] = *pos;
         let block = chunk.block_name(x, y, z);
-        let Some(mut entity) = BlockEntity::for_block(block) else {
+        let Some(mut entity) = generated_block_entity(block, nbt) else {
             continue;
         };
-        // MonsterRoomFeature and the structures' setEntityId.
-        if let BlockEntity::Spawner(s) = &mut entity {
-            **s = crate::mobs::spawner::Spawner::load(&Tag::Compound(nbt.clone()));
-        }
-        if let BlockEntity::TrialSpawner(s) = &mut entity {
-            **s = crate::mobs::trial_spawner::TrialSpawner::load(&Tag::Compound(nbt.clone()));
-        }
-        if let BlockEntity::Vault(v) = &mut entity {
-            **v = crate::vault::Vault::load(&Tag::Compound(nbt.clone()));
-        }
         if let (BlockEntity::Chest(slots), Some(table), Some(loot)) =
             (&mut entity, text(nbt, "LootTable"), loot)
         {
@@ -277,5 +305,44 @@ mod tests {
         // A plain item has nothing pending.
         stack.exploration = None;
         assert!(!has_pending_map(&loot_item(&stack)));
+    }
+
+    /// The End cities' tower tops save their banners' patterns in the
+    /// template; the placed banner must keep them (`EndCityPieces`).
+    #[test]
+    fn a_generated_banner_keeps_its_template_patterns() {
+        let patterns = Tag::List(vec![
+            Tag::compound([
+                ("color", Tag::String("black".into())),
+                ("pattern", Tag::String("minecraft:triangle_top".into())),
+            ]),
+            Tag::compound([
+                ("color", Tag::String("black".into())),
+                ("pattern", Tag::String("minecraft:triangle_bottom".into())),
+            ]),
+        ]);
+        let nbt = Tag::compound([
+            ("id", Tag::String("minecraft:banner".into())),
+            ("patterns", patterns),
+        ]);
+        let Tag::Compound(nbt) = nbt else {
+            unreachable!()
+        };
+        let Some(BlockEntity::Banner(banner)) =
+            generated_block_entity("minecraft:magenta_banner", &nbt)
+        else {
+            panic!("a banner block makes a banner block entity");
+        };
+        assert_eq!(banner.layers.len(), 2);
+        assert_eq!(&*banner.layers[0].pattern, "minecraft:triangle_top");
+        assert_eq!(&*banner.layers[1].pattern, "minecraft:triangle_bottom");
+        assert_eq!(&*banner.layers[0].color, "black");
+        // A banner the template saved without patterns stays bare.
+        let Some(BlockEntity::Banner(bare)) =
+            generated_block_entity("minecraft:white_banner", &Compound::new())
+        else {
+            panic!("a banner block makes a banner block entity");
+        };
+        assert!(bare.layers.is_empty());
     }
 }
