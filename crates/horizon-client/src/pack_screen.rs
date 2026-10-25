@@ -6,10 +6,13 @@
 //! [`PackScreen::draw`] gives the screen's GUI calls. The game shows it;
 //! tools/test_pack_screen_parity.py compares it with vanilla.
 use crate::{
+    font::Patch,
+    hud::{HudAtlas, PACK_ICON_SIZE, PACK_ICON_SLOTS},
     packs::{Position, Selectable, SelectionModel},
     screen_draw::{self as d, Draw, Measure, TextField},
     text::{Style, Text},
 };
+use std::{collections::HashMap, sync::Arc};
 
 /// `PackCompatibility`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,8 +53,8 @@ pub struct PackInfo {
     pub description_style: Style,
     pub source: Source,
     pub compat: Compat,
-    /// Whether the pack has a `pack.png`.
-    pub icon: bool,
+    /// The pack's `pack.png` ([`load_icon`]); none draws `unknown_pack`.
+    pub icon: Option<Arc<[u8]>>,
     pub required: bool,
     pub position: Position,
     pub fixed: bool,
@@ -89,6 +92,27 @@ impl PackInfo {
         .with_color(d::GRAY);
         (t, Style::color(d::GRAY))
     }
+}
+/// A `pack.png` as the pack screen draws it: RGBA, stretched to a
+/// `PACK_ICON_SIZE` square by nearest texels, as vanilla's icon texture is
+/// sampled into its 32x32 square. None when it does not decode, where
+/// `loadPackIcon` falls back to `unknown_pack`.
+pub fn load_icon(png: &[u8]) -> Option<Arc<[u8]>> {
+    let (w, h, rgba) = crate::hud::decode_bytes(png).ok()?;
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let size = u64::from(PACK_ICON_SIZE);
+    let mut out = Vec::with_capacity((size * size * 4) as usize);
+    for y in 0..size {
+        let sy = ((2 * y + 1) * u64::from(h) / (2 * size)) as usize;
+        for x in 0..size {
+            let sx = ((2 * x + 1) * u64::from(w) / (2 * size)) as usize;
+            let at = (sy * w as usize + sx) * 4;
+            out.extend_from_slice(&rgba[at..at + 4]);
+        }
+    }
+    Some(out.into())
 }
 /// `PackSelectionScreen.loadPackIcon`'s texture for a pack with an icon.
 pub fn icon_texture(id: &str) -> String {
@@ -306,6 +330,8 @@ pub struct PackScreen {
     confirm: Option<Confirm>,
     /// The selection changed since the screen opened.
     pub changed: bool,
+    /// The packs' icons by their [`icon_texture`].
+    icons: HashMap<String, Arc<[u8]>>,
 }
 
 fn tr(key: &str) -> Text {
@@ -329,11 +355,16 @@ impl PackScreen {
             italic: Some(true),
             ..Style::default()
         }));
+        let icons = packs
+            .iter()
+            .filter_map(|p| Some((icon_texture(&p.id), p.icon.clone()?)))
+            .collect();
         let mut s = Self {
             width,
             height,
             in_world,
             packs,
+            icons,
             model,
             search,
             focus: Focus::None,
@@ -760,6 +791,35 @@ impl PackScreen {
     pub fn commit(&self) -> Vec<String> {
         self.model.commit()
     }
+    /// Points the icon blits of `draws` at the atlas's pack icon slots and
+    /// writes the icons into them, one slot per icon drawn (vanilla registers a
+    /// texture per pack). Icons past the last slot keep `unknown_pack`.
+    pub fn bind_icons(&self, draws: &mut [Draw], atlas: &HudAtlas, patches: &mut Vec<Patch>) {
+        let mut slots = 0..PACK_ICON_SLOTS;
+        for draw in draws {
+            let Draw::Blit { texture, .. } = draw else {
+                continue;
+            };
+            let Some(icon) = self.icons.get(texture.as_str()) else {
+                continue;
+            };
+            let Some(slot) = slots.next() else {
+                return;
+            };
+            let sprite = format!("horizon/pack-icon{slot}");
+            let Some(rect) = atlas.sprites.get(&sprite) else {
+                return;
+            };
+            patches.push(Patch {
+                x: (rect.u0 * atlas.width as f32).round() as u32,
+                y: (rect.v0 * atlas.height as f32).round() as u32,
+                width: PACK_ICON_SIZE,
+                height: PACK_ICON_SIZE,
+                rgba: icon.to_vec(),
+            });
+            *texture = sprite;
+        }
+    }
 
     /// The shown screen's calls (`Screen.extractRenderState`); `blink_ms`
     /// is the time since the search box took the focus.
@@ -891,7 +951,7 @@ impl PackScreen {
                             -8978432,
                         );
                     }
-                    let icon = if p.icon {
+                    let icon = if p.icon.is_some() {
                         icon_texture(id)
                     } else {
                         "textures/misc/unknown_pack.png".into()
@@ -975,6 +1035,106 @@ impl PackScreen {
                 l.height,
             );
             d::sprite(out, "widget/scroller", l.scroll_bar_x(), sy, 6, sh);
+        }
+    }
+}
+
+#[cfg(test)]
+mod icon_tests {
+    use super::*;
+
+    fn png(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut encoder = png::Encoder::new(&mut out, w, h);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(rgba)
+            .unwrap();
+        out
+    }
+    fn pack(id: &str, icon: Option<Arc<[u8]>>) -> PackInfo {
+        PackInfo {
+            id: id.into(),
+            title: Text::literal(id),
+            description: Text::literal(""),
+            description_style: Style::default(),
+            source: Source::BuiltIn,
+            compat: Compat::Compatible,
+            icon,
+            required: false,
+            position: Position::Top,
+            fixed: false,
+        }
+    }
+
+    /// Any size stretches over the whole square, nearest texels, as the
+    /// icon texture is sampled into its 32x32 blit.
+    #[test]
+    fn icons_stretch_to_the_slot_by_nearest_texels() {
+        let (red, blue) = ([255, 0, 0, 255], [0, 0, 255, 128]);
+        let icon = load_icon(&png(2, 1, &[red, blue].concat())).unwrap();
+        let side = PACK_ICON_SIZE as usize;
+        assert_eq!(icon.len(), side * side * 4);
+        let at = |x: usize, y: usize| &icon[(y * side + x) * 4..][..4];
+        assert_eq!((at(0, 0), at(side / 2 - 1, side - 1)), (&red[..], &red[..]));
+        assert_eq!(
+            (at(side / 2, 0), at(side - 1, side - 1)),
+            (&blue[..], &blue[..])
+        );
+        assert!(load_icon(b"not a png").is_none());
+    }
+
+    /// Programmer Art and High Contrast draw their own `pack.png`; a pack
+    /// without one keeps `unknown_pack`.
+    #[test]
+    fn drawn_icons_take_atlas_slots() {
+        let atlas =
+            crate::hud::HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets"))
+                .unwrap();
+        let m = Measure(&atlas.font);
+        let dirt = load_icon(&png(1, 1, &[134, 96, 67, 255])).unwrap();
+        let contrast = load_icon(&png(1, 1, &[0, 0, 0, 255])).unwrap();
+        let packs = vec![
+            pack("programmer_art", Some(dirt.clone())),
+            pack("high_contrast", Some(contrast.clone())),
+            pack("file/Iconless", None),
+        ];
+        let screen = PackScreen::new(&m, 480, 320, false, packs, &[]);
+        let mut draws = screen.draw(&m, (0, 0), 0);
+        let mut patches = Vec::new();
+        screen.bind_icons(&mut draws, &atlas, &mut patches);
+        let icons: Vec<&str> = draws
+            .iter()
+            .filter_map(|d| match d {
+                Draw::Blit { texture, .. } if texture.contains("pack") => Some(texture.as_str()),
+                _ => None,
+            })
+            .collect();
+        // The list shows them sorted by id.
+        assert_eq!(
+            icons,
+            [
+                "textures/misc/unknown_pack.png",
+                "horizon/pack-icon0",
+                "horizon/pack-icon1"
+            ]
+        );
+        assert_eq!(patches.len(), 2);
+        for (i, (patch, icon)) in patches.iter().zip([&contrast, &dirt]).enumerate() {
+            let rect = atlas.sprites[&format!("horizon/pack-icon{i}")];
+            assert_eq!(
+                (patch.x, patch.y, patch.width, patch.height),
+                (
+                    (rect.u0 * atlas.width as f32).round() as u32,
+                    (rect.v0 * atlas.height as f32).round() as u32,
+                    PACK_ICON_SIZE,
+                    PACK_ICON_SIZE
+                )
+            );
+            assert_eq!(&patch.rgba[..], &icon[..]);
         }
     }
 }

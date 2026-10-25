@@ -198,6 +198,8 @@ pub struct FogInputs<'a> {
     pub blindness: Option<(i32, bool)>,
     /// The darkness effect's blend factor, while the effect is on.
     pub darkness: Option<f32>,
+    /// `GameRenderer.bossOverlayWorldDarkening`: a wither's bar dims the fog.
+    pub darken_world: f32,
     /// `BossHealthOverlay.shouldCreateWorldFog`: a boss bar with
     /// `createWorldFog` is shown (the Ender Dragon's).
     pub boss_world_fog: bool,
@@ -262,6 +264,13 @@ pub fn setup_fog(tables: &FogTables, state: &FogState, input: &FogInputs) -> Fog
     if darkness > 0.0 && !matches!(input.fog_type, FogType::Lava | FogType::PowderSnow) {
         let brightness = (1.0 - darkness) * (1.0 - darkness);
         color = color.map(|c| c * brightness);
+    }
+    // FogRenderer.computeFogColor: a boss bar's world darkening.
+    if input.darken_world > 0.0 {
+        let t = input.darken_world;
+        color[0] += (color[0] * 0.7 - color[0]) * t;
+        color[1] += (color[1] * 0.6 - color[1]) * t;
+        color[2] += (color[2] * 0.6 - color[2]) * t;
     }
     let brighten = if eye_in_water { water_vision } else { 0.0 };
     if color.iter().all(|&c| c != 0.0) {
@@ -394,6 +403,7 @@ mod tests {
             skybox: true,
             blindness: None,
             darkness: None,
+            darken_world: 0.0,
             boss_world_fog: false,
         }
     }
@@ -420,6 +430,25 @@ mod tests {
         input.fog_type = FogType::Water;
         let water = setup_fog(&tables, &FogState::default(), &input);
         assert_eq!(water.environmental_start, -8.0);
+    }
+    #[test]
+    fn boss_darkening_dims_fog_color() {
+        // FogRenderer.computeFogColor: lerp toward 70/60/60% of each channel.
+        let sky = Sky {
+            fog_color: [1.0, 1.0, 1.0],
+            sky_color: [1.0, 1.0, 1.0],
+            ..Sky::default()
+        };
+        let tables = FogTables {
+            water_fog_end: vec![1.0],
+        };
+        let mut input = inputs(&sky);
+        input.skybox = false;
+        input.darken_world = 1.0;
+        let fog = setup_fog(&tables, &FogState::default(), &input);
+        assert!((fog.color[0] - 0.7).abs() < 1.0e-5);
+        assert!((fog.color[1] - 0.6).abs() < 1.0e-5);
+        assert!((fog.color[2] - 0.6).abs() < 1.0e-5);
     }
     #[test]
     fn void_darkness_starts_32_above_the_floor() {

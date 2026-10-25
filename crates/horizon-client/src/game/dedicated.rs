@@ -6,7 +6,7 @@
 //! its simulation and the play-state hub that LAN hosting uses, configured
 //! from server.properties, with the operator, whitelist and ban lists and a
 //! console on standard input.
-use super::{Game, Options, lan::LanSettings};
+use super::{Game, Options, lan::LanSettings, world_loading::WorldRequest};
 use horizon_client::{
     Result,
     lan::{LoginGate, NetConfig, NetLog, OnlineMode, hub::HubConfig},
@@ -218,21 +218,22 @@ impl Lists {
             use_whitelist: false,
             enforce_whitelist: false,
         };
+        // DedicatedPlayerList's constructor order and its LOGGER.warn lines.
         let warn = |what: &str, r: std::result::Result<(), String>| {
             if let Err(e) = r {
-                log("WARN", &format!("Failed to load {what}: {e}"));
+                log("WARN", &format!("Failed to {what}: {e}"));
             }
         };
-        // DedicatedPlayerList's constructor order.
-        warn("user banlist", l.bans.load());
-        let _ = l.bans.save();
-        warn("ip banlist", l.ip_bans.load());
-        let _ = l.ip_bans.save();
-        warn("operators list", l.ops.load());
-        warn("white-list", l.white.load());
-        let _ = l.ops.save();
+        let saved = |r: std::io::Result<()>| r.map_err(|e| e.to_string());
+        warn("load user banlist", l.bans.load());
+        warn("save user banlist", saved(l.bans.save()));
+        warn("load ip banlist", l.ip_bans.load());
+        warn("save ip banlist", saved(l.ip_bans.save()));
+        warn("load operators list", l.ops.load());
+        warn("load white-list", l.white.load());
+        warn("save operators list", saved(l.ops.save()));
         if !l.white.file.exists() {
-            let _ = l.white.save();
+            warn("save white-list", saved(l.white.save()));
         }
         l
     }
@@ -546,13 +547,13 @@ impl Game<'_> {
         let lists = Arc::new(Mutex::new(lists));
         log("INFO", &format!("Preparing level \"{level_name}\""));
         let folder = world_dir.to_string_lossy().into_owned();
-        self.open_world(
+        self.load_world(WorldRequest::new(
             &folder,
             Some(&level_name),
             Some(props.seed),
             game_mode == 1,
             None,
-        )?;
+        )?)?;
         if new_world {
             self.level.hardcore = props.hardcore;
         }

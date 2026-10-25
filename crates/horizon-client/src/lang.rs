@@ -37,6 +37,21 @@ pub trait ResourceSource {
         vec!["minecraft".into()]
     }
 }
+/// Horizon's own strings, compiled in so they need no prepared resources.
+struct Bundled;
+impl ResourceSource for Bundled {
+    fn read(&self, path: &str) -> Option<Vec<u8>> {
+        let body = match path {
+            "assets/horizon/lang/en_us.json" => include_str!("../assets/horizon/lang/en_us.json"),
+            "assets/horizon/lang/ru_ru.json" => include_str!("../assets/horizon/lang/ru_ru.json"),
+            _ => return None,
+        };
+        Some(body.as_bytes().to_vec())
+    }
+    fn namespaces(&self) -> Vec<String> {
+        vec!["horizon".into()]
+    }
+}
 impl ResourceSource for std::path::PathBuf {
     fn read(&self, path: &str) -> Option<Vec<u8>> {
         std::fs::read(self.join(path)).ok()
@@ -86,6 +101,12 @@ impl Language {
         if code != DEFAULT {
             codes.push(code);
         }
+        // Horizon's own strings first, so a pack or the prepared root can still
+        // override them. Vanilla has no key for "Controller vibration".
+        let bundled = Bundled;
+        let mut all: Vec<&dyn ResourceSource> = vec![&bundled];
+        all.extend_from_slice(sources);
+        let sources = all.as_slice();
         let namespaces: std::collections::BTreeSet<String> =
             sources.iter().flat_map(|s| s.namespaces()).collect();
         for c in codes {
@@ -204,6 +225,16 @@ mod tests {
             self.0.get(path).cloned()
         }
     }
+    #[test]
+    fn bundled_horizon_strings_follow_the_language() {
+        // No prepared resources at all: the namespace is compiled in.
+        let empty = Mem(HashMap::new());
+        let en = Language::load(&[&empty], "en_us");
+        assert_eq!(en.get("horizon.options.controller"), Some("Controller"));
+        let ru = Language::load(&[&empty], "ru_ru");
+        assert_eq!(ru.get("horizon.options.controller"), Some("Геймпад"));
+    }
+
     #[test]
     fn layers_selected_language_over_english() {
         let base = Mem(HashMap::from([
