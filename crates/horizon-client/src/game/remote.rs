@@ -4000,8 +4000,14 @@ impl Game<'_> {
             }
             if reacts {
                 self.predict_use(&changes, seq);
-            } else if let Some(stack) = held.as_ref() {
-                self.predict_item_on_block(stack, &hit);
+            } else if let Some(stack) = held.as_ref()
+                && self.predict_item_on_block(stack, &hit)
+            {
+                // Item.useOn succeeded here (InteractionResult.SUCCESS):
+                // this hand swings and the click ends, so the other hand
+                // (a shield, a torch) is never tried.
+                self.with_hand(hand, Game::swing_arm);
+                return true;
             }
             if held_block {
                 let placed = if reacts {
@@ -4031,7 +4037,8 @@ impl Game<'_> {
     /// `playSound(player, ...)`: the server sends them to the others only):
     /// honeycomb waxing copper, and an axe, hoe or shovel transforming a
     /// block (stripping, scraping, removing wax, tilling, making a path).
-    fn predict_item_on_block(&mut self, stack: &ItemStack, hit: &super::Hit) {
+    /// Whether the item's use succeeded, which ends the click.
+    fn predict_item_on_block(&mut self, stack: &ItemStack, hit: &super::Hit) -> bool {
         let at = [
             f64::from(hit.pos[0]) + 0.5,
             f64::from(hit.pos[1]) + 0.5,
@@ -4050,11 +4057,15 @@ impl Game<'_> {
                 self.audio
                     .play("minecraft:item.honeycomb.wax_on", Some(at), 1.0, 1.0);
             }
+            waxes
         } else if let Some((_, sound, _, _, particle)) =
             self.block_transform(stack, hit.pos, hit.face)
         {
             self.transform_particle(&particle, hit.pos);
             self.audio.play(&sound, Some(at), 1.0, 1.0);
+            true
+        } else {
+            false
         }
     }
 
