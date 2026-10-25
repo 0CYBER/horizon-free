@@ -144,6 +144,9 @@ struct Launcher {
     releases: Load<Vec<Release>>,
     installed: Vec<String>,
     installing: Option<(String, f32)>,
+    /// The version being deleted on a background thread. It is already out of `installed`, so
+    /// nothing can launch, select or prepare it, and its row can't install or remove it again.
+    removing: Option<String>,
     install_error: Option<(String, String)>,
     confirm_remove: Option<String>,
     picker_open: bool,
@@ -286,6 +289,7 @@ impl Launcher {
             releases: Load::Loading,
             installed,
             installing: None,
+            removing: None,
             install_error: None,
             confirm_remove: None,
             picker_open: false,
@@ -415,7 +419,7 @@ impl Launcher {
         let Some(release) = self.updates.horizon.clone() else {
             return;
         };
-        if self.installing.is_some() {
+        if self.installing.is_some() || self.removing.as_ref() == Some(&release.tag) {
             return;
         }
         let select =
@@ -540,6 +544,17 @@ impl Launcher {
                             self.settings.save();
                         }
                         Err(e) => self.install_error = Some((tag, e)),
+                    }
+                }
+                Msg::Removed(tag, result) => {
+                    if self.removing.as_ref() == Some(&tag) {
+                        self.removing = None;
+                    }
+                    self.installed = backend::installed();
+                    self.settings.selected =
+                        selection_after_removal(&self.installed, Settings::load().selected);
+                    if let Err(e) = result {
+                        self.install_error = Some((tag, e));
                     }
                 }
                 Msg::Updates(Ok(updates)) => {
@@ -706,7 +721,7 @@ impl Launcher {
     }
 
     fn install(&mut self, release: &Release) {
-        if release.asset.is_none() {
+        if release.asset.is_none() || self.removing.as_ref() == Some(&release.tag) {
             return;
         }
         let (release, tx) = (release.clone(), self.tx.clone());
@@ -724,15 +739,26 @@ impl Launcher {
         });
     }
 
+    /// Deletes an installed version on a background thread: a version is thousands of files and
+    /// the window must keep drawing meanwhile. `Msg::Removed` ends it.
     fn remove(&mut self, tag: &str) {
-        if let Err(e) = backend::remove_version(tag) {
-            self.install_error = Some((tag.to_string(), e));
-        }
         self.confirm_remove = None;
-        self.installed = backend::installed();
-        self.settings.selected = Settings::load()
-            .selected
-            .or_else(|| self.installed.first().cloned());
+        if self.removing.is_some()
+            || self.installing.as_ref().is_some_and(|(t, _)| t == tag)
+            || !self.installed.iter().any(|t| t == tag)
+        {
+            return;
+        }
+        self.install_error = None;
+        self.removing = Some(tag.to_string());
+        self.installed.retain(|t| t != tag);
+        self.settings.selected =
+            selection_after_removal(&self.installed, self.settings.selected.take());
+        let (tag, tx) = (tag.to_string(), self.tx.clone());
+        std::thread::spawn(move || {
+            let result = backend::remove_version(&tag);
+            let _ = tx.send(Msg::Removed(tag, result));
+        });
     }
 
     fn prepare(&mut self) {
@@ -1156,6 +1182,14 @@ fn segments<T: Copy + PartialEq + 'static>(
                 .child(div().relative().child(label))
                 .on_click(move |_: &ClickEvent, window, cx| pick(value, window, cx))
         }))
+}
+
+/// The selected version once one has been removed: the saved choice if it is still installed,
+/// else the newest left.
+fn selection_after_removal(installed: &[String], saved: Option<String>) -> Option<String> {
+    saved
+        .filter(|s| installed.contains(s))
+        .or_else(|| installed.first().cloned())
 }
 
 fn disabled(b: Stateful<Div>) -> Stateful<Div> {
@@ -2923,6 +2957,7 @@ impl Launcher {
             self.installing.as_ref().is_some_and(|(t, _)| t == tag)
                 || self.install_error.as_ref().is_some_and(|(t, _)| t == tag)
                 || self.confirm_remove.as_ref() == Some(tag)
+                || self.removing.as_ref() == Some(tag)
         };
         let list = self.long_list.clone().column(
             &self.content_scroll.handle,
@@ -2958,6 +2993,15 @@ impl Launcher {
                                 .text_color(t.muted)
                                 .child(format!("{:.0}%", p * 100.)),
                         )
+                        .into_any_element()
+                } else if self.removing.as_ref() == Some(&tag) {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .w(px(180.))
+                        .child(progress_bar(None, &t))
+                        .child(text(theme::MICRO).text_color(t.muted).child("Removing…"))
                         .into_any_element()
                 } else if installed {
                     let confirming = self.confirm_remove.as_ref() == Some(&tag);
@@ -3585,6 +3629,20 @@ mod tests {
         assert!(hit.iter().any(|b| b.action().partial_eq(&Quit)));
         let (hit, _) = keymap.bindings_for_input(&key("cmd-w"), &[]);
         assert!(hit.iter().any(|b| b.action().partial_eq(&CloseWindow)));
+    }
+
+    #[test]
+    fn the_selection_survives_a_removal_or_moves_to_the_newest_left() {
+        let left = ["v0.2.49".to_string(), "v0.2.48".to_string()];
+        let pick =
+            |saved: Option<&str>| super::selection_after_removal(&left, saved.map(String::from));
+        assert_eq!(pick(Some("v0.2.48")).as_deref(), Some("v0.2.48"));
+        assert_eq!(pick(Some("v0.2.47")).as_deref(), Some("v0.2.49"));
+        assert_eq!(pick(None).as_deref(), Some("v0.2.49"));
+        assert_eq!(
+            super::selection_after_removal(&[], Some("v0.2.47".into())),
+            None
+        );
     }
 
     #[test]
