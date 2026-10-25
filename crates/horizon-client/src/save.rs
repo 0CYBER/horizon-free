@@ -1913,7 +1913,10 @@ pub fn write_dat(path: &Path, tag: Tag) -> Result<()> {
             Some(stem) => path.with_file_name(format!("{stem}.dat_old")),
             None => path.with_file_name(format!("{file}_old")),
         };
-        let _ = fs::rename(path, old);
+        // Vanilla's safeReplaceFile moves the current file aside first. This used to be
+        // swallowed, and the rename below then failed on the existing path with nothing
+        // reporting it: a save that could not happen looked like one that did.
+        fs::rename(path, old).map_err(|e| format!("{}: {e}", path.display()))?;
     }
     fs::rename(temporary, path)?;
     Ok(())

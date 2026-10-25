@@ -816,8 +816,12 @@ impl Game<'_> {
             ("data", data),
             ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
         ]);
-        let _ = horizon_client::save::write_dat(&path, root);
-        let _ = write_difficulty(&self.world_root, self.ui.difficulty);
+        if let Err(e) = horizon_client::save::write_dat(&path, root) {
+            log::warn!("the world clocks were not written: {e}");
+        }
+        if let Err(e) = write_difficulty(&self.world_root, self.ui.difficulty) {
+            log::warn!("the difficulty was not written: {e}");
+        }
     }
     /// Death message in chat (CombatTracker.getDeathMessage, as far as the
     /// cause is known to the client).

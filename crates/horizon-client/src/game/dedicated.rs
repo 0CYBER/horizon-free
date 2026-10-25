@@ -225,14 +225,23 @@ impl Lists {
         };
         // DedicatedPlayerList's constructor order.
         warn("user banlist", l.bans.load());
-        let _ = l.bans.save();
+        warn(
+            "user banlist write",
+            l.bans.save().map_err(|e| e.to_string()),
+        );
         warn("ip banlist", l.ip_bans.load());
-        let _ = l.ip_bans.save();
+        warn(
+            "ip banlist write",
+            l.ip_bans.save().map_err(|e| e.to_string()),
+        );
         warn("operators list", l.ops.load());
         warn("white-list", l.white.load());
-        let _ = l.ops.save();
+        warn("operators write", l.ops.save().map_err(|e| e.to_string()));
         if !l.white.file.exists() {
-            let _ = l.white.save();
+            warn(
+                "white-list write",
+                l.white.save().map_err(|e| e.to_string()),
+            );
         }
         l
     }
