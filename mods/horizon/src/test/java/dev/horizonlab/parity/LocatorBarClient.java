@@ -5,9 +5,12 @@ import io.netty.buffer.Unpooled;
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
+import java.io.FileDescriptor;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.PrintStream;
 import java.io.PrintWriter;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -78,7 +81,10 @@ import net.minecraft.world.phys.Vec3;
  * on|off} (the shift key, as ServerboundPlayerInputPacket), {@code fly NAME
  * on|off} (ServerboundPlayerAbilitiesPacket), {@code still NAME} (the
  * position reminder LocalPlayer.sendPosition sends every 20 ticks standing
- * still), {@code quit NAME}, {@code
+ * still), {@code sync NAME} (runs {@code time query gametime}, whose reply is
+ * not recorded, and prints {@code synced NAME} once it is back: the server has
+ * handled everything this player sent before, and everything the server sent
+ * this player before the reply has been recorded), {@code quit NAME}, {@code
  * players on|off} (whether each player also records the other players added
  * to and removed from its level, and its own respawns into a dimension),
  * {@code chat on|off} (whether the system chat each player receives is
@@ -95,6 +101,8 @@ public final class LocatorBarClient {
     private static final Map<UUID, String> NAMES = new LinkedHashMap<>();
 
     public static void main(String[] args) throws Exception {
+        // Bootstrap sends System.out to the logger: `synced` lines go to the real stdout.
+        PrintStream stdout = new PrintStream(new FileOutputStream(FileDescriptor.out), true, StandardCharsets.UTF_8);
         ParityData.init();
         String host = args[0];
         int port = Integer.parseInt(args[1]);
@@ -122,6 +130,13 @@ public final class LocatorBarClient {
                         players.get(w[1]).send(new net.minecraft.network.protocol.game.ServerboundPlayerAbilitiesPacket(abilities));
                     }
                     case "still" -> players.get(w[1]).still();
+                    case "sync" -> {
+                        try {
+                            players.get(w[1]).sync();
+                        } finally {
+                            stdout.println("synced " + w[1]);
+                        }
+                    }
                     case "quit" -> players.get(w[1]).close();
                     case "players" -> LocatorBarClient.players = w[1].equals("on");
                     case "chat" -> chat = w[1].equals("on");
@@ -189,6 +204,7 @@ public final class LocatorBarClient {
         private final Map<Integer, String> seen = new java.util.HashMap<>();
         private final Object replyLock = new Object();
         private int replies;
+        private int syncs;
 
         Player(String name) {
             this.name = name;
@@ -204,6 +220,23 @@ public final class LocatorBarClient {
                     long left = (until - System.nanoTime()) / 1_000_000L;
                     if (left <= 0) {
                         record("error no reply to /" + command);
+                        return;
+                    }
+                    replyLock.wait(left);
+                }
+            }
+        }
+
+        /** A round trip through the server thread, its reply left out of the transcript. */
+        void sync() throws Exception {
+            synchronized (replyLock) {
+                int before = syncs;
+                send(new ServerboundChatCommandPacket("time query gametime"));
+                long until = System.nanoTime() + 30_000_000_000L;
+                while (syncs == before) {
+                    long left = (until - System.nanoTime()) / 1_000_000L;
+                    if (left <= 0) {
+                        record("error no reply to sync");
                         return;
                     }
                     replyLock.wait(left);
@@ -312,6 +345,13 @@ public final class LocatorBarClient {
                         seen.clear();
                     } else if (p instanceof ClientboundTrackedWaypointPacket) {
                         record(waypoint(r.payload));
+                    } else if (p instanceof ClientboundSystemChatPacket c
+                        && c.content().getContents() instanceof net.minecraft.network.chat.contents.TranslatableContents t
+                        && t.getKey().equals("commands.time.query.gametime")) {
+                        synchronized (replyLock) {
+                            syncs++;
+                            replyLock.notifyAll();
+                        }
                     } else if (p instanceof ClientboundSystemChatPacket c) {
                         if (chat) {
                             record("chat " + (c.overlay() ? "overlay " : "") + net.minecraft.network.chat.ComponentSerialization.CODEC
