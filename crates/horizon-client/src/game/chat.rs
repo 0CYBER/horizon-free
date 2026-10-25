@@ -18,7 +18,7 @@ fn chat_tree<'a>(
     mods: &'a super::mods::ModsState,
 ) -> &'a horizon_client::command::Dispatcher {
     match remote.as_ref().and_then(|r| r.commands.as_ref()) {
-        Some(tree) => tree,
+        Some(tree) => mods.remote_dispatcher().unwrap_or(tree),
         None => mods.dispatcher(),
     }
 }

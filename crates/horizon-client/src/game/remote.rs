@@ -1904,25 +1904,12 @@ impl Game<'_> {
                         }
                     }
                 }
-                // LivingEntity.onSyncedDataUpdated(DATA_LIVING_ENTITY_FLAGS):
-                // another player starts using the item in a hand (eating, a
-                // bow drawn, a shield up), or stops.
+                // LivingEntity.DATA_LIVING_ENTITY_FLAGS: for another player
+                // too, remote_mob_data's apply reads index 8 above.
                 let other = self
                     .remote
                     .as_ref()
                     .is_some_and(|r| r.level_players.contains_key(&p.id) && r.entity_id != p.id);
-                if other && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
-                    for (index, _, value) in &p.values {
-                        if let (8, Value::Byte(flags)) = (index, value) {
-                            m.extra.using_off_hand = flags & 2 != 0;
-                            if flags & 1 == 0 {
-                                m.extra.using_item = 0;
-                            } else if m.extra.using_item == 0 {
-                                m.extra.using_item = 1;
-                            }
-                        }
-                    }
-                }
                 // LivingEntity.onSyncedDataUpdated(SLEEPING_POS_ID): another
                 // player lies down in their bed (drawn lying in it), or gets up.
                 if other {
@@ -2172,12 +2159,10 @@ impl Game<'_> {
                 }
             }
             C::PlayerCombatKill(p) => {
-                let lang = self
-                    .remote
-                    .as_ref()
-                    .map(|r| r.lang.clone())
-                    .unwrap_or_default();
-                let message = plain(&p.message, &lang);
+                // The component resolves in the client's current language, as
+                // the chat line does, not in the language the session joined
+                // with (`Remote.lang` is the vanilla server-language table).
+                let message = remote_text(&p.message).plain();
                 let me = self.remote.as_ref().is_some_and(|r| r.entity_id == p.id);
                 if let Some(r) = self.remote.as_mut() {
                     r.death_message = Some(message);
@@ -2380,6 +2365,7 @@ impl Game<'_> {
                 if let Some(r) = self.remote.as_mut() {
                     r.commands = Some(tree);
                 }
+                self.merge_remote_tree();
             }
             C::SystemChat(p) => {
                 // The component as sent, translated in the client's own
@@ -3074,6 +3060,7 @@ impl Game<'_> {
         self.tick_block_entity_anims();
         self.tick_hand();
         self.tick_particles();
+        self.tick_client_ambient();
         self.tick_client_effects();
         // Player.tick's sleep counter (the darkening and the wake-up fade).
         self.sleep_timer = super::tick_sleep_timer(self.sleep_timer, self.sleeping.is_some());
@@ -3407,25 +3394,28 @@ impl Game<'_> {
                 m.head_yaw += wrap_degrees(*yaw - m.head_yaw) / *steps as f32;
                 *steps -= 1;
             }
-            // LivingEntity.updatingUsingItem for another player: the ticks the
-            // item has been used before this one.
-            if player && m.extra.using_item > 0 {
-                let item = if m.extra.using_off_hand {
-                    m.extra.off_hand.clone()
-                } else {
-                    m.extra.main_hand.clone()
-                };
-                if let Some(item) = item {
-                    let eye = if m.extra.crouching { 1.27 } else { 1.62 };
-                    let at = [m.position.x, m.position.y, m.position.z];
-                    using.push((
-                        item,
-                        m.extra.using_item as u32 - 1,
-                        at,
-                        eye,
-                        m.head_pitch,
-                        m.yaw,
-                    ));
+            // LivingEntity.updatingUsingItem: the ticks the item has been
+            // used before this one. Another player's use particles; a mob's
+            // drawn bow only needs the count (its pull follows it).
+            if m.extra.using_item > 0 {
+                if player {
+                    let item = if m.extra.using_off_hand {
+                        m.extra.off_hand.clone()
+                    } else {
+                        m.extra.main_hand.clone()
+                    };
+                    if let Some(item) = item {
+                        let eye = if m.extra.crouching { 1.27 } else { 1.62 };
+                        let at = [m.position.x, m.position.y, m.position.z];
+                        using.push((
+                            item,
+                            m.extra.using_item as u32 - 1,
+                            at,
+                            eye,
+                            m.head_pitch,
+                            m.yaw,
+                        ));
+                    }
                 }
                 m.extra.using_item += 1;
             }
@@ -4822,6 +4812,7 @@ impl Game<'_> {
                     cooking_timer: 0,
                     cooking_total: 0,
                     speed: 1.0,
+                    recipes_used: std::collections::HashMap::new(),
                 }))
             }
             // HopperMenu, and DispenserMenu (MenuType.GENERIC_3x3: dispensers
