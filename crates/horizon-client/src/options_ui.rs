@@ -1291,7 +1291,10 @@ impl OptionsUi {
                         open("Graphics...", Page::Graphics),
                         Some(open("Advanced Graphics...", Page::GraphicsAdvanced)),
                     ),
-                    Row::Buttons(open("Controller Settings...", Page::Controller), None),
+                    Row::Buttons(
+                        open("Controller Settings...", Page::Controller),
+                        Some(self.extra_button(s, crate::extras::Item::DiscordPresence)),
+                    ),
                     Row::Buttons(
                         open("Extras...", Page::Extras),
                         Some(open("Mods...", Page::Mods)),
