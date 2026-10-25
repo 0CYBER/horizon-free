@@ -83,6 +83,13 @@ pub enum Component {
     WrittenBook(WrittenBook),
     /// `ChargedProjectiles`: a loaded crossbow's ammunition, as templates.
     Stacks(Vec<Stack>),
+    /// `Fireworks`: flight duration and its explosions.
+    Fireworks {
+        flight: i32,
+        explosions: Vec<FireworkExplosion>,
+    },
+    /// `FireworkExplosion` (a firework star).
+    FireworkExplosion(FireworkExplosion),
     /// `ArmorTrim` naming its material and pattern by registry id (`trim_material`,
     /// `trim_pattern`); a trim with a direct holder stays [`Component::Raw`].
     Trim {
@@ -92,13 +99,6 @@ pub enum Component {
     /// A component Horizon reads past without interpreting it: its encoded
     /// bytes, written back as they came.
     Raw(Vec<u8>),
-    /// `Fireworks`: flight duration and its explosions.
-    Fireworks {
-        flight: i32,
-        explosions: Vec<FireworkExplosion>,
-    },
-    /// `FireworkExplosion` (a firework star).
-    FireworkExplosion(FireworkExplosion),
 }
 
 /// `FireworkExplosion.STREAM_CODEC`: shape id, colors, fade colors, trail
