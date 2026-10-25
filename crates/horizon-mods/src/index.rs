@@ -608,5 +608,6 @@ fn names(caps: &[Capability]) -> String {
     format!("[{}]", names.join(", "))
 }
 
+pub mod registry;
 #[cfg(test)]
 mod tests;
