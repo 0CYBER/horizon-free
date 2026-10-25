@@ -7,6 +7,21 @@ use horizon_client::gfx::pack_uniforms::PackInputs;
 use horizon_shaders::{BlockIds, Macros, Pack, Properties, dimension_folder, load_post};
 
 use super::{Dim, Game};
+use horizon_client::gfx::pack_draw::EntitySpan;
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+/// The ids a pack gives entities and block entities (4.1, 5.3), for the spans of the entity
+/// geometry.
+pub(super) struct PackIds {
+    entities: HashMap<String, i32>,
+    blocks: BlockIds,
+    /// `blockEntityId` by block state, filled as states are drawn.
+    block_states: RefCell<HashMap<u32, i32>>,
+    /// The id of a name the file lacks: 65535, or 0 without the file.
+    missing_entity: i32,
+    missing_block: i32,
+}
 
 impl Game<'_> {
     /// Loads the pack for the current dimension when it changed, and returns this frame's
@@ -52,6 +67,18 @@ impl Game<'_> {
                     for note in &ids.notes {
                         log::warn!("shader pack {name}: block.properties: {note}");
                     }
+                    let text = pack.read_text("entity.properties");
+                    let entities = BlockIds::parse_kind(
+                        &Properties::parse(text.as_deref().unwrap_or_default(), &macros),
+                        "entity",
+                    );
+                    self.pack_ids = Some(PackIds {
+                        entities: entities.plain(),
+                        missing_entity: if text.is_some() { 65535 } else { 0 },
+                        missing_block: if ids.is_empty() { 0 } else { 65535 },
+                        blocks: ids.clone(),
+                        block_states: RefCell::default(),
+                    });
                     let started_ids = std::time::Instant::now();
                     let table = block_id_table(&self.pack, &ids);
                     log::info!(
@@ -75,6 +102,7 @@ impl Game<'_> {
                     }
                 }
                 Err(e) => {
+                    self.pack_ids = None;
                     log::warn!("shader pack {name}: {e}");
                     renderer.set_shader_pack(dimension, None, &[]);
                 }
@@ -110,6 +138,58 @@ impl Game<'_> {
             }),
             temperature: info.map_or(0.0, |b| b.temperature),
             rainfall: info.map_or(0.0, |b| b.downfall),
+        }
+    }
+}
+
+impl Game<'_> {
+    /// Starts a span of the entity geometry at vertex `start` for entity type `name`
+    /// (`minecraft:zombie`; "" for one the pack cannot name). Nothing without a pack.
+    pub(super) fn mark_entity(&self, start: usize, name: &str) {
+        if let Some(ids) = &self.pack_ids {
+            let id = ids.entities.get(name).copied();
+            self.push_span(start, "ENTITIES", id.unwrap_or(ids.missing_entity));
+        }
+    }
+
+    /// Starts a span for the block entity of block state `state`.
+    pub(super) fn mark_block_entity(&self, start: usize, state: u32) {
+        let Some(ids) = &self.pack_ids else { return };
+        let id = *ids
+            .block_states
+            .borrow_mut()
+            .entry(state)
+            .or_insert_with(|| {
+                let registry = self.pack.assets.registry;
+                registry
+                    .state(horizon_world::registry::BlockStateId(state))
+                    .and_then(|s| {
+                        ids.blocks
+                            .id(&s.name, |k| s.properties.get(k).map(String::as_str))
+                    })
+                    .unwrap_or(ids.missing_block)
+            });
+        self.push_span(start, "BLOCK_ENTITIES", id);
+    }
+
+    /// Starts a span of geometry that is not an entity (`PARTICLES`, `DESTROY`...).
+    pub(super) fn mark_stage(&self, start: usize, stage: &str) {
+        if self.pack_ids.is_some() {
+            self.push_span(start, stage, 0);
+        }
+    }
+
+    fn push_span(&self, start: usize, stage: &str, id: i32) {
+        let mut spans = self.entity_spans.borrow_mut();
+        let span = EntitySpan {
+            start: start as u32,
+            stage: horizon_shaders::render_stage(stage),
+            id,
+        };
+        // A span that drew nothing gives way to the next.
+        match spans.last_mut() {
+            Some(last) if last.start == span.start => *last = span,
+            _ => spans.push(span),
         }
     }
 }

@@ -1228,6 +1228,11 @@ struct Game<'a> {
     luminance: Option<horizon_client::dynamic_light::Luminance>,
     /// Name tags drawn over everything (`RenderPipelines.TEXT_SEE_THROUGH`).
     see_through_vertices: Vec<Vertex>,
+    /// Runs of `entity_vertices` by entity, for a shader pack's per-entity draws; recorded only
+    /// while `pack_ids` is set (game/shader_packs.rs).
+    entity_spans: std::cell::RefCell<Vec<horizon_client::gfx::pack_draw::EntitySpan>>,
+    /// The shader pack's entity and block entity ids, while one draws entities.
+    pack_ids: Option<shader_packs::PackIds>,
     started: Instant,
     previous: Instant,
     /// FramerateLimitTracker.latestInputTime.
@@ -6668,8 +6673,10 @@ impl Game<'_> {
         alpha: f64,
         mut out: Vec<Vertex>,
     ) -> Vec<Vertex> {
+        self.entity_spans.borrow_mut().clear();
         self.prepare_entity_culling(camera);
         self.prepare_trims();
+        self.mark_entity(out.len(), "minecraft:entity_flame");
         let fire_yaw = if self.camera_type == perspective::CameraType::ThirdPersonFront {
             self.yaw + 180.0
         } else {
@@ -6761,20 +6768,27 @@ impl Game<'_> {
             }
         }
         // `ItemEntityRenderer`.
+        self.mark_entity(out.len(), "minecraft:item");
         self.dropped_item_geometry(camera, alpha, &mut out);
         // `VaultRenderer`.
+        self.mark_entity(out.len(), "");
         self.vault_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:ominous_item_spawner");
         self.ominous_item_spawner_geometry(camera, alpha, &mut out);
-        // Mobs and their projectiles.
+        // Mobs and their projectiles (a span each).
         self.mob_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:player");
         self.player_model_geometry(camera, self.clock.camera_fraction(), &mut out);
         self.guest_model_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:evoker_fangs");
         self.fangs_geometry(camera, alpha, &mut out);
         let mut see_through = std::mem::take(&mut self.see_through_vertices);
         see_through.clear();
+        self.mark_entity(out.len(), "minecraft:name_tag");
         self.name_tag_geometry(camera, alpha, &mut out, &mut see_through);
         self.see_through_vertices = see_through;
         // Entity shadows (EntityRenderer.extractShadow).
+        self.mark_entity(out.len(), "minecraft:entity_shadow");
         if let Some(sprite) = self.gui.atlas.sprites.get("misc/shadow").copied() {
             let ambient = if self.dim == Dim::Nether { 0.1 } else { 0.0 };
             let darken = self.sky_darken();
@@ -6868,13 +6882,14 @@ impl Game<'_> {
                         v.intersects(o - glam::Vec3::ONE, o + glam::Vec3::splat(2.0))
                     })
             });
-            if self.entity_culler.is_some() {
+            if self.entity_culler.is_some() || self.pack_ids.is_some() {
                 for block in visible {
                     let start = out.len();
+                    self.mark_block_entity(start, block.1);
                     self.res
                         .block_entity_render()
                         .render(&scene, std::iter::once(block), &mut out);
-                    if !off_screen(block.1) {
+                    if !off_screen(block.1) && self.entity_culler.is_some() {
                         self.cull_entity_vertices(&mut out, start);
                     }
                 }
@@ -6883,6 +6898,7 @@ impl Game<'_> {
                     .block_entity_render()
                     .render(&scene, visible, &mut out);
             }
+            self.mark_stage(out.len(), "DESTROY");
             for (pos, stage) in self.cracks(camera) {
                 let state = self.world.block(pos[0], pos[1], pos[2]);
                 self.res
@@ -6891,6 +6907,7 @@ impl Game<'_> {
             }
         }
         // Experience orbs (ExperienceOrbRenderer): pulsing billboards from a 4x4 icon sheet.
+        self.mark_entity(out.len(), "minecraft:experience_orb");
         if let Some(r) = self
             .gui
             .atlas
@@ -6954,6 +6971,7 @@ impl Game<'_> {
             }
         }
         // Falling blocks use their baked model, including non-cubic shapes.
+        self.mark_entity(out.len(), "minecraft:falling_block");
         for f in &self.falling {
             let Some((_, tint)) = self.block_face_sprite(f.state) else {
                 continue;
@@ -6984,20 +7002,34 @@ impl Game<'_> {
                 vertex.color = horizon_client::hud_layout::multiply(vertex.color, tint);
             }
         }
+        self.mark_entity(out.len(), "");
         self.moving_piston_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:tnt");
         self.tnt_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:painting");
         self.painting_geometry(camera, &mut out);
+        self.mark_entity(out.len(), "minecraft:item_frame");
         self.frame_geometry(camera, &mut out);
+        self.mark_entity(out.len(), "minecraft:armor_stand");
         self.armor_stand_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:oak_boat");
         self.boat_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:minecart");
         self.cart_geometry(camera, alpha, &mut out);
+        self.mark_stage(out.len(), "BLOCK_ENTITIES");
         self.beacon_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:fishing_bobber");
         self.fishing_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:leash_knot");
         self.leash_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:trident");
         self.trident_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:firework_rocket");
         self.rocket_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:splash_potion");
         self.thrown_potion_geometry(camera, alpha, &mut out);
         // Particles (ParticleEngine.extract): camera-facing quads.
+        self.mark_stage(out.len(), "PARTICLES");
         let world = &self.world;
         self.particles.render(
             camera,
@@ -7008,6 +7040,7 @@ impl Game<'_> {
             &mut out,
         );
         // Breaking progress overlays (destroy_stage_0..9): ours and the other players'.
+        self.mark_stage(out.len(), "DESTROY");
         for (pos, stage) in self.cracks(camera) {
             let o = (glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]))
                 - camera)
@@ -10070,6 +10103,7 @@ impl Game<'_> {
         } else {
             self.shader_pack_inputs(camera, alpha as f32)
         };
+        let entity_spans = std::mem::take(self.entity_spans.get_mut());
         let frame = Frame {
             weather: &weather,
             weather_time: horizon_client::weather::Time::new(self.world.game_time, alpha as f32),
@@ -10134,6 +10168,7 @@ impl Game<'_> {
                 color: sky.cloud_color,
             }),
             entities: &entities,
+            entity_spans: &entity_spans,
             dynamic_lights: &self.dynamic_lights,
             lightning: horizon_client::gfx::lightning::Input {
                 bolts: &bolts,
@@ -10182,6 +10217,7 @@ impl Game<'_> {
         };
         // Restore storage even when rendering fails (for example, a lost surface).
         self.entity_vertices = entities;
+        *self.entity_spans.get_mut() = entity_spans;
         self.see_through_vertices = see_through;
         result
     }
@@ -11762,6 +11798,8 @@ impl<'a> Game<'a> {
             dynamic_lights: Vec::new(),
             luminance: None,
             see_through_vertices: Vec::new(),
+            entity_spans: Default::default(),
+            pack_ids: None,
             health_hud: hud_layout::HealthHud::default(),
             started: now,
             previous: now,
@@ -12686,6 +12724,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         hud,
         nether_lighting: false,
         entities: &[],
+        entity_spans: &[],
         dynamic_lights: &[],
         clouds: None,
         lightning: Default::default(),

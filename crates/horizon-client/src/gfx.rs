@@ -69,7 +69,7 @@ pub mod lightning;
 mod lod;
 mod occlusion;
 mod pack_atlas;
-mod pack_draw;
+pub mod pack_draw;
 mod pack_post;
 mod pack_sky;
 mod pack_timing;
@@ -248,6 +248,8 @@ pub struct Frame<'a> {
     pub nether_lighting: bool,
     /// Camera-relative entity geometry textured from the shared atlas.
     pub entities: &'a [Vertex],
+    /// Runs of `entities` by entity, while a shader pack draws them (`pack_draw::EntitySpan`).
+    pub entity_spans: &'a [pack_draw::EntitySpan],
     pub weather: &'a [crate::weather::Vertex],
     pub weather_time: crate::weather::Time,
     /// Horizon Extras' dynamic lights, nearest first (`dynamic_light::select`); empty when off.

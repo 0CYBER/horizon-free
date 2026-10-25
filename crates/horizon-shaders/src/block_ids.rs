@@ -23,9 +23,16 @@ pub struct BlockIds {
 
 impl BlockIds {
     pub fn parse(properties: &Properties) -> Self {
+        Self::parse_kind(properties, "block")
+    }
+
+    /// The same for `<kind>.<id>=` lines: `entity` in `entity.properties`, `item` in
+    /// `item.properties` (4.1); names there carry no state filters.
+    pub fn parse_kind(properties: &Properties, kind: &str) -> Self {
         let mut out = Self::default();
+        let prefix = format!("{kind}.");
         for e in &properties.entries {
-            let Some(id) = e.key.strip_prefix("block.") else {
+            let Some(id) = e.key.strip_prefix(prefix.as_str()) else {
                 continue;
             };
             let Ok(id) = id.parse::<i32>() else {
@@ -78,6 +85,16 @@ impl BlockIds {
             .map(|r| r.id)
     }
 
+    /// Every name without state filters and its id (the first line naming it wins): what
+    /// `entity.properties` and `item.properties` hold.
+    pub fn plain(&self) -> std::collections::HashMap<String, i32> {
+        let mut out = std::collections::HashMap::new();
+        for r in self.rules.iter().filter(|r| r.filters.is_empty()) {
+            out.entry(r.name.clone()).or_insert(r.id);
+        }
+        out
+    }
+
     pub fn is_empty(&self) -> bool {
         self.rules.is_empty()
     }
@@ -116,5 +133,19 @@ mod tests {
         assert_eq!(ids.id("minecraft:oak_leaves", leaves("true", "3")), None);
         assert_eq!(ids.id("minecraft:oak_leaves", leaves("false", "1")), None);
         assert_eq!(ids.notes.len(), 1, "{:?}", ids.notes);
+    }
+
+    #[test]
+    fn entity_lines_by_name() {
+        let text = "entity.10=zombie minecraft:husk\nentity.11=zombie mod:thing\nblock.5=stone\n";
+        let ids = BlockIds::parse_kind(&Properties::parse(text, &Macros::standard()), "entity");
+        let plain = ids.plain();
+        assert_eq!(
+            plain["minecraft:zombie"], 10,
+            "the first line naming it wins"
+        );
+        assert_eq!(plain["minecraft:husk"], 10);
+        assert_eq!(plain["mod:thing"], 11);
+        assert!(!plain.contains_key("minecraft:stone"));
     }
 }
