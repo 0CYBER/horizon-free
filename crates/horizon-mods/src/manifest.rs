@@ -75,14 +75,18 @@ pub enum Capability {
     /// New blocks and items from the mod's `data/` (API 0.2): no WIT
     /// interface, the game reads them before the world loads.
     Registries,
+    /// A screen the mod owns and a settings page in Options > Mods, drawn
+    /// with the menus' own widgets (interface `ui`, calls `ui-events`).
+    Ui,
 }
 impl Capability {
-    pub const ALL: [Capability; 5] = [
+    pub const ALL: [Capability; 6] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
         Capability::Storage,
         Capability::Registries,
+        Capability::Ui,
     ];
     /// The WIT interface it grants, in `horizon:mods`.
     pub fn interface(self) -> &'static str {
@@ -92,6 +96,7 @@ impl Capability {
             Capability::Hud => "hud",
             Capability::Storage => "storage",
             Capability::Registries => "registries",
+            Capability::Ui => "ui",
         }
     }
     /// What the player reads before turning the mod on: "May <this>".
@@ -102,6 +107,7 @@ impl Capability {
             Capability::Hud => "draw text on your screen",
             Capability::Storage => "save its own settings to disk",
             Capability::Registries => "add blocks and items to your worlds",
+            Capability::Ui => "show its own screens and a settings page",
         }
     }
     /// The capability a component import needs, `Ok(None)` for one every
@@ -132,6 +138,7 @@ impl fmt::Display for Capability {
             Capability::Hud => "hud",
             Capability::Storage => "storage",
             Capability::Registries => "registries",
+            Capability::Ui => "ui",
         };
         f.write_str(name)
     }

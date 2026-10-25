@@ -237,6 +237,7 @@ impl Game<'_> {
                     let _ = std::fs::create_dir_all(&dir);
                     super::packs::open_folder(&dir);
                 }
+                Event::ModSettings(i) => self.open_mod_screen(i, true),
                 Event::Credits => self.open_win_screen(false, super::win::Finish::Options),
             }
         }
