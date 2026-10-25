@@ -39,6 +39,8 @@ probe against Horizon, and compares their outputs. There are about 290 of them.
 
 Never commit game files, decompiled source or prepared resources (`.local/`): `tools/check_public_tree.py` rejects
 them (`git config core.hooksPath .githooks` runs it before every commit).
+The pre-push hook checks the full history reachable from the branches and tags being pushed. Run
+`python3 tools/check_public_tree.py --history` to audit the history of all local refs.
 
 ## Only original code
 

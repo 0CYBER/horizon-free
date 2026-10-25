@@ -339,7 +339,7 @@ def main():
         oracle_harness.run_logged(['cargo', 'build', '--locked', '--release', '-p', 'horizon-client', '--bin', 'horizon-client'],
                                   build, 'compile-rust')
         oracle_harness.run_logged([lab.cargo_target() / 'release/horizon-client', '--resources', resources], build, 'horizon',
-                                  env={**os.environ, 'HORIZON_SCULK_FIXTURE': f'{inputs},{build / "horizon.txt"}', 'HORIZON_NO_AUDIO': '1'})
+                                  env=lab.game_env(HORIZON_SCULK_FIXTURE=f'{inputs},{build / "horizon.txt"}'))
     if args.java_only:
         return
     names = {s[0] for _, s in chosen}

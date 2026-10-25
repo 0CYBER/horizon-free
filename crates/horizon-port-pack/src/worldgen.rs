@@ -13,6 +13,11 @@
 //! by name. Each rewrite is counted in the carry report, and every type left
 //! as it is is listed, so the coverage report can say what generates and how
 //! closely.
+//!
+//! YUNG's, Lithostitched's and CTOV's worldgen files are converted by
+//! `legacy_structure_mods`, called from [`upgrade`], [`crate::carry`] and the
+//! processors.
+use crate::legacy_structure_mods::{lithostitched, yung};
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -21,8 +26,7 @@ use std::{
 };
 
 /// Structure types that are vanilla's jigsaw with extra start rules.
-const JIGSAWS: [&str; 3] = [
-    "lithostitched:jigsaw",
+const JIGSAWS: [&str; 2] = [
     "moogs_structures:moogs_structures_generic_jigsaw_structure",
     "repurposed_structures:generic_jigsaw_structure",
 ];
@@ -56,35 +60,6 @@ const PIECE_LIMITED_RULES: [&str; 4] = [
 const SPREADS: [&str; 2] = [
     "moogs_structures:advanced_random_spread",
     "repurposed_structures:advanced_random_spread",
-];
-/// YUNG's placements: vanilla's random spread with an enhanced exclusion
-/// zone (several sets), plus, for the temples, no start near an ocean or a
-/// river, and for strongholds, starts only in odd rings around the origin.
-const YUNG_SPREADS: [&str; 4] = [
-    "yungsapi:enhanced_random_spread",
-    "betterdeserttemples:desert_temple",
-    "betterjungletemples:jungle_temple",
-    "betterstrongholds:stronghold",
-];
-/// YUNG's structures and the vanilla structure type each one's mod turns
-/// off (its DisableVanilla*Mixin, on by default in each mod's config).
-const YUNG_REPLACES: [(&str, &str); 7] = [
-    (
-        "betterdeserttemples:desert_temple",
-        "minecraft:desert_pyramid",
-    ),
-    (
-        "betterjungletemples:jungle_temple",
-        "minecraft:jungle_temple",
-    ),
-    ("betterwitchhuts:witch_hut", "minecraft:swamp_hut"),
-    (
-        "betteroceanmonuments:ocean_monument",
-        "minecraft:ocean_monument",
-    ),
-    ("betterstrongholds:stronghold", "minecraft:stronghold"),
-    ("betterfortresses:fortress", "minecraft:fortress"),
-    ("bettermineshafts:mineshaft_", "minecraft:mineshaft"),
 ];
 /// Mo' Structures' placement (`mostructures:type`) takes its spacing and
 /// separation from the mod's config, not its files: the defaults it writes
@@ -130,8 +105,8 @@ const LAYOUT_RULES: [&str; 4] = [
 ];
 /// The libraries' terrain kernel field, the game's
 /// `horizon:enhanced_terrain_adaptation` (docs/mods.md).
-const ENHANCED_TERRAIN: &str = "enhanced_terrain_adaptation";
-const HORIZON_ENHANCED_TERRAIN: &str = "horizon:enhanced_terrain_adaptation";
+pub(crate) const ENHANCED_TERRAIN: &str = "enhanced_terrain_adaptation";
+pub(crate) const HORIZON_ENHANCED_TERRAIN: &str = "horizon:enhanced_terrain_adaptation";
 /// Fields of older versions the mods' codecs no longer read: their own
 /// structures ignore them, and so does carry. Repurposed's jungle fortress
 /// and End stronghold still write `vertical_distance_from_start_piece`.
@@ -180,195 +155,6 @@ pub struct Upgrade {
 /// Where a mod's additions to other sets and pools go in its carry:
 /// `data/<id>/worldgen/<kind>/horizon_added/<name>.json`.
 pub const ADDED: &str = "horizon_added";
-
-/// A lithostitched worldgen modifier
-/// (`data/<ns>/lithostitched/worldgen_modifier/`) that adds to structure
-/// sets or template pools, as a file the game merges into them (the key
-/// `horizon:add_to`, `horizon_client::mod_content`): (kind, file). The
-/// modifier's conditions are checked against `loaded`, the mods ported
-/// along: a compat addition for a mod that is not would place that mod's
-/// blocks, which the game does not have. Other modifier types are left out.
-/// Both are counted in `report`.
-pub fn modifier(
-    v: &Value,
-    loaded: &dyn Fn(&str) -> bool,
-    report: &mut Upgrade,
-) -> Option<(&'static str, Value)> {
-    let t = v["type"].as_str().unwrap_or_default();
-    let mut left = |why: &str| *report.modifiers_left.entry(why.to_owned()).or_default() += 1;
-    let (kind, targets, from, to) = match t {
-        "lithostitched:add_structure_set_entries" => {
-            ("structure_set", "structure_sets", "entries", "structures")
-        }
-        "lithostitched:add_template_pool_elements" => {
-            ("template_pool", "template_pools", "elements", "elements")
-        }
-        _ => {
-            left(t);
-            return None;
-        }
-    };
-    if !conditions_hold(v, loaded) {
-        left("conditions");
-        return None;
-    }
-    let targets: Option<Vec<&str>> = match &v[targets] {
-        Value::String(s) => Some(vec![s.as_str()]),
-        Value::Array(a) => a.iter().map(Value::as_str).collect(),
-        _ => None,
-    };
-    let Some(targets) = targets.filter(|t| !t.is_empty() && t.iter().all(|t| !t.starts_with('#')))
-    else {
-        left("target");
-        return None;
-    };
-    let entries = v[from].as_array().cloned().unwrap_or_default();
-    for target in &targets {
-        *report.added_to.entry((*target).to_owned()).or_default() += entries.len();
-    }
-    Some((
-        kind,
-        serde_json::json!({"horizon:add_to": targets, to: entries}),
-    ))
-}
-
-/// Whether a modifier's load conditions hold: lithostitched's `predicate`,
-/// and the loader's conditions (NeoForge's, else Fabric's). A condition
-/// type not known here does not hold.
-fn conditions_hold(v: &Value, loaded: &dyn Fn(&str) -> bool) -> bool {
-    let all = |list: &Value, test: &dyn Fn(&Value) -> bool| {
-        list.as_array().is_some_and(|a| a.iter().all(test))
-    };
-    fn predicate(p: &Value, loaded: &dyn Fn(&str) -> bool) -> bool {
-        let test = |q: &Value| predicate(q, loaded);
-        let list = &p["predicates"];
-        match p["type"]
-            .as_str()
-            .map(|t| t.trim_start_matches("lithostitched:"))
-        {
-            Some("true") => true,
-            Some("mod_loaded") => p["mod_id"].as_str().is_some_and(loaded),
-            Some("not") => !predicate(&p["predicate"], loaded),
-            Some("all_of") => list.as_array().is_some_and(|a| a.iter().all(test)),
-            Some("any_of") => list.as_array().is_some_and(|a| a.iter().any(test)),
-            _ => false,
-        }
-    }
-    fn neoforge(c: &Value, loaded: &dyn Fn(&str) -> bool) -> bool {
-        let test = |q: &Value| neoforge(q, loaded);
-        match c["type"].as_str() {
-            Some("neoforge:true") => true,
-            Some("neoforge:mod_loaded") => c["modid"].as_str().is_some_and(loaded),
-            Some("neoforge:not") => !neoforge(&c["value"], loaded),
-            Some("neoforge:and") => c["values"].as_array().is_some_and(|a| a.iter().all(test)),
-            Some("neoforge:or") => c["values"].as_array().is_some_and(|a| a.iter().any(test)),
-            _ => false,
-        }
-    }
-    fn fabric(c: &Value, loaded: &dyn Fn(&str) -> bool) -> bool {
-        let test = |q: &Value| fabric(q, loaded);
-        let mods = || {
-            c["values"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(Value::as_str)
-        };
-        match c["condition"].as_str() {
-            Some("fabric:true") => true,
-            Some("fabric:all_mods_loaded") => mods().all(|m| m.is_some_and(loaded)),
-            Some("fabric:any_mods_loaded") => mods().any(|m| m.is_some_and(loaded)),
-            Some("fabric:not") => !fabric(&c["value"], loaded),
-            Some("fabric:and") => c["values"].as_array().is_some_and(|a| a.iter().all(test)),
-            Some("fabric:or") => c["values"].as_array().is_some_and(|a| a.iter().any(test)),
-            _ => false,
-        }
-    }
-    let litho = v.get("predicate").is_none_or(|p| predicate(p, loaded));
-    let loader = match (
-        v.get("neoforge:conditions"),
-        v.get("fabric:load_conditions"),
-    ) {
-        (Some(c), _) => all(c, &|c| neoforge(c, loaded)),
-        // One condition or a list of them.
-        (None, Some(c)) if c.is_array() => all(c, &|c| fabric(c, loaded)),
-        (None, Some(c)) => fabric(c, loaded),
-        (None, None) => true,
-    };
-    litho && loader
-}
-
-/// ChoiceTheorem's Overhauled Village's villages and outposts, which it adds
-/// to vanilla's `villages` and `pillager_outposts` sets in Java code
-/// (`CTOV.registerstructure`, through lithostitched), with its default
-/// config: every village type in three sizes, weighted 10, 4 and 1, and
-/// every outpost weighted 1. Vanilla's own entries stay (weight 1 each).
-const CTOV_VILLAGES: [&str; 21] = [
-    "beach",
-    "christmas",
-    "desert",
-    "desert_oasis",
-    "dark_forest",
-    "jungle",
-    "jungle_tree",
-    "mesa",
-    "mesa_fortified",
-    "mountain",
-    "mountain_alpine",
-    "mushroom",
-    "plains",
-    "plains_fortified",
-    "savanna",
-    "savanna_na",
-    "snowy_igloo",
-    "swamp",
-    "swamp_fortified",
-    "taiga",
-    "taiga_fortified",
-];
-const CTOV_OUTPOSTS: [&str; 11] = [
-    "beach",
-    "dark_forest",
-    "desert",
-    "jungle",
-    "badlands",
-    "mountain",
-    "plains",
-    "savanna",
-    "snowy",
-    "swamp",
-    "taiga",
-];
-
-/// The entries a mod adds to other structure sets in Java code, as its
-/// default config has them: (file name, set, `[(structure, weight)]`).
-/// Lithostitched appends them in the order of a hash map of every modifier
-/// in the pack, which carry cannot know; they are written in the order the
-/// mod registers them. Each set picks by weight, so how often each starts
-/// is the same.
-pub fn code_set_entries(mod_id: &str) -> Vec<(&'static str, &'static str, Vec<(String, u32)>)> {
-    match mod_id {
-        "ctov" => {
-            let outposts = CTOV_OUTPOSTS
-                .iter()
-                .map(|v| (format!("ctov:pillager_outpost_{v}"), 1))
-                .collect();
-            let villages = [("small", 10), ("medium", 4), ("large", 1)]
-                .into_iter()
-                .flat_map(|(size, weight)| {
-                    CTOV_VILLAGES
-                        .iter()
-                        .map(move |v| (format!("ctov:{size}/village_{v}"), weight))
-                })
-                .collect();
-            vec![
-                ("pillager_outposts", "minecraft:pillager_outposts", outposts),
-                ("villages", "minecraft:villages", villages),
-            ]
-        }
-        _ => Vec::new(),
-    }
-}
 
 /// Rewrites one `data/<ns>/worldgen/<kind>/...` file in place; whether it
 /// changed.
@@ -474,15 +260,16 @@ fn upgrade_types(
     set_tags: &BTreeMap<String, Vec<String>>,
 ) -> bool {
     let lost = &mut report.rules_lost;
+    // YUNG's and Lithostitched's types are converted apart from this code.
+    if let Some(changed) =
+        yung::upgrade(kind, v, set_tags, lost).or_else(|| lithostitched::upgrade(kind, v, lost))
+    {
+        report.mapped += usize::from(changed);
+        return changed;
+    }
     let mut unsupported = |t: &str| *report.unsupported.entry(t.to_owned()).or_default() += 1;
     let changed = match kind {
         "structure" => match v["type"].as_str() {
-            // Better Dungeons' small Nether dungeon is YUNG's jigsaw behind a
-            // config switch that ships on.
-            Some("yungsapi:yung_jigsaw" | "betterdungeons:small_nether_dungeon") => {
-                yung_structure(v, lost);
-                true
-            }
             Some(t)
                 if JIGSAWS.contains(&t)
                     || NETHER_JIGSAWS.contains(&t)
@@ -591,11 +378,6 @@ fn upgrade_types(
                 true
             }
             Some("mostructures:type") => mo_placement(&mut v["placement"], lost),
-            Some(t) if YUNG_SPREADS.contains(&t) => {
-                let t = t.to_owned();
-                yung_placement(&t, &mut v["placement"], set_tags, lost);
-                true
-            }
             Some(t) if !t.starts_with("minecraft:") => {
                 unsupported(t);
                 false
@@ -615,6 +397,10 @@ fn upgrade_types(
                 }
             }
             for element in elements {
+                if yung::upgrade_pool_element(element, lost) {
+                    changed = true;
+                    continue;
+                }
                 let Some(t) = element["element_type"].as_str() else {
                     continue;
                 };
@@ -628,9 +414,6 @@ fn upgrade_types(
                         }
                     }
                     element["element_type"] = (*to).into();
-                    changed = true;
-                } else if t == "yungsapi:yung_single_element" {
-                    yung_element(element, lost);
                     changed = true;
                 } else if t == "formations:single_pool_element" {
                     // Vanilla's element with its own ground level (1 when
@@ -653,167 +436,10 @@ fn upgrade_types(
     changed
 }
 
-/// YUNG's API's jigsaw as vanilla's, laid out by its own assembler in the
-/// game (`horizon:yungsapi`, `horizon_world::worldgen::structure::yung`):
-/// the heights pieces stay within move under the key, its terrain
-/// adaptation under `horizon:enhanced_terrain_adaptation`. A start offset in
-/// the chunk is lost.
-fn yung_structure(v: &mut Value, lost: &mut BTreeMap<String, usize>) {
-    let Some(o) = v.as_object_mut() else {
-        return;
-    };
-    o.insert("type".into(), "minecraft:jigsaw".into());
-    let mut rules = serde_json::Map::new();
-    for key in ["min_y", "max_y"] {
-        if let Some(y) = o.remove(key) {
-            rules.insert(key.into(), y);
-        }
-    }
-    // YungJigsawStructure's adaptation (NONE by default): every piece's
-    // junctions, and the start's box grown by its radius.
-    let own = o.remove(ENHANCED_TERRAIN);
-    let mut kernel = yung_terrain(own.as_ref().unwrap_or(&Value::Null), lost);
-    kernel["rigid_junctions"] = true.into();
-    kernel["inflate"] = true.into();
-    o.insert(HORIZON_ENHANCED_TERRAIN.into(), kernel);
-    for key in ["x_offset_in_chunk", "z_offset_in_chunk"] {
-        if o.remove(key).is_some_and(|n| n != 0) {
-            *lost.entry(key.into()).or_default() += 1;
-        }
-    }
-    o.insert("horizon:yungsapi".into(), rules.into());
-}
-
-/// YUNG's single pool element as vanilla's, its rules under
-/// `horizon:yungsapi`: name and `max_count`, depth range, priority,
-/// `ignore_bounds`, its condition, dead-end pool and modifiers; its terrain
-/// adaptation under `horizon:enhanced_terrain_adaptation`.
-fn yung_element(element: &mut Value, lost: &mut BTreeMap<String, usize>) {
-    let Some(o) = element.as_object_mut() else {
-        return;
-    };
-    o.insert(
-        "element_type".into(),
-        "minecraft:single_pool_element".into(),
-    );
-    let mut rules = serde_json::Map::new();
-    for (from, to) in [
-        ("name", "name"),
-        ("max_count", "max_count"),
-        ("min_required_depth", "min_depth"),
-        ("max_possible_depth", "max_depth"),
-        ("is_priority", "priority"),
-        ("ignore_bounds", "ignore_bounds"),
-    ] {
-        if let Some(x) = o.remove(from) {
-            rules.insert(to.into(), x);
-        }
-    }
-    if let Some(c) = o.remove("condition") {
-        rules.insert("condition".into(), yung_condition(&c, lost));
-    }
-    // A piece's own adaptation, NONE included, replaces its structure's.
-    if let Some(a) = o.remove(ENHANCED_TERRAIN) {
-        o.insert(HORIZON_ENHANCED_TERRAIN.into(), yung_terrain(&a, lost));
-    }
-    if let Some(pool) = o.remove("deadend_pool").filter(Value::is_string) {
-        rules.insert("deadend_pool".into(), pool);
-    }
-    let modifiers: Vec<Value> = o
-        .remove("modifiers")
-        .and_then(|m| m.as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|m| yung_modifier(m, lost))
-        .collect();
-    if !modifiers.is_empty() {
-        rules.insert("modifiers".into(), modifiers.into());
-    }
-    o.insert("horizon:yungsapi".into(), rules.into());
-}
-
-/// One of YUNG's structure modifiers in the game's terms: its condition and
-/// its transform and delay_generation actions, on the piece itself (`self`,
-/// the API's only target). Another target loses the modifier, another action
-/// just that action.
-fn yung_modifier(m: &Value, lost: &mut BTreeMap<String, usize>) -> Option<Value> {
-    let target = m["target_selector"]["type"].as_str().unwrap_or_default();
-    if target != "yungsapi:self" {
-        *lost
-            .entry(format!("yungsapi modifier target {target}"))
-            .or_default() += 1;
-        return None;
-    }
-    let mut actions = Vec::new();
-    for a in m["actions"].as_array().into_iter().flatten() {
-        let int = |k: &str| a[k].as_i64().unwrap_or(0);
-        match a["type"].as_str().unwrap_or_default() {
-            "yungsapi:transform" => actions.push(serde_json::json!({"type": "transform",
-                "output": a["output"].clone(),
-                "offset": [int("x_offset"), int("y_offset"), int("z_offset")]})),
-            "yungsapi:delay_generation" => {
-                actions.push(serde_json::json!({"type": "delay_generation"}))
-            }
-            other => {
-                *lost
-                    .entry(format!("yungsapi modifier action {other}"))
-                    .or_default() += 1
-            }
-        }
-    }
-    let condition = match m.get("condition") {
-        Some(c) => yung_condition(c, lost),
-        None => serde_json::json!({"type": "true"}),
-    };
-    Some(serde_json::json!({"condition": condition, "actions": actions}))
-}
-
-/// YUNG's API's terrain adaptation as the game's kernel: its two presets
-/// spelled out, NONE (also the default) as size 0. An aquifer override
-/// (none of ATM10's) is lost.
-fn yung_terrain(a: &Value, lost: &mut BTreeMap<String, usize>) -> Value {
-    let kernel = |size: i32, distance: i32, top: &str, bottom: &str| {
-        serde_json::json!({"kernel_size": size, "kernel_distance": distance,
-            "top": top, "bottom": bottom})
-    };
-    match a["type"].as_str() {
-        Some("yungsapi:carved_top_no_beard_large") => kernel(24, 16, "carve", "none"),
-        Some("yungsapi:carved_top_no_beard_small") => kernel(12, 6, "carve", "none"),
-        Some("yungsapi:custom") => {
-            let mut out = serde_json::Map::new();
-            for key in [
-                "kernel_size",
-                "kernel_distance",
-                "top",
-                "bottom",
-                "bottom_offset",
-                "padding",
-            ] {
-                if let Some(x) = a.get(key) {
-                    out.insert(key.into(), x.clone());
-                }
-            }
-            if a.get("aquifer_override")
-                .is_some_and(|x| x["type"] != "yungsapi:none")
-            {
-                *lost.entry("yungsapi aquifer_override".into()).or_default() += 1;
-            }
-            moogs_terrain(&out.into(), lost).unwrap_or_else(|| kernel(0, 0, "none", "none"))
-        }
-        None | Some("yungsapi:none") => kernel(0, 0, "none", "none"),
-        Some(other) => {
-            *lost
-                .entry(format!("yungsapi terrain adaptation {other}"))
-                .or_default() += 1;
-            kernel(0, 0, "none", "none")
-        }
-    }
-}
-
 /// MoogsStructureLib's terrain adaptation: already the game's shape (with
 /// its band), when it has the fields the game needs (else it is lost, as
 /// the library's codec would refuse it).
-fn moogs_terrain(a: &Value, lost: &mut BTreeMap<String, usize>) -> Option<Value> {
+pub(crate) fn moogs_terrain(a: &Value, lost: &mut BTreeMap<String, usize>) -> Option<Value> {
     let ok = ["kernel_size", "kernel_distance"]
         .iter()
         .all(|k| a[k].is_u64())
@@ -824,58 +450,15 @@ fn moogs_terrain(a: &Value, lost: &mut BTreeMap<String, usize>) -> Option<Value>
     ok.then(|| a.clone())
 }
 
-/// One of YUNG's structure conditions in the game's terms. `mod_loaded`
-/// holds for Minecraft alone: a mod that needs code is not ported, and the
-/// pieces it guards would place its blocks. A condition the game does not
-/// have does not hold, and is counted.
-fn yung_condition(c: &Value, lost: &mut BTreeMap<String, usize>) -> Value {
-    let t = c["type"].as_str().unwrap_or_default();
-    let list = |lost: &mut BTreeMap<String, usize>| -> Value {
-        let all = c["conditions"].as_array().into_iter().flatten();
-        all.map(|x| yung_condition(x, lost))
-            .collect::<Vec<_>>()
-            .into()
-    };
-    let opt = |k: &str| c.get(k).cloned().unwrap_or(Value::Null);
-    match t.trim_start_matches("yungsapi:") {
-        "always_true" => serde_json::json!({"type": "true"}),
-        "not" => {
-            serde_json::json!({"type": "not", "condition": yung_condition(&c["condition"], lost)})
-        }
-        "all_of" => serde_json::json!({"type": "all_of", "conditions": list(lost)}),
-        "any_of" => serde_json::json!({"type": "any_of", "conditions": list(lost)}),
-        "depth" => serde_json::json!({"type": "depth",
-            "min_depth": opt("min_required_depth"), "max_depth": opt("max_possible_depth")}),
-        "altitude" => serde_json::json!({"type": "altitude",
-            "bottom": opt("bottom_cutoff_y"), "top": opt("top_cutoff_y")}),
-        "random_chance" => serde_json::json!({"type": "random_chance", "chance": opt("chance")}),
-        "rotation" => serde_json::json!({"type": "rotation", "rotations": opt("rotations")}),
-        "piece_in_horizontal_direction" => {
-            // "yungsapi:all" (or no list) matches any piece.
-            let pieces: Vec<Value> = c["pieces"].as_array().cloned().unwrap_or_default();
-            let any = pieces.is_empty() || pieces.iter().any(|p| p == "yungsapi:all");
-            serde_json::json!({"type": "piece_in_horizontal_direction",
-                "pieces": if any { Vec::new() } else { pieces },
-                "range": opt("range"), "rotation": opt("rotation")})
-        }
-        // The game reads "yungsapi:all" (or no list) as any piece.
-        "piece_in_range" => serde_json::json!({"type": "piece_in_range",
-            "pieces": c.get("pieces").cloned().unwrap_or_else(|| Vec::<Value>::new().into()),
-            "horizontal_range": opt("horizontal_range"), "above_range": opt("above_range"),
-            "below_range": opt("below_range")}),
-        "mod_loaded" if c["modid"] == "minecraft" => serde_json::json!({"type": "true"}),
-        "mod_loaded" => serde_json::json!({"type": "false"}),
-        _ => {
-            *lost.entry(format!("yungsapi condition {t}")).or_default() += 1;
-            serde_json::json!({"type": "false"})
-        }
-    }
-}
-
 /// Moves a Repurposed Structures or Moog's jigsaw's start rules under
 /// `horizon:start_checks`, and counts the layout rules it loses. `liquid` is
 /// the block its no-start-in-liquid rule reads.
-fn start_checks(v: &mut Value, liquid: &str, lost: &mut BTreeMap<String, usize>, limited: bool) {
+pub(crate) fn start_checks(
+    v: &mut Value,
+    liquid: &str,
+    lost: &mut BTreeMap<String, usize>,
+    limited: bool,
+) {
     let Some(o) = v.as_object_mut() else {
         return;
     };
@@ -1043,7 +626,7 @@ fn moogs_spacing(p: &mut Value, lost: &mut BTreeMap<String, usize>) {
 
 /// An advanced random spread's minimum distance from the world origin and
 /// its super exclusion zone (sets named by a tag) under `horizon:` keys.
-fn placement_rules(
+pub(crate) fn placement_rules(
     p: &mut Value,
     set_tags: &BTreeMap<String, Vec<String>>,
     lost: &mut BTreeMap<String, usize>,
@@ -1112,65 +695,6 @@ fn mo_placement(p: &mut Value, lost: &mut BTreeMap<String, usize>) -> bool {
         );
     }
     o.insert("type".into(), "minecraft:random_spread".into());
-    true
-}
-
-/// One of YUNG's placements as vanilla's random spread with `horizon:` keys:
-/// the enhanced exclusion zone as `horizon:exclusion_zone`; the temples'
-/// ocean and river search (findBiomeHorizontal around the chunk's middle
-/// block at y 120, 48 blocks, every 2 quarts) as `horizon:avoid_biomes`; the
-/// strongholds' rings as `horizon:ring_sections`.
-fn yung_placement(
-    t: &str,
-    p: &mut Value,
-    set_tags: &BTreeMap<String, Vec<String>>,
-    lost: &mut BTreeMap<String, usize>,
-) {
-    placement_rules(p, set_tags, lost);
-    p["type"] = "minecraft:random_spread".into();
-    let Some(o) = p.as_object_mut() else {
-        return;
-    };
-    match t {
-        "betterdeserttemples:desert_temple" | "betterjungletemples:jungle_temple" => {
-            o.insert(
-                "horizon:avoid_biomes".into(),
-                serde_json::json!({"biomes": ["#minecraft:is_river", "#minecraft:is_ocean"],
-                    "radius": 48, "step": 2, "y": 120}),
-            );
-        }
-        "betterstrongholds:stronghold" => {
-            let mut rings = serde_json::Map::new();
-            for (from, to) in [
-                ("chunk_distance_to_first_ring", "distance_to_first_ring"),
-                ("ring_chunk_thickness", "thickness"),
-                ("max_ring_section", "max_section"),
-            ] {
-                if let Some(n) = o.remove(from) {
-                    rings.insert(to.into(), n);
-                }
-            }
-            o.insert("horizon:ring_sections".into(), rings.into());
-        }
-        _ => {}
-    }
-}
-
-/// Marks a YUNG's structure that the game can start (its type is vanilla's
-/// after the upgrade) with the vanilla type its mod turns off, under
-/// `horizon:disables`. One the game cannot start leaves the vanilla
-/// structure in place, so the world keeps one of the two.
-pub fn disables(id: &str, v: &mut Value) -> bool {
-    let Some((_, vanilla)) = YUNG_REPLACES.iter().find(|(s, _)| id.starts_with(s)) else {
-        return false;
-    };
-    if !v["type"]
-        .as_str()
-        .is_some_and(|t| t.starts_with("minecraft:"))
-    {
-        return false;
-    }
-    v["horizon:disables"] = serde_json::json!([vanilla]);
     true
 }
 
@@ -1591,94 +1115,6 @@ mod tests {
     }
 
     #[test]
-    fn yungs_jigsaws_keep_their_rules() {
-        let mut report = Upgrade::default();
-        let mut s = json!({"type": "yungsapi:yung_jigsaw", "start_pool": "y:start", "size": 20,
-            "max_y": 60, "x_offset_in_chunk": 0, "max_distance_from_center": 80,
-            "enhanced_terrain_adaptation": {"type": "yungsapi:custom", "kernel_size": 24,
-                "kernel_distance": 24, "top": "carve", "bottom": "none"}});
-        assert!(upgrade("structure", &mut s, &mut report, &NO_TAGS));
-        assert_eq!(s["type"], "minecraft:jigsaw");
-        assert_eq!(s["horizon:yungsapi"], json!({"max_y": 60}));
-        assert_eq!(
-            s["horizon:enhanced_terrain_adaptation"],
-            json!({"kernel_size": 24, "kernel_distance": 24, "top": "carve", "bottom": "none",
-                "rigid_junctions": true, "inflate": true})
-        );
-        for gone in ["max_y", "x_offset_in_chunk", "enhanced_terrain_adaptation"] {
-            assert!(s.get(gone).is_none(), "{gone}");
-        }
-        // Better Dungeons' small Nether dungeon is the same jigsaw.
-        let mut nether = json!({"type": "betterdungeons:small_nether_dungeon",
-            "start_pool": "betterdungeons:small_nether_dungeon", "size": 10,
-            "start_jigsaw_name": "betterdungeons:small_nether_dungeon_anchor",
-            "max_distance_from_center": 80, "liquid_settings": "ignore_waterlogging"});
-        assert!(upgrade("structure", &mut nether, &mut report, &NO_TAGS));
-        assert_eq!(nether["type"], "minecraft:jigsaw");
-        assert_eq!(nether["horizon:yungsapi"], json!({}));
-        assert_eq!(
-            nether["horizon:enhanced_terrain_adaptation"],
-            json!({"kernel_size": 0, "kernel_distance": 0, "top": "none", "bottom": "none",
-                "rigid_junctions": true, "inflate": true})
-        );
-        assert_eq!(
-            nether["start_jigsaw_name"],
-            "betterdungeons:small_nether_dungeon_anchor"
-        );
-        assert!(report.unsupported.is_empty());
-        let mut pool = json!({"elements": [{"weight": 3, "element": {
-            "element_type": "yungsapi:yung_single_element", "location": "y:room",
-            "processors": "minecraft:empty", "projection": "rigid",
-            "name": "room", "max_count": 2, "min_required_depth": 1, "is_priority": true,
-            "ignore_bounds": false, "deadend_pool": "y:end",
-            "modifiers": [
-                {"condition": {"type": "yungsapi:piece_in_range", "pieces": ["y:pillar"],
-                    "above_range": 40},
-                 "target_selector": {"type": "yungsapi:self"},
-                 "actions": [{"type": "yungsapi:transform", "output": ["y:covered"], "x_offset": -1},
-                    {"type": "yungsapi:delay_generation"}, {"type": "yungsapi:spin"}]},
-                {"condition": {"type": "yungsapi:always_true"},
-                 "target_selector": {"type": "yungsapi:all"}, "actions": []}],
-            "enhanced_terrain_adaptation": {"type": "yungsapi:carved_top_no_beard_small"},
-            "condition": {"type": "yungsapi:all_of", "conditions": [
-                {"type": "yungsapi:piece_in_horizontal_direction", "pieces": ["yungsapi:all"],
-                    "range": 5, "rotation": "none"},
-                {"type": "yungsapi:not", "condition": {"type": "yungsapi:mod_loaded", "modid": "create"}},
-                {"type": "yungsapi:biome", "biomes": []}]}}}]});
-        assert!(upgrade("template_pool", &mut pool, &mut report, &NO_TAGS));
-        let e = &pool["elements"][0]["element"];
-        assert_eq!(e["element_type"], "minecraft:single_pool_element");
-        assert_eq!(e["location"], "y:room");
-        assert_eq!(
-            e["horizon:yungsapi"],
-            json!({"name": "room", "max_count": 2, "min_depth": 1, "priority": true,
-                "ignore_bounds": false, "condition": {"type": "all_of", "conditions": [
-                    {"type": "piece_in_horizontal_direction", "pieces": [], "range": 5, "rotation": "none"},
-                    {"type": "not", "condition": {"type": "false"}},
-                    {"type": "false"}]},
-                "deadend_pool": "y:end",
-                "modifiers": [{"condition": {"type": "piece_in_range", "pieces": ["y:pillar"],
-                        "horizontal_range": null, "above_range": 40, "below_range": null},
-                    "actions": [{"type": "transform", "output": ["y:covered"], "offset": [-1, 0, 0]},
-                        {"type": "delay_generation"}]}]})
-        );
-        assert!(e.get("deadend_pool").is_none() && e.get("modifiers").is_none());
-        assert_eq!(
-            e["horizon:enhanced_terrain_adaptation"],
-            json!({"kernel_size": 12, "kernel_distance": 6, "top": "carve", "bottom": "none"})
-        );
-        assert_eq!(
-            report.rules_lost,
-            BTreeMap::from([
-                ("yungsapi condition yungsapi:biome".into(), 1),
-                ("yungsapi modifier action yungsapi:spin".into(), 1),
-                ("yungsapi modifier target yungsapi:all".into(), 1),
-            ])
-        );
-        assert!(report.unsupported.is_empty());
-    }
-
-    #[test]
     fn drops_processors_written_in_java() {
         let mut report = Upgrade::default();
         let mut list = json!({"processors": [
@@ -1720,59 +1156,6 @@ mod tests {
                 ("repurposed_structures:bottom_pillar_processor".into(), 1),
             ])
         );
-    }
-
-    #[test]
-    fn yungs_placements_keep_their_rules() {
-        let tags = BTreeMap::from([(
-            "bf:avoid".to_owned(),
-            vec!["minecraft:nether_complexes".to_owned()],
-        )]);
-        let mut report = Upgrade::default();
-        let mut fortress = json!({"placement": {"type": "yungsapi:enhanced_random_spread",
-            "salt": 1, "spacing": 30, "separation": 20,
-            "enhanced_exclusion_zone": {"other_set": "#bf:avoid", "chunk_count": 10}}});
-        assert!(upgrade("structure_set", &mut fortress, &mut report, &tags));
-        assert_eq!(
-            fortress["placement"],
-            json!({"type": "minecraft:random_spread", "salt": 1, "spacing": 30, "separation": 20,
-                "horizon:exclusion_zone": {"other_sets": ["minecraft:nether_complexes"], "chunk_count": 10}})
-        );
-        let mut temple = json!({"placement": {"type": "betterdeserttemples:desert_temple",
-            "salt": 2, "spacing": 30, "separation": 20,
-            "exclusion_zone": {"other_set": "minecraft:villages", "chunk_count": 6}}});
-        assert!(upgrade("structure_set", &mut temple, &mut report, &tags));
-        assert_eq!(temple["placement"]["type"], "minecraft:random_spread");
-        assert_eq!(temple["placement"]["exclusion_zone"]["chunk_count"], 6);
-        assert_eq!(
-            temple["placement"]["horizon:avoid_biomes"],
-            json!({"biomes": ["#minecraft:is_river", "#minecraft:is_ocean"],
-                "radius": 48, "step": 2, "y": 120})
-        );
-        let mut stronghold = json!({"placement": {"type": "betterstrongholds:stronghold",
-            "salt": 3, "spacing": 85, "separation": 50,
-            "chunk_distance_to_first_ring": 80, "ring_chunk_thickness": 96}});
-        assert!(upgrade(
-            "structure_set",
-            &mut stronghold,
-            &mut report,
-            &tags
-        ));
-        assert_eq!(
-            stronghold["placement"],
-            json!({"type": "minecraft:random_spread", "salt": 3, "spacing": 85, "separation": 50,
-                "horizon:ring_sections": {"distance_to_first_ring": 80, "thickness": 96}})
-        );
-        assert_eq!(report.mapped, 3);
-        assert!(report.unsupported.is_empty());
-        // The vanilla counterpart is turned off only for a structure the game starts.
-        let mut ported = json!({"type": "minecraft:jigsaw"});
-        assert!(disables("betterstrongholds:stronghold", &mut ported));
-        assert_eq!(ported["horizon:disables"], json!(["minecraft:stronghold"]));
-        let mut java = json!({"type": "bettermineshafts:mineshaft"});
-        assert!(!disables("bettermineshafts:mineshaft_oak", &mut java));
-        let mut circle = json!({"type": "minecraft:jigsaw"});
-        assert!(!disables("betterwitchhuts:witch_circle", &mut circle));
     }
 
     #[test]
@@ -1884,88 +1267,6 @@ mod tests {
         ));
         assert_eq!(report.block_states, 2);
         assert_eq!(report.mapped, 0);
-    }
-
-    #[test]
-    fn modifiers_add_to_sets_and_pools() {
-        let mut report = Upgrade::default();
-        let only_fd = |m: &str| m == "farmersdelight";
-        let set = json!({"type": "lithostitched:add_structure_set_entries",
-            "structure_sets": "minecraft:villages",
-            "entries": [{"structure": "x:village", "weight": 4}]});
-        let (kind, added) = modifier(&set, &only_fd, &mut report).unwrap();
-        assert_eq!(kind, "structure_set");
-        assert_eq!(
-            added,
-            json!({"horizon:add_to": ["minecraft:villages"],
-                "structures": [{"structure": "x:village", "weight": 4}]})
-        );
-        // A compat addition holds only when its mod is ported along.
-        let pool = |modid: &str| {
-            json!({"type": "lithostitched:add_template_pool_elements",
-                "neoforge:conditions": [{"type": "neoforge:mod_loaded", "modid": modid}],
-                "fabric:load_conditions": {"condition": "fabric:all_mods_loaded", "values": ["other"]},
-                "template_pools": ["x:houses", "y:houses"],
-                "elements": [{"weight": 5, "element": {"element_type": "minecraft:single_pool_element",
-                    "location": "x:fd_farm", "projection": "rigid", "processors": "minecraft:empty"}}]})
-        };
-        let (kind, added) = modifier(&pool("farmersdelight"), &only_fd, &mut report).unwrap();
-        assert_eq!(kind, "template_pool");
-        assert_eq!(added["horizon:add_to"], json!(["x:houses", "y:houses"]));
-        assert_eq!(added["elements"][0]["weight"], 5);
-        assert!(modifier(&pool("create"), &only_fd, &mut report).is_none());
-        // Fabric's conditions when there are no NeoForge ones; lithostitched's own.
-        let fabric = json!({"type": "lithostitched:add_structure_set_entries",
-            "fabric:load_conditions": [{"condition": "fabric:not",
-                "value": {"condition": "fabric:any_mods_loaded", "values": ["create"]}}],
-            "predicate": {"type": "lithostitched:all_of", "predicates": [
-                {"type": "lithostitched:mod_loaded", "mod_id": "farmersdelight"},
-                {"type": "lithostitched:true"}]},
-            "structure_sets": "minecraft:villages", "entries": []});
-        assert!(modifier(&fabric, &only_fd, &mut report).is_some());
-        let tagged = json!({"type": "lithostitched:add_structure_set_entries",
-            "structure_sets": "#x:sets", "entries": []});
-        assert!(modifier(&tagged, &only_fd, &mut report).is_none());
-        let features = json!({"type": "lithostitched:add_features"});
-        assert!(modifier(&features, &only_fd, &mut report).is_none());
-        assert_eq!(
-            report.added_to,
-            BTreeMap::from([
-                ("minecraft:villages".into(), 1),
-                ("x:houses".into(), 1),
-                ("y:houses".into(), 1),
-            ])
-        );
-        assert_eq!(
-            report.modifiers_left,
-            BTreeMap::from([
-                ("conditions".into(), 1),
-                ("lithostitched:add_features".into(), 1),
-                ("target".into(), 1),
-            ])
-        );
-    }
-
-    #[test]
-    fn ctov_joins_vanillas_villages_and_outposts() {
-        let sets = code_set_entries("ctov");
-        let (file, set, outposts) = &sets[0];
-        assert_eq!(
-            (*file, *set),
-            ("pillager_outposts", "minecraft:pillager_outposts")
-        );
-        assert_eq!(outposts.len(), 11);
-        assert!(outposts.iter().all(|(_, w)| *w == 1));
-        let (_, set, villages) = &sets[1];
-        assert_eq!(*set, "minecraft:villages");
-        assert_eq!(villages.len(), 63);
-        assert_eq!(villages[0], ("ctov:small/village_beach".into(), 10));
-        assert_eq!(villages[21], ("ctov:medium/village_beach".into(), 4));
-        assert_eq!(
-            villages[62],
-            ("ctov:large/village_taiga_fortified".into(), 1)
-        );
-        assert!(code_set_entries("mvs").is_empty());
     }
 
     #[test]
