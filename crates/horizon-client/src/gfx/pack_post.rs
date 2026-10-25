@@ -39,6 +39,82 @@ struct Binding {
     binding: u32,
     /// A filtering sampler (the texture is filterable).
     filtering: bool,
+    /// Where this texture's sampler object is bound: the first texture of each kind binds it
+    /// (`binding + 1`), the others share it (devices have as few as 16 sampler slots).
+    sampler: u32,
+}
+
+/// The sampler objects a pass binds, one slot per kind it uses.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum SamplerKind {
+    Linear,
+    Nearest,
+    Repeat,
+    NearestRepeat,
+    Comparison,
+}
+
+impl SamplerKind {
+    fn of(source: Source, filtering: bool) -> Self {
+        match source {
+            Source::Color(_) | Source::Dummy if !filtering => Self::Nearest,
+            Source::Depth => Self::Nearest,
+            Source::Noise => Self::Repeat,
+            Source::Shadow => Self::Comparison,
+            // Blocks look as the game draws them: nearest texels.
+            Source::Atlas => Self::NearestRepeat,
+            Source::Color(_) | Source::Dummy | Source::Lightmap => Self::Linear,
+        }
+    }
+
+    fn binding_type(self) -> wgpu::SamplerBindingType {
+        match self {
+            Self::Linear | Self::Repeat => wgpu::SamplerBindingType::Filtering,
+            Self::Nearest | Self::NearestRepeat => wgpu::SamplerBindingType::NonFiltering,
+            Self::Comparison => wgpu::SamplerBindingType::Comparison,
+        }
+    }
+}
+
+/// Points every sampler object of `module` at the slot `slot` gives its binding, so that
+/// samplers sharing a slot become one variable (two variables may not share a binding).
+fn share_samplers(module: &mut naga::Module, slot: &HashMap<u32, u32>) {
+    let mut first = HashMap::new();
+    let mut same = HashMap::new();
+    for (h, g) in module.global_variables.iter_mut() {
+        let Some(b) = g.binding.as_mut() else {
+            continue;
+        };
+        if !matches!(module.types[g.ty].inner, naga::TypeInner::Sampler { .. }) {
+            continue;
+        }
+        let Some(&to) = slot.get(&b.binding) else {
+            continue;
+        };
+        b.binding = to;
+        match first.entry(to) {
+            std::collections::hash_map::Entry::Occupied(e) => _ = same.insert(h, *e.get()),
+            std::collections::hash_map::Entry::Vacant(e) => _ = e.insert(h),
+        }
+    }
+    if same.is_empty() {
+        return;
+    }
+    let fix = |expressions: &mut naga::Arena<naga::Expression>| {
+        for (_, e) in expressions.iter_mut() {
+            if let naga::Expression::GlobalVariable(g) = e
+                && let Some(&to) = same.get(g)
+            {
+                *g = to;
+            }
+        }
+    };
+    for (_, f) in module.functions.iter_mut() {
+        fix(&mut f.expressions);
+    }
+    for ep in &mut module.entry_points {
+        fix(&mut ep.function.expressions);
+    }
 }
 
 struct Pass {
@@ -128,7 +204,12 @@ fn texture_format(f: Format, features: wgpu::Features) -> wgpu::TextureFormat {
     let half = pick(T::R16Float, T::Rg16Float, T::Rgba16Float);
     match (f.kind, f.bits) {
         (Kind::Unorm, 10) => T::Rgb10a2Unorm,
-        (Kind::Unorm, 16) if features.contains(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM) => {
+        (Kind::Unorm, 16)
+            if features.contains(
+                wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+                    | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
+            ) =>
+        {
             pick(T::R16Unorm, T::Rg16Unorm, T::Rgba16Unorm)
         }
         (Kind::Unorm, b) if b <= 8 => pick(T::R8Unorm, T::Rg8Unorm, T::Rgba8Unorm),
@@ -229,8 +310,11 @@ fn checked<T>(device: &wgpu::Device, create: impl FnOnce() -> T) -> Result<T, St
     let value = create();
     match pollster::block_on(scope.pop()) {
         Some(e) => {
-            // The details are in the error's sources.
-            let mut message = e.to_string();
+            // The details are in the error's description or its sources.
+            let mut message = match &e {
+                wgpu::Error::Validation { source, .. } => format!("{source:?}"),
+                e => e.to_string(),
+            };
             let mut source = std::error::Error::source(&e);
             while let Some(s) = source {
                 message = format!("{message}: {s}");
@@ -365,12 +449,22 @@ fn build_pass(
         },
     )];
     let mut samplers = Vec::new();
+    let (mut kinds, mut slots) = (HashMap::new(), HashMap::new());
     let mut reads = 0u16;
+    // A gbuffers pass draws into its buffers and the depth buffer: reading them as well would
+    // be a feedback loop (undefined in GL, refused by wgpu), so those read a blank texture.
+    let in_place = match geometry {
+        Some(_) => p.buffers.iter().fold(0u16, |m, &b| m | 1 << b),
+        None => 0,
+    };
     for s in &interface.samplers {
         let mut src = source(&s.name);
-        if src == Source::Atlas && geometry.is_none() {
-            src = Source::Dummy;
-        }
+        let blank = match src {
+            Source::Atlas => geometry.is_none(),
+            Source::Depth => geometry.is_some(),
+            Source::Color(n) => in_place & 1 << n != 0,
+            _ => false,
+        };
         let float = wgpu::TextureSampleType::Float { filterable: true };
         let mut sample_type = match src {
             Source::Color(n) => formats[n]
@@ -399,25 +493,32 @@ fn build_pass(
             ));
             (src, sample_type) = (Source::Dummy, float);
         }
+        if blank {
+            // The blank texture is float: an integer sampler then fails the pipeline (a note).
+            src = Source::Dummy;
+            if int {
+                sample_type = float;
+            }
+        }
         let filtering = sample_type == float;
         if let Source::Color(n) = src {
             reads |= 1 << n;
         }
         entries.push(texture_entry(s.binding, sample_type));
-        entries.push(entry(
-            s.binding + 1,
-            wgpu::BindingType::Sampler(if src == Source::Shadow {
-                wgpu::SamplerBindingType::Comparison
-            } else if filtering {
-                wgpu::SamplerBindingType::Filtering
-            } else {
-                wgpu::SamplerBindingType::NonFiltering
-            }),
-        ));
+        let kind = SamplerKind::of(src, filtering);
+        let sampler = *kinds.entry(kind).or_insert_with(|| {
+            entries.push(entry(
+                s.binding + 1,
+                wgpu::BindingType::Sampler(kind.binding_type()),
+            ));
+            s.binding + 1
+        });
+        slots.insert(s.binding + 1, sampler);
         samplers.push(Binding {
             source: src,
             binding: s.binding,
             filtering,
+            sampler,
         });
     }
     let final_pass = p.group == Group::Final;
@@ -453,24 +554,25 @@ fn build_pass(
     } else {
         (written & !kept) | mask(&p.flips)
     };
-    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some(&p.name),
-        entries: &entries,
-    });
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some(&p.name),
-        bind_group_layouts: &[Some(&layout), geometry.and_then(|g| g.table)],
-        ..Default::default()
-    });
     let created = checked(device, || {
-        let module = |m: naga::Module| {
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some(&p.name),
+            entries: &entries,
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some(&p.name),
+            bind_group_layouts: &[Some(&layout), geometry.and_then(|g| g.table)],
+            ..Default::default()
+        });
+        let module = |mut m: naga::Module| {
+            share_samplers(&mut m, &slots);
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(&p.name),
                 source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(m)),
             })
         };
         let (vs, fs) = (module(p.program.vertex), module(p.program.fragment));
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(&p.name),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
@@ -496,10 +598,11 @@ fn build_pass(
             }),
             multiview_mask: None,
             cache: None,
-        })
+        });
+        (layout, pipeline)
     });
-    let pipeline = match created {
-        Ok(p) => p,
+    let (layout, pipeline) = match created {
+        Ok(created) => created,
         Err(e) => {
             notes.push(format!("{}: skipped: {e}", p.name));
             return None;
@@ -590,9 +693,12 @@ impl PackPost {
             .terrain
             .zip(world.terrain.as_ref())
             .and_then(|(p, g)| build(p, Some(g)));
+        // Developers' aid: `HORIZON_SHADER_PACK_SKIP=composite,final` leaves programs out.
+        let skip = std::env::var("HORIZON_SHADER_PACK_SKIP").unwrap_or_default();
         let passes: Vec<Pass> = post
             .programs
             .into_iter()
+            .filter(|p| !skip.split(',').any(|s| s == p.name))
             .filter_map(|p| build(p, None))
             .collect();
         if let Some(t) = &terrain {
@@ -775,37 +881,34 @@ impl PackPost {
                 resource: pass.ubo.as_entire_binding(),
             }];
             for s in &pass.samplers {
-                let filter = if s.filtering {
-                    &self.linear
-                } else {
-                    &self.nearest
+                let texture = match s.source {
+                    Source::Color(i) => targets.color[i]
+                        .as_ref()
+                        .map_or(&self.dummy, |t| &t[usize::from(key & 1 << i != 0)]),
+                    Source::Depth => &targets.depth,
+                    Source::Noise => &self.noise,
+                    Source::Dummy => &self.dummy,
+                    Source::Shadow => &self.shadow.0,
+                    Source::Atlas => self.atlas.as_ref().unwrap_or(&self.dummy),
+                    Source::Lightmap => &self.lightmap,
                 };
-                let (texture, sampler) = match s.source {
-                    Source::Color(i) => (
-                        targets.color[i]
-                            .as_ref()
-                            .map_or(&self.dummy, |t| &t[usize::from(key & 1 << i != 0)]),
-                        filter,
-                    ),
-                    Source::Depth => (&targets.depth, &self.nearest),
-                    Source::Noise => (&self.noise, &self.repeat),
-                    Source::Dummy => (&self.dummy, &self.linear),
-                    Source::Shadow => (&self.shadow.0, &self.shadow.1),
-                    // Blocks look as the game draws them: nearest texels.
-                    Source::Atlas => (
-                        self.atlas.as_ref().unwrap_or(&self.dummy),
-                        &self.nearest_repeat,
-                    ),
-                    Source::Lightmap => (&self.lightmap, &self.linear),
+                let sampler = match SamplerKind::of(s.source, s.filtering) {
+                    SamplerKind::Linear => &self.linear,
+                    SamplerKind::Nearest => &self.nearest,
+                    SamplerKind::Repeat => &self.repeat,
+                    SamplerKind::NearestRepeat => &self.nearest_repeat,
+                    SamplerKind::Comparison => &self.shadow.1,
                 };
                 entries.push(wgpu::BindGroupEntry {
                     binding: s.binding,
                     resource: wgpu::BindingResource::TextureView(texture),
                 });
-                entries.push(wgpu::BindGroupEntry {
-                    binding: s.binding + 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                });
+                if s.sampler == s.binding + 1 {
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: s.sampler,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    });
+                }
             }
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(&pass.name),
@@ -1130,6 +1233,31 @@ mod tests {
     use super::*;
     use wgpu::TextureFormat as T;
 
+    /// Two textures with a sampler each become two textures sharing one sampler variable.
+    #[test]
+    fn samplers_of_a_kind_share_one_variable() {
+        let mut module = naga::front::wgsl::parse_str(
+            "@group(0) @binding(1) var a: texture_2d<f32>;\n\
+             @group(0) @binding(2) var sa: sampler;\n\
+             @group(0) @binding(3) var b: texture_2d<f32>;\n\
+             @group(0) @binding(4) var sb: sampler;\n\
+             @fragment fn main() -> @location(0) vec4<f32> {\n\
+             return textureSample(a, sa, vec2(0.5)) + textureSample(b, sb, vec2(0.5));\n}\n",
+        )
+        .unwrap();
+        share_samplers(&mut module, &HashMap::from([(2, 2), (4, 2)]));
+        let info = naga::valid::Validator::new(Default::default(), Default::default())
+            .validate(&module)
+            .unwrap();
+        let used: Vec<u32> = module
+            .global_variables
+            .iter()
+            .filter(|(h, _)| !info.get_entry_point(0)[*h].is_empty())
+            .filter_map(|(_, g)| g.binding.as_ref().map(|b| b.binding))
+            .collect();
+        assert_eq!(used, [1, 2, 3]);
+    }
+
     #[test]
     fn pack_formats_map_to_renderable_ones() {
         let f = |name| texture_format(Format::parse(name).unwrap(), wgpu::Features::empty());
@@ -1142,8 +1270,9 @@ mod tests {
         assert_eq!(f("RGBA16"), T::Rgba16Float, "16-bit norm needs a feature");
         assert_eq!(f("RGBA8_SNORM"), T::Rgba16Float, "snorm is not renderable");
         assert_eq!(f("R11F_G11F_B10F"), T::Rgba16Float);
-        let all =
-            wgpu::Features::TEXTURE_FORMAT_16BIT_NORM | wgpu::Features::RG11B10UFLOAT_RENDERABLE;
+        let all = wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+            | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+            | wgpu::Features::RG11B10UFLOAT_RENDERABLE;
         let g = |name| texture_format(Format::parse(name).unwrap(), all);
         assert_eq!(g("RGBA16"), T::Rgba16Unorm);
         assert_eq!(g("R11F_G11F_B10F"), T::Rg11b10Ufloat);
