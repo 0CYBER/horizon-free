@@ -345,7 +345,26 @@ impl Game<'_> {
             Some(Arg::Resource(s)) => Some(s.clone()),
             _ => None,
         };
-        self.audio.stop_sounds(sound.as_deref(), source);
+        // StopSoundCommand: each target's connection gets the packet; the
+        // window's own player stops its sounds.
+        let packet = C::StopSound(play::StopSound {
+            source: source.map(|s| s as i32),
+            sound: sound.clone(),
+        });
+        for &t in &targets {
+            match t {
+                Target::Player if self.lan_acting.is_some() => {
+                    self.guest_packets.push(packet.clone());
+                }
+                Target::Player => self.audio.stop_sounds(sound.as_deref(), source),
+                Target::Guest(conn) => {
+                    if let Some(host) = self.lan.as_ref() {
+                        host.hub.send_to(conn, &packet);
+                    }
+                }
+                _ => {}
+            }
+        }
         let key = match (source, &sound) {
             (Some(_), Some(_)) => "commands.stopsound.success.source.sound",
             (Some(_), None) => "commands.stopsound.success.source.any",
