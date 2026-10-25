@@ -637,11 +637,7 @@ impl Streaming {
         });
         self.shared.ready.notify_one();
     }
-    #[expect(
-        clippy::boxed_local,
-        reason = "the box is `Done::Decorated`'s, so moving it out copies nothing"
-    )]
-    fn receive_decorated(&mut self, x: i32, z: i32, region: Box<[Proto; 9]>) {
+    fn receive_decorated(&mut self, x: i32, z: i32, region: [Proto; 9]) {
         self.generation_scan.exhausted = false;
         self.decorating -= 1;
         self.decorated.insert((x, z));
@@ -828,7 +824,7 @@ impl Streaming {
                         }
                     }
                 }
-                Done::Decorated(x, z, region) => self.receive_decorated(x, z, region),
+                Done::Decorated(x, z, region) => self.receive_decorated(x, z, *region),
                 Done::Generated(chunk) => self.receive_generated(chunk, world),
                 Done::Saved(protos) => self.receive_saved(protos),
                 Done::Lit(x, z, sections, seq) => {
@@ -1310,7 +1306,7 @@ impl Streaming {
         while self.decorating > 0 || !self.finishing.is_empty() || self.saving > 0 {
             let left = deadline.saturating_duration_since(std::time::Instant::now());
             match self.results.recv_timeout(left) {
-                Ok(Done::Decorated(x, z, region)) => self.receive_decorated(x, z, region),
+                Ok(Done::Decorated(x, z, region)) => self.receive_decorated(x, z, *region),
                 Ok(Done::Generated(chunk)) => self.receive_generated(chunk, world),
                 Ok(Done::Saved(protos)) => self.receive_saved(protos),
                 Ok(other) => self.deferred.push(other),
@@ -1338,7 +1334,7 @@ impl Streaming {
         let started = std::time::Instant::now();
         while let Ok(done) = self.results.try_recv() {
             match done {
-                Done::Decorated(x, z, region) => self.receive_decorated(x, z, region),
+                Done::Decorated(x, z, region) => self.receive_decorated(x, z, *region),
                 Done::Generated(chunk) => self.receive_generated(chunk, world),
                 Done::Saved(protos) => self.receive_saved(protos),
                 other => self.deferred.push(other),
