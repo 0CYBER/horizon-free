@@ -321,20 +321,7 @@ impl Game<'_> {
         }
         for p in self.creatures.projectiles.iter().filter(|p| p.id != 0) {
             use horizon_client::projectiles::ProjectileKind as K;
-            let kind = match &p.kind {
-                K::Arrow { .. } => "minecraft:arrow",
-                K::Snowball => "minecraft:snowball",
-                K::Egg => "minecraft:egg",
-                K::EnderPearl => "minecraft:ender_pearl",
-                K::SmallFireball => "minecraft:small_fireball",
-                K::LargeFireball { .. } => "minecraft:fireball",
-                K::LlamaSpit => "minecraft:llama_spit",
-                K::WindCharge => "minecraft:wind_charge",
-                K::BreezeWindCharge => "minecraft:breeze_wind_charge",
-                K::ShulkerBullet { .. } => "minecraft:shulker_bullet",
-                K::WitherSkull { .. } => "minecraft:wither_skull",
-                K::Potion { .. } => "minecraft:splash_potion",
-            };
+            let kind = p.kind.id();
             let mut e = state(p.id, kind, at(p.position), p.yaw, false);
             e.pitch = p.pitch;
             e.velocity = at(p.velocity);

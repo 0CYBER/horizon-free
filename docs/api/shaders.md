@@ -34,10 +34,55 @@ how the world is fed to the GPU.
   benchmark ([benchmark-report.md](../benchmark-report.md)) records the pack and its cost, so "fast" stays measured.
 - **Off by default.** Without a pack the renderer is vanilla's look, and no pack code runs.
 
+## The pack format (schema 1)
+
+A pack is a folder, or the same files zipped as a `.hshader`, with `horizon-shaders.toml` at its root
+(crate `horizon-shader-api`; the sample with every key is
+`crates/horizon-shader-api/tests/samples/schema-1/`):
+
+```toml
+schema = 1                 # the manifest's format; a reader refuses schemas newer than it knows
+id = "soft_light"          # [a-z0-9_]{1,64}: the settings key and the registry id
+name = "Soft Light"
+version = "1.0.0"
+api = "0.1"                # the shader API line the WGSL is written for
+description = "..."        # optional, like authors and license
+shared = ["common.wgsl"]   # optional: WGSL put before every stage's file, in order
+
+[sky]                      # each stage is optional, but a pack has at least one
+file = "sky.wgsl"
+
+[material]
+file = "material.wgsl"
+
+[[post]]                   # full-screen passes, in the order they run (8 at most)
+file = "post/grade.wgsl"
+name = "Colour grade"      # optional: the GPU time overlay's label
+
+[[options]]                # 64 at most; `id` is the WGSL `override` it sets
+id = "saturation"
+name = "Saturation"
+type = "float"             # bool, float (min, max, step), int (min, max), choice (values)
+default = 1.1
+min = 0.0
+max = 2.0
+step = 0.05
+
+[budget]
+gpu_ms = 1.5               # optional: the GPU time the pack aims to add (0 to 16 ms)
+```
+
+An option's `override` has the type of its kind: `bool`, `f32`, `i32`, or `u32` for a choice (the index of the
+value). The pack holds only the manifest, the `.wgsl` files it names (each used, UTF-8, 256 KiB at most),
+`README.md`, `LICENSE` (`.md`, `.txt`) and `icon.png`, under plain paths, 8 MiB in all. A `.hshader` is built
+the same way every time (files in path order, fixed dates), so a pack's SHA-256 depends only on its files.
+
 ## Guide, reference and examples
 
-None yet. When the first stage lands: a guide here, a generated reference (`shaders-reference.md`) and an example pack
-in the repository that the renderer's tests load.
+- [shaders-reference.md](shaders-reference.md): every stage's signature, input and output structs, resources and
+  helpers, the frame's fields with their units, option types and limits, generated from `crates/horizon-shader-api`.
+- [The guide](../shaders.md): making a pack with `horizon-shader new`, `check` and `pack`; the templates and the
+  example pack (`crates/horizon-shader-api/packs/golden_hour`).
 
 ## Stability
 
@@ -46,9 +91,13 @@ pack exist ([stability.md](stability.md)).
 
 ## Not there yet
 
-Everything on this page. The order: the renderer hooks shared with the format loader, then the material and post
+The stages and everything that runs a pack (the format above is read and checked). The order: the renderer hooks shared with the format loader, then the material and post
 stages with options and hot reload, then the overlay, lighting, sky and shadow stages.
 
 ## Changelog
 
+- 2026-10-25: `horizon-shader` (`new`, `check`, `pack`), three templates, the example pack and the guide.
+- 2026-10-25: the check (naga validation, signatures, options, budgets, SPIR-V/Metal/HLSL translation).
+- 2026-10-25: the stages of API 0.1 (sky, material, post), their inputs and the generated reference.
+- 2026-10-25: the pack format, schema 1: `horizon-shaders.toml` and the `.hshader` package.
 - 2026-10-24: the earlier shader pack code was removed; this API is designed from scratch.

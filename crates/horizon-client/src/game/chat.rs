@@ -99,6 +99,8 @@ pub struct UiState {
     /// Death screen cause and when the player died (buttons wait 20 ticks).
     pub death_text: Option<Text>,
     pub died_at: Option<std::time::Instant>,
+    /// `LivingEntity.deathTime` of the window's player: ticks since it died.
+    pub death_time: u32,
 }
 
 impl Game<'_> {
@@ -570,8 +572,14 @@ impl Game<'_> {
     /// ChatScreen.handleChatInput: history, then a command or a chat line.
     pub(super) fn handle_chat_input(&mut self, message: &str) {
         self.ui.chat.add_recent(message);
-        // On a server (single player's own included) the server runs it.
+        // On a server (single player's own included) the server runs it,
+        // unless a client mod owns the command.
         if self.remote.is_some() {
+            if let Some(command) = message.strip_prefix('/')
+                && self.mod_command(command)
+            {
+                return;
+            }
             self.send_chat(message);
             return;
         }
@@ -580,7 +588,7 @@ impl Game<'_> {
         } else {
             let line = Text::translate(
                 "chat.type.text",
-                &[Text::literal(PLAYER_NAME), Text::literal(message)],
+                &[self.player_display_name(), Text::literal(message)],
             );
             let focused = self.screen == Screen::Chat;
             let heard = self.mods.running().then(|| line.plain());
@@ -816,8 +824,12 @@ impl Game<'_> {
             ("data", data),
             ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
         ]);
-        let _ = horizon_client::save::write_dat(&path, root);
-        let _ = write_difficulty(&self.world_root, self.ui.difficulty);
+        if let Err(e) = horizon_client::save::write_dat(&path, root) {
+            log::warn!("the world clocks were not written: {e}");
+        }
+        if let Err(e) = write_difficulty(&self.world_root, self.ui.difficulty) {
+            log::warn!("the difficulty was not written: {e}");
+        }
     }
     /// Death message in chat (CombatTracker.getDeathMessage, as far as the
     /// cause is known to the client).

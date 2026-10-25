@@ -33,6 +33,7 @@ impl StartupMenu {
             Some(PendingWorldEntry::Server {
                 address: address.clone(),
                 name: options.player_name(),
+                cookies: None,
             })
         } else {
             options
@@ -125,6 +126,7 @@ impl StartupMenu {
             Action::Connect { address } => PendingWorldEntry::Server {
                 address,
                 name: player_name,
+                cookies: None,
             },
             _ => return,
         };
@@ -762,7 +764,7 @@ mod tests {
             "Guest".into(),
         );
         assert!(
-            matches!(menu.pending.take(), Some(PendingWorldEntry::Server { address, name })
+            matches!(menu.pending.take(), Some(PendingWorldEntry::Server { address, name, .. })
             if address == "localhost:25565" && name == "Guest")
         );
         assert!(menu.pending.take().is_none(), "an entry is consumed once");

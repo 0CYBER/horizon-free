@@ -428,6 +428,8 @@ version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
+ "serde",
+ "termcolor",
  "unicode-width",
 ]
 
@@ -1266,6 +1268,7 @@ dependencies = [
  "horizon-mods",
  "horizon-protocol",
  "horizon-server-files",
+ "horizon-shaders",
  "horizon-telemetry",
  "horizon-theme",
  "horizon-threads",
@@ -1435,9 +1438,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-shader-api"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "naga",
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml",
+ "zip",
+]
+
+[[package]]
 name = "horizon-shaders"
 version = "0.1.0"
 dependencies = [
+ "horizon-core",
+ "naga",
  "zip",
 ]
 
@@ -1973,6 +1991,7 @@ dependencies = [
  "naga-types",
  "num-traits",
  "once_cell",
+ "pp-rs",
  "rustc-hash 1.1.0",
  "spirv",
  "thiserror 2.0.21",
@@ -2647,6 +2666,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d83eb9bc6d8e5cf568e7a1101d60ee05e81ed50ea106026f3d18deeb046d7661"
 dependencies = [
  "zerovec",
+]
+
+[[package]]
+name = "pp-rs"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb458bb7f6e250e6eb79d5026badc10a3ebb8f9a15d1fff0f13d17c71f4d6dee"
+dependencies = [
+ "unicode-xid",
 ]
 
 [[package]]
@@ -4197,6 +4225,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "js-sys",
  "log",
+ "naga",
  "parking_lot",
  "portable-atomic",
  "profiling",

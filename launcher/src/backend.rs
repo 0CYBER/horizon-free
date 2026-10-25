@@ -558,7 +558,19 @@ pub fn install(release: &Release, progress: impl Fn(f32)) -> Result<(), String> 
 }
 
 pub fn remove(tag: &str) -> Result<(), String> {
-    fs::remove_dir_all(version_dir(tag)).map_err(|e| e.to_string())
+    let dir = version_dir(tag);
+    // Windows holds a file for a moment after the game, a scan or the launcher's own reader lets
+    // go of it, and remove_dir_all stops at the first one. Retry for a second; a folder that is
+    // already gone is removed.
+    for attempt in 1.. {
+        match fs::remove_dir_all(&dir) {
+            Ok(()) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Err(e) if attempt == 5 => return Err(e.to_string()),
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(250)),
+        }
+    }
+    Ok(())
 }
 
 /// The Minecraft version a Horizon build targets, from its research-lock.json.
@@ -1624,6 +1636,7 @@ pub fn need_prepared(tag: &str) -> Result<(), String> {
 pub fn client(tag: &str) -> Result<Command, String> {
     need_prepared(tag)?;
     complete_packs(tag);
+    crate::browser::horizon::before_play(&game_home());
     let mut cmd = client_command(tag);
     // A sign-in that can't be renewed (no network, expired) still lets the game start, offline.
     if let Err(e) = crate::account::attach_session(&mut cmd, &game_home()) {
