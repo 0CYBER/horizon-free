@@ -661,17 +661,24 @@ const CACHE_LIMIT: usize = 16384;
 /// Coordinates only equal missing neighbour keys. Weak entries retain no
 /// computed values across eviction or explicit invalidation. Only one work
 /// lock may be held at a time; finish shared prerequisites before acquiring it.
-pub(super) struct ChunkWork(Mutex<HashMap<(i32, i32), std::sync::Weak<Mutex<()>>>>);
+/// Sharded by key: every worker asks for the locks of the same neighbourhoods.
+pub(super) struct ChunkWork(Box<[Mutex<HashMap<(i32, i32), std::sync::Weak<Mutex<()>>>>]>);
+const WORK_SHARDS: usize = 64;
+/// The shard of `key` among `shards` (a power of two).
+pub(super) fn shard_of(key: (i32, i32), shards: usize) -> usize {
+    let hash = (key.0 as u32).wrapping_mul(0x9E37_79B9) ^ (key.1 as u32).wrapping_mul(0x85EB_CA6B);
+    (hash >> (32 - shards.trailing_zeros())) as usize
+}
 impl ChunkWork {
     pub(super) fn new() -> Self {
-        Self(Mutex::new(HashMap::new()))
+        Self((0..WORK_SHARDS).map(|_| Mutex::default()).collect())
     }
     pub(super) fn at(&self, key: (i32, i32)) -> Arc<Mutex<()>> {
-        let mut work = self.0.lock().unwrap();
+        let mut work = self.0[shard_of(key, WORK_SHARDS)].lock().unwrap();
         if let Some(lock) = work.get(&key).and_then(std::sync::Weak::upgrade) {
             return lock;
         }
-        if work.len() >= 4096 {
+        if work.len() >= 4096 / WORK_SHARDS {
             // Keep every active builder/waiter on its original lock, including
             // when the result cache was cleared while it was in flight.
             work.retain(|_, lock| lock.strong_count() > 0);
@@ -2971,7 +2978,13 @@ mod tests {
         for x in 1..8192 {
             drop(work.at((x, 1)));
         }
-        assert!(work.0.lock().unwrap().len() <= 4096);
+        assert!(
+            work.0
+                .iter()
+                .map(|s| s.lock().unwrap().len())
+                .sum::<usize>()
+                <= 4096
+        );
         assert!(Arc::ptr_eq(&same, &work.at((0, 0))));
         let weak = Arc::downgrade(&first);
         drop(held);
