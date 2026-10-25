@@ -3905,6 +3905,10 @@ impl Game<'_> {
                 if let Some(placed) = &placed {
                     self.predict_place(placed, seq);
                     self.with_hand(hand, Game::consume_held);
+                } else if let Some(r) = self.remote.as_mut() {
+                    // BlockItem.place plays its sound only once the block is set: the
+                    // server's resend of the target it refused is no placement.
+                    r.placing = None;
                 }
                 if reacts || placed.is_some() {
                     self.with_hand(hand, Game::swing_arm);
