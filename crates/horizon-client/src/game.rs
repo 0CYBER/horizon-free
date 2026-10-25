@@ -11272,9 +11272,10 @@ impl ApplicationHandler for Game<'_> {
                         // The hovered slot took the key (`ignoreTextInput`).
                     } else if let Some(shortcut) = self.edit_shortcut(&event) {
                         self.creative_search_shortcut(shortcut);
+                    } else if event.physical_key == PhysicalKey::Code(KeyCode::Backspace) {
+                        self.creative_search_backspace(self.has_control_down());
                     } else {
-                        let backspace = event.physical_key == PhysicalKey::Code(KeyCode::Backspace);
-                        self.creative_search_edit(event.text.as_deref(), backspace);
+                        self.creative_search_edit(event.text.as_deref());
                     }
                 }
                 WindowEvent::KeyboardInput { event, .. }
