@@ -437,7 +437,7 @@ for (const { file, values: own } of docPages) {
 await mkdir(join(dist, "data"), { recursive: true });
 await cp(join(site, "data", "roadmap.json"), join(dist, "data", "roadmap.json"));
 // The journal for Kira's #updates and its X posts: /data/journal.json, rebuilt with every deploy.
-await writeFile(join(dist, "data", "journal.json"), JSON.stringify(journalJson(journal, roadmap), null, 1) + "\n");
+await writeFile(join(dist, "data", "journal.json"), JSON.stringify(journalJson(releases, hubLive, roadmap), null, 1) + "\n");
 
 // The pages' inline scripts (they mark the page as scripted and apply the saved theme before CSS
 // applies) and the inlined stylesheet: the Content-Security-Policy in the Caddyfile allows them by hash.

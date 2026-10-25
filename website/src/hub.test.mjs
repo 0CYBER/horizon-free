@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { boardFrom, fixesIn, itemOf, journalFrom, journalHtml, journalJson, overviewHtml, progress, roadmapHtml, slimIssue } from "./hub.js";
+import { boardFrom, boardHtml, fixesIn, itemOf, journalFrom, journalHtml, journalJson, overviewHtml, progress, roadmapHtml, slimIssue } from "./hub.js";
 
 const roadmap = JSON.parse(readFileSync(new URL("../data/roadmap.json", import.meta.url), "utf8"));
 
@@ -42,7 +42,11 @@ test("the roadmap renders every item once, with both texts, in its status's sect
 });
 
 test("an item is its own anchor (hub#<id>, as Kira links it) and takes no other id of the page", () => {
-  const page = readFileSync(new URL("./hub.html", import.meta.url), "utf8") + roadmapHtml(roadmap) + overviewHtml(roadmap);
+  const week = { week: "2030-01", date: "2029-12-31", title: "A week", plain: "p", dev: "d" };
+  const release = { tag_name: "v0.2.2", name: "0.2.2", published_at: "2030-01-02T00:00:00Z", html_url: "u", body: "" };
+  const journal = journalHtml(journalFrom([release], [], { ...roadmap, journal: [week] }), roadmap);
+  const board = boardHtml(boardFrom([], roadmap), roadmap);
+  const page = readFileSync(new URL("./hub.html", import.meta.url), "utf8") + roadmapHtml(roadmap) + overviewHtml(roadmap) + board + journal;
   const ids = [...page.matchAll(/ id="([^"]+)"/g)].map((m) => m[1]);
   assert.deepEqual(ids.filter((id, i) => ids.indexOf(id) !== i), []);
   for (const item of roadmap.items) assert.ok(ids.includes(item.id), item.id);
@@ -91,10 +95,45 @@ test("the journal groups a release's changes by roadmap item and lists what awai
   assert.deepEqual(entries.map((e) => e.id), ["next-release", "v0.2.2", "launcher@0.2.1"]);
   assert.deepEqual(entries[0].changes.map((c) => [c.prs, c.item]), [[[1788], "discord-presence"]]);
   assert.deepEqual(entries[1].changes.map((c) => [c.section, c.text, c.item]), [["new", "Discord Rich Presence", "discord-presence"], ["fixed", "A fix", null]]);
-  const json = journalJson(entries, roadmap, "now");
-  assert.equal(json.format, "horizon-journal");
-  assert.equal(json.entries[1].items[0].post.length <= 240, true);
   const html = journalHtml(entries, roadmap);
-  assert.ok(html.includes('href="#item-discord-presence"'));
+  assert.ok(html.includes('href="#discord-presence"'));
   assert.ok(html.includes("And 1 fix."));
+});
+
+test("journal.json is the flat feed Kira reads: merges, releases, shipped items, weeks, ids that never change", () => {
+  const releases = [
+    { tag_name: "v0.2.48", name: "Horizon 0.2.48", published_at: "2030-01-02T00:00:00Z", html_url: "https://github.com/ludovic111/horizon/releases/tag/v0.2.48", body: "### New\n- Packs (#1)\n" },
+    { tag_name: "nightly-1", name: "Nightly", published_at: "2030-01-03T00:00:00Z", html_url: "u", body: "" },
+  ];
+  const list = [
+    pr(1788, { state: "closed", pull_request: { merged_at: "2030-01-04T00:00:00Z" }, html_url: "https://github.com/ludovic111/horizon/pull/1788" }),
+    pr(7, { state: "closed", pull_request: { merged_at: "2030-01-04T00:00:00Z" }, labels: [{ name: "skip-release" }] }),
+    pr(8, { state: "closed", pull_request: { merged_at: "2030-01-04T00:00:00Z" }, labels: [{ name: "skip-release" }, { name: "roadmap:lean-code" }] }),
+    pr(9),
+  ].map(slimIssue);
+  const week = { week: "2030-01", date: "2029-12-31", title: "A week", plain: "p", dev: "d" };
+  const feed = journalJson(releases, list, { ...roadmap, journal: [week] }, "2030-01-05T00:00:00Z");
+  const byId = new Map(feed.entries.map((e) => [e.id, e]));
+  // A merged pull request, with its roadmap item; skip-release ones only when they move an item; open ones never.
+  assert.deepEqual(byId.get("pr-1788"), { id: "pr-1788", kind: "merge", date: "2030-01-04T00:00:00Z", title: "PR 1788", url: "https://github.com/ludovic111/horizon/pull/1788", number: 1788, item: "discord-presence", item_title: "Discord Rich Presence" });
+  assert.ok(!byId.has("pr-7") && byId.get("pr-8").item === "lean-code" && !byId.has("pr-9"));
+  // Game and launcher releases only.
+  assert.equal(byId.get("release-v0.2.48").tag, "v0.2.48");
+  assert.ok(!byId.has("release-nightly-1"));
+  // Every shipped item, dated by its release when the feed has it, with its post and the announce flag.
+  const shipped = roadmap.items.filter((i) => i.status === "shipped");
+  for (const item of shipped) {
+    const e = byId.get(`shipped-${item.id}`);
+    assert.equal(e.kind, "shipped");
+    assert.equal(e.url, `https://playhorizon.dev/hub#${item.id}`);
+    assert.ok(e.post.length <= 240 && typeof e.announce === "boolean", item.id);
+  }
+  assert.equal(byId.get("shipped-server-resource-packs").date, "2030-01-02T00:00:00Z");
+  assert.equal(byId.get("weekly-2030-01").date, "2030-01-06T23:59:59.000Z");
+  // Newest first; every entry has what Kira needs, and links only where Kira shows them.
+  assert.deepEqual(feed.entries.map((e) => e.date), feed.entries.map((e) => e.date).sort().reverse());
+  for (const e of feed.entries) {
+    assert.ok(e.id && ["merge", "release", "weekly", "shipped"].includes(e.kind) && e.date && e.title, e.id);
+    assert.match(e.url, /^https:\/\/(github\.com|playhorizon\.dev)\//, e.id);
+  }
 });

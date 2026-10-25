@@ -319,19 +319,66 @@ export function journalFrom(releases, list, roadmap) {
   return entries.sort((a, b) => b.date.localeCompare(a.date)).slice(0, ENTRIES);
 }
 
-// /hub/journal.json: the journal for Kira's #updates and posts elsewhere, with each shipped item's short text.
-export function journalJson(entries, roadmap, generated = new Date().toISOString()) {
-  const item = (id) => {
-    const i = roadmap.items.find((x) => x.id === id);
-    return i && { id: i.id, title: i.title, plain: i.plain, post: i.post || i.plain };
-  };
-  return {
-    format: "horizon-journal",
-    version: 1,
-    generated,
-    url: JOURNAL_URL,
-    entries: entries.map((e) => ({ ...e, items: [...new Set(e.changes.map((c) => c.item).filter(Boolean))].map(item).filter(Boolean), shipped: e.shipped.map(item).filter(Boolean) })),
-  };
+const HUB = "https://playhorizon.dev/hub";
+const FEED = 300;
+
+// /data/journal.json, which Kira reads for #updates and X (kira's src/journal.js): one flat entry per merged pull
+// request, release, shipped roadmap item and weekly summary, newest first. An entry's id never changes: Kira posts
+// each id once. Shipped items carry `post` (at most 240 characters, tools/roadmap.py checks) and `announce`.
+export function journalJson(releases, list, roadmap, generated = new Date().toISOString()) {
+  const items = new Map(roadmap.items.map((i) => [i.id, i]));
+  const ours = releases.filter((r) => !r.draft && (isGame(r.tag_name) || isLauncher(r.tag_name)));
+  const published = new Map(ours.map((r) => [r.tag_name, r.published_at || ""]));
+  const merges = list
+    .filter((i) => i.kind === "pr" && i.state === "merged")
+    .map((pr) => ({ pr, item: itemOf(pr, roadmap) }))
+    // What players see, and anything that moves a roadmap item.
+    .filter(({ pr, item }) => item || !pr.labels.includes("skip-release"))
+    .map(({ pr, item }) => ({
+      id: `pr-${pr.n}`,
+      kind: "merge",
+      date: pr.at,
+      title: pr.title,
+      url: pr.url,
+      number: pr.n,
+      ...(item ? { item, item_title: items.get(item)?.title } : {}),
+    }));
+  const released = ours.map((r) => ({
+    id: `release-${r.tag_name}`,
+    kind: "release",
+    date: r.published_at || "",
+    title: r.name || r.tag_name,
+    plain: parts(r).line,
+    url: r.html_url,
+    tag: r.tag_name,
+  }));
+  const shipped = roadmap.items
+    .filter((i) => i.status === "shipped")
+    .map((i) => ({
+      id: `shipped-${i.id}`,
+      kind: "shipped",
+      date: published.get(i.shipped_in) || generated,
+      title: i.title,
+      plain: i.plain,
+      url: `${HUB}#${i.id}`,
+      item: i.id,
+      item_title: i.title,
+      shipped_in: i.shipped_in,
+      post: i.post || i.plain,
+      announce: Boolean(i.announce),
+    }));
+  // A week's summary is dated at the end of its week, after that week's releases.
+  const weekly = (roadmap.journal || []).map((w) => ({
+    id: `weekly-${w.week}`,
+    kind: "weekly",
+    date: new Date(Date.parse(w.date) + 7 * 864e5 - 1000).toISOString(),
+    title: w.title,
+    plain: w.plain,
+    dev: w.dev,
+    url: `${HUB}#week-${w.week}`,
+  }));
+  const entries = [...merges, ...released, ...shipped, ...weekly].sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
+  return { format: "horizon-journal", version: 2, generated, url: `${HUB}#journal`, entries: entries.slice(0, FEED) };
 }
 
 const KIND = { release: "Game", launcher: "Launcher", merged: "Merged", week: "This week" };
@@ -349,7 +396,7 @@ function changesHtml(entry, roadmap) {
   const dev = `<div class="hub-dev">${order
     .map((id) => {
       const item = roadmap.items.find((i) => i.id === id);
-      return `<p class="hub-group">${item ? `<a href="#item-${escape(id)}">${escape(item.title)}</a>` : "Other changes"}</p><ul class="hub-changes">${groups.get(id).map(line).join("")}</ul>`;
+      return `<p class="hub-group">${item ? `<a href="#${escape(id)}">${escape(item.title)}</a>` : "Other changes"}</p><ul class="hub-changes">${groups.get(id).map(line).join("")}</ul>`;
     })
     .join("")}</div>`;
   return simple + dev;
@@ -364,8 +411,8 @@ export function journalHtml(entries, roadmap) {
   <p class="hub-entry-meta"><span class="badge${e.kind === "release" ? " badge-game" : e.kind === "launcher" ? " badge-launcher" : ""}">${KIND[e.kind]}</span><time datetime="${escape(e.date)}">${escape(e.date.slice(0, 10))}</time></p>
   <h3 class="hub-entry-title">${e.url ? `<a href="${escape(e.url)}">${escape(e.title)}</a>` : escape(e.title)}</h3>
   ${e.kind === "week" ? `<p class="hub-plain">${inline(e.plain)}</p><p class="hub-dev">${inline(e.dev.replace(/(^|[^\w[/`])#(\d+)\b/g, (_, b, n) => `${b}[#${n}](${issueUrl(n)})`))}</p>` : ""}
-  ${shipped.length ? `<p class="hub-shipped">Shipped: ${shipped.map((i) => `<a href="#item-${escape(i.id)}">${escape(i.title)}</a>`).join(", ")}</p>` : ""}
-  ${items.length ? `<p class="hub-entry-items hub-plain">${items.map((i) => `<a class="hub-link" href="#item-${escape(i.id)}">${escape(i.title)}</a>`).join("")}</p>` : ""}
+  ${shipped.length ? `<p class="hub-shipped">Shipped: ${shipped.map((i) => `<a href="#${escape(i.id)}">${escape(i.title)}</a>`).join(", ")}</p>` : ""}
+  ${items.length ? `<p class="hub-entry-items hub-plain">${items.map((i) => `<a class="hub-link" href="#${escape(i.id)}">${escape(i.title)}</a>`).join("")}</p>` : ""}
   ${changesHtml(e, roadmap)}
 </article>`;
     })

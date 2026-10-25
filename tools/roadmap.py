@@ -57,7 +57,7 @@ ISSUE = re.compile(r"#(\d+)$")
 ID = re.compile(r"[a-z0-9]+(-[a-z0-9]+)*$")
 # An item is the anchor playhorizon.dev/hub#<id>: it can't take the name of a tab, a section or a heading.
 RESERVED = {"main", "overview", "roadmap", "board", "journal", "contribute", "hub-data", *STATUSES}
-RESERVED_PREFIXES = ("h-", "tab-", "week-")
+RESERVED_PREFIXES = ("h-", "tab-", "col-", "week-", "journal-")
 RELEASE = re.compile(r"(v\d[\w.]*|launcher@\d[\w.]*|launcher-v\d[\w.]*|website)$")
 MONTHS = ("January|February|March|April|June|July|August|September|October|November|December")
 # Kira's rule: no dates and no promises of when. "Coming soon" is the one allowed phrase.

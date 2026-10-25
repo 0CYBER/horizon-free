@@ -53,7 +53,7 @@ Whoever moves the work (the orchestrator on each heartbeat, or anyone in their p
 5. Once a week, write the week's summary in `roadmap/journal/<year>-<ISO week>.md` (for example
    `2026-43.md`): `# Title`, a paragraph or two for players, then `## Technical` and the same week for
    contributors, with its pull requests. `build` puts it into website/data/roadmap.json; the hub's Journal tab
-   shows it among the releases, and `/hub/journal.json` carries it to Kira's #updates and to posts elsewhere.
+   shows it among the releases, and `/data/journal.json` carries it to Kira's #updates and to X.
 6. Suggestions from the website and Discord are read and triaged by the maintainers. A good one becomes an
    item in a normal pull request; none is published automatically.
 
@@ -62,18 +62,30 @@ or when the file breaks a rule; `python3 tools/roadmap.py check --offline` runs 
 
 ## The journal
 
-The hub's Journal tab and `https://playhorizon.dev/hub/journal.json` are built with each deploy of the website
-(`website/src/hub.js`, `journalFrom`): every game and launcher release with its notes' changes, each placed under
-the roadmap item it moves (the pull request's `roadmap:<id>` label, else the item that links it); the merged pull
-requests no release has yet; and the weekly summaries above. Its JSON, newest first:
+The hub's Journal tab and `https://playhorizon.dev/data/journal.json` are built with each deploy of the website
+(`website/src/hub.js`). The tab shows every game and launcher release with its notes' changes, each placed under
+the roadmap item it moves (the pull request's `roadmap:<id>` label, else the item that links it), the merged pull
+requests no release has yet, and the weekly summaries above.
+
+`journal.json` is what Kira reads for `#updates` and its X posts (kira's `src/journal.js`): one flat entry per
+merged pull request, release, shipped item and weekly summary, newest first, the latest 300.
 
 ```json
-{ "format": "horizon-journal", "version": 1, "generated": "…", "url": "https://playhorizon.dev/hub#journal",
-  "entries": [ { "id": "v0.2.57", "kind": "release | launcher | merged | week", "date": "…", "title": "…",
-                 "plain": "one line for players", "url": "…", "dev": "weeks only",
-                 "changes": [ { "section": "new | fixed | merged", "text": "…", "prs": [1787], "item": "discord-presence" } ],
-                 "items": [ { "id", "title", "plain", "post" } ],      // roadmap items the entry moved
-                 "shipped": [ { "id", "title", "plain", "post" } ] } ] } // items that shipped in this release
+{ "format": "horizon-journal", "version": 2, "generated": "…", "url": "https://playhorizon.dev/hub#journal",
+  "entries": [
+    { "id": "pr-1788", "kind": "merge", "date": "…", "title": "the pull request's title", "url": "…",
+      "number": 1788, "item": "discord-presence", "item_title": "Discord Rich Presence" },
+    { "id": "release-v0.2.57", "kind": "release", "date": "…", "title": "…", "plain": "one line", "url": "…",
+      "tag": "v0.2.57" },
+    { "id": "shipped-server-resource-packs", "kind": "shipped", "date": "the release's", "title": "…",
+      "plain": "…", "url": "https://playhorizon.dev/hub#server-resource-packs", "item": "…", "item_title": "…",
+      "shipped_in": "v0.2.48", "post": "at most 240 characters", "announce": false },
+    { "id": "weekly-2026-43", "kind": "weekly", "date": "the week's last second", "title": "…", "plain": "…",
+      "dev": "…", "url": "https://playhorizon.dev/hub#week-2026-43" } ] }
 ```
 
-`post` is at most 240 characters, ready to announce as is. Readers should remember the ids they have posted.
+- An `id` never changes: readers post each one once. `merge` entries are the pull requests players see (no
+  `skip-release` label), plus any that moves a roadmap item; `item` is absent when none does.
+- `announce: true` (the item's `announce` key) asks Kira to post the shipped item on X too, with `post`.
+- `https://playhorizon.dev/data/roadmap.json` is `roadmap.toml` as JSON (`areas`, `items` with every key above,
+  `overview`, the weekly summaries); an item's page is `https://playhorizon.dev/hub#<id>`.
