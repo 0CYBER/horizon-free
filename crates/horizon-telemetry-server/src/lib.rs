@@ -75,7 +75,7 @@ impl Default for Config {
             live_per_hour: 600.0,
             live_window: horizon_telemetry::live::WINDOW,
             live_max_sessions: 200_000,
-            hub_per_hour: 120.0,
+            hub_per_hour: 600.0,
         }
     }
 }

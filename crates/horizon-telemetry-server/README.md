@@ -77,7 +77,7 @@ All are environment variables:
 - `HORIZON_TELEMETRY_LIVE_PER_HOUR` per address, pings and reads (600, bursts of 60: ten players behind one address)
 - `HORIZON_TELEMETRY_LIVE_WINDOW_SECONDS` (120)
 - `HORIZON_TELEMETRY_LIVE_MAX_SESSIONS` (200 000)
-- `HORIZON_TELEMETRY_HUB_PER_HOUR` votes and vote reads per address (120, bursts of 12)
+- `HORIZON_TELEMETRY_HUB_PER_HOUR` votes and vote reads per address (600, bursts of 60: a page load is one read, and several players can share an address)
 
 ## Hosting
 
