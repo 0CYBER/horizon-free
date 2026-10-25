@@ -45,8 +45,8 @@ fn searches_by_kind_and_words() {
     assert_eq!(found("", Kind::Mod), ["coords_hud"]);
     assert_eq!(found("coordinates HUD", Kind::Mod), ["coords_hud"]);
     assert!(found("zoom", Kind::Mod).is_empty());
-    // Kinds this launcher can't install yet (modpacks, a world) are never offered.
-    assert!(found("", Kind::Modpack).is_empty());
+    // Modpacks under Modpacks; a kind this launcher can't install yet (a world) never.
+    assert_eq!(found("", Kind::Modpack), ["cozy"]);
     assert!(found("skyblock", Kind::ResourcePack).is_empty());
     let p = hud(&index);
     assert_eq!(p.support(), super::super::Support::Works);
@@ -123,7 +123,7 @@ fn refuses_a_changed_file_a_taken_id_and_local_files_from_the_real_registry() {
         date: String::new(),
     });
     let e = install_from(&taken_down, true, &p, &home, &|_, _| {}).unwrap_err();
-    assert!(e.contains("no version"), "{e}");
+    assert_eq!(e, "Coordinates HUD was taken down: Test.");
     fs::remove_dir_all(&home).unwrap();
 }
 
@@ -142,4 +142,23 @@ fn registry_versions_run_when_made_for_this_game() {
         .map(|x| version_of(&index, p, x))
         .collect();
     assert_eq!(pick(Kind::Mod, &versions, false).unwrap().number, "0.1.0");
+}
+
+#[test]
+fn owner_links_only_take_github_logins() {
+    for ok in ["Stink-O", "ludovic111", "a"] {
+        assert!(github_login(ok), "{ok}");
+    }
+    for bad in [
+        "",
+        "-x",
+        "x-",
+        "a--b",
+        "bad login",
+        "a/b",
+        "x?y=1",
+        &"a".repeat(40),
+    ] {
+        assert!(!github_login(bad), "{bad}");
+    }
 }

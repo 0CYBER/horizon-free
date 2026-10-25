@@ -3,7 +3,7 @@
   "build": {
     "builder": "DOCKERFILE",
     "dockerfilePath": "Dockerfile",
-    "watchPatterns": ["/website/**", "/README.md", "/launcher/links.json"]
+    "watchPatterns": ["/website/**", "/README.md", "/launcher/links.json", "/docs/api/**"]
   },
   "deploy": {
     "healthcheckPath": "/",

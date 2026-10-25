@@ -1214,6 +1214,23 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
         } => {
             let source = source.get()?;
             let p = source.project(&project)?;
+            if p.kind == Kind::Modpack && p.source == SourceId::Horizon {
+                let pack = horizon::pack::install(&p.id, &line)?;
+                if as_json {
+                    json(
+                        serde_json::json!({"pack": pack.id, "version": pack.version, "mods": pack.mods, "home": horizon::pack::home(&pack.work)}),
+                    );
+                } else {
+                    println!(
+                        "{} {} is installed as its own profile, with {}.",
+                        pack.name,
+                        pack.version,
+                        pack.mods.join(", ")
+                    );
+                    println!("Play it: horizon-launcher modpack play {}", pack.id);
+                }
+                return Ok(());
+            }
             if p.kind == Kind::Modpack {
                 let folder = modpacks::ports_dir().join("downloads");
                 let file =
@@ -1306,10 +1323,15 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
 }
 
 fn modpack(action: ModpackCmd, as_json: bool) -> Result<(), String> {
+    use horizon_launcher::browser::horizon;
     use horizon_launcher::modpacks::{self, Imported};
     use horizon_port_pack::report::Status;
     let log = &|line: String| eprintln!("{line}");
     let work = |pack: &str| {
+        let registry = horizon::pack::packs_dir().join(pack);
+        if horizon::pack::is_pack(&registry) {
+            return Ok(registry);
+        }
         let work = modpacks::ports_dir().join(pack);
         modpacks::load(&work).map(|_| work)
     };
@@ -1343,10 +1365,26 @@ fn modpack(action: ModpackCmd, as_json: bool) -> Result<(), String> {
     match action {
         ModpackCmd::List => {
             let packs = modpacks::list();
-            if packs.is_empty() && !as_json {
+            let registry = horizon::pack::list();
+            if packs.is_empty() && registry.is_empty() && !as_json {
                 println!("No modpack imported yet: horizon-launcher modpack import <pack>");
             }
             packs.iter().for_each(show);
+            for p in &registry {
+                if as_json {
+                    json(
+                        serde_json::json!({"pack": p.id, "name": p.name, "version": p.version, "source": "horizon", "mods": p.mods}),
+                    );
+                } else {
+                    println!(
+                        "{} {}  ({}, from Horizon's registry)\n  {}",
+                        p.name,
+                        p.version,
+                        p.id,
+                        p.mods.join(", ")
+                    );
+                }
+            }
         }
         ModpackCmd::Import { path } => show(&modpacks::import(&path, log)?),
         ModpackCmd::Port {
