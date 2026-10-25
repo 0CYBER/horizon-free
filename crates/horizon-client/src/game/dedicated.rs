@@ -667,7 +667,9 @@ impl Game<'_> {
             self.poll_server_control(&mut state);
             let players = self.lan.as_ref().map_or(0, |h| h.hub.guests.len());
             if pause_after > 0 {
-                if players == 0 {
+                // A `/pregen` task keeps the server busy as a player would:
+                // paused, nothing would post-process its chunks.
+                if players == 0 && self.pregen_level().is_none() {
                     state.empty_ticks += 1;
                 } else {
                     state.empty_ticks = 0;
