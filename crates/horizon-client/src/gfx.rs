@@ -73,6 +73,7 @@ pub mod pack_draw;
 mod pack_entities;
 mod pack_hand;
 mod pack_post;
+mod pack_shadow;
 mod pack_sky;
 mod pack_timing;
 pub mod pack_uniforms;
