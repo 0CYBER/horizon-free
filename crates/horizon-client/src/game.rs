@@ -537,6 +537,8 @@ struct GameLevel<'w> {
     seed: i64,
     behaviours: &'w Behaviours,
     items: &'w Items,
+    /// Cooking recipes' experience, which a removed furnace pays out.
+    recipes: &'w horizon_client::crafting::Recipes,
     /// Container loot tables (`unpackLootTable`).
     loot: Option<std::sync::Arc<horizon_world::loot::LootData>>,
     registry: &'static horizon_world::registry::BlockRegistry,
@@ -2420,6 +2422,7 @@ impl Game<'_> {
             seed: self.level.seed,
             behaviours: self.res.behaviours(),
             items: self.res.items(),
+            recipes: self.res.recipes(),
             loot: horizon_client::structure_blocks::loot_data(&self.options.resources),
             registry: self.pack.assets.registry,
             rules,
@@ -3246,12 +3249,6 @@ impl Game<'_> {
         }
         // The block entity as it was, for what the drops copy from it.
         let key = (pos[0], pos[1], pos[2]);
-        // AbstractFurnaceBlockEntity.playerDestroy: the experience its recipes earned drops
-        // with the block. Read now, paid only if the block is really removed.
-        let furnace_xp = match self.world.block_entities.get(&key) {
-            Some(BlockEntity::Furnace(f)) => f.experience_owed(self.res.recipes()),
-            _ => 0,
-        };
         if let Some(entity) = self.world.block_entities.get(&key).cloned() {
             let name = self.world.block_names.get(&key).cloned();
             self.pending.record(pos, &entity, &facts.name, name);
@@ -3320,18 +3317,6 @@ impl Game<'_> {
                         xp,
                     );
                 }
-            }
-            // Stored recipe experience is not a loot drop: it leaves with the block
-            // whatever the tool, as `AbstractFurnaceBlockEntity` does.
-            if furnace_xp > 0 {
-                self.spawn_orbs(
-                    [
-                        f64::from(pos[0]) + 0.5,
-                        f64::from(pos[1]) + 0.5,
-                        f64::from(pos[2]) + 0.5,
-                    ],
-                    furnace_xp,
-                );
             }
         }
         self.pending.clear(pos);
@@ -6007,14 +5992,12 @@ impl Game<'_> {
                 self.player_drop(stack);
             }
             self.award_crafted(&crafted);
-            // shortcut: paid straight to the player instead of through `ExperienceOrb.award`
-            // (no orb flies at them), which a furnace's orbs reach within a tick anyway;
-            // upgrade if the visual matters or another block pays out far from the player.
-            if furnace_before > furnace_after {
-                let owed = self.take_furnace_experience();
-                if owed > 0 {
-                    self.give_orb_points(owed);
-                }
+            if furnace_before > furnace_after
+                && self.remote.is_none()
+                && let (Some(pos), Some(p)) = (self.container, self.player.as_ref())
+            {
+                let at = [p.position.x, p.position.y, p.position.z];
+                self.award_furnace_recipes(pos, at);
             }
         }
         if kind == Kind::Loom {
@@ -8807,17 +8790,26 @@ impl Game<'_> {
             self.give_orb_points(gained);
         }
     }
-    /// `AbstractFurnaceBlockEntity.awardUsedRecipesAndPopExperience`: what the open furnace
-    /// owes for everything it made since the last payout, cleared as it is read.
-    fn take_furnace_experience(&mut self) -> u32 {
-        let Some(pos) = self.container else {
-            return 0;
+    /// `FurnaceResultSlot.checkTakeAchievements`: the player took from the output of the
+    /// furnace at `pos`, which pops the experience of what it made at them
+    /// (`awardUsedRecipesAndPopExperience`) and forgets it.
+    pub(super) fn award_furnace_recipes(&mut self, pos: (i32, i32, i32), at: [f64; 3]) {
+        let used = match self.world.block_entities.get_mut(&pos) {
+            Some(BlockEntity::Furnace(f)) => {
+                let used = f.recipe_experience(self.res.recipes());
+                f.recipes_used.clear();
+                used
+            }
+            _ => return,
         };
-        let recipes = self.res.recipes();
-        let Some(BlockEntity::Furnace(f)) = self.world.block_entities.get_mut(&pos) else {
-            return 0;
-        };
-        f.take_experience(recipes)
+        for (count, experience) in used {
+            let xp = horizon_client::containers::create_experience(
+                count,
+                experience,
+                &mut self.world.random,
+            );
+            self.spawn_orbs(at, xp);
+        }
     }
     /// `Player.giveExperiencePoints`, and `giveExperienceLevels`' level-up
     /// sound every fifth level (at most every 100 ticks).

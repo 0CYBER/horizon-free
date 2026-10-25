@@ -488,25 +488,13 @@ impl Furnace {
             self.cooking_timer = 0;
         }
     }
-    /// `AbstractFurnaceBlockEntity.createExperience`: each recipe's own share is floored,
-    /// then the floors are added. Flooring the sum instead pays one point for two recipes
-    /// worth 0.6 each, which vanilla does not.
-    fn owed(used: &HashMap<String, u32>, experience: impl Fn(&str) -> f32) -> u32 {
-        used.iter()
-            .map(|(id, count)| (experience(id) * *count as f32).floor().max(0.0) as u32)
-            .sum()
-    }
-    /// What this furnace owes right now, without forgetting it: breaking the block reads
-    /// the same counter, and only a payout clears it.
-    pub fn experience_owed(&self, recipes: &Recipes) -> u32 {
-        Self::owed(&self.recipes_used, |id| recipes.cooking_experience(id))
-    }
-    /// `AbstractFurnaceBlockEntity.awardUsedRecipesAndPopExperience`: the experience this
-    /// furnace owes, forgotten as it is paid.
-    pub fn take_experience(&mut self, recipes: &Recipes) -> u32 {
-        let owed = self.experience_owed(recipes);
-        self.recipes_used.clear();
-        owed
+    /// `recipesUsed`, each recipe with its `experience` (0 for one this data pack does
+    /// not have), in the order `getRecipesToAwardAndPopExperience` pays them.
+    pub fn recipe_experience(&self, recipes: &Recipes) -> Vec<(u32, f32)> {
+        self.recipes_used
+            .iter()
+            .map(|(id, count)| (*count, recipes.cooking_experience(id)))
+            .collect()
     }
     /// A menu click wrote its slots into `items`, and `before` was the input
     /// slot until then: the menu called `setItem` on it only if it changed
@@ -621,23 +609,40 @@ fn total_time(time: u32, speed: f32) -> i32 {
     }
 }
 
+/// `AbstractFurnaceBlockEntity.createExperience`: `count * experience`, floored, and one
+/// more with the chance of what is left over (a level random draw only when there is some).
+pub fn create_experience(
+    count: u32,
+    experience: f32,
+    random: &mut impl horizon_core::random::RandomSource,
+) -> u32 {
+    let total = count as f32 * experience;
+    let whole = total.floor();
+    let fraction = total - whole;
+    let mut xp = whole.max(0.0) as u32;
+    if fraction != 0.0 && random.next_float() < fraction {
+        xp += 1;
+    }
+    xp
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use horizon_core::random::{LegacyRandom, RandomSource};
 
-    /// `createExperience` floors each recipe on its own. Two recipes worth 0.6 each pay
-    /// nothing, where flooring their sum would pay one point.
+    /// A whole amount pays itself without a draw; a fraction is a chance of one more.
     #[test]
-    fn experience_is_floored_per_recipe_and_not_on_the_sum() {
-        let mut used = HashMap::new();
-        used.insert("a".to_owned(), 1);
-        used.insert("b".to_owned(), 1);
-        assert_eq!(Furnace::owed(&used, |_| 0.6), 0);
-
-        used.insert("c".to_owned(), 10);
-        assert_eq!(
-            Furnace::owed(&used, |id| if id == "c" { 0.1 } else { 0.0 }),
-            1
-        );
+    fn create_experience_rounds_the_fraction_by_chance() {
+        let mut random = LegacyRandom::new(7);
+        let mut untouched = LegacyRandom::new(7);
+        assert_eq!(create_experience(4, 0.5, &mut random), 2);
+        assert_eq!(create_experience(3, 0.0, &mut random), 0);
+        assert_eq!(random.next_long(), untouched.next_long());
+        let paid: u32 = (0..1000)
+            .map(|_| create_experience(1, 0.35, &mut random))
+            .sum();
+        assert!((250..450).contains(&paid), "{paid}");
+        assert!((0..100).all(|_| (1..=2).contains(&create_experience(1, 1.7, &mut random))));
     }
 }
