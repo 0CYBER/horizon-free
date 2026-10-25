@@ -264,7 +264,7 @@ def main():
     oh.run_logged([*java, 'keys', build], build, 'keys')
     services = Services(json.loads((build / 'publickeys.json').read_text()))
     discovery = services.url + '/minecraft/client'
-    os.environ.update(HORIZON_NO_AUDIO='1', HORIZON_API_DISCOVERY=discovery)
+    os.environ.update(lab.game_env(HORIZON_API_DISCOVERY=discovery))
     servers = {
         'vanilla': ['java', '-Xmx2g', '-Duser.timezone=UTC', f'-Dminecraft.api.discovery.host={discovery}',
                     '-cp', dependencies, 'net.minecraft.server.Main', 'nogui'],
