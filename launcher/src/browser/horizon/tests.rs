@@ -123,7 +123,7 @@ fn refuses_a_changed_file_a_taken_id_and_local_files_from_the_real_registry() {
         date: String::new(),
     });
     let e = install_from(&taken_down, true, &p, &home, &|_, _| {}).unwrap_err();
-    assert!(e.contains("no version"), "{e}");
+    assert_eq!(e, "Coordinates HUD was taken down: Test.");
     fs::remove_dir_all(&home).unwrap();
 }
 

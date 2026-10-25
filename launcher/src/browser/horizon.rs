@@ -374,10 +374,19 @@ fn install_from(
 
 /// A project's newest version for this game that wasn't taken down.
 fn newest<'a>(index: &Index, p: &'a index::Project) -> Result<&'a index::Version, String> {
-    p.versions
-        .iter()
-        .find(|v| v.game == GAME && index.revoked(&p.id, &v.file.sha256).is_none())
-        .ok_or_else(|| format!("{} has no version for {GAME} to install.", p.name))
+    let mut taken_down = None;
+    for v in p.versions.iter().filter(|v| v.game == GAME) {
+        match index.revoked(&p.id, &v.file.sha256) {
+            None => return Ok(v),
+            Some(r) => {
+                taken_down.get_or_insert(r);
+            }
+        }
+    }
+    Err(match taken_down {
+        Some(r) => format!("{} was taken down: {}", p.name, r.reason),
+        None => format!("{} has no version for {GAME} to install.", p.name),
+    })
 }
 
 /// Installs version `v` of the registry's mod or resource pack `p` into the game folder `home`.
