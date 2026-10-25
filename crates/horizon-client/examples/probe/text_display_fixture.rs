@@ -19,6 +19,15 @@ pub fn main() -> Result<(), Box<dyn Error>> {
         };
         let mut display = TextDisplayData::default();
         display.apply(&packet.values);
+        if let Some(angles) = input["angles"].as_array() {
+            let a: Vec<_> = angles.iter().map(|v| v.as_f64().unwrap() as f32).collect();
+            writeln!(
+                out,
+                "{}",
+                serde_json::to_string(&display.matrix([a[0], a[1]], [a[2], a[3]]).to_cols_array())?
+            )?;
+            continue;
+        }
         let mut state = serde_json::to_value(&display)?;
         state["text"] = display.text.plain().into();
         state["alignment"] = format!("{:?}", display.align()).to_uppercase().into();

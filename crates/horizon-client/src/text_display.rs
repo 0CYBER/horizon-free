@@ -69,6 +69,51 @@ impl Default for TextDisplayData {
 }
 
 impl TextDisplayData {
+    /// DisplayRenderer's billboard orientation followed by Transformation's T*L*S*R.
+    pub fn matrix(&self, entity: [f32; 2], camera: [f32; 2]) -> glam::Mat4 {
+        let [yaw, pitch] = match self.billboard {
+            1 => [camera[0] - 180.0, entity[1]],
+            2 => [entity[0], -camera[1]],
+            3 => [camera[0] - 180.0, -camera[1]],
+            _ => entity,
+        };
+        let orientation = glam::Quat::from_euler(
+            glam::EulerRot::YXZ,
+            -yaw * 0.017_453_292,
+            pitch * 0.017_453_292,
+            0.0,
+        );
+        glam::Mat4::from_quat(orientation)
+            * glam::Mat4::from_translation(self.translation.into())
+            * glam::Mat4::from_quat(glam::Quat::from_array(self.left_rotation))
+            * glam::Mat4::from_scale(self.scale.into())
+            * glam::Mat4::from_quat(glam::Quat::from_array(self.right_rotation))
+    }
+
+    pub fn blend(&self, from: &Self, t: f32) -> Self {
+        let mut out = self.clone();
+        for i in 0..3 {
+            out.translation[i] =
+                from.translation[i] + t * (self.translation[i] - from.translation[i]);
+            out.scale[i] = from.scale[i] + t * (self.scale[i] - from.scale[i]);
+        }
+        out.left_rotation = glam::Quat::from_array(from.left_rotation)
+            .slerp(glam::Quat::from_array(self.left_rotation), t)
+            .to_array();
+        out.right_rotation = glam::Quat::from_array(from.right_rotation)
+            .slerp(glam::Quat::from_array(self.right_rotation), t)
+            .to_array();
+        let int = |a: i32, b: i32| a + (t * (b as f32 - a as f32)).floor() as i32;
+        out.opacity = int(i32::from(from.opacity), i32::from(self.opacity)) as i8;
+        out.background = (0..4).fold(0, |color, channel| {
+            color
+                | (int(
+                    (from.background as u32 >> (channel * 8) & 255) as i32,
+                    (self.background as u32 >> (channel * 8) & 255) as i32,
+                ) << (channel * 8))
+        });
+        out
+    }
     /// Omitted fields retain their previous values.
     pub fn apply(&mut self, values: &[(u8, i32, Value)]) {
         for (id, _, value) in values {
