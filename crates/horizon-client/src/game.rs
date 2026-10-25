@@ -5296,22 +5296,32 @@ impl Game<'_> {
                 Some(BlockEntity::Chest(_)) if self.draw_machine_screen(batch, ox, oy) => {}
                 Some(BlockEntity::Chest(_)) => self.draw_chest_screen(batch, ox, oy),
                 Some(BlockEntity::Furnace(f)) => {
-                    let (tex, title) = match f.kind {
+                    let (tex, key, fallback) = match f.kind {
                         horizon_client::containers::FurnaceKind::Furnace => {
-                            ("gui/container/furnace", "Furnace")
+                            ("gui/container/furnace", "container.furnace", "Furnace")
                         }
-                        horizon_client::containers::FurnaceKind::BlastFurnace => {
-                            ("gui/container/blast_furnace", "Blast Furnace")
-                        }
+                        horizon_client::containers::FurnaceKind::BlastFurnace => (
+                            "gui/container/blast_furnace",
+                            "container.blast_furnace",
+                            "Blast Furnace",
+                        ),
                         horizon_client::containers::FurnaceKind::Smoker => {
-                            ("gui/container/smoker", "Smoker")
+                            ("gui/container/smoker", "container.smoker", "Smoker")
                         }
                     };
                     part(batch, tex, 0.0, 0.0, 176.0, 166.0, ox, oy);
-                    let title = &self.container_title(title.to_owned());
-                    let tw = HudBatch::text_width(atlas, title);
-                    batch.text(atlas, title, ox + (176.0 - tw) / 2.0, oy + 6.0, grey, false);
-                    batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
+                    let title = self.container_title(self.translate(key, fallback));
+                    let tw = HudBatch::text_width(atlas, &title);
+                    batch.text(
+                        atlas,
+                        &title,
+                        ox + (176.0 - tw) / 2.0,
+                        oy + 6.0,
+                        grey,
+                        false,
+                    );
+                    let inventory = self.translate("container.inventory", "Inventory");
+                    batch.text(atlas, &inventory, ox + 8.0, oy + 72.0, grey, false);
                     if f.lit_remaining > 0 {
                         // AbstractFurnaceScreen: flame height ceil(lit * 13) + 1.
                         let total = if f.lit_total == 0 { 200 } else { f.lit_total };
@@ -5365,14 +5375,12 @@ impl Game<'_> {
                         "gui/container/inventory"
                     };
                     part(batch, texture, 0.0, 0.0, 176.0, 166.0, ox, oy);
-                    let (title, tx) = if self.craft_size == 3 {
-                        ("Crafting", 29.0)
-                    } else {
-                        ("Crafting", 97.0)
-                    };
-                    batch.text(atlas, title, ox + tx, oy + 6.0, grey, false);
+                    let title = self.translate("container.crafting", "Crafting");
+                    let tx = if self.craft_size == 3 { 29.0 } else { 97.0 };
+                    batch.text(atlas, &title, ox + tx, oy + 6.0, grey, false);
                     if self.craft_size == 3 {
-                        batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
+                        let inventory = self.translate("container.inventory", "Inventory");
+                        batch.text(atlas, &inventory, ox + 8.0, oy + 72.0, grey, false);
                     }
                 }
             }
@@ -9402,6 +9410,11 @@ impl Game<'_> {
     fn creative_origin(batch: &HudBatch) -> (f32, f32) {
         batch.centered_origin(Creative::WIDTH, Creative::HEIGHT)
     }
+    /// A creative tab's title: `itemGroup.*`, else the export's English title.
+    fn creative_tab_title(&self, tab: &horizon_client::creative::Tab) -> String {
+        horizon_client::creative::item_group_key(&tab.id)
+            .map_or_else(|| tab.title.clone(), |key| self.translate(key, &tab.title))
+    }
     /// Vanilla tooltip: dark box with a purple gradient border.
     fn tooltip(&self, batch: &mut HudBatch, text: &str, x: f32, y: f32) {
         let atlas = &self.gui.atlas;
@@ -9471,9 +9484,10 @@ impl Game<'_> {
         }
         let atlas = &self.gui.atlas;
         if !tab.inventory {
+            let title = self.creative_tab_title(&tab);
             batch.text(
                 atlas,
-                &tab.title,
+                &title,
                 ox + 8.0,
                 oy + 6.0,
                 rgba(64, 64, 64, 255),
@@ -9584,7 +9598,12 @@ impl Game<'_> {
                 && self.cursor.1 >= oy + ty
                 && self.cursor.1 < oy + ty + 32.0
             {
-                self.tooltip(batch, &t.title, self.cursor.0, self.cursor.1);
+                self.tooltip(
+                    batch,
+                    &self.creative_tab_title(t),
+                    self.cursor.0,
+                    self.cursor.1,
+                );
             }
         }
         self.draw_carried(batch);

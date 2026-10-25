@@ -4990,6 +4990,15 @@ impl Game<'_> {
     pub(super) fn remote_menu_title(&self) -> Option<String> {
         self.remote.as_ref()?.menu_title.clone()
     }
+    /// A language change reaches the server-sent components too: their titles
+    /// are resolved when the packet arrives, with the session's language.
+    pub(super) fn refresh_remote_language(&mut self) {
+        if let Some(lang) = horizon_client::lang::current()
+            && let Some(r) = self.remote.as_mut()
+        {
+            r.lang = Arc::new(lang.map().clone());
+        }
+    }
     /// A server's chest-like menu (`MenuType.GENERIC_9xN`): its rows and title.
     pub(super) fn remote_chest_menu(&self) -> Option<(usize, String)> {
         let r = self.remote.as_ref()?;

@@ -246,6 +246,7 @@ impl Game<'_> {
     pub(super) fn load_language(&mut self, code: &str) {
         let root = self.options.resources.clone();
         lang::set(lang::Language::load(&[&root], code));
+        self.refresh_remote_language();
         self.ui.chat.rescale(&self.gui.atlas);
     }
     /// Settings that Horizon applies beyond render distance, volume and GUI scale.
