@@ -2423,6 +2423,7 @@ impl Game<'_> {
                 if let Some(r) = self.remote.as_mut() {
                     r.commands = Some(tree);
                 }
+                self.merge_remote_tree();
             }
             C::SystemChat(p) => {
                 // The component as sent, translated in the client's own

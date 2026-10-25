@@ -39,6 +39,9 @@ pub(super) struct ModsState {
     /// The chat's command tree while a running mod owns commands.
     #[cfg(feature = "mods")]
     tree: Option<Dispatcher>,
+    /// The server's command tree with the running mods' commands added.
+    #[cfg(feature = "mods")]
+    remote_tree: Option<Dispatcher>,
 }
 impl ModsState {
     /// The chat's command tree: vanilla's, plus the running mods' commands.
@@ -48,6 +51,14 @@ impl ModsState {
             return tree;
         }
         vanilla::game_dispatcher()
+    }
+    /// The server's tree plus the mods' commands, when a mod owns any.
+    pub(super) fn remote_dispatcher(&self) -> Option<&Dispatcher> {
+        #[cfg(feature = "mods")]
+        if let Some(tree) = &self.remote_tree {
+            return Some(tree);
+        }
+        None
     }
     /// Whether a mod runs: the chat keeps its lines for them.
     pub(super) fn running(&self) -> bool {
@@ -158,6 +169,7 @@ impl Game<'_> {
             );
         }
     }
+    pub(super) fn merge_remote_tree(&mut self) {}
     pub(super) fn sync_mods(&mut self) {}
     pub(super) fn tick_mods(&mut self) {}
     pub(super) fn mods_frame(&mut self, _elapsed: Duration) {}
@@ -238,7 +250,20 @@ impl Game<'_> {
             .peek()
             .is_some()
             .then(|| vanilla::game_dispatcher().with_mod_commands(names));
+        self.merge_remote_tree();
     }
+
+    /// The server's command tree with the mods' commands, for the chat.
+    pub(super) fn merge_remote_tree(&mut self) {
+        let names: Vec<String> = self.mods.mods.commands().map(str::to_owned).collect();
+        self.mods.remote_tree = self
+            .remote
+            .as_ref()
+            .and_then(|r| r.commands.as_ref())
+            .filter(|_| !names.is_empty())
+            .map(|t| t.with_mod_commands(names.iter().map(String::as_str)));
+    }
+
     /// After the options changed: restart the mods if the list of the ones
     /// turned on did.
     pub(super) fn sync_mods(&mut self) {
