@@ -303,7 +303,11 @@ async fn a_submission_becomes_a_pull_request() {
         assert!(message.contains("Co-authored-by: alice <7+alice@users.noreply.github.com>"));
         assert_eq!(replaced, &None);
         let body = m.pulls[0]["body"].as_str().unwrap();
-        assert!(body.starts_with("<!-- submitted-by: alice -->"), "{body}");
+        assert!(
+            body.starts_with("<!-- submitted-by: alice -->\n🤖 Submitted through "),
+            "{body}"
+        );
+        assert!(body.contains("/mods/submit) by @alice."), "{body}");
         assert!(body.contains("may draw text on your screen"), "{body}");
     }
     // The same version again: its branch is there.

@@ -17,6 +17,7 @@ import { CPUS, GPUS, singleThread } from "./src/hardware.js";
 import { isGame, isLauncher, launcherVersion, newestFirst } from "./src/versions.js";
 import { contributorsFrom, contributorsHtml } from "./src/contributors.js";
 import { areaFilterHtml, boardFilterHtml, boardFrom, boardHtml, creditFrom, creditHtml, helpWantedHtml, journalFrom, journalHtml, journalJson, overviewHtml, roadmapHtml, slimIssue, suggestItemsHtml } from "./src/hub.js";
+import { INDEX_URL, KINDS, SUBMIT, listHtml, projectHtml, readIndex, submitHtml } from "./src/mods.js";
 
 const site = dirname(fileURLToPath(import.meta.url));
 const dist = join(site, "dist");
@@ -40,6 +41,21 @@ try {
   for (const key of Object.keys(links)) if (typeof parsed[key] === "string") links[key] = parsed[key].trim();
 } catch (e) {
   console.warn(`links.json: ${e.message}; using the built-in links`);
+}
+
+// Horizon's registry (/mods): the index its repository publishes, or HORIZON_MOD_INDEX (a file or an address) to
+// try a test registry. Without an answer the pages are built empty and load the index themselves.
+let modProjects = [];
+let modIndex = null;
+try {
+  const from = process.env.HORIZON_MOD_INDEX || INDEX_URL;
+  const text = from.startsWith("https://")
+    ? await fetch(from, { signal: AbortSignal.timeout(15000) }).then((r) => (r.ok ? r.text() : Promise.reject(new Error(`${r.status}`))))
+    : await readFile(from, "utf8");
+  modIndex = JSON.parse(text);
+  modProjects = readIndex(modIndex) ?? (console.warn("mod index: a schema this site doesn't read"), []);
+} catch (e) {
+  console.warn(`mod index: ${e.message}; the pages will load it themselves`);
 }
 
 // An optional token (a Railway variable, or `gh auth token` locally) lifts the rate limit.
@@ -224,7 +240,7 @@ await writeFile(join(dist, "favicon.ico"), Buffer.concat([ico, png32]));
 const names = {};
 const rewrite = (code) => code.replace(/"\.\/(\w+\.js)"/g, (all, file) => (names[file] ? `"./${names[file]}"` : all));
 // Dependencies before what imports them.
-const modules = ["markdown.js", "versions.js", "chrome.js", "hardware.js", "estimate.js", "releases.js", "contributors.js", "bench.js", "hub.js", "main.js", "releases-page.js", "benchmarks-page.js", "docs-page.js", "hub-page.js"];
+const modules = ["markdown.js", "versions.js", "chrome.js", "hardware.js", "estimate.js", "releases.js", "contributors.js", "bench.js", "hub.js", "main.js", "releases-page.js", "benchmarks-page.js", "docs-page.js", "hub-page.js", "mods.js", "mods-page.js", "mods-submit.js"];
 for (const file of modules) {
   const code = rewrite(await readFile(join(site, "src", file), "utf8"));
   names[file] = `${file.replace(".js", "")}.${fingerprint(code)}.js`;
@@ -257,7 +273,7 @@ const unavailable = `<p class="lede">The release notes could not be loaded here.
 
 // One top bar and phone menu for Home, Releases, Benchmarks and every Docs page.
 const navSections = [["/#about", "About"], ["/#screenshots", "In game"], ["/#parity", "Parity"], ["/#launcher", "Launcher"], ["/#recent", "New", "Recently added"], ["/#community", "Community"]];
-const navPages = [["/hub", "Hub"], ["/releases", "Releases"], ["/benchmarks", "Benchmarks"], ["/docs/", "Docs", "Documentation"]];
+const navPages = [["/hub", "Hub"], ["/mods", "Mods"], ["/releases", "Releases"], ["/benchmarks", "Benchmarks"], ["/docs/", "Docs", "Documentation"]];
 const navLink = ([href, label, menuLabel], current, menu = false) =>
   `<a href="${href}"${href === current ? ' aria-current="page"' : ""}${href === "/#contributors" ? ` data-contributors${contributors.length ? "" : " hidden"}` : ""}>${menu && menuLabel ? menuLabel : label}</a>`;
 const siteNav = (current) => `    <header class="nav" id="top">
@@ -287,7 +303,7 @@ const siteFooter = `    <footer class="footer">
       <div class="container">
         <div class="footer-bar">
           <span class="footer-mark">Made in the open, in Rust.</span>
-          <nav class="footer-links" aria-label="Elsewhere"><a href="/">Home</a><a href="/hub">Hub</a><a href="/releases">Releases</a><a href="/benchmarks">Benchmarks</a><a href="/docs/">Docs</a><a href="/docs/how-horizon-is-built">How it's built</a><a href="https://github.com/${REPO}">GitHub</a><a href="/privacy">Privacy</a><a href="/LEGAL.md">Assets</a></nav>
+          <nav class="footer-links" aria-label="Elsewhere"><a href="/">Home</a><a href="/hub">Hub</a><a href="/mods">Mods</a><a href="/releases">Releases</a><a href="/benchmarks">Benchmarks</a><a href="/docs/">Docs</a><a href="/docs/how-horizon-is-built">How it's built</a><a href="https://github.com/${REPO}">GitHub</a><a href="/privacy">Privacy</a><a href="/LEGAL.md">Assets</a></nav>
         </div>
       </div>
       <p class="footer-word" aria-hidden="true">horizon</p>
@@ -436,6 +452,50 @@ for (const page of pages) {
   html = html.replace(/href="\/(favicon\.svg|favicon-32\.png|apple-touch-icon\.png)"/g, (all, icon) => `href="/${icon}?v=${iconVersions[icon]}"`);
   await writeFile(join(dist, page), html);
 }
+// The registry: /mods (the list) and /mods/<id> (a page per project), one template.
+const modsTemplate = await readFile(join(site, "src", "mods.html"), "utf8");
+const modsList = `        <p class="kicker"><span>Mods</span>Made for Horizon, reviewed</p>
+        <h1 class="display page-title">Horizon mods</h1>
+        <p class="lede">Mods, modpacks and resource packs made for Horizon. Each one was reviewed before it was listed, and the launcher checks every file before it installs it. Mods run in a sandbox and can only do what their page says.</p>
+        <p class="mod-actions"><a class="button primary" href="${SUBMIT}">Submit yours</a> <a class="button secondary" href="/docs/mods">Make a mod</a></p>
+        <div class="mod-tools">
+          <input class="mod-search" id="mod-search" type="search" placeholder="Search" aria-label="Search the registry" autocomplete="off">
+          <div class="release-filter" role="group" aria-label="Show">
+            <button type="button" class="button secondary small" data-kind-filter="all" aria-pressed="true">All</button>
+${KINDS.map(([k, label]) => `            <button type="button" class="button secondary small" data-kind-filter="${k}" aria-pressed="false">${label}</button>`).join("\n")}
+          </div>
+        </div>
+        <p class="meta release-count" data-mod-count>${modProjects.length} of ${modProjects.length}</p>
+        <div class="mod-list" id="mod-list" aria-live="polite">
+${listHtml(modProjects)}
+        </div>`;
+const modPages = [
+  { file: "mods.html", path: "/mods", title: "Mods", description: "Mods, modpacks and resource packs made for Horizon, reviewed, each with what it may do and how to install it.", main: modsList },
+  { file: "mods/submit.html", path: "/mods/submit", title: "Submit to the registry", description: "Submit a mod, a modpack or a resource pack made for Horizon: it is checked, reviewed, then listed here and in the launcher.", main: submitHtml(), js: "mods-submit.js" },
+  ...modProjects.filter((p) => p.id !== "submit").map((p) => ({ file: `mods/${p.id}.html`, path: `/mods/${p.id}`, title: p.name, description: p.summary || p.name, main: projectHtml(p) })),
+];
+await mkdir(join(dist, "mods"), { recursive: true });
+const modsData = JSON.stringify(modIndex && modProjects.length ? { schema: modIndex.schema, projects: modProjects } : null).replace(/</g, "\\u003c");
+for (const page of modPages) {
+  const own = {
+    ...values,
+    SITE_NAV: siteNav("/mods"),
+    MODS_TITLE: escape(page.title),
+    MODS_DESCRIPTION: escape(page.description),
+    MODS_PATH: page.path,
+    MODS_JS: `/assets/${names[page.js || "mods-page.js"]}`,
+    MODS_MAIN: page.main,
+    MODS_DATA: modsData,
+    MODS_BAKED_AT: escape(modIndex?.generated || ""),
+  };
+  let html = modsTemplate.replace(/\{\{(\w+)\}\}/g, (all, key) => {
+    if (!(key in own)) throw new Error(`mods.html: unknown placeholder ${all}`);
+    return own[key];
+  });
+  html = html.replace(/href="\/(favicon\.svg|favicon-32\.png|apple-touch-icon\.png)"/g, (all, icon) => `href="/${icon}?v=${iconVersions[icon]}"`);
+  await writeFile(join(dist, page.file), html);
+}
+
 const docTemplate = await readFile(join(site, "src", "docs.html"), "utf8");
 for (const { file, values: own } of docPages) {
   let html = docTemplate.replace(/\{\{(\w+)\}\}/g, (all, key) => {
@@ -456,12 +516,12 @@ await writeFile(join(dist, "data", "journal.json"), JSON.stringify(journalJson(r
 
 // The pages' inline scripts (they mark the page as scripted and apply the saved theme before CSS
 // applies) and the inlined stylesheet: the Content-Security-Policy in the Caddyfile allows them by hash.
-const allHtml = (await Promise.all([...pages, ...docPageFiles].map((page) => readFile(join(dist, page), "utf8")))).join("\n");
+const allHtml = (await Promise.all([...pages, ...docPageFiles, ...modPages.map((p) => p.file)].map((page) => readFile(join(dist, page), "utf8")))).join("\n");
 const hashes = (re) => [...new Set([...allHtml.matchAll(re)].map((m) => `'sha256-${createHash("sha256").update(m[1]).digest("base64")}'`))].join(" ");
 await writeFile(join(dist, ".csp-script"), hashes(/<script>([\s\S]*?)<\/script>/g));
 await writeFile(join(dist, ".csp-style"), hashes(/<style>([\s\S]*?)<\/style>/g));
 
-const urls = ["/", "/hub", "/releases", "/benchmarks", ...docs.map((d) => d.path), "/privacy"];
+const urls = ["/", "/hub", "/mods", ...modPages.slice(1).map((p) => p.path), "/releases", "/benchmarks", ...docs.map((d) => d.path), "/privacy"];
 await writeFile(
   join(dist, "sitemap.xml"),
   `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map((u) => `  <url><loc>https://playhorizon.dev${u}</loc></url>`).join("\n")}\n</urlset>\n`,
@@ -469,5 +529,5 @@ await writeFile(
 
 console.log(
   `built dist/ from ${readmeFrom}: ${body.length} subsystems, ${percent}, ${harnesses} harnesses, ` +
-    `${ours.length} releases (${game.length} game)${launcher ? `, launcher ${launcher.tag_name}` : ""}, ${benchSummary.groups.length} benchmark rows, ${contributors.length} contributors, ${docs.length} docs pages, ${roadmap.items.length} roadmap items (${hubLinked.size}/${linked.size} links live), ${Object.values(board).flat().length} board cards, ${journal.length} journal entries`,
+    `${ours.length} releases (${game.length} game)${launcher ? `, launcher ${launcher.tag_name}` : ""}, ${benchSummary.groups.length} benchmark rows, ${contributors.length} contributors, ${docs.length} docs pages, ${modProjects.length} registry projects, ${roadmap.items.length} roadmap items (${hubLinked.size}/${linked.size} links live), ${Object.values(board).flat().length} board cards, ${journal.length} journal entries`,
 );

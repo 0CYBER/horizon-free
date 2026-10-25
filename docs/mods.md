@@ -378,6 +378,29 @@ none.
     "top": "carve", "bottom": "none", "rigid_junctions": true, "inflate": true } }
 ```
 
+## Publish your mod
+
+Horizon's registry lists mods, modpacks (`.hpack`) and resource packs made for Horizon, each reviewed before it is
+published. Players find them at [playhorizon.dev/mods](https://playhorizon.dev/mods) and in the launcher (Mods, then
+**Horizon** beside Modrinth), which checks every file before it installs it.
+
+1. Run `cargo horizon-mod check` on the file (above): the registry runs the same checks.
+2. Put the source somewhere public, under a licence that lets players run it: reviewers read it, and the file must be
+   built from it.
+3. Open [playhorizon.dev/mods/submit](https://playhorizon.dev/mods/submit), sign in with GitHub (it reads only your
+   public profile) and fill in the page: the file, its name and summary, licence, source address, and optionally a
+   minisign public key with the file's `.minisig`.
+4. The form checks the file again and opens a pull request in
+   [ludovic111/horizon-mods](https://github.com/ludovic111/horizon-mods) that adds `mods/<id>.toml`, with you as its
+   owner. That repository's checks run the file in the sandbox and post their report on the pull request; answer the
+   reviewers there.
+5. A reviewer merges it: within minutes the file is a release of horizon-mods, and the project is on the site and in
+   the launcher.
+
+An update is the same form with a new version; only the project's `owners` can publish one, signed with its key if it
+has one. A published file never changes. Without the form, open the pull request by hand (the repository's README
+says how). The formats: [api/mod-index.md](api/mod-index.md).
+
 ## Versions and compatibility
 
 - The API is the WIT package `horizon:mods@0.1.0`. New functions and
@@ -420,12 +443,10 @@ none.
   format: a `.hmod.minisig` beside it); the index pins each project's public
   key, so an update signed by another key is refused. Unsigned local files
   stay allowed, with an "unsigned" mark on the Mods page.
-- **Where mods come from.** Modrinth is where players already look and it
-  stores files with hashes, but its loader list is Modrinth's to extend: we ask
-  Modrinth to add a `horizon` loader. Until then (and as a fallback), the
-  launcher reads a small index of approved mods: a JSON file in a public Git
-  repository (id, versions, file URLs as GitHub release assets, SHA-256,
-  signing key). No server of our own is needed.
+- **Where mods come from.** Horizon's registry ([Publish your mod](#publish-your-mod)): reviewed pull requests in
+  [ludovic111/horizon-mods](https://github.com/ludovic111/horizon-mods), files as its release assets, and an
+  `index.json` on GitHub Pages that the launcher and the website read. A file the registry takes down
+  (`revoked.toml`) is refused by the launcher and turned off where installed.
 - **The launcher.** A Mods tab per installation: browse and search the index,
   install, update, turn on and off (it writes the same `horizon-mods.txt`),
   see capabilities before installing. The launcher's CLI and MCP tools gain
