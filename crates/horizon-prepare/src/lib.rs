@@ -407,7 +407,7 @@ pub fn prepare(options: &Options, log: Log) -> Result<PathBuf, String> {
     // Java first: nothing below can finish without it, and the player should hear it at once.
     let mut homes: Vec<PathBuf> = options.java_home.iter().cloned().collect();
     homes.extend(java::minecraft_runtimes(
-        &artifacts::minecraft_dir(options.minecraft_dir.as_deref()).join("runtime"),
+        &artifacts::game_files(options.minecraft_dir.as_deref(), &lock.version).runtimes,
     ));
     let jdk = java::find(lock.java_major, &homes)?;
     if options.import && !artifacts::reuse_imported(root, log)? {

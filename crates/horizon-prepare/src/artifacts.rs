@@ -1,5 +1,5 @@
 //! The player's own game files: the pinned version JSON, client jar and libraries from their
-//! official launcher install, and the server jar they downloaded, each checked against
+//! official launcher or ATLauncher install, and the server jar they downloaded, each checked against
 //! research-lock.json before it is copied to `.local/minecraft/<version>` (tools/lab.py's
 //! `prepare`, which the Python preparer ran first), then checked again on every run
 //! (tools/test_rust_parity.py's `verify_artifacts`).
@@ -12,20 +12,16 @@ use std::path::{Component, Path, PathBuf};
 
 const LAUNCHER_HINT: &str =
     "Horizon does not download the game: play {version} once in the launcher you play \
-Minecraft Java Edition with (the official launcher, Prism Launcher, MultiMC...) so it downloads \
-the game's files, then rerun. If that launcher keeps them in another folder, pass \
---minecraft-dir or set HORIZON_MINECRAFT_DIR.";
+Minecraft Java Edition with so it downloads the game's files, then rerun. Horizon reads the \
+official launcher's folder, ATLauncher's and the CurseForge app's; for Prism Launcher, MultiMC, \
+the Modrinth App or GDLauncher, prepare from the Horizon launcher, which finds their files. If your launcher keeps \
+them in another folder, pass --minecraft-dir or set HORIZON_MINECRAFT_DIR.";
 const SERVER_HINT: &str = "Horizon does not download the game: download the {version} server jar yourself (minecraft.net/download/server \
 while {version} is the current release, otherwise the downloads.server.url in your launcher's \
 versions/{version}/{version}.json), then pass --server-jar PATH or set HORIZON_SERVER_JAR.";
 
 fn hint(text: &str, version: &str) -> String {
     text.replace("{version}", version)
-}
-
-/// What to do when the player's launcher install lacks the pinned version's files.
-pub(crate) fn launcher_hint(version: &str) -> String {
-    hint(LAUNCHER_HINT, version)
 }
 
 /// research-lock.json and the folder the pinned version's files go to.
@@ -134,6 +130,134 @@ pub fn minecraft_dir(chosen: Option<&Path>) -> PathBuf {
     }
 }
 
+/// One launcher's copy of the pinned version: its version JSON (Mojang's file, checked by its
+/// sha1), the client jar, and the folder holding its `libraries` (at the version JSON's paths)
+/// and `assets`.
+pub struct GameFiles {
+    pub folder: PathBuf,
+    pub manifest: PathBuf,
+    pub client: PathBuf,
+    /// Mojang's Java runtimes the launcher downloaded (java::minecraft_runtimes).
+    pub runtimes: PathBuf,
+    /// The folders looked in, each with its launcher, when none held the version.
+    searched: Vec<(&'static str, PathBuf)>,
+}
+
+impl GameFiles {
+    /// What to do when these files are missing, with the folders looked in.
+    pub(crate) fn hint(&self, version: &str) -> String {
+        let mut text = hint(LAUNCHER_HINT, version);
+        if !self.searched.is_empty() {
+            text += &format!(" Horizon looked for {version} in:");
+            for (launcher, folder) in &self.searched {
+                text += &format!("\n  {} ({launcher})", folder.display());
+            }
+        }
+        text
+    }
+}
+
+/// The layouts horizon-prepare reads in `folder`: the official launcher's, then ATLauncher's,
+/// which saves Mojang's version JSON as is in `configs/json/minecraft` and the client jar as
+/// the library `net.minecraft:client:<version>` (its `InstanceInstaller`).
+fn layouts(folder: &Path, version: &str) -> [GameFiles; 2] {
+    let files = |manifest: String, client: String, runtimes: &str| GameFiles {
+        folder: folder.to_path_buf(),
+        manifest: folder.join(manifest),
+        client: folder.join(client),
+        runtimes: folder.join(runtimes),
+        searched: Vec::new(),
+    };
+    let v = version;
+    [
+        files(
+            format!("versions/{v}/{v}.json"),
+            format!("versions/{v}/{v}.jar"),
+            "runtime",
+        ),
+        files(
+            format!("configs/json/minecraft/{v}.json"),
+            format!("libraries/net/minecraft/client/{v}/client-{v}.jar"),
+            "runtimes/minecraft",
+        ),
+    ]
+}
+
+/// The launchers whose folders are looked in when none is chosen: the official launcher's
+/// (`minecraft_dir`), ATLauncher's, then the CurseForge app's `Install` folder, where it runs
+/// the official launcher (its default modding folder, `curseforge/minecraft`, is in the home
+/// folder on Windows and in Documents elsewhere). ATLauncher keeps its files in its working folder:
+/// where its Windows installer puts it, inside the macOS app, and the folders its Linux
+/// packages and Flatpak start it in.
+fn launcher_folders() -> Vec<(&'static str, PathBuf)> {
+    let mut folders = vec![("the official launcher", minecraft_dir(None))];
+    let atlauncher: Vec<PathBuf> = if cfg!(target_os = "macos") {
+        let app = Path::new("Applications/ATLauncher.app/Contents/Java");
+        vec![Path::new("/").join(app), home().join(app)]
+    } else if cfg!(windows) {
+        std::env::var_os("APPDATA")
+            .map(|d| PathBuf::from(d).join("ATLauncher"))
+            .into_iter()
+            .collect()
+    } else {
+        let data = std::env::var_os("XDG_DATA_HOME")
+            .filter(|d| !d.is_empty())
+            .map_or_else(|| home().join(".local/share"), PathBuf::from);
+        vec![
+            data.join("atlauncher"),
+            home().join(".var/app/com.atlauncher.ATLauncher/data"),
+        ]
+    };
+    folders.extend(atlauncher.into_iter().map(|dir| ("ATLauncher", dir)));
+    let curseforge = if cfg!(windows) { "" } else { "Documents" };
+    folders.push((
+        "the CurseForge app",
+        home().join(curseforge).join("curseforge/minecraft/Install"),
+    ));
+    folders
+}
+
+/// The pinned version's files in the chosen folder (`--minecraft-dir`, HORIZON_MINECRAFT_DIR),
+/// or the launcher above it when an instance folder (`instances/<name>`) is chosen; with no
+/// folder chosen, in the first launcher folder that has them. When none does, the official
+/// layout of the first folder is returned, for the errors to name, with the folders looked in.
+pub fn game_files(chosen: Option<&Path>, version: &str) -> GameFiles {
+    let chosen = chosen
+        .filter(|d| !d.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::var_os("HORIZON_MINECRAFT_DIR").map(PathBuf::from))
+        .filter(|d| !d.as_os_str().is_empty())
+        .map(|d| expand_user(&d));
+    let folders = match chosen {
+        Some(dir) => {
+            let launcher = dir
+                .ancestors()
+                .find(|a| a.file_name().is_some_and(|n| n == "instances"))
+                .and_then(Path::parent)
+                .map(Path::to_path_buf);
+            let mut folders = vec![("the folder chosen", dir)];
+            folders.extend(launcher.map(|dir| ("the launcher above it", dir)));
+            folders
+        }
+        None => launcher_folders(),
+    };
+    // A folder with both files first: a version JSON left without its jar is used, for the
+    // error to name the jar, only when no folder has both.
+    let complete = |files: &GameFiles| files.manifest.is_file() && files.client.is_file();
+    let partial = |files: &GameFiles| files.manifest.is_file();
+    for found in [complete, partial] {
+        let mut all = folders
+            .iter()
+            .flat_map(|(_, folder)| layouts(folder, version));
+        if let Some(files) = all.find(found) {
+            return files;
+        }
+    }
+    let [mut files, _] = layouts(&folders[0].1, version);
+    files.searched = folders;
+    files
+}
+
 /// Copy one file from the player's install, checked like a download; an existing verified
 /// copy is kept.
 pub(crate) fn import_copy(
@@ -170,17 +294,14 @@ pub(crate) fn import_copy(
     Ok(destination.to_path_buf())
 }
 
-/// The pinned version JSON from the launcher's versions/ directory. The launcher's copy wins
-/// over the cached one so the manifest matches the asset index installed alongside it.
-pub(crate) fn import_manifest(lock: &Lock, minecraft: &Path) -> Result<Value, String> {
+/// The pinned version JSON from the launcher's install. The launcher's copy wins over the
+/// cached one so the manifest matches the asset index installed alongside it.
+pub(crate) fn import_manifest(lock: &Lock, files: &GameFiles) -> Result<Value, String> {
     let version = &lock.version;
     let destination = lock.directory.join("manifest.json");
-    let source = minecraft
-        .join("versions")
-        .join(version)
-        .join(format!("{version}.json"));
+    let source = &files.manifest;
     if source.is_file() {
-        let manifest = read_json(&source)?;
+        let manifest = read_json(source)?;
         let downloads = manifest.get("downloads");
         let sha1 = |side: &str| {
             downloads
@@ -197,7 +318,7 @@ pub(crate) fn import_manifest(lock: &Lock, minecraft: &Path) -> Result<Value, St
                 source.display()
             ));
         }
-        let checksum = digest(&source, "sha1")?;
+        let checksum = digest(source, "sha1")?;
         if !lock.manifest_accepted(&checksum) {
             return Err(format!(
                 "{} is a {version} version file Horizon does not know yet (sha1 {checksum}); \
@@ -207,13 +328,13 @@ pub(crate) fn import_manifest(lock: &Lock, minecraft: &Path) -> Result<Value, St
         }
         if !(destination.exists() && digest(&destination, "sha1")? == checksum) {
             fs::create_dir_all(&lock.directory).map_err(|e| e.to_string())?;
-            fs::copy(&source, &destination).map_err(|e| e.to_string())?;
+            fs::copy(source, &destination).map_err(|e| e.to_string())?;
         }
     } else if !(destination.exists() && lock.manifest_accepted(&digest(&destination, "sha1")?)) {
         return Err(format!(
             "Missing {}. {}",
             source.display(),
-            hint(LAUNCHER_HINT, version)
+            files.hint(version)
         ));
     }
     let manifest = read_json(&destination)?;
@@ -524,18 +645,15 @@ pub fn import(
     server_jar: Option<&Path>,
     log: Log,
 ) -> Result<(), String> {
-    let minecraft = minecraft_dir(minecraft);
-    let version = &lock.version;
-    let manifest = import_manifest(lock, &minecraft)?;
+    let files = game_files(minecraft, &lock.version);
+    let minecraft = &files.folder;
+    let manifest = import_manifest(lock, &files)?;
     let client = import_copy(
-        &minecraft
-            .join("versions")
-            .join(version)
-            .join(format!("{version}.jar")),
+        &files.client,
         &lock.directory.join("jars/client.jar"),
         lock.pin("client_sha1")?,
         "sha1",
-        &hint(LAUNCHER_HINT, version),
+        &files.hint(&lock.version),
     )?;
     let downloads = manifest.get("downloads");
     if downloads.and_then(|d| d.get("client_mappings")).is_some()
@@ -560,7 +678,7 @@ pub fn import(
     for (name, artifact) in client_library_artifacts(&manifest)? {
         let (path, sha1) = artifact_fields(artifact)?;
         let relative = safe_relative(path).ok_or("Unsafe library path")?;
-        let source = launcher_library(&minecraft, name, &relative);
+        let source = launcher_library(minecraft, name, &relative);
         let destination = lock.directory.join("libraries/client").join(&relative);
         if runs_without(name) && !source.is_file() && !destination.exists() {
             log(&format!(
@@ -574,7 +692,7 @@ pub fn import(
             &destination,
             sha1,
             "sha1",
-            &hint(LAUNCHER_HINT, version),
+            &files.hint(&lock.version),
         )?);
     }
     write_import_metadata(
@@ -1206,6 +1324,103 @@ mod tests {
         fs::remove_dir_all(lock.directory.join("libraries/client/org")).unwrap();
         fs::remove_file(prism.join("libraries/org/lib/lib/1/lib-1.jar")).unwrap();
         assert!(prepare().unwrap_err().starts_with("Missing "));
+    }
+
+    /// ATLauncher keeps Mojang's version JSON in `configs/json/minecraft` and the client jar as
+    /// a library; its folder, or one of its instances, prepares like the official launcher's,
+    /// with the same pins.
+    #[test]
+    fn an_atlauncher_install_prepares() {
+        let fixture = Imports::new();
+        let old = fixture.imported(&fixture.source);
+        let atlauncher = fixture.directory.join("ATLauncher");
+        let put = |path: &str, data: &[u8]| {
+            let path = atlauncher.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, data).unwrap();
+        };
+        let client = fs::read(old.join("jars/client.jar")).unwrap();
+        put("libraries/net/minecraft/client/9.9/client-9.9.jar", &client);
+        put("libraries/client.jar", b"client library");
+        put("instances/Minecraft99/instance.json", b"{}");
+        // A version JSON left without its jar does not hide the launcher's complete copy.
+        put("instances/Minecraft99/versions/9.9/9.9.json", b"{}");
+        let manifest = fs::read_to_string(old.join("manifest.json")).unwrap();
+        let manifest = manifest.replacen('{', r#"{"javaVersion":{"majorVersion":25},"#, 1);
+        put("configs/json/minecraft/9.9.json", manifest.as_bytes());
+        let pinned = digest(&atlauncher.join("configs/json/minecraft/9.9.json"), "sha1").unwrap();
+        let lock_path = fixture.target.join("research-lock.json");
+        let text = fs::read_to_string(&lock_path).unwrap();
+        let old_sha1 = digest(&old.join("manifest.json"), "sha1").unwrap();
+        fs::write(&lock_path, text.replace(&old_sha1, &pinned)).unwrap();
+        let lock = Lock::read(&fixture.target).unwrap();
+        let server = old.join("jars/server.jar");
+        let prepare = |dir: &Path| {
+            let _ = fs::remove_dir_all(&lock.directory);
+            import(&fixture.target, &lock, Some(dir), Some(&server), &|_| {})
+        };
+
+        for chosen in [atlauncher.clone(), atlauncher.join("instances/Minecraft99")] {
+            prepare(&chosen).unwrap();
+            let artifacts = verify(&lock).unwrap();
+            assert_eq!(fs::read(&artifacts.jars["client"]).unwrap(), client);
+            assert_eq!(
+                client_libraries(&lock, &artifacts.manifest).unwrap().len(),
+                1
+            );
+        }
+        let files = game_files(Some(&atlauncher), "9.9");
+        assert_eq!(files.runtimes, atlauncher.join("runtimes/minecraft"));
+
+        // The pins gate it as they gate the official layout.
+        put(
+            "libraries/net/minecraft/client/9.9/client-9.9.jar",
+            b"other",
+        );
+        assert!(prepare(&atlauncher)
+            .unwrap_err()
+            .contains("is not the pinned file"));
+        put("libraries/net/minecraft/client/9.9/client-9.9.jar", &client);
+        put(
+            "configs/json/minecraft/9.9.json",
+            manifest.replace(',', ", ").as_bytes(),
+        );
+        assert!(prepare(&atlauncher)
+            .unwrap_err()
+            .contains("does not know yet"));
+    }
+
+    /// With no launcher's files in the chosen folder, the error names where Horizon looked and
+    /// the launchers it reads.
+    #[test]
+    fn the_error_names_the_folders_looked_in() {
+        let fixture = Imports::new();
+        let empty = fixture.directory.join("instances/empty");
+        fs::create_dir_all(&empty).unwrap();
+        let lock = Lock::read(&fixture.target).unwrap();
+        let error = import(&fixture.target, &lock, Some(&empty), None, &|_| {}).unwrap_err();
+        assert!(error.starts_with(&format!(
+            "Missing {}",
+            empty.join("versions/9.9/9.9.json").display()
+        )));
+        assert!(error.contains("Horizon looked for 9.9 in:"), "{error}");
+        assert!(error.contains(&format!("\n  {} (the folder chosen)", empty.display())));
+        assert!(error.contains(&format!(
+            "\n  {} (the launcher above it)",
+            fixture.directory.display()
+        )));
+        assert!(error.contains("ATLauncher"));
+    }
+
+    #[test]
+    fn every_launcher_horizon_reads_is_looked_in() {
+        let launchers: Vec<_> = launcher_folders()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        for name in ["the official launcher", "ATLauncher", "the CurseForge app"] {
+            assert!(launchers.contains(&name), "{name}");
+        }
     }
 
     #[test]
