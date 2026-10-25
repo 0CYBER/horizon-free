@@ -612,6 +612,21 @@ impl Game<'_> {
                 continue;
             };
             let value = match c {
+                // Read past, not decoded: the item keeps its prototype's value.
+                Component::Raw(_) => continue,
+                // Trim materials and patterns are synced registries, as enchantments are.
+                Component::Trim { material, pattern } => {
+                    let (Some(material), Some(pattern)) = (
+                        r.registries.name("minecraft:trim_material", *material),
+                        r.registries.name("minecraft:trim_pattern", *pattern),
+                    ) else {
+                        continue;
+                    };
+                    Tag::compound([
+                        ("material", Tag::String(material.into())),
+                        ("pattern", Tag::String(pattern.into())),
+                    ])
+                }
                 Component::Int(v) if *kind == component::RARITY => {
                     let rarity = ["common", "uncommon", "rare", "epic"];
                     Tag::String(rarity.get(*v as usize).copied().unwrap_or("common").into())
@@ -1496,6 +1511,7 @@ impl Game<'_> {
             );
         }
         self.turn_remote_object(id, rotation.map(|(yaw, _)| yaw), on_ground);
+        self.move_remote_text_display(id, position, rotation);
         self.turn_remote_projectile(id, rotation);
     }
     fn remove_entity(&mut self, id: i32) {
@@ -1600,6 +1616,12 @@ impl Game<'_> {
                 }
             }
         }
+    }
+    /// Find a game slot in the menu's complete, contiguous slot mapping.
+    fn menu_slot_index(menu: &str, internal: usize) -> Option<usize> {
+        (0..)
+            .map_while(|slot| Self::menu_slot(menu, slot))
+            .position(|slot| slot == internal)
     }
     /// The workstation screen of a menu type a server opens.
     pub(super) fn remote_station_kind(menu: &str) -> Option<super::stations::Kind> {
@@ -1805,6 +1827,9 @@ impl Game<'_> {
                     self.audio.play(&name, Some(at), p.volume, p.pitch);
                 }
             }
+            C::StopSound(p) => self
+                .audio
+                .stop_sounds(p.sound.as_deref(), p.source.map(|s| s as usize)),
             C::AddEntity(p) => {
                 let kind = self
                     .remote
@@ -1838,6 +1863,7 @@ impl Game<'_> {
                         p.data,
                     );
                 }
+                self.move_remote_text_display(p.id, p.position, Some((rotation[0], rotation[1])));
             }
             C::RemoveEntities(p) => {
                 for id in p.ids {
@@ -3064,6 +3090,8 @@ impl Game<'_> {
             }
             None => {
                 let mut player = PlayerMotion::new(self.motion, position)?;
+                // Player.tick derives noPhysics from the current game mode.
+                player.spectator = self.spectator();
                 player.velocity = delta;
                 self.player = Some(player);
                 self.pad.player_replaced();
@@ -3407,6 +3435,9 @@ impl Game<'_> {
     /// ClientLevel.tickEntities; a frozen level only ticks the players
     /// (`TickRateManager.isEntityFrozen`).
     fn tick_remote_entities(&mut self, running: bool) {
+        if running {
+            self.tick_text_displays();
+        }
         // EntityFluidInteraction.update for the entities this window only displays: the
         // server never sends the fluid contact, and the renderers read it (cod, salmon and
         // tropical fish lie on their side without `in_water`, #1591).
@@ -4233,11 +4264,13 @@ impl Game<'_> {
             return;
         };
         let stack = self.stack_in(slot).cloned();
+        // Another hotbar slot picked: LivingEntity.updatingUsingItem sees a
+        // different stack in the hand. The off hand keeps its item.
+        let in_hand = slot == self.selected || slot == super::shield::OFFHAND_SLOT;
         // A drawn bow, a charging crossbow, a raised shield...: held until
-        // the button lets go (or another slot is picked).
+        // the button lets go.
         if stack.as_ref().is_some_and(|s| self.held_until_released(s)) {
-            self.using = (slot == self.selected || slot == super::shield::OFFHAND_SLOT)
-                .then_some((slot, ticks + 1));
+            self.using = in_hand.then_some((slot, ticks + 1));
             return;
         }
         let consumable = stack
@@ -4251,7 +4284,7 @@ impl Game<'_> {
         // Button release belongs to the next handleKeybinds phase, which
         // sends RELEASE_USE_ITEM. Do not silently clear a use begun by a
         // quick press/release between ticks.
-        if slot != self.selected {
+        if !in_hand {
             self.using = None;
             return;
         }
@@ -4572,12 +4605,10 @@ impl Game<'_> {
         for &(slot, button, input) in ops {
             let slot = match slot {
                 None => -999,
-                Some(internal) => {
-                    match (0..64).find(|&s| Self::menu_slot(&menu, s) == Some(internal)) {
-                        Some(s) => s as i16,
-                        None => return false,
-                    }
-                }
+                Some(internal) => match Self::menu_slot_index(&menu, internal) {
+                    Some(s) => s as i16,
+                    None => return false,
+                },
             };
             clicks.push((slot, button, input));
         }
@@ -4646,7 +4677,7 @@ impl Game<'_> {
     /// such slot.
     pub(super) fn remote_slot_click(&mut self, internal: usize, button: i8, input: i32) -> bool {
         let (container, menu) = self.remote_menu();
-        let slot = (0..64).find(|&s| Self::menu_slot(&menu, s) == Some(internal));
+        let slot = Self::menu_slot_index(&menu, internal);
         let Some(slot) = slot else { return false };
         let carried = self.to_network(&self.carried).map(|s| Hashed::of(&s));
         let state = self.remote.as_ref().map_or(0, |r| r.state_id);
@@ -5081,6 +5112,8 @@ impl Game<'_> {
                 .collect::<Vec<_>>(),
             // The player's own model exists (third person and the inventory draw it).
             "player_model": self.player_model.is_some(),
+            "text_display_vertices": self.text_display_vertices,
+            "text_displays": self.text_displays.len(),
             "health": r.health.0,
             "food": r.health.1,
             "decode_errors": r.decode_errors,
@@ -5504,5 +5537,29 @@ mod tests {
             assert!(internal.is_some_and(|i| seen.insert(i)), "slot {slot}");
         }
         assert_eq!(Game::menu_slot("inventory", 46), None);
+    }
+
+    #[test]
+    fn remote_clicks_find_slots_past_the_old_large_chest_cutoff() {
+        for (menu, internal, index) in [
+            ("minecraft:generic_9x6", 18, 63),
+            ("minecraft:generic_9x6", 19, 64),
+            ("minecraft:generic_9x6", 0, 81),
+            ("minecraft:generic_9x6", 8, 89),
+            ("minecraft:generic_9x6", 353, 53),
+            ("minecraft:generic_9x5", 8, 80),
+            ("minecraft:generic_9x4", 8, 71),
+            ("minecraft:generic_9x3", 8, 62),
+            ("inventory", 504, 45),
+        ] {
+            assert_eq!(
+                Game::menu_slot_index(menu, internal),
+                Some(index),
+                "{menu}, game slot {internal}"
+            );
+        }
+        assert_eq!(Game::menu_slot_index("minecraft:generic_9x6", 354), None);
+        assert_eq!(Game::menu_slot_index("minecraft:generic_9x6", 504), None);
+        assert_eq!(Game::menu_slot_index("unknown", 0), None);
     }
 }
