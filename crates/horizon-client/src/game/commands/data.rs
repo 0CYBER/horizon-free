@@ -65,9 +65,10 @@ impl Game<'_> {
                 tag
             }
             Target::Mob(id) => {
-                let uuid = self.uuid_for(id);
-                let m = self.mobs.iter().find(|m| m.id == id)?;
-                entity_nbt::mob_to_nbt(m, uuid, self.persist.raw.get(&id))
+                // `saveWithoutId` writes the entity as saved, riders under
+                // `Passengers`: `/data get` reads the same tree persistence does (#1519).
+                let i = self.mobs.iter().position(|m| m.id == id)?;
+                self.mob_tree_nbt(i)
             }
             Target::Item(id) => {
                 let uuid = self.uuid_for(id);

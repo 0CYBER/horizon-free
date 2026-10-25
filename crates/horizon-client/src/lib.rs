@@ -24,6 +24,7 @@ pub mod block_entity_render;
 pub mod block_transform;
 pub mod blocks;
 pub mod border_render;
+pub mod boss_overlay;
 pub mod bossbar;
 pub mod breaking;
 pub mod brewing;
