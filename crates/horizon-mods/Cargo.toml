@@ -20,6 +20,8 @@ wit-parser = { version = "0.239", optional = true }
 # The registry index's checks (feature `index`): SHA-256, and minisign signatures (no dependencies of its own).
 sha2 = { version = "0.10", optional = true }
 minisign-verify = { version = "0.3", optional = true }
+# A shader pack's check (kind `shader`): the one the game runs before it loads a pack.
+horizon-shader-api = { path = "../horizon-shader-api", optional = true }
 
 [features]
 # Loads and runs mods (the game's `mods` feature); without it only manifests,
@@ -28,7 +30,7 @@ minisign-verify = { version = "0.3", optional = true }
 runtime = ["dep:wasmtime"]
 pack = ["dep:wit-component", "dep:wit-parser"]
 # The mod registry's index (docs/api/mod-index.md): the launcher, the registry server and its CI.
-index = ["dep:sha2", "dep:minisign-verify"]
+index = ["dep:sha2", "dep:minisign-verify", "dep:horizon-shader-api"]
 
 # Runs real mods: `cargo test -p horizon-mods --features runtime,pack`.
 [[test]]
