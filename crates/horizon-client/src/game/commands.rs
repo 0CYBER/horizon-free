@@ -751,7 +751,8 @@ impl Game<'_> {
                     && !id.ends_with("get")
                     && let Ok(t) = self.entities(ctx, "target", false)
                 {
-                    self.cmds.waypoint_dirty.push(t[0]);
+                    let target = self.waypoint_target(t[0]);
+                    self.cmds.waypoint_dirty.push(target);
                 }
                 result
             }

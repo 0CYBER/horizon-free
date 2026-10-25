@@ -684,6 +684,23 @@ impl Game<'_> {
     pub(super) fn remote_backlog(&self) -> usize {
         self.remote.as_ref().map_or(0, |r| r.backlog.len())
     }
+    /// A headless command oracle has a real connection but no movement tick.
+    /// Acknowledge loaded terrain without predicting or sending movement.
+    pub(super) fn poll_stationary_client(&mut self) -> Result<()> {
+        self.poll_remote()?;
+        let loaded = self.player.as_ref().is_some_and(|p| {
+            self.streaming.is_lit(
+                (p.position.x.floor() as i32) >> 4,
+                (p.position.z.floor() as i32) >> 4,
+            )
+        });
+        if loaded && self.remote.as_ref().is_some_and(|r| !r.loaded_sent) {
+            self.send(S::PlayerLoaded(Empty));
+            self.remote.as_mut().unwrap().loaded_sent = true;
+        }
+        Ok(())
+    }
+
     /// Process what the network thread received (once per frame, like the
     /// client's packet processor), in order. Chunk packets get
     /// `CHUNK_PACKETS_PER_FRAME`: once a frame has spent it, the events from

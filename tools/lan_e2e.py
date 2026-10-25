@@ -6398,5 +6398,44 @@ CHECKS += ['sprint-fov']
 CHECK_FNS['sprint-fov'] = check_sprint_fov
 
 
+def check_sculk_container(host, guest, out):
+    """A real guest's container interaction emits a server game event. Both
+    clients see the sensor and the non-summoning shrieker activate and reset.
+    The component oracle separately controls warning levels and seeded mobs.
+    """
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    chest, sensor, shrieker = (x + 2, y, z), (x + 3, y, z), (x + 4, y, z)
+    guest('command', command='gamemode survival')
+    for at, block in ((chest, 'chest'), (shrieker, 'sculk_shrieker'), (sensor, 'sculk_sensor')):
+        guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:{block}')
+    guest.wait(60)
+    seen = {}
+    # Keep the sensor's 30-tick active window observable while both clients
+    # acknowledge the container and the control socket inspects them.
+    host('command', command='tick rate 4')
+    try:
+        guest.raw('interact', *chest)
+        guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
+        for game in (host, guest):
+            active = wait_state(game, sensor, 'sculk_sensor_phase', 'active', 40)
+            shrieking = wait_state(game, shrieker, 'shrieking', 'true', 40)
+            seen[game.name] = (active, shrieking)
+        assert all(s == ('active', 'true') for s in seen.values()), seen
+        guest.raw('key', 'esc', 'tap')
+        for game in (host, guest):
+            assert wait_state(game, sensor, 'sculk_sensor_phase', 'inactive', 160) == 'inactive', seen
+            assert wait_state(game, shrieker, 'shrieking', 'false', 160) == 'false', seen
+    finally:
+        host('command', command='tick rate 20')
+        if guest('state').get('screen') == 'container':
+            guest.raw('key', 'esc', 'tap')
+        for at in (sensor, shrieker, chest):
+            guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:air')
+    return seen
+
+
+CHECKS += ['sculk_container']
+CHECK_FNS['sculk_container'] = check_sculk_container
+
 if __name__ == '__main__':
     main()

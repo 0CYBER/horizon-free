@@ -348,10 +348,7 @@ impl Options {
             dedicated: None,
             benchmark: None,
             dev_mods: Vec::new(),
-            // The command harness (HORIZON_COMMAND_SCRIPT) drives the world
-            // itself, without the event loop: it stays in the frame.
-            server_thread: std::env::var("HORIZON_SERVER_THREAD").map_or(true, |v| v != "0")
-                && std::env::var_os("HORIZON_COMMAND_SCRIPT").is_none(),
+            server_thread: std::env::var("HORIZON_SERVER_THREAD").map_or(true, |v| v != "0"),
             execution_role: execution_role::ExecutionRole::Client,
         };
         let mut session_file = std::env::var("HORIZON_SESSION_FILE").ok();
@@ -12935,11 +12932,11 @@ fn start_game<'a>(
         );
     }
     if let Ok(spec) = std::env::var("HORIZON_DISPENSE_FIXTURE") {
-        game.dispense_fixture(&spec)?;
+        game.run_component_harness(integrated::ComponentHarness::Dispenser(spec))?;
         return Ok(None);
     }
     if let Ok(spec) = std::env::var("HORIZON_SCULK_FIXTURE") {
-        game.sculk_fixture(&spec)?;
+        game.run_component_harness(integrated::ComponentHarness::Sculk(spec))?;
         return Ok(None);
     }
     if game.options.execution_role == execution_role::ExecutionRole::DedicatedServer {
@@ -12961,8 +12958,8 @@ fn start_game<'a>(
         Some(folder) => {
             let (seed, creative) = (game.options.seed, game.options.creative);
             if std::env::var_os("HORIZON_COMMAND_SCRIPT").is_some() {
-                // The command harness runs before entering the window loop.
-                game.open_world(&folder, None, Some(seed), creative, None)?;
+                // Headless, but with the same server and memory connection as play.
+                game.open_integrated(&folder, None, Some(seed), creative, None)?;
             } else {
                 // Start after the window is handed over, so --world uses the
                 // same responsive initialization path as the title screen.
@@ -12989,11 +12986,10 @@ fn start_game<'a>(
             game.title = Some(title);
         }
     }
-    if let (Some(script), Some(output)) = (
-        std::env::var_os("HORIZON_COMMAND_SCRIPT"),
-        std::env::var_os("HORIZON_COMMAND_OUTPUT"),
-    ) {
-        game.run_command_harness(script.as_ref(), output.as_ref())?;
+    if std::env::var_os("HORIZON_COMMAND_SCRIPT").is_some()
+        && std::env::var_os("HORIZON_COMMAND_OUTPUT").is_some()
+    {
+        game.wait_command_harness()?;
         return Ok(None);
     }
     Ok(Some(game))

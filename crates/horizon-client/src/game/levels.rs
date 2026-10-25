@@ -21,7 +21,7 @@ use super::{
 use horizon_client::{
     Result, block_entity_anim::BlockEntityAnims, random_tick_sections::RandomTickSections,
     save::SaveDir, streaming::Streaming, tick_chunk_membership::TickChunkMembership,
-    ticket_levels::ChunkTickets, world::World,
+    ticket_levels::ChunkTickets, vanillagen::VanillaTerrain, world::World,
 };
 use horizon_world::level::{LevelEvent, Ticks};
 use std::{
@@ -39,6 +39,7 @@ const IDLE_TICKS: u32 = 300;
 pub(super) struct Parked {
     world: World,
     streaming: Streaming,
+    locator: Option<Arc<VanillaTerrain>>,
     save: Arc<SaveDir>,
     block_ticks: Ticks,
     tick_chunks: TickChunkMembership,
@@ -109,13 +110,21 @@ pub(super) struct Levels {
 impl Game<'_> {
     /// A new level for `dim`, opened from the save (`MinecraftServer.createLevels`).
     fn open_level(&self, dim: Dim) -> Result<Parked> {
-        let (streaming, save) =
-            self.make_streaming(&self.world_root.clone(), dim, self.level.seed)?;
+        let (streaming, save, locator) = super::world_loading::make_streaming(
+            &self.res,
+            &self.pack,
+            &self.options,
+            &self.settings,
+            &self.world_root,
+            dim,
+            self.level.seed,
+        )?;
         let mut world = World::new(self.res.facts().air, self.level.seed);
         world.fast_lava = dim == Dim::Nether;
         Ok(Parked {
             world,
             streaming,
+            locator,
             save,
             block_ticks: Ticks::new(self.level.seed as i32),
             tick_chunks: Default::default(),
@@ -163,6 +172,9 @@ impl Game<'_> {
         use std::mem::swap;
         swap(&mut self.world, &mut p.world);
         swap(&mut self.streaming, &mut p.streaming);
+        let mut locator = self.end.locator();
+        swap(&mut locator, &mut p.locator);
+        self.end.set_locator(locator);
         swap(&mut self.save, &mut p.save);
         swap(&mut self.block_ticks, &mut p.block_ticks);
         swap(&mut self.tick_chunks, &mut p.tick_chunks);
