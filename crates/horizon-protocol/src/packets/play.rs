@@ -1118,6 +1118,42 @@ packet!(SoundEntity {
     pitch: f32 => Float,
     seed: i64 => Long,
 });
+
+/// ClientboundStopSoundPacket: bit 0 selects a source, bit 1 an event id.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StopSound {
+    pub source: Option<i32>,
+    pub sound: Option<String>,
+}
+impl Codec<StopSound> for StopSound {
+    fn read(r: &mut Reader) -> crate::Result<Self> {
+        let flags = r.u8()?;
+        let source = if flags & 1 != 0 {
+            let value = r.varint()?;
+            if !(0..11).contains(&value) {
+                return Err(crate::Error::new("invalid sound source"));
+            }
+            Some(value)
+        } else {
+            None
+        };
+        let sound = if flags & 2 != 0 {
+            Some(r.string(32767)?)
+        } else {
+            None
+        };
+        Ok(Self { source, sound })
+    }
+    fn write(p: &Self, w: &mut Writer) {
+        w.u8(u8::from(p.source.is_some()) | (u8::from(p.sound.is_some()) << 1));
+        if let Some(source) = p.source {
+            w.varint(source);
+        }
+        if let Some(sound) = &p.sound {
+            w.string(sound);
+        }
+    }
+}
 /// One entry of ClientboundCommandsPacket: a literal or an argument node.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommandNode {
@@ -1678,6 +1714,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SetTitlesAnimation(TitlesAnimation) = SET_TITLES_ANIMATION,
     Sound(Sound) = SOUND,
     SoundEntity(SoundEntity) = SOUND_ENTITY,
+    StopSound(StopSound) = STOP_SOUND,
     StartConfiguration(Empty) = START_CONFIGURATION,
     SwingAnimation(SwingAnimation) = SWING_ANIMATION,
     SystemChat(SystemChat) = SYSTEM_CHAT,

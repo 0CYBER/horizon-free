@@ -1826,6 +1826,9 @@ impl Game<'_> {
                     self.audio.play(&name, Some(at), p.volume, p.pitch);
                 }
             }
+            C::StopSound(p) => self
+                .audio
+                .stop_sounds(p.sound.as_deref(), p.source.map(|s| s as usize)),
             C::AddEntity(p) => {
                 let kind = self
                     .remote
