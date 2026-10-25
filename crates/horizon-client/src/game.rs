@@ -1844,6 +1844,19 @@ impl Game<'_> {
     /// (decreaseAirSupply), the wings, leather boots on powder snow
     /// (PowderSnowBlock.canEntityWalkOnPowderSnow), freeze-immune wear
     /// (LivingEntity.canFreeze) and the dimension's FAST_LAVA.
+    /// `LivingEntity.canFreeze`'s armor half: any worn piece in
+    /// `freeze_immune_wearables`.
+    pub(crate) fn wears_freeze_immune(&self) -> bool {
+        let immune = self
+            .res
+            .items()
+            .item_tags
+            .get("minecraft:freeze_immune_wearables");
+        self.armor
+            .iter()
+            .flatten()
+            .any(|s| immune.is_some_and(|t| t.contains(&*s.item)))
+    }
     pub(crate) fn sync_player_body(&mut self) {
         let glider = self.glider_worn();
         let item_use_speed = self
@@ -1863,16 +1876,7 @@ impl Game<'_> {
         let leather_boots = self.armor[3]
             .as_ref()
             .is_some_and(|s| &*s.item == "minecraft:leather_boots");
-        let immune = self
-            .res
-            .items()
-            .item_tags
-            .get("minecraft:freeze_immune_wearables");
-        let freeze_immune = self
-            .armor
-            .iter()
-            .flatten()
-            .any(|s| immune.is_some_and(|t| t.contains(&*s.item)));
+        let freeze_immune = self.wears_freeze_immune();
         let Some(player) = self.player.as_mut() else {
             return;
         };
