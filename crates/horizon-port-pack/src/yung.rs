@@ -54,15 +54,9 @@ pub(crate) fn upgrade_pool_element(element: &Value, lost: &mut BTreeMap<String, 
     if element["element_type"] != ELEMENT {
         return false;
     }
-    // spec-yungsapi §3: OPEN-Y5 to OPEN-Y9 and §5.
-    for field in [
-        "is_priority",
-        "min_required_depth",
-        "ignore_bounds",
-        "condition",
-        "enhanced_terrain_adaptation",
-        "modifiers",
-    ] {
+    // spec-yungsapi §4 and §5. `name`, `max_count`, `is_priority`,
+    // `min_required_depth` and `ignore_bounds` are run (§3, §3.2).
+    for field in ["condition", "enhanced_terrain_adaptation", "modifiers"] {
         if active(element, field) {
             count(lost, format!("{ELEMENT} {field}"));
         }
@@ -95,7 +89,8 @@ mod tests {
 
         let mut lost = BTreeMap::new();
         let pile = json!({"element_type": ELEMENT, "name": "loot_pile_0", "max_count": 1,
-            "enhanced_terrain_adaptation": {"type": NO_ADAPTATION}, "is_priority": false});
+            "enhanced_terrain_adaptation": {"type": NO_ADAPTATION}, "is_priority": true,
+            "min_required_depth": 2, "ignore_bounds": true});
         assert!(upgrade_pool_element(&pile, &mut lost));
         assert!(lost.is_empty());
         let gated = json!({"element_type": ELEMENT, "condition": {"type": "yungsapi:not"}});

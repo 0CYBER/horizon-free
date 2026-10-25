@@ -23,8 +23,16 @@ a fresh work folder, and an overlay of the 26.3 resources adds the carried struc
 processor lists, biome tags and templates. The jars are the player's; nothing of them enters the
 repository.
 
-usage: test_structure_layout_parity.py [--profile lithostitched|betterdungeons] [--filter REGEX] [--verbose]
+The `yung-probe` profiles check YUNG's API's draws with a data pack of the spec team's own (spec-yungsapi
+§3, probe experiments e1-e9: fallback, max_count, empty elements, min_required_depth, ignore_bounds,
+max_y, is_priority). The pack is carried as one more mod, built at run time from the oracle's profile file
+(`.local/structure-oracle/profiles/<profile>.json`), and its starts are read from the oracle's census of
+every start (`all_starts`).
+
+usage: test_structure_layout_parity.py [--profile lithostitched|betterdungeons|yung-probe|yung-probe2]
+                                       [--filter REGEX] [--verbose]
 """
+import base64
 import argparse
 import gzip
 import json
@@ -33,6 +41,7 @@ import re
 import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 try:
@@ -49,6 +58,9 @@ PROFILES = {
     'betterdungeons': {'side': 'pieces', 'mods': {'yungsapi': 'YungsApi-1.21.1-NeoForge-5.1.9.jar',
                                                   'betterdungeons': 'YungsBetterDungeons-1.21.1-NeoForge-5.1.4.jar'},
                        'carry': ['betterdungeons'], 'structures': r'^betterdungeons:(small|skeleton|zombie)_dungeon$'},
+    **{name: {'side': 'all_starts', 'mods': {'yungsapi': 'YungsApi-1.21.1-NeoForge-5.1.9.jar'},
+              'packs': {'probe': name}, 'carry': ['probe'], 'structures': r'^probe:'}
+       for name in ['yung-probe', 'yung-probe2']},
 }
 BUNDLES = {'structure': 'structures', 'structure_set': 'structure_sets', 'template_pool': 'template_pools',
            'processor_list': 'processor_lists'}
@@ -95,14 +107,29 @@ CENSUS = ['blockstates', 'item_models', 'recipes', 'loot_tables', 'tags', 'world
           'textures', 'sounds', 'classes', 'mixin_configs']
 
 
-def carry(profile, mods, carried):
-    """`horizon-port-pack carry` of the profile's mods; the carried mods' data folders."""
+def pack_jar(work, mod, profile):
+    """The data pack an oracle profile added to its world, as a jar of mod `mod`."""
+    spec = json.loads((ORACLE / 'profiles' / f'{profile}.json').read_text())
+    files = {**spec['config_files'], **{path: base64.b64decode(data) for path, data in spec.get('binary_files', {}).items()}}
+    jar = work / f'{mod}.jar'
+    with zipfile.ZipFile(jar, 'w') as z:
+        for path, content in files.items():
+            parts = Path(path).parts
+            if parts[:2] == ('world', 'datapacks') and len(parts) > 3:
+                z.writestr(str(Path(*parts[3:])), content)
+    return jar
+
+
+def carry(profile, mods, carried, packs=None):
+    """`horizon-port-pack carry` of the profile's mods and packs; the carried mods' data folders."""
     work = lab.LOCAL / 'structure-layout' / profile / 'work'
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
+    mods = {key: str(JARS / jar) for key, jar in mods.items()}
+    mods.update({key: str(pack_jar(work, key, name)) for key, name in (packs or {}).items()})
     records = [{'key': key, 'name': key, 'version': '', 'path': jar, 'tier': 'data', 'confidence': 'known',
                 'class': 'content' if key in carried else 'library', 'source': 'file', 'license': '',
-                'client': '', 'server': '', 'depends': [], 'layer': 0, 'jar': str(JARS / jar),
+                'client': '', 'server': '', 'depends': [], 'layer': 0, 'jar': jar,
                 'info': {'mod_id': key, 'name': key, 'version': '', 'license': '', 'depends': [],
                          'census': dict.fromkeys(CENSUS, 0)}}
                for key, jar in mods.items()]
@@ -188,6 +215,15 @@ def compare(expected, actual):
     return None
 
 
+def census_starts(oracle):
+    """The oracle's census of every start (`all_starts`), as `structures` entries with their `all_starts`."""
+    for chunk in oracle['all_starts']:
+        for start in chunk['starts']:
+            if 'children' in start:
+                yield {'id': start['id'], 'dimension': chunk['dimension'], 'start_chunk': chunk['chunk'],
+                       'all_starts': start['children']}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--profile', default='lithostitched', choices=sorted(PROFILES))
@@ -199,20 +235,23 @@ def main():
         print(f'SKIP: no oracle results in {ORACLE / args.profile} (see this file\'s docstring)')
         return 0
     profile = PROFILES[args.profile]
-    missing = [jar for jar in profile['mods'].values() if not (JARS / jar).exists()]
+    missing = [str(JARS / jar) for jar in profile['mods'].values() if not (JARS / jar).exists()]
+    missing += [str(ORACLE / 'profiles' / f'{name}.json') for name in profile.get('packs', {}).values()
+                if not (ORACLE / 'profiles' / f'{name}.json').exists()]
     if missing:
-        print(f'SKIP: mod jars not in {JARS}: {", ".join(missing)}')
+        print(f'SKIP: not found: {", ".join(missing)}')
         return 0
     resources = lab.RESOURCES
     if profile['carry']:
-        resources = overlay(args.profile, carry(args.profile, profile['mods'], profile['carry']))
+        data = carry(args.profile, profile['mods'], profile['carry'], profile.get('packs'))
+        resources = overlay(args.profile, data)
     binary = probe_binary()
     matched, known, failed = 0, 0, []
     for path in results:
         oracle = json.load(gzip.open(path))
         seed = oracle['seed']
         by_dimension = {}
-        for start in oracle['structures']:
+        for start in oracle['structures'] if profile['side'] != 'all_starts' else census_starts(oracle):
             if start.get(profile['side']) is None or not re.search(args.filter, start['id']) \
                     or not re.search(profile['structures'] or '', start['id']):
                 continue
