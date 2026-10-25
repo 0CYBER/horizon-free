@@ -472,6 +472,8 @@ impl Game<'_> {
                 "sprinting": self.keys.contains(&KeyCode::ControlLeft),
                 "health": p.health.health(),
                 "absorption": p.health.absorption(),
+                // The hurt animation's ticks left (the camera's hurt tilt).
+                "hurt_time": p.health.hurt_animation_time,
                 "air": p.air,
                 "food": p.health.food.food,
                 "saturation": p.health.food.saturation,

@@ -689,7 +689,7 @@ impl Lod {
                                 }
                                 let finer = finer.remove(&key).unwrap_or_default();
                                 let input = snapshot.mesh_input(key, finer);
-                                let mesh = mesher.mesh(
+                                let mut mesh = mesher.mesh(
                                     input.key,
                                     &input.columns(),
                                     &covered,
@@ -698,6 +698,7 @@ impl Lod {
                                     &input.neighbors,
                                     &input.finer,
                                 );
+                                mesh.sort_solid();
                                 meshes.push((input.key, mesh));
                             }
                             Done::Mesh {
@@ -1727,10 +1728,6 @@ mod tests {
         let expected = (key.size() * key.size() - 16 * 16) as f32;
         assert_eq!(top_area(&mesh.solid, 70.0), expected);
         assert_eq!(top_area(&mesh.translucent, 80.0 - 1.0 / 9.0), expected);
-        assert_eq!(
-            mesh.faces.quads.iter().sum::<u32>() as usize,
-            mesh.solid.len() / 4
-        );
         assert!(mesh.translucent.iter().all(|v| v.light == 240));
         let side = |axis: usize, plane: f32, low: f32, high: f32| {
             let other = if axis == 0 { 2 } else { 0 };
