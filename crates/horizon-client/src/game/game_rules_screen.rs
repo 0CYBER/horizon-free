@@ -564,6 +564,29 @@ mod tests {
         );
     }
 
+    /// AbstractScrollArea: a press on the bar holds it, a drag moves the
+    /// list (to the ends past them), a release lets go.
+    #[test]
+    fn the_scroll_bar_can_be_held_dragged_and_let_go() {
+        let mut s = RulesScreen::new(&GameRules::default());
+        let (w, h) = (427.0, 240.0);
+        let (top, bottom, content) = (HEADER, h - FOOTER, s.content());
+        assert!(
+            content > bottom - top,
+            "the rules overflow a 240-high screen"
+        );
+        let bar = RulesScreen::bar(w);
+        assert!(!s.press_scrollbar((bar - 4.0, top + 5.0), (w, h)));
+        assert!(s.press_scrollbar((bar + 3.0, top + 5.0), (w, h)));
+        s.drag(top + 40.0, h);
+        assert!(s.scroll.amount > 0.0);
+        s.drag(bottom + 10.0, h);
+        assert_eq!(s.scroll.amount, content - (bottom - top));
+        s.release();
+        s.drag(top, h);
+        assert_eq!(s.scroll.amount, content - (bottom - top));
+    }
+
     #[test]
     fn edits_change_rules_and_bad_numbers_hold_done() {
         let mut s = RulesScreen::new(&GameRules::default());

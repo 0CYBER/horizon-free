@@ -492,11 +492,7 @@ impl Game<'_> {
     }
     pub(super) fn stats_scroll(&mut self, amount: f32) {
         let (row_h, _) = self.stats_rows();
-        let size = self
-            .renderer
-            .as_ref()
-            .map_or([1280, 720], |r| [r.config.width, r.config.height]);
-        let h = HudBatch::new(size).height;
+        let h = self.gui_size().1;
         let content = self.stats_content();
         self.stats_ui
             .scroll
@@ -517,11 +513,7 @@ impl Game<'_> {
         if !self.stats_ui.scroll.held() {
             return;
         }
-        let size = self
-            .renderer
-            .as_ref()
-            .map_or([1280, 720], |r| [r.config.width, r.config.height]);
-        let h = HudBatch::new(size).height;
+        let h = self.gui_size().1;
         let content = self.stats_content();
         self.stats_ui
             .scroll
