@@ -588,7 +588,7 @@ impl Game<'_> {
             let [x, y, z] = gs.pos;
             let name = &self.res.facts().get(self.world.block(x, y, z)).name;
             let block = StationKind::from_block(name) == Some(gs.kind);
-            if !(block && within_reach(g, gs.pos)) {
+            if !(block && g.within_block_range(gs.pos, 4.0)) {
                 let window = gs.window;
                 self.lan_station_closed(host, conn, Some(window));
                 host.hub.send_to(
@@ -631,16 +631,7 @@ impl Game<'_> {
                 Some(BlockEntity::Lectern(l)) if l.book.is_some()
             );
             // Container.stillValidBlockEntity: the interaction range and its buffer.
-            let eye = [g.position[0], g.position[1] + g.eye_height(), g.position[2]];
-            let reach = if g.creative() { 5.0 } else { 4.5 } + 4.0;
-            let pos = [key.0, key.1, key.2];
-            let near = (0..3)
-                .map(|k| {
-                    let lo = f64::from(pos[k]);
-                    (lo - eye[k]).max(eye[k] - lo - 1.0).max(0.0).powi(2)
-                })
-                .sum::<f64>()
-                < reach * reach;
+            let near = g.within_block_range([key.0, key.1, key.2], 4.0);
             if has_book && near {
                 self.lan_send_lectern(host, conn, false);
             } else {
@@ -659,19 +650,4 @@ pub(super) fn station_inputs(gs: &GuestStation) -> Vec<ItemStack> {
     menu_of(gs.kind)
         .map(|(_, _, inputs)| inputs.filter_map(|s| gs.menu.slot(s).cloned()).collect())
         .unwrap_or_default()
-}
-
-/// `Player.isWithinBlockInteractionRange(pos, 4)`: the guest's eyes within
-/// its block interaction range (4.5, creative 5) and a 4-block buffer of the
-/// block's box.
-pub(super) fn within_reach(g: &horizon_client::lan::guest::Guest, pos: [i32; 3]) -> bool {
-    let eye = [g.position[0], g.position[1] + g.eye_height(), g.position[2]];
-    let reach = if g.creative() { 5.0 } else { 4.5 } + 4.0;
-    (0..3)
-        .map(|k| {
-            let lo = f64::from(pos[k]);
-            (lo - eye[k]).max(eye[k] - lo - 1.0).max(0.0).powi(2)
-        })
-        .sum::<f64>()
-        < reach * reach
 }
