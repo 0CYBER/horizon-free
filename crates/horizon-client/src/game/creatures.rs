@@ -316,6 +316,9 @@ impl Game<'_> {
     /// The `mobs` command: nearby mobs with position, health and running goals.
     pub(super) fn control_mobs(&self, radius: f64) -> serde_json::Value {
         let center = self.player.as_ref().map_or(Vec3::ZERO, |p| p.position);
+        self.control_mobs_at(radius, center)
+    }
+    pub(super) fn control_mobs_at(&self, radius: f64, center: Vec3) -> serde_json::Value {
         let list: Vec<serde_json::Value> = self
             .mobs
             .iter()

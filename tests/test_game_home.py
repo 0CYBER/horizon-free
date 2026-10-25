@@ -29,6 +29,7 @@ EXEMPT = {
     "build_release.py": "builds and packs the release",
     "release_train.py": "release bookkeeping",
     "pr_ready.py": "runs cargo checks and parity.py",
+    "test_friends_integration_parity.py": "builds binaries; test_friends.Game isolates every game through integration_env",
     "port_harness.py": "ports Java code, starts no game",
 }
 

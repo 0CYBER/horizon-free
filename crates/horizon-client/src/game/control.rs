@@ -11,6 +11,9 @@ use winit::{event::MouseButton, event_loop::ActiveEventLoop, keyboard::KeyCode};
 
 const HELP: &[&str] = &[
     "status                         game, player, streaming and renderer state",
+    "simulation                     authoritative projectiles in the owner's level",
+    "server-hold on|off             hold simulation and player packets at a control-fixture barrier",
+    "stall MILLISECONDS             stall the window thread (0..5000), leaving transport alive",
     "key KEY down|up|tap|repeat     press, release or auto-repeat a key (w a s d space shift ctrl e q esc f3 1-9 arrows ...)",
     "release                        release every key and mouse button",
     "mouse left|right|middle down|up|click",
@@ -238,6 +241,47 @@ impl Game<'_> {
             }
             "sculk" => Ok(Some(self.sculk_command(&words)?)),
             "status" => Ok(Some(self.control_status())),
+            "stall" => {
+                let millis: u64 = arg(1)?.parse()?;
+                if millis > 5000 {
+                    return Err("stall is limited to 5000 milliseconds".into());
+                }
+                std::thread::sleep(Duration::from_millis(millis));
+                ok()
+            }
+            "simulation" => {
+                self.require_world()?;
+                let value = if let Some(server) = &self.integrated {
+                    server
+                        .call(|g| {
+                            g.in_owner_level(|g| {
+                                json!({ "game_time": g.world.game_time, "projectiles": g.projectiles_status() })
+                            })
+                        })
+                        .ok_or("the integrated server stopped")?
+                } else {
+                    json!({ "game_time": self.world.game_time, "projectiles": self.projectiles_status() })
+                };
+                Ok(Some(value))
+            }
+            "server-hold" => {
+                self.require_world()?;
+                let held = match arg(1)? {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("server-hold on|off".into()),
+                };
+                if let Some(server) = &self.integrated {
+                    server
+                        .call(move |g| g.agent.hold_server = held)
+                        .ok_or("the integrated server stopped")?;
+                } else if self.remote.is_some() {
+                    return Err("server-hold requires the world's host".into());
+                } else {
+                    self.agent.hold_server = held;
+                }
+                ok()
+            }
             "pad" => Ok(Some(self.pad_command(&words)?)),
             "key" => {
                 let key = key_code(arg(1)?).ok_or_else(|| format!("unknown key {}", words[1]))?;
@@ -496,10 +540,23 @@ impl Game<'_> {
             "mobs" => {
                 self.require_world()?;
                 let radius: f64 = words.get(1).map_or(Ok(64.0), |r| r.parse())?;
+                if let Some(server) = &self.integrated {
+                    let center = self.player.as_ref().map_or(Vec3::ZERO, |p| p.position);
+                    let value = server
+                        .call(move |g| g.in_owner_level(|g| g.control_mobs_at(radius, center)))
+                        .ok_or("the integrated server stopped")?;
+                    return Ok(Some(value));
+                }
                 Ok(Some(self.control_mobs(radius)))
             }
             "hurtlog" => {
                 self.require_world()?;
+                if let Some(server) = &self.integrated {
+                    let value = server
+                        .call(|g| g.control_hurt_log())
+                        .ok_or("the integrated server stopped")?;
+                    return Ok(Some(value));
+                }
                 Ok(Some(self.control_hurt_log()))
             }
             "resume" => {

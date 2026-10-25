@@ -272,7 +272,8 @@ impl Game<'_> {
             out.push(json!({"id": t.id, "kind": "minecraft:trident", "position": at(t.position)}));
         }
         for p in &self.creatures.projectiles {
-            out.push(json!({"id": p.id, "kind": format!("{:?}", p.kind).split([' ', '{']).next().unwrap_or(""), "position": at(p.position)}));
+            out.push(json!({"id": p.id, "kind": format!("{:?}", p.kind).split([' ', '{']).next().unwrap_or(""), "position": at(p.position), "velocity": at(p.velocity),
+                "player_owned": p.owner == Some(horizon_client::mobs::Who::Player)}));
         }
         for (kind, p, _) in self.potions.thrown_entities() {
             out.push(json!({"kind": kind, "position": at(p)}));

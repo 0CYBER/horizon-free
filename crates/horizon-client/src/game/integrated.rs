@@ -360,6 +360,12 @@ impl Game<'_> {
         let mut next = Instant::now();
         while !flags.stop.load(Ordering::Relaxed) {
             self.run_tasks();
+            if self.agent.hold_server {
+                // Keep servicing control requests so the fixture can release the barrier.
+                // Unlike /tick freeze, no player's queued packets are applied here.
+                self.wait_for_next_server_tick(&mut next, true);
+                continue;
+            }
             let paused = flags.paused.load(Ordering::Relaxed);
             if paused {
                 // Only the connections run.

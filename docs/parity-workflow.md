@@ -77,3 +77,49 @@ On ludodesktop, source `~/code/horizon-parity/env.sh` first: it sets the ALSA bu
 ## Reading vanilla
 
 Besides the Vineflower sources in `.local/minecraft/<version>/sources/`, `tools/rea_vanilla.py` queries the shipped bytecode through REA (callers through lambdas, overloads, a second decompiler); see [decompilation status](decompilation-status.md#querying-the-shipped-bytecode-with-rea).
+
+## Player-facing integration and deterministic fixtures
+
+`python3 tools/lan_e2e.py` runs every LAN check with an integrated server thread,
+the same path as normal single player. `python3 tools/test_friends.py --client
+target/fast/horizon-client --relay target/fast/horizon-relay --baseline` covers
+plain LAN, direct invitations, a local relay and ended invitations in that mode.
+Both accept `--in-frame` for comparison and retain `--server-thread` for existing
+callers. Run Linux games under `xvfb-run -a` when no display is available. Each
+process gets scratch game, launcher, XDG data and config homes; telemetry, audio
+and launcher self-update are disabled.
+
+`lan_integration` and `friends_integration` register these suites with the normal
+`parity.py` selection used by CI. Their traced imports and Cargo artifacts select
+them when the drivers or game implementation change. LAN writes `results.json`
+with the host mode and each result beside its screenshots and logs. A skipped
+case is recorded explicitly and does not count as passing coverage.
+
+The game-binary fixture audit keeps these complementary direct rule tests:
+
+- `command_harness.rs`: command feedback, styled spans and result callbacks,
+  held player position, explicit ticks and portal completion matching
+  `VanillaCommandExecOracle`. LAN `commands`, `feedback`, `styles`, `levels` and
+  `portals` cover command input, packet feedback and travel across the boundary.
+- `dispense_fixture.rs`: seeded synthetic worlds, block/event traces, item
+  use/mining and combat hooks matching `VanillaDispenserOracle`. These isolate
+  rule results and RNG order; LAN machines, crafting, clicks, fireball, mining
+  and combat exercise real input and server handling separately. The new
+  `dispenser_input_host` / `dispenser_input_guest` checks press a button and
+  verify authoritative inventory consumption and exactly one drop on both clients.
+- `sculk_fixture.rs`: scripted events and exact per-tick sculk/warden traces
+  matching `VanillaSculkOracle`; introducing wall-clock network ticks would
+  destroy that deterministic oracle contract. `sculk_input_host` and
+  `sculk_input_guest` separately exercise real footsteps reaching a sensor;
+  failures remain visible rather than changing the oracle trace.
+- `net_harness.rs`: already a real network client of a dedicated server; keep
+  its handshake, world loading, chat and command packet assertions.
+
+Library probes, `lan_bot`'s protocol hub fixture, generation/save tests and
+streaming/mesh tests remain fast deterministic coverage. They do not become
+full game launches. Setup and authoritative reads use the owning server;
+interactions stay on the client. `server-hold on|off` provides a prediction-test
+barrier between server ticks, including player packet handling, while transport
+threads and control calls remain responsive. `stall MILLISECONDS` stalls only
+the window to test recovery from a hung frame without process signals interrupting
+socket reads. Neither mechanism changes normal gameplay.
