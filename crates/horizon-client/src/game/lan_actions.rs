@@ -1939,7 +1939,7 @@ impl Game<'_> {
         let in_wall = !g.sleeping && self.in_wall(g.position, g.eye_height());
         let at = g.position;
         let sneaking = g.sneaking;
-        let sounds = self.as_guest(host, conn, |game| {
+        let events = self.as_guest(host, conn, |game| {
             let (rules, motion) = (game.world.health_rules, game.motion);
             let health = &motion.health;
             let Some(player) = game.player.as_mut() else {
@@ -2036,20 +2036,26 @@ impl Game<'_> {
             // A hurt since the last tick marked the velocity (Entity.markHurt):
             // ServerEntity.sendChanges sends it as it is after this travel.
             let marked = std::mem::take(&mut player.health.sync_velocity);
-            let sounds = events
-                .into_iter()
-                .filter_map(|e| match e {
-                    MotionEvent::HurtSound(sound) => Some(sound),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            (sounds, marked.then_some(player.velocity))
+            (events, marked.then_some(player.velocity))
         });
-        let Some((sounds, marked)) = sounds else {
+        let Some((events, marked)) = events else {
             return;
         };
-        for sound in sounds {
-            self.player_hurt_sound(sound, at);
+        for event in events {
+            match event {
+                MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, at),
+                MotionEvent::Fall(horizon_client::landing::FallEvent::Write {
+                    position,
+                    flags,
+                    ..
+                }) => {
+                    // Landing wrote the raw state: finish Level.setBlock's neighbour updates.
+                    self.with_level(|b, level, ticks| {
+                        b.notify_written(level, ticks, position, flags as i32)
+                    });
+                }
+                _ => {}
+            }
         }
         if let (Some(v), Some(g)) = (marked, host.hub.guest(conn)) {
             g.send(&C::SetEntityMotion(play::SetEntityMotion {
