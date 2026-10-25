@@ -112,7 +112,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - objects:   boats, minecarts, armor stands, item frames and paintings the host summons reach the
              guest as the host has them (kind, place, rotation, what they hold or wear, the variant).
 - projectiles: primed TNT (one falling), an end crystal and an arrow that lands reach the guest where
-             the host has them; a falling block lands on both sides.
+              the host has them; a falling block lands on both sides.
+- shulker_bullets: every shot a shulker fires has its own id and flies on both sides, following
+              the same trajectory; the bullets disappear on both sides when they hit blocks (#1494).
 - thrown:    a splash potion and an eye of ender the host and the guest each throw fly on both
              sides (#1363, #1391);
 - sparks:    level events' particles on both sides: the host's and the guest's bone meal on wheat
@@ -5628,6 +5630,113 @@ def check_villagers(host, guest, out):
 
 CHECKS += ['villagers']
 CHECK_FNS.update(villagers=check_villagers)
+
+
+def check_shulker_bullets(host, guest, out):
+    """ShulkerAttackGoal's bullets reach ClientPacketListener.handleAddEntity, then the existing
+    projectile renderer and interpolation, with distinct ids from the server's entity counter."""
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    tag = 'lan_shulker_bullets'
+    selector = f'@e[type=minecraft:shulker,tag={tag},limit=1]'
+    sound = 'minecraft:entity.shulker.shoot'
+    paths = {g.name: {} for g in (host, guest)}
+    before = {g.name: heard(g, sound) for g in (host, guest)}
+    shots = dict.fromkeys(before, 0)
+    first_shot = stopped = None
+    photographed = False
+
+    def bullets(status):
+        return [p for p in status['projectiles'] if p['kind'] == 'ShulkerBullet']
+
+    try:
+        host('command', command='difficulty normal')
+        host('command', command='gamemode creative')
+        guest('command', command='gamemode survival')
+        guest('command', command='effect give @s minecraft:resistance 120 4 true')
+        host('command', command=f'fill {x - 10} {y - 1} {z - 10} {x + 10} {y - 1} {z + 18} minecraft:stone')
+        host('command', command=f'fill {x - 10} {y} {z - 10} {x + 10} {y + 12} {z + 18} minecraft:air')
+        # A west wall supports the shulker above the floor, leaving room for a short flight.
+        host('command', command=f'fill {x - 1} {y} {z + 7} {x - 1} {y + 4} {z + 7} minecraft:stone')
+        host('command', command=f'tp @s {x + 4.5} {y} {z - 0.5}')
+        guest('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+        host('command', command=f'summon minecraft:shulker {x + 0.5} {y + 3} {z + 7.5} '
+                                f'{{NoAI:1b,PersistenceRequired:1b,Tags:["{tag}"]}}')
+        for game in (host, guest):
+            game.raw('look-at', x + 0.5, y + 3.5, z + 7.5)
+        guest.wait(20)
+        host('command', command=f'data merge entity {selector} {{NoAI:0b}}')
+        for waited in range(2, 402, 2):
+            guest.wait(2)
+            for game in (host, guest):
+                status = game('status')
+                live = bullets(status)
+                ids = [p['id'] for p in live]
+                assert all(ids) and len(set(ids)) == len(ids), f'{game.name}: invalid bullet ids {ids}'
+                for p in live:
+                    paths[game.name].setdefault(p['id'], []).append(p['position'])
+                shots[game.name] = status['heard'].get(sound, 0) - before[game.name]
+            if shots['host'] and first_shot is None:
+                first_shot = waited
+            if first_shot is not None and waited - first_shot >= 8 and not photographed:
+                host('command', command='tick freeze')
+                try:
+                    for game in (host, guest):
+                        game.raw('look-at', x + 0.5, y + 3.5, z + 7.5)
+                        game.raw('key', 'f1', 'tap')
+                        try:
+                            game.shot(out, 'shulker-bullets')
+                        finally:
+                            game.raw('key', 'f1', 'tap')
+                finally:
+                    host('command', command='tick unfreeze')
+                photographed = True
+            if shots['host'] >= 2 and stopped is None:
+                host('command', command=f'data merge entity {selector} {{NoAI:1b}}')
+                stopped = waited
+            if stopped is not None and waited - stopped >= 20:
+                break
+            # Keep the survival target in range after a hit applies levitation.
+            if waited % 20 == 0:
+                guest('command', command='effect clear @s minecraft:levitation')
+                guest('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+        lab.write_json(out / 'shulker-bullets.json', {'shots': shots, 'paths': paths})
+        assert shots['host'] >= 2, f'the shulker did not attack twice: {shots}'
+        for name, by_id in paths.items():
+            assert len(by_id) == shots[name], f'{name}: {shots[name]} shots but bullet ids {list(by_id)}'
+            for id, positions in by_id.items():
+                assert any(math.dist(positions[0], p) > 0.5 for p in positions), \
+                    f'{name}: bullet {id} did not move: {positions}'
+        assert paths['host'].keys() == paths['guest'].keys(), f'different bullets: {paths}'
+        for id, positions in paths['guest'].items():
+            # The clients interpolate three ticks behind, and reads are not simultaneous.
+            assert all(min(math.dist(p, q) for q in paths['host'][id]) < 1.5 for p in positions), \
+                f'bullet {id} diverged from the host: {paths}'
+
+        # Put blocks in the flight volume to exercise server removal without depending on homing.
+        for game in (host, guest):
+            game('command', command='gamemode creative')
+            game('command', command=f'tp @s {x + 0.5} {y + 16} {z + 0.5}')
+        host('command', command=f'fill {x - 10} {y} {z - 10} {x + 10} {y + 12} {z + 18} minecraft:stone')
+        for _ in range(20):
+            guest.wait(2)
+            remaining = {g.name: bullets(g('status')) for g in (host, guest)}
+            if not any(remaining.values()):
+                break
+        assert not any(remaining.values()), f'bullets survived block hits: {remaining}'
+    finally:
+        host('command', command='tick unfreeze')
+        host('command', command=f'kill @e[tag={tag}]')
+        host('command', command=f'fill {x - 10} {y} {z - 10} {x + 10} {y + 12} {z + 18} minecraft:air')
+        for game in (host, guest):
+            game('command', command='effect clear @s')
+            game('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+            game('command', command='gamemode survival')
+        face_each_other(host, guest)
+    return {'shots': shots, 'ids': sorted(paths['host']), 'removed': True}
+
+
+CHECKS += ['shulker_bullets']
+CHECK_FNS.update(shulker_bullets=check_shulker_bullets)
 
 
 def check_farmland(host, guest, out):
