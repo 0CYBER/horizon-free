@@ -149,6 +149,9 @@ pub struct Hub {
     pub singleplayer_owner: Option<u128>,
     /// Who rides what, set by the game before each tick.
     pub riding: super::entity::Riding,
+    /// The scoreboard's teams, set by the game each tick, for players'
+    /// display names.
+    pub teams: Vec<crate::scoreboard::Team>,
     last_clock: i64,
     last_rate: f32,
     ticking: (f32, bool),
@@ -204,6 +207,24 @@ pub fn display_name(uuid: u128, name: &str) -> Tag {
         ),
         ("insertion", string(name)),
     ])
+}
+
+impl Hub {
+    /// Player.getDisplayName: the name formatted for the player's team
+    /// (PlayerTeam.formatNameForTeam), suggesting `/tell NAME `, showing the
+    /// player on hover and inserting the name.
+    pub fn player_display_name(&self, uuid: u128, name: &str) -> Tag {
+        let Some(team) = self.teams.iter().find(|t| t.players.contains(name)) else {
+            return display_name(uuid, name);
+        };
+        let mut c = team.formatted_name_comp(&crate::scoreboard::literal(name));
+        c["click_event"] =
+            serde_json::json!({"action": "suggest_command", "command": format!("/tell {name} ")});
+        c["hover_event"] = serde_json::json!({"action": "show_entity", "id": "minecraft:player",
+            "uuid": horizon_protocol::crypto::uuid_string(uuid), "name": name});
+        c["insertion"] = name.into();
+        crate::scoreboard::component_tag(&c)
+    }
 }
 
 /// A yellow translation of player names (`multiplayer.player.joined`).
@@ -315,6 +336,7 @@ impl Hub {
             entity_types: Default::default(),
             entities: Default::default(),
             entity_out: Vec::new(),
+            teams: Vec::new(),
         }
     }
 
@@ -2292,6 +2314,11 @@ impl Hub {
             .dynamic
             .name("minecraft:enchantment", id)
             .map(str::to_owned)
+    }
+    /// A stack a client sent (`SetCreativeModeSlot`), read with this
+    /// server's registries.
+    pub fn stack_from_network(&self, s: &horizon_protocol::item::Stack) -> crate::items::ItemStack {
+        crate::item_sync::from_network(s, &self.sync.builtin, &self.sync.dynamic)
     }
 
     /// ServerLevel.removePlayerImmediately, then addRespawnedPlayer: the other players

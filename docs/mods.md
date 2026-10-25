@@ -12,7 +12,7 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 
 | Part | Where | State |
 |---|---|---|
-| The contract (WIT) | `crates/horizon-mod-sdk/wit/horizon.wit` | 0.1: log, game-read, chat, hud, storage; tick, frame, chat and command hooks |
+| The contract (WIT) | `crates/horizon-mod-sdk/wit/horizon.wit` | 0.1: log, game-read, chat, hud, storage, ui; tick, frame, chat and command hooks |
 | SDK for mod authors | `crates/horizon-mod-sdk` | 0.1 |
 | Example mod | `crates/horizon-mod-sdk/examples/coords-hud` | coordinates, facing and time HUD, `/where`, `/coords` |
 | Runtime | `crates/horizon-mods` | wasmtime 36 LTS, component model |
@@ -86,6 +86,7 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | `chat` | `chat` | `show(text)`: a line only the local player sees, after the mod's name (8 per call) |
 | `hud` | `hud` | `set-panel(corner, lines)`, `clear()`: up to 16 lines of 256 characters |
 | `storage` | `storage` | `get(key)`, `set(key, value)`, `delete(key)`: a per-mod folder of up to 64 files, 4 MiB total, at most 1 MiB written per call |
+| `ui` | `ui` | `open-screen`, `close-screen`, `set-settings`: a screen the mod owns and a page in Options > Mods, of text, item and list widgets the game lays out and draws with its own menus' code. **Experimental:** the manifest needs `experimental = ["ui"]` |
 
 | Hook (export) | When |
 |---|---|
@@ -112,7 +113,6 @@ loading. Ordered by what the first native ports need:
 | `target` | the crosshair's block or entity, with its state and NBT summary | Jade/WTHIT-style tooltips |
 | `inventory-read` | the player's inventory, held item, open container | AppleSkin, recipe viewers |
 | `recipes` | the recipe registry and lookups | JEI/EMI-style viewers |
-| `ui` | widgets: text, item icons, lists, a screen the mod owns, a settings page in Options > Mods | built from vanilla's widgets (`ui`) so it matches the menus |
 | `world-read` | blocks and biomes around the player, within the render distance | minimaps, schematics |
 | `render` | world-space lines, boxes and ghost blocks in a per-frame budget | Litematica-style placement, waypoints |
 | `registries` | new blocks, items, entities and recipes, mostly data: JSON models, textures, loot and recipes in the `.hmod`'s `assets/` and `data/` | server side; see [Multiplayer](#multiplayer) |
@@ -285,10 +285,13 @@ authors = ["..."]
 api = "0.1"                  # the API the SDK targets
 side = "client"              # client | server | both
 capabilities = ["game-read", "hud", "chat"]
+experimental = []            # experimental capabilities it uses, e.g. ["ui"]
 ```
 
 Unknown keys are refused, so a typo is an error, not a silently ignored
-permission.
+permission. An experimental capability (today `ui`) may change in any release
+([stability](api/stability.md)): a mod uses it only by naming it in
+`experimental` as well, so nobody depends on it by accident.
 
 ### Content mods (API 0.2)
 
