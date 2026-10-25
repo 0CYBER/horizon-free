@@ -83,7 +83,7 @@ pub fn main() -> horizon_client::Result<()> {
             let mut extra = String::new();
             match kind {
                 "give" => count = book.add_recipes(&index, &list()).0,
-                "take" => count = book.remove_recipes(&index, &list()),
+                "take" => count = book.remove_recipes(&index, &list()).len(),
                 "seen" => book.remove_highlight(op["id"].as_str().unwrap_or_default()),
                 "set" => {
                     let i = match op["type"].as_str().unwrap_or_default() {

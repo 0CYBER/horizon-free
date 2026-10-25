@@ -173,6 +173,11 @@ impl Random {
     }
 }
 
+/// One bot thread that panics poisons the locks it held; the others and the report go on.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn raw(id: i32, write: impl FnOnce(&mut Writer)) -> Vec<u8> {
     let mut w = Writer::new();
     w.varint(id);
@@ -329,7 +334,7 @@ fn read(
 ) {
     use ids::play::clientbound as cb;
     use ids::play::serverbound as sb;
-    let send = |body: Vec<u8>| writer.lock().unwrap().send(&body);
+    let send = |body: Vec<u8>| lock(&writer).send(&body);
     let mut seen = HashSet::new();
     let mut batch = BatchSize::new();
     let mut teleports = 0u64;
@@ -338,7 +343,7 @@ fn read(
             Ok(packet) => packet,
             Err(e) => {
                 if bot.online.swap(false, Ordering::SeqCst) {
-                    *bot.error.lock().unwrap() = Some(e.to_string());
+                    *lock(&bot.error) = Some(e.to_string());
                 }
                 return;
             }
@@ -356,7 +361,7 @@ fn read(
             cb::LEVEL_CHUNK_WITH_LIGHT => {
                 bot.chunks.fetch_add(1, Ordering::Relaxed);
                 if let (Ok(x), Ok(z)) = (r.i32(), r.i32()) {
-                    if !bot.held.lock().unwrap().insert((x, z)) {
+                    if !lock(&bot.held).insert((x, z)) {
                         bot.resent.fetch_add(1, Ordering::Relaxed);
                     }
                     if seen.insert((x, z)) {
@@ -368,7 +373,7 @@ fn read(
             cb::FORGET_LEVEL_CHUNK => {
                 if let Ok(play::Clientbound::ForgetLevelChunk(p)) =
                     play::Clientbound::decode(id, &body)
-                    && bot.held.lock().unwrap().remove(&(p.pos[0], p.pos[1]))
+                    && lock(&bot.held).remove(&(p.pos[0], p.pos[1]))
                 {
                     bot.forgotten.fetch_add(1, Ordering::Relaxed);
                 }
@@ -389,7 +394,7 @@ fn read(
             }
             cb::PLAYER_POSITION => match play::Clientbound::decode(id, &body) {
                 Ok(play::Clientbound::PlayerPosition(p)) => {
-                    let mut at = bot.teleport.lock().unwrap();
+                    let mut at = lock(&bot.teleport);
                     let previous = at.unwrap_or([0.0; 3]);
                     // Relative flags: X 1, Y 2, Z 4.
                     let pos: [f64; 3] = std::array::from_fn(|i| {
@@ -420,7 +425,7 @@ fn read(
             },
             cb::DISCONNECT | cb::START_CONFIGURATION => {
                 bot.online.store(false, Ordering::SeqCst);
-                *bot.error.lock().unwrap() = Some(if id == cb::DISCONNECT {
+                *lock(&bot.error) = Some(if id == cb::DISCONNECT {
                     format!(
                         "disconnected: {}",
                         String::from_utf8_lossy(&body)
@@ -455,7 +460,7 @@ fn run_bot(
     let connection = match join(&o, &name) {
         Ok(c) => c,
         Err(e) => {
-            *bot.error.lock().unwrap() = Some(e);
+            *lock(&bot.error) = Some(e);
             return;
         }
     };
@@ -469,12 +474,12 @@ fn run_bot(
     use ids::play::serverbound as sb;
     // Wait for the spawn position.
     let spawn = loop {
-        if let Some(at) = *bot.teleport.lock().unwrap() {
+        if let Some(at) = *lock(&bot.teleport) {
             break at;
         }
         if !bot.online.load(Ordering::SeqCst) || asked.elapsed() > Duration::from_secs(60) {
-            if bot.error.lock().unwrap().is_none() {
-                *bot.error.lock().unwrap() = Some("no spawn position within 60 s".into());
+            if lock(&bot.error).is_none() {
+                *lock(&bot.error) = Some("no spawn position within 60 s".into());
             }
             return;
         }
@@ -482,7 +487,7 @@ fn run_bot(
     };
     bot.joined_after_ms
         .store(asked.elapsed().as_millis() as u64, Ordering::SeqCst);
-    let send = |body: Vec<u8>| writer.lock().unwrap().send(&body).is_ok();
+    let send = |body: Vec<u8>| lock(&writer).send(&body).is_ok();
     send(raw(sb::PLAYER_LOADED, |_| {}));
     let mut random = Random(o.seed ^ (index as u64).wrapping_mul(0x2545_F491_4F6C_DD1D));
     let mut pos = spawn;
@@ -491,17 +496,15 @@ fn run_bot(
     let mut target = pos;
     let mut next = Instant::now();
     loop {
-        if until.lock().unwrap().is_some_and(|u| Instant::now() >= u)
-            || !bot.online.load(Ordering::SeqCst)
-        {
+        if lock(&until).is_some_and(|u| Instant::now() >= u) || !bot.online.load(Ordering::SeqCst) {
             break;
         }
         // A teleport from the server wins over where the bot thought it was.
-        if let Some(at) = bot.teleport.lock().unwrap().take() {
+        if let Some(at) = lock(&bot.teleport).take() {
             pos = at;
         }
         let here = ((pos[0].floor() as i32) >> 4, (pos[2].floor() as i32) >> 4);
-        if !bot.held.lock().unwrap().contains(&here) {
+        if !lock(&bot.held).contains(&here) {
             bot.waited.fetch_add(1, Ordering::Relaxed);
         } else if pos[1] < cruise {
             pos[1] = (pos[1] + 0.5).min(cruise);
@@ -558,7 +561,7 @@ fn run_bot(
     }
     // Offline first, so the reader doesn't count the closed connection as a failure.
     bot.online.store(false, Ordering::SeqCst);
-    writer.lock().unwrap().shutdown();
+    lock(&writer).shutdown();
 }
 
 fn behaviour_of(mode: &str, index: usize) -> Behaviour {
@@ -612,13 +615,10 @@ fn main() {
         let total = |f: fn(&Bot) -> &AtomicU64| -> u64 {
             bots.iter().map(|b| f(b).load(Ordering::Relaxed)).sum()
         };
-        let failed = bots
-            .iter()
-            .filter(|b| b.error.lock().unwrap().is_some())
-            .count();
+        let failed = bots.iter().filter(|b| lock(&b.error).is_some()).count();
         if first.is_none() && online > 0 {
             first = Some(Instant::now());
-            *until.lock().unwrap() = Some(Instant::now() + Duration::from_secs(o.seconds));
+            *lock(&until) = Some(Instant::now() + Duration::from_secs(o.seconds));
         }
         println!(
             "{}",
@@ -636,10 +636,10 @@ fn main() {
             })
         );
         previous_chunks = chunks;
-        let over = until.lock().unwrap().is_some_and(|u| Instant::now() >= u);
+        let over = lock(&until).is_some_and(|u| Instant::now() >= u);
         let all_failed = failed == o.bots;
         if over || all_failed || (first.is_none() && start.elapsed() > Duration::from_secs(120)) {
-            *until.lock().unwrap() = Some(Instant::now());
+            *lock(&until) = Some(Instant::now());
             break;
         }
     }
@@ -669,7 +669,7 @@ fn main() {
             "forgotten": b.forgotten.load(Ordering::Relaxed),
             "pulled_back": b.pulled_back.load(Ordering::Relaxed),
             "waited_ticks": b.waited.load(Ordering::Relaxed),
-            "error": *b.error.lock().unwrap(),
+            "error": *lock(&b.error),
         })).collect::<Vec<_>>(),
     });
     if o.report.as_deref() == Some("-") {
