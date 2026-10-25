@@ -3927,7 +3927,7 @@ impl Game<'_> {
         let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
         // A boat, minecart, item frame, armor stand or painting nearer than
         // any mob: the server uses it (AbstractBoat.interact boards it).
-        if let Some(hit) = self.remote_object_hit()
+        if let Some(hit) = self.remote_object_hit(false)
             && self.mob_hit().is_none_or(|(_, d)| hit.distance < d)
             && self.before_block(hit.distance)
         {
@@ -4436,12 +4436,12 @@ impl Game<'_> {
                 id: self.creatures.projectiles[i].id as i32,
             }));
             self.reset_attack_strength();
-        } else if let Some(hit) = self.remote_object_hit()
+        } else if let Some(hit) = self.remote_object_hit(true)
             && self.mob_hit().is_none_or(|(_, d)| hit.distance < d)
             && self.before_block(hit.distance)
         {
             // VehicleEntity.hurtServer, ItemFrame and ArmorStand hurtServer,
-            // a painting broken: the server decides.
+            // a painting broken or an EndCrystal hurtServer: the server decides.
             self.send(S::Attack(play::Attack { id: hit.id }));
             self.reset_attack_strength();
         } else if let Some((i, distance)) = self.mob_hit()
