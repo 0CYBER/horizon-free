@@ -69,18 +69,10 @@ pub fn register(m: &mut Mob) {
 }
 /// Chicken.aiStep: wing flapping, slowed falling and laying eggs.
 pub fn chicken_ai_step(m: &mut Mob, _w: &MobWorld, events: &mut Vec<MobEvent>) {
-    let a = &mut m.anim;
-    a.flap_o = a.flap;
-    a.flap_speed_o = a.flap_speed;
-    a.flap_speed = (a.flap_speed + if m.on_ground { -1.0 } else { 4.0 } * 0.3).clamp(0.0, 1.0);
-    if !m.on_ground && a.flapping < 1.0 {
-        a.flapping = 1.0;
-    }
-    a.flapping *= 0.9;
+    chicken_flap(m);
     if !m.on_ground && m.velocity.y < 0.0 {
         m.velocity.y *= 0.6;
     }
-    a.flap += a.flapping * 2.0;
     if m.alive() && !m.is_baby() && !m.extra.jockey {
         m.extra.egg_time -= 1;
         if m.extra.egg_time <= 0 {
@@ -94,6 +86,21 @@ pub fn chicken_ai_step(m: &mut Mob, _w: &MobWorld, events: &mut Vec<MobEvent>) {
             m.extra.egg_time = m.random.next_int_bound(6000).unwrap_or(0) + 6000;
         }
     }
+}
+/// Chicken.aiStep's wings: `flapSpeed` rises in the air and falls on the
+/// ground, `flapping` restarts at 1 in the air and decays, and `flap` turns
+/// by it. It runs on a client too, for the chickens it only displays (the
+/// falling slowdown and the eggs are the server's).
+pub fn chicken_flap(m: &mut Mob) {
+    let a = &mut m.anim;
+    a.flap_o = a.flap;
+    a.flap_speed_o = a.flap_speed;
+    a.flap_speed = (a.flap_speed + if m.on_ground { -1.0 } else { 4.0 } * 0.3).clamp(0.0, 1.0);
+    if !m.on_ground && a.flapping < 1.0 {
+        a.flapping = 1.0;
+    }
+    a.flapping *= 0.9;
+    a.flap += a.flapping * 2.0;
 }
 /// Farm animal climate from the biome tags (`spawns_warm/cold_variant_farm_animals`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -123,5 +130,91 @@ pub fn sheep_color(climate: Climate, random: &mut impl RandomSource) -> u8 {
         common
     } else {
         6
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mobs::{Anim, Brain, Flags, MobType, Part, Species};
+    use horizon_core::geometry::Vec3;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    fn chicken() -> Mob {
+        let model = Arc::new(Part::parse(
+            "root",
+            &json!({"children": {"right_wing": {}, "left_wing": {}}}),
+        ));
+        let kind = Arc::new(MobType {
+            id: "minecraft:chicken".into(),
+            species: Species::Chicken,
+            width: 0.4,
+            height: 0.7,
+            eye_height: 0.644,
+            category: "creature".into(),
+            max_health: 4.0,
+            speed: 0.25,
+            flying_speed: 0.4,
+            attack_damage: 0.0,
+            attack_knockback: 0.0,
+            follow_range: 16.0,
+            step_height: 0.6,
+            armor: 0.0,
+            armor_toughness: 0.0,
+            knockback_resistance: 0.0,
+            jump_strength: 0.42,
+            attributes: Arc::default(),
+            gravity: 0.08,
+            safe_fall_distance: 3.0,
+            fall_damage_multiplier: 1.0,
+            water_efficiency: 0.0,
+            water_slowdown: 0.8,
+            air_speed: 0.02,
+            baby_scale: 0.5,
+            head_rot_speed: 10.0,
+            max_head_x_rot: 40.0,
+            max_head_y_rot: 75.0,
+            ambient_interval: 120,
+            flags: Flags {
+                animal: true,
+                ..Default::default()
+            },
+            model,
+            layers: HashMap::new(),
+            texture: String::new(),
+            brain: Brain::Passive,
+            anim: Anim::Chicken,
+            sounds: [""; 3],
+            step_sound: None,
+            food: Arc::default(),
+            tempt: Arc::default(),
+        });
+        Mob::new(1, kind, Vec3::ZERO, 0.0)
+    }
+
+    #[test]
+    fn a_falling_chicken_flaps_and_a_landed_one_folds_its_wings() {
+        let mut m = chicken();
+        m.on_ground = true;
+        chicken_flap(&mut m);
+        assert_eq!(m.anim.flap_speed, 0.0);
+        assert_eq!(m.anim.flap, 0.0);
+        // In the air flapSpeed rises by 1.2 (clamped to 1), flapping restarts
+        // at 1 and decays by 0.9, and flap turns by twice flapping.
+        m.on_ground = false;
+        chicken_flap(&mut m);
+        assert_eq!(m.anim.flap_speed, 1.0);
+        assert_eq!(m.anim.flapping, 0.9);
+        assert_eq!(m.anim.flap, 1.8);
+        chicken_flap(&mut m);
+        assert_eq!(m.anim.flap_o, 1.8);
+        assert_eq!(m.anim.flap_speed_o, 1.0);
+        assert_eq!(m.anim.flap, 3.6);
+        // Landed, flapSpeed falls by 0.3 a tick and flapping decays.
+        m.on_ground = true;
+        chicken_flap(&mut m);
+        assert!((m.anim.flap_speed - 0.7).abs() < 1.0e-6);
+        assert!((m.anim.flapping - 0.81).abs() < 1.0e-6);
     }
 }

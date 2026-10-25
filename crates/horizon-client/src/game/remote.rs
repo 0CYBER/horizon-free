@@ -3572,6 +3572,10 @@ impl Game<'_> {
                 m.head_yaw += wrap_degrees(*yaw - m.head_yaw) / *steps as f32;
                 *steps -= 1;
             }
+            // Chicken.aiStep: the wings follow the server's on-ground flag.
+            if m.species() == horizon_client::mobs::Species::Chicken {
+                horizon_client::mobs::farm::chicken_flap(m);
+            }
             // LivingEntity.updatingUsingItem for another player: the ticks the
             // item has been used before this one.
             if player && m.extra.using_item > 0 {
