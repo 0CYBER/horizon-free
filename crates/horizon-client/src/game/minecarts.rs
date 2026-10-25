@@ -87,6 +87,9 @@ pub(super) struct Minecart {
     pub fuse: i32,
     /// Hopper minecarts: an unpowered activator rail enables them.
     pub enabled: bool,
+    /// Chest minecarts: the loot table rolled into `items` on load, saved
+    /// again while the items are still that roll.
+    pub loot: Option<horizon_client::save::RolledLoot>,
 }
 const WIDTH: f64 = 0.98;
 const HEIGHT: f64 = 0.7;
@@ -182,6 +185,7 @@ impl Minecart {
             push: [0.0; 2],
             fuse: -1,
             enabled: true,
+            loot: None,
         }
     }
     pub fn bounds(&self) -> Aabb {
@@ -1513,6 +1517,12 @@ impl Minecart {
                     put("UpdateLastExecution", Tag::Byte(1));
                 }
                 CartKind::Rideable => {}
+            }
+            // A loaded loot table goes back while the items are still its roll;
+            // otherwise the items replace it, as vanilla's unpackLootTable does.
+            if !self.loot.as_ref().is_some_and(|l| l.restore(map)) {
+                map.remove(&JavaString::from("LootTable"));
+                map.remove(&JavaString::from("LootTableSeed"));
             }
         }
         tag
