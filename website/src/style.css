@@ -117,14 +117,11 @@ code {
 /* --- Navigation ------------------------------------------------------------------------- */
 
 .nav {
-  position: fixed; inset: 0 0 auto; z-index: 20; height: var(--nav);
-  background: color-mix(in srgb, var(--page) 0%, transparent);
-  transition: background-color var(--move) var(--ease-move), box-shadow var(--move) var(--ease-move);
-}
-.nav.is-scrolled, .nav.is-menu {
+  position: fixed; inset: 0 0 auto; z-index: 20; height: var(--nav); max-width: 100vw;
   background: color-mix(in srgb, var(--page) 88%, transparent);
   -webkit-backdrop-filter: blur(16px) saturate(1.2); backdrop-filter: blur(16px) saturate(1.2);
   box-shadow: 0 1px 0 var(--rule);
+  transition: background-color var(--move) var(--ease-move), box-shadow var(--move) var(--ease-move);
 }
 .nav-inner { display: flex; align-items: center; gap: 24px; height: 100%; max-width: var(--max); margin: 0 auto; padding: 0 var(--g); }
 .nav-mark { display: inline-flex; align-items: center; gap: 10px; color: var(--ink); font-weight: 500; font-size: var(--text-label); }
@@ -133,7 +130,7 @@ code {
 .mark-stem { fill: var(--ink); }
 .mark-low { fill: var(--ink); opacity: 0.36; }
 .mark-line { fill: var(--accent); }
-.nav-links { display: flex; gap: 2px; margin-left: auto; }
+.nav-links { display: flex; gap: 2px; margin-left: auto; white-space: nowrap; }
 .nav-links a, .nav-github, .theme-toggle {
   display: inline-flex; align-items: center; height: 32px; padding: 0 12px;
   border-radius: var(--radius-pill); color: var(--muted); font-size: var(--text-label);
@@ -162,12 +159,12 @@ code {
 .is-menu .menu-icon::after { top: 4px; transform: rotate(-45deg); }
 
 .menu {
-  position: fixed; inset: var(--nav) 0 0; z-index: 19; display: flex; flex-direction: column;
-  justify-content: space-between; padding: 24px var(--g) 32px; background: var(--page);
+  position: fixed; inset: var(--nav) 0 0; z-index: 19; display: flex; flex-direction: column; max-width: 100vw;
+  justify-content: space-between; gap: 24px; overflow-y: auto; padding: 24px var(--g) 32px; background: var(--page);
   opacity: 0; transition: opacity var(--move) var(--ease-move);
 }
 .menu.is-open { opacity: 1; }
-.menu nav { display: flex; flex-direction: column; }
+.menu nav { display: flex; flex-direction: column; flex-shrink: 0; }
 .menu nav a {
   display: flex; align-items: baseline; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--rule);
   color: var(--ink); font-size: var(--text-title); line-height: var(--text-title-line);
@@ -176,12 +173,13 @@ code {
   transition: opacity var(--enter) var(--ease-enter), transform var(--enter) var(--ease-enter);
 }
 .menu.is-open nav a { opacity: 1; transform: none; }
-.menu-foot { display: flex; flex-direction: column; gap: 16px; }
+.menu-foot { display: flex; flex-direction: column; gap: 16px; flex-shrink: 0; }
 .menu-foot p { font-size: var(--text-caption); color: var(--muted); }
 
-@media (max-width: 1119px) {
+@media (max-width: 1279px) {
   .nav-links, .nav-github { display: none; }
   .menu-button { display: inline-flex; }
+  .nav-end { margin-left: auto; }
 }
 @media (max-width: 520px) {
   .nav-end .button { display: none; }
@@ -426,22 +424,11 @@ figcaption span { font-family: var(--mono); font-size: var(--text-micro); letter
 
 /* --- Documentation (/docs): a left navigation and one page at a time --------------------- */
 
-.docs-bar {
-  position: sticky; top: 0; z-index: 20; height: 56px;
-  background: color-mix(in srgb, var(--page) 88%, transparent);
-  -webkit-backdrop-filter: blur(16px) saturate(1.2); backdrop-filter: blur(16px) saturate(1.2);
-  box-shadow: 0 1px 0 var(--rule);
-}
-.docs-bar-inner { display: flex; align-items: center; gap: 16px; height: 100%; max-width: var(--max); margin: 0 auto; padding: 0 var(--g); }
-.docs-bar-title { padding-left: 16px; border-left: 1px solid var(--rule); color: var(--muted); font-size: var(--text-label); }
-.docs-bar-end { margin-left: auto; display: flex; align-items: center; gap: 16px; }
-.docs-bar-link { color: var(--muted); font-size: var(--text-label); }
-.docs-bar-link:hover { color: var(--ink); }
 .docs {
   display: grid; grid-template-columns: 248px minmax(0, 1fr); gap: clamp(32px, 6vw, 96px);
-  max-width: var(--max); margin: 0 auto; padding: 48px var(--g) 0; align-items: start;
+  max-width: var(--max); margin: 0 auto; padding: calc(var(--nav) + 48px) var(--g) 0; align-items: start;
 }
-.docs-nav-wrap { position: sticky; top: 80px; max-height: calc(100vh - 104px); overflow-y: auto; padding-bottom: 24px; }
+.docs-nav-wrap { position: sticky; top: calc(var(--nav) + 24px); max-height: calc(100vh - var(--nav) - 48px); overflow-y: auto; padding-bottom: 24px; }
 .docs-nav-wrap summary { display: none; }
 .docs-nav-group { margin: 28px 0 8px; font: var(--text-micro) / var(--text-micro-line) var(--mono); letter-spacing: var(--text-micro-tracking); text-transform: uppercase; color: var(--muted); }
 .docs-nav-group:first-child { margin-top: 0; }
@@ -478,7 +465,7 @@ figcaption span { font-family: var(--mono); font-size: var(--text-micro); letter
 .docs-main .disclaimer { margin-top: 24px; }
 
 @media (max-width: 900px) {
-  .docs { grid-template-columns: minmax(0, 1fr); gap: 0; padding-top: 12px; }
+  .docs { grid-template-columns: minmax(0, 1fr); gap: 0; padding-top: calc(var(--nav) + 12px); }
   .docs-nav-wrap { position: static; max-height: none; overflow: visible; margin-bottom: 24px; border-bottom: 1px solid var(--rule); }
   .docs-nav-wrap summary { display: flex; align-items: center; min-height: 44px; cursor: pointer; font-weight: 500; list-style: none; }
   .docs-nav-wrap summary::-webkit-details-marker { display: none; }
@@ -486,10 +473,9 @@ figcaption span { font-family: var(--mono); font-size: var(--text-micro); letter
   .docs-nav-wrap[open] summary::after { content: "\2212"; }
   .docs-pager { grid-template-columns: minmax(0, 1fr); }
   .docs-pager-next { grid-column: 1; }
-  .docs-bar-link { display: none; }
 }
 @media (pointer: coarse) {
-  .docs-nav li a, .docs-toc a, .docs-bar-title, .docs-bar-link { display: flex; align-items: center; min-height: 44px; }
+  .docs-nav li a, .docs-toc a { display: flex; align-items: center; min-height: 44px; }
 }
 
 /* --- Blocks: the launcher's look on the page (docs/design-system.md, "Blocks") -------------
@@ -548,7 +534,7 @@ code { border-radius: 0; background: var(--well); box-shadow: 0 0 0 1px var(--ou
 :focus-visible { border-radius: 0; }
 
 /* The top bar: the sidebar colour with an outline under it, tabs with an accent underline. */
-.nav.is-scrolled, .nav.is-menu { background: var(--side); -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 0 var(--block-outline) 0 var(--outline); }
+.nav { background: var(--side); -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 0 var(--block-outline) 0 var(--outline); }
 .nav-links a, .nav-github, .theme-toggle { border-radius: 0; font-family: var(--pixel); font-weight: 500; font-size: 15px; }
 .nav-links a:hover, .nav-github:hover, .theme-toggle:hover { background: var(--raised); }
 .nav-links a[aria-current] { background: var(--raised); box-shadow: inset 0 -3px 0 var(--accent); }
@@ -606,7 +592,6 @@ code { border-radius: 0; background: var(--well); box-shadow: 0 0 0 1px var(--ou
 }
 
 /* Documentation. */
-.docs-bar { background: var(--side); -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 0 var(--block-outline) 0 var(--outline); }
 .docs-nav li a { border-radius: 0; }
 .docs-nav li a[aria-current] { background: var(--raised); box-shadow: inset 4px 0 0 var(--accent); }
 .docs-toc a { border-radius: 0; background: var(--button); box-shadow: 0 0 0 var(--block-outline) var(--outline); }

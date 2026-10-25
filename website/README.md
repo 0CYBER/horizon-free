@@ -10,6 +10,9 @@ stone texture and a pixel landscape drawn in code (`scripts/art.mjs`), and short
 releases, the community links and the contributors. Plain HTML, CSS and JavaScript; no framework and
 no runtime dependencies.
 
+Home, Releases, Benchmarks and every Docs page share the header and phone menu rendered by
+`build.mjs`, with the same links, theme switch and Download button.
+
 ## Layout
 
 ```
@@ -31,6 +34,7 @@ src/chrome.js      the light/dark switch, the phone menu and GitHub fetching, sh
 src/releases-page.js  the Releases page: the channel filter and the refresh from GitHub
 src/mods.js        the registry's markup (list, project page, submit form), shared by build and page; mods-page.js: the filter, the search, the refresh; mods-submit.js: the form's sign-in and sending
 src/benchmarks-page.js  the Benchmarks page: players' results from the telemetry server, the picker
+src/docs-page.js    the Docs pages: the shared theme switch and phone menu
 src/bench.js       the Benchmarks tables, shared by build and page
 src/hardware.js    the spec table estimates use (GPU TFLOPS and bandwidth, CPU single-thread score)
 src/estimate.js    estimates for unmeasured hardware from the nearest measured machine

@@ -210,7 +210,7 @@ impl Tool {
     pub fn call(&self, args: &Value) -> Result<String, String> {
         let words = self.argv(args)?;
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let out = std::process::Command::new(exe)
+        let out = horizon_launcher::process::command(exe)
             .arg("--json")
             .args(&words)
             .stdin(std::process::Stdio::null())

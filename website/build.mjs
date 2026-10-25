@@ -186,7 +186,7 @@ await writeFile(join(dist, "favicon.ico"), Buffer.concat([ico, png32]));
 const names = {};
 const rewrite = (code) => code.replace(/"\.\/(\w+\.js)"/g, (all, file) => (names[file] ? `"./${names[file]}"` : all));
 // Dependencies before what imports them.
-const modules = ["markdown.js", "versions.js", "chrome.js", "hardware.js", "estimate.js", "releases.js", "contributors.js", "bench.js", "main.js", "releases-page.js", "benchmarks-page.js", "mods.js", "mods-page.js", "mods-submit.js"];
+const modules = ["markdown.js", "versions.js", "chrome.js", "hardware.js", "estimate.js", "releases.js", "contributors.js", "bench.js", "main.js", "releases-page.js", "benchmarks-page.js", "docs-page.js", "mods.js", "mods-page.js", "mods-submit.js"];
 for (const file of modules) {
   const code = rewrite(await readFile(join(site, "src", file), "utf8"));
   names[file] = `${file.replace(".js", "")}.${fingerprint(code)}.js`;
@@ -217,13 +217,16 @@ const baked = {
 
 const unavailable = `<p class="lede">The release notes could not be loaded here.</p><a class="button secondary" href="https://github.com/${REPO}/releases">Read them on GitHub</a>`;
 
-// The top bar and the footer of the pages beside the home page (Releases, Benchmarks).
-const navLinks = [["/#about", "About"], ["/mods", "Mods"], ["/releases", "Releases"], ["/benchmarks", "Benchmarks"], ["/docs/", "Docs"]];
-const siteNav = (current) => `    <header class="nav is-scrolled" id="top">
+// One top bar and phone menu for Home, Releases, Benchmarks and every Docs page.
+const navSections = [["/#about", "About"], ["/#screenshots", "In game"], ["/#parity", "Parity"], ["/#launcher", "Launcher"], ["/#recent", "New", "Recently added"], ["/#community", "Community"]];
+const navPages = [["/mods", "Mods"], ["/releases", "Releases"], ["/benchmarks", "Benchmarks"], ["/docs/", "Docs", "Documentation"]];
+const navLink = ([href, label, menuLabel], current, menu = false) =>
+  `<a href="${href}"${href === current ? ' aria-current="page"' : ""}${href === "/#contributors" ? ` data-contributors${contributors.length ? "" : " hidden"}` : ""}>${menu && menuLabel ? menuLabel : label}</a>`;
+const siteNav = (current) => `    <header class="nav" id="top">
       <div class="nav-inner">
         <a class="nav-mark" href="/" aria-label="Horizon, home"><svg class="mark" viewBox="0 0 16 16" aria-hidden="true"><path class="mark-stem" d="M4 3h2v4H4zM10 3h2v4h-2z"/><path class="mark-low" d="M4 8h2v4H4zM10 8h2v4h-2z"/><path class="mark-line" d="M1 7h14v1H1z"/></svg>Horizon</a>
-        <nav class="nav-links" aria-label="Pages">
-${navLinks.map(([href, label]) => `          <a href="${href}"${href === current ? ' aria-current="page"' : ""}>${label}</a>`).join("\n")}
+        <nav class="nav-links" id="nav-links" aria-label="Sections and pages">
+${[...navSections, ...navPages].map((link) => `          ${navLink(link, current)}`).join("\n")}
         </nav>
         <div class="nav-end">
           <button class="theme-toggle" type="button" aria-label="Switch between light and dark"><span data-theme-label>Dark</span></button>
@@ -234,9 +237,8 @@ ${navLinks.map(([href, label]) => `          <a href="${href}"${href === current
       </div>
     </header>
     <div class="menu" id="menu" hidden>
-      <nav aria-label="Pages">
-        <a href="/">Home</a>
-${navLinks.map(([href, label]) => `        <a href="${href}">${label}</a>`).join("\n")}
+      <nav aria-label="Sections and pages">
+${[...navSections, ["/#contributors", "Contributors"], ...navPages].map((link) => `        ${navLink(link, current, true)}`).join("\n")}
       </nav>
       <div class="menu-foot">
         <a class="button secondary large" href="https://github.com/${REPO}">GitHub</a>
@@ -247,7 +249,7 @@ const siteFooter = `    <footer class="footer">
       <div class="container">
         <div class="footer-bar">
           <span class="footer-mark">Made in the open, in Rust.</span>
-          <nav class="footer-links" aria-label="Elsewhere"><a href="/">Home</a><a href="/mods">Mods</a><a href="/releases">Releases</a><a href="/benchmarks">Benchmarks</a><a href="/docs/">Docs</a><a href="https://github.com/${REPO}">GitHub</a><a href="/privacy">Privacy</a><a href="/LEGAL.md">Assets</a></nav>
+          <nav class="footer-links" aria-label="Elsewhere"><a href="/">Home</a><a href="/mods">Mods</a><a href="/releases">Releases</a><a href="/benchmarks">Benchmarks</a><a href="/docs/">Docs</a><a href="/docs/how-horizon-is-built">How it's built</a><a href="https://github.com/${REPO}">GitHub</a><a href="/privacy">Privacy</a><a href="/LEGAL.md">Assets</a></nav>
         </div>
       </div>
       <p class="footer-word" aria-hidden="true">horizon</p>
@@ -277,6 +279,7 @@ const values = {
   RECENT: recentHtml(game) || unavailable,
   SITE_NAV: "",
   SITE_FOOTER: siteFooter,
+  DOCS_JS: `/assets/${names["docs-page.js"]}`,
   RELEASES_JS: `/assets/${names["releases-page.js"]}`,
   RELEASE_LIST: releasesPageHtml(ours) || unavailable,
   RELEASE_COUNT: ours.length ? `${ours.length} releases` : "",
@@ -366,6 +369,7 @@ const docPages = renderedDocs.map((d, i) => {
       DOC_BODY: d.html,
       DOC_PAGER: pagerLink(renderedDocs[i - 1], "prev") + pagerLink(renderedDocs[i + 1], "next"),
       DOC_FILE: d.file,
+      SITE_NAV: siteNav("/docs/"),
     },
   };
 });

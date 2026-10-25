@@ -155,7 +155,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -428,6 +428,8 @@ version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
+ "serde",
+ "termcolor",
  "unicode-width",
 ]
 
@@ -1266,6 +1268,7 @@ dependencies = [
  "horizon-mods",
  "horizon-protocol",
  "horizon-server-files",
+ "horizon-shaders",
  "horizon-telemetry",
  "horizon-theme",
  "horizon-threads",
@@ -1315,7 +1318,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "socket2",
+ "socket2 0.5.10",
  "spake2",
 ]
 
@@ -1331,8 +1334,10 @@ name = "horizon-mods"
 version = "0.1.0"
 dependencies = [
  "log",
+ "minisign-verify",
  "serde",
  "serde_json",
+ "sha2",
  "toml",
  "wasmtime",
  "wit-component 0.239.0",
@@ -1378,6 +1383,7 @@ dependencies = [
  "getrandom 0.3.4",
  "horizon-core",
  "horizon-world",
+ "ipconfig",
  "serde_json",
  "sha1",
  "sha2",
@@ -1429,6 +1435,15 @@ dependencies = [
  "horizon-world",
  "log",
  "ureq",
+]
+
+[[package]]
+name = "horizon-shaders"
+version = "0.1.0"
+dependencies = [
+ "horizon-core",
+ "naga",
+ "zip",
 ]
 
 [[package]]
@@ -1652,6 +1667,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "ipconfig"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d40460c0ce33d6ce4b0630ad68ff63d6661961c48b6dba35e5a4d81cfb48222"
+dependencies = [
+ "socket2 0.6.5",
+ "widestring",
+ "windows-registry",
+ "windows-result 0.4.1",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1899,6 +1927,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "minisign-verify"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "871285dc19d8d0ebe0eef3d0e99a205f2a71363b122632cbbfa4a6c370a960ce"
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1944,6 +1978,7 @@ dependencies = [
  "naga-types",
  "num-traits",
  "once_cell",
+ "pp-rs",
  "rustc-hash 1.1.0",
  "spirv",
  "thiserror 2.0.21",
@@ -2621,6 +2656,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pp-rs"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb458bb7f6e250e6eb79d5026badc10a3ebb8f9a15d1fff0f13d17c71f4d6dee"
+dependencies = [
+ "unicode-xid",
+]
+
+[[package]]
 name = "presser"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3136,6 +3180,16 @@ checksum = "e22376abed350d73dd1cd119b57ffccad95b4e585a7cda43e286245ce23c0678"
 dependencies = [
  "libc",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "socket2"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4158,6 +4212,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "js-sys",
  "log",
+ "naga",
  "parking_lot",
  "portable-atomic",
  "profiling",
@@ -4295,6 +4350,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "widestring"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
+
+[[package]]
 name = "winapi-util"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4424,6 +4485,17 @@ checksum = "6e2e40844ac143cdb44aead537bbf727de9b044e107a0f1220392177d15b0f26"
 dependencies = [
  "windows-core 0.62.2",
  "windows-link",
+]
+
+[[package]]
+name = "windows-registry"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02752bf7fbdcce7f2a27a742f798510f3e5ad88dbe84871e5168e2120c3d5720"
+dependencies = [
+ "windows-link",
+ "windows-result 0.4.1",
+ "windows-strings",
 ]
 
 [[package]]
