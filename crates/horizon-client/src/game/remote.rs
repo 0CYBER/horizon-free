@@ -1994,15 +1994,6 @@ impl Game<'_> {
                         }
                     }
                 }
-                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
-                    && m.species() == horizon_client::mobs::Species::Rabbit
-                {
-                    for (index, _, value) in &p.values {
-                        if let (15, Value::Byte(flags)) = (index, value) {
-                            m.no_ai = flags & 1 != 0;
-                        }
-                    }
-                }
                 self.remote_mob_data(p.id, &p.values);
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
                     && m.species() == horizon_client::mobs::Species::Creeper
