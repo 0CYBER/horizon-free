@@ -54,6 +54,7 @@ pub mod datapack;
 pub mod debug_chart;
 pub mod debug_keys;
 pub mod debug_overlay;
+pub mod discord_presence;
 pub mod dynamic_light;
 pub mod effects;
 pub mod enchant;
