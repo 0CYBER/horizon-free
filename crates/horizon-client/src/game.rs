@@ -4289,6 +4289,7 @@ impl Game<'_> {
                 MotionEvent::Snowflake { position, velocity } => self.snowflake(position, velocity),
                 MotionEvent::EnterBlock { state } => self.trigger_enter_block(state),
                 MotionEvent::InsidePortal { pos } => self.player_inside_nether_portal(pos),
+                MotionEvent::InsideWitherRose => self.wither_rose_contact(),
                 MotionEvent::SmashLanding {
                     state,
                     position,

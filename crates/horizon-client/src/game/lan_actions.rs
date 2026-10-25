@@ -2010,6 +2010,12 @@ impl Game<'_> {
             let _ = w.apply_fire_contact();
             let _ = w.server_hazards_tick(in_wall);
             let mut events = std::mem::take(&mut w.player.events);
+            // WitherRoseBlock.entityInside along those moves.
+            for event in &events {
+                if matches!(event, MotionEvent::InsideWitherRose) {
+                    game.wither_rose_contact();
+                }
+            }
             // ServerGamePacketListenerImpl.handleMovePlayer:
             // Player.checkMovementStatistics for each move.
             for d in travelled {

@@ -167,6 +167,9 @@ pub enum MotionEvent {
     InsidePortal {
         pos: BlockPos,
     },
+    /// `WitherRoseBlock.entityInside`: the player's box swept through a
+    /// wither rose; the server adds its Wither unless peaceful.
+    InsideWitherRose,
     /// `ServerPlayer.checkFallDamage` after a mace smash: block particles
     /// from the landing block, more the further the fall.
     SmashLanding {
@@ -1294,9 +1297,13 @@ impl MotionWorld<'_, '_, '_> {
                 }
             };
             if inside && visited.insert(p.pack()) {
-                // CactusBlock and CampfireBlock.entityInside (`entity.hurt`).
+                // CactusBlock and CampfireBlock.entityInside (`entity.hurt`),
+                // and WitherRoseBlock's server-side effect.
                 match name {
                     "minecraft:cactus" => self.environment_hurt("minecraft:cactus", 1.0)?,
+                    "minecraft:wither_rose" => {
+                        self.player.events.push(MotionEvent::InsideWitherRose);
+                    }
                     "minecraft:campfire" | "minecraft:soul_campfire" => {
                         let lit = self
                             .assets
@@ -2366,6 +2373,76 @@ mod tests {
             .unwrap();
         }
         assert_eq!(player.position.y, 4.0);
+    }
+
+    #[test]
+    fn standing_in_a_wither_rose_asks_for_its_effect() {
+        let root = std::env::var_os("HORIZON_TEST_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../.local/horizon-client")
+                    .join(horizon_core::VANILLA_VERSION)
+            });
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 1).unwrap();
+        let rose = assets
+            .registry
+            .default_state("minecraft:wither_rose")
+            .unwrap();
+        scene.set(20, 4, 20, rose).unwrap();
+        let roses = |player: &PlayerMotion| {
+            player
+                .events
+                .iter()
+                .filter(|e| matches!(e, MotionEvent::InsideWitherRose))
+                .count()
+        };
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+        MotionWorld {
+            entities: &[],
+            player: &mut player,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        }
+        .controlled_simulation_tick(Default::default())
+        .unwrap();
+        assert_eq!(roses(&player), 1);
+        // A server's player: its client moved it, the server applies the effect.
+        player.events.clear();
+        let from = player.position;
+        MotionWorld {
+            entities: &[],
+            player: &mut player,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        }
+        .server_block_damage(from)
+        .unwrap();
+        assert_eq!(roses(&player), 1);
+        // Two blocks away, nothing.
+        let mut away = PlayerMotion::new(&resources, Vec3::new(22.5, 4.0, 20.5)).unwrap();
+        MotionWorld {
+            entities: &[],
+            player: &mut away,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        }
+        .controlled_simulation_tick(Default::default())
+        .unwrap();
+        assert_eq!(roses(&away), 0);
     }
 
     #[test]
