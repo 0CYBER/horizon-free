@@ -4,7 +4,8 @@
 The oracle (VanillaStructureStartOracle with HORIZON_START_NBT) generates the start of each case's chunk with the
 pinned server's own classes and prints its tag; the probe (world_probe structure_start_nbt) prints the tag
 Horizon saves for the same chunk. Both print sorted keys and typed numbers, and the lines must be identical.
-The cases are the start chunks of one site of every structure kind built from jigsaw pools (seed 12345).
+The cases are the start chunks of one site of every structure kind built from jigsaw pools or templates (seed
+12345).
 """
 import argparse
 import collections
@@ -26,6 +27,10 @@ CASES = [
     (12345, 'overworld', 11, -11), (12345, 'overworld', 91, -90), (12345, 'overworld', 8, -33),
     (12345, 'overworld', 2, -71), (12345, 'overworld', 39, -28), (12345, 'overworld', -90, -60),
     (12345, 'the_nether', 11, -16),
+    (12345, 'overworld', 291, 441), (12345, 'overworld', 36, 41), (12345, 'overworld', -8, 2),
+    (12345, 'overworld', 114, -133), (12345, 'overworld', -16, 5), (12345, 'overworld', -109, 91),
+    (12345, 'overworld', 0, -18), (12345, 'overworld', -150, 51), (12345, 'overworld', 61, 49),
+    (12345, 'the_nether', 0, -18), (12345, 'the_nether', -22, 6), (12345, 'the_end', -15, -76),
 ]
 
 
