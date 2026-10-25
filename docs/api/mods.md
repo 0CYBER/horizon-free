@@ -95,6 +95,8 @@ What real mods need next, in the order modpacks and servers need it:
 
 ## Changelog
 
+- Experimental: `ui` button widget; `render.set-corner`, `text-width`, `frame-stats`; `input.mapping`,
+  `clicks-per-second` (what the official FPS, keystrokes and zoom mods need).
 - Experimental `input` (`experimental = ["input"]`): `claim-items`, `register-key`, `held`, `poll` (use-start,
   use-stop, key-down, key-up).
 - Experimental `render` (`experimental = ["render"]`): HUD shapes (fill, quad, sprite, item, text), `gui-size`, camera

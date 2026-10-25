@@ -120,9 +120,20 @@ interface ui {
         selected: option<u32>,
     }
     /// A thing on a mod's screen or settings page.
+    /// A button as the options pages have them (200 × 20): a click is
+    /// `ui-events::select(id, 0)`. Mods cycle its label for a choice
+    /// ("Corner: Top Left").
+    record button-widget {
+        /// The mod's own name for the widget.
+        id: u32,
+        /// Up to 256 characters.
+        label: string,
+    }
     variant widget {
         /// Text the player reads.
         text(text-widget),
+        /// A button.
+        button(button-widget),
         /// An item's icon and name.
         item(item-widget),
         /// Rows the player picks from.
@@ -203,6 +214,20 @@ interface input {
     held: func() -> option<held-item>;
     /// The events since the last call, oldest first.
     poll: func() -> list<event>;
+    /// A mapping as the player has bound it.
+    record mapping-state {
+        /// The bound key's name as Controls shows it: `W`, `Space`, `LMB`.
+        label: string,
+        /// Held down now (as of this frame for a mod with a `frame` hook,
+        /// else this tick).
+        down: bool,
+    }
+    /// A movement or click mapping as the player has bound it: `key.forward`,
+    /// `key.left`, `key.back`, `key.right`, `key.jump`, `key.sneak`,
+    /// `key.sprint`, `key.attack` or `key.use`. None for another name.
+    mapping: func(name: string) -> option<mapping-state>;
+    /// Clicks of the attack and use buttons in the last second.
+    clicks-per-second: func() -> tuple<u32, u32>;
 }
 
 /// Capability `render` (experimental: the manifest needs
@@ -210,6 +235,13 @@ interface input {
 /// own renderer, kept until the mod replaces them (no call per frame). A mod
 /// never supplies shader code.
 interface render {
+    /// A corner of the screen, as `hud`'s panels use them.
+    enum corner {
+        top-left,
+        top-right,
+        bottom-left,
+        bottom-right,
+    }
     /// A rectangle in GUI pixels: the top left corner and the size.
     record rect {
         x: f32,
@@ -279,6 +311,26 @@ interface render {
     /// turns, the player doesn't, and the player's Distortion Effects option
     /// scales it (0 turns it off).
     shake: func(strength: f32, seconds: f32);
+    /// Replaces the mod's corner panel: shapes in GUI pixels from the top
+    /// left of a `width` × `height` box that the game places in `corner`,
+    /// stacked with the game's overlays and the other mods' panels (under
+    /// the status effects at the top right), as `hud`'s panels are.
+    set-corner: func(corner: corner, width: f32, height: f32, shapes: list<shape>);
+    /// Removes the mod's corner panel.
+    clear-corner: func();
+    /// The width of one line of text in GUI pixels, in the HUD's font: exact
+    /// for Latin letters (U+0000 to U+024F), 6 per other character.
+    text-width: func(text: string) -> f32;
+    record frame-rate {
+        /// Frames drawn in the last second.
+        fps: u32,
+        /// The slowest frame's rate, and the 1% low (the 99th percentile
+        /// frame time's rate), over the last 5 seconds.
+        min: u32,
+        low: u32,
+    }
+    /// The game's frame counter, recomputed twice a second.
+    frame-stats: func() -> frame-rate;
 }
 
 /// What the game calls. Only the hooks `init` asks for are ever called.

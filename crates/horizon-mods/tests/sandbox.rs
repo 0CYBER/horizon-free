@@ -91,7 +91,7 @@ fn player() -> Snapshot {
             day_time: 24000 + 6000,
         }),
         gui_size: (427.0, 240.0),
-        held: None,
+        ..Snapshot::default()
     }
 }
 
@@ -412,7 +412,7 @@ fn ui_screens_settings_and_events() {
     assert_eq!(mods.settings_widgets(0).len(), 3);
     assert!(mods.entries()[0].has_ui_settings());
     mods.ui_settings_opened(0);
-    assert_eq!(mods.settings_widgets(0).len(), 1);
+    assert_eq!(mods.settings_widgets(0).len(), 2);
     // `/ui_close` closes the mod's own screen.
     assert!(mods.command("ui_close"));
     assert!(mods.drain().contains(&Output::CloseScreen { owner: 0 }));
@@ -424,7 +424,6 @@ fn render_shapes_and_shakes() {
     let mut mods = load("horizon_mods_test_ui_guest.hmod");
     mods.set_snapshot(Snapshot {
         gui_size: (427.0, 240.0),
-        held: None,
         ..Snapshot::default()
     });
     assert_eq!(mods.hud_shapes().count(), 0);
@@ -507,6 +506,47 @@ fn input_claims_keys_and_events() {
     });
     assert!(mods.command("input_held"));
     assert_eq!(chat(&mut mods), ["holding minecraft:stick x3 in 2"]);
+}
+
+#[test]
+fn corner_panels_text_width_and_readings() {
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    // A font of 5-pixel glyphs, 3-pixel spaces.
+    let mut widths = vec![5.0f32; 0x250];
+    widths[' ' as usize] = 3.0;
+    mods.set_snapshot(Snapshot {
+        frame: (60, 41, 52),
+        mappings: vec![("key.forward", "W".into(), true)],
+        cps: (7, 2),
+        font_widths: widths.into(),
+        ..Snapshot::default()
+    });
+    assert!(mods.command("corner"));
+    let panels: Vec<_> = mods.corner_panels().cloned().collect();
+    assert_eq!(panels.len(), 1);
+    // "60 fps": five glyphs and a space, plus the box's 4.
+    assert_eq!(
+        (panels[0].width, panels[0].height),
+        (5.0 * 5.0 + 3.0 + 4.0, 12.0)
+    );
+    assert_eq!(panels[0].shapes.len(), 2);
+    assert!(matches!(
+        panels[0].corner,
+        horizon_mods::RenderCorner::TopRight
+    ));
+    assert!(matches!(
+        &mods.settings_widgets(0)[0],
+        horizon_mods::UiWidget::Button(b) if b.id == 3 && b.label == "Corner: Top Right"
+    ));
+    mods.drain();
+    assert!(mods.command("readings"));
+    assert_eq!(
+        mods.drain(),
+        [Output::Chat {
+            name: "Test UI Guest".into(),
+            text: "60 41 52; forward W true; cps 7 2; other true".into(),
+        }]
+    );
 }
 
 #[test]

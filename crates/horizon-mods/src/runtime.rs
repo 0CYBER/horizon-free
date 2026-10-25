@@ -37,7 +37,7 @@ use bindings::{
 /// The widget model a `ui` screen or settings page shows (WIT `interface
 /// ui`), for the game to draw with its menus' own widgets.
 pub use ui_bindings::horizon::mods::ui::{
-    ItemWidget, ListWidget, Screen as UiScreen, TextWidget, Widget as UiWidget,
+    ButtonWidget, ItemWidget, ListWidget, Screen as UiScreen, TextWidget, Widget as UiWidget,
 };
 use ui_bindings::{UiHost, horizon::mods::ui};
 /// Capability `render`'s imports (docs/mods.md): the game draws the shapes.
@@ -52,8 +52,8 @@ use render_bindings::horizon::mods::input;
 pub use render_bindings::horizon::mods::input::{Event as InputEvent, HeldItem, ItemUse};
 /// What capability `render` asks the game to draw (WIT `interface render`).
 pub use render_bindings::horizon::mods::render::{
-    FillShape, ItemShape, Point as RenderPoint, QuadShape, Rect as RenderRect, Shape, SpriteShape,
-    TextShape,
+    Corner as RenderCorner, FillShape, FrameRate, ItemShape, Point as RenderPoint, QuadShape,
+    Rect as RenderRect, Shape, SpriteShape, TextShape,
 };
 use render_bindings::{RenderHost, horizon::mods::render};
 
@@ -90,6 +90,16 @@ pub struct Snapshot {
     pub gui_size: (f32, f32),
     /// The main hand's stack (capability `input`'s `held`).
     pub held: Option<HeldItem>,
+    /// The game's frame counter: fps, min, 1% low (`render.frame-stats`).
+    pub frame: (u32, u32, u32),
+    /// The movement and click mappings `input.mapping` answers for:
+    /// (mapping, the bound key's label, held).
+    pub mappings: Vec<(&'static str, String, bool)>,
+    /// Attack and use clicks in the last second.
+    pub cps: (u32, u32),
+    /// The HUD font's advance per character from U+0000
+    /// (`render.text-width`); empty: 6 each.
+    pub font_widths: Arc<[f32]>,
 }
 
 /// What mods asked the game to show since the last [`Mods::drain`].
@@ -177,6 +187,8 @@ struct State {
     ui: UiState,
     /// Capability `render`'s HUD shapes, drawn until replaced.
     shapes: Vec<Shape>,
+    /// Capability `render`'s corner panel.
+    corner: Option<CornerPanel>,
     input: InputState,
     /// Capability `storage`'s folder; made on first `set`.
     data_dir: PathBuf,
@@ -318,6 +330,7 @@ impl Mods {
             panel: None,
             ui: UiState::default(),
             shapes: Vec::new(),
+            corner: None,
             input: InputState::default(),
             data_dir,
             storage_budget: STORAGE_WRITE_BUDGET,
@@ -509,6 +522,19 @@ impl Mods {
         self.entries
             .iter()
             .filter_map(|e| e.run.as_ref()?.store.data().panel.as_ref())
+    }
+    /// The running mods' corner panels (capability `render`), in load order.
+    pub fn corner_panels(&self) -> impl Iterator<Item = &CornerPanel> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref()?.store.data().corner.as_ref())
+    }
+    /// Some running mod has a `frame` hook: the game refreshes the snapshot
+    /// every frame for it.
+    pub fn wants_frames(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|e| e.run.as_ref().is_some_and(|r| r.hooks.frame))
     }
     /// Some running mod claimed items (capability `input`).
     pub fn claims_any(&self) -> bool {
@@ -728,6 +754,10 @@ fn clip_widgets(widgets: Vec<UiWidget>) -> Vec<UiWidget> {
                 t.text = clip(t.text);
                 UiWidget::Text(t)
             }
+            UiWidget::Button(mut b) => {
+                b.label = clip(b.label);
+                UiWidget::Button(b)
+            }
             UiWidget::Item(mut i) => {
                 i.item = clip(i.item);
                 i.name = clip(i.name);
@@ -849,6 +879,16 @@ impl input::Host for State {
     fn poll(&mut self) -> Vec<InputEvent> {
         self.input.events.drain(..).collect()
     }
+    fn mapping(&mut self, name: String) -> Option<input::MappingState> {
+        let (_, label, down) = self.snapshot.mappings.iter().find(|m| m.0 == name)?;
+        Some(input::MappingState {
+            label: label.clone(),
+            down: *down,
+        })
+    }
+    fn clicks_per_second(&mut self) -> (u32, u32) {
+        self.snapshot.cps
+    }
 }
 
 /// HUD shapes one mod may keep (capability `render`).
@@ -856,33 +896,76 @@ const SHAPES: usize = 1024;
 /// The longest jolt `render.shake` makes, in seconds.
 const SHAKE_SECONDS: f32 = 10.0;
 
+/// A mod's corner panel: shapes in a `width` × `height` box the game
+/// places in `corner`, stacked with the other overlays.
+#[derive(Clone, Debug)]
+pub struct CornerPanel {
+    pub corner: RenderCorner,
+    pub width: f32,
+    pub height: f32,
+    pub shapes: Vec<Shape>,
+}
+
+fn clip_shapes(shapes: Vec<Shape>) -> Vec<Shape> {
+    shapes
+        .into_iter()
+        .take(SHAPES)
+        .map(|shape| match shape {
+            Shape::Sprite(mut s) => {
+                s.sprite = clip(s.sprite);
+                Shape::Sprite(s)
+            }
+            Shape::Item(mut i) => {
+                i.item = clip(i.item);
+                i.scale = if i.scale.is_finite() {
+                    i.scale.clamp(0.0, 16.0)
+                } else {
+                    1.0
+                };
+                Shape::Item(i)
+            }
+            Shape::Text(mut t) => {
+                t.text = clip(t.text);
+                t.color &= 0xFF_FFFF;
+                Shape::Text(t)
+            }
+            other => other,
+        })
+        .collect()
+}
+
 impl render::Host for State {
     fn set_hud(&mut self, shapes: Vec<Shape>) {
-        self.shapes = shapes
-            .into_iter()
-            .take(SHAPES)
-            .map(|shape| match shape {
-                Shape::Sprite(mut s) => {
-                    s.sprite = clip(s.sprite);
-                    Shape::Sprite(s)
-                }
-                Shape::Item(mut i) => {
-                    i.item = clip(i.item);
-                    i.scale = if i.scale.is_finite() {
-                        i.scale.clamp(0.0, 16.0)
-                    } else {
-                        1.0
-                    };
-                    Shape::Item(i)
-                }
-                Shape::Text(mut t) => {
-                    t.text = clip(t.text);
-                    t.color &= 0xFF_FFFF;
-                    Shape::Text(t)
-                }
-                other => other,
-            })
-            .collect();
+        self.shapes = clip_shapes(shapes);
+    }
+    fn set_corner(&mut self, corner: RenderCorner, width: f32, height: f32, shapes: Vec<Shape>) {
+        let size = |v: f32| {
+            if v.is_finite() {
+                v.clamp(0.0, 1024.0)
+            } else {
+                0.0
+            }
+        };
+        self.corner = Some(CornerPanel {
+            corner,
+            width: size(width),
+            height: size(height),
+            shapes: clip_shapes(shapes),
+        });
+    }
+    fn clear_corner(&mut self) {
+        self.corner = None;
+    }
+    fn text_width(&mut self, text: String) -> f32 {
+        let widths = &self.snapshot.font_widths;
+        text.chars()
+            .map(|c| widths.get(c as usize).copied().unwrap_or(6.0))
+            .sum::<f32>()
+            .ceil()
+    }
+    fn frame_stats(&mut self) -> FrameRate {
+        let (fps, min, low) = self.snapshot.frame;
+        FrameRate { fps, min, low }
     }
     fn gui_size(&mut self) -> (f32, f32) {
         self.snapshot.gui_size
