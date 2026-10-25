@@ -1777,6 +1777,10 @@ impl Game<'_> {
                 continue;
             }
             if self.on_server_trip(conn) {
+                // LivingEntity.hurt kills at once (die), whether the level
+                // has loaded around the player or not: its respawn request
+                // is taken as soon as it comes.
+                self.guest_die(host, gi, conn);
                 continue;
             }
             let play = host.play.entry(conn).or_default();
@@ -1851,69 +1855,72 @@ impl Game<'_> {
             self.guest_dig_feedback(host, conn);
             self.guest_pickups(host, gi);
             self.guest_orbs(host, gi);
-            if host.hub.guests[gi].health <= 0.0 && !host.hub.guests[gi].dead {
-                self.guest_forget_digging(host, conn);
-                // FishingHook.shouldStopFishing: its owner is dead.
-                if let Some(play) = host.play.get_mut(&conn) {
-                    play.hook = None;
-                }
+            self.guest_die(host, gi, conn);
+        }
+    }
+
+    /// `ServerPlayer.die` for a guest whose health has run out: the death
+    /// message, the loot and experience, the death screen.
+    fn guest_die(&mut self, host: &mut LanHost, gi: usize, conn: u32) {
+        if host.hub.guests[gi].health <= 0.0 && !host.hub.guests[gi].dead {
+            self.guest_forget_digging(host, conn);
+            // FishingHook.shouldStopFishing: its owner is dead.
+            if let Some(play) = host.play.get_mut(&conn) {
+                play.hook = None;
             }
-            let g = &mut host.hub.guests[gi];
-            if g.health <= 0.0 && !g.dead {
-                g.dead = true;
-                g.last_death = Some(g.position.map(|v| v.floor() as i32));
-                let (id, at) = (g.entity_id, g.position);
-                let reward = Experience {
-                    level: g.xp_level,
-                    progress: g.xp_progress,
-                    total: g.xp_total,
-                }
-                .death_reward(self.ui.rules.bool("keep_inventory") || g.game_mode == SPECTATOR);
-                let (name, uuid) = (g.name.clone(), g.uuid);
-                // ServerPlayer.die: dropAllDeathLoot unless a spectator, from the eyes less 0.3.
-                let drops = (g.game_mode != SPECTATOR)
-                    .then(|| [at[0], at[1] + g.eye_height() - 0.3, at[2]]);
-                let cause = host.play.get_mut(&conn).and_then(|p| p.death_cause.take());
-                // ServerPlayer.die: with showDeathMessages, the message goes to
-                // the dying player's death screen and to everyone the team lets
-                // see it; without it, the death screen gets an empty one.
-                let message = if self.ui.rules.bool("show_death_messages") {
-                    let me = self.player_text(&name, uuid);
-                    let text = match cause {
-                        Some(key) => horizon_client::text::Text::translate(&key, &[me]),
-                        None if at[1] < f64::from(horizon_client::chunk::MIN_Y - 64) => {
-                            horizon_client::text::Text::translate("death.attack.outOfWorld", &[me])
-                        }
-                        None => self.guest_death_message(conn, me),
-                    };
-                    let message = horizon_client::lan::data::component_nbt(&text.component());
-                    let team = self.score.board.players_team(&name);
-                    if horizon_client::scoreboard::own_death_message_shown(team) {
-                        host.hub.system_message(message.clone());
-                        if self.options.dedicated.is_some() {
-                            super::dedicated::log(
-                                "INFO",
-                                &format!("System chat: {}", text.plain()),
-                            );
-                        } else if self.player.is_some() {
-                            self.system_message(text);
-                        }
+        }
+        let g = &mut host.hub.guests[gi];
+        if g.health <= 0.0 && !g.dead {
+            g.dead = true;
+            g.last_death = Some(g.position.map(|v| v.floor() as i32));
+            let (id, at) = (g.entity_id, g.position);
+            let reward = Experience {
+                level: g.xp_level,
+                progress: g.xp_progress,
+                total: g.xp_total,
+            }
+            .death_reward(self.ui.rules.bool("keep_inventory") || g.game_mode == SPECTATOR);
+            let (name, uuid) = (g.name.clone(), g.uuid);
+            // ServerPlayer.die: dropAllDeathLoot unless a spectator, from the eyes less 0.3.
+            let drops =
+                (g.game_mode != SPECTATOR).then(|| [at[0], at[1] + g.eye_height() - 0.3, at[2]]);
+            let cause = host.play.get_mut(&conn).and_then(|p| p.death_cause.take());
+            // ServerPlayer.die: with showDeathMessages, the message goes to
+            // the dying player's death screen and to everyone the team lets
+            // see it; without it, the death screen gets an empty one.
+            let message = if self.ui.rules.bool("show_death_messages") {
+                let me = self.player_text(&name, uuid);
+                let text = match cause {
+                    Some(key) => horizon_client::text::Text::translate(&key, &[me]),
+                    None if at[1] < f64::from(horizon_client::chunk::MIN_Y - 64) => {
+                        horizon_client::text::Text::translate("death.attack.outOfWorld", &[me])
                     }
-                    message
-                } else {
-                    literal("")
+                    None => self.guest_death_message(conn, me),
                 };
-                host.hub.send_to(
-                    conn,
-                    &C::PlayerCombatKill(play::PlayerCombatKill { id, message }),
-                );
-                // LivingEntity.die: the death animation, the dying player included.
-                host.hub.entity_event(id, 3, at);
-                if let Some(eyes) = drops {
-                    self.as_guest(host, conn, |game| game.drop_inventory(eyes));
+                let message = horizon_client::lan::data::component_nbt(&text.component());
+                let team = self.score.board.players_team(&name);
+                if horizon_client::scoreboard::own_death_message_shown(team) {
+                    host.hub.system_message(message.clone());
+                    if self.options.dedicated.is_some() {
+                        super::dedicated::log("INFO", &format!("System chat: {}", text.plain()));
+                    } else if self.player.is_some() {
+                        self.system_message(text);
+                    }
                 }
-                self.spawn_orbs(at, reward);
+                message
+            } else {
+                literal("")
+            };
+            host.hub.send_to(
+                conn,
+                &C::PlayerCombatKill(play::PlayerCombatKill { id, message }),
+            );
+            // LivingEntity.die: the death animation, the dying player included.
+            host.hub.entity_event(id, 3, at);
+            if let Some(eyes) = drops {
+                self.as_guest(host, conn, |game| game.drop_inventory(eyes));
             }
+            self.spawn_orbs(at, reward);
         }
     }
 
