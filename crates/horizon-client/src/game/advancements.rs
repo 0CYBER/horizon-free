@@ -897,10 +897,14 @@ fn frame_color(frame: Frame) -> u32 {
 /// `Advancement.decorateName`: a copy of the title with the frame's colour
 /// under its own style (mergeStyles), then a new line and the description
 /// after the title's own siblings, so both inherit the title's root style.
-/// Built on the title's JSON: a parsed Text moves a styled root's style down
-/// a level once it has siblings.
+/// Built on the title's JSON (a list as its first element with the rest as
+/// siblings): a parsed Text moves a styled root's style down a level once it
+/// has siblings.
 fn decorate_name(d: &adv::Display) -> Text {
-    let mut component = root_component(&d.title);
+    let mut component = match horizon_client::scoreboard::canonical_component(&d.title) {
+        Value::String(s) => serde_json::json!({ "text": s }),
+        c => c,
+    };
     if let Some(o) = component.as_object_mut() {
         let frame = Text::empty().with_color(frame_color(d.frame)).component();
         o.entry("color").or_insert_with(|| frame["color"].clone());
@@ -910,25 +914,6 @@ fn decorate_name(d: &adv::Display) -> Text {
         }
     }
     text_of(&component).with_component(component)
-}
-/// A component's JSON as one object whose root keeps its own style: a list is
-/// its first element with the rest appended to its siblings.
-fn root_component(v: &Value) -> Value {
-    match v {
-        Value::Object(_) => v.clone(),
-        Value::String(s) => serde_json::json!({ "text": s }),
-        Value::Array(list) if !list.is_empty() => {
-            let mut root = root_component(&list[0]);
-            if let Some(o) = root.as_object_mut() {
-                let extra = o.entry("extra").or_insert_with(|| serde_json::json!([]));
-                if let Some(extra) = extra.as_array_mut() {
-                    extra.extend(list[1..].iter().cloned());
-                }
-            }
-            root
-        }
-        other => text_of(other).component(),
-    }
 }
 impl Game<'_> {
     /// `AdvancementCommands.Action.GRANT` on one advancement (or one of
@@ -1178,7 +1163,7 @@ mod tests {
     #[test]
     fn chat_hover_description_takes_a_styled_titles_own_style() {
         // mergeStyles keeps the title's gold; the description inherits it.
-        let a = announced(
+        let object = announced(
             serde_json::json!({"text": "Quest", "color": "gold", "bold": true, "extra": [" Board"]}),
             serde_json::json!("Open the board"),
         );
@@ -1186,7 +1171,7 @@ mod tests {
             serde_json::json!([{"text": "Quest", "color": "gold", "bold": true}, " Board"]),
             serde_json::json!("Open the board"),
         );
-        for a in [a, list] {
+        for a in [object, list] {
             let (sent, local) = hover(&a);
             let sent = horizon_client::scoreboard::comp_text(&sent);
             assert_eq!(sent.plain(), "Quest Board\nOpen the board");
