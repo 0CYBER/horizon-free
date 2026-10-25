@@ -54,13 +54,15 @@ impl Game<'_> {
         if self.bosses.bars.bars.is_empty() && !self.bossbar_path().exists() {
             return;
         }
-        let _ = save::write_dat(
+        if let Err(e) = save::write_dat(
             &self.bossbar_path(),
             Tag::compound([
                 ("data", self.bosses.bars.pack()),
                 ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
             ]),
-        );
+        ) {
+            log::warn!("boss bars were not written: {e}");
+        }
     }
     pub(in crate::game) fn bossbar_exists(&self, id: &str) -> bool {
         self.bosses.bars.get(id).is_some()
