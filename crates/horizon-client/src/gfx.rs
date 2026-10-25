@@ -2069,16 +2069,15 @@ impl Renderer {
         // One per blend and `.png.mcmeta` sampling (screen_effects::SAMPLE_*):
         // the shader is specialised, so a pixel pays for none of the others.
         let screen_pipelines: [wgpu::RenderPipeline; 8] = std::array::from_fn(|i| {
-            let (entry, blend) = if i & 4 == 0 {
-                ("fs_screen", alpha_blend)
-            } else {
-                ("fs_vignette", vignette_blend)
+            let blur = i as u32 & crate::screen_effects::SAMPLE_BLUR != 0;
+            let (entry, blend) = match (i & 4 == 0, blur) {
+                (true, false) => ("fs_screen", alpha_blend),
+                (true, true) => ("fs_screen_blur", alpha_blend),
+                (false, false) => ("fs_vignette", vignette_blend),
+                (false, true) => ("fs_vignette_blur", vignette_blend),
             };
-            let on = |bit: u32| f64::from(u8::from(i as u32 & bit != 0));
-            let constants = [
-                ("BLUR", on(crate::screen_effects::SAMPLE_BLUR)),
-                ("CLAMP", on(crate::screen_effects::SAMPLE_CLAMP)),
-            ];
+            let clamp = i as u32 & crate::screen_effects::SAMPLE_CLAMP != 0;
+            let constants = [("CLAMP", f64::from(u8::from(clamp)))];
             let compilation_options = wgpu::PipelineCompilationOptions {
                 constants: &constants,
                 ..Default::default()
