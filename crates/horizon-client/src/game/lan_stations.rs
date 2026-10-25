@@ -665,13 +665,5 @@ pub(super) fn station_inputs(gs: &GuestStation) -> Vec<ItemStack> {
 /// its block interaction range (4.5, creative 5) and a 4-block buffer of the
 /// block's box.
 pub(super) fn within_reach(g: &horizon_client::lan::guest::Guest, pos: [i32; 3]) -> bool {
-    let eye = [g.position[0], g.position[1] + g.eye_height(), g.position[2]];
-    let reach = if g.creative() { 5.0 } else { 4.5 } + 4.0;
-    (0..3)
-        .map(|k| {
-            let lo = f64::from(pos[k]);
-            (lo - eye[k]).max(eye[k] - lo - 1.0).max(0.0).powi(2)
-        })
-        .sum::<f64>()
-        < reach * reach
+    g.within_block_range(pos, 4.0)
 }

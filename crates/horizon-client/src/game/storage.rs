@@ -127,6 +127,42 @@ impl Game<'_> {
             None => vec![own],
         }
     }
+    /// `Container.stillValidBlockEntity`: the open block container closes once
+    /// the player's eyes are out of reach of any of its blocks (a 4-block buffer).
+    pub(super) fn tick_container_reach(&mut self) {
+        // A server's menu ends when the server closes it.
+        if self.remote.is_some() {
+            return;
+        }
+        let Some(eye) = self.eye_position() else {
+            return;
+        };
+        if self
+            .container
+            .is_none_or(|k| k.1 == super::minecarts::CART_KEY_Y)
+        {
+            return;
+        }
+        let range = self.reach() + 4.0;
+        let near = self.container_parts().iter().all(|((x, y, z), _)| {
+            let d = [*x, *y, *z]
+                .iter()
+                .zip(eye)
+                .map(|(&lo, e)| {
+                    (f64::from(lo) - e)
+                        .max(e - f64::from(lo) - 1.0)
+                        .max(0.0)
+                        .powi(2)
+                })
+                .sum::<f64>();
+            d < range * range
+        });
+        if !near {
+            self.close_container();
+            self.screen = super::Screen::Playing;
+            self.capture(true);
+        }
+    }
     /// The number of slots of the open container.
     pub(super) fn container_size(&self) -> usize {
         self.container_parts().iter().map(|p| p.1).sum()

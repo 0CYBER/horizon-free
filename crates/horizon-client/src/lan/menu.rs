@@ -64,6 +64,19 @@ impl Slots {
             .iter()
             .all(|k| world.block_entities.contains_key(k))
     }
+    /// `Container.stillValid` for the guest: the block entities are there
+    /// and the guest is within reach of each (`stillValidBlockEntity`). The
+    /// ender chest's block is `at` (`PlayerEnderChestContainer.activeChest`).
+    pub fn still_valid(self, world: &World, guest: &Guest, at: Option<(i32, i32, i32)>) -> bool {
+        let blocks = match self {
+            Slots::Ender => at.into_iter().collect(),
+            _ => self.halves(),
+        };
+        self.valid(world)
+            && blocks
+                .iter()
+                .all(|k| guest.within_block_range([k.0, k.1, k.2], 4.0))
+    }
     /// Container slot `n`.
     pub fn get(self, world: &World, guest: &Guest, mut n: usize) -> Option<ItemStack> {
         if self == Slots::Ender {
