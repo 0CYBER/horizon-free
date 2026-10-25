@@ -2449,6 +2449,32 @@ impl Game<'_> {
             .map_or(&[][..], |log| log.get(logged..).unwrap_or(&[]))
             .to_vec();
         let facts = self.res.facts();
+        // BlockItem.place: `playSound(player, ...)`, for the others only. The
+        // placer's client plays it as its block appears.
+        let placed: Vec<([f64; 3], String)> = changed
+            .iter()
+            .map(|&(x, y, z)| {
+                let at = [f64::from(x) + 0.5, f64::from(y) + 0.5, f64::from(z) + 0.5];
+                let name = &facts.get(self.world.block(x, y, z)).sounds.place;
+                (at, name.trim_start_matches("minecraft:").to_owned())
+            })
+            .collect();
+        if let Some(capture) = self.audio.capture.as_mut() {
+            let mut i = heard.min(capture.len());
+            while i < capture.len() {
+                let (name, at, ..) = &capture[i];
+                let place = placed
+                    .iter()
+                    .any(|(p, n)| p == at && name.trim_start_matches("minecraft:") == n.as_str());
+                if place {
+                    let (name, at, volume, pitch) = capture.remove(i);
+                    let source = horizon_client::settings::sound_source(&name) as i32;
+                    host.hub.sound(&name, at, volume, pitch, source, Some(conn));
+                } else {
+                    i += 1;
+                }
+            }
+        }
         if changed.is_empty()
             || !changed.iter().all(|&(x, y, z)| {
                 super::remote::hand_operated(&facts.get(self.world.block(x, y, z)).name)
