@@ -52,14 +52,7 @@ impl Zip {
         match method {
             CompressionMethod::Stored => Ok(raw),
             CompressionMethod::Deflated => {
-                // Streamed archives write 0xFFFFFFFF for the uncompressed
-                // size; bound the output instead of trusting it.
-                let limit = if size == u32::MAX as usize {
-                    1 << 30
-                } else {
-                    size.max(1) * 2 + 1024
-                };
-                miniz_oxide::inflate::decompress_to_vec_with_limit(&raw, limit)
+                miniz_oxide::inflate::decompress_to_vec_with_limit(&raw, size.max(1) * 2 + 1024)
                     .map_err(|_| invalid("corrupt deflate stream"))
             }
             _ => Err(invalid("unsupported zip compression")),
@@ -74,10 +67,10 @@ const END_HEADER: usize = 22;
 /// reading the central directory from `cenpos` to `cenpos + cenlen` whatever
 /// they say; the `zip` crate insists the record agrees with the directory.
 /// Packs written while streaming (Nexo serves them for gommehd.net, for one)
-/// leave every file's local header a stub, the uncompressed sizes at
-/// 0xFFFFFFFF and the END counts and disk number at 0 and 0xFFFF — archives
-/// Java opens but the crate refuses. Count the real directory entries and
-/// normalize the record so it does not look multi-disk or empty.
+/// leave every file's local header a stub and the END counts and disk number
+/// at 0 and 0xFFFF: archives Java opens but the crate refuses. Count the real
+/// directory entries and normalize the record so it does not look multi-disk
+/// or empty.
 fn normalize_end(data: &mut [u8]) {
     if data.len() < END_HEADER {
         return;
@@ -270,45 +263,59 @@ mod tests {
     }
 
     /// A pack as a streaming writer serves it (Nexo/gommehd.net): every
-    /// local header is a stub, the uncompressed sizes are 0xFFFFFFFF and the
-    /// END record's counts and disk numbers are wrong. Java's ZipFile opens
-    /// it anyway; so do we.
+    /// local header is a 30-byte stub and the END record's disk number and
+    /// counts are wrong. Java 25's `ZipFile` opens it, with each size either
+    /// in the directory or as 0xFFFFFFFF plus its Zip64 extra field (without
+    /// that field it refuses the archive: "invalid zip64 extra len size").
     #[test]
     fn reads_a_streamed_archive() {
-        let files: [(&str, &[u8], bool); 2] = [
-            ("pack.mcmeta", b"{\"pack\":{}}", true),
-            ("a/b.txt", b"streamed entry", true),
-        ];
-        let mut out = Vec::new();
-        let mut central = Vec::new();
-        for (name, body, _) in files {
-            let data = miniz_oxide::deflate::compress_to_vec(body, 6);
-            let offset = out.len() as u32;
-            out.extend(0x0403_4b50u32.to_le_bytes());
-            out.extend([0; 26]);
-            out.extend(&data);
-            central.extend(0x0201_4b50u32.to_le_bytes());
-            central.extend([20, 0, 20, 0, 0, 0]);
-            central.extend(8u16.to_le_bytes());
-            central.extend([0; 8]);
-            central.extend((data.len() as u32).to_le_bytes());
-            central.extend(u32::MAX.to_le_bytes());
-            central.extend((name.len() as u16).to_le_bytes());
-            central.extend([0; 12]);
-            central.extend(offset.to_le_bytes());
-            central.extend(name.as_bytes());
+        for zip64 in [false, true] {
+            let files: [(&str, &[u8]); 2] = [
+                ("pack.mcmeta", b"{\"pack\":{}}"),
+                ("a/b.txt", b"streamed entry"),
+            ];
+            let mut out = Vec::new();
+            let mut central = Vec::new();
+            for (name, body) in files {
+                let data = miniz_oxide::deflate::compress_to_vec(body, 6);
+                let offset = out.len() as u32;
+                out.extend(0x0403_4b50u32.to_le_bytes());
+                out.extend([0; 26]);
+                out.extend(&data);
+                let extra: Vec<u8> = if zip64 {
+                    [1u16, 8]
+                        .iter()
+                        .flat_map(|v| v.to_le_bytes())
+                        .chain((body.len() as u64).to_le_bytes())
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                central.extend(0x0201_4b50u32.to_le_bytes());
+                central.extend([20, 0, 20, 0, 0, 0]);
+                central.extend(8u16.to_le_bytes());
+                central.extend([0; 8]);
+                central.extend((data.len() as u32).to_le_bytes());
+                central.extend(if zip64 { u32::MAX } else { body.len() as u32 }.to_le_bytes());
+                central.extend((name.len() as u16).to_le_bytes());
+                central.extend((extra.len() as u16).to_le_bytes());
+                central.extend([0; 10]);
+                central.extend(offset.to_le_bytes());
+                central.extend(name.as_bytes());
+                central.extend(extra);
+            }
+            let start = out.len() as u32;
+            out.extend(&central);
+            out.extend(0x0605_4b50u32.to_le_bytes());
+            out.extend(u16::MAX.to_le_bytes());
+            out.extend([0; 6]);
+            out.extend((central.len() as u32).to_le_bytes());
+            out.extend(start.to_le_bytes());
+            out.extend([0; 2]);
+            let zip = Zip::from_bytes(out).unwrap();
+            assert_eq!(zip.names().collect::<Vec<_>>(), ["a/b.txt", "pack.mcmeta"]);
+            assert_eq!(zip.read("pack.mcmeta").unwrap(), b"{\"pack\":{}}");
+            assert_eq!(zip.read("a/b.txt").unwrap(), b"streamed entry");
         }
-        let start = out.len() as u32;
-        out.extend(&central);
-        out.extend(0x0605_4b50u32.to_le_bytes());
-        out.extend(u16::MAX.to_le_bytes());
-        out.extend([0; 6]);
-        out.extend((central.len() as u32).to_le_bytes());
-        out.extend(start.to_le_bytes());
-        out.extend([0; 2]);
-        let zip = Zip::from_bytes(out).unwrap();
-        assert_eq!(zip.names().collect::<Vec<_>>(), ["a/b.txt", "pack.mcmeta"]);
-        assert_eq!(zip.read("pack.mcmeta").unwrap(), b"{\"pack\":{}}");
-        assert_eq!(zip.read("a/b.txt").unwrap(), b"streamed entry");
     }
 }
