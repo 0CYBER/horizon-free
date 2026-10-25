@@ -1,4 +1,5 @@
-//! The hub's votes: a 👍 on a roadmap item at playhorizon.dev/hub. roadmap/README.md documents them for Kira and the website.
+//! The hub's votes: a 👍 on a roadmap item at playhorizon.dev/hub, and the helpers the hub's other
+//! endpoints (`intake`) share. roadmap/README.md documents them for Kira and the website.
 //!
 //! - `POST /hub/vote`: a 👍 on a roadmap item, one per browser (`voter`, a random id the page makes and
 //!   keeps); `"up": false` takes it back. Answers the item's count.
@@ -114,10 +115,12 @@ impl App {
 
     /// The hub's share of `maintain`: idle buckets are forgotten.
     pub(crate) fn forget_hub_buckets(&self) {
-        self.hub_buckets
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .retain(|_, (_, at)| at.elapsed() < Duration::from_secs(3600));
+        for buckets in [&self.hub_buckets, &self.hub_post_buckets] {
+            buckets
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .retain(|_, (_, at)| at.elapsed() < Duration::from_secs(3600));
+        }
     }
 }
 

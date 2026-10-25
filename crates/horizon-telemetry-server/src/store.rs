@@ -131,6 +131,7 @@ impl Store {
         let mut db = Connection::open(path)?;
         db.execute_batch(SCHEMA)?;
         db.execute_batch(crate::hub::SCHEMA)?;
+        db.execute_batch(crate::intake::SCHEMA)?;
         migrate(&mut db)?;
         Ok(Self { db })
     }
