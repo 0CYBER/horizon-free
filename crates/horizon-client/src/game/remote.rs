@@ -383,6 +383,7 @@ impl Game<'_> {
         }
         self.apply_settings();
         self.clear_waypoints();
+        self.boss_overlay.reset();
         self.remote = Some(Remote {
             session,
             brand: "unknown".into(),
@@ -465,6 +466,7 @@ impl Game<'_> {
             self.extras_left();
         }
         self.clear_waypoints();
+        self.boss_overlay.reset();
         if let Some(mut r) = self.remote.take() {
             r.session.disconnect();
         }
@@ -2717,6 +2719,7 @@ impl Game<'_> {
             }
             // ClientPacketListener.setActionBarText, setTitleText,
             // setSubtitleText, setTitlesAnimation and handleTitlesClear.
+            C::BossEvent(p) => self.apply_boss_event(&p),
             C::SetActionBarText(p) => self.titles.set_overlay(remote_text(&p.text), false),
             C::SetTitleText(p) => self.titles.set_title(remote_text(&p.text)),
             C::SetSubtitleText(p) => self.titles.set_subtitle(remote_text(&p.text)),
@@ -3151,6 +3154,7 @@ impl Game<'_> {
         // Minecraft.tick: TickRateManager.tick; ClientLevel.tickTime advances
         // the time only while the level runs normally.
         let running = self.clock.world_runs();
+        self.boss_overlay.tick_darken(running);
         if running {
             self.world.game_time += 1;
             self.remote_clock_tick();

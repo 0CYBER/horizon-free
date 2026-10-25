@@ -268,6 +268,8 @@ pub struct Frame<'a> {
     pub night_vision: f32,
     /// Torch flicker added to the block light factor of 1.4.
     pub block_flicker: f32,
+    /// `lightmap.fsh` BossOverlayWorldDarkeningFactor (a wither's bar).
+    pub boss_darken: f32,
     /// `Screen.extractBlurredBackground`: blur the frame by this radius
     /// (`menuBackgroundBlurriness`) before the screen is drawn over it.
     pub menu_blur: Option<f32>,
@@ -2793,6 +2795,7 @@ impl Renderer {
         gamma: f32,
         night_vision: f32,
         flicker: f32,
+        boss_darken: f32,
     ) {
         // lightmap.fsh: per (block, sky) level.
         let brightness = |level: f32| level / (4.0 - 3.0 * level);
@@ -2810,6 +2813,8 @@ impl Renderer {
                 let parabolic = (2.0 * block_level - 1.0).powi(2);
                 let block_color = Vec3::from(sky.block_light_tint).lerp(Vec3::ONE, 0.9 * parabolic);
                 color += block_color * block_brightness;
+                // lightmap.fsh: a boss bar mixes the light toward 70/60/60%.
+                color = color.lerp(color * Vec3::new(0.7, 0.6, 0.6), boss_darken);
                 color -= Vec3::splat(darkness);
                 color = color.clamp(Vec3::ZERO, Vec3::ONE);
                 let max = color.max_element().max(1e-6);
@@ -2924,6 +2929,7 @@ impl Renderer {
             (self.gamma - frame.darkness.0).max(0.0),
             frame.night_vision,
             frame.block_flicker,
+            frame.boss_darken,
         );
         let view_proj = self.view_projection(frame);
         if frame.title {
