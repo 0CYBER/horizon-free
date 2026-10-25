@@ -39,6 +39,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -679,7 +680,10 @@ def clear_large_outputs(name, trace):
                 top = path.relative_to(local).parts[0]
             except (ValueError, IndexError):
                 continue
-            if top not in OWN_DIRECTORIES:
+            # Only the harness's own directory: another harness running beside it may be writing
+            # large files in a directory this one merely read (decorated_region compiles its oracle
+            # into chunk-generation-parity while chunk_generation writes its dumps there).
+            if top not in OWN_DIRECTORIES and top.startswith(name.replace("_", "-")):
                 directories.add(local / top)
     for directory in directories:
         for file in (directory.rglob("*") if directory.is_dir() else []):
@@ -809,6 +813,12 @@ class LocalExecutor:
         trace.unlink(missing_ok=True)
         log = (STATE_DIR / "logs" / f"{name}.log").open("w")
         environment = run_environment(reuse)
+        # A game the harness starts logs into HORIZON_HOME, which is a real player's folder when it is unset
+        # (lab.game_env keeps this one).
+        game_home = STATE_DIR / "game-home" / name
+        shutil.rmtree(game_home, ignore_errors=True)
+        game_home.mkdir(parents=True)
+        environment.setdefault("HORIZON_HOME", str(game_home))
         environment["PARITY_SHIM_OUTPUTS"] = str(outputs_listing(name, fresh=True))
         environment.pop("PARITY_SHARD", None)
         if shard:

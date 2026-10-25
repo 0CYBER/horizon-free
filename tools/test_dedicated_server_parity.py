@@ -126,7 +126,7 @@ class Server:
         self.lines = []
         self.process = subprocess.Popen(list(map(str, command)), cwd=directory, stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                        encoding='utf-8', errors='replace')
+                                        encoding='utf-8', errors='replace', env=lab.game_env())
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
 
@@ -181,18 +181,23 @@ def settle(server, ticks=600, timeout=600):
             break
         time.sleep(2)
 
-    def game_time():
-        start = len(server.lines)
-        server.console('time query gametime')
-        while time.time() < deadline:
-            for line in server.lines[start:]:
-                if m := re.search(r'The (?:game )?time is (\d+)', line):
-                    return int(m.group(1))
-            time.sleep(0.2)
-        raise AssertionError(f'{server.log_path.name}: no game time in {timeout} s')
-    until = game_time() + ticks
-    while game_time() < until:
+    until = game_time(server, deadline - time.time()) + ticks
+    while game_time(server, deadline - time.time()) < until:
         time.sleep(2)
+
+
+def game_time(server, timeout=300):
+    """The server's game time, asked from its console: the console runs its queue in order, so every console
+    command sent before has run."""
+    deadline = time.time() + timeout
+    start = len(server.lines)
+    server.console('time query gametime')
+    while time.time() < deadline:
+        for line in server.lines[start:]:
+            if m := re.search(r'The (?:game )?time is (\d+)', line):
+                return int(m.group(1))
+        time.sleep(0.05)
+    raise AssertionError(f'{server.log_path.name}: no game time in {timeout:.0f} s')
 
 
 def legacy_ping(port):
@@ -352,7 +357,7 @@ def horizon_client_joins(vanilla_server, binary, world, build, reference):
     server = Server(vanilla_server, directory, label)
     try:
         server.wait_for(r'Done \(')
-        env = dict(os.environ, HORIZON_NO_AUDIO='1', HORIZON_NET_REPORT=str(report))
+        env = lab.game_env(HORIZON_NET_REPORT=report)
         with (build / 'horizon-client-run.log').open('w') as log:
             subprocess.run([str(c) for c in [binary, '--resources', lab.RESOURCES, '--render-distance', 2,
                                              '--server', f'127.0.0.1:{port}', '--name', PLAYER]],
