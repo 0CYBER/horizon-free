@@ -105,6 +105,17 @@ impl Pregen {
         moved
     }
 
+    /// The chunks of the band's first row, which it waits for.
+    pub fn first_row(&self) -> Vec<(i32, i32)> {
+        let Some(&(x0, x1)) = self.strips.get(self.strip) else {
+            return Vec::new();
+        };
+        (x0..=x1)
+            .filter(|&x| self.contains(x, self.row))
+            .map(|x| (x, self.row))
+            .collect()
+    }
+
     pub fn finished(&self) -> bool {
         self.strip >= self.strips.len()
     }

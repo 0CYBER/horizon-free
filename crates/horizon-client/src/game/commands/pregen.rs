@@ -14,6 +14,8 @@ use std::time::{Duration, Instant};
 
 /// How often the progress is reported.
 const REPORT_EVERY: Duration = Duration::from_secs(5);
+/// How long the band may stay put before the task looks for what holds it.
+const STALL: Duration = Duration::from_secs(30);
 
 pub(in crate::game) struct PregenTask {
     pregen: Pregen,
@@ -23,6 +25,8 @@ pub(in crate::game) struct PregenTask {
     ran: Duration,
     resumed: Instant,
     reported: Instant,
+    /// When the band last moved, to notice a task that stopped advancing.
+    moved: Instant,
     /// The player who started it, told the progress too (a guest's connection).
     owner: Option<u32>,
 }
@@ -113,6 +117,7 @@ impl Game<'_> {
                     ran: Duration::ZERO,
                     resumed: now,
                     reported: now,
+                    moved: now,
                     owner: self.lan_acting,
                 });
                 Ok(total as i32)
@@ -181,13 +186,32 @@ impl Game<'_> {
         // (`postprocess_chunks`, on the tick), as vanilla's are by the time
         // they are FULL: then they may unload and be saved.
         let (streaming, chunks) = (&mut self.streaming, &self.world.chunks);
-        task.pregen.advance(|x, z| {
+        if task.pregen.advance(|x, z| {
             streaming.is_lit(x, z)
                 && chunks
                     .get(&(x, z))
                     .is_some_and(|c| c.postprocess.is_empty())
-        });
+        }) {
+            task.moved = Instant::now();
+        }
         streaming.set_band(task.pregen.band());
+        if task.moved.elapsed() >= STALL {
+            // Nothing advanced for a while: say what the first row waits
+            // for, and queue light again for chunks that lost their job.
+            task.moved = Instant::now();
+            let row = task.pregen.first_row();
+            let waiting = row
+                .iter()
+                .filter(|k| chunks.get(k).is_some_and(|c| !c.postprocess.is_empty()))
+                .count();
+            let [missing, lighting, unlit] = streaming.unstick_light(&mut self.world, &row);
+            log::warn!(
+                "Horizon: pregeneration waits on row {:?}: {missing} not loaded, {lighting} being lit, \
+                 {unlit} unlit with no light job (queued again), {waiting} not post-processed; {:?}",
+                row.first(),
+                streaming.stages()
+            );
+        }
         let finished = task.pregen.finished();
         if finished || task.reported.elapsed() >= REPORT_EVERY {
             task.reported = Instant::now();

@@ -1406,6 +1406,27 @@ impl Streaming {
         }
         self.band_ranked = Some((x0, x1, end.max(first - 1) + 1));
     }
+    /// What holds up the columns `keys`, for a task that stopped advancing:
+    /// how many are not loaded, loaded but unlit with a light job in flight,
+    /// and unlit with none (those whose neighbours are all loaded are queued
+    /// for light again).
+    pub fn unstick_light(&mut self, world: &mut World, keys: &[(i32, i32)]) -> [usize; 3] {
+        let mut counts = [0; 3];
+        for &key in keys {
+            if !world.chunks.contains_key(&key) {
+                counts[0] += 1;
+            } else if self.lit.contains(&key) {
+            } else if self.lighting.contains_key(&key) {
+                counts[1] += 1;
+            } else {
+                counts[2] += 1;
+                if Self::region(world, key.0, key.1).is_some() {
+                    world.dirty_light.insert(key);
+                }
+            }
+        }
+        counts
+    }
     /// Wait up to `timeout` for a worker to finish a job; the next `update`
     /// takes it. A server pumps generation with this between its ticks.
     pub fn wait(&mut self, timeout: std::time::Duration) {
