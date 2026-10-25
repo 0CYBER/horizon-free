@@ -30,7 +30,7 @@ cd my-mod
 cargo horizon-mod run
 ```
 
-`run` builds the mod and starts the game with it. After an edit, `cargo horizon-mod build` rebuilds it and the running game reloads it. The full guide, with the API, the manifest and the roadmap, is [docs/mods.md](https://github.com/ludovic111/horizon/blob/main/docs/mods.md). Java mod jars don't run in Horizon: their code calls and patches Minecraft's Java classes, and Horizon has none. What carries over is the data and assets inside a jar ([modpacks](https://github.com/ludovic111/horizon/blob/main/docs/modpacks.md)).
+`run` builds the mod and starts the game with it. After an edit, `cargo horizon-mod build` rebuilds it and the running game reloads it. `cargo horizon-mod test` runs the mod's test scripts (`tests/*.toml`: ticks, commands and the player's position in, chat and HUD lines checked) with no game open. The full guide, with the API, the manifest and the roadmap, is [docs/mods.md](https://github.com/ludovic111/horizon/blob/main/docs/mods.md). Java mod jars don't run in Horizon: their code calls and patches Minecraft's Java classes, and Horizon has none. What carries over is the data and assets inside a jar ([modpacks](https://github.com/ludovic111/horizon/blob/main/docs/modpacks.md)).
 
 ## Finding resource packs and modpacks
 

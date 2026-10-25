@@ -1,7 +1,9 @@
 //! Loads real mods built with the SDK: the coords-hud example and a guest
 //! that misbehaves on command. Needs `rustup target add wasm32-unknown-unknown`.
 use horizon_mods::{
-    Clock, Corner, Mods, Output, Package, Player, Snapshot, Status, manifest::componentize,
+    Clock, Corner, Mods, Output, Package, Player, Snapshot, Status,
+    manifest::componentize,
+    testing::{Script, TestGame},
 };
 use std::{
     path::{Path, PathBuf},
@@ -395,4 +397,81 @@ capabilities = ["registries"]
     assert!(matches!(&mods.entries()[1].status, Status::Failed(e) if e.contains("own namespace")));
     // Content has no hooks: the game's per-tick mod work stays skipped.
     assert!(!mods.is_running());
+}
+
+/// `cargo horizon-mod test` on the example: its own `tests/*.toml` pass.
+#[test]
+fn the_examples_test_scripts_pass() {
+    let tests =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../horizon-mod-sdk/examples/coords-hud/tests");
+    let mut ran = 0;
+    for entry in std::fs::read_dir(tests).unwrap() {
+        let path = entry.unwrap().path();
+        let script = Script::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let mut game = TestGame::load(&mods_dir().join("coords_hud.hmod")).unwrap();
+        script
+            .run(&mut game)
+            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        ran += 1;
+    }
+    assert_eq!(ran, 2);
+}
+
+#[test]
+fn a_test_script_says_which_step_failed_and_why() {
+    let script = Script::parse(
+        r#"
+        [[step]]
+        ticks = 3
+        command = "hello there"
+        expect.chat = ["hello there after 2 ticks"]
+        "#,
+    )
+    .unwrap();
+    let mut game = TestGame::load(&mods_dir().join("horizon_mods_test_guest.hmod")).unwrap();
+    assert_eq!(
+        script.run(&mut game).unwrap_err(),
+        "step 1 (3 ticks, /hello there): chat\n    expected: [\"hello there after 2 ticks\"]\n    \
+         got:      [\"hello there after 3 ticks\"]"
+    );
+    assert!(
+        Script::parse("[[step]]\ntick = 1").is_err(),
+        "a typo is an error"
+    );
+}
+
+#[test]
+fn a_test_script_reloads_and_expects_a_stop() {
+    let script = Script::parse(
+        r#"
+        [[step]]
+        command = "save kept"
+        expect.feedback = "saved"
+
+        [[step]]
+        reload = true
+        command = "load"
+        expect.chat = ["kept"]
+
+        [[step]]
+        command = "panic"
+        expect.stopped = "panic"
+
+        [[step]]
+        reload = true
+        command = "nope"
+        "#,
+    )
+    .unwrap();
+    let mut game = TestGame::load(&mods_dir().join("horizon_mods_test_guest.hmod")).unwrap();
+    let dir = game.hmod().parent().unwrap().to_path_buf();
+    assert_eq!(
+        script.run(&mut game).unwrap_err(),
+        "step 4 (reload, /nope): the mod owns no command /nope"
+    );
+    drop(game);
+    assert!(
+        !dir.exists(),
+        "the scratch copy and its storage are removed"
+    );
 }
