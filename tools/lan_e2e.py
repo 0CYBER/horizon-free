@@ -6302,5 +6302,51 @@ CHECKS += ['boat-dismount-pose']
 CHECK_FNS['boat-dismount-pose'] = check_boat_dismount_pose
 
 
+def check_sprint_fov(host, guest, out):
+    """Releasing Ctrl must preserve a sprint until W is released, then reset FOV.
+
+    PlayerInput reports keys; PlayerCommand starts/stops the sprint. Confusing
+    them clears the client's sprint flag while leaving its speed modifier on.
+    """
+    seen = {}
+    for game in (host, guest):
+        game('command', command='gamemode creative')
+        game('command', command='effect clear @s')
+        game.raw('options-set', 'fovEffectScale', '1.0')
+        x, y, z = map(math.floor, pos_of(game))
+        game('command', command=f'fill {x - 2} {y} {z - 2} {x + 2} {y + 3} {z + 20} minecraft:air')
+        game('command', command=f'fill {x - 2} {y - 1} {z - 2} {x + 2} {y - 1} {z + 20} minecraft:stone')
+        game('command', command=f'tp @s {x + 0.5} {y} {z + 0.5} 0 0')
+        game.wait(20)
+        try:
+            game.raw('key', 'w', 'down')
+            game.raw('key', 'ctrl', 'down')
+            game.wait(10)
+            started = game('state')['player']
+            game.raw('key', 'ctrl', 'up')
+            game.wait(10)
+            released_ctrl = game('state')['player']
+            game.raw('key', 'w', 'up')
+            game.wait(20)
+            stopped = game('state')['player']
+        finally:
+            game.raw('key', 'ctrl', 'up')
+            game.raw('key', 'w', 'up')
+        seen[game.name] = states = {
+            label: {k: p[k] for k in ('sprinting', 'fov_modifier')}
+            for label, p in [('started', started), ('released_ctrl', released_ctrl), ('stopped', stopped)]
+        }
+        for label in ('started', 'released_ctrl'):
+            assert states[label]['sprinting'], f'{game.name} {label}: {states}'
+            assert abs(states[label]['fov_modifier'] - 1.15) < 0.002, f'{game.name} {label}: {states}'
+        assert not stopped['sprinting'], f'{game.name}: {states}'
+        assert abs(stopped['fov_modifier'] - 1.0) < 0.002, f'{game.name}: {states}'
+    return seen
+
+
+CHECKS += ['sprint-fov']
+CHECK_FNS['sprint-fov'] = check_sprint_fov
+
+
 if __name__ == '__main__':
     main()

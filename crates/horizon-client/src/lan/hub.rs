@@ -1984,7 +1984,9 @@ impl Hub {
                 S::PlayerInput(p) => {
                     self.guests[i].input = p.flags;
                     self.guests[i].sneaking = p.flags & 32 != 0;
-                    self.guests[i].sprinting = p.flags & 64 != 0 && p.flags & 1 != 0;
+                    // handlePlayerInput only records keys and updates crouching.
+                    // Sprinting persists after the sprint key is released (or
+                    // starts with a double tap); PlayerCommand changes it.
                 }
                 // OPEN_INVENTORY (the ridden mount's inventory) and
                 // START_FALL_FLYING (checked against the guest's chest slot

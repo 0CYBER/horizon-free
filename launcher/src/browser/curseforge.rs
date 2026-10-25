@@ -164,6 +164,7 @@ pub(super) fn parse_file(f: &Value) -> Option<Version> {
                 name: name.clone(),
                 size: f["fileLength"].as_u64().unwrap_or(0),
                 sha512: None,
+                sha256: None,
                 sha1,
                 primary: true,
             }]
