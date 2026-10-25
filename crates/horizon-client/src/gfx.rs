@@ -2799,6 +2799,7 @@ impl Renderer {
                     depth_write: true,
                     atlas: None,
                     ids: None,
+                    cull: true,
                 }),
                 block_ids,
                 celestial: self
@@ -4070,31 +4071,42 @@ impl Renderer {
         {
             let size = self.world_post.size().unwrap_or([1, 1]);
             let flat = self.flat.as_ref().filter(|_| flat_frame);
-            let mut terrain = |rp: &mut wgpu::RenderPass<'_>, translucent: bool| {
-                if !pack_draws_terrain {
-                    return;
-                }
-                match flat {
-                    Some(flat) => {
-                        let calls = if translucent {
-                            &flat.calls[flat.solid_calls..]
-                        } else {
-                            &flat.calls[..flat.solid_calls]
-                        };
-                        flat.draw(rp, calls, |p| self.arena.buffer(p));
-                    }
-                    None => {
-                        rp.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
-                        rp.set_vertex_buffer(1, self.instances.slice(..));
-                        let (first, count) = if translucent {
-                            (solid_draws, translucent_draws)
-                        } else {
-                            (0, solid_draws)
-                        };
-                        self.draw_sections(rp, &self.indirect, 0, first, count);
-                    }
-                }
+            let pages: Vec<(u32, wgpu::Buffer)> = match flat {
+                Some(_) if pack_draws_terrain => self
+                    .arena
+                    .page_buffers()
+                    .map(|(p, b)| (p, b.clone()))
+                    .collect(),
+                _ => Vec::new(),
             };
+            let mut terrain =
+                |rp: &mut wgpu::RenderPass<'_>,
+                 translucent: bool,
+                 page: &dyn Fn(&mut wgpu::RenderPass<'_>, u32)| {
+                    if !pack_draws_terrain {
+                        return;
+                    }
+                    match flat {
+                        Some(flat) => {
+                            let calls = if translucent {
+                                &flat.calls[flat.solid_calls..]
+                            } else {
+                                &flat.calls[..flat.solid_calls]
+                            };
+                            flat.draw_with(rp, calls, |p| self.arena.buffer(p), page);
+                        }
+                        None => {
+                            rp.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                            rp.set_vertex_buffer(1, self.instances.slice(..));
+                            let (first, count) = if translucent {
+                                (solid_draws, translucent_draws)
+                            } else {
+                                (0, solid_draws)
+                            };
+                            self.draw_sections(rp, &self.indirect, 0, first, count);
+                        }
+                    }
+                };
             post.run(
                 &self.device,
                 &self.queue,
@@ -4106,6 +4118,7 @@ impl Renderer {
                 &frame.pack,
                 size,
                 [self.config.width, self.config.height],
+                &pages,
                 &mut terrain,
             );
             self.pack_post = Some((dimension, Some(post)));

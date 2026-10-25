@@ -211,8 +211,10 @@ pub struct PackPost {
     down: HashMap<wgpu::TextureFormat, (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
     /// The per-draw uniforms of gbuffers programs.
     draws: DrawUniforms,
-    /// `mc_Entity`'s table of flat terrain, and its bind group.
-    block_ids: Option<(wgpu::BindGroupLayout, wgpu::BindGroup)>,
+    /// Set 3 of flat terrain (`mc_Entity`'s table) and its bind group for each arena page,
+    /// with the page buffer it was made for.
+    block_ids: Option<(wgpu::BindGroupLayout, wgpu::Buffer)>,
+    page_groups: HashMap<u32, (wgpu::Buffer, wgpu::BindGroup)>,
     /// `HORIZON_SHADER_PACK_TIMING`: GPU time of each pass, in the log.
     timing: Option<super::pack_timing::PassTiming>,
     /// `shaders.properties`' custom uniforms, after the frame's in `uniforms.values`.
@@ -498,8 +500,14 @@ fn attach(
     })
 }
 
-/// `mc_Entity`'s table as a storage buffer (vertex stage) at set 3; -1 pairs when empty.
-fn block_ids(device: &wgpu::Device, table: &[i32]) -> (wgpu::BindGroupLayout, wgpu::BindGroup) {
+/// Draws the game's terrain (`true`: translucent) into a pass; calls its third argument with
+/// each arena page before drawing from it.
+pub(super) type TerrainDraw<'a> =
+    dyn FnMut(&mut wgpu::RenderPass<'_>, bool, &dyn Fn(&mut wgpu::RenderPass<'_>, u32)) + 'a;
+
+/// Set 3 of flat terrain, read by the vertex stage: `mc_Entity`'s table (-1 pairs when empty)
+/// and, per arena page, the page's vertices (a vertex reads its quad's corners for its normal).
+fn block_ids(device: &wgpu::Device, table: &[i32]) -> (wgpu::BindGroupLayout, wgpu::Buffer) {
     let empty = [-1, -1];
     let table = if table.is_empty() { &empty[..] } else { table };
     let buffer = wgpu::util::DeviceExt::create_buffer_init(
@@ -510,28 +518,21 @@ fn block_ids(device: &wgpu::Device, table: &[i32]) -> (wgpu::BindGroupLayout, wg
             usage: wgpu::BufferUsages::STORAGE,
         },
     );
+    let storage = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::VERTEX,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    };
     let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("Shader pack block ids"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        }],
+        label: Some("Shader pack terrain"),
+        entries: &[storage(0), storage(1)],
     });
-    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Shader pack block ids"),
-        layout: &layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: buffer.as_entire_binding(),
-        }],
-    });
-    (layout, group)
+    (layout, buffer)
 }
 
 /// The game's geometry a gbuffers program draws: its vertex buffers and, for flat draws
@@ -545,6 +546,8 @@ pub(super) struct Geometry<'a> {
     pub atlas: Option<wgpu::TextureView>,
     /// `mc_Entity`'s table at set 3 (flat terrain).
     pub ids: Option<&'a wgpu::BindGroupLayout>,
+    /// Back faces are culled, as for the game's own terrain.
+    pub cull: bool,
 }
 
 /// The pass of program `p`: a quad, or `geometry` drawn by the game. `None` (with a note) when
@@ -728,7 +731,12 @@ fn build_pass(
                 compilation_options: Default::default(),
                 buffers: geometry.map_or(&[], |g| g.buffers),
             },
-            primitive: Default::default(),
+            // Rows flipped to GL's turn front faces clockwise.
+            primitive: wgpu::PrimitiveState {
+                front_face: wgpu::FrontFace::Cw,
+                cull_mode: geometry.filter(|g| g.cull).map(|_| wgpu::Face::Back),
+                ..Default::default()
+            },
             depth_stencil: geometry.map(|g| wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: Some(g.depth_write),
@@ -854,6 +862,7 @@ impl PackPost {
             depth_write: g.depth_write,
             atlas: g.atlas.clone(),
             ids: block_ids.as_ref().map(|i| &i.0),
+            cull: g.cull,
         });
         let terrain = post
             .terrain
@@ -871,6 +880,7 @@ impl PackPost {
                 depth_write: false,
                 atlas: None,
                 ids: None,
+                cull: false,
             };
             let basic = post.sky.and_then(|p| build(p, Some(&basic)));
             let textured = Geometry {
@@ -879,6 +889,7 @@ impl PackPost {
                 depth_write: false,
                 atlas: world.celestial.clone(),
                 ids: None,
+                cull: false,
             };
             let textured = post.sky_textured.and_then(|p| build(p, Some(&textured)));
             Sky {
@@ -1043,6 +1054,7 @@ impl PackPost {
             down,
             draws,
             block_ids,
+            page_groups: HashMap::new(),
             timing: super::pack_timing::PassTiming::new(device, queue),
             custom,
             atlas: world.atlas.as_ref().map(|a| a.0.clone()),
@@ -1253,7 +1265,7 @@ impl PackPost {
         encoder: &mut wgpu::CommandEncoder,
         size: [u32; 2],
         translucent: bool,
-        draw: &mut dyn FnMut(&mut wgpu::RenderPass<'_>, bool),
+        draw: &mut TerrainDraw<'_>,
     ) {
         let slot = if translucent {
             &mut self.water
@@ -1278,11 +1290,6 @@ impl PackPost {
             let mut rp = self.begin(encoder, &pass);
             rp.set_pipeline(&pass.pipeline);
             rp.set_bind_group(0, &group, &[]);
-            if pass.ids
-                && let Some((_, ids)) = &self.block_ids
-            {
-                rp.set_bind_group(3, ids, &[]);
-            }
             if pass.draw {
                 let stage = if translucent {
                     "TERRAIN_TRANSLUCENT"
@@ -1291,7 +1298,13 @@ impl PackPost {
                 };
                 self.draws.bind(&mut rp, stage);
             }
-            draw(&mut rp, translucent);
+            let (groups, ids) = (&self.page_groups, pass.ids);
+            let page = |rp: &mut wgpu::RenderPass<'_>, page: u32| {
+                if let Some((_, group)) = groups.get(&page).filter(|_| ids) {
+                    rp.set_bind_group(3, group, &[]);
+                }
+            };
+            draw(&mut rp, translucent, &page);
         }
         self.mips_valid &= !pass.written;
         if translucent {
@@ -1362,7 +1375,7 @@ impl PackPost {
         encoder: &mut wgpu::CommandEncoder,
         size: [u32; 2],
         frame: &super::Frame,
-        terrain: &mut dyn FnMut(&mut wgpu::RenderPass<'_>, bool),
+        terrain: &mut TerrainDraw<'_>,
     ) {
         if super::sky_visible(frame) {
             self.draw_sky(device, queue, encoder, size, frame);
@@ -1533,9 +1546,34 @@ impl PackPost {
         inputs: &PackInputs,
         size: [u32; 2],
         window: [u32; 2],
-        terrain: &mut dyn FnMut(&mut wgpu::RenderPass<'_>, bool),
+        pages: &[(u32, wgpu::Buffer)],
+        terrain: &mut TerrainDraw<'_>,
     ) {
         self.resize(device, size);
+        if let Some((layout, ids)) = &self.block_ids {
+            // A page that grew has a new buffer.
+            self.page_groups
+                .retain(|p, (b, _)| pages.iter().any(|(q, c)| q == p && c == b));
+            for (page, buffer) in pages {
+                self.page_groups.entry(*page).or_insert_with(|| {
+                    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Shader pack terrain"),
+                        layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: ids.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: buffer.as_entire_binding(),
+                            },
+                        ],
+                    });
+                    (buffer.clone(), group)
+                });
+            }
+        }
         if let Some(t) = &mut self.timing {
             t.begin(device, queue);
         }

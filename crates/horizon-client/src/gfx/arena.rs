@@ -155,6 +155,11 @@ impl Arena {
     pub fn has_page(&self, page: u32) -> bool {
         self.pages.get(page as usize).is_some_and(Option::is_some)
     }
+    /// Each live page's buffer, by page.
+    pub fn page_buffers(&self) -> impl Iterator<Item = (u32, &wgpu::Buffer)> {
+        let pages = self.pages.iter().enumerate();
+        pages.filter_map(|(i, p)| Some((i as u32, &p.as_ref()?.buffer)))
+    }
     pub fn buffer(&self, page: u32) -> &wgpu::Buffer {
         &self.pages[page as usize]
             .as_ref()
