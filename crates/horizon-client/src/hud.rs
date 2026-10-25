@@ -81,6 +81,12 @@ pub const MINIMAP_SPRITE: &str = "horizon/minimap";
 pub const SKIN_SLOTS: usize = 32;
 /// Reused by the visible rows of the classic world selector.
 pub const WORLD_ICON_SLOTS: usize = 32;
+/// Atlas slots for the pack icons on the pack screen, one per icon drawn
+/// (`PackSelectionScreen.loadPackIcon` registers a texture per pack): two lists
+/// of 36-pixel rows at GUI scale 2 on a 4K screen still fit.
+pub const PACK_ICON_SLOTS: usize = 64;
+/// A pack icon slot's side: vanilla's own icons are 128x128.
+pub const PACK_ICON_SIZE: u32 = 128;
 /// Atlas slots for armour trim textures made at run time (`trims`), each the
 /// size of the largest trim texture.
 pub const TRIM_SLOTS: usize = 32;
@@ -252,7 +258,7 @@ impl HudAtlas {
         )
     }
     /// Empty slots written at run time: map textures (game/maps.rs), the
-    /// minimap, downloaded skins, world icons and the on-screen keyboard's text.
+    /// minimap, downloaded skins, world and pack icons and the on-screen keyboard's text.
     fn slots(images: &mut Vec<PackedImage>, trim: (u32, u32)) {
         for i in 0..MAP_SLOTS {
             images.push((format!("horizon/map{i}"), 128, 128, vec![0; 128 * 128 * 4]));
@@ -282,6 +288,15 @@ impl HudAtlas {
                 64,
                 64,
                 vec![0; 64 * 64 * 4],
+            ));
+        }
+        let side = PACK_ICON_SIZE as usize;
+        for i in 0..PACK_ICON_SLOTS {
+            images.push((
+                format!("horizon/pack-icon{i}"),
+                PACK_ICON_SIZE,
+                PACK_ICON_SIZE,
+                vec![0; side * side * 4],
             ));
         }
         // The on-screen keyboard's text and corner masks (ui_theme), rasterized at run time.

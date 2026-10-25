@@ -4,10 +4,16 @@
 //! - `build [--debug]`: the `.hmod` in `target/horizon-mod/`.
 //! - `run [--game <horizon-client>] [-- <game args>]`: build, then play with
 //!   the mod; run `build` again and the game reloads it.
+//! - `check <file> [--json]`: what the registry checks of a submission
+//!   (`.hmod`, `.hpack`, resource pack `.zip`), with a trial run for a mod.
+//! - `registry build|review|check|list`: the registry repository's CI.
 use horizon_mods::{
     Manifest, Package,
     manifest::{MANIFEST, component_imports, componentize},
 };
+mod check;
+mod registry;
+
 use std::{
     path::{Path, PathBuf},
     process::{Command, ExitCode, Stdio},
@@ -28,7 +34,9 @@ fn main() -> ExitCode {
             println!("Built {}", p.display());
         }),
         Some("run") => run(&args[1..]),
-        _ => Err("usage: cargo horizon-mod new <path> | build [--debug] | run [--game <horizon-client>] [-- <game args>]".into()),
+        Some("check") => check(&args[1..]),
+        Some("registry") => registry::main(&args[1..]),
+        _ => Err("usage: cargo horizon-mod new <path> | build [--debug] | run [--game <horizon-client>] [-- <game args>] | check <file> [--kind <kind>] [--key <public key> --signature <file.minisig>] [--json] | registry build|review|check|list".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -148,6 +156,37 @@ fn build(release: bool) -> Result<PathBuf, String> {
     std::fs::write(&partial, Package::write(&manifest_text, &wasm)?).map_err(|e| e.to_string())?;
     std::fs::rename(&partial, &path).map_err(|e| e.to_string())?;
     Ok(path)
+}
+
+/// `check <file>`: the registry's checks of a submission, printed; fails
+/// when one does.
+fn check(args: &[String]) -> Result<(), String> {
+    let file = args
+        .first()
+        .filter(|a| !a.starts_with("--"))
+        .ok_or("cargo horizon-mod check <file>")?;
+    let path = Path::new(file);
+    let kind = match flag(args, "--kind") {
+        Some(k) => horizon_mods::index::Kind::from(k.to_string()),
+        None => check::kind_of(path)
+            .ok_or("pass --kind mod|modpack|resourcepack: the extension doesn't say")?,
+    };
+    let signature = flag(args, "--signature")
+        .map(|p| std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}")))
+        .transpose()?;
+    let report = check::check(path, kind, flag(args, "--key"), signature.as_deref());
+    if args.iter().any(|a| a == "--json") {
+        let json = match &report {
+            Ok(r) => serde_json::json!({"ok": true, "report": r.json()}),
+            Err(e) => serde_json::json!({"ok": false, "error": e}),
+        };
+        println!("{json}");
+    }
+    let report = report?;
+    if !args.iter().any(|a| a == "--json") {
+        print!("{}", report.text());
+    }
+    Ok(())
 }
 
 fn run(args: &[String]) -> Result<(), String> {

@@ -35,47 +35,7 @@
   <body>
     <a class="skip" href="#main">Skip to the content</a>
 
-    <header class="nav" id="top">
-      <div class="nav-inner">
-        <a class="nav-mark" href="#top" aria-label="Horizon, back to the top"><svg class="mark" viewBox="0 0 16 16" aria-hidden="true"><path class="mark-stem" d="M4 3h2v4H4zM10 3h2v4h-2z"/><path class="mark-low" d="M4 8h2v4H4zM10 8h2v4h-2z"/><path class="mark-line" d="M1 7h14v1H1z"/></svg>Horizon</a>
-        <nav class="nav-links" id="nav-links" aria-label="Sections">
-          <a href="#about">About</a>
-          <a href="#screenshots">In game</a>
-          <a href="#parity">Parity</a>
-          <a href="#launcher">Launcher</a>
-          <a href="#recent">New</a>
-          <a href="#community">Community</a>
-          <a href="/releases">Releases</a>
-          <a href="/benchmarks">Benchmarks</a>
-          <a href="/docs/">Docs</a>
-        </nav>
-        <div class="nav-end">
-          <button class="theme-toggle" type="button" aria-label="Switch between light and dark"><span data-theme-label>Dark</span></button>
-          <a class="nav-github" href="https://github.com/ludovic111/horizon">GitHub</a>
-          <a class="button primary small" data-download href="https://github.com/ludovic111/horizon/releases?q=launcher-v&amp;expanded=true">Download</a>
-          <button class="menu-button" type="button" aria-expanded="false" aria-controls="menu"><span class="menu-label">Menu</span><span class="menu-icon" aria-hidden="true"></span></button>
-        </div>
-      </div>
-    </header>
-
-    <div class="menu" id="menu" hidden>
-      <nav aria-label="Sections">
-        <a href="#about">About</a>
-        <a href="#screenshots">In game</a>
-        <a href="#parity">Parity</a>
-        <a href="#launcher">Launcher</a>
-        <a href="#recent">Recently added</a>
-        <a href="#community">Community</a>
-        <a href="#contributors" data-contributors{{CONTRIBUTORS_HIDDEN}}>Contributors</a>
-        <a href="/releases">Releases</a>
-        <a href="/benchmarks">Benchmarks</a>
-        <a href="/docs/">Documentation</a>
-      </nav>
-      <div class="menu-foot">
-        <a class="button secondary large" href="https://github.com/ludovic111/horizon">GitHub</a>
-        <p>Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft.</p>
-      </div>
-    </div>
+{{SITE_NAV}}
 
     <main id="main">
       <section class="hero" aria-labelledby="hero-title">
@@ -218,6 +178,7 @@
             <a class="card row reveal" data-card data-link="discord" href="{{DISCORD}}"><span class="row-index" aria-hidden="true">01</span><span class="card-title">Discord</span><span class="card-text">Questions, bug reports and screenshots.</span><span class="card-arrow" aria-hidden="true">→</span></a>
             <a class="card row reveal" data-card data-link="sponsor" href="{{SPONSOR}}"><span class="row-index" aria-hidden="true">02</span><span class="card-title">Sponsor</span><span class="card-text">Sponsors on GitHub fund the next release.</span><span class="card-arrow" aria-hidden="true">→</span></a>
             <a class="card row reveal" data-card href="https://github.com/ludovic111/horizon"><span class="row-index" aria-hidden="true">03</span><span class="card-title">Source</span><span class="card-text">Issues and pull requests are welcome.</span><span class="card-arrow" aria-hidden="true">→</span></a>
+            <a class="card row reveal" data-card href="/docs/how-horizon-is-built"><span class="row-index" aria-hidden="true">04</span><span class="card-title">How it's built</span><span class="card-text">Who writes it, how changes are checked, why it's safe to run.</span><span class="card-arrow" aria-hidden="true">→</span></a>
           </div>
           <div class="contributors" id="contributors" aria-labelledby="contributors-title" data-contributors{{CONTRIBUTORS_HIDDEN}}>
             <h3 class="contributors-title reveal" id="contributors-title">Contributors</h3>
@@ -238,7 +199,7 @@
         </div>
         <div class="footer-bar">
           <span class="footer-mark">Made in the open, in Rust.</span>
-          <nav class="footer-links" aria-label="Elsewhere"><a href="https://github.com/ludovic111/horizon">GitHub</a><a href="/releases">Releases</a><a href="/benchmarks">Benchmarks</a><a href="https://github.com/ludovic111/horizon/blob/main/LICENSE">Licence</a><a href="/docs/">Docs</a><a href="/docs/hosting">Host a server</a><a href="/LEGAL.md">Assets</a><a href="/privacy">Privacy</a></nav>
+          <nav class="footer-links" aria-label="Elsewhere"><a href="https://github.com/ludovic111/horizon">GitHub</a><a href="/releases">Releases</a><a href="/benchmarks">Benchmarks</a><a href="https://github.com/ludovic111/horizon/blob/main/LICENSE">Licence</a><a href="/docs/">Docs</a><a href="/docs/how-horizon-is-built">How it's built</a><a href="/docs/hosting">Host a server</a><a href="/LEGAL.md">Assets</a><a href="/privacy">Privacy</a></nav>
         </div>
       </div>
       <p class="footer-word" aria-hidden="true">horizon</p>

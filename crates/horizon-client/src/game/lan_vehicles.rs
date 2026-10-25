@@ -9,7 +9,7 @@
 //! here with the rider's input (`ServerPlayer.getLastClientMoveIntent`).
 //! Sneaking gets out (`Player.rideTick`: `wantsToStopRiding`), and the client
 //! is teleported where the player lands (`ServerPlayer.dismountTo`).
-use super::{Game, Keys, boats::SEAT, lan::LanHost};
+use super::{Game, Keys, lan::LanHost, minecarts::SEAT};
 use horizon_client::collisions::SceneCollisions;
 use horizon_core::geometry::{Aabb, Vec3};
 use horizon_protocol::{
@@ -120,8 +120,8 @@ impl Game<'_> {
                     game.dismount(i);
                     return None;
                 }
-                let p = game.boats[i].position;
-                return Some([p.x, p.y + SEAT, p.z]);
+                let p = game.player_boat_seat(i);
+                return Some([p.x, p.y, p.z]);
             }
             // The minecart moves with the rider's input, and lets it out when
             // it sneaks or the cart breaks. An animal takes the rider's input
@@ -161,19 +161,19 @@ impl Game<'_> {
         let at = self
             .boats
             .iter()
-            .find(|b| b.id == vehicle)
-            .map(|b| b.position)
+            .position(|b| b.id == vehicle)
+            .map(|i| (self.boats[i].position, self.player_boat_seat(i)))
             .or_else(|| {
                 self.carts
                     .iter()
                     .find(|c| c.id == vehicle)
-                    .map(|c| c.position)
+                    .map(|c| (c.position, c.position.add_vector(Vec3::new(0.0, SEAT, 0.0))))
             });
-        if let Some(p) = at {
+        if let Some((p, seat)) = at {
             let g = &mut host.hub.guests[gi];
             g.vehicle_good = Some([p.x, p.y, p.z]);
             g.previous_position = g.position;
-            g.position = [p.x, p.y + SEAT, p.z];
+            g.position = [seat.x, seat.y, seat.z];
             g.on_ground = false;
             return;
         }
@@ -289,10 +289,11 @@ impl Game<'_> {
         b.previous_yaw = b.yaw;
         b.yaw = p.yaw;
         b.on_ground = p.on_ground;
+        let seat = self.player_boat_seat(i);
         let g = &mut host.hub.guests[gi];
         g.vehicle_good = Some([target.x, target.y, target.z]);
         g.previous_position = g.position;
-        g.position = [target.x, target.y + SEAT, target.z];
+        g.position = [seat.x, seat.y, seat.z];
     }
 
     /// `handlePaddleBoat`: the paddles of the boat the player drives.

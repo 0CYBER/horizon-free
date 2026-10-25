@@ -68,7 +68,8 @@ pub fn program_in(
 /// system can't load the program, as on a Linux without the ALSA and udev libraries the full game links
 /// (the server build doesn't). The reason, with what to install.
 pub fn check_starts(program: &Path) -> Result<(), String> {
-    let output = Command::new(program)
+    let mut command = crate::process::command(program);
+    let output = command
         .arg("--help")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -176,7 +177,8 @@ pub fn spawn(program: &Path, resources: &Path, dir: &Path) -> std::io::Result<Ch
     #[cfg(windows)]
     std::os::windows::process::CommandExt::creation_flags(
         &mut command,
-        windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP,
+        windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP
+            | windows_sys::Win32::System::Threading::CREATE_NO_WINDOW,
     );
     command.spawn()
 }

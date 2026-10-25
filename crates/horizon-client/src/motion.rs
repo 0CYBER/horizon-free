@@ -300,6 +300,10 @@ pub struct PlayerMotion {
     /// it travels on the server: `isLocalInstanceAuthoritative` is false, so
     /// its moves check no fall damage.
     pub server_copy: bool,
+    /// A client's copy of its own player (`Level.isClientSide`): only the
+    /// server hurts it (`Entity.hurt` does nothing on a client) and ticks its
+    /// food (`ServerPlayer.tick`). Its hurt animation comes from the server.
+    pub client_side: bool,
     /// `Entity.applyEffectsFromBlocks` runs after travel (always in the game;
     /// differential fixtures turn it off where their reference does).
     pub block_effects: bool,
@@ -465,6 +469,7 @@ impl PlayerMotion {
             freeze_immune: false,
             old_position: position,
             server_copy: false,
+            client_side: false,
             block_effects: true,
             powder_snow_entered: Vec::new(),
             hurt_log: Vec::new(),
@@ -1753,6 +1758,11 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         state: BlockStateId,
         position: BlockPos,
     ) -> Result<()> {
+        // LivingEntity.aiStep: Slow Falling and Levitation reset the fall
+        // distance every tick, so landing under either does not hurt.
+        if self.player.status.slow_falling || self.player.status.levitation.is_some() {
+            self.player.fall_distance = 0.0;
+        }
         if self.player.spawn_extra_particles_on_fall && grounded && self.player.fall_distance > 0.0
         {
             self.player.events.push(MotionEvent::SmashLanding {
@@ -2853,6 +2863,98 @@ mod tests {
             assert!(w.player.ground.on_ground);
             assert_eq!(w.player.fluids.was_touching_water, wet);
             if wet {
+                assert_eq!(w.player.health.health(), 20.0);
+                assert_eq!(w.player.fall_distance, 0.0);
+            } else {
+                assert!(w.player.health.health() < 20.0);
+            }
+        }
+    }
+    /// A client's own fall (multiplayer, a LAN guest, single player on its
+    /// server thread) plays its landing but never hurts it: only the server
+    /// does (`Entity.hurt` on a client), so a server that cancels fall damage
+    /// leaves the screen still.
+    #[test]
+    fn a_clients_own_fall_does_not_hurt_it() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        for client_side in [false, true] {
+            let mut scene = World::test_scene(&assets, &render, 2).unwrap();
+            let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 20.0, 20.5)).unwrap();
+            player.client_side = client_side;
+            player.fall_distance = 30.0;
+            let mut w = MotionWorld {
+                entities: &[],
+                player: &mut player,
+                scene: &mut scene,
+                assets: &assets,
+                collision_binding: &binding,
+                resources: &resources,
+            };
+            w.move_self(Vec3::new(0.0, -30.0, 0.0)).unwrap();
+            assert!(w.player.ground.on_ground);
+            assert_eq!(w.player.fall_distance, 0.0);
+            // LivingEntity.causeFallDamage's sounds play on both sides.
+            assert!(w.player.events.iter().any(|e| matches!(
+                e,
+                MotionEvent::Fall(crate::landing::FallEvent::Sound {
+                    sound: crate::landing::SceneSound::BigFall,
+                    ..
+                })
+            )));
+            let hurt = w.player.health.health() < 20.0;
+            assert_eq!(hurt, !client_side);
+            assert_eq!(w.player.health.hurt_animation_time > 0, !client_side);
+            // The server's health then starts the client's hurt animation.
+            if client_side {
+                w.player.health.flash_health_change(20.0);
+                assert_eq!(w.player.health.hurt_animation_time, 0);
+                w.player.health.flash_health_change(12.0);
+                assert_eq!(w.player.health.hurt_animation_time, 10);
+            }
+        }
+    }
+    #[test]
+    fn slow_falling_clears_the_fall_distance_so_landing_does_not_hurt() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        for slow_falling in [false, true] {
+            let mut scene = World::test_scene(&assets, &render, 2).unwrap();
+            let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 9.0, 20.5)).unwrap();
+            player.fall_distance = 30.0;
+            player.status.slow_falling = slow_falling;
+            let mut w = MotionWorld {
+                entities: &[],
+                player: &mut player,
+                scene: &mut scene,
+                assets: &assets,
+                collision_binding: &binding,
+                resources: &resources,
+            };
+            for _ in 0..200 {
+                if w.player.ground.on_ground {
+                    break;
+                }
+                w.player_movement_tick([0.0, 0.0], false).unwrap();
+            }
+            assert!(w.player.ground.on_ground);
+            if slow_falling {
                 assert_eq!(w.player.health.health(), 20.0);
                 assert_eq!(w.player.fall_distance, 0.0);
             } else {
