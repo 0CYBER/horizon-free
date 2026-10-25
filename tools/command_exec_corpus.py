@@ -291,6 +291,19 @@ def entities():
         cmd('/data get entity @e[tag=root,limit=1] Passengers[0].Health'),
         cmd('/data get entity @e[tag=root,limit=1] Passengers[0].id'),
         cmd('/kill @e[tag=root]'),
+        # Saved attribute bases are read for every mob, then Health or the max
+        # health when there is none (LivingEntity.readAdditionalSaveData, #1483).
+        cmd('/summon minecraft:cow 4.5 210 8.5 {Tags:["attr"],NoAI:1b,NoGravity:1b,'
+            'attributes:[{id:"minecraft:max_health",base:40.0d},{id:"minecraft:movement_speed",base:0.5d}]}'),
+        cmd('/data get entity @e[tag=attr,limit=1] Health'),
+        cmd('/attribute @e[tag=attr,limit=1] minecraft:max_health base get'),
+        cmd('/attribute @e[tag=attr,limit=1] minecraft:movement_speed base get'),
+        cmd('/kill @e[tag=attr]'),
+        cmd('/summon minecraft:zombie 4.5 210 8.5 {Tags:["attr"],NoAI:1b,NoGravity:1b,Health:7.0f,'
+            'attributes:[{id:"minecraft:attack_damage",base:9.0d}]}'),
+        cmd('/data get entity @e[tag=attr,limit=1] Health'),
+        cmd('/attribute @e[tag=attr,limit=1] minecraft:attack_damage base get'),
+        cmd('/kill @e[tag=attr]'),
         *setup('/kill @e[type=minecraft:armor_stand]'),
         {'op': 'tick', 'n': 25},
         cmd('/execute if entity @e[tag=h]'),
