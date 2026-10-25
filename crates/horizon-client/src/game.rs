@@ -1168,6 +1168,8 @@ struct Game<'a> {
     carried: Option<ItemStack>,
     craft_grid: Vec<Option<ItemStack>>,
     craft_size: usize,
+    /// The crafting table the 3x3 grid belongs to (`CraftingMenu.access`).
+    craft_table: Option<[i32; 3]>,
     /// A quick craft drag over inventory slots: (button, game slots so far).
     inv_drag: Option<(i32, Vec<usize>)>,
     /// `AbstractContainerScreen`'s quick craft and skip-release state.
@@ -1837,6 +1839,19 @@ impl Game<'_> {
                 .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
         })
     }
+    /// `LivingEntity.canFreeze`'s armor half: any worn piece in
+    /// `freeze_immune_wearables`.
+    pub(crate) fn wears_freeze_immune(&self) -> bool {
+        let immune = self
+            .res
+            .items()
+            .item_tags
+            .get("minecraft:freeze_immune_wearables");
+        self.armor
+            .iter()
+            .flatten()
+            .any(|s| immune.is_some_and(|t| t.contains(&*s.item)))
+    }
     /// What the window decides for its player's body every tick, in frame and
     /// on a server alike: the look (Player.travel steers sprint-swimming by
     /// the pitch), Auto Jump (LocalPlayer.sendPosition), the slowdown of an
@@ -1863,16 +1878,7 @@ impl Game<'_> {
         let leather_boots = self.armor[3]
             .as_ref()
             .is_some_and(|s| &*s.item == "minecraft:leather_boots");
-        let immune = self
-            .res
-            .items()
-            .item_tags
-            .get("minecraft:freeze_immune_wearables");
-        let freeze_immune = self
-            .armor
-            .iter()
-            .flatten()
-            .any(|s| immune.is_some_and(|t| t.contains(&*s.item)));
+        let freeze_immune = self.wears_freeze_immune();
         let Some(player) = self.player.as_mut() else {
             return;
         };
@@ -2173,6 +2179,11 @@ impl Game<'_> {
         // Player.drop: the drop statistics.
         self.stats.add("dropped", &thrown.item, thrown.count as i32);
         self.stats.custom("drop", 1);
+        self.throw_from_eyes(thrown, eye);
+    }
+    /// `Player.createItemStackToDrop`: an item entity thrown from the eyes
+    /// along the view direction.
+    fn throw_from_eyes(&mut self, thrown: ItemStack, eye: [f64; 3]) {
         let (yaw, pitch) = (
             f64::from(self.yaw).to_radians(),
             f64::from(self.pitch).to_radians(),
@@ -2916,6 +2927,7 @@ impl Game<'_> {
         }
         if &*name == "minecraft:crafting_table" {
             self.craft_size = 3;
+            self.craft_table = Some(pos);
         } else if &*name == "minecraft:ender_chest" {
             self.open_ender_chest(key);
             self.container_opener_event(key, true);
@@ -4335,7 +4347,8 @@ impl Game<'_> {
             // Out of the world.
             let _ = player.set_health(0.0, false);
         }
-        if player.health.dead_or_dying() && self.screen != Screen::Dead {
+        let dead = player.health.dead_or_dying();
+        if dead && self.screen != Screen::Dead {
             // Inventory.dropAll: every stack thrown in a random direction.
             let feet = [player.position.x, player.position.y, player.position.z];
             let at = [feet[0], feet[1] + 1.32, feet[2]];
@@ -4369,6 +4382,18 @@ impl Game<'_> {
             }
             self.screen = Screen::Dead;
             self.capture(false);
+            self.ui.death_time = 0;
+        } else if dead {
+            // LivingEntity.tickDeath: 20 ticks after dying the player is
+            // removed, and Player.remove's inventoryMenu.removed drops what
+            // the cursor held.
+            self.ui.death_time += 1;
+            if self.ui.death_time >= 20
+                && let Some(stack) = self.carried.take()
+                && let Some(eye) = self.eye_position()
+            {
+                self.throw_from_eyes(stack, eye);
+            }
         }
         self.tick_world(running)
     }
@@ -5425,6 +5450,7 @@ impl Game<'_> {
             }
         }
         self.craft_size = 2;
+        self.craft_table = None;
         if let Some(key) = self.container.take() {
             self.container_opener_event(key, false);
             self.post_block_game_event(
@@ -7879,8 +7905,12 @@ impl Game<'_> {
             (0..width).all(|i| frame([left[0] + d[0] * i, left[1] + height, left[2] + d[2] * i]));
         ((3..=21).contains(&height) && top_ok).then_some((left, width, height))
     }
-    /// BaseFireBlock.onPlace: lighting fire inside a frame creates a portal.
+    /// BaseFireBlock.onPlace: lighting fire inside a frame creates a portal,
+    /// only in the Overworld and the Nether (`inPortalDimension`).
     fn try_light_portal(&mut self, at: [i32; 3]) -> Result<bool> {
+        if !matches!(self.dim, Dim::Overworld | Dim::Nether) {
+            return Ok(false);
+        }
         for x_axis in [true, false] {
             if let Some((origin, width, height)) = self.portal_shape(at, x_axis) {
                 let d = if x_axis { [1, 0, 0] } else { [0, 0, 1] };
@@ -11750,6 +11780,7 @@ impl<'a> Game<'a> {
             carried: None,
             craft_grid: vec![None; 9],
             craft_size: 2,
+            craft_table: None,
             inv_drag: None,
             tweaks: Default::default(),
             inv_clicks: Default::default(),

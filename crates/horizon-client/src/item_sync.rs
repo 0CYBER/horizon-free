@@ -106,6 +106,16 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
                 ("mob_factor", Tag::Float(v[5].to_bits())),
             ]),
             Component::Profile(p) => profile_tag(p),
+            // PotionContents' NBT: the potion by name and the custom colour.
+            Component::Potion { potion, color, .. } => {
+                let potion = potion.and_then(|id| builtin.get("minecraft:potion")?.name(id));
+                Tag::compound(
+                    potion
+                        .map(|name| ("potion", Tag::String(name.into())))
+                        .into_iter()
+                        .chain(color.map(|c| ("custom_color", Tag::Int(c)))),
+                )
+            }
             // ItemStackTemplate.CODEC: id, count and components.
             Component::Stacks(stacks) => Tag::List(
                 stacks
@@ -206,6 +216,7 @@ mod tests {
             (component::DAMAGE, "minecraft:damage"),
             (component::CUSTOM_NAME, "minecraft:custom_name"),
             (component::ENCHANTMENTS, "minecraft:enchantments"),
+            (component::POTION_CONTENTS, "minecraft:potion_contents"),
             (component::REPAIR_COST, "minecraft:repair_cost"),
             (
                 component::STORED_ENCHANTMENTS,
@@ -220,11 +231,19 @@ mod tests {
             registries: [
                 (
                     "minecraft:item".to_owned(),
-                    Ids::from_names(names(&["minecraft:air", "minecraft:diamond_chestplate"])),
+                    Ids::from_names(names(&[
+                        "minecraft:air",
+                        "minecraft:diamond_chestplate",
+                        "minecraft:splash_potion",
+                    ])),
                 ),
                 (
                     "minecraft:data_component_type".to_owned(),
                     Ids::from_names(components),
+                ),
+                (
+                    "minecraft:potion".to_owned(),
+                    Ids::from_names(names(&["minecraft:water", "minecraft:swiftness"])),
                 ),
             ]
             .into(),
@@ -256,6 +275,12 @@ mod tests {
         d.repair_cost = 9;
         d.custom_name = Some("Keeper".to_owned());
         d.trim = Some((Arc::from("minecraft:gold"), Arc::from("minecraft:sentry")));
+        let id = |registry: &str, name: &str| {
+            builtin
+                .get(registry)
+                .and_then(|ids| ids.id(name))
+                .or_else(|| dynamic.id(registry, name))
+        };
         let wire = crate::lan::guest::stack_to_network(
             |name| {
                 builtin
@@ -263,7 +288,7 @@ mod tests {
                     .and_then(|i| i.id(name))
                     .unwrap_or(0)
             },
-            |registry, name| dynamic.id(registry, name),
+            id,
             &Some(stack.clone()),
         )
         .unwrap();
@@ -281,6 +306,19 @@ mod tests {
         assert_eq!(
             d.trim,
             Some((Arc::from("minecraft:gold"), Arc::from("minecraft:sentry")))
+        );
+        // PotionContents: the potion is a built-in registry, as a hub's
+        // `SyncData::id` treats it, so the id has to come from there.
+        let potion = ItemStack::new("minecraft:splash_potion", 1).with_potion("swiftness");
+        let wire = crate::lan::guest::stack_to_network(
+            |name| id("minecraft:item", name).unwrap_or(0),
+            id,
+            &Some(potion),
+        )
+        .unwrap();
+        assert_eq!(
+            from_network(&wire, &builtin, &dynamic).potion(),
+            Some("minecraft:swiftness")
         );
     }
 }

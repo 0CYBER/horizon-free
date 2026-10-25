@@ -1083,11 +1083,26 @@ impl MotionWorld<'_, '_, '_> {
     }
     /// What `applyEffectsFromBlocks` does to a server's player along the
     /// moves its client sent since `from` (in its history): the damage of
-    /// magma, cactus, lit campfires and grown sweet berry bushes. Its client
-    /// moves it, so the slowing and the rest are the client's.
+    /// magma, cactus, lit campfires and grown sweet berry bushes, and powder
+    /// snow's FREEZE, then `LivingEntity.aiStep`'s freezing and its damage.
+    /// Its client moves it, so the slowing and the rest are the client's.
     pub fn server_block_damage(&mut self, from: Vec3) -> Result<()> {
         self.player.old_position = from;
-        self.effects_from_blocks(true)
+        // Entity.baseTick
+        self.player.was_in_powder_snow = self.player.in_powder_snow;
+        self.player.in_powder_snow = false;
+        self.effects_from_blocks(true)?;
+        // LivingEntity.aiStep "freezing" (server).
+        if !self.player.in_powder_snow || !self.player.can_freeze() {
+            self.player.ticks_frozen = (self.player.ticks_frozen - 2).max(0);
+        }
+        if self.player.health.tick_count % 40 == 0
+            && self.player.is_fully_frozen()
+            && self.player.can_freeze()
+        {
+            self.freeze_damage()?;
+        }
+        Ok(())
     }
     fn effects_from_blocks(&mut self, damage_only: bool) -> Result<()> {
         use horizon_world::entity_move::MovementRecord;
@@ -1191,7 +1206,7 @@ impl MotionWorld<'_, '_, '_> {
                 groups += 1;
                 last_step = step;
             }
-            if groups == 1 {
+            if groups == 1 && !damage_only {
                 // A later group finds the fire already out.
                 self.player.powder_snow_entered.push(p);
             }
@@ -1316,6 +1331,8 @@ impl MotionWorld<'_, '_, '_> {
                     "minecraft:sweet_berry_bush" if damage_only => {
                         self.sweet_berry_bush_damage(state)?;
                     }
+                    // PowderSnowBlock.entityInside's FREEZE.
+                    "minecraft:powder_snow" if damage_only => entered.push((step, p)),
                     _ => {}
                 }
                 if damage_only {
