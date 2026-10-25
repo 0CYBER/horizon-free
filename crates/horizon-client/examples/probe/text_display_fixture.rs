@@ -30,7 +30,7 @@ pub fn main() -> Result<(), Box<dyn Error>> {
         }
         let mut state = serde_json::to_value(&display)?;
         state["text"] = display.text.plain().into();
-        state["alignment"] = display.alignment().into();
+        state["alignment"] = format!("{:?}", display.align()).to_uppercase().into();
         writeln!(out, "{}", state)?;
     }
     Ok(())
