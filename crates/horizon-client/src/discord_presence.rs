@@ -4,7 +4,7 @@
 //! length u32 LE + JSON). The game only calls [`set`] each frame: a change wakes the thread,
 //! which connects when Discord runs, retries every 15 s when it doesn't, keeps under Discord's
 //! update limit and clears the activity on quit. Nothing is sent with the setting off,
-//! with `HORIZON_NO_DISCORD=1`, or while [`DISCORD_APP_ID`] is the placeholder.
+//! or with `HORIZON_NO_DISCORD=1`.
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
@@ -16,12 +16,11 @@ use serde_json::{Value, json};
 
 use crate::command::args::GameMode;
 
-/// The "Horizon" application on Discord's developer portal (public: it names the game).
-/// Until it exists this is the placeholder, and the feature stays inert.
-pub const DISCORD_APP_ID: &str = PLACEHOLDER_APP_ID;
-const PLACEHOLDER_APP_ID: &str = "0";
+/// The "Horizon" application on Discord's developer portal (public: it names the game). Its
+/// Rich Presence assets: `horizon`, the logo.
+pub const DISCORD_APP_ID: &str = "1563857609738690560";
 /// Whether the application has the game-mode images (`survival`, `creative`, `adventure`,
-/// `spectator`) beside the `horizon` logo.
+/// `spectator`) beside the logo; it doesn't yet.
 const MODE_IMAGES: bool = false;
 /// Points the game at a test's fake Discord (a folder holding `discord-ipc-0`).
 const IPC_DIR_ENV: &str = "HORIZON_DISCORD_IPC_DIR";
@@ -114,10 +113,9 @@ static THREAD: OnceLock<Thread> = OnceLock::new();
 /// `automated` runs (offscreen, benchmarks) only talk to a test's fake Discord.
 pub fn start(enabled: bool, automated: bool) {
     let fake_discord = std::env::var_os(IPC_DIR_ENV).is_some();
-    let real_discord = !automated && DISCORD_APP_ID != PLACEHOLDER_APP_ID;
     if THREAD.get().is_some()
         || std::env::var_os("HORIZON_NO_DISCORD").is_some_and(|v| v != "0")
-        || !(fake_discord || real_discord)
+        || (automated && !fake_discord)
     {
         return;
     }
