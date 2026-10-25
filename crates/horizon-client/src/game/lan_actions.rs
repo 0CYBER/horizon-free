@@ -2044,16 +2044,7 @@ impl Game<'_> {
         for event in events {
             match event {
                 MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, at),
-                MotionEvent::Fall(horizon_client::landing::FallEvent::Write {
-                    position,
-                    flags,
-                    ..
-                }) => {
-                    // Landing wrote the raw state: finish Level.setBlock's neighbour updates.
-                    self.with_level(|b, level, ticks| {
-                        b.notify_written(level, ticks, position, flags as i32)
-                    });
-                }
+                MotionEvent::Fall(event) => self.landing_block_updates(&event),
                 _ => {}
             }
         }
