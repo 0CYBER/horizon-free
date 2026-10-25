@@ -2560,6 +2560,18 @@ impl Renderer {
     pub fn section_count(&self) -> usize {
         self.sections.len()
     }
+    /// What a shader pack's shadow pass draws of the entities this frame: (entities or block
+    /// entities other than the player, so those Horizon's culling hides from the camera are
+    /// kept for it; the local player, so its model is built in first person too). (false,
+    /// false) without a pack or its shadow pass.
+    pub fn pack_shadow_casters(&self) -> (bool, bool) {
+        let Some((_, Some(post))) = &self.pack_post else {
+            return (false, false);
+        };
+        let c = post.shadow_casters();
+        ((c.entities && !c.only_player) || c.blocks, c.entities)
+    }
+
     pub fn has_section(&self, key: SectionKey) -> bool {
         self.sections.contains(key)
     }

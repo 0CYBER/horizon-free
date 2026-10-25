@@ -7,7 +7,7 @@ use horizon_shaders::{RENDER_STAGES, render_stage};
 /// Where a run of `Frame::entities` begins, and what it is (slice 7): the run lasts until the
 /// next span. Recorded only while a shader pack draws entities, so Horizon's own frames carry
 /// none; Horizon itself still draws the whole list at once.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct EntitySpan {
     /// The first vertex.
     pub start: u32,
@@ -18,6 +18,44 @@ pub struct EntitySpan {
     pub id: i32,
     /// An entity part that blends (a name tag, a shadow): `gbuffers_entities_translucent`.
     pub translucent: bool,
+    /// Hidden from the camera (Horizon's entity culling, the player in first person): only the
+    /// shadow pass draws it.
+    pub hidden: bool,
+    /// The local player (`shadowPlayer`).
+    pub player: bool,
+    /// A block entity whose block emits light (`shadowLightBlockEntities`).
+    pub emissive: bool,
+}
+
+impl EntitySpan {
+    /// Marks vertices `start..end` of `spans`' list (one entity) as hidden: the span covering
+    /// `start` is split there, the spans inside are hidden, and the geometry after `end` goes
+    /// on in the last span's kind. False when no span covers `start`.
+    pub fn hide(spans: &mut Vec<EntitySpan>, start: usize, end: usize) -> bool {
+        let Some(i) = spans.iter().rposition(|s| s.start as usize <= start) else {
+            return false;
+        };
+        let after = spans[spans.len() - 1];
+        if spans[i].start as usize != start {
+            let split = EntitySpan {
+                start: start as u32,
+                ..spans[i]
+            };
+            spans.insert(i + 1, split);
+        }
+        for s in spans.iter_mut().skip(i) {
+            if s.start as usize >= start {
+                s.hidden = true;
+            }
+        }
+        if end > start {
+            spans.push(EntitySpan {
+                start: end as u32,
+                ..after
+            });
+        }
+        true
+    }
 }
 
 /// `HzDraw`'s size: `renderStage`, `entityId`, `blockEntityId`, a pad, `entityColor`.
@@ -79,5 +117,36 @@ impl DrawUniforms {
     /// Draws that follow read `renderStage` = `MC_RENDER_STAGE_<stage>`, other values zero.
     pub fn bind(&self, pass: &mut wgpu::RenderPass<'_>, stage: &str) {
         pass.set_bind_group(2, &self.group, &[self.stride * render_stage(stage)]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EntitySpan;
+
+    fn span(start: u32, id: i32) -> EntitySpan {
+        EntitySpan {
+            start,
+            id,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn hide_splits_the_span_around_one_entity() {
+        // Two cows in one span: the second (vertices 8..16) is hidden.
+        let mut spans = vec![span(0, 7)];
+        assert!(EntitySpan::hide(&mut spans, 8, 16));
+        let hidden = EntitySpan {
+            hidden: true,
+            ..span(8, 7)
+        };
+        assert_eq!(spans, [span(0, 7), hidden, span(16, 7)]);
+        // An entity with its own span and a part after it (armour) is hidden whole.
+        let mut spans = vec![span(0, 1), span(4, 2), span(6, 3)];
+        assert!(EntitySpan::hide(&mut spans, 4, 10));
+        assert!(!spans[0].hidden && spans[1].hidden && spans[2].hidden);
+        assert_eq!(spans[3], span(10, 3));
+        assert!(!EntitySpan::hide(&mut Vec::new(), 0, 4));
     }
 }
