@@ -218,21 +218,22 @@ impl Lists {
             use_whitelist: false,
             enforce_whitelist: false,
         };
+        // DedicatedPlayerList's constructor order and its LOGGER.warn lines.
         let warn = |what: &str, r: std::result::Result<(), String>| {
             if let Err(e) = r {
-                log("WARN", &format!("Failed to load {what}: {e}"));
+                log("WARN", &format!("Failed to {what}: {e}"));
             }
         };
-        // DedicatedPlayerList's constructor order.
-        warn("user banlist", l.bans.load());
-        let _ = l.bans.save();
-        warn("ip banlist", l.ip_bans.load());
-        let _ = l.ip_bans.save();
-        warn("operators list", l.ops.load());
-        warn("white-list", l.white.load());
-        let _ = l.ops.save();
+        let saved = |r: std::io::Result<()>| r.map_err(|e| e.to_string());
+        warn("load user banlist", l.bans.load());
+        warn("save user banlist", saved(l.bans.save()));
+        warn("load ip banlist", l.ip_bans.load());
+        warn("save ip banlist", saved(l.ip_bans.save()));
+        warn("load operators list", l.ops.load());
+        warn("load white-list", l.white.load());
+        warn("save operators list", saved(l.ops.save()));
         if !l.white.file.exists() {
-            let _ = l.white.save();
+            warn("save white-list", saved(l.white.save()));
         }
         l
     }

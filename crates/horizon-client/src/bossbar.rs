@@ -14,40 +14,64 @@ pub const STYLES: [&str; 5] = [
     "notched_12",
     "notched_20",
 ];
-/// `BossBarColor.getFormatting`.
+/// `BossBarColor.getFormatting`. Purple is dark blue in 26.3.
 pub fn color_rgb(color: &str) -> u32 {
     let name = match color {
         "pink" => "red",
         "red" => "dark_red",
-        "purple" => "dark_purple",
+        "purple" => "dark_blue",
         other => other,
     };
     text::named_color(name).unwrap_or(text::WHITE)
 }
 
+/// A version-4 shaped id from a resource id. Saved boss events do not keep
+/// their UUID (`CustomBossEvents` mints a new one on load).
+pub fn stable_uuid(id: &str) -> u128 {
+    let mut h = 0xcbf29ce484222325u64;
+    for b in id.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    let most = (h as i64) & -61441 | 16384;
+    let least = (h.rotate_left(17) as i64) & 4_611_686_018_427_387_903 | i64::MIN;
+    ((most as u64 as u128) << 64) | (least as u64 as u128)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct BossBar {
     pub id: String,
+    /// The `ServerBossEvent` UUID. Not saved.
+    pub uuid: u128,
     pub name: Comp,
     pub color: String,
     pub style: String,
     pub value: i32,
     pub max: i32,
+    /// `ServerBossEvent.visible`. A new bar is visible; nobody sees it until
+    /// a player is added.
     pub visible: bool,
-    /// Whether the (single) local player is in the bar's player set.
-    pub player: bool,
+    pub darken: bool,
+    pub music: bool,
+    pub fog: bool,
+    /// `CustomBossEvent.players`, the UUIDs told about the bar.
+    pub players: Vec<[i32; 4]>,
 }
 impl BossBar {
     pub fn new(id: &str, name: Comp) -> Self {
         Self {
             id: id.to_owned(),
+            uuid: stable_uuid(id),
             name,
             color: "white".into(),
             style: "progress".into(),
             value: 0,
             max: 100,
             visible: true,
-            player: false,
+            darken: false,
+            music: false,
+            fog: false,
+            players: Vec::new(),
         }
     }
     /// `CustomBossEvent.getDisplayName`.
@@ -91,31 +115,34 @@ impl BossBars {
     pub fn ids(&self) -> Vec<String> {
         self.bars.iter().map(|b| b.id.clone()).collect()
     }
-    /// The saved compound; the player's UUID stands for "the local player".
-    pub fn pack(&self, player: Option<[i32; 4]>) -> Tag {
+    /// The saved compound (`CustomBossEvent.Packed`).
+    pub fn pack(&self) -> Tag {
         let mut c = Compound::new();
         for b in &self.bars {
-            let mut e = vec![
-                ("Name", json_to_tag(&b.name)),
-                ("Visible", Tag::Byte(i8::from(b.visible))),
-                ("Value", Tag::Int(b.value)),
-                ("Max", Tag::Int(b.max)),
-                ("Color", Tag::String(b.color.as_str().into())),
-                ("Overlay", Tag::String(b.style.as_str().into())),
-                ("DarkenScreen", Tag::Byte(0)),
-                ("PlayBossMusic", Tag::Byte(0)),
-                ("CreateWorldFog", Tag::Byte(0)),
-            ];
-            let players = match (b.player, player) {
-                (true, Some(u)) => vec![Tag::IntArray(u.to_vec())],
-                _ => Vec::new(),
-            };
-            e.push(("Players", Tag::List(players)));
-            c.insert(b.id.as_str().into(), Tag::compound(e));
+            let players = b
+                .players
+                .iter()
+                .map(|u| Tag::IntArray(u.to_vec()))
+                .collect();
+            c.insert(
+                b.id.as_str().into(),
+                Tag::compound([
+                    ("Name", json_to_tag(&b.name)),
+                    ("Visible", Tag::Byte(i8::from(b.visible))),
+                    ("Value", Tag::Int(b.value)),
+                    ("Max", Tag::Int(b.max)),
+                    ("Color", Tag::String(b.color.as_str().into())),
+                    ("Overlay", Tag::String(b.style.as_str().into())),
+                    ("DarkenScreen", Tag::Byte(i8::from(b.darken))),
+                    ("PlayBossMusic", Tag::Byte(i8::from(b.music))),
+                    ("CreateWorldFog", Tag::Byte(i8::from(b.fog))),
+                    ("Players", Tag::List(players)),
+                ]),
+            );
         }
         Tag::Compound(c)
     }
-    pub fn unpack(data: &Tag, player: Option<[i32; 4]>) -> Self {
+    pub fn unpack(data: &Tag) -> Self {
         let mut bars = Vec::new();
         if let Tag::Compound(c) = data {
             for (id, e) in c {
@@ -130,21 +157,30 @@ impl BossBars {
                     Some(Tag::Byte(v)) => i32::from(*v),
                     _ => d,
                 };
-                let in_players = match (get("Players"), player) {
-                    (Some(Tag::List(l)), Some(u)) => l
+                let players = match get("Players") {
+                    Some(Tag::List(l)) => l
                         .iter()
-                        .any(|t| matches!(t, Tag::IntArray(a) if a.as_slice() == u)),
-                    _ => false,
+                        .filter_map(|t| match t {
+                            Tag::IntArray(a) if a.len() == 4 => Some([a[0], a[1], a[2], a[3]]),
+                            _ => None,
+                        })
+                        .collect(),
+                    _ => Vec::new(),
                 };
+                let id = id.to_string_lossy();
                 bars.push(BossBar {
-                    id: id.to_string_lossy(),
+                    uuid: stable_uuid(&id),
+                    id,
                     name: get("Name").map_or_else(|| literal(""), tag_to_json),
                     color: text("Color", "white"),
                     style: text("Overlay", "progress"),
                     value: num("Value", 0),
                     max: num("Max", 100),
                     visible: num("Visible", 0) != 0,
-                    player: in_players,
+                    darken: num("DarkenScreen", 0) != 0,
+                    music: num("PlayBossMusic", 0) != 0,
+                    fog: num("CreateWorldFog", 0) != 0,
+                    players,
                 });
             }
         }
@@ -167,17 +203,15 @@ mod tests {
         bar.value = 25;
         bar.max = 50;
         bar.visible = true;
-        bar.player = true;
-        let uuid = Some([1, 2, 3, 4]);
-        let back = BossBars::unpack(&b.pack(uuid), uuid);
+        bar.darken = true;
+        bar.players = vec![[1, 2, 3, 4]];
+        let back = BossBars::unpack(&b.pack());
         assert_eq!(back, b);
-        // Another player's UUID does not include the local player.
-        assert!(!BossBars::unpack(&b.pack(uuid), Some([9, 9, 9, 9])).bars[0].player);
         let bar = b.get("test:x").unwrap();
         assert_eq!(bar.progress(), 0.5);
         assert_eq!(bar.display_name().plain(), "chat.square_brackets");
         assert_eq!(color_rgb("pink"), text::RED);
-        assert_eq!(color_rgb("purple"), 0xAA00AA);
+        assert_eq!(color_rgb("purple"), text::named_color("dark_blue").unwrap());
         b.remove("test:x");
         assert!(b.bars.is_empty());
     }
