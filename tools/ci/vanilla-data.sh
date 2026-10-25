@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The vanilla data for this checkout on the self-hosted runner. Horizon never downloads the game: the runner
 # holds the maintainer's own copy, imported and decompiled once (HORIZON_SHARED_SOURCE, default
-# ~/code/horizon-parity/shared-local). It is cloned once into the runner's work folder ($RUNNER_WORKSPACE/
-# shared-local; APFS clones, so no second copy of the bytes), and .local/ links to it as in a parity worktree.
+# ~/code/horizon-parity/shared-local; tools/ci/linux-runner.sh sets it on Linux). It is cloned once into the runner's
+# work folder ($RUNNER_WORKSPACE/shared-local; APFS clones, or reflinks where the file system has them, so no second
+# copy of the bytes), and .local/ links to it as in a parity worktree.
 # .local/horizon-client and the exporter outputs beside it, what horizon-prepare makes, are prepared by this
 # checkout's own preparer once per preparer version (its sources, the exporters and research-lock.json), so a
 # change to the preparer is checked with what it prepares; the four newest preparations are kept.
@@ -31,7 +32,8 @@ for entry in "$shared"/*; do
 done
 
 # HORIZON_PREPARE_KEY: the same key, computed where the Git history is (tools/pr_ready.py on another machine).
-key=${HORIZON_PREPARE_KEY:-$(git ls-files -s crates/horizon-prepare mods/horizon/src/test/java research-lock.json | shasum -a 256 | cut -c1-16)}
+sha256() { if command -v shasum > /dev/null; then shasum -a 256; else sha256sum; fi; }
+key=${HORIZON_PREPARE_KEY:-$(git ls-files -s crates/horizon-prepare mods/horizon/src/test/java research-lock.json | sha256 | cut -c1-16)}
 prepared="$shared/prepared/$key"
 # Two runners share the vanilla data (~/.actions-runners/horizon-2/_work/horizon/shared-local links to the first
 # one's): one preparation at a time. A lock older than 30 minutes belongs to a job that died.
