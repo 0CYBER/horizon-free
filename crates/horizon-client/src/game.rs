@@ -2163,7 +2163,7 @@ impl Game<'_> {
         self.player_drop(thrown);
     }
     /// `Player.drop`: the statistics and a thrown item entity in front of the player.
-    fn player_drop(&mut self, thrown: ItemStack) {
+    pub(super) fn player_drop(&mut self, thrown: ItemStack) {
         let Some(eye) = self.eye_position() else {
             return;
         };
@@ -6326,7 +6326,11 @@ impl Game<'_> {
         use horizon_client::menu::Input;
         let button = i32::from(right);
         if self.remote.is_some() {
-            self.remote_throw(right, input);
+            if self.screen == Screen::Creative {
+                self.remote_creative_drop(right);
+            } else {
+                self.remote_throw(right, input);
+            }
             return;
         }
         let before = self.carried.clone();

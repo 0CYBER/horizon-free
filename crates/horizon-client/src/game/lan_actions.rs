@@ -38,6 +38,9 @@ pub(super) struct GuestPlay {
     use_delay: u32,
     /// The shield's ItemCooldowns entry: an axe disabled it for this many ticks.
     pub(super) shield_cooldown: u32,
+    /// `ServerGamePacketListenerImpl.dropSpamThrottler` (`TickThrottler(20, 1480)`): 20 for each
+    /// item a creative player drops from the creative screen, one less each tick.
+    creative_drops: u32,
     attack_ticks: u32,
     /// The main hand's item at the guest's last tick (`Game::attack_item`).
     attack_item: Option<std::sync::Arc<str>>,
@@ -1015,6 +1018,35 @@ impl Game<'_> {
             }
             S::MoveVehicle(p) => self.guest_move_vehicle(host, conn, &p),
             S::PaddleBoat(p) => self.guest_paddle_boat(host, conn, [p.left, p.right]),
+            // handleSetCreativeModeSlot's drop: a slot below 0 is a stack thrown out of the
+            // creative screen (`handleCreativeModeItemDrop`), dropped from the player's hand.
+            S::SetCreativeModeSlot(p) if p.slot < 0 => {
+                if !host.hub.guests[gi].creative() {
+                    return;
+                }
+                let Some(stack) = self.item_from_network(host, &p.item) else {
+                    return;
+                };
+                if stack.count
+                    > self
+                        .res
+                        .items()
+                        .get(&stack.item)
+                        .map_or(64, |i| i.max_stack)
+                {
+                    return;
+                }
+                let play = host.play.entry(conn).or_default();
+                if play.creative_drops >= 1480 {
+                    eprintln!(
+                        "Player {} was dropping items too fast in creative mode, ignoring.",
+                        host.hub.guests[gi].name
+                    );
+                    return;
+                }
+                play.creative_drops += 20;
+                self.as_guest(host, conn, |g| g.player_drop(stack));
+            }
             S::SetCreativeModeSlot(p) => {
                 let g = &mut host.hub.guests[gi];
                 if !g.creative() || !(0..46).contains(&p.slot) {
@@ -1701,6 +1733,7 @@ impl Game<'_> {
             // Player.tick's ItemCooldowns.tick, once a tick for each player
             // (the shield an axe disabled).
             play.shield_cooldown = play.shield_cooldown.saturating_sub(1);
+            play.creative_drops = play.creative_drops.saturating_sub(1);
             let digging = play.digging;
             let using = play.using.is_some();
             let delayed = play.destroy_delay > 0 || play.use_delay > 0 || play.attack_ticks < 100;
