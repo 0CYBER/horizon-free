@@ -15,6 +15,7 @@ use horizon_world::registry::BlockStateId;
 impl Game<'_> {
     pub(super) fn tick_block_entities(&mut self) -> Result<()> {
         self.tick_mount_menu();
+        self.tick_craft_table();
         self.tick_container_reach();
         self.load_entity_types();
         if !self.world.block_entities.has_states() {
