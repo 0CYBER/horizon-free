@@ -2,10 +2,12 @@
 //! item's registry id and a data component patch, plus the hashed form the
 //! client sends back in container clicks (HashedStack).
 use crate::{
-    Error, Result,
+    Result,
     buf::{Codec, Reader, Writer},
 };
 use horizon_world::nbt::Tag;
+
+mod skip;
 
 /// minecraft:data_component_type registry ids (26.3).
 pub mod component {
@@ -78,6 +80,9 @@ pub enum Component {
     WrittenBook(WrittenBook),
     /// `ChargedProjectiles`: a loaded crossbow's ammunition, as templates.
     Stacks(Vec<Stack>),
+    /// A component Horizon reads past without interpreting it: its encoded
+    /// bytes, written back as they came.
+    Raw(Vec<u8>),
 }
 
 /// `Filterable.streamCodec`: the raw value, then an optional filtered one
@@ -224,11 +229,16 @@ impl Component {
                     hidden: (0..n).map(|_| r.varint()).collect::<Result<_>>()?,
                 }
             }
-            other => return Err(Error::new(format!("unsupported item component {other}"))),
+            other => {
+                let start = r.position();
+                skip::component(other, r)?;
+                Self::Raw(r.since(start).to_vec())
+            }
         })
     }
     fn write(&self, kind: i32, w: &mut Writer) {
         match self {
+            Self::Raw(bytes) => w.bytes(bytes),
             Self::Int(v) if kind == component::DYED_COLOR => w.i32(*v),
             Self::Int(v) => w.varint(*v),
             Self::Unit => {}
@@ -582,7 +592,8 @@ mod tests {
 
     #[test]
     fn unknown_components_are_errors() {
-        let bytes = [1, 5, 1, 0, 99];
+        // 122 is past DataComponents' last id (cushion_color, 121).
+        let bytes = [1, 5, 1, 0, 122];
         assert!(Slot::read(&mut Reader::new(&bytes)).is_err());
     }
 
@@ -630,5 +641,33 @@ mod tests {
             profile.properties,
             [("textures".to_owned(), "x".to_owned(), None)]
         );
+    }
+
+    #[test]
+    fn components_read_past_keep_their_bytes() {
+        // Vanilla 26.3's encoding (tools/test_item_wire_parity.py) of a chestplate's
+        // armour trim, a banner's patterns (one direct), a pot's sherds and a stew's
+        // effects: one server's inventory, recipe book and advancements had them.
+        for (hex, kind) in [
+            ("01bd0801003a0502", 58),
+            ("01890b01004a02200e000b6d696e6563726166743a7801790b", 74),
+            ("01880301004c01f60801000001be0c0100000001d30c010000", 76),
+            ("01a408010037020f6412a001", 55),
+        ] {
+            let bytes: Vec<u8> = (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+                .collect();
+            let mut r = Reader::new(&bytes);
+            let stack = Slot::read(&mut r).unwrap();
+            assert_eq!(r.remaining(), 0, "component {kind}");
+            assert!(matches!(
+                stack.as_ref().and_then(|s| s.component(kind)),
+                Some(Component::Raw(_))
+            ));
+            let mut w = Writer::new();
+            Slot::write(&stack, &mut w);
+            assert_eq!(w.data, bytes, "component {kind}");
+        }
     }
 }
