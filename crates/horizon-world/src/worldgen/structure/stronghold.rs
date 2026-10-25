@@ -1075,6 +1075,48 @@ impl LegacyPiece for StrongholdPiece {
     fn bounding_box(&self) -> BoundingBox {
         self.frame.bounding_box
     }
+    fn save(&self) -> Option<crate::nbt::Compound> {
+        use crate::nbt::Tag;
+        let flag = |b: bool| Tag::Byte(i8::from(b));
+        let mut tag = super::legacy::piece_tag(
+            self.type_name(),
+            self.frame.bounding_box,
+            self.frame.orientation,
+            self.depth,
+        );
+        // SmallDoorType.LEGACY_CODEC: the enum name.
+        let door = match self.door {
+            Door::Opening => "OPENING",
+            Door::Wood => "WOOD_DOOR",
+            Door::Grates => "GRATES",
+            Door::Iron => "IRON_DOOR",
+        };
+        let placed = *self.placed.lock().unwrap();
+        let [a, b, c, d] = self.flags;
+        let mut entries = vec![("EntryDoor", Tag::String(door.into()))];
+        match self.kind {
+            Kind::ChestCorridor => entries.push(("Chest", flag(placed))),
+            Kind::Filler => entries.push(("Steps", Tag::Int(self.value))),
+            Kind::FiveCrossing => entries.extend([
+                ("leftLow", flag(a)),
+                ("leftHigh", flag(b)),
+                ("rightLow", flag(c)),
+                ("rightHigh", flag(d)),
+            ]),
+            Kind::Library => entries.push(("Tall", flag(a))),
+            Kind::PortalRoom => entries.push(("Mob", flag(placed))),
+            Kind::RoomCrossing => entries.push(("Type", Tag::Int(self.value))),
+            // StartPiece is a StairsDown that is the source.
+            Kind::StairsDown => entries.push(("Source", flag(false))),
+            Kind::Start => entries.push(("Source", flag(true))),
+            Kind::Straight => entries.extend([("Left", flag(a)), ("Right", flag(b))]),
+            _ => {}
+        }
+        for (key, value) in entries {
+            tag.insert(key.into(), value);
+        }
+        Some(tag)
+    }
     fn type_name(&self) -> &'static str {
         match self.kind {
             Kind::Straight => "minecraft:shs",

@@ -18,10 +18,21 @@ fn empty_processors() -> Arc<ProcessorList> {
 #[derive(Debug)]
 pub struct BuriedTreasurePiece {
     pub position: [i32; 3],
+    /// Where the chest went: the box vanilla saves once placed.
+    pub found: Mutex<Option<[i32; 3]>>,
 }
 impl LegacyPiece for BuriedTreasurePiece {
     fn bounding_box(&self) -> BoundingBox {
         BoundingBox::new(self.position, self.position)
+    }
+    fn save(&self) -> Option<crate::nbt::Compound> {
+        let at = self.found.lock().unwrap().unwrap_or(self.position);
+        Some(super::legacy::piece_tag(
+            "minecraft:btp",
+            BoundingBox::new(at, at),
+            None,
+            0,
+        ))
     }
     fn type_name(&self) -> &'static str {
         "minecraft:btp"
@@ -58,6 +69,7 @@ impl LegacyPiece for BuriedTreasurePiece {
                         }
                     }
                 }
+                *self.found.lock().unwrap() = Some(pos);
                 create_chest(c, pos, "minecraft:chests/buried_treasure", None)?;
                 return Ok(());
             }
@@ -441,6 +453,21 @@ impl Scattered {
     pub fn frame(&self) -> PieceFrame {
         *self.frame.lock().unwrap()
     }
+    /// `ScatteredFeaturePiece`'s tag: the box and the height it settled on.
+    pub fn saved(&self, id: &str) -> crate::nbt::Compound {
+        use crate::nbt::Tag;
+        let f = self.frame();
+        let mut tag = super::legacy::piece_tag(id, f.bounding_box, f.orientation, 0);
+        for (key, value) in [
+            ("Width", self.width),
+            ("Height", self.height),
+            ("Depth", self.depth),
+            ("HPos", *self.height_position.lock().unwrap()),
+        ] {
+            tag.insert(key.into(), Tag::Int(value));
+        }
+        tag
+    }
     /// updateAverageGroundHeight over the part of the box inside the chunk.
     pub fn average_ground(&self, c: &mut PieceContext<'_>, offset: i32) -> Result<bool> {
         if *self.height_position.lock().unwrap() >= 0 {
@@ -498,18 +525,28 @@ impl Scattered {
 #[derive(Debug)]
 pub struct SwampHutPiece {
     pub base: Scattered,
+    /// spawnedWitch and spawnedCat: both spawn in the same chunk.
+    spawned: Mutex<bool>,
 }
 impl SwampHutPiece {
     pub fn new(random: &mut impl RandomSource, west: i32, north: i32) -> Self {
         let direction = random_horizontal(random);
         Self {
             base: Scattered::new(west, 64, north, 7, 7, 9, direction),
+            spawned: Mutex::new(false),
         }
     }
 }
 impl LegacyPiece for SwampHutPiece {
     fn bounding_box(&self) -> BoundingBox {
         self.base.frame().bounding_box
+    }
+    fn save(&self) -> Option<crate::nbt::Compound> {
+        let mut tag = self.base.saved("minecraft:tesh");
+        let spawned = crate::nbt::Tag::Byte(i8::from(*self.spawned.lock().unwrap()));
+        tag.insert("Witch".into(), spawned.clone());
+        tag.insert("Cat".into(), spawned);
+        Some(tag)
     }
     fn type_name(&self) -> &'static str {
         "minecraft:tesh"
@@ -579,6 +616,7 @@ impl LegacyPiece for SwampHutPiece {
                 c.world
                     .entity(super::legacy::spawn_nbt(id, pos, true, true))?;
             }
+            *self.spawned.lock().unwrap() = true;
         }
         Ok(())
     }
