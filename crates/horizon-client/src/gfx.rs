@@ -685,7 +685,7 @@ fn instance_descriptor(backends: wgpu::Backends) -> wgpu::InstanceDescriptor {
 /// device. `api` is the player's choice (`GraphicsApi::with_env` applied);
 /// `wgpu_backend`: whether `WGPU_BACKEND` is set, which picks the backends
 /// itself. Only Windows has two: Auto tries Vulkan, then DirectX 12 when
-/// Vulkan has no adapter (no Vulkan driver) or no device. A native crash in
+/// Vulkan has no surface, adapter (no Vulkan driver) or device. A native crash in
 /// the driver can't be caught in the game; the launcher switches the setting
 /// to DirectX 12 after one at the renderer's start (#746).
 fn backend_order(api: GraphicsApi, windows: bool, wgpu_backend: bool) -> Vec<wgpu::Backends> {
@@ -793,7 +793,13 @@ async fn open_device(
         let surface = if offscreen {
             None
         } else {
-            Some(instance.create_surface(window.clone())?)
+            match instance.create_surface(window.clone()) {
+                Ok(surface) => Some(surface),
+                Err(e) => {
+                    failures.push(format!("{name} surface: {e}"));
+                    continue;
+                }
+            }
         };
         let adapter = match instance
             .request_adapter(&wgpu::RequestAdapterOptions {
