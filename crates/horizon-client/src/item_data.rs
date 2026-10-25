@@ -291,7 +291,7 @@ fn filterable_text(t: &Tag) -> Option<String> {
         None => read_text(t),
     }
 }
-fn read_text(t: &Tag) -> Option<String> {
+pub(crate) fn read_text(t: &Tag) -> Option<String> {
     match t {
         Tag::String(s) => Some(s.to_string_lossy()),
         // A component's root `text` may be empty with the visible words in

@@ -1216,21 +1216,22 @@ impl Game<'_> {
         host: &LanHost,
         stack: &Option<horizon_protocol::item::Stack>,
     ) -> Option<ItemStack> {
-        use horizon_protocol::item::{Component, component};
         let s = stack.as_ref()?;
         let name = host
             .hub
             .item_name(s.item)
             .unwrap_or_else(|| "minecraft:air".into());
         let mut out = ItemStack::new(&name, s.count.max(1) as u32);
-        out.damage = s.damage().max(0) as u32;
-        if let Some(Component::Enchantments(list)) = s.component(component::ENCHANTMENTS) {
-            for (id, level) in list {
-                if let Some(e) = host.hub.enchantment_name(*id) {
-                    out.enchant(&e, *level as u32);
-                }
-            }
-        }
+        // The same components the encoder wrote, so a creative slot keeps what
+        // the client held instead of just damage and enchantments.
+        horizon_client::item_sync::apply(
+            s,
+            &mut out,
+            |id| host.hub.enchantment_name(id).map(|n| n.into()),
+            |id| host.hub.trim_name("minecraft:trim_material", id),
+            |id| host.hub.trim_name("minecraft:trim_pattern", id),
+        );
+        out.tidy();
         Some(out)
     }
 

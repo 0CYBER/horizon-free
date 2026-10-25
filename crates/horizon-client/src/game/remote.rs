@@ -761,10 +761,14 @@ impl Game<'_> {
     fn to_network(&self, s: &Option<ItemStack>) -> Option<Stack> {
         let s = s.as_ref()?;
         let mut stack = Stack::new(self.item_id(&s.item), s.count as i32);
-        if s.damage > 0 {
-            stack.added.push((
-                horizon_protocol::item::component::DAMAGE,
-                horizon_protocol::item::Component::Int(s.damage as i32),
+        // The components the client models, with the synced registries' ids:
+        // without them the server's echo hands back a bare item.
+        if let Some(r) = self.remote.as_ref() {
+            stack.added.extend(horizon_client::item_sync::encode(
+                s,
+                |name| r.registries.id("minecraft:enchantment", name),
+                |name| r.registries.id("minecraft:trim_material", name),
+                |name| r.registries.id("minecraft:trim_pattern", name),
             ));
         }
         Some(stack)

@@ -2293,6 +2293,14 @@ impl Hub {
             .name("minecraft:enchantment", id)
             .map(str::to_owned)
     }
+    /// An entry of a synced registry by id, for the components a packet
+    /// carries by id (`minecraft:trim_material`, `minecraft:trim_pattern`).
+    pub fn trim_name(&self, registry: &str, id: i32) -> Option<std::sync::Arc<str>> {
+        self.sync
+            .dynamic
+            .name(registry, id)
+            .map(std::sync::Arc::from)
+    }
 
     /// ServerLevel.removePlayerImmediately, then addRespawnedPlayer: the other players
     /// lose the dead player's entity (ServerEntity.removePairing) and are sent the
