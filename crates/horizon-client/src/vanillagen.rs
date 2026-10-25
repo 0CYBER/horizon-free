@@ -279,6 +279,26 @@ impl VanillaTerrain {
         let worker = worker.get_or_insert_with(|| self.generator.worker());
         worker.ring_positions(set)
     }
+    /// Searches the concentric rings on a thread of their own, behind the
+    /// server and render threads, as vanilla's background executor does:
+    /// the first chunks don't wait for them, and an eye of ender thrown
+    /// later finds them ready. A chunk or a query that needs them first
+    /// shares the remaining searches with this thread.
+    pub fn search_rings_behind(self: &Arc<Self>) {
+        let terrain = Arc::clone(self);
+        let spawned = std::thread::Builder::new()
+            .name("Ring search".into())
+            .spawn(move || {
+                horizon_threads::behind_server();
+                let _ = terrain
+                    .generator
+                    .worker()
+                    .ring_positions("minecraft:strongholds");
+            });
+        if let Err(e) = spawned {
+            log::warn!("ring search thread: {e}");
+        }
+    }
 }
 /// The worldgen bundle at `dir`, loaded once and shared by every generator
 /// and by live feature placement (sapling growth, bone meal).
