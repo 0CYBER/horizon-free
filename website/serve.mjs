@@ -11,6 +11,10 @@ const port = Number(process.env.PORT) || 4173;
 
 createServer(async (req, res) => {
   let path = normalize(decodeURIComponent(new URL(req.url, "http://x").pathname)).replace(/^(\.\.[/\\])+/, "");
+  if (path === "/docs/api/") {
+    res.writeHead(301, { Location: "/docs/api" });
+    return res.end();
+  }
   if (path.endsWith("/")) path += "index.html";
   // The server guide is part of the docs now, as the Caddyfile redirects it.
   if (path === "/server" || path === "/server.html") {
@@ -18,7 +22,7 @@ createServer(async (req, res) => {
     return res.end();
   }
   if (path === "/docs") path = "/docs/index.html";
-  // /privacy and /docs/<page> are .html files, as the Caddyfile rewrites them.
+  // /privacy, /docs/<page> and /docs/api/<page> are .html files, as the Caddyfile rewrites them.
   if (!extname(path)) path += ".html";
   let file = join(root, path);
   let status = 200;

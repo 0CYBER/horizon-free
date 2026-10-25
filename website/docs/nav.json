@@ -3,6 +3,7 @@
   { "group": "Playing", "pages": ["settings", "multiplayer", "troubleshooting"] },
   { "group": "Hosting", "pages": ["hosting"] },
   { "group": "Going further", "pages": ["modpacks", "mods", "performance", "agents"] },
-  { "group": "Build on Horizon", "pages": ["apis"] },
+  { "group": "Build on Horizon", "pages": ["apis", "api", "api/stability"] },
+  { "group": "API reference", "pages": ["api/mods", "api/mods-reference", "api/mod-index", "api/server", "api/server-reference", "api/agent-control", "api/launcher", "api/data-formats", "api/shaders"] },
   { "group": "Project", "pages": ["contributing", "faq"] }
 ]
