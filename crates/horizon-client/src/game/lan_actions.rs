@@ -2111,6 +2111,9 @@ impl Game<'_> {
             let _ = w.tick_environment_damage();
             let _ = w.apply_fire_contact();
             let _ = w.server_hazards_tick(in_wall);
+            // Player.tick ends with updatePlayerPose: a swimmer, or a player
+            // crawling under a block, takes the short box its moves are checked with.
+            let _ = w.update_player_pose();
             let mut events = std::mem::take(&mut w.player.events);
             // WitherRoseBlock.entityInside along those moves.
             for event in &events {
