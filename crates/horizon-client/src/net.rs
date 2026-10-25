@@ -147,7 +147,12 @@ impl Session {
     pub fn poll(&self) -> Vec<Event> {
         self.events.try_iter().collect()
     }
-    /// Send a play packet; silently dropped once the connection is gone.
+    /// Send a play packet; silently dropped once the connection is gone,
+    /// and while the server has the connection back in configuration (a
+    /// proxy switching servers). Vanilla's `handleConfigurationStart` clears
+    /// the level before it acknowledges, so no play packet follows the
+    /// acknowledgement; one that did would reach the server as a
+    /// configuration packet, and Velocity drops such a client.
     pub fn send(&self, packet: play::Serverbound) {
         if self.debug
             && !matches!(
@@ -159,7 +164,11 @@ impl Session {
         {
             eprintln!("[net] -> {packet:?}");
         }
-        if let Some(w) = self.writer.lock().unwrap().as_mut()
+        let mut writer = self.writer.lock().unwrap();
+        if self.configuring.load(Ordering::Relaxed) {
+            return;
+        }
+        if let Some(w) = writer.as_mut()
             && w.send(&packet.encode()).is_err()
         {
             w.shutdown();
@@ -296,8 +305,13 @@ fn run(
                 target
             }
         };
-        let c =
-            Connection::connect(&host, port, Duration::from_secs(10)).map_err(|e| e.to_string())?;
+        let c = if address.starts_with(FRIEND) {
+            // The friends relay supplies a concrete endpoint, not a Minecraft hostname.
+            Connection::connect(&host, port, Duration::from_secs(10))
+        } else {
+            Connection::connect_server(&host, port, Duration::from_secs(10))
+        }
+        .map_err(|e| e.to_string())?;
         (host, port, c)
     };
     *shared_counters.lock().unwrap() = Some(c.reader.counters.clone());
@@ -596,7 +610,7 @@ pub fn load_language(resources: &std::path::Path) -> Language {
 pub fn ping(address: &str, timeout: Duration) -> Result<(serde_json::Value, u128), String> {
     use horizon_protocol::packets::status;
     let (host, port) = parse_address(address).ok_or("Invalid address")?;
-    let mut c = Connection::connect(&host, port, timeout).map_err(|e| e.to_string())?;
+    let mut c = Connection::connect_server(&host, port, timeout).map_err(|e| e.to_string())?;
     c.reader
         .set_read_timeout(Some(timeout))
         .map_err(|e| e.to_string())?;
@@ -678,6 +692,60 @@ mod tests {
             matches!(events.recv_timeout(timeout).unwrap(), Event::Packet(p) if *p == play::Clientbound::Ping(cfg::Ping { id: 7 }))
         );
         writer.lock().unwrap().take().unwrap().shutdown();
+        assert!(thread.join().unwrap().is_err());
+    }
+
+    #[test]
+    fn play_packets_wait_out_a_reconfiguration() {
+        let (client, server) = horizon_protocol::connection::Pipe::pair();
+        let (mut reader, writer) = Connection::local(client).split();
+        let (send, events) = channel();
+        let session = Session {
+            events,
+            writer: Arc::new(Mutex::new(Some(writer))),
+            configuring: Arc::new(AtomicBool::new(false)),
+            thread: None,
+            address: "local".into(),
+            name: "Player".into(),
+            counters: Arc::new(Mutex::new(None)),
+            debug: false,
+        };
+        let (thread_writer, thread_configuring) =
+            (session.writer.clone(), session.configuring.clone());
+        let thread = std::thread::spawn(move || {
+            receive_play(
+                &mut reader,
+                &thread_writer,
+                &thread_configuring,
+                &Language::new(),
+                &send,
+            )
+        });
+        let mut server = Connection::local(server);
+        let tick_end = play::Serverbound::ClientTickEnd(Empty);
+        server
+            .send(&play::Clientbound::StartConfiguration(Empty).encode())
+            .unwrap();
+        let (id, body) = server.recv().unwrap();
+        assert_eq!(
+            play::Serverbound::decode(id, &body).unwrap(),
+            play::Serverbound::ConfigurationAcknowledged(Empty)
+        );
+        // The game thread still ticks the old level: nothing of it goes out.
+        session.send(tick_end.clone());
+        server
+            .send(&cfg::Clientbound::FinishConfiguration(Empty).encode())
+            .unwrap();
+        let (id, body) = server.recv().unwrap();
+        assert_eq!(
+            cfg::Serverbound::decode(id, &body).unwrap(),
+            cfg::Serverbound::FinishConfiguration(Empty)
+        );
+        // Back in play, the game's packets flow again.
+        session.send(tick_end.clone());
+        let (id, body) = server.recv().unwrap();
+        assert_eq!(play::Serverbound::decode(id, &body).unwrap(), tick_end);
+        drop(session);
         assert!(thread.join().unwrap().is_err());
     }
 

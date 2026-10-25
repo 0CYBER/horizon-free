@@ -3,8 +3,9 @@
 Horizon gets its own mod system, written in Rust and run in a sandbox, plus
 two ways to bring over what Java players use: native Horizon ports of popular
 mods and the data-driven parts of packs and mods. Fabric and NeoForge jars do
-**not** run as they are: [research/java-mod-compat.md](research/java-mod-compat.md)
-explains why and what we do instead.
+**not** run as they are: their code calls and patches Minecraft's Java classes, and
+Horizon has none. What carries over is the data and assets inside a jar
+([modpacks.md](modpacks.md)).
 
 Mods are **off and absent by default**. A fresh install has no `horizon-mods`
 folder, loads no runtime and plays exactly like vanilla 26.3.
@@ -15,10 +16,11 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | SDK for mod authors | `crates/horizon-mod-sdk` | 0.1 |
 | Example mods | `crates/horizon-mod-sdk/examples/coords-hud`, `examples/predator-missile` | coordinates, facing and time HUD, `/where`, `/coords`; `/missile`, a guided missile from vanilla commands |
 | Runtime | `crates/horizon-mods` | wasmtime 36 LTS, component model |
-| Authoring tool | `crates/cargo-horizon-mod` | `cargo horizon-mod new / build / run` |
+| Authoring tool | `crates/cargo-horizon-mod` | `cargo horizon-mod new / build / run / check`, and the registry's CI (`registry build / review / list`) |
 | In the game | `crates/horizon-client/src/game/mods.rs`, Options > Mods | client mods |
 | Launcher mod browser (Modrinth, CurseForge with a key) | [mod-browser.md](mod-browser.md) | resource packs, modpacks |
-| `.hmod` index, signing, server mods, registries | this page, [Roadmap](#roadmap) | planned |
+| Registry index (`index.json`, `.hpack`), signatures | `horizon_mods::index`, [api/mod-index.md](api/mod-index.md) | schema 1; launcher and website next |
+| Server mods, registries | this page, [Roadmap](#roadmap) | planned |
 
 ## Design goals
 
@@ -103,7 +105,7 @@ name (the mod reads it as `args`; API 0.1 has no way to declare argument types).
 ### Planned interfaces
 
 Each is a new capability, added in a 0.x minor version so older mods keep
-loading. Ordered by what the first native ports need ([research](research/java-mod-compat.md#port-first)):
+loading. Ordered by what the first native ports need:
 
 | Interface | For | Notes |
 |---|---|---|
@@ -224,6 +226,18 @@ cargo horizon-mod build             # again after an edit: the running game relo
 always on, and the game checks its file once a second: rebuild and it restarts
 with "Mods reloaded" in chat. Its in-memory state starts over; whatever it
 saved with capability `storage` survives the reload.
+
+Before you submit it to the registry, run what its CI runs:
+
+```sh
+cargo horizon-mod check target/horizon-mod/my_mod.hmod   # --json for the report as JSON
+```
+
+It reads the manifest and content, refuses imports the capabilities don't
+cover, then plays the mod in the sandbox for 40 ticks, 120 frames, a chat line
+and each of its commands: it must start and never trap or overrun. It checks a
+`.hpack` and a resource pack `.zip` too, and a signature with `--key <public
+key> --signature <file>.minisig`.
 
 ### Template layout
 

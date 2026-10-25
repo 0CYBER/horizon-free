@@ -74,12 +74,17 @@ LAUNCHER_PATHS = [
 ]
 LAUNCHER_IGNORED = ["launcher/links.json", "launcher/docs/", "launcher/tests/"]
 
-FOOTER = {
-    "game": "Install or update it from the Horizon launcher: it installs new versions by itself. "
-            "New here? Get the launcher at https://playhorizon.dev. You need your own copy of Minecraft: Java Edition.",
-    "launcher": "Your launcher updates itself. New here? Download the archive for your system below, extract it, "
-                "and run `horizon-launcher`. Website: https://playhorizon.dev",
-}
+# A game release is GitHub's latest (servers and install.sh follow it), so it is the first release people land on:
+# its notes open with the way to the launcher (#1647). Raw HTML on one line, which GitHub shows and every launcher's
+# notes view and one-line summary skip (pulldown-cmark's HTML events), so launchers never tell players to get
+# themselves. The site's Releases page leaves it out too.
+PLAYERS = ('<h3>Want to play? Download the <a href="https://playhorizon.dev">Horizon launcher</a>, not the files '
+           'below</h3><p>It installs this version and keeps it up to date. It is also on GitHub: <a href="'
+           f'https://github.com/{REPO}/releases?q=launcher&amp;expanded=true">the launcher releases</a>. You need your '
+           "own copy of Minecraft: Java Edition. The files below are what the launcher installs, and the dedicated "
+           "server for people who host one.</p>")
+LAUNCHER_FOOTER = ("Your launcher updates itself. New here? Download the archive for your system below, extract it, "
+                   "and run `horizon-launcher`. Website: https://playhorizon.dev")
 DISCLAIMER = "Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft."
 # An open issue with this label holds every game release (docs/release-flow.md). Only people who can triage the
 # repository can add it, and the issue's text is never read: its author could edit it afterwards.
@@ -374,7 +379,9 @@ def notes(kind, version, prs, issues, previous=None):
     else:
         title = f"Horizon launcher {version.removeprefix(OLD_LAUNCHER_PREFIX).removeprefix(LAUNCHER_PREFIX)}"
     intro = line_intro(kind, version, previous)
-    parts = [intro] if intro else []
+    parts = [PLAYERS] if kind == "game" else []
+    if intro:
+        parts.append(intro)
     if not shown:
         parts.append("Rebuilt from the latest main.")
     if new:
@@ -386,7 +393,8 @@ def notes(kind, version, prs, issues, previous=None):
     contributors = sorted({pr["author"] for pr in shown if pr["author"] and pr["author"] != REPO.split("/")[0]})
     if contributors:
         parts.append("Thanks to " + ", ".join(f"@{name}" for name in contributors) + ".")
-    parts.append(FOOTER[kind])
+    if kind == "launcher":
+        parts.append(LAUNCHER_FOOTER)
     parts.append(DISCLAIMER)
     return title, "\n\n".join(parts) + "\n"
 

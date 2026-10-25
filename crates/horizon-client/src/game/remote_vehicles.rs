@@ -88,8 +88,10 @@ impl Game<'_> {
         for m in &mut self.mobs {
             if m.extra.mount == Some(vehicle_id) && !passengers.contains(&(m.id as i32)) {
                 m.extra.mount = None;
+                m.extra.passenger = false;
             } else if passengers.contains(&(m.id as i32)) {
                 m.extra.mount = Some(vehicle_id);
+                m.extra.passenger = true;
             }
         }
         if passengers.contains(&me) {
@@ -129,17 +131,20 @@ impl Game<'_> {
             self.yaw += b.delta_rotation;
             let delta = (self.yaw - b.yaw + 180.0).rem_euclid(360.0) - 180.0;
             self.yaw += delta.clamp(-105.0, 105.0) - delta;
-            let seat = b.position;
             self.boats[i] = b;
-            Some(seat)
+            // In front of a mob that shares the boat.
+            Some(self.player_boat_seat(i))
         } else {
             // A minecart: the server moves it, the rider sits in it.
-            self.carts.iter().find(|c| c.id == id).map(|c| c.position)
+            self.carts.iter().find(|c| c.id == id).map(|c| {
+                c.position
+                    .add_vector(Vec3::new(0.0, super::minecarts::SEAT, 0.0))
+            })
         };
         if let Some(p) = self.player.as_mut() {
             self.previous_position = p.position;
             if let Some(v) = seat {
-                p.position = Vec3::new(v.x, v.y + super::boats::SEAT, v.z);
+                p.position = v;
             }
             p.velocity = Vec3::ZERO;
             p.fall_distance = 0.0;

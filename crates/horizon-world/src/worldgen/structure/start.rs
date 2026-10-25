@@ -2,7 +2,9 @@
 //! references, terrain adaptation and per-chunk piece placement.
 use super::{
     BoundingBox, StructureResources,
-    jigsaw::{JigsawConfig, JigsawContext, PlaceFeature, PoolPiece, Pools, Projection, assemble},
+    jigsaw::{
+        JigsawConfig, JigsawContext, PlaceFeature, PoolPiece, Pools, Projection, assemble_drawing,
+    },
     legacy::{LegacyPiece, PieceContext},
 };
 use crate::{
@@ -59,6 +61,8 @@ pub struct JigsawDef {
     checks: super::start_checks::StartChecks,
     /// Laid out by YUNG's API's assembler (`"horizon:yungsapi"`).
     yung: Option<super::yung::Config>,
+    /// Vanilla's draws, or YUNG's API's for `yungsapi:yung_jigsaw`.
+    draws: super::jigsaw::Draws,
     /// Laid out by Repurposed Structures' and Moog's piece-limited
     /// assembler (`"horizon:piece_limited"`).
     piece_limited: Option<super::piece_limited::Config>,
@@ -320,8 +324,13 @@ impl StructureRegistry {
                     .flatten()
                     .filter_map(|t| Some(t.as_str()?.to_owned())),
             );
+            let draws = match v["type"].as_str() {
+                Some("yungsapi:yung_jigsaw") => super::jigsaw::Draws::Yung,
+                _ => super::jigsaw::Draws::Vanilla,
+            };
             let kind = match v["type"].as_str().unwrap_or_default() {
-                "minecraft:jigsaw" => StructureKind::Jigsaw(JigsawDef {
+                "minecraft:jigsaw" | "yungsapi:yung_jigsaw" => StructureKind::Jigsaw(JigsawDef {
+                    draws,
                     start_pool: v["start_pool"].as_str().unwrap_or_default().to_owned(),
                     start_jigsaw: v["start_jigsaw_name"].as_str().map(str::to_owned),
                     max_depth: v["size"].as_i64().unwrap_or(0) as i32,
@@ -923,7 +932,8 @@ fn try_generate(
                     &mut random,
                     start,
                 )?,
-                (None, None) => assemble(
+                (None, None) => assemble_drawing(
+                    jigsaw.draws,
                     &config,
                     context,
                     &registry.pools,

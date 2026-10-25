@@ -13,6 +13,7 @@ mod block_entity_anims;
 mod block_entity_ticks;
 mod block_items;
 mod blockctl;
+mod boat_passengers;
 mod boats;
 mod books;
 mod bossbars;
@@ -153,6 +154,7 @@ mod storage;
 mod structures;
 mod subtitle_hud;
 mod sulfur_cubes;
+mod text_displays;
 mod titles;
 mod tnt;
 mod totem;
@@ -1421,6 +1423,8 @@ struct Game<'a> {
     dragon_model: Option<horizon_client::mobs::Part>,
     /// Map textures waiting for the next HUD batch to upload them.
     map_patches: Vec<horizon_client::font::Patch>,
+    text_displays: std::collections::HashMap<i32, text_displays::RemoteTextDisplay>,
+    text_display_vertices: usize,
     /// Player skin downloads, and which skin each atlas skin slot holds
     /// (least recently shown first).
     skin_downloads: RefCell<horizon_client::skins::Downloader>,
@@ -4045,6 +4049,20 @@ impl Game<'_> {
         self.capture_loaded_world();
         Ok(())
     }
+    /// Landing rules (farmland trampling, turtle eggs) wrote or removed the block
+    /// raw: finish `Level.setBlock`'s neighbour updates, so a crop on trampled
+    /// farmland breaks. The local player's and every server player's landings.
+    fn landing_block_updates(&mut self, event: &horizon_client::landing::FallEvent) {
+        use horizon_client::landing::FallEvent;
+        let (position, flags) = match *event {
+            FallEvent::Write {
+                position, flags, ..
+            } => (position, flags as i32),
+            FallEvent::Destroy { position, .. } => (position, level_flags::UPDATE_ALL),
+            _ => return,
+        };
+        self.with_level(|b, level, ticks| b.notify_written(level, ticks, position, flags));
+    }
     fn tick(&mut self) -> Result<()> {
         self.tick_debug_keys()?;
         self.tick_debug_charts();
@@ -4259,23 +4277,7 @@ impl Game<'_> {
                     };
                     self.audio.play(name, Some(feet), volume, pitch);
                 }
-                MotionEvent::Fall(horizon_client::landing::FallEvent::Write {
-                    position,
-                    flags,
-                    ..
-                }) => {
-                    // Landing rules (farmland trampling, turtle eggs) wrote the block raw.
-                    self.with_level(|b, level, ticks| {
-                        b.notify_written(level, ticks, position, flags as i32)
-                    });
-                }
-                MotionEvent::Fall(horizon_client::landing::FallEvent::Destroy {
-                    position, ..
-                }) => {
-                    self.with_level(|b, level, ticks| {
-                        b.notify_written(level, ticks, position, level_flags::UPDATE_ALL)
-                    });
-                }
+                MotionEvent::Fall(event) => self.landing_block_updates(&event),
                 MotionEvent::Snowflake { position, velocity } => self.snowflake(position, velocity),
                 MotionEvent::EnterBlock { state } => self.trigger_enter_block(state),
                 MotionEvent::InsidePortal { pos } => self.player_inside_nether_portal(pos),
@@ -4413,7 +4415,7 @@ impl Game<'_> {
                 self.resolve_arrivals();
             });
         }
-        horizon_client::spans::time("tick_lan", || self.tick_lan());
+        horizon_client::spans::time("tick_lan", || self.tick_lan(false));
         self.tick_friends();
         horizon_client::spans::time("tick_hand", || self.tick_hand());
         horizon_client::spans::time("tick_sleep", || self.tick_sleep());
@@ -6771,6 +6773,7 @@ impl Game<'_> {
         let mut see_through = std::mem::take(&mut self.see_through_vertices);
         see_through.clear();
         self.name_tag_geometry(camera, alpha, &mut out, &mut see_through);
+        self.text_display_geometry(camera, alpha, &mut out, &mut see_through);
         self.see_through_vertices = see_through;
         // Entity shadows (EntityRenderer.extractShadow).
         if let Some(sprite) = self.gui.atlas.sprites.get("misc/shadow").copied() {
@@ -9090,21 +9093,11 @@ impl Game<'_> {
         // Options.biomeBlendRadius, ambientOcclusion and cutoutLeaves:
         // LevelExtractor.allChanged when they change.
         let (s, st) = (&self.settings, &self.streaming);
-        let remesh = (
-            s.biome_blend,
-            s.smooth_lighting,
-            s.cutout_leaves,
-            s.horizon.cull_leaves,
-        ) != (
-            st.biome_blend,
-            st.smooth_lighting,
-            st.cutout_leaves,
-            st.cull_leaves,
-        );
+        let remesh = (s.biome_blend, s.smooth_lighting, s.cutout_leaves)
+            != (st.biome_blend, st.smooth_lighting, st.cutout_leaves);
         self.streaming.biome_blend = self.settings.biome_blend;
         self.streaming.smooth_lighting = self.settings.smooth_lighting;
         self.streaming.cutout_leaves = self.settings.cutout_leaves;
-        self.streaming.cull_leaves = self.settings.horizon.cull_leaves;
         if remesh {
             self.all_sections_changed();
         }
@@ -11893,6 +11886,8 @@ impl<'a> Game<'a> {
             breath_clouds: Vec::new(),
             dragon_model: prepared.dragon_model,
             map_patches: Vec::new(),
+            text_displays: Default::default(),
+            text_display_vertices: 0,
             skin_downloads: RefCell::new(horizon_client::skins::Downloader::new(
                 std::env::current_dir()
                     .unwrap_or_default()

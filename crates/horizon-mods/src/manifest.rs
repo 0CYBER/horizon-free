@@ -1,5 +1,5 @@
 //! `horizon-mod.toml`, a mod's manifest, and the `.hmod` file around it.
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fmt,
     io::Read,
@@ -20,6 +20,9 @@ pub const APIS: [&str; 2] = [API, "0.2"];
 /// Namespaces no mod may claim: vanilla's, the convention tags' (mods add
 /// to those, docs/mods.md) and the game's own.
 const RESERVED_NAMESPACES: [&str; 3] = ["minecraft", "c", "horizon"];
+/// A mod's data (capability `storage`), in `horizon-mods/` beside the mods
+/// (`find` never mistakes it for a mod: it has no manifest).
+pub const STORAGE_DIR: &str = ".horizon-mod-data";
 /// The biggest `mod.wasm` a mod may ship.
 const MAX_WASM: u64 = 32 << 20;
 
@@ -48,7 +51,7 @@ pub struct Manifest {
     pub namespaces: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Side {
     /// Runs in the player's game only (HUD, keys, chat commands).
@@ -62,7 +65,7 @@ pub enum Side {
 
 /// What a mod may do beyond writing its log. Each is a WIT interface the
 /// component imports; the player sees them before turning the mod on.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "kebab-case")]
 pub enum Capability {
     GameRead,
