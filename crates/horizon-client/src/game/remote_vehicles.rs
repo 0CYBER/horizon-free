@@ -9,8 +9,8 @@
 //! server (`LocalPlayer.tick`: `ServerboundMoveVehiclePacket`,
 //! `AbstractBoat.tick`: `ServerboundPaddleBoatPacket`). A minecart moves on
 //! the server with the rider's input, and the rider sits in it.
-use super::{Game, Keys, view_vector};
-use horizon_core::geometry::Vec3;
+use super::{Game, Keys, ray_box, view_vector};
+use horizon_core::geometry::{Aabb, Vec3};
 use horizon_protocol::packets::play::{self, Serverbound as S};
 
 /// An object under the crosshair: its entity id, how far along the view it
@@ -24,8 +24,8 @@ pub(super) struct ObjectHit {
 
 impl Game<'_> {
     /// The nearest boat, minecart, item frame, armor stand or painting the
-    /// view hits within reach.
-    pub(super) fn remote_object_hit(&self) -> Option<ObjectHit> {
+    /// view hits within reach; also End crystals when attacking.
+    pub(super) fn remote_object_hit(&self, attacking: bool) -> Option<ObjectHit> {
         let eye = self.eye_position()?;
         let dir = view_vector(self.yaw, self.pitch);
         let at = |d: f64| {
@@ -64,6 +64,22 @@ impl Game<'_> {
             let p = self.carts[i].position;
             hits.push((self.carts[i].id as i32, d, [p.x, p.y, p.z]));
         }
+        if attacking {
+            // EndCrystal.isPickable: its 2 x 2 box, with the server's entity
+            // id, not special_targets' local projectile target id.
+            // Entity.interact passes on a crystal, so right clicks use the item.
+            let reach = if self.creative { 5.0 } else { 3.0 };
+            for c in self.crystals.iter().filter(|c| c.id != 0) {
+                let p = c.position;
+                let bounds = Aabb::new(
+                    Vec3::new(p.x - 1.0, p.y, p.z - 1.0),
+                    Vec3::new(p.x + 1.0, p.y + 2.0, p.z + 1.0),
+                );
+                if let Some(d) = ray_box(eye, dir, reach, bounds) {
+                    hits.push((c.id as i32, d, [p.x, p.y, p.z]));
+                }
+            }
+        }
         let (id, distance, origin) = hits.into_iter().min_by(|a, b| a.1.total_cmp(&b.1))?;
         let point = at(distance);
         Some(ObjectHit {
@@ -88,8 +104,10 @@ impl Game<'_> {
         for m in &mut self.mobs {
             if m.extra.mount == Some(vehicle_id) && !passengers.contains(&(m.id as i32)) {
                 m.extra.mount = None;
+                m.extra.passenger = false;
             } else if passengers.contains(&(m.id as i32)) {
                 m.extra.mount = Some(vehicle_id);
+                m.extra.passenger = true;
             }
         }
         if passengers.contains(&me) {
@@ -129,17 +147,20 @@ impl Game<'_> {
             self.yaw += b.delta_rotation;
             let delta = (self.yaw - b.yaw + 180.0).rem_euclid(360.0) - 180.0;
             self.yaw += delta.clamp(-105.0, 105.0) - delta;
-            let seat = b.position;
             self.boats[i] = b;
-            Some(seat)
+            // In front of a mob that shares the boat.
+            Some(self.player_boat_seat(i))
         } else {
             // A minecart: the server moves it, the rider sits in it.
-            self.carts.iter().find(|c| c.id == id).map(|c| c.position)
+            self.carts.iter().find(|c| c.id == id).map(|c| {
+                c.position
+                    .add_vector(Vec3::new(0.0, super::minecarts::SEAT, 0.0))
+            })
         };
         if let Some(p) = self.player.as_mut() {
             self.previous_position = p.position;
             if let Some(v) = seat {
-                p.position = Vec3::new(v.x, v.y + super::boats::SEAT, v.z);
+                p.position = v;
             }
             p.velocity = Vec3::ZERO;
             p.fall_distance = 0.0;

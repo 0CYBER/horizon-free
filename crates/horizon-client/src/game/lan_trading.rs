@@ -48,10 +48,9 @@ impl Game<'_> {
         if let Some(id) = state.mob
             && state.session.villager
         {
-            // startTrading with the guest's reputation (their effects are
-            // not modelled on the host: no Hero of the Village).
+            // startTrading with the guest's reputation. The session already
+            // captured their Hero effect while they acted as the player.
             state.session.reputation = self.villager_reputation_of(id, uuid);
-            state.session.hero = None;
             state.session.update_special_prices();
         }
         let title = self.merchant_display_name(&state);
