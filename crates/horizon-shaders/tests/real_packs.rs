@@ -174,7 +174,8 @@ fn real_packs_read() {
                 sky: Some(terrain.clone()),
                 celestial: Some(terrain.clone()),
                 entities: Some(terrain.clone()),
-                clouds: Some(terrain),
+                clouds: Some(terrain.clone()),
+                weather: Some(terrain),
             };
             let post = load_post(&pack, &folder, &shaders, &Macros::standard(), &inputs);
             println!(

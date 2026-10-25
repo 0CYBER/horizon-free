@@ -75,6 +75,7 @@ mod pack_post;
 mod pack_sky;
 mod pack_timing;
 pub mod pack_uniforms;
+mod pack_weather;
 mod page_runs;
 pub mod panorama;
 mod resident;
@@ -492,6 +493,8 @@ pub struct Renderer {
     pack_entity_rest: Vec<Vertex>,
     /// Set 1 of the cloud pipeline, for a shader pack's `gbuffers_clouds`.
     cloud_bindings: wgpu::BindGroupLayout,
+    /// Rain and snow handed to a shader pack's `gbuffers_weather`, once a pack draws them.
+    pack_weather: Option<pack_weather::PackWeather>,
     /// The block sprites as one atlas, while a shader pack is loaded.
     pack_atlas: Option<pack_atlas::PackAtlas>,
     /// The pack's terrain program reads flat draws' vertices (`pack_terrain_inputs`).
@@ -1481,7 +1484,10 @@ impl Renderer {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                // COPY_SRC: a shader pack's weather copies the rain and snow sprites out.
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             },
             wgpu::util::TextureDataOrder::LayerMajor,
@@ -2353,6 +2359,7 @@ impl Renderer {
             pack_post: None,
             pack_entity_rest: Vec::new(),
             cloud_bindings,
+            pack_weather: None,
             pack_atlas: None,
             pack_terrain_flat: false,
             hud,
@@ -2817,6 +2824,7 @@ impl Renderer {
                     .as_ref()
                     .map(|t| t.create_view(&Default::default())),
                 clouds: Some(&self.cloud_bindings),
+                weather: true,
             };
             pack_post::PackPost::new(
                 &self.device,
@@ -2842,6 +2850,7 @@ impl Renderer {
             celestial: Some(pack_sky::celestial_inputs()),
             entities: Some(pack_entities::inputs()),
             clouds: Some(pack_entities::cloud_inputs()),
+            weather: Some(pack_weather::inputs()),
         }
     }
 
@@ -3797,6 +3806,12 @@ impl Renderer {
                 .as_ref()
                 .and_then(|p| p.1.as_ref())
                 .is_some_and(|p| p.has_clouds());
+        let pack_draws_weather = pack_post
+            && self
+                .pack_post
+                .as_ref()
+                .and_then(|p| p.1.as_ref())
+                .is_some_and(|p| p.has_weather());
         let scaled = self.world_post.prepare(
             &self.device,
             [self.config.width, self.config.height],
@@ -3962,7 +3977,9 @@ impl Renderer {
                 pass.draw_indexed(0..entity_quads * 6, 0, 0..1);
                 pass.set_bind_group(0, &self.group, &[]);
             }
-            self.weather.draw(&mut pass, &self.entity_group);
+            if !pack_draws_weather {
+                self.weather.draw(&mut pass, &self.entity_group);
+            }
             pass.set_bind_group(0, &self.group, &[]);
             if crumbling_quads > 0 {
                 pass.set_pipeline(&self.crumbling_pipeline);
@@ -4101,6 +4118,22 @@ impl Renderer {
             && let Some((dimension, Some(mut post))) = self.pack_post.take()
         {
             let size = self.world_post.size().unwrap_or([1, 1]);
+            let weather = match &self.hud.atlas_texture {
+                Some(atlas) if pack_draws_weather => self
+                    .pack_weather
+                    .get_or_insert_with(|| pack_weather::PackWeather::new(&self.device))
+                    .prepare(
+                        &self.device,
+                        &mut encoder,
+                        &mut self.uploads,
+                        atlas,
+                        frame.weather,
+                        frame.weather_time,
+                        &self.indices,
+                    ),
+                _ => None,
+            };
+            post.set_weather(weather);
             let flat = self.flat.as_ref().filter(|_| flat_frame);
             let pages: Vec<(u32, wgpu::Buffer)> = match flat {
                 Some(_) if pack_draws_terrain => self
