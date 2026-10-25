@@ -135,14 +135,12 @@ async function setUpLive() {
 // --- Navigation ----------------------------------------------------------------------
 
 function setUpNav() {
-  const bar = document.querySelector(".nav");
-  // The sections on this page (the nav also links to other pages, such as /server).
-  const links = [...document.querySelectorAll('.nav-links a[href^="#"]')];
-  const sections = links.map((a) => document.querySelector(a.getAttribute("href")));
+  // The home sections use the same root-relative links in every page's header.
+  const links = [...document.querySelectorAll('.nav-links a[href^="/#"]')];
+  const sections = links.map((a) => document.querySelector(a.hash));
 
   let current = null;
   const update = () => {
-    bar.classList.toggle("is-scrolled", scrollY > 24);
     const line = innerHeight * 0.4;
     let index = -1;
     sections.forEach((s, i) => {

@@ -65,9 +65,10 @@ impl Game<'_> {
                 tag
             }
             Target::Mob(id) => {
-                let uuid = self.uuid_for(id);
-                let m = self.mobs.iter().find(|m| m.id == id)?;
-                entity_nbt::mob_to_nbt(m, uuid, self.persist.raw.get(&id))
+                // `saveWithoutId` writes the entity as saved, riders under
+                // `Passengers`: `/data get` reads the same tree persistence does (#1519).
+                let i = self.mobs.iter().position(|m| m.id == id)?;
+                self.mob_tree_nbt(i)
             }
             Target::Item(id) => {
                 let uuid = self.uuid_for(id);
@@ -113,7 +114,7 @@ impl Game<'_> {
                 self.other_to_nbt(&o, uuid)
             }
             Target::Orb(i) => entity_nbt::orb_to_nbt(self.orbs.get(i)?, random_uuid()),
-            Target::Arrow(i) => {
+            Target::Projectile(i) => {
                 let p = self.creatures.projectiles.get(i)?;
                 let owner = if p.owner == Some(horizon_client::mobs::Who::Player) {
                     player_uuid
@@ -125,7 +126,8 @@ impl Game<'_> {
                     .as_ref()
                     .and_then(|a| a.last_state)
                     .map(|s| self.state_to_nbt(s));
-                entity_nbt::arrow_to_nbt(p, random_uuid(), owner, in_block, None)?
+                entity_nbt::arrow_to_nbt(p, random_uuid(), owner, in_block, None)
+                    .or_else(|| entity_nbt::fireball_to_nbt(p, random_uuid(), owner, None))?
             }
         })
     }

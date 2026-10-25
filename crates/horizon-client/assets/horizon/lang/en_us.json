@@ -1,0 +1,15 @@
+{
+  "horizon.options.controller": "Controller",
+  "horizon.options.vibration": "Vibration",
+  "horizon.options.adaptive_triggers": "Adaptive Triggers",
+  "horizon.options.lightbar": "Lightbar",
+  "horizon.options.look_sensitivity": "Look Sensitivity",
+  "horizon.options.invert_x": "Invert Look X",
+  "horizon.options.invert_y": "Invert Look Y",
+  "horizon.options.sneak_button": "Sneak Button",
+  "horizon.options.move_deadzone": "Move Deadzone",
+  "horizon.options.look_deadzone": "Look Deadzone",
+  "horizon.options.button_glyphs": "Button Glyphs",
+  "horizon.options.menu_navigation": "Menu Navigation",
+  "horizon.options.on_screen_keyboard": "On-Screen Keyboard"
+}

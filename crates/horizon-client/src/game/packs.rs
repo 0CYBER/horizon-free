@@ -4,7 +4,7 @@ use super::Game;
 use horizon_client::{
     hud::HudAtlas,
     lang,
-    pack_screen::{Compat, PackInfo, Source as PackSource},
+    pack_screen::{self, Compat, PackInfo, Source as PackSource},
     packs::{self, Pack, Position},
     text::{Style, Text},
 };
@@ -34,10 +34,16 @@ pub fn open_folder(dir: &Path) {
         log::warn!("Horizon: could not open {}: {e}", dir.display());
     }
 }
-/// The resource root to load from, given the vanilla root and the selection.
-pub fn startup_root(vanilla: &Path, selected: &[String]) -> std::io::Result<PathBuf> {
+/// The resource root to load from, given the vanilla root, the selection and
+/// a server's packs, which go on top (`Pack.Position.TOP`, fixed).
+pub fn startup_root(
+    vanilla: &Path,
+    selected: &[String],
+    server: &[Pack],
+) -> std::io::Result<PathBuf> {
     let all = packs::discover(vanilla, &packs_dir());
-    let enabled = packs::enabled(&all, selected);
+    let mut enabled = packs::enabled(&all, selected);
+    enabled.extend_from_slice(server);
     packs::resource_root(vanilla, &enabled, &cache_dir())
 }
 fn info(p: &Pack) -> PackInfo {
@@ -53,14 +59,15 @@ fn info(p: &Pack) -> PackInfo {
             PackSource::Default
         },
         compat: p.compatibility,
-        icon: p.icon,
+        icon: p.icon_png().as_deref().and_then(pack_screen::load_icon),
         required: false,
         position: Position::Top,
         fixed: false,
     }
 }
-/// The vanilla pack: required, at the bottom (`BuiltInPackSource`).
-fn vanilla_info() -> PackInfo {
+/// The vanilla pack: required, at the bottom (`BuiltInPackSource`), with the
+/// client JAR's `pack.png` that the prepared resources hold.
+fn vanilla_info(vanilla: &Path) -> PackInfo {
     PackInfo {
         id: "vanilla".into(),
         title: Text::translate("resourcePack.vanilla.name", &[]),
@@ -68,7 +75,10 @@ fn vanilla_info() -> PackInfo {
         description_style: Style::default(),
         source: PackSource::BuiltIn,
         compat: Compat::Compatible,
-        icon: true,
+        icon: std::fs::read(vanilla.join("pack.png"))
+            .ok()
+            .as_deref()
+            .and_then(pack_screen::load_icon),
         required: true,
         position: Position::Bottom,
         fixed: false,
@@ -80,7 +90,7 @@ pub(super) fn pack_infos(vanilla: &Path) -> Vec<PackInfo> {
         .iter()
         .map(info)
         .collect();
-    infos.push(vanilla_info());
+    infos.push(vanilla_info(vanilla));
     infos
 }
 impl Game<'_> {
@@ -113,14 +123,7 @@ impl Game<'_> {
             self.pending_pack_reload = true;
             return;
         }
-        let vanilla = self.vanilla_root();
-        if self.ui.vanilla_root.as_os_str().is_empty() {
-            self.ui.vanilla_root = vanilla.clone();
-        }
-        let result = startup_root(&vanilla, &self.settings.resource_packs)
-            .map_err(Into::into)
-            .and_then(|root| self.reload_resources(&root));
-        if let Err(e) = result {
+        if let Err(e) = self.reload_selected_packs() {
             log::warn!("Horizon: resource reload failed: {e}");
             if self.screen != super::Screen::Options {
                 self.open_options_at(
@@ -130,6 +133,16 @@ impl Game<'_> {
             }
             self.ui.options.resource_error = Some(e.to_string());
         }
+    }
+    /// Reload from the selected packs and the server's.
+    pub(super) fn reload_selected_packs(&mut self) -> horizon_client::Result<()> {
+        let vanilla = self.vanilla_root();
+        if self.ui.vanilla_root.as_os_str().is_empty() {
+            self.ui.vanilla_root = vanilla.clone();
+        }
+        let server = &self.server_packs.active;
+        let root = startup_root(&vanilla, &self.settings.resource_packs, server)?;
+        self.reload_resources(&root)
     }
     fn reload_resources(&mut self, root: &Path) -> horizon_client::Result<()> {
         let render = std::sync::Arc::new(self.pack.assets.reload(root)?);
