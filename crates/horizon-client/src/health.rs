@@ -253,6 +253,22 @@ impl PlayerHealth {
             self.hurt_animation_time -= 1;
         }
     }
+    /// `LivingEntity.animateHurt` / `handleDamageEvent` on a client: the hurt
+    /// tilt and red flash restart.
+    pub fn animate_hurt(&mut self) {
+        self.hurt.hurt_duration = 10;
+        self.hurt.hurt_time = 10;
+        self.hurt_animation_time = 10;
+    }
+    /// `LocalPlayer.hurtTo` with `flashOnSetHealth`: a drop below the current
+    /// health starts the hurt animation.
+    pub fn flash_health_change(&mut self, health: f32) {
+        let damage = self.health() - health;
+        if damage > 0.0 {
+            self.hurt.last_hurt = damage;
+            self.animate_hurt();
+        }
+    }
 }
 impl PlayerMotion {
     pub fn hurt(
@@ -274,6 +290,9 @@ impl PlayerMotion {
         amount: f32,
         blocking: Option<Blocking>,
     ) -> Result<BlockOutcome> {
+        if self.client_side {
+            return Ok(BlockOutcome::default());
+        }
         let source = resources
             .damage
             .source::<()>(source, None, None, None)

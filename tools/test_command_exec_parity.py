@@ -82,7 +82,7 @@ def main():
     rust_dir = build / 'rust'
     shutil.rmtree(rust_dir, ignore_errors=True)
     rust_dir.mkdir()
-    env = dict(os.environ, HORIZON_NO_AUDIO='1', HORIZON_COMMAND_SCRIPT=str(script_path), HORIZON_COMMAND_OUTPUT=str(build / 'rust.jsonl'))
+    env = lab.game_env(HORIZON_COMMAND_SCRIPT=script_path, HORIZON_COMMAND_OUTPUT=build / 'rust.jsonl')
     run([binary, '--resources', lab.RESOURCES, '--world', 'harness', '--seed', SEED, '--radius', 4], 'rust', cwd=rust_dir, env=env)
 
     vanilla = [json.loads(l) for l in (build / 'vanilla.jsonl').open(encoding='utf-8')]
