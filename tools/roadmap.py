@@ -56,7 +56,8 @@ ITEM_KEYS = {"id", "title", "status", "area", "plain", "dev", "links", "focus", 
 ISSUE = re.compile(r"#(\d+)$")
 ID = re.compile(r"[a-z0-9]+(-[a-z0-9]+)*$")
 # An item is the anchor playhorizon.dev/hub#<id>: it can't take the name of a tab, a section or a heading.
-RESERVED = {"main", "overview", "roadmap", "board", "journal", "contribute", "hub-data", *STATUSES}
+RESERVED = {"main", "overview", "roadmap", "board", "journal", "contribute", "report", "suggest", "contributors",
+            "hub-data", *STATUSES}
 RESERVED_PREFIXES = ("h-", "tab-", "col-", "week-", "journal-")
 RELEASE = re.compile(r"(v\d[\w.]*|launcher@\d[\w.]*|launcher-v\d[\w.]*|website)$")
 MONTHS = ("January|February|March|April|June|July|August|September|October|November|December")

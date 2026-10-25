@@ -132,6 +132,7 @@ async function refresh() {
   document.querySelector("[data-overview]").innerHTML = overviewHtml(data.roadmap, live);
   document.querySelector("[data-roadmap]").innerHTML = roadmapHtml(data.roadmap, live);
   filter(area);
+  showVotes();
   const board = boardFrom(fresh, data.roadmap);
   const chosen = boardSelect.value;
   boardSelect.innerHTML = boardFilterHtml(board, data.roadmap);
@@ -144,7 +145,126 @@ async function refresh() {
   if (note) note.textContent = "Pull request and issue states are live from GitHub.";
 }
 
+// --- Votes, bug reports and suggestions: the hub's server (crates/horizon-telemetry-server) --------------------
+
+const saved = (key, fallback) => {
+  try {
+    return JSON.parse(localStorage.getItem(key)) ?? fallback;
+  } catch {
+    return fallback;
+  }
+};
+const save = (key, value) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {}
+};
+const post = (path, body) => fetch(`${data.api}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+// This browser's random id (one vote per item per browser) and the items it voted for. Nothing else identifies it.
+function voter() {
+  let id = saved("hub:voter", "");
+  if (typeof id !== "string" || id.length < 16) {
+    id = crypto.randomUUID ? crypto.randomUUID() : [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
+    save("hub:voter", id);
+  }
+  return id;
+}
+const mine = new Set(saved("hub:voted", []));
+let counts = null; // { item: votes } once the server answered; until then the buttons stay hidden
+
+function showVotes() {
+  if (!counts) return;
+  for (const button of document.querySelectorAll("[data-vote]")) {
+    const id = button.dataset.vote;
+    button.hidden = false;
+    button.setAttribute("aria-pressed", String(mine.has(id)));
+    button.querySelector(".hub-vote-label").textContent = mine.has(id) ? "Wanted" : "Want it";
+    button.querySelector("[data-votes]").textContent = counts[id] ? String(counts[id]) : "";
+  }
+}
+
+async function vote(id) {
+  const up = !mine.has(id);
+  const apply = (on, step) => {
+    if (on) mine.add(id);
+    else mine.delete(id);
+    counts[id] = Math.max(0, (counts[id] || 0) + step);
+    save("hub:voted", [...mine]);
+    showVotes();
+  };
+  apply(up, up ? 1 : -1);
+  try {
+    const res = await post("/hub/vote", { item: id, voter: voter(), up });
+    if (!res.ok) throw new Error(res.status);
+    counts[id] = (await res.json()).votes;
+    showVotes();
+  } catch {
+    apply(!up, up ? -1 : 1);
+  }
+}
+document.addEventListener("click", (e) => {
+  const button = e.target.closest("[data-vote]");
+  if (button && counts) vote(button.dataset.vote);
+});
+
+const LABELS = { title: "the title", did: "what you did", happened: "what happened", expected: "what you expected", version: "the version", system: "OS, CPU, GPU", text: "your idea", name: "your name" };
+// The server's answer in words: "did: 3 to 2000 characters" becomes "Check what you did: 3 to 2000 characters."
+function trouble(code, answer) {
+  if (code === 429) return "Too many sent from your connection: try again in a few minutes.";
+  const said = typeof answer.error === "string" ? answer.error : "";
+  const field = said.match(/^(\w+): (.+)$/);
+  if (code === 400 && field) return `Check ${LABELS[field[1]] || field[1]}: ${field[2]}.`;
+  return said ? `${said[0].toUpperCase()}${said.slice(1)}.` : "That didn't go through: try again in a moment.";
+}
+
+function setUpForm(form, path, thanks) {
+  const status = form.querySelector("[data-status]");
+  form.hidden = false;
+  form.parentElement.querySelector("[data-closed]").hidden = true;
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!form.reportValidity()) return;
+    const button = form.querySelector('[type="submit"]');
+    button.disabled = true;
+    status.textContent = "Sending…";
+    try {
+      const res = await post(path, Object.fromEntries(new FormData(form)));
+      const answer = await res.json().catch(() => ({}));
+      if (res.ok) {
+        thanks(status, answer);
+        // A new report starts with the version filled in again; the name stays for the next one.
+        for (const field of form.querySelectorAll("textarea, input:not([name='version']):not([name='name'])")) field.value = "";
+      } else status.textContent = trouble(res.status, answer);
+    } catch {
+      status.textContent = "Couldn't reach the server: try again, or use GitHub or Discord.";
+    }
+    button.disabled = false;
+  });
+}
+
+// The forms and the votes show once the server answers; without it the page points to GitHub and Discord.
+async function connect() {
+  try {
+    // Revalidated: the server keeps the counts a minute, a browser's copy would miss this browser's own vote.
+    const res = await fetch(`${data.api}/hub/votes`, { cache: "no-cache" });
+    if (!res.ok) return;
+    counts = (await res.json()).votes || {};
+  } catch {
+    return;
+  }
+  showVotes();
+  setUpForm(document.querySelector('[data-form="report"]'), "/hub/report", (status, answer) => {
+    const issue = typeof answer.issue === "string" && answer.issue.match(/^https:\/\/github\.com\/ludovic111\/horizon\/issues\/(\d+)$/);
+    status.innerHTML = issue ? `Thanks! It's <a href="${issue[0]}">issue #${issue[1]}</a> on GitHub: follow it there.` : "Thanks! It will be on GitHub in a few minutes.";
+  });
+  setUpForm(document.querySelector('[data-form="suggest"]'), "/hub/suggest", (status) => {
+    status.textContent = "Thanks! The maintainers read every suggestion.";
+  });
+}
+
 setUpTheme();
 setUpMenu();
+connect();
 follow();
 refresh().then(() => data.roadmap.items.some((i) => `#${i.id}` === location.hash) && follow());

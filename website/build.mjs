@@ -16,7 +16,7 @@ import { machinesHtml, playersHtml } from "./src/bench.js";
 import { CPUS, GPUS, singleThread } from "./src/hardware.js";
 import { isGame, isLauncher, launcherVersion, newestFirst } from "./src/versions.js";
 import { contributorsFrom, contributorsHtml } from "./src/contributors.js";
-import { areaFilterHtml, boardFilterHtml, boardFrom, boardHtml, helpWantedHtml, journalFrom, journalHtml, journalJson, overviewHtml, roadmapHtml, slimIssue } from "./src/hub.js";
+import { areaFilterHtml, boardFilterHtml, boardFrom, boardHtml, creditFrom, creditHtml, helpWantedHtml, journalFrom, journalHtml, journalJson, overviewHtml, roadmapHtml, slimIssue, suggestItemsHtml } from "./src/hub.js";
 
 const site = dirname(fileURLToPath(import.meta.url));
 const dist = join(site, "dist");
@@ -118,6 +118,18 @@ try {
 const hubLinked = new Map(hubLive.filter((i) => linked.has(i.n)).map((i) => [i.n, i]));
 const board = boardFrom(hubLive, roadmap);
 const journal = journalFrom(releases, hubLive, roadmap);
+
+// The hub's server (crates/horizon-telemetry-server: votes, bug reports, suggestions), and Kira's list of the
+// contributors who linked their Discord account and agreed to be credited (kira's /contributors.json).
+const hubApi = process.env.HUB_API_URL || "https://telemetry.playhorizon.dev";
+let kiraCredit = {};
+try {
+  const res = await fetch(process.env.KIRA_CONTRIBUTORS_URL || "https://kira-production-500e.up.railway.app/contributors.json", { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) throw new Error(`${res.status} from Kira`);
+  kiraCredit = await res.json();
+} catch (e) {
+  console.warn(`hub: contributors' Discord names: ${e.message}`);
+}
 
 // --- The parity table ------------------------------------------------------------------
 
@@ -332,7 +344,10 @@ const values = {
   HUB_BOARD: hubLive.length ? boardHtml(board, roadmap) : `<p class="lede">The board could not be loaded here.</p>`,
   HUB_BOARD_FILTER: boardFilterHtml(board, roadmap),
   HUB_JOURNAL: journalHtml(journal, roadmap) || unavailable,
-  HUB_DATA: JSON.stringify({ roadmap, live: [...hubLinked.values()] }).replace(/</g, "\\u003c"),
+  HUB_DATA: JSON.stringify({ roadmap, live: [...hubLinked.values()], api: hubApi }).replace(/</g, "\\u003c"),
+  HUB_SUGGEST_ITEMS: suggestItemsHtml(roadmap),
+  HUB_VERSION: escape(game[0]?.tag_name || ""),
+  HUB_CREDIT: creditHtml(creditFrom(contributors, kiraCredit)),
   YEAR: String(new Date().getUTCFullYear()),
 };
 
