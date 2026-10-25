@@ -687,6 +687,10 @@ code { border-radius: 0; background: var(--well); box-shadow: 0 0 0 1px var(--ou
 .bench-table td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .bench-table td.wins { color: var(--ink); font-weight: 600; }
 .bench-table td.vs { font-size: var(--text-caption); white-space: nowrap; }
+.md-table { width: 100%; border-collapse: collapse; font-size: var(--text-ui); }
+.md-table th, .md-table td { padding: 8px 12px 8px 0; text-align: left; border-bottom: 1px solid var(--rule); vertical-align: baseline; }
+.md-table th { font-weight: 500; color: var(--ink); }
+.md-table td code, .md-table th code { overflow-wrap: anywhere; }
 .vs-horizon { color: var(--success); }
 .vs-java { color: var(--danger); }
 .vs-tie, .vs-none { color: var(--muted); }
