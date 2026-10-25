@@ -371,7 +371,9 @@ impl Game<'_> {
                         "vehicle": m.extra.mount,
                     })),
                 });
-                state["passenger"] = serde_json::json!(m.extra.passenger);
+                // Drawn seated (Entity.isPassenger); set apart because the
+                // json! above is at the macro recursion limit.
+                state["passenger"] = m.extra.passenger.into();
                 state
             })
             .collect();
