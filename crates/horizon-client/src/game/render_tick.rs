@@ -100,7 +100,10 @@ impl Game<'_> {
                 skybox: self.dim == Dim::Overworld,
                 blindness: None,
                 darkness: self.darkness_fog(),
-                boss_world_fog: self.dragon_bar_shown(),
+                darken_world: self
+                    .boss_overlay
+                    .darken_amount(self.clock.fraction() as f32),
+                boss_world_fog: self.boss_overlay.should_create_world_fog(),
             },
         )
     }

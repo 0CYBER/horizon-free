@@ -206,9 +206,8 @@ class Game:
         self.home = work / 'home'
         for d in ('home', 'launcher', 'data', 'config'):
             (work / d).mkdir(parents=True)
-        self.env = dict(os.environ, HORIZON_HOME=str(self.home), HORIZON_LAUNCHER_HOME=str(work / 'launcher'),
-                        XDG_DATA_HOME=str(work / 'data'), XDG_CONFIG_HOME=str(work / 'config'),
-                        HORIZON_LAUNCHER_NO_SELF_UPDATE='1', HORIZON_NO_AUDIO='1', HORIZON_TELEMETRY_URL='off')
+        self.env = lab.game_env(HORIZON_HOME=self.home, HORIZON_LAUNCHER_HOME=work / 'launcher',
+                                XDG_DATA_HOME=work / 'data', XDG_CONFIG_HOME=work / 'config', HORIZON_TELEMETRY_URL='off')
         self.base = [str(bins / 'horizon-ctl'), '--socket', str(work / 'c.sock')]
         self.log = work / 'c.log'
         reply = self('launch', '--game', bins / 'horizon-client', '--offscreen', '--resources', resources)
@@ -343,7 +342,7 @@ class Run:
                          ('XDG_CONFIG_HOME', 'config')):
             (work / 'servers' / sub).mkdir(parents=True)
             os.environ[var] = str(work / 'servers' / sub)
-        os.environ.update(HORIZON_LAUNCHER_NO_SELF_UPDATE='1', HORIZON_NO_AUDIO='1', HORIZON_TELEMETRY_URL='off')
+        os.environ.update(lab.game_env(HORIZON_TELEMETRY_URL='off'))
         game = self.game = Game(Path(self.args.bin), self.resources, work / 'game')
         servers_dat = game.home / 'servers.dat'
         downloads = game.home / 'downloads'

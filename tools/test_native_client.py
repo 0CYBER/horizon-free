@@ -71,7 +71,7 @@ def main():
         str(executable), '--radius', '1', '--frames', '30',
         '--smoke-report', str(report), '--timeout-seconds', '60']
     with (root / 'startup-smoke.log').open('w') as log:
-        subprocess.run(command, cwd=lab.ROOT, env=environment, check=True,
+        subprocess.run(command, cwd=lab.ROOT, env=lab.game_env(environment), check=True,
                        stdout=log, stderr=subprocess.STDOUT, timeout=120)
     result = json.loads(report.read_text())
     if (result.get('error') is not None or result.get('presented_frames') != 30

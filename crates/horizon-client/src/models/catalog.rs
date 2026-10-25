@@ -41,9 +41,12 @@ pub struct BakedModel {
 }
 type VariantKey = (String, [u8; 3], bool);
 pub struct StateModels {
-    choices: Vec<CompiledChoices>,
-    states: BTreeMap<BlockStateId, (usize, SelectedModels)>,
-    baked: BTreeMap<VariantKey, BakedModel>,
+    /// Each definition's choices, a variant standing as its index in `baked`.
+    choices: Vec<CompiledChoices<u32>>,
+    /// By state id: its definition in `choices` and the models it selects.
+    states: Vec<Option<(usize, SelectedModels)>>,
+    /// Every transformed model once, with the variant it was baked from.
+    baked: Vec<(Variant, BakedModel)>,
 }
 fn key(variant: &Variant) -> VariantKey {
     (variant.model.clone(), variant.rotations, variant.uv_lock)
@@ -85,7 +88,7 @@ impl StateModels {
         models: &crate::model_library::ParsedModels,
     ) -> Result<Self> {
         let mut choices = Vec::new();
-        let mut states = BTreeMap::new();
+        let mut states = vec![None; registry.len()];
         let mut variants = BTreeSet::new();
         let mut by_name: std::collections::HashMap<&str, Vec<BlockStateId>> =
             std::collections::HashMap::new();
@@ -178,7 +181,7 @@ impl StateModels {
             }
             for ((id, _), selected) in native_order.into_iter().zip(bound) {
                 if let Some(selected) = selected {
-                    states.insert(id, (choices.len(), selected));
+                    states[id.0 as usize] = Some((choices.len(), selected));
                 }
             }
             for choice in definition
@@ -211,7 +214,8 @@ impl StateModels {
                 models.block_library_or_missing(root, names)?
             }
         };
-        let mut baked = BTreeMap::new();
+        let mut baked = Vec::with_capacity(variants.len());
+        let mut index = BTreeMap::new();
         for (name, turns, lock) in variants {
             let model = library.resolve(&name)?;
             let particle = model
@@ -233,16 +237,22 @@ impl StateModels {
                     })
                     .collect::<Result<_>>()?;
             let cube = super::cube::cube_styles(&faces);
-            baked.insert(
-                (name, turns, lock),
-                BakedModel {
-                    ambient_occlusion: model.ambient_occlusion,
-                    particle,
-                    faces,
-                    cube,
-                },
-            );
+            index.insert((name.clone(), turns, lock), baked.len() as u32);
+            let variant = Variant {
+                model: name,
+                rotations: turns,
+                uv_lock: lock,
+            };
+            let model = BakedModel {
+                ambient_occlusion: model.ambient_occlusion,
+                particle,
+                faces,
+                cube,
+            };
+            baked.push((variant, model));
         }
+        // Every variant of every definition was baked above.
+        let choices = choices.iter().map(|c| c.map(|v| index[&key(v)])).collect();
         Ok(Self {
             choices,
             states,
@@ -260,26 +270,47 @@ impl StateModels {
     /// `BlockStateModel.particleMaterial`: the particle sprite layer of the
     /// state's first variant (see `CompiledChoices::particle_variant`).
     pub fn particle(&self, state: BlockStateId) -> Option<u32> {
-        let (choice, selected) = self.states.get(&state)?;
-        let variant = self.choices[*choice].particle_variant(selected)?;
-        self.baked.get(&key(variant))?.particle
+        let (choice, selected) = self.state(state)?;
+        let model = self.choices[*choice].particle_variant(selected)?;
+        self.baked[*model as usize].1.particle
     }
     pub fn collect_seeded(
         &self,
         state: BlockStateId,
         seed: i64,
     ) -> Result<Vec<(&Variant, &BakedModel)>> {
-        let (choice, selected) = self
-            .states
-            .get(&state)
-            .ok_or("unbound gallery block state")?;
+        let mut models = Vec::new();
+        self.each_seeded(state, seed, |(variant, model)| {
+            models.push((variant, model))
+        })?;
+        Ok(models)
+    }
+    /// The models a block draws at `position`, into `out` (cleared first):
+    /// `collect` for the mesher, which reuses one list for every block.
+    pub fn models_at<'a>(
+        &'a self,
+        state: BlockStateId,
+        position: BlockPos,
+        out: &mut Vec<&'a BakedModel>,
+    ) -> Result<()> {
+        out.clear();
+        self.each_seeded(state, position_seed(position), |(_, model)| out.push(model))
+    }
+    fn each_seeded<'a>(
+        &'a self,
+        state: BlockStateId,
+        seed: i64,
+        mut f: impl FnMut(&'a (Variant, BakedModel)),
+    ) -> Result<()> {
+        let (choice, selected) = self.state(state).ok_or("unbound gallery block state")?;
         let mut random = LegacyRandom::new(seed);
-        let mut variants = Vec::new();
-        self.choices[*choice].collect(selected, &mut random, &mut variants)?;
-        variants
-            .into_iter()
-            .map(|v| Ok((v, self.baked.get(&key(v)).ok_or("unbaked block model")?)))
-            .collect()
+        self.choices[*choice].for_each(selected, &mut random, |&model| {
+            f(&self.baked[model as usize]);
+        })?;
+        Ok(())
+    }
+    fn state(&self, state: BlockStateId) -> Option<&(usize, SelectedModels)> {
+        self.states.get(state.0 as usize)?.as_ref()
     }
 }
 
