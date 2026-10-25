@@ -312,6 +312,15 @@ and by hand; pushes to `launcher` and `launcher-*` branches only build.
 - Published with `--latest=false`: the repository's latest release stays a game release. Notes list the pull
   requests under New and Fixed; Kira posts launcher releases without pinging.
 
+Making a launcher release GitHub's latest instead would break servers: every `horizon-server` already installed,
+`install.sh` and `install.ps1` ask for `releases/latest` and expect the game's archives there, and a server that
+can't update can't fetch the fix either. So the game release stays the latest, and it sends people to the launcher
+(#1647): its notes open with a "Want to play? Download the Horizon launcher" block (`PLAYERS` in
+`tools/release_train.py`: raw HTML, which GitHub shows and launchers' notes skip; the site's Releases page leaves
+it out too), and its archives carry labels ("Game files the
+launcher installs: Linux (…)") that GitHub shows in place of the file names. Everything that downloads matches
+the asset's name, which is unchanged.
+
 Starting by hand, pausing and rolling back work as for the game (`gh workflow run launcher …`,
 `RELEASES_PAUSED`, `gh release edit launcher@X.Y.Z --draft`). Launchers older than the withdrawn release then
 see the previous one as the newest; launchers that already updated keep running.

@@ -1,6 +1,7 @@
 //! The JDK that compiles and runs the vanilla exporters. They call Mojang's own code, so they
 //! stay Java; everything around them is here.
 
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -13,6 +14,20 @@ pub struct Jdk {
 
 const TIMEOUT: Duration = Duration::from_secs(3600);
 
+/// Exporters and JDK probes write to pipes or log files: on Windows they open no terminal.
+fn command(program: impl AsRef<OsStr>) -> Command {
+    let command = Command::new(program);
+    #[cfg(windows)]
+    let command = {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut command = command;
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+    };
+    command
+}
+
 fn executable(dir: &Path, name: &str) -> PathBuf {
     dir.join(if cfg!(windows) {
         format!("{name}.exe")
@@ -21,41 +36,82 @@ fn executable(dir: &Path, name: &str) -> PathBuf {
     })
 }
 
-fn on_path(name: &str) -> Option<PathBuf> {
-    std::env::split_paths(&std::env::var_os("PATH")?)
-        .map(|dir| executable(&dir, name))
-        .find(|p| p.is_file())
+/// `fs::canonicalize`, without the `\\?\` prefix it gives a Windows drive path: the
+/// home goes into `JAVA_HOME` and the PATH of preparers, whose lookups don't take it.
+fn real_path(path: PathBuf) -> PathBuf {
+    let real = fs::canonicalize(&path).unwrap_or(path);
+    if cfg!(windows) {
+        without_verbatim(real)
+    } else {
+        real
+    }
 }
 
-/// The major version `javac -version` reports ("javac 25.0.1" → 25; "javac 1.8.0" → 8).
-fn javac_major(javac: &Path) -> Result<u32, String> {
-    let output = Command::new(javac)
+fn without_verbatim(path: PathBuf) -> PathBuf {
+    match path.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => path,
+    }
+}
+
+/// Resolve compiler symlinks before picking its sibling runtime. The first `java` on the
+/// PATH may be an older, runtime-only install; it must not be paired with a newer `javac`.
+fn path_jdks(path: &OsStr) -> Vec<PathBuf> {
+    std::env::split_paths(path)
+        .map(|dir| executable(&dir, "javac"))
+        .filter(|javac| javac.is_file())
+        .map(real_path)
+        .filter_map(|javac| {
+            let bin = javac.parent()?;
+            // macOS's system tools are dispatchers, not a JDK home: JAVA_HOME=/usr
+            // makes them call themselves. /usr/libexec/java_home finds the actual JDK.
+            if bin.file_name()? != "bin"
+                || (cfg!(target_os = "macos") && bin == Path::new("/usr/bin"))
+            {
+                return None;
+            }
+            Some(bin.parent()?.to_path_buf())
+        })
+        .collect()
+}
+
+/// The major version `javac -version` or `java -version` reports, including Java 8's `1.8`.
+fn tool_major(program: &Path, name: &str) -> Result<u32, String> {
+    let output = command(program)
         .arg("-version")
         .stdin(Stdio::null())
         .output()
-        .map_err(|e| format!("{}: {e}", javac.display()))?;
+        .map_err(|e| format!("{}: {e}", program.display()))?;
     let text = String::from_utf8_lossy(&output.stdout).into_owned()
         + &String::from_utf8_lossy(&output.stderr);
+    // macOS ships /usr/bin/java and /usr/bin/javac as placeholders.
+    if text.contains("Unable to locate a Java Runtime") {
+        return Err(format!(
+            "{} is macOS's placeholder (no Java installed)",
+            program.display()
+        ));
+    }
+    if !output.status.success() {
+        return Err(format!(
+            "{} -version failed ({}): {}",
+            program.display(),
+            output.status,
+            text.trim()
+        ));
+    }
+    let marker = if name == "javac" { "javac" } else { "version" };
     let version = text
         .split_whitespace()
-        .skip_while(|w| *w != "javac")
+        .skip_while(|w| *w != marker)
         .nth(1)
         .ok_or_else(|| {
-            // macOS ships /usr/bin/javac as a placeholder that only says no Java is installed.
-            if text.contains("Unable to locate a Java Runtime") {
-                format!(
-                    "{} is macOS's placeholder (no Java installed)",
-                    javac.display()
-                )
-            } else {
-                format!(
-                    "{} -version printed no version: {}",
-                    javac.display(),
-                    text.trim()
-                )
-            }
+            format!(
+                "{} -version printed no version: {}",
+                program.display(),
+                text.trim()
+            )
         })?;
-    let mut parts = version.split(['.', '-', '+', '_']);
+    let mut parts = version.trim_matches('"').split(['.', '-', '+', '_']);
     let first: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
     Ok(if first == 1 {
         parts.next().and_then(|p| p.parse().ok()).unwrap_or(0)
@@ -160,11 +216,10 @@ pub fn minecraft_runtimes(runtime: &Path) -> Vec<PathBuf> {
     homes
 }
 
-/// Finds a JDK with `javac` of at least `major`, the version research-lock.json pins:
-/// `JAVA_HOME` when it holds one, else `javac` and `java` on the PATH (as the Python preparer
-/// ran them), else, on macOS, the JDK `/usr/libexec/java_home -v <major>` reports, else the JDK
-/// homes in `more` (the launcher's pick, Minecraft's own runtimes), else a JDK in the folders
-/// installers put them in (`jdk_parents`).
+/// Finds a JDK whose compiler and runtime are both at least `major`, the version
+/// research-lock.json pins: `JAVA_HOME`, else JDKs on the PATH, else, on macOS, the JDK
+/// `/usr/libexec/java_home -v <major>` reports, else the homes in `more` (the launcher's pick,
+/// Minecraft's own runtimes), else the folders installers use (`jdk_parents`).
 pub fn find(major: i64, more: &[PathBuf]) -> Result<Jdk, String> {
     let need = format!(
         "Java {major} is needed (a JDK with javac, e.g. Eclipse Temurin {major}). \
@@ -179,11 +234,14 @@ pub fn find(major: i64, more: &[PathBuf]) -> Result<Jdk, String> {
             "JAVA_HOME",
         ));
     }
-    if let (Some(javac), Some(java)) = (on_path("javac"), on_path("java")) {
-        candidates.push((javac, java, "PATH"));
+    if let Some(path) = std::env::var_os("PATH") {
+        for home in path_jdks(&path) {
+            let bin = home.join("bin");
+            candidates.push((executable(&bin, "javac"), executable(&bin, "java"), "PATH"));
+        }
     }
     if cfg!(target_os = "macos") {
-        if let Ok(out) = Command::new("/usr/libexec/java_home")
+        if let Ok(out) = command("/usr/libexec/java_home")
             .args(["-v", &major.to_string()])
             .stderr(Stdio::null())
             .output()
@@ -224,10 +282,19 @@ pub fn find(major: i64, more: &[PathBuf]) -> Result<Jdk, String> {
             ));
             continue;
         }
-        match javac_major(&javac) {
-            Ok(found) if i64::from(found) >= major => return Ok(Jdk { javac, java }),
-            Ok(found) => problems.push(format!("{from} has Java {found} ({})", javac.display())),
-            Err(e) => problems.push(e),
+        let checked = [(&javac, "javac"), (&java, "java")]
+            .into_iter()
+            .try_for_each(|(program, name)| {
+                let found = tool_major(program, name)?;
+                if i64::from(found) >= major {
+                    Ok(())
+                } else {
+                    Err(format!("{name} {found} ({})", program.display()))
+                }
+            });
+        match checked {
+            Ok(()) => return Ok(Jdk { javac, java }),
+            Err(e) => problems.push(format!("{from}: {e}")),
         }
     }
     if problems.is_empty() {
@@ -260,7 +327,7 @@ impl Jdk {
     /// `javac --release <major> -proc:none` with Python's `subprocess.run(..., check=True,
     /// stdout=log, stderr=STDOUT, timeout=3600)`.
     pub fn javac(&self, major: i64, args: &[String], log: &fs::File) -> Result<(), String> {
-        let mut command = Command::new(&self.javac);
+        let mut command = command(&self.javac);
         command
             .args(["--release", &major.to_string(), "-proc:none"])
             .args(args);
@@ -268,7 +335,7 @@ impl Jdk {
     }
 
     pub fn java(&self, args: &[String], cwd: Option<&Path>, log: &fs::File) -> Result<(), String> {
-        let mut command = Command::new(&self.java);
+        let mut command = command(&self.java);
         command.args(args);
         if let Some(dir) = cwd {
             command.current_dir(dir);
@@ -312,6 +379,22 @@ fn run(mut command: Command, log: &fs::File) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verbatim_drive_paths_lose_their_prefix() {
+        let jdk = r"C:\Program Files\Eclipse Adoptium\jdk-25\bin\javac.exe";
+        assert_eq!(
+            without_verbatim(PathBuf::from(format!(r"\\?\{jdk}"))),
+            PathBuf::from(jdk)
+        );
+        // A UNC share keeps its verbatim form: stripping it would leave no valid path.
+        let unc = r"\\?\UNC\server\jdk\bin\javac.exe";
+        assert_eq!(without_verbatim(PathBuf::from(unc)), PathBuf::from(unc));
+        assert_eq!(
+            without_verbatim(PathBuf::from("/usr/lib/jvm/bin/javac")),
+            PathBuf::from("/usr/lib/jvm/bin/javac")
+        );
+    }
 
     #[test]
     fn installed_jdks_prefer_the_pinned_major() {

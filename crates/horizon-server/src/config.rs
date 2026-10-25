@@ -19,22 +19,22 @@ pub const TEMPLATE: &str = r##"# Horizon server settings (docs/server.md). The s
 # every start: edit this file, not that one.
 
 [server]
-motd = "A Minecraft Server"
-port = 25565
+motd = "A Minecraft Server"  # the line under the server's name in the server list
+port = 25565                 # the port players connect to
 bind = ""                    # listen on every address, or only on this one (server-ip)
-max_players = 20
+max_players = 20             # how many players can be online at once
 online_mode = true           # check players' Minecraft accounts (false: anyone joins under any name)
 whitelist = true             # only whitelisted players and operators can join
 enforce_whitelist = false    # kick online players taken off the whitelist
-view_distance = 10
-simulation_distance = 10
+view_distance = 10           # chunks sent around each player
+simulation_distance = 10     # chunks around each player where mobs, crops and redstone tick
 
 [world]
 name = "world"               # the world folder
 seed = ""                    # empty: a random seed on the first start
 game_mode = "survival"       # survival, creative, adventure or spectator
 difficulty = "easy"          # peaceful, easy, normal or hard
-hardcore = false
+hardcore = false             # one life: a player who dies becomes a spectator
 
 # Any other server.properties key, spelled as vanilla spells it, for example:
 # spawn-protection = 16
@@ -43,7 +43,7 @@ hardcore = false
 [engine]
 path = ""                    # the game program; empty: the one installed beside horizon-server
 resources = ""               # the prepared game files; empty: resources/ here, else the usual places
-restart_on_crash = true
+restart_on_crash = true      # start the game again when it crashes
 
 [backups]
 every = "6h"                 # automatic backups while the server runs: 30m, 6h, 1d...; "0" turns them off
@@ -58,7 +58,7 @@ allow_public = false         # true lets bind be any address; never put the pane
 "##;
 
 /// Each typed setting: its section, its name, and the vanilla key it writes.
-const TYPED: [(&str, &str, &str); 14] = [
+pub(crate) const TYPED: [(&str, &str, &str); 14] = [
     ("server", "motd", "motd"),
     ("server", "port", "server-port"),
     ("server", "bind", "server-ip"),

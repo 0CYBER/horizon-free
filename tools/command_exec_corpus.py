@@ -36,6 +36,11 @@ def group_setup():
         *setup('/kill @e[type=!player]'),
         {'op': 'tick', 'n': 25},
         *setup('/fill 0 200 0 15 228 15 air', '/time set 1000', '/weather clear', '/difficulty normal', '/clear @s'),
+        # Before the gamerules above, while the oracle waits for its entities to load (a number of ticks that
+        # depends on the machine), mobs spawn and some die with their drops on: a bat's death rolled
+        # minecraft:entities/bat on 1 vanilla run in 24, one more sequence for the ticking group's
+        # /random reset * to count. Every run starts the script without them.
+        *setup('/random reset *'),
     ]
 
 
@@ -280,10 +285,46 @@ def entities():
         cmd('/execute as @e[tag=h] run say mob'),
         cmd('/execute store result score @s harness_score run data get entity @s SelectedItemSlot'),
         cmd('/kill @e[tag=h]'),
+        # A live rider travels with its vehicle in `/data get`, the way `saveWithoutId`
+        # writes it (#1519): the pig is mounted, so its health is the nested value.
+        cmd('/summon minecraft:cow 4.5 210 8.5 {Tags:["root"],NoAI:1b,Passengers:[{id:"minecraft:pig",NoAI:1b}]}'),
+        cmd('/data get entity @e[tag=root,limit=1] Passengers[0].Health'),
+        cmd('/data get entity @e[tag=root,limit=1] Passengers[0].id'),
+        cmd('/kill @e[tag=root]'),
         *setup('/kill @e[type=minecraft:armor_stand]'),
         {'op': 'tick', 'n': 25},
         cmd('/execute if entity @e[tag=h]'),
     ]
+
+
+def riding_teleport():
+    """Player teleports remove the vehicle, leave it behind and keep the destination (#1473)."""
+    horse = '@e[tag=tp_horse,limit=1]'
+    operations = setup(
+        '/summon minecraft:horse 4.5 220 4.5 {Tame:1b,NoAI:1b,NoGravity:1b,Tags:["tp_horse"]}',
+        '/summon minecraft:marker 8.5 220 0.5 {Tags:["tp_destination"]}',
+    )
+    for teleport in ('/tp @s 8.5 220 0.5', '/teleport @s ~4 220 ~-4',
+                     '/tp @s @e[tag=tp_destination,limit=1]'):
+        operations += [
+            *setup('/tp @s 4.5 220 4.5'),
+            cmd(f'/ride @s mount {horse}'),
+            cmd('/execute on vehicle run say mounted'),
+            # An invalid destination must not dismount the player.
+            cmd('/tp @s 30000000 220 0'),
+            cmd('/execute on vehicle run say still mounted'),
+            cmd(teleport),
+            cmd('/execute on vehicle run say still riding after teleport'),
+            cmd('/data get entity @s Pos'),
+            cmd(f'/data get entity {horse} Pos'),
+            {'op': 'tick', 'n': 60},
+            cmd('/execute on vehicle run say still riding after ticks'),
+            cmd('/data get entity @s Pos'),
+            cmd(f'/data get entity {horse} Pos'),
+            cmd('/ride @s dismount'),
+        ]
+    return operations + setup('/kill @e[tag=tp_horse]', '/kill @e[tag=tp_destination]',
+                              '/tp @s 8.5 230 8.5 0 0')
 
 
 def scores():
@@ -975,6 +1016,7 @@ def groups():
         ('player state', player_state()),
         ('blocks and border', world_blocks()),
         ('entities', entities()),
+        ('riding teleport', riding_teleport()),
         ('scores, teams and bossbars', scores()),
         ('execute', execute()),
         ('levels', levels()),

@@ -1,8 +1,7 @@
 //! The machine a report was measured on. CPU, RAM and OS are detected here; the GPU and the display
 //! come from the program that rendered (the game knows its adapter, the launcher its window).
 
-use std::process::Command;
-
+use horizon_telemetry::system::command_output as output;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -171,12 +170,6 @@ pub fn cpu_seconds(pid: u32) -> Option<f64> {
     let fields: Vec<&str> = stat.rsplit_once(')')?.1.split_whitespace().collect();
     let ticks: f64 = fields.get(11)?.parse::<f64>().ok()? + fields.get(12)?.parse::<f64>().ok()?;
     Some(ticks / 100.0)
-}
-
-fn output(program: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(program).args(args).output().ok()?;
-    let text = String::from_utf8(out.stdout).ok()?.trim().to_owned();
-    (out.status.success() && !text.is_empty()).then_some(text)
 }
 
 #[cfg(target_os = "macos")]

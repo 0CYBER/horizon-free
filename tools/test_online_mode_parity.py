@@ -179,7 +179,7 @@ def run_client(binary, build, port, label, token, discovery):
     shutil.rmtree(directory, ignore_errors=True)
     directory.mkdir()
     report = directory / 'report.json'
-    env = dict(os.environ, HORIZON_NO_AUDIO='1', HORIZON_NET_REPORT=str(report), HORIZON_API_DISCOVERY=discovery)
+    env = lab.game_env(HORIZON_NET_REPORT=report, HORIZON_API_DISCOVERY=discovery)
     command = [binary, '--resources', lab.RESOURCES, '--render-distance', 2,
                '--server', f'127.0.0.1:{port}', '--name', PLAYER]
     if token:
@@ -246,7 +246,7 @@ def run_side(label, command, binary, build, services, discovery):
     props = dict(PROPERTIES, **{'server-port': str(port)})
     (directory / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in props.items()))
     (directory / 'eula.txt').write_text('eula=true\n')
-    os.environ.update(HORIZON_NO_AUDIO='1', HORIZON_API_DISCOVERY=discovery)
+    os.environ.update(lab.game_env(HORIZON_API_DISCOVERY=discovery))
     server = Server(command, directory, f'{label}-online')
     checks = []
     starts = []

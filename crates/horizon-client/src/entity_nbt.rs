@@ -1155,6 +1155,72 @@ pub fn arrow_from_nbt(
     Some((p, tag.get("inBlockState").cloned()))
 }
 
+/// `LargeFireball` and `SmallFireball`: `AbstractHurtingProjectile`'s
+/// `acceleration_power`, `Projectile`'s owner and flags, `ExplosionPower`.
+pub fn fireball_to_nbt(
+    p: &Projectile,
+    uuid: [i32; 4],
+    owner: Option<[i32; 4]>,
+    raw: Option<&Tag>,
+) -> Option<Tag> {
+    let power = match p.kind {
+        ProjectileKind::LargeFireball { power } => Some(power),
+        ProjectileKind::SmallFireball => None,
+        _ => return None,
+    };
+    let base = Base {
+        id: p.kind.id(),
+        uuid,
+        position: p.position,
+        motion: p.velocity,
+        rotation: [p.yaw, p.pitch],
+        on_ground: false,
+        fall_distance: 0.0,
+    };
+    let mut tag = base.tag(raw);
+    put(
+        &mut tag,
+        "acceleration_power",
+        Tag::Double(p.acceleration.to_bits()),
+    );
+    // Projectile: LeftOwner only when set; HasBeenShot once it has ticked
+    // (a fireball saved before its first tick keeps what it was loaded with).
+    if let Tag::Compound(map) = &mut tag {
+        map.remove(&"LeftOwner".into());
+    }
+    if p.left_owner {
+        put(&mut tag, "LeftOwner", Tag::Byte(1));
+    }
+    if p.age > 0 || tag.get("HasBeenShot").is_none() {
+        put(&mut tag, "HasBeenShot", Tag::Byte(i8::from(p.age > 0)));
+    }
+    if let Some(power) = power {
+        put(&mut tag, "ExplosionPower", Tag::Byte(power as i8));
+    }
+    if let Some(owner) = owner {
+        put(&mut tag, "Owner", Tag::IntArray(owner.to_vec()));
+    }
+    Some(tag)
+}
+
+pub fn fireball_from_nbt(tag: &Tag, player: Option<[i32; 4]>) -> Option<Projectile> {
+    let kind = match kind(tag)?.as_str() {
+        "minecraft:fireball" => ProjectileKind::LargeFireball {
+            power: number(tag.get("ExplosionPower")).unwrap_or(1) as i32,
+        },
+        "minecraft:small_fireball" => ProjectileKind::SmallFireball,
+        _ => return None,
+    };
+    let owner = uuid_from_tag(tag.get("Owner"));
+    let from_player = player.is_some() && owner == player;
+    let mut p = Projectile::new(kind, position(tag)?, from_player.then_some(Who::Player));
+    p.velocity = motion(tag);
+    [p.yaw, p.pitch] = rotation(tag);
+    p.left_owner = flag(tag, "LeftOwner");
+    p.acceleration = float(tag.get("acceleration_power")).unwrap_or(0.1);
+    Some(p)
+}
+
 /// `FallingBlockEntity`: BlockState, Time, DropItem, HurtEntities.
 #[allow(clippy::too_many_arguments)]
 pub fn falling_block_to_nbt(
@@ -2137,5 +2203,43 @@ mod sheep_nbt_tests {
             .collect();
         let back = mob_from_nbt(&tag, &types, 2).unwrap();
         assert_eq!((back.extra.color, back.extra.sheared), (14, true));
+    }
+}
+
+#[cfg(test)]
+mod fireball_nbt_tests {
+    use super::*;
+    #[test]
+    fn a_fireball_round_trips_its_flight() {
+        let raw = Tag::compound([
+            ("id", Tag::String("minecraft:fireball".into())),
+            ("Pos", doubles(&[1.0, 70.0, -2.5])),
+            ("Motion", doubles(&[0.0, -0.5, 1.0])),
+            ("ExplosionPower", Tag::Byte(4)),
+            ("acceleration_power", Tag::Double(0.0f64.to_bits())),
+        ]);
+        let p = fireball_from_nbt(&raw, None).unwrap();
+        assert_eq!(p.kind, ProjectileKind::LargeFireball { power: 4 });
+        assert_eq!((p.velocity.z, p.acceleration), (1.0, 0.0));
+        let back = fireball_to_nbt(&p, [1, 2, 3, 4], None, None).unwrap();
+        assert_eq!(number(back.get("ExplosionPower")), Some(4));
+        assert_eq!(float(back.get("acceleration_power")), Some(0.0));
+        // Projectile.addAdditionalSaveData: no LeftOwner unless set, HasBeenShot always.
+        assert!(back.get("LeftOwner").is_none());
+        assert_eq!(number(back.get("HasBeenShot")), Some(0));
+        assert_eq!(
+            read_doubles::<3>(back.get("Motion")),
+            Some([0.0, -0.5, 1.0])
+        );
+        // A default fireball keeps vanilla's power and acceleration.
+        let plain = Tag::compound([
+            ("id", Tag::String("minecraft:fireball".into())),
+            ("Pos", doubles(&[0.0, 0.0, 0.0])),
+        ]);
+        let p = fireball_from_nbt(&plain, None).unwrap();
+        assert_eq!(
+            (p.kind, p.acceleration),
+            (ProjectileKind::LargeFireball { power: 1 }, 0.1)
+        );
     }
 }

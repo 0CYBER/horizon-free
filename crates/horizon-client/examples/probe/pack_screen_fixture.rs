@@ -5,7 +5,7 @@
 //!
 //! usage: pack_screen_fixture RESOURCES CASES OUTPUT
 use horizon_client::{
-    hud::HudAtlas,
+    hud::{HudAtlas, PACK_ICON_SIZE},
     lang,
     pack_screen::{Compat, PackInfo, PackScreen, Source},
     packs::{self, Position},
@@ -13,7 +13,7 @@ use horizon_client::{
     text::Text,
 };
 use serde_json::{Value, json};
-use std::{fmt::Write as _, fs, path::PathBuf};
+use std::{fmt::Write as _, fs, path::PathBuf, sync::Arc};
 
 /// Styled runs: [text, rgb or null, bold, italic, underlined, strikethrough, obfuscated].
 pub fn runs(t: &Text) -> Value {
@@ -105,7 +105,9 @@ pub fn main() -> horizon_client::Result<()> {
                         Some("unknown") => Compat::Unknown,
                         _ => Compat::Compatible,
                     },
-                    icon: p["icon"].as_bool().unwrap_or(false),
+                    icon: p["icon"].as_bool().unwrap_or(false).then(|| {
+                        Arc::from(vec![0; (PACK_ICON_SIZE * PACK_ICON_SIZE * 4) as usize])
+                    }),
                     required: p["required"].as_bool().unwrap_or(false),
                     position: if p["position"] == "top" {
                         Position::Top

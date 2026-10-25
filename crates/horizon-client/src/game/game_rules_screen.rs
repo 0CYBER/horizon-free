@@ -3,6 +3,7 @@
 //! box each, and Done sending the changed ones (ServerboundSetGameRulePacket).
 //! Leaving with changes asks first (ConfirmScreen).
 use horizon_client::{
+    confirm_screen::Confirm,
     font::Font,
     gamerules::{self, GameRules, RULES, Rule, Value},
     hud::{HudAtlas, HudBatch},
@@ -66,9 +67,6 @@ fn parse(r: &Rule, s: &str) -> Option<i32> {
         .flatten()
         .filter(|v| (r.min..=r.max).contains(v))
 }
-fn widest(font: &Font, lines: &[Text]) -> f32 {
-    lines.iter().map(|l| font.width_text(l)).fold(0.0, f32::max)
-}
 fn lines(font: &Font, t: &Text, width: f32) -> Vec<Text> {
     font.split_lines(t, width)
         .into_iter()
@@ -95,38 +93,11 @@ fn yellow() -> u32 {
     named_color("yellow").unwrap_or(0xFFFF55)
 }
 
-/// ConfirmScreen: the title, the message (at most `width - 50` wide), and
-/// Yes / No 16 below, 4 apart, all centred.
-struct Confirm {
-    lines: Vec<(Text, f32, f32)>,
-    buttons: [(f32, f32); 2],
-}
-impl Confirm {
-    fn new(font: &Font, (w, h): (f32, f32)) -> Self {
-        let title = Text::translate("editGamerule.inGame.discardChanges.title", &[]);
-        let message = Text::translate("editGamerule.inGame.discardChanges.message", &[]);
-        let message: Vec<Text> = lines(font, &message, w - 50.0)
-            .into_iter()
-            .take(15)
-            .collect();
-        let (tw, mw) = (font.width_text(&title), widest(font, &message));
-        let mh = 9.0 * message.len() as f32;
-        let col = tw.max(mw).max(304.0);
-        let total = 9.0 + 8.0 + mh + 8.0 + 36.0;
-        let (lx, ly) = (((w - col) / 2.0).trunc(), ((h - total) / 2.0).trunc());
-        let cell = |cw: f32| lx + ((col - cw) / 2.0).trunc();
-        let mid = cell(mw) + (mw / 2.0).trunc();
-        let mut out = vec![(title, cell(tw), ly)];
-        for (i, line) in message.into_iter().enumerate() {
-            let x = mid - (font.width_text(&line) / 2.0).trunc();
-            out.push((line, x, ly + 17.0 + 9.0 * i as f32));
-        }
-        let (bx, by) = (cell(304.0), ly + 9.0 + 8.0 + mh + 8.0 + 16.0);
-        Self {
-            lines: out,
-            buttons: [(bx, by), (bx + 154.0, by)],
-        }
-    }
+/// ConfirmScreen "Game Rule Changes".
+fn confirm(font: &Font, size: (f32, f32)) -> Confirm {
+    let title = Text::translate("editGamerule.inGame.discardChanges.title", &[]);
+    let message = Text::translate("editGamerule.inGame.discardChanges.message", &[]);
+    Confirm::new(font, size, &title, &message)
 }
 
 impl RulesScreen {
@@ -301,13 +272,10 @@ impl RulesScreen {
         let (w, h) = size;
         let on = |x: f32, y: f32, bw: f32, bh: f32| ui::hovered(cursor, x, y, bw, bh);
         if self.confirm {
-            let c = Confirm::new(&atlas.font, size);
-            let [(yx, yy), (nx, ny)] = c.buttons;
-            if on(yx, yy, 150.0, 20.0) {
-                return Some(Exit::Discard);
-            }
-            if on(nx, ny, 150.0, 20.0) {
-                self.confirm = false;
+            match confirm(&atlas.font, size).answer_at(cursor) {
+                Some(true) => return Some(Exit::Discard),
+                Some(false) => self.confirm = false,
+                None => {}
             }
             return None;
         }
@@ -367,7 +335,7 @@ impl RulesScreen {
         let (w, h) = size;
         let on = |(x, y): (f32, f32)| ui::hovered(cursor, x, y, 150.0, 20.0);
         if self.confirm {
-            return Confirm::new(&atlas.font, size).buttons.into_iter().any(on);
+            return confirm(&atlas.font, size).answer_at(cursor).is_some();
         }
         let [done, cancel] = footer(w, h);
         if (on(done) && !self.invalid()) || on(cancel) {
@@ -384,15 +352,11 @@ impl RulesScreen {
         let (w, h) = (batch.width, batch.height);
         ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
         if self.confirm {
-            let c = Confirm::new(&atlas.font, (w, h));
-            for (line, x, y) in &c.lines {
-                batch.text_styled(atlas, line, *x, *y, u32::MAX, true);
-            }
-            for ((bx, by), key) in c.buttons.into_iter().zip(["gui.yes", "gui.no"]) {
-                let hover = ui::hovered(cursor, bx, by, 150.0, 20.0);
-                let label = Text::translate(key, &[]);
-                ui::button(batch, atlas, bx, by, 150.0, 20.0, &label, true, hover);
-            }
+            let labels = [
+                Text::translate("gui.yes", &[]),
+                Text::translate("gui.no", &[]),
+            ];
+            confirm(&atlas.font, (w, h)).draw(batch, atlas, cursor, [&labels[0], &labels[1]]);
             return;
         }
         let rows = self.rows();
