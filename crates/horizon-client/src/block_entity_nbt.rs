@@ -664,7 +664,9 @@ pub fn canonical(tag: &Tag) -> Option<Tag> {
         }
         "minecraft:trial_spawner" => {
             // `TrialSpawnerStateData.Packed` and `FullConfig`: every key is optional
-            // and defaulted by vanilla; they are kept as loaded.
+            // and defaulted by vanilla; they are kept as loaded. No `spawn_data` is
+            // added: an absent one loads as Optional.empty and is not stored, and
+            // an empty entity would keep the spawner from ever picking a mob.
             if let Tag::Compound(c) = tag {
                 for (k, v) in c {
                     let key = k.to_string_lossy();
@@ -675,12 +677,6 @@ pub fn canonical(tag: &Tag) -> Option<Tag> {
                         f.out.insert(k.clone(), v.clone());
                     }
                 }
-            }
-            if !f.out.contains_key(&"spawn_data".into()) {
-                f.put(
-                    "spawn_data",
-                    Tag::compound([("entity", Tag::Compound(Compound::new()))]),
-                );
             }
         }
         "minecraft:vault" => {
@@ -825,6 +821,21 @@ mod tests {
     }
     fn canon(s: &str) -> Tag {
         canonical(&snbt(s)).expect("known type")
+    }
+
+    #[test]
+    fn a_trial_spawner_without_spawn_data_saves_none() {
+        let fresh = canon(
+            r#"{id:"minecraft:trial_spawner",x:1,y:2,z:3,normal_config:"minecraft:trial_chamber/ranged/skeleton/normal"}"#,
+        );
+        assert_eq!(fresh.get("spawn_data"), None);
+        let picked = canon(
+            r#"{id:"minecraft:trial_spawner",x:1,y:2,z:3,spawn_data:{entity:{id:"minecraft:skeleton"}}}"#,
+        );
+        assert_eq!(
+            picked.get("spawn_data"),
+            Some(&snbt(r#"{entity:{id:"minecraft:skeleton"}}"#))
+        );
     }
 
     #[test]
