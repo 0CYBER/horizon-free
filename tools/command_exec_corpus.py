@@ -36,6 +36,11 @@ def group_setup():
         *setup('/kill @e[type=!player]'),
         {'op': 'tick', 'n': 25},
         *setup('/fill 0 200 0 15 228 15 air', '/time set 1000', '/weather clear', '/difficulty normal', '/clear @s'),
+        # Before the gamerules above, while the oracle waits for its entities to load (a number of ticks that
+        # depends on the machine), mobs spawn and some die with their drops on: a bat's death rolled
+        # minecraft:entities/bat on 1 vanilla run in 24, one more sequence for the ticking group's
+        # /random reset * to count. Every run starts the script without them.
+        *setup('/random reset *'),
     ]
 
 
