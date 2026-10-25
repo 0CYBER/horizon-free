@@ -140,8 +140,9 @@ pub(super) struct Remote {
     stepped: HashMap<i32, SteppedInterpolation>,
     /// `LivingEntity.lerpHeadTo`: the head yaw and the ticks left to reach it.
     head_lerps: HashMap<i32, (f32, u32)>,
-    /// Item entities waiting for their item data.
-    pending_items: HashMap<i32, [f64; 3]>,
+    /// Item entities waiting for their item data: where they are and their
+    /// motion.
+    pending_items: HashMap<i32, ([f64; 3], Vec3)>,
     health: (f32, i32, f32),
     /// `LocalPlayer.flashOnSetHealth`: set by the first health the server
     /// sends; from then on a drop starts the hurt animation.
@@ -1386,7 +1387,7 @@ impl Game<'_> {
         }
         if let Some(r) = self.remote.as_mut() {
             if kind == "minecraft:item" {
-                r.pending_items.insert(id, position);
+                r.pending_items.insert(id, (position, Vec3::ZERO));
             }
             r.entities.insert(
                 id,
@@ -1465,6 +1466,23 @@ impl Game<'_> {
                 m.on_ground = on_ground;
                 return;
             }
+            if let Some(p) = r.pending_items.get_mut(&id) {
+                p.0 = position;
+            }
+            // ItemEntity and FallingBlockEntity keep Entity's NO_OP
+            // InterpolationHandler: moveOrInterpolateTo puts them there at
+            // once, and their own tick moves them on between the server's
+            // updates (`tick_remote_entities`).
+            let at = Vec3::new(position[0], position[1], position[2]);
+            if let Some(d) = self.dropped.iter_mut().find(|d| d.id == id as u32) {
+                d.position = at;
+                d.on_ground = on_ground;
+                return;
+            }
+            if let Some(f) = self.falling.iter_mut().find(|f| f.id == id as u32) {
+                f.position = at;
+                return;
+            }
             // AbstractInterpolationHandler.interpolateTo: without a rotation,
             // the one it was heading for.
             let rotation = rotation.or_else(|| r.lerps.get(&id).and_then(|l| l.rotation));
@@ -1476,9 +1494,6 @@ impl Game<'_> {
                     steps: 3,
                 },
             );
-            if let Some(p) = r.pending_items.get_mut(&id) {
-                *p = position;
-            }
         }
         self.turn_remote_object(id, rotation.map(|(yaw, _)| yaw), on_ground);
         self.turn_remote_projectile(id, rotation);
@@ -1811,6 +1826,8 @@ impl Game<'_> {
                     }
                 }
                 self.spawn_entity(p.id, &kind, p.position, rotation);
+                // Entity.recreateFromPacket: setDeltaMovement(packet.getMovement()).
+                self.remote_motion(p.id, p.velocity);
                 if !self.spawn_remote_object(p.id, &kind, p.position, rotation[0], p.data) {
                     self.spawn_remote_projectile(
                         p.id,
@@ -2129,6 +2146,8 @@ impl Game<'_> {
                     pl.velocity = Vec3::new(p.velocity[0], p.velocity[1], p.velocity[2]);
                 }
             }
+            // The same packet for another entity: Entity.lerpMotion.
+            C::SetEntityMotion(p) => self.remote_motion(p.id, p.velocity),
             // ClientPacketListener.handleDamageEvent: LivingEntity.handleDamageEvent
             // jolts the walk animation and restarts the hurt flash. Its hurt
             // sound comes as a sound from Horizon's host, which plays it itself.
@@ -2952,7 +2971,9 @@ impl Game<'_> {
             item.stack = stack;
             return;
         }
-        let Some(p) = position else { return };
+        let Some((p, velocity)) = position else {
+            return;
+        };
         let at = Vec3::new(p[0], p[1], p[2]);
         let bob_offset = self.world.random.next_float() * std::f32::consts::PI * 2.0;
         self.dropped.push(ItemEntity {
@@ -2963,13 +2984,30 @@ impl Game<'_> {
             stack,
             position: at,
             previous: at,
-            velocity: Vec3::ZERO,
+            velocity,
             on_ground: false,
             age: 0,
             pickup_delay: 0,
             bob_offset,
             ticks: 0,
         });
+    }
+    /// `Entity.lerpMotion` (and `recreateFromPacket`'s motion) for the
+    /// entities whose own tick moves them on a client: dropped items and
+    /// falling blocks.
+    fn remote_motion(&mut self, id: i32, velocity: [f64; 3]) {
+        let v = Vec3::new(velocity[0], velocity[1], velocity[2]);
+        if let Some(d) = self.dropped.iter_mut().find(|d| d.id == id as u32) {
+            d.velocity = v;
+        } else if let Some(f) = self.falling.iter_mut().find(|f| f.id == id as u32) {
+            f.velocity = v;
+        } else if let Some(p) = self
+            .remote
+            .as_mut()
+            .and_then(|r| r.pending_items.get_mut(&id))
+        {
+            p.1 = v;
+        }
     }
     fn apply_remote_health(&mut self) {
         let Some((health, food, saturation)) = self.remote.as_ref().map(|r| r.health) else {
@@ -3491,20 +3529,12 @@ impl Game<'_> {
                 l.steps -= 1;
             }
         }
+        // ItemEntity.tick runs on a client too: gravity, collisions and
+        // friction move the item between the server's updates (every 20
+        // ticks), and only the server removes it.
+        let (world, facts, collision) = (&self.world, self.res.facts(), self.collision);
         for d in self.dropped.iter_mut().filter(|_| running) {
-            d.previous = d.position;
-            d.age += 1;
-            if let Some(l) = lerps.get_mut(&(d.id as i32))
-                && l.steps > 0
-            {
-                let n = f64::from(l.steps);
-                d.position = Vec3::new(
-                    d.position.x + (l.target[0] - d.position.x) / n,
-                    d.position.y + (l.target[1] - d.position.y) / n,
-                    d.position.z + (l.target[2] - d.position.z) / n,
-                );
-                l.steps -= 1;
-            }
+            d.tick(world, facts, collision, false);
         }
         head_lerps.retain(|_, (_, steps)| *steps > 0);
         for (item, ticks, at, eye, pitch, yaw) in using {
