@@ -10,6 +10,8 @@ use crate::{
 use horizon_core::geometry::{Aabb, Vec3};
 use horizon_world::block_collision::BlockCollisionRegistry;
 
+mod fluids;
+
 #[derive(Clone, Debug)]
 pub struct ItemEntity {
     pub health: i32,
@@ -165,18 +167,16 @@ impl ItemEntity {
         facts: &BlockFacts,
         collision: &BlockCollisionRegistry<'_>,
         no_physics: bool,
+        fluids: &crate::motion::FluidResources,
     ) -> bool {
         self.ticks += 1;
         self.previous = self.position;
         if self.pickup_delay > 0 && self.pickup_delay != u32::MAX {
             self.pickup_delay -= 1;
         }
-        let eye = world.block(
-            self.position.x.floor() as i32,
-            (self.position.y + 0.1).floor() as i32,
-            self.position.z.floor() as i32,
-        );
-        let in_water = facts.get(eye).fluid == Fluid::Water;
+        // Entity.baseTick pushes before ItemEntity applies buoyancy and moves.
+        let (water_height, lava_height) = self.update_fluids(world, fluids);
+        let in_water = water_height > f64::from(0.1f32);
         if in_water {
             // ItemEntity.setUnderwaterMovement
             self.velocity = Vec3::new(
@@ -184,7 +184,7 @@ impl ItemEntity {
                 self.velocity.y + if self.velocity.y < 0.06 { 5.0e-4 } else { 0.0 },
                 self.velocity.z * 0.99,
             );
-        } else if facts.get(eye).fluid == Fluid::Lava {
+        } else if lava_height > f64::from(0.1f32) {
             self.velocity = Vec3::new(
                 self.velocity.x * 0.95,
                 self.velocity.y + if self.velocity.y < 0.06 { 5.0e-4 } else { 0.0 },
@@ -245,6 +245,8 @@ impl ItemEntity {
             }
         }
         self.age += 1;
+        // ItemEntity.tick refreshes immersion and pushes again after moving.
+        self.update_fluids(world, fluids);
         self.age < 6000 && self.position.y > -128.0
     }
     /// `ItemEntity.isMergable` at `age`: a stack below its size whose pickup

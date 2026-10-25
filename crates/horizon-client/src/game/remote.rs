@@ -3464,7 +3464,7 @@ impl Game<'_> {
         // ticks), and only the server removes it.
         let (world, facts, collision) = (&self.world, self.res.facts(), self.collision);
         for d in self.dropped.iter_mut().filter(|_| running) {
-            d.tick(world, facts, collision, false);
+            d.tick(world, facts, collision, false, &self.res.motion().fluids);
         }
         head_lerps.retain(|_, (_, steps)| *steps > 0);
         for (item, ticks, at, eye, pitch, yaw) in using {

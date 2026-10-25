@@ -2238,7 +2238,13 @@ impl Game<'_> {
                 let speed = self.world.random.next_float() * 0.2 + 0.1;
                 item.move_towards_closest_space(&self.world, self.res.facts(), speed);
             }
-            let alive = item.tick(&self.world, self.res.facts(), self.collision, no_physics);
+            let alive = item.tick(
+                &self.world,
+                self.res.facts(),
+                self.collision,
+                no_physics,
+                &self.res.motion().fluids,
+            );
             cells.moved(i, item.previous, item.position);
             // ItemEntity.tick: merge every 2 ticks while moving between
             // blocks, every 40 otherwise, before the lifetime check.
