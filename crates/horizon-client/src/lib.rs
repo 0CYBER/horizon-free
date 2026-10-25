@@ -177,6 +177,7 @@ pub mod tab_list;
 pub mod telemetry;
 pub mod testgen;
 pub mod text;
+pub mod text_display;
 pub mod tick_chunk_membership;
 pub mod ticket_levels;
 pub mod title;
