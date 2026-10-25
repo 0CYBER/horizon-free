@@ -207,15 +207,18 @@ impl Connection {
         Self::connect_addresses(host, addrs, timeout)
     }
     fn connect_addresses(host: &str, addrs: Vec<SocketAddr>, timeout: Duration) -> Result<Self> {
-        let addrs = ipv4_first(addrs);
-        let mut last = Error::new(format!("Unknown host {host}"));
-        for addr in addrs {
+        // Report the first address's failure: it is the one vanilla tries, and the IPv6
+        // fallbacks after it often fail only because the client has no IPv6 route.
+        let mut first = None;
+        for addr in ipv4_first(addrs) {
             match TcpStream::connect_timeout(&addr, timeout) {
                 Ok(stream) => return Self::from_stream(stream),
-                Err(e) => last = Error::new(format!("Connection refused: {e}")),
+                Err(e) => {
+                    first.get_or_insert_with(|| Error::new(format!("Connection refused: {e}")));
+                }
             }
         }
-        Err(last)
+        Err(first.unwrap_or_else(|| Error::new(format!("Unknown host {host}"))))
     }
     pub fn from_stream(stream: TcpStream) -> Result<Self> {
         stream.set_nodelay(true)?;
@@ -333,7 +336,7 @@ mod tests {
     use std::net::TcpListener;
 
     #[test]
-    fn ipv4_addresses_come_first_in_resolver_order() {
+    fn ipv4_first_keeps_each_familys_order() {
         let a = |s: &str| s.parse::<SocketAddr>().unwrap();
         let resolved = vec![
             a("[2001:db8::1]:25565"),
@@ -350,6 +353,51 @@ mod tests {
                 a("[2001:db8::2]:25565"),
             ]
         );
+    }
+
+    fn peer(c: &Connection) -> SocketAddr {
+        match &c.reader.stream {
+            Stream::Tcp(s) => s.peer_addr().unwrap(),
+            Stream::Memory(_) => panic!("not a socket"),
+        }
+    }
+
+    /// Binds `[::1]`, or `None` where the machine has no IPv6 loopback.
+    fn ipv6_loopback() -> Option<TcpListener> {
+        let listener = TcpListener::bind("[::1]:0");
+        if listener.is_err() {
+            eprintln!("skipped: no IPv6 loopback");
+        }
+        listener.ok()
+    }
+
+    #[test]
+    fn connects_to_ipv4_although_the_resolver_lists_ipv6_first() {
+        // Both listen, as with a server whose IPv6 address accepts and then resets.
+        let Some(v6_listener) = ipv6_loopback() else {
+            return;
+        };
+        let v4_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let v6 = v6_listener.local_addr().unwrap();
+        let v4 = v4_listener.local_addr().unwrap();
+        let c =
+            Connection::connect_addresses("test", vec![v6, v4], Duration::from_secs(5)).unwrap();
+        assert_eq!(peer(&c), v4);
+    }
+
+    #[test]
+    fn falls_back_to_ipv6_when_ipv4_refuses() {
+        let Some(v6_listener) = ipv6_loopback() else {
+            return;
+        };
+        let v6 = v6_listener.local_addr().unwrap();
+        let closed = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let c = Connection::connect_addresses("test", vec![v6, closed], Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(peer(&c), v6);
     }
 
     #[test]
