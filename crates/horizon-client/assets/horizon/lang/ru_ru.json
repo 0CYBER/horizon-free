@@ -1,0 +1,15 @@
+{
+  "horizon.options.controller": "Геймпад",
+  "horizon.options.vibration": "Вибрация",
+  "horizon.options.adaptive_triggers": "Адаптивные триггеры",
+  "horizon.options.lightbar": "Подсветка",
+  "horizon.options.look_sensitivity": "Чувствительность обзора",
+  "horizon.options.invert_x": "Инверсия обзора по X",
+  "horizon.options.invert_y": "Инверсия обзора по Y",
+  "horizon.options.sneak_button": "Кнопка приседания",
+  "horizon.options.move_deadzone": "Мёртвая зона движения",
+  "horizon.options.look_deadzone": "Мёртвая зона обзора",
+  "horizon.options.button_glyphs": "Символы кнопок",
+  "horizon.options.menu_navigation": "Навигация по меню",
+  "horizon.options.on_screen_keyboard": "Экранная клавиатура"
+}

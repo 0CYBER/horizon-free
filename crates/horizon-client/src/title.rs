@@ -581,23 +581,57 @@ impl Title {
                 let cx = (w / 2.0).floor();
                 let y = (h / 4.0).floor() + 48.0;
                 let mut buttons = vec![
-                    b(cx - 100.0, y, 200.0, "Singleplayer", true, 1),
-                    b(cx - 100.0, y + 24.0, 200.0, "Multiplayer", true, 4),
-                    b(cx - 100.0, y + 48.0, 200.0, "Minecraft Realms", false, 0),
-                    b(cx - 100.0, y + 96.0, 98.0, "Options...", true, 3),
-                    b(cx + 2.0, y + 96.0, 98.0, "Quit Game", true, 2),
-                ];
-                for (i, (label, enabled, id, icon, size)) in [
-                    // Horizon's Join a Friend (an invite code) behind
-                    // vanilla's Friends button.
-                    ("Friends", true, 5, "friends/friends", 15.0),
-                    ("Language", true, 6, "icon/language", 15.0),
-                    (
-                        "Accessibility Settings",
+                    b(
+                        cx - 100.0,
+                        y,
+                        200.0,
+                        &lang::get_or("menu.singleplayer", "Singleplayer"),
                         true,
+                        1,
+                    ),
+                    b(
+                        cx - 100.0,
+                        y + 24.0,
+                        200.0,
+                        &lang::get_or("menu.multiplayer", "Multiplayer"),
+                        true,
+                        4,
+                    ),
+                    b(
+                        cx - 100.0,
+                        y + 48.0,
+                        200.0,
+                        &lang::get_or("menu.online", "Minecraft Realms"),
+                        false,
+                        0,
+                    ),
+                    b(
+                        cx - 100.0,
+                        y + 96.0,
+                        98.0,
+                        &lang::get_or("menu.options", "Options..."),
+                        true,
+                        3,
+                    ),
+                    b(
+                        cx + 2.0,
+                        y + 96.0,
+                        98.0,
+                        &lang::get_or("menu.quit", "Quit Game"),
+                        true,
+                        2,
+                    ),
+                ];
+                // CommonButtons' icon buttons; Horizon's Join a Friend (an
+                // invite code) sits behind vanilla's Friends button.
+                for (i, (key, plain, id, icon)) in [
+                    ("gui.friends.open", "Friends", 5, "friends/friends"),
+                    ("options.language", "Language...", 6, "icon/language"),
+                    (
+                        "options.accessibility",
+                        "Accessibility Settings...",
                         7,
                         "icon/accessibility",
-                        15.0,
                     ),
                 ]
                 .into_iter()
@@ -607,11 +641,11 @@ impl Title {
                         cx - 34.0 + i as f32 * 24.0,
                         y + 72.0,
                         20.0,
-                        label,
-                        enabled,
+                        &lang::get_or(key, plain),
+                        true,
                         id,
                     );
-                    button.icon = Some((icon, size));
+                    button.icon = Some((icon, 15.0));
                     buttons.push(button);
                 }
                 buttons
@@ -621,7 +655,7 @@ impl Title {
                     (w / 2.0).floor() - 154.0,
                     h - 52.0,
                     150.0,
-                    "Play Selected World",
+                    &lang::get_or("selectWorld.select", "Play Selected World"),
                     selected.is_some(),
                     10,
                 ),
@@ -629,7 +663,7 @@ impl Title {
                     (w / 2.0).floor() + 4.0,
                     h - 52.0,
                     150.0,
-                    "Create New World",
+                    &lang::get_or("selectWorld.create", "Create New World"),
                     true,
                     11,
                 ),
@@ -657,7 +691,14 @@ impl Title {
                     selected.is_some(),
                     15,
                 ),
-                b((w / 2.0).floor() + 83.0, h - 28.0, 71.0, "Back", true, 12),
+                b(
+                    (w / 2.0).floor() + 83.0,
+                    h - 28.0,
+                    71.0,
+                    &lang::get_or("gui.back", "Back"),
+                    true,
+                    12,
+                ),
             ],
             Mode::Create {
                 creative, options, ..

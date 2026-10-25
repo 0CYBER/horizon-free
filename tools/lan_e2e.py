@@ -117,6 +117,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
               the host has them; a falling block lands on both sides.
 - shulker_bullets: every shot a shulker fires has its own id and flies on both sides, following
               the same trajectory; the bullets disappear on both sides when they hit blocks (#1494).
+- crystals:  the host and the guest punch placed End crystals in survival and creative; the blast
+             kills the survival player, and attacks respect reach and blocks in front (#1532).
 - thrown:    a splash potion and an eye of ender the host and the guest each throw fly on both
              sides (#1363, #1391);
 - sparks:    level events' particles on both sides: the host's and the guest's bone meal on wheat
@@ -6160,6 +6162,94 @@ def check_falling(host, guest, out):
 
 CHECKS += ['falling']
 CHECK_FNS.update(falling=check_falling)
+
+
+def check_crystals(host, guest, out):
+    """#1532: a real left click detonates a placed End crystal in survival and creative,
+    on the host and the guest; reach, block occlusion and passing right clicks still apply."""
+    spots = apart(host, guest)
+    seen = {}
+
+    def crystals(game, at):
+        return [p for p in game('status')['projectiles'] if p['kind'] == 'minecraft:end_crystal'
+                and math.dist(p['position'], at) < 0.01]
+
+    for label, player, other in (('host', host, guest), ('guest', guest, host)):
+        x, y, z = spots[label]
+        y += 32  # Above the terrain and its entities: EndCrystalItem requires an empty box.
+        at = [x + 2.5, y, z + 0.5]
+        other('command', command='gamemode creative')
+        for mode in ('creative', 'survival'):
+            case = f'{label}-{mode}'
+            try:
+                host('command', command=f'fill {x - 5} {y - 1} {z - 3} {x + 5} {y - 1} {z + 3} minecraft:obsidian')
+                host('command', command=f'fill {x - 5} {y} {z - 3} {x + 5} {y + 3} {z + 3} minecraft:air')
+                player('command', command=f'gamemode {mode}')
+                player('command', command='clear @s')
+                player('command', command='effect clear @s')
+                player('command', command='effect give @s minecraft:instant_health 1 5 true')
+                player('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+                player('command', command='give @s minecraft:end_crystal 1')
+                player.raw('select', 1)
+                player.wait(10)
+                player.raw('look-at', at[0], y - 0.01, at[2])
+                player.raw('mouse', 'right', 'click')
+                player.wait(10)
+                placed = crystals(player, at)
+                assert len(placed) == 1, f'{case}: placing the crystal: {placed}'
+                crystal_id = placed[0]['id']
+                tracked = crystals(other, at)
+                assert crystal_id != 0 and [p['id'] for p in tracked] == [crystal_id], f'{case}: crystal not tracked on both sides'
+
+                # The nearest face is six blocks away, beyond both modes' attack reach.
+                player('command', command=f'tp @s {x - 4.5} {y} {z + 0.5}')
+                player.wait(5)
+                player.raw('look-at', at[0], y + 1, at[2])
+                player.raw('mouse', 'left', 'click')
+                player.wait(10)
+                assert crystals(player, at), f'{case}: attacked a crystal out of reach'
+
+                player('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+                host('command', command=f'fill {x + 1} {y} {z} {x + 1} {y + 2} {z} minecraft:obsidian')
+                player.wait(5)
+                player.raw('look-at', at[0], y + 1, at[2])
+                player.raw('mouse', 'left', 'click')
+                player.wait(10)
+                assert crystals(player, at), f'{case}: attacked a crystal through a block'
+                host('command', command=f'fill {x + 1} {y} {z} {x + 1} {y + 2} {z} minecraft:air')
+                player('command', command='item replace entity @s weapon.mainhand with minecraft:shield')
+                player.wait(10)
+                player.raw('look-at', at[0], y + 1, at[2])
+                player.raw('mouse', 'right', 'down')
+                player.wait(10)
+                assert player('state').get('using') and server_using(host, player), f'{case}: crystal consumed right click'
+                player.raw('mouse', 'right', 'up')
+                player('command', command='clear @s')
+                player.wait(5)
+                player.shot(out, f'crystals-{mode}-before')
+
+                player.raw('mouse', 'left', 'click')
+                player.wait(40)
+                remaining = {g.name: len(crystals(g, at)) for g in (player, other)}
+                health = server_player(host, player)['health']
+                screen = player('state').get('screen')
+                seen[case] = {'id': crystal_id, 'remaining': remaining, 'health': health, 'screen': screen}
+                player.shot(out, f'crystals-{mode}-after')
+                assert not any(remaining.values()), f'{case}: left click left the crystal intact: {seen[case]}'
+                assert health == (20 if mode == 'creative' else 0), f'{case}: explosion damage: {seen[case]}'
+                assert screen == ('playing' if mode == 'creative' else 'dead'), f'{case}: explosion death: {seen[case]}'
+            finally:
+                if player('state').get('screen') == 'dead':
+                    respawn_when_ready(player)
+                    player.wait(30)
+                else:
+                    player.raw('mouse', 'right', 'up')
+                player('command', command='gamemode creative')
+    return seen
+
+
+CHECKS += ['crystals']
+CHECK_FNS.update(crystals=check_crystals)
 
 
 def check_boat_dismount_pose(host, guest, out):
