@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>{{MODS_TITLE}} · Horizon</title>
+    <meta name="description" content="{{MODS_DESCRIPTION}}">
+    <meta name="theme-color" content="#ece7f7" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0f0d17" media="(prefers-color-scheme: dark)">
+    <meta name="color-scheme" content="light dark">
+    <link rel="canonical" href="https://playhorizon.dev{{MODS_PATH}}">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Horizon">
+    <meta property="og:title" content="{{MODS_TITLE}} · Horizon">
+    <meta property="og:description" content="{{MODS_DESCRIPTION}}">
+    <meta property="og:url" content="https://playhorizon.dev{{MODS_PATH}}">
+    <meta property="og:image" content="https://playhorizon.dev/og.png">
+    <style>{{STYLE}}</style>
+    <script>document.documentElement.classList.replace("no-js", "js"); try { const t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t } catch {}</script>
+    <script type="module" src="{{MODS_JS}}"></script>
+  </head>
+  <body class="subpage">
+    <a class="skip" href="#main">Skip to the content</a>
+{{SITE_NAV}}
+    <main id="main" class="section page-main">
+      <div class="container" id="mods" data-baked="{{MODS_BAKED_AT}}">
+{{MODS_MAIN}}
+        <p class="disclaimer">Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft.</p>
+      </div>
+    </main>
+{{SITE_FOOTER}}
+    <script type="application/json" id="mods-index">{{MODS_DATA}}</script>
+  </body>
+</html>
