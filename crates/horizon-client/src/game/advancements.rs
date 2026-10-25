@@ -881,30 +881,39 @@ pub(super) fn adv_name(a: &adv::Advancement) -> Text {
     let Some(d) = &a.display else {
         return Text::literal(a.id.clone());
     };
-    let color = match d.frame {
-        Frame::Challenge => text::DARK_PURPLE,
-        _ => text::GREEN,
-    };
-    // Advancement.decorateName: the title in the frame's colour (styles
-    // merged into it), then a new line and the description after the
-    // title's own siblings.
-    let coloured = text_of(&d.title).with_color(color);
-    let mut component = coloured.component();
-    if let Some(o) = component.as_object_mut() {
-        let extra = o.entry("extra").or_insert_with(|| serde_json::json!([]));
-        if let Some(extra) = extra.as_array_mut() {
-            extra.extend(["\n".into(), text_of(&d.description).component()]);
-        }
-    }
-    let tooltip = coloured
-        .append("\n")
-        .append(text_of(&d.description))
-        .with_component(component);
+    let color = frame_color(d.frame);
     let title = text_of(&d.title).with_style(&Style {
-        hover: Some(Box::new(tooltip)),
+        hover: Some(Box::new(decorate_name(d))),
         ..Style::default()
     });
     Text::translate("chat.square_brackets", &[title]).with_color(color)
+}
+fn frame_color(frame: Frame) -> u32 {
+    match frame {
+        Frame::Challenge => text::DARK_PURPLE,
+        _ => text::GREEN,
+    }
+}
+/// `Advancement.decorateName`: a copy of the title with the frame's colour
+/// under its own style (mergeStyles), then a new line and the description
+/// after the title's own siblings, so both inherit the title's root style.
+/// Built on the title's JSON: a parsed Text moves a styled root's style down
+/// a level once it has siblings.
+fn decorate_name(d: &adv::Display) -> Text {
+    let mut component = match &d.title {
+        Value::Object(_) => d.title.clone(),
+        Value::String(s) => serde_json::json!({ "text": s }),
+        other => text_of(other).component(),
+    };
+    if let Some(o) = component.as_object_mut() {
+        let frame = Text::empty().with_color(frame_color(d.frame)).component();
+        o.entry("color").or_insert_with(|| frame["color"].clone());
+        let extra = o.entry("extra").or_insert_with(|| serde_json::json!([]));
+        if let Some(extra) = extra.as_array_mut() {
+            extra.extend(["\n".into(), d.description.clone()]);
+        }
+    }
+    text_of(&component).with_component(component)
 }
 impl Game<'_> {
     /// `AdvancementCommands.Action.GRANT` on one advancement (or one of
@@ -1096,22 +1105,27 @@ mod tests {
             "extra": [{"text": "Quest ", "color": "gold"}, "Board"],
         }));
         assert_eq!(title.plain(), "Quest Board");
-        assert_eq!(title.spans[0].style.color, Some(horizon_client::text::GOLD));
+        assert_eq!(title.spans[0].style.color, Some(text::GOLD));
+        assert_eq!(title.spans[1].style.color, None);
+        let vanilla = text_of(&serde_json::json!({"translate": "advancements.story.root.title"}));
         assert_eq!(
-            text_of(&serde_json::json!({"translate": "advancements.story.root.title"})),
+            vanilla,
             Text::translate("advancements.story.root.title", &[])
+        );
+        assert_eq!(
+            vanilla.translation_key(),
+            Some("advancements.story.root.title")
         );
     }
 
-    #[test]
-    fn chat_hover_keeps_the_titles_siblings_before_the_description() {
-        let a = adv::Advancement {
+    fn announced(title: Value, description: Value) -> adv::Advancement {
+        adv::Advancement {
             id: "quests:board".into(),
             parent: None,
             display: Some(adv::Display {
                 icon: "minecraft:book".into(),
-                title: serde_json::json!({"text": "", "extra": ["Quest ", "Board"]}),
-                description: serde_json::json!("Open the board"),
+                title,
+                description,
                 frame: Frame::Task,
                 background: None,
                 show_toast: true,
@@ -1121,12 +1135,58 @@ mod tests {
             criteria: Vec::new(),
             requirements: Vec::new(),
             rewards: adv::Rewards::default(),
-        };
-        // The JSON a client receives, not just the local spans.
-        let name = adv_name(&a).component();
-        let hover = &name["with"][0]["hover_event"]["value"];
-        let sent = horizon_client::scoreboard::comp_text(hover);
+        }
+    }
+    /// The chat hover: the JSON a client receives, and the spans drawn here.
+    fn hover(a: &adv::Advancement) -> (Value, Text) {
+        let local = decorate_name(a.display.as_ref().unwrap());
+        let sent = adv_name(a).component()["with"][0]["hover_event"]["value"].clone();
+        (sent, local)
+    }
+
+    #[test]
+    fn chat_hover_keeps_the_titles_siblings_before_the_description() {
+        let a = announced(
+            serde_json::json!({"text": "", "extra": [{"text": "Quest ", "color": "gold"}, "Board"]}),
+            serde_json::json!("Open the board"),
+        );
+        let (sent, local) = hover(&a);
+        let sent = horizon_client::scoreboard::comp_text(&sent);
         assert_eq!(sent.plain(), "Quest Board\nOpen the board");
+        let colors = |t: &Text| t.spans.iter().map(|s| s.style.color).collect::<Vec<_>>();
+        let (gold, green) = (Some(text::GOLD), Some(text::GREEN));
+        assert_eq!(colors(&sent), [gold, green, green, green]);
+        assert_eq!(colors(&local), colors(&sent));
+    }
+
+    #[test]
+    fn chat_hover_description_takes_a_styled_titles_own_style() {
+        // mergeStyles keeps the title's gold; the description inherits it.
+        let a = announced(
+            serde_json::json!({"text": "Quest", "color": "gold", "bold": true, "extra": [" Board"]}),
+            serde_json::json!("Open the board"),
+        );
+        let (sent, local) = hover(&a);
+        let sent = horizon_client::scoreboard::comp_text(&sent);
+        let last = &sent.spans.last().unwrap().style;
+        assert_eq!((last.color, last.bold), (Some(text::GOLD), Some(true)));
+        assert_eq!(local.spans.last().unwrap().style, *last);
+    }
+
+    #[test]
+    fn chat_hover_of_a_vanilla_advancement() {
+        let a = announced(
+            serde_json::json!({"translate": "advancements.story.root.title"}),
+            serde_json::json!({"translate": "advancements.story.root.description"}),
+        );
+        assert_eq!(
+            hover(&a).0,
+            serde_json::json!({
+                "translate": "advancements.story.root.title",
+                "color": "green",
+                "extra": ["\n", {"translate": "advancements.story.root.description"}],
+            })
+        );
     }
 
     #[test]
