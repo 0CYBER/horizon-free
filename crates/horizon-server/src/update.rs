@@ -781,6 +781,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    // Only the unix tests build an install tree; the path helper goes with them.
+    #[cfg_attr(not(unix), allow(dead_code))]
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "horizon-server-update-{name}-{}",
