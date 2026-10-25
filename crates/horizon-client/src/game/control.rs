@@ -513,7 +513,10 @@ impl Game<'_> {
                 if self.pending_screenshot.is_some() {
                     return Err("a screenshot is already pending".into());
                 }
-                renderer.screenshot = Some(arg(1)?.into());
+                arg(1)?;
+                // The rest of the line: a path may hold spaces.
+                let path = line.trim_start().strip_prefix("screenshot").unwrap_or("");
+                renderer.screenshot = Some(path.trim().into());
                 self.pending_screenshot = Some(reply.clone());
                 Ok(None)
             }

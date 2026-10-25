@@ -74,7 +74,7 @@ impl Game<'_> {
         })
     }
     /// The fluid at the camera, as `Camera.getFluidInCamera` reports it.
-    fn camera_fluid(&self, camera: [f64; 3]) -> CameraFluid {
+    pub(super) fn camera_fluid(&self, camera: [f64; 3]) -> CameraFluid {
         match fog_type(&self.world, self.res.facts(), camera, self.forward()) {
             FogType::Water => CameraFluid::Water,
             FogType::Lava => CameraFluid::Lava,

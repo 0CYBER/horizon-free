@@ -170,7 +170,7 @@ impl Pack {
 }
 
 /// `a/./b/../c` → `a/c`; `None` for a path that climbs out of `shaders`.
-fn normalize(path: &str) -> Option<String> {
+pub(crate) fn normalize(path: &str) -> Option<String> {
     let mut parts: Vec<&str> = Vec::new();
     for part in path.split(['/', '\\']) {
         match part {
