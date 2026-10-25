@@ -356,7 +356,7 @@ impl PackEntities {
 }
 
 /// Two triangles for each of `quads` quads, from vertex 0.
-fn quad_indices(device: &wgpu::Device, quads: u32) -> wgpu::Buffer {
+pub(super) fn quad_indices(device: &wgpu::Device, quads: u32) -> wgpu::Buffer {
     let indices: Vec<u32> = (0..quads)
         .flat_map(|q| [0, 1, 2, 0, 2, 3].map(|i| q * 4 + i))
         .collect();

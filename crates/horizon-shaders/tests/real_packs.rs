@@ -175,7 +175,8 @@ fn real_packs_read() {
                 celestial: Some(terrain.clone()),
                 entities: Some(terrain.clone()),
                 clouds: Some(terrain.clone()),
-                weather: Some(terrain),
+                weather: Some(terrain.clone()),
+                hand: Some(terrain),
             };
             let post = load_post(&pack, &folder, &shaders, &Macros::standard(), &inputs);
             println!(
