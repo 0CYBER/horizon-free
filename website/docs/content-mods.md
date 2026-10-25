@@ -4,7 +4,7 @@ A content mod adds blocks and items to the game with data files only: no Rust, n
 
 ## What a content mod is
 
-A folder (while you work on it) or a `.hmod` zip (to share it) holding a manifest, `assets/` and `data/`. This is the SDK's [`ruby-content`](https://github.com/ludovic111/horizon/tree/main/crates/horizon-mod-sdk/examples/ruby-content) example, a ruby gem and a block of ruby:
+A folder (while you work on it) or a `.hmod` file (to share it) holding a manifest, `assets/` and `data/`. This is the SDK's [`ruby-content`](https://github.com/ludovic111/horizon/tree/main/crates/horizon-mod-sdk/examples/ruby-content) example, a ruby gem and a block of ruby:
 
 ```
 ruby/
@@ -98,17 +98,27 @@ A mod made from a Java mod whose files use other names lists them in its manifes
 - Unknown keys in a block or item file are refused, and the mod stays off with the reason on its row.
 - Content mods work in single player today. Playing them together on a server is planned.
 
+## Start one
+
+```sh
+cargo horizon-mod new my-blocks --template content
+```
+
+makes a content mod with one block, Glowing Amethyst: an amethyst block that gives light, with its block state, model (using vanilla's amethyst texture), item model, name, loot table, a recipe (an amethyst block and glowstone dust) and the pickaxe tag. Rename and copy its files to add your own.
+
 ## Try it and share it
 
 While you work, give the game the folder as a dev mod ([how](/docs/make-a-mod#see-it-in-the-game)): `--dev-mod "/path/to/ruby"`. The first start with a new set of mods takes a little longer while the game adds their content to its tables; after a change to the files, start the game again.
 
-To share it, zip the folder's contents, with `horizon-mod.toml` at the top of the zip, and name the file `<id>.hmod`:
+To share it, build the `.hmod` in the mod's folder:
 
 ```sh
-cd ruby
-zip -r ../ruby.hmod horizon-mod.toml assets data
+cargo horizon-mod build
+cargo horizon-mod check target/horizon-mod/ruby.hmod
 ```
 
-Players put that file in their `horizon-mods` folder and turn it on in **Options, Mods...**. The registry doesn't take content-only mods yet: its checks (`cargo horizon-mod check`) expect code in the file. That is coming next.
+A folder without a `Cargo.toml` is a content mod: `build` checks its files as the game will and packs the manifest, `assets/` and `data/` into `target/horizon-mod/<id>.hmod`, with no compiler involved. `check` reads it as the registry does and says "no code: content only, nothing to run". Players put that file in their `horizon-mods` folder and turn it on in **Options, Mods...**, and you can [publish it](/docs/publish-a-mod) like any mod.
+
+A mod can have both: a `Cargo.toml` with code, and `assets/` and `data/` with content. `build` packs both.
 
 Next: [test it](/docs/test-a-mod).

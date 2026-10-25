@@ -41,7 +41,7 @@ cargo horizon-mod new my-mod
 cd my-mod
 ```
 
-`new` makes a folder with a working mod in it: a `/hello` command that answers in chat. `--name "My Mod"` sets the name players see. The folder holds:
+`new` makes a folder with a working mod in it: a `/hello` command that answers in chat. `--name "My Mod"` sets the name players see, and `--template content` makes a [content mod](/docs/content-mods) instead, with no code. The folder holds:
 
 ```
 my-mod/

@@ -16,7 +16,7 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | SDK for mod authors | `crates/horizon-mod-sdk` | 0.1 |
 | Example mod | `crates/horizon-mod-sdk/examples/coords-hud` | coordinates, facing and time HUD, `/where`, `/coords` |
 | Runtime | `crates/horizon-mods` | wasmtime 36 LTS, component model |
-| Authoring tool | `crates/cargo-horizon-mod` | `cargo horizon-mod new / build / run / check`, and the registry's CI (`registry build / review / list`) |
+| Authoring tool | `crates/cargo-horizon-mod` | `cargo horizon-mod new [--template code\|content] / build / run / check`, and the registry's CI (`registry build / review / list`) |
 | In the game | `crates/horizon-client/src/game/mods.rs`, Options > Mods | client mods |
 | Launcher mod browser (Modrinth, CurseForge with a key) | [mod-browser.md](mod-browser.md) | resource packs, modpacks |
 | Registry index (`index.json`, `.hpack`), signatures | `horizon_mods::index`, [api/mod-index.md](api/mod-index.md) | schema 1; launcher and website next |
@@ -215,6 +215,7 @@ Benchmarks (`--benchmark`) never load mods.
 rustup target add wasm32-unknown-unknown
 cargo install --git https://github.com/ludovic111/horizon cargo-horizon-mod
 cargo horizon-mod new my-mod        # Cargo.toml, horizon-mod.toml, src/lib.rs
+                                    # (--template content: a content mod, no code)
 cd my-mod
 cargo horizon-mod run               # build, then start the game with it
 cargo horizon-mod build             # again after an edit: the running game reloads it
@@ -292,7 +293,10 @@ permission.
 ### Content mods (API 0.2)
 
 A mod with `api = "0.2"` and capability `registries` may carry `assets/` and
-`data/` in the `.hmod`, and needs no `mod.wasm` if it has no code. It adds
+`data/` in the `.hmod`, and needs no `mod.wasm` if it has no code
+(`cargo horizon-mod new --template content` starts one; `build` in a folder
+with no `Cargo.toml` packs the manifest, `assets/` and `data/`, and `check`
+reads it without a trial run). It adds
 blocks and items by declaring them in `data/<id>/horizon/block/*.json` and
 `data/<id>/horizon/item/*.json`, each copying a vanilla template
 ([modpacks.md](modpacks.md#registries-02-data-driven-blocks-and-items)):
