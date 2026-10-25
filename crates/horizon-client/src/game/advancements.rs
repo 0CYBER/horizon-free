@@ -900,11 +900,7 @@ fn frame_color(frame: Frame) -> u32 {
 /// Built on the title's JSON: a parsed Text moves a styled root's style down
 /// a level once it has siblings.
 fn decorate_name(d: &adv::Display) -> Text {
-    let mut component = match &d.title {
-        Value::Object(_) => d.title.clone(),
-        Value::String(s) => serde_json::json!({ "text": s }),
-        other => text_of(other).component(),
-    };
+    let mut component = root_component(&d.title);
     if let Some(o) = component.as_object_mut() {
         let frame = Text::empty().with_color(frame_color(d.frame)).component();
         o.entry("color").or_insert_with(|| frame["color"].clone());
@@ -914,6 +910,25 @@ fn decorate_name(d: &adv::Display) -> Text {
         }
     }
     text_of(&component).with_component(component)
+}
+/// A component's JSON as one object whose root keeps its own style: a list is
+/// its first element with the rest appended to its siblings.
+fn root_component(v: &Value) -> Value {
+    match v {
+        Value::Object(_) => v.clone(),
+        Value::String(s) => serde_json::json!({ "text": s }),
+        Value::Array(list) if !list.is_empty() => {
+            let mut root = root_component(&list[0]);
+            if let Some(o) = root.as_object_mut() {
+                let extra = o.entry("extra").or_insert_with(|| serde_json::json!([]));
+                if let Some(extra) = extra.as_array_mut() {
+                    extra.extend(list[1..].iter().cloned());
+                }
+            }
+            root
+        }
+        other => text_of(other).component(),
+    }
 }
 impl Game<'_> {
     /// `AdvancementCommands.Action.GRANT` on one advancement (or one of
@@ -1156,6 +1171,7 @@ mod tests {
         let colors = |t: &Text| t.spans.iter().map(|s| s.style.color).collect::<Vec<_>>();
         let (gold, green) = (Some(text::GOLD), Some(text::GREEN));
         assert_eq!(colors(&sent), [gold, green, green, green]);
+        // The spans drawn here come from the same JSON a client receives.
         assert_eq!(colors(&local), colors(&sent));
     }
 
@@ -1166,11 +1182,18 @@ mod tests {
             serde_json::json!({"text": "Quest", "color": "gold", "bold": true, "extra": [" Board"]}),
             serde_json::json!("Open the board"),
         );
-        let (sent, local) = hover(&a);
-        let sent = horizon_client::scoreboard::comp_text(&sent);
-        let last = &sent.spans.last().unwrap().style;
-        assert_eq!((last.color, last.bold), (Some(text::GOLD), Some(true)));
-        assert_eq!(local.spans.last().unwrap().style, *last);
+        let list = announced(
+            serde_json::json!([{"text": "Quest", "color": "gold", "bold": true}, " Board"]),
+            serde_json::json!("Open the board"),
+        );
+        for a in [a, list] {
+            let (sent, local) = hover(&a);
+            let sent = horizon_client::scoreboard::comp_text(&sent);
+            assert_eq!(sent.plain(), "Quest Board\nOpen the board");
+            let last = &sent.spans.last().unwrap().style;
+            assert_eq!((last.color, last.bold), (Some(text::GOLD), Some(true)));
+            assert_eq!(local.spans.last().unwrap().style, *last);
+        }
     }
 
     #[test]
