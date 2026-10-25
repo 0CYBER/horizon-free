@@ -6,7 +6,7 @@ use horizon_launcher::backend;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Stdio};
 
 pub const PREFIX: &str = "game_";
 
@@ -61,7 +61,7 @@ impl GameTools {
         if !ctl.exists() {
             return Err(format!("{tag} has no {CTL}"));
         }
-        let mut child = Command::new(&ctl)
+        let mut child = horizon_launcher::process::command(&ctl)
             .arg("--socket")
             .arg(socket_path())
             .arg("mcp")

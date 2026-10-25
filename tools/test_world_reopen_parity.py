@@ -24,6 +24,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lab  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 RESOURCES = ROOT / '.local' / 'horizon-client' / '26.3'
 RUN = ROOT / '.local' / 'world-reopen'
@@ -32,7 +35,7 @@ CYCLES = 3
 
 def game_env():
     """macOS renders offscreen; Linux uses the virtual screen (as test_save_roundtrip_parity)."""
-    env = dict(os.environ, HORIZON_NO_AUDIO='1')
+    env = lab.game_env()
     if sys.platform == 'darwin':
         return env, ['--offscreen']
     subprocess.run(['vscreen', 'up'], check=False, capture_output=True)

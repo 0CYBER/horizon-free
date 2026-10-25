@@ -10,7 +10,11 @@ A vanilla dedicated server and Horizon's (`horizon-client --dedicated --nogui`) 
 vanilla generated first, with Alice and Bob as operators in creative. LocatorBarClient joins them both (players made
 of vanilla's protocol code) and records, step by step, the system chat each receives and what the server changes
 about it: game mode events, teleports, inventory slots, effects, its death (with the death message), the other
-players it is sent or loses and the levels it respawns into. Each player's lines in each step are compared exactly,
+players it is sent or loses and the levels it respawns into. A step ends by the server's clock, not the wall's: its
+console commands have run (the console's `time query gametime` comes back), each player's commands have run (a
+`sync` round trip), the server has ticked STEP_TICKS more times, and each client holds what was sent until then (a
+last `sync`), so a server that stalls under load still has each packet recorded in its own step (a fixed 2.5 s
+filed a stalled vanilla's teleports under the next step). Each player's lines in each step are compared exactly,
 in sorted order (the packets of one step may leave in another order within the tick), with the locator bar's
 waypoints as each step leaves them (one manager per level: a player in another level is untracked). What a death does besides its messages
 is left to its own harness.
@@ -25,12 +29,12 @@ import time
 
 try:
     from . import lab, test_rust_parity as base
-    from .test_dedicated_server_parity import Server
+    from .test_dedicated_server_parity import Server, game_time
     from .test_locator_bar_parity import generate_world, server_dir
 except ImportError:
     import lab
     import test_rust_parity as base
-    from test_dedicated_server_parity import Server
+    from test_dedicated_server_parity import Server, game_time
     from test_locator_bar_parity import generate_world, server_dir
 
 NAME = 'server-player-targets-parity'
@@ -70,7 +74,8 @@ SCRIPT = [
 # What the players' locator bars show has its own harness (test_locator_bar_parity), and what a death does
 # besides its messages (drops, the body leaving) the player combat ones: here only the messages of `kill`.
 DEATH_STEP = 'step=console-kill'
-STEP_SECONDS = 2.5
+STEP_TICKS = 40
+PLAYERS = ('Alice', 'Bob')
 
 
 def run_side(label, server_command, client_command, build, world):
@@ -83,32 +88,49 @@ def run_side(label, server_command, client_command, build, world):
         server.wait_for(r'Done \(')
         with (build / f'{label}-client.log').open('w') as log:
             client = subprocess.Popen([*map(str, client_command), '127.0.0.1', str(port), str(out)],
-                                      cwd=lab.ROOT, stdin=subprocess.PIPE, stdout=log, stderr=subprocess.STDOUT,
-                                      text=True)
+                                      cwd=lab.ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                      stderr=subprocess.STDOUT, text=True)
 
             def tell(line):
                 client.stdin.write(line + '\n')
                 client.stdin.flush()
+
+            def sync():
+                for name in PLAYERS:
+                    tell(f'sync {name}')
+                for name in PLAYERS:
+                    while (line := client.stdout.readline()) != f'synced {name}\n':
+                        if not line:
+                            raise AssertionError(f'{label}: the client exited (see {build}/{label}-client.log)')
+                        log.write(line)
+
+            def finish_step():
+                sync()
+                until = game_time(server) + STEP_TICKS
+                while game_time(server) < until:
+                    time.sleep(0.2)
+                for name in PLAYERS:
+                    tell(f'still {name}')
+                sync()
             try:
-                for name, x in (('Alice', 0.5), ('Bob', 4.5)):
+                for name, x in zip(PLAYERS, (0.5, 4.5)):
                     tell(f'join {name}')
                     server.wait_for(rf'{name} joined the game', timeout=120)
                     tell(f'fly {name} on')
                     tell(f'cmd {name} tp @s {x} -60 0.5 0 0')
-                time.sleep(STEP_SECONDS)
+                finish_step()
                 for flag in ('chat', 'state', 'players'):
                     tell(f'{flag} on')
                 for step, console, actions in SCRIPT:
                     tell(f'step {step}')
                     for command in console:
                         server.console(command)
+                    game_time(server)  # the console runs its queue in order: these commands have run
                     for action in actions:
                         tell(action)
-                    time.sleep(STEP_SECONDS)
-                    for name in ('Alice', 'Bob'):
-                        tell(f'still {name}')
+                    finish_step()
                 tell('end')
-                client.wait(timeout=60)
+                log.write(client.communicate(timeout=60)[0])
             finally:
                 if client.poll() is None:
                     client.kill()

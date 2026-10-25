@@ -9,11 +9,19 @@ use std::sync::OnceLock;
 
 use crate::payload::System;
 
-fn command_output(program: &str, args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new(program)
-        .args(args)
-        .output()
-        .ok()?;
+/// What `program args` prints, trimmed, when it succeeds and prints something. On Windows the
+/// program opens no console window: a GUI launcher or a game started without one would flash a
+/// terminal for every probe.
+pub fn command_output(program: &str, args: &[&str]) -> Option<String> {
+    let mut command = std::process::Command::new(program);
+    command.args(args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let out = command.output().ok()?;
     let text = String::from_utf8_lossy(&out.stdout).trim().to_owned();
     (out.status.success() && !text.is_empty()).then_some(text)
 }
