@@ -59,20 +59,15 @@ impl Game<'_> {
                 self.recipe_unlocked(&unlocked);
                 count as i32
             } else {
-                let removed: Vec<i32> = recipes
-                    .iter()
-                    .filter(|r| self.level.recipe_book.knows(r))
-                    .flat_map(|r| index.display_ids(r))
-                    .collect();
-                let count = self.level.recipe_book.remove_recipes(index, &recipes);
-                // ServerRecipeBook.removeRecipes sends the displays actually
-                // removed, including every display of a transmutation recipe.
+                let removed = self.level.recipe_book.remove_recipes(index, &recipes);
+                let count = removed.len() as i32;
+                // A network player's client drops them from its book.
                 if self.lan_acting.is_some() && !removed.is_empty() {
                     self.guest_packets.push(C::RecipeBookRemove(
                         horizon_protocol::packets::recipes::RecipeBookRemove { ids: removed },
                     ));
                 }
-                count as i32
+                count
             };
             tracker.track(&h, n);
         }
