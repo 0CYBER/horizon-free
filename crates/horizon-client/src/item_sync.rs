@@ -87,6 +87,14 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
                 ("pages", Tag::List(b.pages.clone())),
                 ("resolved", Tag::Byte(i8::from(b.resolved))),
             ]),
+            Component::Fireworks { flight, explosions } => Tag::compound([
+                ("flight_duration", Tag::Byte(*flight as i8)),
+                (
+                    "explosions",
+                    Tag::List(explosions.iter().map(fireworks_tag).collect()),
+                ),
+            ]),
+            Component::FireworkExplosion(e) => fireworks_tag(e),
             Component::Enchantments(list) => {
                 // Enchantments are a synced (data-driven) registry: the
                 // ids index the server's RegistryData, not the builtin
@@ -176,6 +184,29 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
         entries.push((key, value));
     }
     Some(Tag::compound(entries))
+}
+
+/// A wire `FireworkExplosion` as vanilla's NBT codec writes it
+/// (`FireworkExplosion.Shape`'s BY_ID order).
+fn fireworks_tag(e: &horizon_protocol::item::FireworkExplosion) -> Tag {
+    const SHAPES: [&str; 5] = ["small_ball", "large_ball", "star", "creeper", "burst"];
+    let ints = |c: &[i32]| Tag::List(c.iter().map(|c| Tag::Int(*c)).collect());
+    Tag::compound([
+        (
+            "shape",
+            Tag::String(
+                SHAPES
+                    .get(e.shape.max(0) as usize)
+                    .copied()
+                    .unwrap_or("small_ball")
+                    .into(),
+            ),
+        ),
+        ("colors", ints(&e.colors)),
+        ("fade_colors", ints(&e.fade)),
+        ("has_trail", Tag::Byte(i8::from(e.trail))),
+        ("has_twinkle", Tag::Byte(i8::from(e.twinkle))),
+    ])
 }
 
 /// A `minecraft:profile` component as the item data JSON the model reads.
