@@ -586,7 +586,7 @@ impl Game<'_> {
         } else {
             let line = Text::translate(
                 "chat.type.text",
-                &[Text::literal(PLAYER_NAME), Text::literal(message)],
+                &[self.player_display_name(), Text::literal(message)],
             );
             let focused = self.screen == Screen::Chat;
             let heard = self.mods.running().then(|| line.plain());
