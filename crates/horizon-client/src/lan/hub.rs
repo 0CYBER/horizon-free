@@ -351,7 +351,7 @@ impl Hub {
     pub fn stack(&mut self, s: &Option<ItemStack>) -> Option<horizon_protocol::item::Stack> {
         let id = s.as_ref().map(|s| self.item_id(&s.item))?;
         let sync = self.sync.clone();
-        stack_to_network(|_| id, |name| sync.id("minecraft:enchantment", name), s)
+        stack_to_network(|_| id, |registry, name| sync.id(registry, name), s)
     }
 
     pub fn broadcast(&self, packet: &C) {
