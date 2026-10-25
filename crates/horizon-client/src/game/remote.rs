@@ -2285,12 +2285,10 @@ impl Game<'_> {
                 }
             }
             C::PlayerCombatKill(p) => {
-                let lang = self
-                    .remote
-                    .as_ref()
-                    .map(|r| r.lang.clone())
-                    .unwrap_or_default();
-                let message = plain(&p.message, &lang);
+                // The component resolves in the client's current language, as
+                // the chat line does, not in the language the session joined
+                // with (`Remote.lang` is the vanilla server-language table).
+                let message = remote_text(&p.message).plain();
                 let me = self.remote.as_ref().is_some_and(|r| r.entity_id == p.id);
                 if let Some(r) = self.remote.as_mut() {
                     r.death_message = Some(message);
