@@ -10090,8 +10090,6 @@ impl Game<'_> {
             Vec::new()
         };
         let mut hud = horizon_client::spans::time("hud", || self.hud(size));
-        // Map textures changed since the last drawn frame (game/maps.rs).
-        hud.patches.append(&mut self.map_patches);
         // LevelLoadingScreen (Reason.OTHER) draws the title's panorama.
         let title = self.title.is_some()
             || self.loading_reason() == Some(horizon_client::level_loading::Reason::Other);
@@ -10193,6 +10191,10 @@ impl Game<'_> {
         } else {
             self.shader_pack_inputs(camera, alpha as f32)
         };
+        // Map textures and font glyphs changed while building this frame's
+        // geometry (game/maps.rs, world text) upload with this batch; draining
+        // map_patches any earlier leaves them a frame behind.
+        hud.patches.append(&mut self.map_patches);
         let frame = Frame {
             weather: &weather,
             weather_time: horizon_client::weather::Time::new(self.world.game_time, alpha as f32),

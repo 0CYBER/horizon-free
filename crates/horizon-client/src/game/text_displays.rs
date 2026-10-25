@@ -198,7 +198,7 @@ impl Game<'_> {
                 Lines { lines, width }
             });
             let width = *width;
-            let height = lines.len() as f32 * 10.0 - 1.0;
+            let height = lines.len() as f32 * 9.0 - 1.0;
             matrix *=
                 glam::Mat4::from_translation(glam::Vec3::new(1.0 - width / 2.0, -height, 0.0));
             let mut batch = HudBatch::new([1, 1]);
@@ -212,8 +212,8 @@ impl Game<'_> {
                     atlas,
                     -1.0,
                     -1.0,
-                    width + 1.0,
-                    height + 1.0,
+                    width + 2.0,
+                    height + 2.0,
                     rgba(
                         (bg >> 16) as u8,
                         (bg >> 8) as u8,
@@ -233,7 +233,7 @@ impl Game<'_> {
                     atlas,
                     line,
                     x,
-                    i as f32 * 10.0,
+                    i as f32 * 9.0,
                     rgba(255, 255, 255, d.opacity as u8),
                     d.flags & 1 != 0,
                 );
