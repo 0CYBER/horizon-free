@@ -337,8 +337,8 @@ impl Enchantments {
         let language = crate::lang::current();
         self.full_name_in(language.as_deref(), id, level)
     }
-    /// `full_name` against `language`; `None` keeps the English names loaded
-    /// above, which is what the server thread and the probes see.
+    /// `full_name` against `language`; `None` (no language loaded: a
+    /// dedicated server, the probes) keeps the English names loaded above.
     pub fn full_name_in(
         &self,
         language: Option<&crate::lang::Language>,
