@@ -1,7 +1,7 @@
 # Mod API
 
-Mods are Rust crates compiled to sandboxed WebAssembly components. They run in the player's game and, once server
-mods land, wherever a world is simulated. Design and the runtime: [mods.md](../mods.md).
+Mods are Rust crates compiled to sandboxed WebAssembly components. Client mods run in the player's game; server mods
+(experimental) run wherever a world is simulated: single player, a LAN host, the dedicated server. Design and the runtime: [mods.md](../mods.md).
 
 ## Overview
 
@@ -83,9 +83,10 @@ release.
 
 What real mods need next, in the order modpacks and servers need it:
 
-- **Server mods in the game** (`api = "0.3"`, [Server mods](../mods.md#server-mods-api-03-experimental)): the
-  contract, runtime and SDK are here; next the server thread, LAN host and dedicated server start them and call
-  their hooks, then entity events, game rules and server commands with typed arguments.
+- **More for server mods** (`api = "0.3"`, [Server mods](../mods.md#server-mods-api-03-experimental)): they run
+  on the server thread, a LAN host and the dedicated server today, with joins, chat, commands and players' block
+  breaking and placing; next entity events, game rules, server commands with typed arguments sent to clients'
+  command trees.
 - **World and blocks**: read blocks, block states and biomes in loaded chunks; change them through the server's block
   log, so clients and the parity harnesses see vanilla's updates.
 - **Items and inventories**: the player's inventory, held item and open container; item stacks with components.
@@ -101,6 +102,7 @@ What real mods need next, in the order modpacks and servers need it:
 
 ## Changelog
 
+- Server mods run in the game: single player (server thread and in-frame), LAN hosts, the dedicated server.
 - API 0.3 (server mods, experimental): world `horizon-server-mod`, capability `players`, the `server-events`
   hooks; SDK `server::ServerMod`; example `welcome`.
 - SDK: `cargo horizon-mod test` and `horizon_mods::testing`, test scripts in TOML; the template has one.

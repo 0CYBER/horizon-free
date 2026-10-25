@@ -1407,6 +1407,10 @@ impl Game<'_> {
             );
             return;
         }
+        // A server mod's command, for every player whatever their level.
+        if self.guest_server_mod_command(host, conn, command.trim_start_matches('/')) {
+            return;
+        }
         // An integrated server runs every player's commands at their own
         // permission level (`CommandSourceStack.permissions`); a LAN world
         // follows its Allow Commands, and a dedicated server leaves it to

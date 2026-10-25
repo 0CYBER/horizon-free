@@ -17,20 +17,21 @@ use std::{path::PathBuf, time::Duration};
 #[cfg(feature = "mods")]
 use {
     super::Screen,
+    super::{execution_role::ExecutionRole, lan::LanHost, server_mods::ModEvent},
     horizon_client::{
         extras::Corner,
         extras_hud,
         mod_list::Installed,
         text::{self, Text},
     },
-    horizon_mods::{Clock, Mods, Output, Player, Runs, Snapshot, Status},
+    horizon_mods::{Clock, Mods, Output, Player, Runs, ServerPlayer, Snapshot, Status},
     std::time::Instant,
 };
 
 #[derive(Default)]
 pub(super) struct ModsState {
     #[cfg(feature = "mods")]
-    mods: Mods,
+    pub(super) mods: Mods,
     /// `--dev-mod PATH`: always on, reloaded when rebuilt.
     pub(super) dev: Vec<PathBuf>,
     /// When dev mods were last checked for a rebuild.
@@ -39,6 +40,15 @@ pub(super) struct ModsState {
     /// The chat's command tree while a running mod owns commands.
     #[cfg(feature = "mods")]
     tree: Option<Dispatcher>,
+    /// A server mod runs here: what players do is queued for it.
+    #[cfg(feature = "mods")]
+    pub(super) server: bool,
+    /// The players server mods saw last tick, for joins and leaves.
+    #[cfg(feature = "mods")]
+    pub(super) players: Vec<ServerPlayer>,
+    /// What players did this tick, for server mods at its end.
+    #[cfg(feature = "mods")]
+    pub(super) events: Vec<ModEvent>,
 }
 impl ModsState {
     /// The chat's command tree: vanilla's, plus the running mods' commands.
@@ -185,14 +195,24 @@ impl Game<'_> {
             .collect();
         let enabled = &self.settings.mods.enabled;
         let on = |id: &str| enabled.contains(id) || dev_ids.iter().any(|d| d == id);
-        let mods = Mods::load_for(Runs::Client, &paths, on, vanilla_command);
+        let mods = Mods::load_for(self.mod_runs(), &paths, on, vanilla_command);
         self.mods.mods = mods;
         self.list_mods();
         self.sync_mod_commands();
         self.show_mod_output();
     }
+    /// Which mods this game runs: a server the server mods, the window
+    /// client mods, and both when it simulates the world itself (in-frame).
+    fn mod_runs(&self) -> Runs {
+        match self.options.execution_role {
+            ExecutionRole::IntegratedServer | ExecutionRole::DedicatedServer => Runs::Server,
+            ExecutionRole::Client if self.options.server_thread => Runs::Client,
+            ExecutionRole::Client => Runs::Both,
+        }
+    }
     /// The Mods page's rows, from what loaded.
     fn list_mods(&mut self) {
+        self.mods.server = self.mods.mods.runs_server();
         let dev = &self.mods.dev;
         self.settings.mods.installed = self
             .mods
@@ -263,8 +283,18 @@ impl Game<'_> {
             self.start_mods();
         }
     }
-    /// What mods read this tick.
+    /// What mods read this tick: the server's players as they were at the
+    /// last tick's end.
     fn mod_snapshot(&self) -> Snapshot {
+        let players = if self.mods.server {
+            self.mods.players.clone()
+        } else {
+            Vec::new()
+        };
+        self.mod_snapshot_with(players)
+    }
+    /// What mods read, with these players on the server.
+    pub(super) fn mod_snapshot_with(&self, players: Vec<ServerPlayer>) -> Snapshot {
         let player = self.player.as_ref().map(|p| Player {
             x: p.position.x,
             y: p.position.y,
@@ -282,7 +312,7 @@ impl Game<'_> {
         Snapshot {
             player,
             clock,
-            players: Vec::new(),
+            players,
         }
     }
     /// A game tick.
@@ -295,21 +325,30 @@ impl Game<'_> {
         self.mods.mods.tick(self.ticks);
         self.show_mod_output();
     }
-    /// Once per frame: the frame hook, and dev mods' rebuilds.
-    pub(super) fn mods_frame(&mut self, elapsed: Duration) {
-        if !self.mods.dev.is_empty()
-            && self
+    /// Restarts the dev mods rebuilt since the last check, once a second.
+    pub(super) fn reload_dev_mods(&mut self) {
+        if self.mods.dev.is_empty()
+            || self
                 .mods
                 .checked
-                .is_none_or(|t| t.elapsed() >= RELOAD_CHECK)
+                .is_some_and(|t| t.elapsed() < RELOAD_CHECK)
         {
-            self.mods.checked = Some(Instant::now());
-            if self.mods.mods.reload_changed(vanilla_command) {
-                self.list_mods();
-                self.sync_mod_commands();
+            return;
+        }
+        self.mods.checked = Some(Instant::now());
+        if self.mods.mods.reload_changed(vanilla_command) {
+            self.list_mods();
+            self.sync_mod_commands();
+            if self.options.execution_role.is_client() {
                 self.system_message(Text::literal("Mods reloaded").with_color(text::GRAY));
+            } else {
+                log::info!("Horizon: mods reloaded");
             }
         }
+    }
+    /// Once per frame: the frame hook, and dev mods' rebuilds.
+    pub(super) fn mods_frame(&mut self, elapsed: Duration) {
+        self.reload_dev_mods();
         if !self.mods.mods.is_running() {
             return;
         }
@@ -335,8 +374,13 @@ impl Game<'_> {
         self.mods.mods.chat(line);
         self.show_mod_output();
     }
-    /// Chat lines, command feedback and stopped mods, into the chat.
-    fn show_mod_output(&mut self) {
+    /// What mods showed: client mods' lines into the chat, server mods'
+    /// to their players.
+    pub(super) fn show_mod_output(&mut self) {
+        self.route_mod_output(None);
+    }
+    /// [`Game::show_mod_output`], with the hub when it is out of `self.lan`.
+    pub(super) fn route_mod_output(&mut self, mut host: Option<&mut LanHost>) {
         for output in self.mods.mods.drain() {
             let line = match output {
                 Output::Chat { name, text } => {
@@ -349,17 +393,28 @@ impl Game<'_> {
                 Output::Stopped { name, reason } => {
                     self.list_mods();
                     self.sync_mod_commands();
-                    Text::literal(format!("Mod {name} stopped: {reason}")).with_color(text::RED)
+                    let line = format!("Mod {name} stopped: {reason}");
+                    if self.options.dedicated.is_some() {
+                        super::dedicated::log("WARN", &line);
+                    }
+                    Text::literal(line).with_color(text::RED)
                 }
-                // Server mods' lines: this game runs no server mod yet.
-                Output::Tell { .. } | Output::Broadcast { .. } | Output::Reply { .. } => continue,
+                server
+                @ (Output::Tell { .. } | Output::Broadcast { .. } | Output::Reply { .. }) => {
+                    self.route_server_output(host.as_deref_mut(), server);
+                    continue;
+                }
             };
-            // Not through system_message: a mod must not hear its own lines.
-            let focused = self.screen == Screen::Chat;
-            self.ui
-                .chat
-                .add(&self.gui.atlas, line, None, self.ticks, focused);
+            self.add_mod_chat_line(line);
         }
+    }
+    /// A mod's line in the window's chat; not through system_message: a mod
+    /// must not hear its own lines.
+    pub(super) fn add_mod_chat_line(&mut self, line: Text) {
+        let focused = self.screen == Screen::Chat;
+        self.ui
+            .chat
+            .add(&self.gui.atlas, line, None, self.ticks, focused);
     }
     /// The mods' HUD panels, stacked with the extras in their corners.
     pub(super) fn draw_mod_panels(&self, batch: &mut HudBatch, corners: &mut Corners) {

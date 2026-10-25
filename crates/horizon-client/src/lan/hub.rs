@@ -128,6 +128,11 @@ pub enum HostEvent {
         line: String,
         secure: bool,
     },
+    /// A chat message a player sent (after it was broadcast), for server mods.
+    PlayerChat {
+        sender: u128,
+        text: String,
+    },
     /// A server log warning (ServerGamePacketListenerImpl's LOGGER.warn).
     Warn(String),
     /// A server log error (LOGGER.error).
