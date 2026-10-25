@@ -11690,7 +11690,11 @@ impl<'a> Game<'a> {
         let inventory = vec![None; 36];
         let now = Instant::now();
         let look = options.look;
-        let particles = horizon_client::particles::ParticleEngine::new(&root, &gui.atlas.sprites);
+        let particles = horizon_client::particles::ParticleEngine::new(
+            &root,
+            &gui.atlas.sprites,
+            gui.atlas.translucent.clone(),
+        );
         Ok(Game {
             res: res.clone(),
             rest_loader: None,
