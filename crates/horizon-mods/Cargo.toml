@@ -30,5 +30,10 @@ pack = ["dep:wit-component", "dep:wit-parser"]
 name = "sandbox"
 required-features = ["runtime", "pack"]
 
+# docs/api/mods-reference.md from the WIT contract (HORIZON_WRITE_DOCS=1 rewrites it).
+[[test]]
+name = "api_reference"
+required-features = ["pack"]
+
 [lints]
 workspace = true

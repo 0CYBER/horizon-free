@@ -191,6 +191,19 @@ impl Connection {
             .to_socket_addrs()
             .map_err(|e| Error::new(format!("Unknown host {host}: {e}")))?
             .collect();
+        Self::connect_addresses(host, addrs, timeout)
+    }
+    /// Minecraft's SRV redirect applies to the socket destination only. Callers
+    /// keep the player's original host and port in the protocol handshake.
+    pub fn connect_server(host: &str, port: u16, timeout: Duration) -> Result<Self> {
+        let addrs = crate::resolver::resolve(host, port)?;
+        Self::connect_addresses(host, addrs, timeout)
+    }
+    fn connect_addresses(
+        host: &str,
+        addrs: Vec<std::net::SocketAddr>,
+        timeout: Duration,
+    ) -> Result<Self> {
         let mut last = Error::new(format!("Unknown host {host}"));
         for addr in addrs {
             match TcpStream::connect_timeout(&addr, timeout) {

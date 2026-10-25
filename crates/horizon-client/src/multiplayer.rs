@@ -67,6 +67,9 @@ pub enum Screen {
         name: String,
         address: String,
         focus: u8,
+        /// Server Resource Packs (`acceptTextures`): Enabled, Disabled, or
+        /// none for Prompt.
+        packs: Option<bool>,
     },
     Direct {
         address: String,
@@ -222,6 +225,19 @@ fn entry_address(servers: &[ServerEntry], lan: &Scanner, index: usize) -> Option
             .nth(index - servers.len())
             .map(|g| g.address),
     }
+}
+
+/// The Server Resource Packs button's label: `CommonComponents.optionNameValue`.
+fn pack_setting_label(packs: Option<bool>) -> String {
+    let (key, fallback) = match packs {
+        Some(true) => ("manageServer.resourcePack.enabled", "Enabled"),
+        Some(false) => ("manageServer.resourcePack.disabled", "Disabled"),
+        None => ("manageServer.resourcePack.prompt", "Prompt"),
+    };
+    let name = crate::lang::get_or("manageServer.resourcePack", "Server Resource Packs");
+    crate::lang::get_or("options.generic_value", "%s: %s")
+        .replacen("%s", &name, 1)
+        .replacen("%s", &crate::lang::get_or(key, fallback), 1)
 }
 
 /// JoinMultiplayerScreen's `HeaderAndFooterLayout(33, 60)`.
@@ -461,7 +477,16 @@ impl Screen {
                     ),
                 ]
             }
-            Self::Edit { address, .. } => vec![
+            Self::Edit { address, packs, .. } => vec![
+                // ManageServerScreen's CycleButton, above Done.
+                b(
+                    w / 2.0 - 100.0,
+                    h / 4.0 + 72.0,
+                    200.0,
+                    &pack_setting_label(*packs),
+                    true,
+                    60,
+                ),
                 b(
                     w / 2.0 - 100.0,
                     h / 4.0 + 96.0 + 18.0,
@@ -847,6 +872,7 @@ impl Screen {
                 name,
                 address,
                 focus,
+                ..
             } => {
                 centered(
                     batch,
@@ -996,6 +1022,7 @@ impl Screen {
                     name: "Minecraft Server".into(),
                     address: String::new(),
                     focus: 1,
+                    packs: None,
                 }
             }
             (
@@ -1011,6 +1038,7 @@ impl Screen {
                         name: s.name,
                         address: s.ip,
                         focus: 0,
+                        packs: s.accept_textures,
                     };
                 }
             }
@@ -1125,21 +1153,32 @@ impl Screen {
                     *selected = Some(index);
                 }
             }
+            // CycleButton: Enabled, Disabled, Prompt, and round again.
+            (Self::Edit { packs, .. }, Some(60)) => {
+                *packs = match *packs {
+                    Some(true) => Some(false),
+                    Some(false) => None,
+                    None => Some(true),
+                }
+            }
             (
                 Self::Edit {
                     index,
                     name,
                     address,
+                    packs,
                     ..
                 },
                 Some(50),
             ) => {
                 let mut list = servers::load(&servers_file(saves));
-                let entry = ServerEntry::new(name.trim(), address.trim());
+                let mut entry = ServerEntry::new(name.trim(), address.trim());
+                entry.accept_textures = *packs;
                 match index.and_then(|i| list.get_mut(i)) {
                     Some(e) => {
                         e.name = entry.name;
                         e.ip = entry.ip;
+                        e.accept_textures = entry.accept_textures;
                     }
                     None => list.push(entry),
                 }
@@ -1635,6 +1674,59 @@ mod tests {
             matches!(&screen, Screen::List { selected: None, servers, .. } if servers.len() == 1)
         );
         assert_eq!(names(), ["Keep"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn edit_cycles_and_saves_the_server_resource_pack_setting() {
+        let dir = std::env::temp_dir().join(format!("horizon-mp-packs-{}", std::process::id()));
+        let saves = dir.join("saves");
+        std::fs::create_dir_all(&saves).unwrap();
+        let file = servers_file(&saves);
+        let mut entry = ServerEntry::new("Packs", "127.0.0.1:4");
+        entry.accept_textures = Some(false);
+        servers::save(&file, &[entry]).unwrap();
+        let size = (427.0, 240.0);
+        let mut screen = Screen::list(&saves);
+        if let Screen::List { selected, .. } = &mut screen {
+            *selected = Some(0);
+        }
+        screen.click(Some(43), 0.0, 0.0, size, &saves);
+        let cycle = |screen: &Screen| {
+            screen
+                .buttons(size.0, size.1)
+                .into_iter()
+                .find(|b| b.5 == 60)
+                .map(|b| (b.0, b.1, b.2, b.3))
+        };
+        // ManageServerScreen: 200 wide at height / 4 + 72, the saved value first.
+        assert_eq!(
+            cycle(&screen),
+            Some((
+                113.5,
+                132.0,
+                200.0,
+                "Server Resource Packs: Disabled".into()
+            ))
+        );
+        // Disabled, Prompt, Enabled: Cancel keeps what was saved.
+        screen.click(Some(60), 0.0, 0.0, size, &saves);
+        assert_eq!(cycle(&screen).unwrap().3, "Server Resource Packs: Prompt");
+        screen.click(Some(51), 0.0, 0.0, size, &saves);
+        assert_eq!(servers::load(&file)[0].accept_textures, Some(false));
+        // Done saves it.
+        if let Screen::List { selected, .. } = &mut screen {
+            *selected = Some(0);
+        }
+        screen.click(Some(43), 0.0, 0.0, size, &saves);
+        screen.click(Some(60), 0.0, 0.0, size, &saves);
+        screen.click(Some(60), 0.0, 0.0, size, &saves);
+        assert_eq!(cycle(&screen).unwrap().3, "Server Resource Packs: Enabled");
+        screen.click(Some(50), 0.0, 0.0, size, &saves);
+        assert_eq!(servers::load(&file)[0].accept_textures, Some(true));
+        // A new server asks.
+        screen.click(Some(42), 0.0, 0.0, size, &saves);
+        assert_eq!(cycle(&screen).unwrap().3, "Server Resource Packs: Prompt");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

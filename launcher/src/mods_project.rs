@@ -19,6 +19,7 @@ use horizon_launcher::browser::{
 };
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// A project page's tabs.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -38,8 +39,17 @@ const TABS: [(Tab, &str); 3] = [
 pub(super) struct Opened {
     pub(super) project: Project,
     tab: Tab,
-    details: Option<Result<Details, String>>,
-    versions: Option<Result<Vec<Version>, String>>,
+    details: Option<Result<Arc<Details>, String>>,
+    versions: Option<Result<Arc<[ProjectVersion]>, String>>,
+    version_list: cull::Cull,
+    checked_versions: HashMap<String, horizon_port_pack::check::Verdict>,
+}
+
+/// Cached verdicts are read with the version request, never while drawing a frame.
+#[derive(Clone)]
+pub(super) struct ProjectVersion {
+    version: Version,
+    verdict: Option<horizon_port_pack::check::Verdict>,
 }
 
 /// The project page, filters and images' share of the Mods page's state.
@@ -58,7 +68,12 @@ pub(super) struct Browse {
 /// What the background sends this module.
 pub(super) enum Loaded {
     Details((SourceId, String), Result<Details, String>),
-    Versions((SourceId, String), Result<Vec<Version>, String>),
+    Versions((SourceId, String), Result<Vec<ProjectVersion>, String>),
+    Checked(
+        (SourceId, String),
+        String,
+        horizon_port_pack::check::Verdict,
+    ),
     Image((String, u32), Option<PathBuf>),
     Tags((SourceId, PackKind), Result<Tags, String>),
 }
@@ -77,12 +92,20 @@ impl Launcher {
         match loaded {
             Loaded::Details(key, d) => {
                 if let Some(o) = open(b, &key) {
-                    o.details = Some(d);
+                    o.details = Some(d.map(Arc::new));
                 }
             }
             Loaded::Versions(key, v) => {
                 if let Some(o) = open(b, &key) {
-                    o.versions = Some(v);
+                    o.versions = Some(v.map(Arc::from));
+                    o.apply_checks();
+                    o.version_list.reset();
+                }
+            }
+            Loaded::Checked(key, version, verdict) => {
+                if let Some(o) = open(b, &key) {
+                    o.checked_versions.insert(version, verdict);
+                    o.apply_checks();
                 }
             }
             Loaded::Image(key, path) => {
@@ -106,7 +129,21 @@ impl Launcher {
             };
             let d = source.details(&p);
             let _ = tx.send(Event::Loaded(Loaded::Details(key.clone(), d)));
-            let v = source.versions(&p);
+            let v = source.versions(&p).map(|versions| {
+                let home = backend::game_home();
+                versions
+                    .into_iter()
+                    .map(|version| {
+                        let verdict = version.file().and_then(|file| {
+                            (p.kind == PackKind::Mod)
+                                .then(|| java::cached(&home, file))
+                                .flatten()
+                                .map(|check| check.verdict)
+                        });
+                        ProjectVersion { version, verdict }
+                    })
+                    .collect()
+            });
             let _ = tx.send(Event::Loaded(Loaded::Versions(key, v)));
         });
         self.mods.browse.open = Some(Opened {
@@ -114,6 +151,8 @@ impl Launcher {
             tab: Tab::Description,
             details: None,
             versions: None,
+            version_list: cull::Cull::default(),
+            checked_versions: HashMap::new(),
         });
     }
 
@@ -361,6 +400,7 @@ impl Launcher {
         ));
         let details = o.details.clone();
         let versions = o.versions.clone();
+        let version_list = o.version_list.clone();
         let mut meta = vec![format!("{} downloads", thousands(p.downloads))];
         if let Some(Ok(d)) = &details {
             meta.push(format!("{} followers", thousands(d.followers)));
@@ -551,9 +591,13 @@ impl Launcher {
             Tab::Versions => match &versions {
                 None => centered("Loading…", &t),
                 Some(Err(e)) => notice(e.clone(), &t),
-                Some(Ok(list)) => {
-                    let mut rows = div().flex().flex_col();
-                    for (i, v) in list.iter().take(50).enumerate() {
+                Some(Ok(list)) => version_list.column(
+                    &self.content_scroll.handle,
+                    list.len().min(50),
+                    8.,
+                    |_| false,
+                    |i| {
+                        let v = &list[i].version;
                         let file = v.file();
                         let mut detail = vec![
                             v.published.get(..10).unwrap_or_default().to_string(),
@@ -570,27 +614,33 @@ impl Launcher {
                         if let Some(f) = file {
                             detail.push(format!("{} · {:.1} MB", f.name, f.size as f64 / 1e6));
                         }
-                        let checked = file.and_then(|f| {
-                            (p.kind == PackKind::Mod)
-                                .then(|| java::cached(&backend::game_home(), f))
-                                .flatten()
-                        });
-                        rows = rows.child(index_row(
+                        index_row(
                             i + 1,
                             v.number.clone(),
                             Some(detail.join(" · ").into_any_element()),
-                            checked.map(|c| {
-                                caps(c.verdict.label())
-                                    .text_color(t.muted)
-                                    .into_any_element()
+                            list[i].verdict.as_ref().map(|verdict| {
+                                caps(verdict.label()).text_color(t.muted).into_any_element()
                             }),
                             &t,
-                        ));
-                    }
-                    rows
-                }
+                        )
+                    },
+                ),
             },
         };
         Some(page.child(body))
+    }
+}
+
+impl Opened {
+    /// A check can finish before or after the version request; retain either event order.
+    fn apply_checks(&mut self) {
+        let Some(Ok(versions)) = &mut self.versions else {
+            return;
+        };
+        for row in Arc::make_mut(versions) {
+            if let Some(verdict) = self.checked_versions.get(&row.version.id) {
+                row.verdict = Some(*verdict);
+            }
+        }
     }
 }

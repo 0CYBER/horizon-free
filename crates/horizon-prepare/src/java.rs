@@ -1,6 +1,7 @@
 //! The JDK that compiles and runs the vanilla exporters. They call Mojang's own code, so they
 //! stay Java; everything around them is here.
 
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -12,6 +13,20 @@ pub struct Jdk {
 }
 
 const TIMEOUT: Duration = Duration::from_secs(3600);
+
+/// Exporters and JDK probes write to pipes or log files: on Windows they open no terminal.
+fn command(program: impl AsRef<OsStr>) -> Command {
+    let command = Command::new(program);
+    #[cfg(windows)]
+    let command = {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut command = command;
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+    };
+    command
+}
 
 fn executable(dir: &Path, name: &str) -> PathBuf {
     dir.join(if cfg!(windows) {
@@ -29,7 +44,7 @@ fn on_path(name: &str) -> Option<PathBuf> {
 
 /// The major version `javac -version` reports ("javac 25.0.1" → 25; "javac 1.8.0" → 8).
 fn javac_major(javac: &Path) -> Result<u32, String> {
-    let output = Command::new(javac)
+    let output = command(javac)
         .arg("-version")
         .stdin(Stdio::null())
         .output()
@@ -183,7 +198,7 @@ pub fn find(major: i64, more: &[PathBuf]) -> Result<Jdk, String> {
         candidates.push((javac, java, "PATH"));
     }
     if cfg!(target_os = "macos") {
-        if let Ok(out) = Command::new("/usr/libexec/java_home")
+        if let Ok(out) = command("/usr/libexec/java_home")
             .args(["-v", &major.to_string()])
             .stderr(Stdio::null())
             .output()
@@ -260,7 +275,7 @@ impl Jdk {
     /// `javac --release <major> -proc:none` with Python's `subprocess.run(..., check=True,
     /// stdout=log, stderr=STDOUT, timeout=3600)`.
     pub fn javac(&self, major: i64, args: &[String], log: &fs::File) -> Result<(), String> {
-        let mut command = Command::new(&self.javac);
+        let mut command = command(&self.javac);
         command
             .args(["--release", &major.to_string(), "-proc:none"])
             .args(args);
@@ -268,7 +283,7 @@ impl Jdk {
     }
 
     pub fn java(&self, args: &[String], cwd: Option<&Path>, log: &fs::File) -> Result<(), String> {
-        let mut command = Command::new(&self.java);
+        let mut command = command(&self.java);
         command.args(args);
         if let Some(dir) = cwd {
             command.current_dir(dir);

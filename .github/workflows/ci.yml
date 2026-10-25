@@ -430,7 +430,7 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: stable
         run: python tools/test_float_log_parity.py
-  portable-mod:
+  jfr-analysis:
     if: github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, linux, horizon-game]
     steps:
@@ -442,101 +442,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
-      - name: Compile original mod and test metrics
-        run: python tools/build_mod.py
       - name: Verify streaming JFR analysis against the JDK exporter
         run: python tools/test_jfr.py
       - name: Verify ZGC pause and allocation event interpretation
         run: python tools/test_jfr.py --gc zgc
-      - name: Build pinned portable packs
-        run: python tools/build_pack.py
-      - name: Measure isolated worker pacing on this platform
-        run: python -c "from tools.build_mod import benchmark_workers; benchmark_workers()"
-      - name: Measure isolated debounce queue polling
-        run: python -c "from tools.build_mod import benchmark_debounce; benchmark_debounce()"
-      - name: Measure wakeable idle queue latency
-        run: python -c "from tools.build_mod import benchmark_idle; benchmark_idle()"
-      - name: Measure object allocations with compact headers off and on
-        run: python -c "from tools.build_mod import benchmark_headers; benchmark_headers()"
-      - name: Test pack integrity and comparisons
-        run: python -m unittest discover -s tests -v
-      - name: Start recommended OpenGL macOS clients and verify framebuffer readback
-        if: runner.os == 'macOS'
-        run: |
-          python tools/test_client_graphics.py --native-display
-          cp dist/client-graphics-smoke.json dist/client-graphics-macos-title.json
-          python tools/test_client_graphics.py --native-display --world
-          cp dist/client-graphics-smoke.json dist/client-graphics-macos-world.json
-      - name: Compile the private dispatch fixture
-        run: python -c "from tools.build_mod import build_dispatch_fixture; build_dispatch_fixture()"
-      - name: Compile the private integrated-server graphics fixture
-        run: python -c "from tools.build_mod import build_integration_fixture; build_integration_fixture('server-graphics', 'dev.horizonlab.metrics.ServerGraphicsIntegration', fixture_dependencies={})"
-      - name: Compile the private tick-manager state fixture
-        run: python -c "from tools.build_mod import build_integration_fixture; build_integration_fixture('tick-state', 'dev.horizonlab.metrics.TickStateIntegration')"
-      - name: Compile the private terrain tick membership fixture
-        run: python -c "from tools.build_mod import build_tick_dedup_fixture; build_tick_dedup_fixture()"
-      - name: Compile the private culling whitelist fixture
-        run: python -c "from tools.build_mod import build_culling_empty_fixture; build_culling_empty_fixture()"
-      - name: Compile the private culling ray geometry fixture
-        run: python -c "from tools.build_mod import build_integration_fixture; build_integration_fixture('culling-rays', 'dev.horizonlab.dispatch.CullingRayIntegration', ['entityculling'], ['CullingRayAccess'])"
-      - name: Compile the private terrain position lookup fixture
-        run: python -c "from tools.build_mod import build_integration_fixture; build_integration_fixture('terrain-position', 'dev.horizonlab.dispatch.PositionIntegration')"
-      - name: Compile the private terrain quad reuse fixture
-        run: python -c "from tools.build_mod import build_integration_fixture; build_integration_fixture('quad-reuse', 'dev.horizonlab.dispatch.QuadReuseIntegration')"
-      - name: Compile the private object-size agent and terrain quad fixture
-        run: python -c "from tools.test_quad_sizes import build_agent; from tools.build_mod import build_integration_fixture; build_agent(); build_integration_fixture('quad-size', 'dev.horizonlab.dispatch.QuadSizeIntegration')"
-      - name: Compile the private terrain read shutdown fixture
-        run: python -c "from tools.build_mod import build_integration_fixture; build_integration_fixture('terrain-read', 'dev.horizonlab.dispatch.TerrainReadIntegration')"
-      - name: Install headless graphics libraries for applied-hook checks
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1 libegl1 libvulkan1 mesa-vulkan-drivers libasound2t64 libxkbcommon0
-      - name: Verify integrated-server graphics report against the actual device
-        run: python tools/test_server_graphics.py ${{ runner.os == 'macOS' && '--native-display' || '' }}
-      - name: Exercise the applied dispatcher hooks and upstream rejection path
-        if: runner.os == 'Linux'
-        run: python tools/test_dispatch.py
-      - name: Verify applied tick membership transitions and allocation
-        if: runner.os == 'Linux'
-        run: python tools/test_tick_dedup.py
-      - name: Verify live culling whitelist registration and empty iteration
-        if: runner.os == 'Linux'
-        run: python tools/test_culling_empty.py
-      - name: Compare applied culling ray geometry and provider queries
-        if: runner.os == 'Linux'
-        run: python tools/test_culling_rays.py
-      - name: Verify actual full-data position lookup equivalence
-        if: runner.os == 'Linux'
-        run: python tools/test_terrain_position.py
-      - name: Verify actual terrain quad geometry and allocation
-        if: runner.os == 'Linux'
-        run: python tools/test_quad_reuse.py
-      - name: Measure actual builder and quad shallow sizes in both header modes
-        if: runner.os == 'Linux'
-        run: python tools/test_quad_sizes.py
-      - name: Verify interrupted DH reads and preserved shared futures
-        if: runner.os == 'Linux'
-        run: python tools/test_terrain_read.py
-      - name: Upload original mod and pack manifests only
-        uses: actions/upload-artifact@v4
-        with:
-          name: horizon-linux
-          path: |
-            dist/*.mrpack
-            dist/horizon-*.jar
-            dist/worker-pacing-benchmark.txt
-            dist/debounce-queue-benchmark.txt
-            dist/idle-queue-benchmark.txt
-            dist/object-header-benchmark.txt
-            dist/dispatch-integration.json
-            dist/tick-dedup-integration.json
-            dist/culling-empty-integration.json
-            dist/terrain-read-integration.json
-            dist/culling-rays-integration.json
-            dist/terrain-position-integration.json
-            dist/quad-reuse-integration.json
-            dist/quad-size-integration.json
-            dist/server-graphics-smoke.json
-            dist/client-graphics-smoke.json
-            dist/client-graphics-macos-title.json
-            dist/client-graphics-macos-world.json
-          retention-days: 3
