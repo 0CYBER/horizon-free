@@ -234,7 +234,7 @@ impl Game<'_> {
                 // A server's dialog takes the keys, in configuration too.
                 if self.dialog_open() {
                     if arg(2)? != "up" {
-                        self.dialog_key(key)?;
+                        self.dialog_key(key, None, None)?;
                     }
                     return ok();
                 }
@@ -527,13 +527,17 @@ impl Game<'_> {
                 ))
             }
             "type" => {
-                self.require_world()?;
                 let text = line
                     .trim_start()
                     .strip_prefix("type")
                     .unwrap_or("")
                     .strip_prefix(' ')
                     .unwrap_or("");
+                // A server's dialog, in configuration too.
+                if self.dialog_type(text) {
+                    return ok();
+                }
+                self.require_world()?;
                 if self.book.is_some() {
                     self.book_type(text);
                     return ok();

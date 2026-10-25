@@ -9,8 +9,9 @@ the game shows and what reaches the server (its console and, for custom click ac
     python3 tools/server_e2e.py --bin-dir target/fast --check dialog
 
 Checks:
-- dialog: `/dialog show` with a multi-action dialog (a message, three buttons): the game shows it,
-          a command runs on the server (`trigger`), a custom action reaches it with its
+- dialog: `/dialog show` with a multi-action dialog (a message, a text and a boolean input, three
+          buttons): the game shows it with its inputs and buttons, the text typed and the box ticked
+          go back in a command template (`trigger`, run by the server) and in a custom action's
           payload (the server's "Received custom click action" line), `wait_for_response` leaves the
           waiting screen, and `/dialog clear` closes a dialog (servers used to see nothing: the game
           dropped the packets).
@@ -79,8 +80,13 @@ def check_dialog(server, game, out):
         'type': 'minecraft:multi_action',
         'title': {'text': 'Sign in', 'color': 'gold'},
         'body': {'type': 'minecraft:plain_message', 'contents': 'Pick a number.'},
+        'inputs': [
+            {'type': 'minecraft:text', 'key': 'number', 'label': 'Number'},
+            {'type': 'minecraft:boolean', 'key': 'agree', 'label': 'Agree', 'on_true': '1', 'on_false': '0'},
+        ],
         'actions': [
-            {'label': 'Send', 'action': {'type': 'minecraft:run_command', 'command': 'trigger answer set 41'}},
+            {'label': 'Send', 'action': {'type': 'minecraft:dynamic/run_command',
+                                         'template': 'trigger answer set $(number)$(agree)'}},
             {'label': 'Submit', 'action': {'type': 'minecraft:dynamic/custom', 'id': 'horizon:e2e',
                                            'additions': {'tag': 'x'}}},
             {'label': 'Wait', 'action': {'type': 'minecraft:dynamic/custom', 'id': 'horizon:wait'}},
@@ -94,19 +100,24 @@ def check_dialog(server, game, out):
     state = game('state')
     shown['shown'] = state['dialog']['open']
     assert shown['shown']['title'] == 'Sign in', shown
+    assert [i['key'] for i in shown['shown']['inputs']] == ['number', 'agree'], shown
     assert shown['shown']['buttons'] == ['Send', 'Submit', 'Wait'], shown
     game.shot(out, 'dialog')
+    # The text, the box, then the command the template makes of them.
+    game.raw('type', '4')
+    game.raw('click', 'agree')
     game.raw('click', 'send')
     time.sleep(1)
     server.console(f'scoreboard players get {PLAYER} answer')
     server.wait_for(rf'{PLAYER} has 41 \[answer\]', timeout=30)
     shown['trigger'] = 41
-    # A custom action and its additions.
+    # A custom action: its additions and every input's tag.
     game.raw('click', 'submit')
     server.wait_for(r'Received custom click action horizon:e2e with payload', timeout=30)
     line = next(l for l in server.lines if 'horizon:e2e' in l)
     shown['custom'] = line.split('payload ', 1)[1]
-    assert shown['custom'] == '{tag:"x"}', shown
+    for part in ('agree:1b', 'number:"4"', 'tag:"x"'):
+        assert part in shown['custom'], shown
     # after_action none: still open. Then clear it.
     assert game('state')['dialog']['open'], 'the dialog closed after an action with after_action none'
     server.console(f'dialog clear {PLAYER}')

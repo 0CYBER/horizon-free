@@ -6,9 +6,10 @@
 use super::Game;
 use horizon_client::{
     Result,
+    clipboard::EditShortcut,
     confirm_screen::Confirm,
-    dialog::{AfterAction, Click, Dialog, InputValue},
-    dialog_screen::{Layout, Part, WARNING_SPRITES, waiting_button},
+    dialog::{AfterAction, Click, Control, Dialog, InputValue},
+    dialog_screen::{BOX, Layout, Part, WARNING_SPRITES, waiting_button},
     hud::{HudBatch, rgba},
     text::Text,
     ui,
@@ -21,6 +22,9 @@ use winit::keyboard::KeyCode;
 struct Open {
     dialog: Dialog,
     values: Vec<InputValue>,
+    /// The box of each text input.
+    fields: Vec<Option<ui::EditBox>>,
+    focus: Option<usize>,
     scroll: ui::Scroll,
 }
 
@@ -58,9 +62,30 @@ impl Game<'_> {
             return;
         };
         let values = dialog.inputs.iter().map(|i| i.control.initial()).collect();
+        let fields = dialog
+            .inputs
+            .iter()
+            .map(|i| match &i.control {
+                Control::Text {
+                    width,
+                    initial,
+                    max_length,
+                    ..
+                } => {
+                    let mut edit = ui::EditBox::new(0.0, 0.0, *width as f32, 20.0);
+                    edit.max_length = (*max_length).max(1) as usize;
+                    edit.set_value(initial);
+                    edit.focused = false;
+                    Some(edit)
+                }
+                _ => None,
+            })
+            .collect();
         self.dialogs.open = Some(Open {
             dialog,
             values,
+            fields,
+            focus: None,
             scroll: ui::Scroll::default(),
         });
         self.dialogs.waiting = None;
@@ -83,6 +108,15 @@ impl Game<'_> {
     fn dialog_closed(&mut self) {
         if self.player.is_some() && self.screen == super::Screen::Playing && self.title.is_none() {
             self.capture(true);
+        }
+    }
+
+    /// The input values as the controls hold them now.
+    fn dialog_values(open: &mut Open) {
+        for (value, field) in open.values.iter_mut().zip(&open.fields) {
+            if let Some(f) = field {
+                *value = InputValue::Text(f.value.clone());
+            }
         }
     }
 
@@ -268,6 +302,37 @@ impl Game<'_> {
                 Part::Line(text, x, y) => {
                     batch.text_styled(atlas, &text, x, y, u32::MAX, true);
                 }
+                Part::Field { input, rect } => {
+                    if let Some(Some(edit)) = open.fields.get_mut(input) {
+                        [edit.x, edit.y, edit.width, edit.height] = rect;
+                        edit.focused = open.focus == Some(input);
+                        edit.draw(batch, atlas, None);
+                    }
+                }
+                Part::Check { input, rect } => {
+                    let [x, y, cw, ch] = rect;
+                    let hover = in_area(cursor.1) && ui::hovered(cursor, x, y, cw, ch);
+                    let on = open.values.get(input) == Some(&InputValue::Bool(true));
+                    let sprite = match (on, hover) {
+                        (true, true) => "gui/sprites/widget/checkbox_selected_highlighted",
+                        (true, false) => "gui/sprites/widget/checkbox_selected",
+                        (false, true) => "gui/sprites/widget/checkbox_highlighted",
+                        (false, false) => "gui/sprites/widget/checkbox",
+                    };
+                    let Control::Boolean { label, .. } = &open.dialog.inputs[input].control else {
+                        continue;
+                    };
+                    horizon_client::widgets::record(&label.plain(), rect, true);
+                    batch.sprite_scaled(atlas, sprite, x, y, BOX, BOX, u32::MAX);
+                    batch.text_styled(
+                        atlas,
+                        label,
+                        x + BOX + 4.0,
+                        y + 4.0,
+                        rgba(224, 224, 224, 255),
+                        true,
+                    );
+                }
                 Part::Button { index, rect } => {
                     let [x, y, bw, bh] = rect;
                     let hover =
@@ -360,24 +425,51 @@ impl Game<'_> {
         };
         let [_, ay, _, ah] = layout.area;
         let mut action = None;
+        open.focus = None;
         for (part, clipped) in layout.placed(open.scroll.amount) {
             if clipped && !(cursor.1 >= ay && cursor.1 < ay + ah) {
                 continue;
             }
             match part {
+                Part::Field {
+                    input,
+                    rect: [x, y, w, h],
+                } if ui::hovered(cursor, x, y, w, h) => {
+                    open.focus = Some(input);
+                    if let Some(Some(edit)) = open.fields.get_mut(input) {
+                        edit.focused = true;
+                        edit.click(&self.gui.atlas, cursor.0, false, false);
+                    }
+                }
+                Part::Check {
+                    input,
+                    rect: [x, y, w, h],
+                } if ui::hovered(cursor, x, y, w, h) => {
+                    if let Some(InputValue::Bool(b)) = open.values.get_mut(input) {
+                        *b = !*b;
+                    }
+                    action = Some(None);
+                }
                 Part::Button {
                     index,
                     rect: [x, y, w, h],
                 } if ui::hovered(cursor, x, y, w, h) => {
-                    action = Some(index);
+                    action = Some(Some(index));
                 }
                 _ => {}
             }
         }
-        let Some(index) = action else {
+        let Some(action) = action else {
             return Ok(());
         };
         self.audio.play_button_click();
+        let Some(index) = action else {
+            return Ok(());
+        };
+        let Some(open) = self.dialogs.open.as_mut() else {
+            return Ok(());
+        };
+        Self::dialog_values(open);
         let d = &open.dialog;
         let click = d.buttons()[index]
             .action
@@ -398,8 +490,15 @@ impl Game<'_> {
         }
     }
 
-    /// A key pressed on a dialog screen: Escape closes what allows it.
-    pub(super) fn dialog_key(&mut self, key: KeyCode) -> Result<()> {
+    /// A key pressed on a dialog screen: Escape closes what allows it, Tab
+    /// moves between the text inputs, the rest goes to the focused one
+    /// (`shortcut`: the press as an edit shortcut; `text`: what it types).
+    pub(super) fn dialog_key(
+        &mut self,
+        key: KeyCode,
+        shortcut: Option<EditShortcut>,
+        text: Option<&str>,
+    ) -> Result<()> {
         let escape = key == KeyCode::Escape;
         if self.dialogs.warning {
             if escape {
@@ -418,7 +517,9 @@ impl Game<'_> {
             }
             return Ok(());
         }
-        let Some(open) = self.dialogs.open.as_ref() else {
+        let ctrl = self.modifiers.control_key() || self.modifiers.super_key();
+        let shift = self.modifiers.shift_key();
+        let Some(open) = self.dialogs.open.as_mut() else {
             return Ok(());
         };
         if escape {
@@ -426,11 +527,63 @@ impl Game<'_> {
                 return Ok(());
             }
             // onClose: the cancel action, and the screen closes.
+            Self::dialog_values(open);
             let d = &open.dialog;
             let click = d.on_cancel().and_then(|a| a.click(&d.inputs, &open.values));
             return self.run_dialog_action(click, AfterAction::Close);
         }
+        if key == KeyCode::Tab {
+            let texts: Vec<usize> = (0..open.fields.len())
+                .filter(|&i| open.fields[i].is_some())
+                .collect();
+            if !texts.is_empty() {
+                let at = open.focus.and_then(|f| texts.iter().position(|&i| i == f));
+                let next = match at {
+                    None if shift => texts.len() - 1,
+                    None => 0,
+                    Some(p) if shift => (p + texts.len() - 1) % texts.len(),
+                    Some(p) => (p + 1) % texts.len(),
+                };
+                open.focus = Some(texts[next]);
+            }
+            return Ok(());
+        }
+        let Some(Some(edit)) = open.focus.and_then(|f| open.fields.get_mut(f)) else {
+            return Ok(());
+        };
+        if let Some(shortcut) = shortcut {
+            edit.shortcut(shortcut, &mut self.clipboard);
+            return Ok(());
+        }
+        if edit.key(key, ctrl, shift) {
+            return Ok(());
+        }
+        let typed: String = text
+            .unwrap_or_default()
+            .chars()
+            .filter(|c| !c.is_control())
+            .collect();
+        if !typed.is_empty() {
+            edit.insert_text(&typed);
+        }
         Ok(())
+    }
+
+    /// `type TEXT` with a dialog open: into the focused text input, or the
+    /// first one.
+    pub(super) fn dialog_type(&mut self, text: &str) -> bool {
+        let Some(open) = self.dialogs.open.as_mut() else {
+            return false;
+        };
+        let focus = open
+            .focus
+            .or_else(|| open.fields.iter().position(Option::is_some));
+        let Some(Some(edit)) = focus.and_then(|f| open.fields.get_mut(f)) else {
+            return false;
+        };
+        open.focus = focus;
+        edit.insert_text(text);
+        true
     }
 
     /// What `state` reports: the open dialog and its values, or the waiting
@@ -444,7 +597,15 @@ impl Game<'_> {
         } else {
             None
         };
-        let open = d.open.as_ref().map(|open| open.dialog.json(&open.values));
+        let open = d.open.as_ref().map(|open| {
+            let mut values = open.values.clone();
+            for (value, field) in values.iter_mut().zip(&open.fields) {
+                if let Some(f) = field {
+                    *value = InputValue::Text(f.value.clone());
+                }
+            }
+            open.dialog.json(&values)
+        });
         serde_json::json!({ "open": open, "screen": screen })
     }
 }
