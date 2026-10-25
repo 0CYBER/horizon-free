@@ -1,5 +1,6 @@
 import copy
 import datetime
+import json
 import tomllib
 import unittest
 from unittest import mock
@@ -77,9 +78,15 @@ class RepositoryRoadmap(unittest.TestCase):
     def test_the_roadmap_keeps_its_rules(self):
         self.assertEqual(roadmap.validate(roadmap.load()), [])
 
-    def test_roadmap_md_is_generated_from_the_toml(self):
-        self.assertEqual(roadmap.OUTPUT.read_text(), roadmap.render(roadmap.load()),
-                         "ROADMAP.md is out of date: run `python3 tools/roadmap.py build`")
+    def test_generated_files_match_the_toml(self):
+        for path, text in roadmap.outputs(roadmap.load()).items():
+            self.assertEqual(path.read_text(), text, f"{path.name} is out of date: run `python3 tools/roadmap.py build`")
+
+    def test_site_data_has_every_item_in_one_line_text(self):
+        data = json.loads(roadmap.site_data(tomllib.loads(SAMPLE)))
+        self.assertEqual([item["id"] for item in data["items"]], ["fast", "faster", "fastest", "old"])
+        self.assertEqual(data["items"][0]["dev"], "Multiply, not divide (#10).")
+        self.assertEqual(data["areas"], [{"id": "performance", "name": "Performance"}])
 
 
 class Rules(unittest.TestCase):

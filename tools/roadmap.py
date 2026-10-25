@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Horizon's roadmap: roadmap/roadmap.toml is the source, ROADMAP.md is generated from it.
 
-    python3 tools/roadmap.py build              write ROADMAP.md
-    python3 tools/roadmap.py build --check      fail when ROADMAP.md is out of date (CI)
+    python3 tools/roadmap.py build              write ROADMAP.md and website/data/roadmap.json
+    python3 tools/roadmap.py build --check      fail when either is out of date (CI)
     python3 tools/roadmap.py check --offline    the file's own rules (CI)
     python3 tools/roadmap.py check              the same, then GitHub: links resolve, no stale Now item
     python3 tools/roadmap.py sync [--dry-run]   items whose pull requests all merged become shipped,
@@ -28,6 +28,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "roadmap" / "roadmap.toml"
 OUTPUT = ROOT / "ROADMAP.md"
+# What the website's hub reads (website/build.mjs), and serves at /hub/roadmap.json for Kira and others.
+SITE_DATA = ROOT / "website" / "data" / "roadmap.json"
 REPO = "ludovic111/horizon"
 SITE = "https://playhorizon.dev/hub"
 
@@ -225,6 +227,27 @@ def render(data):
                     out += ["", "More: " + link_list(more)]
                 out += ["", "</details>"]
     return "\n".join(out) + "\n"
+
+
+def site_data(data):
+    """website/data/roadmap.json: the items as the hub and Kira read them, in the file's order."""
+    keys = ("id", "title", "status", "area", "plain", "dev", "links", "focus", "ongoing", "shipped_in", "post")
+    out = {
+        "format": "horizon-roadmap",
+        "version": 1,
+        "source": "roadmap/roadmap.toml",
+        "overview": {key: " ".join(value.split()) for key, value in data["overview"].items()},
+        "statuses": [{"id": key, "name": name} for key, name in STATUSES.items()],
+        "areas": [{"id": key, "name": name} for key, name in areas_in_order(data)],
+        "items": [{key: (" ".join(item[key].split()) if isinstance(item[key], str) else item[key])
+                   for key in keys if key in item} for item in data.get("item", [])],
+    }
+    return json.dumps(out, indent=1, ensure_ascii=False) + "\n"
+
+
+def outputs(data):
+    """Every generated file and its content."""
+    return {OUTPUT: render(data), SITE_DATA: site_data(data)}
 
 
 # --- GitHub ---------------------------------------------------------------------------------------------------
@@ -466,13 +489,15 @@ def command_build(args):
     problems = validate(data)
     if problems:
         return report(problems)
-    markdown = render(data)
+    files = outputs(data)
     if args.check:
-        if not OUTPUT.exists() or OUTPUT.read_text() != markdown:
-            return report(["ROADMAP.md is out of date: run `python3 tools/roadmap.py build`"])
-        return 0
-    OUTPUT.write_text(markdown)
-    print(f"roadmap: wrote {OUTPUT.relative_to(ROOT)}")
+        stale = [path for path, text in files.items() if not path.exists() or path.read_text() != text]
+        return report([f"{path.relative_to(ROOT)} is out of date: run `python3 tools/roadmap.py build`"
+                       for path in stale])
+    for path, text in files.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        print(f"roadmap: wrote {path.relative_to(ROOT)}")
     return 0
 
 
@@ -505,8 +530,9 @@ def command_sync(args):
     if len(new.get("item", [])) != len(data.get("item", [])) or validate(new):
         return report(["sync produced an invalid file; nothing written"] + validate(new))
     SOURCE.write_text(text)
-    OUTPUT.write_text(render(new))
-    print("roadmap: wrote roadmap/roadmap.toml and ROADMAP.md")
+    for path, content in outputs(new).items():
+        path.write_text(content)
+    print("roadmap: wrote roadmap/roadmap.toml, ROADMAP.md and website/data/roadmap.json")
     return 0
 
 

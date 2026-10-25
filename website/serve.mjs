@@ -17,6 +17,11 @@ createServer(async (req, res) => {
     res.writeHead(301, { Location: "/docs/hosting" });
     return res.end();
   }
+  // The roadmap page became the hub's Roadmap tab.
+  if (path === "/roadmap") {
+    res.writeHead(301, { Location: "/hub#roadmap" });
+    return res.end();
+  }
   if (path === "/docs") path = "/docs/index.html";
   // /privacy and /docs/<page> are .html files, as the Caddyfile rewrites them.
   if (!extname(path)) path += ".html";
