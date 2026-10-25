@@ -180,7 +180,7 @@ impl Game<'_> {
             | Target::Cart(id)
             | Target::Other(id) => self.persist.raw.get(&id),
             Target::Player => self.level.player_extra.as_ref(),
-            Target::Guest(_) | Target::Orb(_) | Target::Arrow(_) => None,
+            Target::Guest(_) | Target::Orb(_) | Target::Projectile(_) => None,
         };
         match raw.and_then(|r| r.get("Tags")) {
             Some(Tag::List(l)) => l

@@ -12,7 +12,6 @@ use horizon_client::{
     hud_layout, hud_overlays,
     mesher::Vertex,
     particles::{ParticleOptions, ParticleType},
-    text::Text,
 };
 use horizon_core::{
     geometry::{Aabb, Vec3},
@@ -2157,23 +2156,12 @@ impl Game<'_> {
             });
         }
     }
-    /// `BossHealthOverlay`: the dragon's pink bar, then the withers', the
-    /// raids' and the custom bars, in that order.
+    /// `BossHealthOverlay.extractRenderState`: whatever `publish_boss_bars`
+    /// (or a server's packets) put on this client's overlay.
     pub(super) fn draw_boss_bars(&self, batch: &mut HudBatch) {
-        let mut bars = Vec::new();
-        if let Some(d) = self.dragon.as_ref().filter(|_| self.dragon_bar_shown()) {
-            bars.push(hud_overlays::BossBar {
-                name: Text::literal(
-                    self.translate("entity.minecraft.ender_dragon", "Ender Dragon"),
-                ),
-                progress: (d.health / MAX_HEALTH).clamp(0.0, 1.0),
-                color: 0,
-                overlay: 0,
-            });
-        }
-        self.wither_bars(&mut bars);
-        self.raid_bars(&mut bars);
-        self.custom_bossbars(&mut bars);
+        let bars = self
+            .boss_overlay
+            .bars(horizon_client::boss_overlay::now_millis());
         let draws = hud_overlays::boss_overlay(
             batch.width as i32,
             batch.height as i32,
@@ -2182,14 +2170,26 @@ impl Game<'_> {
         );
         hud_layout::paint(batch, &self.gui.atlas, &draws);
     }
-    /// The dragon fight's boss bar shows (`EnderDragonFight.dragonEvent`,
-    /// with `setCreateWorldFog`).
-    pub(super) fn dragon_bar_shown(&self) -> bool {
-        self.dim == Dim::End && self.dragon.is_some()
+    /// The dragon fight's bar for a player at `at`
+    /// (`EnderDragonFight.dragonEvent`, visible while the fight is not won
+    /// and the player is alive within 192 blocks of (0, 128, 0)).
+    pub(super) fn dragon_boss_progress(&self, at: [f64; 3], alive: bool) -> Option<f32> {
+        if self.dim != Dim::End || !alive || !self.fight.loaded || self.fight.killed {
+            return None;
+        }
+        let near = at[0].powi(2) + (at[1] - 128.0).powi(2) + at[2].powi(2) <= 192.0 * 192.0;
+        if !near {
+            return None;
+        }
+        Some(
+            self.dragon
+                .as_ref()
+                .map_or(1.0, |d| (d.health / MAX_HEALTH).clamp(0.0, 1.0)),
+        )
     }
-    /// `music.dragon` while the boss bar plays music.
+    /// `BossHealthOverlay.shouldPlayMusic`.
     pub(super) fn boss_music(&self) -> bool {
-        self.dim == Dim::End && self.dragon.is_some() || self.wither_near()
+        self.boss_overlay.should_play_music()
     }
 }
 pub(super) struct DragonFireball {

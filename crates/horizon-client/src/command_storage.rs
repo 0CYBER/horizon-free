@@ -55,7 +55,7 @@ impl CommandStorage {
                 .iter()
                 .map(|(k, v)| (k.as_str().into(), v.clone()))
                 .collect();
-            let _ = save::write_dat(
+            if let Err(e) = save::write_dat(
                 &file(root, namespace),
                 Tag::compound([
                     (
@@ -64,7 +64,9 @@ impl CommandStorage {
                     ),
                     ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
                 ]),
-            );
+            ) {
+                log::warn!("command storage {namespace} was not written: {e}");
+            }
         }
     }
     /// `get`: an empty compound when unset.

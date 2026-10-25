@@ -42,7 +42,8 @@ pub(super) enum Target {
     Mob(u32),
     Item(u32),
     Orb(usize),
-    Arrow(usize),
+    /// By index in `creatures.projectiles`.
+    Projectile(usize),
     Stand(u32),
     Frame(u32),
     Painting(u32),
@@ -327,7 +328,7 @@ impl Game<'_> {
                 .orbs
                 .get(i)
                 .map(|o| [o.position.x, o.position.y, o.position.z]),
-            Target::Arrow(i) => self
+            Target::Projectile(i) => self
                 .creatures
                 .projectiles
                 .get(i)
@@ -382,7 +383,11 @@ impl Game<'_> {
                 }),
             Target::Item(_) => "minecraft:item".into(),
             Target::Orb(_) => "minecraft:experience_orb".into(),
-            Target::Arrow(_) => "minecraft:arrow".into(),
+            Target::Projectile(i) => self
+                .creatures
+                .projectiles
+                .get(i)
+                .map_or_else(String::new, |p| p.kind.id().into()),
             Target::Stand(_) => "minecraft:armor_stand".into(),
             Target::Frame(id) => {
                 if self.item_frames.iter().any(|f| f.id == id && f.glow) {
@@ -503,6 +508,7 @@ impl Game<'_> {
             _ => {}
         }
         if s.kind != 's' {
+            use horizon_client::projectiles::ProjectileKind as K;
             candidates.extend(self.player_candidates(s));
             candidates.extend(
                 self.mobs
@@ -517,8 +523,12 @@ impl Game<'_> {
                     .projectiles
                     .iter()
                     .enumerate()
-                    .filter(|(_, p)| p.arrow.is_some())
-                    .map(|(i, _)| Target::Arrow(i)),
+                    // The kinds /data can write (entity_nbt).
+                    .filter(|(_, p)| {
+                        p.arrow.is_some()
+                            || matches!(p.kind, K::LargeFireball { .. } | K::SmallFireball)
+                    })
+                    .map(|(i, _)| Target::Projectile(i)),
             );
             candidates.extend(self.armor_stands.iter().map(|a| Target::Stand(a.id)));
             candidates.extend(self.item_frames.iter().map(|f| Target::Frame(f.id)));
@@ -1100,9 +1110,15 @@ impl Game<'_> {
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
                     m.position = v;
                     m.previous = v;
-                    if let Some([yaw, _]) = rotation {
+                    // Entity.teleportSetPosition: setYRot, setYHeadRot, setXRot
+                    // (clamped to -90..90), then setOldRot.
+                    if let Some([yaw, pitch]) = rotation {
                         m.yaw = yaw;
                         m.body_yaw = yaw;
+                        m.head_yaw = yaw;
+                        m.head_pitch = pitch.clamp(-90.0, 90.0);
+                        m.previous_yaw = m.yaw;
+                        m.previous_head_pitch = m.head_pitch;
                     }
                 }
             }
@@ -1118,7 +1134,7 @@ impl Game<'_> {
                     o.previous = v;
                 }
             }
-            Target::Arrow(i) => {
+            Target::Projectile(i) => {
                 if let Some(a) = self.creatures.projectiles.get_mut(i) {
                     a.position = v;
                     a.previous = v;
@@ -1542,14 +1558,10 @@ impl Game<'_> {
                     self.orbs[i].age = u32::MAX / 2;
                 }
             }
-            Target::Arrow(i) => {
-                if let Some(a) = self
-                    .creatures
-                    .projectiles
-                    .get_mut(i)
-                    .and_then(|p| p.arrow.as_mut())
-                {
-                    a.removed = true;
+            // cmd_kill goes from the highest index down.
+            Target::Projectile(i) => {
+                if i < self.creatures.projectiles.len() {
+                    self.creatures.projectiles.remove(i);
                 }
             }
             Target::Stand(id) => self.armor_stands.retain(|a| a.id != id),
@@ -1571,7 +1583,7 @@ impl Game<'_> {
         let mut ordered = targets.clone();
         ordered.sort_by_key(|t| {
             std::cmp::Reverse(match t {
-                Target::Orb(i) | Target::Arrow(i) => *i,
+                Target::Orb(i) | Target::Projectile(i) => *i,
                 _ => 0,
             })
         });
@@ -1579,9 +1591,6 @@ impl Game<'_> {
             self.kill_target(t);
         }
         self.orbs.retain(|o| o.age < u32::MAX / 2);
-        self.creatures
-            .projectiles
-            .retain(|p| !p.arrow.as_ref().is_some_and(|a| a.removed));
         let message = if targets.len() == 1 {
             Text::translate("commands.kill.success.single", &[names[0].clone()])
         } else {
