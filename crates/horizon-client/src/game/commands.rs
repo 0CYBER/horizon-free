@@ -1100,9 +1100,15 @@ impl Game<'_> {
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
                     m.position = v;
                     m.previous = v;
-                    if let Some([yaw, _]) = rotation {
+                    // Entity.teleportSetPosition: setYRot, setYHeadRot, setXRot
+                    // (clamped to -90..90), then setOldRot.
+                    if let Some([yaw, pitch]) = rotation {
                         m.yaw = yaw;
                         m.body_yaw = yaw;
+                        m.head_yaw = yaw;
+                        m.head_pitch = pitch.clamp(-90.0, 90.0);
+                        m.previous_yaw = m.yaw;
+                        m.previous_head_pitch = m.head_pitch;
                     }
                 }
             }
