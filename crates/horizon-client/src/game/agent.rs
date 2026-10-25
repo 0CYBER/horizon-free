@@ -469,7 +469,8 @@ impl Game<'_> {
                 "flying": p.flying,
                 "fall_flying": p.fall_flying,
                 "sneaking": self.keys.contains(&KeyCode::ShiftLeft),
-                "sprinting": self.keys.contains(&KeyCode::ControlLeft),
+                // The sprint flag jumpFromGround reads, not whether Ctrl is down.
+                "sprinting": p.sprinting,
                 "health": p.health.health(),
                 "absorption": p.health.absorption(),
                 // The hurt animation's ticks left (the camera's hurt tilt).

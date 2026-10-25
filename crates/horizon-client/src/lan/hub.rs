@@ -1982,9 +1982,15 @@ impl Hub {
                     g.center = None;
                 }
                 S::PlayerInput(p) => {
+                    // ServerGamePacketListenerImpl.handlePlayerInput records the
+                    // keys and updates crouching. Sprinting is not a held key:
+                    // PlayerCommand start/stop owns the flag, so releasing Ctrl
+                    // (or double-tapping forward, which never holds it) must not
+                    // clear it. The flag is synced back to the client, and
+                    // LivingEntity.jumpFromGround adds its 0.2 look-direction
+                    // impulse only while that flag is set.
                     self.guests[i].input = p.flags;
                     self.guests[i].sneaking = p.flags & 32 != 0;
-                    self.guests[i].sprinting = p.flags & 64 != 0 && p.flags & 1 != 0;
                 }
                 // OPEN_INVENTORY (the ridden mount's inventory) and
                 // START_FALL_FLYING (checked against the guest's chest slot
