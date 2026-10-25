@@ -1636,6 +1636,7 @@ pub fn need_prepared(tag: &str) -> Result<(), String> {
 pub fn client(tag: &str) -> Result<Command, String> {
     need_prepared(tag)?;
     complete_packs(tag);
+    crate::browser::horizon::before_play(&game_home());
     let mut cmd = client_command(tag);
     // A sign-in that can't be renewed (no network, expired) still lets the game start, offline.
     if let Err(e) = crate::account::attach_session(&mut cmd, &game_home()) {

@@ -423,6 +423,7 @@ impl Launcher {
             self.mods.checks.get(&(p.source, p.id.clone())),
             None | Some(Checking::Running)
         ) && p.kind == PackKind::Mod
+            && p.source != SourceId::Horizon
             && p.support().installable();
         let mut action = div().flex().items_center().gap(px(8.)).child(
             caps(if checking {
