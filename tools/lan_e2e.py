@@ -228,6 +228,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - villagers: the guest sees each villager's and zombie villager's type, profession and level as the
              host has them, and an unemployed villager that takes a composter becomes a farmer on
              the guest too (the guest used to draw every villager as an unemployed plains one).
+- stopsound: the host's and the guest's own /stopsound, by source and by event, reach their own
+             client's sounds, and the host's /stopsound of the guest only the guest's (StopSoundCommand
+             sends each target its packet).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -5494,6 +5497,40 @@ def check_villagers(host, guest, out):
 
 CHECKS += ['villagers']
 CHECK_FNS.update(villagers=check_villagers)
+
+
+def check_stopsound(host, guest, out):
+    """StopSoundCommand sends each target ClientboundStopSoundPacket: a player's own /stopsound by
+    source and by event reaches its own client's sound engine, and the host's /stopsound of the
+    guest reaches the guest's (sounds stopped, counted in the status as `heard` is, audio or not)."""
+    event = 'minecraft:music_disc.cat'
+
+    def stopped(game):
+        return game('status')['stopped_sounds']
+
+    seen = {}
+    for game in (host, guest):
+        before = stopped(game)
+        game('command', command='stopsound @s record')
+        game('command', command=f'stopsound @s * {event}')
+        game.wait(10)
+        after = stopped(game)
+        seen[game.name] = {k: after.get(k, 0) - before.get(k, 0) for k in after}
+        assert seen[game.name].get('record *') == 1 and seen[game.name].get(f'* {event}') == 1, \
+            f'{game.name}: its own /stopsound did not reach its client: {seen}'
+    before = {g.name: stopped(g) for g in (host, guest)}
+    host('command', command=f'stopsound {GUEST_NAME}')
+    guest.wait(10)
+    for game in (host, guest):
+        after = stopped(game)
+        seen[f'{game.name}-by-host'] = after.get('* *', 0) - before[game.name].get('* *', 0)
+    assert seen['guest-by-host'] == 1 and seen['host-by-host'] == 0, \
+        f"the host's /stopsound of the guest stopped the wrong client: {seen}"
+    return seen
+
+
+CHECKS += ['stopsound']
+CHECK_FNS.update(stopsound=check_stopsound)
 
 
 if __name__ == '__main__':
