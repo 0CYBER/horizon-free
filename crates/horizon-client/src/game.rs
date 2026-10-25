@@ -1837,13 +1837,6 @@ impl Game<'_> {
                 .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
         })
     }
-    /// What the window decides for its player's body every tick, in frame and
-    /// on a server alike: the look (Player.travel steers sprint-swimming by
-    /// the pitch), Auto Jump (LocalPlayer.sendPosition), the slowdown of an
-    /// item in use (LocalPlayer.modifyInput), the helmet's Respiration
-    /// (decreaseAirSupply), the wings, leather boots on powder snow
-    /// (PowderSnowBlock.canEntityWalkOnPowderSnow), freeze-immune wear
-    /// (LivingEntity.canFreeze) and the dimension's FAST_LAVA.
     /// `LivingEntity.canFreeze`'s armor half: any worn piece in
     /// `freeze_immune_wearables`.
     pub(crate) fn wears_freeze_immune(&self) -> bool {
@@ -1857,6 +1850,13 @@ impl Game<'_> {
             .flatten()
             .any(|s| immune.is_some_and(|t| t.contains(&*s.item)))
     }
+    /// What the window decides for its player's body every tick, in frame and
+    /// on a server alike: the look (Player.travel steers sprint-swimming by
+    /// the pitch), Auto Jump (LocalPlayer.sendPosition), the slowdown of an
+    /// item in use (LocalPlayer.modifyInput), the helmet's Respiration
+    /// (decreaseAirSupply), the wings, leather boots on powder snow
+    /// (PowderSnowBlock.canEntityWalkOnPowderSnow), freeze-immune wear
+    /// (LivingEntity.canFreeze) and the dimension's FAST_LAVA.
     pub(crate) fn sync_player_body(&mut self) {
         let glider = self.glider_worn();
         let item_use_speed = self
