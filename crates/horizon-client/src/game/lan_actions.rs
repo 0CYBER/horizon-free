@@ -117,6 +117,7 @@ pub(super) struct GuestSwap {
     host_command_block: Option<super::command_blocks::CommandBlockScreen>,
     host_mount_menu: super::mount_menu::MountMenu,
     craft_size: usize,
+    craft_table: Option<[i32; 3]>,
     craft_grid: Vec<Option<ItemStack>>,
     container: Option<(i32, i32, i32)>,
     mining: Option<Mining>,
@@ -307,6 +308,7 @@ impl Game<'_> {
         // The host's crafting grid stays theirs; a crafting table the guest
         // opens shows as the 3x3 size.
         let craft_size = std::mem::replace(&mut self.craft_size, 2);
+        let craft_table = self.craft_table.take();
         let craft_grid = std::mem::replace(&mut self.craft_grid, vec![None; 9]);
         let container = self.container.take();
         let mining = std::mem::replace(&mut self.mining, play.mining.take());
@@ -390,6 +392,7 @@ impl Game<'_> {
             host_command_block,
             host_mount_menu,
             craft_size,
+            craft_table,
             craft_grid,
             container,
             mining,
@@ -445,6 +448,7 @@ impl Game<'_> {
             host_command_block,
             host_mount_menu,
             craft_size,
+            craft_table,
             craft_grid,
             container,
             mining,
@@ -495,7 +499,10 @@ impl Game<'_> {
 
         // What the action opened: handed to the guest instead of the host.
         let opened = self.container.take();
-        let opened_table = std::mem::replace(&mut self.craft_size, craft_size) == 3;
+        let guest_table = std::mem::replace(&mut self.craft_table, craft_table);
+        let opened_table = (std::mem::replace(&mut self.craft_size, craft_size) == 3)
+            .then_some(guest_table)
+            .flatten();
         self.craft_grid = craft_grid;
         let opened_station = std::mem::replace(&mut self.station, host_station);
         let bed = std::mem::replace(&mut self.sleeping, sleeping);
@@ -671,8 +678,8 @@ impl Game<'_> {
         if let Some(key) = guest_lectern {
             self.lan_open_lectern(host, conn, key);
         }
-        if opened_table {
-            self.lan_open_crafting(host, conn);
+        if let Some(pos) = opened_table {
+            self.lan_open_crafting(host, conn, pos);
         }
         if let Some(mob) = guest_mount {
             self.lan_open_mount(host, conn, mob);
@@ -1238,7 +1245,7 @@ impl Game<'_> {
     /// cursor goes back into their inventory (`placeItemBackInInventory`,
     /// dropped only if it doesn't fit), and their client's cursor empties
     /// with the inventory it is sent.
-    fn guest_carried_back(&mut self, host: &mut LanHost, gi: usize) {
+    pub(super) fn guest_carried_back(&mut self, host: &mut LanHost, gi: usize) {
         if let Some(c) = host.hub.guests[gi].carried.take() {
             self.lan_place_back(host, gi, vec![c]);
             host.hub.send_inventory(gi);
@@ -1680,6 +1687,7 @@ impl Game<'_> {
     pub(super) fn tick_guests(&mut self, host: &mut LanHost) {
         self.lan_merchant_tick(host);
         self.lan_stations_tick(host);
+        self.lan_tables_tick(host);
         self.tick_lan_mount_menus(host);
         self.announce_guest_advancements(host);
         let conns: Vec<u32> = host

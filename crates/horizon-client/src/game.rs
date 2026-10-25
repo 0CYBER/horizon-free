@@ -1168,6 +1168,8 @@ struct Game<'a> {
     carried: Option<ItemStack>,
     craft_grid: Vec<Option<ItemStack>>,
     craft_size: usize,
+    /// The crafting table the 3x3 grid belongs to (`CraftingMenu.access`).
+    craft_table: Option<[i32; 3]>,
     /// A quick craft drag over inventory slots: (button, game slots so far).
     inv_drag: Option<(i32, Vec<usize>)>,
     /// `AbstractContainerScreen`'s quick craft and skip-release state.
@@ -2897,6 +2899,35 @@ impl Game<'_> {
         }
         Ok(())
     }
+    /// `CraftingMenu.stillValid`: the open crafting table closes once its
+    /// block is gone or the player's eyes are out of reach (a 4-block buffer).
+    pub(super) fn tick_craft_table(&mut self) {
+        // A server's menu ends when the server closes it.
+        if self.remote.is_some() || self.craft_size != 3 {
+            return;
+        }
+        let (Some(pos), Some(eye)) = (self.craft_table, self.eye_position()) else {
+            return;
+        };
+        let table = &*self
+            .res
+            .facts()
+            .get(self.world.block(pos[0], pos[1], pos[2]))
+            .name
+            == "minecraft:crafting_table";
+        let range = self.reach() + 4.0;
+        let d = (0..3)
+            .map(|k| {
+                let lo = f64::from(pos[k]);
+                (lo - eye[k]).max(eye[k] - lo - 1.0).max(0.0).powi(2)
+            })
+            .sum::<f64>();
+        if !table || d >= range * range {
+            self.close_container();
+            self.screen = Screen::Playing;
+            self.capture(true);
+        }
+    }
     /// Menus opened by PlayerEffect::OpenMenu.
     fn open_menu(&mut self, pos: [i32; 3]) {
         let name = self
@@ -2916,6 +2947,7 @@ impl Game<'_> {
         }
         if &*name == "minecraft:crafting_table" {
             self.craft_size = 3;
+            self.craft_table = Some(pos);
         } else if &*name == "minecraft:ender_chest" {
             self.open_ender_chest(key);
             self.container_opener_event(key, true);
@@ -5425,6 +5457,7 @@ impl Game<'_> {
             }
         }
         self.craft_size = 2;
+        self.craft_table = None;
         if let Some(key) = self.container.take() {
             self.container_opener_event(key, false);
             self.post_block_game_event(
@@ -11746,6 +11779,7 @@ impl<'a> Game<'a> {
             carried: None,
             craft_grid: vec![None; 9],
             craft_size: 2,
+            craft_table: None,
             inv_drag: None,
             tweaks: Default::default(),
             inv_clicks: Default::default(),
