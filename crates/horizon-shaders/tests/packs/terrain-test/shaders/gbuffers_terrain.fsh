@@ -3,6 +3,7 @@
 uniform sampler2D texture;
 uniform sampler2D lightmap;
 uniform ivec2 atlasSize;
+uniform int renderStage;
 
 varying vec2 texcoord;
 varying vec2 lmcoord;
@@ -17,6 +18,8 @@ void main() {
     color.rgb = mix(color.rgb * vec3(0.6, 0.7, 1.2), color.rgb, lmcoord.y);
     // A dot at the face's centre, one texel wide.
     if (length((texcoord - mid) * vec2(atlasSize)) < 1.0) color.rgb = vec3(1.0, 0.0, 1.0);
+    // Any other stage than solid terrain (translucent terrain falls back here): red.
+    if (renderStage != MC_RENDER_STAGE_TERRAIN_SOLID) color.rgb = vec3(1.0, 0.0, 0.0);
     /* DRAWBUFFERS:0 */
     gl_FragData[0] = color;
 }

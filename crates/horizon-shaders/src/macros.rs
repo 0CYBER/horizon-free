@@ -60,6 +60,14 @@ pub const RENDER_STAGES: [&str; 24] = [
     "HAND_TRANSLUCENT",
 ];
 
+/// The value of `MC_RENDER_STAGE_<name>` (OQ-7: its index in `RENDER_STAGES`).
+pub fn render_stage(name: &str) -> u32 {
+    RENDER_STAGES
+        .iter()
+        .position(|s| *s == name)
+        .unwrap_or_else(|| panic!("no render stage {name}")) as u32
+}
+
 impl Macros {
     /// The standard macros that need no renderer (spec 1.5.1): `MC_VERSION`, this system's
     /// `MC_OS_*`, the GL and GLSL versions Horizon's translation accepts, the render stages and

@@ -69,6 +69,7 @@ pub mod lightning;
 mod lod;
 mod occlusion;
 mod pack_atlas;
+mod pack_draw;
 mod pack_post;
 mod pack_timing;
 pub mod pack_uniforms;

@@ -45,7 +45,18 @@ pub struct Interface {
     pub samplers: Vec<Sampler>,
     /// The fragment stage's output locations.
     pub outputs: Vec<u32>,
+    /// A gbuffers program reads `DRAW_UNIFORMS`: the block at set 2, binding 0, set per draw.
+    pub draw: bool,
 }
+
+/// The uniforms a gbuffers program reads per draw (5.3's "D"), in a block of their own
+/// (`HzDraw`, std140: three ints, a pad, a vec4; 32 bytes) the game sets for each draw.
+pub const DRAW_UNIFORMS: [(&str, &str); 4] = [
+    ("renderStage", "int"),
+    ("entityId", "int"),
+    ("blockEntityId", "int"),
+    ("entityColor", "vec4"),
+];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Uniform {
@@ -170,6 +181,17 @@ fn translate(
             samplers.insert(name.clone(), ty.clone());
         }
     }
+    // Per-draw values move to their own block; another type than the documented one keeps
+    // the frame's block (and reads zero).
+    let mut draw = false;
+    if gbuffers.is_some() {
+        for (name, ty) in DRAW_UNIFORMS {
+            if uniforms.get(name).is_some_and(|t| t == ty) {
+                uniforms.remove(name);
+                draw = true;
+            }
+        }
+    }
     let samplers: Vec<Sampler> = samplers
         .into_iter()
         .enumerate()
@@ -203,6 +225,12 @@ fn translate(
             .unwrap();
         }
         h.push_str(" };\n");
+        if draw {
+            h.push_str(
+                "layout(set = 2, binding = 0) uniform HzDraw { int renderStage; int entityId; \
+                 int blockEntityId; int hz_draw_pad; vec4 entityColor; };\n",
+            );
+        }
         for s in &samplers {
             let (texture, sampler) = split_sampler(&s.ty);
             writeln!(
@@ -327,6 +355,7 @@ fn translate(
             uniforms,
             samplers,
             outputs,
+            draw,
         },
     })
 }
@@ -394,7 +423,11 @@ fn compile(stage: &Stage, text: &str, header_lines: usize) -> Result<naga::Modul
 /// The uniform block's size and member offsets, from naga's layout.
 fn block_layout(module: &naga::Module) -> (u32, Vec<(String, u32)>) {
     for (_, var) in module.global_variables.iter() {
-        if var.space != naga::AddressSpace::Uniform {
+        let frame = var
+            .binding
+            .as_ref()
+            .is_some_and(|b| b.group == 0 && b.binding == 0);
+        if var.space != naga::AddressSpace::Uniform || !frame {
             continue;
         }
         if let naga::TypeInner::Struct { members, span } = &module.types[var.ty].inner {
@@ -546,9 +579,9 @@ mod tests {
                    light = (gl_TextureMatrix[1] * gl_MultiTexCoord1).xy;\n    color = gl_Color;\n    \
                    normal = normalize(gl_NormalMatrix * gl_Normal);\n    id = mc_Entity.x + mc_midTexCoord.x;\n}\n";
         let fsh = "#version 120\nuniform sampler2D texture;\nuniform sampler2D lightmap;\nuniform mat4 gbufferModelView;\n\
-                   varying vec2 uv;\nvarying vec2 light;\nvarying vec4 color;\nvarying vec3 normal;\nvarying float id;\n\
+                   uniform int renderStage;\nvarying vec2 uv;\nvarying vec2 light;\nvarying vec4 color;\nvarying vec3 normal;\nvarying float id;\n\
                    void main() {\n    vec4 c = texture2D(texture, uv) * texture2D(lightmap, light) * color;\n    \
-                   /* DRAWBUFFERS:02 */\n    gl_FragData[0] = c * gl_FragCoord.z;\n    \
+                   /* DRAWBUFFERS:02 */\n    gl_FragData[0] = c * gl_FragCoord.z * float(renderStage);\n    \
                    gl_FragData[1] = vec4(normal * 0.5 + 0.5, id);\n}\n";
         let files: Vec<(String, &str)> =
             [("gbuffers_terrain.vsh", vsh), ("gbuffers_terrain.fsh", fsh)]
@@ -586,6 +619,14 @@ mod tests {
             assert!(names.contains(&name), "{name} missing from {names:?}");
         }
         assert_eq!(p.interface.outputs, vec![0, 1]);
+        // renderStage is set per draw, in its own block.
+        assert!(p.interface.draw && !names.contains(&"renderStage"));
+        let per_draw = p.fragment.global_variables.iter().any(|(_, v)| {
+            v.binding
+                .as_ref()
+                .is_some_and(|b| b.group == 2 && b.binding == 0)
+        });
+        assert!(per_draw);
         let inputs: Vec<&str> = p.vertex.entry_points[0]
             .function
             .arguments

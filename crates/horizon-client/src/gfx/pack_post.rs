@@ -15,6 +15,7 @@ use std::collections::HashMap;
 
 use horizon_shaders::{Format, Group, Kind, Post, Val};
 
+use super::pack_draw::DrawUniforms;
 use super::pack_uniforms::{self, FrameUniforms, PackInputs};
 
 const BUFFERS: usize = horizon_shaders::BUFFERS;
@@ -139,6 +140,8 @@ struct Pass {
     written: u16,
     /// Buffers whose mip chain is regenerated right before it (6.1.7).
     mipmaps: u16,
+    /// Reads the per-draw block (`DrawUniforms`).
+    draw: bool,
     groups: HashMap<u16, wgpu::BindGroup>,
 }
 
@@ -186,6 +189,8 @@ pub struct PackPost {
     mips_valid: u16,
     /// The downsampling pipeline of each format with mipmaps.
     down: HashMap<wgpu::TextureFormat, (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
+    /// The per-draw uniforms of gbuffers programs.
+    draws: DrawUniforms,
     /// `HORIZON_SHADER_PACK_TIMING`: GPU time of each pass, in the log.
     timing: Option<super::pack_timing::PassTiming>,
     /// `shaders.properties`' custom uniforms, after the frame's in `uniforms.values`.
@@ -488,6 +493,7 @@ fn build_pass(
     notes: &mut Vec<String>,
     geometry: Option<&Geometry<'_>>,
     custom: &[String],
+    draws: &wgpu::BindGroupLayout,
 ) -> Option<Pass> {
     let features = device.features();
     // The frame's uniforms, then the pack's custom ones.
@@ -499,6 +505,7 @@ fn build_pass(
     };
     let mask = |flips: &[(u32, bool)]| flips.iter().filter(|f| f.1).fold(0u16, |m, f| m | 1 << f.0);
     let interface = &p.program.interface;
+    let draw = interface.draw;
     let mut entries = vec![entry(
         0,
         wgpu::BindingType::Buffer {
@@ -632,7 +639,11 @@ fn build_pass(
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(&p.name),
-            bind_group_layouts: &[Some(&layout), geometry.and_then(|g| g.table)],
+            bind_group_layouts: &[
+                Some(&layout),
+                geometry.and_then(|g| g.table),
+                draw.then_some(draws),
+            ],
             ..Default::default()
         });
         let module = |mut m: naga::Module| {
@@ -712,6 +723,7 @@ fn build_pass(
         reads,
         written,
         mipmaps: p.mipmaps,
+        draw,
         groups: HashMap::new(),
     })
 }
@@ -748,6 +760,7 @@ impl PackPost {
         let mask =
             |flips: &[(u32, bool)]| flips.iter().filter(|f| f.1).fold(0u16, |m, f| m | 1 << f.0);
         let mut used = 1u16;
+        let draws = DrawUniforms::new(device);
         let mut build = |p: horizon_shaders::PostProgram, geometry: Option<&Geometry<'_>>| {
             let pass = build_pass(
                 device,
@@ -757,6 +770,7 @@ impl PackPost {
                 &mut notes,
                 geometry,
                 &custom_names,
+                &draws.layout,
             )?;
             used |= pass.reads | pass.written | pass.flip;
             Some(pass)
@@ -910,6 +924,7 @@ impl PackPost {
             mipped,
             mips_valid: 0,
             down,
+            draws,
             timing: super::pack_timing::PassTiming::new(device, queue),
             custom,
             atlas: world.atlas.as_ref().map(|a| a.0.clone()),
@@ -1133,6 +1148,14 @@ impl PackPost {
             });
             rp.set_pipeline(&pass.pipeline);
             rp.set_bind_group(0, &group, &[]);
+            if pass.draw {
+                let stage = if translucent {
+                    "TERRAIN_TRANSLUCENT"
+                } else {
+                    "TERRAIN_SOLID"
+                };
+                self.draws.bind(&mut rp, stage);
+            }
             draw(&mut rp, translucent);
         }
         self.mips_valid &= !pass.written;

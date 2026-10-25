@@ -30,7 +30,7 @@ pub use config::{BUFFERS, Buffer, Config, Format, Kind, buffer_index, draw_buffe
 pub use custom::{Custom, Val};
 pub use discover::{Found, discover};
 pub use lang::Lang;
-pub use macros::{MC_VERSION, Macros, RENDER_STAGES};
+pub use macros::{MC_VERSION, Macros, RENDER_STAGES, render_stage};
 pub use options::switches_on;
 pub use pack::{Pack, PackError};
 pub use post::{
@@ -39,6 +39,6 @@ pub use post::{
 pub use preprocess::{Diagnostic, Origin, Preprocessed, preprocess};
 pub use properties::{Entry, Note, Properties};
 pub use translate::{
-    Error, GbuffersInputs, Interface, Program, Sampler, Target, Uniform, translate_composite,
-    translate_gbuffers,
+    DRAW_UNIFORMS, Error, GbuffersInputs, Interface, Program, Sampler, Target, Uniform,
+    translate_composite, translate_gbuffers,
 };
