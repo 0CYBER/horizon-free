@@ -68,7 +68,16 @@ jobs:
             exit
           fi
           names=$(sed '$d' .local/parity-selection.txt | grep -E '^[A-Za-z0-9_#]+$' || true)
-          if [ -z "$names" ]; then
+          # The summary line says how many would run: a count that doesn't match the names read (a format change)
+          # must not let the job pass untested.
+          expected=$(tail -1 .local/parity-selection.txt | sed -nE 's/^([0-9]+) of [0-9]+ harnesses would run$/\1/p')
+          count=$(printf '%s' "$names" | grep -c . || true)
+          if [ -z "$expected" ] || [ "$expected" != "$count" ]; then
+            echo "main's selection listed $count names, its summary says '${expected:-?}': the head's own selection runs"
+            own
+            exit
+          fi
+          if [ "$count" = 0 ]; then
             echo "Nothing to run."
             exit 0
           fi

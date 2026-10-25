@@ -657,6 +657,9 @@ def prebuild(artifacts, jobs):
 
 
 LARGE_OUTPUT = 64 << 20
+# Vanilla outputs above this are deleted after a pass too: rerunning those few oracles (12 harnesses on the Mac
+# mini's runner) costs less than the 26 GB they held in every checkout; smaller ones stay for oracle reuse.
+KEPT_ORACLE_OUTPUT = 256 << 20
 OWN_DIRECTORIES = {"parity-target", "parity-runner", "rea", "logs", "gate"}
 
 
@@ -672,11 +675,12 @@ def clear_large_outputs(name, trace):
     """After a pass, delete the large files a harness regenerates on every run.
 
     Harness outputs reach gigabytes and used to stay in every worktree. Vanilla
-    oracle outputs are kept, since reusing an oracle run needs them in place;
-    everything else large under the harness's .local directories is rebuilt on
-    its next run."""
+    oracle outputs under KEPT_ORACLE_OUTPUT are kept, since reusing an oracle
+    run needs them in place; everything else large under the harness's .local
+    directories (`<name>...` or `rust-<name>-parity`) is rebuilt on its next run."""
     local = LOCAL.resolve()
     keep = {os.path.realpath(line) for line in outputs_listing(name).read_text(encoding="utf-8").splitlines() if line}
+    own = name.split("#")[0].replace("_", "-")
     directories = set()
     for command in trace["commands"]:
         for argument in command[1:]:
@@ -688,12 +692,13 @@ def clear_large_outputs(name, trace):
             # Only the harness's own directory: another harness running beside it may be writing
             # large files in a directory this one merely read (decorated_region compiles its oracle
             # into chunk-generation-parity while chunk_generation writes its dumps there).
-            if top not in OWN_DIRECTORIES and top.startswith(name.replace("_", "-")):
+            if top not in OWN_DIRECTORIES and (top.startswith(own) or top == f"rust-{own}-parity"):
                 directories.add(local / top)
     for directory in directories:
         for file in (directory.rglob("*") if directory.is_dir() else []):
             try:
-                if file.is_file() and not file.is_symlink() and file.stat().st_size >= LARGE_OUTPUT and str(file) not in keep:
+                size = file.stat().st_size if file.is_file() and not file.is_symlink() else 0
+                if size >= LARGE_OUTPUT and (str(file) not in keep or size > KEPT_ORACLE_OUTPUT):
                     file.unlink()
             except OSError:
                 pass
@@ -828,8 +833,11 @@ class LocalExecutor:
         environment.pop("PARITY_SHARD", None)
         if shard:
             environment["PARITY_SHARD"] = shard
+        # stdin from /dev/null: tools/parity_shim.py never reuses an oracle run that reads a pipe, and CI runners
+        # (and --worker's ssh) give the runner one, which kept oracle reuse off on CI.
         process = subprocess.Popen([sys.executable, str(Path(__file__)), "--trace", str(trace), str(script)],
-                                   cwd=ROOT, env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                                   cwd=ROOT, env=environment, stdin=subprocess.DEVNULL, stdout=log,
+                                   stderr=subprocess.STDOUT, start_new_session=True)
         self.running[name] = {"process": process, "started": time.monotonic(), "log": log, "expected": expected,
                               "slot": slot, "script": script}
         return True
