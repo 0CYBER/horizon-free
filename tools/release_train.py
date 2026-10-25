@@ -414,13 +414,26 @@ def gather(kind, head, releases=None):
     return last, prs
 
 
-def green_main_head():
-    """The newest commit on main whose checks passed: what an automatic release builds."""
-    runs = gh_json("run", "list", "--repo", REPO, "--workflow", "checks", "--branch", "main", "--event", "push",
+def passed_on(workflow, sha):
+    """Whether the newest finished push run of workflow on main for commit sha passed."""
+    runs = gh_json("run", "list", "--repo", REPO, "--workflow", workflow, "--branch", "main", "--event", "push",
+                   "--commit", sha, "--limit", "5", "--json", "status,conclusion")
+    done = [entry for entry in runs if entry["status"] == "completed" and entry["conclusion"] != "cancelled"]
+    return bool(done) and done[0]["conclusion"] == "success"
+
+
+def green_main_head(parity=False):
+    """The newest commit on main whose checks passed: what an automatic release builds. With parity (game
+    releases), the newest commit parity-main passed on, if its checks passed too: parity-main runs on batches of
+    merges, so the commits a run skipped are covered by the next one, and a superseded run counts for nothing."""
+    workflow = "parity-main" if parity else "checks"
+    runs = gh_json("run", "list", "--repo", REPO, "--workflow", workflow, "--branch", "main", "--event", "push",
                    "--limit", "10", "--json", "headSha,status,conclusion")
     for entry in runs:
-        if entry["status"] == "completed":
-            return entry["headSha"] if entry["conclusion"] == "success" else None
+        if entry["status"] == "completed" and entry["conclusion"] != "cancelled":
+            if entry["conclusion"] != "success":
+                return None
+            return entry["headSha"] if not parity or passed_on("checks", entry["headSha"]) else None
     return None
 
 
@@ -437,7 +450,7 @@ def main():
     parser.add_argument("--kind", choices=["game", "launcher"], required=True)
     parser.add_argument("--head", help="the commit to release (default: the newest commit on main whose checks passed)")
     parser.add_argument("--tag", help="notes: the release's tag")
-    parser.add_argument("--force", action="store_true", help="release even without player-facing changes, before merges settle or while paused")
+    parser.add_argument("--force", action="store_true", help="release even without player-facing changes, before merges settle, while paused or before parity-main passed")
     parser.add_argument("--out", type=Path, help="notes: write title.txt and body.md here")
     parser.add_argument("--now", help="the time to decide at (ISO 8601; default now)")
     parser.add_argument("--smoke", type=Path, help="gate: the release smoke test's report (smoke-test.json)")
@@ -456,9 +469,12 @@ def main():
                 summary.write(f"### {line}\n")
         return 1 if problem else 0
 
-    head = args.head or green_main_head()
+    # Game releases ship only a commit the vanilla harnesses passed on (parity-main, docs/release-flow.md).
+    parity = args.kind == "game" and args.command == "decide" and not args.force
+    head = args.head or green_main_head(parity)
     if not head:
-        result = {"release": False, "reason": "main's latest checks did not pass"}
+        result = {"release": False, "reason": "main's latest checks did not pass" + (
+            " or parity-main did not pass on them" if parity else "")}
         print(json.dumps(result, indent=1))
         write_outputs({"release": "false", "reason": result["reason"]})
         return 0
@@ -482,6 +498,8 @@ def main():
     blockers = open_blockers() if args.kind == "game" else []
     release, reason = decision(args.kind, prs, now, os.environ.get("RELEASES_PAUSED") == "1", args.force, new_line,
                                blockers)
+    if release and args.head and parity and not (passed_on("parity-main", head) and passed_on("checks", head)):
+        release, reason = False, f"waiting for checks and parity-main to pass on {head[:9]}"
     minor = any("feature" in pr["labels"] for pr in prs if pr["paths"])
     tag = next_game_tag(tags, now.date(), line) if args.kind == "game" else next_launcher_tag(tags, minor, line)
     result = {
