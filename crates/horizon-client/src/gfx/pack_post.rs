@@ -2081,9 +2081,6 @@ impl PackPost {
         }
     }
 
-    /// Runs the pack over the world drawn into `world` (colour) and `world_depth`, then draws
-    /// the result onto `screen`.
-    #[allow(clippy::too_many_arguments)]
     /// The shadow pass (2.1, passes 2 and 3): the shadow buffers cleared, then the `shadowcomp`
     /// programs, each drawing into the "alt" side of what it writes and flipping it after.
     fn run_shadow(
@@ -2133,6 +2130,9 @@ impl PackPost {
         self.shadow_comp = comp;
     }
 
+    /// Runs the pack over the world drawn into `world` (colour) and `world_depth`, then draws
+    /// the result onto `screen`.
+    #[allow(clippy::too_many_arguments)]
     pub fn run(
         &mut self,
         device: &wgpu::Device,
