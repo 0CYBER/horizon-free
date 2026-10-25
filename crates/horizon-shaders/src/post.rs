@@ -8,10 +8,11 @@
 //!   dimension when it exists; every stage file is read from it.
 //! - OQ-29: a program with a geometry stage is reported and treated as missing.
 //! - A program that fails to translate is reported and treated as missing (2.5).
+//! - Terrain draws with the first program of its fallback chain that loads (2.3).
 
 use crate::config::{self, Config};
-use crate::{Macros, Pack, Preprocessed, Program, Properties, Target, eval_condition};
-use crate::{preprocess, translate_composite};
+use crate::{GbuffersInputs, Macros, Pack, Preprocessed, Program, Properties, Target};
+use crate::{eval_condition, preprocess, translate_composite, translate_gbuffers};
 
 /// Which group of 2.1 a program belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,7 +21,17 @@ pub enum Group {
     Deferred,
     Composite,
     Final,
+    /// A gbuffers program: the game draws its geometry with it.
+    Gbuffers,
 }
+
+/// `gbuffers_terrain` and its fallbacks (2.3).
+const TERRAIN: [&str; 4] = [
+    "gbuffers_terrain",
+    "gbuffers_textured_lit",
+    "gbuffers_textured",
+    "gbuffers_basic",
+];
 
 const GROUPS: [(Group, &str); 4] = [
     (Group::Prepare, "prepare"),
@@ -47,6 +58,8 @@ pub struct Post {
     /// The flips of the virtual `deferred_pre` and `composite_pre` (6.1.6).
     pub deferred_pre: Vec<(u32, bool)>,
     pub composite_pre: Vec<(u32, bool)>,
+    /// What draws solid and cutout terrain, when the game asked for it and one loads.
+    pub terrain: Option<PostProgram>,
     pub config: Config,
     /// Programs skipped and why, as `program: message` or `file:line: message`.
     pub notes: Vec<String>,
@@ -63,19 +76,30 @@ pub fn dimension_folder(pack: &Pack, id: i32) -> String {
     }
 }
 
-/// Loads the post-processing programs of `folder`.
-pub fn load_post(pack: &Pack, folder: &str, properties: &Properties, macros: &Macros) -> Post {
+/// Loads the post-processing programs of `folder` and, given the game's terrain vertices, the
+/// program terrain draws with.
+pub fn load_post(
+    pack: &Pack,
+    folder: &str,
+    properties: &Properties,
+    macros: &Macros,
+    terrain: Option<&GbuffersInputs>,
+) -> Post {
     let mut post = Post {
         folder: folder.to_owned(),
         programs: Vec::new(),
         deferred_pre: flips(properties, "deferred_pre"),
         composite_pre: flips(properties, "composite_pre"),
+        terrain: None,
         config: Config::default(),
         notes: Vec::new(),
     };
-    let path = |name: &str, ext: &str| match folder {
-        "" => format!("{name}.{ext}"),
-        f => format!("{f}/{name}.{ext}"),
+    let mut loader = Loader {
+        pack,
+        folder,
+        properties,
+        macros,
+        post: &mut post,
     };
     for (group, base) in GROUPS {
         let names: Vec<String> = if group == Group::Final {
@@ -85,61 +109,96 @@ pub fn load_post(pack: &Pack, folder: &str, properties: &Properties, macros: &Ma
                 .chain((1..=99).map(|n| format!("{base}{n}")))
                 .collect()
         };
+        let target = match group {
+            Group::Final => Target::Window,
+            _ => Target::Buffers,
+        };
         for name in names {
-            let (vsh, fsh) = (path(&name, "vsh"), path(&name, "fsh"));
-            if !pack.exists(&fsh) || !pack.exists(&vsh) {
-                continue;
+            if let Some(p) = loader.load(name, group, |v, f| translate_composite(v, f, target)) {
+                loader.post.programs.push(p);
             }
-            if !enabled(properties, folder, &name, macros) {
-                continue;
-            }
-            if pack.exists(&path(&name, "gsh")) {
-                post.notes.push(format!(
-                    "{name}: uses a geometry stage (not supported); skipped"
-                ));
-                continue;
-            }
-            let vertex = preprocess(pack, &vsh, macros);
-            let fragment = preprocess(pack, &fsh, macros);
-            let problems: Vec<String> = [&vertex, &fragment]
-                .iter()
-                .flat_map(|pp| diagnostics(pp))
-                .collect();
-            if !problems.is_empty() {
-                post.notes.extend(problems);
-                post.notes.push(format!("{name}: skipped"));
-                continue;
-            }
-            let target = match group {
-                Group::Final => Target::Window,
-                _ => Target::Buffers,
-            };
-            let program = match translate_composite(&vertex, &fragment, target) {
-                Ok(p) => p,
-                Err(errors) => {
-                    post.notes.extend(
-                        errors
-                            .iter()
-                            .map(|e| format!("{}:{}: {}", e.file, e.line, e.message)),
-                    );
-                    post.notes.push(format!("{name}: skipped"));
-                    continue;
-                }
-            };
-            post.config.read(&vertex);
-            post.config.read(&fragment);
-            let buffers = config::draw_buffers(&fragment).unwrap_or_else(|| (0..8).collect());
-            post.programs.push(PostProgram {
-                flips: flips(properties, &name),
-                name,
-                group,
-                program,
-                buffers,
-            });
         }
+    }
+    if let Some(inputs) = terrain {
+        loader.post.terrain = TERRAIN.iter().find_map(|name| {
+            loader.load(name.to_string(), Group::Gbuffers, |v, f| {
+                translate_gbuffers(v, f, Target::Buffers, inputs)
+            })
+        });
     }
     post.config = std::mem::take(&mut post.config).finish();
     post
+}
+
+struct Loader<'a> {
+    pack: &'a Pack,
+    folder: &'a str,
+    properties: &'a Properties,
+    macros: &'a Macros,
+    post: &'a mut Post,
+}
+
+impl Loader<'_> {
+    /// The program `name` translated by `translate`, or `None` when it is missing, disabled or
+    /// fails (with a note).
+    fn load(
+        &mut self,
+        name: String,
+        group: Group,
+        translate: impl FnOnce(&Preprocessed, &Preprocessed) -> Result<Program, Vec<crate::Error>>,
+    ) -> Option<PostProgram> {
+        let path = |ext: &str| match self.folder {
+            "" => format!("{name}.{ext}"),
+            f => format!("{f}/{name}.{ext}"),
+        };
+        let (vsh, fsh) = (path("vsh"), path("fsh"));
+        let notes = &mut self.post.notes;
+        if !self.pack.exists(&fsh) || !self.pack.exists(&vsh) {
+            return None;
+        }
+        if !enabled(self.properties, self.folder, &name, self.macros) {
+            return None;
+        }
+        if self.pack.exists(&path("gsh")) {
+            notes.push(format!(
+                "{name}: uses a geometry stage (not supported); skipped"
+            ));
+            return None;
+        }
+        let vertex = preprocess(self.pack, &vsh, self.macros);
+        let fragment = preprocess(self.pack, &fsh, self.macros);
+        let problems: Vec<String> = [&vertex, &fragment]
+            .iter()
+            .flat_map(|pp| diagnostics(pp))
+            .collect();
+        if !problems.is_empty() {
+            notes.extend(problems);
+            notes.push(format!("{name}: skipped"));
+            return None;
+        }
+        let program = match translate(&vertex, &fragment) {
+            Ok(p) => p,
+            Err(errors) => {
+                notes.extend(
+                    errors
+                        .iter()
+                        .map(|e| format!("{}:{}: {}", e.file, e.line, e.message)),
+                );
+                notes.push(format!("{name}: skipped"));
+                return None;
+            }
+        };
+        self.post.config.read(&vertex);
+        self.post.config.read(&fragment);
+        let buffers = config::draw_buffers(&fragment).unwrap_or_else(|| (0..8).collect());
+        Some(PostProgram {
+            flips: flips(self.properties, &name),
+            name,
+            group,
+            program,
+            buffers,
+        })
+    }
 }
 
 fn diagnostics(pp: &Preprocessed) -> Vec<String> {
@@ -248,7 +307,7 @@ mod tests {
         );
         assert_eq!(dimension_folder(&pack, 0), "");
         assert_eq!(dimension_folder(&pack, -1), "world-1");
-        let post = load_post(&pack, "", &properties, &Macros::standard());
+        let post = load_post(&pack, "", &properties, &Macros::standard(), None);
         let names: Vec<&str> = post.programs.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["deferred", "composite", "composite2", "final"]);
         let p = &post.programs;
@@ -268,10 +327,10 @@ mod tests {
 
         let mut macros = Macros::standard();
         macros.define("HQ", "");
-        let post = load_post(&pack, "world-1", &properties, &macros);
+        let post = load_post(&pack, "world-1", &properties, &macros, None);
         let names: Vec<&str> = post.programs.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["final"]);
-        let post = load_post(&pack, "", &properties, &macros);
+        let post = load_post(&pack, "", &properties, &macros, None);
         assert!(post.programs.iter().any(|p| p.name == "composite3"));
     }
 
@@ -281,7 +340,13 @@ mod tests {
         let pack = Pack::open(&dir).unwrap();
         let macros = Macros::standard();
         let properties = Properties::parse(&pack.read_text("shaders.properties").unwrap(), &macros);
-        let post = load_post(&pack, &dimension_folder(&pack, 0), &properties, &macros);
+        let post = load_post(
+            &pack,
+            &dimension_folder(&pack, 0),
+            &properties,
+            &macros,
+            None,
+        );
         assert!(post.notes.is_empty(), "{:?}", post.notes);
         let names: Vec<&str> = post.programs.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["composite", "composite1", "final"]);

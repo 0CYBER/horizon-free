@@ -42,7 +42,7 @@ impl Game<'_> {
                         );
                     }
                     let folder = dimension_folder(&pack, dimension);
-                    let post = load_post(&pack, &folder, &properties, &macros);
+                    let post = load_post(&pack, &folder, &properties, &macros, None);
                     if let Some((programs, notes)) = renderer.set_shader_pack(dimension, Some(post))
                     {
                         for note in notes {

@@ -162,14 +162,27 @@ fn real_packs_read() {
         for id in [0, -1, 1] {
             let start = std::time::Instant::now();
             let folder = dimension_folder(&pack, id);
-            let post = load_post(&pack, &folder, &shaders, &Macros::standard());
+            // Vertex inputs like the game's (gfx/pack_post.rs writes the real ones).
+            let terrain = horizon_shaders::GbuffersInputs {
+                declarations: "layout(location = 0) in vec3 hz_v_pos;".into(),
+                body: "    hz_Vertex = vec4(hz_v_pos, 1.0);\n    hz_Color = vec4(1.0);\n".into(),
+                attributes: vec![("mc_Entity".into(), "vec4(-1.0)".into())],
+            };
+            let post = load_post(
+                &pack,
+                &folder,
+                &shaders,
+                &Macros::standard(),
+                Some(&terrain),
+            );
             println!(
-                "  dimension {id} (folder `{folder}`): {} post programs, {} notes, {:.0} ms",
+                "  dimension {id} (folder `{folder}`): {} post programs, terrain {:?}, {} notes, {:.0} ms",
                 post.programs.len(),
+                post.terrain.as_ref().map(|t| &t.name),
                 post.notes.len() + post.config.notes.len(),
                 start.elapsed().as_secs_f64() * 1000.0
             );
-            for n in post.notes.iter().chain(&post.config.notes).take(5) {
+            for n in post.notes.iter().chain(&post.config.notes).take(12) {
                 println!("    {n}");
             }
         }

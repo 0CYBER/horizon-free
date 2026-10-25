@@ -73,6 +73,8 @@ impl Stage<'_> {
         let mut calls: Vec<(&str, &str, usize)> = Vec::new();
         // Sampler parameters of the function being written: name → type.
         let mut params: HashMap<String, String> = HashMap::new();
+        // Names of samplers a local variable or parameter of the function hides.
+        let mut hidden: Vec<&str> = Vec::new();
         let mut depth = 0;
         let mut skip_until = 0;
         let next = |i: usize| (i + 1..self.tokens.len()).find(|&j| significant(self.tokens[j]));
@@ -99,6 +101,7 @@ impl Stage<'_> {
                     depth -= 1;
                     if depth == 0 {
                         params.clear();
+                        hidden.clear();
                     }
                 }
                 "(" => {
@@ -146,6 +149,22 @@ impl Stage<'_> {
                     skip_until = n + 1;
                     continue;
                 }
+            }
+            // `float specular`: a variable of the same name as a sampler, from here to the
+            // function's end; `.specular` a member.
+            if sampler_ty.contains_key(t) && !params.contains_key(t) {
+                let before = prev(i).map(|j| self.tokens[j]);
+                if before == Some(".") {
+                    out.push_str(t);
+                    continue;
+                }
+                if before.is_some_and(|b| is_ident(b) && !matches!(b, "return" | "case" | "else")) {
+                    hidden.push(t);
+                }
+            }
+            if hidden.contains(&t) {
+                out.push_str(t);
+                continue;
             }
             let sampler = params
                 .get(t)
