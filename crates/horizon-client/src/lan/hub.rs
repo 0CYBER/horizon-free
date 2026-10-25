@@ -1827,7 +1827,9 @@ impl Hub {
     fn flush_advancements(&mut self, i: usize, show: bool) {
         let sync = self.sync.clone();
         let g = &mut self.guests[i];
-        let unlocked = std::mem::take(&mut g.recipes_unlocked);
+        let mut unlocked = std::mem::take(&mut g.recipes_unlocked);
+        // A recipe given and taken before this flush must not reappear.
+        unlocked.retain(|id| g.recipe_book.knows(id));
         if let Some(add) = sync.advancements.recipes_added(&unlocked, &sync) {
             g.send(&raw(ids::RECIPE_BOOK_ADD, add));
         }

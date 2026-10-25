@@ -87,7 +87,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - commands:  the guest's chat completes commands and their arguments over the server's command
              tree (Tab), and runs what it completed;
 - recipes:   the guest's recipe book lists the planks recipe the logs unlock, and clicking it
-             places a log in the inventory's crafting grid (the server places it).
+              places a log in the inventory's crafting grid (the server places it).
+- recipe_removal: the host and guest each forget all and individual recipes while the book
+              is open; it stays empty when reopened, and a later grant appears (#1495).
 - feedback:  the guest's command feedback names the guest and shows the numbers, and the host (an
              operator) is told of it as `[Guest: ...]`.
 - clicks:    with real mouse presses (not click-slot, which skips the screen's press and drag
@@ -5630,6 +5632,71 @@ def check_villagers(host, guest, out):
 
 CHECKS += ['villagers']
 CHECK_FNS.update(villagers=check_villagers)
+
+
+def check_recipe_removal(host, guest, out):
+    """ServerRecipeBook.removeRecipes sends ClientboundRecipeBookRemovePacket to the player:
+    the open book updates immediately, reopening keeps it empty, and later grants still arrive."""
+    seen = {}
+    for game in (host, guest):
+        back_to_game(game)
+        game('command', command='clear @s')
+        game('command', command='give @s minecraft:oak_log 4')
+        game('command', command='recipe give @s minecraft:oak_planks')
+        game('command', command='recipe give @s minecraft:stick')
+        game.wait(40)
+        game.raw('key', 'e', 'tap')
+        game.wait(5)
+        try:
+            book = game('screen').get('recipe_book')
+            assert book, f'{game.name}: the inventory has no recipe book'
+            if len(book['targets']) == 1:
+                game.raw('click-at', *centre(book['targets'][0]))
+                game.wait(5)
+                book = game('screen')['recipe_book']
+            known = book['known']
+            assert known > 1, f'{game.name}: recipes were not granted: {book}'
+            game.shot(out, 'recipe-removal-before')
+
+            game('command', command='recipe take @s *')
+            game.wait(20)
+            empty = game('screen')['recipe_book']['known']
+            game.shot(out, 'recipe-removal-empty')
+            assert empty == 0, f'{game.name}: forgotten recipes remain in the open book: {empty}'
+            game.raw('key', 'esc', 'tap')
+            game.wait(5)
+            game.raw('key', 'e', 'tap')
+            game.wait(5)
+            reopened = game('screen')['recipe_book']['known']
+            assert reopened == 0, f'{game.name}: reopening restored {reopened} forgotten recipes'
+
+            game('command', command='recipe give @s minecraft:oak_planks')
+            game('command', command='recipe give @s minecraft:stick')
+            game.wait(20)
+            given = game('screen')['recipe_book']['known']
+            assert given == 2, f'{game.name}: two later grants did not appear: {given}'
+            game('command', command='recipe take @s minecraft:oak_planks')
+            game.wait(20)
+            one = game('screen')['recipe_book']['known']
+            assert one == 1, f'{game.name}: taking one recipe left {one}, expected 1'
+            game('command', command='recipe take @s minecraft:stick')
+            game.wait(20)
+            assert game('screen')['recipe_book']['known'] == 0, f'{game.name}: the last recipe remains'
+
+            game('command', command='recipe give @s minecraft:oak_planks')
+            game.wait(20)
+            granted = game('screen')['recipe_book']['known']
+            assert granted == 1, f'{game.name}: a later grant did not appear: {granted}'
+            game.shot(out, 'recipe-removal-granted')
+            seen[game.name] = {'known': known, 'empty': empty, 'reopened': reopened,
+                               'given': given, 'one': one, 'granted': granted}
+        finally:
+            back_to_game(game)
+    return seen
+
+
+CHECKS += ['recipe_removal']
+CHECK_FNS.update(recipe_removal=check_recipe_removal)
 
 
 def check_shulker_bullets(host, guest, out):
