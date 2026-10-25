@@ -144,6 +144,9 @@ struct Launcher {
     releases: Load<Vec<Release>>,
     installed: Vec<String>,
     installing: Option<(String, f32)>,
+    /// The version being deleted: the removal runs off the UI thread, so the window has to know
+    /// which row is busy until `Msg::Removed` arrives.
+    removing: Option<String>,
     install_error: Option<(String, String)>,
     confirm_remove: Option<String>,
     picker_open: bool,
@@ -286,6 +289,7 @@ impl Launcher {
             releases: Load::Loading,
             installed,
             installing: None,
+            removing: None,
             install_error: None,
             confirm_remove: None,
             picker_open: false,
@@ -516,6 +520,16 @@ impl Launcher {
                     self.bar = (self.bar.1, p);
                     self.installing = Some((tag, p));
                 }
+                Msg::Removed(tag, result) => {
+                    self.removing = None;
+                    self.installed = backend::installed();
+                    self.settings.selected = Settings::load()
+                        .selected
+                        .or_else(|| self.installed.first().cloned());
+                    if let Err(e) = result {
+                        self.install_error = Some((tag, e));
+                    }
+                }
                 Msg::Installed(tag, result) => {
                     self.installing = None;
                     self.bar = (0., 0.);
@@ -725,14 +739,16 @@ impl Launcher {
     }
 
     fn remove(&mut self, tag: &str) {
-        if let Err(e) = backend::remove_version(tag) {
-            self.install_error = Some((tag.to_string(), e));
-        }
+        // Same shape as install: the folder is hundreds of megabytes and Windows may hold a file
+        // for a moment, so the deletion goes to a thread instead of stalling the window.
+        let (tag, tx) = (tag.to_string(), self.tx.clone());
+        self.removing = Some(tag.clone());
         self.confirm_remove = None;
-        self.installed = backend::installed();
-        self.settings.selected = Settings::load()
-            .selected
-            .or_else(|| self.installed.first().cloned());
+        self.install_error = None;
+        std::thread::spawn(move || {
+            let result = backend::remove_version(&tag);
+            let _ = tx.send(Msg::Removed(tag, result));
+        });
     }
 
     fn prepare(&mut self) {
@@ -2921,6 +2937,7 @@ impl Launcher {
         let keep = |i: usize| {
             let tag = &releases[i].tag;
             self.installing.as_ref().is_some_and(|(t, _)| t == tag)
+                || self.removing.as_deref() == Some(tag.as_str())
                 || self.install_error.as_ref().is_some_and(|(t, _)| t == tag)
                 || self.confirm_remove.as_ref() == Some(tag)
         };

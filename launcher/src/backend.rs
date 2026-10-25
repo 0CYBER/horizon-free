@@ -558,7 +558,26 @@ pub fn install(release: &Release, progress: impl Fn(f32)) -> Result<(), String> 
 }
 
 pub fn remove(tag: &str) -> Result<(), String> {
-    fs::remove_dir_all(version_dir(tag)).map_err(|e| e.to_string())
+    let dir = version_dir(tag);
+    // Windows keeps a handle on a file for a moment after the game, a scan or the launcher's own
+    // reader lets go of it, and remove_dir_all stops at the first one: a removal that already
+    // took most of the folder reported os error 5 while the rest of it did go. Retry, and treat a
+    // folder that is already gone as done.
+    let mut last = None;
+    for attempt in 0..5 {
+        match fs::remove_dir_all(&dir) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => last = Some(e),
+        }
+        if attempt < 4 {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+    }
+    Err(match last {
+        Some(e) => e.to_string(),
+        None => format!("could not remove {}", dir.display()),
+    })
 }
 
 /// The Minecraft version a Horizon build targets, from its research-lock.json.
@@ -2170,6 +2189,8 @@ pub enum Msg {
     Links(Links),
     Progress(String, f32),
     Installed(String, Result<(), String>),
+    /// A removal finished off the UI thread.
+    Removed(String, Result<(), String>),
     Line(Job, String),
     Exit(Job, Result<(), String>),
     Updates(Result<Updates, String>),
