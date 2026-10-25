@@ -192,7 +192,7 @@ impl super::block_predicate::PredicateBlockResolver for FeatureBlockBindings<'_>
         &self,
         property: BlockProperty,
     ) -> Result<BoundBlockProperty, DecodeError> {
-        super::bound_property(self.physical_properties.as_ref(), property)
+        super::block_predicate::bound_property(self.physical_properties.as_ref(), property)
     }
     fn predicate_biome_set(
         &self,
