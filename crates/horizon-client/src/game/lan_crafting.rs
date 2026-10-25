@@ -291,6 +291,11 @@ impl Game<'_> {
             let at = host.hub.guests[gi].position;
             self.award_furnace_recipes(pos, at);
         }
+        // Slot.setChanged on a changed container slot: BlockEntity.setChanged,
+        // so the chunk is saved and comparators read the block again.
+        if (0..items.len()).any(|k| menu.slot(k) != items[k].as_ref()) {
+            self.container_changed(pos);
+        }
         host.play.entry(conn).or_default().crafting.machine = Some((p.container, menu));
         host.hub.inventory_clicked(conn, p, &self.world, &changed);
         true
