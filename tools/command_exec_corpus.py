@@ -285,6 +285,12 @@ def entities():
         cmd('/execute as @e[tag=h] run say mob'),
         cmd('/execute store result score @s harness_score run data get entity @s SelectedItemSlot'),
         cmd('/kill @e[tag=h]'),
+        # A live rider travels with its vehicle in `/data get`, the way `saveWithoutId`
+        # writes it (#1519): the pig is mounted, so its health is the nested value.
+        cmd('/summon minecraft:cow 4.5 210 8.5 {Tags:["root"],NoAI:1b,Passengers:[{id:"minecraft:pig",NoAI:1b}]}'),
+        cmd('/data get entity @e[tag=root,limit=1] Passengers[0].Health'),
+        cmd('/data get entity @e[tag=root,limit=1] Passengers[0].id'),
+        cmd('/kill @e[tag=root]'),
         *setup('/kill @e[type=minecraft:armor_stand]'),
         {'op': 'tick', 'n': 25},
         cmd('/execute if entity @e[tag=h]'),
