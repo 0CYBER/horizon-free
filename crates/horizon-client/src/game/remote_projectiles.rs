@@ -239,20 +239,20 @@ impl Game<'_> {
         for r in &mut self.rockets {
             let id = r.id;
             r.remote_step(|at| step(id, at));
-            if me.is_some() && r.attached_to == me {
-                if let Some(p) = self.player.as_mut()
-                    && p.fall_flying
-                {
-                    let look = view_vector(self.yaw, self.pitch);
-                    let m = p.velocity;
-                    p.velocity = Vec3::new(
-                        m.x + look[0] * 0.1 + (look[0] * 1.5 - m.x) * 0.5,
-                        m.y + look[1] * 0.1 + (look[1] * 1.5 - m.y) * 0.5,
-                        m.z + look[2] * 0.1 + (look[2] * 1.5 - m.z) * 0.5,
-                    );
-                    r.position = p.position;
-                    r.velocity = p.velocity;
-                }
+            if me.is_some()
+                && r.attached_to == me
+                && let Some(p) = self.player.as_mut()
+                && p.fall_flying
+            {
+                let look = view_vector(self.yaw, self.pitch);
+                let m = p.velocity;
+                p.velocity = Vec3::new(
+                    m.x + look[0] * 0.1 + (look[0] * 1.5 - m.x) * 0.5,
+                    m.y + look[1] * 0.1 + (look[1] * 1.5 - m.y) * 0.5,
+                    m.z + look[2] * 0.1 + (look[2] * 1.5 - m.z) * 0.5,
+                );
+                r.position = p.position;
+                r.velocity = p.velocity;
             }
         }
         for c in &mut self.crystals {
