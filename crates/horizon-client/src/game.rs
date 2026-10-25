@@ -5472,6 +5472,8 @@ impl Game<'_> {
         self.craft_size = 2;
         self.craft_table = None;
         if let Some(key) = self.container.take() {
+            // A cart's or chest boat's items go back to it.
+            self.close_cart_container(key);
             self.container_opener_event(key, false);
             self.post_block_game_event(
                 "minecraft:container_close",
@@ -5511,7 +5513,6 @@ impl Game<'_> {
             self.world.modified.insert((key.0 >> 4, key.2 >> 4));
         }
         self.close_ender_chest();
-        self.close_cart_container();
     }
     /// `quickMoveStack` of the open plain menu for a shift-click.
     fn inventory_quick_move(&mut self, slot: usize) -> bool {

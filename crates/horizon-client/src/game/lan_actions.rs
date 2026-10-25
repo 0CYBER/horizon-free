@@ -1138,6 +1138,10 @@ impl Game<'_> {
                 {
                     self.container_changed(key);
                 }
+                // A vehicle's menu edits the vehicle's own items.
+                if let Some(Slots::Block(key)) = slots {
+                    self.store_cart_items(key);
+                }
                 self.drop_guest_items(host, gi, drops);
             }
             S::ContainerClose(p) => {
