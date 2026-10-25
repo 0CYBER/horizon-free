@@ -2026,6 +2026,7 @@ impl Game<'_> {
         let events = self.as_guest(host, conn, |game| {
             let (rules, motion) = (game.world.health_rules, game.motion);
             let health = &motion.health;
+            let freeze_immune = game.wears_freeze_immune();
             let Some(player) = game.player.as_mut() else {
                 return (Vec::new(), None);
             };
@@ -2089,6 +2090,7 @@ impl Game<'_> {
             // Entity.applyEffectsFromBlocks along those moves: magma, cactus,
             // lit campfires and grown sweet berry bushes hurt (#1305).
             w.player.shift_key_down = sneaking;
+            w.player.freeze_immune = freeze_immune;
             let _ = w.server_block_damage(start);
             let _ = w.tick_environment_damage();
             let _ = w.apply_fire_contact();
