@@ -10,6 +10,7 @@ mod items;
 mod misc;
 mod place;
 mod players;
+pub(super) mod pregen;
 mod raid;
 mod terrain_cmds;
 mod text_commands;
@@ -758,6 +759,7 @@ impl Game<'_> {
             "ride.mount" | "ride.dismount" => self.cmd_ride(id, ctx),
             "spreadplayers" => self.cmd_spreadplayers(ctx),
             id if id.starts_with("forceload.") => self.cmd_forceload(id, ctx),
+            id if id.starts_with("pregen.") => self.cmd_pregen(id, ctx),
             "fillbiome" => self.cmd_fillbiome(ctx),
             id if id.starts_with("worldborder.") => self.cmd_worldborder(id, ctx),
             id if id.starts_with("loot.") => self.cmd_loot(id, ctx),

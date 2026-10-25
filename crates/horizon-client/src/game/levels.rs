@@ -365,7 +365,12 @@ impl Game<'_> {
         }
         *next += self.clock.tick_duration();
         if *next > now {
-            std::thread::sleep(*next - now);
+            // A `/pregen` task keeps the workers fed until the next tick.
+            self.pump_pregen(*next);
+            let now = Instant::now();
+            if *next > now {
+                std::thread::sleep(*next - now);
+            }
         } else if now - *next > Duration::from_secs(2) {
             *next = now;
         }
@@ -373,7 +378,7 @@ impl Game<'_> {
 
     /// The levels this server tick runs, in `MinecraftServer.levels` order
     /// (the Overworld, the Nether, the End): every level with a player in
-    /// it, or the Overworld while nobody is online.
+    /// it or a `/pregen` task, or the Overworld while nobody is online.
     pub(super) fn levels_to_tick(&self) -> Vec<Dim> {
         let guests = self
             .lan
@@ -381,7 +386,9 @@ impl Game<'_> {
             .map_or(&[][..], |h| h.hub.guests.as_slice());
         let mut dims: Vec<Dim> = [Dim::Overworld, Dim::Nether, Dim::End]
             .into_iter()
-            .filter(|d| guests.iter().any(|g| g.dimension == d.id()))
+            .filter(|d| {
+                guests.iter().any(|g| g.dimension == d.id()) || self.pregen_level() == Some(*d)
+            })
             .collect();
         if dims.is_empty() {
             dims.push(Dim::Overworld);
