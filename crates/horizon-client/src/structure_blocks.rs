@@ -165,14 +165,10 @@ pub fn block_entities(
                 .iter_mut()
                 .zip(loot.fill(&table, seed, 27, Some(biome)))
             {
-                *slot = stack.map(|s| {
-                    let mut item = loot_item(&s);
-                    // An ominous bottle's level (the default, 0, is no component).
-                    if let Some(level) = s.ominous_amplifier.filter(|l| *l > 0) {
-                        item.data_mut().ominous_amplifier = Some(level.clamp(0, 4) as u8);
-                    }
-                    item
-                });
+                // With what the rolls put on them: enchantments
+                // (enchant_with_levels in End city chests), potions and an
+                // ominous bottle's level.
+                *slot = stack.map(|s| loot_item_with_components(&s));
             }
         }
         out.push(((x, y, z), entity));
@@ -211,7 +207,7 @@ pub fn unpack_entity_loot(
     let slots: Vec<Option<ItemStack>> = loot
         .fill(&table, seed, 27, Some(biome))
         .into_iter()
-        .map(|s| s.map(|s| loot_item(&s)))
+        .map(|s| s.map(|s| loot_item_with_components(&s)))
         .collect();
     nbt.remove(&JavaString::from("LootTable"));
     nbt.remove(&JavaString::from("LootTableSeed"));
@@ -223,6 +219,45 @@ pub fn unpack_entity_loot(
 mod tests {
     use super::*;
     use horizon_world::loot::{ExplorationMap, LootStack};
+
+    #[test]
+    fn placed_chest_loot_keeps_its_enchantments_and_potions() {
+        let stack =
+            |item: &str, enchantments: Vec<(String, i32)>, potion: Option<&str>| LootStack {
+                item: item.into(),
+                count: 1,
+                damage: 0,
+                enchantments,
+                potion: potion.map(str::to_owned),
+                map: false,
+                exploration: None,
+                ominous_amplifier: None,
+            };
+        // An End city chest's enchant_with_levels roll.
+        let boots = loot_item_with_components(&stack(
+            "minecraft:diamond_boots",
+            vec![
+                ("minecraft:protection".into(), 3),
+                ("minecraft:unbreaking".into(), 2),
+            ],
+            None,
+        ));
+        assert_eq!(boots.enchantments().len(), 2);
+        // A book's go into stored_enchantments.
+        let book = loot_item_with_components(&stack(
+            "minecraft:enchanted_book",
+            vec![("minecraft:mending".into(), 1)],
+            None,
+        ));
+        assert!(book.enchantments().is_empty());
+        assert_eq!(book.stored_enchantments().len(), 1);
+        let arrow = loot_item_with_components(&stack(
+            "minecraft:tipped_arrow",
+            Vec::new(),
+            Some("minecraft:slowness"),
+        ));
+        assert_eq!(arrow.potion(), Some("minecraft:slowness"));
+    }
 
     #[test]
     fn exploration_maps_wait_in_custom_data_until_searched() {
