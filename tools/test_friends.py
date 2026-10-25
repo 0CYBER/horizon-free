@@ -96,7 +96,7 @@ class Game:
         self.process = subprocess.Popen(Game.prefix + [
             str(client), '--resources', str(resources), '--render-distance', '2', '--test-terrain',
             '--control-socket', str(self.endpoint), '--timeout-seconds', '600',
-        ] + Game.extra, cwd=self.home, env=dict(os.environ, HORIZON_HOME=str(self.home), HORIZON_NO_AUDIO='1', **env),
+        ] + Game.extra, cwd=self.home, env=lab.game_env(HORIZON_HOME=self.home, **env),
             stdout=self.log, stderr=subprocess.STDOUT)
         wait_for(self.endpoint, 'screen', lambda v: v['screen'] == 'title', 120, f'{name} title')
 

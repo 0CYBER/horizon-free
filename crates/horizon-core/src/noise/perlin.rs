@@ -148,10 +148,11 @@ impl PerlinNoise {
         y_scale: f64,
         amplitude: f32,
     ) -> Result<(), DensityError> {
-        self.add_volume(buffer, volume, xz_scale, y_scale, amplitude, None)
+        self.add_volume::<true>(buffer, volume, xz_scale, y_scale, amplitude, None)
     }
 
-    fn add_volume(
+    /// `BATCH` = false evaluates one Y at a time: the reference the batched loop is tested against.
+    fn add_volume<const BATCH: bool>(
         &self,
         buffer: &mut [f32],
         volume: DensityVolume,
@@ -207,7 +208,10 @@ impl PerlinNoise {
                 let mut previous_y = i32::MIN;
                 let mut xz_dots = [0.0_f32; 8];
                 let mut y_gradients = [0.0_f32; 8];
-                for (sample, out) in ys.iter().zip(&mut buffer[index..index + size_y]) {
+                let column = &mut buffer[index..index + size_y];
+                let mut y = 0;
+                while y < size_y {
+                    let sample = &ys[y];
                     if previous_y != sample.cell {
                         let gradients = self.gradients_at(p, q, sample.cell, cell_z);
                         for i in 0..8 {
@@ -217,11 +221,31 @@ impl PerlinNoise {
                         }
                         previous_y = sample.cell;
                     }
+                    // Four Ys in one cell share the corners: side by side, LLVM computes them
+                    // as vectors. Cell boundaries and the column's tail go one at a time.
+                    if BATCH
+                        && y + 4 <= size_y
+                        && ys[y + 1..y + 4].iter().all(|s| s.cell == sample.cell)
+                    {
+                        add_four(
+                            &mut column[y..y + 4],
+                            &ys[y..y + 4],
+                            xz_dots,
+                            y_gradients,
+                            fade_x,
+                            fade_z,
+                            amplitude,
+                        );
+                        y += 4;
+                        continue;
+                    }
+                    let out = &mut column[y];
                     let dy = sample.offset;
                     let values = std::array::from_fn(|i| {
                         xz_dots[i] + y_gradients[i] * (dy - ((i >> 1) & 1) as f32)
                     });
                     *out += amplitude * lerp3([fade_x, sample.fade, fade_z], values);
+                    y += 1;
                 }
                 index += size_y;
             }
@@ -293,7 +317,7 @@ impl SmearedPerlinNoise {
         y_scale: f64,
         amplitude: f32,
     ) -> Result<(), DensityError> {
-        self.base.add_volume(
+        self.base.add_volume::<true>(
             buffer,
             volume,
             xz_scale,
@@ -311,4 +335,98 @@ fn compute_fudge_y(input_y: f64, relative_y: f64, scale: f64) -> f64 {
         relative_y
     };
     f64::from(floor_i32(limited_y / scale + f64::from(1e-7_f32))) * scale
+}
+
+/// Adds four Y samples of one cell, laid out lane by lane so LLVM vectorizes them (no intrinsics,
+/// no target feature). Each lane does the one-at-a-time loop's operations in the same order.
+#[inline]
+fn add_four(
+    out: &mut [f32],
+    ys: &[YSample],
+    dots: [f32; 8],
+    gradients: [f32; 8],
+    fade_x: f32,
+    fade_z: f32,
+    amplitude: f32,
+) {
+    let dy: [f32; 4] = std::array::from_fn(|lane| ys[lane].offset);
+    let fy: [f32; 4] = std::array::from_fn(|lane| ys[lane].fade);
+    let values: [[f32; 4]; 8] = std::array::from_fn(|i| {
+        std::array::from_fn(|lane| dots[i] + gradients[i] * (dy[lane] - ((i >> 1) & 1) as f32))
+    });
+    for lane in 0..4 {
+        out[lane] += amplitude * lerp3([fade_x, fy[lane], fade_z], values.map(|v| v[lane]));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::random::LegacyRandom;
+
+    #[test]
+    fn batched_volume_is_bit_identical() {
+        let scales = [
+            0.0,
+            -0.0,
+            0.001,
+            -0.001,
+            0.125,
+            -0.5,
+            1.0,
+            4.0,
+            1e100,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+        ];
+        let amplitudes = [
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NAN,
+            f32::from_bits(1),
+        ];
+        for seed in [0, -1, 1234, i64::MIN] {
+            let noise = PerlinNoise::new(&mut LegacyRandom::new(seed));
+            for height in [1, 2, 3, 4, 5, 7, 8, 9, 31, 64, 65, 97] {
+                for (case, &scale) in scales.iter().enumerate() {
+                    let minimum = [
+                        [-17, -64, 49],
+                        [i32::MAX, i32::MIN, -16777216],
+                        [16777216, 33554431, -33554432],
+                    ][case % 3];
+                    let volume = DensityVolume::new(
+                        [2, height, 2],
+                        minimum,
+                        [4, if case % 3 == 0 { i32::MAX } else { 1 }, 16],
+                    )
+                    .unwrap();
+                    for fudge in [None, Some(0.125), Some(-0.25), Some(0.0), Some(f64::NAN)] {
+                        let initial = [0.0, -0.0, 1.5, f32::from_bits(1)];
+                        let mut a: Vec<_> =
+                            (0..volume.size() + 3).map(|i| initial[i % 4]).collect();
+                        let mut b = a.clone();
+                        let amplitude = amplitudes[case % amplitudes.len()];
+                        noise
+                            .add_volume::<false>(&mut a, volume, scale, scale, amplitude, fudge)
+                            .unwrap();
+                        noise
+                            .add_volume::<true>(&mut b, volume, scale, scale, amplitude, fudge)
+                            .unwrap();
+                        for (i, (a, b)) in a.iter().zip(&b).enumerate() {
+                            assert_eq!(
+                                a.to_bits(),
+                                b.to_bits(),
+                                "seed={seed} height={height} scale={scale} fudge={fudge:?} index={i}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

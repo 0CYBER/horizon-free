@@ -488,7 +488,7 @@ fn make_link(target: &Path, link: &Path) -> std::io::Result<()> {
         arg.push("\"");
         arg
     };
-    let status = std::process::Command::new("cmd")
+    let status = crate::process::command("cmd")
         .args(["/C", "mklink", "/J"])
         .raw_arg(quoted(link))
         .raw_arg(quoted(target))

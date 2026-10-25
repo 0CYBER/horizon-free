@@ -13,6 +13,7 @@ mod block_entity_anims;
 mod block_entity_ticks;
 mod block_items;
 mod blockctl;
+mod boat_passengers;
 mod boats;
 mod books;
 mod bossbars;
@@ -137,6 +138,7 @@ mod scoreboard;
 mod screens;
 mod sculk;
 mod sculk_fixture;
+mod server_packs;
 mod server_travel;
 mod shader_packs;
 mod shield;
@@ -1127,6 +1129,8 @@ struct Game<'a> {
     pending_entry: Option<PendingWorldEntry>,
     world_loader: Option<world_loading::WorldLoader>,
     pending_pack_reload: bool,
+    /// A server's resource packs (game/server_packs.rs).
+    server_packs: server_packs::ServerPackState,
     world_renderer_ready: bool,
     collision: &'a BlockCollisionRegistry<'a>,
     motion: &'a MotionResources,
@@ -4411,7 +4415,7 @@ impl Game<'_> {
                 self.resolve_arrivals();
             });
         }
-        horizon_client::spans::time("tick_lan", || self.tick_lan());
+        horizon_client::spans::time("tick_lan", || self.tick_lan(false));
         self.tick_friends();
         horizon_client::spans::time("tick_hand", || self.tick_hand());
         horizon_client::spans::time("tick_sleep", || self.tick_sleep());
@@ -4772,7 +4776,14 @@ impl Game<'_> {
         hud_layout::paint(batch, &self.gui.atlas, &draws);
     }
     fn hud(&mut self, size: [u32; 2]) -> HudBatch {
-        let mut batch = self.hud_layers(size);
+        // The pack prompt replaces the connecting screen (setScreen), but
+        // in game it opens over the world.
+        let mut batch = if self.server_packs.prompt.is_some() && self.player.is_none() {
+            HudBatch::new(size)
+        } else {
+            self.hud_layers(size)
+        };
+        self.draw_pack_prompt(&mut batch);
         // Gui.extractRenderState: the debug overlay comes after the screen
         // and the toasts, so it is over everything, menus included.
         self.draw_debug_overlay(&mut batch, size);
@@ -9081,21 +9092,11 @@ impl Game<'_> {
         // Options.biomeBlendRadius, ambientOcclusion and cutoutLeaves:
         // LevelExtractor.allChanged when they change.
         let (s, st) = (&self.settings, &self.streaming);
-        let remesh = (
-            s.biome_blend,
-            s.smooth_lighting,
-            s.cutout_leaves,
-            s.horizon.cull_leaves,
-        ) != (
-            st.biome_blend,
-            st.smooth_lighting,
-            st.cutout_leaves,
-            st.cull_leaves,
-        );
+        let remesh = (s.biome_blend, s.smooth_lighting, s.cutout_leaves)
+            != (st.biome_blend, st.smooth_lighting, st.cutout_leaves);
         self.streaming.biome_blend = self.settings.biome_blend;
         self.streaming.smooth_lighting = self.settings.smooth_lighting;
         self.streaming.cutout_leaves = self.settings.cutout_leaves;
-        self.streaming.cull_leaves = self.settings.horizon.cull_leaves;
         if remesh {
             self.all_sections_changed();
         }
@@ -11002,6 +11003,13 @@ impl ApplicationHandler for Game<'_> {
                         self.advancements_scroll(scaled(raw_x) as f32, d);
                     }
                 }
+                WindowEvent::MouseInput { state, button, .. }
+                    if self.server_packs.prompt.is_some() =>
+                {
+                    if state == ElementState::Pressed && button == MouseButton::Left {
+                        self.pack_prompt_click()?;
+                    }
+                }
                 WindowEvent::MouseInput { .. } if self.screen == Screen::Win => {}
                 WindowEvent::MouseInput { state, button, .. } if self.screen == Screen::Options => {
                     if self.options_waiting_for_key() && state == ElementState::Pressed {
@@ -11199,6 +11207,14 @@ impl ApplicationHandler for Game<'_> {
                             self.stats_click(size);
                         }
                         _ => {}
+                    }
+                }
+                // ConfirmScreen.keyPressed: Escape answers no.
+                WindowEvent::KeyboardInput { event, .. } if self.server_packs.prompt.is_some() => {
+                    if event.state == ElementState::Pressed
+                        && event.physical_key == PhysicalKey::Code(KeyCode::Escape)
+                    {
+                        self.answer_pack_prompt(false)?;
                     }
                 }
                 WindowEvent::KeyboardInput { event, .. }
@@ -11579,6 +11595,7 @@ impl ApplicationHandler for Game<'_> {
             event_loop.exit();
             return;
         }
+        self.tick_server_packs();
         self.poll_control(event_loop);
         if self.pending_save.is_some() {
             return;
@@ -11673,6 +11690,7 @@ impl<'a> Game<'a> {
             pending_entry: None,
             world_loader: None,
             pending_pack_reload: false,
+            server_packs: Default::default(),
             world_renderer_ready: false,
             collision: res.collision(),
             motion: res.motion(),
@@ -13262,7 +13280,7 @@ pub fn run() -> Result<()> {
         return run_loading(options, early_settings, vanilla_root, None, started);
     }
     let mut pack_error = None;
-    options.resources = packs::startup_root(&vanilla_root, &early_settings.resource_packs)
+    options.resources = packs::startup_root(&vanilla_root, &early_settings.resource_packs, &[])
         .unwrap_or_else(|e| {
             log::warn!("Horizon: resource packs not applied: {e}");
             pack_error = Some(e.to_string());
