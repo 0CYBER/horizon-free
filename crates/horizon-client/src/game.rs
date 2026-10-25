@@ -1203,6 +1203,8 @@ struct Game<'a> {
     left: bool,
     right: bool,
     cursor: (f32, f32),
+    /// The cursor icon the window shows (`widgets::take_cursor` each frame).
+    cursor_icon: horizon_client::widgets::Cursor,
     captured: bool,
     focused: bool,
     /// The keyboard's modifier state (`KeyEvent.modifiers`).
@@ -4658,6 +4660,24 @@ impl Game<'_> {
             self.captured = false;
         }
         window.set_cursor_visible(!self.captured);
+    }
+    /// `GuiGraphicsExtractor.applyCursor` -> `Window.selectCursor` at the end
+    /// of a frame: the cursor the frame's widgets asked for, set on the window
+    /// only when it changes.
+    fn apply_cursor_icon(&mut self) {
+        use horizon_client::widgets::Cursor;
+        let wanted = horizon_client::widgets::take_cursor();
+        if wanted == self.cursor_icon {
+            return;
+        }
+        if let Some(window) = &self.window {
+            window.set_cursor(match wanted {
+                Cursor::Arrow => winit::window::CursorIcon::Default,
+                Cursor::PointingHand => winit::window::CursorIcon::Pointer,
+                Cursor::NotAllowed => winit::window::CursorIcon::NotAllowed,
+            });
+        }
+        self.cursor_icon = wanted;
     }
     /// LevelLoadingScreen.onClose -> Gui.setScreen(null) -> grabMouse.
     fn capture_loaded_world(&mut self) {
@@ -11472,6 +11492,7 @@ impl ApplicationHandler for Game<'_> {
                     self.advance_flight();
                     let ticked = Instant::now();
                     let rendered = self.render()?;
+                    self.apply_cursor_icon();
                     if let Some(threshold) = self.options.spikes
                         && let Some(r) = self.renderer.as_ref()
                     {
@@ -11779,6 +11800,7 @@ impl<'a> Game<'a> {
             left: false,
             right: false,
             cursor: (0.0, 0.0),
+            cursor_icon: horizon_client::widgets::Cursor::Arrow,
             captured: false,
             focused: true,
             modifiers: winit::keyboard::ModifiersState::empty(),
