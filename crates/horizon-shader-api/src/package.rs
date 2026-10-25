@@ -148,6 +148,21 @@ impl Pack {
         }
         Ok(zip.finish().map_err(err)?.into_inner())
     }
+
+    /// The SHA-256 of [`Pack::package`], in lowercase hex: the pack's
+    /// identity in the registry.
+    pub fn sha256(&self) -> Result<String, String> {
+        Ok(sha256_hex(&self.package()?))
+    }
+}
+
+/// SHA-256 in lowercase hex.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn read_dir(dir: &Path, prefix: &str, files: &mut BTreeMap<String, Vec<u8>>) -> Result<(), String> {

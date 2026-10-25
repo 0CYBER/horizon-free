@@ -1444,6 +1444,7 @@ dependencies = [
  "bytemuck",
  "naga",
  "serde",
+ "sha2",
  "toml",
  "zip",
 ]
