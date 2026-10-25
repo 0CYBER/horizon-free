@@ -8,12 +8,14 @@
 #   bash tools/ci/linux-runner.sh uninstall  # stop and unregister
 #
 # Everything lives in ~/.actions-runners/horizon (never in ~/code): the runner, its own rustup and cargo homes,
-# the work folder, and copies of this script and runner-pause.py taken at install time (a pull request's checkout
-# never runs as the service). The service runs nice, in horizon-ci.slice (low CPU and I/O weight, memory capped),
+# the work folder, and copies of this script and runner_pause.py taken at install time (a pull request's checkout
+# never runs as the service). horizon-runner-pause.service (runner_pause.py) starts the runner only while nobody is
+# at the screen or playing, and stops it otherwise. The runner runs nice, in horizon-ci.slice (low CPU and I/O weight, memory capped),
 # on its own virtual screen: vscreen (a headless sway) where it is installed, else Xvfb from nixpkgs with Mesa's
-# Vulkan drivers. runner-pause.py pauses it while a game runs (horizon-runner-pause.service).
+# Vulkan drivers.
 # HORIZON_SHARED_SOURCE: the imported vanilla data (default ~/horizon-local/shared-local, else
-# ~/code/horizon/.local); RUNNER_JOBS: cargo jobs and harnesses at once (default 2/3 of the threads).
+# ~/code/horizon/.local); RUNNER_JOBS: cargo jobs and harnesses at once (default a third of the threads, at most 8:
+# ludodesktop froze under ~7 cold cargo builds on 2026-10-14, and it is the maintainer's own machine).
 set -euo pipefail
 repo=ludovic111/horizon
 dir=$HOME/.actions-runners/horizon
@@ -30,6 +32,18 @@ export LD_LIBRARY_PATH=/run/current-system/sw/share/nix-ld/lib${LD_LIBRARY_PATH:
 # NixOS has no /bin/bash: the runner's scripts (again after each of its self-updates) get a portable one.
 fix_shebangs() { sed -i '1s|^#!/bin/bash|#!/usr/bin/env bash|' "$dir"/*.sh "$dir"/bin/*.sh; }
 
+# Other machines' parity runs can send harnesses here (tools/parity_hosts.json "desktop": parity.py --worker over
+# ssh, in horizon-ci.slice). Their vanilla data is the runner checkout's: parity-host/shared-local links to its
+# .local links, so it follows the preparation of the runner's last job.
+parity_host_links() {
+  local checkout=$dir/_work/horizon/horizon/.local shared=$dir/parity-host/shared-local entry
+  [ -d "$checkout" ] || return 0
+  mkdir -p "$shared"
+  for entry in "$checkout"/*; do
+    [ -L "$entry" ] && ln -sfn "$entry" "$shared/$(basename "$entry")"
+  done
+}
+
 display_env() {
   # The jobs' screen. Never the maintainer's: the user manager hands every service his DISPLAY and WAYLAND_DISPLAY.
   if command -v vscreen > /dev/null; then
@@ -40,7 +54,9 @@ display_env() {
 }
 
 install() {
-  local name=${RUNNER_NAME:-$(hostname)-horizon} jobs=${RUNNER_JOBS:-$(( $(nproc) * 2 / 3 ))}
+  local name=${RUNNER_NAME:-$(hostname)-horizon} threads jobs
+  threads=$(nproc)
+  jobs=${RUNNER_JOBS:-$(( threads / 3 > 8 ? 8 : threads / 3 > 1 ? threads / 3 : 1 ))}
   local source=${HORIZON_SHARED_SOURCE:-}
   if [ -z "$source" ]; then
     for candidate in "$HOME/horizon-local/shared-local" "$HOME/code/horizon/.local"; do
@@ -49,7 +65,7 @@ install() {
   fi
   [ -n "$source" ] && [ -d "$source/minecraft" ] || { echo "no imported Minecraft (HORIZON_SHARED_SOURCE)"; exit 1; }
   mkdir -p "$dir/nix" "$units"
-  cp "$here/linux-runner.sh" "$here/runner-pause.py" "$dir/"
+  cp "$here/linux-runner.sh" "$here/runner_pause.py" "$dir/"
 
   if [ ! -f "$dir/.runner" ]; then
     local cache=$HOME/.cache/gha-runner/actions-runner-linux-x64-$version.tar.gz
@@ -66,11 +82,11 @@ install() {
   fi
 
   # Libraries for building (pkg-config) and running (dlopen) the game, the JDK pinned by research-lock.json, sccache.
-  local alsa udev java sccache
+  local alsa udev java
   alsa=$(nix_out alsa-lib.dev alsa-dev)
   udev=$(nix_out systemd.dev systemd-dev)
   java=$(nix_out "jdk$(sed -n 's/.*"java_major": *\([0-9]*\).*/\1/p' "$here/../../research-lock.json" | head -1)_headless" jdk)/lib/openjdk
-  sccache=$(nix_out sccache sccache)
+  nix_out sccache sccache > /dev/null  # on the PATH below: runner-env.sh hands it to cargo
   local libs=/run/opengl-driver/lib:/run/current-system/sw/share/nix-ld/lib
   if ! command -v vscreen > /dev/null; then
     local mesa x
@@ -91,6 +107,7 @@ RUSTUP_HOME=$dir/rustup
 CARGO_HOME=$dir/cargo
 CARGO_BUILD_JOBS=$jobs
 PARITY_MACHINE_JOBS=$jobs
+PARITY_LOCAL_JOBS=$jobs
 JAVA_HOME=$java
 HORIZON_SHARED_SOURCE=$source
 HORIZON_NO_AUDIO=1
@@ -118,27 +135,25 @@ MemoryMax=$(( $(awk '/MemTotal/ {print int($2 / 1048576)}' /proc/meminfo) * 2 / 
 EOF
   cat > "$units/horizon-runner.service" <<EOF
 [Unit]
-Description=GitHub Actions runner for $repo (parity), paused while a game runs
+Description=GitHub Actions runner for $repo (parity), started and stopped by horizon-runner-pause
 After=network-online.target
 [Service]
 Slice=horizon-ci.slice
 WorkingDirectory=$dir
 ExecStart=/usr/bin/env bash $dir/linux-runner.sh run
-Nice=10
+Nice=19
 # runsvc.sh hands SIGTERM to the runner, which stops after cancelling its job; then the rest (Xvfb) goes.
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=5min
 Restart=on-failure
 RestartSec=30
-[Install]
-WantedBy=default.target
 EOF
   cat > "$units/horizon-runner-pause.service" <<EOF
 [Unit]
-Description=Pauses the Horizon CI runner while a game runs
+Description=Runs the Horizon CI runner only while nobody is at the screen or playing
 [Service]
-ExecStart=$(command -v python3) $dir/runner-pause.py
+ExecStart=$(command -v python3) $dir/runner_pause.py
 Restart=always
 RestartSec=10
 [Install]
@@ -149,15 +164,20 @@ EOF
     sudo -n loginctl enable-linger "$USER" || echo "Run once: sudo loginctl enable-linger $USER"
   fi
   systemctl --user daemon-reload
-  systemctl --user enable horizon-runner.service horizon-runner-pause.service > /dev/null
+  # Only the watcher starts the runner (never the boot itself): it decides whether anyone is at the screen.
+  systemctl --user enable horizon-runner-pause.service > /dev/null
+  # The runner reads .env when it starts: stop it, unless it is in a job (that would cancel the job); the watcher
+  # starts it again when it may run.
+  if pgrep -f "$dir/bin/Runner.Worker" > /dev/null; then echo "In a job: stop horizon-runner.service after it"
+  else systemctl --user stop horizon-runner.service; rm -f "$dir/paused"; fi
   systemctl --user restart horizon-runner-pause.service
-  [ -e "$dir/paused" ] || systemctl --user start horizon-runner.service
   status
 }
 
 run() {
   cd "$dir"
   fix_shebangs
+  parity_host_links
   if command -v vscreen > /dev/null; then
     eval "$(display_env)"
   else
