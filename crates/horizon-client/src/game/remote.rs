@@ -3060,6 +3060,7 @@ impl Game<'_> {
         self.tick_block_entity_anims();
         self.tick_hand();
         self.tick_particles();
+        self.tick_client_ambient();
         self.tick_client_effects();
         // Player.tick's sleep counter (the darkening and the wake-up fade).
         self.sleep_timer = super::tick_sleep_timer(self.sleep_timer, self.sleeping.is_some());
