@@ -5,8 +5,10 @@ use super::{
     generator::{ChunkWork, GeneratorData, GeneratorError},
     structure::{
         StructureResources,
+        jigsaw::PoolPiece,
         start::{
-            Rings, StartContext, StructureRegistry, StructureStart, beardifier, create_starts,
+            Piece, Rings, StartContext, StructureRegistry, StructureStart, beardifier,
+            create_starts,
         },
         stronghold::RingSearch,
     },
@@ -141,6 +143,9 @@ impl StartCache {
             shard.clear();
         }
         shard.entry(key).or_insert(starts).clone()
+    }
+    fn replace(&self, key: (i32, i32), starts: Starts) {
+        self.shard(key).write().unwrap().insert(key, starts);
     }
     fn clear(&self) {
         for shard in &self.shards {
@@ -284,6 +289,45 @@ impl StructureState {
             .collect(),
         );
         self.starts.insert_first((chunk.x, chunk.z), starts)
+    }
+    /// Puts a saved start of `structure` in `chunk`, in place of the one
+    /// this generator builds there from the same structure sets (a set
+    /// starts one structure per chunk): `pieces` as a save lists them (see
+    /// `PoolPiece::from_saved`). Until the starts are forgotten.
+    pub(super) fn use_saved_start(
+        &self,
+        context: &mut impl super::structure::start::StartContext,
+        chunk: ChunkPos,
+        structure: &str,
+        pieces: &[Value],
+    ) -> Result<(), String> {
+        let index = (self.registry.structures.iter())
+            .position(|s| s.name == structure)
+            .ok_or_else(|| format!("unknown structure {structure}"))?;
+        let pieces = (pieces.iter())
+            .map(|p| PoolPiece::from_saved(p, &self.resources, &self.bindings).map(Piece::Pool))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("{structure} at {chunk:?}: {e}"))?;
+        if pieces.is_empty() {
+            return Err(format!("{structure} at {chunk:?}: no pieces"));
+        }
+        let def = &self.registry.structures[index];
+        let sets: Vec<_> = (self.registry.sets.iter())
+            .filter(|set| set.structures.iter().any(|(s, _)| *s == index))
+            .collect();
+        let same_set = |s: usize| {
+            s == index
+                || sets
+                    .iter()
+                    .any(|set| set.structures.iter().any(|(t, _)| *t == s))
+        };
+        let mut starts: Vec<_> = (self.starts_at(context, chunk).iter())
+            .filter(|s| !same_set(s.structure))
+            .cloned()
+            .collect();
+        starts.push(Arc::new(StructureStart::new(index, def, chunk, pieces)));
+        self.starts.replace((chunk.x, chunk.z), Arc::new(starts));
+        Ok(())
     }
     /// ChunkGenerator.findNearestMapStructure: the nearest start of one of
     /// `names` from block `from` (rings: every ring chunk; random spreads:

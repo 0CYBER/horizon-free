@@ -1166,24 +1166,31 @@ fn try_generate(
     if !def.biomes.contains(&context.noise_biome(quart)) || pieces.is_empty() {
         return None;
     }
-    let mut bounding_box = pieces[0].bounding_box();
-    for piece in &pieces[1..] {
-        bounding_box.encapsulate(&piece.bounding_box());
+    Some(StructureStart::new(structure, def, chunk, pieces))
+}
+impl StructureStart {
+    /// A start of `def` (registry index `structure`) from its pieces, at
+    /// least one: their box, grown where the structure adapts the terrain.
+    pub fn new(structure: usize, def: &StructureDef, chunk: ChunkPos, pieces: Vec<Piece>) -> Self {
+        let mut bounding_box = pieces[0].bounding_box();
+        for piece in &pieces[1..] {
+            bounding_box.encapsulate(&piece.bounding_box());
+        }
+        if def.terrain != TerrainAdjustment::None {
+            bounding_box = bounding_box.inflated(12, 12);
+        }
+        if let Some(enhanced) = def.enhanced_terrain.as_ref().filter(|e| e.inflate) {
+            let r = enhanced.radius();
+            bounding_box = bounding_box.inflated(r, r);
+        }
+        Self {
+            structure,
+            name: def.name.clone(),
+            chunk,
+            pieces,
+            bounding_box,
+        }
     }
-    if def.terrain != TerrainAdjustment::None {
-        bounding_box = bounding_box.inflated(12, 12);
-    }
-    if let Some(enhanced) = def.enhanced_terrain.as_ref().filter(|e| e.inflate) {
-        let r = enhanced.radius();
-        bounding_box = bounding_box.inflated(r, r);
-    }
-    Some(StructureStart {
-        structure,
-        name: def.name.clone(),
-        chunk,
-        pieces,
-        bounding_box,
-    })
 }
 /// PoolAliasLookup.create.
 fn resolve_aliases(bindings: &[Value], position: [i32; 3], seed: i64) -> BTreeMap<String, String> {

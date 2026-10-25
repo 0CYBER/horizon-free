@@ -1651,6 +1651,13 @@ trait SeededPipeline: Send + Sync {
         pos: ChunkPos,
     ) -> Vec<Arc<super::structure::start::StructureStart>>;
     fn unsupported_features(&self) -> Vec<(String, String)>;
+    fn use_saved_start(
+        &self,
+        worker: &mut WorkerState,
+        chunk: ChunkPos,
+        structure: &str,
+        pieces: &[serde_json::Value],
+    ) -> Result<(), String>;
     fn forget_structure_starts(&self);
     fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>>;
     fn spawn_position(&self) -> Result<[i32; 2], GeneratorError>;
@@ -1746,6 +1753,21 @@ where
             .as_ref()
             .map(super::generator_decoration::Decoration::unsupported)
             .unwrap_or_default()
+    }
+    fn use_saved_start(
+        &self,
+        worker: &mut WorkerState,
+        chunk: ChunkPos,
+        structure: &str,
+        pieces: &[serde_json::Value],
+    ) -> Result<(), String> {
+        let structures = (self.structures.as_ref()).ok_or("structures were not loaded")?;
+        let mut queries = StructureQueries {
+            pipeline: self,
+            worker,
+            valid: BTreeSet::new(),
+        };
+        structures.use_saved_start(&mut queries, chunk, structure, pieces)
     }
     fn forget_structure_starts(&self) {
         if let Some(structures) = &self.structures {
@@ -2493,6 +2515,17 @@ impl GeneratorWorker {
         pos: ChunkPos,
     ) -> Vec<Arc<super::structure::start::StructureStart>> {
         self.pipeline.structure_starts(&mut self.state, pos)
+    }
+    /// Puts a saved start of `structure` (its pieces as a save lists them, in
+    /// JSON) in `chunk`, in place of the one generation builds there, until
+    /// the starts are forgotten. Harnesses place another game's layout.
+    pub fn use_saved_start(
+        &mut self,
+        chunk: ChunkPos,
+        structure: &str,
+        pieces: &[serde_json::Value],
+    ) -> Result<(), String> {
+        (self.pipeline).use_saved_start(&mut self.state, chunk, structure, pieces)
     }
     /// Forget the cached structure starts: chunks generated afterwards get
     /// fresh starts, as in a new level that has not loaded the old chunks.

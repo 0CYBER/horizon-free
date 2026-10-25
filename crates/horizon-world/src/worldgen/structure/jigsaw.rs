@@ -458,6 +458,63 @@ pub struct PoolPiece {
     pub waterlogging: bool,
 }
 impl PoolPiece {
+    /// A piece as a saved start lists it (PoolElementStructurePiece's tag:
+    /// `pool_element`, `PosX`/`PosY`/`PosZ`, `rotation`, `ground_level_delta`,
+    /// `BB`, `junctions`, `liquid_settings`), in JSON. Harnesses place another
+    /// game's layout with it.
+    pub fn from_saved(
+        v: &Value,
+        resources: &StructureResources,
+        bindings: &FeatureBlockBindings<'_>,
+    ) -> Result<Self, DecodeError> {
+        let int = |v: &Value, key: &'static str| {
+            v[key]
+                .as_i64()
+                .and_then(|i| i32::try_from(i).ok())
+                .ok_or(DecodeError::Field(key))
+        };
+        let corners: Vec<i32> = v["BB"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|i| i32::try_from(i.as_i64()?).ok())
+            .collect();
+        let [x0, y0, z0, x1, y1, z1]: [i32; 6] =
+            corners.try_into().map_err(|_| DecodeError::Field("BB"))?;
+        let rotation = match v["rotation"].as_str() {
+            Some("NONE") => Rotation::None,
+            Some("CLOCKWISE_90") => Rotation::Clockwise90,
+            Some("CLOCKWISE_180") => Rotation::Clockwise180,
+            Some("COUNTERCLOCKWISE_90") => Rotation::Counterclockwise90,
+            _ => return Err(DecodeError::Field("rotation")),
+        };
+        let junctions = v["junctions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|j| {
+                Ok(Junction {
+                    source_x: int(j, "source_x")?,
+                    source_ground_y: int(j, "source_ground_y")?,
+                    source_z: int(j, "source_z")?,
+                })
+            })
+            .collect::<Result<_, DecodeError>>()?;
+        Ok(Self {
+            element: Arc::new(PoolElement::decode(
+                &v["pool_element"],
+                resources,
+                bindings,
+                None,
+            )?),
+            position: [int(v, "PosX")?, int(v, "PosY")?, int(v, "PosZ")?],
+            ground_level_delta: int(v, "ground_level_delta")?,
+            rotation,
+            bounding_box: BoundingBox::new([x0, y0, z0], [x1, y1, z1]),
+            junctions,
+            waterlogging: v["liquid_settings"].as_str() != Some("ignore_waterlogging"),
+        })
+    }
     pub(super) fn moved(&mut self, dy: i32) {
         self.position[1] += dy;
         self.bounding_box = self.bounding_box.moved([0, dy, 0]);
