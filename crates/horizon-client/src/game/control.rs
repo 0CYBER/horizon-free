@@ -226,6 +226,16 @@ impl Game<'_> {
                 }
                 Ok(Some(json!({ "ok": true, "cull": r.section_cull() })))
             }
+            "section-sides" => {
+                let r = self.renderer.as_mut().ok_or("no renderer")?;
+                match words.get(1).copied() {
+                    None => {}
+                    Some("on") => r.set_section_sides(true),
+                    Some("off") => r.set_section_sides(false),
+                    Some(other) => return Err(format!("unknown section sides mode {other}").into()),
+                }
+                Ok(Some(json!({ "ok": true, "sides": r.section_sides() })))
+            }
             "sculk" => Ok(Some(self.sculk_command(&words)?)),
             "status" => Ok(Some(self.control_status())),
             "pad" => Ok(Some(self.pad_command(&words)?)),
@@ -981,6 +991,7 @@ impl Game<'_> {
         status["destroying"] = json!(destroying);
         status["physical_keys"] = json!(physical_keys);
         status["heard"] = json!(self.audio.heard);
+        status["stopped_sounds"] = json!(self.audio.stopped);
         // Boats, minecarts, armor stands, item frames and paintings.
         status["objects"] = json!(self.objects_status());
         status["lightning"] = json!({"bolts": self.bolts.len(), "struck": self.lightning_seen[0],
