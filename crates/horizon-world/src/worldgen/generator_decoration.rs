@@ -333,6 +333,9 @@ impl Decoration {
             biomes: BiomeRegion::new(biomes, obfuscate_seed(seed))
                 .map_err(|e| resource(e.to_string()))?,
             zone: GenerationWriteZone::new(center, 1),
+            center,
+            uniform_biomes: vec![UNKNOWN_BIOME; 9 * (height / 16).max(0) as usize],
+            biome_quarts: region[4].biomes().quart_range(),
             decoration: self,
             temperatures: &mut worker.temperatures,
             behaviours: data.behaviours.as_deref(),
@@ -451,6 +454,72 @@ impl Decoration {
     }
 }
 
+/// `a`, and `b` when it differs.
+fn span<T: PartialEq>(a: T, b: T) -> (T, Option<T>) {
+    let b = (a != b).then_some(b);
+    (a, b)
+}
+const UNKNOWN_BIOME: u32 = u32::MAX;
+const MIXED_BIOMES: u32 = u32::MAX - 1;
+impl World<'_> {
+    /// The biome of a biome section when all its quarts hold the same one
+    /// (and its chunk has biomes); `None` when mixed or outside the region.
+    fn uniform_section(&mut self, cx: i32, cz: i32, section: usize) -> Option<BiomeId> {
+        let (dx, dz) = (
+            i64::from(cx) - i64::from(self.center.x) + 1,
+            i64::from(cz) - i64::from(self.center.z) + 1,
+        );
+        if !(0..3).contains(&dx) || !(0..3).contains(&dz) {
+            return None;
+        }
+        let sections = self.uniform_biomes.len() / 9;
+        if section >= sections {
+            return None;
+        }
+        let slot = (dz * 3 + dx) as usize * sections + section;
+        if self.uniform_biomes[slot] == UNKNOWN_BIOME {
+            let chunk = ChunkPos::new(cx, cz);
+            let ready = self.region.chunk(cx, cz).is_ok_and(|c| {
+                c.highest_generated_status() >= crate::chunk_status::ChunkStatus::Biomes
+            });
+            let values = self
+                .biomes
+                .chunk(chunk)
+                .ok()
+                .and_then(|c| c.section(section));
+            self.uniform_biomes[slot] = match values {
+                Some(values) if ready && values.iter().all(|b| *b == values[0]) => values[0].0,
+                _ => MIXED_BIOMES,
+            };
+        }
+        match self.uniform_biomes[slot] {
+            MIXED_BIOMES => None,
+            id => Some(BiomeId(id)),
+        }
+    }
+    /// BiomeManager.getBiome without the zoom when every quart it can pick
+    /// lies in biome sections of one and the same biome.
+    fn uniform_biome(&mut self, [x, y, z]: [i32; 3]) -> Option<BiomeId> {
+        let base = [x, y, z].map(|v| v.wrapping_sub(2) >> 2);
+        let (bottom, top) = self.biome_quarts;
+        let section = |q: i32| ((q.clamp(bottom, top) - bottom) >> 2) as usize;
+        // The chunks and sections holding the quarts base..=base + 1.
+        let (x0, x1) = span(base[0] >> 2, base[0].wrapping_add(1) >> 2);
+        let (z0, z1) = span(base[2] >> 2, base[2].wrapping_add(1) >> 2);
+        let (s0, s1) = span(section(base[1]), section(base[1].wrapping_add(1)));
+        let found = self.uniform_section(x0, z0, s0)?;
+        for cx in std::iter::once(x0).chain(x1) {
+            for cz in std::iter::once(z0).chain(z1) {
+                for s in std::iter::once(s0).chain(s1) {
+                    if self.uniform_section(cx, cz, s)? != found {
+                        return None;
+                    }
+                }
+            }
+        }
+        Some(found)
+    }
+}
 /// WorldGenRegion-style view: reads anywhere in the 3×3 region, writes within
 /// the FEATURES step's write radius, biome lookups through the biome zoom.
 struct World<'a> {
@@ -464,6 +533,12 @@ struct World<'a> {
     region: TerrainRegion<'static, GenBlockStates>,
     biomes: BiomeRegion<BiomeId>,
     zone: GenerationWriteZone,
+    center: ChunkPos,
+    /// Per biome section of the nine chunks (chunk-major): its one biome id,
+    /// MIXED_BIOMES, or UNKNOWN_BIOME until first asked.
+    uniform_biomes: Vec<u32>,
+    /// The quart Ys biome lookups clamp to (`BiomeChunk::quart_range`).
+    biome_quarts: (i32, i32),
     decoration: &'a Decoration,
     temperatures: &'a mut [BiomeTemperature],
     behaviours: Option<&'a crate::level::Behaviours>,
@@ -611,6 +686,15 @@ impl FeatureWorld for World<'_> {
     #[inline]
     fn block(&mut self, position: [i32; 3]) -> Result<BlockStateId, RegionError> {
         self.region.block(position)
+    }
+    fn scan_column(
+        &mut self,
+        position: [i32; 3],
+        step: i32,
+        limit: i32,
+        keep: impl FnMut(BlockStateId) -> bool,
+    ) -> Result<i32, RegionError> {
+        self.region.scan_column(position, step, limit, keep)
     }
     fn set_block(
         &mut self,
@@ -1172,6 +1256,9 @@ impl PlacementContext for World<'_> {
         self.region.schedule_block_tick(position, block, delay)
     }
     fn biome_identity(&mut self, position: [i32; 3]) -> Result<BiomeId, PlacementQueryError> {
+        if let Some(biome) = self.uniform_biome(position) {
+            return Ok(biome);
+        }
         self.region
             .biome_at(
                 &self.biomes,
@@ -1237,13 +1324,14 @@ impl PlacementContext for World<'_> {
                 }
             }
         }
-        for x in x0..=x1 {
-            for z in z0..=z1 {
-                let map = self.region.chunk(x >> 4, z >> 4)?.heightmap(kind).unwrap();
-                let floor = map
-                    .first_available(x & 15, z & 15)
-                    .map_err(|e| RegionError::from(super::terrain::TerrainError::from(e)))?;
-                if y <= floor {
+        // Any column will do, so each chunk's part of the square is read
+        // from its heightmap in one go.
+        for cx in x0 >> 4..=x1 >> 4 {
+            let xs = [x0.max(cx << 4) & 15, x1.min((cx << 4) + 15) & 15];
+            for cz in z0 >> 4..=z1 >> 4 {
+                let zs = [z0.max(cz << 4) & 15, z1.min((cz << 4) + 15) & 15];
+                let map = self.region.chunk(cx, cz)?.heightmap(kind).unwrap();
+                if map.any_first_available_at_least(xs, zs, y) {
                     return Ok(Some(true));
                 }
             }

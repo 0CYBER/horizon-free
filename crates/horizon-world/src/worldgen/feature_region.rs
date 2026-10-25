@@ -268,6 +268,18 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
     pub fn block(&self, [x, y, z]: [i32; 3]) -> Result<BlockStateId, RegionError> {
         Ok(self.chunk(x >> 4, z >> 4)?.block(x, y, z))
     }
+    /// `FeatureWorld::scan_column` within one chunk's column.
+    pub fn scan_column(
+        &self,
+        [x, y, z]: [i32; 3],
+        step: i32,
+        limit: i32,
+        keep: impl FnMut(BlockStateId) -> bool,
+    ) -> Result<i32, RegionError> {
+        Ok(self
+            .chunk(x >> 4, z >> 4)?
+            .scan_column([x, y, z], step, limit, keep))
+    }
     /// Level-style biome lookup checks the selected chunk's generation status
     /// before reading its palette. Raw biome storage remains independently
     /// accessible for generation itself. Retained upgrade status permits reading
@@ -653,6 +665,15 @@ where
     type Error = RegionError;
     fn block(&mut self, position: [i32; 3]) -> Result<BlockStateId, Self::Error> {
         self.region.block(position)
+    }
+    fn scan_column(
+        &mut self,
+        position: [i32; 3],
+        step: i32,
+        limit: i32,
+        keep: impl FnMut(BlockStateId) -> bool,
+    ) -> Result<i32, Self::Error> {
+        self.region.scan_column(position, step, limit, keep)
     }
     fn set_block(
         &mut self,

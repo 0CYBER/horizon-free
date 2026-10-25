@@ -339,6 +339,47 @@ impl<'r, B: TerrainBlockStates> TerrainChunk<'r, B> {
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
         self.blocks.block(x, y, z)
     }
+    /// `FeatureWorld::scan_column` in this chunk: an all-air section is
+    /// tested once, a mixed one read without looking the section up per block.
+    pub fn scan_column(
+        &self,
+        [x, mut y, z]: [i32; 3],
+        step: i32,
+        mut limit: i32,
+        mut keep: impl FnMut(BlockStateId) -> bool,
+    ) -> i32 {
+        debug_assert!(step == 1 || step == -1);
+        let blocks = &self.blocks;
+        while limit > 0 {
+            let Some(section) = blocks.section_index(y) else {
+                if !keep(blocks.void_air) {
+                    return y;
+                }
+                y = y.wrapping_add(step);
+                limit -= 1;
+                continue;
+            };
+            // Blocks from y to this section's end in the walk's direction.
+            let within = (y - blocks.min_y) & 15;
+            let run = if step > 0 { 16 - within } else { within + 1 }.min(limit);
+            limit -= run;
+            if blocks.non_air[section] == 0 {
+                if !keep(blocks.air) {
+                    return y;
+                }
+                y = y.wrapping_add(step * run);
+                continue;
+            }
+            let storage = &blocks.sections[section];
+            for _ in 0..run {
+                if !keep(storage.state(local_index(x, y, z))) {
+                    return y;
+                }
+                y = y.wrapping_add(step);
+            }
+        }
+        y
+    }
     pub fn section(&self, index: usize) -> Option<&BlockSection<'r>> {
         self.blocks.sections.get(index)
     }
