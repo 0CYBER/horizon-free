@@ -24,6 +24,14 @@ fn projectile_kind(kind: &str) -> Option<ProjectileKind> {
         "minecraft:llama_spit" => ProjectileKind::LlamaSpit,
         "minecraft:wind_charge" => ProjectileKind::WindCharge,
         "minecraft:breeze_wind_charge" => ProjectileKind::BreezeWindCharge,
+        // Homing state stays on the server; the client interpolates its positions.
+        "minecraft:shulker_bullet" => ProjectileKind::ShulkerBullet {
+            target: horizon_client::mobs::Who::Player,
+            dir: None,
+            steps: 0,
+            delta: [0.0; 3],
+            seed: 0,
+        },
         "minecraft:wither_skull" => ProjectileKind::WitherSkull { dangerous: false },
         _ => return None,
     })
