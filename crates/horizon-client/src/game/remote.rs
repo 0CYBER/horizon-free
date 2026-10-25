@@ -1465,10 +1465,10 @@ impl Game<'_> {
             if let Some(p) = r.pending_items.get_mut(&id) {
                 p.0 = position;
             }
-            // ItemEntity and FallingBlockEntity keep Entity's NO_OP
-            // InterpolationHandler: moveOrInterpolateTo puts them there at
-            // once, and their own tick moves them on between the server's
-            // updates (`tick_remote_entities`).
+            // ItemEntity, FallingBlockEntity and PrimedTnt keep Entity's
+            // NO_OP InterpolationHandler: moveOrInterpolateTo puts them there
+            // at once, and their own tick moves them on between the server's
+            // updates (`tick_remote_entities`, `tick_remote_projectiles`).
             let at = Vec3::new(position[0], position[1], position[2]);
             if let Some(d) = self.dropped.iter_mut().find(|d| d.id == id as u32) {
                 d.position = at;
@@ -1477,6 +1477,11 @@ impl Game<'_> {
             }
             if let Some(f) = self.falling.iter_mut().find(|f| f.id == id as u32) {
                 f.position = at;
+                return;
+            }
+            if let Some(t) = self.tnts.iter_mut().find(|t| t.id == id as u32) {
+                t.position = at;
+                t.on_ground = on_ground;
                 return;
             }
             // AbstractInterpolationHandler.interpolateTo: without a rotation,
@@ -2974,14 +2979,16 @@ impl Game<'_> {
         });
     }
     /// `Entity.lerpMotion` (and `recreateFromPacket`'s motion) for the
-    /// entities whose own tick moves them on a client: dropped items and
-    /// falling blocks.
+    /// entities whose own tick moves them on a client: dropped items, falling
+    /// blocks and primed TNT.
     fn remote_motion(&mut self, id: i32, velocity: [f64; 3]) {
         let v = Vec3::new(velocity[0], velocity[1], velocity[2]);
         if let Some(d) = self.dropped.iter_mut().find(|d| d.id == id as u32) {
             d.velocity = v;
         } else if let Some(f) = self.falling.iter_mut().find(|f| f.id == id as u32) {
             f.velocity = v;
+        } else if let Some(t) = self.tnts.iter_mut().find(|t| t.id == id as u32) {
+            t.velocity = v;
         } else if let Some(p) = self
             .remote
             .as_mut()
