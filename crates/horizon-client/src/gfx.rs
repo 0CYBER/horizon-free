@@ -1368,6 +1368,7 @@ impl Renderer {
             sprite_mips,
             &sprite_textures,
             split,
+            animate::SpriteAnimator::compute(&adapter, &device),
         );
         let sprite_unused = device
             .create_texture(&wgpu::TextureDescriptor {

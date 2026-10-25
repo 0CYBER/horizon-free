@@ -10,6 +10,10 @@
 //! frames. Blending on the CPU at the array's size and copying every changed
 //! sprite level by level (a copy command each, a blit each in Mesa) was about
 //! a fifth of the render thread on an integrated GPU.
+//!
+//! Without compute shaders (OpenGL before 4.3, the last fallback) the same
+//! jobs run on the CPU, the same integer mix as `animate.wgsl`, and each
+//! changed level is copied into its layer.
 use super::upload::Uploads;
 use crate::mipmap::Settings;
 use crate::sprites::{FrameBlend, SpriteAnimation};
@@ -38,17 +42,32 @@ struct Sprite {
 struct Group {
     /// Where its jobs start in `SpriteAnimator::jobs`, in bytes.
     offset: u64,
-    /// One bind group per mip level of the array.
+    /// One bind group per mip level of the array (none on the CPU).
     levels: Vec<wgpu::BindGroup>,
     /// This tick's jobs.
     jobs: Vec<u8>,
+    /// Its sprite array and its frames, for the CPU.
+    array: usize,
+    buffer: usize,
+}
+
+/// Where the jobs run.
+enum Writer {
+    Gpu {
+        jobs: wgpu::Buffer,
+        pipeline: wgpu::ComputePipeline,
+    },
+    /// Every frames buffer's words, and the sprite arrays to copy into.
+    Cpu {
+        frames: Vec<Vec<u8>>,
+        textures: Vec<wgpu::Texture>,
+    },
 }
 
 pub(super) struct SpriteAnimator {
     sprites: Vec<Sprite>,
     groups: Vec<Group>,
-    jobs: wgpu::Buffer,
-    pipeline: wgpu::ComputePipeline,
+    writer: Writer,
     /// Edge of the arrays' layers.
     size: u32,
     /// The layers the last `animate` rewrote, counted over all arrays.
@@ -57,7 +76,8 @@ pub(super) struct SpriteAnimator {
 
 impl SpriteAnimator {
     /// `textures` are the sprite arrays, `split` layers each, `size` pixels
-    /// wide; `animations` hold their frames at that size.
+    /// wide; `animations` hold their frames at that size. `compute`: whether
+    /// the device runs compute shaders writing storage textures.
     pub fn new(
         device: &wgpu::Device,
         animations: &[SpriteAnimation],
@@ -65,11 +85,17 @@ impl SpriteAnimator {
         settings: &[Settings],
         textures: &[wgpu::Texture],
         split: u32,
+        compute: bool,
     ) -> Self {
         let limits = device.limits();
-        let limit = limits
-            .max_storage_buffer_binding_size
-            .min(limits.max_buffer_size);
+        let limit = if compute {
+            limits
+                .max_storage_buffer_binding_size
+                .min(limits.max_buffer_size)
+        } else {
+            // Word offsets.
+            u64::from(u32::MAX) * 4
+        };
         let mut frames: Vec<Vec<u8>> = Vec::new();
         // Each group's sprite array and frames buffer.
         let mut keys: Vec<(u32, usize)> = Vec::new();
@@ -118,6 +144,29 @@ impl SpriteAnimator {
                 edge: chains[0].1,
                 group,
             });
+        }
+        if !compute {
+            let groups = keys
+                .iter()
+                .zip(&counts)
+                .map(|(&(array, buffer), &count)| Group {
+                    offset: 0,
+                    levels: Vec::new(),
+                    jobs: Vec::with_capacity(count * JOB_BYTES),
+                    array: array as usize,
+                    buffer,
+                })
+                .collect();
+            return Self {
+                sprites,
+                groups,
+                writer: Writer::Cpu {
+                    frames,
+                    textures: textures.to_vec(),
+                },
+                size,
+                changed: Vec::new(),
+            };
         }
         let frames: Vec<_> = frames
             .iter()
@@ -198,17 +247,31 @@ impl SpriteAnimator {
                     offset,
                     levels,
                     jobs: Vec::with_capacity(count * JOB_BYTES),
+                    array: array as usize,
+                    buffer,
                 }
             })
             .collect();
         Self {
             sprites,
             groups,
-            jobs,
-            pipeline,
+            writer: Writer::Gpu { jobs, pipeline },
             size,
             changed: Vec::new(),
         }
+    }
+
+    /// Whether the jobs can run on the GPU: compute shaders writing a
+    /// storage texture and reading two storage buffers (not OpenGL before
+    /// 4.3).
+    pub fn compute(adapter: &wgpu::Adapter, device: &wgpu::Device) -> bool {
+        let limits = device.limits();
+        adapter
+            .get_downlevel_capabilities()
+            .flags
+            .contains(wgpu::DownlevelFlags::COMPUTE_SHADERS)
+            && limits.max_storage_textures_per_shader_stage >= 1
+            && limits.max_storage_buffers_per_shader_stage >= 2
     }
 
     /// The layers the last `animate` rewrote (for the shader pack atlas).
@@ -227,14 +290,47 @@ impl SpriteAnimator {
         if self.collect(tick) == 0 {
             return;
         }
+        let (jobs, pipeline) = match &self.writer {
+            Writer::Gpu { jobs, pipeline } => (jobs, pipeline),
+            Writer::Cpu { frames, textures } => {
+                for group in &mut self.groups {
+                    let (frames, texture) = (&frames[group.buffer], &textures[group.array]);
+                    for job in group.jobs.as_chunks::<JOB_BYTES>().0 {
+                        let (words, _) = job.as_chunks::<4>();
+                        let job: [u32; 5] = std::array::from_fn(|i| u32::from_le_bytes(words[i]));
+                        for level in 0..texture.mip_level_count() {
+                            let width = self.size >> level;
+                            uploads.texture(
+                                encoder,
+                                wgpu::TexelCopyTextureInfo {
+                                    texture,
+                                    mip_level: level,
+                                    origin: wgpu::Origin3d {
+                                        x: 0,
+                                        y: 0,
+                                        z: job[0],
+                                    },
+                                    aspect: wgpu::TextureAspect::All,
+                                },
+                                width,
+                                width,
+                                &mix_level(frames, job, width),
+                            );
+                        }
+                    }
+                    group.jobs.clear();
+                }
+                return;
+            }
+        };
         for group in &self.groups {
-            uploads.buffer(encoder, &self.jobs, group.offset, &group.jobs);
+            uploads.buffer(encoder, jobs, group.offset, &group.jobs);
         }
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Animated sprites"),
             timestamp_writes: None,
         });
-        pass.set_pipeline(&self.pipeline);
+        pass.set_pipeline(pipeline);
         for group in &mut self.groups {
             let count = (group.jobs.len() / JOB_BYTES) as u32;
             if count == 0 {
@@ -276,6 +372,33 @@ impl SpriteAnimator {
         }
         count
     }
+}
+
+/// `animate.wgsl` on the CPU: one `width` wide level of a job
+/// (`[layer, current, next, millis, edge]`) from `frames`' chains.
+fn mix_level(frames: &[u8], [_, current, next, millis, edge]: [u32; 5], width: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity((width * width * 4) as usize);
+    for y in 0..width {
+        for x in 0..width {
+            let texel = if width >= edge {
+                let scale = width / edge;
+                y / scale * edge + x / scale
+            } else {
+                4 * (edge * edge - width * width) / 3 + y * width + x
+            };
+            let at = |chain: u32| ((chain + texel) * 4) as usize;
+            let a = &frames[at(current)..at(current) + 4];
+            if millis == 0 {
+                out.extend_from_slice(a);
+                continue;
+            }
+            let b = &frames[at(next)..at(next) + 4];
+            out.extend(a.iter().zip(b).map(|(&a, &b)| {
+                ((u32::from(a) * (1000 - millis) + u32::from(b) * millis + 500) / 1000) as u8
+            }));
+        }
+    }
+    out
 }
 
 /// The mip chain a frame's layer is made of, and its first level's edge.
@@ -512,6 +635,16 @@ mod tests {
 
     #[test]
     fn gpu_layers_match_the_cpu_chains_every_tick() {
+        layers_match_the_cpu_chains_every_tick(true);
+    }
+
+    /// Without compute shaders (OpenGL before 4.3): the same layers.
+    #[test]
+    fn copied_layers_match_the_cpu_chains_every_tick() {
+        layers_match_the_cpu_chains_every_tick(false);
+    }
+
+    fn layers_match_the_cpu_chains_every_tick(compute: bool) {
         let Some((device, queue)) = device() else {
             return;
         };
@@ -552,12 +685,15 @@ mod tests {
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
                     format: wgpu::TextureFormat::Rgba8Unorm,
-                    usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                    usage: wgpu::TextureUsages::STORAGE_BINDING
+                        | wgpu::TextureUsages::COPY_SRC
+                        | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
                 })
             })
             .collect();
-        let mut animator = SpriteAnimator::new(&device, &animations, size, &mips, &textures, split);
+        let mut animator =
+            SpriteAnimator::new(&device, &animations, size, &mips, &textures, split, compute);
         let mut uploads = Uploads::new(&device);
         let mut writes = Vec::new();
         for tick in [0, 0, 1, 2, 3, 4, 7, 7, 12, 30] {
