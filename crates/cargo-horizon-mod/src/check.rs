@@ -242,6 +242,11 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
                 format!("{}: {text}", if error { "error" } else { "feedback" })
             }
             Output::Stopped { reason, .. } => return Err(format!("it stopped: {reason}")),
+            Output::SetBlocks {
+                dimension, blocks, ..
+            } => {
+                format!("set {} block(s) in {dimension}", blocks.len())
+            }
         });
     }
     match failed(&mods) {

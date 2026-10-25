@@ -1,0 +1,22 @@
+# /ground reads the block under the player and the biome; /beacon sets four blocks of glowstone two to the east.
+
+[[step]]
+join = "Alex"
+blocks = [{ x = 0, y = 63, z = 0, state = "minecraft:grass_block[snowy=false]" }]
+command = "ground"
+expect.feedback = "You are standing on minecraft:grass_block[snowy=false] in minecraft:plains"
+
+[[step]]
+command = "beacon"
+expect.broadcast = ["Alex lit a beacon at 2 64 0"]
+expect.blocks = [
+    { x = 2, y = 64, z = 0, state = "minecraft:glowstone" },
+    { x = 2, y = 67, z = 0, state = "minecraft:glowstone" },
+    { x = 2, y = 68, z = 0, state = "minecraft:air" },
+]
+
+# Anywhere the script set nothing is air.
+[[step]]
+player = { x = 10.5, z = 10.5 }
+command = "ground"
+expect.feedback = "You are standing on minecraft:air in minecraft:plains"

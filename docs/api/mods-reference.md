@@ -13,6 +13,7 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `storage` | [`storage`](#storage) | save its own settings to disk |
 | `registries` | data files (`assets/`, `data/`), no interface | add blocks and items to your worlds |
 | `players` | [`players`](#players) | see who is on the server and message them |
+| `world` | [`world`](#world) | read and change the world's blocks |
 
 ## World `horizon-mod`
 
@@ -25,7 +26,7 @@ A client mod: runs in the player's game.
 
 A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs where the world is simulated, on the dedicated server, a LAN host and single player's own server.
 
-- Imports (what the game offers): `log`, `storage`, `players`
+- Imports (what the game offers): `log`, `storage`, `players`, `world`
 - Exports (what the mod provides): `server-events`
 
 ## `log`
@@ -183,6 +184,27 @@ Capability `players`, server mods only (manifest `api = "0.3"`, experimental): t
 | `online` | `func() -> list<player>` | The players online, in the order they joined. |
 | `tell` | `func(player: string, text: string) -> bool` | A system message to one player, after the mod's name; false when no player with that id is online. Up to 8 messages per call. |
 | `broadcast` | `func(text: string)` | A system message to every player and the server's log, after the mod's name. Counts toward the same 8 per call. |
+
+## `world`
+
+Access: capability `world`.
+
+Capability `world`, server mods only (manifest `api = "0.3"`, experimental): the blocks of the server's loaded chunks, and changes to them through the server's own block updates.
+
+### record `block-change`
+
+| Field | Type | |
+| --- | --- | --- |
+| `x` | `s32` |  |
+| `y` | `s32` |  |
+| `z` | `s32` |  |
+| `state` | `string` | `minecraft:oak_log[axis=y]`; properties left out take the block's defaults, `minecraft:stone` alone is the default state. |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `get-block` | `func(dimension: string, x: s32, y: s32, z: s32) -> option<string>` | The block state at a position in a dimension (`minecraft:overworld`, ...), as `minecraft:oak_log[axis=y]`, as of this call: none where the server has no chunk loaded there. |
+| `get-biome` | `func(dimension: string, x: s32, y: s32, z: s32) -> option<string>` | The biome at a position (`minecraft:plains`, ...), as the server stores it (one per 4 x 4 x 4 cell): none where no chunk is loaded. |
+| `set-blocks` | `func(dimension: string, blocks: list<block-change>) -> result<_, string>` | Sets blocks as `/setblock` does: the old block entity removed, neighbours and shapes updated, light, and every player told. Every state is checked now (an error queues nothing); the changes are made in order after this call returns, before that dimension's next tick; one in a chunk not loaded then is skipped. At most 4096 per call. |
 
 ## `server-events`
 

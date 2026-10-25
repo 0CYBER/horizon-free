@@ -278,6 +278,7 @@ A step's parts happen in this order:
 | --- | --- |
 | `reload = true` | stops the mod and starts it again, as a rebuild does in the game: its memory starts over, its `storage` stays |
 | `title-screen = true` | no player and no clock until a step sets them |
+| `blocks = [{ x = 0, y = 63, z = 0, state = "minecraft:stone" }]` | server mods with `world`: those blocks of the Overworld, before the rest of the step (every other block is air, every biome the dimension's plainest: plains, nether wastes, the end) |
 | `player = { x = 3.0, ... }`, `clock = { day-time = 0 }` | changes those fields (`x y z yaw pitch health food dimension`, `game-time day-time`) |
 | `ticks = n`, `frames = n` | that many ticks (the game's tick counter and the clock move on), then frames 1/60 s apart |
 | `chat = "<Steve> hi"` | a chat line the player receives |
@@ -303,6 +304,7 @@ checked:
 | `feedback = "..."`, `error = "..."` | the command's answer, shown plain or in red |
 | `panel = ["..."]`, `corner = "top-left"` | its HUD panel's lines (`[]`: no panel) and corner |
 | `told = ["Alex: Welcome!"]`, `broadcast = ["..."]` | server mods: every `players.tell` (as `name: text`) and `players.broadcast`, in order |
+| `blocks = [{ x = 2, y = 64, z = 0, state = "minecraft:glowstone" }]` | server mods with `world`: those blocks of the Overworld after the step, the mod's `set-blocks` made (the script checks a state's shape; the game checks its name) |
 | `stopped = "panic"` | the mod was turned off, for a reason holding this text; without it, a mod that traps, panics or overruns fails the test |
 
 Unknown keys are errors, so a typo never passes silently. The same runner is
@@ -465,6 +467,7 @@ its component targets the WIT world `horizon-server-mod` instead of
 | `log` | always | as for client mods |
 | `storage` | `storage` | as for client mods, in the server's `horizon-mods/` |
 | `players` | `players` | `online()`: id, name, position, dimension, game mode, health of each player on; `tell(id, text)`, `broadcast(text)`: system messages after the mod's name, 8 per call |
+| `world` | `world` | `get-block(dimension, x, y, z)`: the state in a loaded chunk, `minecraft:oak_log[axis=y]`; `get-biome(dimension, x, y, z)`: `minecraft:plains`, ...; `set-blocks(dimension, changes)`: up to 4096 per call, checked at once, made as `/setblock` makes them (neighbours, light, block entities, every player told) after the call, before that dimension's next tick |
 
 | Hook (export `server-events`) | When |
 |---|---|
@@ -478,7 +481,20 @@ its component targets the WIT world `horizon-server-mod` instead of
 Capabilities that act on a local player (`game-read`, `chat`, `hud`) are for
 client mods; `players` is for server mods. In Rust: `impl
 horizon_mod_sdk::server::ServerMod` and `export_server_mod!`; the example is
-[`welcome`](../crates/horizon-mod-sdk/examples/welcome/src/lib.rs).
+[`welcome`](../crates/horizon-mod-sdk/examples/welcome/src/lib.rs), and with
+`world`, [`beacons`](../crates/horizon-mod-sdk/examples/beacons/src/lib.rs).
+
+**Capability `world`.** Reads are of the server's loaded chunks as they are
+during the call: the game lends a server mod's call the levels' chunk maps
+(moved, not copied, and only while a running mod has `world`), so a read
+costs a map lookup and no copy of the world. A dimension with no chunk loaded
+at a position reads as none. Writes go through the same code as `/setblock`,
+so block updates, light, block entities and every client (LAN guests,
+dedicated server players) see them as vanilla's; the parity harnesses test
+that code. Changes for a dimension whose level isn't ticking wait for it
+(in-frame single player ticks only the player's), up to 65,536 blocks; a
+change in a chunk that isn't loaded when it is made is skipped, as `/setblock`
+refuses one.
 
 **Where they run.** The game that simulates the world starts the server mods
 that are on, and only that one:

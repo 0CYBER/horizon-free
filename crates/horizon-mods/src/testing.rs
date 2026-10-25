@@ -29,6 +29,54 @@ pub struct TestGame {
     /// Every name that joined, for their id.
     names: Vec<String>,
     tick: u64,
+    /// Capability `world`'s Overworld: the blocks a script set or the mod
+    /// changed; every other block, and the other dimensions, are air. Every
+    /// biome is the dimension's plainest: plains, nether wastes, the end.
+    pub world: std::collections::BTreeMap<(i32, i32, i32), String>,
+}
+
+/// The world a script's mod reads: [`TestGame::world`], copied for a step.
+struct ScriptWorld(std::collections::BTreeMap<(i32, i32, i32), String>);
+
+impl crate::WorldView for ScriptWorld {
+    fn block(&self, dimension: &str, x: i32, y: i32, z: i32) -> Option<String> {
+        let here = (dimension == "minecraft:overworld")
+            .then(|| self.0.get(&(x, y, z)).cloned())
+            .flatten();
+        Some(here.unwrap_or_else(|| "minecraft:air".into()))
+    }
+    fn biome(&self, dimension: &str, _x: i32, _y: i32, _z: i32) -> Option<String> {
+        let biome = match dimension {
+            "minecraft:overworld" => "minecraft:plains",
+            "minecraft:the_nether" => "minecraft:nether_wastes",
+            "minecraft:the_end" => "minecraft:the_end",
+            _ => return None,
+        };
+        Some(biome.into())
+    }
+    fn has_dimension(&self, dimension: &str) -> bool {
+        matches!(
+            dimension,
+            "minecraft:overworld" | "minecraft:the_nether" | "minecraft:the_end"
+        )
+    }
+    fn check_state(&self, state: &str) -> Result<(), String> {
+        // No registry here: the shape only (the game checks the names).
+        let name = state.split('[').next().unwrap_or_default();
+        let plain = |t: &str| {
+            !t.is_empty()
+                && t.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.-/".contains(&b))
+        };
+        let ok = match name.split_once(':') {
+            Some((ns, path)) => plain(ns) && plain(path),
+            None => plain(name),
+        };
+        let closed = !state.contains('[') || state.ends_with(']');
+        (ok && closed)
+            .then_some(())
+            .ok_or_else(|| format!("{state} is not a block state"))
+    }
 }
 
 /// Where a script starts: standing at 0.5 64 0.5 in the Overworld, facing
@@ -71,6 +119,7 @@ impl TestGame {
             players: Vec::new(),
             names: Vec::new(),
             tick: 0,
+            world: Default::default(),
         };
         copy_mod(hmod, &copy)?;
         game.start()?;
@@ -309,9 +358,10 @@ pub struct ClockSet {
 }
 
 /// One step. Its parts happen in this order: `reload`, `title-screen`,
-/// `join`, `player`, `clock`, `ticks`, `frames`, `chat`, `command`, `break`,
-/// `place`, `leave`; then `expect` is checked against what the mod showed
-/// during the step. For a server mod, `player`, `chat`, `command`, `break`
+/// `blocks`, `join`, `player`, `clock`, `ticks`, `frames`, `chat`, `command`,
+/// `break`, `place`, `leave`; then the blocks the mod set are made, and
+/// `expect` is checked against what the mod showed and changed during the
+/// step. For a server mod, `player`, `chat`, `command`, `break`
 /// and `place` are the doing of the player named by `as`, or of the first
 /// player on.
 #[derive(Debug, Default, Deserialize)]
@@ -338,6 +388,10 @@ pub struct Step {
     #[serde(rename = "break")]
     broken: Option<BlockSet>,
     place: Option<BlockSet>,
+    /// Blocks of the Overworld before the rest of the step (capability
+    /// `world`); every other block is air.
+    #[serde(default)]
+    blocks: Vec<BlockSet>,
     #[serde(default)]
     expect: Expect,
 }
@@ -360,6 +414,9 @@ pub struct Expect {
     /// The panel's lines (`[]`: no panel) and its corner.
     panel: Option<Vec<String>>,
     corner: Option<String>,
+    /// Blocks of the Overworld after the step, the mod's changes made
+    /// (capability `world`).
+    blocks: Option<Vec<BlockSet>>,
     /// The mod is turned off during this step, for a reason holding this text.
     /// Without it, a mod that stops fails the test.
     stopped: Option<String>,
@@ -464,6 +521,11 @@ impl Step {
             game.player = None;
             game.clock = None;
         }
+        for b in &self.blocks {
+            game.world.insert((b.x, b.y, b.z), b.state.clone());
+        }
+        game.mods
+            .lend_world(Box::new(ScriptWorld(game.world.clone())));
         if let Some(name) = &self.join {
             game.join(name);
         }
@@ -528,7 +590,19 @@ impl Step {
         {
             return Err(format!("{name} is not on the server"));
         }
+        game.mods.take_world();
         let out = game.drain();
+        for o in &out {
+            if let Output::SetBlocks {
+                dimension, blocks, ..
+            } = o
+                && dimension == "minecraft:overworld"
+            {
+                for b in blocks {
+                    game.world.insert((b.x, b.y, b.z), b.state.clone());
+                }
+            }
+        }
         let stopped = out.iter().find_map(|o| match o {
             Output::Stopped { reason, .. } => Some(reason.as_str()),
             _ => None,
@@ -611,6 +685,18 @@ impl Step {
                 .map(|p| p.lines.iter().map(|l| l.text.clone()).collect())
                 .unwrap_or_default();
             same("panel", want, &got)?;
+        }
+        if let Some(want) = &e.blocks {
+            for b in want {
+                let got = game.world.get(&(b.x, b.y, b.z));
+                let got = got.map_or("minecraft:air", String::as_str);
+                if got != b.state {
+                    return Err(format!(
+                        "block at {} {} {}: expected {}, got {got}",
+                        b.x, b.y, b.z, b.state
+                    ));
+                }
+            }
         }
         if let Some(want) = &e.corner {
             let got = game.panel().map(|p| corner_name(p.corner).to_string());

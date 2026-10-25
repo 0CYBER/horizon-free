@@ -166,6 +166,7 @@ pub mod server {
 
     pub use exports::horizon::mods::server_events::{BlockPos, Guest as __Guest, Registration};
     pub use horizon::mods::players::{self, GameMode, Player};
+    pub use horizon::mods::world::{self, BlockChange};
 
     /// The server's calls into a mod. Only the hooks [`Registration`] asks
     /// for are called; the others may stay as their defaults.

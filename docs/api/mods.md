@@ -84,11 +84,11 @@ release.
 What real mods need next, in the order modpacks and servers need it:
 
 - **More for server mods** (`api = "0.3"`, [Server mods](../mods.md#server-mods-api-03-experimental)): they run
-  on the server thread, a LAN host and the dedicated server today, with joins, chat, commands and players' block
-  breaking and placing; next entity events, game rules, server commands with typed arguments sent to clients'
-  command trees.
-- **World and blocks**: read blocks, block states and biomes in loaded chunks; change them through the server's block
-  log, so clients and the parity harnesses see vanilla's updates.
+  on the server thread, a LAN host and the dedicated server today, with joins, chat, commands, players' block
+  breaking and placing, and `world` (read blocks and biomes, set blocks as `/setblock` does); next entity events, game rules,
+  server commands with typed arguments sent to clients' command trees.
+- **World and blocks**: blocks, block states and biomes are there for server mods (`world`); next block entities,
+  and `world` for client mods (raycasts, single player and LAN hosts).
 - **Items and inventories**: the player's inventory, held item and open container; item stacks with components.
 - **Entities**: query and change entities near a position; spawn from a mod's own entity types (data first).
 - **Block entities and menus**: ticking machines with slots and their screens.
@@ -102,6 +102,8 @@ What real mods need next, in the order modpacks and servers need it:
 
 ## Changelog
 
+- API 0.3: capability `world` (`get-block`, `get-biome`, `set-blocks`); example `beacons`; test scripts' `blocks` and
+  `expect.blocks`.
 - Server mods run in the game: single player (server thread and in-frame), LAN hosts, the dedicated server.
 - API 0.3 (server mods, experimental): world `horizon-server-mod`, capability `players`, the `server-events`
   hooks; SDK `server::ServerMod`; example `welcome`.

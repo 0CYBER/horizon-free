@@ -144,6 +144,33 @@ interface players {
     broadcast: func(text: string);
 }
 
+/// Capability `world`, server mods only (manifest `api = "0.3"`,
+/// experimental): the blocks of the server's loaded chunks, and changes to
+/// them through the server's own block updates.
+interface %world {
+    record block-change {
+        x: s32,
+        y: s32,
+        z: s32,
+        /// `minecraft:oak_log[axis=y]`; properties left out take the block's
+        /// defaults, `minecraft:stone` alone is the default state.
+        state: string,
+    }
+    /// The block state at a position in a dimension (`minecraft:overworld`,
+    /// ...), as `minecraft:oak_log[axis=y]`, as of this call: none where the
+    /// server has no chunk loaded there.
+    get-block: func(dimension: string, x: s32, y: s32, z: s32) -> option<string>;
+    /// The biome at a position (`minecraft:plains`, ...), as the server
+    /// stores it (one per 4 x 4 x 4 cell): none where no chunk is loaded.
+    get-biome: func(dimension: string, x: s32, y: s32, z: s32) -> option<string>;
+    /// Sets blocks as `/setblock` does: the old block entity removed,
+    /// neighbours and shapes updated, light, and every player told. Every
+    /// state is checked now (an error queues nothing); the changes are made
+    /// in order after this call returns, before that dimension's next tick;
+    /// one in a chunk not loaded then is skipped. At most 4096 per call.
+    set-blocks: func(dimension: string, blocks: list<block-change>) -> result<_, string>;
+}
+
 /// What the server calls in a server mod (manifest `api = "0.3"`,
 /// experimental). Only the hooks `init` asks for are ever called. The player
 /// in each event is as the server saw them when it happened.
@@ -205,5 +232,6 @@ world horizon-server-mod {
     import log;
     import storage;
     import players;
+    import %world;
     export server-events;
 }

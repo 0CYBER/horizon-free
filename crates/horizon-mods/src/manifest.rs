@@ -80,19 +80,26 @@ pub enum Capability {
     Registries,
     /// The players on the server and messages to them (server mods).
     Players,
+    /// Blocks in the server's loaded chunks, and changes to them (server
+    /// mods; client mods later, where the game runs the world).
+    World,
 }
 impl Capability {
-    pub const ALL: [Capability; 6] = [
+    pub const ALL: [Capability; 7] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
         Capability::Storage,
         Capability::Registries,
         Capability::Players,
+        Capability::World,
     ];
     /// Whether a server mod may have it: the others act on a local player.
     pub fn on_server(self) -> bool {
-        matches!(self, Capability::Storage | Capability::Players)
+        matches!(
+            self,
+            Capability::Storage | Capability::Players | Capability::World
+        )
     }
     /// The WIT interface it grants, in `horizon:mods`.
     pub fn interface(self) -> &'static str {
@@ -103,6 +110,7 @@ impl Capability {
             Capability::Storage => "storage",
             Capability::Registries => "registries",
             Capability::Players => "players",
+            Capability::World => "world",
         }
     }
     /// What the player reads before turning the mod on: "May <this>".
@@ -114,6 +122,7 @@ impl Capability {
             Capability::Storage => "save its own settings to disk",
             Capability::Registries => "add blocks and items to your worlds",
             Capability::Players => "see who is on the server and message them",
+            Capability::World => "read and change the world's blocks",
         }
     }
     /// The capability a component import needs, `Ok(None)` for one every
@@ -145,6 +154,7 @@ impl fmt::Display for Capability {
             Capability::Storage => "storage",
             Capability::Registries => "registries",
             Capability::Players => "players",
+            Capability::World => "world",
         };
         f.write_str(name)
     }

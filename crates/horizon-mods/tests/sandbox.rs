@@ -36,6 +36,8 @@ fn mods_dir() -> &'static Path {
                 "-p",
                 "welcome",
                 "-p",
+                "beacons",
+                "-p",
                 "horizon-mods-test-guest",
                 "--target-dir",
             ])
@@ -56,6 +58,7 @@ fn mods_dir() -> &'static Path {
         let mods = [
             ("coords_hud", example("coords-hud")),
             ("welcome", example("welcome")),
+            ("beacons", example("beacons")),
             ("horizon_mods_test_guest", GUEST_MANIFEST.to_string()),
         ];
         for (name, manifest) in mods {
@@ -412,7 +415,12 @@ capabilities = ["registries"]
 fn the_examples_test_scripts_pass() {
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../horizon-mod-sdk/examples");
     let mut ran = 0;
-    for (example, hmod) in [("coords-hud", "coords_hud"), ("welcome", "welcome")] {
+    let examples_and_files = [
+        ("coords-hud", "coords_hud"),
+        ("welcome", "welcome"),
+        ("beacons", "beacons"),
+    ];
+    for (example, hmod) in examples_and_files {
         for entry in std::fs::read_dir(examples.join(example).join("tests")).unwrap() {
             let path = entry.unwrap().path();
             let script = Script::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
@@ -423,7 +431,24 @@ fn the_examples_test_scripts_pass() {
             ran += 1;
         }
     }
-    assert_eq!(ran, 4);
+    assert_eq!(ran, 5);
+}
+
+/// Capability `world` without a world lent (the registry's trial run):
+/// `get-block` finds nothing, `set-blocks` checks its count and queues.
+#[test]
+fn a_server_mod_without_a_world_reads_nothing() {
+    let mut game = TestGame::load(&mods_dir().join("beacons.hmod")).unwrap();
+    game.join("Alex");
+    let alex = game.players[0].clone();
+    assert!(game.player_command(&alex, "ground"));
+    let out = game.drain();
+    assert!(
+        out.iter()
+            .any(|o| matches!(o, Output::Reply { text, error: true, .. }
+            if text == "The ground under you isn't loaded")),
+        "{out:?}"
+    );
 }
 
 #[test]

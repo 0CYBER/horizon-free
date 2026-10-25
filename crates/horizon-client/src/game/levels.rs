@@ -106,6 +106,19 @@ pub(super) struct Levels {
     parked: HashMap<Dim, Parked>,
 }
 
+impl Levels {
+    /// The chunks of each level not in place (capability `world` lends
+    /// them to server mods for a call).
+    #[cfg_attr(not(feature = "mods"), allow(dead_code))]
+    pub(super) fn parked_chunks(
+        &mut self,
+    ) -> impl Iterator<Item = (Dim, &mut horizon_client::chunk_map::ChunkMap)> {
+        self.parked
+            .iter_mut()
+            .map(|(d, p)| (*d, &mut p.world.chunks))
+    }
+}
+
 impl Game<'_> {
     /// A new level for `dim`, opened from the save (`MinecraftServer.createLevels`).
     fn open_level(&self, dim: Dim) -> Result<Parked> {
@@ -295,6 +308,8 @@ impl Game<'_> {
             };
             self.update_dedicated_streaming();
             self.update_world();
+            // What server mods set in this level since its last tick.
+            self.apply_mod_block_writes();
             result = if paused {
                 self.tick_lan(true);
                 Ok(())
