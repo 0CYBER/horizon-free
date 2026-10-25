@@ -13,6 +13,7 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `storage` | [`storage`](#storage) | save its own settings to disk |
 | `registries` | data files (`assets/`, `data/`), no interface | add blocks and items to your worlds |
 | `ui` | [`ui`](#ui) | show its own screens and a settings page |
+| `render` | [`render`](#render) | draw on your screen and shake the camera |
 
 ## World `horizon-mod`
 
@@ -23,7 +24,7 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 
 A mod with widgets (capability `ui`): the SDK builds every mod against this world. Mods built for `horizon-mod` alone (no `ui-events` export) still load and simply hear nothing of their widgets.
 
-- Imports (what the game offers): `ui`, `log`, `game`, `chat`, `hud`, `storage`
+- Imports (what the game offers): `ui`, `render`, `log`, `game`, `chat`, `hud`, `storage`
 - Exports (what the mod provides): `ui-events`, `events`
 
 ## World `ui-host`
@@ -32,6 +33,13 @@ The game's side of `horizon-ui-mod` beyond `horizon-mod`.
 
 - Imports (what the game offers): `ui`
 - Exports (what the mod provides): `ui-events`
+
+## World `render-host`
+
+The game's side of capability `render` (imports only).
+
+- Imports (what the game offers): `render`
+- Exports (what the mod provides): 
 
 ## `log`
 
@@ -204,6 +212,90 @@ What the game calls on a mod that shows widgets (capability `ui`): what the play
 | `select` | `func(id: u32, row: u32)` | A row of one of the mod's `list` widgets was picked: the widget's `id` and the row, on the screen or the settings page that showed it. |
 | `closed` | `func()` | The player left the mod's screen (Esc or Done); not for a screen the mod closed itself or one that went away with the mod. |
 | `settings-opened` | `func()` | The player opened the mod's settings page in Options > Mods: call `ui::set-settings` now to fill it with fresh widgets. |
+
+## `render`
+
+Access: capability `render`.
+
+Capability `render` (experimental: the manifest needs `experimental = ["render"]`): shapes the game draws for the mod with its own renderer, kept until the mod replaces them (no call per frame). A mod never supplies shader code.
+
+### record `rect`
+
+A rectangle in GUI pixels: the top left corner and the size.
+
+| Field | Type | |
+| --- | --- | --- |
+| `x` | `f32` |  |
+| `y` | `f32` |  |
+| `w` | `f32` |  |
+| `h` | `f32` |  |
+
+### record `point`
+
+A point in GUI pixels from the screen's top left.
+
+| Field | Type | |
+| --- | --- | --- |
+| `x` | `f32` |  |
+| `y` | `f32` |  |
+
+### record `fill-shape`
+
+| Field | Type | |
+| --- | --- | --- |
+| `rect` | `rect` |  |
+| `color` | `u32` | 0xAARRGGBB. |
+
+### record `quad-shape`
+
+Any four-cornered shape (a wheel's segment, an arrow): the corners in order round it.
+
+| Field | Type | |
+| --- | --- | --- |
+| `corners` | `tuple<point, point, point, point>` |  |
+| `color` | `u32` | 0xAARRGGBB. |
+
+### record `sprite-shape`
+
+| Field | Type | |
+| --- | --- | --- |
+| `sprite` | `string` | One of the game's GUI sprites, as `gui/sprites/` names them (`hud/heart/full`, `widget/button`), the resource packs' versions included. An unknown one draws nothing. |
+| `rect` | `rect` |  |
+| `color` | `u32` | A tint, 0xAARRGGBB: 0xFFFFFFFF draws it as it is. |
+
+### record `item-shape`
+
+| Field | Type | |
+| --- | --- | --- |
+| `item` | `string` | `minecraft:diamond`, `<mod>:<path>`; an unknown one draws nothing. |
+| `at` | `point` | The icon's top left. |
+| `scale` | `f32` | 1.0 is the hotbar's 16 × 16. |
+
+### record `text-shape`
+
+| Field | Type | |
+| --- | --- | --- |
+| `text` | `string` | Up to 256 characters, one line. |
+| `at` | `point` |  |
+| `color` | `u32` | 0xRRGGBB, as `hud`'s lines. |
+| `centered` | `bool` | Centred on `at.x` instead of starting there. |
+| `shadow` | `bool` |  |
+
+### variant `shape`
+
+| Case | Payload | |
+| --- | --- | --- |
+| `fill` | `fill-shape` |  |
+| `quad` | `quad-shape` |  |
+| `sprite` | `sprite-shape` |  |
+| `item` | `item-shape` |  |
+| `text` | `text-shape` |  |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `set-hud` | `func(shapes: list<shape>)` | Replaces the mod's HUD shapes: up to 1024, drawn every frame in order over the HUD (after the hotbar, under chat and screens), hidden with the HUD (F1). An empty list removes them. |
+| `gui-size` | `func() -> tuple<f32, f32>` | The screen's size in GUI pixels (width, height), as of this tick. |
+| `shake` | `func(strength: f32, seconds: f32)` | Shakes the camera: a jolt of `strength` (0 to 1, 1 the hardest) that fades out over `seconds` (at most 10). Jolts add up to 1. The view turns, the player doesn't, and the player's Distortion Effects option scales it (0 turns it off). |
 
 ## `events`
 

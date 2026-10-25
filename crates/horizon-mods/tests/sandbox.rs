@@ -1,7 +1,7 @@
 //! Loads real mods built with the SDK: the coords-hud example and a guest
 //! that misbehaves on command. Needs `rustup target add wasm32-unknown-unknown`.
 use horizon_mods::{
-    Clock, Corner, Mods, Output, Package, Player, Snapshot, Status, manifest::componentize,
+    Clock, Corner, Mods, Output, Package, Player, Shape, Snapshot, Status, manifest::componentize,
 };
 use std::{
     path::{Path, PathBuf},
@@ -22,8 +22,8 @@ id = "test_ui_guest"
 name = "Test UI Guest"
 version = "0.1.0"
 api = "0.1"
-capabilities = ["chat", "ui"]
-experimental = ["ui"]
+capabilities = ["chat", "ui", "render"]
+experimental = ["ui", "render"]
 "#;
 
 /// Builds both mods once and writes their `.hmod` files; returns the folder.
@@ -89,6 +89,7 @@ fn player() -> Snapshot {
             game_time: 100,
             day_time: 24000 + 6000,
         }),
+        gui_size: (427.0, 240.0),
     }
 }
 
@@ -414,6 +415,37 @@ fn ui_screens_settings_and_events() {
     assert!(mods.command("ui_close"));
     assert!(mods.drain().contains(&Output::CloseScreen { owner: 0 }));
     assert!(mods.screen(0).is_none());
+}
+
+#[test]
+fn render_shapes_and_shakes() {
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    mods.set_snapshot(Snapshot {
+        gui_size: (427.0, 240.0),
+        ..Snapshot::default()
+    });
+    assert_eq!(mods.hud_shapes().count(), 0);
+    assert!(mods.command("render_hud"));
+    let shapes: Vec<_> = mods.hud_shapes().cloned().collect();
+    assert_eq!(shapes.len(), 5);
+    // The guest read `gui-size`; text is clipped to 256 characters.
+    let Shape::Text(t) = &shapes[4] else {
+        panic!("{:?}", shapes[4])
+    };
+    assert!(t.text.starts_with("gui 427x240 "), "{}", t.text);
+    assert_eq!(t.text.chars().count(), 256);
+    assert!(mods.command("render_clear"));
+    assert_eq!(mods.hud_shapes().count(), 0);
+    // One jolt, clamped; zero and NaN shake nothing.
+    mods.drain();
+    assert!(mods.command("render_shake"));
+    assert_eq!(
+        mods.drain(),
+        [Output::Shake {
+            strength: 1.0,
+            seconds: 10.0
+        }]
+    );
 }
 
 #[test]

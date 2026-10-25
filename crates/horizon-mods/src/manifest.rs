@@ -84,15 +84,19 @@ pub enum Capability {
     /// A screen the mod owns and a settings page in Options > Mods, drawn
     /// with the menus' own widgets (interface `ui`, calls `ui-events`).
     Ui,
+    /// Shapes on the HUD and the camera's shake, drawn by the game's own
+    /// renderer (interface `render`).
+    Render,
 }
 impl Capability {
-    pub const ALL: [Capability; 6] = [
+    pub const ALL: [Capability; 7] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
         Capability::Storage,
         Capability::Registries,
         Capability::Ui,
+        Capability::Render,
     ];
     /// The WIT interface it grants, in `horizon:mods`.
     pub fn interface(self) -> &'static str {
@@ -103,12 +107,13 @@ impl Capability {
             Capability::Storage => "storage",
             Capability::Registries => "registries",
             Capability::Ui => "ui",
+            Capability::Render => "render",
         }
     }
     /// May change in any release: a mod uses it only with
     /// `experimental = ["<name>"]` in its manifest.
     pub fn is_experimental(self) -> bool {
-        matches!(self, Capability::Ui)
+        matches!(self, Capability::Ui | Capability::Render)
     }
     /// What the player reads before turning the mod on: "May <this>".
     pub fn describe(self) -> &'static str {
@@ -119,6 +124,7 @@ impl Capability {
             Capability::Storage => "save its own settings to disk",
             Capability::Registries => "add blocks and items to your worlds",
             Capability::Ui => "show its own screens and a settings page",
+            Capability::Render => "draw on your screen and shake the camera",
         }
     }
     /// The capability a component import needs, `Ok(None)` for one every
@@ -150,6 +156,7 @@ impl fmt::Display for Capability {
             Capability::Storage => "storage",
             Capability::Registries => "registries",
             Capability::Ui => "ui",
+            Capability::Render => "render",
         };
         f.write_str(name)
     }

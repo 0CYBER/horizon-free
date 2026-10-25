@@ -38,7 +38,7 @@ wit_bindgen::generate!({
 
 pub use exports::horizon::mods::events::{Guest as __Guest, Registration};
 pub use exports::horizon::mods::ui_events::Guest as __UiEventsGuest;
-pub use horizon::mods::{chat, game, hud, log, storage, ui};
+pub use horizon::mods::{chat, game, hud, log, render, storage, ui};
 
 /// The game's calls into a mod. Only the hooks [`Registration`] asks for
 /// are called; the others may stay as their defaults.

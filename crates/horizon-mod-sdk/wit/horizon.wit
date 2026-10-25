@@ -163,6 +163,82 @@ interface ui-events {
     settings-opened: func();
 }
 
+/// Capability `render` (experimental: the manifest needs
+/// `experimental = ["render"]`): shapes the game draws for the mod with its
+/// own renderer, kept until the mod replaces them (no call per frame). A mod
+/// never supplies shader code.
+interface render {
+    /// A rectangle in GUI pixels: the top left corner and the size.
+    record rect {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    }
+    /// A point in GUI pixels from the screen's top left.
+    record point {
+        x: f32,
+        y: f32,
+    }
+    record fill-shape {
+        rect: rect,
+        /// 0xAARRGGBB.
+        color: u32,
+    }
+    /// Any four-cornered shape (a wheel's segment, an arrow): the corners
+    /// in order round it.
+    record quad-shape {
+        corners: tuple<point, point, point, point>,
+        /// 0xAARRGGBB.
+        color: u32,
+    }
+    record sprite-shape {
+        /// One of the game's GUI sprites, as `gui/sprites/` names them
+        /// (`hud/heart/full`, `widget/button`), the resource packs' versions
+        /// included. An unknown one draws nothing.
+        sprite: string,
+        rect: rect,
+        /// A tint, 0xAARRGGBB: 0xFFFFFFFF draws it as it is.
+        color: u32,
+    }
+    record item-shape {
+        /// `minecraft:diamond`, `<mod>:<path>`; an unknown one draws nothing.
+        item: string,
+        /// The icon's top left.
+        at: point,
+        /// 1.0 is the hotbar's 16 × 16.
+        scale: f32,
+    }
+    record text-shape {
+        /// Up to 256 characters, one line.
+        text: string,
+        at: point,
+        /// 0xRRGGBB, as `hud`'s lines.
+        color: u32,
+        /// Centred on `at.x` instead of starting there.
+        centered: bool,
+        shadow: bool,
+    }
+    variant shape {
+        fill(fill-shape),
+        quad(quad-shape),
+        sprite(sprite-shape),
+        item(item-shape),
+        text(text-shape),
+    }
+    /// Replaces the mod's HUD shapes: up to 1024, drawn every frame in
+    /// order over the HUD (after the hotbar, under chat and screens), hidden
+    /// with the HUD (F1). An empty list removes them.
+    set-hud: func(shapes: list<shape>);
+    /// The screen's size in GUI pixels (width, height), as of this tick.
+    gui-size: func() -> tuple<f32, f32>;
+    /// Shakes the camera: a jolt of `strength` (0 to 1, 1 the hardest) that
+    /// fades out over `seconds` (at most 10). Jolts add up to 1. The view
+    /// turns, the player doesn't, and the player's Distortion Effects option
+    /// scales it (0 turns it off).
+    shake: func(strength: f32, seconds: f32);
+}
+
 /// What the game calls. Only the hooks `init` asks for are ever called.
 interface events {
     record registration {
@@ -203,6 +279,7 @@ world horizon-mod {
 world horizon-ui-mod {
     include horizon-mod;
     import ui;
+    import render;
     export ui-events;
 }
 
@@ -210,4 +287,9 @@ world horizon-ui-mod {
 world ui-host {
     import ui;
     export ui-events;
+}
+
+/// The game's side of capability `render` (imports only).
+world render-host {
+    import render;
 }
