@@ -193,7 +193,7 @@ fn parse(composed: &Composed) -> Result<naga::Module, Vec<Problem>> {
     naga::front::wgsl::parse_str(&composed.text).map_err(|e| {
         let label = e.labels().next();
         let mut message = e.message().to_owned();
-        if let Some((_, text)) = label.filter(|(_, t)| !t.is_empty()) {
+        if let Some((_, text)) = label.filter(|(_, t)| !t.is_empty() && !message.contains(*t)) {
             message += &format!(" ({text})");
         }
         let at = label.and_then(|(span, _)| span.to_range()).map(|r| r.start);
