@@ -77,7 +77,7 @@ pub(super) struct SpriteAnimator {
 impl SpriteAnimator {
     /// `textures` are the sprite arrays, `split` layers each, `size` pixels
     /// wide; `animations` hold their frames at that size. `compute`: whether
-    /// the device runs compute shaders writing storage textures.
+    /// the device says it runs compute shaders writing storage textures.
     pub fn new(
         device: &wgpu::Device,
         animations: &[SpriteAnimation],
@@ -87,8 +87,9 @@ impl SpriteAnimator {
         split: u32,
         compute: bool,
     ) -> Self {
+        let pipeline = if compute { pipeline(device) } else { None };
         let limits = device.limits();
-        let limit = if compute {
+        let limit = if pipeline.is_some() {
             limits
                 .max_storage_buffer_binding_size
                 .min(limits.max_buffer_size)
@@ -145,7 +146,7 @@ impl SpriteAnimator {
                 group,
             });
         }
-        if !compute {
+        let Some(pipeline) = pipeline else {
             let groups = keys
                 .iter()
                 .zip(&counts)
@@ -167,7 +168,7 @@ impl SpriteAnimator {
                 size,
                 changed: Vec::new(),
             };
-        }
+        };
         let frames: Vec<_> = frames
             .iter()
             .map(|data| {
@@ -190,18 +191,6 @@ impl SpriteAnimator {
             size: total.max(align),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
-        });
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Animated sprites"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("animate.wgsl").into()),
-        });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Animated sprites"),
-            layout: None,
-            module: &module,
-            entry_point: Some("animate"),
-            compilation_options: Default::default(),
-            cache: None,
         });
         let layout = pipeline.get_bind_group_layout(0);
         let groups = keys
@@ -371,6 +360,35 @@ impl SpriteAnimator {
             count += 1;
         }
         count
+    }
+}
+
+/// `animate.wgsl`'s pipeline, unless the device fails to make it: an OpenGL
+/// driver can list compute shaders among its extensions while wgpu writes
+/// the GLSL version of its core version, which has none (Mesa's
+/// `MESA_GL_VERSION_OVERRIDE`, older drivers).
+fn pipeline(device: &wgpu::Device) -> Option<wgpu::ComputePipeline> {
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Animated sprites"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("animate.wgsl").into()),
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("Animated sprites"),
+        layout: None,
+        module: &module,
+        entry_point: Some("animate"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let internal = pollster::block_on(internal.pop());
+    match internal.or(pollster::block_on(validation.pop())) {
+        None => Some(pipeline),
+        Some(e) => {
+            log::warn!("Horizon renderer: animated sprites drawn on the CPU ({e})");
+            None
+        }
     }
 }
 
