@@ -964,13 +964,16 @@
   {
    "id": "opengl-fallback",
    "title": "OpenGL for old computers",
-   "status": "later",
+   "status": "shipped",
    "area": "platforms",
-   "plain": "A way to play on old PCs and Linux machines that have no Vulkan or DirectX 12, through OpenGL.",
-   "dev": "Players on older hardware ask whether Vulkan is the only way. Horizon draws with wgpu, which has an OpenGL backend; what is needed is to see which features hold up on it, how fast it runs, and a launcher switch like the DirectX 12 fallback that already ships.",
+   "plain": "Horizon now starts on old PCs whose graphics card has no Vulkan or DirectX 12 driver: it switches to OpenGL by itself, and Options > Graphics can pick OpenGL by hand.",
+   "dev": "wgpu's GL backend (WGL on Windows, EGL on Linux) as the last fallback after Vulkan and DirectX 12 (#1917), sprite arrays and CPU sprite animation for drivers without compute (#1920), no indirect draws below GL 4.3 (#1936). Minimum OpenGL 3.3 core. Shader packs don't run on it yet.",
    "links": [
-    "docs/graphics.md"
-   ]
+    "#1917",
+    "#1920",
+    "#1936"
+   ],
+   "shipped_in": "v0.2.63"
   },
   {
    "id": "phones-and-browser",
@@ -1202,6 +1205,37 @@
     "docs/hosting.md"
    ],
    "shipped_in": "launcher-v0.15.0"
+  },
+  {
+   "id": "cli-server-install",
+   "title": "A server you install with one command",
+   "status": "next",
+   "area": "servers",
+   "plain": "Install and run a Horizon dedicated server from a terminal with a single command, no launcher needed, for VPSes and headless machines.",
+   "dev": "A player's idea (#horizon-ideas). `horizon-server` already runs headless; left: an install script (Linux/macOS shell, Windows PowerShell) that fetches the signed release, checks it, asks for or points at the player's own game files and starts the server, documented in docs/hosting.md.",
+   "links": [
+    "docs/hosting.md"
+   ]
+  },
+  {
+   "id": "launcher-look-menus",
+   "title": "Game menus in the launcher's style",
+   "status": "later",
+   "area": "extras",
+   "plain": "An optional look for the game's own menus and options that matches the Horizon launcher. Off by default: the vanilla menus stay as they are.",
+   "dev": "A player's idea (#horizon-ideas). A built-in resource pack or a Horizon setting that restyles the title, pause and options screens with the launcher's design tokens (crates/horizon-theme), following docs/design-system.md; off by default because it changes the vanilla look.",
+   "links": [
+    "docs/design-system.md"
+   ]
+  },
+  {
+   "id": "linux-packages",
+   "title": "AppImage and a Nix flake",
+   "status": "later",
+   "area": "platforms",
+   "plain": "Install Horizon on any Linux distribution as an AppImage, and on NixOS through a Nix flake.",
+   "dev": "A player's idea (#horizon-ideas). An AppImage of the launcher and game from the release workflow, and a flake.nix packaging the release binaries with their runtime libraries (Vulkan loader, X11/Wayland, ALSA), the way horizon-parity's NixOS setup runs them today.",
+   "links": []
   }
  ],
  "journal": [
