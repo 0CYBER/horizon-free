@@ -267,20 +267,21 @@ impl Opt {
             Opt::HighContrastBlockOutlines => "options.accessibility.high_contrast_block_outline",
             Opt::ForceUnicode => "options.forceUnicodeFont",
             Opt::JapaneseGlyphs => "options.japaneseGlyphVariants",
-            // Horizon's own options: English captions (no vanilla keys).
-            Opt::PadEnabled => "Controller",
-            Opt::PadVibration => "Vibration",
-            Opt::PadAdaptiveTriggers => "Adaptive Triggers",
-            Opt::PadLightbar => "Lightbar",
-            Opt::PadLookSensitivity => "Look Sensitivity",
-            Opt::PadInvertX => "Invert Look X",
-            Opt::PadInvertY => "Invert Look Y",
-            Opt::PadToggleSneak => "Sneak Button",
-            Opt::PadMoveDeadzone => "Move Deadzone",
-            Opt::PadLookDeadzone => "Look Deadzone",
-            Opt::PadGlyphs => "Button Glyphs",
-            Opt::PadMenuNav => "Menu Navigation",
-            Opt::PadKeyboard => "On-Screen Keyboard",
+            // Horizon's own options: vanilla has no keys for them, so they read
+            // the namespace the client bundles (assets/horizon/lang).
+            Opt::PadEnabled => "horizon.options.controller",
+            Opt::PadVibration => "horizon.options.vibration",
+            Opt::PadAdaptiveTriggers => "horizon.options.adaptive_triggers",
+            Opt::PadLightbar => "horizon.options.lightbar",
+            Opt::PadLookSensitivity => "horizon.options.look_sensitivity",
+            Opt::PadInvertX => "horizon.options.invert_x",
+            Opt::PadInvertY => "horizon.options.invert_y",
+            Opt::PadToggleSneak => "horizon.options.sneak_button",
+            Opt::PadMoveDeadzone => "horizon.options.move_deadzone",
+            Opt::PadLookDeadzone => "horizon.options.look_deadzone",
+            Opt::PadGlyphs => "horizon.options.button_glyphs",
+            Opt::PadMenuNav => "horizon.options.menu_navigation",
+            Opt::PadKeyboard => "horizon.options.on_screen_keyboard",
         }
     }
     pub(crate) fn kind(self, s: &Settings) -> Kind {
@@ -1291,7 +1292,10 @@ impl OptionsUi {
                         open("Graphics...", Page::Graphics),
                         Some(open("Advanced Graphics...", Page::GraphicsAdvanced)),
                     ),
-                    Row::Buttons(open("Controller Settings...", Page::Controller), None),
+                    Row::Buttons(
+                        open("Controller Settings...", Page::Controller),
+                        Some(self.extra_button(s, crate::extras::Item::DiscordPresence)),
+                    ),
                     Row::Buttons(
                         open("Extras...", Page::Extras),
                         Some(open("Mods...", Page::Mods)),
@@ -2079,7 +2083,9 @@ impl OptionsUi {
             let blink = self.pack_focus.elapsed().as_millis() as u64;
             let m = crate::screen_draw::Measure(&atlas.font);
             let mouse = (cursor.0.floor() as i32, cursor.1.floor() as i32);
-            let draws = self.packs(atlas, (w, h)).draw(&m, mouse, blink);
+            let packs = self.packs(atlas, (w, h));
+            let mut draws = packs.draw(&m, mouse, blink);
+            packs.bind_icons(&mut draws, atlas, &mut batch.patches);
             crate::screen_draw::paint(batch, atlas, &draws);
             return;
         }

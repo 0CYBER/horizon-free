@@ -245,7 +245,7 @@ fn point(link: &Path, target: &Path) -> std::io::Result<()> {
     #[cfg(windows)]
     {
         let _ = fs::remove_dir(link);
-        let status = Command::new("cmd")
+        let status = crate::process::command("cmd")
             .args(["/C", "mklink", "/J"])
             .arg(link)
             .arg(target)
@@ -266,10 +266,8 @@ pub fn command(dir: &Path, args: &[&str]) -> Result<Command, String> {
     let program = program().ok_or(
         "The server programs aren't set up yet: create a server, or press Prepare on its page.",
     )?;
-    let mut cmd = Command::new(program);
+    let mut cmd = crate::process::command(program);
     cmd.arg("--dir").arg(dir).args(args);
-    #[cfg(windows)]
-    std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0800_0000); // CREATE_NO_WINDOW
     Ok(cmd)
 }
 
@@ -752,7 +750,7 @@ pub fn lan_address() -> Option<std::net::IpAddr> {
 pub fn service_installed(dir: &Path) -> bool {
     if cfg!(windows) {
         let name = format!("horizon-server-{}", service_suffix(dir));
-        return Command::new("schtasks")
+        return crate::process::command("schtasks")
             .args(["/Query", "/TN", &name])
             .stdout(Stdio::null())
             .stderr(Stdio::null())

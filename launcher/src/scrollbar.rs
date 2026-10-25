@@ -6,6 +6,9 @@ use gpui::{
 };
 use std::{cell::Cell, rc::Rc};
 
+/// Space reserved beside scroll content for the track and its padding.
+pub const GUTTER: f32 = 16.;
+
 #[derive(Clone, Default)]
 pub(crate) struct Scrollbar {
     pub handle: ScrollHandle,
@@ -60,7 +63,7 @@ impl Scrollbar {
             .child(
                 content
                     .track_scroll(&self.handle)
-                    .mr(px(16.))
+                    .mr(px(GUTTER))
                     // Nested scroll areas must not also move the page behind them.
                     .on_scroll_wheel(|_, _, cx| cx.stop_propagation()),
             )
