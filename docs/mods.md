@@ -86,7 +86,7 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | `chat` | `chat` | `show(text)`: a line only the local player sees, after the mod's name (8 per call) |
 | `hud` | `hud` | `set-panel(corner, lines)`, `clear()`: up to 16 lines of 256 characters |
 | `storage` | `storage` | `get(key)`, `set(key, value)`, `delete(key)`: a per-mod folder of up to 64 files, 4 MiB total, at most 1 MiB written per call |
-| `ui` | `ui` | `open-screen`, `close-screen`, `set-settings`: a screen the mod owns and a page in Options > Mods, of text, item and list widgets the game lays out and draws with its own menus' code |
+| `ui` | `ui` | `open-screen`, `close-screen`, `set-settings`: a screen the mod owns and a page in Options > Mods, of text, item and list widgets the game lays out and draws with its own menus' code. **Experimental:** the manifest needs `experimental = ["ui"]` |
 
 | Hook (export) | When |
 |---|---|
@@ -284,10 +284,13 @@ authors = ["..."]
 api = "0.1"                  # the API the SDK targets
 side = "client"              # client | server | both
 capabilities = ["game-read", "hud", "chat"]
+experimental = []            # experimental capabilities it uses, e.g. ["ui"]
 ```
 
 Unknown keys are refused, so a typo is an error, not a silently ignored
-permission.
+permission. An experimental capability (today `ui`) may change in any release
+([stability](api/stability.md)): a mod uses it only by naming it in
+`experimental` as well, so nobody depends on it by accident.
 
 ### Content mods (API 0.2)
 

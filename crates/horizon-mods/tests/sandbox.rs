@@ -23,6 +23,7 @@ name = "Test UI Guest"
 version = "0.1.0"
 api = "0.1"
 capabilities = ["chat", "ui"]
+experimental = ["ui"]
 "#;
 
 /// Builds both mods once and writes their `.hmod` files; returns the folder.
