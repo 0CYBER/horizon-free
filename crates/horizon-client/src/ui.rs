@@ -279,9 +279,17 @@ pub fn centered_text(
     w: f32,
     color: u32,
 ) {
-    let width = atlas.font.width_text(text);
+    let text = text.resolved();
+    let width = atlas.font.width_text(&text);
     if width <= w {
-        batch.text_styled(atlas, text, x + ((w - width) / 2.0).floor(), y, color, true);
+        batch.text_styled(
+            atlas,
+            &text,
+            x + ((w - width) / 2.0).floor(),
+            y,
+            color,
+            true,
+        );
     } else {
         // Clip by characters (vanilla scrolls; we show the part that fits).
         let mut shown = Text::empty();
