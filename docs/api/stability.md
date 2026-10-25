@@ -88,7 +88,7 @@ Deprecations and breaking changes are in bold. The release notes of the game rel
 | --- | --- | --- |
 | Mod API: `log`, `game`, `chat`, `hud`, `storage`, `events` | preview | 0.1.0 |
 | Content mods (`registries`: data-driven blocks and items) | preview | manifest `api = "0.2"` |
-| Server mods: world `horizon-server-mod`, `players`, `server-events` | experimental | manifest `api = "0.3"` |
+| Server mods: world `horizon-server-mod`, `players`, `server-events`, `world`, typed `server-command`s | experimental | manifest `api = "0.3"` |
 | Script mods (Lua run by an interpreter mod, [mods.md](mods.md#ways-in)) | not started | |
 | `cargo horizon-mod` (`new`, `build`, `run`), `horizon-mod-sdk` | preview | 0.1.0 |
 | Shader API | not started | |
