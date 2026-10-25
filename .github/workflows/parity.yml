@@ -37,6 +37,10 @@ jobs:
         run: bash tools/ci/runner-env.sh
       - name: Vanilla data, and resources prepared by this preparer
         run: bash tools/ci/vanilla-data.sh
+      - name: The prepared output is the one the preparer's OUTPUT_VERSION says
+        env:
+          BASE_SHA: ${{ inputs.base }}
+        run: python3 tools/prepare_output.py check --cache --base "$BASE_SHA"
       - name: The version constants are the pinned jar's
         run: python3 tools/gen_version_consts.py --check
       - name: The harnesses this change can affect
