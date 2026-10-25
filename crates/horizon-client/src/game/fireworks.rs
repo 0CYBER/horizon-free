@@ -28,6 +28,9 @@ pub(super) struct Rocket {
     pub(super) explosions: Vec<FireworkExplosion>,
     /// Boosting the player (attachedToEntity).
     pub(super) attached: bool,
+    /// On a server, the player it boosts when not this game's own: a guest's
+    /// connection.
+    pub(super) guest: Option<u32>,
     /// `DATA_ATTACHED_TO_TARGET`: the server entity the rocket follows;
     /// boosting happens when it is the local player.
     pub(super) attached_to: Option<u32>,
@@ -51,6 +54,7 @@ impl Rocket {
             lifetime: i32::MAX,
             explosions,
             attached: false,
+            guest: None,
             attached_to: None,
             angled: false,
             item,
@@ -93,6 +97,7 @@ impl Game<'_> {
             lifetime,
             explosions,
             attached,
+            guest: None,
             attached_to: None,
             angled: false,
             item: stack.clone(),
@@ -132,7 +137,8 @@ impl Game<'_> {
             return false;
         }
         let at = self.player.as_ref().map_or(Vec3::ZERO, |p| p.position);
-        let rocket = self.new_rocket(at, stack, true);
+        let mut rocket = self.new_rocket(at, stack, true);
+        rocket.guest = self.lan_acting;
         self.rockets.push(rocket);
         if !self.creative {
             self.consume_held();
@@ -145,7 +151,18 @@ impl Game<'_> {
         while i < self.rockets.len() {
             let mut r = self.rockets.remove(i);
             r.previous = r.position;
-            if r.attached {
+            if r.attached
+                && let Some(conn) = r.guest
+            {
+                // A guest's rocket follows them; their own client boosts them.
+                let guest = self
+                    .lan
+                    .as_ref()
+                    .and_then(|host| host.hub.guests.iter().find(|g| g.conn == conn));
+                if let Some(g) = guest {
+                    r.position = Vec3::new(g.position[0], g.position[1], g.position[2]);
+                }
+            } else if r.attached {
                 if let Some(p) = self.player.as_mut() {
                     if p.fall_flying {
                         let look = view_vector(self.yaw, self.pitch);
@@ -234,7 +251,7 @@ impl Game<'_> {
         let at = [r.position.x, r.position.y, r.position.z];
         if !r.explosions.is_empty() {
             let damage = 5.0 + r.explosions.len() as f32 * 2.0;
-            if r.attached {
+            if r.attached && r.guest.is_none() {
                 self.hurt_player_by("minecraft:fireworks", damage);
             }
             let from = r.position;
