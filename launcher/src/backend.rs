@@ -1096,17 +1096,23 @@ fn download_for_owner(
     }
 }
 
-/// The home of a JDK whose compiler and runtime support `major`. Forward even an installed
-/// JDK to external preparers: older versions may otherwise rediscover incompatible PATH tools.
+/// The Java home for this version: a runtime for precompiled exporters, a JDK for older
+/// preparers or changed sources. Forward the selection to external preparers too.
 /// Else try the official launcher's Java in `games`, then download the runtime named by
 /// `manifest` into Horizon's game folder (Mojang's runtimes are whole JDKs).
 fn java(
     major: i64,
+    compiler: bool,
     games: &[PathBuf],
     manifest: &Path,
     log: &dyn Fn(String),
 ) -> Result<PathBuf, String> {
-    if let Ok(jdk) = horizon_prepare::java::find(major, &[]) {
+    let find = if compiler {
+        horizon_prepare::java::find
+    } else {
+        horizon_prepare::java::find_runtime
+    };
+    if let Ok(jdk) = find(major, &[]) {
         return Ok(jdk.home());
     }
     let mut runtimes: Vec<PathBuf> = Vec::new();
@@ -1118,7 +1124,7 @@ fn java(
             runtimes.push(home);
         }
     }
-    let missing = match horizon_prepare::java::find(major, &runtimes) {
+    let missing = match find(major, &runtimes) {
         Ok(jdk) => return Ok(jdk.home()),
         Err(e) => e,
     };
@@ -1129,7 +1135,7 @@ fn java(
     // musl distributions) it cannot start, so don't download it.
     if cfg!(all(target_os = "linux", target_arch = "x86_64")) && !Path::new(GLIBC_LOADER).exists() {
         return Err(format!(
-            "{missing}\n  • Minecraft's own Java from Mojang needs glibc ({GLIBC_LOADER} is missing; on NixOS, enable programs.nix-ld), so install a JDK instead."
+            "{missing}\n  • Minecraft's own Java from Mojang needs glibc ({GLIBC_LOADER} is missing; on NixOS, enable programs.nix-ld), so install compatible Java instead."
         ));
     }
     let fetch = |url: &str| -> Result<Vec<u8>, String> {
@@ -1144,13 +1150,13 @@ fn java(
     let home = mojang::java_runtime(&component, &runtime, 8, &fetch, log).map_err(|e| {
         format!("{missing}\n  • Horizon also tried to download Minecraft's own Java from Mojang, but: {e}")
     })?;
-    horizon_prepare::java::find(major, &[home]).map(|jdk| jdk.home())
+    find(major, &[home]).map(|jdk| jdk.home())
 }
 
 /// The dynamic loader glibc programs on x86-64 Linux start through.
 const GLIBC_LOADER: &str = "/lib64/ld-linux-x86-64.so.2";
 
-/// Runs `cmd` with the JDK at `home`: JAVA_HOME names it and its `bin` leads the PATH, as the
+/// Runs `cmd` with Java at `home`: JAVA_HOME names it and its `bin` leads the PATH, as the
 /// versions' own preparers look for Java.
 fn with_java(cmd: &mut Command, home: &Path) {
     let mut path = vec![home.join("bin")];
@@ -1253,7 +1259,7 @@ pub fn preparer(
             "This version prepares with Python: Python 3.10 or newer is needed. Install it, or pick a newer version.",
         )?),
     };
-    // The JDK the version pins, found as horizon-prepare finds it, so a missing one is
+    // The Java the version pins, found as horizon-prepare finds it, so a missing one is
     // reported (or downloaded) before the server jar is downloaded. Versions from before
     // java_major ran Java 25.
     let major = read_json(&dir.join("research-lock.json"))
@@ -1267,7 +1273,13 @@ pub fn preparer(
             .into_iter()
             .map(|(_, dir)| dir),
     );
-    let java_home = java(major, &games, &manifest, log)?;
+    let java_home = java(
+        major,
+        !horizon_prepare::exporters::available(&dir),
+        &games,
+        &manifest,
+        log,
+    )?;
     let jar = data_dir()
         .join("server-jars")
         .join(format!("{version}.jar"));

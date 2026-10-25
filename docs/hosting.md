@@ -71,7 +71,7 @@ from there too.
 ## 2. Prepare the game files
 
 Horizon reads Minecraft's data from your own copy of the game. You need Minecraft Java Edition 26.3, played
-once from the official launcher on this computer, Java 25 (a JDK), and the 26.3 `server.jar`: it's the
+once from the official launcher on this computer, a Java 25 runtime, and the 26.3 `server.jar`: it's the
 `downloads.server.url` in your launcher's `versions/26.3/26.3.json`. Then:
 
 ```sh
