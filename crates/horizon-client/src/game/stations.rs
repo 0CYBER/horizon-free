@@ -1674,12 +1674,6 @@ impl Game<'_> {
         if display.name_visible(self.screen == Screen::Creative) {
             lines.push((horizon_client::text::Text::legacy(&name), color));
         }
-        // ItemLore.addToTooltip: after the name, before other component lines.
-        if display.shows("minecraft:lore") {
-            for text in horizon_client::item_tooltip::lore_texts(stack) {
-                lines.push((text, u32::MAX));
-            }
-        }
         let translate = |k: &str| e.translate(k).map(str::to_owned);
         let push = |lines: &mut Vec<(horizon_client::text::Text, u32)>, s: String, c: u32| {
             lines.push((horizon_client::text::Text::legacy(&s), c));
@@ -1774,6 +1768,13 @@ impl Game<'_> {
                     self.translate(&key, &key),
                     rgba(170, 170, 170, 255),
                 );
+            }
+        }
+        // ItemLore.addToTooltip: after the enchantments, before the attributes
+        // (ItemStack.addDetailsToTooltip).
+        if display.shows("minecraft:lore") {
+            for text in horizon_client::item_tooltip::lore_texts(stack) {
+                lines.push((text, u32::MAX));
             }
         }
         // Spawner.appendHoverText: what a spawner or trial spawner item spawns.
