@@ -321,7 +321,7 @@ impl Game<'_> {
             .iter()
             .filter(|m| m.distance_sqr(center) <= radius * radius)
             .map(|m| {
-                serde_json::json!({
+                let mut state = serde_json::json!({
                     "id": m.id,
                     "kind": m.kind.id,
                     "pos": [m.position.x, m.position.y, m.position.z],
@@ -370,7 +370,11 @@ impl Game<'_> {
                         "patrol_target": s.patrol_target,
                         "vehicle": m.extra.mount,
                     })),
-                })
+                });
+                // Drawn seated (Entity.isPassenger); set apart because the
+                // json! above is at the macro recursion limit.
+                state["passenger"] = m.extra.passenger.into();
+                state
             })
             .collect();
         serde_json::json!({ "count": self.mobs.len(), "near": list, "projectiles": self.creatures.projectiles.len() })
