@@ -111,6 +111,9 @@ pub struct PostProgram {
     pub flips: Vec<(u32, bool)>,
     /// How a gbuffers program's output blends into its buffers; `None` writes them.
     pub blend: Option<Blend>,
+    /// Bit n: `colortex<n>MipmapEnabled` in its fragment stage, so buffer n's mip chain is
+    /// regenerated right before it (6.1.7; not for gbuffers programs).
+    pub mipmaps: u16,
 }
 
 pub struct Post {
@@ -280,6 +283,16 @@ impl Loader<'_> {
         self.post.config.read(&vertex);
         self.post.config.read(&fragment);
         let buffers = config::draw_buffers(&fragment).unwrap_or_else(|| (0..8).collect());
+        let mipmaps = match group {
+            Group::Gbuffers | Group::Translucent => 0,
+            _ => {
+                let mut own = Config::default();
+                own.read(&fragment);
+                (own.buffers.iter().enumerate())
+                    .filter(|b| b.1.mipmap)
+                    .fold(0, |m, (i, _)| m | 1 << i)
+            }
+        };
         Some(PostProgram {
             flips: flips(self.properties, &name),
             name,
@@ -287,6 +300,7 @@ impl Loader<'_> {
             program,
             buffers,
             blend: None,
+            mipmaps,
         })
     }
 }
@@ -391,7 +405,8 @@ mod tests {
                 ("shaders/deferred.vsh", VSH),
                 (
                     "shaders/deferred.fsh",
-                    "#version 120\nvoid main() { gl_FragColor = vec4(1.0); }\n",
+                    "#version 120\nconst bool colortex5MipmapEnabled = true;\n\
+                     void main() { gl_FragColor = vec4(1.0); }\n",
                 ),
                 ("shaders/composite1.fsh", FSH),
                 ("shaders/composite3.vsh", VSH),
@@ -423,6 +438,7 @@ mod tests {
         assert_eq!(names, ["deferred", "composite", "composite2", "final"]);
         let p = &post.programs;
         assert_eq!(p[0].buffers, (0..8).collect::<Vec<_>>());
+        assert_eq!((p[0].mipmaps, p[1].mipmaps), (1 << 5, 0));
         assert_eq!(p[1].buffers, [3]);
         assert_eq!(p[1].flips, [(3, false)]);
         assert_eq!(p[2].flips, [(4, true)]);

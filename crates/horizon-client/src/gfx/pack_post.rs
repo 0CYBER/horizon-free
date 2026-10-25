@@ -137,7 +137,17 @@ struct Pass {
     reads: u16,
     /// Buffers written.
     written: u16,
+    /// Buffers whose mip chain is regenerated right before it (6.1.7).
+    mipmaps: u16,
     groups: HashMap<u16, wgpu::BindGroup>,
+}
+
+/// One side of a buffer with mipmaps.
+struct Mips {
+    /// Every level, for sampling.
+    all: wgpu::TextureView,
+    /// From the second level down: its attachment, and a bind group over the level above.
+    levels: Vec<(wgpu::TextureView, wgpu::BindGroup)>,
 }
 
 struct Targets {
@@ -148,6 +158,8 @@ struct Targets {
     depth_texture: wgpu::Texture,
     /// `depthtex1`, when a program after translucent terrain reads it.
     depth1: Option<(wgpu::Texture, wgpu::TextureView)>,
+    /// Both sides' mip chains of the buffers with mipmaps (`color` is their first level).
+    mips: [Option<[Mips; 2]>; BUFFERS],
 }
 
 /// What a pack's gbuffers programs read and draw from the game's world.
@@ -168,6 +180,12 @@ pub struct PackPost {
     water: Option<Pass>,
     /// A program after translucent terrain reads `depthtex1`: it is copied before water.
     depth1: bool,
+    /// Buffers with mipmaps (filterable ones a program asks them for).
+    mipped: u16,
+    /// Buffers whose mip chain matches their first level, this frame.
+    mips_valid: u16,
+    /// The downsampling pipeline of each format with mipmaps.
+    down: HashMap<wgpu::TextureFormat, (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
     /// `HORIZON_SHADER_PACK_TIMING`: GPU time of each pass, in the log.
     timing: Option<super::pack_timing::PassTiming>,
     /// `shaders.properties`' custom uniforms, after the frame's in `uniforms.values`.
@@ -693,6 +711,7 @@ fn build_pass(
         flip,
         reads,
         written,
+        mipmaps: p.mipmaps,
         groups: HashMap::new(),
     })
 }
@@ -848,6 +867,39 @@ impl PackPost {
             &[target(screen)],
             None,
         );
+        let filterable = |b: usize| {
+            formats[b].sample_type(None, Some(device.features()))
+                == Some(wgpu::TextureSampleType::Float { filterable: true })
+        };
+        let asked = passes.iter().fold(0u16, |m, p| m | p.mipmaps);
+        let mipped = (0..BUFFERS)
+            .filter(|&b| asked & 1 << b != 0 && filterable(b))
+            .fold(0u16, |m, b| m | 1 << b);
+        if asked & !mipped != 0 {
+            notes.push(format!(
+                "mipmaps of unfilterable buffers are not generated (buffers {:#b})",
+                asked & !mipped
+            ));
+        }
+        let mut down = HashMap::new();
+        for b in (0..BUFFERS).filter(|b| mipped & 1 << b != 0) {
+            down.entry(formats[b]).or_insert_with(|| {
+                helper(
+                    device,
+                    "vs_full",
+                    "fs_down",
+                    &[
+                        texture_entry(0, float),
+                        entry(
+                            2,
+                            wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        ),
+                    ],
+                    &[target(formats[b])],
+                    None,
+                )
+            });
+        }
         let white = [255u8; 4];
         Self {
             notes,
@@ -855,6 +907,9 @@ impl PackPost {
             terrain,
             water,
             depth1,
+            mipped,
+            mips_valid: 0,
+            down,
             timing: super::pack_timing::PassTiming::new(device, queue),
             custom,
             atlas: world.atlas.as_ref().map(|a| a.0.clone()),
@@ -960,9 +1015,14 @@ impl PackPost {
             }];
             for s in &pass.samplers {
                 let texture = match s.source {
-                    Source::Color(i) => targets.color[i]
-                        .as_ref()
-                        .map_or(&self.dummy, |t| &t[usize::from(key & 1 << i != 0)]),
+                    Source::Color(i) => {
+                        let side = usize::from(key & 1 << i != 0);
+                        match (&targets.mips[i], &targets.color[i]) {
+                            (Some(m), _) => &m[side].all,
+                            (None, Some(t)) => &t[side],
+                            (None, None) => &self.dummy,
+                        }
+                    }
                     Source::Depth => &targets.depth,
                     // Before translucent terrain the two are the same.
                     Source::Depth1 => match &targets.depth1 {
@@ -1075,10 +1135,37 @@ impl PackPost {
             rp.set_bind_group(0, &group, &[]);
             draw(&mut rp, translucent);
         }
+        self.mips_valid &= !pass.written;
         if translucent {
             self.water = Some(pass);
         } else {
             self.terrain = Some(pass);
+        }
+    }
+
+    /// Regenerates the mip chain of buffer `b`'s side that programs read.
+    fn mipmap(&self, encoder: &mut wgpu::CommandEncoder, b: usize) {
+        let (Some(targets), Some((pipeline, _))) = (&self.targets, self.down.get(&self.formats[b]))
+        else {
+            return;
+        };
+        let Some(mips) = &targets.mips[b] else { return };
+        let side = &mips[usize::from(self.main & 1 << b != 0)];
+        for (attachment, group) in &side.levels {
+            let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Shader pack mipmap"),
+                color_attachments: &[attach(
+                    attachment,
+                    wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                )],
+                ..Default::default()
+            });
+            rp.set_pipeline(pipeline);
+            rp.set_bind_group(0, group, &[]);
+            rp.draw(0..3, 0..1);
         }
     }
 
@@ -1101,7 +1188,8 @@ impl PackPost {
         if self.targets.as_ref().is_some_and(|t| t.size == size) {
             return;
         }
-        let texture = |label: &str, format, usage| {
+        let full_chain = 32 - size[0].max(size[1]).max(1).leading_zeros();
+        let texture_levels = |label: &str, format, usage, levels| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
                 size: wgpu::Extent3d {
@@ -1109,7 +1197,7 @@ impl PackPost {
                     height: size[1],
                     depth_or_array_layers: 1,
                 },
-                mip_level_count: 1,
+                mip_level_count: levels,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format,
@@ -1117,14 +1205,55 @@ impl PackPost {
                 view_formats: &[],
             })
         };
-        let make = |label: &str, format| {
-            texture(label, format, wgpu::TextureUsages::RENDER_ATTACHMENT)
-                .create_view(&Default::default())
+        let texture = |label: &str, format, usage| texture_levels(label, format, usage, 1);
+        let level = |t: &wgpu::Texture, level: u32| {
+            t.create_view(&wgpu::TextureViewDescriptor {
+                base_mip_level: level,
+                mip_level_count: Some(1),
+                ..Default::default()
+            })
         };
+        let mut mips: [Option<[Mips; 2]>; BUFFERS] = Default::default();
         let color = std::array::from_fn(|i| {
             (self.used & 1 << i != 0).then(|| {
                 let label = format!("colortex{i}");
-                [make(&label, self.formats[i]), make(&label, self.formats[i])]
+                let mipped = self.mipped & 1 << i != 0;
+                let levels = if mipped { full_chain } else { 1 };
+                let attachment = wgpu::TextureUsages::RENDER_ATTACHMENT;
+                let sides =
+                    [0, 1].map(|_| texture_levels(&label, self.formats[i], attachment, levels));
+                if mipped && let Some((_, layout)) = self.down.get(&self.formats[i]) {
+                    mips[i] = Some(sides.each_ref().map(|t| {
+                        Mips {
+                            all: t.create_view(&Default::default()),
+                            levels: (1..levels)
+                                .map(|l| {
+                                    let group =
+                                        device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                            label: Some(&label),
+                                            layout,
+                                            entries: &[
+                                                wgpu::BindGroupEntry {
+                                                    binding: 0,
+                                                    resource: wgpu::BindingResource::TextureView(
+                                                        &level(t, l - 1),
+                                                    ),
+                                                },
+                                                wgpu::BindGroupEntry {
+                                                    binding: 2,
+                                                    resource: wgpu::BindingResource::Sampler(
+                                                        &self.linear,
+                                                    ),
+                                                },
+                                            ],
+                                        });
+                                    (level(t, l), group)
+                                })
+                                .collect(),
+                        }
+                    }));
+                }
+                sides.map(|t| level(&t, 0))
             })
         });
         let depth32 = wgpu::TextureFormat::Depth32Float;
@@ -1144,6 +1273,7 @@ impl PackPost {
             depth: depth_texture.create_view(&Default::default()),
             depth_texture,
             depth1,
+            mips,
         });
         let gbuffers = self.terrain.iter_mut().chain(&mut self.water);
         for pass in self.passes.iter_mut().chain(gbuffers) {
@@ -1277,6 +1407,8 @@ impl PackPost {
             pass.draw(0..3, 0..1);
         }
 
+        // The world and the clears just rewrote the buffers' first levels.
+        self.mips_valid = 0;
         let mut passes = std::mem::take(&mut self.passes);
         let mut seen = (false, false);
         let mut shown = false;
@@ -1299,6 +1431,11 @@ impl PackPost {
                 seen.1 = true;
                 self.main ^= self.composite_pre;
             }
+            let stale = pass.mipmaps & self.mipped & !self.mips_valid;
+            for b in (0..BUFFERS).filter(|b| stale & 1 << b != 0) {
+                self.mipmap(encoder, b);
+            }
+            self.mips_valid |= stale;
             let final_pass = pass.group == Group::Final;
             let group = self.bind(device, queue, pass, if final_pass { window } else { size });
             let targets = self.targets.as_ref().expect("resized");
@@ -1332,6 +1469,7 @@ impl PackPost {
                 rp.draw(0..6, 0..1);
             }
             self.main ^= pass.flip;
+            self.mips_valid &= !pass.written;
         }
         self.passes = passes;
         if !terrain_drawn {
