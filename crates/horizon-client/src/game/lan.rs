@@ -1114,9 +1114,9 @@ impl Game<'_> {
         for e in events {
             if let horizon_world::level::LevelEvent::LevelEvent { id, pos, data } = e {
                 // The acting guest does not predict the egg's teleport
-                // particles, nor bone meal's growth (BoneMealItem.useOn's
-                // levelEvent names no player).
-                let except = if matches!(*id, 2015 | 1505) {
+                // particles, bone meal's growth, or anvil result sounds
+                // (these levelEvent calls name no excluded player).
+                let except = if matches!(*id, 2015 | 1505 | 1029 | 1030) {
                     None
                 } else {
                     self.lan_acting

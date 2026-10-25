@@ -2764,7 +2764,13 @@ impl Game<'_> {
                             }
                             _ => 1.0,
                         };
-                        self.audio.play(name, c, volume, pitch);
+                        if matches!(id, 1029 | 1030) {
+                            // Clients play the anvil sound from its level event;
+                            // capturing it also sends a duplicate sound packet.
+                            self.audio.play_unshared(name, c, volume, pitch);
+                        } else {
+                            self.audio.play(name, c, volume, pitch);
+                        }
                     }
                 }
                 LevelEvent::Sound {

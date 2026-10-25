@@ -52,9 +52,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - grindstone: a grindstone opens on the guest's screen; the enchanted sword the guest shift-clicks in
              shows the server's result, and the guest takes it with only its curse left and the
              experience orbs the server awards (#868);
-- anvil:     an anvil opens on the guest's screen; the guest repairs a sword with iron ingots and
-             renames it (ServerboundRenameItemPacket), takes it for the server's level cost, and the
-             server has the repaired, renamed sword (#868);
+- anvil:     each player repairs and renames a sword (ServerboundRenameItemPacket), takes it for
+             the server's level cost, and the server has the repaired, renamed sword (#868);
+             both players hear exactly one anvil sound for each result (#1907);
 - enchanting: an enchanting table opens on the guest's screen with the server's offers for the
              sword the guest puts in; the guest clicks the first offer and the server enchants the
              sword for a level and a lapis, and counts it in the guest's enchant_item stat (#868);
@@ -1620,6 +1620,12 @@ def check_grindstone(host, guest, out):
 
 
 def check_anvil(host, guest, out):
+    # AnvilMenu.onTake emits one level event to everyone, including the user.
+    # Exercise both the in-frame host and a remote user (both remote with --server-thread).
+    return {actor.name: check_anvil_user(actor, (host, guest), out) for actor in (guest, host)}
+
+
+def check_anvil_user(guest, listeners, out):
     guest('command', command='gamemode survival')
     guest('command', command='clear @s')
     guest('command', command='xp set @s 5 levels')
@@ -1638,8 +1644,12 @@ def check_anvil(host, guest, out):
     menu = guest.raw('menu')
     offered = (menu['info']['anvil_cost'], station_slots(guest).get(650))
     guest.shot(out, 'anvil-rename')
+    sounds = ('minecraft:block.anvil.use', 'minecraft:block.anvil.destroy')
+    before = {g.name: sum(heard(g, s) for s in sounds) for g in listeners}
     guest.raw('click-slot', 650, 'shift')
-    guest.wait(10)
+    guest.wait(20)
+    sound_counts = {g.name: sum(heard(g, s) for s in sounds) - before[g.name] for g in listeners}
+    assert sound_counts == {g.name: 1 for g in listeners}, f'anvil sounds: {sound_counts}'
     left = station_slots(guest)
     close_station(guest, at)
     sword = server_reply(guest, 'data get entity @s Inventory[{id:"minecraft:iron_sword"}].components',
@@ -1653,7 +1663,7 @@ def check_anvil(host, guest, out):
     want = {'offered': (4, ('minecraft:iron_sword', 1)), 'left': {}, 'name': True, 'damage': True,
             'levels': 1, 'ingots': 0}
     assert seen == want, f'the anvil on the guest: {seen} ({sword!r})'
-    return seen
+    return {**seen, 'heard': sound_counts}
 
 
 def check_smithing(host, guest, out):
