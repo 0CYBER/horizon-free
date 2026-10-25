@@ -16,6 +16,7 @@ import { machinesHtml, playersHtml } from "./src/bench.js";
 import { CPUS, GPUS, singleThread } from "./src/hardware.js";
 import { isGame, isLauncher, launcherVersion, newestFirst } from "./src/versions.js";
 import { contributorsFrom, contributorsHtml } from "./src/contributors.js";
+import { areaFilterHtml, helpWantedHtml, overviewHtml, roadmapHtml, slimIssue } from "./src/hub.js";
 import { INDEX_URL, KINDS, SUBMIT, listHtml, projectHtml, readIndex, submitHtml } from "./src/mods.js";
 
 const site = dirname(fileURLToPath(import.meta.url));
@@ -92,6 +93,45 @@ try {
 } catch (e) {
   console.warn(`contributors: ${e.message}; the page will load them itself`);
 }
+
+// The hub's roadmap (data/roadmap.json, generated from roadmap/roadmap.toml by tools/roadmap.py) and the live state
+// of the issues and pull requests its items link: the open ones and those closed lately, then (with a token) the
+// older ones in one GraphQL request. Without GitHub the hub shows the links without their state.
+const roadmap = JSON.parse(await readFile(join(site, "data", "roadmap.json"), "utf8"));
+const linked = new Set(roadmap.items.flatMap((i) => (i.links || []).map((l) => Number((l.match(/^#(\d+)$/) || [])[1])).filter(Boolean)));
+let hubLive = [];
+try {
+  const urls = [1, 2, 3].map((p) => `https://api.github.com/repos/${REPO}/issues?state=open&per_page=100&page=${p}`);
+  urls.push(`https://api.github.com/repos/${REPO}/issues?state=closed&sort=updated&direction=desc&per_page=100`);
+  for (const url of urls) {
+    const res = await fetch(url, { headers: githubHeaders, signal: AbortSignal.timeout(15000) });
+    if (!res.ok) throw new Error(`${res.status} from GitHub`);
+    hubLive.push(...(await res.json()).map(slimIssue));
+  }
+  const missing = [...linked].filter((n) => !hubLive.some((i) => i.n === n));
+  if (missing.length && process.env.GITHUB_TOKEN) {
+    const fields = missing.map((n) => `n${n}: issueOrPullRequest(number: ${n}) { ... on Issue { number title state stateReason url } ... on PullRequest { number title state isDraft mergedAt url } }`).join(" ");
+    const res = await fetch("https://api.github.com/graphql", {
+      method: "POST",
+      headers: githubHeaders,
+      body: JSON.stringify({ query: `query { repository(owner: "ludovic111", name: "horizon") { ${fields} } }` }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const nodes = Object.values((await res.json()).data?.repository || {}).filter(Boolean);
+    hubLive.push(
+      ...nodes.map((x) =>
+        slimIssue({
+          number: x.number, title: x.title, html_url: x.url, draft: x.isDraft,
+          state: x.state === "OPEN" ? "open" : "closed", state_reason: x.stateReason === "NOT_PLANNED" ? "not_planned" : null,
+          pull_request: "isDraft" in x ? { merged_at: x.mergedAt } : undefined,
+        }),
+      ),
+    );
+  }
+} catch (e) {
+  console.warn(`hub: ${e.message}; the page will load the states itself`);
+}
+const hubLinked = new Map(hubLive.filter((i) => linked.has(i.n)).map((i) => [i.n, i]));
 
 // --- The parity table ------------------------------------------------------------------
 
@@ -186,7 +226,7 @@ await writeFile(join(dist, "favicon.ico"), Buffer.concat([ico, png32]));
 const names = {};
 const rewrite = (code) => code.replace(/"\.\/(\w+\.js)"/g, (all, file) => (names[file] ? `"./${names[file]}"` : all));
 // Dependencies before what imports them.
-const modules = ["markdown.js", "versions.js", "chrome.js", "hardware.js", "estimate.js", "releases.js", "contributors.js", "bench.js", "main.js", "releases-page.js", "benchmarks-page.js", "docs-page.js", "mods.js", "mods-page.js", "mods-submit.js"];
+const modules = ["markdown.js", "versions.js", "chrome.js", "hardware.js", "estimate.js", "releases.js", "contributors.js", "bench.js", "hub.js", "main.js", "releases-page.js", "benchmarks-page.js", "docs-page.js", "hub-page.js", "mods.js", "mods-page.js", "mods-submit.js"];
 for (const file of modules) {
   const code = rewrite(await readFile(join(site, "src", file), "utf8"));
   names[file] = `${file.replace(".js", "")}.${fingerprint(code)}.js`;
@@ -219,7 +259,7 @@ const unavailable = `<p class="lede">The release notes could not be loaded here.
 
 // One top bar and phone menu for Home, Releases, Benchmarks and every Docs page.
 const navSections = [["/#about", "About"], ["/#screenshots", "In game"], ["/#parity", "Parity"], ["/#launcher", "Launcher"], ["/#recent", "New", "Recently added"], ["/#community", "Community"]];
-const navPages = [["/mods", "Mods"], ["/releases", "Releases"], ["/benchmarks", "Benchmarks"], ["/docs/", "Docs", "Documentation"]];
+const navPages = [["/hub", "Hub"], ["/mods", "Mods"], ["/releases", "Releases"], ["/benchmarks", "Benchmarks"], ["/docs/", "Docs", "Documentation"]];
 const navLink = ([href, label, menuLabel], current, menu = false) =>
   `<a href="${href}"${href === current ? ' aria-current="page"' : ""}${href === "/#contributors" ? ` data-contributors${contributors.length ? "" : " hidden"}` : ""}>${menu && menuLabel ? menuLabel : label}</a>`;
 const siteNav = (current) => `    <header class="nav" id="top">
@@ -249,7 +289,7 @@ const siteFooter = `    <footer class="footer">
       <div class="container">
         <div class="footer-bar">
           <span class="footer-mark">Made in the open, in Rust.</span>
-          <nav class="footer-links" aria-label="Elsewhere"><a href="/">Home</a><a href="/mods">Mods</a><a href="/releases">Releases</a><a href="/benchmarks">Benchmarks</a><a href="/docs/">Docs</a><a href="/docs/how-horizon-is-built">How it's built</a><a href="https://github.com/${REPO}">GitHub</a><a href="/privacy">Privacy</a><a href="/LEGAL.md">Assets</a></nav>
+          <nav class="footer-links" aria-label="Elsewhere"><a href="/">Home</a><a href="/hub">Hub</a><a href="/mods">Mods</a><a href="/releases">Releases</a><a href="/benchmarks">Benchmarks</a><a href="/docs/">Docs</a><a href="/docs/how-horizon-is-built">How it's built</a><a href="https://github.com/${REPO}">GitHub</a><a href="/privacy">Privacy</a><a href="/LEGAL.md">Assets</a></nav>
         </div>
       </div>
       <p class="footer-word" aria-hidden="true">horizon</p>
@@ -298,6 +338,12 @@ const values = {
   CONTRIBUTORS: contributorsHtml(contributors),
   CONTRIBUTORS_HIDDEN: contributors.length ? "" : " hidden",
   BAKED: JSON.stringify(baked).replace(/</g, "\\u003c"),
+  HUB_JS: `/assets/${names["hub-page.js"]}`,
+  HUB_OVERVIEW: overviewHtml(roadmap, hubLinked),
+  HUB_ROADMAP: roadmapHtml(roadmap, hubLinked),
+  HUB_AREAS: areaFilterHtml(roadmap),
+  HUB_HELP_WANTED: helpWantedHtml(roadmap),
+  HUB_DATA: JSON.stringify({ roadmap, live: [...hubLinked.values()] }).replace(/</g, "\\u003c"),
   YEAR: String(new Date().getUTCFullYear()),
 };
 
@@ -374,8 +420,8 @@ const docPages = renderedDocs.map((d, i) => {
   };
 });
 
-const pages = ["index.html", "404.html", "privacy.html", "releases.html", "benchmarks.html"];
-const currentPath = { "releases.html": "/releases", "benchmarks.html": "/benchmarks" };
+const pages = ["index.html", "404.html", "privacy.html", "releases.html", "benchmarks.html", "hub.html"];
+const currentPath = { "releases.html": "/releases", "benchmarks.html": "/benchmarks", "hub.html": "/hub" };
 for (const page of pages) {
   let html = await readFile(join(site, "src", page), "utf8");
   const own = { ...values, SITE_NAV: siteNav(currentPath[page]) };
@@ -442,6 +488,10 @@ for (const { file, values: own } of docPages) {
   docPageFiles.push(file);
 }
 
+// The roadmap for other readers (Kira, scripts): /data/roadmap.json, as tools/roadmap.py wrote it.
+await mkdir(join(dist, "data"), { recursive: true });
+await cp(join(site, "data", "roadmap.json"), join(dist, "data", "roadmap.json"));
+
 // The pages' inline scripts (they mark the page as scripted and apply the saved theme before CSS
 // applies) and the inlined stylesheet: the Content-Security-Policy in the Caddyfile allows them by hash.
 const allHtml = (await Promise.all([...pages, ...docPageFiles, ...modPages.map((p) => p.file)].map((page) => readFile(join(dist, page), "utf8")))).join("\n");
@@ -449,7 +499,7 @@ const hashes = (re) => [...new Set([...allHtml.matchAll(re)].map((m) => `'sha256
 await writeFile(join(dist, ".csp-script"), hashes(/<script>([\s\S]*?)<\/script>/g));
 await writeFile(join(dist, ".csp-style"), hashes(/<style>([\s\S]*?)<\/style>/g));
 
-const urls = ["/", "/mods", ...modPages.slice(1).map((p) => p.path), "/releases", "/benchmarks", ...docs.map((d) => d.path), "/privacy"];
+const urls = ["/", "/hub", "/mods", ...modPages.slice(1).map((p) => p.path), "/releases", "/benchmarks", ...docs.map((d) => d.path), "/privacy"];
 await writeFile(
   join(dist, "sitemap.xml"),
   `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map((u) => `  <url><loc>https://playhorizon.dev${u}</loc></url>`).join("\n")}\n</urlset>\n`,
@@ -457,5 +507,5 @@ await writeFile(
 
 console.log(
   `built dist/ from ${readmeFrom}: ${body.length} subsystems, ${percent}, ${harnesses} harnesses, ` +
-    `${ours.length} releases (${game.length} game)${launcher ? `, launcher ${launcher.tag_name}` : ""}, ${benchSummary.groups.length} benchmark rows, ${contributors.length} contributors, ${docs.length} docs pages, ${modProjects.length} registry projects`,
+    `${ours.length} releases (${game.length} game)${launcher ? `, launcher ${launcher.tag_name}` : ""}, ${benchSummary.groups.length} benchmark rows, ${contributors.length} contributors, ${docs.length} docs pages, ${modProjects.length} registry projects, ${roadmap.items.length} roadmap items (${hubLinked.size}/${linked.size} links live)`,
 );

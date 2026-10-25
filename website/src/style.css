@@ -645,7 +645,7 @@ code { border-radius: 0; background: var(--well); box-shadow: 0 0 0 1px var(--ou
 
 /* Releases: a filter, then every release as a panel that opens. */
 .release-filter { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 32px; }
-.release-filter .button[aria-pressed="true"] { background: var(--face); color: var(--on-face); box-shadow: inset 0 var(--block-bevel) 0 var(--face-bevel), inset 0 calc(-1 * var(--block-lip)) 0 var(--face-lip); }
+.release-filter .button[aria-pressed="true"], .hub-detail .button[aria-pressed="true"] { background: var(--face); color: var(--on-face); box-shadow: inset 0 var(--block-bevel) 0 var(--face-bevel), inset 0 calc(-1 * var(--block-lip)) 0 var(--face-lip); }
 .release-count { margin: 16px 0 12px; }
 .release-list { display: grid; gap: 8px; }
 .release-list .release + .release { margin-top: 0; }
@@ -725,6 +725,67 @@ code { border-radius: 0; background: var(--well); box-shadow: 0 0 0 1px var(--ou
   .release-entry summary { grid-template-columns: minmax(0, 1fr) auto; }
   .release-detail { padding-left: 0; margin-left: 0; }
   .machine { padding: 16px; }
+}
+
+/* --- The hub (/hub): tabs, the Simple / Technical switch, roadmap items as panels ------------------- */
+
+.hub-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; margin-top: 32px; }
+.hub-tabs { margin-bottom: 0; }
+.hub-detail { display: flex; gap: 8px; }
+/* A link to a tab (/hub#roadmap) lands with the tabs in view under the top bar. */
+.hub-panel { margin-top: 40px; scroll-margin-top: calc(var(--nav) + 120px); }
+.js .hub-panel:not(.is-active) { display: none; }
+/* Simple shows `plain`, Technical shows `dev`; without the switch (no JavaScript) Simple reads. */
+.hub .hub-dev { display: none; }
+:root[data-detail="dev"] .hub .hub-dev { display: block; }
+:root[data-detail="dev"] .hub .hub-plain { display: none; }
+.hub-lead { max-width: 60ch; font-size: var(--text-heading); line-height: var(--text-heading-line); color: var(--ink); }
+.hub-block { margin-top: 56px; }
+.hub-block > .title { margin-bottom: 16px; }
+.hub-intro { margin-bottom: 16px; color: var(--ink-soft); max-width: var(--measure); }
+.hub-rows .row > a { grid-template-columns: var(--index) minmax(0, 1fr) auto; align-items: baseline; }
+.hub-row-body { display: grid; gap: 4px; min-width: 0; }
+.hub-row-title { font-size: clamp(18px, 1.8vw, 22px); font-weight: 500; color: var(--ink); }
+.hub-row-body .hub-plain, .hub-row-body .hub-dev { color: var(--ink-soft); font-size: var(--text-ui); max-width: 80ch; }
+.hub-rows .row-meta { max-width: 16rem; }
+.hub-section { margin-top: 48px; }
+.hub-section-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px; }
+.hub-items { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 8px; margin-top: 16px; }
+.hub-item {
+  display: flex; flex-direction: column; gap: 10px; padding: 18px 20px; scroll-margin-top: calc(var(--nav) + 24px);
+  background: var(--panel); border: var(--block-outline) solid var(--outline); box-shadow: var(--panel-edges);
+}
+.hub-item:target { box-shadow: var(--panel-edges), 0 0 0 3px var(--accent); }
+.hub-item-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.hub-item-meta .badge { margin-right: 0; }
+.hub-ongoing { font: var(--text-micro) / 1 var(--mono); letter-spacing: var(--text-micro-tracking); color: var(--muted); }
+.hub-item-title { font-size: var(--text-heading); line-height: var(--text-heading-line); }
+.hub-item .hub-plain, .hub-item .hub-dev { font-size: var(--text-ui); color: var(--ink-soft); }
+.hub-progress { font: var(--text-micro) / 1.4 var(--mono); letter-spacing: var(--text-micro-tracking); color: var(--ink); }
+.hub-links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; padding-top: 4px; }
+.hub-link {
+  display: inline-flex; gap: 6px; align-items: baseline; padding: 3px 7px; font: var(--text-micro) / 1.3 var(--mono);
+  color: var(--ink-soft); background: var(--well); box-shadow: 0 0 0 var(--block-outline) var(--outline);
+}
+.hub-link span { color: var(--muted); }
+.hub-link:hover { color: var(--accent); }
+.hub-link.is-merged { background: color-mix(in srgb, var(--success) 18%, var(--well)); }
+.hub-link.is-in-review { background: color-mix(in srgb, var(--accent) 18%, var(--well)); }
+.hub-link.is-in-progress { background: color-mix(in srgb, var(--warn) 22%, var(--well)); }
+.hub-link.is-merged span, .hub-link.is-in-review span, .hub-link.is-in-progress span { color: var(--ink); }
+.hub-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: 8px; }
+.hub-cards .highlight { justify-content: flex-start; }
+.hub-cards h3 { font-size: var(--text-heading); line-height: var(--text-heading-line); }
+.hub-cards p { color: var(--ink-soft); font-size: var(--text-ui); }
+.hub-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.hub-cards .hub-actions { margin-top: auto; }
+.hub-rules { list-style: decimal; padding-left: 20px; max-width: var(--measure); }
+.hub-rules li + li { margin-top: 10px; }
+.hub-rules li::marker { color: var(--muted); font-family: var(--mono); }
+.hub-source { margin-top: 40px; max-width: var(--measure); }
+@media (max-width: 720px) {
+  .hub-rows .row > a { grid-template-columns: var(--index) minmax(0, 1fr); }
+  .hub-rows .row-meta { grid-column: 2; text-align: left; }
 }
 
 /* The registry (/mods): a search and the kind filter, rows as panels, then a page per project. */

@@ -33,6 +33,9 @@
 	rewrite /privacy /privacy.html
 	rewrite /releases /releases.html
 	rewrite /benchmarks /benchmarks.html
+	rewrite /hub /hub.html
+	# The roadmap is the hub's Roadmap tab.
+	redir /roadmap /hub#roadmap permanent
 	@doc path_regexp doc ^/docs/([a-z-]+)$
 	rewrite @doc /docs/{re.doc.1}.html
 	# The registry's submission service (crates/horizon-mod-registry), over Railway's private network. Unset, the
@@ -48,8 +51,11 @@
 		file {path}.html /mods.html
 	}
 	rewrite @mod {file_match.relative}
-	@pages path / /index.html /404.html /privacy.html /releases /releases.html /benchmarks /benchmarks.html /benchmarks.json /docs /docs/* /mods /mods.html /mods/* /sitemap.xml
+	@pages path / /index.html /404.html /privacy.html /releases /releases.html /benchmarks /benchmarks.html /benchmarks.json /hub /hub.html /data/* /docs /docs/* /mods /mods.html /mods/* /sitemap.xml
 	header @pages Cache-Control "no-cache"
+	# The hub's data for Kira and anyone else: readable from any origin.
+	@data path /data/*
+	header @data Access-Control-Allow-Origin "*"
 	@legal path /LEGAL.md /fonts/*.txt
 	header @legal Content-Type "text/plain; charset=utf-8"
 
