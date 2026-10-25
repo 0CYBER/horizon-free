@@ -36,6 +36,8 @@
             <span class="tab-pill" aria-hidden="true"></span>
             <button type="button" role="tab" id="tab-overview" aria-controls="overview" aria-selected="true">Overview</button>
             <button type="button" role="tab" id="tab-roadmap" aria-controls="roadmap" aria-selected="false" tabindex="-1">Roadmap</button>
+            <button type="button" role="tab" id="tab-board" aria-controls="board" aria-selected="false" tabindex="-1">Kanban</button>
+            <button type="button" role="tab" id="tab-journal" aria-controls="journal" aria-selected="false" tabindex="-1">Journal</button>
             <button type="button" role="tab" id="tab-contribute" aria-controls="contribute" aria-selected="false" tabindex="-1">Contribute</button>
           </div>
           <div class="hub-detail" role="group" aria-label="Detail">
@@ -56,6 +58,23 @@
 {{HUB_ROADMAP}}
           </div>
           <p class="meta hub-source">The roadmap lives in the repository: <a href="https://github.com/ludovic111/horizon/blob/main/ROADMAP.md">ROADMAP.md</a>, generated from <a href="https://github.com/ludovic111/horizon/blob/main/roadmap/roadmap.toml">roadmap/roadmap.toml</a>. Pull requests carry the <code>roadmap:&lt;id&gt;</code> label of their item. <span data-live-note></span></p>
+        </div>
+
+        <div class="hub-panel" role="tabpanel" id="board" aria-labelledby="tab-board">
+          <div class="hub-board-head">
+            <p class="hub-intro">Every open issue and pull request, placed by its state on GitHub, as on Kira's work board in Discord.</p>
+            <label class="hub-select"><span class="meta">Show</span><select data-board-item>{{HUB_BOARD_FILTER}}</select></label>
+          </div>
+          <div class="hub-board" data-board>
+{{HUB_BOARD}}
+          </div>
+        </div>
+
+        <div class="hub-panel" role="tabpanel" id="journal" aria-labelledby="tab-journal">
+          <p class="hub-intro">Every release with what it changed, grouped by roadmap item in Technical, and a summary of each week. Also as <a href="/data/journal.json">journal.json</a>.</p>
+          <div class="hub-journal" data-journal>
+{{HUB_JOURNAL}}
+          </div>
         </div>
 
         <div class="hub-panel" role="tabpanel" id="contribute" aria-labelledby="tab-contribute">

@@ -3,7 +3,7 @@
 // linked issue and pull request, refreshed from GitHub's public API. Without JavaScript, every tab reads
 // one after the other with what was baked at build time.
 import { cached, get, setUpMenu, setUpTheme } from "./chrome.js";
-import { REPO, overviewHtml, roadmapHtml, slimIssue } from "./hub.js";
+import { REPO, boardFilterHtml, boardFrom, boardHtml, journalFrom, journalHtml, overviewHtml, roadmapHtml, slimIssue } from "./hub.js";
 
 const root = document.documentElement;
 const data = JSON.parse(document.getElementById("hub-data").textContent);
@@ -87,6 +87,28 @@ function filter(to) {
 }
 areaButtons.forEach((b) => b.addEventListener("click", () => filter(b.dataset.areaFilter)));
 
+// --- The board: a roadmap item's cards, and the long columns' "Show more" ----------------------------------------
+
+const boardSelect = document.querySelector("[data-board-item]");
+function showItem() {
+  const want = boardSelect.value;
+  for (const card of document.querySelectorAll("[data-board] .hub-card")) {
+    card.hidden = want === "-" ? !card.dataset.item : want ? card.dataset.item !== want : false;
+  }
+  for (const column of document.querySelectorAll("[data-board] .hub-column")) {
+    column.querySelector("[data-count]").textContent = column.querySelectorAll(".hub-card:not([hidden])").length;
+    // A filtered column shows all its cards.
+    column.classList.toggle("is-open", Boolean(want) || column.classList.contains("was-opened"));
+  }
+}
+boardSelect?.addEventListener("change", showItem);
+document.querySelector("[data-board]")?.addEventListener("click", (e) => {
+  const button = e.target.closest("[data-more-button]");
+  if (!button) return;
+  button.closest(".hub-column").classList.add("is-open", "was-opened");
+  button.remove();
+});
+
 // --- Live state from GitHub ------------------------------------------------------------------------------------
 
 // The open issues and pull requests, and those closed or merged lately: four requests at most, kept ten minutes.
@@ -100,6 +122,7 @@ async function loadLive() {
   const closed = await get(`https://api.github.com/repos/${REPO}/issues?state=closed&sort=updated&direction=desc&per_page=100`);
   return list.concat(closed.map(slimIssue));
 }
+const loadReleases = () => get(`https://api.github.com/repos/${REPO}/releases?per_page=40`);
 
 async function refresh() {
   const fresh = await cached("horizon:hub-live", loadLive).catch(() => null);
@@ -109,6 +132,14 @@ async function refresh() {
   document.querySelector("[data-overview]").innerHTML = overviewHtml(data.roadmap, live);
   document.querySelector("[data-roadmap]").innerHTML = roadmapHtml(data.roadmap, live);
   filter(area);
+  const board = boardFrom(fresh, data.roadmap);
+  const chosen = boardSelect.value;
+  boardSelect.innerHTML = boardFilterHtml(board, data.roadmap);
+  boardSelect.value = [...boardSelect.options].some((o) => o.value === chosen) ? chosen : "";
+  document.querySelector("[data-board]").innerHTML = boardHtml(board, data.roadmap);
+  showItem();
+  const releases = await cached("horizon:hub-releases", loadReleases).catch(() => null);
+  if (releases) document.querySelector("[data-journal]").innerHTML = journalHtml(journalFrom(releases, fresh, data.roadmap), data.roadmap);
   const note = document.querySelector("[data-live-note]");
   if (note) note.textContent = "Pull request and issue states are live from GitHub.";
 }

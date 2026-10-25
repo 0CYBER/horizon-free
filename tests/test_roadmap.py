@@ -171,6 +171,23 @@ class GitHubState(unittest.TestCase):
         self.assertTrue(any("#10 is neither" in p for p in problems))
 
 
+class Journal(unittest.TestCase):
+    def test_weekly_summaries_newest_first_with_their_monday(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            (folder / "2026-43.md").write_text("# A week\n\nPlain\nwords.\n\n## Technical\n\nDev (#1).\n")
+            (folder / "2026-42.md").write_text("# Older\n\nPlain.\n\n## Technical\n\nDev.\n")
+            (folder / "week-44.md").write_text("# Bad name\n")
+            (folder / "2026-45.md").write_text("# No technical part\n\nPlain.\n")
+            entries, problems = roadmap.weeks(folder)
+        self.assertEqual([e["week"] for e in entries], ["2026-43", "2026-42"])
+        self.assertEqual(entries[0], {"week": "2026-43", "date": "2026-10-19", "title": "A week",
+                                      "plain": "Plain words.", "dev": "Dev (#1)."})
+        self.assertEqual(len(problems), 2)
+
+
 class Labels(unittest.TestCase):
     def test_creates_updates_and_adds_labels(self):
         data = tomllib.loads(SAMPLE)

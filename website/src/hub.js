@@ -4,6 +4,8 @@
 // twice: `plain` (.hub-plain) for players and `dev` (.hub-dev) for contributors; the page's Simple / Technical
 // switch shows one of them.
 import { escape, inline } from "./markdown.js";
+import { parts, plainItem, sections } from "./releases.js";
+import { isGame, isLauncher } from "./versions.js";
 
 export const REPO = "ludovic111/horizon";
 const issueUrl = (n) => `https://github.com/${REPO}/issues/${n}`;
@@ -172,4 +174,247 @@ export function helpWantedHtml(roadmap) {
       return `<li class="row"><a href="${escape(href)}"><span class="row-index">${String(i + 1).padStart(2, "0")}</span><span class="hub-row-body"><span class="hub-row-title">${escape(item.title)}</span><span class="hub-plain">${inline(item.plain)}</span><span class="hub-dev">${inline(item.dev)}</span></span><span class="row-meta">${first ? `#${first}` : ""}</span></a></li>`;
     })
     .join("");
+}
+
+// --- The work board --------------------------------------------------------------------------------------------
+
+export const COLUMNS = [
+  { id: "todo", name: "To do", about: "Open and free: pick one, and say so with /claim on Discord." },
+  { id: "progress", name: "In progress", about: "Claimed, assigned, or a draft pull request." },
+  { id: "review", name: "In review", about: "A pull request is ready for review." },
+  { id: "done", name: "Done", about: "Closed or merged in the last seven days." },
+];
+const DONE_DAYS = 7;
+
+// The roadmap item an issue or pull request moves: its roadmap:<id> label, else the item linking it, else (for a
+// pull request) the item linking an issue it fixes.
+export function itemOf(issue, roadmap) {
+  const label = issue.labels.find((l) => l.startsWith("roadmap:"));
+  const ids = new Set(roadmap.items.map((i) => i.id));
+  if (label && ids.has(label.slice(8))) return label.slice(8);
+  const linking = (n) => roadmap.items.find((i) => (i.links || []).includes(`#${n}`))?.id;
+  return linking(issue.n) || issue.fixes.map(linking).find(Boolean) || null;
+}
+
+// The board from GitHub's open issues and pull requests and those closed lately, placed as Kira's work board places
+// them: an issue goes to review when an open, ready pull request fixes it, to progress when a draft one does or it is
+// claimed or assigned; a pull request that fixes no open issue is a card of its own.
+export function boardFrom(list, roadmap, now = Date.now()) {
+  const columns = Object.fromEntries(COLUMNS.map((c) => [c.id, []]));
+  const open = list.filter((i) => i.state === "open");
+  const openIssues = new Set(open.filter((i) => i.kind === "issue").map((i) => i.n));
+  const fixing = (n) => open.filter((p) => p.kind === "pr" && p.fixes.includes(n));
+  const card = (i, prs = []) => ({ n: i.n, kind: i.kind, title: i.title, user: i.user, url: i.url, item: itemOf(i, roadmap) || prs.map((p) => itemOf(p, roadmap)).find(Boolean) || null, prs: prs.map((p) => p.n) });
+  for (const i of open) {
+    if (i.kind === "issue") {
+      const prs = fixing(i.n);
+      const claimed = i.assigned || i.labels.some((l) => /^(in progress|claimed)$/i.test(l));
+      const column = prs.some((p) => !p.draft) ? "review" : prs.length || claimed ? "progress" : "todo";
+      columns[column].push(card(i, prs));
+    } else if (!i.fixes.some((n) => openIssues.has(n))) {
+      columns[i.draft ? "progress" : "review"].push(card(i));
+    }
+  }
+  const since = now - DONE_DAYS * 864e5;
+  const seen = new Set();
+  for (const i of list) {
+    if (seen.has(i.n) || !["merged", "closed"].includes(i.state) || !(Date.parse(i.at) >= since)) continue;
+    seen.add(i.n);
+    columns.done.push(card(i));
+  }
+  columns.done.sort((a, b) => b.n - a.n);
+  return columns;
+}
+
+const SHOWN = 20; // cards per column before "Show more"
+
+function cardHtml(c, roadmap, more) {
+  const item = c.item && roadmap.items.find((i) => i.id === c.item);
+  return `<li class="hub-card" data-item="${escape(c.item || "")}"${more ? " data-more" : ""}><a href="${escape(c.url)}"><span class="hub-card-ref">${c.kind === "pr" ? "PR" : "Issue"} #${c.n}${c.prs.length ? ` · ${c.prs.map((n) => `PR #${n}`).join(", ")}` : ""}</span><span class="hub-card-title">${escape(c.title)}</span><span class="hub-card-meta">${item ? `<span class="hub-card-item">${escape(item.title)}</span>` : ""}${c.user ? `<span>${escape(c.user)}</span>` : ""}</span></a></li>`;
+}
+
+export function boardHtml(columns, roadmap) {
+  return COLUMNS.map(({ id, name, about }) => {
+    const cards = columns[id];
+    return `<section class="hub-column" data-column="${id}" aria-labelledby="col-${id}">
+  <h3 id="col-${id}"><span>${escape(name)}</span><span class="hub-count" data-count>${cards.length}</span></h3>
+  <p class="meta">${escape(about)}</p>
+  <ol class="hub-cards-list">${cards.map((c, i) => cardHtml(c, roadmap, i >= SHOWN)).join("")}</ol>
+  ${cards.length > SHOWN ? `<button type="button" class="button secondary small hub-more" data-more-button>Show ${cards.length - SHOWN} more</button>` : ""}
+</section>`;
+  }).join("\n");
+}
+
+// The board's roadmap filter: every item that has a card.
+export function boardFilterHtml(columns, roadmap) {
+  const used = new Set(Object.values(columns).flat().map((c) => c.item).filter(Boolean));
+  return [`<option value="">Every card</option>`, `<option value="-">Cards of a roadmap item</option>`]
+    .concat(roadmap.items.filter((i) => used.has(i.id)).map((i) => `<option value="${escape(i.id)}">${escape(i.title)}</option>`))
+    .join("");
+}
+
+// --- The journal -----------------------------------------------------------------------------------------------
+
+export const JOURNAL_URL = "https://playhorizon.dev/hub#journal";
+const ENTRIES = 40;
+
+// The journal, newest first: each release with its changes grouped by roadmap item, the weekly summaries
+// (roadmap/journal/), and what merged since the newest game release. releases: GitHub's release objects; list: the
+// hub's issues and pull requests (their roadmap:<id> labels place changes the roadmap doesn't link).
+export function journalFrom(releases, list, roadmap) {
+  const prs = new Map(list.filter((i) => i.kind === "pr").map((i) => [i.n, i]));
+  const placed = (numbers) => {
+    for (const n of numbers) {
+      const known = prs.get(n);
+      const id = known ? itemOf(known, roadmap) : roadmap.items.find((i) => (i.links || []).includes(`#${n}`))?.id;
+      if (id) return id;
+    }
+    return null;
+  };
+  const ours = releases.filter((r) => !r.draft && (isGame(r.tag_name) || isLauncher(r.tag_name)));
+  const entries = ours.map((r) => {
+    const changes = sections(r.body)
+      .filter((x) => /^(new|what's new|fixed)/i.test(x.title))
+      .flatMap((x) => x.items.map((text) => ({ section: /^fixed/i.test(x.title) ? "fixed" : "new", text })))
+      .map((c) => {
+        const numbers = [...c.text.matchAll(/#(\d+)/g)].map((m) => Number(m[1]));
+        return { ...c, text: plainItem(c.text), prs: numbers, item: placed(numbers) };
+      });
+    return {
+      id: r.tag_name,
+      kind: isLauncher(r.tag_name) ? "launcher" : "release",
+      date: r.published_at || "",
+      title: r.name || r.tag_name,
+      plain: parts(r).line,
+      url: r.html_url,
+      changes,
+      shipped: roadmap.items.filter((i) => i.status === "shipped" && i.shipped_in === r.tag_name).map((i) => i.id),
+    };
+  });
+  // Merged but in no release's notes yet: a release is cut from main a while after its last merge, so the newest
+  // releases' notes, not their dates, say what they hold. Pull requests players don't see (skip-release) never are.
+  const games = ours.filter((r) => isGame(r.tag_name)).map((r) => r.published_at).sort().reverse();
+  const since = games[Math.min(4, games.length - 1)] || "";
+  const noted = new Set(entries.flatMap((e) => e.changes.flatMap((c) => c.prs)));
+  const pending = list
+    .filter((i) => i.kind === "pr" && i.state === "merged" && i.at > since && !noted.has(i.n) && !i.labels.includes("skip-release"))
+    .sort((a, b) => b.at.localeCompare(a.at));
+  if (pending.length) {
+    entries.push({
+      id: "next-release",
+      kind: "merged",
+      date: pending[0].at,
+      title: "Merged, in the next release",
+      plain: `${pending.length} change${pending.length === 1 ? "" : "s"} merged since the last release.`,
+      url: `https://github.com/${REPO}/pulls?q=is%3Apr+is%3Amerged`,
+      changes: pending.map((p) => ({ section: "merged", text: p.title, prs: [p.n], item: itemOf(p, roadmap) })),
+      shipped: [],
+    });
+  }
+  for (const w of roadmap.journal || []) {
+    // A week's summary sits after its last day's releases.
+    const end = new Date(Date.parse(w.date) + 7 * 864e5 - 1).toISOString();
+    entries.push({ id: `week-${w.week}`, kind: "week", date: end, title: w.title, plain: w.plain, dev: w.dev, url: `${JOURNAL_URL.replace("#journal", "")}#week-${w.week}`, changes: [], shipped: [] });
+  }
+  return entries.sort((a, b) => b.date.localeCompare(a.date)).slice(0, ENTRIES);
+}
+
+const HUB = "https://playhorizon.dev/hub";
+const FEED = 300;
+
+// /data/journal.json, which Kira reads for #updates and X (kira's src/journal.js): one flat entry per merged pull
+// request, release, shipped roadmap item and weekly summary, newest first. An entry's id never changes: Kira posts
+// each id once. Shipped items carry `post` (at most 240 characters, tools/roadmap.py checks) and `announce`.
+export function journalJson(releases, list, roadmap, generated = new Date().toISOString()) {
+  const items = new Map(roadmap.items.map((i) => [i.id, i]));
+  const ours = releases.filter((r) => !r.draft && (isGame(r.tag_name) || isLauncher(r.tag_name)));
+  const published = new Map(ours.map((r) => [r.tag_name, r.published_at || ""]));
+  const merges = list
+    .filter((i) => i.kind === "pr" && i.state === "merged")
+    .map((pr) => ({ pr, item: itemOf(pr, roadmap) }))
+    // What players see, and anything that moves a roadmap item.
+    .filter(({ pr, item }) => item || !pr.labels.includes("skip-release"))
+    .map(({ pr, item }) => ({
+      id: `pr-${pr.n}`,
+      kind: "merge",
+      date: pr.at,
+      title: pr.title,
+      url: pr.url,
+      number: pr.n,
+      ...(item ? { item, item_title: items.get(item)?.title } : {}),
+    }));
+  const released = ours.map((r) => ({
+    id: `release-${r.tag_name}`,
+    kind: "release",
+    date: r.published_at || "",
+    title: r.name || r.tag_name,
+    plain: parts(r).line,
+    url: r.html_url,
+    tag: r.tag_name,
+  }));
+  const shipped = roadmap.items
+    .filter((i) => i.status === "shipped")
+    .map((i) => ({
+      id: `shipped-${i.id}`,
+      kind: "shipped",
+      date: published.get(i.shipped_in) || generated,
+      title: i.title,
+      plain: i.plain,
+      url: `${HUB}#${i.id}`,
+      item: i.id,
+      item_title: i.title,
+      shipped_in: i.shipped_in,
+      post: i.post || i.plain,
+      announce: Boolean(i.announce),
+    }));
+  // A week's summary is dated at the end of its week, after that week's releases.
+  const weekly = (roadmap.journal || []).map((w) => ({
+    id: `weekly-${w.week}`,
+    kind: "weekly",
+    date: new Date(Date.parse(w.date) + 7 * 864e5 - 1000).toISOString(),
+    title: w.title,
+    plain: w.plain,
+    dev: w.dev,
+    url: `${HUB}#week-${w.week}`,
+  }));
+  const entries = [...merges, ...released, ...shipped, ...weekly].sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
+  return { format: "horizon-journal", version: 2, generated, url: `${HUB}#journal`, entries: entries.slice(0, FEED) };
+}
+
+const KIND = { release: "Game", launcher: "Launcher", merged: "Merged", week: "This week" };
+
+function changesHtml(entry, roadmap) {
+  if (!entry.changes.length) return "";
+  const line = (c) => `<li>${inline(c.text)}${c.prs.length ? ` ${c.prs.map((n) => `<a class="hub-ref" href="${issueUrl(n)}">#${n}</a>`).join(" ")}` : ""}</li>`;
+  // Simple: what is new, then how many fixes. Technical: every change, under the roadmap item it moves.
+  const added = entry.changes.filter((c) => c.section !== "fixed");
+  const fixes = entry.changes.length - added.length;
+  const simple = `<div class="hub-plain">${added.length ? `<ul class="hub-changes">${added.map((c) => `<li>${inline(c.text)}</li>`).join("")}</ul>` : ""}${fixes ? `<p class="meta">${added.length ? "And " : ""}${fixes} fix${fixes === 1 ? "" : "es"}.</p>` : ""}</div>`;
+  const groups = new Map();
+  for (const c of entry.changes) groups.set(c.item || "", [...(groups.get(c.item || "") || []), c]);
+  const order = [...groups.keys()].sort((a, b) => (a === "") - (b === ""));
+  const dev = `<div class="hub-dev">${order
+    .map((id) => {
+      const item = roadmap.items.find((i) => i.id === id);
+      return `<p class="hub-group">${item ? `<a href="#${escape(id)}">${escape(item.title)}</a>` : "Other changes"}</p><ul class="hub-changes">${groups.get(id).map(line).join("")}</ul>`;
+    })
+    .join("")}</div>`;
+  return simple + dev;
+}
+
+export function journalHtml(entries, roadmap) {
+  return entries
+    .map((e) => {
+      const shipped = e.shipped.map((id) => roadmap.items.find((i) => i.id === id)).filter(Boolean);
+      const items = [...new Set(e.changes.map((c) => c.item).filter(Boolean))].map((id) => roadmap.items.find((i) => i.id === id)).filter(Boolean);
+      return `<article class="hub-entry hub-entry-${e.kind}" id="${e.kind === "week" ? escape(e.id) : `journal-${escape(e.id.replace(/[^\w.-]/g, "-"))}`}">
+  <p class="hub-entry-meta"><span class="badge${e.kind === "release" ? " badge-game" : e.kind === "launcher" ? " badge-launcher" : ""}">${KIND[e.kind]}</span><time datetime="${escape(e.date)}">${escape(e.date.slice(0, 10))}</time></p>
+  <h3 class="hub-entry-title">${e.url ? `<a href="${escape(e.url)}">${escape(e.title)}</a>` : escape(e.title)}</h3>
+  ${e.kind === "week" ? `<p class="hub-plain">${inline(e.plain)}</p><p class="hub-dev">${inline(e.dev.replace(/(^|[^\w[/`])#(\d+)\b/g, (_, b, n) => `${b}[#${n}](${issueUrl(n)})`))}</p>` : ""}
+  ${shipped.length ? `<p class="hub-shipped">Shipped: ${shipped.map((i) => `<a href="#${escape(i.id)}">${escape(i.title)}</a>`).join(", ")}</p>` : ""}
+  ${items.length ? `<p class="hub-entry-items hub-plain">${items.map((i) => `<a class="hub-link" href="#${escape(i.id)}">${escape(i.title)}</a>`).join("")}</p>` : ""}
+  ${changesHtml(e, roadmap)}
+</article>`;
+    })
+    .join("\n");
 }

@@ -16,7 +16,7 @@ import { machinesHtml, playersHtml } from "./src/bench.js";
 import { CPUS, GPUS, singleThread } from "./src/hardware.js";
 import { isGame, isLauncher, launcherVersion, newestFirst } from "./src/versions.js";
 import { contributorsFrom, contributorsHtml } from "./src/contributors.js";
-import { areaFilterHtml, helpWantedHtml, overviewHtml, roadmapHtml, slimIssue } from "./src/hub.js";
+import { areaFilterHtml, boardFilterHtml, boardFrom, boardHtml, helpWantedHtml, journalFrom, journalHtml, journalJson, overviewHtml, roadmapHtml, slimIssue } from "./src/hub.js";
 import { INDEX_URL, KINDS, SUBMIT, listHtml, projectHtml, readIndex, submitHtml } from "./src/mods.js";
 
 const site = dirname(fileURLToPath(import.meta.url));
@@ -132,6 +132,8 @@ try {
   console.warn(`hub: ${e.message}; the page will load the states itself`);
 }
 const hubLinked = new Map(hubLive.filter((i) => linked.has(i.n)).map((i) => [i.n, i]));
+const board = boardFrom(hubLive, roadmap);
+const journal = journalFrom(releases, hubLive, roadmap);
 
 // --- The parity table ------------------------------------------------------------------
 
@@ -343,6 +345,9 @@ const values = {
   HUB_ROADMAP: roadmapHtml(roadmap, hubLinked),
   HUB_AREAS: areaFilterHtml(roadmap),
   HUB_HELP_WANTED: helpWantedHtml(roadmap),
+  HUB_BOARD: hubLive.length ? boardHtml(board, roadmap) : `<p class="lede">The board could not be loaded here.</p>`,
+  HUB_BOARD_FILTER: boardFilterHtml(board, roadmap),
+  HUB_JOURNAL: journalHtml(journal, roadmap) || unavailable,
   HUB_DATA: JSON.stringify({ roadmap, live: [...hubLinked.values()] }).replace(/</g, "\\u003c"),
   YEAR: String(new Date().getUTCFullYear()),
 };
@@ -491,6 +496,8 @@ for (const { file, values: own } of docPages) {
 // The roadmap for other readers (Kira, scripts): /data/roadmap.json, as tools/roadmap.py wrote it.
 await mkdir(join(dist, "data"), { recursive: true });
 await cp(join(site, "data", "roadmap.json"), join(dist, "data", "roadmap.json"));
+// The journal for Kira's #updates and its X posts: /data/journal.json, rebuilt with every deploy.
+await writeFile(join(dist, "data", "journal.json"), JSON.stringify(journalJson(releases, hubLive, roadmap), null, 1) + "\n");
 
 // The pages' inline scripts (they mark the page as scripted and apply the saved theme before CSS
 // applies) and the inlined stylesheet: the Content-Security-Policy in the Caddyfile allows them by hash.
@@ -507,5 +514,5 @@ await writeFile(
 
 console.log(
   `built dist/ from ${readmeFrom}: ${body.length} subsystems, ${percent}, ${harnesses} harnesses, ` +
-    `${ours.length} releases (${game.length} game)${launcher ? `, launcher ${launcher.tag_name}` : ""}, ${benchSummary.groups.length} benchmark rows, ${contributors.length} contributors, ${docs.length} docs pages, ${modProjects.length} registry projects, ${roadmap.items.length} roadmap items (${hubLinked.size}/${linked.size} links live)`,
+    `${ours.length} releases (${game.length} game)${launcher ? `, launcher ${launcher.tag_name}` : ""}, ${benchSummary.groups.length} benchmark rows, ${contributors.length} contributors, ${docs.length} docs pages, ${modProjects.length} registry projects, ${roadmap.items.length} roadmap items (${hubLinked.size}/${linked.size} links live), ${Object.values(board).flat().length} board cards, ${journal.length} journal entries`,
 );
