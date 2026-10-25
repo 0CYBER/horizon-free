@@ -86,18 +86,74 @@ pub enum Target {
     Window,
 }
 
+/// What a gbuffers-style program's vertex stage reads. The game writes it: it knows its vertex
+/// formats, the translator only places it.
+#[derive(Clone, Debug, Default)]
+pub struct GbuffersInputs {
+    /// GLSL declarations: the vertex inputs and any bindings of set 1.
+    pub declarations: String,
+    /// GLSL statements that set `hz_Vertex`, `hz_Color`, `hz_MultiTexCoord0`,
+    /// `hz_MultiTexCoord1` and `hz_Normal` (the compatibility inputs), run first in `main`.
+    pub body: String,
+    /// The value of each attribute a pack may declare (`mc_Entity`, `vaPosition`...), as a GLSL
+    /// expression of the declared type's size; an attribute not listed reads zero.
+    pub attributes: Vec<(String, String)>,
+}
+
 /// Translates a composite-style program (`composite`, `deferred`, `final`...).
 pub fn translate_composite(
     vertex: &Preprocessed,
     fragment: &Preprocessed,
     target: Target,
 ) -> Result<Program, Vec<Error>> {
+    translate(vertex, fragment, target, None)
+}
+
+/// Translates a gbuffers-style program (`gbuffers_terrain`...) drawing the game's geometry
+/// described by `inputs`, into `target` (the pack's buffers).
+pub fn translate_gbuffers(
+    vertex: &Preprocessed,
+    fragment: &Preprocessed,
+    target: Target,
+    inputs: &GbuffersInputs,
+) -> Result<Program, Vec<Error>> {
+    translate(vertex, fragment, target, Some(inputs))
+}
+
+/// The matrices of the compatibility profile in a gbuffers-style program, from the frame's.
+const GBUFFERS_MATRICES: &str = "    hz_ModelViewMatrix = gbufferModelView;\n    \
+     hz_ProjectionMatrix = gbufferProjection;\n    \
+     hz_ModelViewProjectionMatrix = gbufferProjection * gbufferModelView;\n    \
+     hz_ModelViewMatrixInverse = gbufferModelViewInverse;\n    \
+     hz_ProjectionMatrixInverse = gbufferProjectionInverse;\n    \
+     hz_NormalMatrix = mat3(gbufferModelView);\n    \
+     mat4 hz_light = mat4(vec4(1.0 / 256.0, 0.0, 0.0, 0.0), vec4(0.0, 1.0 / 256.0, 0.0, 0.0), vec4(0.0, 0.0, 1.0, 0.0), vec4(1.0 / 32.0, 1.0 / 32.0, 0.0, 1.0));\n    \
+     hz_TextureMatrix = mat4[8](mat4(1.0), hz_light, hz_light, mat4(1.0), mat4(1.0), mat4(1.0), mat4(1.0), mat4(1.0));\n";
+
+fn translate(
+    vertex: &Preprocessed,
+    fragment: &Preprocessed,
+    target: Target,
+    gbuffers: Option<&GbuffersInputs>,
+) -> Result<Program, Vec<Error>> {
     let mut v = Stage::scan(vertex, ShaderStage::Vertex);
     let mut f = Stage::scan(fragment, ShaderStage::Fragment);
+    v.gbuffers = gbuffers.is_some();
+    f.gbuffers = gbuffers.is_some();
     let mut errors: Vec<Error> = v.errors.drain(..).chain(f.errors.drain(..)).collect();
 
     // One uniform block and one set of samplers for both stages.
     let mut uniforms: BTreeMap<String, String> = BTreeMap::new();
+    if gbuffers.is_some() {
+        for name in [
+            "gbufferModelView",
+            "gbufferModelViewInverse",
+            "gbufferProjection",
+            "gbufferProjectionInverse",
+        ] {
+            uniforms.insert(name.to_owned(), "mat4".to_owned());
+        }
+    }
     let mut samplers: BTreeMap<String, String> = BTreeMap::new();
     for stage in [&v, &f] {
         for (name, ty, at) in &stage.uniforms {
@@ -169,17 +225,37 @@ pub fn translate_composite(
             )
             .unwrap();
         }
+        if let (Some(inputs), ShaderStage::Vertex) = (gbuffers, stage.kind) {
+            h.push_str(&inputs.declarations);
+            h.push('\n');
+        }
         h.push_str(&stage.prelude());
         h
     };
     let flip = if target == Target::Buffers { "-" } else { "" };
     let fog =
         "    hz_Fog = hz_FogParameters(hz_fog_color, hz_fog.x, hz_fog.y, hz_fog.z, hz_fog.w);\n";
-    let mut vertex_main = String::from(
-        "\nvoid main() {\n    vec2 hz_p = hz_quad[gl_VertexIndex];\n    hz_Vertex = vec4(hz_p, 0.0, 1.0);\n    \
-         hz_MultiTexCoord0 = hz_Vertex;\n    hz_Color = vec4(1.0);\n    hz_Normal = vec3(0.0, 0.0, 1.0);\n",
-    );
-    for (name, value) in &v.attributes {
+    let mut vertex_main = String::from("\nvoid main() {\n");
+    match gbuffers {
+        None => vertex_main.push_str(
+            "    vec2 hz_p = hz_quad[gl_VertexIndex];\n    hz_Vertex = vec4(hz_p, 0.0, 1.0);\n    \
+             hz_MultiTexCoord0 = hz_Vertex;\n    hz_Color = vec4(1.0);\n    hz_Normal = vec3(0.0, 0.0, 1.0);\n",
+        ),
+        Some(inputs) => {
+            vertex_main.push_str(GBUFFERS_MATRICES);
+            vertex_main.push_str(&inputs.body);
+        }
+    }
+    for (name, value, ty) in &v.attributes {
+        let value = match gbuffers {
+            // Our quad's values for a composite.
+            None => value.clone(),
+            // The game's, or zero for anything it doesn't provide.
+            Some(inputs) => match inputs.attributes.iter().find(|a| &a.0 == name) {
+                Some((_, given)) => format!("{ty}({given})"),
+                None => format!("{ty}(0)"),
+            },
+        };
         writeln!(vertex_main, "    {name} = {value};").unwrap();
     }
     vertex_main.push_str(fog);
@@ -192,6 +268,9 @@ pub fn translate_composite(
     )
     .unwrap();
     let mut fragment_main = String::from("\nvoid main() {\n");
+    if gbuffers.is_some() {
+        fragment_main.push_str(GBUFFERS_MATRICES);
+    }
     fragment_main.push_str(fog);
     if f.frag_coord {
         fragment_main.push_str(match target {
@@ -442,6 +521,66 @@ mod tests {
             });
             assert!(stores, "{target:?}: main does not set hz_FragCoord");
         }
+    }
+
+    #[test]
+    fn gbuffers_programs_read_the_games_vertices() {
+        let vsh = "#version 120\nattribute vec4 mc_Entity;\nattribute vec2 mc_midTexCoord;\nvarying vec2 uv;\nvarying vec2 light;\n\
+                   varying vec4 color;\nvarying vec3 normal;\nvarying float id;\nvoid main() {\n    \
+                   gl_Position = ftransform();\n    uv = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;\n    \
+                   light = (gl_TextureMatrix[1] * gl_MultiTexCoord1).xy;\n    color = gl_Color;\n    \
+                   normal = normalize(gl_NormalMatrix * gl_Normal);\n    id = mc_Entity.x + mc_midTexCoord.x;\n}\n";
+        let fsh = "#version 120\nuniform sampler2D texture;\nuniform sampler2D lightmap;\nuniform mat4 gbufferModelView;\n\
+                   varying vec2 uv;\nvarying vec2 light;\nvarying vec4 color;\nvarying vec3 normal;\nvarying float id;\n\
+                   void main() {\n    vec4 c = texture2D(texture, uv) * texture2D(lightmap, light) * color;\n    \
+                   /* DRAWBUFFERS:02 */\n    gl_FragData[0] = c * gl_FragCoord.z;\n    \
+                   gl_FragData[1] = vec4(normal * 0.5 + 0.5, id);\n}\n";
+        let files: Vec<(String, &str)> =
+            [("gbuffers_terrain.vsh", vsh), ("gbuffers_terrain.fsh", fsh)]
+                .iter()
+                .map(|(p, t)| (format!("shaders/{p}"), *t))
+                .collect();
+        let files: Vec<(&str, &str)> = files.iter().map(|(p, t)| (p.as_str(), *t)).collect();
+        let pack = Pack::from_zip_bytes("P.zip", zip(&files)).unwrap();
+        let m = Macros::standard();
+        let inputs = GbuffersInputs {
+            declarations: "layout(location = 0) in vec3 game_pos;\nlayout(location = 1) in uvec2 game_uv;".into(),
+            body: "    hz_Vertex = vec4(game_pos, 1.0);\n    hz_MultiTexCoord0 = vec4(vec2(game_uv) / 32768.0, 0.0, 1.0);\n    \
+                   hz_MultiTexCoord1 = vec4(240.0, 240.0, 0.0, 1.0);\n    hz_Color = vec4(1.0);\n    hz_Normal = vec3(0.0, 1.0, 0.0);\n"
+                .into(),
+            attributes: vec![("mc_midTexCoord".into(), "vec2(game_uv) / 32768.0".into())],
+        };
+        let p = translate_gbuffers(
+            &preprocess(&pack, "gbuffers_terrain.vsh", &m),
+            &preprocess(&pack, "gbuffers_terrain.fsh", &m),
+            Target::Buffers,
+            &inputs,
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        let names: Vec<&str> = p
+            .interface
+            .uniforms
+            .iter()
+            .map(|u| u.name.as_str())
+            .collect();
+        for name in [
+            "gbufferModelView",
+            "gbufferProjection",
+            "gbufferModelViewInverse",
+        ] {
+            assert!(names.contains(&name), "{name} missing from {names:?}");
+        }
+        assert_eq!(p.interface.outputs, vec![0, 1]);
+        let inputs: Vec<&str> = p.vertex.entry_points[0]
+            .function
+            .arguments
+            .iter()
+            .filter_map(|a| a.name.as_deref())
+            .collect();
+        assert!(
+            inputs.contains(&"game_pos") && inputs.contains(&"game_uv"),
+            "{inputs:?}"
+        );
     }
 
     #[test]
