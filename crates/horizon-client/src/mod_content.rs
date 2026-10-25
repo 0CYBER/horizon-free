@@ -729,24 +729,29 @@ fn worldgen_entry(file: &str) -> Option<(&'static str, String)> {
     Some((bundle, format!("{ns}:{}", path.strip_suffix(".json")?)))
 }
 
-/// The key of a mod's structure set or template pool file that adds its
-/// entries to other sets or pools (vanilla's, another mod's) instead of
-/// being one of its own. Vanilla data never has it.
+/// The key of a mod's structure set, template pool or processor list file
+/// that adds its entries to other sets, pools or lists (vanilla's, another
+/// mod's) instead of being one of its own. Vanilla data never has it.
 const ADD_TO: &str = "horizon:add_to";
+/// An addition's place among the others (lower first; 1000 by default), as
+/// Lithostitched's modifiers' `priority`.
+const PRIORITY: &str = "horizon:priority";
 /// The bundles a mod may add to, and the list each entry goes into.
-const ADDABLE: [(&str, &str); 2] = [
+const ADDABLE: [(&str, &str); 3] = [
     ("worldgen/structure_sets.json", "structures"),
     ("worldgen/template_pools.json", "elements"),
+    ("worldgen/processor_lists.json", "processors"),
 ];
 
 /// A mod file's additions (`horizon:add_to`): its entries appended to the
-/// list of each set or pool it names, as lithostitched's
-/// `add_structure_set_entries` and `add_template_pool_elements` do for
-/// NeoForge and Fabric packs.
+/// list of each set, pool or processor list it names, as Lithostitched's
+/// `add_structure_set_entries`, `add_template_pool_elements` and
+/// `add_processor_list_processors` do for NeoForge and Fabric packs.
 struct Addition {
     targets: Vec<String>,
     list: &'static str,
     entries: Vec<J>,
+    priority: i64,
 }
 impl Addition {
     /// What a mod file of `bundle` adds, if it is an addition file.
@@ -776,10 +781,16 @@ impl Addition {
         let Some(J::Arr(entries)) = doc.get(list) else {
             return Err(format!("{ADD_TO} without a {list} list").into());
         };
+        let priority = match doc.get(PRIORITY) {
+            None => 1000,
+            Some(J::Num(n)) => n.as_i64().ok_or(format!("{PRIORITY}: not an integer"))?,
+            Some(_) => return Err(format!("{PRIORITY}: not an integer").into()),
+        };
         Ok(Some(Self {
             targets,
             list,
             entries: entries.clone(),
+            priority,
         }))
     }
     /// Appends the entries to each target in the bundle `doc` (id → the
@@ -1215,7 +1226,11 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>
         overlay.write(BIOME_TAGS, &serde_json::to_vec(&doc)?)?;
     }
     // Structures and the pools, sets, processors and features they use, then
-    // what mods add to sets and pools, in mod and file order.
+    // what mods add to sets, pools and lists, by priority, then in mod and
+    // file order.
+    for list in additions.values_mut() {
+        list.sort_by_key(|a| a.priority);
+    }
     for (bundle, entries) in &worldgen {
         if !base.join(bundle).exists() {
             continue;

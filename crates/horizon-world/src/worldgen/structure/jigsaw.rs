@@ -119,6 +119,11 @@ impl PoolElement {
         };
         Ok(match kind {
             "minecraft:empty_pool_element" => Self::Empty,
+            // Lithostitched's elements place what their `delegate` places;
+            // their limits are the pool entry's (`Pool::limits`).
+            "lithostitched:limited" | "lithostitched:guaranteed" | "lithostitched:delegating" => {
+                Self::decode(&value["delegate"], resources, bindings, inherited)?
+            }
             // YUNG's API's element places what a single element places; its
             // `name` and `max_count` are the pool entry's (`Pool::limits`).
             "minecraft:single_pool_element"
@@ -321,11 +326,14 @@ pub(super) fn can_attach(source: &Jigsaw, target: &Jigsaw) -> bool {
 pub struct Pool {
     /// Each element repeated by its weight.
     pub(super) templates: Vec<Arc<PoolElement>>,
+    /// The entry of `raw` each of `templates` repeats.
+    entries: Vec<usize>,
     /// The elements with their weights, in file order (`rawTemplates`).
     pub(super) raw: Vec<(Arc<PoolElement>, i32)>,
-    /// Per entry of `raw`: a YUNG element's `name` and `max_count`, the most
-    /// pieces of that name in one start.
-    limits: Vec<Option<(Arc<str>, i32)>>,
+    /// Per entry of `raw`: how many pieces of it one start may hold.
+    limits: Vec<Option<Limit>>,
+    /// The entries of `raw` that are Lithostitched's `guaranteed` elements.
+    guaranteed: Vec<usize>,
     pub(super) fallback: String,
     max_size: OnceLock<i32>,
 }
@@ -339,10 +347,11 @@ impl Pool {
             .unwrap_or(0) as usize]
             .clone()
     }
-    fn shuffled(&self, random: &mut impl RandomSource) -> Vec<Arc<PoolElement>> {
-        let mut copy = self.templates.clone();
-        shuffle(&mut copy, random);
-        copy
+    /// The entries of `templates`, shuffled.
+    fn shuffled(&self, random: &mut impl RandomSource) -> Vec<usize> {
+        let mut order: Vec<usize> = (0..self.templates.len()).collect();
+        shuffle(&mut order, random);
+        order.into_iter().map(|i| self.entries[i]).collect()
     }
     /// YUNG's API's pick: `nextInt` of the entries' total weight, walked in
     /// `order` (indices into `raw`); the entry that takes it below zero.
@@ -363,6 +372,52 @@ impl Pool {
                 .max()
                 .unwrap_or(0)
         })
+    }
+}
+/// How many pieces of a pool entry one start may hold, and where.
+#[derive(Clone, Debug)]
+struct Limit {
+    /// The pieces counted together: a YUNG element's `name`; a Lithostitched
+    /// element itself (its JSON), wherever it is listed.
+    key: Arc<str>,
+    max: i32,
+    /// The parent piece's least depth (the start is at 0).
+    min_depth: i32,
+    /// `lithostitched:guaranteed`: tried before the pool's other entries.
+    guaranteed: bool,
+}
+impl Limit {
+    /// A pool entry's element's limit: YUNG's `max_count` (spec-yungsapi §3),
+    /// Lithostitched's `limited` and `guaranteed` (spec-lithostitched §3).
+    fn of(element: &Value) -> Option<Self> {
+        let int = |key: &str| {
+            element[key]
+                .as_i64()
+                .map(|v| v.clamp(0, i32::MAX.into()) as i32)
+        };
+        let litho = |max: Option<i32>, guaranteed| {
+            Some(Self {
+                key: element.to_string().into(),
+                max: max?,
+                min_depth: int("min_depth").unwrap_or(0),
+                guaranteed,
+            })
+        };
+        match element["element_type"].as_str()? {
+            "yungsapi:yung_single_element" => Some(Self {
+                key: element["name"].as_str()?.into(),
+                max: int("max_count")?,
+                min_depth: 0,
+                guaranteed: false,
+            }),
+            "lithostitched:limited" => litho(int("limit"), false),
+            "lithostitched:guaranteed" => litho(Some(int("count").unwrap_or(1)), true),
+            _ => None,
+        }
+    }
+    /// Whether one more piece may go below a parent at `depth`.
+    fn allows(&self, counts: &HashMap<Arc<str>, i32>, depth: i32) -> bool {
+        depth >= self.min_depth && counts.get(&self.key).copied().unwrap_or(0) < self.max
     }
 }
 /// Lazily decoded template pools.
@@ -393,7 +448,8 @@ impl Pools {
         }
         let pool = self.raw.get(name).and_then(|json| {
             let value: Value = serde_json::from_str(json).ok()?;
-            let (mut templates, mut raw, mut limits) = (Vec::new(), Vec::new(), Vec::new());
+            let (mut templates, mut entries, mut raw, mut limits) =
+                (Vec::new(), Vec::new(), Vec::new(), Vec::new());
             for entry in value["elements"].as_array()? {
                 let element =
                     match PoolElement::decode(&entry["element"], resources, bindings, None) {
@@ -408,24 +464,21 @@ impl Pools {
                 let weight = entry["weight"].as_i64().unwrap_or(1);
                 for _ in 0..weight {
                     templates.push(element.clone());
+                    entries.push(raw.len());
                 }
                 raw.push((element, weight as i32));
-                let fields = &entry["element"];
-                limits.push(
-                    match (fields["name"].as_str(), fields["max_count"].as_i64()) {
-                        (Some(name), Some(max))
-                            if fields["element_type"] == "yungsapi:yung_single_element" =>
-                        {
-                            Some((name.into(), max as i32))
-                        }
-                        _ => None,
-                    },
-                );
+                limits.push(Limit::of(&entry["element"]));
             }
+            let guaranteed = (limits.iter().enumerate())
+                .filter(|(_, l)| l.as_ref().is_some_and(|l| l.guaranteed))
+                .map(|(i, _)| i)
+                .collect();
             Some(Arc::new(Pool {
                 templates,
+                entries,
                 raw,
                 limits,
+                guaranteed,
                 fallback: value["fallback"]
                     .as_str()
                     .unwrap_or("minecraft:empty")
@@ -669,9 +722,11 @@ pub enum Draws {
 
 /// The elements a jigsaw tries, in order.
 enum Candidates {
-    /// Vanilla: the target pool's weight-expanded elements, then the
-    /// fallback's, each shuffled up front.
-    Listed(std::vec::IntoIter<Arc<PoolElement>>),
+    /// Vanilla: the target pool's weight-expanded entries, then the
+    /// fallback's, each shuffled up front. Lithostitched's `guaranteed`
+    /// entries of the target pool come first, in file order, and are not
+    /// drawn again (spec-lithostitched §3, OPEN-L4).
+    Listed(std::vec::IntoIter<(Arc<Pool>, usize)>),
     /// YUNG's: weighted picks from each pool in turn (the fallback's only
     /// once the target's are spent), each pool's entries shuffled when it
     /// is reached.
@@ -694,27 +749,36 @@ impl Candidates {
             vec![fallback.clone()]
         };
         match draws {
-            Draws::Vanilla => Self::Listed(
-                pools
-                    .iter()
-                    .flat_map(|pool| pool.shuffled(random))
-                    .collect::<Vec<_>>()
-                    .into_iter(),
-            ),
+            Draws::Vanilla => {
+                let first = (target.guaranteed.iter()).filter(|_| below_max_depth);
+                let mut listed: Vec<_> = first.map(|&e| (target.clone(), e)).collect();
+                for pool in &pools {
+                    let drawn = pool.shuffled(random).into_iter();
+                    let drawn = drawn.filter(|&e| !pool.guaranteed.contains(&e));
+                    listed.extend(drawn.map(|e| (pool.clone(), e)));
+                }
+                Self::Listed(listed.into_iter())
+            }
             Draws::Yung => Self::Weighted {
                 pools: pools.into_iter().rev().collect(),
                 current: None,
             },
         }
     }
-    /// The next element to try, with its YUNG name and limit.
+    /// The next element to try below a parent at `depth`, with the key
+    /// its pieces are counted under.
     fn next(
         &mut self,
         counts: &HashMap<Arc<str>, i32>,
+        depth: i32,
         random: &mut impl RandomSource,
     ) -> Option<(Arc<PoolElement>, Option<Arc<str>>)> {
         match self {
-            Self::Listed(elements) => elements.next().map(|e| (e, None)),
+            Self::Listed(entries) => entries.find_map(|(pool, entry)| {
+                let limit = pool.limits[entry].as_ref();
+                (limit.is_none_or(|l| l.allows(counts, depth)))
+                    .then(|| (pool.raw[entry].0.clone(), limit.map(|l| l.key.clone())))
+            }),
             Self::Weighted { pools, current } => loop {
                 let (pool, order) = match current {
                     Some((pool, order)) if !order.is_empty() => (pool, order),
@@ -731,13 +795,11 @@ impl Candidates {
                     continue;
                 };
                 let entry = order.remove(at);
-                let limit = pool.limits[entry].clone();
-                if let Some((name, max)) = &limit
-                    && counts.get(name).copied().unwrap_or(0) >= *max
-                {
+                let limit = pool.limits[entry].as_ref();
+                if limit.is_some_and(|l| !l.allows(counts, depth)) {
                     continue;
                 }
-                return Some((pool.raw[entry].0.clone(), limit.map(|(name, _)| name)));
+                return Some((pool.raw[entry].0.clone(), limit.map(|l| l.key.clone())));
             },
         }
     }
@@ -830,7 +892,7 @@ pub fn assemble_drawing(
             let rotation = Rotation::random(random);
             let entry = order[center_pool.weighted(&order, random)?];
             let (element, _) = &center_pool.raw[entry];
-            let limit = center_pool.limits[entry].clone().map(|(name, _)| name);
+            let limit = center_pool.limits[entry].as_ref().map(|l| l.key.clone());
             (rotation, element.clone(), limit)
         }
     };
@@ -972,7 +1034,7 @@ struct Placer<'a, 'p> {
     /// SequencedPriorityIterator: highest priority first, FIFO within one.
     queue: BTreeMap<i32, VecDeque<PieceState>>,
     draws: Draws,
-    /// Pieces placed per YUNG element name.
+    /// Pieces placed per limited element (`Limit::key`).
     counts: HashMap<Arc<str>, i32>,
 }
 impl Placer<'_, '_> {
@@ -1052,7 +1114,7 @@ impl Placer<'_, '_> {
                 depth != self.config.max_depth,
                 random,
             );
-            while let Some((target, name)) = candidates.next(&self.counts, random) {
+            while let Some((target, name)) = candidates.next(&self.counts, depth, random) {
                 if matches!(target.as_ref(), PoolElement::Empty) {
                     break;
                 }
@@ -1173,5 +1235,119 @@ impl Placer<'_, '_> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A pool of empty elements, told apart by identity, with these limits.
+    fn pool(entries: &[(i32, Value)]) -> Arc<Pool> {
+        let (mut templates, mut indices, mut raw, mut limits) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        for (i, (weight, element)) in entries.iter().enumerate() {
+            let e = Arc::new(PoolElement::Empty);
+            for _ in 0..*weight {
+                templates.push(e.clone());
+                indices.push(i);
+            }
+            raw.push((e, *weight));
+            limits.push(Limit::of(element));
+        }
+        let guaranteed = (0..entries.len())
+            .filter(|&i| limits[i].as_ref().is_some_and(|l: &Limit| l.guaranteed))
+            .collect();
+        Arc::new(Pool {
+            templates,
+            entries: indices,
+            raw,
+            limits,
+            guaranteed,
+            fallback: "minecraft:empty".into(),
+            max_size: OnceLock::new(),
+        })
+    }
+    fn delegate() -> Value {
+        json!({"element_type": "minecraft:single_pool_element", "location": "a:b"})
+    }
+    /// The entries a vanilla jigsaw tries below a parent at `depth`, by index.
+    fn tried(
+        pool: &Arc<Pool>,
+        counts: &HashMap<Arc<str>, i32>,
+        depth: i32,
+        below_max: bool,
+    ) -> Vec<usize> {
+        let empty = self::pool(&[]);
+        let mut random = LegacyRandom::new(7);
+        let mut candidates = Candidates::new(Draws::Vanilla, pool, &empty, below_max, &mut random);
+        let mut out = Vec::new();
+        while let Some((element, _)) = candidates.next(counts, depth, &mut random) {
+            out.push(
+                pool.raw
+                    .iter()
+                    .position(|(e, _)| Arc::ptr_eq(e, &element))
+                    .unwrap(),
+            );
+        }
+        out
+    }
+
+    #[test]
+    fn limits_read_yungs_and_lithostitcheds_fields() {
+        let yung =
+            json!({"element_type": "yungsapi:yung_single_element", "name": "pile", "max_count": 2});
+        let yung = Limit::of(&yung).unwrap();
+        assert_eq!(
+            (&*yung.key, yung.max, yung.min_depth, yung.guaranteed),
+            ("pile", 2, 0, false)
+        );
+        let limited =
+            json!({"element_type": "lithostitched:limited", "limit": 1, "delegate": delegate()});
+        let l = Limit::of(&limited).unwrap();
+        assert_eq!((l.max, l.min_depth, l.guaranteed), (1, 0, false));
+        assert_eq!(*l.key, *limited.to_string());
+        let guaranteed = json!({"element_type": "lithostitched:guaranteed", "count": 2, "min_depth": 3,
+            "delegate": delegate()});
+        let g = Limit::of(&guaranteed).unwrap();
+        assert_eq!((g.max, g.min_depth, g.guaranteed), (2, 3, true));
+        // No limit: none to keep.
+        for none in [
+            json!({"element_type": "lithostitched:limited", "delegate": delegate()}),
+            json!({"element_type": "yungsapi:yung_single_element", "name": "pile"}),
+            delegate(),
+        ] {
+            assert!(Limit::of(&none).is_none(), "{none}");
+        }
+    }
+
+    #[test]
+    fn vanilla_jigsaws_keep_lithostitcheds_limits() {
+        let limited =
+            json!({"element_type": "lithostitched:limited", "limit": 1, "delegate": delegate()});
+        let guaranteed = json!({"element_type": "lithostitched:guaranteed", "count": 1, "min_depth": 3,
+            "delegate": delegate()});
+        let p = pool(&[
+            (3, delegate()),
+            (2, limited.clone()),
+            (1, guaranteed.clone()),
+        ]);
+        let mut counts = HashMap::new();
+        // Too shallow for the guaranteed entry: the weight-expanded list without it.
+        let mut shallow = tried(&p, &counts, 2, true);
+        shallow.sort();
+        assert_eq!(shallow, [0, 0, 0, 1, 1]);
+        // Deep enough: it comes first, and is not drawn again.
+        let deep = tried(&p, &counts, 3, true);
+        assert_eq!(deep[0], 2);
+        assert_eq!(deep[1..].iter().filter(|&&e| e == 2).count(), 0);
+        // At the most depth only the fallback is tried.
+        assert!(tried(&p, &counts, 3, false).is_empty());
+        // Entries at their limit are skipped.
+        counts.insert(Arc::from(limited.to_string()), 1);
+        counts.insert(Arc::from(guaranteed.to_string()), 1);
+        let full = tried(&p, &counts, 3, true);
+        assert_eq!(full, [0, 0, 0]);
     }
 }

@@ -605,7 +605,8 @@ fn content_root_carries_a_structure_mod() {
             "data/huts/tags/worldgen/biome/has_hut.json",
             r##"{"values": ["#minecraft:is_overworld", "#c:is_plains", "othermod:glade", "minecraft:plains"]}"##,
         ),
-        // Additions to vanilla's set and pool; a target nobody defines is skipped.
+        // Additions to vanilla's set, pool and processor list; a target nobody
+        // defines is skipped. A lower priority goes first.
         (
             "data/huts/worldgen/structure_set/added/villages.json",
             r#"{"horizon:add_to": "minecraft:villages",
@@ -616,6 +617,16 @@ fn content_root_carries_a_structure_mod() {
             r#"{"horizon:add_to": ["othermod:houses", "minecraft:village/plains/houses"],
                 "elements": [{"weight": 2, "element": {"element_type": "minecraft:single_pool_element",
                 "location": "huts:hut", "projection": "rigid", "processors": "minecraft:empty"}}]}"#,
+        ),
+        (
+            "data/huts/worldgen/template_pool/added/more_houses.json",
+            r#"{"horizon:add_to": "minecraft:village/plains/houses", "horizon:priority": 10,
+                "elements": [{"weight": 1, "element": {"element_type": "minecraft:empty_pool_element"}}]}"#,
+        ),
+        (
+            "data/huts/worldgen/processor_list/added/mossy.json",
+            r#"{"horizon:add_to": "minecraft:mossify_10_percent",
+                "processors": [{"processor_type": "minecraft:nop"}]}"#,
         ),
     ];
     for (name, text) in files {
@@ -652,14 +663,23 @@ fn content_root_carries_a_structure_mod() {
             "structure_sets.json",
             "minecraft:villages",
             "structures",
-            serde_json::json!({"structure": "huts:hut", "weight": 3}),
+            vec![serde_json::json!({"structure": "huts:hut", "weight": 3})],
         ),
         (
             "template_pools.json",
             "minecraft:village/plains/houses",
             "elements",
-            serde_json::json!({"weight": 2, "element": {"element_type": "minecraft:single_pool_element",
+            vec![
+                serde_json::json!({"weight": 1, "element": {"element_type": "minecraft:empty_pool_element"}}),
+                serde_json::json!({"weight": 2, "element": {"element_type": "minecraft:single_pool_element",
                 "location": "huts:hut", "projection": "rigid", "processors": "minecraft:empty"}}),
+            ],
+        ),
+        (
+            "processor_lists.json",
+            "minecraft:mossify_10_percent",
+            "processors",
+            vec![serde_json::json!({"processor_type": "minecraft:nop"})],
         ),
     ] {
         let (ours, vanilla) = (bundle(name, &root), bundle(name, &base));
@@ -668,7 +688,7 @@ fn content_root_carries_a_structure_mod() {
             v[list].as_array().unwrap().clone()
         };
         let mut expected = entries(&vanilla[id]);
-        expected.push(added);
+        expected.extend(added);
         assert_eq!(entries(&ours[id]), expected, "{id}");
         assert!(!ours.keys().any(|k| k.starts_with("huts:added/")), "{name}");
         assert!(!ours.contains_key("othermod:houses"));

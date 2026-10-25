@@ -449,7 +449,9 @@ Two cases the oracle fills in:
   - `lithostitched:jigsaw`, MoogsStructureLib's and Repurposed Structures' generic jigsaws
     become `minecraft:jigsaw`;
   - their `advanced_random_spread` becomes `minecraft:random_spread`;
-  - their versioned, legacy and empty pool elements become vanilla's.
+  - their versioned, legacy and empty pool elements become vanilla's; Lithostitched's
+    `limited` and `guaranteed` elements are the game's own (its `delegating` places its
+    `delegate`).
 
   Three more rewrites make the mapped structures decode and start where their mod would:
   - **Block states.** 1.21.1 writes a block or fluid state as `{"Name", "Properties"}`, 26.3
@@ -516,6 +518,11 @@ Two cases the oracle fills in:
     CTOV's compat hooks for other mods (its `modular_compat`, 30 of them in 17 lists) become a
     `reference` when the mod they name is ported along, and are taken out (a no-op, as in the
     mod) when it is not. In ATM10 they all name Nature's Spirit, which the pack does not have.
+    Lithostitched's `add_template_pool_elements` and `add_processor_list_processors` modifiers
+    (CTOV's houses for 11 of ATM10's mods) become the game's additions, when the mods their
+    load conditions name are ported along. The houses are `limited` (at most once in a
+    village) or `guaranteed` (tried first, from the depth they name, until placed): the game
+    keeps both.
     In Java, Lithostitched also lays out every jigsaw structure its own way (villages,
     outposts, trial chambers; CTOV's villages are `lithostitched:jigsaw`, carried as vanilla's
     jigsaw). Horizon keeps vanilla's layouts, so with Lithostitched in a pack, structure layouts
