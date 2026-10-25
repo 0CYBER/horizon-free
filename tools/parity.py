@@ -45,6 +45,11 @@ import subprocess
 import sys
 import time
 
+try:
+    from . import parity_reach
+except ImportError:
+    import parity_reach
+
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL = ROOT / ".local"
 STATE_DIR = LOCAL / "parity-runner"
@@ -1224,20 +1229,44 @@ def changed_harnesses(found, records, ref):
     return found_changed
 
 
-def affected_harnesses(found, records, changed):
+def affected_harnesses(found, records, changed, reach=True, base=None):
     """Harnesses the changed files can affect: their script or a recorded dependency (here, or in the shared
-    dependency lists) changed, a file every harness depends on changed, or nothing is recorded about them yet."""
+    dependency lists) changed, a file every harness depends on changed, or nothing is recorded about them yet.
+    With reach, a harness's workspace Rust sources count only if its probes can reach them (tools/parity_reach.py);
+    a harness whose probes can't be placed keeps them all. A changed file counts unless, compared with base (a
+    commit), only declarations of modules the harness doesn't reach changed (tools/parity_reach.py)."""
     if changed & SHARED_INPUTS:
         return set(found)
+    graph = None
+    if reach and any(path.startswith("crates/") for path in changed):
+        cache_path = STATE_DIR / "reach-cache.json"
+        try:
+            cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            cache = {}
+        graph = parity_reach.SourceGraph(ROOT, rust_code, cache)
     affected = set()
     for name, script in found.items():
-        dependencies = records.get(name, {}).get("dependencies")
+        record = records.get(name) or {}
+        dependencies = record.get("dependencies")
         template = SHARED / "dependencies" / f"{name}.json"
         if dependencies is None and template.exists():
-            dependencies = json.loads(template.read_text(encoding="utf-8")).get("dependencies")
-        if dependencies is None or Path(script).relative_to(ROOT).as_posix() in changed or \
-                any(path.split(KEEP)[0] in changed for path in dependencies):
+            record = json.loads(template.read_text(encoding="utf-8"))
+            dependencies = record.get("dependencies")
+        if dependencies is None or Path(script).relative_to(ROOT).as_posix() in changed:
             affected.add(name)
+            continue
+        plain = {path.split(KEEP)[0] for path in dependencies}
+        if graph is not None and plain & changed:
+            narrowed = parity_reach.narrow(dependencies, recorded_artifacts(record), graph, changed)
+            if any(path.split(KEEP)[0] in changed and (children is None or parity_reach.declarations_changed(
+                    ROOT, path.split(KEEP)[0], children, base, whole)) for path, (whole, children) in narrowed.items()):
+                affected.add(name)
+        elif plain & changed:
+            affected.add(name)
+    if graph is not None:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(graph.saved_cache()), encoding="utf-8")
     return affected
 
 
@@ -1280,6 +1309,8 @@ def main():
     parser.add_argument("--flake-rounds", type=int, default=3, help="runs required by --flake-check (default 3)")
     parser.add_argument("--changed", metavar="REF", help="only harnesses the changes since the merge base with REF can "
                         "affect (and that have not passed with their current inputs): the pull-request check")
+    parser.add_argument("--by-crate", action="store_true", help="with --changed: count every Rust source a probe "
+                        "links, not only those it can reach (tools/parity_reach.py)")
     parser.add_argument("--changed-files", metavar="FILE", help="like --changed, for the changed paths listed in FILE, "
                         "one per line: for a copy without Git history (tools/pr_ready.py on another machine)")
     args = parser.parse_args()
@@ -1316,7 +1347,11 @@ def main():
             changed, since = changed_files(args.changed), f" since the merge base with {args.changed}"
         if changed is None:
             parser.error(f"no merge base with {args.changed}")
-        affected = affected_harnesses(found, records, changed)
+        base = None
+        if args.changed:
+            merge_base = subprocess.run(["git", "merge-base", "HEAD", args.changed], cwd=ROOT, capture_output=True, text=True)
+            base = merge_base.stdout.strip() or None
+        affected = affected_harnesses(found, records, changed, reach=not args.by_crate, base=base)
         chosen = [name for name in found if name in affected and stale(name, state, hasher, environment)]
         print(f"{len(changed)} files changed{since}: {len(affected)} harnesses "
               f"depend on them, {len(chosen)} without a pass for their current inputs.", flush=True)
