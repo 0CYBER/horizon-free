@@ -893,6 +893,9 @@ enum Act {
     ResetPadKey(&'static str),
     ResetPadKeys,
     ToggleMod(usize),
+    /// The installed mod's own settings page (capability `ui`), shown as a
+    /// screen: `Event::ModSettings` has the game open it.
+    ModSettings(usize),
     OpenModFolder,
     /// Credits & Attribution's Credits button (WinScreen without the poem).
     Credits,
@@ -944,6 +947,9 @@ pub enum Event {
     Packs(Vec<String>),
     OpenPackFolder,
     OpenModFolder,
+    /// Open the mod's own settings page (capability `ui`): the installed
+    /// mod's index in `mods.installed`.
+    ModSettings(usize),
     /// Roll the credits (`CreditsAndAttributionScreen.openCreditsScreen`).
     Credits,
     /// Copy how an agent connects (the AI Agent page).
@@ -1503,15 +1509,26 @@ impl OptionsUi {
                         } else if installed.dev {
                             label = label.append(" (Dev)");
                         }
-                        let widget = button(0.0, 0.0, 310.0, label, Act::ToggleMod(i));
-                        Row::Buttons(
-                            if installed.dev || installed.id.is_empty() {
-                                inactive(widget)
-                            } else {
-                                widget
-                            },
-                            None,
-                        )
+                        let dead = installed.dev || installed.id.is_empty();
+                        // A running mod with a settings page (capability
+                        // `ui`) gets its own button beside the toggle.
+                        if installed.has_settings {
+                            let toggle = button(0.0, 0.0, 150.0, label, Act::ToggleMod(i));
+                            let settings = button(
+                                0.0,
+                                0.0,
+                                150.0,
+                                Text::literal("Settings"),
+                                Act::ModSettings(i),
+                            );
+                            Row::Buttons(
+                                if dead { inactive(toggle) } else { toggle },
+                                Some(settings),
+                            )
+                        } else {
+                            let widget = button(0.0, 0.0, 310.0, label, Act::ToggleMod(i));
+                            Row::Buttons(if dead { inactive(widget) } else { widget }, None)
+                        }
                     })
                     .collect()
             }
@@ -2498,6 +2515,10 @@ impl OptionsUi {
                             s.mods.toggle(i);
                             events.push(Event::Changed);
                         }
+                        Act::ModSettings(i) => {
+                            events.push(Event::ButtonClick);
+                            events.push(Event::ModSettings(i));
+                        }
                         Act::OpenModFolder => events.push(Event::OpenModFolder),
                         Act::Credits => events.push(Event::Credits),
                         Act::CopyAgentDetails => events.push(Event::CopyAgentDetails),
@@ -2988,6 +3009,7 @@ mod tests {
                 description: "May show HUD panels.".into(),
                 problem: id.is_empty().then(|| "Invalid package".into()),
                 dev,
+                has_settings: false,
             });
         }
         let (widgets, ..) = ui.layout(&s, size.0, size.1);
