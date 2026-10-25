@@ -5,7 +5,7 @@ use crate::{
     nbt::{Compound, Tag},
     registry::{BlockRegistry, BlockStateId},
 };
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct BlockInfo {
@@ -42,6 +42,9 @@ pub struct EntityInfo {
 }
 #[derive(Debug)]
 pub struct StructureTemplate {
+    /// The id it was loaded under (`StructureResources::template`); empty
+    /// for a template read from elsewhere.
+    pub location: Arc<str>,
     pub size: [i32; 3],
     palettes: Vec<Palette>,
     pub entities: Vec<EntityInfo>,
@@ -129,6 +132,7 @@ impl StructureTemplate {
     /// A new, never-loaded template: zero size and no palettes.
     pub fn empty() -> Self {
         Self {
+            location: "".into(),
             size: [0; 3],
             palettes: Vec::new(),
             entities: Vec::new(),
@@ -231,6 +235,7 @@ impl StructureTemplate {
             }
         }
         Self {
+            location: "".into(),
             size,
             palettes,
             entities,

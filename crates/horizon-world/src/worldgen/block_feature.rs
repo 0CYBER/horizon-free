@@ -192,17 +192,7 @@ impl super::block_predicate::PredicateBlockResolver for FeatureBlockBindings<'_>
         &self,
         property: BlockProperty,
     ) -> Result<BoundBlockProperty, DecodeError> {
-        let values = self
-            .physical_properties
-            .as_ref()
-            .ok_or(DecodeError::Field("predicate block property registry"))?;
-        Ok(values[match property {
-            BlockProperty::Solid => 0,
-            BlockProperty::Replaceable => 1,
-            BlockProperty::Liquid => 2,
-            BlockProperty::SolidRender => 3,
-        }]
-        .clone())
+        super::block_predicate::bound_property(self.physical_properties.as_ref(), property)
     }
     fn predicate_biome_set(
         &self,
