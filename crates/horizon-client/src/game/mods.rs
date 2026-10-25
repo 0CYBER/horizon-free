@@ -23,7 +23,7 @@ use {
         mod_list::Installed,
         text::{self, Text},
     },
-    horizon_mods::{Clock, Mods, Output, Player, Snapshot, Status},
+    horizon_mods::{Clock, Mods, Output, Player, Runs, Snapshot, Status},
     std::time::Instant,
 };
 
@@ -185,7 +185,7 @@ impl Game<'_> {
             .collect();
         let enabled = &self.settings.mods.enabled;
         let on = |id: &str| enabled.contains(id) || dev_ids.iter().any(|d| d == id);
-        let mods = Mods::load(&paths, on, vanilla_command);
+        let mods = Mods::load_for(Runs::Client, &paths, on, vanilla_command);
         self.mods.mods = mods;
         self.list_mods();
         self.sync_mod_commands();
@@ -279,7 +279,11 @@ impl Game<'_> {
             game_time: self.world.game_time.max(0) as u64,
             day_time: self.world.day_time.max(0) as u64,
         });
-        Snapshot { player, clock }
+        Snapshot {
+            player,
+            clock,
+            players: Vec::new(),
+        }
     }
     /// A game tick.
     pub(super) fn tick_mods(&mut self) {
@@ -347,6 +351,8 @@ impl Game<'_> {
                     self.sync_mod_commands();
                     Text::literal(format!("Mod {name} stopped: {reason}")).with_color(text::RED)
                 }
+                // Server mods' lines: this game runs no server mod yet.
+                Output::Tell { .. } | Output::Broadcast { .. } | Output::Reply { .. } => continue,
             };
             // Not through system_message: a mod must not hear its own lines.
             let focused = self.screen == Screen::Chat;

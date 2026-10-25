@@ -116,7 +116,7 @@ loading. Ordered by what the first native ports need:
 | `world-read` | blocks and biomes around the player, within the render distance | minimaps, schematics |
 | `render` | world-space lines, boxes and ghost blocks in a per-frame budget | Litematica-style placement, waypoints |
 | `registries` | new blocks, items, entities and recipes, mostly data: JSON models, textures, loot and recipes in the `.hmod`'s `assets/` and `data/` | server side; see [Multiplayer](#multiplayer) |
-| `server` | world events (block break/place, entity spawn/death, player join), game rules, server commands | runs where the world is simulated |
+| `server` | world events (entity spawn/death), game rules, world read/write, typed server commands | after [server mods 0.3](#server-mods-api-03-experimental)'s players, chat, blocks and commands |
 | `net` | a mod's own client↔server channel (custom payloads) | only between the two halves of the same mod |
 
 There is no file, socket, process or raw-input interface, on purpose.
@@ -438,6 +438,38 @@ none.
 { "horizon:enhanced_terrain_adaptation": { "kernel_size": 24, "kernel_distance": 24,
     "top": "carve", "bottom": "none", "rigid_junctions": true, "inflate": true } }
 ```
+
+### Server mods (API 0.3, experimental)
+
+A server mod runs where the world is simulated: on the dedicated server, on a
+LAN host and on single player's own server, never in a player's window. Its
+manifest says `side = "server"` and `api = "0.3"` (and only a server mod may);
+its component targets the WIT world `horizon-server-mod` instead of
+`horizon-mod`. Experimental: it may change in any release
+([stability](api/stability.md)).
+
+| Interface | Capability | Functions |
+|---|---|---|
+| `log` | always | as for client mods |
+| `storage` | `storage` | as for client mods, in the server's `horizon-mods/` |
+| `players` | `players` | `online()`: id, name, position, dimension, game mode, health of each player on; `tell(id, text)`, `broadcast(text)`: system messages after the mod's name, 8 per call |
+
+| Hook (export `server-events`) | When |
+|---|---|
+| `init() -> result<registration, string>` | once, after loading |
+| `tick(tick)` | each server tick |
+| `player-joined(player)`, `player-left(player)` | `registration.joins` |
+| `chat(player, text)` | `registration.chat`: each chat message a player sends |
+| `command(player, name, args)` | `/name args` typed by a player, for a command it registered; `ok(some)` is that player's feedback, `err` their red error |
+| `block-broken(player, pos, state)`, `block-placed(player, pos, state)` | `registration.blocks`, with the state as `minecraft:oak_log[axis=y]` |
+
+Capabilities that act on a local player (`game-read`, `chat`, `hud`) are for
+client mods; `players` is for server mods. In Rust: `impl
+horizon_mod_sdk::server::ServerMod` and `export_server_mod!`; the example is
+[`welcome`](../crates/horizon-mod-sdk/examples/welcome/src/lib.rs). The
+runtime, the registry's `check` and the SDK run them today; the game starts
+them once its server code calls these hooks (the next step), and until then a
+server mod that is turned on shows as run elsewhere.
 
 ## Versions and compatibility
 

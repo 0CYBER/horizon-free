@@ -4198,6 +4198,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "welcome"
+version = "0.1.0"
+dependencies = [
+ "horizon-mod-sdk",
+]
+
+[[package]]
 name = "wgpu"
 version = "30.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

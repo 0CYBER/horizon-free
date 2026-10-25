@@ -1,7 +1,8 @@
 //! Loads real mods built with the SDK: the coords-hud example and a guest
 //! that misbehaves on command. Needs `rustup target add wasm32-unknown-unknown`.
 use horizon_mods::{
-    Clock, Corner, Mods, Output, Package, Player, Snapshot, Status,
+    BlockPos, Clock, Corner, GameMode, Mods, Output, Package, Player, Runs, ServerPlayer, Snapshot,
+    Status,
     manifest::componentize,
     testing::{Script, TestGame},
 };
@@ -33,6 +34,8 @@ fn mods_dir() -> &'static Path {
                 "-p",
                 "coords-hud",
                 "-p",
+                "welcome",
+                "-p",
                 "horizon-mods-test-guest",
                 "--target-dir",
             ])
@@ -46,9 +49,13 @@ fn mods_dir() -> &'static Path {
         let built = target.join("wasm32-unknown-unknown/release");
         let dir = target.join("mods");
         std::fs::create_dir_all(&dir).unwrap();
-        let example = root.join("crates/horizon-mod-sdk/examples/coords-hud/horizon-mod.toml");
+        let example = |name: &str| {
+            let path = format!("crates/horizon-mod-sdk/examples/{name}/horizon-mod.toml");
+            std::fs::read_to_string(root.join(path)).unwrap()
+        };
         let mods = [
-            ("coords_hud", std::fs::read_to_string(example).unwrap()),
+            ("coords_hud", example("coords-hud")),
+            ("welcome", example("welcome")),
             ("horizon_mods_test_guest", GUEST_MANIFEST.to_string()),
         ];
         for (name, manifest) in mods {
@@ -80,6 +87,7 @@ fn player() -> Snapshot {
             game_time: 100,
             day_time: 24000 + 6000,
         }),
+        players: Vec::new(),
     }
 }
 
@@ -473,5 +481,76 @@ fn a_test_script_reloads_and_expects_a_stop() {
     assert!(
         !dir.exists(),
         "the scratch copy and its storage are removed"
+    );
+}
+
+fn alex() -> ServerPlayer {
+    ServerPlayer {
+        id: "00000000-0000-4000-8000-000000000001".into(),
+        name: "Alex".into(),
+        x: 0.5,
+        y: 64.0,
+        z: 0.5,
+        dimension: "minecraft:the_nether".into(),
+        game_mode: GameMode::Survival,
+        health: 20.0,
+    }
+}
+
+#[test]
+fn a_server_mod_runs_only_where_the_world_does() {
+    // A fresh folder: what the mod stored in an earlier run is beside it.
+    let dir = mods_dir().join("server");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("welcome.hmod");
+    std::fs::copy(mods_dir().join("welcome.hmod"), &path).unwrap();
+    let paths = std::slice::from_ref(&path);
+    let window = Mods::load_for(Runs::Client, paths, |_| true, |_| false);
+    assert_eq!(window.entries()[0].status, Status::Elsewhere);
+    assert!(!window.is_running());
+
+    let mut mods = Mods::load_for(Runs::Server, paths, |_| true, |c| c == "give");
+    assert!(mods.runs_server());
+    assert_eq!(
+        mods.server_commands().collect::<Vec<_>>(),
+        ["online", "mined"]
+    );
+    assert_eq!(mods.commands().count(), 0, "not the window's chat commands");
+    let alex = alex();
+    mods.set_snapshot(Snapshot {
+        players: vec![alex.clone()],
+        ..Snapshot::default()
+    });
+    mods.player_joined(&alex);
+    let greeted = [
+        Output::Tell {
+            name: "Welcome".into(),
+            player: alex.id.clone(),
+            text: "Welcome, Alex! 0 other player(s) online.".into(),
+        },
+        Output::Broadcast {
+            name: "Welcome".into(),
+            text: "Alex is here for the first time".into(),
+        },
+    ];
+    assert_eq!(mods.drain(), greeted);
+    let stone = BlockPos { x: 1, y: 63, z: 0 };
+    mods.block_broken(&alex, stone, "minecraft:stone");
+    assert!(mods.server_command(&alex, "mined"));
+    assert!(mods.server_command(&alex, "online"));
+    let reply = |text: &str| Output::Reply {
+        player: alex.id.clone(),
+        text: text.into(),
+        error: false,
+    };
+    assert_eq!(
+        mods.drain(),
+        [reply("You broke 1 block(s)"), reply("Alex (the_nether)")]
+    );
+    assert!(!mods.server_command(&alex, "where"));
+    assert!(
+        !mods.command("online"),
+        "a server command isn't the window's"
     );
 }

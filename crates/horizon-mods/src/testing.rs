@@ -87,6 +87,7 @@ impl TestGame {
         self.mods.set_snapshot(Snapshot {
             player: self.player.clone(),
             clock: self.clock,
+            ..Snapshot::default()
         });
     }
 

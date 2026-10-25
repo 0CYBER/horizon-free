@@ -111,6 +111,84 @@ interface events {
     chat: func(text: string);
 }
 
+/// Capability `players`, server mods only (manifest `api = "0.3"`,
+/// experimental): the players on the server, and messages to them.
+interface players {
+    enum game-mode {
+        survival,
+        creative,
+        adventure,
+        spectator,
+    }
+    record player {
+        /// The player's UUID, `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`.
+        id: string,
+        name: string,
+        /// Feet position, in blocks.
+        x: f64,
+        y: f64,
+        z: f64,
+        /// `minecraft:overworld`, `minecraft:the_nether`, ...
+        dimension: string,
+        game-mode: game-mode,
+        /// Hit points as vanilla counts them: 20 is full health without effects.
+        health: f32,
+    }
+    /// The players online, in the order they joined.
+    online: func() -> list<player>;
+    /// A system message to one player, after the mod's name; false when no
+    /// player with that id is online. Up to 8 messages per call.
+    tell: func(player: string, text: string) -> bool;
+    /// A system message to every player and the server's log, after the
+    /// mod's name. Counts toward the same 8 per call.
+    broadcast: func(text: string);
+}
+
+/// What the server calls in a server mod (manifest `api = "0.3"`,
+/// experimental). Only the hooks `init` asks for are ever called. The player
+/// in each event is as the server saw them when it happened.
+interface server-events {
+    use players.{player};
+
+    record registration {
+        /// Commands players may type, without the slash. A name vanilla
+        /// already uses is refused (vanilla's command runs).
+        commands: list<string>,
+        /// Call `tick` every server tick (20 per second).
+        tick: bool,
+        /// Call `player-joined` and `player-left`.
+        joins: bool,
+        /// Call `chat` for each chat message a player sends.
+        chat: bool,
+        /// Call `block-broken` and `block-placed`.
+        blocks: bool,
+    }
+    record block-pos {
+        x: s32,
+        y: s32,
+        z: s32,
+    }
+    /// Once, after loading. An error keeps the mod off and is logged.
+    init: func() -> result<registration, string>;
+    /// Each server tick, with the server's tick counter.
+    tick: func(tick: u64);
+    /// A player joined the server; they are in `players.online` already.
+    player-joined: func(player: player);
+    /// A player left the server; they are no longer in `players.online`.
+    player-left: func(player: player);
+    /// A chat message a player sent, as plain text.
+    chat: func(player: player, text: string);
+    /// `/name args` typed by `player`: ok(some(text)) is their feedback,
+    /// err(text) their error in red.
+    command: func(player: player, name: string, args: string) -> result<option<string>, string>;
+    /// A player broke the block at `pos` in their dimension: `state` is what
+    /// was there, as `minecraft:oak_log[axis=y]`.
+    block-broken: func(player: player, pos: block-pos, state: string);
+    /// A player placed `state` at `pos` in their dimension.
+    block-placed: func(player: player, pos: block-pos, state: string);
+}
+
+/// A client mod: runs in the player's game.
 world horizon-mod {
     import log;
     import game;
@@ -118,4 +196,14 @@ world horizon-mod {
     import hud;
     import storage;
     export events;
+}
+
+/// A server mod (manifest `side = "server"`, `api = "0.3"`, experimental):
+/// runs where the world is simulated, on the dedicated server, a LAN host
+/// and single player's own server.
+world horizon-server-mod {
+    import log;
+    import storage;
+    import players;
+    export server-events;
 }

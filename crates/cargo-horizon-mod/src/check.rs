@@ -1,10 +1,11 @@
 //! `cargo horizon-mod check <file>`: what the registry checks of a submission,
 //! run anywhere: its kind's own checks (docs/api/mod-index.md), its signature
 //! when given a key, and for a mod a trial run in the sandbox: it must start,
-//! survive ticks, frames, a chat line and each of its commands, and import
-//! no more than its capabilities.
+//! survive ticks, frames, a chat line and each of its commands (a server mod:
+//! a player joining, chatting, typing them and leaving), and import no more
+//! than its capabilities.
 use horizon_mods::{
-    Clock, Mods, Output, Package, Player, Snapshot, Status,
+    Clock, GameMode, Mods, Output, Package, Player, ServerPlayer, Snapshot, Status,
     index::{self, Facts, Kind},
     manifest::component_imports,
 };
@@ -181,37 +182,63 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
     if let Some(reason) = failed(&mods) {
         return Err(format!("it didn't start: {reason}"));
     }
-    report.commands = mods.commands().map(str::to_owned).collect();
+    let client: Vec<String> = mods.commands().map(str::to_owned).collect();
+    let server: Vec<String> = mods.server_commands().map(str::to_owned).collect();
+    report.commands = [client.clone(), server.clone()].concat();
+    // A server mod plays with one player on, who joins, chats and leaves.
+    let steve = ServerPlayer {
+        id: "00000000-0000-4000-8000-000000000001".into(),
+        name: "Steve".into(),
+        x: 0.5,
+        y: 64.0,
+        z: 0.5,
+        dimension: "minecraft:overworld".into(),
+        game_mode: GameMode::Survival,
+        health: 20.0,
+    };
+    let snapshot = |t: u64| Snapshot {
+        player: Some(Player {
+            x: 0.5 + t as f64 * 0.1,
+            y: 64.0,
+            z: 0.5,
+            yaw: 90.0,
+            pitch: 0.0,
+            health: 20.0,
+            food: 20,
+            dimension: "minecraft:overworld".into(),
+        }),
+        clock: Some(Clock {
+            game_time: t,
+            day_time: 1000 + t,
+        }),
+        players: vec![steve.clone()],
+    };
+    mods.set_snapshot(snapshot(0));
+    mods.player_joined(&steve);
     for t in 0..TICKS {
-        mods.set_snapshot(Snapshot {
-            player: Some(Player {
-                x: 0.5 + t as f64 * 0.1,
-                y: 64.0,
-                z: 0.5,
-                yaw: 90.0,
-                pitch: 0.0,
-                health: 20.0,
-                food: 20,
-                dimension: "minecraft:overworld".into(),
-            }),
-            clock: Some(Clock {
-                game_time: t,
-                day_time: 1000 + t,
-            }),
-        });
+        mods.set_snapshot(snapshot(t));
         mods.tick(t);
+        mods.server_tick(t);
         for _ in 0..FRAMES_PER_TICK {
             mods.frame(1.0 / 60.0);
         }
     }
     mods.chat("<Steve> hello");
-    for name in report.commands.clone() {
-        mods.command(&name);
+    mods.player_chat(&steve, "hello");
+    for name in &client {
+        mods.command(name);
     }
+    for name in &server {
+        mods.server_command(&steve, name);
+    }
+    mods.set_snapshot(Snapshot::default());
+    mods.player_left(&steve);
     for out in mods.drain() {
         report.output.push(match out {
             Output::Chat { text, .. } => format!("chat: {text}"),
-            Output::Feedback { text, error } => {
+            Output::Tell { text, .. } => format!("tell: {text}"),
+            Output::Broadcast { text, .. } => format!("broadcast: {text}"),
+            Output::Feedback { text, error } | Output::Reply { text, error, .. } => {
                 format!("{}: {text}", if error { "error" } else { "feedback" })
             }
             Output::Stopped { reason, .. } => return Err(format!("it stopped: {reason}")),
