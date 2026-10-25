@@ -829,13 +829,11 @@ impl Game<'_> {
                         r.joined = true;
                         r.profile = uuid;
                         r.profile_name = name.clone();
-                        // `multiplayer.downloadingTerrain`, as
-                        // LevelLoadingScreen shows it; no player name.
-                        r.status = horizon_client::text::Text::translate(
+                        // LevelLoadingScreen's line: no player name.
+                        r.status = horizon_client::lang::get_or(
                             "multiplayer.downloadingTerrain",
-                            &[],
-                        )
-                        .plain();
+                            "Loading terrain...",
+                        );
                     }
                 }
                 Event::Brand(brand) => {
