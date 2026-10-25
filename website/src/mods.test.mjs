@@ -1,0 +1,42 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { CAPABILITIES, listHtml, matches, projectHtml, readIndex } from "./mods.js";
+
+const project = (over = {}) => ({
+  id: "coords_hud", kind: "mod", name: "Coordinates HUD", summary: "Where you are.", authors: ["Horizon"],
+  license: "MIT", source: "https://example.org/src",
+  versions: [{ version: "0.1.0", api: "0.1", side: "client", capabilities: ["game-read", "hud"], game: "26.3",
+    file: { name: "coords_hud-0.1.0.hmod", url: "https://github.com/ludovic111/horizon-mods/releases/download/x/coords_hud-0.1.0.hmod", size: 438, sha256: "e".repeat(64) } }],
+  ...over,
+});
+
+test("reads schema 1, keeps the kinds it knows and refuses a newer schema", () => {
+  const index = { schema: 1, projects: [project(), project({ id: "map", kind: "world" }), project({ id: "Bad id" })] };
+  assert.deepEqual(readIndex(index).map((p) => p.id), ["coords_hud"]);
+  assert.equal(readIndex({ schema: 2, projects: [project()] }), null);
+  assert.equal(readIndex(null), null);
+});
+
+test("filters by kind and every word", () => {
+  const p = project();
+  assert.ok(matches(p, "all", "coordinates horizon"));
+  assert.ok(matches(p, "mod", ""));
+  assert.ok(!matches(p, "modpack", ""));
+  assert.ok(!matches(p, "all", "zoom"));
+});
+
+test("escapes what authors wrote and only links https addresses", () => {
+  const evil = project({ name: "<script>x</script>", source: "javascript:alert(1)", summary: '"><img src=x onerror=alert(1)>' });
+  const html = listHtml([evil]) + projectHtml(evil);
+  assert.ok(!html.includes("<script>x"));
+  assert.ok(!html.includes("<img src=x"));
+  assert.ok(!html.includes("javascript:"));
+});
+
+test("a mod's page says what it may do, as the game does", () => {
+  const html = projectHtml(project());
+  assert.ok(html.includes(`May ${CAPABILITIES["game-read"]}`));
+  assert.ok(html.includes("Unsigned"));
+  assert.ok(projectHtml(project({ key: "RWT" })).includes("Signed"));
+  assert.ok(html.includes("horizon-launcher mods install --source horizon coords_hud"));
+});
