@@ -82,14 +82,56 @@ pub enum BlockEntity {
     /// `SkullBlockEntity` of every skull and head block.
     Skull(Skull),
 }
-/// `SkullBlockEntity`: the player profile the head shows (kept as loaded —
-/// `SkullOwner` is a compound, or a string when it names a player only),
-/// the note block sound and `custom_name`.
+/// `SkullBlockEntity`: the player profile the head shows (kept as loaded:
+/// a compound, or a string when it names a player only), the note block
+/// sound and `custom_name`.
 #[derive(Clone, Debug, Default)]
 pub struct Skull {
     pub profile: Option<horizon_world::nbt::Tag>,
     pub note_block_sound: Option<String>,
     pub custom_name: Option<horizon_world::nbt::Tag>,
+    /// What `profile` draws, read from it once rather than every frame.
+    pub skin: Option<SkullSkin>,
+}
+impl Skull {
+    pub fn new(
+        profile: Option<horizon_world::nbt::Tag>,
+        note_block_sound: Option<String>,
+        custom_name: Option<horizon_world::nbt::Tag>,
+    ) -> Self {
+        let skin = profile.as_ref().map(SkullSkin::of);
+        Self {
+            profile,
+            note_block_sound,
+            custom_name,
+            skin,
+        }
+    }
+}
+/// `SkullBlockRenderer.getPlayerSkin` of a head's profile: its skin's URL
+/// with the `skins/<sha1>` sprite it downloads to, and the
+/// `DefaultPlayerSkin` drawn until that sprite is there (steve for a
+/// profile with no id).
+#[derive(Clone, Debug)]
+pub struct SkullSkin {
+    pub download: Option<(String, String)>,
+    pub fallback: &'static str,
+}
+impl SkullSkin {
+    pub fn of(profile: &horizon_world::nbt::Tag) -> Self {
+        let download = crate::skins::profile_skin_url_nbt(profile).and_then(|url| {
+            let location = crate::skins::skin_location(&crate::skins::texture_hash(&url)?);
+            Some((url, location))
+        });
+        let fallback = crate::skins::profile_uuid_nbt(profile)
+            .map_or("entity/player/wide/steve", crate::tab_list::default_skin);
+        Self { download, fallback }
+    }
+}
+/// The skull and head blocks (`SkullBlock`, `WallSkullBlock`): every
+/// `*_skull` and `*_head` but the piston's head.
+fn is_skull(name: &str) -> bool {
+    name.ends_with("_skull") || (name.ends_with("_head") && name != "minecraft:piston_head")
 }
 /// `CrafterBlockEntity`: nine slots that can be disabled, the powered flag
 /// and the ticks left in the crafting animation.
@@ -244,7 +286,7 @@ impl BlockEntity {
         if name.ends_with("_banner") {
             return Some(Self::Banner(Banner::default()));
         }
-        if name.ends_with("_head") || name.ends_with("_skull") {
+        if is_skull(name) {
             return Some(Self::Skull(Skull::default()));
         }
         if name == "minecraft:beacon" {

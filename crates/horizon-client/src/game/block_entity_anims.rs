@@ -394,34 +394,25 @@ impl Game<'_> {
     pub(super) fn chest_lid(&self, pos: [i32; 3], partial: f32) -> f32 {
         self.be_anims.lid(pos, partial)
     }
-    /// `SkullBlockRenderer.getPlayerSkin`: the skin sprite of the `profile` of
+    /// `SkullBlockRenderer.getPlayerSkin`: the skin sprite of the profile of
     /// the player head at `pos`. The skin download is started here; while it
-    /// is in flight (or when it cannot be got) the profile's uuid picks the
-    /// `DefaultPlayerSkin` for it, and a profile with no id keeps steve. A
-    /// head with no profile answers None so `SKIN_BY_TYPE` applies.
-    pub(super) fn skull_skin_at(&self, pos: [i32; 3]) -> Option<String> {
-        let key = (pos[0], pos[1], pos[2]);
-        let profile = match self.world.block_entities.get(&key) {
-            Some(BlockEntity::Skull(s)) => s.profile.clone(),
-            _ => None,
-        }
-        .or_else(|| self.saved_tag(pos).and_then(|t| t.get("profile").cloned()));
-        let profile = profile?;
-        if let Some(url) = skins::profile_skin_url_nbt(&profile)
-            && let Some(location) =
-                skins::texture_hash(&url).map(|hash| skins::skin_location(&hash))
-        {
+    /// is in flight (or when it cannot be got) the profile's default skin
+    /// stands in. A head with no profile answers None: `SKIN_BY_TYPE`.
+    pub(super) fn skull_skin_at(&self, pos: [i32; 3]) -> Option<&str> {
+        let Some(BlockEntity::Skull(skull)) =
+            self.world.block_entities.get(&(pos[0], pos[1], pos[2]))
+        else {
+            return None;
+        };
+        let skin = skull.skin.as_ref()?;
+        if let Some((url, location)) = &skin.download {
             self.skin_downloads
                 .borrow_mut()
-                .state(skins::Kind::Skin, &url);
-            if self.gui.atlas.sprites.contains_key(&location) {
+                .state(skins::Kind::Skin, url);
+            if self.gui.atlas.sprites.contains_key(location) {
                 return Some(location);
             }
         }
-        Some(
-            skins::profile_uuid_nbt(&profile)
-                .map(|uuid| horizon_client::tab_list::default_skin(uuid).to_owned())
-                .unwrap_or_else(|| "entity/player/wide/steve".to_owned()),
-        )
+        Some(skin.fallback)
     }
 }

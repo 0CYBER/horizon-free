@@ -733,7 +733,7 @@ pub struct Scene<'a> {
     /// The skin sprite a `player_head` shows at a position (`SkullBlockRenderer`
     /// profile → skin): a downloaded `skins/<sha1>` slot or the profile's
     /// `DefaultPlayerSkin` fallback; None keeps `SKIN_BY_TYPE` (steve).
-    pub skull: &'a dyn Fn([i32; 3]) -> Option<String>,
+    pub skull: &'a dyn Fn([i32; 3]) -> Option<&'a str>,
     /// Font glyph cell (none for blank glyphs such as the space) and advance.
     pub glyph: &'a dyn Fn(char) -> (Option<Rect>, f32),
 }
@@ -1285,10 +1285,8 @@ impl BlockEntityRenderer {
                 };
                 // SkullBlockRenderer.getRenderType: the profile's skin when it
                 // resolves, `SKIN_BY_TYPE` (steve) otherwise.
-                let skin;
                 let texture = if *kind == SkullType::Player {
-                    skin = (scene.skull)(pos);
-                    skin.as_deref().unwrap_or(texture)
+                    (scene.skull)(pos).unwrap_or(texture)
                 } else {
                     texture
                 };

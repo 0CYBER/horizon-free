@@ -27,10 +27,6 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
   change), none for a fix. Agents never add `release-now`: the maintainer decides it. Merges ship in batches of 5, or after
   6 hours ([docs/release-flow.md](docs/release-flow.md)).
 - Contributors first: `gh pr list --state open --search <area>` before you start; never duplicate theirs.
-- Asked for a feature? Run the whole loop: check open PRs for the area (above), work in a new worktree,
-  `git fetch` the upstream remote (`ludovic111/horizon`) and start from its latest `main`, build, run
-  `tools/pr_ready.py`, then push to your fork and open the pull request against upstream's `main` —
-  never against the fork itself.
 
 ## Crates
 

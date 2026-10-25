@@ -637,13 +637,12 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
     if id == "minecraft:skull" {
         return Some((
             pos,
-            BlockEntity::Skull(crate::containers::Skull {
-                profile: tag.get("profile").cloned(),
-                note_block_sound: text(tag.get("note_block_sound")),
-                custom_name: tag
-                    .get("custom_name")
+            BlockEntity::Skull(crate::containers::Skull::new(
+                tag.get("profile").cloned(),
+                text(tag.get("note_block_sound")),
+                tag.get("custom_name")
                     .and_then(crate::block_entity_nbt::component),
-            }),
+            )),
         ));
     }
     // A spawner's block entity id is not its block's name.
@@ -3940,6 +3939,13 @@ mod tests {
         );
         let (_, decoded) = decode_block_entity(&plain).expect("plain skull");
         assert!(matches!(decoded, crate::containers::BlockEntity::Skull(_)));
+        // The heads and skulls have one; the piston's head is no skull.
+        use crate::containers::BlockEntity;
+        assert!(matches!(
+            BlockEntity::for_block("minecraft:player_wall_head"),
+            Some(BlockEntity::Skull(_))
+        ));
+        assert!(BlockEntity::for_block("minecraft:piston_head").is_none());
     }
 
     #[test]
