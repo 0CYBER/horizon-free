@@ -1,16 +1,66 @@
 //! Shader packs, for development until the Shader Packs page exists: `HORIZON_SHADER_PACK=<name>`
-//! (the runtime that uses it comes next). What the pack's uniforms need from the game.
+//! runs `shaderpacks/<name>` (a folder or a zip beside `options.txt`) over the world. The
+//! programs of the current dimension's folder are loaded when the dimension changes (spec 1.2).
 
 use horizon_client::camera::CameraFluid;
 use horizon_client::gfx::pack_uniforms::PackInputs;
+use horizon_shaders::{Macros, Pack, Properties, dimension_folder, load_post};
 
-use super::Game;
+use super::{Dim, Game};
 
 impl Game<'_> {
-    /// This frame's inputs to the pack's uniforms.
+    /// Loads the pack for the current dimension when it changed, and returns this frame's
+    /// inputs to the pack's uniforms.
     pub(super) fn shader_pack_inputs(&mut self, camera: glam::DVec3, partial: f32) -> PackInputs {
-        if std::env::var_os("HORIZON_SHADER_PACK").is_none() {
+        let Some(name) = std::env::var_os("HORIZON_SHADER_PACK") else {
             return PackInputs::default();
+        };
+        let dimension = match self.dim {
+            Dim::Overworld => 0,
+            Dim::Nether => -1,
+            Dim::End => 1,
+        };
+        if let Some(renderer) = &mut self.renderer
+            && renderer.shader_pack_dimension() != Some(dimension)
+        {
+            let name = name.to_string_lossy();
+            let started = std::time::Instant::now();
+            let path = std::env::current_dir()
+                .unwrap_or_default()
+                .join("shaderpacks")
+                .join(&*name);
+            match Pack::open(&path) {
+                Ok(pack) => {
+                    let macros = Macros::standard();
+                    let text = pack.read_text("shaders.properties").unwrap_or_default();
+                    let properties = Properties::parse(&text, &macros);
+                    for note in &properties.notes {
+                        log::warn!(
+                            "shader pack {name}: shaders.properties:{}: {}",
+                            note.line,
+                            note.message
+                        );
+                    }
+                    let folder = dimension_folder(&pack, dimension);
+                    let post = load_post(&pack, &folder, &properties, &macros);
+                    if let Some((programs, notes)) = renderer.set_shader_pack(dimension, Some(post))
+                    {
+                        for note in notes {
+                            log::warn!("shader pack {name}: {note}");
+                        }
+                        log::info!(
+                            "shader pack {name}: folder `{folder}`, {} programs ({}) in {} ms",
+                            programs.len(),
+                            programs.join(" "),
+                            started.elapsed().as_millis()
+                        );
+                    }
+                }
+                Err(e) => {
+                    log::warn!("shader pack {name}: {e}");
+                    renderer.set_shader_pack(dimension, None);
+                }
+            }
         }
         let lerp = |(old, new): (f32, f32)| old + (new - old) * partial;
         let at = camera.floor().as_ivec3();
