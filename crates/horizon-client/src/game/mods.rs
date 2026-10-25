@@ -395,6 +395,12 @@ impl Game<'_> {
                 .chat
                 .add(&self.gui.atlas, line, None, self.ticks, focused);
         }
+        // A mod may set or clear its settings page in any call, not only
+        // while loading: its row's Settings button follows.
+        let rows = self.settings.mods.installed.iter_mut();
+        for (row, e) in rows.zip(self.mods.mods.entries()) {
+            row.has_settings = e.has_ui_settings();
+        }
     }
     /// The mods' HUD panels, stacked with the extras in their corners.
     pub(super) fn draw_mod_panels(&self, batch: &mut HudBatch, corners: &mut Corners) {
@@ -521,10 +527,10 @@ impl Game<'_> {
         let mut items: Vec<(String, f32, f32)> = Vec::new();
         let atlas = &self.gui.atlas;
         let in_world = self.player.is_some();
-        ui::menu_background(batch, &atlas, 0.0, 0.0, batch.width, batch.height, in_world);
+        ui::menu_background(batch, atlas, 0.0, 0.0, batch.width, batch.height, in_world);
         ui::centered_text(
             batch,
-            &atlas,
+            atlas,
             &Text::literal(title),
             0.0,
             15.0,
@@ -545,7 +551,7 @@ impl Game<'_> {
                     };
                     ui::centered_text(
                         batch,
-                        &atlas,
+                        atlas,
                         &Text::literal(t.text.clone()),
                         x,
                         wy + 1.0,
@@ -557,7 +563,7 @@ impl Game<'_> {
                     if self.res.items().get(&i.item).is_some() {
                         items.push((i.item.clone(), x + 2.0, wy + 2.0));
                     } else {
-                        batch.text(&atlas, "?", x + 6.0, wy + 6.0, u32::MAX, true);
+                        batch.text(atlas, "?", x + 6.0, wy + 6.0, u32::MAX, true);
                     }
                     let name = if i.name.is_empty() {
                         i.item.rsplit(':').next().unwrap_or(&i.item).to_string()
@@ -565,7 +571,7 @@ impl Game<'_> {
                         i.name.clone()
                     };
                     batch.text_styled(
-                        &atlas,
+                        atlas,
                         &Text::literal(name),
                         x + 22.0,
                         wy + 6.0,
@@ -582,12 +588,12 @@ impl Game<'_> {
                     list_i += 1;
                     let rows_top = wy + 4.0;
                     let rows_bottom = wy + wh - 4.0;
-                    batch.fill(&atlas, x, wy, MOD_UI_COLUMN, wh, 0x8000_0000);
+                    batch.fill(atlas, x, wy, MOD_UI_COLUMN, wh, 0x8000_0000);
                     for (b, yy) in [(x, wy), (x, wy + wh - 1.0)] {
-                        batch.fill(&atlas, b, yy, MOD_UI_COLUMN, 1.0, 0xFF50_5050);
+                        batch.fill(atlas, b, yy, MOD_UI_COLUMN, 1.0, 0xFF50_5050);
                     }
                     for (xx, yy) in [(x, wy), (x + MOD_UI_COLUMN - 1.0, wy)] {
-                        batch.fill(&atlas, xx, yy, 1.0, wh, 0xFF50_5050);
+                        batch.fill(atlas, xx, yy, 1.0, wh, 0xFF50_5050);
                     }
                     let content = l.rows.len() as f32 * 12.0;
                     let first = (scroll.amount / 12.0) as usize;
@@ -596,13 +602,13 @@ impl Game<'_> {
                     for (vi, ri) in (first..last).enumerate() {
                         let ry = rows_top + vi as f32 * 12.0 - (scroll.amount % 12.0);
                         if ui::hovered(self.cursor, x, ry, MOD_UI_COLUMN - 6.0, 12.0) {
-                            batch.fill(&atlas, x + 1.0, ry, MOD_UI_COLUMN - 8.0, 12.0, 0x20FF_FFFF);
+                            batch.fill(atlas, x + 1.0, ry, MOD_UI_COLUMN - 8.0, 12.0, 0x20FF_FFFF);
                         }
                         if l.selected == Some(ri as u32) {
-                            batch.fill(&atlas, x + 1.0, ry, 3.0, 12.0, 0xFFFF_FFFF);
+                            batch.fill(atlas, x + 1.0, ry, 3.0, 12.0, 0xFFFF_FFFF);
                         }
                         batch.text_styled(
-                            &atlas,
+                            atlas,
                             &Text::literal(l.rows[ri].clone()),
                             x + 6.0,
                             ry + 2.0,
@@ -612,7 +618,7 @@ impl Game<'_> {
                     }
                     ui::scrollbar(
                         batch,
-                        &atlas,
+                        atlas,
                         x + MOD_UI_COLUMN - 5.0,
                         rows_top,
                         rows_bottom,
@@ -625,7 +631,7 @@ impl Game<'_> {
         let hover = ui::hovered(self.cursor, cx - 100.0, batch.height - 27.0, 200.0, 20.0);
         ui::button(
             batch,
-            &atlas,
+            atlas,
             cx - 100.0,
             batch.height - 27.0,
             200.0,
