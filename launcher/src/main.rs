@@ -2976,6 +2976,12 @@ impl Launcher {
                                 .child(format!("{:.0}%", p * 100.)),
                         )
                         .into_any_element()
+                } else if self.removing.as_deref() == Some(tag.as_str()) {
+                    // No Use or Remove while the folder is going.
+                    text(theme::CAPTION)
+                        .text_color(t.muted)
+                        .child("Removing…")
+                        .into_any_element()
                 } else if installed {
                     let confirming = self.confirm_remove.as_ref() == Some(&tag);
                     let (t1, t2) = (tag.clone(), tag.clone());
