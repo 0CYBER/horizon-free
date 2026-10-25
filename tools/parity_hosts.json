@@ -18,7 +18,7 @@
    "setup": "test ! -e ~/.actions-runners/horizon/paused && set -a && . ~/.actions-runners/horizon/.env && set +a && export PATH=$(cat ~/.actions-runners/horizon/.path) && eval \"$(vscreen env)\"",
    "jobs": 8,
    "nice": 19,
-   "note": "ludodesktop, the maintainer's own machine: only while nobody is at the screen (tools/ci/runner_pause.py: a paused desktop refuses workers and stops the running ones, whose harnesses then run here); 8 jobs at most, in the CI runner's environment and slice"
+   "note": "ludodesktop, the maintainer's own machine: only while nobody uses it (tools/ci/runner_pause.py: screen locked or untouched for 15 min, no game; a paused desktop refuses workers and stops the running ones, whose harnesses then run here); 8 jobs at most, in the CI runner's environment and slice"
   },
   "thinkpad": {
    "ssh": "thinkpad",

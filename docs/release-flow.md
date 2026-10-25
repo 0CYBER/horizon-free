@@ -68,21 +68,23 @@ release's macOS build back. Each keeps its own checkout, `target/` and Rust inst
 time, under a lock) and the parity passes and slots.
 
 **The desktop's runner.** `ludodesktop-horizon` (labels `self-hosted`, `Linux`, `X64`, `ludodesktop`, and
-`horizon-game` once a full trial has passed there) runs on the maintainer's Linux desktop, only while nobody is
-at it. `tools/ci/linux-runner.sh install`, run there as him, registers it and installs two systemd user services:
-`horizon-runner` (the runner, in `~/.actions-runners/horizon`, nice 19, in `horizon-ci.slice` with CPU and I/O
-weight 20 and memory capped at two thirds of the RAM; `CARGO_BUILD_JOBS` and the harness slots at 8, after the
-machine froze under ~7 cold cargo builds on 2026-10-14; its own Rust install; the JDK, sccache and the build
-libraries from nixpkgs; its own `vscreen` so no game it starts reaches his screen) and `horizon-runner-pause`
-(`tools/ci/runner_pause.py`), the only thing that starts the runner. The watcher stops it while a graphical
-session is open on the machine, locked or not (`~/fleet/power status` says "IN USE"), while a game runs (Steam,
-gamescope, Wine, Proton or Minecraft processes, fleet-load's own detection, or a process outside the CI slice
-using the GPU at 50 % or more), or while `~/.actions-runners/horizon/pause` exists, and starts it again 5 minutes
-after the last such sign. A job already under way is throttled to 2 threads at the lowest weight and the runner
-stops after it: freezing the job would make GitHub drop it as lost and the harnesses time out. Old pull requests'
-`runner-env.sh` know only the Mac: the runner's `.env` and `.path` give their jobs Python, the JDK and the
-vanilla data (`HORIZON_SHARED_SOURCE`) all the same. The nightly audit stays on the Mac mini's runners, so its
-comparison with the previous night is always made on one platform.
+`horizon-game` once a full trial has passed there) runs on the maintainer's Linux desktop while nobody uses it: its
+screen locked, or untouched for 15 minutes (his rule, 2026-10-26). `tools/ci/linux-runner.sh install`, run there as
+him, registers it and installs two systemd user services: `horizon-runner` (the runner, in
+`~/.actions-runners/horizon`, nice 19, in `horizon-ci.slice` with CPU and I/O weight 20 and memory capped at two
+thirds of the RAM; `CARGO_BUILD_JOBS` and the harness slots at 8, after the machine froze under ~7 cold cargo
+builds on 2026-10-14; its own Rust install; the JDK, sccache and the build libraries from nixpkgs; its own
+`vscreen` so no game it starts reaches his screen) and `horizon-runner-pause` (`tools/ci/runner_pause.py`), the
+only thing that starts the runner. The watcher stops it at once on keyboard, mouse or gamepad input (read from
+`/dev/input`: only whether bytes came, never what), while an unlocked session has had input in the last 15 minutes,
+while the CPU package is at 90 °C or more, while a game runs (Steam, gamescope, Wine, Proton or Minecraft
+processes, fleet-load's own detection, or a process outside the CI slice using the GPU at 50 % or more), or while
+`~/.actions-runners/horizon/pause` exists, and starts it again 5 minutes after the last such sign. A job already
+under way is throttled to 2 threads at the lowest weight and the runner stops after it: freezing the job would make
+GitHub drop it as lost and the harnesses time out. Old pull requests' `runner-env.sh` know only the Mac: the
+runner's `.env` and `.path` give their jobs Python, the JDK and the vanilla data (`HORIZON_SHARED_SOURCE`) all the
+same. The nightly audit stays on the Mac mini's runners, so its comparison with the previous night is always made
+on one platform.
 
 ## Merging
 

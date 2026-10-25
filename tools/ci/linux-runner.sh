@@ -9,10 +9,10 @@
 #
 # Everything lives in ~/.actions-runners/horizon (never in ~/code): the runner, its own rustup and cargo homes,
 # the work folder, and copies of this script and runner_pause.py taken at install time (a pull request's checkout
-# never runs as the service). horizon-runner-pause.service (runner_pause.py) starts the runner only while nobody is
-# at the screen or playing, and stops it otherwise. The runner runs nice, in horizon-ci.slice (low CPU and I/O weight, memory capped),
-# on its own virtual screen: vscreen (a headless sway) where it is installed, else Xvfb from nixpkgs with Mesa's
-# Vulkan drivers.
+# never runs as the service). horizon-runner-pause.service (runner_pause.py) starts the runner only while nobody
+# uses the machine (screen locked or untouched for 15 min, no game), and stops it otherwise. The runner runs nice,
+# in horizon-ci.slice (low CPU and I/O weight, memory capped), on its own virtual screen: vscreen (a headless sway)
+# where it is installed, else Xvfb from nixpkgs with Mesa's Vulkan drivers.
 # HORIZON_SHARED_SOURCE: the imported vanilla data (default ~/horizon-local/shared-local, else
 # ~/code/horizon/.local); RUNNER_JOBS: cargo jobs and harnesses at once (default a third of the threads, at most 8:
 # ludodesktop froze under ~7 cold cargo builds on 2026-10-14, and it is the maintainer's own machine).
@@ -40,7 +40,7 @@ parity_host_links() {
   [ -d "$checkout" ] || return 0
   mkdir -p "$shared"
   for entry in "$checkout"/*; do
-    [ -L "$entry" ] && ln -sfn "$entry" "$shared/$(basename "$entry")"
+    if [ -L "$entry" ]; then ln -sfn "$entry" "$shared/$(basename "$entry")"; fi
   done
 }
 
@@ -151,7 +151,7 @@ RestartSec=30
 EOF
   cat > "$units/horizon-runner-pause.service" <<EOF
 [Unit]
-Description=Runs the Horizon CI runner only while nobody is at the screen or playing
+Description=Runs the Horizon CI runner only while nobody uses the machine or plays on it
 [Service]
 ExecStart=$(command -v python3) $dir/runner_pause.py
 Restart=always

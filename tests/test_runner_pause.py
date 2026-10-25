@@ -18,7 +18,7 @@ class Machine:
         self.throttles = []  # (clock, on)
         self.calls = []
 
-    def reason(self, hot):
+    def reason(self, hot, keys):
         return next((reason for start, end, reason in self.signs if start <= self.clock < end), None)
 
     def systemctl(self, *arguments):
@@ -76,6 +76,17 @@ class RunnerPauseTests(unittest.TestCase):
         self.assertGreaterEqual(stop, 1200)  # and the runner stops once it ends, not before
         self.assertLess(stop, 1215)
         self.assertEqual(machine.throttles[-1], (1290 + 300, False))
+
+    def test_the_desktop_is_free_when_locked_or_untouched_for_15_minutes(self):
+        cases = [  # (session, seconds since the last input, someone there)
+            (("3", False), 30, True), (("3", True), 30, True),  # any input pauses at once, even on the lock screen
+            (("3", False), 120, True), (("3", False), 1000, False),  # unlocked: free after 15 min untouched
+            (("3", True), 120, False), (None, 120, False),  # locked, or nobody logged in
+        ]
+        for session, idle, there in cases:
+            with self.subTest(session=session, idle=idle), \
+                    mock.patch.object(runner_pause, "seat_session", lambda: session):
+                self.assertEqual(runner_pause.at_the_screen(idle) is not None, there)
 
 
 if __name__ == "__main__":

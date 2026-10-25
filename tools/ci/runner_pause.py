@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Pauses the Horizon CI runner (tools/ci/linux-runner.sh) while the maintainer is at this machine or plays on it.
+"""Pauses the Horizon CI runner (tools/ci/linux-runner.sh) while the maintainer uses this machine or plays on it.
 
-The runner works only while nobody is at the screen (rule of 2026-10-25, after ludodesktop was restarted under a
-CI load while he used it). It pauses when any of these holds:
-  - a graphical session is open on seat0, locked or not: what `~/fleet/power status` calls "IN USE";
+The runner works while nobody uses the machine: its screen locked, or untouched for IDLE_AFTER seconds (900).
+It pauses when any of these holds:
+  - keyboard, mouse or gamepad input in the last INPUT_PAUSE seconds (60), or an unlocked session on seat0 with
+    input in the last IDLE_AFTER seconds;
+  - the CPU package at TEMP_LIMIT °C (90) or more;
   - fleet-load says a game runs (~/fleet/load: Steam, gamescope, Wine or Proton processes);
   - a process of his matches GAME below (the same, plus Minecraft and a Horizon game he started himself);
   - a process outside horizon-ci.slice keeps the GPU busy (nvidia-smi: SM use >= GPU_BUSY %, default 50, in two
@@ -34,6 +36,9 @@ GPU_BUSY = int(os.environ.get("GPU_BUSY", 50))
 INTERVAL = int(os.environ.get("INTERVAL", 15))
 RESUME_AFTER = int(os.environ.get("RESUME_AFTER", 300))
 THROTTLE_CPUS = int(os.environ.get("THROTTLE_CPUS", 2))
+INPUT_PAUSE = int(os.environ.get("INPUT_PAUSE", 60))
+IDLE_AFTER = int(os.environ.get("IDLE_AFTER", 900))
+TEMP_LIMIT = int(os.environ.get("TEMP_LIMIT", 90))
 
 
 def log(text):
@@ -53,13 +58,71 @@ def ci_process(pid):
         return True  # gone
 
 
-def at_the_screen():
-    """A graphical login on seat0, as ~/fleet/power status counts it (a locked screen counts too)."""
+class Input:
+    """Keyboard, mouse and gamepad activity, from /dev/input (the input group): only whether bytes came, never what."""
+
+    def __init__(self):
+        self.devices = {}  # path -> file descriptor
+        self.last = time.monotonic()  # a start counts as input: nothing is known yet
+
+    def poll(self):
+        try:
+            text = Path("/proc/bus/input/devices").read_text()
+        except OSError:
+            text = ""
+        wanted = {f"/dev/input/{handler}" for block in text.split("\n\n") for line in block.splitlines()
+                  if line.startswith("H: Handlers=") and re.search(r"\b(kbd|mouse\d*|js\d*)\b", line)
+                  for handler in line.split("=", 1)[1].split() if handler.startswith("event")}
+        for path in set(self.devices) - wanted:
+            os.close(self.devices.pop(path))
+        for path in wanted - set(self.devices):
+            try:
+                self.devices[path] = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+            except OSError:
+                pass
+        for path, descriptor in list(self.devices.items()):
+            try:
+                while os.read(descriptor, 4096):
+                    self.last = time.monotonic()
+            except BlockingIOError:
+                pass
+            except OSError:  # unplugged
+                os.close(self.devices.pop(path))
+        return time.monotonic() - self.last
+
+
+def seat_session():
+    """The graphical session on seat0 and whether its screen is locked, or None."""
     sessions = subprocess.run(["loginctl", "list-sessions", "--no-legend"], capture_output=True, text=True).stdout
     for line in sessions.splitlines():
         fields = line.split()
         if "seat0" in fields:
-            return f"session {fields[0]} of {fields[2] if len(fields) > 2 else '?'} at the screen (seat0)"
+            locked = subprocess.run(["loginctl", "show-session", fields[0], "-p", "LockedHint", "--value"],
+                                    capture_output=True, text=True).stdout.strip() == "yes"
+            return fields[0], locked
+    return None
+
+
+def at_the_screen(input_idle):
+    """Someone is at the machine: input in the last INPUT_PAUSE seconds, or an unlocked session with input in the last
+    IDLE_AFTER seconds. A locked screen, or one nobody touched for IDLE_AFTER, leaves the machine to CI."""
+    if input_idle < INPUT_PAUSE:
+        return f"input {input_idle:.0f} s ago"
+    session = seat_session()
+    if session and not session[1] and input_idle < IDLE_AFTER:
+        return f"session {session[0]} unlocked, input {input_idle:.0f} s ago"
+    return None
+
+
+def too_hot():
+    """The CPU package above TEMP_LIMIT °C (coretemp or k10temp)."""
+    for monitor in Path("/sys/class/hwmon").glob("hwmon*"):
+        try:
+            if (monitor / "name").read_text().strip() in ("coretemp", "k10temp"):
+                celsius = int((monitor / "temp1_input").read_text()) / 1000
+                return f"CPU at {celsius:.0f} °C" if celsius >= TEMP_LIMIT else None
+        except (OSError, ValueError):
+            pass
     return None
 
 
@@ -133,11 +196,12 @@ def throttle(on):
         systemctl("set-property", "--runtime", SLICE, "CPUWeight=20", "IOWeight=20", "CPUQuota=")
 
 
-def pause_reason(hot):
-    """Why the runner may not work now, or None. hot: the GPU users seen busy at the last sample (updated)."""
+def pause_reason(hot, keys):
+    """Why the runner may not work now, or None. hot: the GPU users seen busy at the last sample (updated);
+    keys: the Input watcher."""
     if MANUAL.exists():
         return f"paused by hand ({MANUAL})"
-    reason = at_the_screen() or fleet_load_gaming() or game_process()
+    reason = at_the_screen(keys.poll()) or too_hot() or fleet_load_gaming() or game_process()
     if reason:
         return reason
     busy = {pid for pid, sm in gpu_users().items() if sm >= GPU_BUSY}
@@ -154,13 +218,13 @@ def pause_reason(hot):
 
 
 def main():
-    hot = {}
+    hot, keys = {}, Input()
     # A boot (or a restart of this watcher) counts as a sign: the runner starts RESUME_AFTER seconds later at the
     # earliest, which leaves time to log in after switching the machine on.
     last_sign = time.monotonic()
     paused = None
     while True:
-        reason = pause_reason(hot)
+        reason = pause_reason(hot, keys)
         now = time.monotonic()
         if reason:
             last_sign = now
