@@ -102,6 +102,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
              pushes it, as in vanilla), not ever faster across the ground.
 - eat:       holding right click with bread, the guest's own screen plays the eating (the item in use
              counts up) and the server eats one loaf and feeds the guest.
+- consume-release: the host and the guest each cancel eating a golden apple and drinking milk from
+              either hand: use ends on client and server, the item and effects stay, and holding
+              use to completion still consumes the item (#1293).
 - eating:    each side sees the other player eat: the item in use (LivingEntity's flags) on the
              player it draws, and no longer once the bread is eaten (#803);
 - xp:        experience orbs 4 blocks away fly to the guest, show on the guest's screen and give the
@@ -4895,6 +4898,82 @@ def check_held_use(host, guest, out):
 
 CHECKS += ['helduse']
 CHECK_FNS.update(helduse=check_held_use)
+
+
+def check_consume_release(host, guest, out):
+    """#1293: releasing a consumable in either hand cancels it on client and server, while
+    holding it to completion applies its effects and remainder (Consumable.onConsume)."""
+    apart(host, guest)
+    seen = {}
+    try:
+        for game in (host, guest):
+            game('command', command='gamemode survival')
+            x, y, z = pos_of(game)
+            game.raw('look-at', x, y + 1.6, z + 2)
+            for hand in ('mainhand', 'offhand'):
+                for item in ('golden_apple', 'milk_bucket'):
+                    case = f'{game.name}-{hand}-{item}'
+                    game('command', command='clear @s')
+                    game('command', command='item replace entity @s weapon.offhand with minecraft:air')
+                    game('command', command='effect clear @s')
+                    if item == 'milk_bucket':
+                        game('command', command='effect give @s minecraft:speed 60')
+                    game('command', command=f'item replace entity @s weapon.{hand} with minecraft:{item}')
+                    game.wait(10)
+                    assert game('looking_at')['kind'] == 'none', f'{case} is not aimed into the air'
+                    before = set(effect_ids(game))
+                    assert before == ({'speed'} if item == 'milk_bucket' else set()), f'{case}: {before}'
+                    game.raw('mouse', 'right', 'down')
+                    game.wait(5)
+                    during = {'client': game('state').get('using'), 'server': server_using(host, game)}
+                    game.raw('mouse', 'right', 'up')
+                    game.wait(10)
+                    released = {'client': game('state').get('using'), 'server': server_using(host, game)}
+                    # Wait past the full use duration: the server must not finish eating after release.
+                    game.wait(60)
+                    effects = set(effect_ids(game))
+                    inventory = game('inventory')
+                    stack = inventory['offhand'] if hand == 'offhand' else inventory['held']
+                    cancelled = {'during': during, 'released': released,
+                                 'stack': stack, 'effects': sorted(effects)}
+                    seen[case] = {'cancelled': cancelled}
+                    assert during['client'] and during['server'], f'{case} did not start on both sides: {cancelled}'
+                    assert released == {'client': None, 'server': None}, f'{case} did not cancel: {cancelled}'
+                    assert stack and stack['item'] == f'minecraft:{item}' and stack['count'] == 1, \
+                        f'{case} consumed the released item: {cancelled}'
+                    assert effects == before, f'{case} applied consumption effects after release: {cancelled}'
+                    game.shot(out, f'consume-release-{hand}-{item}')
+                    # A sustained press must still consume normally, including the milk's empty bucket.
+                    game.raw('mouse', 'right', 'down')
+                    game.wait(40)
+                    game.raw('mouse', 'right', 'up')
+                    game.wait(10)
+                    inventory = game('inventory')
+                    stack = inventory['offhand'] if hand == 'offhand' else inventory['held']
+                    completed = {'stack': stack, 'effects': sorted(effect_ids(game)),
+                                 'using': (game('state').get('using'), server_using(host, game))}
+                    seen[case]['completed'] = completed
+                    assert completed['using'] == (None, None), \
+                        f'{case} did not finish normally: {completed}'
+                    if item == 'golden_apple':
+                        assert inventory['counts'].get('minecraft:golden_apple', 0) == 0, \
+                            f'{case} kept the eaten apple: {completed}'
+                        assert set(completed['effects']) == {'regeneration', 'absorption'}, f'{case}: {completed}'
+                    else:
+                        assert not completed['effects'] and stack and stack['item'] == 'minecraft:bucket' \
+                            and stack['count'] == 1, f'{case}: {completed}'
+    finally:
+        for game in (host, guest):
+            game.raw('mouse', 'right', 'up')
+            game('command', command='clear @s')
+            game('command', command='item replace entity @s weapon.offhand with minecraft:air')
+            game('command', command='effect clear @s')
+        face_each_other(host, guest)
+    return seen
+
+
+CHECKS += ['consume-release']
+CHECK_FNS.update({'consume-release': check_consume_release})
 
 
 def check_wind(host, guest, out):
