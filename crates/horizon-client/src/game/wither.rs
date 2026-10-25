@@ -2,10 +2,8 @@
 //! its boss bar, and its skulls hitting and exploding.
 use super::Game;
 use horizon_client::{
-    hud_overlays,
     mobs::{Damage, DamageKind, Species, Who},
     projectiles::{Projectile, ProjectileKind},
-    text::Text,
 };
 
 impl Game<'_> {
@@ -77,45 +75,6 @@ impl Game<'_> {
             }
         }
         Ok(())
-    }
-    /// The wither boss bars (purple), within range.
-    pub(super) fn wither_bars(&self, bars: &mut Vec<hud_overlays::BossBar>) {
-        let Some(p) = self.player.as_ref() else {
-            return;
-        };
-        for m in self
-            .mobs
-            .iter()
-            .filter(|m| m.species() == Species::Wither && m.alive())
-        {
-            if m.position.distance_squared(p.position) > 64.0 * 64.0 {
-                continue;
-            }
-            let progress = if m.extra.counter > 0 {
-                1.0 - m.extra.counter as f32 / horizon_client::mobs::wither::INVULNERABLE as f32
-            } else {
-                (m.health / m.attrs.max_health).clamp(0.0, 1.0)
-            };
-            let name = m
-                .custom_name
-                .clone()
-                .unwrap_or_else(|| self.translate("entity.minecraft.wither", "Wither"));
-            bars.push(hud_overlays::BossBar {
-                name: Text::literal(name),
-                progress,
-                color: 5,
-                overlay: 0,
-            });
-        }
-    }
-    pub(super) fn wither_near(&self) -> bool {
-        self.player.as_ref().is_some_and(|p| {
-            self.mobs.iter().any(|m| {
-                m.species() == Species::Wither
-                    && m.alive()
-                    && m.position.distance_squared(p.position) <= 64.0 * 64.0
-            })
-        })
     }
     /// `WitherSkull.onHitEntity` / `onHit`: 8 damage (healing the wither 5
     /// when it kills), withering for 10 seconds, then a power 1 blast.

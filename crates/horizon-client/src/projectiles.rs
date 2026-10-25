@@ -61,6 +61,25 @@ pub enum ProjectileKind {
         color: u32,
     },
 }
+impl ProjectileKind {
+    /// Its entity type.
+    pub fn id(&self) -> &'static str {
+        match self {
+            Self::Arrow { .. } => "minecraft:arrow",
+            Self::Snowball => "minecraft:snowball",
+            Self::Egg => "minecraft:egg",
+            Self::EnderPearl => "minecraft:ender_pearl",
+            Self::SmallFireball => "minecraft:small_fireball",
+            Self::LargeFireball { .. } => "minecraft:fireball",
+            Self::LlamaSpit => "minecraft:llama_spit",
+            Self::WindCharge => "minecraft:wind_charge",
+            Self::BreezeWindCharge => "minecraft:breeze_wind_charge",
+            Self::ShulkerBullet { .. } => "minecraft:shulker_bullet",
+            Self::WitherSkull { .. } => "minecraft:wither_skull",
+            Self::Potion { .. } => "minecraft:splash_potion",
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq)]
 pub struct Projectile {
     /// The entity id a server tracks it by (0 until it is tracked).
@@ -83,6 +102,8 @@ pub struct Projectile {
     pub bonus: crate::mobs::gear::ArrowBonus,
     /// Arrows' `AbstractArrow` state (ticked by `arrows::tick`).
     pub arrow: Option<Box<crate::arrows::ArrowState>>,
+    /// `AbstractHurtingProjectile.accelerationPower`.
+    pub acceleration: f64,
 }
 /// What a projectile struck this tick.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -146,6 +167,7 @@ impl Projectile {
             stuck: false,
             left_owner: false,
             bonus: Default::default(),
+            acceleration: 0.1,
             arrow: kind_is_arrow.then(|| {
                 // Entity.random: seeded unpredictably, the position stands in.
                 Box::new(crate::arrows::ArrowState::new(
@@ -571,9 +593,9 @@ impl Projectile {
                 let v = self.velocity;
                 let len = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt().max(1.0e-9);
                 self.velocity = Vec3::new(
-                    (v.x + v.x / len * 0.1) * inertia,
-                    (v.y + v.y / len * 0.1) * inertia,
-                    (v.z + v.z / len * 0.1) * inertia,
+                    (v.x + v.x / len * self.acceleration) * inertia,
+                    (v.y + v.y / len * self.acceleration) * inertia,
+                    (v.z + v.z / len * self.acceleration) * inertia,
                 );
             }
             // Arrows tick with `arrows::tick`.

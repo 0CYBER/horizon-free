@@ -8,14 +8,19 @@ use horizon_client::{
     Result,
     confirm_screen::Confirm,
     hud::{HudAtlas, HudBatch},
-    multiplayer, packs,
+    java_text, multiplayer, packs,
     scoreboard::{comp_text, tag_to_json},
     server_packs::{Prompt, ServerPacks, action, download, parse_sha1, valid_url},
     text::{Text, named_color},
+    toasts::SystemToast,
     ui,
 };
+use horizon_core::jmath;
 use horizon_protocol::{packets::configuration::ResourcePackPush, servers};
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::mpsc::{Receiver, TryRecvError},
+};
 
 /// `ClientCommonPacketListenerImpl.PackConfirmScreen`: the packs it asks
 /// about, whether the last one is required, and the server's message.
@@ -75,6 +80,111 @@ pub(super) struct ServerPackState {
     user: (String, u128),
     /// The packs loaded on top of the player's own, bottom first.
     pub(super) active: Vec<packs::Pack>,
+    /// The download batches' notifiers, oldest first.
+    notifiers: Vec<PackNotifier>,
+}
+/// `DownloadedPackSource.createDownloadNotifier`: one batch's progress in its
+/// own `SystemToast`.
+struct PackNotifier {
+    progress: Receiver<download::Progress>,
+    total: usize,
+    /// `count`: the requests started.
+    count: usize,
+    /// `failCount`.
+    failed: usize,
+    /// `totalBytes`: the Content-Length of the request in flight.
+    size: Option<u64>,
+    /// The bytes it has written so far: none before the first response.
+    bytes: Option<u64>,
+    /// The last request has finished.
+    done: bool,
+    toast: Option<SystemToast>,
+}
+impl PackNotifier {
+    fn new(progress: Receiver<download::Progress>, total: usize) -> Self {
+        Self {
+            progress,
+            total,
+            count: 0,
+            failed: 0,
+            size: None,
+            bytes: None,
+            done: false,
+            toast: None,
+        }
+    }
+    /// The batch's events since the last call, with the toast updated once
+    /// for all of them. False once the batch has ended and its toast is gone.
+    fn poll(&mut self) -> bool {
+        let (mut changed, mut hide) = (false, false);
+        let ended = loop {
+            let event = match self.progress.try_recv() {
+                Ok(event) => event,
+                Err(e) => break e == TryRecvError::Disconnected,
+            };
+            changed |= match event {
+                download::Progress::RequestStart => {
+                    self.count += 1;
+                    true
+                }
+                download::Progress::DownloadStart(size) => {
+                    self.size = size;
+                    self.bytes = Some(0);
+                    true
+                }
+                download::Progress::Bytes(bytes) => {
+                    self.bytes = Some(bytes);
+                    true
+                }
+                download::Progress::RequestFinished(ok) => {
+                    self.failed += usize::from(!ok);
+                    self.done = self.count == self.total;
+                    // Every pack came: forceHide; else the failure title.
+                    hide |= self.done && self.failed == 0;
+                    self.done && self.failed > 0
+                }
+            };
+        };
+        if changed {
+            let (title, message) = self.text();
+            let (title, message) = (title.plain(), message.map(|m| m.plain()));
+            // SystemToast.addOrUpdate.
+            match &mut self.toast {
+                Some(toast) => toast.reset(title, message),
+                None => self.toast = Some(SystemToast::new(title, message)),
+            }
+        }
+        if hide && let Some(toast) = &mut self.toast {
+            toast.force_hide();
+        }
+        !ended || self.toast.is_some()
+    }
+    /// The toast's title and message.
+    fn text(&self) -> (Text, Option<Text>) {
+        if self.done && self.failed > 0 {
+            let failed = Text::tr("download.pack.failed", &[&self.failed, &self.total]);
+            return (failed, None);
+        }
+        let title = Text::tr("download.pack.title", &[&self.count, &self.total]);
+        let message = self.bytes.map(|bytes| match self.size {
+            Some(size) if size > 0 => {
+                Text::tr("download.pack.progress.percent", &[&(bytes * 100 / size)])
+            }
+            _ => Text::tr("download.pack.progress.bytes", &[&human_readable(bytes)]),
+        });
+        (title, message)
+    }
+}
+/// `com.mojang.realmsclient.Unit.humanReadable`, for
+/// `download.pack.progress.bytes`.
+fn human_readable(bytes: u64) -> String {
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let exp = (jmath::log(bytes as f64) / jmath::log(1024.0)) as i32;
+    let prefix = &"KMGTPE"[exp as usize - 1..exp as usize];
+    let value = bytes as f64 / 1024f64.powi(exp);
+    format!("{} {prefix}B", java_text::format_fixed(value, 1))
 }
 
 fn saves() -> PathBuf {
@@ -89,6 +199,7 @@ impl Game<'_> {
         let state = &mut self.server_packs;
         state.user = user;
         state.prompt = None;
+        state.notifiers.clear();
         let Some(address) = address else {
             state.address = None;
             state.packs.local_world();
@@ -103,6 +214,7 @@ impl Game<'_> {
     /// `Minecraft.clearDownloadedResourcePacks`: every server pack goes at once.
     pub(super) fn server_packs_disconnect(&mut self) {
         self.server_packs.prompt = None;
+        self.server_packs.notifiers.clear();
         self.server_packs.packs.disconnect();
         self.tick_server_packs();
     }
@@ -197,6 +309,7 @@ impl Game<'_> {
     /// that finished, the ones to start, a resource reload when the active
     /// packs change, and the statuses for the server.
     pub(super) fn tick_server_packs(&mut self) {
+        self.server_packs.notifiers.retain_mut(PackNotifier::poll);
         // A reload waits for the world's resources (`reload_packs`).
         if self.rest_loader.is_some() || self.world_loader.is_some() {
             return;
@@ -238,6 +351,15 @@ impl Game<'_> {
                 Ok(queue) => state.queue = Some(queue),
                 Err(e) => {
                     log::error!("Horizon: failed to open the download queue: {e}");
+                    // Every request failed, as the notifier would hear it.
+                    let (progress, events) = std::sync::mpsc::channel();
+                    for _ in &requests {
+                        let _ = progress.send(download::Progress::RequestStart);
+                        let _ = progress.send(download::Progress::RequestFinished(false));
+                    }
+                    state
+                        .notifiers
+                        .push(PackNotifier::new(events, requests.len()));
                     let failed = requests.iter().map(|r| r.id).collect();
                     state.packs.downloaded(horizon_client::server_packs::Batch {
                         downloaded: Vec::new(),
@@ -248,8 +370,12 @@ impl Game<'_> {
             }
         }
         let headers = download::headers(&state.user.0, state.user.1);
+        let (progress, events) = std::sync::mpsc::channel();
+        state
+            .notifiers
+            .push(PackNotifier::new(events, requests.len()));
         if let Some(queue) = &state.queue {
-            queue.download(requests, headers);
+            queue.download(requests, headers, progress);
         }
     }
     /// `DownloadedPackSource.startReload`: the packs on top of the player's
@@ -297,6 +423,29 @@ impl Game<'_> {
             .layout(atlas, (w, h))
             .draw(batch, atlas, self.cursor, [&yes, &no]);
     }
+    /// The download notifiers' toasts, each in the next 32-pixel slot
+    /// below an advancement or recipe toast (`ToastManager`).
+    pub(super) fn draw_pack_toasts(&mut self, batch: &mut HudBatch) {
+        let multiplier = f64::from(self.settings.notification_display_time);
+        let mut slot = usize::from(!self.adv.toasts.is_empty());
+        for notifier in &mut self.server_packs.notifiers {
+            let Some(toast) = &mut notifier.toast else {
+                continue;
+            };
+            let (sound, finished) = toast.update(multiplier);
+            if let Some(show) = sound {
+                let event = if show { "ui.toast.in" } else { "ui.toast.out" };
+                self.audio
+                    .play(&format!("minecraft:{event}"), None, 1.0, 1.0);
+            }
+            if finished {
+                notifier.toast = None;
+                continue;
+            }
+            toast.draw(&self.gui.atlas, batch, 32.0 * slot as f32);
+            slot += 1;
+        }
+    }
     /// A left click on the prompt: its answer when it hit a button.
     pub(super) fn pack_prompt_click(&mut self) -> Result<()> {
         let Some(prompt) = &self.server_packs.prompt else {
@@ -311,6 +460,100 @@ impl Game<'_> {
                 self.answer_pack_prompt(yes)
             }
             None => Ok(()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use download::Progress::*;
+
+    fn notifier(total: usize, events: &[download::Progress]) -> PackNotifier {
+        let (send, receive) = std::sync::mpsc::channel();
+        for event in events {
+            send.send(*event).unwrap();
+        }
+        let mut notifier = PackNotifier::new(receive, total);
+        assert!(notifier.poll());
+        notifier
+    }
+    fn texts(n: &PackNotifier) -> (serde_json::Value, Option<serde_json::Value>) {
+        let (title, message) = n.text();
+        (title.component(), message.map(|m| m.component()))
+    }
+
+    #[test]
+    fn the_toast_counts_requests_and_shows_progress() {
+        let n = notifier(2, &[RequestStart]);
+        let (title, message) = texts(&n);
+        assert_eq!(title["translate"], "download.pack.title");
+        assert_eq!(title["with"], serde_json::json!([1, 2]));
+        assert_eq!(message, None);
+        let n = notifier(2, &[RequestStart, DownloadStart(Some(400)), Bytes(100)]);
+        assert_eq!(
+            texts(&n).1.unwrap(),
+            serde_json::json!({"translate": "download.pack.progress.percent", "with": [25]})
+        );
+        let n = notifier(1, &[RequestStart, DownloadStart(None), Bytes(1280)]);
+        assert_eq!(
+            texts(&n).1.unwrap()["with"],
+            serde_json::json!([{"text": "1.3 KB"}])
+        );
+    }
+
+    #[test]
+    fn a_failed_pack_turns_the_toast_into_the_failure_count() {
+        let events = [
+            RequestStart,
+            RequestFinished(false),
+            RequestStart,
+            DownloadStart(Some(3)),
+            Bytes(3),
+        ];
+        let (send, receive) = std::sync::mpsc::channel();
+        for event in events {
+            send.send(event).unwrap();
+        }
+        let mut n = PackNotifier::new(receive, 2);
+        assert!(n.poll());
+        // Not the last request yet: still downloading.
+        assert_eq!(texts(&n).0["translate"], "download.pack.title");
+        send.send(RequestFinished(true)).unwrap();
+        drop(send);
+        assert!(n.poll(), "the failure toast stays until it slides out");
+        let (title, message) = texts(&n);
+        assert_eq!(
+            title,
+            serde_json::json!({"translate": "download.pack.failed", "with": [1, 2]})
+        );
+        assert_eq!(message, None);
+    }
+
+    #[test]
+    fn a_finished_batch_without_a_toast_is_dropped() {
+        let (send, receive) = std::sync::mpsc::channel::<download::Progress>();
+        drop(send);
+        assert!(!PackNotifier::new(receive, 1).poll());
+    }
+
+    #[test]
+    fn sizes_read_as_realms_unit_human_readable() {
+        // com.mojang.realmsclient.Unit.humanReadable, run on the 26.3 jar.
+        for (bytes, text) in [
+            (0, "0 B"),
+            (1023, "1023 B"),
+            (1024, "1.0 KB"),
+            (1280, "1.3 KB"),
+            (1535, "1.5 KB"),
+            (10_000, "9.8 KB"),
+            (1_048_575, "1024.0 KB"),
+            (1_048_576, "1.0 MB"),
+            (52_428_800, "50.0 MB"),
+            (262_144_000, "250.0 MB"),
+            (1_073_741_824, "1.0 GB"),
+        ] {
+            assert_eq!(human_readable(bytes), text, "{bytes}");
         }
     }
 }

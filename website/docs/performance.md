@@ -23,13 +23,37 @@ The full tables, with the method and the Linux software-rendering run, are in [d
 
 **Horizon against vanilla.** The benchmark exists: `tools/perf_bench.py` starts Horizon, vanilla 26.3 and vanilla with Sodium, Lithium, FerriteCore and ImmediatelyFast on the same machine, world, camera path and settings, and computes every number the same way. [docs/benchmark.md](https://github.com/ludovic111/horizon/blob/main/docs/benchmark.md) says how it keeps the comparison fair. Its results for the client, measured on the project's own machines, are on the [Benchmarks page](/benchmarks), with the places where Java is faster. It also estimates other hardware from them, as a range, and shows players' uploaded results once at least three installs share a graphics card and processor.
 
-**Measure your own computer.** Horizon's half of that benchmark runs on its own:
+**Measure your own computer.** Horizon's half of that benchmark is built into the game. Close other heavy apps,
+plug in a laptop, and run in a terminal:
 
 ```sh
-horizon-client --benchmark standard --render-distance 16
+horizon-launcher play --arg=--benchmark --arg=standard
 ```
 
-It creates a world, flies the four scenes and writes a report to the `benchmarks` folder in the game folder. If you allow benchmark uploads in the launcher's data collection settings, you can share it. See [Privacy](/privacy).
+Add `--arg=--render-distance --arg=16` to choose the render distance; your other settings are used as they are and
+stored in the report. The game creates its own world, `horizon-benchmark` (it never touches your saves), flies over a
+village, a forest, the ocean and a mountain, and quits by itself. `--arg=village` (or `forest`, `ocean`, `mountain`)
+instead of `--arg=standard` flies one scene. For the run only, VSync is off and the frame rate unlimited; your options
+are not changed.
+
+The report is a `.json` file in the `benchmarks` folder of the game folder:
+
+| System | Folder |
+|---|---|
+| Windows | `%APPDATA%\horizon\benchmarks` |
+| macOS | `~/Library/Application Support/horizon/benchmarks` |
+| Linux | `~/.local/share/horizon/benchmarks` |
+
+It holds startup times, each scene's chunk load time, the frame rate with its 1% and 0.1% lows, memory, and your
+machine (operating system, processor, memory, graphics card and driver). Its format is
+[docs/benchmark-report.md](https://github.com/ludovic111/horizon/blob/main/docs/benchmark-report.md).
+
+**Share it.** To add your computer to the [Benchmarks page](/benchmarks), either:
+
+- upload it from the launcher: `horizon-launcher data benchmark <the report's path>` shows exactly what would be sent,
+  without your file paths, and asks before sending. Or allow benchmark uploads once (`horizon-launcher data allow
+  benchmarks`), and every later report is sent for you. See [Privacy](/privacy);
+- or post the `.json` file in the Discord.
 
 ## Servers
 
