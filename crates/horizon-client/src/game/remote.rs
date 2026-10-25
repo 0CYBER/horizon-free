@@ -893,8 +893,12 @@ impl Game<'_> {
                     }
                 }
                 Event::Reconfigured(registries) => self.set_registries(registries),
+                // handleTransfer: "Cannot transfer to server from
+                // singleplayer" (no ServerData), so the world just closes.
                 Event::Transfer { host, port } => {
-                    if let Some(r) = self.remote.as_mut() {
+                    if let Some(r) = self.remote.as_mut()
+                        && r.session.address != "local"
+                    {
                         r.transfer = Some(format!("{host}:{port}"));
                     }
                 }

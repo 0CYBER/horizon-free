@@ -139,6 +139,9 @@ impl Session {
         let writer = Arc::new(Mutex::new(None));
         let configuring = Arc::new(AtomicBool::new(true));
         let counters = Arc::new(Mutex::new(None));
+        // Connection.initiateServerboundPlayConnection: a transfer's
+        // handshake says so (ClientIntent.TRANSFER).
+        let transferred = cookies.is_some();
         let cookies = cookies.unwrap_or_default();
         let (thread_writer, thread_counters, thread_cookies) =
             (writer.clone(), counters.clone(), cookies.clone());
@@ -159,6 +162,7 @@ impl Session {
                     &thread_configuring,
                     &thread_counters,
                     &thread_cookies,
+                    transferred,
                 );
                 let from_server = result.is_ok();
                 let reason = result.unwrap_or_else(|e| e);
@@ -333,6 +337,7 @@ fn run(
     configuring: &AtomicBool,
     shared_counters: &Mutex<Option<Arc<Counters>>>,
     cookies: &Cookies,
+    transferred: bool,
 ) -> Result<String, String> {
     let (host, port, mut c) = if let Some(pipe) = local {
         (address.to_owned(), 0, Connection::local(pipe))
@@ -363,7 +368,11 @@ fn run(
             protocol: PROTOCOL_VERSION,
             host: host.clone(),
             port,
-            intent: handshake::LOGIN,
+            intent: if transferred {
+                handshake::TRANSFER
+            } else {
+                handshake::LOGIN
+            },
         })
         .encode(),
     )
@@ -433,11 +442,14 @@ fn run(
                 )
                 .map_err(e)?;
             }
+            // ClientHandshakePacketListenerImpl.handleRequestCookie: the
+            // cookies a transfer carried over (none on a plain join).
             login::Clientbound::CookieRequest(q) => {
+                let payload = cookies.lock().unwrap().get(&q.key).cloned();
                 c.send(
                     &login::Serverbound::CookieResponse(login::CookieResponse {
                         key: q.key,
-                        payload: None,
+                        payload,
                     })
                     .encode(),
                 )
@@ -827,6 +839,68 @@ mod tests {
         assert_eq!(play::Serverbound::decode(id, &body).unwrap(), tick_end);
         drop(session);
         assert!(thread.join().unwrap().is_err());
+    }
+
+    #[test]
+    fn play_answers_cookie_requests_from_stored_cookies_and_follows_transfers() {
+        let (client, server) = horizon_protocol::connection::Pipe::pair();
+        let (mut reader, writer) = Connection::local(client).split();
+        let writer = Arc::new(Mutex::new(Some(writer)));
+        let (send, events) = channel();
+        let cookies = Cookies::default();
+        let (thread_writer, thread_cookies) = (writer.clone(), cookies.clone());
+        let thread = std::thread::spawn(move || {
+            receive_play(
+                &mut reader,
+                &thread_writer,
+                &AtomicBool::new(false),
+                &Language::new(),
+                &send,
+                &thread_cookies,
+            )
+        });
+        let mut server = Connection::local(server);
+        let ask = |server: &mut Connection, key: &str| {
+            let request = play::Clientbound::CookieRequest(cfg::CookieRequest { key: key.into() });
+            server.send(&request.encode()).unwrap();
+            let (id, body) = server.recv().unwrap();
+            play::Serverbound::decode(id, &body).unwrap()
+        };
+        // handleRequestCookie answers an unknown key with no payload.
+        assert_eq!(
+            ask(&mut server, "proxy:session"),
+            play::Serverbound::CookieResponse(cfg::CookieResponse {
+                key: "proxy:session".into(),
+                payload: None,
+            })
+        );
+        let store = play::Clientbound::StoreCookie(cfg::StoreCookie {
+            key: "proxy:session".into(),
+            payload: vec![1, 2, 3],
+        });
+        server.send(&store.encode()).unwrap();
+        assert_eq!(
+            ask(&mut server, "proxy:session"),
+            play::Serverbound::CookieResponse(cfg::CookieResponse {
+                key: "proxy:session".into(),
+                payload: Some(vec![1, 2, 3]),
+            })
+        );
+        let transfer = play::Clientbound::Transfer(cfg::Transfer {
+            host: "example.net".into(),
+            port: 25566,
+        });
+        server.send(&transfer.encode()).unwrap();
+        assert!(thread.join().unwrap().is_ok());
+        assert!(matches!(
+            events.try_iter().last(),
+            Some(Event::Transfer { host, port: 25566 }) if host == "example.net"
+        ));
+        // The stored cookie stays for the next connection (TransferState).
+        assert_eq!(
+            cookies.lock().unwrap().get("proxy:session"),
+            Some(&vec![1, 2, 3])
+        );
     }
 
     #[test]
