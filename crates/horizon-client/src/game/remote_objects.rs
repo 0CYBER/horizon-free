@@ -24,7 +24,12 @@ impl Game<'_> {
         let at = Vec3::new(position[0], position[1], position[2]);
         let block = position.map(|v| v.floor() as i32);
         self.remove_remote_object(id);
-        if let Some(cart) = super::minecarts::CartKind::from_id(kind) {
+        if kind == "minecraft:text_display" {
+            self.text_displays.insert(
+                id as i32,
+                super::text_displays::RemoteTextDisplay::new(position, yaw),
+            );
+        } else if let Some(cart) = super::minecarts::CartKind::from_id(kind) {
             let mut c = super::minecarts::Minecart::new(id, cart, at);
             c.yaw = yaw;
             c.previous_yaw = yaw;
@@ -93,6 +98,10 @@ impl Game<'_> {
 
     /// `handleSetEntityData` for an object: what changes how it looks.
     pub(super) fn remote_object_data(&mut self, id: i32, values: &[(u8, i32, Value)]) {
+        if let Some(display) = self.text_displays.get_mut(&id) {
+            display.metadata(values);
+            return;
+        }
         let id = id as u32;
         for (index, _, value) in values {
             if self.item_frames.iter().any(|f| f.id == id) {
@@ -273,6 +282,7 @@ impl Game<'_> {
 
     /// Every object a server sent (a new connection, level or dimension).
     pub(super) fn clear_remote_objects(&mut self) {
+        self.text_displays.clear();
         self.carts.clear();
         self.boats.clear();
         self.armor_stands.clear();
@@ -281,6 +291,7 @@ impl Game<'_> {
     }
 
     pub(super) fn remove_remote_object(&mut self, id: u32) {
+        self.text_displays.remove(&(id as i32));
         self.carts.retain(|c| c.id != id);
         self.boats.retain(|b| b.id != id);
         self.armor_stands.retain(|a| a.id != id);
