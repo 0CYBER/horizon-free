@@ -502,7 +502,7 @@ impl Game<'_> {
                     horizon_client::item_tooltip::lines(
                         stack,
                         self.res.items().get(&stack.item),
-                        &|k| self.pack.names.get(k).map(str::to_owned),
+                        &|k| self.pack.names.display_get(k),
                     )
                 })
             {
