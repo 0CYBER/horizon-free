@@ -3762,17 +3762,21 @@ def check_frames(host, guest, out):
         # Within a survival player's 3 blocks of reach: a frame on a wall, an armor stand beside it.
         player('command', command=f'fill {x - 2} {y} {z + 1} {x + 2} {y + 2} {z + 2} minecraft:air')
         player('command', command=f'fill {x - 2} {y} {z + 3} {x + 2} {y + 2} {z + 3} minecraft:stone')
-        player('command', command=f'summon minecraft:item_frame {x + 0.5} {y + 1.5} {z + 2.97} '
+        frame_kind = 'item_frame' if label == 'host' else 'glow_item_frame'
+        player('command', command=f'summon minecraft:{frame_kind} {x + 0.5} {y + 1.5} {z + 2.97} '
                f'{{block_pos:[I;{x},{y + 1},{z + 2}],Facing:2b}}')
         player('command', command=f'summon minecraft:armor_stand {x - 1.5} {y} {z + 1.5}')
         player('command', command='clear @s')
-        player('command', command='item replace entity @s weapon.mainhand with minecraft:diamond')
+        frame_name = f'{label} framed diamond'
+        player('command', command='item replace entity @s weapon.mainhand with '
+               f"minecraft:diamond[minecraft:custom_name='{frame_name}']")
         player.wait(30)
         try:
             frame = [o for o in player('status')['objects'] if o['kind'].endswith('item_frame')
                      and o['position'] == [x, y + 1, z + 2]]
             assert frame, f'the {label} sees no item frame at {[x, y + 1, z + 2]}'
             player.raw('look-at', f'{x + 0.5:.2f}', f'{y + 1.5:.2f}', f'{z + 2.95:.2f}')
+            assert frame_name not in (player('status').get('name_tags') or []), 'empty frame name visible'
             player.raw('mouse', 'right', 'click')
             player.wait(10)
             player.raw('mouse', 'right', 'click')
@@ -3780,6 +3784,15 @@ def check_frames(host, guest, out):
             frame = [o for o in player('status')['objects'] if o['id'] == frame[0]['id']][0]
             assert frame['item'] == 'minecraft:diamond', f'the {label}\'s frame holds {frame["item"]}'
             assert frame['rotation'] == 1, f'the {label}\'s frame turned to {frame["rotation"]}'
+            assert frame_name in (player('status').get('name_tags') or []), \
+                f"the {label}'s targeted frame has no item name"
+            player.shot(out, f'{label}-framed-item-name')
+            player.raw('key', 'f1', 'tap')
+            player.wait(2)
+            assert frame_name not in (player('status').get('name_tags') or []), 'F1 left the frame name visible'
+            player.raw('key', 'f1', 'tap')
+            player.raw('look-at', f'{x + 2:.2f}', f'{y + 1.5:.2f}', f'{z + 2.95:.2f}')
+            assert frame_name not in (player('status').get('name_tags') or []), 'untargeted frame name visible'
             theirs = [o for o in other('status')['objects'] if o['kind'].endswith('item_frame')
                       and o['position'] == [x, y + 1, z + 2]]
             assert theirs and theirs[0]['item'] == 'minecraft:diamond' and theirs[0]['rotation'] == 1, \
