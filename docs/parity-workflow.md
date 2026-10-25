@@ -20,6 +20,8 @@ python3 tools/parity.py --changed origin/main      # those a branch's changes ca
 python3 tools/parity.py --changed-files paths.txt  # the same for listed paths, in a copy without Git (tools/pr_ready.py)
 ```
 
+On CI, a pull request runs the parity job only when it changes a harness, an oracle, a probe or the runner; everything else is checked on main by `parity-main`, a batch of merges at a time, which bisects a failure to the merge that caused it (`tools/parity_main.py`; [release-flow.md](release-flow.md#parity-on-main)). Game releases wait for it.
+
 Each harness runs unmodified under a tracer that records the files it depended on: its Python modules, its Java oracle and the oracle sources javac pulled in, other repository files it read, and the Rust sources of the probes it ran (from Cargo's `.d` dep-info files). A pass stands until one of those files, the pinned vanilla artifacts, `Cargo.lock` or the Rust/Java toolchains change. State and logs are in `.local/parity-runner/`; each harness's own outputs stay in its `.local/<name>/` directory.
 
 Vanilla oracle runs are reused as well. `tools/parity_shim.py` stands in for `java` and `javac`: it records each oracle run's outputs and the content of every file under the paths its arguments name, and replays the run while those are unchanged. After a Rust-only change a harness pays only for its Rust side (`block_update`: 53 s to 5 s). Files an oracle writes outside its named paths aren't tracked, so a harness that fails while reusing oracle results is rerun fresh, and stops reusing them if it then passes. `--all` and `--fresh` never reuse them.
