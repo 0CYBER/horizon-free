@@ -128,40 +128,23 @@ fn text(nbt: &Compound, key: &str) -> Option<String> {
     }
 }
 
-/// `BannerBlockEntity.loadAdditional`: the `patterns` layers and the custom
-/// name a structure template saves with its banner (the End cities' tower
-/// tops place black triangles this way).
-fn banner_from_nbt(nbt: &Compound) -> crate::containers::Banner {
-    crate::containers::Banner {
-        layers: crate::banner::layers_from_nbt(nbt.get(&JavaString::from("patterns"))),
-        name: text(nbt, "CustomName"),
-        components: match nbt.get(&JavaString::from("components")) {
-            Some(Tag::Compound(c)) => c.clone(),
-            _ => Compound::new(),
-        },
-    }
-}
-
 /// The client block entity for one of a chunk's generated block entities,
-/// before a container's loot is unpacked.
+/// before a container's loot is unpacked: `StructureTemplate.placeInWorld`
+/// hands the template's block entity NBT to the level's block entity.
 fn generated_block_entity(block: &str, nbt: &Compound) -> Option<BlockEntity> {
     let mut entity = BlockEntity::for_block(block)?;
-    let tag = Tag::Compound(nbt.clone());
-    // MonsterRoomFeature and the structures' setEntityId.
-    if let BlockEntity::Spawner(s) = &mut entity {
-        **s = crate::mobs::spawner::Spawner::load(&tag);
-    }
-    if let BlockEntity::TrialSpawner(s) = &mut entity {
-        **s = crate::mobs::trial_spawner::TrialSpawner::load(&tag);
-    }
-    if let BlockEntity::Vault(v) = &mut entity {
-        **v = crate::vault::Vault::load(&tag);
-    }
-    // StructureTemplate.placeInWorld hands the template's block entity NBT to
-    // the level, so `BannerBlockEntity.loadAdditional` keeps the banner's
-    // patterns (the End cities' black triangles) and its name.
-    if let BlockEntity::Banner(b) = &mut entity {
-        *b = banner_from_nbt(nbt);
+    match &mut entity {
+        // MonsterRoomFeature and the structures' setEntityId.
+        BlockEntity::Spawner(s) => {
+            **s = crate::mobs::spawner::Spawner::load(&Tag::Compound(nbt.clone()));
+        }
+        BlockEntity::TrialSpawner(s) => {
+            **s = crate::mobs::trial_spawner::TrialSpawner::load(&Tag::Compound(nbt.clone()));
+        }
+        BlockEntity::Vault(v) => **v = crate::vault::Vault::load(&Tag::Compound(nbt.clone())),
+        // BannerBlockEntity.loadAdditional: the End cities' black triangles.
+        BlockEntity::Banner(b) => *b = crate::save::decode_banner(&Tag::Compound(nbt.clone())),
+        _ => {}
     }
     Some(entity)
 }
