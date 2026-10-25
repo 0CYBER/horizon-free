@@ -432,18 +432,21 @@ impl Guest {
 }
 
 /// The off hand slot is conventionally 40 in saves and 45 in the menu.
+/// `synced_id` names an entry of a synced registry (enchantments, trim
+/// materials and patterns) by its id on this connection.
 pub fn stack_to_network(
     item_id: impl Fn(&str) -> i32,
-    enchantment_id: impl Fn(&str) -> Option<i32>,
+    synced_id: impl Fn(&str, &str) -> Option<i32>,
     s: &Option<ItemStack>,
 ) -> Option<Stack> {
-    network_stack(&item_id, &enchantment_id, s)
+    network_stack(&item_id, &synced_id, s)
 }
 fn network_stack(
     item_id: &dyn Fn(&str) -> i32,
-    enchantment_id: &dyn Fn(&str) -> Option<i32>,
+    synced_id: &dyn Fn(&str, &str) -> Option<i32>,
     s: &Option<ItemStack>,
 ) -> Option<Stack> {
+    let enchantment_id = |name: &str| synced_id("minecraft:enchantment", name);
     let s = s.as_ref()?;
     let mut stack = Stack::new(item_id(&s.item), s.count as i32);
     if s.damage > 0 {
@@ -481,6 +484,25 @@ fn network_stack(
                 horizon_protocol::item::Component::Int(rgb),
             ));
         }
+        // ArmorTrim: both holders as references into the synced registries.
+        if let Some((material, pattern)) = &d.trim {
+            let id = |registry: &str, name: &str| {
+                if name.contains(':') {
+                    synced_id(registry, name)
+                } else {
+                    synced_id(registry, &format!("minecraft:{name}"))
+                }
+            };
+            if let (Some(material), Some(pattern)) = (
+                id("minecraft:trim_material", material),
+                id("minecraft:trim_pattern", pattern),
+            ) {
+                stack.added.push((
+                    horizon_protocol::item::component::TRIM,
+                    horizon_protocol::item::Component::Trim { material, pattern },
+                ));
+            }
+        }
         if let Some(id) = d.map_id {
             stack.added.push((
                 horizon_protocol::item::component::MAP_ID,
@@ -504,7 +526,7 @@ fn network_stack(
             let charged = d
                 .charged
                 .iter()
-                .filter_map(|c| network_stack(item_id, enchantment_id, &Some(c.clone())))
+                .filter_map(|c| network_stack(item_id, synced_id, &Some(c.clone())))
                 .collect();
             stack.added.push((
                 horizon_protocol::item::component::CHARGED_PROJECTILES,
@@ -544,4 +566,33 @@ fn network_stack(
         ));
     }
     Some(stack)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_protocol::item::{Component, component};
+
+    #[test]
+    fn trims_go_as_synced_registry_references() {
+        let mut chestplate = ItemStack::new("minecraft:diamond_chestplate", 1);
+        chestplate.data_mut().trim = Some(("minecraft:gold".into(), "coast".into()));
+        let synced_id = |registry: &str, name: &str| match (registry, name) {
+            ("minecraft:trim_material", "minecraft:gold") => Some(4),
+            ("minecraft:trim_pattern", "minecraft:coast") => Some(1),
+            _ => None,
+        };
+        let stack = stack_to_network(|_| 7, synced_id, &Some(chestplate.clone())).unwrap();
+        assert_eq!(
+            stack.component(component::TRIM),
+            Some(&Component::Trim {
+                material: 4,
+                pattern: 1
+            })
+        );
+        // A name the connection's registry lacks sends no trim.
+        chestplate.data_mut().trim = Some(("minecraft:x".into(), "coast".into()));
+        let stack = stack_to_network(|_| 7, synced_id, &Some(chestplate)).unwrap();
+        assert_eq!(stack.component(component::TRIM), None);
+    }
 }
