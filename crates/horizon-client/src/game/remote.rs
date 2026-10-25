@@ -223,30 +223,6 @@ fn face_direction(face: [i32; 3]) -> u8 {
     }
 }
 
-/// A `minecraft:profile` component as the item data JSON the model reads.
-fn profile_tag(p: &horizon_protocol::item::Profile) -> Tag {
-    let properties = p
-        .properties
-        .iter()
-        .map(|(name, value, signature)| {
-            let mut entries: Vec<(&'static str, Tag)> = vec![
-                ("name", Tag::String(name.as_str().into())),
-                ("value", Tag::String(value.as_str().into())),
-            ];
-            if let Some(signature) = signature {
-                entries.push(("signature", Tag::String(signature.as_str().into())));
-            }
-            Tag::compound(entries)
-        })
-        .collect::<Vec<_>>();
-    let mut entries: Vec<(&'static str, Tag)> = Vec::new();
-    if let Some(name) = &p.name {
-        entries.push(("name", Tag::String(name.as_str().into())));
-    }
-    entries.push(("properties", Tag::List(properties)));
-    Tag::compound(entries)
-}
-
 /// A protocol number format as the scoreboard's.
 fn number_format(f: &play::NumberFormat) -> horizon_client::scoreboard::NumberFormat {
     use horizon_client::scoreboard::{NumberFormat, tag_to_json};
@@ -610,168 +586,26 @@ impl Game<'_> {
             .and_then(|i| i.id(name))
             .unwrap_or(0)
     }
+    /// A stack from the server, decoded as the saved and command item NBT
+    /// are, so tooltips and models see every field.
     pub(super) fn to_stack(&self, s: &Option<Stack>) -> Option<ItemStack> {
-        let s = s.as_ref()?;
-        let mut out = ItemStack {
-            item: self.item_name(s.item),
-            count: s.count.max(0) as u32,
-            damage: 0,
-            extra: None,
-        };
-        // A vanilla `components` compound, then the same decoder the saved
-        // and command item NBT use, so tooltips and models see every field.
-        let components = self.protocol_components(s);
-        let (damage, data) = horizon_client::item_data::decode_components(components.as_ref());
-        out.damage = damage;
-        if let Some(data) = data {
-            *out.data_mut() = *data;
-        }
-        out.tidy();
-        Some(out)
-    }
-    /// The item's patched components as vanilla's `components` compound.
-    fn protocol_components(&self, s: &Stack) -> Option<Tag> {
-        use horizon_protocol::item::{Component, component};
         let r = self.remote.as_ref()?;
-        let name = |id: i32| r.builtin.get("minecraft:data_component_type")?.name(id);
-        let mut entries: Vec<(&str, Tag)> = Vec::new();
-        for (kind, c) in &s.added {
-            let Some(key) = name(*kind) else {
-                continue;
-            };
-            let value = match c {
-                // Read past, not decoded: the item keeps its prototype's value.
-                Component::Raw(_) => continue,
-                // Trim materials and patterns are synced registries, as enchantments are.
-                Component::Trim { material, pattern } => {
-                    let (Some(material), Some(pattern)) = (
-                        r.registries.name("minecraft:trim_material", *material),
-                        r.registries.name("minecraft:trim_pattern", *pattern),
-                    ) else {
-                        continue;
-                    };
-                    Tag::compound([
-                        ("material", Tag::String(material.into())),
-                        ("pattern", Tag::String(pattern.into())),
-                    ])
-                }
-                Component::Int(v) if *kind == component::RARITY => {
-                    let rarity = ["common", "uncommon", "rare", "epic"];
-                    Tag::String(rarity.get(*v as usize).copied().unwrap_or("common").into())
-                }
-                Component::Int(v) => Tag::Int(*v),
-                Component::Unit => Tag::Compound(Default::default()),
-                Component::Bool(v) => Tag::Byte(i8::from(*v)),
-                Component::Text(t) | Component::Nbt(t) => t.clone(),
-                Component::Ident(v) => Tag::String(v.as_str().into()),
-                Component::Lore(lines) => Tag::List(lines.clone()),
-                Component::WritableBook(pages) => Tag::compound([(
-                    "pages",
-                    Tag::List(
-                        pages
-                            .iter()
-                            .map(|p| Tag::String(p.as_str().into()))
-                            .collect(),
-                    ),
-                )]),
-                Component::WrittenBook(b) => Tag::compound([
-                    ("title", Tag::String(b.title.as_str().into())),
-                    ("author", Tag::String(b.author.as_str().into())),
-                    ("generation", Tag::Int(b.generation)),
-                    ("pages", Tag::List(b.pages.clone())),
-                    ("resolved", Tag::Byte(i8::from(b.resolved))),
-                ]),
-                Component::Enchantments(list) => {
-                    // Enchantments are a synced (data-driven) registry: the
-                    // ids index the server's RegistryData, not the builtin
-                    // report, so a datapack enchantment names correctly.
-                    let levels = list.iter().filter_map(|(id, level)| {
-                        let name = r.registries.name("minecraft:enchantment", *id)?;
-                        Some((name, Tag::Int(*level)))
-                    });
-                    Tag::compound(levels)
-                }
-                Component::AttackRange(v) => Tag::compound([
-                    ("min_reach", Tag::Float(v[0].to_bits())),
-                    ("max_reach", Tag::Float(v[1].to_bits())),
-                    ("min_attack_momentum", Tag::Float(v[2].to_bits())),
-                    ("max_attack_momentum", Tag::Float(v[3].to_bits())),
-                    ("hitbox_margin", Tag::Float(v[4].to_bits())),
-                    ("mob_factor", Tag::Float(v[5].to_bits())),
-                ]),
-                Component::Profile(p) => profile_tag(p),
-                // ItemStackTemplate.CODEC: id, count and components.
-                Component::Stacks(stacks) => Tag::List(
-                    stacks
-                        .iter()
-                        .map(|t| {
-                            let mut entries = vec![
-                                ("id", Tag::String(self.item_name(t.item).as_ref().into())),
-                                ("count", Tag::Int(t.count)),
-                            ];
-                            if let Some(c) = self.protocol_components(t) {
-                                entries.push(("components", c));
-                            }
-                            Tag::compound(entries)
-                        })
-                        .collect(),
-                ),
-                Component::CustomModelData {
-                    floats,
-                    flags,
-                    strings,
-                    colors,
-                } => Tag::compound([
-                    (
-                        "floats",
-                        Tag::List(floats.iter().map(|f| Tag::Float(f.to_bits())).collect()),
-                    ),
-                    (
-                        "flags",
-                        Tag::List(flags.iter().map(|b| Tag::Byte(i8::from(*b))).collect()),
-                    ),
-                    (
-                        "strings",
-                        Tag::List(
-                            strings
-                                .iter()
-                                .map(|s| Tag::String(s.as_str().into()))
-                                .collect(),
-                        ),
-                    ),
-                    (
-                        "colors",
-                        Tag::List(colors.iter().map(|c| Tag::Int(*c)).collect()),
-                    ),
-                ]),
-                Component::TooltipDisplay { hide, hidden } => {
-                    let hidden = hidden
-                        .iter()
-                        .filter_map(|id| Some(Tag::String(name(*id)?.into())));
-                    Tag::compound([
-                        ("hide_tooltip", Tag::Byte(i8::from(*hide))),
-                        ("hidden_components", Tag::List(hidden.collect())),
-                    ])
-                }
-            };
-            entries.push((key, value));
-        }
-        Some(Tag::compound(entries))
+        Some(horizon_client::item_sync::from_network(
+            s.as_ref()?,
+            &r.builtin,
+            &r.registries,
+        ))
     }
+    /// A stack to the server (`SetCreativeModeSlot`): the same component
+    /// patch a Horizon server sends its clients, with the synced registries'
+    /// ids, so the server's echo doesn't hand back a bare item.
     fn to_network(&self, s: &Option<ItemStack>) -> Option<Stack> {
-        let s = s.as_ref()?;
-        let mut stack = Stack::new(self.item_id(&s.item), s.count as i32);
-        // The components the client models, with the synced registries' ids:
-        // without them the server's echo hands back a bare item.
-        if let Some(r) = self.remote.as_ref() {
-            stack.added.extend(horizon_client::item_sync::encode(
-                s,
-                |name| r.registries.id("minecraft:enchantment", name),
-                |name| r.registries.id("minecraft:trim_material", name),
-                |name| r.registries.id("minecraft:trim_pattern", name),
-            ));
-        }
-        Some(stack)
+        let r = self.remote.as_ref()?;
+        horizon_client::lan::guest::stack_to_network(
+            |name| self.item_id(name),
+            |registry, name| r.registries.id(registry, name),
+            s,
+        )
     }
     /// A line in the connection's chat, with its styles, click and hover
     /// events (ChatComponent.addMessage).

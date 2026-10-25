@@ -2293,13 +2293,10 @@ impl Hub {
             .name("minecraft:enchantment", id)
             .map(str::to_owned)
     }
-    /// An entry of a synced registry by id, for the components a packet
-    /// carries by id (`minecraft:trim_material`, `minecraft:trim_pattern`).
-    pub fn trim_name(&self, registry: &str, id: i32) -> Option<std::sync::Arc<str>> {
-        self.sync
-            .dynamic
-            .name(registry, id)
-            .map(std::sync::Arc::from)
+    /// A stack a client sent (`SetCreativeModeSlot`), read with this
+    /// server's registries.
+    pub fn stack_from_network(&self, s: &horizon_protocol::item::Stack) -> crate::items::ItemStack {
+        crate::item_sync::from_network(s, &self.sync.builtin, &self.sync.dynamic)
     }
 
     /// ServerLevel.removePlayerImmediately, then addRespawnedPlayer: the other players

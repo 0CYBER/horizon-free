@@ -1,149 +1,277 @@
-//! The data components a stack keeps when it crosses the wire, and how the
-//! other side reads them back. A creative slot's packet carries a component
-//! patch, and before this the encoder wrote damage alone, so everything else
-//! (enchantments, a custom name, trim, repair cost) was gone once the server
-//! echoed the inventory back.
-use crate::item_data::{Levels, StackData};
+//! Item stacks on the wire (`ItemStack.OPTIONAL_STREAM_CODEC`): the component
+//! patch read back as vanilla's `components` compound, so the decoder the saved
+//! and command item NBT use fills every field. Both sides use it: a client for
+//! what its server sends, a server for a creative client's
+//! `SetCreativeModeSlot`. The other direction is `lan::guest::stack_to_network`.
 use crate::items::ItemStack;
-use horizon_protocol::item::{Component, Stack, component};
+use horizon_protocol::item::{Component, Profile, Stack, component};
+use horizon_protocol::registry::{Builtin, Dynamic};
 use horizon_world::nbt::Tag;
 use std::sync::Arc;
 
-/// `Slot.STREAM_CODEC`'s patch for the components Horizon models, with the
-/// registries' ids for enchantments and trim. A name the registry does not
-/// know is left out: id 0 is a different entry, not a missing one.
-pub fn encode(
-    stack: &ItemStack,
-    enchantment: impl Fn(&str) -> Option<i32>,
-    trim_material: impl Fn(&str) -> Option<i32>,
-    trim_pattern: impl Fn(&str) -> Option<i32>,
-) -> Vec<(i32, Component)> {
-    let mut out = Vec::new();
-    if stack.damage > 0 {
-        out.push((component::DAMAGE, Component::Int(stack.damage as i32)));
-    }
-    let Some(d) = stack.data() else {
-        return out;
+/// A stack from the wire: its item by the built-in registry's id, its
+/// components by the synced registries' (enchantments, trims).
+pub fn from_network(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> ItemStack {
+    let mut out = ItemStack {
+        item: item_name(builtin, s.item),
+        count: s.count.max(0) as u32,
+        damage: 0,
+        extra: None,
     };
-    let levels = |levels: &Levels| -> Option<Component> {
-        let list: Vec<(i32, i32)> = levels
-            .iter()
-            .filter_map(|(name, level)| Some((enchantment(name)?, *level as i32)))
-            .collect();
-        (!list.is_empty()).then_some(Component::Enchantments(list))
-    };
-    if let Some(c) = levels(&d.enchantments) {
-        out.push((component::ENCHANTMENTS, c));
+    let components = components_tag(s, builtin, synced);
+    let (damage, data) = crate::item_data::decode_components(components.as_ref());
+    out.damage = damage;
+    if let Some(data) = data {
+        *out.data_mut() = *data;
     }
-    if let Some(c) = levels(&d.stored_enchantments) {
-        out.push((component::STORED_ENCHANTMENTS, c));
-    }
-    if d.repair_cost > 0 {
-        out.push((component::REPAIR_COST, Component::Int(d.repair_cost as i32)));
-    }
-    if let Some(name) = &d.custom_name {
-        // A plain string is a valid text component, and `decode_components`
-        // reads it back as one.
-        out.push((
-            component::CUSTOM_NAME,
-            Component::Text(Tag::String(name.as_str().into())),
-        ));
-    }
-    if let Some((material, pattern)) = &d.trim
-        && let (Some(material), Some(pattern)) = (trim_material(material), trim_pattern(pattern))
-    {
-        out.push((component::TRIM, Component::Trim { material, pattern }));
-    }
+    out.tidy();
     out
 }
 
-/// The same patch read back into `out`, the fields `item_data::decode_components`
-/// fills from the equivalent `components` compound.
-pub fn apply(
-    stack: &Stack,
-    out: &mut ItemStack,
-    enchantment: impl Fn(i32) -> Option<Arc<str>>,
-    trim_material: impl Fn(i32) -> Option<Arc<str>>,
-    trim_pattern: impl Fn(i32) -> Option<Arc<str>>,
-) {
-    out.damage = stack.damage().max(0) as u32;
-    let read_levels = |kind: i32, into: &mut Levels| {
-        if let Some(Component::Enchantments(list)) = stack.component(kind) {
-            for (id, level) in list {
-                if let Some(name) = enchantment(*id) {
-                    into.push((name, (*level).max(0) as u32));
-                }
+fn item_name(builtin: &Builtin, id: i32) -> Arc<str> {
+    Arc::from(
+        builtin
+            .get("minecraft:item")
+            .and_then(|i| i.name(id))
+            .unwrap_or("minecraft:air"),
+    )
+}
+
+/// The item's patched components as vanilla's `components` compound.
+fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag> {
+    let name = |id: i32| builtin.get("minecraft:data_component_type")?.name(id);
+    let mut entries: Vec<(&str, Tag)> = Vec::new();
+    for (kind, c) in &s.added {
+        let Some(key) = name(*kind) else {
+            continue;
+        };
+        let value = match c {
+            // Read past, not decoded: the item keeps its prototype's value.
+            Component::Raw(_) => continue,
+            // Trim materials and patterns are synced registries, as enchantments are.
+            Component::Trim { material, pattern } => {
+                let (Some(material), Some(pattern)) = (
+                    synced.name("minecraft:trim_material", *material),
+                    synced.name("minecraft:trim_pattern", *pattern),
+                ) else {
+                    continue;
+                };
+                Tag::compound([
+                    ("material", Tag::String(material.into())),
+                    ("pattern", Tag::String(pattern.into())),
+                ])
             }
-        }
-    };
-    let data: &mut StackData = out.data_mut();
-    read_levels(component::ENCHANTMENTS, &mut data.enchantments);
-    read_levels(
-        component::STORED_ENCHANTMENTS,
-        &mut data.stored_enchantments,
-    );
-    if let Some(Component::Int(v)) = stack.component(component::REPAIR_COST) {
-        data.repair_cost = (*v).max(0) as u32;
+            Component::Int(v) if *kind == component::RARITY => {
+                let rarity = ["common", "uncommon", "rare", "epic"];
+                Tag::String(rarity.get(*v as usize).copied().unwrap_or("common").into())
+            }
+            Component::Int(v) => Tag::Int(*v),
+            Component::Unit => Tag::Compound(Default::default()),
+            Component::Bool(v) => Tag::Byte(i8::from(*v)),
+            Component::Text(t) | Component::Nbt(t) => t.clone(),
+            Component::Ident(v) => Tag::String(v.as_str().into()),
+            Component::Lore(lines) => Tag::List(lines.clone()),
+            Component::WritableBook(pages) => Tag::compound([(
+                "pages",
+                Tag::List(
+                    pages
+                        .iter()
+                        .map(|p| Tag::String(p.as_str().into()))
+                        .collect(),
+                ),
+            )]),
+            Component::WrittenBook(b) => Tag::compound([
+                ("title", Tag::String(b.title.as_str().into())),
+                ("author", Tag::String(b.author.as_str().into())),
+                ("generation", Tag::Int(b.generation)),
+                ("pages", Tag::List(b.pages.clone())),
+                ("resolved", Tag::Byte(i8::from(b.resolved))),
+            ]),
+            Component::Enchantments(list) => {
+                // Enchantments are a synced (data-driven) registry: the
+                // ids index the server's RegistryData, not the builtin
+                // report, so a datapack enchantment names correctly.
+                let levels = list.iter().filter_map(|(id, level)| {
+                    let name = synced.name("minecraft:enchantment", *id)?;
+                    Some((name, Tag::Int(*level)))
+                });
+                Tag::compound(levels)
+            }
+            Component::AttackRange(v) => Tag::compound([
+                ("min_reach", Tag::Float(v[0].to_bits())),
+                ("max_reach", Tag::Float(v[1].to_bits())),
+                ("min_attack_momentum", Tag::Float(v[2].to_bits())),
+                ("max_attack_momentum", Tag::Float(v[3].to_bits())),
+                ("hitbox_margin", Tag::Float(v[4].to_bits())),
+                ("mob_factor", Tag::Float(v[5].to_bits())),
+            ]),
+            Component::Profile(p) => profile_tag(p),
+            // ItemStackTemplate.CODEC: id, count and components.
+            Component::Stacks(stacks) => Tag::List(
+                stacks
+                    .iter()
+                    .map(|t| {
+                        let mut entries = vec![
+                            (
+                                "id",
+                                Tag::String(item_name(builtin, t.item).as_ref().into()),
+                            ),
+                            ("count", Tag::Int(t.count)),
+                        ];
+                        if let Some(c) = components_tag(t, builtin, synced) {
+                            entries.push(("components", c));
+                        }
+                        Tag::compound(entries)
+                    })
+                    .collect(),
+            ),
+            Component::CustomModelData {
+                floats,
+                flags,
+                strings,
+                colors,
+            } => Tag::compound([
+                (
+                    "floats",
+                    Tag::List(floats.iter().map(|f| Tag::Float(f.to_bits())).collect()),
+                ),
+                (
+                    "flags",
+                    Tag::List(flags.iter().map(|b| Tag::Byte(i8::from(*b))).collect()),
+                ),
+                (
+                    "strings",
+                    Tag::List(
+                        strings
+                            .iter()
+                            .map(|s| Tag::String(s.as_str().into()))
+                            .collect(),
+                    ),
+                ),
+                (
+                    "colors",
+                    Tag::List(colors.iter().map(|c| Tag::Int(*c)).collect()),
+                ),
+            ]),
+            Component::TooltipDisplay { hide, hidden } => {
+                let hidden = hidden
+                    .iter()
+                    .filter_map(|id| Some(Tag::String(name(*id)?.into())));
+                Tag::compound([
+                    ("hide_tooltip", Tag::Byte(i8::from(*hide))),
+                    ("hidden_components", Tag::List(hidden.collect())),
+                ])
+            }
+        };
+        entries.push((key, value));
     }
-    if let Some(Component::Text(t)) = stack.component(component::CUSTOM_NAME) {
-        data.custom_name = crate::item_data::read_text(t);
+    Some(Tag::compound(entries))
+}
+
+/// A `minecraft:profile` component as the item data JSON the model reads.
+fn profile_tag(p: &Profile) -> Tag {
+    let properties = p
+        .properties
+        .iter()
+        .map(|(name, value, signature)| {
+            let mut entries: Vec<(&'static str, Tag)> = vec![
+                ("name", Tag::String(name.as_str().into())),
+                ("value", Tag::String(value.as_str().into())),
+            ];
+            if let Some(signature) = signature {
+                entries.push(("signature", Tag::String(signature.as_str().into())));
+            }
+            Tag::compound(entries)
+        })
+        .collect::<Vec<_>>();
+    let mut entries: Vec<(&'static str, Tag)> = Vec::new();
+    if let Some(name) = &p.name {
+        entries.push(("name", Tag::String(name.as_str().into())));
     }
-    if let Some(Component::Trim { material, pattern }) = stack.component(component::TRIM)
-        && let (Some(material), Some(pattern)) = (trim_material(*material), trim_pattern(*pattern))
-    {
-        data.trim = Some((material, pattern));
-    }
+    entries.push(("properties", Tag::List(properties)));
+    Tag::compound(entries)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use horizon_protocol::registry::Ids;
 
-    fn named(name: &str) -> Option<i32> {
-        Some(match name {
-            "minecraft:sharpness" => 3,
-            "minecraft:gold" => 7,
-            "minecraft:sentry" => 2,
-            _ => return None,
-        })
-    }
-    fn name_of(id: i32) -> Option<Arc<str>> {
-        Some(Arc::from(match id {
-            3 => "minecraft:sharpness",
-            7 => "minecraft:gold",
-            2 => "minecraft:sentry",
-            _ => return None,
-        }))
-    }
-
-    fn stack_with_data() -> ItemStack {
-        let mut stack = ItemStack::new("minecraft:diamond_sword", 1);
+    /// What a creative client sends (`stack_to_network`) comes back whole on
+    /// the server: damage, both enchantment lists, repair cost, name, trim.
+    #[test]
+    fn a_creative_stack_keeps_its_components_across_the_wire() {
+        let mut components = vec![String::new(); 60];
+        for (id, name) in [
+            (component::DAMAGE, "minecraft:damage"),
+            (component::CUSTOM_NAME, "minecraft:custom_name"),
+            (component::ENCHANTMENTS, "minecraft:enchantments"),
+            (component::REPAIR_COST, "minecraft:repair_cost"),
+            (
+                component::STORED_ENCHANTMENTS,
+                "minecraft:stored_enchantments",
+            ),
+            (component::TRIM, "minecraft:trim"),
+        ] {
+            components[id as usize] = name.to_owned();
+        }
+        let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let builtin = Builtin {
+            registries: [
+                (
+                    "minecraft:item".to_owned(),
+                    Ids::from_names(names(&["minecraft:air", "minecraft:diamond_chestplate"])),
+                ),
+                (
+                    "minecraft:data_component_type".to_owned(),
+                    Ids::from_names(components),
+                ),
+            ]
+            .into(),
+        };
+        let synced = |n: &[&str]| n.iter().map(|s| (s.to_string(), None)).collect::<Vec<_>>();
+        let dynamic = Dynamic {
+            registries: [
+                (
+                    "minecraft:enchantment".to_owned(),
+                    synced(&["minecraft:protection", "minecraft:sharpness"]),
+                ),
+                (
+                    "minecraft:trim_material".to_owned(),
+                    synced(&["minecraft:gold"]),
+                ),
+                (
+                    "minecraft:trim_pattern".to_owned(),
+                    synced(&["minecraft:sentry"]),
+                ),
+            ]
+            .into(),
+        };
+        let mut stack = ItemStack::new("minecraft:diamond_chestplate", 1);
         stack.damage = 5;
+        stack.enchant("minecraft:protection", 4);
         let d = stack.data_mut();
-        d.enchantments.push((Arc::from("minecraft:sharpness"), 4));
         d.stored_enchantments
             .push((Arc::from("minecraft:sharpness"), 2));
         d.repair_cost = 9;
         d.custom_name = Some("Keeper".to_owned());
         d.trim = Some((Arc::from("minecraft:gold"), Arc::from("minecraft:sentry")));
-        stack
-    }
-
-    /// Every modelled component survives the packet, so the server's echo does
-    /// not hand back a bare item.
-    #[test]
-    fn a_stack_keeps_its_components_across_the_wire() {
-        let stack = stack_with_data();
-        let mut packet = Stack::new(1, 1);
-        packet.added = encode(&stack, named, named, named);
-
-        let mut back = ItemStack::new("minecraft:diamond_sword", 1);
-        apply(&packet, &mut back, name_of, name_of, name_of);
-        back.tidy();
-
+        let wire = crate::lan::guest::stack_to_network(
+            |name| {
+                builtin
+                    .get("minecraft:item")
+                    .and_then(|i| i.id(name))
+                    .unwrap_or(0)
+            },
+            |registry, name| dynamic.id(registry, name),
+            &Some(stack.clone()),
+        )
+        .unwrap();
+        let back = from_network(&wire, &builtin, &dynamic);
+        assert_eq!(back.item, stack.item);
         assert_eq!(back.damage, 5);
         let d = back.data().expect("components");
-        assert_eq!(d.enchantments, vec![(Arc::from("minecraft:sharpness"), 4)]);
+        assert_eq!(d.enchantments, vec![(Arc::from("minecraft:protection"), 4)]);
         assert_eq!(
             d.stored_enchantments,
             vec![(Arc::from("minecraft:sharpness"), 2)]
@@ -154,17 +282,5 @@ mod tests {
             d.trim,
             Some((Arc::from("minecraft:gold"), Arc::from("minecraft:sentry")))
         );
-    }
-
-    /// A name the registry does not know is a missing id, not id 0, which would
-    /// name the registry's first entry instead.
-    #[test]
-    fn an_unknown_enchantment_is_left_out_rather_than_sent_as_zero() {
-        let mut stack = ItemStack::new("minecraft:book", 1);
-        stack
-            .data_mut()
-            .enchantments
-            .push((Arc::from("mod:unknown"), 1));
-        assert!(encode(&stack, named, named, named).is_empty());
     }
 }
