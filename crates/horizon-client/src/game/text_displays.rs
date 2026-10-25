@@ -3,7 +3,8 @@ use super::Game;
 use horizon_client::{
     hud::{HudBatch, rgba},
     mesher::Vertex,
-    text_display::TextDisplayData,
+    text::Text,
+    text_display::{Align, TextDisplayData},
 };
 use horizon_protocol::entity_data::Value;
 
@@ -25,6 +26,24 @@ pub(super) struct RemoteTextDisplay {
     start_dirty: bool,
     duration_dirty: bool,
     initialized: bool,
+    /// `Display.lastProgress`: the progress the last frame drew, where a new
+    /// interpolation starts from.
+    last_progress: f32,
+    /// `TextDisplay.clientDisplayCache`: the split lines, until the render
+    /// state changes.
+    lines: Option<Lines>,
+}
+
+/// `TextDisplay.CachedInfo`: each line and its width, and the widest.
+struct Lines {
+    lines: Vec<(Text, f32)>,
+    width: f32,
+}
+
+/// `Display.RENDER_STATE_IDS` and `TextDisplay.TEXT_RENDER_STATE_IDS`: the
+/// data a render state is built from (not the view range, size or glow).
+fn renders(id: u8) -> bool {
+    matches!(id, 11..=16 | 18 | 19 | 23..=27)
 }
 
 impl RemoteTextDisplay {
@@ -47,6 +66,8 @@ impl RemoteTextDisplay {
             start_dirty: false,
             duration_dirty: false,
             initialized: false,
+            last_progress: 0.0,
+            lines: None,
         }
     }
     fn progress(&self, partial: f32) -> f32 {
@@ -59,7 +80,7 @@ impl RemoteTextDisplay {
     pub fn metadata(&mut self, values: &[(u8, i32, Value)]) {
         self.start_dirty |= values.iter().any(|v| v.0 == 8);
         self.duration_dirty |= values.iter().any(|v| v.0 == 9);
-        self.dirty |= values.iter().any(|v| v.0 >= 11);
+        self.dirty |= values.iter().any(|v| renders(v.0));
         self.data.apply(values);
     }
     fn tick(&mut self) {
@@ -82,12 +103,13 @@ impl RemoteTextDisplay {
         }
         if self.dirty {
             self.from = if self.initialized && self.duration > 0 {
-                self.shown.blend(&self.from, self.progress(0.0))
+                self.shown.blend(&self.from, self.last_progress)
             } else {
                 self.data.clone()
             };
             self.shown = self.data.clone();
             self.initialized = true;
+            self.lines = None;
         }
         self.dirty = false;
         self.start_dirty = false;
@@ -142,10 +164,9 @@ impl Game<'_> {
         } else {
             [self.yaw, self.pitch]
         };
-        for display in self.text_displays.values() {
-            let d = display
-                .shown
-                .blend(&display.from, display.progress(partial as f32));
+        for display in self.text_displays.values_mut() {
+            display.last_progress = display.progress(partial as f32);
+            let d = display.shown.blend(&display.from, display.last_progress);
             let position = display.previous.lerp(display.position, partial);
             let range = f64::from(d.view_range) * 64.0 * f64::from(self.settings.entity_distance);
             if position.distance_squared(camera) >= range * range || d.text.is_empty() {
@@ -162,12 +183,21 @@ impl Game<'_> {
             if !matrix.is_finite() {
                 continue;
             }
-            let lines = atlas.font.wrap_components(&d.text, d.line_width.max(1));
-            let widths: Vec<_> = lines
-                .iter()
-                .map(|line| atlas.font.width_text(line).ceil())
-                .collect();
-            let width = widths.iter().copied().fold(0.0_f32, f32::max);
+            // TextDisplayRenderer.splitLines: Font.split, no indent on wrapped lines.
+            let Lines { lines, width } = display.lines.get_or_insert_with(|| {
+                let lines: Vec<_> = atlas
+                    .font
+                    .split(&d.text, d.line_width as f32)
+                    .into_iter()
+                    .map(|line| {
+                        let width = atlas.font.width_text(&line).ceil();
+                        (line, width)
+                    })
+                    .collect();
+                let width = lines.iter().map(|l| l.1).fold(0.0, f32::max);
+                Lines { lines, width }
+            });
+            let width = *width;
             let height = lines.len() as f32 * 10.0 - 1.0;
             matrix *=
                 glam::Mat4::from_translation(glam::Vec3::new(1.0 - width / 2.0, -height, 0.0));
@@ -192,11 +222,12 @@ impl Game<'_> {
                     ),
                 );
             }
-            for (i, (line, line_width)) in lines.iter().zip(widths).enumerate() {
-                let x = match d.alignment() {
-                    "LEFT" => 0.0,
-                    "RIGHT" => width - line_width,
-                    _ => (width - line_width) / 2.0,
+            let align = d.align();
+            for (i, (line, line_width)) in lines.iter().enumerate() {
+                let x = match align {
+                    Align::Left => 0.0,
+                    Align::Right => width - line_width,
+                    Align::Center => (width - line_width) / 2.0,
                 };
                 batch.text_styled(
                     atlas,
