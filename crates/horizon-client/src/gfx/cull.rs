@@ -46,13 +46,15 @@ const RETEST: u32 = 8;
 /// more than they save. Else one frame in `PROBE` tests every section.
 const MIN_SHARE: f32 = 0.1;
 const PROBE: u32 = 64;
-/// On Metal, section draws from which a frame culls. Apple's GPUs store and
-/// reload the whole frame at each of the passes the test adds, a fixed cost
-/// that the sections it hides repay only at high render distances: on an M4
-/// Pro at 1080p and render distance 12 (1,000–1,600 draws) culling added
-/// about 0.05 ms of GPU time while hiding 15–30% of the solid indices; at
-/// 32 (drawn flat, over this many draws) it saved 0.25–1.6 ms.
-pub const TILED_MIN_DRAWS: usize = 4096;
+/// On Metal, sections in view from which a frame culls. Apple's GPUs store
+/// and reload the whole frame at each of the passes the test adds, a fixed
+/// cost that the sections it hides repay only at high render distances: on
+/// an M4 Pro at 1080p and render distance 12 (1,000–1,600 draws) culling
+/// added about 0.05 ms of GPU time while hiding 15–30% of the solid
+/// indices; at 32 (over 4,096 draws) it saved 0.25–1.6 ms. Those draws were
+/// 2.2 to 2.5 per section; a section's draw count now depends on the sides
+/// it shows the eye (`mesher::Sides`), so the bar counts sections.
+pub const TILED_MIN_SECTIONS: usize = 1600;
 /// Boxes over more than this share of the screen count as seen untested.
 const BIG: f32 = 0.25;
 /// Results read back at once, some frames late so the CPU never waits.
@@ -148,8 +150,8 @@ pub struct Cull {
     pub hidden: ([usize; 2], f32),
     /// Cull every frame, whatever the hidden share (A/B checks).
     pub always: bool,
-    /// Frames with fewer section draws than this do not cull.
-    pub min_draws: usize,
+    /// Frames with fewer sections in view than this do not cull.
+    pub min_sections: usize,
 }
 
 fn buffer(
@@ -348,7 +350,7 @@ impl Cull {
             stamp: 0,
             hidden: ([0; 2], 1.0),
             always: false,
-            min_draws: 0,
+            min_sections: 0,
         }
     }
 

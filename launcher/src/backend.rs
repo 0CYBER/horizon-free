@@ -558,7 +558,19 @@ pub fn install(release: &Release, progress: impl Fn(f32)) -> Result<(), String> 
 }
 
 pub fn remove(tag: &str) -> Result<(), String> {
-    fs::remove_dir_all(version_dir(tag)).map_err(|e| e.to_string())
+    let dir = version_dir(tag);
+    // Windows holds a file for a moment after the game, a scan or the launcher's own reader lets
+    // go of it, and remove_dir_all stops at the first one. Retry for a second; a folder that is
+    // already gone is removed.
+    for attempt in 1.. {
+        match fs::remove_dir_all(&dir) {
+            Ok(()) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Err(e) if attempt == 5 => return Err(e.to_string()),
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(250)),
+        }
+    }
+    Ok(())
 }
 
 /// The Minecraft version a Horizon build targets, from its research-lock.json.
@@ -1022,21 +1034,18 @@ fn download_for_owner(
     }
 }
 
-/// A JDK of at least `major` for the preparation. `None` when horizon-prepare finds one by
-/// itself (JAVA_HOME, the PATH, an installed JDK): the preparation then runs as before, in an
-/// unchanged environment (a JDK found on the PATH can be a stub such as macOS's
-/// /usr/bin/javac, whose folder is no Java home: `JAVA_HOME=/usr` makes it call itself
-/// forever). Else the home of the Java the official launcher downloaded into one of the
-/// `games` folders, else of Minecraft's own Java downloaded from Mojang into Horizon's game
-/// folder, the runtime the version JSON at `manifest` names (Mojang's runtimes are whole JDKs).
+/// The home of a JDK whose compiler and runtime support `major`. Forward even an installed
+/// JDK to external preparers: older versions may otherwise rediscover incompatible PATH tools.
+/// Else try the official launcher's Java in `games`, then download the runtime named by
+/// `manifest` into Horizon's game folder (Mojang's runtimes are whole JDKs).
 fn java(
     major: i64,
     games: &[PathBuf],
     manifest: &Path,
     log: &dyn Fn(String),
-) -> Result<Option<PathBuf>, String> {
-    if horizon_prepare::java::find(major, &[]).is_ok() {
-        return Ok(None);
+) -> Result<PathBuf, String> {
+    if let Ok(jdk) = horizon_prepare::java::find(major, &[]) {
+        return Ok(jdk.home());
     }
     let mut runtimes: Vec<PathBuf> = Vec::new();
     for home in games
@@ -1048,7 +1057,7 @@ fn java(
         }
     }
     let missing = match horizon_prepare::java::find(major, &runtimes) {
-        Ok(jdk) => return Ok(Some(jdk.home())),
+        Ok(jdk) => return Ok(jdk.home()),
         Err(e) => e,
     };
     let component = read_json(manifest)
@@ -1073,7 +1082,7 @@ fn java(
     let home = mojang::java_runtime(&component, &runtime, 8, &fetch, log).map_err(|e| {
         format!("{missing}\n  • Horizon also tried to download Minecraft's own Java from Mojang, but: {e}")
     })?;
-    horizon_prepare::java::find(major, &[home]).map(|jdk| Some(jdk.home()))
+    horizon_prepare::java::find(major, &[home]).map(|jdk| jdk.home())
 }
 
 /// The dynamic loader glibc programs on x86-64 Linux start through.
@@ -1196,14 +1205,12 @@ pub fn preparer(
                 import: !reused,
                 minecraft_dir: Some(minecraft.clone()),
                 server_jar: (!reused).then_some(jar),
-                java_home: java_home.clone(),
+                java_home: Some(java_home.clone()),
             };
             return Ok((Preparer::InProcess(options), minecraft));
         }
         let mut cmd = Command::new(binary);
-        if let Some(home) = &java_home {
-            with_java(&mut cmd, home);
-        }
+        with_java(&mut cmd, &java_home);
         cmd.current_dir(&dir).arg("--root").arg(&dir);
         if !reused {
             cmd.args(["--prepare", "--server-jar"]).arg(&jar);
@@ -1212,9 +1219,7 @@ pub fn preparer(
         return Ok((Preparer::Process(cmd), minecraft));
     }
     let mut cmd = Command::new(python.unwrap());
-    if let Some(home) = &java_home {
-        with_java(&mut cmd, home);
-    }
+    with_java(&mut cmd, &java_home);
     cmd.current_dir(&dir)
         .args(["-u", "tools/prepare_native_client.py"]);
     if !reused {
@@ -2337,6 +2342,10 @@ impl Settings {
 #[cfg(test)]
 #[path = "backend/release_loading_tests.rs"]
 mod release_loading_tests;
+
+#[cfg(test)]
+#[path = "backend/java_tests.rs"]
+mod java_tests;
 
 #[cfg(test)]
 mod tests {

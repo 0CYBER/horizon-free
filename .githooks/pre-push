@@ -1,2 +1,2 @@
 #!/bin/sh
-exec python3 tools/check_public_tree.py --history
+exec python3 tools/check_public_tree.py --pre-push

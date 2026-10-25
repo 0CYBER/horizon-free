@@ -168,6 +168,7 @@ mod stored_consume_fixture;
 mod stored_effect_attributes_fixture;
 mod stored_effect_notifications_fixture;
 mod structure_density_fixture;
+mod structure_pieces;
 mod suffocation_fixture;
 mod swimming_fixture;
 mod synced_bytes_fixture;
@@ -338,6 +339,7 @@ probes! {
     stored_effect_attributes_fixture,
     stored_effect_notifications_fixture,
     structure_density_fixture,
+    structure_pieces,
     suffocation_fixture,
     swimming_fixture,
     synced_bytes_fixture,
