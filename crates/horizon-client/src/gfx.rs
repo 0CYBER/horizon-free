@@ -2140,13 +2140,16 @@ impl Renderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let flat_wanted = flat::wanted(&adapter, &device);
+        // Readable as storage where flat draws run: a shader pack's terrain program reads them.
         let arena = arena::Arena::new(
             &device,
             std::mem::size_of::<TerrainVertex>() as u64,
             1 << 20,
+            flat_wanted,
         );
         // Sections as one index list per frame where multi-draw is emulated.
-        let flat = flat::wanted(&adapter, &device).then(|| {
+        let flat = flat_wanted.then(|| {
             let buffers = [Some(wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<TerrainVertex>() as u64,
                 step_mode: wgpu::VertexStepMode::Vertex,
