@@ -1082,6 +1082,8 @@ impl Game<'_> {
                 self.for_player(t, |g| g.teleport_to(Target::Player, pos, rotation));
             }
             Target::Player => {
+                // ServerPlayer.teleport: removeVehicle before placing the player.
+                self.stop_riding();
                 if let Some(p) = self.player.as_mut() {
                     p.position = v;
                     p.velocity = Vec3::new(0.0, 0.0, 0.0);
