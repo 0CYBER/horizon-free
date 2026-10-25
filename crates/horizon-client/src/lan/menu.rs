@@ -111,6 +111,8 @@ pub struct View<'a> {
     pub guest: &'a mut Guest,
     /// The container's slots, or None for the inventory menu.
     pub container: Option<&'a mut [Option<ItemStack>]>,
+    /// The container is a shulker box (`ShulkerBoxSlot`).
+    pub shulker: bool,
 }
 
 impl View<'_> {
@@ -152,6 +154,14 @@ impl View<'_> {
     fn may_place(&self, i: usize, stack: &ItemStack, rules: &dyn Rules) -> bool {
         if self.container.is_none() && (5..=8).contains(&i) {
             return rules.armor_index(&stack.item) == Some(i - 5);
+        }
+        // ShulkerBoxSlot.mayPlace: Item.canFitInsideContainerItems, false
+        // for shulker boxes.
+        if self.shulker
+            && self.container.as_ref().is_some_and(|c| i < c.len())
+            && stack.item.ends_with("shulker_box")
+        {
+            return false;
         }
         self.enabled(i)
     }
@@ -704,6 +714,7 @@ mod tests {
         let mut view = View {
             guest: &mut g,
             container: Some(&mut chest),
+            shulker: false,
         };
         view.guest.carried = Some(ItemStack::new("minecraft:bundle", 1));
         // Left click with the bundle: the stone goes in.
