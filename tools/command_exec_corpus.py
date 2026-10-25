@@ -327,6 +327,31 @@ def riding_teleport():
                               '/tp @s 8.5 230 8.5 0 0')
 
 
+def mob_riding():
+    """Mobs mount and dismount mobs with /ride, NBT passengers included (#1520)."""
+    rider, vehicle = '@e[tag=ride_r,limit=1]', '@e[tag=ride_v,limit=1]'
+    return [
+        *setup('/summon minecraft:cow 4.5 220 12.5 {NoAI:1b,NoGravity:1b,Tags:["ride_v"]}',
+               '/summon minecraft:pig 6.5 220 12.5 {NoAI:1b,NoGravity:1b,Tags:["ride_r"]}'),
+        cmd(f'/ride {rider} dismount'),
+        cmd(f'/ride {rider} mount @s'),
+        cmd(f'/ride {rider} mount {rider}'),
+        cmd(f'/ride {rider} mount {vehicle}'),
+        cmd(f'/ride {rider} mount {vehicle}'),
+        cmd(f'/ride {vehicle} mount {rider}'),
+        cmd('/execute as @e[tag=ride_r] on vehicle run say carrying'),
+        cmd(f'/ride {rider} dismount'),
+        cmd(f'/data get entity {rider} Pos'),
+        cmd('/execute as @e[tag=ride_r] on vehicle run say still carrying'),
+        *setup('/kill @e[tag=ride_r]', '/kill @e[tag=ride_v]'),
+        *setup('/summon minecraft:cow 4.5 220 12.5 {NoAI:1b,NoGravity:1b,Tags:["ride_v"],'
+               'Passengers:[{id:"minecraft:pig",NoAI:1b,NoGravity:1b,Tags:["ride_r"]}]}'),
+        cmd(f'/ride {rider} dismount'),
+        cmd(f'/data get entity {rider} Pos'),
+        *setup('/kill @e[tag=ride_r]', '/kill @e[tag=ride_v]'),
+    ]
+
+
 def scores():
     return [
         cmd('/scoreboard objectives add harness dummy'),
@@ -1017,6 +1042,7 @@ def groups():
         ('blocks and border', world_blocks()),
         ('entities', entities()),
         ('riding teleport', riding_teleport()),
+        ('mob riding', mob_riding()),
         ('scores, teams and bossbars', scores()),
         ('execute', execute()),
         ('levels', levels()),
