@@ -68,6 +68,7 @@ mod flat;
 pub mod lightning;
 mod lod;
 mod occlusion;
+mod pack_atlas;
 mod pack_post;
 pub mod pack_uniforms;
 mod page_runs;
@@ -472,6 +473,8 @@ pub struct Renderer {
     world_post: world_post::Post,
     /// The shader pack's post-processing, and the dimension (legacy id) it was loaded for.
     pack_post: Option<(i32, Option<pack_post::PackPost>)>,
+    /// The block sprites as one atlas, while a shader pack is loaded.
+    pack_atlas: Option<pack_atlas::PackAtlas>,
     pub hud: HudRenderer,
     /// Vanilla's menu background blur, made on first use.
     menu_blur: Option<crate::menu_blur::MenuBlur>,
@@ -1320,6 +1323,8 @@ impl Renderer {
                         format: wgpu::TextureFormat::Rgba8Unorm,
                         usage: wgpu::TextureUsages::TEXTURE_BINDING
                             | wgpu::TextureUsages::COPY_DST
+                            // Shader packs' atlas copies them (pack_atlas.rs).
+                            | wgpu::TextureUsages::COPY_SRC
                             | wgpu::TextureUsages::STORAGE_BINDING,
                         view_formats: &[],
                     },
@@ -2318,6 +2323,7 @@ impl Renderer {
             occlusion: occlusion::Occlusion::new(crate::chunk::MIN_Y, crate::chunk::HEIGHT / 16),
             world_post,
             pack_post: None,
+            pack_atlas: None,
             hud,
             menu_blur: None,
             info,
@@ -2763,6 +2769,25 @@ impl Renderer {
                 self.config.format.remove_srgb_suffix(),
             )
         });
+        if post.is_none() {
+            self.pack_atlas = None;
+        } else if self.pack_atlas.is_none() {
+            let mut encoder = self.device.create_command_encoder(&Default::default());
+            let layers = self
+                .sprite_textures
+                .iter()
+                .map(|t| t.depth_or_array_layers())
+                .sum();
+            self.pack_atlas = pack_atlas::PackAtlas::new(
+                &self.device,
+                &mut encoder,
+                &self.sprite_textures,
+                sprite_split(),
+                layers,
+                self.sprite_textures[0].width(),
+            );
+            self.queue.submit([encoder.finish()]);
+        }
         let report = post.as_ref().map(|p| {
             let programs = p.programs().into_iter().map(str::to_owned).collect();
             (programs, p.notes.clone())
@@ -2893,6 +2918,13 @@ impl Renderer {
     }
     fn animate(&mut self, encoder: &mut wgpu::CommandEncoder, tick: u64) {
         self.animations.animate(encoder, &mut self.uploads, tick);
+        if let Some(atlas) = &self.pack_atlas {
+            atlas.copy(
+                encoder,
+                &self.sprite_textures,
+                self.animations.changed().iter().copied(),
+            );
+        }
     }
     pub fn render(&mut self, frame: &Frame) -> Result<bool> {
         let rendered = self.draw_frame(frame);
