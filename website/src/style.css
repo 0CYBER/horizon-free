@@ -759,6 +759,9 @@ code { border-radius: 0; background: var(--well); box-shadow: 0 0 0 1px var(--ou
 .mod-page { display: grid; gap: 16px; max-width: calc(var(--measure) + 240px); }
 .mod-page .heading { margin-top: 24px; }
 .mod-head { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 24px; align-items: start; }
+.mod-owners { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 0; }
+.mod-owner { display: inline-flex; align-items: center; gap: 6px; }
+.mod-owner img { border-radius: 50%; }
 .mod-head .mod-icon { width: 96px; height: 96px; font-size: 44px; }
 .mod-head .page-title { margin-top: 0; }
 .mod-badges { margin-top: 16px; }

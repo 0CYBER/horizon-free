@@ -79,6 +79,19 @@ function installHtml(p, v) {
 </ol>`;
 }
 
+// GitHub's rule for a login: letters, digits and single dashes, at most 39.
+const LOGIN = /^(?!-)(?!.*--)[A-Za-z0-9-]{1,39}(?<!-)$/;
+
+// Who publishes it: the GitHub accounts the registry checked when the project was submitted.
+export function ownersHtml(p) {
+  const owners = (p.owners || []).filter((o) => LOGIN.test(o));
+  if (!owners.length) return "";
+  const links = owners
+    .map((o) => `<a class="mod-owner" href="https://github.com/${o}"><img src="https://avatars.githubusercontent.com/${o}?s=48" alt="" width="24" height="24" loading="lazy">@${o}</a>`)
+    .join(" ");
+  return `<p class="meta mod-owners">Published by ${links}</p>`;
+}
+
 // One project's page.
 export function projectHtml(p) {
   const v = p.versions[0];
@@ -93,7 +106,7 @@ export function projectHtml(p) {
     .map((x) => `<li><strong>${escape(x.version)}</strong> <span class="mod-version">${escape(x.published || "")} · for ${escape(x.game)}${x.api ? ` · API ${escape(x.api)}` : ""}</span>${x.changelog ? `<div class="prose">${markdown(x.changelog)}</div>` : ""}</li>`)
     .join("");
   return `<article class="mod-page" data-id="${escape(p.id)}">
-  <header class="mod-head">${icon(p)}<div><p class="kicker"><span>${escape(KIND_NAMES[p.kind] || p.kind)}</span>${escape((p.authors || []).join(", "))}</p>
+  <header class="mod-head">${icon(p)}<div><p class="kicker"><span>${escape(KIND_NAMES[p.kind] || p.kind)}</span>${escape((p.authors || []).join(", "))}</p>${ownersHtml(p)}
   <h1 class="display page-title">${escape(p.name)}</h1><p class="lede">${escape(p.summary || "")}</p>
   <p class="mod-badges">${trust(p)} <span class="badge">${escape(p.license)}</span> <span class="badge">${escape(v.version)}</span>${v.side ? ` <span class="badge">${escape(v.side)}</span>` : ""}</p></div></header>
   ${p.description ? `<div class="prose">${markdown(p.description)}</div>` : ""}
