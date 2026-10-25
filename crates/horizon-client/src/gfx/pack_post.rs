@@ -270,6 +270,9 @@ pub struct PackPost {
     depth1: bool,
     /// The shadow buffers, when the shadow pass runs (2.5), and the `shadowcomp` programs.
     shadow_targets: Option<super::pack_shadow::ShadowTargets>,
+    /// What draws terrain from the light (`shadow`), and translucent terrain (`shadow_water`).
+    shadow_terrain: Option<Pass>,
+    shadow_water: Option<Pass>,
     shadow_comp: Vec<Pass>,
     /// Buffers with mipmaps (filterable ones a program asks them for).
     mipped: u16,
@@ -598,10 +601,35 @@ fn attach(
     })
 }
 
-/// Draws the game's terrain (`true`: translucent) into a pass; calls its third argument with
-/// each arena page before drawing from it.
+/// Which of the frame's terrain draws: the camera's solid or translucent ones, or the shadow
+/// camera's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TerrainList {
+    Solid,
+    Translucent,
+    ShadowSolid,
+    ShadowTranslucent,
+}
+
+impl TerrainList {
+    fn translucent(self) -> bool {
+        matches!(self, Self::Translucent | Self::ShadowTranslucent)
+    }
+}
+
+/// Draws the game's terrain of one list into a pass; calls its third argument with each arena
+/// page before drawing from it.
 pub(super) type TerrainDraw<'a> =
-    dyn FnMut(&mut wgpu::RenderPass<'_>, bool, &dyn Fn(&mut wgpu::RenderPass<'_>, u32)) + 'a;
+    dyn FnMut(&mut wgpu::RenderPass<'_>, TerrainList, &dyn Fn(&mut wgpu::RenderPass<'_>, u32)) + 'a;
+
+/// What the shadow camera sees of the terrain, for the game's draw lists: its view and
+/// projection in wgpu's clip space, the direction toward the light, and how far from the camera
+/// terrain is drawn (`shadowDistanceRenderMul`).
+pub(super) struct ShadowView {
+    pub cull: glam::Mat4,
+    pub light: glam::Vec3,
+    pub distance: Option<f32>,
+}
 
 /// Set 3 of flat terrain, read by the vertex stage: `mc_Entity`'s table (-1 pairs when empty)
 /// and, per arena page, the page's vertices (a vertex reads its quad's corners for its normal).
@@ -1007,6 +1035,14 @@ impl PackPost {
             .water
             .zip(terrain_geometry.as_ref())
             .and_then(|(p, g)| build(p, Some(g)));
+        let shadow_terrain = post
+            .shadow
+            .zip(terrain_geometry.as_ref())
+            .and_then(|(p, g)| build(p, Some(g)));
+        let shadow_water = post
+            .shadow_water
+            .zip(terrain_geometry.as_ref())
+            .and_then(|(p, g)| build(p, Some(g)));
         let sky = (post.sky.is_some() || post.sky_textured.is_some()).then(|| {
             let geometry = PackSky::new(device);
             let basic = Geometry {
@@ -1124,8 +1160,21 @@ impl PackPost {
         if let Some(t) = &terrain {
             notes.push(format!("terrain draws with {}", t.name));
         }
+        for (part, pass) in [
+            ("terrain", &shadow_terrain),
+            ("translucent terrain", &shadow_water),
+        ] {
+            if let Some(p) = pass {
+                notes.push(format!("{part} casts shadows with {}", p.name));
+            }
+        }
         if let Some(w) = &water {
             notes.push(format!("translucent terrain draws with {}", w.name));
+        }
+        // Timed (and labelled) apart from the solid shadow pass that runs the same program.
+        let mut shadow_water = shadow_water;
+        if let Some(p) = &mut shadow_water {
+            p.name.push_str(" (translucent)");
         }
         for (part, pass) in sky
             .iter()
@@ -1168,6 +1217,7 @@ impl PackPost {
                 .chain(&shadow_comp)
                 .chain(&terrain)
                 .chain(&water))
+            .chain(shadow_terrain.iter().chain(&shadow_water))
             .chain(sky.iter().flat_map(|s| s.basic.iter().chain(&s.textured)))
             .chain(entities.iter().flat_map(|e| e.passes.iter().flatten()))
             .chain(&clouds)
@@ -1189,9 +1239,11 @@ impl PackPost {
             let t =
                 super::pack_shadow::ShadowTargets::new(device, &shadow_config, f, colors, depth1);
             notes.push(format!(
-                "shadow map {0}x{0}, shadowcolor buffers {colors:#b}{1}",
+                "shadow map {0}x{0} over {2} blocks, sunPathRotation {3}, shadowcolor buffers {colors:#b}{1}",
                 t.size,
-                if depth1 { ", shadowtex1" } else { "" }
+                if depth1 { ", shadowtex1" } else { "" },
+                shadow_config.distance,
+                shadow_config.sun_path_rotation,
             ));
             t
         });
@@ -1334,6 +1386,8 @@ impl PackPost {
             hand,
             depth1,
             shadow_targets,
+            shadow_terrain,
+            shadow_water,
             shadow_comp,
             mipped,
             mips_valid: 0,
@@ -1545,7 +1599,12 @@ impl PackPost {
             load: wgpu::LoadOp::Load,
             store: wgpu::StoreOp::Store,
         };
-        // The shadow pass draws into the shadow buffers and the shadow map.
+        // The shadow pass draws into the shadow buffers and the shadow map, the frame's first
+        // one clearing them.
+        let (depth_ops, shadow_ops) = match &mut self.shadow_targets {
+            Some(s) if pass.group.shadow() => s.clear_ops(pass.writes.iter().map(|w| w.1)),
+            _ => (super::pack_shadow::load(), [load; 2]),
+        };
         let shadow = self.shadow_targets.as_ref().filter(|_| pass.group.shadow());
         let mut attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = Vec::new();
         for &(location, buffer) in &pass.writes {
@@ -1554,7 +1613,9 @@ impl PackPost {
                 attachments.resize(l + 1, None);
             }
             attachments[l] = match shadow {
-                Some(s) => s.color(buffer, false).and_then(|v| attach(v, load)),
+                Some(s) => s
+                    .color(buffer, false)
+                    .and_then(|v| attach(v, shadow_ops.get(buffer).copied().unwrap_or(load))),
                 None => targets.color[buffer]
                     .as_ref()
                     .and_then(|t| attach(&t[usize::from(self.main & 1 << buffer != 0)], load)),
@@ -1567,10 +1628,7 @@ impl PackPost {
             timestamp_writes,
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: shadow.map_or(&targets.depth, |s| &s.depth.1),
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                }),
+                depth_ops: Some(depth_ops),
                 stencil_ops: None,
             }),
             ..Default::default()
@@ -1585,18 +1643,20 @@ impl PackPost {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         size: [u32; 2],
-        translucent: bool,
+        list: TerrainList,
         draw: &mut TerrainDraw<'_>,
     ) {
-        let slot = if translucent {
-            &mut self.water
-        } else {
-            &mut self.terrain
+        let slot = match list {
+            TerrainList::Solid => &mut self.terrain,
+            TerrainList::Translucent => &mut self.water,
+            TerrainList::ShadowSolid => &mut self.shadow_terrain,
+            TerrainList::ShadowTranslucent => &mut self.shadow_water,
         };
         let Some(mut pass) = slot.take() else {
             return;
         };
-        if translucent
+        let translucent = list.translucent();
+        if list == TerrainList::Translucent
             && let Some(t) = &self.targets
             && let Some((copy, _)) = &t.depth1
         {
@@ -1625,14 +1685,17 @@ impl PackPost {
                     rp.set_bind_group(3, group, &[]);
                 }
             };
-            draw(&mut rp, translucent, &page);
+            draw(&mut rp, list, &page);
         }
-        self.mips_valid &= !pass.written;
-        if translucent {
-            self.water = Some(pass);
-        } else {
-            self.terrain = Some(pass);
+        if !pass.group.shadow() {
+            self.mips_valid &= !pass.written;
         }
+        *match list {
+            TerrainList::Solid => &mut self.terrain,
+            TerrainList::Translucent => &mut self.water,
+            TerrainList::ShadowSolid => &mut self.shadow_terrain,
+            TerrainList::ShadowTranslucent => &mut self.shadow_water,
+        } = Some(pass);
     }
 
     /// The sky's parts in vanilla's order, each with the program that draws it; one render pass
@@ -1782,7 +1845,7 @@ impl PackPost {
         if super::sky_visible(frame) {
             self.draw_sky(device, queue, encoder, size, frame);
         }
-        self.draw_terrain(device, queue, encoder, size, false, terrain);
+        self.draw_terrain(device, queue, encoder, size, TerrainList::Solid, terrain);
         self.draw_entities(device, queue, encoder, size, false);
         self.draw_clouds(device, queue, encoder, size);
         self.draw_hand(device, queue, encoder, size, frame);
@@ -1878,7 +1941,14 @@ impl PackPost {
         size: [u32; 2],
         terrain: &mut TerrainDraw<'_>,
     ) {
-        self.draw_terrain(device, queue, encoder, size, true, terrain);
+        self.draw_terrain(
+            device,
+            queue,
+            encoder,
+            size,
+            TerrainList::Translucent,
+            terrain,
+        );
         self.draw_entities(device, queue, encoder, size, true);
         self.draw_weather(device, queue, encoder, size);
     }
@@ -1960,6 +2030,20 @@ impl PackPost {
     }
 
     /// Whether the pack draws terrain itself.
+    /// What the shadow camera draws of the terrain this frame, when the pack draws it.
+    pub fn shadow_view(&self, frame: &super::Frame) -> Option<ShadowView> {
+        self.shadow_targets.as_ref()?;
+        if self.shadow_terrain.is_none() && self.shadow_water.is_none() {
+            return None;
+        }
+        let shadow = &self.uniforms.shadow;
+        Some(ShadowView {
+            cull: pack_uniforms::shadow_culling(frame, shadow),
+            light: pack_uniforms::shadow_light(frame, shadow),
+            distance: (shadow.render_mul > 0.0).then_some(shadow.distance * shadow.render_mul),
+        })
+    }
+
     pub fn has_terrain(&self) -> bool {
         self.terrain.is_some()
     }
@@ -2088,13 +2172,32 @@ impl PackPost {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
+        terrain: &mut TerrainDraw<'_>,
     ) {
-        let Some(t) = &self.shadow_targets else {
+        let Some(t) = &mut self.shadow_targets else {
             return;
         };
-        t.clear(encoder);
-        t.copy_depth1(encoder);
+        t.begin_frame();
         let size = [t.size; 2];
+        self.draw_terrain(
+            device,
+            queue,
+            encoder,
+            size,
+            TerrainList::ShadowSolid,
+            terrain,
+        );
+        let t = self.shadow_targets.as_mut().expect("shadow pass");
+        t.clear_rest(encoder);
+        t.copy_depth1(encoder);
+        self.draw_terrain(
+            device,
+            queue,
+            encoder,
+            size,
+            TerrainList::ShadowTranslucent,
+            terrain,
+        );
         let mut comp = std::mem::take(&mut self.shadow_comp);
         for pass in &mut comp {
             let group = self.bind(device, queue, pass, size);
@@ -2181,7 +2284,7 @@ impl PackPost {
         if self.targets.is_none() {
             return;
         }
-        self.run_shadow(device, queue, encoder);
+        self.run_shadow(device, queue, encoder, terrain);
         let Some(targets) = &self.targets else { return };
         let main = |m: u16, i: usize| usize::from(m & 1 << i != 0);
         let view = |m: u16, i: usize, alt: bool| {

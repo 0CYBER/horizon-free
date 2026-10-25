@@ -471,6 +471,8 @@ pub struct Renderer {
     /// Per-frame scratch, kept to avoid allocating every frame.
     visible: Vec<resident::Visible>,
     visible_lods: Vec<lod::Visible>,
+    /// The sections a shader pack's shadow camera sees (`pack_post::ShadowView`).
+    shadow_visible: Vec<resident::Visible>,
     translucent_draws: Vec<(u64, usize, [u32; 5], (u32, Option<u32>))>,
     origins: Vec<[f32; 4]>,
     /// `DrawIndexedIndirectArgs` words: index count, instance count, first
@@ -485,6 +487,8 @@ pub struct Renderer {
     /// Each section's solid draws, to group them by arena page.
     solid_runs: page_runs::PageRuns,
     phase2_runs: page_runs::PageRuns,
+    /// The shadow camera's draws by page, in bands of distance from the light.
+    shadow_runs: page_runs::PageRuns,
     /// Block-entity blocks per meshed section (world position, state id).
     block_entities: HashMap<SectionKey, Vec<([i32; 3], u32)>>,
     /// Changes whenever `block_entities` does (unique across renderers).
@@ -2351,6 +2355,7 @@ impl Renderer {
             multi_draw,
             visible: Vec::new(),
             visible_lods: Vec::new(),
+            shadow_visible: Vec::new(),
             translucent_draws: Vec::new(),
             origins: Vec::new(),
             draws: Vec::new(),
@@ -2359,6 +2364,7 @@ impl Renderer {
             phase2_pages: Vec::new(),
             solid_runs: page_runs::PageRuns::default(),
             phase2_runs: page_runs::PageRuns::default(),
+            shadow_runs: page_runs::PageRuns::default(),
             block_entities: HashMap::new(),
             block_entity_revision: next_block_entity_revision(),
             occlusion: occlusion::Occlusion::new(crate::chunk::MIN_Y, crate::chunk::HEIGHT / 16),
@@ -3275,8 +3281,43 @@ impl Renderer {
             );
             visible_lods.sort_unstable_by_key(|v| (v.distance, v.key));
         }
+        // A shader pack's shadow pass draws the sections in its camera's box, all of them (the
+        // occlusion graph follows the eye, not the light), within shadowDistanceRenderMul.
+        let shadow_view = self
+            .pack_post
+            .as_ref()
+            .and_then(|p| p.1.as_ref())
+            .filter(|_| !frame.title)
+            .and_then(|p| p.shadow_view(frame));
+        let mut shadow_visible = std::mem::take(&mut self.shadow_visible);
+        shadow_visible.clear();
+        if let Some(v) = &shadow_view {
+            let radius = (frame.detail_distance / 16.0) as i32;
+            let radius = v
+                .distance
+                .map_or(radius, |d| radius.min((d / 16.0).ceil() as i32));
+            let light = Frustum {
+                planes: frustum(v.cull),
+            };
+            crate::spans::time("shadow visibility", || {
+                self.sections.visible(
+                    camera,
+                    radius,
+                    &light,
+                    |_| true,
+                    |_, _| false,
+                    &mut shadow_visible,
+                )
+            });
+            // Nearest the light first, so the depth test rejects what lies under it.
+            let light = v.light;
+            shadow_visible.sort_unstable_by(|a, b| {
+                let height = |s: &resident::Visible| glam::Vec3::from(s.origin).dot(light);
+                height(b).total_cmp(&height(a))
+            });
+        }
         self.drawn_sections = visible.len() + visible_lods.len();
-        let instances = self.drawn_sections;
+        let instances = self.drawn_sections + shadow_visible.len();
         if instances as u64 > self.instance_capacity {
             self.instance_capacity = (instances as u64).next_power_of_two();
             self.instances = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -3293,7 +3334,8 @@ impl Renderer {
             visible
                 .iter()
                 .map(|v| section_instance(v.origin))
-                .chain(visible_lods.iter().map(|v| lod::instance(v.origin))),
+                .chain(visible_lods.iter().map(|v| lod::instance(v.origin)))
+                .chain(shadow_visible.iter().map(|v| section_instance(v.origin))),
         );
         if !self.origins.is_empty() {
             self.uploads.buffer(
@@ -3497,9 +3539,87 @@ impl Renderer {
         self.translucency_cursor += budget;
         let translucent_draws = self.draws.len() as u32 - solid_draws;
         self.section_draws = self.draws.len();
+        // The shadow camera's sections after the camera's: quads that can face the light, then
+        // translucent ones (in their last sorted order; depth decides there).
+        let shadow_first = self.draws.len() as u32;
+        let mut shadow_translucent = Vec::new();
+        self.shadow_runs.clear();
+        if let Some(view) = &shadow_view {
+            let base = self.drawn_sections;
+            let toward = view.light * 1.0e5;
+            // How far below the nearest section to the light (squared, as bits, as `PageRuns`
+            // takes distances): each band's draws go by page, a call per page and band.
+            let height = |v: &resident::Visible| glam::Vec3::from(v.origin).dot(view.light);
+            let top = shadow_visible.first().map_or(0.0, height);
+            for (k, v) in shadow_visible.iter().enumerate() {
+                let s = self.sections.get_mut(v.slot);
+                let instance = (base + k) as u32;
+                let depth = f64::from(top - height(v)).max(0.0);
+                let distance = (depth * depth).to_bits();
+                // A section the camera never saw has no sorted indices yet: sorted once now.
+                if let Some((index_page, index_start)) = s.sorted_indices
+                    && !s.sort.is_sorted()
+                {
+                    let origin = [
+                        v.key.0 * 16,
+                        crate::chunk::MIN_Y + v.key.1 * 16,
+                        v.key.2 * 16,
+                    ];
+                    if let Some(indices) =
+                        s.sort
+                            .update(camera.to_array(), origin, &mut self.translucent_sorter)
+                    {
+                        self.uploads.buffer(
+                            &mut encoder,
+                            self.sorted_indices.buffer(index_page),
+                            index_start * 4,
+                            bytemuck::cast_slice(indices),
+                        );
+                    }
+                }
+                let before = self.draws.len();
+                facing_runs(&s.sides, Some(toward), v.origin, |first, quads| {
+                    let start = s.start as u32 + first * 4;
+                    self.draws.push([quads * 6, 1, 0, start, instance]);
+                    self.draw_pages.push((s.page, None));
+                });
+                let len = self.draws.len() - before;
+                self.shadow_runs.push(distance, s.page, before, len, [0; 3]);
+                if let Some((index_page, index_start)) = s.sorted_indices {
+                    let start = s.start + u64::from(s.solid) * 4;
+                    shadow_translucent.push((
+                        distance,
+                        [
+                            s.translucent * 6,
+                            1,
+                            index_start as u32,
+                            start as u32,
+                            instance,
+                        ],
+                        (s.page, Some(index_page)),
+                    ));
+                }
+            }
+        }
+        let shadow_solid = self.draws.len() as u32 - shadow_first;
+        self.shadow_runs
+            .regroup(&mut self.draws, &mut self.draw_pages, shadow_first as usize);
+        self.shadow_runs.clear();
+        for (distance, draw, pages) in shadow_translucent {
+            self.shadow_runs
+                .push(distance, pages.0, self.draws.len(), 1, [0; 3]);
+            self.draws.push(draw);
+            self.draw_pages.push(pages);
+        }
+        self.shadow_runs.regroup(
+            &mut self.draws,
+            &mut self.draw_pages,
+            (shadow_first + shadow_solid) as usize,
+        );
+        let shadow_translucent = self.draws.len() as u32 - shadow_first - shadow_solid;
         // Metal replays a multi-draw as one draw call per entry.
         self.section_draw_calls = if self.multi_draw && self.info.backend != wgpu::Backend::Metal {
-            (0..self.draws.len())
+            (0..self.section_draws)
                 .filter(|&i| {
                     i == 0
                         || i == phase1_draws as usize
@@ -3508,7 +3628,7 @@ impl Renderer {
                 })
                 .count()
         } else {
-            self.draws.len()
+            self.section_draws
         };
         let debug_depth = frame.debug_lines.len() as u32;
         let debug_top = frame.debug_lines_on_top.len() as u32;
@@ -3743,7 +3863,9 @@ impl Renderer {
             Some(flat)
                 if self.flat_on
                     && !self.draws.is_empty()
-                    && (self.drawn_sections >= flat.min_sections || pack_terrain) =>
+                    && (self.drawn_sections >= flat.min_sections
+                        || pack_terrain
+                        || shadow_view.is_some()) =>
             {
                 let sections = &self.sections;
                 let lods = &self.lods;
@@ -3758,9 +3880,11 @@ impl Renderer {
                         &self.draw_pages,
                         phase1_draws as usize,
                         solid_draws as usize,
+                        [shadow_first, shadow_first + shadow_solid].map(|d| d as usize),
                         phase2,
                         visible
                             .iter()
+                            .chain(&shadow_visible)
                             .filter_map(|v| {
                                 let id = sections.get(v.slot).flat_id?;
                                 Some((id, section_instance(v.origin)))
@@ -3776,7 +3900,7 @@ impl Renderer {
             _ => false,
         };
         if flat_frame {
-            self.section_draw_calls = self.flat.as_ref().map_or(0, |f| f.calls.len());
+            self.section_draw_calls = self.flat.as_ref().map_or(0, |f| f.shadow_calls[0]);
         } else if self.multi_draw && !self.draws.is_empty() {
             if self.draws.len() as u64 > self.indirect_capacity {
                 self.indirect_capacity = (self.draws.len() as u64).next_power_of_two();
@@ -3805,6 +3929,8 @@ impl Renderer {
         let pack_post = !frame.title && self.pack_post.as_ref().is_some_and(|p| p.1.is_some());
         // The pack's program reads the vertices this frame's draws bind.
         let pack_draws_terrain = pack_terrain && flat_frame == self.pack_terrain_flat;
+        // The shadow camera's lists, drawn by the pack's shadow programs.
+        let pack_draws_shadow = shadow_view.is_some() && flat_frame == self.pack_terrain_flat;
         let pack_draws_sky = pack_post
             && self
                 .pack_post
@@ -4074,7 +4200,7 @@ impl Renderer {
                 _ if pack_draws_water => {}
                 Some(flat) => {
                     pass.set_pipeline(&flat.translucent);
-                    flat.draw(&mut pass, &flat.calls[flat.solid_calls..], |p| {
+                    flat.draw(&mut pass, flat.translucent_calls(), |p| {
                         self.arena.buffer(p)
                     });
                     pass.set_bind_group(0, &self.group, &[]);
@@ -4165,7 +4291,7 @@ impl Renderer {
             post.set_weather(weather);
             let flat = self.flat.as_ref().filter(|_| flat_frame);
             let pages: Vec<(u32, wgpu::Buffer)> = match flat {
-                Some(_) if pack_draws_terrain => self
+                Some(_) if pack_draws_terrain || pack_draws_shadow => self
                     .arena
                     .page_buffers()
                     .map(|(p, b)| (p, b.clone()))
@@ -4174,27 +4300,38 @@ impl Renderer {
             };
             let mut terrain =
                 |rp: &mut wgpu::RenderPass<'_>,
-                 translucent: bool,
+                 list: pack_post::TerrainList,
                  page: &dyn Fn(&mut wgpu::RenderPass<'_>, u32)| {
-                    if !pack_draws_terrain {
+                    use pack_post::TerrainList as L;
+                    let shadow = matches!(list, L::ShadowSolid | L::ShadowTranslucent);
+                    if !(if shadow {
+                        pack_draws_shadow
+                    } else {
+                        pack_draws_terrain
+                    }) {
                         return;
                     }
                     match flat {
                         Some(flat) => {
-                            let calls = if translucent {
-                                &flat.calls[flat.solid_calls..]
-                            } else {
-                                &flat.calls[..flat.solid_calls]
+                            let [shadow, shadow_translucent] = flat.shadow_calls;
+                            let calls = match list {
+                                L::Solid => &flat.calls[..flat.solid_calls],
+                                L::Translucent => flat.translucent_calls(),
+                                L::ShadowSolid => &flat.calls[shadow..shadow_translucent],
+                                L::ShadowTranslucent => &flat.calls[shadow_translucent..],
                             };
                             flat.draw_with(rp, calls, |p| self.arena.buffer(p), page);
                         }
                         None => {
                             rp.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                             rp.set_vertex_buffer(1, self.instances.slice(..));
-                            let (first, count) = if translucent {
-                                (solid_draws, translucent_draws)
-                            } else {
-                                (0, solid_draws)
+                            let (first, count) = match list {
+                                L::Solid => (0, solid_draws),
+                                L::Translucent => (solid_draws, translucent_draws),
+                                L::ShadowSolid => (shadow_first, shadow_solid),
+                                L::ShadowTranslucent => {
+                                    (shadow_first + shadow_solid, shadow_translucent)
+                                }
                             };
                             self.draw_sections(rp, &self.indirect, 0, first, count);
                         }
@@ -4429,6 +4566,7 @@ impl Renderer {
         let _ = self.started;
         self.visible = visible;
         self.visible_lods = visible_lods;
+        self.shadow_visible = shadow_visible;
         Ok(true)
     }
 }
