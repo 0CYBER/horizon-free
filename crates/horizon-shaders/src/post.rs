@@ -226,8 +226,15 @@ pub fn load_post(
     }
     let mut gbuffers = |names: &[&str], group, inputs: &GbuffersInputs| {
         names.iter().find_map(|name| {
+            // `alphaTest.<program>` replaces the geometry's default test (OQ-23).
+            let key = properties.get(&format!("alphaTest.{name}"));
+            let test = key.and_then(|v| crate::AlphaTest::parse(v.trim()));
+            let mut inputs = inputs.clone();
+            if let Some(test) = test {
+                inputs.alpha_test = test;
+            }
             loader.load(name.to_string(), group, |v, f| {
-                translate_gbuffers(v, f, Target::Buffers, inputs)
+                translate_gbuffers(v, f, Target::Buffers, &inputs)
             })
         })
     };

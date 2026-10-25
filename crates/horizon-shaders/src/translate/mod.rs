@@ -111,6 +111,41 @@ pub struct GbuffersInputs {
     pub attributes: Vec<(String, String)>,
     /// GLSL statements run last in `main`, with `gl_Position` in wgpu's clip space.
     pub after: String,
+    /// The alpha test applied to output 0 (`gl_FragData[0]`, `gl_FragColor`), the loader's
+    /// (3.2 `alphaTest.<program>`): `None` keeps every fragment.
+    pub alpha_test: Option<AlphaTest>,
+}
+
+/// A fragment stays when its output 0's alpha compares to `reference` as `op` says (a GLSL
+/// comparison operator, `true` for GL's `ALWAYS`, `false` for `NEVER`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AlphaTest {
+    pub op: &'static str,
+    pub reference: f32,
+}
+
+impl AlphaTest {
+    /// `alphaTest.<program>`'s value: `off`, or a GL comparison and a reference.
+    pub fn parse(value: &str) -> Option<Option<Self>> {
+        let mut words = value.split_whitespace();
+        let func = words.next()?;
+        if func == "off" {
+            return Some(None);
+        }
+        let op = match func.trim_start_matches("GL_") {
+            "NEVER" => "false",
+            "LESS" => "<",
+            "EQUAL" => "==",
+            "LEQUAL" => "<=",
+            "GREATER" => ">",
+            "NOTEQUAL" => "!=",
+            "GEQUAL" => ">=",
+            "ALWAYS" => return Some(None),
+            _ => return None,
+        };
+        let reference = words.next()?.parse().ok()?;
+        Some(Some(Self { op, reference }))
+    }
 }
 
 /// Translates a composite-style program (`composite`, `deferred`, `final`...).
@@ -343,7 +378,23 @@ fn translate(
     for name in &f.inits {
         writeln!(fragment_main, "    {name} = hz_init_{name}();").unwrap();
     }
-    fragment_main.push_str("    hz_main();\n}\n");
+    fragment_main.push_str("    hz_main();\n");
+    // With `out` variables the pack tests alpha itself.
+    if let Some(t) = gbuffers.and_then(|g| g.alpha_test)
+        && f.outputs.contains(&0)
+        && !f.frag_outs.iter().any(|(n, _)| *n == 0)
+    {
+        match t.op {
+            "false" => fragment_main.push_str("    discard;\n"),
+            op => writeln!(
+                fragment_main,
+                "    if (!(hz_out0.a {op} {:?})) {{ discard; }}",
+                t.reference
+            )
+            .unwrap(),
+        }
+    }
+    fragment_main.push_str("}\n");
 
     let v_text = format!(
         "{}{}{vertex_main}",
@@ -648,6 +699,50 @@ mod tests {
                 })
             });
             assert!(stores, "{target:?}: main does not set hz_FragCoord");
+        }
+    }
+
+    #[test]
+    fn the_alpha_test_discards_below_its_reference() {
+        assert_eq!(
+            AlphaTest::parse("GREATER 0.1"),
+            Some(Some(AlphaTest {
+                op: ">",
+                reference: 0.1
+            }))
+        );
+        assert_eq!(AlphaTest::parse("off"), Some(None));
+        assert_eq!(AlphaTest::parse("GL_ALWAYS 0"), Some(None));
+        assert_eq!(AlphaTest::parse("SOMETIMES 0.5"), None);
+        let vsh = "#version 120\nvoid main() { gl_Position = ftransform(); }\n";
+        let legacy = "#version 120\nvoid main() { gl_FragData[0] = vec4(0.5); }\n";
+        let outs =
+            "#version 330\nlayout(location = 0) out vec4 c;\nvoid main() { c = vec4(0.5); }\n";
+        for (fsh, kills) in [(legacy, true), (outs, false)] {
+            let files = [
+                ("shaders/gbuffers_entities.vsh", vsh),
+                ("shaders/gbuffers_entities.fsh", fsh),
+            ];
+            let pack = Pack::from_zip_bytes("P.zip", zip(&files)).unwrap();
+            let m = Macros::standard();
+            let inputs = GbuffersInputs {
+                body: "    hz_Vertex = vec4(0.0, 0.0, 0.0, 1.0);\n".into(),
+                alpha_test: AlphaTest::parse("GREATER 0.1").unwrap(),
+                ..Default::default()
+            };
+            let p = translate_gbuffers(
+                &preprocess(&pack, "gbuffers_entities.vsh", &m),
+                &preprocess(&pack, "gbuffers_entities.fsh", &m),
+                Target::Buffers,
+                &inputs,
+            )
+            .unwrap_or_else(|e| panic!("{e:?}"));
+            let functions = p.fragment.functions.iter().map(|(_, f)| f);
+            let kill = functions
+                .chain([&p.fragment.entry_points[0].function])
+                .any(|f| format!("{:?}", f.body).contains("Kill"));
+            // With `out` variables the pack tests alpha itself.
+            assert_eq!(kill, kills, "{fsh}");
         }
     }
 
