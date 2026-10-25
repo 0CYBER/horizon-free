@@ -5,7 +5,9 @@ import { markdown, escape } from "./markdown.js";
 
 export const INDEX_URL = "https://ludovic111.github.io/horizon-mods/index.json";
 const REGISTRY = "https://github.com/ludovic111/horizon-mods";
-export const SUBMIT = `${REGISTRY}#submit`;
+export const SUBMIT = "/mods/submit";
+// The submission form's service (crates/horizon-mod-registry), behind the site's own address.
+export const API = "/api/mods";
 export const SCHEMA = 1;
 
 // The kinds the site shows, in the filter's order. Kinds a newer index adds are left out until the site knows them.
@@ -107,4 +109,67 @@ export function projectHtml(p) {
   <a class="link-arrow" href="${REGISTRY}/blob/main/mods/${escape(p.id)}.toml">Its entry in the registry<span aria-hidden="true">→</span></a>
   <a class="link-arrow" href="${REGISTRY}/issues/new?template=report.yml&amp;title=${escape(p.id)}">Report it<span aria-hidden="true">→</span></a></p>
 </article>`;
+}
+
+// /mods/submit: the form. Its script (mods-submit.js) signs in, then sends the page and the file to the service, which
+// checks the file and opens the pull request the reviewers read.
+const field = (name, label, input, hint = "") =>
+  `<label class="mod-field" for="f-${name}"><span class="mod-label">${label}</span>${input}${hint ? `<span class="meta">${hint}</span>` : ""}</label>`;
+const text = (name, attrs = "") => `<input class="mod-search" id="f-${name}" name="${name}" ${attrs}>`;
+
+export function submitHtml() {
+  return `<p class="kicker"><span>Mods</span>Submit</p>
+        <h1 class="display page-title">Submit to the registry</h1>
+        <p class="lede">A mod, a modpack of registry mods, or a resource pack made for Horizon. The form checks the file and opens a pull request; a reviewer reads it, its source and the checks' report, and merging publishes it to this site and the launcher.</p>
+        <div class="mod-auth" id="submit-auth" aria-live="polite">
+          <p class="meta no-script">The form needs JavaScript. You can also <a href="${REGISTRY}">open a pull request by hand</a>.</p>
+        </div>
+        <form class="mod-form" id="submit-form" hidden>
+          <fieldset><legend class="heading">The file</legend>
+          ${field("kind", "Kind", `<select class="mod-search" id="f-kind" name="kind">${KINDS.map(([k, label]) => `<option value="${k}"${k === "shader" ? " disabled" : ""}>${label.replace(/s$/, "")}${k === "shader" ? " (opens with Horizon's own shader format)" : ""}</option>`).join("")}</select>`)}
+          ${field("file", "File", `<input id="f-file" name="file" type="file" accept=".hmod,.hpack,.zip" required>`, "A .hmod, a .hpack or a resource pack .zip, at most 64 MB. Run <code>cargo horizon-mod check</code> on it first.")}
+          ${field("id", "Id", text("id", `required pattern="[a-z0-9_]{1,64}" placeholder="my_mod" autocomplete="off"`), "Its manifest's id: a-z, 0-9 and _. A resource pack's is yours to pick.")}
+          ${field("version", "Version", text("version", `required pattern="[A-Za-z0-9][A-Za-z0-9._\\-]{0,63}" placeholder="1.0.0"`))}
+          ${field("game", "For Minecraft", text("game", `required value="26.3"`))}
+          ${field("changelog", "What changed", `<textarea class="mod-search" id="f-changelog" name="changelog" rows="3"></textarea>`, "Markdown.")}
+          </fieldset>
+          <fieldset><legend class="heading">Its page</legend>
+          ${field("name", "Name", text("name", `required maxlength="64"`))}
+          ${field("summary", "Summary", text("summary", `required maxlength="160"`), "One line for the list.")}
+          ${field("description", "Description", `<textarea class="mod-search" id="f-description" name="description" rows="6"></textarea>`, "Markdown.")}
+          ${field("authors", "Authors", text("authors", `placeholder="Alice, Bob"`), "Separated by commas.")}
+          ${field("license", "Licence", text("license", `required placeholder="MIT"`), "An SPDX expression.")}
+          ${field("source", "Source code", text("source", `required type="url" pattern="https://.*" placeholder="https://github.com/you/your-mod"`), "Reviewers read it: the file must be built from it.")}
+          ${field("icon", "Icon", text("icon", `type="url" pattern="https://.*" placeholder="https://…/icon.png"`), "Optional, a square PNG.")}
+          </fieldset>
+          <fieldset><legend class="heading">Signature</legend>
+          <p class="meta">Optional, and recommended: with your <a href="https://jedisct1.github.io/minisign/">minisign</a> key on the project, every later version must be signed with it, so nobody else can publish an update in your name.</p>
+          ${field("key", "Public key", text("key", `placeholder="RW…" autocomplete="off"`), "A new project's. Changing a published project's key is a pull request by hand.")}
+          ${field("signature", "Signature", `<input id="f-signature" name="signature" type="file" accept=".minisig">`, "The file's .minisig.")}
+          </fieldset>
+          <label class="mod-check"><input type="checkbox" id="f-mine" required> I made it, or I may publish it under this licence, and its source is at the address above.</label>
+          <p class="mod-actions"><button class="button primary" type="submit" id="f-send">Submit for review</button></p>
+          <div class="mod-result" id="submit-result" role="status" aria-live="polite"></div>
+        </form>`;
+}
+
+// The service's "entry" from the form's values (strings), as it reads it.
+export function entryFrom(v) {
+  const optional = (x) => (x && x.trim() ? x.trim() : undefined);
+  return {
+    id: v.id.trim(),
+    kind: v.kind,
+    name: v.name.trim(),
+    summary: v.summary.trim(),
+    description: v.description || "",
+    authors: (v.authors || "").split(",").map((a) => a.trim()).filter(Boolean),
+    license: v.license.trim(),
+    source: v.source.trim(),
+    icon: optional(v.icon),
+    key: optional(v.key),
+    signature: optional(v.signature),
+    version: v.version.trim(),
+    game: v.game.trim(),
+    changelog: v.changelog || "",
+  };
 }

@@ -35,7 +35,12 @@
 	rewrite /benchmarks /benchmarks.html
 	@doc path_regexp doc ^/docs/([a-z-]+)$
 	rewrite @doc /docs/{re.doc.1}.html
-	# The registry: /mods, and /mods/<id> baked at build time, else the list page, whose script shows a project
+	# The registry's submission service (crates/horizon-mod-registry), over Railway's private network. Unset, the
+	# form says it isn't open.
+	handle /api/mods/* {
+		reverse_proxy {$REGISTRY_UPSTREAM:127.0.0.1:9}
+	}
+	# The registry: /mods, /mods/submit and /mods/<id> baked at build time, else the list page, whose script shows a project
 	# published since.
 	rewrite /mods /mods.html
 	@mod {
