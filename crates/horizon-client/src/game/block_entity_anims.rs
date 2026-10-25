@@ -11,7 +11,10 @@ use horizon_client::{
     particles::{ParticleOptions, ParticleType},
     save::number,
 };
-use horizon_core::geometry::{Aabb, Vec3};
+use horizon_core::{
+    geometry::{Aabb, Vec3},
+    position::BlockPos,
+};
 use horizon_world::nbt::Tag;
 
 /// The handle of the local player among a bell's gathered entities.
@@ -84,6 +87,16 @@ impl Game<'_> {
                     self.lid_openers_changed(other, open);
                 }
             }
+            _ if self
+                .res
+                .facts()
+                .get(self.world.block(pos[0], pos[1], pos[2]))
+                .name
+                .as_ref()
+                == "minecraft:barrel" =>
+            {
+                self.barrel_openers_changed(key, open);
+            }
             Some(Ticker::Shulker { .. }) => {
                 let shulker = self.be_anims.shulkers.entry(pos).or_default();
                 let (count, _) = if open {
@@ -102,15 +115,48 @@ impl Game<'_> {
     /// `ChestBlockEntity.signalOpenCount`: block event 1 with the count, here
     /// and for the guests.
     fn lid_openers_changed(&mut self, key: (i32, i32, i32), open: bool) {
-        let count = self.lid_openers.entry(key).or_default();
-        *count = (*count + if open { 1 } else { -1 }).max(0);
-        let count = *count;
-        if count == 0 {
-            self.lid_openers.remove(&key);
-        }
+        let (before, count) = self.count_opener(key, open);
         let pos = [key.0, key.1, key.2];
         self.block_entity_event(pos, 1, count);
         self.lan_block_event(pos, 1, count);
+        // TrappedChestBlockEntity.signalOpenCount: its signal is the count
+        // (`TrappedChestBlock.getSignal`), so the blocks around it and
+        // below it hear of a change.
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        if before != count && self.res.facts().get(state).name.as_ref() == "minecraft:trapped_chest"
+        {
+            let p = BlockPos::new(pos[0], pos[1], pos[2]);
+            self.with_level(|b, level, ticks| {
+                let block = b.block(state);
+                b.update_neighbors_at(level, ticks, p, block);
+                b.update_neighbors_at(level, ticks, p.offset(0, -1, 0), block);
+            });
+        }
+    }
+    /// `BarrelBlockEntity.openersCounter`: the first opener opens the barrel
+    /// (`open=true`), the last one to leave closes it (`updateBlockState`).
+    fn barrel_openers_changed(&mut self, key: (i32, i32, i32), open: bool) {
+        let (before, count) = self.count_opener(key, open);
+        if (before == 0) != (count == 0) {
+            self.set_bool_prop(
+                key,
+                "open",
+                count > 0,
+                horizon_world::level::flags::UPDATE_ALL,
+            );
+        }
+    }
+    /// One opener more (`open`) or less at `key`: the count before and after
+    /// (`ContainerOpenersCounter.incrementOpeners` / `decrementOpeners`).
+    fn count_opener(&mut self, key: (i32, i32, i32), open: bool) -> (i32, i32) {
+        let count = self.lid_openers.entry(key).or_default();
+        let before = *count;
+        *count = (before + if open { 1 } else { -1 }).max(0);
+        let after = *count;
+        if after == 0 {
+            self.lid_openers.remove(&key);
+        }
+        (before, after)
     }
     /// `BellBlockEntity.updateEntities`: the living entities whose bounding
     /// box meets the bell's block box inflated by 48.
