@@ -4233,11 +4233,13 @@ impl Game<'_> {
             return;
         };
         let stack = self.stack_in(slot).cloned();
+        // Another hotbar slot picked: LivingEntity.updatingUsingItem sees a
+        // different stack in the hand. The off hand keeps its item.
+        let in_hand = slot == self.selected || slot == super::shield::OFFHAND_SLOT;
         // A drawn bow, a charging crossbow, a raised shield...: held until
-        // the button lets go (or another slot is picked).
+        // the button lets go.
         if stack.as_ref().is_some_and(|s| self.held_until_released(s)) {
-            self.using = (slot == self.selected || slot == super::shield::OFFHAND_SLOT)
-                .then_some((slot, ticks + 1));
+            self.using = in_hand.then_some((slot, ticks + 1));
             return;
         }
         let consumable = stack
@@ -4251,7 +4253,7 @@ impl Game<'_> {
         // Button release belongs to the next handleKeybinds phase, which
         // sends RELEASE_USE_ITEM. Do not silently clear a use begun by a
         // quick press/release between ticks.
-        if slot != self.selected && slot != super::shield::OFFHAND_SLOT {
+        if !in_hand {
             self.using = None;
             return;
         }

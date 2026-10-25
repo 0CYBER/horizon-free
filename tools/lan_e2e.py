@@ -101,7 +101,7 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - push:      a cow standing in the guest pushes it just clear of the cow (the guest's own client
              pushes it, as in vanilla), not ever faster across the ground.
 - eat:       holding right click with bread, the guest's own screen plays the eating (the item in use
-              counts up) and the server eats one loaf and feeds the guest.
+             counts up) and the server eats one loaf and feeds the guest.
 - consume-release: the host and the guest each cancel eating a golden apple and drinking milk from
               either hand: use ends on client and server, the item and effects stay, and holding
               use to completion still consumes the item (#1293).
