@@ -1582,6 +1582,12 @@ impl Game<'_> {
             }
         }
     }
+    /// Find a game slot in the menu's complete, contiguous slot mapping.
+    fn menu_slot_index(menu: &str, internal: usize) -> Option<usize> {
+        (0..)
+            .map_while(|slot| Self::menu_slot(menu, slot))
+            .position(|slot| slot == internal)
+    }
     /// The workstation screen of a menu type a server opens.
     pub(super) fn remote_station_kind(menu: &str) -> Option<super::stations::Kind> {
         use super::stations::Kind;
@@ -4522,12 +4528,10 @@ impl Game<'_> {
         for &(slot, button, input) in ops {
             let slot = match slot {
                 None => -999,
-                Some(internal) => {
-                    match (0..64).find(|&s| Self::menu_slot(&menu, s) == Some(internal)) {
-                        Some(s) => s as i16,
-                        None => return false,
-                    }
-                }
+                Some(internal) => match Self::menu_slot_index(&menu, internal) {
+                    Some(s) => s as i16,
+                    None => return false,
+                },
             };
             clicks.push((slot, button, input));
         }
@@ -4596,7 +4600,7 @@ impl Game<'_> {
     /// such slot.
     pub(super) fn remote_slot_click(&mut self, internal: usize, button: i8, input: i32) -> bool {
         let (container, menu) = self.remote_menu();
-        let slot = (0..64).find(|&s| Self::menu_slot(&menu, s) == Some(internal));
+        let slot = Self::menu_slot_index(&menu, internal);
         let Some(slot) = slot else { return false };
         let carried = self.to_network(&self.carried).map(|s| Hashed::of(&s));
         let state = self.remote.as_ref().map_or(0, |r| r.state_id);
@@ -5454,5 +5458,29 @@ mod tests {
             assert!(internal.is_some_and(|i| seen.insert(i)), "slot {slot}");
         }
         assert_eq!(Game::menu_slot("inventory", 46), None);
+    }
+
+    #[test]
+    fn remote_clicks_find_slots_past_the_old_large_chest_cutoff() {
+        for (menu, internal, index) in [
+            ("minecraft:generic_9x6", 18, 63),
+            ("minecraft:generic_9x6", 19, 64),
+            ("minecraft:generic_9x6", 0, 81),
+            ("minecraft:generic_9x6", 8, 89),
+            ("minecraft:generic_9x6", 353, 53),
+            ("minecraft:generic_9x5", 8, 80),
+            ("minecraft:generic_9x4", 8, 71),
+            ("minecraft:generic_9x3", 8, 62),
+            ("inventory", 504, 45),
+        ] {
+            assert_eq!(
+                Game::menu_slot_index(menu, internal),
+                Some(index),
+                "{menu}, game slot {internal}"
+            );
+        }
+        assert_eq!(Game::menu_slot_index("minecraft:generic_9x6", 354), None);
+        assert_eq!(Game::menu_slot_index("minecraft:generic_9x6", 504), None);
+        assert_eq!(Game::menu_slot_index("unknown", 0), None);
     }
 }
