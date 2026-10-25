@@ -1438,6 +1438,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-shader-api"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml",
+ "zip",
+]
+
+[[package]]
 name = "horizon-shaders"
 version = "0.1.0"
 dependencies = [
