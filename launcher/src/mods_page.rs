@@ -468,6 +468,16 @@ impl Launcher {
                         None => source.project(&id)?,
                     };
                     modpack = p.kind == PackKind::Modpack;
+                    if modpack && p.source == SourceId::Horizon {
+                        let pack = horizon::pack::install(&p.id, &progress)?;
+                        return Ok(format!(
+                            "Installed {} {} as its own profile with {}, each checked. Play it \
+                             from the list above.",
+                            pack.name,
+                            pack.version,
+                            pack.mods.join(", ")
+                        ));
+                    }
                     if modpack {
                         let folder = modpacks::ports_dir().join("downloads");
                         let file = installed::fetch_modpack(&*source, &p, &folder, &|f| {

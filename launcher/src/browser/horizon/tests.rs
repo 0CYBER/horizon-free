@@ -45,8 +45,8 @@ fn searches_by_kind_and_words() {
     assert_eq!(found("", Kind::Mod), ["coords_hud"]);
     assert_eq!(found("coordinates HUD", Kind::Mod), ["coords_hud"]);
     assert!(found("zoom", Kind::Mod).is_empty());
-    // Kinds this launcher can't install yet (modpacks, a world) are never offered.
-    assert!(found("", Kind::Modpack).is_empty());
+    // Modpacks under Modpacks; a kind this launcher can't install yet (a world) never.
+    assert_eq!(found("", Kind::Modpack), ["cozy"]);
     assert!(found("skyblock", Kind::ResourcePack).is_empty());
     let p = hud(&index);
     assert_eq!(p.support(), super::super::Support::Works);
@@ -123,7 +123,7 @@ fn refuses_a_changed_file_a_taken_id_and_local_files_from_the_real_registry() {
         date: String::new(),
     });
     let e = install_from(&taken_down, true, &p, &home, &|_, _| {}).unwrap_err();
-    assert!(e.contains("no version"), "{e}");
+    assert_eq!(e, "Coordinates HUD was taken down: Test.");
     fs::remove_dir_all(&home).unwrap();
 }
 
