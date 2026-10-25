@@ -9562,13 +9562,13 @@ impl Game<'_> {
                 let (x, y) = (ox + 9.0 + c as f32 * 18.0, oy + 112.0);
                 let stack = self.inventory[c].clone();
                 self.draw_slot_item(batch, drag.as_ref(), c, stack.clone(), x, y);
-                if let Some(stack) = stack
-                    && self.cursor.0 >= x
+                if self.cursor.0 >= x
                     && self.cursor.0 < x + 16.0
                     && self.cursor.1 >= y
                     && self.cursor.1 < y + 16.0
                 {
-                    hovered = Some(stack);
+                    batch.fill(&self.gui.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
+                    hovered = stack;
                 }
             }
             let scrollable = self.creative_screen.rows(&self.pack.names) > 5;
