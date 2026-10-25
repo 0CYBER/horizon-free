@@ -208,8 +208,16 @@ mod tests {
         zip.write_all(b"renderDistance:8\n").unwrap();
         zip.finish().unwrap();
         let size = |p: &Path| fs::metadata(p).unwrap().len();
-        // Forward slashes: a Windows path's backslashes would be escapes in the JSON.
-        let url = |p: &Path| p.display().to_string().replace('\\', "/");
+        // A `file:///` URL: forward slashes (a Windows path's backslashes would be escapes in
+        // the JSON) and a leading slash before a Windows drive.
+        let url = |p: &Path| {
+            let path = p.display().to_string().replace('\\', "/");
+            if path.starts_with('/') {
+                path
+            } else {
+                format!("/{path}")
+            }
+        };
         let text = format!(
             r#"{{"schema": 1, "projects": [
               {{"id": "coords_hud", "kind": "mod", "name": "Coordinates HUD", "summary": "", "license": "MIT",
