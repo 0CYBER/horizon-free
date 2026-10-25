@@ -44,6 +44,10 @@ pub struct Furnace {
     pub cooking_timer: i32,
     pub cooking_total: i32,
     pub speed: f32,
+    /// `AbstractFurnaceBlockEntity.recipesUsed`: how many of each recipe this furnace has
+    /// made since a player last took from its output. The experience is owed per recipe
+    /// rather than per item, and a save keeps it as the `RecipesUsed` compound.
+    pub recipes_used: HashMap<String, u32>,
 }
 /// A hopper's slots: the only plain container with five.
 pub const HOPPER_SLOTS: usize = 5;
@@ -190,6 +194,7 @@ impl BlockEntity {
                 cooking_timer: 0,
                 cooking_total: 0,
                 speed: 1.0,
+                recipes_used: HashMap::new(),
             }));
         }
         if name == "minecraft:creaking_heart" {
@@ -483,6 +488,26 @@ impl Furnace {
             self.cooking_timer = 0;
         }
     }
+    /// `AbstractFurnaceBlockEntity.createExperience`: each recipe's own share is floored,
+    /// then the floors are added. Flooring the sum instead pays one point for two recipes
+    /// worth 0.6 each, which vanilla does not.
+    fn owed(used: &HashMap<String, u32>, experience: impl Fn(&str) -> f32) -> u32 {
+        used.iter()
+            .map(|(id, count)| (experience(id) * *count as f32).floor().max(0.0) as u32)
+            .sum()
+    }
+    /// What this furnace owes right now, without forgetting it: breaking the block reads
+    /// the same counter, and only a payout clears it.
+    pub fn experience_owed(&self, recipes: &Recipes) -> u32 {
+        Self::owed(&self.recipes_used, |id| recipes.cooking_experience(id))
+    }
+    /// `AbstractFurnaceBlockEntity.awardUsedRecipesAndPopExperience`: the experience this
+    /// furnace owes, forgotten as it is paid.
+    pub fn take_experience(&mut self, recipes: &Recipes) -> u32 {
+        let owed = self.experience_owed(recipes);
+        self.recipes_used.clear();
+        owed
+    }
     /// A menu click wrote its slots into `items`, and `before` was the input
     /// slot until then: the menu called `setItem` on it only if it changed
     /// (`Slot.setByPlayer`; partial takes and merges keep the stack).
@@ -564,6 +589,7 @@ impl Furnace {
                                     Some(out) => out.count += recipe.result.count,
                                     None => self.items[2] = Some(recipe.result.clone()),
                                 }
+                                *self.recipes_used.entry(recipe.id.clone()).or_insert(0) += 1;
                                 if let Some(i) = self.items[0].as_mut() {
                                     i.count -= 1;
                                     if i.count == 0 {
@@ -592,5 +618,26 @@ fn total_time(time: u32, speed: f32) -> i32 {
         (time as f32 / speed).ceil() as i32
     } else {
         time as i32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `createExperience` floors each recipe on its own. Two recipes worth 0.6 each pay
+    /// nothing, where flooring their sum would pay one point.
+    #[test]
+    fn experience_is_floored_per_recipe_and_not_on_the_sum() {
+        let mut used = HashMap::new();
+        used.insert("a".to_owned(), 1);
+        used.insert("b".to_owned(), 1);
+        assert_eq!(Furnace::owed(&used, |_| 0.6), 0);
+
+        used.insert("c".to_owned(), 10);
+        assert_eq!(
+            Furnace::owed(&used, |id| if id == "c" { 0.1 } else { 0.0 }),
+            1
+        );
     }
 }

@@ -4919,6 +4919,7 @@ impl Game<'_> {
                     cooking_timer: 0,
                     cooking_total: 0,
                     speed: 1.0,
+                    recipes_used: std::collections::HashMap::new(),
                 }))
             }
             // HopperMenu, and DispenserMenu (MenuType.GENERIC_3x3: dispensers

@@ -3246,6 +3246,12 @@ impl Game<'_> {
         }
         // The block entity as it was, for what the drops copy from it.
         let key = (pos[0], pos[1], pos[2]);
+        // AbstractFurnaceBlockEntity.playerDestroy: the experience its recipes earned drops
+        // with the block. Read now, paid only if the block is really removed.
+        let furnace_xp = match self.world.block_entities.get(&key) {
+            Some(BlockEntity::Furnace(f)) => f.experience_owed(self.res.recipes()),
+            _ => 0,
+        };
         if let Some(entity) = self.world.block_entities.get(&key).cloned() {
             let name = self.world.block_names.get(&key).cloned();
             self.pending.record(pos, &entity, &facts.name, name);
@@ -3314,6 +3320,18 @@ impl Game<'_> {
                         xp,
                     );
                 }
+            }
+            // Stored recipe experience is not a loot drop: it leaves with the block
+            // whatever the tool, as `AbstractFurnaceBlockEntity` does.
+            if furnace_xp > 0 {
+                self.spawn_orbs(
+                    [
+                        f64::from(pos[0]) + 0.5,
+                        f64::from(pos[1]) + 0.5,
+                        f64::from(pos[2]) + 0.5,
+                    ],
+                    furnace_xp,
+                );
             }
         }
         self.pending.clear(pos);
@@ -5936,6 +5954,12 @@ impl Game<'_> {
             // Attached after the slots were set: setting them is not a click.
             menu.merchant = session.map(|(s, _)| s);
         }
+        // `FurnaceResultSlot.checkTakeAchievements` pays out on what left the output slot.
+        let furnace_before = if matches!(kind, Kind::Furnace(_)) {
+            menu.slot(2).cloned().map_or(0, |s| s.count)
+        } else {
+            0
+        };
         let outcome = run(&mut menu, &env, &to_menu);
         let made = maps.made.take();
         match outcome {
@@ -5953,6 +5977,12 @@ impl Game<'_> {
             self.merchant_sync_out(s);
         }
         let after: Vec<Option<ItemStack>> = (0..total).map(|i| menu.slot(i).cloned()).collect();
+        // Only a furnace has a result slot to compare: an enchanting table has two slots.
+        let furnace_after = if matches!(kind, Kind::Furnace(_)) {
+            after[2].as_ref().map_or(0, |s| s.count)
+        } else {
+            0
+        };
         let carried = menu.carried.take();
         let dropped = std::mem::take(&mut menu.dropped);
         let sounds = std::mem::take(&mut menu.sounds);
@@ -5977,6 +6007,15 @@ impl Game<'_> {
                 self.player_drop(stack);
             }
             self.award_crafted(&crafted);
+            // shortcut: paid straight to the player instead of through `ExperienceOrb.award`
+            // (no orb flies at them), which a furnace's orbs reach within a tick anyway;
+            // upgrade if the visual matters or another block pays out far from the player.
+            if furnace_before > furnace_after {
+                let owed = self.take_furnace_experience();
+                if owed > 0 {
+                    self.give_orb_points(owed);
+                }
+            }
         }
         if kind == Kind::Loom {
             if let Some(s) = self.station.as_mut() {
@@ -8767,6 +8806,18 @@ impl Game<'_> {
                 .play("minecraft:entity.experience_orb.pickup", at, 0.1, pitch);
             self.give_orb_points(gained);
         }
+    }
+    /// `AbstractFurnaceBlockEntity.awardUsedRecipesAndPopExperience`: what the open furnace
+    /// owes for everything it made since the last payout, cleared as it is read.
+    fn take_furnace_experience(&mut self) -> u32 {
+        let Some(pos) = self.container else {
+            return 0;
+        };
+        let recipes = self.res.recipes();
+        let Some(BlockEntity::Furnace(f)) = self.world.block_entities.get_mut(&pos) else {
+            return 0;
+        };
+        f.take_experience(recipes)
     }
     /// `Player.giveExperiencePoints`, and `giveExperienceLevels`' level-up
     /// sound every fifth level (at most every 100 ticks).
