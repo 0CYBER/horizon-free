@@ -23,6 +23,7 @@ use horizon_core::{
 pub use library::MaterialRuleLibrary;
 pub use noise::MaterialNoiseSources;
 use rule::CompiledRule;
+pub use rule::SurfaceVariants;
 pub use rule::{MaterialRule, MaterialRuleError};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -299,7 +300,81 @@ enum Kind<R: RandomSource> {
     },
     Not(Box<Compiled<R>>),
 }
+/// What a specialised rule may assume about every position it is applied to
+/// (`CompiledRule::specialize`): its y lies in `low..=high`, and whether it is
+/// at or above the column's preliminary surface level, when known.
+#[derive(Clone, Copy, Debug)]
+pub struct Facts {
+    pub low: i32,
+    pub high: i32,
+    pub above_surface: Option<bool>,
+}
+impl<R: RandomSource> Clone for Kind<R>
+where
+    R::Positional: Clone,
+{
+    fn clone(&self) -> Self {
+        match self {
+            Self::Simple(condition) => Self::Simple(condition.clone()),
+            Self::Biome(names) => Self::Biome(names.clone()),
+            Self::Constant(value) => Self::Constant(*value),
+            Self::Noise { sampler, min, max } => Self::Noise {
+                sampler: *sampler,
+                min: *min,
+                max: *max,
+            },
+            Self::Gradient { low, high, random } => Self::Gradient {
+                low: *low,
+                high: *high,
+                random: random.clone(),
+            },
+            Self::Not(child) => Self::Not(child.clone()),
+        }
+    }
+}
+impl<R: RandomSource> Clone for Compiled<R>
+where
+    R::Positional: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            kind: self.kind.clone(),
+            revision: self.revision,
+            result: self.result,
+        }
+    }
+}
 impl<R: RandomSource> Compiled<R> {
+    /// The value `facts` decide for this condition at every position they
+    /// cover. Conditions read the position and the world, never change them,
+    /// so one decided in advance gives what testing it would.
+    fn decided(&self, facts: Facts) -> Option<bool> {
+        match &self.kind {
+            Kind::Constant(value) => Some(*value),
+            Kind::Simple(MaterialCondition::AbovePreliminarySurface) => facts.above_surface,
+            Kind::Gradient { low, high, .. } => {
+                if facts.high <= *low {
+                    Some(true)
+                } else if facts.low >= *high {
+                    Some(false)
+                } else {
+                    None
+                }
+            }
+            Kind::Not(child) => child.decided(facts).map(|value| !value),
+            _ => None,
+        }
+    }
+    /// The vertical gradients' bounds, and whether the preliminary surface
+    /// is asked for.
+    fn inputs(&self, gradients: &mut Vec<(i32, i32)>, surface: &mut bool) {
+        match &self.kind {
+            Kind::Gradient { low, high, .. } => gradients.push((*low, *high)),
+            Kind::Simple(MaterialCondition::AbovePreliminarySurface) => *surface = true,
+            Kind::Not(child) => child.inputs(gradients, surface),
+            _ => {}
+        }
+    }
     fn constant_result(&self) -> Option<bool> {
         match &self.kind {
             Kind::Constant(value) => Some(*value),

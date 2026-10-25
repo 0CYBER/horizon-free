@@ -2,6 +2,7 @@
 use super::{Game, Screen};
 use horizon_client::{
     Result,
+    command::args::GameMode,
     hud::{HudBatch, rgba},
     text::{self, Text},
     ui,
@@ -17,7 +18,8 @@ impl Screen {
             | Self::Stats
             | Self::Advancements
             | Self::WorldOptions
-            | Self::Friends => true,
+            | Self::Friends
+            | Self::Mod => true,
             Self::Playing
             | Self::GameModeSwitcher
             | Self::Chat
@@ -81,9 +83,15 @@ fn pause_icons(w: f32, h: f32) -> [(f32, f32, &'static str); 4] {
         (x0 + 72.0, y, "gui/sprites/pause_menu/player_reporting"),
     ]
 }
-fn death_buttons(w: f32, h: f32) -> [(f32, f32, &'static str, u8); 2] {
+/// DeathScreen.init: a hardcore player can only spectate.
+fn death_buttons(w: f32, h: f32, hardcore: bool) -> [(f32, f32, &'static str, u8); 2] {
+    let respawn = if hardcore {
+        "deathScreen.spectate"
+    } else {
+        "deathScreen.respawn"
+    };
     [
-        (w / 2.0 - 100.0, h / 4.0 + 72.0, "deathScreen.respawn", 0),
+        (w / 2.0 - 100.0, h / 4.0 + 72.0, respawn, 0),
         (
             w / 2.0 - 100.0,
             h / 4.0 + 96.0,
@@ -223,7 +231,12 @@ impl Game<'_> {
                 ),
             );
         }
-        let title = Text::translate("deathScreen.title", &[]);
+        let title = if self.level.hardcore {
+            "deathScreen.title.hardcore"
+        } else {
+            "deathScreen.title"
+        };
+        let title = Text::translate(title, &[]);
         let tw = atlas.font.width_text(&title);
         ui::text_scaled(
             batch,
@@ -258,7 +271,7 @@ impl Game<'_> {
             .ui
             .died_at
             .is_none_or(|t| t.elapsed().as_millis() >= 1000);
-        for (x, y, key, _) in death_buttons(w, h) {
+        for (x, y, key, _) in death_buttons(w, h, self.level.hardcore) {
             let hover = active && ui::hovered(self.cursor, x, y, 200.0, 20.0);
             ui::button(
                 batch,
@@ -286,7 +299,7 @@ impl Game<'_> {
             .as_ref()
             .map_or([1, 1], |r| [r.config.width, r.config.height]);
         let b = HudBatch::new(size);
-        let hit = death_buttons(b.width, b.height)
+        let hit = death_buttons(b.width, b.height, self.level.hardcore)
             .into_iter()
             .find(|d| ui::hovered(self.cursor, d.0, d.1, 200.0, 20.0))
             .map(|d| d.3);
@@ -329,6 +342,11 @@ impl Game<'_> {
             }
             Some(1) => self.close_world()?,
             _ => {}
+        }
+        // ServerGamePacketListenerImpl.handleClientCommand: a hardcore world's
+        // respawned player only watches.
+        if hit == Some(0) && self.remote.is_none() && self.level.hardcore {
+            self.set_mode(GameMode::Spectator);
         }
         if hit.is_some() {
             self.audio.play_button_click();

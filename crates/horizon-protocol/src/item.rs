@@ -35,6 +35,7 @@ pub mod component {
     pub const MAP_ID: i32 = 48;
     pub const MAP_POST_PROCESSING: i32 = 50;
     pub const CHARGED_PROJECTILES: i32 = 51;
+    pub const POTION_CONTENTS: i32 = 53;
     pub const WRITABLE_BOOK_CONTENT: i32 = 56;
     pub const WRITTEN_BOOK_CONTENT: i32 = 57;
     pub const TRIM: i32 = 58;
@@ -65,6 +66,13 @@ pub enum Component {
     Lore(Vec<Tag>),
     Enchantments(Vec<(i32, i32)>),
     AttackRange([f32; 6]),
+    /// `PotionContents`: the potion's `minecraft:potion` id and the custom
+    /// colour; the custom effects and name stay their encoded bytes.
+    Potion {
+        potion: Option<i32>,
+        color: Option<i32>,
+        rest: Vec<u8>,
+    },
     Profile(Profile),
     CustomModelData {
         floats: Vec<f32>,
@@ -161,6 +169,22 @@ impl Component {
                         .map(|_| Ok((r.varint()?, r.varint()?)))
                         .collect::<Result<_>>()?,
                 )
+            }
+            POTION_CONTENTS => {
+                let potion = if r.bool()? { Some(r.varint()?) } else { None };
+                let color = if r.bool()? { Some(r.i32()?) } else { None };
+                let start = r.position();
+                skip::potion_effects_and_name(r)?;
+                // No custom effects and no name: an empty tail.
+                let rest = match r.since(start) {
+                    [0, 0] => Vec::new(),
+                    bytes => bytes.to_vec(),
+                };
+                Self::Potion {
+                    potion,
+                    color,
+                    rest,
+                }
             }
             ATTACK_RANGE => {
                 let mut values = [0.0f32; 6];
@@ -283,6 +307,27 @@ impl Component {
                 }
             }
             Self::AttackRange(values) => values.iter().for_each(|v| w.f32(*v)),
+            Self::Potion {
+                potion,
+                color,
+                rest,
+            } => {
+                w.bool(potion.is_some());
+                if let Some(id) = potion {
+                    w.varint(*id);
+                }
+                w.bool(color.is_some());
+                if let Some(color) = color {
+                    w.i32(*color);
+                }
+                // An empty tail is no custom effects and no name.
+                if rest.is_empty() {
+                    w.varint(0);
+                    w.bool(false);
+                } else {
+                    w.bytes(rest);
+                }
+            }
             Self::Profile(p) => {
                 w.u8(0);
                 w.bool(p.name.is_some());
@@ -530,6 +575,51 @@ mod tests {
         let mut r = Reader::new(&w.data);
         assert_eq!(C::read(&mut r).unwrap(), v);
         assert_eq!(r.remaining(), 0);
+    }
+
+    #[test]
+    fn potion_contents_round_trip() {
+        let mut arrow = Stack::new(7, 3);
+        arrow.added.push((
+            component::POTION_CONTENTS,
+            Component::Potion {
+                potion: Some(31),
+                color: None,
+                rest: Vec::new(),
+            },
+        ));
+        round::<Option<Stack>, Slot>(Some(arrow));
+        // A custom colour, one custom effect (speed II for 600 ticks, shown,
+        // no hidden effect) and a custom name survive as they came.
+        let mut w = Writer::new();
+        w.bool(false);
+        w.bool(true);
+        w.i32(0x00FF_8800);
+        w.varint(1);
+        for v in [1, 1, 600] {
+            w.varint(v);
+        }
+        for b in [false, true, true, false] {
+            w.bool(b);
+        }
+        w.bool(true);
+        w.string("Tea");
+        let mut r = Reader::new(&w.data);
+        let read = Component::read(component::POTION_CONTENTS, &mut r).unwrap();
+        assert_eq!(r.remaining(), 0);
+        let Component::Potion {
+            potion,
+            color,
+            rest,
+        } = &read
+        else {
+            panic!("{read:?}");
+        };
+        assert_eq!((*potion, *color), (None, Some(0x00FF_8800)));
+        assert!(!rest.is_empty());
+        let mut again = Writer::new();
+        read.write(component::POTION_CONTENTS, &mut again);
+        assert_eq!(again.data, w.data);
     }
 
     #[test]
