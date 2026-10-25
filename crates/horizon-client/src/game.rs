@@ -482,6 +482,9 @@ enum Screen {
     CommandBlock,
     /// WinScreen: the end poem and the credits (game/win.rs).
     Win,
+    /// A `ui` mod's own screen, or its settings page from Options > Mods
+    /// (game/mods.rs).
+    Mod,
 }
 struct Mining {
     pos: [i32; 3],
@@ -5072,6 +5075,7 @@ impl Game<'_> {
                 self.draw_creative(&mut batch);
             }
             Screen::Chat => self.draw_chat_screen(&mut batch),
+            Screen::Mod => self.draw_mod_screen(&mut batch),
             Screen::Playing | Screen::Options | Screen::Win => {}
         }
         self.draw_toasts(&mut batch);
@@ -10393,6 +10397,7 @@ impl Game<'_> {
                 Screen::CommandBlock => self.close_command_block(),
                 Screen::Chat => self.close_chat(),
                 Screen::Win => self.close_win_screen()?,
+                Screen::Mod => self.close_mod_screen(true),
             },
             KeyCode::Digit1
             | KeyCode::Digit2
@@ -11039,6 +11044,9 @@ impl ApplicationHandler for Game<'_> {
                     if self.screen == Screen::Options && d != 0.0 {
                         self.options_scroll(d);
                     }
+                    if self.screen == Screen::Mod && d != 0.0 {
+                        self.mod_screen_scroll(d);
+                    }
                     if self.screen == Screen::Creative && d != 0.0 {
                         self.creative_screen.wheel(f64::from(d), &self.pack.names);
                     }
@@ -11260,6 +11268,9 @@ impl ApplicationHandler for Game<'_> {
                                 .as_ref()
                                 .map_or([1, 1], |r| [r.config.width, r.config.height]);
                             self.stats_click(size);
+                        }
+                        Screen::Mod if pressed && button == MouseButton::Left => {
+                            self.mod_screen_click()
                         }
                         _ => {}
                     }
