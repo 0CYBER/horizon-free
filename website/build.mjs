@@ -411,7 +411,7 @@ const modsTemplate = await readFile(join(site, "src", "mods.html"), "utf8");
 const modsList = `        <p class="kicker"><span>Mods</span>Made for Horizon, reviewed</p>
         <h1 class="display page-title">Horizon mods</h1>
         <p class="lede">Mods, modpacks and resource packs made for Horizon. Each one was reviewed before it was listed, and the launcher checks every file before it installs it. Mods run in a sandbox and can only do what their page says.</p>
-        <p class="mod-actions"><a class="button primary" href="${SUBMIT}">Submit yours</a> <a class="button secondary" href="/docs/mods">Make a mod</a></p>
+        <p class="mod-actions"><a class="button primary" href="${SUBMIT}">Submit yours</a> <a class="button secondary" href="/docs/make-a-mod">Make a mod</a></p>
         <div class="mod-tools">
           <input class="mod-search" id="mod-search" type="search" placeholder="Search" aria-label="Search the registry" autocomplete="off">
           <div class="release-filter" role="group" aria-label="Show">
