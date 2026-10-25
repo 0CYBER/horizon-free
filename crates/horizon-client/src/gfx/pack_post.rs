@@ -202,6 +202,17 @@ pub(super) struct World<'a> {
     pub block_ids: &'a [i32],
     /// The atlas of the sun and moon's sprites.
     pub celestial: Option<wgpu::TextureView>,
+    /// Set 1 of the clouds' draw: their offset and palette.
+    pub clouds: Option<&'a wgpu::BindGroupLayout>,
+}
+
+/// This frame's clouds, when the pack draws them: their vertices, uniform, quad indices and
+/// quad count.
+pub(super) struct Clouds {
+    pub vertices: wgpu::Buffer,
+    pub group: wgpu::BindGroup,
+    pub indices: wgpu::Buffer,
+    pub quads: u32,
 }
 
 pub struct PackPost {
@@ -215,6 +226,12 @@ pub struct PackPost {
     sky: Option<Sky>,
     /// What draws entities and block entities, after terrain, and their vertices.
     entities: Option<Entities>,
+    /// What draws the clouds, after entities, and this frame's clouds.
+    clouds: Option<Pass>,
+    cloud_draw: Option<Clouds>,
+    /// The pack has `gbuffers_clouds`, even one that writes nothing (a pack drawing its own
+    /// clouds discards vanilla's): the game's clouds are not drawn.
+    hides_clouds: bool,
     /// A program after translucent terrain reads `depthtex1`: it is copied before water.
     depth1: bool,
     /// Buffers with mipmaps (filterable ones a program asks them for).
@@ -944,6 +961,19 @@ impl PackPost {
                 passes: entity_passes,
                 late,
             });
+        let cloud_geometry = world.clouds.map(|layout| Geometry {
+            buffers: &entity_buffers,
+            table: Some(layout),
+            depth_write: true,
+            atlas: world.celestial.clone(),
+            ids: None,
+            cull: false,
+        });
+        let hides_clouds = post.clouds.is_some() && cloud_geometry.is_some();
+        let clouds = post
+            .clouds
+            .zip(cloud_geometry.as_ref())
+            .and_then(|(p, g)| build(p, Some(g)));
         // Developers' aid: `HORIZON_SHADER_PACK_SKIP=composite,final` leaves programs out.
         let skip = std::env::var("HORIZON_SHADER_PACK_SKIP").unwrap_or_default();
         let passes: Vec<Pass> = post
@@ -972,6 +1002,9 @@ impl PackPost {
             "translucent entities",
             "particles",
         ];
+        if let Some(c) = &clouds {
+            notes.push(format!("clouds draw with {}", c.name));
+        }
         for (part, pass) in entities.iter().flat_map(|e| parts.iter().zip(&e.passes)) {
             if let Some(p) = pass {
                 notes.push(format!("{part} draw with {}", p.name));
@@ -995,6 +1028,7 @@ impl PackPost {
                 .flat_map(|s| s.basic.iter().chain(&s.textured))
                 .chain(&terrain)
                 .chain(entities.iter().flat_map(|e| e.passes.iter().flatten()))
+                .chain(&clouds)
                 .chain(&water)
                 .find(touched)
                 .map(|_| true)
@@ -1011,6 +1045,7 @@ impl PackPost {
             || water.is_some()
             || sky.is_some()
             || entities.is_some()
+            || clouds.is_some()
             || passes.iter().any(|p| {
                 p.samplers
                     .iter()
@@ -1107,6 +1142,9 @@ impl PackPost {
             water,
             sky,
             entities,
+            clouds,
+            cloud_draw: None,
+            hides_clouds,
             depth1,
             mipped,
             mips_valid: 0,
@@ -1523,6 +1561,45 @@ impl PackPost {
         }
         self.draw_terrain(device, queue, encoder, size, false, terrain);
         self.draw_entities(device, queue, encoder, size, false);
+        self.draw_clouds(device, queue, encoder, size);
+    }
+
+    /// The clouds `set_clouds` gave for this frame, with `gbuffers_clouds`.
+    fn draw_clouds(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        size: [u32; 2],
+    ) {
+        let (Some(mut pass), Some(clouds)) = (self.clouds.take(), self.cloud_draw.take()) else {
+            return;
+        };
+        let group = self.bind(device, queue, &mut pass, size);
+        {
+            let mut rp = self.begin(encoder, &pass);
+            rp.set_pipeline(&pass.pipeline);
+            rp.set_bind_group(0, &group, &[]);
+            rp.set_bind_group(1, &clouds.group, &[]);
+            if pass.draw {
+                self.draws.bind(&mut rp, "CLOUDS");
+            }
+            rp.set_vertex_buffer(0, clouds.vertices.slice(..));
+            rp.set_index_buffer(clouds.indices.slice(..), wgpu::IndexFormat::Uint32);
+            rp.draw_indexed(0..clouds.quads * 6, 0, 0..1);
+        }
+        self.mips_valid &= !pass.written;
+        self.clouds = Some(pass);
+    }
+
+    /// Whether the pack draws the clouds itself (or hides them).
+    pub fn has_clouds(&self) -> bool {
+        self.hides_clouds
+    }
+
+    /// The clouds to draw this frame (`None`: none).
+    pub fn set_clouds(&mut self, clouds: Option<Clouds>) {
+        self.cloud_draw = clouds.filter(|c| c.quads > 0);
     }
 
     /// Translucent terrain, then the entity parts drawn after deferred.
@@ -1842,8 +1919,10 @@ impl PackPost {
         let mut passes = std::mem::take(&mut self.passes);
         let mut seen = (false, false);
         let mut shown = false;
-        let mut terrain_drawn =
-            self.terrain.is_none() && self.sky.is_none() && self.entities.is_none();
+        let mut terrain_drawn = self.terrain.is_none()
+            && self.sky.is_none()
+            && self.entities.is_none()
+            && self.clouds.is_none();
         let late_entities = self.entities.as_ref().is_some_and(|e| {
             e.passes
                 .iter()

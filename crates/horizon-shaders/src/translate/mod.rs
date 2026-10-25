@@ -702,6 +702,35 @@ mod tests {
         }
     }
 
+    /// Code after an unconditional `discard` (BSL's `gbuffers_clouds` with its own clouds on)
+    /// or `return;` still makes a valid module.
+    #[test]
+    fn code_after_discard_or_return_translates() {
+        let vsh = "#version 120\nvoid main() { gl_Position = ftransform(); }\n";
+        for fsh in [
+            "#version 120\nuniform sampler2D texture;\nvoid main() {\n    discard;\n    vec4 c = texture2D(texture, vec2(0.5));\n    gl_FragData[0] = c;\n}\n",
+            "#version 120\nvoid main() {\n    gl_FragData[0] = vec4(1.0);\n    return;\n    gl_FragData[0] = vec4(0.5);\n}\n",
+        ] {
+            let files = [
+                ("shaders/gbuffers_clouds.vsh", vsh),
+                ("shaders/gbuffers_clouds.fsh", fsh),
+            ];
+            let pack = Pack::from_zip_bytes("P.zip", zip(&files)).unwrap();
+            let m = Macros::standard();
+            let inputs = GbuffersInputs {
+                body: "    hz_Vertex = vec4(0.0, 0.0, 0.0, 1.0);\n".into(),
+                ..Default::default()
+            };
+            translate_gbuffers(
+                &preprocess(&pack, "gbuffers_clouds.vsh", &m),
+                &preprocess(&pack, "gbuffers_clouds.fsh", &m),
+                Target::Buffers,
+                &inputs,
+            )
+            .unwrap_or_else(|e| panic!("{fsh}: {e:?}"));
+        }
+    }
+
     #[test]
     fn the_alpha_test_discards_below_its_reference() {
         assert_eq!(

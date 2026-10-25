@@ -490,6 +490,8 @@ pub struct Renderer {
     pack_post: Option<(i32, Option<pack_post::PackPost>)>,
     /// The entity vertices Horizon draws itself while a shader pack draws the others.
     pack_entity_rest: Vec<Vertex>,
+    /// Set 1 of the cloud pipeline, for a shader pack's `gbuffers_clouds`.
+    cloud_bindings: wgpu::BindGroupLayout,
     /// The block sprites as one atlas, while a shader pack is loaded.
     pack_atlas: Option<pack_atlas::PackAtlas>,
     /// The pack's terrain program reads flat draws' vertices (`pack_terrain_inputs`).
@@ -2350,6 +2352,7 @@ impl Renderer {
             world_post,
             pack_post: None,
             pack_entity_rest: Vec::new(),
+            cloud_bindings,
             pack_atlas: None,
             pack_terrain_flat: false,
             hud,
@@ -2813,6 +2816,7 @@ impl Renderer {
                     .atlas_texture
                     .as_ref()
                     .map(|t| t.create_view(&Default::default())),
+                clouds: Some(&self.cloud_bindings),
             };
             pack_post::PackPost::new(
                 &self.device,
@@ -2837,6 +2841,7 @@ impl Renderer {
             sky: Some(pack_sky::inputs()),
             celestial: Some(pack_sky::celestial_inputs()),
             entities: Some(pack_entities::inputs()),
+            clouds: Some(pack_entities::cloud_inputs()),
         }
     }
 
@@ -3786,6 +3791,12 @@ impl Renderer {
                 .as_ref()
                 .and_then(|p| p.1.as_ref())
                 .is_some_and(|p| p.has_water());
+        let pack_draws_clouds = pack_post
+            && self
+                .pack_post
+                .as_ref()
+                .and_then(|p| p.1.as_ref())
+                .is_some_and(|p| p.has_clouds());
         let scaled = self.world_post.prepare(
             &self.device,
             [self.config.width, self.config.height],
@@ -4066,7 +4077,7 @@ impl Renderer {
                     0..1,
                 );
             }
-            if cloud_quads > 0 {
+            if cloud_quads > 0 && !pack_draws_clouds {
                 pass.set_pipeline(&self.cloud_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_bind_group(1, &self.cloud_group, &[]);
@@ -4127,6 +4138,12 @@ impl Renderer {
                         }
                     }
                 };
+            post.set_clouds(pack_draws_clouds.then(|| pack_post::Clouds {
+                vertices: self.cloud_buffer.clone(),
+                group: self.cloud_group.clone(),
+                indices: self.indices.clone(),
+                quads: cloud_quads,
+            }));
             post.run(
                 &self.device,
                 &self.queue,
