@@ -2155,6 +2155,7 @@ impl Game<'_> {
                 self.apply_remote_health();
                 if p.health <= 0.0 && self.screen != Screen::Dead && self.player.is_some() {
                     self.screen = Screen::Dead;
+                    self.ui.death_time = 0;
                     self.capture(false);
                 }
             }
@@ -2171,6 +2172,7 @@ impl Game<'_> {
                 // screen, whatever health was last sent.
                 if me && self.screen != Screen::Dead && self.player.is_some() {
                     self.screen = Screen::Dead;
+                    self.ui.death_time = 0;
                     self.capture(false);
                 }
             }
@@ -3137,6 +3139,11 @@ impl Game<'_> {
         );
         let was_flying = player.flying;
         self.sync_player_body();
+        // LivingEntity.tickDeath: the local player counts its deathTime once
+        // per client tick while dead (the camera's death roll and zoom).
+        if self.screen == Screen::Dead {
+            self.ui.death_time = self.ui.death_time.saturating_add(1);
+        }
         let Some(player) = self.player.as_mut() else {
             return Ok(());
         };

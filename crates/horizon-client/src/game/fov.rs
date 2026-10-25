@@ -64,14 +64,14 @@ impl Game<'_> {
         });
         self.view.tick(eye, target);
     }
-    /// The player's `deathTime` while dead or dying.
-    fn death_time(&self) -> Option<i32> {
+    /// The player's `deathTime` while dead or dying: whole ticks counted by
+    /// `LivingEntity.tickDeath`, so `deathTime + partialTicks` in
+    /// `Camera.extractRenderState` rises smoothly across frames.
+    pub(super) fn death_time(&self) -> Option<i32> {
         let p = self.player.as_ref()?;
-        p.health.dead_or_dying().then(|| {
-            self.ui
-                .died_at
-                .map_or(0, |t| (t.elapsed().as_secs_f32() * 20.0) as i32)
-        })
+        p.health
+            .dead_or_dying()
+            .then(|| self.ui.death_time.min(i32::MAX as u32) as i32)
     }
     /// The fluid at the camera, as `Camera.getFluidInCamera` reports it.
     pub(super) fn camera_fluid(&self, camera: [f64; 3]) -> CameraFluid {
