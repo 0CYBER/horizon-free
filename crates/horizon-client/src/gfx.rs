@@ -6,7 +6,7 @@ use crate::{
     environment::Sky,
     graphics::GraphicsApi,
     hud::{HudBatch, HudRenderer},
-    mesher::{SectionMesh, TerrainVertex, Vertex},
+    mesher::{SectionMesh, Sides, TerrainVertex, Vertex},
     sprites::SpriteAnimation,
 };
 use glam::{DVec3, Mat4, Vec3, Vec4};
@@ -68,6 +68,9 @@ mod flat;
 pub mod lightning;
 mod lod;
 mod occlusion;
+mod pack_atlas;
+mod pack_post;
+pub mod pack_uniforms;
 mod page_runs;
 pub mod panorama;
 mod resident;
@@ -87,6 +90,7 @@ fn world_pass_after_culling<'e>(
     encoder: &'e mut wgpu::CommandEncoder,
     view: &wgpu::TextureView,
     depth: &wgpu::TextureView,
+    keep_depth: bool,
 ) -> wgpu::RenderPass<'e> {
     encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("Horizon world, after culling"),
@@ -103,7 +107,12 @@ fn world_pass_after_culling<'e>(
             view: depth,
             depth_ops: Some(wgpu::Operations {
                 load: wgpu::LoadOp::Load,
-                store: wgpu::StoreOp::Discard,
+                // A shader pack reads it as depthtex0.
+                store: if keep_depth {
+                    wgpu::StoreOp::Store
+                } else {
+                    wgpu::StoreOp::Discard
+                },
             }),
             stencil_ops: None,
         }),
@@ -156,9 +165,9 @@ struct SectionGpu {
     page: u32,
     start: u64,
     solid: u32,
+    /// Where the solid quads' buckets by facing side end (`mesher::Sides`).
+    sides: Sides,
     translucent: u32,
-    /// The solid quads by facing: back-facing groups are skipped.
-    faces: crate::mesher::FaceGroups,
     sort: translucency::SortState,
     sorted_indices: Option<(u32, u64)>,
     /// Its id for flat draws (`flat::Flat::add`), when they are on.
@@ -249,6 +258,8 @@ pub struct Frame<'a> {
     pub hand_fov_degrees: f32,
     /// Full-screen camera effects drawn over the world and hand, under the HUD.
     pub screen: &'a [crate::screen_effects::ScreenQuad],
+    /// What a shader pack's uniforms need from the game.
+    pub pack: pack_uniforms::PackInputs,
     /// The world border wall, when near enough to be drawn.
     pub border: Option<BorderDraw>,
     pub game_time: f32,
@@ -268,6 +279,8 @@ pub struct Frame<'a> {
     pub night_vision: f32,
     /// Torch flicker added to the block light factor of 1.4.
     pub block_flicker: f32,
+    /// `lightmap.fsh` BossOverlayWorldDarkeningFactor (a wither's bar).
+    pub boss_darken: f32,
     /// `Screen.extractBlurredBackground`: blur the frame by this radius
     /// (`menuBackgroundBlurriness`) before the screen is drawn over it.
     pub menu_blur: Option<f32>,
@@ -325,6 +338,8 @@ pub struct Renderer {
     /// counts reach a multi-draw's entries (Vulkan, Metal).
     cull: Option<cull::Cull>,
     cull_on: bool,
+    /// Solid quads facing away from the eye are left out (`mesher::Sides`).
+    sides_on: bool,
     sky: wgpu::RenderPipeline,
     dark_disc: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
@@ -456,6 +471,10 @@ pub struct Renderer {
     occlusion: occlusion::Occlusion,
     /// Resolution scale and FXAA (Horizon settings).
     world_post: world_post::Post,
+    /// The shader pack's post-processing, and the dimension (legacy id) it was loaded for.
+    pack_post: Option<(i32, Option<pack_post::PackPost>)>,
+    /// The block sprites as one atlas, while a shader pack is loaded.
+    pack_atlas: Option<pack_atlas::PackAtlas>,
     pub hud: HudRenderer,
     /// Vanilla's menu background blur, made on first use.
     menu_blur: Option<crate::menu_blur::MenuBlur>,
@@ -1304,6 +1323,8 @@ impl Renderer {
                         format: wgpu::TextureFormat::Rgba8Unorm,
                         usage: wgpu::TextureUsages::TEXTURE_BINDING
                             | wgpu::TextureUsages::COPY_DST
+                            // Shader packs' atlas copies them (pack_atlas.rs).
+                            | wgpu::TextureUsages::COPY_SRC
                             | wgpu::TextureUsages::STORAGE_BINDING,
                         view_formats: &[],
                     },
@@ -2157,7 +2178,7 @@ impl Renderer {
                     cull::Cull::new(&device, config.format.remove_srgb_suffix(), depth_test);
                 cull.always = cull_env.as_deref() == Ok("all");
                 if !cull.always && adapter.get_info().backend == wgpu::Backend::Metal {
-                    cull.min_draws = cull::TILED_MIN_DRAWS;
+                    cull.min_sections = cull::TILED_MIN_SECTIONS;
                 }
                 cull
             });
@@ -2204,6 +2225,7 @@ impl Renderer {
             translucent,
             flat_on: flat.is_some(),
             cull_on: cull.is_some(),
+            sides_on: true,
             cull,
             flat,
             sky,
@@ -2300,6 +2322,8 @@ impl Renderer {
             block_entity_revision: next_block_entity_revision(),
             occlusion: occlusion::Occlusion::new(crate::chunk::MIN_Y, crate::chunk::HEIGHT / 16),
             world_post,
+            pack_post: None,
+            pack_atlas: None,
             hud,
             menu_blur: None,
             info,
@@ -2453,6 +2477,14 @@ impl Renderer {
         self.flat_on = on;
         Ok(())
     }
+    /// Whether solid quads facing away from the eye are left out.
+    pub fn section_sides(&self) -> bool {
+        self.sides_on
+    }
+    /// Switches leaving out solid quads facing away, for A/B checks.
+    pub fn set_section_sides(&mut self, on: bool) {
+        self.sides_on = on;
+    }
     /// Whether solid sections are occlusion culled (`cull`).
     pub fn section_cull(&self) -> bool {
         self.cull_on
@@ -2575,8 +2607,12 @@ impl Renderer {
             page,
             start,
             solid,
+            sides: if mesh.sides.quads() == solid {
+                mesh.sides
+            } else {
+                Sides::unsorted(solid)
+            },
             translucent,
-            faces: mesh.faces,
             sort: translucency::SortState::new(
                 mesh.translucent
                     .as_chunks::<4>()
@@ -2718,6 +2754,51 @@ impl Renderer {
         self.world_post.scale = scale.clamp(0.25, 2.0);
         self.world_post.antialias = antialias;
     }
+    /// Runs `post` over the world from now on (`None`: no pack), for the dimension `dimension`.
+    /// Returns the programs that run and the notes of loading them.
+    pub fn set_shader_pack(
+        &mut self,
+        dimension: i32,
+        pack: Option<horizon_shaders::Post>,
+    ) -> Option<(Vec<String>, Vec<String>)> {
+        let post = pack.map(|post| {
+            pack_post::PackPost::new(
+                &self.device,
+                &self.queue,
+                post,
+                self.config.format.remove_srgb_suffix(),
+            )
+        });
+        if post.is_none() {
+            self.pack_atlas = None;
+        } else if self.pack_atlas.is_none() {
+            let mut encoder = self.device.create_command_encoder(&Default::default());
+            let layers = self
+                .sprite_textures
+                .iter()
+                .map(|t| t.depth_or_array_layers())
+                .sum();
+            self.pack_atlas = pack_atlas::PackAtlas::new(
+                &self.device,
+                &mut encoder,
+                &self.sprite_textures,
+                sprite_split(),
+                layers,
+                self.sprite_textures[0].width(),
+            );
+            self.queue.submit([encoder.finish()]);
+        }
+        let report = post.as_ref().map(|p| {
+            let programs = p.programs().into_iter().map(str::to_owned).collect();
+            (programs, p.notes.clone())
+        });
+        self.pack_post = Some((dimension, post));
+        report
+    }
+    /// The dimension the shader pack was last set for.
+    pub fn shader_pack_dimension(&self) -> Option<i32> {
+        self.pack_post.as_ref().map(|p| p.0)
+    }
     /// The Mipmap Levels option: block textures sample at most `levels`
     /// reduced copies (0: none).
     pub fn set_mipmap_levels(&mut self, levels: u32) {
@@ -2778,6 +2859,7 @@ impl Renderer {
         gamma: f32,
         night_vision: f32,
         flicker: f32,
+        boss_darken: f32,
     ) {
         // lightmap.fsh: per (block, sky) level.
         let brightness = |level: f32| level / (4.0 - 3.0 * level);
@@ -2795,6 +2877,8 @@ impl Renderer {
                 let parabolic = (2.0 * block_level - 1.0).powi(2);
                 let block_color = Vec3::from(sky.block_light_tint).lerp(Vec3::ONE, 0.9 * parabolic);
                 color += block_color * block_brightness;
+                // lightmap.fsh: a boss bar mixes the light toward 70/60/60%.
+                color = color.lerp(color * Vec3::new(0.7, 0.6, 0.6), boss_darken);
                 color -= Vec3::splat(darkness);
                 color = color.clamp(Vec3::ZERO, Vec3::ONE);
                 let max = color.max_element().max(1e-6);
@@ -2834,6 +2918,13 @@ impl Renderer {
     }
     fn animate(&mut self, encoder: &mut wgpu::CommandEncoder, tick: u64) {
         self.animations.animate(encoder, &mut self.uploads, tick);
+        if let Some(atlas) = &self.pack_atlas {
+            atlas.copy(
+                encoder,
+                &self.sprite_textures,
+                self.animations.changed().iter().copied(),
+            );
+        }
     }
     pub fn render(&mut self, frame: &Frame) -> Result<bool> {
         let rendered = self.draw_frame(frame);
@@ -2909,6 +3000,7 @@ impl Renderer {
             (self.gamma - frame.darkness.0).max(0.0),
             frame.night_vision,
             frame.block_flicker,
+            frame.boss_darken,
         );
         let view_proj = self.view_projection(frame);
         if frame.title {
@@ -3042,6 +3134,9 @@ impl Renderer {
         };
         let camera = frame.camera;
         let camera_section = camera_section(camera);
+        // Solid quads facing away from the eye are left out: the bob moves
+        // the eye off `camera`, so it is found from the projection.
+        let eye = projection_center(view_proj).filter(|_| self.sides_on);
         let culling = !frame.title && frame.cave_culling;
         if culling {
             crate::spans::time("occlusion", || {
@@ -3106,10 +3201,6 @@ impl Renderer {
         // as one list of indirect draws over the section arena.
         self.draws.clear();
         self.draw_pages.clear();
-        // The eye, camera-relative: view bobbing moves it off the camera.
-        let eye = (frame.bob * crate::camera::view_matrix(frame.yaw, frame.pitch))
-            .inverse()
-            .transform_point3(Vec3::ZERO);
         // Occlusion culling leaves the sections its last result did not see
         // to phase 2, after the others, with instance counts of 0. Whether
         // the frame has draws enough goes by the last one's.
@@ -3117,7 +3208,7 @@ impl Renderer {
             .cull
             .as_mut()
             .filter(|c| {
-                self.cull_on && !frame.title && self.multi_draw && self.section_draws >= c.min_draws
+                self.cull_on && !frame.title && self.multi_draw && visible.len() >= c.min_sections
             })
             .and_then(|cull| cull.begin(&self.device).then_some(cull));
         self.phase2_draws.clear();
@@ -3135,12 +3226,11 @@ impl Renderer {
             let start = draws.len();
             let instances = u32::from(first_phase);
             let mut indices = 0;
-            // Only the solid groups that can face the eye.
-            s.faces.ranges(eye - Vec3::from(v.origin), |first, quads| {
-                let first = s.start + u64::from(first) * 4;
-                draws.push([quads * 6, instances, 0, first as u32, i as u32]);
-                pages.push((s.page, None));
+            facing_runs(&s.sides, eye, v.origin, |first, quads| {
                 indices += quads * 6;
+                let base = s.start as u32 + first * 4;
+                draws.push([quads * 6, instances, 0, base, i as u32]);
+                pages.push((s.page, None));
             });
             let runs = if first_phase {
                 &mut self.solid_runs
@@ -3178,10 +3268,10 @@ impl Renderer {
         for (i, v) in visible_lods.iter().enumerate() {
             let s = &self.lods[&v.key].mesh;
             let start = self.draws.len();
-            s.faces.ranges(eye - Vec3::from(v.origin), |first, quads| {
-                let first = s.start + u64::from(first) * 4;
-                self.draws
-                    .push([quads * 6, 1, 0, first as u32, (visible.len() + i) as u32]);
+            let instance = (visible.len() + i) as u32;
+            facing_runs(&s.sides, eye, v.origin, |first, quads| {
+                let base = s.start as u32 + first * 4;
+                self.draws.push([quads * 6, 1, 0, base, instance]);
                 self.draw_pages.push((s.page, None));
             });
             self.solid_runs
@@ -3520,7 +3610,9 @@ impl Renderer {
         }
         let flat_frame = match &mut self.flat {
             Some(flat)
-                if self.flat_on && !self.draws.is_empty() && self.draws.len() >= flat.min_draws =>
+                if self.flat_on
+                    && !self.draws.is_empty()
+                    && self.drawn_sections >= flat.min_sections =>
             {
                 let sections = &self.sections;
                 let lods = &self.lods;
@@ -3579,9 +3671,12 @@ impl Renderer {
             timer.begin(&mut encoder);
         }
         // The world's targets: the screen, or the scaled target of `post`.
-        let scaled = self
-            .world_post
-            .prepare(&self.device, [self.config.width, self.config.height]);
+        let pack_post = !frame.title && self.pack_post.as_ref().is_some_and(|p| p.1.is_some());
+        let scaled = self.world_post.prepare(
+            &self.device,
+            [self.config.width, self.config.height],
+            pack_post,
+        );
         let (world_view, world_depth) = match &scaled {
             Some((color, depth)) => (color, depth),
             None => (&view_target, &self.depth),
@@ -3618,8 +3713,8 @@ impl Renderer {
                     view: world_depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(0.0),
-                        // Phase 2 of occlusion culling draws over it.
-                        store: if cull.is_some() {
+                        // Phase 2 of occlusion culling draws over it; a shader pack reads it.
+                        store: if cull.is_some() || pack_post {
                             wgpu::StoreOp::Store
                         } else {
                             wgpu::StoreOp::Discard
@@ -3678,7 +3773,12 @@ impl Renderer {
                             drop(pass);
                             cull.test_pass(&mut encoder);
                             flat.flatten_phase2(&mut encoder);
-                            pass = world_pass_after_culling(&mut encoder, world_view, world_depth);
+                            pass = world_pass_after_culling(
+                                &mut encoder,
+                                world_view,
+                                world_depth,
+                                pack_post,
+                            );
                             pass.set_bind_group(0, &self.group, &[]);
                             pass.set_pipeline(&flat.solid);
                             flat.draw_phase2(&mut pass, vertices);
@@ -3702,7 +3802,12 @@ impl Renderer {
                             cull.test(&mut pass);
                             drop(pass);
                             cull.test_pass(&mut encoder);
-                            pass = world_pass_after_culling(&mut encoder, world_view, world_depth);
+                            pass = world_pass_after_culling(
+                                &mut encoder,
+                                world_view,
+                                world_depth,
+                                pack_post,
+                            );
                             pass.set_bind_group(0, &self.group, &[]);
                             pass.set_pipeline(&self.solid);
                             pass.set_index_buffer(
@@ -3861,7 +3966,24 @@ impl Renderer {
                 );
             }
         }
-        if scaled.is_some() {
+        if let Some((color, depth)) = &scaled
+            && pack_post
+            && let Some((_, Some(post))) = &mut self.pack_post
+        {
+            let size = self.world_post.size().unwrap_or([1, 1]);
+            post.run(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                color,
+                depth,
+                &view_target,
+                frame,
+                &frame.pack,
+                size,
+                [self.config.width, self.config.height],
+            );
+        } else if scaled.is_some() {
             self.world_post.finish(&mut encoder, &view_target);
         }
         if hand_quads > 0 {
@@ -4202,6 +4324,34 @@ fn world_projection(fov_degrees: f32, aspect: f32, far: f32) -> Mat4 {
     Mat4::perspective_rh(fov_degrees.to_radians(), aspect, far, 0.05)
 }
 
+/// Where a perspective `view_proj` sees from, in its own (camera-relative)
+/// space: the point whose clip x, y and w are all 0. `None` for a
+/// projection without one (orthographic).
+fn projection_center(view_proj: Mat4) -> Option<Vec3> {
+    let m = view_proj.as_dmat4();
+    let rows = [m.row(0), m.row(1), m.row(3)];
+    let a = glam::DMat3::from_cols(
+        DVec3::new(rows[0].x, rows[1].x, rows[2].x),
+        DVec3::new(rows[0].y, rows[1].y, rows[2].y),
+        DVec3::new(rows[0].z, rows[1].z, rows[2].z),
+    );
+    let det = a.determinant();
+    if !det.is_normal() {
+        return None;
+    }
+    let b = DVec3::new(rows[0].w, rows[1].w, rows[2].w);
+    Some((a.inverse() * -b).as_vec3())
+}
+/// Calls `draw(first, quads)` for each run of a mesh's solid quads that can
+/// face `eye` (`projection_center`), the mesh at the camera-relative
+/// `origin`; all of them when there is no eye.
+fn facing_runs(sides: &Sides, eye: Option<Vec3>, origin: [f32; 3], mut draw: impl FnMut(u32, u32)) {
+    match eye {
+        Some(eye) => sides.visible((eye - Vec3::from(origin)).to_array(), draw),
+        None if sides.quads() > 0 => draw(0, sides.quads()),
+        None => {}
+    }
+}
 fn frustum(m: Mat4) -> [Vec4; 6] {
     let r = |i| m.row(i);
     let planes = [
@@ -4427,6 +4577,25 @@ mod tests {
         }
         assert_eq!(super::outline_width(2560), 2560.0 / 1920.0 * 2.5);
         assert_eq!(super::outline_width(3840), 5.0);
+    }
+    #[test]
+    fn the_projection_center_follows_the_view_bob() {
+        use glam::{Mat4, Vec3};
+        let projection = super::world_projection(70.0, 16.0 / 9.0, 512.0);
+        let view = crate::camera::view_matrix(30.0, 20.0);
+        let eye = super::projection_center(projection * view).unwrap();
+        assert!(eye.length() < 1e-5, "{eye}");
+        // A pose translated by the bob: the eye is where the pose's inverse
+        // takes the view's origin.
+        let bob = Mat4::from_rotation_z(0.02) * Mat4::from_translation(Vec3::new(0.03, -0.08, 0.0));
+        let expected = (bob * view).inverse().transform_point3(Vec3::ZERO);
+        let eye = super::projection_center(projection * bob * view).unwrap();
+        assert!(eye.distance(expected) < 1e-5, "{eye} {expected}");
+        assert!(expected.length() > 0.05);
+        assert!(
+            super::projection_center(Mat4::orthographic_rh(-1.0, 1.0, -1.0, 1.0, 0.0, 1.0))
+                .is_none()
+        );
     }
     #[test]
     fn indirect_draws_are_validated_only_in_debug_builds_and_on_directx_12() {

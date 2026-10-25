@@ -834,8 +834,11 @@ impl Game<'_> {
         self.lan_object_states(host_entity, hub, out);
     }
 
-    /// Run the hub for this tick and apply what the guests did.
-    pub(super) fn tick_lan(&mut self) {
+    /// Run the hub for this tick and apply what the guests did. While the
+    /// single player game is `paused` only the connections run
+    /// (`IntegratedServer.tickPaused`): `ServerGamePacketListenerImpl.tick`
+    /// skips `tickPlayer`, so no player's air, hunger or damage moves on.
+    pub(super) fn tick_lan(&mut self, paused: bool) {
         let Some(mut host) = self.lan.take() else {
             return;
         };
@@ -1000,7 +1003,9 @@ impl Game<'_> {
             host.states = states;
         }
         self.lan_flush_effects(&mut host);
-        self.tick_guests(&mut host);
+        if !paused {
+            self.tick_guests(&mut host);
+        }
         self.lan_living_flags(&mut host);
         self.tick_server_travel(&mut host);
         self.lan_swings(&mut host);
