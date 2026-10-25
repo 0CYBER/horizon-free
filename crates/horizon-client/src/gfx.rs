@@ -35,7 +35,7 @@ fn entity_shader() -> String {
 mod entity_batch;
 mod weather;
 use entity_batch::EntityBatch;
-pub use entity_batch::{SHADOW_OVERLAY, WATER_MASK_OVERLAY};
+pub use entity_batch::{SHADOW_OVERLAY, TRANSLUCENT_PARTICLE_OVERLAY, WATER_MASK_OVERLAY};
 
 /// Window.getAppropriateLineWidth, in framebuffer pixels.
 pub fn outline_width(width: u32) -> f32 {
@@ -3439,6 +3439,7 @@ impl Renderer {
             translucent_crumbling_quads,
             water_mask_quads,
             shadow_quads,
+            translucent_particle_quads,
         ] = self.entity_batch.update(
             frame.entities,
             frame.additive,
@@ -3450,7 +3451,8 @@ impl Renderer {
             + crumbling_quads
             + translucent_crumbling_quads
             + water_mask_quads
-            + shadow_quads;
+            + shadow_quads
+            + translucent_particle_quads;
         let cloud_quads = if let Some(input) = &frame.clouds {
             let (rebuilt, uniform) =
                 crate::spans::time("clouds", || self.cloud_mesh.prepare(input));
@@ -3849,7 +3851,7 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(
                     0..shadow_quads * 6,
-                    ((world_quads - shadow_quads) * 4) as i32,
+                    ((world_quads - translucent_particle_quads - shadow_quads) * 4) as i32,
                     0..1,
                 );
                 pass.set_bind_group(0, &self.group, &[]);
@@ -3916,6 +3918,22 @@ impl Renderer {
                         translucent_draws,
                     );
                 }
+            }
+            // LevelRenderer.executeTranslucentAfterTerrain: vanilla's
+            // translucent particle layer draws after translucent terrain —
+            // the quads write depth, so before it they would hide the glass
+            // or water behind them.
+            if translucent_particle_quads > 0 {
+                pass.set_pipeline(&self.entity_pipeline);
+                pass.set_bind_group(0, &self.entity_group, &[]);
+                pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                pass.draw_indexed(
+                    0..translucent_particle_quads * 6,
+                    ((world_quads - translucent_particle_quads) * 4) as i32,
+                    0..1,
+                );
+                pass.set_bind_group(0, &self.group, &[]);
             }
             // LevelRenderer.executeClassicTransparency: translucent targets'
             // outlines follow terrain, so its blending cannot wash them out.
@@ -4423,14 +4441,23 @@ mod tests {
                 normal: [0; 4],
             }; 4]
         };
-        let entities: Vec<_> = [(0, 0), (14, 9), (4, 1), (11, 2), (7, 3), (4, 4), (12, 7)]
-            .into_iter()
-            .flat_map(|(layer, id)| quad(layer, id))
-            .collect();
+        let entities: Vec<_> = [
+            (0, 0),
+            (14, 9),
+            (4, 1),
+            (11, 2),
+            (15, 10),
+            (7, 3),
+            (4, 4),
+            (12, 7),
+        ]
+        .into_iter()
+        .flat_map(|(layer, id)| quad(layer, id))
+        .collect();
         let mut batch = super::EntityBatch::default();
         let counts = batch.update(&entities, &quad(3, 5), &quad(0, 6), &quad(0, 8));
         let vertices = &batch.combined;
-        assert_eq!(counts, [4, 1, 1, 0, 1]);
+        assert_eq!(counts, [4, 1, 1, 0, 1, 1]);
         assert_eq!(
             vertices
                 .as_chunks::<4>()
@@ -4438,7 +4465,7 @@ mod tests {
                 .iter()
                 .map(|q| q[0].light)
                 .collect::<Vec<_>>(),
-            [0, 1, 3, 4, 2, 7, 9, 5, 6, 8]
+            [0, 1, 3, 4, 2, 7, 9, 10, 5, 6, 8]
         );
     }
     #[test]
