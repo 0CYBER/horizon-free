@@ -267,6 +267,9 @@ impl Launcher {
         {
             settings.selected = installed.first().cloned();
         }
+        // Pin the window's chrome (macOS title bar) to the choice before the theme reads
+        // `window.appearance()`, so both draw the same look.
+        titlebar::apply_appearance(window, settings.appearance);
         let mut this = Self {
             theme: Theme::for_appearance(settings.appearance, window.appearance()),
             page: Page::from_env(),
@@ -2485,6 +2488,7 @@ impl Launcher {
                     let _ = this.update(cx, |this, cx| {
                         this.settings.appearance = choice;
                         this.settings.save();
+                        titlebar::apply_appearance(window, choice);
                         this.theme = Theme::for_appearance(choice, window.appearance());
                         cx.notify();
                     });

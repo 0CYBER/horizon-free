@@ -50,8 +50,67 @@ Whoever moves the work (the orchestrator on each heartbeat, or anyone in their p
    item, updates their colour (by status) and description, and adds the label to the open pull requests an item
    links. Label a new pull request for an item by hand or by linking it and running `labels` again. Labels of
    removed items are listed, never deleted.
-5. Suggestions from the website and Discord are read and triaged by the maintainers. A good one becomes an
-   item in a normal pull request; none is published automatically.
+5. Once a week, write the week's summary in `roadmap/journal/<year>-<ISO week>.md` (for example
+   `2026-43.md`): `# Title`, a paragraph or two for players, then `## Technical` and the same week for
+   contributors, with its pull requests. `build` puts it into website/data/roadmap.json; the hub's Journal tab
+   shows it among the releases, and `/data/journal.json` carries it to Kira's #updates and to X.
+6. Suggestions from the website and Discord reach the maintainers' private channel through Kira (below). A good
+   one becomes an item in a normal pull request; none is published automatically.
 
 CI runs `tests/test_roadmap.py` (in the Python tests), which fails when ROADMAP.md is not what `build` writes
 or when the file breaks a rule; `python3 tools/roadmap.py check --offline` runs the same rules without GitHub.
+
+## The journal
+
+The hub's Journal tab and `https://playhorizon.dev/data/journal.json` are built with each deploy of the website
+(`website/src/hub.js`). The tab shows every game and launcher release with its notes' changes, each placed under
+the roadmap item it moves (the pull request's `roadmap:<id>` label, else the item that links it), the merged pull
+requests no release has yet, and the weekly summaries above.
+
+`journal.json` is what Kira reads for `#updates` and its X posts (kira's `src/journal.js`): one flat entry per
+merged pull request, release, shipped item and weekly summary, newest first, the latest 300.
+
+```json
+{ "format": "horizon-journal", "version": 2, "generated": "…", "url": "https://playhorizon.dev/hub#journal",
+  "entries": [
+    { "id": "pr-1788", "kind": "merge", "date": "…", "title": "the pull request's title", "url": "…",
+      "number": 1788, "item": "discord-presence", "item_title": "Discord Rich Presence" },
+    { "id": "release-v0.2.57", "kind": "release", "date": "…", "title": "…", "plain": "one line", "url": "…",
+      "tag": "v0.2.57" },
+    { "id": "shipped-server-resource-packs", "kind": "shipped", "date": "the release's", "title": "…",
+      "plain": "…", "url": "https://playhorizon.dev/hub#server-resource-packs", "item": "…", "item_title": "…",
+      "shipped_in": "v0.2.48", "post": "at most 240 characters", "announce": false },
+    { "id": "weekly-2026-43", "kind": "weekly", "date": "the week's last second", "title": "…", "plain": "…",
+      "dev": "…", "url": "https://playhorizon.dev/hub#week-2026-43" } ] }
+```
+
+- An `id` never changes: readers post each one once. `merge` entries are the pull requests players see (no
+  `skip-release` label), plus any that moves a roadmap item; `item` is absent when none does.
+- `announce: true` (the item's `announce` key) asks Kira to post the shipped item on X too, with `post`.
+- `https://playhorizon.dev/data/roadmap.json` is `roadmap.toml` as JSON (`areas`, `items` with every key above,
+  `overview`, the weekly summaries); an item's page is `https://playhorizon.dev/hub#<id>`.
+
+## The intake: votes, bug reports, suggestions
+
+The hub's forms and vote buttons talk to the telemetry server (`https://telemetry.playhorizon.dev`,
+`crates/horizon-telemetry-server`, `src/hub.rs` and `src/intake.rs`; its README lists the limits and settings).
+Kira uses the same endpoints, so a bug or an idea goes the same way from the site and from Discord.
+
+| Endpoint | Body | Answer |
+| --- | --- | --- |
+| `POST /hub/vote` | `{"item": "<roadmap id>", "voter": "<random id, 16 to 64 characters>", "up": true}` | `{"item", "votes"}`; `"up": false` takes the vote back |
+| `GET /hub/votes` | | `{"votes": {"<item>": n}}`, a minute old at most |
+| `POST /hub/report` | `{"title", "did", "happened", "expected", "version"?, "system", "name"?}` | 201 `{"id", "issue": "<GitHub URL>"}`; 202 `{"id", "issue": null}` when GitHub was down (opened later) |
+| `POST /hub/suggest` | `{"text", "item"?, "name"?}` | 202 `{"id"}` |
+| `GET /hub/suggestions?after=<id>` | `Authorization: Bearer <HORIZON_TELEMETRY_HUB_TOKEN>` | `{"suggestions": [{"id", "text", "item"?, "name"?, "created_at"}]}`, oldest first |
+
+- A report becomes an issue at once, labels `bug` and `from-website`, in the `#horizon-bugs` template (What I did,
+  What happened, What I expected, Horizon version, OS, CPU, GPU) with "Reported on playhorizon.dev". Every field
+  but the version and the name is required; mentions, `#123` references and HTML in people's text are made inert.
+- Suggestions are never published. Kira polls `/hub/suggestions` with the last id it relayed and posts each one
+  to `#roadmap-suggestions`.
+- Errors are `{"error": "…"}`: 400 names the field (`"did: 3 to 2000 characters"`), 429 means too many from that
+  address, 503 a full day or reports turned off (no GitHub token on the server).
+- The page shows the forms and the buttons only once `GET /hub/votes` answers. Until then it points to GitHub and
+  Discord. It keeps a random voter id and the items it voted for in `localStorage` (`hub:voter`, `hub:voted`).
+

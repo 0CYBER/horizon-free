@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Horizon's roadmap: roadmap/roadmap.toml is the source, ROADMAP.md is generated from it.
 
-    python3 tools/roadmap.py build              write ROADMAP.md
-    python3 tools/roadmap.py build --check      fail when ROADMAP.md is out of date (CI)
+    python3 tools/roadmap.py build              write ROADMAP.md and website/data/roadmap.json
+    python3 tools/roadmap.py build --check      fail when either is out of date (CI)
     python3 tools/roadmap.py check --offline    the file's own rules (CI)
     python3 tools/roadmap.py check              the same, then GitHub: links resolve, no stale Now item
     python3 tools/roadmap.py sync [--dry-run]   items whose pull requests all merged become shipped,
@@ -28,6 +28,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "roadmap" / "roadmap.toml"
 OUTPUT = ROOT / "ROADMAP.md"
+# What the website's hub reads (website/build.mjs), and serves at /data/roadmap.json for Kira and others.
+SITE_DATA = ROOT / "website" / "data" / "roadmap.json"
+# The journal's weekly summaries, one file per ISO week: roadmap/journal/2026-43.md (roadmap/README.md).
+JOURNAL = ROOT / "roadmap" / "journal"
+WEEK = re.compile(r"(\d{4})-(\d{2})\.md$")
 REPO = "ludovic111/horizon"
 SITE = "https://playhorizon.dev/hub"
 
@@ -50,6 +55,10 @@ ITEM_KEYS = {"id", "title", "status", "area", "plain", "dev", "links", "focus", 
 
 ISSUE = re.compile(r"#(\d+)$")
 ID = re.compile(r"[a-z0-9]+(-[a-z0-9]+)*$")
+# An item is the anchor playhorizon.dev/hub#<id>: it can't take the name of a tab, a section or a heading.
+RESERVED = {"main", "overview", "roadmap", "board", "journal", "contribute", "report", "suggest", "contributors",
+            "hub-data", *STATUSES}
+RESERVED_PREFIXES = ("h-", "tab-", "col-", "week-", "journal-")
 RELEASE = re.compile(r"(v\d[\w.]*|launcher@\d[\w.]*|launcher-v\d[\w.]*|website)$")
 MONTHS = ("January|February|March|April|June|July|August|September|October|November|December")
 # Kira's rule: no dates and no promises of when. "Coming soon" is the one allowed phrase.
@@ -103,6 +112,8 @@ def validate(data, root=ROOT):
         ident = item.get("id", "")
         if ident and not ID.match(ident):
             problems.append(f"{where}: ids are lowercase words joined by dashes")
+        if ident in RESERVED or ident.startswith(RESERVED_PREFIXES):
+            problems.append(f"{where}: the id is taken by the hub page (hub#{ident} is a tab, a section or a heading)")
         if ident in seen:
             problems.append(f"{where}: the id appears twice")
         seen.add(ident)
@@ -146,6 +157,7 @@ def validate(data, root=ROOT):
                 continue
             if link.startswith(("/", "http:")) or ".." in link or not (root / link).exists():
                 problems.append(f"{where}: link {link!r} is neither #N, https:// nor a path in the repository")
+    problems += weeks()[1] if root == ROOT else []
     focus = sum(1 for item in items if item.get("focus"))
     low, high = FOCUS_RANGE
     if not low <= focus <= high:
@@ -225,6 +237,48 @@ def render(data):
                     out += ["", "More: " + link_list(more)]
                 out += ["", "</details>"]
     return "\n".join(out) + "\n"
+
+
+def weeks(directory=JOURNAL):
+    """The weekly summaries, newest first: {"week", "date" (its Monday), "title", "plain", "dev"}, and problems."""
+    entries, problems = [], []
+    for path in sorted(directory.glob("*.md"), reverse=True) if directory.exists() else []:
+        name = WEEK.match(path.name)
+        text = path.read_text()
+        parts = re.match(r"# (.+)\n\n(.+?)\n\n## Technical\n\n(.+)", text.strip() + "\n", re.S)
+        if not name or not 1 <= int(name[2]) <= 53:
+            problems.append(f"journal/{path.name}: name it by its ISO week, like 2026-43.md")
+            continue
+        if not parts:
+            problems.append(f"journal/{path.name}: needs '# Title', the plain text, then '## Technical' and its text")
+            continue
+        monday = datetime.date.fromisocalendar(int(name[1]), int(name[2]), 1)
+        entries.append({"week": path.stem, "date": monday.isoformat(), "title": parts[1].strip(),
+                        "plain": " ".join(parts[2].split()), "dev": " ".join(parts[3].split())})
+    return entries, problems
+
+
+def site_data(data):
+    """website/data/roadmap.json: the items as the hub and Kira read them, in the file's order."""
+    keys = ("id", "title", "status", "area", "plain", "dev", "links", "focus", "ongoing", "shipped_in", "post",
+            "announce")
+    out = {
+        "format": "horizon-roadmap",
+        "version": 1,
+        "source": "roadmap/roadmap.toml",
+        "overview": {key: " ".join(value.split()) for key, value in data["overview"].items()},
+        "statuses": [{"id": key, "name": name} for key, name in STATUSES.items()],
+        "areas": [{"id": key, "name": name} for key, name in areas_in_order(data)],
+        "items": [{key: (" ".join(item[key].split()) if isinstance(item[key], str) else item[key])
+                   for key in keys if key in item} for item in data.get("item", [])],
+        "journal": weeks()[0],
+    }
+    return json.dumps(out, indent=1, ensure_ascii=False) + "\n"
+
+
+def outputs(data):
+    """Every generated file and its content."""
+    return {OUTPUT: render(data), SITE_DATA: site_data(data)}
 
 
 # --- GitHub ---------------------------------------------------------------------------------------------------
@@ -466,13 +520,15 @@ def command_build(args):
     problems = validate(data)
     if problems:
         return report(problems)
-    markdown = render(data)
+    files = outputs(data)
     if args.check:
-        if not OUTPUT.exists() or OUTPUT.read_text() != markdown:
-            return report(["ROADMAP.md is out of date: run `python3 tools/roadmap.py build`"])
-        return 0
-    OUTPUT.write_text(markdown)
-    print(f"roadmap: wrote {OUTPUT.relative_to(ROOT)}")
+        stale = [path for path, text in files.items() if not path.exists() or path.read_text() != text]
+        return report([f"{path.relative_to(ROOT)} is out of date: run `python3 tools/roadmap.py build`"
+                       for path in stale])
+    for path, text in files.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        print(f"roadmap: wrote {path.relative_to(ROOT)}")
     return 0
 
 
@@ -505,8 +561,9 @@ def command_sync(args):
     if len(new.get("item", [])) != len(data.get("item", [])) or validate(new):
         return report(["sync produced an invalid file; nothing written"] + validate(new))
     SOURCE.write_text(text)
-    OUTPUT.write_text(render(new))
-    print("roadmap: wrote roadmap/roadmap.toml and ROADMAP.md")
+    for path, content in outputs(new).items():
+        path.write_text(content)
+    print("roadmap: wrote roadmap/roadmap.toml, ROADMAP.md and website/data/roadmap.json")
     return 0
 
 

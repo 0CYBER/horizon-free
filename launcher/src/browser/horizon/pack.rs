@@ -208,6 +208,16 @@ mod tests {
         zip.write_all(b"renderDistance:8\n").unwrap();
         zip.finish().unwrap();
         let size = |p: &Path| fs::metadata(p).unwrap().len();
+        // A `file:///` URL: forward slashes (a Windows path's backslashes would be escapes in
+        // the JSON) and a leading slash before a Windows drive.
+        let url = |p: &Path| {
+            let path = p.display().to_string().replace('\\', "/");
+            if path.starts_with('/') {
+                path
+            } else {
+                format!("/{path}")
+            }
+        };
         let text = format!(
             r#"{{"schema": 1, "projects": [
               {{"id": "coords_hud", "kind": "mod", "name": "Coordinates HUD", "summary": "", "license": "MIT",
@@ -219,9 +229,9 @@ mod tests {
                 "requires": [{{"id": "coords_hud", "version": "0.1.0", "sha256": "{hmod_sha}"}}],
                 "file": {{"name": "cozy-1.0.0.hpack", "url": "file://{}", "size": {}, "sha256": "{}"}}}}]}}
             ]{extra}}}"#,
-            hmod.display(),
+            url(&hmod),
             size(&hmod),
-            hpack.display(),
+            url(&hpack),
             size(&hpack),
             idx::sha256_file(&hpack).unwrap()
         );
