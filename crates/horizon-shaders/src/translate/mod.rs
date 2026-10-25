@@ -193,8 +193,11 @@ pub fn translate_composite(
     .unwrap();
     let mut fragment_main = String::from("\nvoid main() {\n");
     fragment_main.push_str(fog);
-    if target == Target::Window && f.frag_coord {
-        fragment_main.push_str("    hz_FragCoord = vec4(gl_FragCoord.x, hz_target.y - gl_FragCoord.y, gl_FragCoord.zw);\n");
+    if f.frag_coord {
+        fragment_main.push_str(match target {
+            Target::Window => "    hz_FragCoord = vec4(gl_FragCoord.x, hz_target.y - gl_FragCoord.y, gl_FragCoord.zw);\n",
+            Target::Buffers => "    hz_FragCoord = gl_FragCoord;\n",
+        });
     }
     for name in &f.inits {
         writeln!(fragment_main, "    {name} = hz_init_{name}();").unwrap();
@@ -410,6 +413,35 @@ mod tests {
                 .iter()
                 .any(|u| u.name == "projectionMatrix" && u.ty == "mat4")
         );
+    }
+
+    #[test]
+    fn frag_coord_is_set_for_every_target() {
+        let fsh = "#version 120\nvoid main() { gl_FragColor = vec4(gl_FragCoord.x); }\n";
+        for target in [Target::Buffers, Target::Window] {
+            let p = program(
+                &[("composite.vsh", VSH_120), ("composite.fsh", fsh)],
+                target,
+            )
+            .unwrap();
+            let m = &p.fragment;
+            let (handle, _) = m
+                .global_variables
+                .iter()
+                .find(|(_, g)| g.name.as_deref() == Some("hz_FragCoord"))
+                .unwrap();
+            // naga calls our `main` from its entry point: look in every function.
+            let functions = m.functions.iter().map(|(_, f)| f);
+            let stores = functions.chain([&m.entry_points[0].function]).any(|f| {
+                f.body.iter().any(|s| match s {
+                    naga::Statement::Store { pointer, .. } => {
+                        matches!(f.expressions[*pointer], naga::Expression::GlobalVariable(h) if h == handle)
+                    }
+                    _ => false,
+                })
+            });
+            assert!(stores, "{target:?}: main does not set hz_FragCoord");
+        }
     }
 
     #[test]
