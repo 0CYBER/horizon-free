@@ -700,6 +700,16 @@ impl Game<'_> {
                     ("mob_factor", Tag::Float(v[5].to_bits())),
                 ]),
                 Component::Profile(p) => profile_tag(p),
+                // PotionContents' NBT: the potion by name and the custom colour.
+                Component::Potion { potion, color, .. } => {
+                    let potion = potion.and_then(|id| r.builtin.get("minecraft:potion")?.name(id));
+                    Tag::compound(
+                        potion
+                            .map(|name| ("potion", Tag::String(name.into())))
+                            .into_iter()
+                            .chain(color.map(|c| ("custom_color", Tag::Int(c)))),
+                    )
+                }
                 // ItemStackTemplate.CODEC: id, count and components.
                 Component::Stacks(stacks) => Tag::List(
                     stacks
@@ -761,6 +771,20 @@ impl Game<'_> {
     fn to_network(&self, s: &Option<ItemStack>) -> Option<Stack> {
         let s = s.as_ref()?;
         let mut stack = Stack::new(self.item_id(&s.item), s.count as i32);
+        // A creative pick keeps its potion (PotionContents by its builtin id).
+        if let Some(id) = s.potion().and_then(|p| {
+            let potions = self.remote.as_ref()?.builtin.get("minecraft:potion")?;
+            potions.id(&horizon_world::datafix::dynamic::namespaced(p))
+        }) {
+            stack.added.push((
+                horizon_protocol::item::component::POTION_CONTENTS,
+                horizon_protocol::item::Component::Potion {
+                    potion: Some(id),
+                    color: None,
+                    rest: Vec::new(),
+                },
+            ));
+        }
         if s.damage > 0 {
             stack.added.push((
                 horizon_protocol::item::component::DAMAGE,
