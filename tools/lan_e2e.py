@@ -6162,5 +6162,55 @@ CHECKS += ['falling']
 CHECK_FNS.update(falling=check_falling)
 
 
+def check_boat_dismount_pose(host, guest, out):
+    """Removing a boat detaches its mobs on the server and every observing client."""
+    x, y, z = map(math.floor, pos_of(host))
+    bx, bz = x + 3.5, z + 3.5
+    tag = 'boat_dismount_pose'
+    host('command', command='gamemode creative')
+    host('command', command=f'fill {x - 2} {y - 1} {z - 2} {x + 8} {y - 1} {z + 8} minecraft:stone')
+    host('command', command=f'fill {x - 2} {y} {z - 2} {x + 8} {y + 4} {z + 8} minecraft:air')
+    host('command', command=f'summon minecraft:oak_boat {bx} {y} {bz} {{Tags:["{tag}"]}}')
+    for _ in range(2):
+        host('command', command=f'summon minecraft:husk {bx} {y} {bz} {{NoAI:1b,Tags:["{tag}"]}}')
+        host.wait(5)
+    try:
+        host.wait(20)
+        boat = next(o for o in host('status')['objects']
+                    if o['kind'].endswith('oak_boat') and math.dist(o['position'], [bx, y, bz]) < 2)
+        riders = [m['id'] for m in host.raw('mobs', 64)['near']
+                  if m['kind'] == 'minecraft:husk' and m['mount'] == boat['id']]
+        assert len(riders) == 2, f'the boat did not collect both husks: {riders}'
+        for game in (host, guest):
+            game.wait(10)
+            for rider in riders:
+                m = mob_seen(game, rider)
+                assert m and m['mount'] == boat['id'] and m['passenger'], f'{game.name} did not see seated husk {rider}: {m}'
+            game.raw('look-at', bx, y + 1, bz)
+            game.shot(out, 'boat-passengers-seated')
+        host('command', command=f'tp @s {bx - 3} {y} {bz} 0 0')
+        host.wait(5)
+        # Aim at the near rim, below the riders, so their boxes cannot
+        # intercept the creative player's one hit that destroys the boat.
+        host.raw('look-at', bx - 0.55, y + 0.1, bz)
+        host.raw('mouse', 'left', 'click')
+        seen = {}
+        for game in (host, guest):
+            game.wait(20)
+            assert all(o['id'] != boat['id'] for o in game('status')['objects']), f'{game.name} still sees the boat'
+            seen[game.name] = [mob_seen(game, rider) for rider in riders]
+            game.raw('look-at', bx, y + 1, bz)
+            game.shot(out, 'boat-passengers-dismounted')
+            for m in seen[game.name]:
+                assert m and m['mount'] is None and not m['passenger'], f'{game.name} still draws a removed boat\'s passenger: {m}'
+        return {name: [{k: m[k] for k in ('id', 'mount', 'passenger')} for m in mobs] for name, mobs in seen.items()}
+    finally:
+        host('command', command=f'kill @e[tag={tag}]')
+
+
+CHECKS += ['boat-dismount-pose']
+CHECK_FNS['boat-dismount-pose'] = check_boat_dismount_pose
+
+
 if __name__ == '__main__':
     main()
