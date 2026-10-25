@@ -11693,7 +11693,7 @@ impl<'a> Game<'a> {
         let particles = horizon_client::particles::ParticleEngine::new(
             &root,
             &gui.atlas.sprites,
-            gui.atlas.translucent.clone(),
+            &gui.atlas.translucent,
         );
         Ok(Game {
             res: res.clone(),
