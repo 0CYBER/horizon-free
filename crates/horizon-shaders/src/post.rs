@@ -15,7 +15,9 @@ use std::collections::BTreeSet;
 use crate::config::{self, Config};
 use crate::custom::Custom;
 use crate::{GbuffersInputs, Macros, Pack, Preprocessed, Program, Properties, Target};
-use crate::{eval_condition, preprocess, translate_composite, translate_gbuffers};
+use crate::{
+    eval_condition, preprocess, translate_composite, translate_gbuffers, translate_shadow,
+};
 
 /// Which group of 2.1 a program belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,7 +30,31 @@ pub enum Group {
     Gbuffers,
     /// A gbuffers program drawing translucent geometry, after deferred (2.1).
     Translucent,
+    /// A shadow program: the game's geometry from the shadow light, into the shadow buffers.
+    Shadow,
+    /// `shadowcomp`..`shadowcomp99`: composite-style programs over the shadow buffers.
+    ShadowComp,
 }
+
+impl Group {
+    /// Whether the group writes the shadow buffers, where buffer n is shadowcolor n.
+    pub fn shadow(self) -> bool {
+        matches!(self, Group::Shadow | Group::ShadowComp)
+    }
+}
+
+/// The samplers whose use turns the shadow pass on (2.5, 6.3).
+const SHADOW_SAMPLERS: [&str; 9] = [
+    "shadow",
+    "watershadow",
+    "shadowtex0",
+    "shadowtex1",
+    "shadowtex0HW",
+    "shadowtex1HW",
+    "shadowcolor",
+    "shadowcolor0",
+    "shadowcolor1",
+];
 
 /// A blend factor of `blend.<program>` (3.2), as GL names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -216,6 +242,14 @@ pub struct Post {
     pub weather: Option<PostProgram>,
     /// What draws the first-person hand and held items.
     pub hand: Option<PostProgram>,
+    /// Some program reads a shadow buffer, or `shadow.enabled=true`: the shadow pass runs (2.5).
+    pub shadow_pass: bool,
+    /// When it runs: what draws solid and cutout terrain from the light (`shadow`), and
+    /// translucent terrain (`shadow_water` or `shadow`), into the shadow buffers (2.4).
+    pub shadow: Option<PostProgram>,
+    pub shadow_water: Option<PostProgram>,
+    /// `shadowcomp`..`shadowcomp99`, after the shadow pass (2.1).
+    pub shadow_comp: Vec<PostProgram>,
     /// Translucent entities draw after deferred (`separateEntityDraws`, 3.2).
     pub translucent_late: bool,
     /// Particles draw after deferred (`particles.ordering`, `particles.before.deferred`, 3.2).
@@ -280,6 +314,10 @@ pub fn load_post(
         clouds: None,
         weather: None,
         hand: None,
+        shadow_pass: false,
+        shadow: None,
+        shadow_water: None,
+        shadow_comp: Vec::new(),
         translucent_late: false,
         particles_late: false,
         custom: Custom::parse(properties),
@@ -434,8 +472,75 @@ pub fn load_post(
         Some(_) => true,
         None => !flag("particles.before.deferred").unwrap_or(false),
     };
+    load_shadow(&mut loader, inputs.terrain.as_ref());
     post.config = std::mem::take(&mut post.config).finish();
     post
+}
+
+/// Whether the shadow pass runs (2.5) and, when it does, its programs: `shadow_solid` and
+/// `shadow_cutout` are not used (2.4, Legacy); the game's solid and cutout terrain is one draw.
+fn load_shadow(loader: &mut Loader<'_>, terrain: Option<&GbuffersInputs>) {
+    let post = &*loader.post;
+    let gbuffers = [
+        &post.terrain,
+        &post.water,
+        &post.sky,
+        &post.sky_textured,
+        &post.entities,
+        &post.block,
+        &post.entities_translucent,
+        &post.particles,
+        &post.clouds,
+        &post.weather,
+        &post.hand,
+    ];
+    let reads = (post.programs.iter())
+        .chain(gbuffers.into_iter().flatten())
+        .flat_map(|p| &p.program.interface.samplers)
+        .any(|s| SHADOW_SAMPLERS.contains(&s.name.as_str()));
+    let forced = match loader.properties.get("shadow.enabled").map(str::trim) {
+        Some("true") => Some(true),
+        Some("false") => Some(false),
+        _ => None,
+    };
+    let on = forced.unwrap_or(reads);
+    loader.post.shadow_pass = on;
+    if !on {
+        return;
+    }
+    let names =
+        std::iter::once("shadowcomp".to_owned()).chain((1..=99).map(|n| format!("shadowcomp{n}")));
+    for name in names {
+        let program = loader.load(name, Group::ShadowComp, |v, f| {
+            translate_composite(v, f, Target::Buffers)
+        });
+        loader.post.shadow_comp.extend(program);
+    }
+    let Some(inputs) = terrain else {
+        return;
+    };
+    let properties = loader.properties;
+    let mut load = |names: &[&str]| {
+        names.iter().find_map(|name| {
+            let p = loader.load(name.to_string(), Group::Shadow, |v, f| {
+                translate_shadow(v, f, inputs)
+            });
+            p.map(|mut p| {
+                p.blend = blend(properties, &p.name).flatten();
+                p
+            })
+        })
+    };
+    let shadow = load(&["shadow"]);
+    let water = load(&["shadow_water", "shadow"]);
+    if shadow.is_none() {
+        loader
+            .post
+            .notes
+            .push("shadow: no program; the shadow map stays clear".to_owned());
+    }
+    loader.post.shadow = shadow;
+    loader.post.shadow_water = water;
 }
 
 struct Loader<'a> {
@@ -505,9 +610,17 @@ impl Loader<'_> {
         };
         self.post.config.read(&vertex);
         self.post.config.read(&fragment);
-        let buffers = config::draw_buffers(&fragment).unwrap_or_else(|| (0..8).collect());
+        let mut buffers = config::draw_buffers(&fragment).unwrap_or_else(|| (0..8).collect());
+        if group.shadow() {
+            // Output n writes shadowcolor n (6.3); there are two.
+            let kept = buffers
+                .iter()
+                .position(|&b| b >= 2)
+                .unwrap_or(buffers.len());
+            buffers.truncate(kept);
+        }
         let mipmaps = match group {
-            Group::Gbuffers | Group::Translucent => 0,
+            Group::Gbuffers | Group::Translucent | Group::Shadow | Group::ShadowComp => 0,
             _ => {
                 let mut own = Config::default();
                 own.read(&fragment);
@@ -694,6 +807,67 @@ mod tests {
         assert_eq!(names, ["final"]);
         let post = load_post(&pack, "", &properties, &macros, &GameInputs::default());
         assert!(post.programs.iter().any(|p| p.name == "composite3"));
+    }
+
+    /// The shadow pass runs when a program reads a shadow buffer or `shadow.enabled` says so;
+    /// then `shadow`, `shadow_water` and the `shadowcomp` series load, writing shadowcolor0/1.
+    #[test]
+    fn shadow_programs_load_when_a_shadow_buffer_is_read() {
+        let reads = "#version 120\nuniform sampler2D shadowtex0;\nvarying vec2 uv;\n\
+                     void main() { gl_FragColor = texture2D(shadowtex0, uv); }\n";
+        let shadow = "#version 120\nvarying vec2 uv;\nvoid main() {\n/* RENDERTARGETS: 1,0,4 */\n\
+                      gl_FragData[0] = vec4(1.0); gl_FragData[1] = vec4(0.5); gl_FragData[2] = vec4(0.0);\n}\n";
+        let files = [
+            ("shaders/composite.vsh", VSH),
+            ("shaders/composite.fsh", reads),
+            ("shaders/shadow.vsh", VSH),
+            ("shaders/shadow.fsh", shadow),
+            ("shaders/shadowcomp1.vsh", VSH),
+            ("shaders/shadowcomp1.fsh", FSH),
+        ];
+        let pack = Pack::from_zip_bytes("t", zip(&files)).unwrap();
+        let inputs = GameInputs {
+            terrain: Some(crate::GbuffersInputs {
+                declarations: "layout(location = 0) in vec3 hz_v_pos;".into(),
+                body: "    hz_Vertex = vec4(hz_v_pos, 1.0);\n".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let load = |properties: &str| {
+            let properties = Properties::parse(properties, &Macros::default());
+            load_post(&pack, "", &properties, &Macros::standard(), &inputs)
+        };
+        let post = load("");
+        assert!(post.shadow_pass);
+        let shadow = post.shadow.as_ref().expect("shadow");
+        assert_eq!(
+            (shadow.group, &shadow.buffers[..]),
+            (Group::Shadow, &[1, 0][..])
+        );
+        // shadow_water falls back to shadow.
+        assert_eq!(
+            post.shadow_water.as_ref().map(|p| p.name.as_str()),
+            Some("shadow")
+        );
+        let comp: Vec<_> = post
+            .shadow_comp
+            .iter()
+            .map(|p| (p.name.as_str(), p.group))
+            .collect();
+        assert_eq!(comp, [("shadowcomp1", Group::ShadowComp)]);
+        // DRAWBUFFERS:3 names no shadowcolor buffer.
+        assert!(post.shadow_comp[0].buffers.is_empty());
+        let post = load("shadow.enabled = false");
+        assert!(!post.shadow_pass && post.shadow.is_none() && post.shadow_comp.is_empty());
+        // Nothing reads a shadow buffer.
+        let pack = Pack::from_zip_bytes("t", zip(&files[2..])).unwrap();
+        let none = |properties: &str| {
+            let properties = Properties::parse(properties, &Macros::default());
+            load_post(&pack, "", &properties, &Macros::standard(), &inputs)
+        };
+        assert!(!none("").shadow_pass);
+        assert!(none("shadow.enabled=true").shadow.is_some());
     }
 
     /// Water falls back to the terrain chain and blends by default, as the sky does; entities
