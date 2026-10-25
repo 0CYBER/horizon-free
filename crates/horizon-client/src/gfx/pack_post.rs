@@ -879,6 +879,7 @@ impl PackPost {
         });
         let mut notes = post.notes;
         notes.extend(post.config.notes);
+        let shadow_config = post.config.shadow.clone();
         let mut custom = post.custom;
         let custom_names: Vec<String> = custom.uniforms().map(|u| u.0.to_owned()).collect();
         // A first run finds the names neither the frame nor the pack defines.
@@ -1279,6 +1280,7 @@ impl PackPost {
             uniforms: {
                 let mut u = FrameUniforms::default();
                 u.atlas = world.atlas.map_or([0; 2], |a| a.1);
+                u.shadow = shadow_config;
                 u
             },
         }
@@ -1495,7 +1497,9 @@ impl PackPost {
         let Some(mut sky) = self.sky.take() else {
             return;
         };
-        let parts = sky.geometry.prepare(queue, frame);
+        let parts = sky
+            .geometry
+            .prepare(queue, frame, self.uniforms.shadow.sun_path_rotation);
         let mut groups = [None, None];
         for (i, pass) in [&mut sky.basic, &mut sky.textured].into_iter().enumerate() {
             if let Some(pass) = pass {

@@ -3,7 +3,8 @@
 //! Matrices follow GL's conventions (5.5): `gbufferProjection` maps view depth to clip z in
 //! [-w, w], and the depth buffers packs read hold GL window depth.
 
-use glam::{Mat4, Vec3, Vec4};
+use glam::{DMat4, DVec3, Mat4, Vec3, Vec4};
+use horizon_shaders::Shadow;
 
 use super::Frame;
 
@@ -172,6 +173,8 @@ pub struct FrameUniforms {
     previous: Option<(Vec3, Mat4, Mat4)>,
     wetness: f32,
     eye_smooth: [f32; 2],
+    /// The pack's shadow settings (7.1).
+    pub shadow: Shadow,
 }
 
 impl Default for FrameUniforms {
@@ -185,14 +188,72 @@ impl Default for FrameUniforms {
             previous: None,
             wetness: 0.0,
             eye_smooth: [0.0; 2],
+            shadow: Shadow::default(),
         }
     }
 }
 
-/// `(0, 100, 0)` on the frame the sky draws a body on: Y -90°, then X by its angle in degrees.
-fn body(angle: f32) -> Vec3 {
-    (Mat4::from_rotation_y((-90.0f32).to_radians()) * Mat4::from_rotation_x(angle.to_radians()))
-        .transform_vector3(Vec3::new(0.0, 100.0, 0.0))
+/// `(0, 100, 0)` on the frame the sky draws a body on: Y -90°, then X by its angle in degrees;
+/// `sunPathRotation` (`tilt`, degrees) then turns the path about the world's X axis (7.1, OQ-6).
+fn body(angle: f32, tilt: f32) -> Vec3 {
+    (tilt_matrix(tilt)
+        * Mat4::from_rotation_y((-90.0f32).to_radians())
+        * Mat4::from_rotation_x(angle.to_radians()))
+    .transform_vector3(Vec3::new(0.0, 100.0, 0.0))
+}
+
+/// `sunPathRotation`'s turn of the sky's bodies: `tilt` degrees about the world's X axis, so a
+/// positive angle moves the noon sun toward +Z (south).
+pub fn tilt_matrix(tilt: f32) -> Mat4 {
+    Mat4::from_rotation_x(tilt.to_radians())
+}
+
+/// The world direction of the shadow light (7.1): the sun by day, the moon by night.
+fn shadow_light(frame: &Frame, shadow: &Shadow) -> Vec3 {
+    let sun_angle = (frame.sky.sun_angle / 360.0 + 0.25).rem_euclid(1.0);
+    let angle = if sun_angle < 0.5 {
+        frame.sky.sun_angle
+    } else {
+        frame.sky.moon_angle
+    };
+    body(angle, shadow.sun_path_rotation).normalize()
+}
+
+/// Distance from the snapped point to the shadow camera, toward the light: the middle of the
+/// default near and far planes (OQ-6).
+const SHADOW_EYE: f64 = 128.0;
+
+/// The shadow camera (7.1; OQ-6, impl-plan.md): its view (player space to shadow view space)
+/// and GL projection. The camera looks from the light, world +Z up (+Y when the light is near
+/// Z); the point it centres moves in steps of `shadowIntervalSize` along the shadow view's
+/// own axes, and it sits `SHADOW_EYE` blocks toward the light from it. Orthographic over
+/// `shadowDistance` each side, or perspective with `shadowMapFov`.
+pub fn shadow_camera(light: Vec3, camera: DVec3, shadow: &Shadow) -> (Mat4, Mat4) {
+    let light = light.as_dvec3();
+    let up = if light.z.abs() > 0.99 {
+        DVec3::Y
+    } else {
+        DVec3::Z
+    };
+    let rotation = DMat4::look_to_rh(DVec3::ZERO, -light, up);
+    let at = rotation.transform_vector3(camera);
+    let step = f64::from(shadow.interval);
+    let snapped = if step > 0.0 {
+        (at / step).floor() * step
+    } else {
+        at
+    };
+    let offset = at - snapped - DVec3::new(0.0, 0.0, SHADOW_EYE);
+    let view = (DMat4::from_translation(offset) * rotation).as_mat4();
+    let (near, far) = (shadow.near, shadow.far);
+    let projection = match shadow.fov {
+        Some(fov) => Mat4::perspective_rh_gl(fov.to_radians(), 1.0, near, far),
+        None => {
+            let d = shadow.distance;
+            Mat4::orthographic_rh_gl(-d, d, -d, d, near, far)
+        }
+    };
+    (view, projection)
 }
 
 /// `value` moved toward `target` with a half-life of `half_life` seconds over `dt` (5.6).
@@ -223,8 +284,9 @@ impl FrameUniforms {
         let to_view = |v: Vec3| view.transform_vector3(v);
         let sun_angle = (frame.sky.sun_angle / 360.0 + 0.25).rem_euclid(1.0);
         let day = sun_angle < 0.5;
-        let sun = to_view(body(frame.sky.sun_angle));
-        let moon = to_view(body(frame.sky.moon_angle));
+        let tilt = self.shadow.sun_path_rotation;
+        let sun = to_view(body(frame.sky.sun_angle, tilt));
+        let moon = to_view(body(frame.sky.moon_angle, tilt));
         // Half-lives are given in ticks (7.2); smoothing runs per frame in seconds (OQ-26).
         let half_life = if inputs.rain > self.wetness {
             600.0
@@ -250,14 +312,8 @@ impl FrameUniforms {
             }
             None => (frame.sky.fog_color, frame.distance * 0.9, frame.distance),
         };
-        // The shadow camera (OQ-6, impl-plan.md): orthographic, `shadowDistance` (160) blocks
-        // each side, 100 blocks from the player toward the shadow light, world +z up.
-        let light = view
-            .inverse()
-            .transform_vector3(if day { sun } else { moon })
-            .normalize();
-        let shadow_view = Mat4::look_at_rh(light * 100.0, Vec3::ZERO, Vec3::Z);
-        let shadow_projection = Mat4::orthographic_rh_gl(-160.0, 160.0, -160.0, 160.0, 0.05, 256.0);
+        let light = shadow_light(frame, &self.shadow);
+        let (shadow_view, shadow_projection) = shadow_camera(light, frame.camera, &self.shadow);
         let day_time = inputs.day_time.rem_euclid(24000) as i32;
         let world_day = inputs.day_time.div_euclid(24000);
         let seconds = (now - self.start).as_secs_f32() % 3600.0;
@@ -413,7 +469,38 @@ mod tests {
 
     #[test]
     fn noon_is_straight_up_and_the_sun_sets_in_the_west() {
-        assert!(body(0.0).abs_diff_eq(Vec3::new(0.0, 100.0, 0.0), 1e-3));
-        assert!(body(90.0).abs_diff_eq(Vec3::new(-100.0, 0.0, 0.0), 1e-3));
+        assert!(body(0.0, 0.0).abs_diff_eq(Vec3::new(0.0, 100.0, 0.0), 1e-3));
+        assert!(body(90.0, 0.0).abs_diff_eq(Vec3::new(-100.0, 0.0, 0.0), 1e-3));
+        // sunPathRotation tilts noon toward +Z and leaves sunset on the horizon.
+        assert!(body(0.0, 30.0).abs_diff_eq(Vec3::new(0.0, 86.60254, 50.0), 1e-3));
+        assert!(body(90.0, 30.0).abs_diff_eq(Vec3::new(-100.0, 0.0, 0.0), 1e-3));
+    }
+
+    #[test]
+    fn the_shadow_camera_looks_down_from_the_light_in_steps() {
+        let shadow = Shadow::default();
+        let mut camera = DVec3::new(1000.3, 70.0, -20.7);
+        // Noon: the light is straight up.
+        let (view, projection) = shadow_camera(Vec3::Y, camera, &shadow);
+        let at = |p: Vec3| view.transform_point3(p);
+        // Straight down: a block below the player is farther from the light.
+        assert!(at(Vec3::new(0.0, -1.0, 0.0)).z < at(Vec3::ZERO).z);
+        // The player is less than a step from the centre, 128 blocks from the light.
+        let centre = at(Vec3::ZERO);
+        assert!(centre.x.abs() <= 2.0 && centre.y.abs() <= 2.0, "{centre}");
+        assert!((centre.z + 128.0).abs() < 1e-3, "{centre}");
+        // Moving within a step keeps the world where it was in the map.
+        camera.x = 1000.6;
+        let (moved, _) = shadow_camera(Vec3::Y, camera, &shadow);
+        let world = Vec3::new(5.0, -3.0, 9.0);
+        let shift = Vec3::new(0.3, 0.0, 0.0);
+        assert!(
+            moved
+                .transform_point3(world - shift)
+                .abs_diff_eq(at(world), 1e-3)
+        );
+        // shadowDistance blocks reach the map's edge.
+        let edge = projection.project_point3(Vec3::new(160.0, 0.0, -128.0));
+        assert!((edge.x.abs() - 1.0).abs() < 1e-4, "{edge}");
     }
 }
