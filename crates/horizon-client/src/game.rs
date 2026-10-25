@@ -154,6 +154,7 @@ mod storage;
 mod structures;
 mod subtitle_hud;
 mod sulfur_cubes;
+mod text_displays;
 mod titles;
 mod tnt;
 mod totem;
@@ -1422,6 +1423,8 @@ struct Game<'a> {
     dragon_model: Option<horizon_client::mobs::Part>,
     /// Map textures waiting for the next HUD batch to upload them.
     map_patches: Vec<horizon_client::font::Patch>,
+    text_displays: std::collections::HashMap<i32, text_displays::RemoteTextDisplay>,
+    text_display_vertices: usize,
     /// Player skin downloads, and which skin each atlas skin slot holds
     /// (least recently shown first).
     skin_downloads: RefCell<horizon_client::skins::Downloader>,
@@ -6772,6 +6775,7 @@ impl Game<'_> {
         let mut see_through = std::mem::take(&mut self.see_through_vertices);
         see_through.clear();
         self.name_tag_geometry(camera, alpha, &mut out, &mut see_through);
+        self.text_display_geometry(camera, alpha, &mut out, &mut see_through);
         self.see_through_vertices = see_through;
         // Entity shadows (EntityRenderer.extractShadow).
         if let Some(sprite) = self.gui.atlas.sprites.get("misc/shadow").copied() {
@@ -11884,6 +11888,8 @@ impl<'a> Game<'a> {
             breath_clouds: Vec::new(),
             dragon_model: prepared.dragon_model,
             map_patches: Vec::new(),
+            text_displays: Default::default(),
+            text_display_vertices: 0,
             skin_downloads: RefCell::new(horizon_client::skins::Downloader::new(
                 std::env::current_dir()
                     .unwrap_or_default()
