@@ -114,6 +114,7 @@ mod place;
 mod portal;
 pub mod portal_travel;
 mod query;
+pub(crate) use query::data_2d;
 mod rails;
 mod redstone;
 pub mod removal;

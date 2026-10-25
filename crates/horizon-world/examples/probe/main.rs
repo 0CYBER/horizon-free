@@ -169,6 +169,7 @@ mod stored_effect_attributes_fixture;
 mod stored_effect_notifications_fixture;
 mod structure_density_fixture;
 mod structure_pieces;
+mod structure_start_nbt;
 mod suffocation_fixture;
 mod swimming_fixture;
 mod synced_bytes_fixture;
@@ -340,6 +341,7 @@ probes! {
     stored_effect_notifications_fixture,
     structure_density_fixture,
     structure_pieces,
+    structure_start_nbt,
     suffocation_fixture,
     swimming_fixture,
     synced_bytes_fixture,

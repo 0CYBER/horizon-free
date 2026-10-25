@@ -5,6 +5,7 @@ use super::{
 };
 use crate::{
     heightmap::HeightmapType,
+    nbt::{Compound, Tag},
     worldgen::{
         DecodeError,
         block_feature::FeatureBlockBindings,
@@ -30,12 +31,24 @@ pub enum Projection {
     Rigid,
     TerrainMatching,
 }
+impl Projection {
+    /// `StructureTemplatePool.Projection.getSerializedName`.
+    pub fn saved_name(self) -> &'static str {
+        match self {
+            Self::Rigid => "rigid",
+            Self::TerrainMatching => "terrain_matching",
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub enum PoolElement {
     Empty,
     Single {
         template: Arc<StructureTemplate>,
         processors: ProcessorList,
+        /// The element's `processors` as written: a list id or an inline list,
+        /// saved back as it was.
+        processors_source: Value,
         legacy: bool,
         projection: Projection,
         waterlogging: Option<bool>,
@@ -136,6 +149,7 @@ impl PoolElement {
                         resources,
                         bindings,
                     )?,
+                    processors_source: value["processors"].clone(),
                     legacy: kind == "minecraft:legacy_single_pool_element",
                     projection: projection()?,
                     waterlogging: match value
@@ -177,6 +191,64 @@ impl PoolElement {
             }
             _ => return Err(DecodeError::Field("pool element type")),
         })
+    }
+    /// `StructurePoolElement.CODEC`'s encoding, as a jigsaw piece saves it.
+    pub fn save(&self) -> Tag {
+        let text = |s: &str| Tag::String(s.into());
+        match self {
+            Self::Empty => Tag::compound([("element_type", text("minecraft:empty_pool_element"))]),
+            Self::Single {
+                template,
+                processors_source,
+                legacy,
+                projection,
+                waterlogging,
+                ..
+            } => {
+                let kind = if *legacy {
+                    "minecraft:legacy_single_pool_element"
+                } else {
+                    "minecraft:single_pool_element"
+                };
+                let mut entries = vec![
+                    ("element_type", text(kind)),
+                    ("location", text(&template.location)),
+                    (
+                        "processors",
+                        super::processor::json_to_nbt(processors_source),
+                    ),
+                    ("projection", text(projection.saved_name())),
+                ];
+                if let Some(apply) = waterlogging {
+                    let settings = if *apply {
+                        "apply_waterlogging"
+                    } else {
+                        "ignore_waterlogging"
+                    };
+                    entries.push(("override_liquid_settings", text(settings)));
+                }
+                Tag::compound(entries)
+            }
+            Self::Feature {
+                feature,
+                projection,
+            } => Tag::compound([
+                ("element_type", text("minecraft:feature_pool_element")),
+                ("feature", text(feature)),
+                ("projection", text(projection.saved_name())),
+            ]),
+            Self::List {
+                elements,
+                projection,
+            } => Tag::compound([
+                ("element_type", text("minecraft:list_pool_element")),
+                (
+                    "elements",
+                    Tag::List(elements.iter().map(Self::save).collect()),
+                ),
+                ("projection", text(projection.saved_name())),
+            ]),
+        }
     }
     pub fn projection(&self) -> Projection {
         match self {
@@ -466,6 +538,9 @@ pub struct Junction {
     pub source_x: i32,
     pub source_ground_y: i32,
     pub source_z: i32,
+    /// Saved only (`JigsawJunction.deltaY`, `destProjection`).
+    pub delta_y: i32,
+    pub dest_projection: Projection,
 }
 #[derive(Debug)]
 pub struct PoolPiece {
@@ -517,6 +592,12 @@ impl PoolPiece {
                     source_x: int(j, "source_x")?,
                     source_ground_y: int(j, "source_ground_y")?,
                     source_z: int(j, "source_z")?,
+                    delta_y: int(j, "delta_y")?,
+                    dest_projection: match j["dest_proj"].as_str() {
+                        Some("rigid") => Projection::Rigid,
+                        Some("terrain_matching") => Projection::TerrainMatching,
+                        _ => return Err(DecodeError::Field("dest_proj")),
+                    },
                 })
             })
             .collect::<Result<_, DecodeError>>()?;
@@ -534,6 +615,45 @@ impl PoolPiece {
             junctions,
             waterlogging: v["liquid_settings"].as_str() != Some("ignore_waterlogging"),
         })
+    }
+    /// `PoolElementStructurePiece`'s tag (always genDepth 0, no orientation).
+    pub fn save(&self) -> Compound {
+        let mut tag = super::legacy::piece_tag("minecraft:jigsaw", self.bounding_box, None, 0);
+        let junctions = self
+            .junctions
+            .iter()
+            .map(|j| {
+                Tag::compound([
+                    ("source_x", Tag::Int(j.source_x)),
+                    ("source_ground_y", Tag::Int(j.source_ground_y)),
+                    ("source_z", Tag::Int(j.source_z)),
+                    ("delta_y", Tag::Int(j.delta_y)),
+                    (
+                        "dest_proj",
+                        Tag::String(j.dest_projection.saved_name().into()),
+                    ),
+                ])
+            })
+            .collect();
+        for (key, value) in [
+            ("PosX", Tag::Int(self.position[0])),
+            ("PosY", Tag::Int(self.position[1])),
+            ("PosZ", Tag::Int(self.position[2])),
+            ("ground_level_delta", Tag::Int(self.ground_level_delta)),
+            ("pool_element", self.element.save()),
+            ("rotation", Tag::String(self.rotation.saved_name().into())),
+            ("junctions", Tag::List(junctions)),
+        ] {
+            tag.insert(key.into(), value);
+        }
+        // LiquidSettings.APPLY_WATERLOGGING, the default, is not written.
+        if !self.waterlogging {
+            tag.insert(
+                "liquid_settings".into(),
+                Tag::String("ignore_waterlogging".into()),
+            );
+        }
+        tag
     }
     pub(super) fn moved(&mut self, dy: i32) {
         self.position[1] += dy;
@@ -1204,6 +1324,8 @@ impl Placer<'_, '_> {
                             source_x: target_pos[0],
                             source_ground_y: junction_y - local_y + source_ground,
                             source_z: target_pos[2],
+                            delta_y,
+                            dest_projection: target.projection(),
                         });
                         self.pieces.push(PoolPiece {
                             element: target.clone(),
@@ -1215,6 +1337,12 @@ impl Placer<'_, '_> {
                                 source_x: jigsaw.pos[0],
                                 source_ground_y: junction_y - target_local_y + target_ground,
                                 source_z: jigsaw.pos[2],
+                                delta_y: -delta_y,
+                                dest_projection: if source_rigid {
+                                    Projection::Rigid
+                                } else {
+                                    Projection::TerrainMatching
+                                },
                             }],
                             waterlogging: self.config.waterlogging,
                         });

@@ -685,7 +685,7 @@ fn holder_set(
     }
     Ok(Arc::new(out))
 }
-fn json_to_nbt(value: &Value) -> Tag {
+pub(super) fn json_to_nbt(value: &Value) -> Tag {
     match value {
         Value::Bool(b) => Tag::Byte(i8::from(*b)),
         Value::Number(n) => match n.as_i64() {

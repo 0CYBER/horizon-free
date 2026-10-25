@@ -294,6 +294,8 @@ mod tests {
                 source_x: junction[0],
                 source_ground_y: junction[1],
                 source_z: junction[2],
+                delta_y: 0,
+                dest_projection: Projection::Rigid,
             }],
             waterlogging: false,
         })
@@ -303,6 +305,7 @@ mod tests {
         Arc::new(PoolElement::Single {
             template: Arc::new(StructureTemplate::empty()),
             processors: Default::default(),
+            processors_source: serde_json::Value::Null,
             legacy: false,
             projection,
             waterlogging: None,

@@ -79,12 +79,31 @@ impl Rotation {
     pub fn get_rotated(self, other: Self) -> Self {
         Self::ALL[(self as usize + other as usize) % 4]
     }
+    /// `Rotation.name()`, as structure pieces save it.
+    pub fn saved_name(self) -> &'static str {
+        match self {
+            Self::None => "NONE",
+            Self::Clockwise90 => "CLOCKWISE_90",
+            Self::Clockwise180 => "CLOCKWISE_180",
+            Self::Counterclockwise90 => "COUNTERCLOCKWISE_90",
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Mirror {
     None,
     LeftRight,
     FrontBack,
+}
+impl Mirror {
+    /// `Mirror.name()`, as structure pieces save it.
+    pub fn saved_name(self) -> &'static str {
+        match self {
+            Self::None => "NONE",
+            Self::LeftRight => "LEFT_RIGHT",
+            Self::FrontBack => "FRONT_BACK",
+        }
+    }
 }
 
 /// Inclusive integer box (vanilla BoundingBox).
