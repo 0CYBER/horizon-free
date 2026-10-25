@@ -880,29 +880,21 @@ impl Game<'_> {
             return;
         }
         let c = self.crystals.remove(index);
-        if self.fight.respawn.is_some()
+        // Read before the blast, which can take other respawn crystals.
+        let respawn_crystal = self.fight.respawn.is_some()
             && self
                 .fight
                 .respawn_crystals
                 .iter()
-                .any(|p| p.distance_squared(c.position) < 0.01)
-        {
-            if damage == CrystalDamage::Direct {
-                let at = [c.position.x, c.position.y, c.position.z];
-                let _ = self.server_explode(
-                    at,
-                    6.0,
-                    super::explosion::BlockInteraction::Destroy,
-                    false,
-                );
-            }
-            self.abort_respawn();
-            return;
-        }
+                .any(|p| p.distance_squared(c.position) < 0.01);
         if damage == CrystalDamage::Direct {
             let at = [c.position.x, c.position.y, c.position.z];
             let _ =
                 self.server_explode(at, 6.0, super::explosion::BlockInteraction::Destroy, false);
+        }
+        if respawn_crystal {
+            self.abort_respawn();
+            return;
         }
         // EnderDragonFight.onCrystalDestroyed.
         self.count_crystals();
