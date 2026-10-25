@@ -67,17 +67,20 @@ class Failed(Exception):
     pass
 
 
-def game_env(screen):
+def game_env(screen, home=None):
+    """The environment of a game: lab.game_env with HORIZON_HOME `home` (a scratch folder when None), no live-count
+    ping, and on Linux the virtual screen `screen`."""
+    extra = {'HORIZON_TELEMETRY_URL': 'off'}  # no live-count ping from test games
+    if home is not None:
+        extra['HORIZON_HOME'] = home
     if sys.platform == 'darwin':
-        return dict(os.environ, HORIZON_NO_AUDIO='1', HORIZON_TELEMETRY_URL='off')
-    env = dict(os.environ, VSCREEN=screen)
+        return lab.game_env(**extra)
+    env = lab.game_env(VSCREEN=screen, **extra)
     subprocess.run(['vscreen', 'up'], env=env, check=False, capture_output=True)
     text = subprocess.run(['vscreen', 'env'], env=env, capture_output=True, text=True, check=True).stdout
     env.pop('DISPLAY', None)
     for match in re.finditer(r'(\w+)=(\S+)', text.split('unset')[0]):
         env[match.group(1)] = match.group(2)
-    env['HORIZON_NO_AUDIO'] = '1'
-    env['HORIZON_TELEMETRY_URL'] = 'off'  # no live-count ping from test games
     if LAVAPIPE.exists():
         env['VK_ICD_FILENAMES'] = str(LAVAPIPE)
     return env
@@ -632,7 +635,7 @@ def scratch(mode, resources):
     (work / '.local/horizon-client').mkdir()
     os.symlink(resources, work / '.local/horizon-client' / lab.VERSION)
     # horizon-ctl reads No AI in the game home: this one, not the player's.
-    env = dict(game_env(os.environ.get('VSCREEN', 'agent-control')), HORIZON_HOME=str(work))
+    env = game_env(os.environ.get('VSCREEN', 'agent-control'), home=work)
     return work, env
 
 

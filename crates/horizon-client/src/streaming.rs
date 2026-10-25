@@ -153,7 +153,6 @@ struct MeshSettings {
     blend_radius: i32,
     smooth_lighting: bool,
     cutout_leaves: bool,
-    cull_leaves: bool,
 }
 enum Job {
     Generate(i32, i32),
@@ -258,7 +257,6 @@ pub struct Streaming {
     /// The `ao` and `cutoutLeaves` options.
     pub smooth_lighting: bool,
     pub cutout_leaves: bool,
-    pub cull_leaves: bool,
     /// Incremental relighting of block edits on lit chunks (see `light::relight`).
     light_tables: Arc<LightTables>,
     /// Applied edits by sequence, replayed onto light jobs snapshotted before them.
@@ -500,14 +498,14 @@ impl Streaming {
                                         blend_radius: settings.blend_radius,
                                         smooth_lighting: settings.smooth_lighting,
                                         cutout_leaves: settings.cutout_leaves,
-                                        cull_leaves: settings.cull_leaves,
                                         assets: &context.assets,
                                         render: &context.render,
                                         tables: &context.tables,
                                         biomes: &context.biomes,
                                         visibility,
                                     };
-                                    let mesh = mesher.mesh(&borrow(&region), sy);
+                                    let mut mesh = mesher.mesh(&borrow(&region), sy);
+                                    mesh.sort_solid();
                                     faces = Some((context.tables.clone(), mesher.visibility));
                                     Done::Meshed(x, sy, z, mesh, seq)
                                 }
@@ -556,7 +554,6 @@ impl Streaming {
             biome_blend: 2,
             smooth_lighting: true,
             cutout_leaves: true,
-            cull_leaves: false,
             light_tables,
             light_log: Vec::new(),
             light_edit_sequence: 0,
@@ -641,7 +638,7 @@ impl Streaming {
         });
         self.shared.ready.notify_one();
     }
-    fn receive_decorated(&mut self, x: i32, z: i32, region: Box<[Proto; 9]>) {
+    fn receive_decorated(&mut self, x: i32, z: i32, region: [Proto; 9]) {
         self.generation_scan.exhausted = false;
         self.decorating -= 1;
         self.decorated.insert((x, z));
@@ -828,7 +825,7 @@ impl Streaming {
                         }
                     }
                 }
-                Done::Decorated(x, z, region) => self.receive_decorated(x, z, region),
+                Done::Decorated(x, z, region) => self.receive_decorated(x, z, *region),
                 Done::Generated(chunk) => self.receive_generated(chunk, world),
                 Done::Saved(protos) => self.receive_saved(protos),
                 Done::Lit(x, z, sections, seq) => {
@@ -1177,7 +1174,6 @@ impl Streaming {
                             blend_radius: self.biome_blend,
                             smooth_lighting: self.smooth_lighting,
                             cutout_leaves: self.cutout_leaves,
-                            cull_leaves: self.cull_leaves,
                         },
                     ),
                 );
@@ -1311,7 +1307,7 @@ impl Streaming {
         while self.decorating > 0 || !self.finishing.is_empty() || self.saving > 0 {
             let left = deadline.saturating_duration_since(std::time::Instant::now());
             match self.results.recv_timeout(left) {
-                Ok(Done::Decorated(x, z, region)) => self.receive_decorated(x, z, region),
+                Ok(Done::Decorated(x, z, region)) => self.receive_decorated(x, z, *region),
                 Ok(Done::Generated(chunk)) => self.receive_generated(chunk, world),
                 Ok(Done::Saved(protos)) => self.receive_saved(protos),
                 Ok(other) => self.deferred.push(other),
@@ -1339,7 +1335,7 @@ impl Streaming {
         let started = std::time::Instant::now();
         while let Ok(done) = self.results.try_recv() {
             match done {
-                Done::Decorated(x, z, region) => self.receive_decorated(x, z, region),
+                Done::Decorated(x, z, region) => self.receive_decorated(x, z, *region),
                 Done::Generated(chunk) => self.receive_generated(chunk, world),
                 Done::Saved(protos) => self.receive_saved(protos),
                 other => self.deferred.push(other),

@@ -120,7 +120,7 @@ class Server:
         self.process = subprocess.Popen([str(c) for c in command], cwd=directory, stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                         encoding='utf-8', errors='replace',
-                                        env=dict(os.environ, HORIZON_NO_AUDIO='1'))
+                                        env=lab.game_env())
         threading.Thread(target=self._read, daemon=True).start()
 
     def _read(self):

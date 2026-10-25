@@ -215,14 +215,15 @@ fn relit_columns_keep_every_mesh_current() {
             blend_radius: 2,
             smooth_lighting: true,
             cutout_leaves: true,
-            cull_leaves: false,
             assets: &context.assets,
             render: &context.render,
             tables: &context.tables,
             biomes: &context.biomes,
             visibility: context.tables.visibility.clone(),
         };
-        let fresh = mesher.mesh(&borrow(&region), sy);
+        // The workers sort solid quads by side, as uploads expect.
+        let mut fresh = mesher.mesh(&borrow(&region), sy);
+        fresh.sort_solid();
         let bytes = |m: &SectionMesh| {
             [
                 bytemuck::cast_slice::<_, u8>(&m.solid).to_vec(),
