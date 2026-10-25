@@ -7530,7 +7530,6 @@ impl Game<'_> {
             return Ok(());
         }
         self.join_world_rest()?;
-        let save_root = std::env::current_dir()?.join("saves").join(folder);
         if self
             .options
             .execution_role
