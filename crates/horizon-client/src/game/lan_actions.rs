@@ -1075,7 +1075,20 @@ impl Game<'_> {
             }
             S::ContainerClick(p) => {
                 let rules = ItemRules(self.res.items());
+                let slots = host.hub.guests[gi]
+                    .menu
+                    .as_ref()
+                    .filter(|m| m.window == p.container)
+                    .map(|m| m.slots);
+                let before = slots.and_then(|s| s.read(&self.world, &host.hub.guests[gi]));
                 let drops = host.hub.container_click(conn, &p, &mut self.world, &rules);
+                // A click that changed the container's slots: BlockEntity.setChanged,
+                // so comparators read it again (a double chest's other half follows).
+                if let Some(Slots::Block(key) | Slots::Double(key, _)) = slots
+                    && slots.and_then(|s| s.read(&self.world, &host.hub.guests[gi])) != before
+                {
+                    self.container_changed(key);
+                }
                 self.drop_guest_items(host, gi, drops);
             }
             S::ContainerClose(p) => {
