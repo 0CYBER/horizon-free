@@ -1753,7 +1753,9 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         state: BlockStateId,
         position: BlockPos,
     ) -> Result<()> {
-        if self.player.status.slow_falling {
+        // LivingEntity.aiStep: Slow Falling and Levitation reset the fall
+        // distance every tick, so landing under either does not hurt.
+        if self.player.status.slow_falling || self.player.status.levitation.is_some() {
             self.player.fall_distance = 0.0;
         }
         if self.player.spawn_extra_particles_on_fall && grounded && self.player.fall_distance > 0.0
