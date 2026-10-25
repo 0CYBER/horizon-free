@@ -11,6 +11,7 @@ use horizon_client::{
     hud::{HudBatch, rgba},
     items::ItemStack,
     stations::{self, AnvilResult, EnchantOffers},
+    text::Text,
 };
 use horizon_core::random::{LegacyRandom, RandomSource};
 
@@ -1164,15 +1165,15 @@ impl Game<'_> {
                 }
             }
             let default = self.translate("container.brewing", "Brewing Stand");
-            let title = self
-                .station
-                .as_ref()
-                .and_then(|s| self.world.block_names.get(&(s.pos[0], s.pos[1], s.pos[2])))
-                .cloned()
-                .or_else(|| self.remote_menu_title())
-                .unwrap_or(default);
-            let tw = HudBatch::text_width(atlas, &title);
-            batch.text(
+            let title = self.remote_menu_title().unwrap_or_else(|| {
+                let named = self
+                    .station
+                    .as_ref()
+                    .and_then(|s| self.world.block_names.get(&(s.pos[0], s.pos[1], s.pos[2])));
+                Text::literal(named.cloned().unwrap_or(default)).resolve_legacy()
+            });
+            let tw = atlas.font.width_text(&title);
+            batch.text_styled(
                 atlas,
                 &title,
                 ox + (176.0 - tw) / 2.0,
@@ -1199,7 +1200,10 @@ impl Game<'_> {
                 }
             }
         } else if let Some(kind) = self.station.as_ref().map(|s| s.kind) {
-            let title = self.translate(kind.title_key(), "");
+            // A server's menu has the title it was given.
+            let title = self
+                .remote_menu_title()
+                .unwrap_or_else(|| Text::literal(self.translate(kind.title_key(), "")));
             {
                 let atlas = &self.gui.atlas;
                 Self::part(
@@ -1211,7 +1215,7 @@ impl Game<'_> {
                     (ox, oy),
                 );
                 let (tx, ty) = kind.title_pos();
-                batch.text(atlas, &title, ox + tx, oy + ty, GREY, false);
+                batch.text_styled(atlas, &title, ox + tx, oy + ty, GREY, false);
                 batch.text(atlas, &inventory_label, ox + 8.0, oy + 72.0, GREY, false);
             }
             if kind == Kind::Cartography {

@@ -14,6 +14,8 @@ Checks:
           payload (the server's "Received custom click action" line), `wait_for_response` leaves the
           waiting screen, and `/dialog clear` closes a dialog (servers used to see nothing: the game
           dropped the packets).
+- titles: a chest named with styles (`CustomName`, as a plugin's menu is): its screen's title keeps
+          the colours and bold (it used to be flattened to plain grey).
 
 The game runs with fresh HORIZON_HOME, launcher and XDG folders and without audio. Screenshots and both
 logs go to --out.
@@ -126,7 +128,28 @@ def check_dialog(server, game, out):
     return shown
 
 
-CHECKS = {'dialog': check_dialog}
+def check_titles(server, game, out):
+    # AbstractContainerScreen draws the title the server sent, its styles included (#1645). A named
+    # chest is what a plugin's menu looks like: its CustomName is the open_screen title.
+    x, y, z = (int(v // 1) for v in game('state')['player']['position'])
+    chest = (x + 2, y, z)
+    name = [{'text': 'Server ', 'color': 'gold', 'bold': True}, {'text': 'Selector', 'color': 'aqua'}]
+    server.console(f'setblock {chest[0]} {chest[1]} {chest[2]} minecraft:chest{{CustomName:{snbt(name)}}}')
+    game.wait(10)
+    game.raw('interact', *chest)
+    game.raw('wait-for', 'screen', 'container', '--timeout', 30)
+    game.wait(5)
+    title = game('screen').get('title')
+    game.shot(out, 'titles')
+    game.raw('key', 'esc', 'tap')
+    # A list is its first component with the rest as its children: they inherit its bold.
+    want = [{'text': 'Server ', 'color': '#FFAA00', 'bold': True, 'italic': False},
+            {'text': 'Selector', 'color': '#55FFFF', 'bold': True, 'italic': False}]
+    assert title == want, title
+    return {'title': title}
+
+
+CHECKS = {'dialog': check_dialog, 'titles': check_titles}
 
 
 def run(bins, out, checks):
