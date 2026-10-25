@@ -250,6 +250,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - falling:   an item and a falling block the host summons high up fall smoothly on the guest, a
              little further every tick between the server's updates (every 20 ticks), as their own
              client tick moves them (they used to hang, then jump down once a second, #1568).
+- replant:   flowers and crops replanted after a short harvest click stay planted for both players;
+             the server forgets the completed instant break (#1880).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -6346,6 +6348,72 @@ def check_sprint_fov(host, guest, out):
 
 CHECKS += ['sprint-fov']
 CHECK_FNS['sprint-fov'] = check_sprint_fov
+
+
+def check_replant(host, guest, out):
+    """Instant breaks leave no server dig that can destroy a replacement (#1880).
+
+    ServerPlayerGameMode.handleBlockBreakAction's insta-mine branch finishes on
+    START; MultiPlayerGameMode sends no STOP or ABORT when attack is released.
+    Exercise actual flower placement and seed planting after a short click.
+    """
+    spots = apart(host, guest)
+    seen = {}
+    host('command', command='gamerule random_tick_speed 0')
+    try:
+        for label, player in (('host', host), ('guest', guest)):
+            x, y, z = spots[label]
+            cell = (x, y, z + 2)
+
+            def observe(block):
+                # The integrated host is itself a client: wait for both views.
+                for _ in range(40):
+                    blocks = [g.raw('block', *cell).get('block') for g in (host, guest)]
+                    if blocks == [f'minecraft:{block}'] * 2:
+                        return blocks
+                    host.wait(2)
+                raise AssertionError(f'{label} expected {block} on both clients: {blocks}')
+
+            for mode, block, item, soil in (
+                ('survival', 'dandelion', 'dandelion', 'dirt'),
+                ('survival', 'wheat', 'wheat_seeds', 'farmland[moisture=7]'),
+                ('survival', 'carrots', 'carrot', 'farmland[moisture=7]'),
+                ('creative', 'dandelion', 'dandelion', 'dirt'),
+            ):
+                player('command', command=f'gamemode {mode}')
+                player('command', command='clear @s')
+                player('command', command=f'item replace entity @s weapon.mainhand with minecraft:{item} 8')
+                player('command', command=f'setblock {x} {y - 1} {z + 2} minecraft:{soil}')
+                player('command', command=f'setblock {x} {y} {z + 2} minecraft:{block}')
+                player.wait(5)
+                observe(block)
+                # Flowers' narrow outlines have a position-dependent offset.
+                for dx in (0.0, -0.2, 0.2):
+                    player.raw('look-at', x + 0.5 + dx, y + (0.3 if block == 'dandelion' else 0.1), z + 2.5)
+                    target = player('looking_at').get('block') or {}
+                    if target.get('pos') == list(cell):
+                        break
+                assert target.get('pos') == list(cell), f'{label} does not aim at {block}: {target}'
+                player.raw('mouse', 'left', 'click')
+                player.wait(5)
+                observe('air')
+                # Keep aiming at the supporting soil and use the held flower/seeds.
+                player.raw('mouse', 'right', 'click')
+                player.wait(3)
+                observe(block)
+                player.wait(20)  # past the stale dig's five-tick destroy delay
+                key = f'{label} {mode} {block}'
+                seen[key] = [g.raw('block', *cell).get('block') for g in (host, guest)]
+                player.shot(out, f'replant-{mode}-{block}')
+                assert seen[key] == [f'minecraft:{block}'] * 2, f'{key}: {seen}'
+                player('command', command=f'setblock {x} {y} {z + 2} minecraft:air')
+    finally:
+        host('command', command='gamerule random_tick_speed 3')
+    return seen
+
+
+CHECKS += ['replant']
+CHECK_FNS['replant'] = check_replant
 
 
 if __name__ == '__main__':
