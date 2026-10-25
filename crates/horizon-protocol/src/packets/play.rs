@@ -1616,6 +1616,125 @@ impl Codec<Vec<(i32, i32, i32)>> for StatList {
     }
 }
 
+/// `ClientboundBossEventPacket` (`boss_event`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum BossAction {
+    Add {
+        name: Tag,
+        progress: f32,
+        /// `BossBarColor` ordinal.
+        color: i32,
+        /// `BossBarOverlay` ordinal.
+        overlay: i32,
+        darken: bool,
+        music: bool,
+        fog: bool,
+    },
+    Remove,
+    UpdateProgress {
+        progress: f32,
+    },
+    UpdateName {
+        name: Tag,
+    },
+    UpdateStyle {
+        color: i32,
+        overlay: i32,
+    },
+    UpdateProperties {
+        darken: bool,
+        music: bool,
+        fog: bool,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BossEvent {
+    pub id: u128,
+    pub action: BossAction,
+}
+fn boss_flags(darken: bool, music: bool, fog: bool) -> u8 {
+    u8::from(darken) | (u8::from(music) << 1) | (u8::from(fog) << 2)
+}
+fn split_flags(flags: u8) -> (bool, bool, bool) {
+    (flags & 1 != 0, flags & 2 != 0, flags & 4 != 0)
+}
+impl Codec<BossEvent> for BossEvent {
+    fn read(r: &mut Reader) -> Result<BossEvent> {
+        let id = r.uuid()?;
+        let action = match r.varint()? {
+            0 => {
+                let name = r.nbt()?;
+                let progress = r.f32()?;
+                let color = r.varint()?;
+                let overlay = r.varint()?;
+                let (darken, music, fog) = split_flags(r.u8()?);
+                BossAction::Add {
+                    name,
+                    progress,
+                    color,
+                    overlay,
+                    darken,
+                    music,
+                    fog,
+                }
+            }
+            1 => BossAction::Remove,
+            2 => BossAction::UpdateProgress { progress: r.f32()? },
+            3 => BossAction::UpdateName { name: r.nbt()? },
+            4 => BossAction::UpdateStyle {
+                color: r.varint()?,
+                overlay: r.varint()?,
+            },
+            5 => {
+                let (darken, music, fog) = split_flags(r.u8()?);
+                BossAction::UpdateProperties { darken, music, fog }
+            }
+            op => return Err(Error::new(format!("unknown boss event operation {op}"))),
+        };
+        Ok(BossEvent { id, action })
+    }
+    fn write(v: &BossEvent, w: &mut Writer) {
+        w.uuid(v.id);
+        match &v.action {
+            BossAction::Add {
+                name,
+                progress,
+                color,
+                overlay,
+                darken,
+                music,
+                fog,
+            } => {
+                w.varint(0);
+                w.nbt(name);
+                w.f32(*progress);
+                w.varint(*color);
+                w.varint(*overlay);
+                w.u8(boss_flags(*darken, *music, *fog));
+            }
+            BossAction::Remove => w.varint(1),
+            BossAction::UpdateProgress { progress } => {
+                w.varint(2);
+                w.f32(*progress);
+            }
+            BossAction::UpdateName { name } => {
+                w.varint(3);
+                w.nbt(name);
+            }
+            BossAction::UpdateStyle { color, overlay } => {
+                w.varint(4);
+                w.varint(*color);
+                w.varint(*overlay);
+            }
+            BossAction::UpdateProperties { darken, music, fog } => {
+                w.varint(5);
+                w.u8(boss_flags(*darken, *music, *fog));
+            }
+        }
+    }
+}
+
 packet_enum!(Clientbound, crate::ids::play::clientbound {
     BundleDelimiter(Empty) = BUNDLE_DELIMITER,
     AddEntity(AddEntity) = ADD_ENTITY,
@@ -1626,6 +1745,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     BlockEntityData(BlockEntityData) = BLOCK_ENTITY_DATA,
     BlockEvent(BlockEvent) = BLOCK_EVENT,
     BlockUpdate(BlockUpdate) = BLOCK_UPDATE,
+    BossEvent(BossEvent) = BOSS_EVENT,
     ChangeDifficulty(ChangeDifficulty) = CHANGE_DIFFICULTY,
     ChunkBatchFinished(ChunkBatchFinished) = CHUNK_BATCH_FINISHED,
     ChunkBatchStart(Empty) = CHUNK_BATCH_START,
@@ -2798,10 +2918,11 @@ mod tests {
 
     #[test]
     fn unknown_packets_keep_their_payload() {
-        let p = Clientbound::decode(crate::ids::play::clientbound::BOSS_EVENT, &[1, 2, 3]).unwrap();
+        let p =
+            Clientbound::decode(crate::ids::play::clientbound::PLAYER_LOOK_AT, &[1, 2, 3]).unwrap();
         assert_eq!(
             p,
-            Clientbound::Unknown(crate::ids::play::clientbound::BOSS_EVENT, vec![1, 2, 3])
+            Clientbound::Unknown(crate::ids::play::clientbound::PLAYER_LOOK_AT, vec![1, 2, 3])
         );
         assert_eq!(p.encode()[1..], [1, 2, 3]);
     }
@@ -2897,5 +3018,42 @@ mod tests {
         let mut w = Writer::new();
         w.varint(101);
         assert!(BookPages::read(&mut Reader::new(&w.data)).is_err());
+    }
+    #[test]
+    fn boss_event_round_trips() {
+        let add = Clientbound::BossEvent(BossEvent {
+            id: 0x0123_4567_89ab_cdef_fedc_ba98_7654_3210,
+            action: BossAction::Add {
+                name: Tag::String("Wither".into()),
+                progress: 0.5,
+                color: 5,
+                overlay: 0,
+                darken: true,
+                music: false,
+                fog: true,
+            },
+        });
+        let body = add.encode();
+        // Packet id 9, then the uuid, operation 0, and the property byte
+        // (darken 1, fog 4).
+        assert_eq!(body[0], 9);
+        assert_eq!(*body.last().unwrap(), 5);
+        round_trip(add, Clientbound::encode, Clientbound::decode);
+        round_trip(
+            Clientbound::BossEvent(BossEvent {
+                id: 7,
+                action: BossAction::UpdateProgress { progress: 0.25 },
+            }),
+            Clientbound::encode,
+            Clientbound::decode,
+        );
+        round_trip(
+            Clientbound::BossEvent(BossEvent {
+                id: 7,
+                action: BossAction::Remove,
+            }),
+            Clientbound::encode,
+            Clientbound::decode,
+        );
     }
 }
