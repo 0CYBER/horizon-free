@@ -1906,10 +1906,14 @@ impl Game<'_> {
                 }
                 // LivingEntity.DATA_LIVING_ENTITY_FLAGS: for another player
                 // too, remote_mob_data's apply reads index 8 above.
-                let other = self
-                    .remote
-                    .as_ref()
-                    .is_some_and(|r| r.level_players.contains_key(&p.id) && r.entity_id != p.id);
+                let mannequin = self
+                    .mobs
+                    .iter()
+                    .any(|m| m.id == p.id as u32 && &*m.kind.id == "minecraft:mannequin");
+                let other = mannequin
+                    || self.remote.as_ref().is_some_and(|r| {
+                        r.level_players.contains_key(&p.id) && r.entity_id != p.id
+                    });
                 // LivingEntity.onSyncedDataUpdated(SLEEPING_POS_ID): another
                 // player lies down in their bed (drawn lying in it), or gets up.
                 if other {
@@ -1960,11 +1964,13 @@ impl Game<'_> {
                     }
                 }
                 // Entity.DATA_SHARED_FLAGS_ID's crouching bit: another
-                // player's crouch (their model and Entity.isDiscrete's name tag).
-                if self
-                    .remote
-                    .as_ref()
-                    .is_some_and(|r| r.level_players.contains_key(&p.id))
+                // player's or a mannequin's crouch (their model and
+                // Entity.isDiscrete's name tag).
+                if (mannequin
+                    || self
+                        .remote
+                        .as_ref()
+                        .is_some_and(|r| r.level_players.contains_key(&p.id)))
                     && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
                 {
                     for (index, _, value) in &p.values {
@@ -2780,6 +2786,53 @@ impl Game<'_> {
             && let Some(mob) = self.player_model.as_mut()
         {
             mob.skin = Some(skin);
+        }
+        // ClientMannequin.updateSkin (PlayerSkinRenderCache.lookup): a
+        // mannequin's DATA_PROFILE `textures` property resolves like a
+        // player's, never required to be signed.
+        let mannequins: Vec<(u32, horizon_client::skins::Textures)> = self
+            .mobs
+            .iter()
+            .filter(|m| &*m.kind.id == "minecraft:mannequin" && m.profile.is_some())
+            .map(|m| {
+                let t = m
+                    .profile
+                    .as_ref()
+                    .and_then(|p| p.properties.iter().find(|p| p.name == "textures"));
+                let textures = t.map_or_else(Default::default, |t| {
+                    let signature = if t.signature.is_some() {
+                        horizon_client::skins::Signature::Signed
+                    } else {
+                        horizon_client::skins::Signature::Unsigned
+                    };
+                    horizon_client::skins::unpack(
+                        &t.value,
+                        signature,
+                        &horizon_client::skins::TEXTURE_URIS,
+                    )
+                });
+                (m.id, textures)
+            })
+            .collect();
+        let mut resolved: Vec<(u32, Option<String>)> = Vec::new();
+        for (id, textures) in mannequins {
+            let skin = {
+                let mut downloads = self.skin_downloads.borrow_mut();
+                horizon_client::skins::lookup(&textures, false, |kind, url| {
+                    downloads.state(kind, url)
+                })
+            };
+            resolved.push((id, skin));
+        }
+        for (id, skin) in resolved {
+            let skin = skin.filter(|s| !s.starts_with("skins/") || self.show_skin(s));
+            if let Some(mob) = self
+                .mobs
+                .iter_mut()
+                .find(|m| m.id == id && &*m.kind.id == "minecraft:mannequin")
+            {
+                mob.skin = skin;
+            }
         }
     }
     /// Puts a downloaded skin in an atlas skin slot: a free one, else the
