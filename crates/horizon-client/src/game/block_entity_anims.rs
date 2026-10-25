@@ -171,6 +171,11 @@ impl Game<'_> {
     /// client tick (`ClientLevel.tickBlockEntities`).
     pub(super) fn tick_block_entity_anims(&mut self) {
         let Some(r) = &self.renderer else {
+            // A server has no window, but its gateways still run their
+            // server ticker.
+            if self.remote.is_none() {
+                self.tick_gateway_servers();
+            }
             return;
         };
         // Sorted by position: the order they tick in, and a quick lookup.
@@ -329,6 +334,31 @@ impl Game<'_> {
             }
         }
         self.be_anims.present = positions;
+    }
+    /// `TheEndGatewayBlockEntity.portalTick` (the server ticker) of the
+    /// gateways a server keeps a copy of, in block-ticking chunks
+    /// (`Level.tickBlockEntities`): the cooldown an entry started runs out,
+    /// and every 2400 ticks `triggerCooldown` sends its block event.
+    fn tick_gateway_servers(&mut self) {
+        let levels = self.tickets.levels();
+        let mut positions: Vec<[i32; 3]> = self
+            .be_anims
+            .gateway_servers
+            .keys()
+            .copied()
+            .filter(|p| levels.block_ticking_at(p[0], p[2]))
+            .collect();
+        positions.sort_unstable();
+        for pos in positions {
+            let triggered = self
+                .be_anims
+                .gateway_servers
+                .get_mut(&pos)
+                .is_some_and(EndGateway::portal_tick);
+            if triggered {
+                self.block_entity_event(pos, 1, 0);
+            }
+        }
     }
     /// `EndGatewayBlock.entityInside` on the server: whether the gateway at
     /// `pos` let the entity in (`triggerCooldown`, with its block event).
