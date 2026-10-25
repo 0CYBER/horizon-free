@@ -240,6 +240,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - villagers: the guest sees each villager's and zombie villager's type, profession and level as the
              host has them, and an unemployed villager that takes a composter becomes a farmer on
              the guest too (the guest used to draw every villager as an unemployed plains one).
+- hero-trading: the host and the guest each trade 20 wheat for an emerald, paying 14 with Hero I
+              and 12 with Hero III; clearing the effect restores the ordinary price (#1365).
 - falling:   an item and a falling block the host summons high up fall smoothly on the guest, a
              little further every tick between the server's updates (every 20 ticks), as their own
              client tick moves them (they used to hang, then jump down once a second, #1568).
@@ -5525,6 +5527,76 @@ def check_knockback(host, guest, out):
 
 CHECKS += ['knockback']
 CHECK_FNS.update(knockback=check_knockback)
+
+
+def check_hero_trading(host, guest, out):
+    """Villager.updateSpecialPrices keeps the trading player's Hero effect: the offer sent to the
+    client and the server's payment consumption agree, independently of the other player's effect."""
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    tag = 'hero_trade'
+    seen = {}
+    cases = [('ordinary', None, 20), ('hero-i', 0, 14), ('hero-iii', 2, 12), ('cleared', None, 20)]
+    try:
+        host('command', command=f'fill {x - 4} {y - 1} {z - 2} {x + 4} {y - 1} {z + 2} minecraft:stone')
+        host('command', command=f'fill {x - 4} {y} {z - 2} {x + 4} {y + 3} {z + 2} minecraft:air')
+        for game, other in ((host, guest), (guest, host)):
+            back_to_game(game)
+            back_to_game(other)
+            other('command', command='effect clear @s')
+            other('command', command='effect give @s minecraft:hero_of_the_village 600 4 true')
+            other('command', command=f'tp @s {x - 3.5} {y} {z + 0.5}')
+            game('command', command='gamemode survival')
+            game('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+            for label, amplifier, price in cases:
+                game('command', command='effect clear @s')
+                if amplifier is not None:
+                    game('command', command=f'effect give @s minecraft:hero_of_the_village 600 {amplifier} true')
+                game('command', command='clear @s')
+                game('command', command='give @s minecraft:wheat 20')
+                # A fresh, fixed offer avoids reputation, demand and level-ups between cases.
+                host('command', command=f'summon minecraft:villager {x + 2.5} {y} {z + 0.5} {{Tags:["{tag}"],'
+                     'NoAI:1b,PersistenceRequired:1b,Xp:1,VillagerData:{type:"minecraft:plains",'
+                     'profession:"minecraft:farmer",level:1},Offers:{Recipes:[{buy:{id:"minecraft:wheat",count:20},'
+                     'sell:{id:"minecraft:emerald",count:1},maxUses:16,uses:0,xp:0,priceMultiplier:0f,demand:0}]}}')
+                game.wait(20)
+                villager = next(e['id'] for e in game.raw('entities', 8, 'minecraft:villager')['entities']
+                                if math.dist(e['pos'], [x + 2.5, y, z + 0.5]) < 0.5)
+                game.raw('interact-entity', villager)
+                game.raw('wait-for', 'screen', 'station', '--timeout', 10)
+                assert game('screen')['station'] == 'Merchant', f'{game.name}-{label}: no merchant screen'
+                # The first offer button is 50 pixels left of the usual menu origin. Selecting it
+                # sends SelectTrade on a client; taking the result uses the authoritative menu.
+                game.raw('click-gui', -1, 28)
+                game.wait(10)
+                assert station_slots(game).get(650) == ('minecraft:emerald', 1), f'{game.name}-{label}: no result'
+                game.shot(out, f'hero-trading-{label}')
+                game.raw('click-slot', 650, 'shift')
+                game.wait(10)
+                game.raw('key', 'esc', 'tap')
+                game.wait(10)
+                offer = server_reply(game, f'data get entity @e[type=minecraft:villager,tag={tag},limit=1] '
+                                     'Offers.Recipes[0]', 'following entity data')
+                special = re.search(r'specialPrice"?\s*:\s*(-?\d+)', offer)
+                case = {'price': 20 + (int(special[1]) if special else 0),
+                        'server': {item: server_count(game, item) for item in ('wheat', 'emerald')},
+                        'hero': 'hero_of_the_village' in effect_ids(game)}
+                seen[f'{game.name}-{label}'] = case
+                want = {'price': price, 'server': {'wheat': 20 - price, 'emerald': 1},
+                        'hero': amplifier is not None}
+                assert case == want, f'{game.name}-{label}: expected {want}, got {case}'
+                host('command', command=f'kill @e[tag={tag}]')
+                game.wait(5)
+    finally:
+        for game in (host, guest):
+            back_to_game(game)
+            game('command', command='effect clear @s')
+            game('command', command='clear @s')
+        host('command', command=f'kill @e[tag={tag}]')
+    return seen
+
+
+CHECKS += ['hero-trading']
+CHECK_FNS.update({'hero-trading': check_hero_trading})
 
 
 def check_spectator_travel(host, guest, out):
