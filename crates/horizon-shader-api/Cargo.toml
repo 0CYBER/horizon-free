@@ -7,9 +7,13 @@ rust-version = "1.85"
 description = "Horizon's own shader packs (WGSL, docs/api/shaders.md): horizon-shaders.toml, the .hshader package"
 
 [dependencies]
+bytemuck = { version = "1.24", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 toml = "1.1.6"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+naga = { version = "30.0.1", features = ["wgsl-in"] }
 
 [lints]
 workspace = true

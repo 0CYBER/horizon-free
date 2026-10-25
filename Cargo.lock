@@ -1441,6 +1441,8 @@ dependencies = [
 name = "horizon-shader-api"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
+ "naga",
  "serde",
  "toml",
  "zip",
