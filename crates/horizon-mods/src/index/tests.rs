@@ -151,7 +151,10 @@ fn resource_packs_need_a_pack_mcmeta() {
         path
     };
     let meta = r#"{"pack": {"description": "Look", "min_format": 75, "max_format": 75}}"#;
-    assert_eq!(check_resource_pack(&pack(&[("pack.mcmeta", meta)])), Ok(()));
+    assert_eq!(
+        check_resource_pack(&pack(&[("pack.mcmeta", meta)])),
+        Ok("75".into())
+    );
     let e = check_resource_pack(&pack(&[("assets/x.png", "")])).unwrap_err();
     assert!(e.contains("missing"), "{e}");
     let e = check_resource_pack(&pack(&[("pack.mcmeta", "{}")])).unwrap_err();
