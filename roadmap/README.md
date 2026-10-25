@@ -50,8 +50,30 @@ Whoever moves the work (the orchestrator on each heartbeat, or anyone in their p
    item, updates their colour (by status) and description, and adds the label to the open pull requests an item
    links. Label a new pull request for an item by hand or by linking it and running `labels` again. Labels of
    removed items are listed, never deleted.
-5. Suggestions from the website and Discord are read and triaged by the maintainers. A good one becomes an
+5. Once a week, write the week's summary in `roadmap/journal/<year>-<ISO week>.md` (for example
+   `2026-43.md`): `# Title`, a paragraph or two for players, then `## Technical` and the same week for
+   contributors, with its pull requests. `build` puts it into website/data/roadmap.json; the hub's Journal tab
+   shows it among the releases, and `/hub/journal.json` carries it to Kira's #updates and to posts elsewhere.
+6. Suggestions from the website and Discord are read and triaged by the maintainers. A good one becomes an
    item in a normal pull request; none is published automatically.
 
 CI runs `tests/test_roadmap.py` (in the Python tests), which fails when ROADMAP.md is not what `build` writes
 or when the file breaks a rule; `python3 tools/roadmap.py check --offline` runs the same rules without GitHub.
+
+## The journal
+
+The hub's Journal tab and `https://playhorizon.dev/hub/journal.json` are built with each deploy of the website
+(`website/src/hub.js`, `journalFrom`): every game and launcher release with its notes' changes, each placed under
+the roadmap item it moves (the pull request's `roadmap:<id>` label, else the item that links it); the merged pull
+requests no release has yet; and the weekly summaries above. Its JSON, newest first:
+
+```json
+{ "format": "horizon-journal", "version": 1, "generated": "…", "url": "https://playhorizon.dev/hub#journal",
+  "entries": [ { "id": "v0.2.57", "kind": "release | launcher | merged | week", "date": "…", "title": "…",
+                 "plain": "one line for players", "url": "…", "dev": "weeks only",
+                 "changes": [ { "section": "new | fixed | merged", "text": "…", "prs": [1787], "item": "discord-presence" } ],
+                 "items": [ { "id", "title", "plain", "post" } ],      // roadmap items the entry moved
+                 "shipped": [ { "id", "title", "plain", "post" } ] } ] } // items that shipped in this release
+```
+
+`post` is at most 240 characters, ready to announce as is. Readers should remember the ids they have posted.

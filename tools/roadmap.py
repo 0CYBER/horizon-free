@@ -30,6 +30,9 @@ SOURCE = ROOT / "roadmap" / "roadmap.toml"
 OUTPUT = ROOT / "ROADMAP.md"
 # What the website's hub reads (website/build.mjs), and serves at /data/roadmap.json for Kira and others.
 SITE_DATA = ROOT / "website" / "data" / "roadmap.json"
+# The journal's weekly summaries, one file per ISO week: roadmap/journal/2026-43.md (roadmap/README.md).
+JOURNAL = ROOT / "roadmap" / "journal"
+WEEK = re.compile(r"(\d{4})-(\d{2})\.md$")
 REPO = "ludovic111/horizon"
 SITE = "https://playhorizon.dev/hub"
 
@@ -153,6 +156,7 @@ def validate(data, root=ROOT):
                 continue
             if link.startswith(("/", "http:")) or ".." in link or not (root / link).exists():
                 problems.append(f"{where}: link {link!r} is neither #N, https:// nor a path in the repository")
+    problems += weeks()[1] if root == ROOT else []
     focus = sum(1 for item in items if item.get("focus"))
     low, high = FOCUS_RANGE
     if not low <= focus <= high:
@@ -234,6 +238,25 @@ def render(data):
     return "\n".join(out) + "\n"
 
 
+def weeks(directory=JOURNAL):
+    """The weekly summaries, newest first: {"week", "date" (its Monday), "title", "plain", "dev"}, and problems."""
+    entries, problems = [], []
+    for path in sorted(directory.glob("*.md"), reverse=True) if directory.exists() else []:
+        name = WEEK.match(path.name)
+        text = path.read_text()
+        parts = re.match(r"# (.+)\n\n(.+?)\n\n## Technical\n\n(.+)", text.strip() + "\n", re.S)
+        if not name or not 1 <= int(name[2]) <= 53:
+            problems.append(f"journal/{path.name}: name it by its ISO week, like 2026-43.md")
+            continue
+        if not parts:
+            problems.append(f"journal/{path.name}: needs '# Title', the plain text, then '## Technical' and its text")
+            continue
+        monday = datetime.date.fromisocalendar(int(name[1]), int(name[2]), 1)
+        entries.append({"week": path.stem, "date": monday.isoformat(), "title": parts[1].strip(),
+                        "plain": " ".join(parts[2].split()), "dev": " ".join(parts[3].split())})
+    return entries, problems
+
+
 def site_data(data):
     """website/data/roadmap.json: the items as the hub and Kira read them, in the file's order."""
     keys = ("id", "title", "status", "area", "plain", "dev", "links", "focus", "ongoing", "shipped_in", "post",
@@ -247,6 +270,7 @@ def site_data(data):
         "areas": [{"id": key, "name": name} for key, name in areas_in_order(data)],
         "items": [{key: (" ".join(item[key].split()) if isinstance(item[key], str) else item[key])
                    for key in keys if key in item} for item in data.get("item", [])],
+        "journal": weeks()[0],
     }
     return json.dumps(out, indent=1, ensure_ascii=False) + "\n"
 
