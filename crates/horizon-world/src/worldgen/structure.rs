@@ -347,14 +347,16 @@ impl StructureResources {
                 .read_to_end(&mut raw)
                 .ok()?;
             let tag = nbt::read_named(&raw, Limits::templates()).ok()?.0.tag;
-            Some(Arc::new(StructureTemplate::from_nbt(
+            Some(StructureTemplate::from_nbt(
                 &tag,
                 self.registry,
                 &self.transforms,
-            )))
+            ))
         });
         // StructureTemplateManager.getOrCreate: missing templates are empty.
-        let loaded = loaded.or_else(|| Some(Arc::new(StructureTemplate::empty())));
+        let mut loaded = loaded.unwrap_or_else(StructureTemplate::empty);
+        loaded.location = id.as_str().into();
+        let loaded = Some(Arc::new(loaded));
         self.templates.write().unwrap().insert(id, loaded.clone());
         loaded
     }

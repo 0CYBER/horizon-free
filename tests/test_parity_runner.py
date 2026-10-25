@@ -283,3 +283,20 @@ class OracleReuseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LargeOutputTests(unittest.TestCase):
+    def test_a_pass_clears_only_its_own_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            local, state = Path(tmp) / ".local", Path(tmp) / "state"
+            own, shared = local / "decorated-region-parity", local / "chunk-generation-parity"
+            for directory in (own, shared):
+                directory.mkdir(parents=True)
+                (directory / "dump.txt").write_bytes(b"x" * 16)
+            trace = {"commands": [["java", "-d", str(shared / "classes")], ["probe", str(own / "dump.txt")]]}
+            with mock.patch.multiple(parity, LOCAL=local, STATE_DIR=state, LARGE_OUTPUT=8):
+                parity.outputs_listing("decorated_region", fresh=True)
+                parity.clear_large_outputs("decorated_region", trace)
+            self.assertFalse((own / "dump.txt").exists())
+            # chunk_generation may still be writing there.
+            self.assertTrue((shared / "dump.txt").exists())
