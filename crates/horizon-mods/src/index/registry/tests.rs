@@ -155,7 +155,10 @@ fn lists_every_problem_of_a_registry() {
     );
     assert!(has("coords_hud 0.1.0: the project has a key"), "{errors:?}");
     // A shader entry is taken now, and checked like the others.
-    assert!(has("glow 1.0.0: the file isn't the one its sha256 names"), "{errors:?}");
+    assert!(
+        has("glow 1.0.0: the file isn't the one its sha256 names"),
+        "{errors:?}"
+    );
     assert!(
         has("other 0.1.0: the file's id is \"coords_hud\""),
         "{errors:?}"
