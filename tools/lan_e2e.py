@@ -139,6 +139,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              server's game time after the guest's game stalls for a few seconds (#848).
 - growth:    far from the host, the chunks around the guest tick (#890): water placed there flows
              and wheat on farmland grows (random ticks), however the host runs its world.
+- farmland:  the host and guest each trample planted farmland: the wheat breaks and drops its items,
+             and both clients see dirt/air (#1492).
 - ladder:    the guest climbs down ten blocks of ladder and lands unhurt: the server resets its fall
              distance on a ladder every tick, as LivingEntity.handleOnClimbable does (#1255).
 - boats:     the host (single player, on its server thread or not) and the guest each right-click a
@@ -5626,6 +5628,73 @@ def check_villagers(host, guest, out):
 
 CHECKS += ['villagers']
 CHECK_FNS.update(villagers=check_villagers)
+
+
+def check_farmland(host, guest, out):
+    """FarmlandBlock.fallOn's base-block change breaks the unsupported crop (#1492):
+    the host and guest each land on mature wheat, get its drops, and both clients see dirt/air."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    y = max(hy + 12, 100)
+    starts = {g.name: pos_of(g) for g in (host, guest)}
+    seen = {}
+    host('command', command='gamerule random_tick_speed 0')
+    try:
+        for game, other, dz in ((host, guest, -3), (guest, host, 3)):
+            x, z = hx + 2, hz + dz
+            soil, crop, marker = (x, y, z), (x, y + 1, z), (x + 4, y + 1, z)
+            for g in (game, other):
+                g('command', command='gamemode creative')
+            host('command', command=f'fill {x - 4} {y} {z - 2} {x + 4} {y} {z + 2} minecraft:stone')
+            host('command', command=f'fill {x - 4} {y + 1} {z - 2} {x + 4} {y + 7} {z + 2} minecraft:air')
+            host('command', command=f'setblock {x} {y} {z} minecraft:farmland[moisture=7]')
+            host('command', command=f'setblock {x} {y + 1} {z} minecraft:wheat[age=7]')
+            other('command', command=f'tp @s {x + 3.5} {y + 1} {z + 0.5}')
+            game('command', command=f'tp @s {x + 2.5} {y + 1} {z + 0.5}')
+            game('command', command='clear @s')
+            game('command', command='gamemode survival')
+            game.wait(20)
+            before = {g.name: [g.raw('block', *p).get('block') for p in (soil, crop)]
+                      for g in (host, guest)}
+            assert all(v == ['minecraft:farmland', 'minecraft:wheat'] for v in before.values()), \
+                f'{game.name}: planted wheat missing before landing: {before}'
+            other.raw('look-at', x + 0.5, y + 1, z + 0.5)
+            other.shot(out, f'farmland-{game.name}-before')
+            # More than 1.5 blocks of fall distance guarantees the trampling random check.
+            game('command', command=f'tp @s {x + 0.5} {y + 6} {z + 0.5}')
+            game.wait(80)
+            after = {g.name: [g.raw('block', *p).get('block') for p in (soil, crop)]
+                     for g in (host, guest)}
+            # Test the authoritative blocks too, rather than only each client's view.
+            game('command', command=f'execute if block {x} {y} {z} minecraft:dirt '
+                                    f'if block {x} {y + 1} {z} minecraft:air run '
+                                    f'setblock {marker[0]} {marker[1]} {marker[2]} minecraft:gold_block')
+            game.wait(10)
+            counts = {item: server_count(game, item) for item in ('wheat', 'wheat_seeds')}
+            client_counts = game('inventory')['counts']
+            seen[game.name] = {'blocks': after, 'server': game.raw('block', *marker).get('block'),
+                               'drops': counts,
+                               'client_drops': {item: client_counts.get('minecraft:' + item, 0)
+                                                for item in counts}}
+            other.shot(out, f'farmland-{game.name}-after')
+    finally:
+        host('command', command='gamerule random_tick_speed 3')
+        host('command', command='kill @e[type=minecraft:item]')
+        for g in (host, guest):
+            x0, y0, z0 = starts[g.name]
+            g('command', command=f'tp @s {x0} {y0} {z0}')
+            g('command', command='gamemode survival')
+    for name, s in seen.items():
+        assert all(v == ['minecraft:dirt', 'minecraft:air'] for v in s['blocks'].values()), \
+            f'{name}: unsupported wheat after landing: {seen}'
+        assert s['server'] == 'minecraft:gold_block', f'{name}: server kept the unsupported wheat: {seen}'
+        assert s['drops']['wheat'] == 1 and 1 <= s['drops']['wheat_seeds'] <= 4, \
+            f'{name}: mature wheat drops missing: {seen}'
+        assert s['client_drops'] == s['drops'], f'{name}: crop drops did not synchronize: {seen}'
+    return seen
+
+
+CHECKS += ['farmland']
+CHECK_FNS.update(farmland=check_farmland)
 
 
 def check_large_chest(host, guest, out):
