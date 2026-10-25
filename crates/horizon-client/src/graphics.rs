@@ -98,19 +98,27 @@ impl PresentMode {
 /// macOS). Applies at the next start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum GraphicsApi {
-    /// Vulkan, and DirectX 12 when Vulkan has no adapter or device.
+    /// Vulkan, then DirectX 12 (Windows), then OpenGL when neither has a surface, adapter or device.
     #[default]
     Auto,
     Vulkan,
     Dx12,
+    /// OpenGL, for GPUs with no Vulkan or DirectX 12 driver (Windows and Linux).
+    OpenGl,
 }
 impl GraphicsApi {
-    pub const ALL: [GraphicsApi; 3] = [GraphicsApi::Auto, GraphicsApi::Vulkan, GraphicsApi::Dx12];
+    pub const ALL: [GraphicsApi; 4] = [
+        GraphicsApi::Auto,
+        GraphicsApi::Vulkan,
+        GraphicsApi::Dx12,
+        GraphicsApi::OpenGl,
+    ];
     pub fn name(self) -> &'static str {
         match self {
             GraphicsApi::Auto => "auto",
             GraphicsApi::Vulkan => "vulkan",
             GraphicsApi::Dx12 => "dx12",
+            GraphicsApi::OpenGl => "opengl",
         }
     }
     pub fn label(self) -> &'static str {
@@ -118,6 +126,7 @@ impl GraphicsApi {
             GraphicsApi::Auto => "Auto",
             GraphicsApi::Vulkan => "Vulkan",
             GraphicsApi::Dx12 => "DirectX 12",
+            GraphicsApi::OpenGl => "OpenGL",
         }
     }
     /// The API a name stands for, ignoring case; `None` for anything else.
@@ -126,7 +135,7 @@ impl GraphicsApi {
             .into_iter()
             .find(|api| api.name().eq_ignore_ascii_case(s.trim()))
     }
-    /// `HORIZON_GRAPHICS_API` (auto, vulkan or dx12) if set, else the setting.
+    /// `HORIZON_GRAPHICS_API` (auto, vulkan, dx12 or opengl) if set, else the setting.
     pub fn with_env(self) -> Self {
         std::env::var("HORIZON_GRAPHICS_API")
             .ok()
