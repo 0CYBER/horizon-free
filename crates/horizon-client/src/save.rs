@@ -1913,7 +1913,8 @@ pub fn write_dat(path: &Path, tag: Tag) -> Result<()> {
             Some(stem) => path.with_file_name(format!("{stem}.dat_old")),
             None => path.with_file_name(format!("{file}_old")),
         };
-        let _ = fs::rename(path, old);
+        // Util.safeReplaceFile: no backup, no replacement.
+        fs::rename(path, old).map_err(|e| format!("{}: {e}", path.display()))?;
     }
     fs::rename(temporary, path)?;
     Ok(())
