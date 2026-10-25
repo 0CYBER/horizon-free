@@ -144,18 +144,8 @@ impl Game<'_> {
             return;
         }
         let range = self.reach() + 4.0;
-        let near = self.container_parts().iter().all(|((x, y, z), _)| {
-            let d = [*x, *y, *z]
-                .iter()
-                .zip(eye)
-                .map(|(&lo, e)| {
-                    (f64::from(lo) - e)
-                        .max(e - f64::from(lo) - 1.0)
-                        .max(0.0)
-                        .powi(2)
-                })
-                .sum::<f64>();
-            d < range * range
+        let near = self.container_parts().iter().all(|&((x, y, z), _)| {
+            horizon_client::lan::guest::within_block_range(eye, range, [x, y, z])
         });
         if !near {
             self.close_container();
