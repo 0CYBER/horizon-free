@@ -4251,7 +4251,7 @@ impl Game<'_> {
         // Button release belongs to the next handleKeybinds phase, which
         // sends RELEASE_USE_ITEM. Do not silently clear a use begun by a
         // quick press/release between ticks.
-        if slot != self.selected {
+        if slot != self.selected && slot != super::shield::OFFHAND_SLOT {
             self.using = None;
             return;
         }
