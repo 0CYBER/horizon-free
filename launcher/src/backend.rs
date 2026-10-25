@@ -2170,6 +2170,8 @@ pub enum Msg {
     Links(Links),
     Progress(String, f32),
     Installed(String, Result<(), String>),
+    /// A version's files are gone (or could not be deleted).
+    Removed(String, Result<(), String>),
     Line(Job, String),
     Exit(Job, Result<(), String>),
     Updates(Result<Updates, String>),

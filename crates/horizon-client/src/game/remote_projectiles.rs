@@ -2,7 +2,7 @@
 //! end crystals on a server's client (`ClientPacketListener.handleAddEntity`
 //! and `handleSetEntityData`): the server simulates them, the client draws
 //! them where it says and interpolates their moves.
-use super::{FallingBlock, Game};
+use super::{FallStep, FallingBlock, Game};
 use horizon_client::projectiles::{Projectile, ProjectileKind};
 use horizon_core::{geometry::Vec3, position::BlockPos};
 use horizon_protocol::entity_data::Value;
@@ -185,11 +185,17 @@ impl Game<'_> {
             t.previous = t.position;
             t.position = step(t.id, t.position);
         }
-        for f in &mut self.falling {
-            f.previous = f.position;
-            f.age += 1;
-            f.position = step(f.id, f.position);
+        // FallingBlockEntity.tick runs on a client too: the block falls by
+        // itself between the server's updates (every 20 ticks), then waits
+        // where it lands for the server to place it and remove it.
+        let mut falling = std::mem::take(&mut self.falling);
+        for f in &mut falling {
+            if let Ok(FallStep::Landed(_)) = self.fall_step(f, false) {
+                // Block.updateEntityMovementAfterFallOn, then the air drag.
+                f.velocity = Vec3::new(f.velocity.x * 0.98, 0.0, f.velocity.z * 0.98);
+            }
         }
+        self.falling = falling;
         for p in &mut self.creatures.projectiles {
             p.previous = p.position;
             p.age += 1;

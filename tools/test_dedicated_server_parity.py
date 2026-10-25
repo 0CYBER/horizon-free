@@ -126,7 +126,7 @@ class Server:
         self.lines = []
         self.process = subprocess.Popen(list(map(str, command)), cwd=directory, stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                        encoding='utf-8', errors='replace')
+                                        encoding='utf-8', errors='replace', env=lab.game_env())
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
 
@@ -352,7 +352,7 @@ def horizon_client_joins(vanilla_server, binary, world, build, reference):
     server = Server(vanilla_server, directory, label)
     try:
         server.wait_for(r'Done \(')
-        env = dict(os.environ, HORIZON_NO_AUDIO='1', HORIZON_NET_REPORT=str(report))
+        env = lab.game_env(HORIZON_NET_REPORT=report)
         with (build / 'horizon-client-run.log').open('w') as log:
             subprocess.run([str(c) for c in [binary, '--resources', lab.RESOURCES, '--render-distance', 2,
                                              '--server', f'127.0.0.1:{port}', '--name', PLAYER]],

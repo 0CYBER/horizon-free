@@ -228,6 +228,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - villagers: the guest sees each villager's and zombie villager's type, profession and level as the
              host has them, and an unemployed villager that takes a composter becomes a farmer on
              the guest too (the guest used to draw every villager as an unemployed plains one).
+- falling:   an item and a falling block the host summons high up fall smoothly on the guest, a
+             little further every tick between the server's updates (every 20 ticks), as their own
+             client tick moves them (they used to hang, then jump down once a second, #1568).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -275,8 +278,7 @@ class Game:
         (self.work / '.local/horizon-client').mkdir(parents=True)
         os.symlink(resources, self.work / '.local/horizon-client' / lab.VERSION)
         self.socket = self.work / 'c.sock'
-        env = game_env(os.environ.get('VSCREEN', 'lan-e2e'))
-        env['HORIZON_HOME'] = str(self.work / 'home')
+        env = game_env(os.environ.get('VSCREEN', 'lan-e2e'), home=self.work / 'home')
         self.d = Cli(ctl, self.socket, self.work, env)
         self.d.name = name
 
@@ -5494,6 +5496,47 @@ def check_villagers(host, guest, out):
 
 CHECKS += ['villagers']
 CHECK_FNS.update(villagers=check_villagers)
+
+
+def check_falling(host, guest, out):
+    """ItemEntity and FallingBlockEntity tick on a client too (gravity, collisions, drag), and their
+    position packets snap them (Entity's NO_OP InterpolationHandler). The server sends an item's
+    and a falling block's position every 20 ticks, so between two updates the guest's own tick is
+    what moves them: sampled every 2 ticks over the first 16, both are lower nearly every time."""
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    top = y + 30
+    tag = 'falling_e2e'
+    host('command', command=f'fill {x + 2} {y} {z - 1} {x + 4} {top + 2} {z + 1} minecraft:air')
+    host('command', command=f'summon minecraft:item {x + 3.5} {top} {z + 0.5} '
+                            f'{{Tags:["{tag}"],Item:{{id:"minecraft:diamond",count:1}},PickupDelay:32767}}')
+    host('command', command=f'summon minecraft:falling_block {x + 2.5} {top} {z - 0.5} '
+                            f'{{Tags:["{tag}"],BlockState:{{Name:"minecraft:sand"}},DropItem:0b}}')
+    heights = {'item': [], 'falling block': []}
+    try:
+        for _ in range(8):
+            items = [e['pos'][1] for e in guest.raw('entities', 48, 'minecraft:item')['entities']
+                     if abs(e['pos'][0] - x - 3.5) < 0.5 and abs(e['pos'][2] - z - 0.5) < 0.5]
+            blocks = [o['position'][1] for o in guest('status')['projectiles']
+                      if o.get('kind') == 'minecraft:falling_block'
+                      and abs(o['position'][0] - x - 2.5) < 0.5 and abs(o['position'][2] - z + 0.5) < 0.5]
+            heights['item'].append(items[0] if items else None)
+            heights['falling block'].append(blocks[0] if blocks else None)
+            guest.wait(2)
+        guest.shot(out, 'falling')
+    finally:
+        host('command', command=f'kill @e[tag={tag}]')
+        host('command', command=f'fill {x + 2} {y} {z - 1} {x + 4} {top + 2} {z + 1} minecraft:air')
+    for name, ys in heights.items():
+        seen = [h for h in ys if h is not None]
+        assert len(seen) >= 6, f'the guest saw the {name} {len(seen)} times of 8: {heights}'
+        drops = sum(b < a for a, b in zip(seen, seen[1:]))
+        # A tick or two can pass between two samples with no move; never most of them.
+        assert drops >= len(seen) - 2, f'the {name} fell in {drops} of {len(seen) - 1} samples: {heights}'
+    return heights
+
+
+CHECKS += ['falling']
+CHECK_FNS.update(falling=check_falling)
 
 
 if __name__ == '__main__':
