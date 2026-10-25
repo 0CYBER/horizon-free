@@ -3070,6 +3070,8 @@ impl Game<'_> {
             }
             None => {
                 let mut player = PlayerMotion::new(self.motion, position)?;
+                // Player.tick derives noPhysics from the current game mode.
+                player.spectator = self.spectator();
                 player.velocity = delta;
                 self.player = Some(player);
                 self.pad.player_replaced();
