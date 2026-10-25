@@ -346,10 +346,16 @@ impl Creative {
         }
         // FullTextSearchTree: tooltip lines, and the item id after a colon.
         // The export's lines are English (they come from the vanilla jars);
-        // the display name in the selected language is matched too, so a
-        // localized search finds the item.
+        // the hover name in the selected language is matched too, so a
+        // localized search finds the item. It is the whole name (a tipped
+        // arrow's potion, the ominous banner), as the first line is.
         let text = java_lower(term);
-        let localized = |i: usize| java_lower(&names.display_item(&self.search_items[i].item));
+        let localized = |i: usize| {
+            java_lower(&crate::item_tooltip::name_line(
+                &self.search_items[i],
+                &|k| names.display_get(k),
+            ))
+        };
         all.filter(|&i| {
             let e = &self.search_index[i];
             let fallback;
