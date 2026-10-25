@@ -45,9 +45,17 @@ for every file stable across the two isolated runs. For the three known noisy JS
 it also requires semantic equality after normalizing object key order, opaque JVM lambda
 addresses and creative-tab tag set order. Other variation fails the release check.
 
-On Linux with Java 25, two comparisons produced 23,204 matching resource files each.
-The first isolated runs took 178.95 s and 104.25 s, versus 45.05 s batched; the second took
-100.03 s and 176.06 s, versus 120.09 s batched. All used precompiled exporters. These are fresh output directories with a warm OS file cache, on a
-machine with other workloads; the spread between isolated runs prevents treating this as a
-controlled speedup estimate. The compiler saving is separate: release preparation removes
-the previously measured 15 compiler invocations (29–52 s).
+On Linux with Java 25, the output comparisons used 23,204 resource files per run.
+All runs used precompiled exporters:
+
+| Comparison | Isolated A | Isolated B | Batched |
+|---|---:|---:|---:|
+| Initial | 178.95 s | 104.25 s | 45.05 s |
+| Repeat | 100.03 s | 176.06 s | 120.09 s |
+| Final, immutable collision cache | 133.80 s | 123.79 s | 56.19 s |
+
+These use fresh output directories with a warm OS file cache, on a machine with other
+workloads. The first two rows include output hashing; the final row measures preparation
+before comparison. The variability prevents treating these as a controlled speedup estimate.
+The compiler saving is separate: release preparation removes the previously measured
+15 compiler invocations (29–52 s).
