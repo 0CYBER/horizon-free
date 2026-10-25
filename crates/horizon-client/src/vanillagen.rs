@@ -434,6 +434,14 @@ impl ChunkGenerator for VanillaTerrain {
             .iter()
             .map(|(pos, nbt)| {
                 let mut nbt = nbt.clone();
+                // Placed data can lack its type (a brushable block's loot table
+                // alone); vanilla saves every pending block entity with its id,
+                // and skips one without when the chunk finishes.
+                if let Some(id) =
+                    crate::lan::chunks::block_entity_type(chunk.block_name(pos[0], pos[1], pos[2]))
+                {
+                    nbt.insert("id".into(), Tag::String(id.into()));
+                }
                 for (key, v) in ["x", "y", "z"].into_iter().zip(pos) {
                     nbt.insert(key.into(), Tag::Int(*v));
                 }

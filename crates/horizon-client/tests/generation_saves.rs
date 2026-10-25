@@ -315,3 +315,70 @@ fn saved_proto_chunks_restore_exactly() {
     drop(save);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn saved_proto_block_entities_keep_their_id() {
+    use horizon_client::{
+        save::{Persistent, SaveDir},
+        vanillagen::VanillaTerrain,
+    };
+    use horizon_world::{
+        nbt::{Limits, Tag},
+        region::RegionFile,
+    };
+    let Some(root) = resources() else {
+        return;
+    };
+    let assets = Arc::new(Assets::load(&root).unwrap());
+    let biomes = Arc::new(Biomes::load(&root).unwrap());
+    let terrain = VanillaTerrain::for_dimension(
+        &root.join("worldgen"),
+        assets.registry,
+        &biomes,
+        12345,
+        "minecraft:overworld",
+    )
+    .unwrap();
+    let dir = std::env::temp_dir().join(format!("horizon-proto-ids-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let save = Arc::new(SaveDir::new(dir.clone()));
+    let generator = Persistent {
+        inner: Arc::new(terrain),
+        save: save.clone(),
+        registry: assets.clone(),
+        biomes,
+    };
+    let mut worker = generator.worker();
+    // A cold ocean ruin of seed 12345: its suspicious gravel is placed with a
+    // loot table and no type.
+    let keys: Vec<(i32, i32)> = (0..9).map(|i| (43 + i % 3 - 1, 21 + i / 3 - 1)).collect();
+    let mut region: [Proto; 9] =
+        std::array::from_fn(|i| generator.proto(&mut worker, keys[i].0, keys[i].1));
+    generator.decorate(&mut worker, &mut region);
+    generator.save_protos(&region.iter().collect::<Vec<_>>());
+    save.flush().unwrap();
+    let mut file = RegionFile::open(dir.join("region/r.1.0.mca")).unwrap();
+    let mut suspicious = 0;
+    for &(x, z) in &keys {
+        let Some(record) = file
+            .read(horizon_core::position::ChunkPos::new(x, z))
+            .unwrap()
+        else {
+            continue;
+        };
+        let root = record.nbt(Limits::default()).unwrap();
+        let Some(Tag::List(entities)) = root.tag.get("block_entities") else {
+            continue;
+        };
+        for e in entities {
+            assert!(e.get("id").is_some(), "chunk {x} {z}: {e:?}");
+            if let Some(Tag::String(table)) = e.get("LootTable") {
+                suspicious += usize::from(table.to_string_lossy().contains("archaeology/"));
+            }
+        }
+    }
+    assert!(suspicious > 0, "the ruin placed no suspicious blocks");
+    drop(generator);
+    drop(save);
+    let _ = std::fs::remove_dir_all(&dir);
+}
