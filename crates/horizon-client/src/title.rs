@@ -1150,7 +1150,7 @@ impl Title {
                 + 30.0;
             // Toast.xPos: in from the right edge by the visible portion.
             let x = w - width * slide.portion;
-            toast_background(atlas, batch, x, width);
+            crate::toasts::background(atlas, batch, x, 0.0, width);
             batch.text(atlas, &title, x + 18.0, 7.0, rgba(255, 255, 0, 255), false);
             batch.text(atlas, &message, x + 18.0, 19.0, u32::MAX, false);
         }
@@ -1550,36 +1550,6 @@ impl Title {
             Mode::Error { return_to, .. } => self.mode = *return_to.clone(),
             Mode::Create { .. } => self.cancel_create(),
             _ => self.mode = Mode::Main,
-        }
-    }
-}
-/// SystemToast's 32-pixel background keeps the notice icon and borders intact.
-fn toast_background(atlas: &HudAtlas, batch: &mut HudBatch, x: f32, width: f32) {
-    let Some(rect) = atlas.sprites.get("gui/sprites/toast/system").copied() else {
-        return;
-    };
-    let source_x = [0.0, 17.0, rect.w as f32 - 4.0, rect.w as f32];
-    let target_x = [x, x + 17.0, x + width - 4.0, x + width];
-    for col in 0..3 {
-        for (sy, sh, y, h) in [
-            (0.0, 28.0, 0.0, 28.0),
-            (rect.h as f32 - 4.0, 4.0, 28.0, 4.0),
-        ] {
-            let mut piece = rect;
-            let du = (rect.u1 - rect.u0) / rect.w as f32;
-            let dv = (rect.v1 - rect.v0) / rect.h as f32;
-            piece.u0 = rect.u0 + source_x[col] * du;
-            piece.u1 = rect.u0 + source_x[col + 1] * du;
-            piece.v0 = rect.v0 + sy * dv;
-            piece.v1 = rect.v0 + (sy + sh) * dv;
-            batch.rect_uv(
-                target_x[col],
-                y,
-                target_x[col + 1] - target_x[col],
-                h,
-                piece,
-                u32::MAX,
-            );
         }
     }
 }
