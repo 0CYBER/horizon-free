@@ -11,9 +11,9 @@ use std::{
 /// A packaged pack's extension.
 pub const EXTENSION: &str = "hshader";
 /// Bytes per WGSL file, per other file, and in all.
-const MAX_WGSL: u64 = 256 << 10;
+pub const MAX_WGSL: u64 = 256 << 10;
 const MAX_OTHER: u64 = 1 << 20;
-const MAX_TOTAL: u64 = 8 << 20;
+pub const MAX_TOTAL: u64 = 8 << 20;
 /// Files in a `.hshader`.
 const MAX_ENTRIES: usize = 512;
 /// Files a pack may hold beside its manifest and WGSL.

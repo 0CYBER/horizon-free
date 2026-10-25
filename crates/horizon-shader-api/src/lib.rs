@@ -3,8 +3,13 @@
 //! a folder or a `.hshader`. This crate reads and checks packs; the game, the
 //! launcher and the registry all use it, so a pack is judged the same way
 //! everywhere.
+pub mod inputs;
 pub mod manifest;
 pub mod package;
+pub mod reference;
+pub mod stages;
 
+pub use inputs::Frame;
 pub use manifest::{API, MANIFEST, Manifest, OptionKind, PackOption, SCHEMA, Stage};
 pub use package::{EXTENSION, Pack};
+pub use stages::{Composed, StageKind, compose};
