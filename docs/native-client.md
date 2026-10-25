@@ -226,8 +226,9 @@ Dedicated servers never start it, and automated runs (offscreen, benchmarks)
 only talk to a fake Discord: `lab.game_env` sets `HORIZON_NO_DISCORD=1`, and
 `tools/discord_presence_e2e.py` points games at a fake server with
 `HORIZON_DISCORD_IPC_DIR` (title, world, Nether and quit on both single-player
-paths; a LAN host and guest). It stays inert until `DISCORD_APP_ID` holds the
-Horizon application's id.
+paths; a LAN host and guest; the switch; a Discord started after the game).
+`DISCORD_APP_ID` is Discord's "Horizon" application, whose `horizon` image is
+the large one; there are no game-mode images yet.
 
 ### Play on another of your machines
 
