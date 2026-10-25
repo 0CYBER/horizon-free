@@ -474,9 +474,26 @@ impl Game<'_> {
         }
         out
     }
-    /// Dragon, withers, the raid and custom bars, in that order.
+    /// Custom bars (`CustomBossEvents.onPlayerConnect` sends them as a player
+    /// joins), then the dragon, withers and the raid.
     fn boss_events_for(&self, viewer: &Viewer) -> Vec<Offer> {
         let mut out = Vec::new();
+        for b in &self.bosses.bars.bars {
+            if !b.visible || !b.players.contains(&viewer.ints) {
+                continue;
+            }
+            out.push(Offer {
+                id: b.uuid,
+                name: json_to_tag(&b.name),
+                progress: b.progress(),
+                color: color_index(&b.color),
+                overlay: style_index(&b.style),
+                darken: b.darken,
+                music: b.music,
+                fog: b.fog,
+                scope: Scope::Global,
+            });
+        }
         if viewer.here
             && let Some(progress) = self.dragon_boss_progress(viewer.at, viewer.alive)
         {
@@ -541,22 +558,6 @@ impl Game<'_> {
                 music: false,
                 fog: false,
                 scope: Scope::Level(self.dim),
-            });
-        }
-        for b in &self.bosses.bars.bars {
-            if !b.visible || !b.players.contains(&viewer.ints) {
-                continue;
-            }
-            out.push(Offer {
-                id: b.uuid,
-                name: json_to_tag(&b.name),
-                progress: b.progress(),
-                color: color_index(&b.color),
-                overlay: style_index(&b.style),
-                darken: b.darken,
-                music: b.music,
-                fog: b.fog,
-                scope: Scope::Global,
             });
         }
         out
