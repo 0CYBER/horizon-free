@@ -181,12 +181,16 @@ pub fn java_runtime(
     Ok(home)
 }
 
+// Used by the unix link step below; the path-traversal check itself is tested on every
+// platform, so these stay compiled and are allowed to look unused elsewhere.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn name_in<'a>(home: &Path, path: &'a Path) -> &'a Path {
     path.strip_prefix(home).unwrap_or(path)
 }
 
 /// Whether a link at `link` (relative to the runtime's home) pointing at `target` stays in the
 /// home.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn link_stays_inside(link: &Path, target: &str) -> bool {
     let mut depth = link.components().count().saturating_sub(1);
     for c in Path::new(target).components() {

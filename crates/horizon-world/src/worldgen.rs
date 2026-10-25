@@ -103,6 +103,23 @@ impl std::fmt::Display for DecodeError {
     }
 }
 impl std::error::Error for DecodeError {}
+
+/// The bound value of one physical block property, for the two decode contexts that read
+/// block predicates (`block_feature` and `state_provider`).
+pub(crate) fn bound_property(
+    values: Option<&[crate::block_properties::BoundBlockProperty; 4]>,
+    property: crate::block_properties::BlockProperty,
+) -> Result<crate::block_properties::BoundBlockProperty, DecodeError> {
+    use crate::block_properties::BlockProperty;
+    let values = values.ok_or(DecodeError::Field("predicate block property registry"))?;
+    let index = match property {
+        BlockProperty::Solid => 0,
+        BlockProperty::Replaceable => 1,
+        BlockProperty::Liquid => 2,
+        BlockProperty::SolidRender => 3,
+    };
+    Ok(values[index].clone())
+}
 impl From<serde_json::Error> for DecodeError {
     fn from(value: serde_json::Error) -> Self {
         Self::Json(value)
