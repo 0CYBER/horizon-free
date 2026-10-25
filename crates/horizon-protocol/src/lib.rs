@@ -12,6 +12,7 @@ pub mod ids;
 pub mod item;
 pub mod packets;
 pub mod registry;
+mod resolver;
 pub mod rsa;
 pub mod secure_chat;
 pub mod servers;

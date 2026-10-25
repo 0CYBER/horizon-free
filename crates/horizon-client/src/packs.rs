@@ -34,8 +34,6 @@ pub struct Pack {
     pub description_style: Style,
     pub compatible: bool,
     pub compatibility: crate::pack_screen::Compat,
-    /// The pack has a `pack.png`.
-    pub icon: bool,
     /// Overlay directories active for this game version, in `pack.mcmeta` order.
     pub overlays: Vec<String>,
     /// `filter.block` entries (namespace and path patterns) hiding resources
@@ -260,6 +258,15 @@ fn filter_of(meta: &serde_json::Value) -> Vec<Filter> {
         })
         .collect()
 }
+impl Pack {
+    /// The pack's `pack.png` (`PackResources.getRootResource`), for its icon.
+    pub fn icon_png(&self) -> Option<Vec<u8>> {
+        match &self.source {
+            Source::Dir(d) => fs::read(d.join("pack.png")).ok(),
+            Source::Zip(z) => Zip::open(z).ok()?.read("pack.png").ok(),
+        }
+    }
+}
 fn read_meta(source: &Source) -> Option<serde_json::Value> {
     let bytes = match source {
         Source::Dir(d) => fs::read(d.join("pack.mcmeta")).ok()?,
@@ -270,10 +277,6 @@ fn read_meta(source: &Source) -> Option<serde_json::Value> {
 fn pack(id: String, title: Text, source: Source) -> Option<Pack> {
     let meta = read_meta(&source)?;
     let (raw_description, description_style) = component_root(&meta["pack"]["description"]);
-    let icon = match &source {
-        Source::Dir(d) => d.join("pack.png").is_file(),
-        Source::Zip(z) => Zip::open(z).is_ok_and(|z| z.read("pack.png").is_ok()),
-    };
     Some(Pack {
         id,
         title,
@@ -282,7 +285,6 @@ fn pack(id: String, title: Text, source: Source) -> Option<Pack> {
         description_style,
         compatible: compatible(&meta),
         compatibility: compatibility(&meta),
-        icon,
         overlays: overlays_of(&meta),
         filter: filter_of(&meta),
         source,
@@ -515,7 +517,11 @@ fn build_overlay_uncached(
                     }
                 }
             } else if touched.contains(&child)
-                || (vanilla.join(&child).is_dir() && !filters.is_empty())
+                // Windows cannot link a directory the way unix does (`link` above), so an
+                // untouched one has to be mirrored: skipping it hid textures/font and the
+                // title panorama from the overlay, and a font json that names those sheets
+                // then failed to load (#1688).
+                || (vanilla.join(&child).is_dir() && (cfg!(not(unix)) || !filters.is_empty()))
             {
                 mirror(
                     &child,
@@ -628,6 +634,17 @@ fn merge(kind: Merge, layers: &[Vec<u8>]) -> Option<Vec<u8>> {
         Merge::Atlas => list("sources", &mut parsed.iter()),
     };
     serde_json::to_vec(&out).ok()
+}
+/// `DownloadedPackSource.loadRequestedPacks`: a server's downloaded pack,
+/// "World Specific Resources"; None when its `pack.mcmeta` can't be read. Its
+/// id names the file, which is named after its hash.
+pub fn server_pack(id: u128, path: &Path) -> Option<Pack> {
+    let file = path.file_name()?.to_string_lossy();
+    pack(
+        format!("server/{id:032x}/{file}"),
+        Text::translate("resourcePack.server.name", &[]),
+        Source::Zip(path.to_path_buf()),
+    )
 }
 /// The packs to apply for an options.txt `resourcePacks` list (bottom first).
 pub fn enabled(all: &[Pack], ids: &[String]) -> Vec<Pack> {
@@ -980,6 +997,45 @@ mod tests {
             br#"{"a":"vanilla","b":"pack"}"#
         );
         assert_eq!(fs::read(out.join("facts.json")).unwrap(), b"[]");
+        let _ = fs::remove_dir_all(base);
+    }
+    #[test]
+    fn built_in_and_folder_packs_give_their_pack_png() {
+        use std::io::Write as _;
+        let base = std::env::temp_dir().join(format!("horizon-pack-icons-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let meta = br#"{"pack":{"description":"d","pack_format":97}}"#;
+        let built_in = base.join("vanilla/assets/minecraft/resourcepacks");
+        fs::create_dir_all(&built_in).unwrap();
+        let mut zip =
+            zip::ZipWriter::new(fs::File::create(built_in.join("programmer_art.zip")).unwrap());
+        for (name, data) in [("pack.mcmeta", &meta[..]), ("pack.png", b"dirt")] {
+            zip.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(data).unwrap();
+        }
+        zip.finish().unwrap();
+        for (name, icon) in [("Iconless", None), ("Mine", Some(&b"mine"[..]))] {
+            let dir = base.join("packs").join(name);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("pack.mcmeta"), meta).unwrap();
+            if let Some(icon) = icon {
+                fs::write(dir.join("pack.png"), icon).unwrap();
+            }
+        }
+        let packs = discover(&base.join("vanilla"), &base.join("packs"));
+        let icons: Vec<_> = packs
+            .iter()
+            .map(|p| (p.id.as_str(), p.icon_png()))
+            .collect();
+        assert_eq!(
+            icons,
+            [
+                ("programmer_art", Some(b"dirt".to_vec())),
+                ("file/Iconless", None),
+                ("file/Mine", Some(b"mine".to_vec())),
+            ]
+        );
         let _ = fs::remove_dir_all(base);
     }
     #[test]
