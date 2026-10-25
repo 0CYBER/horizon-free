@@ -33,7 +33,9 @@ pub use lang::Lang;
 pub use macros::{MC_VERSION, Macros, RENDER_STAGES};
 pub use options::switches_on;
 pub use pack::{Pack, PackError};
-pub use post::{Group, Post, PostProgram, dimension_folder, load_post};
+pub use post::{
+    Blend, Factor, Group, Post, PostProgram, TRANSLUCENT_BLEND, dimension_folder, load_post,
+};
 pub use preprocess::{Diagnostic, Origin, Preprocessed, preprocess};
 pub use properties::{Entry, Note, Properties};
 pub use translate::{

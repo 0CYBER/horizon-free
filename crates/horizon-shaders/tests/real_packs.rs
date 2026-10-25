@@ -176,9 +176,10 @@ fn real_packs_read() {
                 Some(&terrain),
             );
             println!(
-                "  dimension {id} (folder `{folder}`): {} post programs, terrain {:?}, {} notes, {:.0} ms",
+                "  dimension {id} (folder `{folder}`): {} post programs, terrain {:?}, water {:?}, {} notes, {:.0} ms",
                 post.programs.len(),
                 post.terrain.as_ref().map(|t| &t.name),
+                post.water.as_ref().map(|t| &t.name),
                 post.notes.len() + post.config.notes.len(),
                 start.elapsed().as_secs_f64() * 1000.0
             );

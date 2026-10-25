@@ -3709,6 +3709,12 @@ impl Renderer {
         let pack_post = !frame.title && self.pack_post.as_ref().is_some_and(|p| p.1.is_some());
         // The pack's program reads the vertices this frame's draws bind.
         let pack_draws_terrain = pack_terrain && flat_frame == self.pack_terrain_flat;
+        let pack_draws_water = pack_draws_terrain
+            && self
+                .pack_post
+                .as_ref()
+                .and_then(|p| p.1.as_ref())
+                .is_some_and(|p| p.has_water());
         let scaled = self.world_post.prepare(
             &self.device,
             [self.config.width, self.config.height],
@@ -3940,6 +3946,8 @@ impl Renderer {
                 pass.draw(0..4, debug_depth..debug_depth + debug_top);
             }
             match self.flat.as_ref().filter(|_| flat_frame) {
+                // The pack draws translucent terrain after its deferred programs.
+                _ if pack_draws_water => {}
                 Some(flat) => {
                     pass.set_pipeline(&flat.translucent);
                     flat.draw(&mut pass, &flat.calls[flat.solid_calls..], |p| {
@@ -4016,20 +4024,28 @@ impl Renderer {
         {
             let size = self.world_post.size().unwrap_or([1, 1]);
             let flat = self.flat.as_ref().filter(|_| flat_frame);
-            let mut terrain = |rp: &mut wgpu::RenderPass<'_>| {
+            let mut terrain = |rp: &mut wgpu::RenderPass<'_>, translucent: bool| {
                 if !pack_draws_terrain {
                     return;
                 }
                 match flat {
                     Some(flat) => {
-                        flat.draw(rp, &flat.calls[..flat.solid_calls], |p| {
-                            self.arena.buffer(p)
-                        });
+                        let calls = if translucent {
+                            &flat.calls[flat.solid_calls..]
+                        } else {
+                            &flat.calls[..flat.solid_calls]
+                        };
+                        flat.draw(rp, calls, |p| self.arena.buffer(p));
                     }
                     None => {
                         rp.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                         rp.set_vertex_buffer(1, self.instances.slice(..));
-                        self.draw_sections(rp, &self.indirect, 0, 0, solid_draws);
+                        let (first, count) = if translucent {
+                            (solid_draws, translucent_draws)
+                        } else {
+                            (0, solid_draws)
+                        };
+                        self.draw_sections(rp, &self.indirect, 0, first, count);
                     }
                 }
             };

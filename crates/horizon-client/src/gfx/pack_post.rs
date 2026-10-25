@@ -24,6 +24,8 @@ const BUFFERS: usize = horizon_shaders::BUFFERS;
 enum Source {
     Color(usize),
     Depth,
+    /// `depthtex1`/`depthtex2`: depth without translucent terrain (a copy taken before it).
+    Depth1,
     Noise,
     /// A 1×1 stand-in for names this slice does not provide yet (custom textures...).
     Dummy,
@@ -58,7 +60,7 @@ impl SamplerKind {
     fn of(source: Source, filtering: bool) -> Self {
         match source {
             Source::Color(_) | Source::Dummy if !filtering => Self::Nearest,
-            Source::Depth => Self::Nearest,
+            Source::Depth | Source::Depth1 => Self::Nearest,
             Source::Noise => Self::Repeat,
             Source::Shadow => Self::Comparison,
             // Blocks look as the game draws them: nearest texels.
@@ -143,6 +145,9 @@ struct Targets {
     /// A and B of each buffer used.
     color: [Option<[wgpu::TextureView; 2]>; BUFFERS],
     depth: wgpu::TextureView,
+    depth_texture: wgpu::Texture,
+    /// `depthtex1`, when a program after translucent terrain reads it.
+    depth1: Option<(wgpu::Texture, wgpu::TextureView)>,
 }
 
 /// What a pack's gbuffers programs read and draw from the game's world.
@@ -159,6 +164,10 @@ pub struct PackPost {
     passes: Vec<Pass>,
     /// What draws terrain (`gbuffers_terrain` or its fallback), between `prepare` and `deferred`.
     terrain: Option<Pass>,
+    /// What draws translucent terrain (`gbuffers_water` or its fallback), after `deferred`.
+    water: Option<Pass>,
+    /// A program after translucent terrain reads `depthtex1`: it is copied before water.
+    depth1: bool,
     /// `shaders.properties`' custom uniforms, after the frame's in `uniforms.values`.
     custom: horizon_shaders::Custom,
     atlas: Option<wgpu::TextureView>,
@@ -231,7 +240,9 @@ fn texture_format(f: Format, features: wgpu::Features) -> wgpu::TextureFormat {
 
 fn source(name: &str) -> Source {
     match name {
-        "depthtex0" | "gdepthtex" | "depthtex1" | "depthtex2" => Source::Depth,
+        "depthtex0" | "gdepthtex" => Source::Depth,
+        // The hand is drawn after the pack, so `depthtex2` (without it) is `depthtex1`.
+        "depthtex1" | "depthtex2" => Source::Depth1,
         "noisetex" => Source::Noise,
         "texture" | "gtexture" | "tex" => Source::Atlas,
         "lightmap" => Source::Lightmap,
@@ -392,6 +403,34 @@ fn texture_entry(binding: u32, sample_type: wgpu::TextureSampleType) -> wgpu::Bi
     )
 }
 
+/// `blend.<program>`'s factors as wgpu's, adding both terms.
+fn blend_state(b: horizon_shaders::Blend) -> wgpu::BlendState {
+    use horizon_shaders::Factor as F;
+    use wgpu::BlendFactor as W;
+    let f = |f| match f {
+        F::Zero => W::Zero,
+        F::One => W::One,
+        F::SrcColor => W::Src,
+        F::OneMinusSrcColor => W::OneMinusSrc,
+        F::DstColor => W::Dst,
+        F::OneMinusDstColor => W::OneMinusDst,
+        F::SrcAlpha => W::SrcAlpha,
+        F::OneMinusSrcAlpha => W::OneMinusSrcAlpha,
+        F::DstAlpha => W::DstAlpha,
+        F::OneMinusDstAlpha => W::OneMinusDstAlpha,
+        F::SrcAlphaSaturate => W::SrcAlphaSaturated,
+    };
+    let component = |src, dst| wgpu::BlendComponent {
+        src_factor: f(src),
+        dst_factor: f(dst),
+        operation: wgpu::BlendOperation::Add,
+    };
+    wgpu::BlendState {
+        color: component(b[0], b[1]),
+        alpha: component(b[2], b[3]),
+    }
+}
+
 fn target(format: wgpu::TextureFormat) -> Option<wgpu::ColorTargetState> {
     Some(wgpu::ColorTargetState {
         format,
@@ -462,6 +501,8 @@ fn build_pass(
         let blank = match src {
             Source::Atlas => geometry.is_none(),
             Source::Depth => geometry.is_some(),
+            // Translucent terrain reads the copy; opaque terrain would read itself.
+            Source::Depth1 => p.group == Group::Gbuffers,
             Source::Color(n) => in_place & 1 << n != 0,
             _ => false,
         };
@@ -470,7 +511,7 @@ fn build_pass(
             Source::Color(n) => formats[n]
                 .sample_type(None, Some(features))
                 .unwrap_or(float),
-            Source::Depth => wgpu::TextureSampleType::Float { filterable: false },
+            Source::Depth | Source::Depth1 => wgpu::TextureSampleType::Float { filterable: false },
             // Unfilterable on WebGPU-level devices; the lightmap is sampled at texel centres.
             Source::Lightmap => float,
             _ => float,
@@ -534,7 +575,17 @@ fn build_pass(
                 targets[0] = target(screen);
             }
         } else if let Some(&buffer) = p.buffers.get(l) {
-            targets[l] = target(formats[buffer as usize]);
+            let format = formats[buffer as usize];
+            let mut state = target(format);
+            if let (Some(t), Some(b)) = (&mut state, p.blend)
+                && format
+                    .guaranteed_format_features(features)
+                    .flags
+                    .contains(wgpu::TextureFormatFeatureFlags::BLENDABLE)
+            {
+                t.blend = Some(blend_state(b));
+            }
+            targets[l] = state;
             writes.push((location, buffer as usize));
         }
     }
@@ -693,6 +744,10 @@ impl PackPost {
             .terrain
             .zip(world.terrain.as_ref())
             .and_then(|(p, g)| build(p, Some(g)));
+        let water = post
+            .water
+            .zip(world.terrain.as_ref())
+            .and_then(|(p, g)| build(p, Some(g)));
         // Developers' aid: `HORIZON_SHADER_PACK_SKIP=composite,final` leaves programs out.
         let skip = std::env::var("HORIZON_SHADER_PACK_SKIP").unwrap_or_default();
         let passes: Vec<Pass> = post
@@ -704,25 +759,43 @@ impl PackPost {
         if let Some(t) = &terrain {
             notes.push(format!("terrain draws with {}", t.name));
         }
+        if let Some(w) = &water {
+            notes.push(format!("translucent terrain draws with {}", w.name));
+        }
+        let depth1 = water.is_some()
+            && passes
+                .iter()
+                .filter(|p| matches!(p.group, Group::Composite | Group::Final))
+                .chain(&water)
+                .any(|p| p.samplers.iter().any(|s| s.source == Source::Depth1));
         // A clear only matters when a program reads the buffer before one writes all of it
         // (composite passes cover their whole target, terrain does not); the others are skipped.
         let mut cleared = Vec::new();
         for b in 1..BUFFERS {
             let bit = 1u16 << b;
             let touched = |p: &&Pass| (p.reads | p.flip | p.written) & bit != 0;
-            let first = terrain.iter().find(touched).map(|_| true).or_else(|| {
-                let p = passes.iter().find(touched)?;
-                Some(p.reads & bit != 0 || p.written & bit == 0)
-            });
+            // Gbuffers passes cover part of their targets: a clear is needed if they touch it.
+            let first = terrain
+                .iter()
+                .chain(&water)
+                .find(touched)
+                .map(|_| true)
+                .or_else(|| {
+                    let p = passes.iter().find(touched)?;
+                    Some(p.reads & bit != 0 || p.written & bit == 0)
+                });
             if clears[b].is_some() && first == Some(true) {
                 cleared.push(b);
             }
         }
         // Terrain tests against the world's depth (entities...), so the blit copies it then.
         let blit_depth = terrain.is_some()
-            || passes
-                .iter()
-                .any(|p| p.samplers.iter().any(|s| s.source == Source::Depth));
+            || water.is_some()
+            || passes.iter().any(|p| {
+                p.samplers
+                    .iter()
+                    .any(|s| matches!(s.source, Source::Depth | Source::Depth1))
+            });
         let room = 8 - 1;
         let other_clears = cleared.split_off(room.min(cleared.len()));
         let float = wgpu::TextureSampleType::Float { filterable: true };
@@ -778,6 +851,8 @@ impl PackPost {
             notes,
             passes,
             terrain,
+            water,
+            depth1,
             custom,
             atlas: world.atlas.as_ref().map(|a| a.0.clone()),
             lightmap: world.lightmap,
@@ -886,6 +961,18 @@ impl PackPost {
                         .as_ref()
                         .map_or(&self.dummy, |t| &t[usize::from(key & 1 << i != 0)]),
                     Source::Depth => &targets.depth,
+                    // Before translucent terrain the two are the same.
+                    Source::Depth1 => match &targets.depth1 {
+                        Some(d)
+                            if matches!(
+                                pass.group,
+                                Group::Composite | Group::Final | Group::Translucent
+                            ) =>
+                        {
+                            &d.1
+                        }
+                        _ => &targets.depth,
+                    },
                     Source::Noise => &self.noise,
                     Source::Dummy => &self.dummy,
                     Source::Shadow => &self.shadow.0,
@@ -919,19 +1006,36 @@ impl PackPost {
         group.clone()
     }
 
-    /// Terrain with the pack's program into the buffers it writes, in place, tested against
-    /// the world's depth; `draw` issues the game's draws.
+    /// Terrain (or, `translucent`, translucent terrain) with the pack's program into the
+    /// buffers it writes, in place, tested against the world's depth; `draw` issues the
+    /// game's draws.
     fn draw_terrain(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         size: [u32; 2],
-        draw: &mut dyn FnMut(&mut wgpu::RenderPass<'_>),
+        translucent: bool,
+        draw: &mut dyn FnMut(&mut wgpu::RenderPass<'_>, bool),
     ) {
-        let Some(mut pass) = self.terrain.take() else {
+        let slot = if translucent {
+            &mut self.water
+        } else {
+            &mut self.terrain
+        };
+        let Some(mut pass) = slot.take() else {
             return;
         };
+        if translucent
+            && let Some(t) = &self.targets
+            && let Some((copy, _)) = &t.depth1
+        {
+            encoder.copy_texture_to_texture(
+                t.depth_texture.as_image_copy(),
+                copy.as_image_copy(),
+                t.depth_texture.size(),
+            );
+        }
         let group = self.bind(device, queue, &mut pass, size);
         let targets = self.targets.as_ref().expect("resized");
         let load = wgpu::Operations {
@@ -964,14 +1068,23 @@ impl PackPost {
             });
             rp.set_pipeline(&pass.pipeline);
             rp.set_bind_group(0, &group, &[]);
-            draw(&mut rp);
+            draw(&mut rp, translucent);
         }
-        self.terrain = Some(pass);
+        if translucent {
+            self.water = Some(pass);
+        } else {
+            self.terrain = Some(pass);
+        }
     }
 
     /// Whether the pack draws terrain itself.
     pub fn has_terrain(&self) -> bool {
         self.terrain.is_some()
+    }
+
+    /// Whether the pack draws translucent terrain itself.
+    pub fn has_water(&self) -> bool {
+        self.water.is_some()
     }
 
     /// The names of the programs that run, in order.
@@ -983,23 +1096,24 @@ impl PackPost {
         if self.targets.as_ref().is_some_and(|t| t.size == size) {
             return;
         }
+        let texture = |label: &str, format, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: size[0],
+                    height: size[1],
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: usage | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+        };
         let make = |label: &str, format| {
-            device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some(label),
-                    size: wgpu::Extent3d {
-                        width: size[0],
-                        height: size[1],
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                })
+            texture(label, format, wgpu::TextureUsages::RENDER_ATTACHMENT)
                 .create_view(&Default::default())
         };
         let color = std::array::from_fn(|i| {
@@ -1008,12 +1122,26 @@ impl PackPost {
                 [make(&label, self.formats[i]), make(&label, self.formats[i])]
             })
         });
+        let depth32 = wgpu::TextureFormat::Depth32Float;
+        let depth_texture = texture(
+            "depthtex0",
+            depth32,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        );
+        let depth1 = self.depth1.then(|| {
+            let t = texture("depthtex1", depth32, wgpu::TextureUsages::COPY_DST);
+            let view = t.create_view(&Default::default());
+            (t, view)
+        });
         self.targets = Some(Targets {
             size,
             color,
-            depth: make("depthtex0", wgpu::TextureFormat::Depth32Float),
+            depth: depth_texture.create_view(&Default::default()),
+            depth_texture,
+            depth1,
         });
-        for pass in self.passes.iter_mut().chain(&mut self.terrain) {
+        let gbuffers = self.terrain.iter_mut().chain(&mut self.water);
+        for pass in self.passes.iter_mut().chain(gbuffers) {
             pass.groups.clear();
         }
     }
@@ -1033,7 +1161,7 @@ impl PackPost {
         inputs: &PackInputs,
         size: [u32; 2],
         window: [u32; 2],
-        terrain: &mut dyn FnMut(&mut wgpu::RenderPass<'_>),
+        terrain: &mut dyn FnMut(&mut wgpu::RenderPass<'_>, bool),
     ) {
         self.resize(device, size);
         self.uniforms.update(frame, inputs, size);
@@ -1143,10 +1271,15 @@ impl PackPost {
         let mut seen = (false, false);
         let mut shown = false;
         let mut terrain_drawn = self.terrain.is_none();
+        let mut water_drawn = self.water.is_none();
         for pass in &mut passes {
             if !terrain_drawn && pass.group != Group::Prepare {
                 terrain_drawn = true;
-                self.draw_terrain(device, queue, encoder, size, terrain);
+                self.draw_terrain(device, queue, encoder, size, false, terrain);
+            }
+            if !water_drawn && matches!(pass.group, Group::Composite | Group::Final) {
+                water_drawn = true;
+                self.draw_terrain(device, queue, encoder, size, true, terrain);
             }
             if pass.group == Group::Deferred && !seen.0 {
                 seen.0 = true;
@@ -1191,7 +1324,10 @@ impl PackPost {
         }
         self.passes = passes;
         if !terrain_drawn {
-            self.draw_terrain(device, queue, encoder, size, terrain);
+            self.draw_terrain(device, queue, encoder, size, false, terrain);
+        }
+        if !water_drawn {
+            self.draw_terrain(device, queue, encoder, size, true, terrain);
         }
         let targets = self.targets.as_ref().expect("resized");
         let view = |m: u16, i: usize, alt: bool| {
@@ -1282,6 +1418,7 @@ mod tests {
     fn sampler_names() {
         assert!(source("gaux1") == Source::Color(4));
         assert!(source("gdepthtex") == Source::Depth);
+        assert!(source("depthtex2") == Source::Depth1);
         assert!(source("noisetex") == Source::Noise);
         assert!(source("shadowcolor0") == Source::Dummy);
     }

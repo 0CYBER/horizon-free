@@ -24,9 +24,66 @@ pub enum Group {
     Deferred,
     Composite,
     Final,
-    /// A gbuffers program: the game draws its geometry with it.
+    /// A gbuffers program: the game draws its geometry with it, before deferred.
     Gbuffers,
+    /// A gbuffers program drawing translucent geometry, after deferred (2.1).
+    Translucent,
 }
+
+/// A blend factor of `blend.<program>` (3.2), as GL names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Factor {
+    Zero,
+    One,
+    SrcColor,
+    OneMinusSrcColor,
+    DstColor,
+    OneMinusDstColor,
+    SrcAlpha,
+    OneMinusSrcAlpha,
+    DstAlpha,
+    OneMinusDstAlpha,
+    SrcAlphaSaturate,
+}
+
+impl Factor {
+    fn parse(word: &str) -> Option<Self> {
+        Some(match word {
+            "ZERO" => Self::Zero,
+            "ONE" => Self::One,
+            "SRC_COLOR" => Self::SrcColor,
+            "ONE_MINUS_SRC_COLOR" => Self::OneMinusSrcColor,
+            "DST_COLOR" => Self::DstColor,
+            "ONE_MINUS_DST_COLOR" => Self::OneMinusDstColor,
+            "SRC_ALPHA" => Self::SrcAlpha,
+            "ONE_MINUS_SRC_ALPHA" => Self::OneMinusSrcAlpha,
+            "DST_ALPHA" => Self::DstAlpha,
+            "ONE_MINUS_DST_ALPHA" => Self::OneMinusDstAlpha,
+            "SRC_ALPHA_SATURATE" => Self::SrcAlphaSaturate,
+            _ => return None,
+        })
+    }
+}
+
+/// Source and destination factors for colour, then for alpha.
+pub type Blend = [Factor; 4];
+
+/// The default blend of translucent geometry (3.2).
+pub const TRANSLUCENT_BLEND: Blend = [
+    Factor::SrcAlpha,
+    Factor::OneMinusSrcAlpha,
+    Factor::One,
+    Factor::OneMinusSrcAlpha,
+];
+
+/// `gbuffers_water` and its fallbacks (2.3).
+const WATER: [&str; 5] = [
+    "gbuffers_water",
+    "gbuffers_terrain",
+    "gbuffers_textured_lit",
+    "gbuffers_textured",
+    "gbuffers_basic",
+];
 
 /// `gbuffers_terrain` and its fallbacks (2.3).
 const TERRAIN: [&str; 4] = [
@@ -52,6 +109,8 @@ pub struct PostProgram {
     pub buffers: Vec<u32>,
     /// `flip.<name>.<buffer>`: buffers forced to flip (true) or kept (false) after this program.
     pub flips: Vec<(u32, bool)>,
+    /// How a gbuffers program's output blends into its buffers; `None` writes them.
+    pub blend: Option<Blend>,
 }
 
 pub struct Post {
@@ -63,6 +122,8 @@ pub struct Post {
     pub composite_pre: Vec<(u32, bool)>,
     /// What draws solid and cutout terrain, when the game asked for it and one loads.
     pub terrain: Option<PostProgram>,
+    /// What draws translucent terrain (water, stained glass) after deferred.
+    pub water: Option<PostProgram>,
     /// The custom uniforms of `shaders.properties` (3.4).
     pub custom: Custom,
     pub config: Config,
@@ -96,6 +157,7 @@ pub fn load_post(
         deferred_pre: flips(properties, "deferred_pre"),
         composite_pre: flips(properties, "composite_pre"),
         terrain: None,
+        water: None,
         custom: Custom::parse(properties),
         config: Config::default(),
         notes: Vec::new(),
@@ -127,11 +189,24 @@ pub fn load_post(
         }
     }
     if let Some(inputs) = terrain {
-        loader.post.terrain = TERRAIN.iter().find_map(|name| {
-            loader.load(name.to_string(), Group::Gbuffers, |v, f| {
-                translate_gbuffers(v, f, Target::Buffers, inputs)
+        let mut gbuffers = |names: &[&str], group| {
+            names.iter().find_map(|name| {
+                loader.load(name.to_string(), group, |v, f| {
+                    translate_gbuffers(v, f, Target::Buffers, inputs)
+                })
             })
+        };
+        let terrain = gbuffers(&TERRAIN, Group::Gbuffers);
+        // gbuffers_water falls back to gbuffers_terrain's chain (2.3).
+        let water = gbuffers(&WATER, Group::Translucent);
+        loader.post.terrain = terrain;
+        loader.post.water = water.map(|mut p| {
+            p.blend = blend(properties, &p.name).unwrap_or(Some(TRANSLUCENT_BLEND));
+            p
         });
+        if let Some(p) = &mut loader.post.terrain {
+            p.blend = blend(properties, &p.name).flatten();
+        }
     }
     post.config = std::mem::take(&mut post.config).finish();
     post
@@ -211,6 +286,7 @@ impl Loader<'_> {
             group,
             program,
             buffers,
+            blend: None,
         })
     }
 }
@@ -258,6 +334,20 @@ fn enabled(
         }
     }
     eval_condition(&condition, macros).ok() != Some(0)
+}
+
+/// `blend.<program>`: `Some(None)` for `off`, `Some(factors)`, or `None` when absent or not
+/// four known factors.
+fn blend(properties: &Properties, program: &str) -> Option<Option<Blend>> {
+    let value = properties.get(&format!("blend.{program}"))?.trim();
+    if value == "off" {
+        return Some(None);
+    }
+    let factors: Vec<Factor> = value
+        .split_whitespace()
+        .map(Factor::parse)
+        .collect::<Option<_>>()?;
+    Some(Some(factors.try_into().ok()?))
 }
 
 /// `flip.<program>.<buffer>=<bool>` keys of one program.
@@ -353,6 +443,38 @@ mod tests {
         assert_eq!(names, ["final"]);
         let post = load_post(&pack, "", &properties, &macros, None);
         assert!(post.programs.iter().any(|p| p.name == "composite3"));
+    }
+
+    /// Water falls back to the terrain chain and blends by default; `blend.*` overrides.
+    #[test]
+    fn water_falls_back_to_terrain_and_blends() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/packs/terrain-test");
+        let pack = Pack::open(&dir).unwrap();
+        let macros = Macros::standard();
+        let inputs = crate::GbuffersInputs {
+            declarations: "layout(location = 0) in vec3 hz_v_pos;".into(),
+            body: "    hz_Vertex = vec4(hz_v_pos, 1.0);\n    hz_Color = vec4(1.0);\n".into(),
+            attributes: Vec::new(),
+        };
+        let post = load_post(&pack, "", &Properties::default(), &macros, Some(&inputs));
+        let (terrain, water) = (post.terrain.unwrap(), post.water.unwrap());
+        assert_eq!((terrain.group, terrain.blend), (Group::Gbuffers, None));
+        assert_eq!(water.name, "gbuffers_terrain");
+        assert_eq!(
+            (water.group, water.blend),
+            (Group::Translucent, Some(TRANSLUCENT_BLEND))
+        );
+        let properties = Properties::parse(
+            "blend.gbuffers_terrain = ONE ONE ZERO ONE\nblend.gbuffers_water = off\n",
+            &macros,
+        );
+        let terrain_blend = blend(&properties, "gbuffers_terrain");
+        assert_eq!(
+            terrain_blend,
+            Some(Some([Factor::One, Factor::One, Factor::Zero, Factor::One]))
+        );
+        assert_eq!(blend(&properties, "gbuffers_water"), Some(None));
+        assert_eq!(blend(&properties, "gbuffers_basic"), None);
     }
 
     #[test]
