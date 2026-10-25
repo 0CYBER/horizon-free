@@ -1,5 +1,6 @@
 //! docs/api/shaders-reference.md, generated from the stages and inputs this
 //! crate defines (`tests/reference.rs` fails when the file drifts).
+use crate::check::{MAX_EXPRESSIONS, MAX_TEXTURE_READS};
 use crate::inputs::{Frame, SURFACE, Struct};
 use crate::manifest::{API, MAX_GPU_MS, MAX_OPTIONS, MAX_POST_PASSES};
 use crate::package::{MAX_TOTAL, MAX_WGSL};
@@ -80,7 +81,15 @@ pub fn markdown() -> String {
          | `choice` | `values`, `default` (one of them) | `override <id>: u32`, the value's index |\n\n\
          ## Limits\n\n\
          - {MAX_POST_PASSES} post passes, {MAX_OPTIONS} options, `budget.gpu_ms` up to {MAX_GPU_MS}.\n\
-         - {} KiB per WGSL file, {} MiB per pack.\n",
+         - {} KiB per WGSL file, {} MiB per pack.\n\
+         - Per stage: {MAX_EXPRESSIONS} naga expressions over all its functions, {MAX_TEXTURE_READS} texture reads (samples,\n  \
+         gathers and loads, the prelude's included).\n\n\
+         ## The check\n\n\
+         A pack runs only after it passes `horizon_shader_api::check` (the game when it loads a pack, the launcher before it\n\
+         installs one, the registry's CI): each stage is parsed and validated by naga, checked against its signature and\n\
+         the rules above, and translated for Vulkan (SPIR-V), Metal and DirectX 12 (HLSL) with its options at their\n\
+         defaults, minimums and maximums. Every option must be an `override` of its type in some stage; an `override`\n\
+         that is no option needs a default.\n",
         MAX_WGSL >> 10,
         MAX_TOTAL >> 20
     );

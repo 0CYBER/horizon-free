@@ -150,3 +150,13 @@ Each `[[options]]` entry sets the WGSL `override` of the same name when the pipe
 
 - 8 post passes, 64 options, `budget.gpu_ms` up to 16.
 - 256 KiB per WGSL file, 8 MiB per pack.
+- Per stage: 20000 naga expressions over all its functions, 64 texture reads (samples,
+  gathers and loads, the prelude's included).
+
+## The check
+
+A pack runs only after it passes `horizon_shader_api::check` (the game when it loads a pack, the launcher before it
+installs one, the registry's CI): each stage is parsed and validated by naga, checked against its signature and
+the rules above, and translated for Vulkan (SPIR-V), Metal and DirectX 12 (HLSL) with its options at their
+defaults, minimums and maximums. Every option must be an `override` of its type in some stage; an `override`
+that is no option needs a default.

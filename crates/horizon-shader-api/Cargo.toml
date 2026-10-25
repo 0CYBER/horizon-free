@@ -8,12 +8,12 @@ description = "Horizon's own shader packs (WGSL, docs/api/shaders.md): horizon-s
 
 [dependencies]
 bytemuck = { version = "1.24", features = ["derive"] }
+# Parses and validates a pack's WGSL, and translates it as wgpu does for Vulkan, Metal and DirectX 12.
+naga = { version = "30.0.1", features = ["wgsl-in", "spv-out", "msl-out", "hlsl-out"] }
 serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
 toml = "1.1.6"
 zip = { version = "2", default-features = false, features = ["deflate"] }
-
-[dev-dependencies]
-naga = { version = "30.0.1", features = ["wgsl-in"] }
 
 [lints]
 workspace = true
