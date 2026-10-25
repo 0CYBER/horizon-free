@@ -9,31 +9,16 @@ ender_pearls_vanish_on_death true: ThrownEnderpearl.tick discards a dead owner's
 never teleported. The teleports, game mode changes and respawns Alice is sent from the throw on are compared
 exactly.
 """
-import json
-import os
-from pathlib import Path
-import platform
-import shutil
-import subprocess
 import sys
-import time
 
 try:
-    from . import lab, test_rust_parity as base, test_locator_bar_parity as locator
-    from .test_dedicated_server_parity import Server
+    from . import test_locator_bar_parity as locator
 except ImportError:
-    import lab
-    import test_rust_parity as base
     import test_locator_bar_parity as locator
-    from test_dedicated_server_parity import Server
 
 NAME = 'pearl-death-parity'
 # server_dir and generate_world write these server.properties.
 locator.PROPERTIES = dict(locator.PROPERTIES, gamemode='survival')
-STEP_SECONDS = 4.0
-SHOWN = ('teleport', 'gamemode', 'respawn')
-
-
 SCRIPT = [
     ('setup', ['cmd Alice gamerule ender_pearls_vanish_on_death true', 'cmd Alice give @s minecraft:ender_pearl']),
     # Straight up: it comes down about four seconds later, near where it was thrown.
@@ -43,96 +28,25 @@ SCRIPT = [
 ]
 
 
-def run_side(label, server_command, client_command, build, world):
-    directory = build / label
-    port = locator.server_dir(directory, world)
-    out = build / f'{label}.txt'
-    out.unlink(missing_ok=True)
-    server = Server(server_command, directory, label)
-    try:
-        server.wait_for(r'Done \(')
-        with (build / f'{label}-client.log').open('w') as log:
-            client = subprocess.Popen([*map(str, client_command), '127.0.0.1', str(port), str(out)],
-                                      cwd=lab.ROOT, stdin=subprocess.PIPE, stdout=log, stderr=subprocess.STDOUT,
-                                      text=True)
-
-            def tell(line):
-                client.stdin.write(line + '\n')
-                client.stdin.flush()
-            try:
-                tell('players on')
-                tell('state on')
-                tell('step joins')
-                tell('join Alice')
-                server.wait_for(r'Alice joined the game', timeout=120)
-                time.sleep(STEP_SECONDS)
-                for step, actions in SCRIPT:
-                    tell(f'step {step}')
-                    for action in actions:
-                        tell(action)
-                    time.sleep(STEP_SECONDS)
-                tell('end')
-                client.wait(timeout=60)
-            finally:
-                if client.poll() is None:
-                    client.kill()
-    finally:
-        server.stop()
-    if not out.exists():
-        raise AssertionError(f'{label}: the client wrote no transcript (see {build}/{label}-client.log)')
-    return out.read_text(encoding='utf-8').splitlines()
-
-
 def shown(lines):
-    """Alice's teleports, game mode changes and respawns from the throws on."""
+    """Alice's teleports, game mode changes and respawns from the throw on."""
     steps = {f'step={step}' for step, _ in SCRIPT if step != 'setup'}
     return [line for line in lines if len(parts := line.split(' ', 3)) >= 3 and parts[1] in steps
-            and parts[2] in SHOWN]
+            and parts[2] in ('teleport', 'gamemode', 'respawn')]
+
+
+def check(vanilla, vanilla_all):
+    killed = any(l.startswith('Alice step=throw killed') for l in vanilla_all)
+    if not killed or 'Alice step=respawn respawn minecraft:overworld' not in vanilla:
+        return 'vanilla did not kill and respawn Alice'
+    return None
 
 
 def main():
-    lock, jars, libraries = base.verify_artifacts()
-    build = lab.LOCAL / NAME
-    build.mkdir(parents=True, exist_ok=True)
-    report = build / 'report.json'
-    report.unlink(missing_ok=True)
-    oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/LocatorBarClient.java'
-    classes = build / 'classes'
-    shutil.rmtree(classes, ignore_errors=True)
-    classes.mkdir()
-    dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
-    subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none', '-nowarn', '-sourcepath',
-                    lab.ROOT / 'mods/horizon/src/test/java', '-cp', dependencies, '-d', classes, oracle],
-                   cwd=lab.ROOT, check=True, capture_output=True)
-    subprocess.run(['cargo', 'build', '--release', '-p', 'horizon-client', '--bin', 'horizon-client'], cwd=lab.ROOT,
-                   check=True, capture_output=True)
-    metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
-                                                  cwd=lab.ROOT, text=True))
-    binary = Path(metadata['target_directory']) / 'release' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
-    vanilla_server = ['java', '-Xmx2g', '-Duser.timezone=UTC', '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
-    horizon_server = [binary, '--resources', lab.LOCAL / 'horizon-client/26.3', '--dedicated', '--nogui']
-    client = ['java', '-Xmx1g', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.LocatorBarClient']
-
-    world = locator.generate_world(vanilla_server, build)
-    vanilla_all = run_side('vanilla', vanilla_server, client, build, world)
-    horizon_all = run_side('horizon', horizon_server, client, build, world)
-    errors = [l for l in vanilla_all + horizon_all if ' error ' in f' {l} ' or 'disconnected' in l]
-    vanilla, horizon = shown(vanilla_all), shown(horizon_all)
-    if errors or vanilla != horizon:
-        import difflib
-        diff = '\n'.join(difflib.unified_diff(vanilla, horizon, 'vanilla', 'horizon', n=1, lineterm=''))
-        raise AssertionError(f'{len(errors)} errors, transcripts differ (see {build}/vanilla.txt and horizon.txt):\n'
-                             + '\n'.join(errors[:10]) + '\n' + diff[:6000])
-    killed = any(l.startswith('Alice step=throw killed') for l in vanilla_all)
-    if not killed or 'Alice step=respawn respawn minecraft:overworld' not in vanilla:
-        raise AssertionError(f'vanilla did not kill and respawn Alice: the script did not run (see {build})')
-    lab.write_json(report, dict(
-        schema=1, minecraft=lock['minecraft']['version'], platform=platform.platform(),
-        java=subprocess.check_output(['java', '--version'], text=True).splitlines()[0],
-        lines=len(vanilla), output_sha256=lab.digest(build / 'horizon.txt', 'sha256'),
-        scope='An ender pearl in flight when its thrower dies and respawns on a dedicated server, with '
-              'ender_pearls_vanish_on_death true: the pearl vanishes and never teleports the player.'))
-    print(f'pearl death: {len(vanilla)} lines identical')
+    lines = locator.one_player(NAME, SCRIPT, shown, check, 'An ender pearl in flight when its thrower dies and '
+                               'respawns on a dedicated server, with ender_pearls_vanish_on_death true: the pearl '
+                               'vanishes and never teleports the player.')
+    print(f'pearl death: {len(lines)} lines identical')
 
 
 if __name__ == '__main__':

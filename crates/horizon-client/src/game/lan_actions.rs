@@ -1649,6 +1649,11 @@ impl Game<'_> {
             border: &self.border,
         };
         host.hub.respawn(i, spawn, &ctx);
+        // ServerGamePacketListenerImpl.handleClientCommand: a hardcore world's
+        // respawned player only watches.
+        if self.level.hardcore {
+            host.hub.set_game_mode(conn, SPECTATOR);
+        }
         if let Some(config) = elsewhere {
             self.respawn_trip(conn, config);
         }
