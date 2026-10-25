@@ -138,8 +138,23 @@ Unknown keys are refused. Its CI runs `cargo-horizon-mod` (`crates/cargo-horizon
 | `cargo horizon-mod check <file> [--json]` | A submission's checks: its kind's (above), its signature with `--key` and `--signature`, and for a mod a trial run in the sandbox (40 ticks, 120 frames, a chat line, each command). |
 | `cargo horizon-mod registry check <base> <head> --files <dir>` | `check` on each file `head` lists and `base` doesn't: a pull request's new files. |
 | `cargo horizon-mod registry list <checkout>` | `<sha256> <id> <version> <file>` per version: the files to download. |
-| `cargo horizon-mod registry build <checkout> --files <dir> --out index.json` | Reads every entry and its file (`<dir>/<sha256>`), lists every problem, and writes the index with URLs `<release>/<id>-<version>/<file>`. |
+| `cargo horizon-mod registry build <checkout> --files <dir> --out index.json` | Reads every entry and its file (`<dir>/<sha256>`), lists every problem, and writes the index with URLs `<release><id>-<version>/<file>` (`--release`, ending in `/`, defaults to the repository's releases). |
 | `cargo horizon-mod registry review <base> <head> --author <login>` | A pull request's changes: a published file never changes and is never removed (take it down in `revoked.toml`), a kind never changes; changes by a non-owner and to owners or keys are pointed out for the reviewers. |
+
+How the repository runs (its workflows are in `.github/workflows/`):
+
+- **A pull request** (`check.yml`) runs `registry review`, downloads each new file from the `staging` prerelease, runs
+  `registry check` on it and builds the index it would publish; the report is the run's summary. The tool is
+  `cargo-horizon-mod` from Horizon at the commit in the repository variable `HORIZON_REV`. The form's pull requests
+  are opened with the token of the account in the variable `REGISTRY_BOT`; for those, the author is the login in the
+  body's `<!-- submitted-by: … -->` line.
+- **Merging** needs the `check` run and a CODEOWNER's review. `publish.yml` then makes each new version a release
+  `<id>-<version>` and deploys `index.json` and `icons/` to GitHub Pages:
+  `https://ludovic111.github.io/horizon-mods/index.json`, served with `Access-Control-Allow-Origin: *`.
+- **Weekly**, `cleanup.yml` deletes staged copies of published files after 7 days and of files no open pull request
+  lists after 30.
+- **Taking a file down** is a pull request adding it to `revoked.toml`. Removing an entry outright (a test, a project
+  nobody installed) fails `registry review` on purpose and needs an administrator's merge.
 
 Kinds open to submissions: `mod`, `modpack`, `resourcepack`. `shader` is in the schema and stays closed until
 Horizon's own shader pack format exists (Iris and OptiFine packs are for the Modrinth browser); its check will compile

@@ -78,7 +78,7 @@ impl Game<'_> {
         let Some(g) = host.hub.guest(conn) else {
             return;
         };
-        let near = super::lan_stations::within_reach(g, p.pos);
+        let near = g.within_block_range(p.pos, 4.0);
         let Some(play) = host.play.get_mut(&conn) else {
             return;
         };

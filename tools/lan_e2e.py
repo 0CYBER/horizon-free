@@ -6252,5 +6252,101 @@ CHECKS += ['crystals']
 CHECK_FNS.update(crystals=check_crystals)
 
 
+def check_boat_dismount_pose(host, guest, out):
+    """Removing a boat detaches its mobs on the server and every observing client."""
+    x, y, z = map(math.floor, pos_of(host))
+    bx, bz = x + 3.5, z + 3.5
+    tag = 'boat_dismount_pose'
+    host('command', command='gamemode creative')
+    host('command', command=f'fill {x - 2} {y - 1} {z - 2} {x + 8} {y - 1} {z + 8} minecraft:stone')
+    host('command', command=f'fill {x - 2} {y} {z - 2} {x + 8} {y + 4} {z + 8} minecraft:air')
+    host('command', command=f'summon minecraft:oak_boat {bx} {y} {bz} {{Tags:["{tag}"]}}')
+    for _ in range(2):
+        host('command', command=f'summon minecraft:husk {bx} {y} {bz} {{NoAI:1b,Tags:["{tag}"]}}')
+        host.wait(5)
+    try:
+        host.wait(20)
+        boat = next(o for o in host('status')['objects']
+                    if o['kind'].endswith('oak_boat') and math.dist(o['position'], [bx, y, bz]) < 2)
+        riders = [m['id'] for m in host.raw('mobs', 64)['near']
+                  if m['kind'] == 'minecraft:husk' and m['mount'] == boat['id']]
+        assert len(riders) == 2, f'the boat did not collect both husks: {riders}'
+        for game in (host, guest):
+            game.wait(10)
+            for rider in riders:
+                m = mob_seen(game, rider)
+                assert m and m['mount'] == boat['id'] and m['passenger'], f'{game.name} did not see seated husk {rider}: {m}'
+            game.raw('look-at', bx, y + 1, bz)
+            game.shot(out, 'boat-passengers-seated')
+        host('command', command=f'tp @s {bx - 3} {y} {bz} 0 0')
+        host.wait(5)
+        # Aim at the near rim, below the riders, so their boxes cannot
+        # intercept the creative player's one hit that destroys the boat.
+        host.raw('look-at', bx - 0.55, y + 0.1, bz)
+        host.raw('mouse', 'left', 'click')
+        seen = {}
+        for game in (host, guest):
+            game.wait(20)
+            assert all(o['id'] != boat['id'] for o in game('status')['objects']), f'{game.name} still sees the boat'
+            seen[game.name] = [mob_seen(game, rider) for rider in riders]
+            game.raw('look-at', bx, y + 1, bz)
+            game.shot(out, 'boat-passengers-dismounted')
+            for m in seen[game.name]:
+                assert m and m['mount'] is None and not m['passenger'], f'{game.name} still draws a removed boat\'s passenger: {m}'
+        return {name: [{k: m[k] for k in ('id', 'mount', 'passenger')} for m in mobs] for name, mobs in seen.items()}
+    finally:
+        host('command', command=f'kill @e[tag={tag}]')
+
+
+CHECKS += ['boat-dismount-pose']
+CHECK_FNS['boat-dismount-pose'] = check_boat_dismount_pose
+
+
+def check_sprint_fov(host, guest, out):
+    """Releasing Ctrl must preserve a sprint until W is released, then reset FOV.
+
+    PlayerInput reports keys; PlayerCommand starts/stops the sprint. Confusing
+    them clears the client's sprint flag while leaving its speed modifier on.
+    """
+    seen = {}
+    for game in (host, guest):
+        game('command', command='gamemode creative')
+        game('command', command='effect clear @s')
+        game.raw('options-set', 'fovEffectScale', '1.0')
+        x, y, z = map(math.floor, pos_of(game))
+        game('command', command=f'fill {x - 2} {y} {z - 2} {x + 2} {y + 3} {z + 20} minecraft:air')
+        game('command', command=f'fill {x - 2} {y - 1} {z - 2} {x + 2} {y - 1} {z + 20} minecraft:stone')
+        game('command', command=f'tp @s {x + 0.5} {y} {z + 0.5} 0 0')
+        game.wait(20)
+        try:
+            game.raw('key', 'w', 'down')
+            game.raw('key', 'ctrl', 'down')
+            game.wait(10)
+            started = game('state')['player']
+            game.raw('key', 'ctrl', 'up')
+            game.wait(10)
+            released_ctrl = game('state')['player']
+            game.raw('key', 'w', 'up')
+            game.wait(20)
+            stopped = game('state')['player']
+        finally:
+            game.raw('key', 'ctrl', 'up')
+            game.raw('key', 'w', 'up')
+        seen[game.name] = states = {
+            label: {k: p[k] for k in ('sprinting', 'fov_modifier')}
+            for label, p in [('started', started), ('released_ctrl', released_ctrl), ('stopped', stopped)]
+        }
+        for label in ('started', 'released_ctrl'):
+            assert states[label]['sprinting'], f'{game.name} {label}: {states}'
+            assert abs(states[label]['fov_modifier'] - 1.15) < 0.002, f'{game.name} {label}: {states}'
+        assert not stopped['sprinting'], f'{game.name}: {states}'
+        assert abs(stopped['fov_modifier'] - 1.0) < 0.002, f'{game.name}: {states}'
+    return seen
+
+
+CHECKS += ['sprint-fov']
+CHECK_FNS['sprint-fov'] = check_sprint_fov
+
+
 if __name__ == '__main__':
     main()

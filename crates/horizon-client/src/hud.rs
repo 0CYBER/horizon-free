@@ -3,7 +3,7 @@
 //! GUI scale is applied when drawing).
 use crate::Result;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -58,6 +58,9 @@ pub struct HudAtlas {
     pub width: u32,
     pub height: u32,
     pub sprites: HashMap<String, Rect>,
+    /// Sprites with a 0 < alpha < 255 texel (`SpriteContents.transparency().hasTranslucent`),
+    /// which puts their particles on vanilla's translucent layer.
+    pub translucent: HashSet<String>,
     /// Sprites whose `.png.mcmeta` sets `blur` or `clamp`; the others
     /// sample as vanilla's defaults (nearest, repeat).
     pub flags: HashMap<String, TextureFlags>,
@@ -78,7 +81,10 @@ pub const MAP_SLOTS: usize = 256;
 /// The atlas slot the minimap extra draws into.
 pub const MINIMAP_SPRITE: &str = "horizon/minimap";
 /// Atlas slots for downloaded player skins (`skins/<sha1>`), 64x64 each.
-pub const SKIN_SLOTS: usize = 32;
+/// Vanilla registers a texture per skin. Here a skin evicted from its slot
+/// is not stored again, and its player falls back to the default skin, so
+/// the slots must cover a busy server's player list.
+pub const SKIN_SLOTS: usize = 128;
 /// Reused by the visible rows of the classic world selector.
 pub const WORLD_ICON_SLOTS: usize = 32;
 /// Atlas slots for the pack icons on the pack screen, one per icon drawn
@@ -459,7 +465,16 @@ impl HudAtlas {
         let height = (glyph_region + GLYPH_ROWS).next_multiple_of(1024);
         let mut pixels = vec![0u8; (width * height * 4) as usize];
         let mut sprites = HashMap::new();
+        let mut translucent = HashSet::new();
         for ((name, w, h, data), (px, py)) in images.iter().zip(placements) {
+            if data
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|p| p[3] != 0 && p[3] != 255)
+            {
+                translucent.insert(name.clone());
+            }
             for row in 0..*h {
                 let src = &data[(row * w * 4) as usize..((row + 1) * w * 4) as usize];
                 let dst = (((py + row) * width + px) * 4) as usize;
@@ -524,6 +539,7 @@ impl HudAtlas {
             width,
             height,
             sprites,
+            translucent,
             flags,
             fire_animations,
             font,
