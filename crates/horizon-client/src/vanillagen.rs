@@ -279,17 +279,17 @@ impl VanillaTerrain {
         let worker = worker.get_or_insert_with(|| self.generator.worker());
         worker.ring_positions(set)
     }
-    /// Searches the concentric rings on a thread of their own, behind the
-    /// server and render threads, as vanilla's background executor does:
-    /// the first chunks don't wait for them, and an eye of ender thrown
-    /// later finds them ready. A chunk or a query that needs them first
-    /// shares the remaining searches with this thread.
+    /// Searches the concentric rings on a thread of their own, as vanilla's
+    /// background executor does, in the idle class: on a few cores it would
+    /// otherwise slow the first chunks, which don't need the rings. An eye
+    /// of ender thrown later finds them ready, and a chunk or a query that
+    /// needs them first shares the remaining searches with this thread.
     pub fn search_rings_behind(self: &Arc<Self>) {
         let terrain = Arc::clone(self);
         let spawned = std::thread::Builder::new()
             .name("Ring search".into())
             .spawn(move || {
-                horizon_threads::behind_server();
+                horizon_threads::idle_current();
                 let _ = terrain
                     .generator
                     .worker()
