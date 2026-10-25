@@ -1,6 +1,6 @@
 # horizon-telemetry-server
 
-This server receives what players choose to send (performance summaries, crash and bug reports, benchmark uploads: [docs/telemetry.md](../../docs/telemetry.md)) and stores it in one SQLite file. It serves anonymous totals to the website. It also keeps the live player count from the games' anonymous "I'm playing" pings, in memory only. It is one small Rust process, about 7 MB of memory when idle.
+This server receives what players choose to send (performance summaries, crash and bug reports, benchmark uploads: [docs/telemetry.md](../../docs/telemetry.md)) and stores it in one SQLite file. It serves anonymous totals to the website. It also keeps the live player count from the games' anonymous "I'm playing" pings, in memory only, and the 👍 players give roadmap items on the hub (playhorizon.dev/hub). It is one small Rust process, about 7 MB of memory when idle.
 
     cargo run --release                     # in this folder: its own workspace, like the launcher's
     PORT=8080 HORIZON_TELEMETRY_DB=/data/telemetry.sqlite3 horizon-telemetry-server
@@ -17,6 +17,8 @@ It runs at **https://telemetry.playhorizon.dev** (`DEFAULT_ENDPOINT` in `crates/
 | `GET /v1/benchmarks/summary` | Players' benchmark uploads grouped by GPU, CPU, render distance and game, for the website's Benchmarks page (below). Cached 10 minutes, same `Access-Control-Allow-Origin`. |
 | `POST /v1/live` | A game's "I'm playing" ping (JSON, at most 512 bytes). Returns 204. Returns 400 for a bad ping, 413 for one too large, 429 over the address's limit, 503 when it holds `LIVE_MAX_SESSIONS` already. |
 | `GET /v1/live` | How many play now, rounded: `playing`, `lan`, `versions`, `platforms`. Made again at most every 15 seconds, with the same `Access-Control-Allow-Origin`. |
+| `POST /hub/vote` | `{"item": "<roadmap id>", "voter": "<the browser's random id>", "up": true}`: a 👍 on a roadmap item, one per voter; `"up": false` takes it back. Returns `{"item", "votes"}`. 400 for a bad id, 429 over the address's limit. `OPTIONS` answers the website's preflight. |
+| `GET /hub/votes` | `{"votes": {"<item>": n}}`. Made again at most every minute. |
 | `GET /healthz` | `ok` |
 
 The totals are grouped per version, OS, GPU vendor and render distance. Each group has its sessions, install-days, hours played, the 14 frame-time buckets summed, and the mean p50 and p99 frame times. Groups with fewer than 5 install-days are left out. The totals also list crash counts per version. Benchmark uploads are published only through the summary below, never one by one.
@@ -56,6 +58,8 @@ The live count is a table in memory: a session ID, when it last pinged, its vers
 
 The day stored is the day the server received an item. The sender's IP address is never written down. The per-address rate limit keeps addresses in memory for an hour at most.
 
+A hub vote is stored as an item ID and the browser's random ID. The hub's rate limits key their buckets by a hash of the address with a key drawn at each start, in memory.
+
 Raw rows are deleted after `HORIZON_TELEMETRY_RETENTION_DAYS` (180). The daily totals stay; they hold no install ID.
 
 ## Settings
@@ -73,6 +77,7 @@ All are environment variables:
 - `HORIZON_TELEMETRY_LIVE_PER_HOUR` per address, pings and reads (600, bursts of 60: ten players behind one address)
 - `HORIZON_TELEMETRY_LIVE_WINDOW_SECONDS` (120)
 - `HORIZON_TELEMETRY_LIVE_MAX_SESSIONS` (200 000)
+- `HORIZON_TELEMETRY_HUB_PER_HOUR` votes and vote reads per address (120, bursts of 12)
 
 ## Hosting
 

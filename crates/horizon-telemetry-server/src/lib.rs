@@ -7,6 +7,7 @@
 //!   least 3 installs only (`summary`), cached; the website's Benchmarks page reads it.
 //! - `POST /v1/live`: a game's anonymous "I'm playing" ping (`live`, in memory only).
 //! - `GET /v1/live`: how many play now, rounded, cached briefly.
+//! - `POST /hub/vote`, `GET /hub/votes`: the hub's 👍 on roadmap items (`hub`).
 //! - `GET /healthz`.
 //!
 //! Abuse limits: a token bucket per IP address (kept in memory for an hour, never stored), a
@@ -15,6 +16,7 @@
 //! rows expire after `retention_days`; the daily totals stay. One small process and one SQLite
 //! file: see `README.md` for running it.
 use std::collections::HashMap;
+use std::hash::{Hash, RandomState};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -27,6 +29,7 @@ use axum::routing::{delete, get, post};
 use horizon_telemetry::batch;
 
 pub mod classes;
+pub mod hub;
 pub mod live;
 pub mod store;
 pub mod summary;
@@ -56,6 +59,8 @@ pub struct Config {
     pub live_window: Duration,
     /// Sessions the live count holds at most; a new one past that is refused.
     pub live_max_sessions: usize,
+    /// The hub's votes and reads of their counts an IP address may make an hour.
+    pub hub_per_hour: f64,
 }
 
 impl Default for Config {
@@ -70,6 +75,7 @@ impl Default for Config {
             live_per_hour: 600.0,
             live_window: horizon_telemetry::live::WINDOW,
             live_max_sessions: 200_000,
+            hub_per_hour: 120.0,
         }
     }
 }
@@ -77,7 +83,7 @@ impl Default for Config {
 impl Config {
     /// The defaults, with `HORIZON_TELEMETRY_RETENTION_DAYS`, `…_MIN_INSTALL_DAYS`,
     /// `…_REQUESTS_PER_HOUR`, `…_ITEMS_PER_DAY`, `…_TRUST_PROXY` (1), `…_ALLOW_ORIGIN`,
-    /// `…_LIVE_PER_HOUR`, `…_LIVE_WINDOW_SECONDS` and `…_LIVE_MAX_SESSIONS`.
+    /// `…_LIVE_PER_HOUR`, `…_LIVE_WINDOW_SECONDS`, `…_LIVE_MAX_SESSIONS` and `…_HUB_PER_HOUR`.
     pub fn from_env() -> Self {
         let var = |k: &str| std::env::var(format!("HORIZON_TELEMETRY_{k}")).ok();
         let d = Self::default();
@@ -105,6 +111,9 @@ impl Config {
             live_max_sessions: var("LIVE_MAX_SESSIONS")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(d.live_max_sessions),
+            hub_per_hour: var("HUB_PER_HOUR")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d.hub_per_hour),
         }
     }
 }
@@ -126,6 +135,12 @@ pub struct App {
     summary_cache: Mutex<Option<(Instant, String)>>,
     /// Today, in days since 1970 (a test moves it).
     today: Box<dyn Fn() -> u32 + Send + Sync>,
+    /// The key the hub's buckets hash addresses with, drawn at start and never stored.
+    hub_key: RandomState,
+    /// The hub's votes and vote counts, per hashed address.
+    hub_buckets: Mutex<hub::HashedBuckets>,
+    /// `GET /hub/votes`'s answer and when it was made.
+    votes_cache: Mutex<Option<(Instant, String)>>,
 }
 
 type Buckets = HashMap<IpAddr, (f64, Instant)>;
@@ -157,6 +172,9 @@ impl App {
             cache: Mutex::default(),
             summary_cache: Mutex::default(),
             today,
+            hub_key: RandomState::new(),
+            hub_buckets: Mutex::default(),
+            votes_cache: Mutex::default(),
         })
     }
 
@@ -221,6 +239,7 @@ impl App {
     pub fn maintain(&self) -> rusqlite::Result<usize> {
         let oldest = (self.today)().saturating_sub(self.config.retention_days);
         let removed = self.store().expire(oldest)?;
+        self.forget_hub_buckets();
         for buckets in [&self.buckets, &self.live_buckets] {
             buckets
                 .lock()
@@ -235,14 +254,14 @@ impl App {
     }
 }
 
-/// Takes a token for `ip` from its bucket in `buckets` (`per_hour`, bursts of a tenth of it);
+/// Takes a token for `key` from its bucket in `buckets` (`per_hour`, bursts of a tenth of it);
 /// false when it has none left.
-fn take(buckets: &Mutex<Buckets>, per_hour: f64, ip: IpAddr) -> bool {
+fn take<K: Hash + Eq>(buckets: &Mutex<HashMap<K, (f64, Instant)>>, per_hour: f64, key: K) -> bool {
     let rate = per_hour / 3600.0;
     let burst = (per_hour / 10.0).max(1.0);
     let mut buckets = buckets.lock().unwrap_or_else(|e| e.into_inner());
     let now = Instant::now();
-    let (tokens, at) = buckets.entry(ip).or_insert((burst, now));
+    let (tokens, at) = buckets.entry(key).or_insert((burst, now));
     *tokens = (*tokens + now.duration_since(*at).as_secs_f64() * rate).min(burst);
     *at = now;
     if *tokens < 1.0 {
@@ -482,6 +501,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/v1/installs/{id}", delete(forget))
         .route("/v1/aggregate", get(aggregate))
         .route("/v1/benchmarks/summary", get(benchmarks))
+        .route("/hub/vote", post(hub::vote).options(hub::preflight))
+        .route("/hub/votes", get(hub::votes))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(app)
 }
