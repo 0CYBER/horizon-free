@@ -622,14 +622,14 @@ impl Title {
                         2,
                     ),
                 ];
-                // Horizon's Join a Friend (an invite code) sits behind vanilla's
-                // Friends button; the other two are vanilla tooltips.
+                // CommonButtons' icon buttons; Horizon's Join a Friend (an
+                // invite code) sits behind vanilla's Friends button.
                 for (i, (key, plain, id, icon)) in [
-                    ("horizon.menu.friends", "Friends", 5, "friends/friends"),
-                    ("options.language", "Language", 6, "icon/language"),
+                    ("gui.friends.open", "Friends", 5, "friends/friends"),
+                    ("options.language", "Language...", 6, "icon/language"),
                     (
                         "options.accessibility",
-                        "Accessibility Settings",
+                        "Accessibility Settings...",
                         7,
                         "icon/accessibility",
                     ),
