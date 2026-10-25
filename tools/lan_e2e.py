@@ -5498,6 +5498,78 @@ CHECKS += ['villagers']
 CHECK_FNS.update(villagers=check_villagers)
 
 
+def check_large_chest(host, guest, out):
+    """Every player slot can be picked up or shift-clicked into a double chest (#1505, #1589).
+    Reopening checks the authoritative contents, with a single chest as the control."""
+    seen = {}
+    for game in (host, guest):
+        game('command', command='gamemode survival')
+        x, y, z = (int(v // 1) for v in pos_of(game))
+        chest, other = (x, y, z + 2), (x + 1, y, z + 2)
+        try:
+            for double in (False, True):
+                size = 54 if double else 27
+                # Double chest indices 54..89 include the old cutoff at 63/64 and every hotbar slot.
+                sources = list(range(9, 36)) + list(range(9)) if double else [19, 0, 8]
+                for shift in (False, True):
+                    back_to_game(game)
+                    for at in (chest, other):
+                        game('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:air')
+                    game('command', command='kill @e[type=minecraft:item,distance=..8]')
+                    game('command', command='clear @s')
+                    block = 'minecraft:chest[facing=north,type=left]' if double else 'minecraft:chest'
+                    game('command', command=f'setblock {x} {y} {z + 2} {block}')
+                    if double:
+                        game('command', command=f'setblock {x + 1} {y} {z + 2} minecraft:chest[facing=north,type=right]')
+                    for slot in sources:
+                        name = f'hotbar.{slot}' if slot < 9 else f'inventory.{slot - 9}'
+                        game('command', command=f'item replace entity @s {name} with minecraft:diamond')
+                    game.wait(10)
+                    game.raw('interact', *chest)
+                    game.raw('wait-for', 'screen', 'container', '--timeout', 10)
+                    game.wait(10)
+                    assert container_items(game)[1] == size, f'{game.name}: expected {size} chest slots'
+                    label = f'{"double" if double else "single"}-chest-{"shift" if shift else "pickup"}'
+                    for target, slot in enumerate(sources):
+                        if shift:
+                            game.raw('key', 'shift', 'down')
+                        try:
+                            mouse(game, slot)
+                        finally:
+                            if shift:
+                                game.raw('key', 'shift', 'up')
+                        if not shift:
+                            held = game('inventory').get('carried') or {}
+                            if held.get('item') != 'minecraft:diamond' or held.get('count') != 1:
+                                game.shot(out, f'{label}-slot-{slot}-failed')
+                                raise AssertionError(f'{game.name} {label}: slot {slot} picked up {held}')
+                            mouse(game, 300 + target)
+                    game.raw('key', 'esc', 'tap')
+                    game.wait(10)
+                    game.raw('interact', *chest)
+                    game.raw('wait-for', 'screen', 'container', '--timeout', 10)
+                    game.wait(10)
+                    contents = [s for s in game('screen')['slots'] if 300 <= s['slot'] < 300 + size and s.get('item')]
+                    inv = game('inventory')
+                    stored = sum(s['count'] for s in contents if s['item'] == 'minecraft:diamond')
+                    assert stored == len(sources) and not inv['counts'].get('minecraft:diamond') and not inv.get('carried'), \
+                        f'{game.name} {label}: chest {contents}, inventory {inv}'
+                    game.shot(out, label)
+                    seen[f'{game.name}-{label}'] = stored
+                    game.raw('key', 'esc', 'tap')
+        finally:
+            back_to_game(game)
+            for at in (chest, other):
+                game('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:air')
+            game('command', command='kill @e[type=minecraft:item,distance=..8]')
+            game('command', command='clear @s')
+    return seen
+
+
+CHECKS += ['large_chest']
+CHECK_FNS.update(large_chest=check_large_chest)
+
+
 def check_falling(host, guest, out):
     """ItemEntity and FallingBlockEntity tick on a client too (gravity, collisions, drag), and their
     position packets snap them (Entity's NO_OP InterpolationHandler). The server sends an item's
