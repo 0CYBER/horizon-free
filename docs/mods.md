@@ -350,14 +350,14 @@ A pool addition holds `"elements"` as a pool does. This is what lithostitched's
 NeoForge and Fabric, and `horizon-port-pack carry` writes them from those.
 
 A structure (and any of its pool elements, in place of the structure's) may
-hold `horizon:enhanced_terrain_adaptation`: YUNG's API's and
-MoogsStructureLib's terrain kernel, which carves or buries terrain around the
+hold `horizon:enhanced_terrain_adaptation`: MoogsStructureLib's terrain
+kernel, which carves or buries terrain around the
 pieces on top of vanilla's `terrain_adaptation`. `kernel_size` and
 `kernel_distance` shape the kernel; `top` and `bottom` (`carve`, `bury` or
 `none`) act above and below a piece's floor; `bottom_offset`, `padding`
 (`x`, `top`, `bottom`, `z`) and MoogsStructureLib's `band` (`bottom`, `top`,
 `piece_heights`) move the box it measures from. On a structure,
-`rigid_junctions` (YUNG's API) adds rigid pieces' junctions as well and
+`rigid_junctions` adds rigid pieces' junctions as well and
 `inflate` grows the start's box by the kernel radius. `kernel_size` 0 is
 none.
 

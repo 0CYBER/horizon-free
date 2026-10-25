@@ -39,9 +39,6 @@ pub enum PoolElement {
         legacy: bool,
         projection: Projection,
         waterlogging: Option<bool>,
-        /// YUNG's API's rules on the piece (`"horizon:yungsapi"`), read only
-        /// by its assembler ([`super::yung`]).
-        yung: Option<Box<super::yung::Rules>>,
         /// The piece's own terrain kernel in a structure that has one
         /// (`"horizon:enhanced_terrain_adaptation"`).
         enhanced_terrain: Option<Arc<super::enhanced_terrain::Adaptation>>,
@@ -149,10 +146,6 @@ impl PoolElement {
                         Some("ignore_waterlogging") => Some(false),
                         _ => None,
                     },
-                    yung: value
-                        .get("horizon:yungsapi")
-                        .map(|rules| super::yung::Rules::decode(rules, resources).map(Box::new))
-                        .transpose()?,
                     enhanced_terrain: value
                         .get("horizon:enhanced_terrain_adaptation")
                         .map(|a| super::enhanced_terrain::Adaptation::decode(a).map(Arc::new))
@@ -248,13 +241,10 @@ impl PoolElement {
                 .first()
                 .map(|e| e.shuffled_jigsaws(resources, position, rotation, random))
                 .unwrap_or_default(),
-            Self::Single { template, yung, .. } => {
+            Self::Single { template, .. } => {
                 let mut jigsaws = template_jigsaws(resources, template, position, rotation);
                 shuffle(&mut jigsaws, random);
-                // YUNG's elements keep the shuffled order.
-                if yung.is_none() {
-                    jigsaws.sort_by_key(|j| std::cmp::Reverse(j.selection_priority));
-                }
+                jigsaws.sort_by_key(|j| std::cmp::Reverse(j.selection_priority));
                 jigsaws
             }
         }
@@ -263,13 +253,6 @@ impl PoolElement {
         match self {
             Self::Single { ground_level, .. } => *ground_level,
             _ => 1,
-        }
-    }
-    /// YUNG's API's rules, on a piece of one of its structures.
-    pub fn yung(&self) -> Option<&super::yung::Rules> {
-        match self {
-            Self::Single { yung, .. } => yung.as_deref(),
-            _ => None,
         }
     }
     /// The piece's own terrain kernel, in place of its structure's.
