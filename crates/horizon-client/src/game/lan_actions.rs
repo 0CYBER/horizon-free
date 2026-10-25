@@ -1791,33 +1791,33 @@ impl Game<'_> {
                 // ServerPlayer.die: dropAllDeathLoot unless a spectator, from the eyes less 0.3.
                 let drops = (g.game_mode != SPECTATOR)
                     .then(|| [at[0], at[1] + g.eye_height() - 0.3, at[2]]);
-                // ServerPlayer.die: the death screen always shows the message;
-                // chat only when the rule allows and the team does not hide it.
                 let cause = host.play.get_mut(&conn).and_then(|p| p.death_cause.take());
-                let key = cause.unwrap_or_else(|| {
-                    if at[1] < f64::from(horizon_client::chunk::MIN_Y - 64) {
-                        "death.attack.outOfWorld".into()
-                    } else {
-                        "death.attack.generic".into()
-                    }
-                });
-                let text =
-                    horizon_client::text::Text::translate(&key, &[self.player_text(&name, uuid)]);
-                let message = horizon_client::lan::data::component_nbt(&text.component());
-                if self.ui.rules.bool("show_death_messages") {
-                    let team = self.score.board.players_team(&name);
-                    if horizon_client::scoreboard::own_death_message_shown(team) {
-                        host.hub.system_message(message.clone());
-                        if self.options.dedicated.is_some() {
-                            super::dedicated::log(
-                                "INFO",
-                                &format!("System chat: {}", text.plain()),
-                            );
-                        } else if self.player.is_some() {
-                            self.system_message(text);
+                let message = match cause {
+                    // ServerPlayer.die: the death message, to everyone unless
+                    // the player's team hides it.
+                    Some(key) if self.ui.rules.bool("show_death_messages") => {
+                        let text = horizon_client::text::Text::translate(
+                            &key,
+                            &[self.player_text(&name, uuid)],
+                        );
+                        let message = horizon_client::lan::data::component_nbt(&text.component());
+                        let team = self.score.board.players_team(&name);
+                        if horizon_client::scoreboard::own_death_message_shown(team) {
+                            host.hub.system_message(message.clone());
+                            if self.options.dedicated.is_some() {
+                                super::dedicated::log(
+                                    "INFO",
+                                    &format!("System chat: {}", text.plain()),
+                                );
+                            } else if self.player.is_some() {
+                                self.system_message(text);
+                            }
                         }
+                        message
                     }
-                }
+                    Some(_) => literal(""),
+                    None => literal(&format!("{name} died")),
+                };
                 host.hub.send_to(
                     conn,
                     &C::PlayerCombatKill(play::PlayerCombatKill { id, message }),

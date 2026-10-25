@@ -755,7 +755,7 @@ impl Game<'_> {
             image_width,
             &self.potions.effects.list,
             self.clock.rate(),
-            &|key| Some(horizon_client::lang::get(key)),
+            &|key| self.pack.names.display_get(key),
             &|text| self.gui.atlas.font.width(text).ceil() as i32,
         );
         if let Some(lines) = inventory_effects::paint(

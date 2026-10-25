@@ -597,14 +597,18 @@ pub fn json_text(v: &serde_json::Value, lang: &Language) -> String {
     }
 }
 
-/// The language a session resolves server-sent components with: the client's
-/// selected language, layered over `en_us` (`ClientLanguage.loadFrom`), so a
-/// menu title the server sends as a key follows the language screen.
+/// The language a session resolves server-sent components with: the selected
+/// one as `lang` loaded it (`en_us` under it, packs included), so a menu title
+/// the server sends as a key follows the language screen. A process with no
+/// language set (a dedicated server's log) reads en_us.json.
 pub fn load_language(resources: &std::path::Path) -> Language {
-    let root = resources.to_path_buf();
-    crate::lang::Language::load(&[&root], &crate::lang::code())
-        .map()
-        .clone()
+    if let Some(lang) = crate::lang::current() {
+        return lang.map().clone();
+    }
+    std::fs::read(resources.join("assets/minecraft/lang/en_us.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
 }
 
 /// Ask a server for its status (ServerStatusPinger): MOTD, players and the
