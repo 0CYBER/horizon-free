@@ -277,15 +277,10 @@ fn argb(c: i32) -> u32 {
 }
 
 impl Game<'_> {
-    fn data(&self) -> &stations::StationData {
-        self.res.stations()
-    }
+    /// `Component.translatable`: the selected language (which `lang` layers
+    /// over `en_us`), the caller's English text last.
     pub(super) fn translate(&self, key: &str, fallback: &str) -> String {
-        self.data()
-            .enchantments
-            .translate(key)
-            .unwrap_or(fallback)
-            .to_owned()
+        horizon_client::lang::get_or(key, fallback)
     }
     fn brewing_open(&self) -> bool {
         matches!(self.container_kind(), Some(BlockEntity::Brewing(_)))
@@ -421,7 +416,8 @@ impl Game<'_> {
     pub(super) fn anvil_item_name(&self, s: &Station) -> String {
         match &s.inputs[0] {
             Some(input)
-                if input.custom_name().is_none() && s.name == self.pack.names.item(&input.item) =>
+                if input.custom_name().is_none()
+                    && s.name == self.pack.names.display_item(&input.item) =>
             {
                 String::new()
             }
@@ -462,7 +458,7 @@ impl Game<'_> {
                 let name = self.anvil_item_name(&s);
                 let hover = s.inputs[0]
                     .as_ref()
-                    .map(|i| stations::hover_name(&|id| self.pack.names.item(id), i))
+                    .map(|i| stations::hover_name(&|id| self.pack.names.display_item(id), i))
                     .unwrap_or_default();
                 s.anvil = stations::anvil_result(
                     &data.enchantments,
@@ -895,7 +891,7 @@ impl Game<'_> {
             s.anvil_last = s.inputs[0].clone();
             s.name = s.inputs[0]
                 .as_ref()
-                .map(|i| stations::hover_name(&|id| self.pack.names.item(id), i))
+                .map(|i| stations::hover_name(&|id| self.pack.names.display_item(id), i))
                 .unwrap_or_default();
         }
         self.station_changed();
@@ -1648,28 +1644,29 @@ impl Game<'_> {
         let name = if let Some(n) = stack.custom_name() {
             n.to_owned()
         } else if stack.data().is_some_and(|d| d.ominous_banner) {
-            e.translate("block.minecraft.ominous_banner")
-                .map_or_else(|| "Ominous Banner".to_owned(), str::to_owned)
+            self.translate("block.minecraft.ominous_banner", "Ominous Banner")
         } else if stack.data().and_then(|d| d.potion.as_ref()).is_some()
             || stack.item.ends_with("potion")
             || &*stack.item == "minecraft:tipped_arrow"
         {
             let key = brewing::potion_name_key(&stack.item, stack.potion());
-            e.translate(&key)
-                .map_or_else(|| self.pack.names.item(&stack.item), str::to_owned)
+            self.pack
+                .names
+                .display_get(&key)
+                .unwrap_or_else(|| self.pack.names.display_item(&stack.item))
         } else {
-            self.pack.names.item(&stack.item)
+            self.pack.names.display_item(&stack.item)
         };
         let display = horizon_client::item_tooltip::TooltipDisplay::for_stack(stack);
         let mut lines = Vec::new();
         if display.name_visible(self.screen == Screen::Creative) {
             lines.push((name, color));
         }
-        let translate = |k: &str| e.translate(k).map(str::to_owned);
+        let translate = |k: &str| self.pack.names.display_get(k);
         // ItemContainerContents.addToTooltip.
         let hover_name = |s: &ItemStack| {
             s.custom_name()
-                .map_or_else(|| self.pack.names.item(&s.item), str::to_owned)
+                .map_or_else(|| self.pack.names.display_item(&s.item), str::to_owned)
         };
         if display.shows("minecraft:container") {
             for line in

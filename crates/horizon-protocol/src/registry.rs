@@ -102,6 +102,12 @@ impl Dynamic {
             .get(i)
             .map(|(n, _)| n.as_str())
     }
+    /// The id of an entry by name, the reverse of `name`. A registry has one
+    /// entry per id, so the first match is the only one.
+    pub fn id(&self, registry: &str, name: &str) -> Option<i32> {
+        let list = self.registries.get(registry)?;
+        list.iter().position(|(n, _)| n == name).map(|i| i as i32)
+    }
     pub fn data(&self, registry: &str, id: i32) -> Option<&Tag> {
         let i = usize::try_from(id).ok()?;
         self.registries.get(registry)?.get(i)?.1.as_ref()

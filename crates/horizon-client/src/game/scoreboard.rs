@@ -332,6 +332,7 @@ impl Game<'_> {
             return;
         }
         self.load_scoreboard();
+        host.hub.teams.clone_from(&self.score.board.teams);
         let view = horizon_client::lan::scoreboard::View::of(&self.score.board);
         for g in host.hub.guests.iter_mut().filter(|g| g.placed) {
             if g.scoreboard != view {
