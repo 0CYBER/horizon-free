@@ -123,6 +123,9 @@ pub(super) struct Remote {
     loaded_sent: bool,
     /// The view distance last sent in ClientInformation.
     sent_view: i8,
+    /// The Chat option's visibility last sent in ClientInformation
+    /// (`Options.broadcastOptions` sends it again when it changes).
+    sent_chat_visibility: i32,
     /// BlockStatePredictionHandler: blocks changed ahead of the server (a predicted break),
     /// with the sequence of the last action that changed them and the state the server
     /// last said they have. Until the server acknowledges that sequence its block updates
@@ -430,6 +433,7 @@ impl Game<'_> {
             abilities: None,
             loaded_sent: false,
             sent_view: view,
+            sent_chat_visibility: self.settings.chat_visibility as i32,
             predictions: HashMap::new(),
             menu: None,
             menu_title: None,
@@ -794,8 +798,22 @@ impl Game<'_> {
         Some(stack)
     }
     /// A line in the connection's chat, with its styles, click and hover
-    /// events (ChatComponent.addMessage).
-    pub(super) fn chat_line(&mut self, content: horizon_client::text::Text) {
+    /// events (ChatComponent.addMessage). `ChatListener` drops the lines the
+    /// Chat option hides before they reach the chat.
+    pub(super) fn chat_line(
+        &mut self,
+        content: horizon_client::text::Text,
+        source: horizon_client::chat::ChatSource,
+    ) {
+        let abilities = self.chat_abilities();
+        let allowed = match source {
+            horizon_client::chat::ChatSource::Player => abilities.receive_player_messages,
+            horizon_client::chat::ChatSource::Server => abilities.receive_system_messages,
+            horizon_client::chat::ChatSource::Client => true,
+        };
+        if !allowed {
+            return;
+        }
         let text = content.plain();
         log::info!("[chat] {text}");
         self.ui.chat.add(
@@ -1776,9 +1794,10 @@ impl Game<'_> {
                 if let Some(r) = self.remote.as_mut() {
                     r.sent_view = view;
                 }
-                self.send(S::ClientInformation(
-                    horizon_protocol::packets::configuration::ClientInformation::new(view),
-                ));
+                let mut info =
+                    horizon_protocol::packets::configuration::ClientInformation::new(view);
+                info.chat_visibility = self.settings.chat_visibility as i32;
+                self.send(S::ClientInformation(info));
             }
             C::Respawn(p) => {
                 // A new player, without effects: the server sends them again.
@@ -2568,7 +2587,7 @@ impl Game<'_> {
                 if p.overlay {
                     self.titles.set_overlay(text, false);
                 } else {
-                    self.chat_line(text);
+                    self.chat_line(text, horizon_client::chat::ChatSource::Server);
                 }
             }
             C::PlayerChat(p) => {
@@ -2578,12 +2597,12 @@ impl Game<'_> {
                     .as_ref()
                     .map_or_else(|| serde_json::Value::from(p.content.as_str()), tag_to_json);
                 let line = self.format_chat(&p.chat_type, content);
-                self.chat_line(line);
+                self.chat_line(line, horizon_client::chat::ChatSource::Player);
             }
             C::DisguisedChat(p) => {
                 let content = horizon_client::scoreboard::tag_to_json(&p.message);
                 let line = self.format_chat(&p.chat_type, content);
-                self.chat_line(line);
+                self.chat_line(line, horizon_client::chat::ChatSource::Player);
             }
             C::PlayerInfoUpdate(p) => {
                 if let Some(r) = self.remote.as_mut() {
@@ -3216,16 +3235,19 @@ impl Game<'_> {
     fn tick_remote_level(&mut self) -> Result<()> {
         self.ticks += 1;
         self.track_experience_display();
-        // Options.broadcastOptions: a changed render distance is sent again.
+        // Options.broadcastOptions: a changed render distance or Chat option
+        // is sent again.
         let view = client_view_distance(self.settings.render_distance);
+        let visibility = self.settings.chat_visibility as i32;
         if let Some(r) = self.remote.as_mut()
             && r.joined
-            && r.sent_view != view
+            && (r.sent_view != view || r.sent_chat_visibility != visibility)
         {
             r.sent_view = view;
-            self.send(S::ClientInformation(
-                horizon_protocol::packets::configuration::ClientInformation::new(view),
-            ));
+            r.sent_chat_visibility = visibility;
+            let mut info = horizon_protocol::packets::configuration::ClientInformation::new(view);
+            info.chat_visibility = visibility;
+            self.send(S::ClientInformation(info));
         }
         // Minecraft.tick: TickRateManager.tick; ClientLevel.tickTime advances
         // the time only while the level runs normally.
@@ -4643,10 +4665,12 @@ impl Game<'_> {
             _ => Ok(false),
         }
     }
-    /// ClientPacketListener.sendChat / sendCommand (unsigned).
+    /// ClientPacketListener.sendChat / sendCommand (unsigned). The Chat
+    /// option's Hidden and System levels keep chat out and Hidden keeps the
+    /// commands out (ChatAbilities).
     pub(super) fn send_chat(&mut self, message: &str) {
         let message = message.trim();
-        if message.is_empty() {
+        if message.is_empty() || !self.chat_abilities().allows(message) {
             return;
         }
         if let Some(command) = message.strip_prefix('/') {
@@ -5026,9 +5050,12 @@ impl Game<'_> {
                 self.send(S::ContainerClose(play::ContainerClose {
                     container: p.container,
                 }));
-                self.chat_line(horizon_client::text::Text::literal(format!(
-                    "(Horizon cannot show {menu} screens yet)"
-                )));
+                self.chat_line(
+                    horizon_client::text::Text::literal(format!(
+                        "(Horizon cannot show {menu} screens yet)"
+                    )),
+                    horizon_client::chat::ChatSource::Client,
+                );
                 return;
             }
         };
