@@ -251,8 +251,19 @@ impl Game<'_> {
         let at = [r.position.x, r.position.y, r.position.z];
         if !r.explosions.is_empty() {
             let damage = 5.0 + r.explosions.len() as f32 * 2.0;
-            if r.attached && r.guest.is_none() {
-                self.hurt_player_by("minecraft:fireworks", damage);
+            // The player it boosts takes the full damage, a guest as well.
+            if r.attached {
+                match r.guest {
+                    None => self.hurt_player_by("minecraft:fireworks", damage),
+                    Some(conn) => {
+                        if let Some(mut host) = self.lan.take() {
+                            self.as_guest(&mut host, conn, |g| {
+                                g.hurt_player_by("minecraft:fireworks", damage);
+                            });
+                            self.lan = Some(host);
+                        }
+                    }
+                }
             }
             let from = r.position;
             let hits: Vec<(u32, f32)> = {

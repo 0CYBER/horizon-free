@@ -769,23 +769,10 @@ impl Game<'_> {
                 horizon_protocol::item::Component::Int(s.damage as i32),
             ));
         }
-        if let Some((flight, explosions)) = s.data().and_then(|d| d.fireworks.clone()) {
-            stack.added.push((
-                horizon_protocol::item::component::FIREWORKS,
-                horizon_protocol::item::Component::Fireworks {
-                    flight: i32::from(flight),
-                    explosions: explosions
-                        .iter()
-                        .map(|e| horizon_protocol::item::FireworkExplosion {
-                            shape: e.shape as i32,
-                            colors: e.colors.iter().map(|c| *c as i32).collect(),
-                            fade: e.fade.iter().map(|c| *c as i32).collect(),
-                            trail: e.trail,
-                            twinkle: e.twinkle,
-                        })
-                        .collect(),
-                },
-            ));
+        if let Some(d) = s.data() {
+            stack
+                .added
+                .extend(horizon_client::lan::guest::firework_components(d));
         }
         Some(stack)
     }
