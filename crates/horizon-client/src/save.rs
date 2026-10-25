@@ -734,18 +734,67 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
     Some((pos, entity))
 }
 
+/// What a dimension's saved chunks depend on: skylight and the build height
+/// (`DimensionType.minY` and `height`). `Chunk` always holds the Overworld's
+/// sections; a level saves only the ones inside its own height.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LevelShape {
+    pub sky_light: bool,
+    pub min_y: i32,
+    pub height: i32,
+}
+impl LevelShape {
+    pub const OVERWORLD: Self = Self {
+        sky_light: true,
+        min_y: MIN_Y,
+        height: SECTIONS as i32 * 16,
+    };
+    pub const NETHER: Self = Self {
+        sky_light: false,
+        min_y: 0,
+        height: 256,
+    };
+    pub const END: Self = Self {
+        sky_light: true,
+        min_y: 0,
+        height: 256,
+    };
+    /// The shape of a dimension folder (`dimensions/minecraft/<name>`, or the
+    /// old `DIM-1` and `DIM1`).
+    pub fn for_dir(root: &Path) -> Self {
+        if root.ends_with("the_nether") || root.ends_with("DIM-1") {
+            Self::NETHER
+        } else if root.ends_with("the_end") || root.ends_with("DIM1") {
+            Self::END
+        } else {
+            Self::OVERWORLD
+        }
+    }
+    fn min_section(self) -> i32 {
+        self.min_y >> 4
+    }
+    fn section_count(self) -> usize {
+        (self.height >> 4) as usize
+    }
+    fn has_section(self, y: i32) -> bool {
+        (self.min_section()..self.min_section() + self.section_count() as i32).contains(&y)
+    }
+}
+
 /// A column's sections as `Heightmap.primeHeightmaps` reads them.
 struct HeightmapView<'a> {
     sections: &'a [Arc<Section>],
     tables: &'a SaveTables,
+    min_y: i32,
+    height: i32,
 }
 impl HeightmapChunk for HeightmapView<'_> {
     type State = crate::assets::StateFacts;
     fn min_y(&self) -> i32 {
-        MIN_Y
+        self.min_y
     }
     fn height(&self) -> i32 {
-        SECTIONS as i32 * 16
+        self.height
     }
     fn highest_section_y(&self) -> i32 {
         let top = self
@@ -765,7 +814,7 @@ impl HeightmapChunk for HeightmapView<'_> {
     }
 }
 /// Heightmaps kept after world generation (`ChunkStatus.FULL.heightmapsAfter`).
-fn heightmaps(chunk: &Chunk, tables: &SaveTables) -> Tag {
+fn heightmaps(chunk: &Chunk, tables: &SaveTables, shape: LevelShape) -> Tag {
     let kinds = [
         HeightmapType::WorldSurface,
         HeightmapType::OceanFloor,
@@ -774,11 +823,13 @@ fn heightmaps(chunk: &Chunk, tables: &SaveTables) -> Tag {
     ];
     let mut maps: Vec<Heightmap> = kinds
         .iter()
-        .filter_map(|k| Heightmap::new(*k, MIN_Y, SECTIONS as i32 * 16).ok())
+        .filter_map(|k| Heightmap::new(*k, shape.min_y, shape.height).ok())
         .collect();
     let view = HeightmapView {
         sections: &chunk.sections,
         tables,
+        min_y: shape.min_y,
+        height: shape.height,
     };
     let mut refs: Vec<&mut Heightmap> = maps.iter_mut().collect();
     if Heightmap::prime(&view, &mut refs).is_err() {
@@ -808,7 +859,12 @@ pub fn client_heightmaps_in(
         .iter()
         .filter_map(|(id, k)| Heightmap::new(*k, min_y, height).ok().map(|m| (*id, m)))
         .collect();
-    let view = HeightmapView { sections, tables };
+    let view = HeightmapView {
+        sections,
+        tables,
+        min_y,
+        height,
+    };
     let mut refs: Vec<&mut Heightmap> = maps.iter_mut().map(|(_, m)| m).collect();
     if Heightmap::prime(&view, &mut refs).is_err() {
         return Vec::new();
@@ -834,17 +890,18 @@ fn nibbles(light: &Light, sky: bool) -> Vec<u8> {
 }
 
 pub fn encode(chunk: &Chunk, registry: &BlockRegistry, biomes: &Biomes) -> NamedTag {
-    encode_with(chunk, registry, biomes, None, true)
+    encode_with(chunk, registry, biomes, None, LevelShape::OVERWORLD)
 }
 /// The chunk NBT vanilla's `SerializableChunkData.write` produces for a full
-/// chunk. `sky_light` is false in dimensions without skylight.
+/// chunk in a level of `shape`.
 pub fn encode_with(
     chunk: &Chunk,
     registry: &BlockRegistry,
     biomes: &Biomes,
     tables: Option<&SaveTables>,
-    sky_light: bool,
+    shape: LevelShape,
 ) -> NamedTag {
+    let sky_light = shape.sky_light;
     let mut sections = Vec::new();
     let air = tables.map_or(0, |t| t.air);
     // Sky layers below the highest section with light other than 15 are
@@ -856,6 +913,9 @@ pub fn encode_with(
     });
     for (si, section) in chunk.sections.iter().enumerate() {
         let y = (MIN_Y >> 4) + si as i32;
+        if !shape.has_section(y) {
+            continue;
+        }
         // PalettedContainer.pack: distinct states in index order, indices at
         // the saved width.
         let packed = section.blocks.pack();
@@ -985,7 +1045,7 @@ pub fn encode_with(
         ("DataVersion", Tag::Int(DATA_VERSION)),
         ("xPos", Tag::Int(chunk.x)),
         ("zPos", Tag::Int(chunk.z)),
-        ("yPos", Tag::Int(MIN_Y >> 4)),
+        ("yPos", Tag::Int(shape.min_section())),
         ("Status", string("minecraft:full")),
         ("LastUpdate", Tag::Long(extras.map_or(0, |e| e.last_update))),
         ("isLightOn", Tag::Byte(i8::from(chunk.lit))),
@@ -1018,10 +1078,10 @@ pub fn encode_with(
             s.insert("References".into(), Tag::Compound(refs));
         }
         map.entry("PostProcessing".into())
-            .or_insert_with(|| Tag::List(vec![Tag::List(Vec::new()); SECTIONS]));
+            .or_insert_with(|| Tag::List(vec![Tag::List(Vec::new()); shape.section_count()]));
     }
     if let Some(t) = tables {
-        put(&mut root, "Heightmaps", heightmaps(chunk, t));
+        put(&mut root, "Heightmaps", heightmaps(chunk, t, shape));
         let names = |k: u32| t.block_names.get(k as usize).cloned();
         let (blocks, fluids) = extras.map_or((&[][..], &[][..]), |e| {
             (&e.block_ticks[..], &e.fluid_ticks[..])
@@ -1237,18 +1297,19 @@ pub fn encode_proto(
     registry: &BlockRegistry,
     biomes: &Biomes,
     tables: Option<&SaveTables>,
-    sky_light: bool,
+    shape: LevelShape,
 ) -> NamedTag {
-    let mut root = encode_with(&proto.column, registry, biomes, tables, sky_light);
+    let mut root = encode_with(&proto.column, registry, biomes, tables, shape);
     let status = if proto.decorated {
         ChunkStatus::Features
     } else {
         ChunkStatus::Terrain
     };
     // ProtoChunk.postProcessing: one list per section, packed section offsets.
-    let mut marks = vec![Vec::new(); SECTIONS];
+    let mut marks = vec![Vec::new(); shape.section_count()];
     for &[x, y, z] in &proto.column.postprocess {
-        if let Some(list) = marks.get_mut(((y - MIN_Y) >> 4) as usize) {
+        let section = usize::try_from((y - shape.min_y) >> 4).ok();
+        if let Some(list) = section.and_then(|s| marks.get_mut(s)) {
             list.push(Tag::Short(
                 ((x & 15) | (y & 15) << 4 | (z & 15) << 8) as i16,
             ));
@@ -1562,7 +1623,7 @@ struct Encoding {
     registry: &'static BlockRegistry,
     biomes: Arc<Biomes>,
     tables: Option<Arc<SaveTables>>,
-    sky_light: bool,
+    shape: LevelShape,
 }
 impl Record {
     fn tag(&self) -> Option<Arc<NamedTag>> {
@@ -1573,7 +1634,7 @@ impl Record {
                 e.registry,
                 &e.biomes,
                 e.tables.as_deref(),
-                e.sky_light,
+                e.shape,
             ))),
             Record::Delete => None,
         }
@@ -1610,12 +1671,12 @@ pub struct SaveDir {
     outstanding: Arc<Outstanding>,
     /// Set by `Persistent` before the first load.
     pub tables: OnceLock<Arc<SaveTables>>,
-    /// False in dimensions without skylight (no SkyLight layers are written).
-    pub sky_light: bool,
+    /// The dimension's skylight and height, from its folder name.
+    pub shape: LevelShape,
 }
 impl SaveDir {
     pub fn new(root: PathBuf) -> Self {
-        let sky_light = !root.ends_with("the_nether") && !root.ends_with("DIM-1");
+        let shape = LevelShape::for_dir(&root);
         Self {
             root,
             regions: Default::default(),
@@ -1625,7 +1686,7 @@ impl SaveDir {
             writer: Mutex::new(None),
             outstanding: Default::default(),
             tables: OnceLock::new(),
-            sky_light,
+            shape,
         }
     }
     fn region_path(&self, folder: &str, rx: i32, rz: i32) -> PathBuf {
@@ -1656,7 +1717,7 @@ impl SaveDir {
         let root = self.read_record("region", x, z)?;
         let tables = self.tables.get().map(|t| &**t);
         let mut chunk = decode_with(&root, registry, biomes, tables)?;
-        load_light(&root.tag, &mut chunk, self.sky_light);
+        load_light(&root.tag, &mut chunk, self.shape.sky_light);
         Some(chunk)
     }
     /// A proto chunk saved before it became final (`decode_proto`).
@@ -1681,7 +1742,7 @@ impl SaveDir {
         let records = protos
             .iter()
             .map(|p| {
-                let tag = encode_proto(p, registry, biomes, tables, self.sky_light);
+                let tag = encode_proto(p, registry, biomes, tables, self.shape);
                 ((p.column.x, p.column.z), Some(tag))
             })
             .collect();
@@ -1856,7 +1917,7 @@ impl SaveDir {
             .map(|c| {
                 (
                     (c.x, c.z),
-                    Some(encode_with(c, registry, biomes, tables, self.sky_light)),
+                    Some(encode_with(c, registry, biomes, tables, self.shape)),
                 )
             })
             .collect();
@@ -1875,7 +1936,7 @@ impl SaveDir {
             registry,
             biomes: biomes.clone(),
             tables: self.tables.get().cloned(),
-            sky_light: self.sky_light,
+            shape: self.shape,
         });
         let records = chunks
             .iter()
@@ -3345,7 +3406,7 @@ impl SaveDir {
         {
             return None;
         }
-        decode_lod_surfaces(&root, assets, biomes, self.sky_light)
+        decode_lod_surfaces(&root, assets, biomes, self.shape.sky_light)
     }
 }
 
@@ -3436,6 +3497,71 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nether_and_end_chunks_save_with_their_own_height() {
+        let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let assets = crate::assets::Assets::load(&root).expect("assets");
+        let biomes = Biomes::load(&root).expect("biomes");
+        let tables = SaveTables::new(&assets);
+        let rack = assets
+            .registry
+            .default_state("minecraft:netherrack")
+            .unwrap();
+        let mut chunk = Chunk::empty(0, 0);
+        for y in 0..128 {
+            chunk.set(0, y, 0, rack.0);
+        }
+        let saved = encode_with(
+            &chunk,
+            assets.registry,
+            &biomes,
+            Some(&tables),
+            LevelShape::NETHER,
+        );
+        assert_eq!(number(saved.tag.get("yPos")), Some(0));
+        let Some(Tag::List(sections)) = saved.tag.get("sections") else {
+            panic!("no sections");
+        };
+        let ys: Vec<i32> = sections
+            .iter()
+            .filter_map(|s| number(s.get("Y")).map(|y| y as i32))
+            .collect();
+        assert_eq!(ys, (0..16).collect::<Vec<_>>());
+        let Some(Tag::List(post)) = saved.tag.get("PostProcessing") else {
+            panic!("no PostProcessing");
+        };
+        assert_eq!(post.len(), 16);
+        // Heightmap values count from the level's minimum: the column's top
+        // block at y=127 reads 128 (vanilla), not 192 (from the Overworld's -64).
+        let Some(Tag::LongArray(surface)) = saved
+            .tag
+            .get("Heightmaps")
+            .and_then(|h| h.get("WORLD_SURFACE"))
+        else {
+            panic!("no WORLD_SURFACE");
+        };
+        assert_eq!(surface[0] & 0x1ff, 128);
+        let overworld = encode_with(
+            &chunk,
+            assets.registry,
+            &biomes,
+            Some(&tables),
+            LevelShape::OVERWORLD,
+        );
+        assert_eq!(number(overworld.tag.get("yPos")), Some(-4));
+        assert_eq!(
+            LevelShape::for_dir(Path::new("w/dimensions/minecraft/the_end")),
+            LevelShape::END
+        );
+        assert_eq!(
+            LevelShape::for_dir(Path::new("w/DIM-1")),
+            LevelShape::NETHER
+        );
+    }
+
     #[test]
     fn saved_far_surface_reads_builds_and_water_without_gameplay_chunks() {
         let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
@@ -3554,7 +3680,7 @@ mod tests {
             "unfinished proto saves must not suppress complete decoration"
         );
         let mut nether = SaveDir::new(dir.clone());
-        nether.sky_light = false;
+        nether.shape = LevelShape::NETHER;
         let dark = nether.lod_surfaces(-2, 3, &assets, &biomes).unwrap();
         assert!(
             dark.iter()
