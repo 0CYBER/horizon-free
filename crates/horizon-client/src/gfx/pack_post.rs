@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use horizon_shaders::{Format, Group, Kind, Post};
+use horizon_shaders::{Format, Group, Kind, Post, Val};
 
 use super::pack_uniforms::{self, FrameUniforms, PackInputs};
 
@@ -83,6 +83,8 @@ pub struct PackPost {
     passes: Vec<Pass>,
     /// What draws terrain (`gbuffers_terrain` or its fallback), between `prepare` and `deferred`.
     terrain: Option<Pass>,
+    /// `shaders.properties`' custom uniforms, after the frame's in `uniforms.values`.
+    custom: horizon_shaders::Custom,
     atlas: Option<wgpu::TextureView>,
     lightmap: wgpu::TextureView,
     deferred_pre: u16,
@@ -342,8 +344,16 @@ fn build_pass(
     screen: wgpu::TextureFormat,
     notes: &mut Vec<String>,
     geometry: Option<&Geometry<'_>>,
+    custom: &[String],
 ) -> Option<Pass> {
     let features = device.features();
+    // The frame's uniforms, then the pack's custom ones.
+    let index = |name: &str| {
+        pack_uniforms::index(name).or_else(|| {
+            let k = custom.iter().position(|c| c == name)?;
+            Some(pack_uniforms::NAMES.len() + k)
+        })
+    };
     let mask = |flips: &[(u32, bool)]| flips.iter().filter(|f| f.1).fold(0u16, |m, f| m | 1 << f.0);
     let interface = &p.program.interface;
     let mut entries = vec![entry(
@@ -499,7 +509,7 @@ fn build_pass(
     let missing: Vec<&str> = interface
         .uniforms
         .iter()
-        .filter(|u| !u.name.starts_with("hz_") && pack_uniforms::index(&u.name).is_none())
+        .filter(|u| !u.name.starts_with("hz_") && index(&u.name).is_none())
         .map(|u| u.name.as_str())
         .collect();
     if !missing.is_empty() {
@@ -516,7 +526,7 @@ fn build_pass(
         uniforms: interface
             .uniforms
             .iter()
-            .map(|u| (pack_uniforms::index(&u.name), u.ty.clone(), u.offset))
+            .map(|u| (index(&u.name), u.ty.clone(), u.offset))
             .collect(),
         name: p.name,
         group: p.group,
@@ -552,11 +562,27 @@ impl PackPost {
         });
         let mut notes = post.notes;
         notes.extend(post.config.notes);
+        let mut custom = post.custom;
+        let custom_names: Vec<String> = custom.uniforms().map(|u| u.0.to_owned()).collect();
+        // A first run finds the names neither the frame nor the pack defines.
+        custom.eval(0.0, &|n| pack_uniforms::index(n).map(|_| Val::scalar(0.0)));
+        if !custom.notes.is_empty() {
+            notes.push(format!("custom uniforms: {}", custom.notes.join("; ")));
+            custom.notes.clear();
+        }
         let mask =
             |flips: &[(u32, bool)]| flips.iter().filter(|f| f.1).fold(0u16, |m, f| m | 1 << f.0);
         let mut used = 1u16;
         let mut build = |p: horizon_shaders::PostProgram, geometry: Option<&Geometry<'_>>| {
-            let pass = build_pass(device, p, &formats, screen, &mut notes, geometry)?;
+            let pass = build_pass(
+                device,
+                p,
+                &formats,
+                screen,
+                &mut notes,
+                geometry,
+                &custom_names,
+            )?;
             used |= pass.reads | pass.written | pass.flip;
             Some(pass)
         };
@@ -646,6 +672,7 @@ impl PackPost {
             notes,
             passes,
             terrain,
+            custom,
             atlas: world.atlas.as_ref().map(|a| a.0.clone()),
             lightmap: world.lightmap,
             deferred_pre: mask(&post.deferred_pre),
@@ -907,6 +934,7 @@ impl PackPost {
     ) {
         self.resize(device, size);
         self.uniforms.update(frame, inputs, size);
+        self.uniforms.eval_custom(&mut self.custom);
         let Some(targets) = &self.targets else { return };
         let main = |m: u16, i: usize| usize::from(m & 1 << i != 0);
         let view = |m: u16, i: usize, alt: bool| {

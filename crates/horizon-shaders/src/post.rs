@@ -13,6 +13,7 @@
 use std::collections::BTreeSet;
 
 use crate::config::{self, Config};
+use crate::custom::Custom;
 use crate::{GbuffersInputs, Macros, Pack, Preprocessed, Program, Properties, Target};
 use crate::{eval_condition, preprocess, translate_composite, translate_gbuffers};
 
@@ -62,6 +63,8 @@ pub struct Post {
     pub composite_pre: Vec<(u32, bool)>,
     /// What draws solid and cutout terrain, when the game asked for it and one loads.
     pub terrain: Option<PostProgram>,
+    /// The custom uniforms of `shaders.properties` (3.4).
+    pub custom: Custom,
     pub config: Config,
     /// Programs skipped and why, as `program: message` or `file:line: message`.
     pub notes: Vec<String>,
@@ -93,6 +96,7 @@ pub fn load_post(
         deferred_pre: flips(properties, "deferred_pre"),
         composite_pre: flips(properties, "composite_pre"),
         terrain: None,
+        custom: Custom::parse(properties),
         config: Config::default(),
         notes: Vec::new(),
     };

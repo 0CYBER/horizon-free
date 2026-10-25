@@ -14,6 +14,7 @@
 
 mod condition;
 mod config;
+mod custom;
 mod discover;
 mod lang;
 mod macros;
@@ -26,6 +27,7 @@ mod translate;
 
 pub use condition::eval_condition;
 pub use config::{BUFFERS, Buffer, Config, Format, Kind, buffer_index, draw_buffers};
+pub use custom::{Custom, Val};
 pub use discover::{Found, discover};
 pub use lang::Lang;
 pub use macros::{MC_VERSION, Macros, RENDER_STAGES};

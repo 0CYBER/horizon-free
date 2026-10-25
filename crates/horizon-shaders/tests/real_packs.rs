@@ -182,6 +182,13 @@ fn real_packs_read() {
                 post.notes.len() + post.config.notes.len(),
                 start.elapsed().as_secs_f64() * 1000.0
             );
+            let mut custom = post.custom;
+            custom.eval(0.016, &|_| None);
+            println!(
+                "    {} custom uniforms; notes: {:?}",
+                custom.uniforms().count(),
+                custom.notes.iter().take(4).collect::<Vec<_>>()
+            );
             for n in post.notes.iter().chain(&post.config.notes).take(12) {
                 println!("    {n}");
             }

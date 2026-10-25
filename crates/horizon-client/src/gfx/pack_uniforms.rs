@@ -304,6 +304,47 @@ impl FrameUniforms {
     }
 }
 
+impl FrameUniforms {
+    /// Evaluates the pack's custom uniforms with this frame's values and puts them after
+    /// `NAMES`' values, in `custom.uniforms()` order.
+    pub fn eval_custom(&mut self, custom: &mut horizon_shaders::Custom) {
+        self.values.truncate(NAMES.len());
+        let values = &self.values;
+        let builtin = |name: &str| {
+            let v = values.get(index(name)?)?;
+            let n = components(name);
+            Some(match *v {
+                Value::F(f) => horizon_shaders::Val::vector(&f.map(f64::from)[..n]),
+                Value::I(i) => horizon_shaders::Val::vector(&i.map(f64::from)[..n.min(3)]),
+            })
+        };
+        let dt = match index("frameTime").and_then(|i| values.get(i)) {
+            Some(Value::F(f)) => f64::from(f[0]),
+            _ => 0.0,
+        };
+        let out = custom.eval(dt, &builtin);
+        self.values
+            .extend(out.iter().map(|v| Value::f(&v.v.map(|x| x as f32)[..v.n])));
+    }
+}
+
+/// How many components the uniform `name` has (16 for a matrix).
+fn components(name: &str) -> usize {
+    match name {
+        "cameraPosition"
+        | "previousCameraPosition"
+        | "upPosition"
+        | "sunPosition"
+        | "moonPosition"
+        | "shadowLightPosition"
+        | "fogColor"
+        | "skyColor" => 3,
+        "eyeBrightness" | "eyeBrightnessSmooth" | "atlasSize" => 2,
+        n if n.starts_with("gbuffer") || n.starts_with("shadow") && n != "shadowAngle" => 16,
+        _ => 1,
+    }
+}
+
 /// The position of `name` in [`NAMES`].
 pub fn index(name: &str) -> Option<usize> {
     NAMES.iter().position(|n| *n == name)
