@@ -181,18 +181,23 @@ def settle(server, ticks=600, timeout=600):
             break
         time.sleep(2)
 
-    def game_time():
-        start = len(server.lines)
-        server.console('time query gametime')
-        while time.time() < deadline:
-            for line in server.lines[start:]:
-                if m := re.search(r'The (?:game )?time is (\d+)', line):
-                    return int(m.group(1))
-            time.sleep(0.2)
-        raise AssertionError(f'{server.log_path.name}: no game time in {timeout} s')
-    until = game_time() + ticks
-    while game_time() < until:
+    until = game_time(server, deadline - time.time()) + ticks
+    while game_time(server, deadline - time.time()) < until:
         time.sleep(2)
+
+
+def game_time(server, timeout=300):
+    """The server's game time, asked from its console: the console runs its queue in order, so every console
+    command sent before has run."""
+    deadline = time.time() + timeout
+    start = len(server.lines)
+    server.console('time query gametime')
+    while time.time() < deadline:
+        for line in server.lines[start:]:
+            if m := re.search(r'The (?:game )?time is (\d+)', line):
+                return int(m.group(1))
+        time.sleep(0.05)
+    raise AssertionError(f'{server.log_path.name}: no game time in {timeout:.0f} s')
 
 
 def legacy_ping(port):

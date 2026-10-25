@@ -221,7 +221,7 @@ impl Game<'_> {
     /// holds it (`self.lan` is taken during the network tick).
     pub(super) fn enter_level(&mut self, host: Option<&mut LanHost>, target: Dim) -> Result<()> {
         // The in-frame game keeps its one level (`enter_dimension`).
-        if self.options.dedicated.is_none() {
+        if self.options.execution_role.is_client() {
             return Ok(());
         }
         if target != self.dim {
@@ -261,7 +261,7 @@ impl Game<'_> {
     /// nobody is in it; returns the level to put back afterwards. Only a
     /// server holds other levels.
     pub(super) fn enter_command_level(&mut self, dim: Dim) -> Option<Dim> {
-        if self.options.dedicated.is_none() || dim == self.dim {
+        if self.options.execution_role.is_client() || dim == self.dim {
             return None;
         }
         let back = self.dim;
