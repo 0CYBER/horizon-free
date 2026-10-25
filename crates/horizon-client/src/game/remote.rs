@@ -383,6 +383,7 @@ impl Game<'_> {
         }
         self.apply_settings();
         self.clear_waypoints();
+        self.boss_overlay.reset();
         self.remote = Some(Remote {
             session,
             brand: "unknown".into(),
@@ -465,6 +466,7 @@ impl Game<'_> {
             self.extras_left();
         }
         self.clear_waypoints();
+        self.boss_overlay.reset();
         if let Some(mut r) = self.remote.take() {
             r.session.disconnect();
         }
@@ -753,6 +755,9 @@ impl Game<'_> {
             self.ticks,
             self.screen == Screen::Chat,
         );
+        if self.mods.running() {
+            self.mods_chat(&text);
+        }
         if let Some(r) = self.remote.as_mut() {
             r.chat.push((text, Instant::now()));
             r.chat_received += 1;
@@ -849,7 +854,11 @@ impl Game<'_> {
                         r.joined = true;
                         r.profile = uuid;
                         r.profile_name = name.clone();
-                        r.status = format!("Joined as {name}; loading terrain...");
+                        // LevelLoadingScreen's line: no player name.
+                        r.status = horizon_client::lang::get_or(
+                            "multiplayer.downloadingTerrain",
+                            "Loading terrain...",
+                        );
                     }
                 }
                 Event::Brand(brand) => {
@@ -2717,6 +2726,7 @@ impl Game<'_> {
             }
             // ClientPacketListener.setActionBarText, setTitleText,
             // setSubtitleText, setTitlesAnimation and handleTitlesClear.
+            C::BossEvent(p) => self.apply_boss_event(&p),
             C::SetActionBarText(p) => self.titles.set_overlay(remote_text(&p.text), false),
             C::SetTitleText(p) => self.titles.set_title(remote_text(&p.text)),
             C::SetSubtitleText(p) => self.titles.set_subtitle(remote_text(&p.text)),
@@ -3126,6 +3136,8 @@ impl Game<'_> {
     /// One client tick while connected (Minecraft.tick with a ClientLevel).
     pub(super) fn tick_remote(&mut self) -> Result<()> {
         self.tick_remote_level()?;
+        // Client mods tick on any server, single player's own included.
+        self.tick_mods();
         // Minecraft.tick sends this even when the player cannot tick yet,
         // including while waiting for chunks. Keep it outside early returns.
         if self.remote.as_ref().is_some_and(|r| r.joined) {
@@ -3151,6 +3163,7 @@ impl Game<'_> {
         // Minecraft.tick: TickRateManager.tick; ClientLevel.tickTime advances
         // the time only while the level runs normally.
         let running = self.clock.world_runs();
+        self.boss_overlay.tick_darken(running);
         if running {
             self.world.game_time += 1;
             self.remote_clock_tick();
@@ -3914,7 +3927,7 @@ impl Game<'_> {
         let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
         // A boat, minecart, item frame, armor stand or painting nearer than
         // any mob: the server uses it (AbstractBoat.interact boards it).
-        if let Some(hit) = self.remote_object_hit()
+        if let Some(hit) = self.remote_object_hit(false)
             && self.mob_hit().is_none_or(|(_, d)| hit.distance < d)
             && self.before_block(hit.distance)
         {
@@ -4423,12 +4436,12 @@ impl Game<'_> {
                 id: self.creatures.projectiles[i].id as i32,
             }));
             self.reset_attack_strength();
-        } else if let Some(hit) = self.remote_object_hit()
+        } else if let Some(hit) = self.remote_object_hit(true)
             && self.mob_hit().is_none_or(|(_, d)| hit.distance < d)
             && self.before_block(hit.distance)
         {
             // VehicleEntity.hurtServer, ItemFrame and ArmorStand hurtServer,
-            // a painting broken: the server decides.
+            // a painting broken or an EndCrystal hurtServer: the server decides.
             self.send(S::Attack(play::Attack { id: hit.id }));
             self.reset_attack_strength();
         } else if let Some((i, distance)) = self.mob_hit()
@@ -5437,6 +5450,10 @@ impl horizon_client::interaction_input::InteractionWorld for RemoteInputWorld<'_
 }
 
 impl Remote {
+    /// Players in the server's player list, this one included.
+    pub(super) fn player_count(&self) -> usize {
+        self.players.len()
+    }
     /// The local player's profile UUID.
     pub(super) fn profile(&self) -> u128 {
         self.profile
