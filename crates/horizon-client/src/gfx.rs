@@ -516,6 +516,18 @@ fn sprite_split() -> u32 {
 }
 /// Sprite arrays terrain.wgsl binds (`sprites`, `sprites_1`...).
 const SPRITE_ARRAYS: u32 = 8;
+/// The layers to give a square texture of `count` layers viewed as a 2D
+/// array. wgpu's OpenGL backend picks a texture's target from its layer
+/// count when it is created: one layer makes a 2D texture and a multiple of
+/// six a cube map, neither of which can be viewed as an array.
+fn array_layers(count: u32, gl: bool) -> u32 {
+    match count {
+        _ if !gl => count,
+        0 | 1 => 2,
+        n if n % 6 == 0 => n + 1,
+        n => n,
+    }
+}
 /// The views of terrain.wgsl's sprite arrays, the unused ones a 1-layer
 /// stand-in.
 fn sprite_views(
@@ -1312,13 +1324,17 @@ impl Renderer {
             PreparedTextures::new(sprite_pixels, sprite_size, layers, sprite_mips, forcefield)
         });
         let mut mip_levels = 1;
+        let gl = adapter.get_info().backend == wgpu::Backend::Gl;
         let sprite_textures: Vec<wgpu::Texture> = prepared
             .sprites
             .into_iter()
             .enumerate()
-            .map(|(array, (mips, levels))| {
+            .map(|(array, (mut mips, levels))| {
                 let first = array as u32 * split;
-                let count = layers.saturating_sub(first).clamp(1, split);
+                let used = layers.saturating_sub(first).clamp(1, split);
+                let count = array_layers(used, gl);
+                // The extra layers are empty.
+                mips.resize(mips.len() / used as usize * count as usize, 0);
                 mip_levels = levels;
                 device.create_texture_with_data(
                     &queue,
@@ -1352,6 +1368,7 @@ impl Renderer {
             sprite_mips,
             &sprite_textures,
             split,
+            animate::SpriteAnimator::compute(&adapter, &device),
         );
         let sprite_unused = device
             .create_texture(&wgpu::TextureDescriptor {
@@ -1359,7 +1376,7 @@ impl Renderer {
                 size: wgpu::Extent3d {
                     width: 1,
                     height: 1,
-                    depth_or_array_layers: 1,
+                    depth_or_array_layers: array_layers(1, gl),
                 },
                 mip_level_count: 1,
                 sample_count: 1,
@@ -4557,6 +4574,13 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{} {}: {e}", path.display(), entry.name));
                 assert!(!hlsl.is_empty());
             }
+        }
+    }
+    #[test]
+    fn gl_sprite_arrays_are_neither_2d_textures_nor_cube_maps() {
+        for (count, gl) in [(1, 2), (2, 2), (5, 5), (6, 7), (12, 13), (2048, 2048)] {
+            assert_eq!(super::array_layers(count, true), gl);
+            assert_eq!(super::array_layers(count, false), count);
         }
     }
     #[test]
