@@ -1191,7 +1191,7 @@ impl Game<'_> {
         };
         let m = &mut self.mobs[i];
         m.extra.passenger = false;
-        m.extra.boarding_cooldown = 60;
+        m.extra.boarding_cooldown = super::super::boat_passengers::BOARDING_COOLDOWN;
         m.position = at;
         m.previous = at;
     }
