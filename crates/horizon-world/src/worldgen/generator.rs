@@ -1002,13 +1002,32 @@ where
         worker: &mut WorkerState,
         pos: ChunkPos,
     ) -> Result<Arc<BiomeChunk<BiomeId>>, GeneratorError> {
+        self.biome_chunk_or_busy(worker, pos, true)
+            .map(|chunk| chunk.expect("waited for the builder"))
+    }
+    /// The chunk's biomes, built here if no other thread is building them.
+    /// With `wait` false, None when another thread is building them now.
+    fn biome_chunk_or_busy(
+        &self,
+        worker: &mut WorkerState,
+        pos: ChunkPos,
+        wait: bool,
+    ) -> Result<Option<Arc<BiomeChunk<BiomeId>>>, GeneratorError> {
         if let Some(chunk) = self.biome_cache.lock().unwrap().get(&(pos.x, pos.z)) {
-            return Ok(chunk.clone());
+            return Ok(Some(chunk.clone()));
         }
         let work = self.biome_work.at((pos.x, pos.z));
-        let _work = work.lock().unwrap();
+        let _work = if wait {
+            work.lock().unwrap()
+        } else {
+            match work.try_lock() {
+                Ok(guard) => guard,
+                Err(std::sync::TryLockError::WouldBlock) => return Ok(None),
+                Err(std::sync::TryLockError::Poisoned(error)) => panic!("{error}"),
+            }
+        };
         if let Some(chunk) = self.biome_cache.lock().unwrap().get(&(pos.x, pos.z)) {
-            return Ok(chunk.clone());
+            return Ok(Some(chunk.clone()));
         }
         let (min, height) = (self.settings.level_min_y, self.settings.level_height);
         let mut chunk = BiomeChunk::new(pos, min, height, BiomeId(0)).map_err(stage("biomes"))?;
@@ -1043,7 +1062,7 @@ where
             cache.clear();
         }
         cache.insert((pos.x, pos.z), chunk.clone());
-        Ok(chunk)
+        Ok(Some(chunk))
     }
     fn carver_biome(&self, worker: &mut WorkerState, origin: ChunkPos) -> Result<BiomeId, String> {
         let key = (origin.x, origin.z);
@@ -1145,12 +1164,20 @@ where
         let mut clock = std::time::Instant::now();
         let mut neighbors = Vec::with_capacity(9);
         let mut possible = BTreeSet::new();
-        for dz in -1..=1 {
-            for dx in -1..=1 {
-                let chunk = self.biome_chunk(
-                    worker,
-                    ChunkPos::new(pos.x.wrapping_add(dx), pos.z.wrapping_add(dz)),
-                )?;
+        // Build the neighbours no other thread is building first, then wait
+        // for the rest (each is built once, by whichever thread gets it).
+        let around =
+            |i: i32| ChunkPos::new(pos.x.wrapping_add(i % 3 - 1), pos.z.wrapping_add(i / 3 - 1));
+        let mut ready: [Option<Arc<BiomeChunk<BiomeId>>>; 9] = Default::default();
+        for (i, slot) in ready.iter_mut().enumerate() {
+            *slot = self.biome_chunk_or_busy(worker, around(i as i32), false)?;
+        }
+        for (i, slot) in ready.iter_mut().enumerate() {
+            let chunk = match slot.take() {
+                Some(chunk) => chunk,
+                None => self.biome_chunk(worker, around(i as i32))?,
+            };
+            {
                 let mut section = 0;
                 while let Some(biomes) = chunk.section(section) {
                     possible.extend(biomes.iter().copied());
