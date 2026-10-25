@@ -343,6 +343,12 @@ impl Hub {
         if !window_ok || self.guests[i].spectator() {
             return Vec::new();
         }
+        // A menu that is no longer valid takes no clicks.
+        if let Some(m) = self.guests[i].menu.as_ref().filter(|_| in_menu)
+            && !m.slots.still_valid(world, &self.guests[i], m.pos)
+        {
+            return Vec::new();
+        }
         let source = self.guests[i].menu.as_ref().map(|m| m.slots);
         let mut drag = if in_menu {
             self.guests[i].menu.as_mut().and_then(|m| m.drag.take())

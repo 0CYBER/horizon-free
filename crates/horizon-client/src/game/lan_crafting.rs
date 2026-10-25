@@ -456,7 +456,7 @@ impl Game<'_> {
             .facts()
             .get(self.world.block(pos[0], pos[1], pos[2]))
             .name;
-        &**name == "minecraft:crafting_table" && super::lan_stations::within_reach(g, pos)
+        &**name == "minecraft:crafting_table" && g.within_block_range(pos, 4.0)
     }
 
     /// `ServerPlayer.tick`'s `stillValid`: a guest's crafting table closes

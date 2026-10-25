@@ -819,6 +819,31 @@ impl Game<'_> {
         }
     }
 
+    /// `ServerPlayer.tick`'s `stillValid`: a guest's block container closes
+    /// once the guest is out of reach of its block (a removed block closes it
+    /// in the hub's `sync_containers`).
+    fn lan_containers_tick(&mut self, host: &mut LanHost) {
+        let far: Vec<u32> = host
+            .hub
+            .guests
+            .iter()
+            .filter(|g| host.hub.here(g))
+            .filter(|g| {
+                g.menu.as_ref().is_some_and(|m| {
+                    m.slots.valid(&self.world) && !m.slots.still_valid(&self.world, g, m.pos)
+                })
+            })
+            .map(|g| g.conn)
+            .collect();
+        for conn in far {
+            self.guest_container_closed(host, conn);
+            host.hub.close_container(conn);
+            if let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) {
+                self.guest_carried_back(host, gi);
+            }
+        }
+    }
+
     /// A packet from a guest that the hub does not handle itself.
     pub(super) fn lan_guest_packet(&mut self, host: &mut LanHost, conn: u32, packet: S) {
         let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
@@ -1688,6 +1713,7 @@ impl Game<'_> {
         self.lan_merchant_tick(host);
         self.lan_stations_tick(host);
         self.lan_tables_tick(host);
+        self.lan_containers_tick(host);
         self.tick_lan_mount_menus(host);
         self.announce_guest_advancements(host);
         let conns: Vec<u32> = host
