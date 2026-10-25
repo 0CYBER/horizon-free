@@ -223,6 +223,8 @@ pub struct Guest {
     /// Whether the guest was on the ground before the first of `moves`.
     pub moves_from_ground: bool,
     pub dead: bool,
+    /// `LivingEntity.deathTime`: ticks since the guest died.
+    pub death_time: u32,
     /// The join packets were sent (PlayerList.placeNewPlayer ran).
     pub placed: bool,
     /// The level the player is in (`ServerPlayer.level().dimension()`): the
@@ -349,6 +351,7 @@ impl Guest {
             moves: Vec::new(),
             moves_from_ground: false,
             dead: false,
+            death_time: 0,
             placed: false,
             dimension: "minecraft:overworld".into(),
             menu: None,
@@ -442,6 +445,43 @@ impl Guest {
     }
 }
 
+/// `FireworkExplosion.STREAM_CODEC`'s fields (`Shape` by its BY_ID order).
+fn network_explosion(
+    e: &crate::particles::FireworkExplosion,
+) -> horizon_protocol::item::FireworkExplosion {
+    horizon_protocol::item::FireworkExplosion {
+        shape: e.shape as i32,
+        colors: e.colors.iter().map(|c| *c as i32).collect(),
+        fade: e.fade.iter().map(|c| *c as i32).collect(),
+        trail: e.trail,
+        twinkle: e.twinkle,
+    }
+}
+
+/// A rocket's `minecraft:fireworks` and a star's `minecraft:firework_explosion`.
+pub fn firework_components(
+    d: &crate::item_data::StackData,
+) -> Vec<(i32, horizon_protocol::item::Component)> {
+    use horizon_protocol::item::{Component, component};
+    let mut out = Vec::new();
+    if let Some((flight, explosions)) = &d.fireworks {
+        out.push((
+            component::FIREWORKS,
+            Component::Fireworks {
+                flight: i32::from(*flight),
+                explosions: explosions.iter().map(network_explosion).collect(),
+            },
+        ));
+    }
+    if let Some(e) = &d.firework_explosion {
+        out.push((
+            component::FIREWORK_EXPLOSION,
+            Component::FireworkExplosion(network_explosion(e)),
+        ));
+    }
+    out
+}
+
 /// The off hand slot is conventionally 40 in saves and 45 in the menu.
 /// `synced_id` names an entry of a synced registry (enchantments, trim
 /// materials and patterns) by its id on this connection.
@@ -532,6 +572,7 @@ fn network_stack(
                 horizon_protocol::item::Component::Int(i32::from(mode)),
             ));
         }
+        stack.added.extend(firework_components(d));
         // PotionContents: the potion by its `minecraft:potion` id.
         if let Some(id) = (d.potion.as_deref()).and_then(|potion| {
             synced_id(

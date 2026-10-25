@@ -17,6 +17,14 @@ version = "0.1.0"
 api = "0.1"
 capabilities = ["chat", "storage"]
 "#;
+const UI_MANIFEST: &str = r#"
+id = "test_ui_guest"
+name = "Test UI Guest"
+version = "0.1.0"
+api = "0.1"
+capabilities = ["chat", "ui"]
+experimental = ["ui"]
+"#;
 
 /// Builds both mods once and writes their `.hmod` files; returns the folder.
 fn mods_dir() -> &'static Path {
@@ -32,6 +40,8 @@ fn mods_dir() -> &'static Path {
                 "coords-hud",
                 "-p",
                 "horizon-mods-test-guest",
+                "-p",
+                "horizon-mods-test-ui-guest",
                 "--target-dir",
             ])
             .arg(&target)
@@ -48,6 +58,7 @@ fn mods_dir() -> &'static Path {
         let mods = [
             ("coords_hud", std::fs::read_to_string(example).unwrap()),
             ("horizon_mods_test_guest", GUEST_MANIFEST.to_string()),
+            ("horizon_mods_test_ui_guest", UI_MANIFEST.to_string()),
         ];
         for (name, manifest) in mods {
             let core = std::fs::read(built.join(format!("{name}.wasm"))).unwrap();
@@ -364,6 +375,45 @@ fn hook_overhead() {
         "load coords-hud:      {:8.1} ms",
         started.elapsed().as_secs_f64() * 1000.0
     );
+}
+
+#[test]
+fn ui_screens_settings_and_events() {
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    assert_eq!(mods.entries()[0].status, Status::Running);
+    assert!(!mods.entries()[0].has_ui_settings());
+    // `/ui_screen` pushes the screen; the host clips nothing of this one.
+    assert!(mods.command("ui_screen"));
+    assert_eq!(mods.drain(), [Output::OpenScreen { owner: 0 }]);
+    let screen = mods.screen(0).expect("a pushed screen");
+    assert_eq!(screen.title, "Guest's screen");
+    assert_eq!(screen.widgets.len(), 3);
+    // What the player did comes back through `ui-events`.
+    mods.ui_select(0, 7, 2);
+    mods.ui_closed(0);
+    assert_eq!(
+        mods.drain(),
+        [
+            Output::Chat {
+                name: "Test UI Guest".into(),
+                text: "selected 7:2".into(),
+            },
+            Output::Chat {
+                name: "Test UI Guest".into(),
+                text: "closed".into(),
+            },
+        ]
+    );
+    // The settings page: empty until the mod fills it, refreshed on open.
+    assert!(mods.command("ui_settings"));
+    assert_eq!(mods.settings_widgets(0).len(), 3);
+    assert!(mods.entries()[0].has_ui_settings());
+    mods.ui_settings_opened(0);
+    assert_eq!(mods.settings_widgets(0).len(), 1);
+    // `/ui_close` closes the mod's own screen.
+    assert!(mods.command("ui_close"));
+    assert!(mods.drain().contains(&Output::CloseScreen { owner: 0 }));
+    assert!(mods.screen(0).is_none());
 }
 
 #[test]

@@ -404,11 +404,19 @@ impl Game<'_> {
                     Value::Item(hub.stack(&Some(r.item.clone()))),
                 ));
             }
+            let boosted = match r.guest {
+                Some(conn) => hub
+                    .guests
+                    .iter()
+                    .find(|g| g.conn == conn)
+                    .map(|g| g.entity_id),
+                None => host_entity,
+            };
             if r.attached
-                && let Some(host) = host_entity
+                && let Some(player) = boosted
             {
                 e.meta
-                    .push((9, serializer::OPTIONAL_UNSIGNED_INT, Value::Id(host + 1)));
+                    .push((9, serializer::OPTIONAL_UNSIGNED_INT, Value::Id(player + 1)));
             }
             if r.angled {
                 e.meta.push((10, serializer::BOOLEAN, Value::Bool(true)));

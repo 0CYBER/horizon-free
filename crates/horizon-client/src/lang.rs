@@ -138,6 +138,11 @@ impl Language {
     pub fn get(&self, key: &str) -> Option<&str> {
         self.map.get(key).map(String::as_str)
     }
+    /// The resolved map, for `horizon_protocol::text::plain`: a server's
+    /// components carry keys, and the network layer resolves them with this.
+    pub fn map(&self) -> &HashMap<String, String> {
+        &self.map
+    }
     pub fn len(&self) -> usize {
         self.map.len()
     }

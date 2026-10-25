@@ -1562,6 +1562,16 @@ impl Game<'_> {
                 id, ticks, amplifier,
             ));
     }
+    /// `WitherRoseBlock.entityInside` for the player: on a server level that
+    /// isn't peaceful, `getBeeInteractionEffect` (Wither, 40 ticks) unless the
+    /// player is invulnerable to wither damage (creative, spectator). A
+    /// server's player gets it from the server.
+    pub(super) fn wither_rose_contact(&mut self) {
+        if self.remote.is_some() || self.ui.difficulty == 0 {
+            return;
+        }
+        self.give_player_effect("minecraft:wither", 40, 0);
+    }
     /// Burning applied to the player by mobs.
     fn tick_player_effects(&mut self) {
         self.creatures.wind_cooldown = self.creatures.wind_cooldown.saturating_sub(1);
@@ -1698,7 +1708,26 @@ impl Game<'_> {
                 targets: targets_guests,
             };
             let guest_entities = self.lan_guest_entities();
+            // ThrownEnderpearl.tick: a dead player's pearl is discarded in
+            // place of its tick while ender_pearls_vanish_on_death is on.
+            let vanish = self.ui.rules.bool("ender_pearls_vanish_on_death");
+            let host_dead = self.player_view().is_some_and(|p| !p.alive);
+            let dead_guests: Vec<u32> = self.lan.as_ref().map_or_else(Vec::new, |h| {
+                h.hub
+                    .guests
+                    .iter()
+                    .filter(|g| g.dead)
+                    .map(|g| g.conn)
+                    .collect()
+            });
             projectiles.retain_mut(|p| {
+                if vanish
+                    && matches!(p.kind, ProjectileKind::EnderPearl)
+                    && p.owner == Some(Who::Player)
+                    && p.guest.map_or(host_dead, |c| dead_guests.contains(&c))
+                {
+                    return false;
+                }
                 let mob_shot = !matches!(p.owner, Some(Who::Player));
                 // A player's arrows, snowballs and eggs meet every player; a
                 // guest's flies from that guest (Projectile.getOwner), not

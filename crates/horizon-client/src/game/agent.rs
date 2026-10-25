@@ -416,6 +416,7 @@ impl Game<'_> {
             Screen::Friends => "friends",
             Screen::CommandBlock => "command-block",
             Screen::Win => "win",
+            Screen::Mod => "mod",
         }
     }
     pub(super) fn inventory_counts(&self) -> BTreeMap<String, i64> {
@@ -1599,8 +1600,12 @@ impl Game<'_> {
                 if self.screen != Screen::Dead {
                     return Err("respawn needs the death screen".into());
                 }
-                let label =
-                    horizon_client::text::Text::translate("deathScreen.respawn", &[]).plain();
+                let key = if self.level.hardcore {
+                    "deathScreen.spectate"
+                } else {
+                    "deathScreen.respawn"
+                };
+                let label = horizon_client::text::Text::translate(key, &[]).plain();
                 let w = widgets::find(&widgets::last(), &label)?;
                 if !w.enabled {
                     // DeathScreen enables its buttons after 20 ticks.

@@ -86,6 +86,83 @@ interface storage {
     delete: func(key: string);
 }
 
+/// Capability `ui`: widgets the game draws with its own menus' widgets, for
+/// a screen the mod owns and a settings page in Options > Mods. Layout and
+/// drawing are the game's: a mod says what its widgets hold, never where
+/// they sit or how they look, and the game clips everything it is handed.
+interface ui {
+    /// A line of text.
+    record text-widget {
+        /// The mod's own name for the widget; `ui-events` calls echo it.
+        id: u32,
+        /// Up to 256 characters.
+        text: string,
+        /// 0xRRGGBB; 0 is the menus' white.
+        color: u32,
+    }
+    /// An item's icon and a name beside it, as recipe viewers show them.
+    record item-widget {
+        /// The mod's own name for the widget.
+        id: u32,
+        /// `minecraft:diamond`, `<mod>:<path>`; an unknown id draws a "?".
+        item: string,
+        /// The name shown beside the icon (empty: the item's own).
+        name: string,
+    }
+    /// Rows the player picks one of, as an options page lists choices: a
+    /// pick is `ui-events::select`, `selected` is the row to mark now.
+    record list-widget {
+        /// The mod's own name for the widget; `ui-events::select` echoes it.
+        id: u32,
+        /// The rows' texts, at most 512, each up to 256 characters.
+        rows: list<string>,
+        /// The row to mark as the current choice, if any.
+        selected: option<u32>,
+    }
+    /// A thing on a mod's screen or settings page.
+    variant widget {
+        /// Text the player reads.
+        text(text-widget),
+        /// An item's icon and name.
+        item(item-widget),
+        /// Rows the player picks from.
+        %list(list-widget),
+    }
+    /// A screen the mod owns: a title over widgets stacked down the middle,
+    /// the Done button the game adds, and Esc to leave it.
+    record screen {
+        /// Its title, up to 256 characters.
+        title: string,
+        /// Its widgets, in order, at most 64.
+        widgets: list<widget>,
+    }
+    /// Show `screen` over the game; a second call while it is open replaces
+    /// it. Only the last call of one hook counts.
+    open-screen: func(screen: screen);
+    /// Close the mod's screen when it is open (the mod hears no `closed`
+    /// for this: it was its own doing).
+    close-screen: func();
+    /// The mod's page in Options > Mods, reached from a settings button on
+    /// its row: the widgets it shows, an empty list for no page. The player
+    /// opening the page is `ui-events::settings-opened`: push fresh widgets
+    /// then; later calls update the page while it shows.
+    set-settings: func(widgets: list<widget>);
+}
+
+/// What the game calls on a mod that shows widgets (capability `ui`):
+/// what the player did with them.
+interface ui-events {
+    /// A row of one of the mod's `list` widgets was picked: the widget's
+    /// `id` and the row, on the screen or the settings page that showed it.
+    select: func(id: u32, row: u32);
+    /// The player left the mod's screen (Esc or Done); not for a screen the
+    /// mod closed itself or one that went away with the mod.
+    closed: func();
+    /// The player opened the mod's settings page in Options > Mods: call
+    /// `ui::set-settings` now to fill it with fresh widgets.
+    settings-opened: func();
+}
+
 /// What the game calls. Only the hooks `init` asks for are ever called.
 interface events {
     record registration {
@@ -118,4 +195,19 @@ world horizon-mod {
     import hud;
     import storage;
     export events;
+}
+
+/// A mod with widgets (capability `ui`): the SDK builds every mod against
+/// this world. Mods built for `horizon-mod` alone (no `ui-events` export)
+/// still load and simply hear nothing of their widgets.
+world horizon-ui-mod {
+    include horizon-mod;
+    import ui;
+    export ui-events;
+}
+
+/// The game's side of `horizon-ui-mod` beyond `horizon-mod`.
+world ui-host {
+    import ui;
+    export ui-events;
 }

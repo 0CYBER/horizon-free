@@ -903,6 +903,9 @@ impl HudBatch {
         color: u32,
         shadow: bool,
     ) -> f32 {
+        // StringDecomposer.iterateFormatted inside Font.drawInternal:
+        // `§` codes inside a span restyle what follows and are not drawn.
+        let text = text.resolved();
         let font = &atlas.font;
         let alpha = (color >> 24) as u8;
         let mut glyphs = Vec::new();
