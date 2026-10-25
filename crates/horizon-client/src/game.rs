@@ -7509,7 +7509,7 @@ impl Game<'_> {
             (sky.star_brightness > 0.0).then(|| (frame(sky.star_angle), sky.star_brightness));
         (out, stars)
     }
-    /// Load (or create) a world folder under saves/ and start streaming it.
+    /// Enter a local world from the client, selecting its simulation mode.
     fn open_world(
         &mut self,
         folder: &str,
@@ -7532,16 +7532,9 @@ impl Game<'_> {
         if integrated::wanted(&self.options, &save_root) {
             return self.open_integrated(folder, name, seed, creative, create);
         }
-        self.perf.world_opening();
-        let request = world_loading::WorldRequest {
-            save_root,
-            folder: folder.to_owned(),
-            name: name.map(str::to_owned),
-            seed,
-            creative,
-            create: create.cloned(),
-        };
+        let request = world_loading::WorldRequest::new(folder, name, seed, creative, create)?;
         if self.window.is_some() {
+            self.perf.world_opening();
             if self.title.is_none() {
                 self.title = Some(Title::new(
                     std::env::current_dir()?.join("saves"),
@@ -7557,6 +7550,14 @@ impl Game<'_> {
             )?);
             return Ok(());
         }
+        self.load_world(request)
+    }
+
+    /// Load authoritative world state synchronously, without client entry or
+    /// integrated-server selection. Server startup must use this entry point.
+    fn load_world(&mut self, request: world_loading::WorldRequest) -> Result<()> {
+        self.join_world_rest()?;
+        self.perf.world_opening();
         let prepared = request.prepare(&self.res, &self.pack, &self.options, &self.settings)?;
         self.finish_open_world(prepared)
     }
