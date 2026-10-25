@@ -351,7 +351,7 @@ impl Hub {
     pub fn stack(&mut self, s: &Option<ItemStack>) -> Option<horizon_protocol::item::Stack> {
         let id = s.as_ref().map(|s| self.item_id(&s.item))?;
         let sync = self.sync.clone();
-        stack_to_network(|_| id, |name| sync.id("minecraft:enchantment", name), s)
+        stack_to_network(|_| id, |registry, name| sync.id(registry, name), s)
     }
 
     pub fn broadcast(&self, packet: &C) {
@@ -1827,7 +1827,9 @@ impl Hub {
     fn flush_advancements(&mut self, i: usize, show: bool) {
         let sync = self.sync.clone();
         let g = &mut self.guests[i];
-        let unlocked = std::mem::take(&mut g.recipes_unlocked);
+        let mut unlocked = std::mem::take(&mut g.recipes_unlocked);
+        // A recipe given and taken before this flush must not reappear.
+        unlocked.retain(|id| g.recipe_book.knows(id));
         if let Some(add) = sync.advancements.recipes_added(&unlocked, &sync) {
             g.send(&raw(ids::RECIPE_BOOK_ADD, add));
         }
