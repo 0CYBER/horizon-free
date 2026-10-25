@@ -151,12 +151,31 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
         })
     }
 
+    /// Move the cursor `n` cells further along its row; `n` must not pass
+    /// the row's end.
+    fn skip(&mut self, n: usize) {
+        if n == 0 {
+            return;
+        }
+        let [width, height, _] = self.sizes;
+        self.index += n;
+        self.cursor[0] += n;
+        if self.cursor[0] == width {
+            self.cursor[0] = 0;
+            self.cursor[1] += 1;
+            if self.cursor[1] == height {
+                self.cursor[1] = 0;
+                self.cursor[2] += 1;
+            }
+        }
+    }
+
     fn find_next(&mut self) -> Result<Option<BlockCollisionHit>, CollisionScanError<W::Error>> {
         while self.index < self.count {
             if self.index >= self.budget {
                 return Err(CollisionScanError::VisitBudget);
             }
-            let [width, height, _] = self.sizes;
+            let [width, height, depth] = self.sizes;
             let relative = self.cursor;
             self.index += 1;
             self.cursor[0] += 1;
@@ -212,6 +231,20 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
                     }
                 };
                 if !reaches {
+                    // On a row along the box's bottom, top or sides every
+                    // cell is outer: the rest of it in this chunk is passed
+                    // at once (never beyond the budget, which still ends the
+                    // scan where it would have).
+                    if relative[1] == 0
+                        || relative[1] == height - 1
+                        || relative[2] == 0
+                        || relative[2] == depth - 1
+                    {
+                        let rest = (width - 1 - relative[0])
+                            .min(15 - (p.x & 15) as usize)
+                            .min(self.budget.saturating_sub(self.index));
+                        self.skip(rest);
+                    }
                     continue;
                 }
             }

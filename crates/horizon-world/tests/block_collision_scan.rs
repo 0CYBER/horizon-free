@@ -222,6 +222,11 @@ fn outer_cells_of_contained_sections_are_not_read() {
             Aabb::new(Vec3::new(4.4, 2.0, -7.6), Vec3::new(4.65, 2.25, -7.35)),
             vec![0],
         ),
+        // Across a chunk's edge: the rest of a row is passed only up to it.
+        (
+            Aabb::new(Vec3::new(14.2, 70.5, -0.4), Vec3::new(17.8, 71.5, 0.4)),
+            vec![4],
+        ),
     ];
     for (bounds, contained) in boxes {
         let mut world = Recording {
@@ -240,5 +245,31 @@ fn outer_cells_of_contained_sections_are_not_read() {
         assert_eq!(hits, 0);
         assert_eq!(world.cells, expected_cells(bounds, &contained));
         assert!(world.cells.len() < expected_cells(bounds, &[]).len());
+    }
+}
+
+/// Passing outer cells at once still stops at the candidate budget, as
+/// visiting them one by one does.
+#[test]
+fn passed_cells_count_toward_the_budget() {
+    let bounds = Aabb::new(Vec3::new(0.2, 63.5, 0.3), Vec3::new(0.8, 65.3, 0.9));
+    for budget in 0..80 {
+        let scan = |contained: Vec<i32>| {
+            let mut world = Recording {
+                cells: Vec::new(),
+                contained,
+            };
+            BlockCollisionScan::new(
+                &mut world,
+                CollisionContext::empty(false),
+                bounds,
+                false,
+                budget,
+            )
+            .unwrap()
+            .map(|hit| hit.map(|_| ()).map_err(|e| e.to_string()))
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(scan(vec![3, 4]), scan(Vec::new()), "budget {budget}");
     }
 }
