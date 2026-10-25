@@ -162,17 +162,26 @@ fn mob_meta(
             meta.push((3, serializer::BOOLEAN, Value::Bool(true)));
         }
     }
+    // LivingEntity.DATA_LIVING_ENTITY_FLAGS: using an item 1, in the off
+    // hand 2 (a skeleton draws its bow, a witch raises her potion).
+    let using = i8::from(m.extra.using_item > 0) | i8::from(m.extra.using_off_hand) << 1;
+    if using != 0 {
+        meta.push((8, serializer::BYTE, Value::Byte(using)));
+    }
+    defaults.push((8, serializer::BYTE, Value::Byte(0)));
     // LivingEntity.DATA_HEALTH_ID: defined as 1, then set to the max health.
     let health = m.health.max(0.0);
     if health != 1.0 {
         meta.push((9, serializer::FLOAT, Value::Float(health)));
     }
     defaults.push((9, serializer::FLOAT, Value::Float(1.0)));
-    // Mob.DATA_MOB_FLAGS_ID: no AI 1, left-handed 2.
-    let flags = i8::from(m.no_ai) | i8::from(m.extra.left_handed) << 1;
+    // Mob.DATA_MOB_FLAGS_ID: no AI 1, left-handed 2, aggressive 4.
+    let flags =
+        i8::from(m.no_ai) | i8::from(m.extra.left_handed) << 1 | i8::from(m.ai.aggressive) << 2;
     if flags != 0 {
         meta.push((15, serializer::BYTE, Value::Byte(flags)));
     }
+    defaults.push((15, serializer::BYTE, Value::Byte(0)));
     // AgeableMob.DATA_BABY_ID (and Zombie's, Piglin's).
     if let Some(index) = baby_index(kind) {
         if m.is_baby() {
@@ -288,6 +297,21 @@ fn mob_meta(
             if e.flag {
                 meta.push((18, serializer::BOOLEAN, Value::Bool(true)));
             }
+        }
+        // Pillager.IS_CHARGING_CROSSBOW: the charge pose and the held
+        // item's loading animation.
+        "minecraft:pillager" => {
+            if e.flag {
+                meta.push((17, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((17, serializer::BOOLEAN, Value::Bool(false)));
+        }
+        // SpellcasterIllager.DATA_SPELL_CASTING_ID: the casting pose.
+        "minecraft:evoker" | "minecraft:illusioner" => {
+            if e.variant2 != 0 {
+                meta.push((17, serializer::BYTE, Value::Byte(e.variant2 as i8)));
+            }
+            defaults.push((17, serializer::BYTE, Value::Byte(0)));
         }
         // Enderman.DATA_CARRY_STATE.
         "minecraft:enderman" => {
