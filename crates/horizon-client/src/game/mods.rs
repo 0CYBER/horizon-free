@@ -262,7 +262,10 @@ impl Game<'_> {
     }
     /// The chat's tree after the running mods changed.
     fn sync_mod_commands(&mut self) {
-        let mut names = self.mods.mods.commands().peekable();
+        // In-frame, the window runs server mods too: their names, free text
+        // here (the server parses their arguments).
+        let server = self.mods.mods.server_commands().map(|c| c.name.as_str());
+        let mut names = self.mods.mods.commands().chain(server).peekable();
         self.mods.tree = names
             .peek()
             .is_some()

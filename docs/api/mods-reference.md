@@ -216,16 +216,6 @@ What the server calls in a server mod (manifest `api = "0.3"`, experimental). On
 
 `type player = player`
 
-### record `registration`
-
-| Field | Type | |
-| --- | --- | --- |
-| `commands` | `list<string>` | Commands players may type, without the slash. A name vanilla already uses is refused (vanilla's command runs). |
-| `tick` | `bool` | Call `tick` every server tick (20 per second). |
-| `joins` | `bool` | Call `player-joined` and `player-left`. |
-| `chat` | `bool` | Call `chat` for each chat message a player sends. |
-| `blocks` | `bool` | Call `block-broken` and `block-placed`. |
-
 ### record `block-pos`
 
 | Field | Type | |
@@ -234,6 +224,59 @@ What the server calls in a server mod (manifest `api = "0.3"`, experimental). On
 | `y` | `s32` |  |
 | `z` | `s32` |  |
 
+### variant `argument-kind`
+
+What an argument of a command takes. The server sends each command and its arguments to players' games, whose chat box completes and colours them as vanilla's; the server parses them before the mod's `command` hook gets their values.
+
+| Case | Payload | |
+| --- | --- | --- |
+| `word` |  | One word: letters, digits and `_ - . +`. |
+| `text` |  | The rest of the line, spaces included: only last. |
+| `integer` | `tuple<option<s32>, option<s32>>` | A whole number, within the bounds given. |
+| `number` |  | A number with or without decimals. |
+| `boolean` |  | `true` or `false`. |
+| `player` |  | One online player: a name, or `@s` or `@p` (whoever typed it, as vanilla picks for a player). |
+| `block-pos` |  | A block position: three whole numbers, each one also `~` or `~n`, relative to whoever typed it. |
+
+### record `argument`
+
+| Field | Type | |
+| --- | --- | --- |
+| `name` | `string` | Shown in the chat box's hint (`<height>`) and the key of its value. |
+| `kind` | `argument-kind` |  |
+| `optional` | `bool` | Optional arguments come after every required one. |
+
+### record `server-command`
+
+| Field | Type | |
+| --- | --- | --- |
+| `name` | `string` | Without the slash. A name vanilla already uses is refused (vanilla's command runs). |
+| `arguments` | `list<argument>` | In order; none: the command takes nothing after its name. Free text is one optional `text` argument. |
+
+### variant `argument-value`
+
+An argument's value, parsed as its kind says.
+
+| Case | Payload | |
+| --- | --- | --- |
+| `word` | `string` |  |
+| `text` | `string` |  |
+| `integer` | `s32` |  |
+| `number` | `f64` |  |
+| `boolean` | `bool` |  |
+| `player` | `player` |  |
+| `block-pos` | `block-pos` |  |
+
+### record `registration`
+
+| Field | Type | |
+| --- | --- | --- |
+| `commands` | `list<server-command>` | Commands players may type. |
+| `tick` | `bool` | Call `tick` every server tick (20 per second). |
+| `joins` | `bool` | Call `player-joined` and `player-left`. |
+| `chat` | `bool` | Call `chat` for each chat message a player sends. |
+| `blocks` | `bool` | Call `block-broken` and `block-placed`. |
+
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `init` | `func() -> result<registration, string>` | Once, after loading. An error keeps the mod off and is logged. |
@@ -241,6 +284,6 @@ What the server calls in a server mod (manifest `api = "0.3"`, experimental). On
 | `player-joined` | `func(player: player)` | A player joined the server; they are in `players.online` already. |
 | `player-left` | `func(player: player)` | A player left the server; they are no longer in `players.online`. |
 | `chat` | `func(player: player, text: string)` | A chat message a player sent, as plain text. |
-| `command` | `func(player: player, name: string, args: string) -> result<option<string>, string>` | `/name args` typed by `player`: ok(some(text)) is their feedback, err(text) their error in red. |
+| `command` | `func(player: player, name: string, args: string, values: list<tuple<string, argument-value>>) -> result<option<string>, string>` | `/name args` typed by `player`: ok(some(text)) is their feedback, err(text) their error in red. `values` holds each argument given, by name, in order (an optional one left out isn't there); a line that doesn't parse never reaches the mod: the player gets vanilla's error. |
 | `block-broken` | `func(player: player, pos: block-pos, state: string)` | A player broke the block at `pos` in their dimension: `state` is what was there, as `minecraft:oak_log[axis=y]`. |
 | `block-placed` | `func(player: player, pos: block-pos, state: string)` | A player placed `state` at `pos` in their dimension. |

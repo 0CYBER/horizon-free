@@ -250,7 +250,7 @@ impl TestGame {
     }
     /// The commands the mod registered.
     pub fn commands(&self) -> Vec<String> {
-        let server = self.mods.server_commands();
+        let server = self.mods.server_commands().map(|c| c.name.as_str());
         self.mods
             .commands()
             .chain(server)

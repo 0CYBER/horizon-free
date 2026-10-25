@@ -174,6 +174,9 @@ pub struct Hub {
     entities: std::collections::HashMap<String, Entities>,
     /// What one tick of entity tracking sends each guest, kept between ticks.
     entity_out: Vec<Vec<Vec<u8>>>,
+    /// Server mods' commands, a root in the commands report's format, sent
+    /// after vanilla's; the key the game last set them for.
+    mod_commands: (serde_json::Value, Option<u64>),
 }
 
 fn string(s: &str) -> Tag {
@@ -320,6 +323,7 @@ impl Hub {
             entity_types: Default::default(),
             entities: Default::default(),
             entity_out: Vec::new(),
+            mod_commands: (serde_json::Value::Null, None),
         }
     }
 
@@ -815,13 +819,36 @@ impl Hub {
         }
     }
 
+    /// The key [`Hub::set_mod_commands`] last had: the game compares it
+    /// with its server mods' each tick.
+    pub fn mod_commands_key(&self) -> Option<u64> {
+        self.mod_commands.1
+    }
+    /// Server mods' commands changed: every player gets their tree again.
+    pub fn set_mod_commands(&mut self, key: u64, commands: serde_json::Value) {
+        let resend = self.mod_commands.0 != commands;
+        self.mod_commands = (commands, Some(key));
+        if resend {
+            for i in 0..self.guests.len() {
+                if self.guests[i].placed {
+                    self.send_commands(i);
+                }
+            }
+        }
+    }
+
     /// Commands.sendCommands: the command tree for this player.
     fn send_commands(&self, i: usize) {
         let g = &self.guests[i];
         let packet = match &self.sync.commands {
             Some(tree) => {
                 let dedicated = self.config.dedicated && !self.config.integrated;
-                tree.packet(g.permission, dedicated, &self.sync.builtin)
+                tree.packet_with(
+                    g.permission,
+                    dedicated,
+                    &self.sync.builtin,
+                    &self.mod_commands.0,
+                )
             }
             None => play::Commands {
                 nodes: vec![play::CommandNode {

@@ -164,7 +164,10 @@ pub mod server {
         },
     });
 
-    pub use exports::horizon::mods::server_events::{BlockPos, Guest as __Guest, Registration};
+    pub use exports::horizon::mods::server_events::{
+        Argument, ArgumentKind, ArgumentValue, BlockPos, Guest as __Guest, Registration,
+        ServerCommand,
+    };
     pub use horizon::mods::players::{self, GameMode, Player};
     pub use horizon::mods::world::{self, BlockChange};
 
@@ -181,13 +184,14 @@ pub mod server {
         fn player_left(&mut self, _player: &Player) {}
         /// A chat message a player sent, when [`Registration::chat`] is set.
         fn chat(&mut self, _player: &Player, _text: &str) {}
-        /// `/name args` typed by `player`. `Ok(Some(text))` is their
-        /// feedback, `Err(text)` their error in red.
+        /// `/name args` typed by `player`, parsed as the command's
+        /// arguments say ([`Registration::command_with`]). `Ok(Some(text))`
+        /// is their feedback, `Err(text)` their error in red.
         fn command(
             &mut self,
             _player: &Player,
             _name: &str,
-            _args: &str,
+            _args: &Args,
         ) -> Result<Option<String>, String> {
             Err("This command does nothing".into())
         }
@@ -207,9 +211,23 @@ pub mod server {
                 blocks: false,
             }
         }
-        /// Adds `/name`.
-        pub fn command(mut self, name: &str) -> Self {
-            self.commands.push(name.into());
+        /// Adds `/name`, taking free text ([`Args::text`]): one optional
+        /// `text` argument named `args`.
+        pub fn command(self, name: &str) -> Self {
+            self.command_with(name, [Argument::text("args").optional()])
+        }
+        /// Adds `/name` with typed arguments (none: nothing after the name):
+        /// players' chat boxes complete and check them, and the server
+        /// parses them into [`Args`].
+        pub fn command_with(
+            mut self,
+            name: &str,
+            arguments: impl IntoIterator<Item = Argument>,
+        ) -> Self {
+            self.commands.push(ServerCommand {
+                name: name.into(),
+                arguments: arguments.into_iter().collect(),
+            });
             self
         }
         pub fn on_tick(mut self) -> Self {
@@ -234,6 +252,105 @@ pub mod server {
             Self::new()
         }
     }
+
+    impl Argument {
+        fn of(name: &str, kind: ArgumentKind) -> Self {
+            Self {
+                name: name.into(),
+                kind,
+                optional: false,
+            }
+        }
+        /// One word: letters, digits and `_ - . +`.
+        pub fn word(name: &str) -> Self {
+            Self::of(name, ArgumentKind::Word)
+        }
+        /// The rest of the line: only last.
+        pub fn text(name: &str) -> Self {
+            Self::of(name, ArgumentKind::Text)
+        }
+        /// A whole number, at least `min` and at most `max` when given.
+        pub fn integer(name: &str, min: Option<i32>, max: Option<i32>) -> Self {
+            Self::of(name, ArgumentKind::Integer((min, max)))
+        }
+        pub fn number(name: &str) -> Self {
+            Self::of(name, ArgumentKind::Number)
+        }
+        pub fn boolean(name: &str) -> Self {
+            Self::of(name, ArgumentKind::Boolean)
+        }
+        /// One online player: a name, `@s` or `@p`.
+        pub fn player(name: &str) -> Self {
+            Self::of(name, ArgumentKind::Player)
+        }
+        /// `x y z`, each one also `~` or `~n`.
+        pub fn block_pos(name: &str) -> Self {
+            Self::of(name, ArgumentKind::BlockPos)
+        }
+        /// May be left out; optional arguments come after the required ones.
+        pub fn optional(mut self) -> Self {
+            self.optional = true;
+            self
+        }
+    }
+
+    /// A command's arguments: the line as typed, and the values the server
+    /// parsed from it, by argument name.
+    #[derive(Clone, Debug, Default)]
+    pub struct Args {
+        text: String,
+        values: Vec<(String, ArgumentValue)>,
+    }
+    impl Args {
+        pub fn new(text: String, values: Vec<(String, ArgumentValue)>) -> Self {
+            Self { text, values }
+        }
+        /// The line after the command's name, as typed.
+        pub fn text(&self) -> &str {
+            &self.text
+        }
+        /// The value of argument `name`; `None` when it was left out.
+        pub fn get(&self, name: &str) -> Option<&ArgumentValue> {
+            self.values.iter().find(|(n, _)| n == name).map(|(_, v)| v)
+        }
+        pub fn integer(&self, name: &str) -> Option<i32> {
+            match self.get(name)? {
+                ArgumentValue::Integer(n) => Some(*n),
+                _ => None,
+            }
+        }
+        pub fn number(&self, name: &str) -> Option<f64> {
+            match self.get(name)? {
+                ArgumentValue::Number(n) => Some(*n),
+                _ => None,
+            }
+        }
+        /// A `word` or `text` argument.
+        pub fn string(&self, name: &str) -> Option<&str> {
+            match self.get(name)? {
+                ArgumentValue::Word(s) | ArgumentValue::Text(s) => Some(s),
+                _ => None,
+            }
+        }
+        pub fn boolean(&self, name: &str) -> Option<bool> {
+            match self.get(name)? {
+                ArgumentValue::Boolean(b) => Some(*b),
+                _ => None,
+            }
+        }
+        pub fn player(&self, name: &str) -> Option<&Player> {
+            match self.get(name)? {
+                ArgumentValue::Player(p) => Some(p),
+                _ => None,
+            }
+        }
+        pub fn block_pos(&self, name: &str) -> Option<BlockPos> {
+            match self.get(name)? {
+                ArgumentValue::BlockPos(p) => Some(*p),
+                _ => None,
+            }
+        }
+    }
 }
 
 /// Exports a [`ServerMod`](server::ServerMod) as the component's
@@ -243,7 +360,7 @@ macro_rules! export_server_mod {
     ($t:ty) => {
         const _: () = {
             use ::std::cell::RefCell;
-            use $crate::server::{BlockPos, Player, Registration, ServerMod};
+            use $crate::server::{Args, ArgumentValue, BlockPos, Player, Registration, ServerMod};
             ::std::thread_local! {
                 static STATE: RefCell<Option<$t>> = const { RefCell::new(None) };
             }
@@ -277,8 +394,10 @@ macro_rules! export_server_mod {
                     player: Player,
                     name: String,
                     args: String,
+                    values: Vec<(String, ArgumentValue)>,
                 ) -> Result<Option<String>, String> {
                     let mut out = Err("The mod is not running".to_string());
+                    let args = Args::new(args, values);
                     with(|m| out = m.command(&player, &name, &args));
                     out
                 }

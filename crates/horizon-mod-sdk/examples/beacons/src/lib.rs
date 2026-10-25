@@ -1,9 +1,12 @@
 //! Example Horizon server mod (`docs/mods.md`, "Server mods") with
-//! capability `world`: `/beacon` lights a pillar of glowstone two blocks east
-//! of the player, `/ground` reads the block under their feet and the biome.
-use horizon_mod_sdk::server::{BlockChange, Player, Registration, ServerMod, players, world};
+//! capability `world` and typed commands: `/beacon [height]` lights a
+//! pillar of glowstone two blocks east of the player, `/ground [pos]` reads
+//! the block under their feet (or at `pos`) and its biome.
+use horizon_mod_sdk::server::{
+    Args, Argument, BlockChange, Player, Registration, ServerMod, players, world,
+};
 
-/// How tall `/beacon` builds.
+/// How tall `/beacon` builds when no height is given.
 const HEIGHT: i32 = 4;
 
 struct Beacons;
@@ -17,10 +20,10 @@ fn feet(player: &Player) -> (i32, i32, i32) {
     )
 }
 
-/// The pillar beside `player`: `HEIGHT` blocks of glowstone, from their feet up.
-fn pillar(player: &Player) -> Vec<BlockChange> {
+/// The pillar beside `player`: `height` blocks of glowstone, from their feet up.
+fn pillar(player: &Player, height: i32) -> Vec<BlockChange> {
     let (x, y, z) = feet(player);
-    (0..HEIGHT)
+    (0..height)
         .map(|dy| BlockChange {
             x: x + 2,
             y: y + dy,
@@ -34,7 +37,12 @@ impl ServerMod for Beacons {
     fn init() -> Result<(Self, Registration), String> {
         Ok((
             Beacons,
-            Registration::new().command("beacon").command("ground"),
+            Registration::new()
+                .command_with(
+                    "beacon",
+                    [Argument::integer("height", Some(1), Some(64)).optional()],
+                )
+                .command_with("ground", [Argument::block_pos("pos").optional()]),
         ))
     }
 
@@ -42,11 +50,12 @@ impl ServerMod for Beacons {
         &mut self,
         player: &Player,
         name: &str,
-        _args: &str,
+        args: &Args,
     ) -> Result<Option<String>, String> {
         let (x, y, z) = feet(player);
         if name == "beacon" {
-            world::set_blocks(&player.dimension, &pillar(player))?;
+            let height = args.integer("height").unwrap_or(HEIGHT);
+            world::set_blocks(&player.dimension, &pillar(player, height))?;
             players::broadcast(&format!(
                 "{} lit a beacon at {} {y} {z}",
                 player.name,
@@ -54,10 +63,17 @@ impl ServerMod for Beacons {
             ));
             return Ok(None);
         }
-        let below = world::get_block(&player.dimension, x, y - 1, z)
-            .ok_or("The ground under you isn't loaded")?;
-        let biome = world::get_biome(&player.dimension, x, y, z).unwrap_or_default();
-        Ok(Some(format!("You are standing on {below} in {biome}")))
+        let (bx, by, bz) = match args.block_pos("pos") {
+            Some(p) => (p.x, p.y, p.z),
+            None => (x, y - 1, z),
+        };
+        let block =
+            world::get_block(&player.dimension, bx, by, bz).ok_or("That block isn't loaded")?;
+        let biome = world::get_biome(&player.dimension, bx, by, bz).unwrap_or_default();
+        if args.block_pos("pos").is_some() {
+            return Ok(Some(format!("{bx} {by} {bz} is {block} in {biome}")));
+        }
+        Ok(Some(format!("You are standing on {block} in {biome}")))
     }
 }
 
@@ -79,7 +95,7 @@ mod tests {
             game_mode: horizon_mod_sdk::server::GameMode::Survival,
             health: 20.0,
         };
-        let blocks = pillar(&p);
+        let blocks = pillar(&p, HEIGHT);
         assert_eq!(blocks.len(), HEIGHT as usize);
         assert_eq!((blocks[0].x, blocks[0].y, blocks[0].z), (1, 64, 3));
         assert_eq!(blocks[3].y, 67);

@@ -183,7 +183,7 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
         return Err(format!("it didn't start: {reason}"));
     }
     let client: Vec<String> = mods.commands().map(str::to_owned).collect();
-    let server: Vec<String> = mods.server_commands().map(str::to_owned).collect();
+    let server: Vec<String> = mods.server_commands().map(|c| c.name.clone()).collect();
     report.commands = [client.clone(), server.clone()].concat();
     // A server mod plays with one player on, who joins, chats and leaves.
     let steve = ServerPlayer {

@@ -177,10 +177,61 @@ interface %world {
 interface server-events {
     use players.{player};
 
+    record block-pos {
+        x: s32,
+        y: s32,
+        z: s32,
+    }
+    /// What an argument of a command takes. The server sends each command
+    /// and its arguments to players' games, whose chat box completes and
+    /// colours them as vanilla's; the server parses them before the mod's
+    /// `command` hook gets their values.
+    variant argument-kind {
+        /// One word: letters, digits and `_ - . +`.
+        word,
+        /// The rest of the line, spaces included: only last.
+        text,
+        /// A whole number, within the bounds given.
+        integer(tuple<option<s32>, option<s32>>),
+        /// A number with or without decimals.
+        number,
+        /// `true` or `false`.
+        boolean,
+        /// One online player: a name, or `@s` or `@p` (whoever typed it,
+        /// as vanilla picks for a player).
+        player,
+        /// A block position: three whole numbers, each one also `~` or
+        /// `~n`, relative to whoever typed it.
+        block-pos,
+    }
+    record argument {
+        /// Shown in the chat box's hint (`<height>`) and the key of its value.
+        name: string,
+        kind: argument-kind,
+        /// Optional arguments come after every required one.
+        optional: bool,
+    }
+    record server-command {
+        /// Without the slash. A name vanilla already uses is refused
+        /// (vanilla's command runs).
+        name: string,
+        /// In order; none: the command takes nothing after its name. Free
+        /// text is one optional `text` argument.
+        arguments: list<argument>,
+    }
+    /// An argument's value, parsed as its kind says.
+    variant argument-value {
+        word(string),
+        text(string),
+        integer(s32),
+        number(f64),
+        boolean(bool),
+        player(player),
+        block-pos(block-pos),
+    }
     record registration {
-        /// Commands players may type, without the slash. A name vanilla
-        /// already uses is refused (vanilla's command runs).
-        commands: list<string>,
+        /// Commands players may type.
+        commands: list<server-command>,
         /// Call `tick` every server tick (20 per second).
         tick: bool,
         /// Call `player-joined` and `player-left`.
@@ -189,11 +240,6 @@ interface server-events {
         chat: bool,
         /// Call `block-broken` and `block-placed`.
         blocks: bool,
-    }
-    record block-pos {
-        x: s32,
-        y: s32,
-        z: s32,
     }
     /// Once, after loading. An error keeps the mod off and is logged.
     init: func() -> result<registration, string>;
@@ -206,8 +252,10 @@ interface server-events {
     /// A chat message a player sent, as plain text.
     chat: func(player: player, text: string);
     /// `/name args` typed by `player`: ok(some(text)) is their feedback,
-    /// err(text) their error in red.
-    command: func(player: player, name: string, args: string) -> result<option<string>, string>;
+    /// err(text) their error in red. `values` holds each argument given, by
+    /// name, in order (an optional one left out isn't there); a line that
+    /// doesn't parse never reaches the mod: the player gets vanilla's error.
+    command: func(player: player, name: string, args: string, values: list<tuple<string, argument-value>>) -> result<option<string>, string>;
     /// A player broke the block at `pos` in their dimension: `state` is what
     /// was there, as `minecraft:oak_log[axis=y]`.
     block-broken: func(player: player, pos: block-pos, state: string);

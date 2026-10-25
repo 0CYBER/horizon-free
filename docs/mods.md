@@ -475,7 +475,7 @@ its component targets the WIT world `horizon-server-mod` instead of
 | `tick(tick)` | each server tick |
 | `player-joined(player)`, `player-left(player)` | `registration.joins` |
 | `chat(player, text)` | `registration.chat`: each chat message a player sends |
-| `command(player, name, args)` | `/name args` typed by a player, for a command it registered; `ok(some)` is that player's feedback, `err` their red error |
+| `command(player, name, args, values)` | `/name args` typed by a player, for a command it registered, with its arguments' values (below); `ok(some)` is that player's feedback, `err` their red error |
 | `block-broken(player, pos, state)`, `block-placed(player, pos, state)` | `registration.blocks`, with the state as `minecraft:oak_log[axis=y]` |
 
 Capabilities that act on a local player (`game-read`, `chat`, `hud`) are for
@@ -483,6 +483,31 @@ client mods; `players` is for server mods. In Rust: `impl
 horizon_mod_sdk::server::ServerMod` and `export_server_mod!`; the example is
 [`welcome`](../crates/horizon-mod-sdk/examples/welcome/src/lib.rs), and with
 `world`, [`beacons`](../crates/horizon-mod-sdk/examples/beacons/src/lib.rs).
+
+**Typed commands.** Each command in `registration.commands` lists its
+arguments, in order: a name and a kind, required or optional (optional ones
+last). The server adds them to the command tree every player receives, after
+vanilla's commands, so a player's chat box completes and colours them as it
+does vanilla's (player names, coordinates, bounds); when a player sends one,
+the server parses the line the way vanilla's parsers do and gives the mod the
+values, by argument name, or answers with vanilla's error (`Integer must not
+be more than 64, found 65`, `No player was found`) without calling the mod.
+
+| Kind | Takes | Value | Chat box parser |
+|---|---|---|---|
+| `word` | one word: letters, digits, `_ - . +` | `word(string)` | `brigadier:string` (word) |
+| `text` | the rest of the line, only last | `text(string)` | `brigadier:string` (greedy) |
+| `integer(min, max)` | a whole number within the bounds given | `integer(s32)` | `brigadier:integer` |
+| `number` | a number | `number(f64)` | `brigadier:double` |
+| `boolean` | `true` or `false` | `boolean(bool)` | `brigadier:bool` |
+| `player` | an online player's name, `@s` or `@p` (whoever typed it) | `player(player)` | `minecraft:entity` (one player) |
+| `block-pos` | `x y z`, each a whole number, `~` or `~n` (from whoever typed it) | `block-pos(block-pos)` | `minecraft:block_pos` |
+
+A command with no arguments takes nothing after its name. In Rust,
+`Registration::command_with("beacon", [Argument::integer("height", Some(1),
+Some(64)).optional()])`, read with `args.integer("height")`; `command(name)`
+alone takes free text, an optional `text` argument named `args`
+(`args.text()` is the line as typed either way).
 
 **Capability `world`.** Reads are of the server's loaded chunks as they are
 during the call: the game lends a server mod's call the levels' chunk maps
@@ -524,10 +549,11 @@ chat for the in-frame player and a system message for a connection;
 on, each of these points costs one branch (measured in the PR that added
 them).
 
-**Not yet.** Clients aren't sent server mods' commands with vanilla's
-command tree, so a player's chat box doesn't complete or colour them; typing
-them works. Block events are a player's own breaking and placing, not
-explosions, pistons or other mods.
+**Not yet.** Block events are a player's own breaking and placing, not
+explosions, pistons or other mods. Command arguments don't take entities,
+items or block states yet, and `^` coordinates; in-frame single player's chat
+box lists server mods' commands by name only (the server still parses their
+arguments).
 
 ## Versions and compatibility
 

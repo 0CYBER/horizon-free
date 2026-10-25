@@ -1,4 +1,4 @@
-# /online lists the players and their dimension; /mined counts the acting player's blocks.
+# /online lists the players and their dimension; /mined [player] counts a player's blocks.
 
 [[step]]
 join = "Alex"
@@ -29,3 +29,18 @@ expect.feedback = "You broke 2 block(s)"
 as = "Steve"
 command = "mined"
 expect.feedback = "You broke 0 block(s)"
+
+[[step]]
+as = "Steve"
+command = "mined alex"
+expect.feedback = "Alex broke 2 block(s)"
+
+# The server parses the arguments before the mod: vanilla's errors.
+[[step]]
+as = "Steve"
+command = "mined Herobrine"
+expect.error = "No player was found"
+
+[[step]]
+command = "online now"
+expect.error = "Incorrect argument for command"

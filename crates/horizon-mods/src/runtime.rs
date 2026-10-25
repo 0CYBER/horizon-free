@@ -43,7 +43,9 @@ use bindings::{
     horizon::mods::{chat, game, hud, log as mod_log, storage},
 };
 pub use server_bindings::{
-    exports::horizon::mods::server_events::BlockPos,
+    exports::horizon::mods::server_events::{
+        Argument, ArgumentKind, ArgumentValue, BlockPos, ServerCommand,
+    },
     horizon::mods::players::{GameMode, Player as ServerPlayer},
     horizon::mods::world::BlockChange,
 };
@@ -206,10 +208,10 @@ impl Hooks {
             Hooks::Client(..) => None,
         }
     }
-    fn commands(&self) -> &[String] {
+    fn commands(&self) -> Vec<&str> {
         match self {
-            Hooks::Client(_, r) => &r.commands,
-            Hooks::Server(_, r) => &r.commands,
+            Hooks::Client(_, r) => r.commands.iter().map(String::as_str).collect(),
+            Hooks::Server(_, r) => r.commands.iter().map(|c| c.name.as_str()).collect(),
         }
     }
 }
@@ -240,9 +242,16 @@ pub struct Mods {
     snapshot: Arc<Snapshot>,
     out: Vec<Output>,
     world: WorldSlot,
+    /// Moves on whenever a mod starts or stops: the game resends the server
+    /// mods' commands to players when it changes.
+    generation: u64,
 }
 
 impl Mods {
+    /// Changes whenever the running mods (so their commands) change.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
     /// Whether a running mod may use capability `world`: only then is a
     /// view worth lending.
     pub fn wants_world(&self) -> bool {
@@ -371,7 +380,8 @@ impl Mods {
             .iter()
             .filter_map(|e| e.run.as_ref())
             .filter(|r| r.hooks.server().is_some() == server)
-            .flat_map(|r| r.hooks.commands().iter().cloned())
+            .flat_map(|r| r.hooks.commands())
+            .map(str::to_owned)
             .collect();
         let snapshot = self.snapshot.clone();
         let world = self.world.clone();
@@ -423,17 +433,30 @@ impl Mods {
                 .map_err(|e| reason(&e))??;
             Hooks::Client(exports, r)
         };
-        let commands = match &mut hooks {
-            Hooks::Client(_, r) => &mut r.commands,
-            Hooks::Server(_, r) => &mut r.commands,
-        };
-        commands.retain(|c| {
-            let free = !reserved(c) && !taken.contains(c);
+        let free = |c: &str| {
+            let free = !reserved(c) && !taken.iter().any(|t| t == c);
             if !free {
                 log::warn!("Horizon: mod {} cannot take /{c}: already a command", m.id);
             }
             free
-        });
+        };
+        match &mut hooks {
+            Hooks::Client(_, r) => r.commands.retain(|c| free(c)),
+            Hooks::Server(_, r) => {
+                r.commands.retain(|c| free(&c.name));
+                for c in &mut r.commands {
+                    if let Err(e) = check_arguments(&c.arguments) {
+                        log::warn!(
+                            "Horizon: mod {}'s /{}: {e}; it takes free text",
+                            m.id,
+                            c.name
+                        );
+                        c.arguments.clear();
+                    }
+                }
+            }
+        }
+        self.generation += 1;
         self.out.append(&mut store.data_mut().out);
         Ok(Some(Running { store, hooks }))
     }
@@ -537,6 +560,7 @@ impl Mods {
                 });
                 entry.status = Status::Failed(reason);
                 entry.run = None;
+                self.generation += 1;
                 None
             }
         }
@@ -561,7 +585,7 @@ impl Mods {
     fn command_owner(&self, server: bool, name: &str) -> Option<usize> {
         self.entries.iter().position(|e| {
             e.run.as_ref().is_some_and(|r| {
-                r.hooks.server().is_some() == server && r.hooks.commands().iter().any(|c| c == name)
+                r.hooks.server().is_some() == server && r.hooks.commands().contains(&name)
             })
         })
     }
@@ -592,7 +616,7 @@ impl Mods {
             .iter()
             .filter_map(|e| e.run.as_ref())
             .filter(move |r| r.hooks.server().is_some() == server)
-            .flat_map(|r| r.hooks.commands().iter().map(String::as_str))
+            .flat_map(|r| r.hooks.commands())
     }
 
     /// A server tick.
@@ -635,9 +659,13 @@ impl Mods {
             |m, s| m.call_block_placed(s, player, pos, state),
         );
     }
-    /// The commands running server mods own, for the server's command tree.
-    pub fn server_commands(&self) -> impl Iterator<Item = &str> {
-        self.owned_commands(true)
+    /// The commands running server mods own and their arguments, for the
+    /// server's command tree.
+    pub fn server_commands(&self) -> impl Iterator<Item = &ServerCommand> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref()?.hooks.server())
+            .flat_map(|r| r.commands.iter())
     }
     /// Runs `line` (without its slash), typed by `player`, if a server mod
     /// owns its command; its feedback is an [`Output::Reply`]. False when
@@ -647,17 +675,31 @@ impl Mods {
         let Some(i) = self.command_owner(true, name) else {
             return false;
         };
-        let result = self.call(i, FUEL_EVENT, |h, s| match h {
-            Hooks::Server(m, _) => m
-                .horizon_mods_server_events()
-                .call_command(s, player, name, args),
-            Hooks::Client(..) => Ok(Ok(None)),
-        });
         let reply = |text, error| Output::Reply {
             player: player.id.clone(),
             text,
             error,
         };
+        let arguments = self.entries[i]
+            .run
+            .as_ref()
+            .and_then(|r| r.hooks.server())
+            .and_then(|r| r.commands.iter().find(|c| c.name == name))
+            .map(|c| c.arguments.as_slice())
+            .unwrap_or_default();
+        let values = match crate::commands::parse(arguments, args, player, &self.snapshot.players) {
+            Ok(values) => values,
+            Err(e) => {
+                self.out.push(reply(e, true));
+                return true;
+            }
+        };
+        let result = self.call(i, FUEL_EVENT, |h, s| match h {
+            Hooks::Server(m, _) => m
+                .horizon_mods_server_events()
+                .call_command(s, player, name, args, &values),
+            Hooks::Client(..) => Ok(Ok(None)),
+        });
         match result {
             Some(Ok(Some(text))) => self.out.push(reply(text, false)),
             Some(Err(text)) => self.out.push(reply(text, true)),
@@ -688,6 +730,7 @@ impl Mods {
                 continue;
             }
             any = true;
+            self.generation += 1;
             self.entries[i].modified = now;
             self.entries[i].run = None;
             let path = self.entries[i].path.clone();
@@ -711,6 +754,34 @@ impl Mods {
         }
         any
     }
+}
+
+/// A command's arguments are well formed: names given and distinct,
+/// optional ones last, free text only last.
+fn check_arguments(arguments: &[Argument]) -> Result<(), String> {
+    for (i, a) in arguments.iter().enumerate() {
+        if a.name.is_empty()
+            || !a
+                .name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return Err(format!("argument name '{}' isn't [A-Za-z0-9_]+", a.name));
+        }
+        if arguments[..i].iter().any(|b| b.name == a.name) {
+            return Err(format!("two arguments are named {}", a.name));
+        }
+        if i > 0 && arguments[i - 1].optional && !a.optional {
+            return Err(format!("{} is required after an optional argument", a.name));
+        }
+        if a.kind == ArgumentKind::Text && i + 1 < arguments.len() {
+            return Err(format!(
+                "{} takes the rest of the line, so it must be last",
+                a.name
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn modified(path: &Path) -> Option<SystemTime> {

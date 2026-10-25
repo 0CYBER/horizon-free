@@ -1,9 +1,10 @@
 //! Example Horizon server mod (`docs/mods.md`, "Server mods"): greets each
 //! player who joins, announces a newcomer to everyone (the players it has
 //! seen are kept in `storage`), `/online` lists who is on and where, and
-//! `/mined` counts the blocks the player broke since the server started.
+//! `/mined [player]` counts the blocks a player broke since the server
+//! started (typed arguments: the chat box completes the player's name).
 use horizon_mod_sdk::{
-    server::{BlockPos, Player, Registration, ServerMod, players},
+    server::{Args, Argument, BlockPos, Player, Registration, ServerMod, players},
     storage,
 };
 use std::collections::HashMap;
@@ -25,8 +26,8 @@ impl ServerMod for Welcome {
             })
             .unwrap_or_default();
         let hooks = Registration::new()
-            .command("online")
-            .command("mined")
+            .command_with("online", [])
+            .command_with("mined", [Argument::player("player").optional()])
             .on_joins()
             .on_blocks();
         Ok((
@@ -55,7 +56,7 @@ impl ServerMod for Welcome {
         &mut self,
         player: &Player,
         name: &str,
-        _args: &str,
+        args: &Args,
     ) -> Result<Option<String>, String> {
         Ok(Some(match name {
             "online" => players::online()
@@ -69,10 +70,16 @@ impl ServerMod for Welcome {
                 })
                 .collect::<Vec<_>>()
                 .join(", "),
-            _ => {
-                let n = self.mined.get(&player.id).copied().unwrap_or(0);
-                format!("You broke {n} block(s)")
-            }
+            _ => match args.player("player") {
+                Some(other) if other.id != player.id => {
+                    let n = self.mined.get(&other.id).copied().unwrap_or(0);
+                    format!("{} broke {n} block(s)", other.name)
+                }
+                _ => {
+                    let n = self.mined.get(&player.id).copied().unwrap_or(0);
+                    format!("You broke {n} block(s)")
+                }
+            },
         }))
     }
 
