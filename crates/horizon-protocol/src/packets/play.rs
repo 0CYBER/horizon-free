@@ -176,6 +176,9 @@ packet!(
     }
 );
 packet!(ContainerSetData { container: i32 => VarInt, id: i16 => Short, value: i16 => Short });
+// ClientboundCooldownPacket: the cooldown group (an identifier) and the ticks
+// its entry lasts (0 ends it).
+packet!(Cooldown { group: String => Ident, duration: i32 => VarInt });
 packet!(ContainerSetSlot { container: i32 => VarInt, state: i32 => VarInt, slot: i16 => Short, item: Option<Stack> => Slot });
 /// A holder reference: registry id + 1, or 0 for an inline value (unsupported).
 pub struct HolderId;
@@ -1761,6 +1764,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     ContainerSetData(ContainerSetData) = CONTAINER_SET_DATA,
     ContainerSetSlot(ContainerSetSlot) = CONTAINER_SET_SLOT,
     CookieRequest(CookieRequest) = COOKIE_REQUEST,
+    Cooldown(Cooldown) = COOLDOWN,
     CustomPayload(CustomPayload) = CUSTOM_PAYLOAD,
     Disconnect(Disconnect) = DISCONNECT,
     DisguisedChat(DisguisedChat) = DISGUISED_CHAT,
@@ -2892,6 +2896,24 @@ mod tests {
         });
         assert_eq!(&beacon.encode()[1..], &[1, 2, 0]);
         round_trip(beacon, Serverbound::encode, Serverbound::decode);
+    }
+
+    #[test]
+    fn a_cooldown_packet_carries_its_group_and_ticks() {
+        let packet = Clientbound::Cooldown(Cooldown {
+            group: "minecraft:ender_pearl".into(),
+            duration: 20,
+        });
+        round_trip(packet, Clientbound::encode, Clientbound::decode);
+        // The group is an identifier, the ticks a VarInt; a duration of 0
+        // removes the entry.
+        let body = Clientbound::encode(&Clientbound::Cooldown(Cooldown {
+            group: "minecraft:ender_pearl".into(),
+            duration: 0,
+        }));
+        assert_eq!(body[0], crate::ids::play::clientbound::COOLDOWN as u8);
+        assert_eq!(&body[1..3], [21, b'm']);
+        assert_eq!(body[body.len() - 1], 0);
     }
 
     #[test]

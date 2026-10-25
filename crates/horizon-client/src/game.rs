@@ -1320,6 +1320,10 @@ struct Game<'a> {
     hand: Hand,
     /// The shield's item cooldown after an axe disabled it (ticks).
     shield_cooldown: u32,
+    /// `Player.getCooldowns()`: the `use_cooldown` component's entries, what
+    /// `itemDecorations` shades a slot by. A server's players have their own
+    /// (`GuestPlay::cooldowns`), swapped in for their turn.
+    cooldowns: horizon_client::cooldowns::Cooldowns,
     /// The source of a command run through /execute (the player otherwise).
     command_source: Option<commands::execute::Source>,
     titles: titles::Titles,
@@ -1558,6 +1562,9 @@ struct Game<'a> {
     chat_capture: Option<Vec<horizon_client::text::Text>>,
     /// Packets for the guest acting now, sent once its action returns.
     guest_packets: Vec<horizon_protocol::packets::play::Clientbound>,
+    /// The acting guest's cooldowns, as (item, ticks): their packet needs the
+    /// hub's item registry, which the guest's turn does not hold.
+    guest_cooldowns: Vec<(Arc<str>, i32)>,
     /// `broadcastToAdmins` lines a guest's command queued, sent once it
     /// returns: the line, whether operators get it and whether the console
     /// logs it.
@@ -3394,6 +3401,25 @@ impl Game<'_> {
             || self.interact_mob()?
             || self.interact_knot())
     }
+    /// `ItemStack.applyAfterUseComponentSideEffects`: a used stack with a
+    /// `use_cooldown` component starts its entry (`UseCooldown.apply`). A
+    /// server's guest also gets `ClientboundCooldownPacket`
+    /// (`ServerItemCooldowns.onCooldownStarted`), queued for their turn's end.
+    pub(super) fn apply_use_cooldown(&mut self, stack: &ItemStack) {
+        let default = self
+            .res
+            .items()
+            .get(&stack.item)
+            .and_then(|i| i.use_cooldown.clone());
+        let Some(component) = horizon_client::cooldowns::component(stack, default.as_ref()) else {
+            return;
+        };
+        let group = horizon_client::cooldowns::group(stack, default.as_ref());
+        self.cooldowns.add(Arc::clone(&group), component.ticks());
+        if self.lan_acting.is_some() {
+            self.guest_cooldowns.push((group, component.ticks()));
+        }
+    }
     /// One hand's turn in `startUseItem`: `useItemOn` the block aimed at,
     /// then `useItem`. Whether the click ends here (it acted or failed).
     fn use_hand(&mut self, block_hit: Option<&Hit>) -> Result<bool> {
@@ -3478,6 +3504,17 @@ impl Game<'_> {
         let Some(info) = self.res.items().get(&stack.item).cloned() else {
             return Ok(false);
         };
+        // ServerPlayerGameMode.useItem and useItemOn: an item on cooldown is
+        // not used (PASS, so the other hand may still act).
+        if self
+            .cooldowns
+            .is_on_cooldown(&horizon_client::cooldowns::group(
+                &stack,
+                info.use_cooldown.as_ref(),
+            ))
+        {
+            return Ok(false);
+        }
         if block_hit.is_some() && (self.use_bone_meal(&stack)? || self.ignite_tnt(&stack)?) {
             return Ok(true);
         }
@@ -3804,6 +3841,8 @@ impl Game<'_> {
         }
         if ticks >= duration {
             self.using = None;
+            // ItemStack.finishUsingItem's applyAfterUseComponentSideEffects.
+            self.apply_use_cooldown(&stack);
             self.finish_consuming(&info, consumable, &stack);
         } else {
             self.using = Some((slot, ticks));
@@ -4405,6 +4444,7 @@ impl Game<'_> {
         // Player.tick's ItemCooldowns.tick for the window's player (a
         // server's players count theirs down in `tick_guests`).
         self.shield_cooldown = self.shield_cooldown.saturating_sub(1);
+        self.cooldowns.tick();
         horizon_client::spans::time("tick_using", || self.tick_using());
         horizon_client::spans::time("tick_hud", || self.tick_hud());
         // The player's digging comes in with its packets, before the level
@@ -4786,17 +4826,17 @@ impl Game<'_> {
         count_text: Option<String>,
     ) {
         // GuiGraphicsExtractor.itemDecorations, laid out at the origin and
-        // moved to (x, y). Horizon tracks no item cooldowns to shade yet.
-        let max_damage = self
-            .res
-            .items()
-            .get(&stack.item)
-            .map_or(0, |info| info.max_damage as i32);
+        // moved to (x, y): the damage bar, the cooldown shade and the count.
+        let info = self.res.items().get(&stack.item);
+        let max_damage = info.map_or(0, |info| info.max_damage as i32);
+        let cooldown =
+            horizon_client::cooldowns::group(stack, info.and_then(|i| i.use_cooldown.as_ref()));
+        let partial = self.clock.fraction() as f32;
         let decorations = hud_overlays::ItemDecorations {
             count: stack.count,
             count_text,
             bar: hud_overlays::damage_bar(stack.damage as i32, max_damage),
-            cooldown: 0.0,
+            cooldown: self.cooldowns.percent(&cooldown, partial),
         };
         let mut draws = vec![hud_layout::GuiDraw::Push(vec![
             hud_layout::PoseOp::Translate(x, y),
@@ -11880,6 +11920,7 @@ impl<'a> Game<'a> {
             offhand: None,
             hand: Hand::Main,
             shield_cooldown: 0,
+            cooldowns: Default::default(),
             command_source: None,
             titles: Default::default(),
             tool_highlight: Default::default(),
@@ -12028,6 +12069,7 @@ impl<'a> Game<'a> {
             lid_openers: HashMap::new(),
             lan_acting: None,
             guest_packets: Vec::new(),
+            guest_cooldowns: Vec::new(),
             lan_acting_name: None,
             lan_acting_uuid: None,
             chat_capture: None,

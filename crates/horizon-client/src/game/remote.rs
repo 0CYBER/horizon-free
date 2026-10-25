@@ -2561,6 +2561,16 @@ impl Game<'_> {
                     r.commands = Some(tree);
                 }
             }
+            C::Cooldown(p) => {
+                // ClientPacketListener.handleItemCooldown: the server starts
+                // (or confirms) a group's cooldown; 0 ends it.
+                let group: Arc<str> = Arc::from(p.group.as_str());
+                if p.duration == 0 {
+                    self.cooldowns.remove(&group);
+                } else {
+                    self.cooldowns.add(group, p.duration);
+                }
+            }
             C::SystemChat(p) => {
                 // The component as sent, translated in the client's own
                 // language. ChatListener.handleOverlay for the action bar.
@@ -4303,8 +4313,12 @@ impl Game<'_> {
         let Some(info) = self.res.items().get(&held.item).cloned() else {
             return false;
         };
-        // MultiPlayerGameMode.useItem runs the use here too: food starts
-        // being eaten (Consumable.startConsuming), a book and quill opens.
+        // MultiPlayerGameMode.useItem runs the use here too (inside
+        // startPrediction): the `use_cooldown` component starts its entry, and
+        // the server's ClientboundCooldownPacket confirms it.
+        self.apply_use_cooldown(&held);
+        // Food starts being eaten (Consumable.startConsuming), a book and
+        // quill opens.
         self.with_hand(hand, |g| g.start_eating(&info));
         if self.with_hand(hand, |g| g.remote_use_book(&held)) {
             return true;
