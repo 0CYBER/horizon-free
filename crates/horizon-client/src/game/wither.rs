@@ -92,6 +92,8 @@ impl Game<'_> {
         match who {
             Some(Who::Player) => {
                 if !self.creative {
+                    // WitherSkull.onHitEntity's source: the wither launched it.
+                    self.combat.projectile_owner = owner;
                     self.mob_hits_player_kind(
                         amount,
                         [p.previous.x, p.previous.y, p.previous.z],

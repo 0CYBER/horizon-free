@@ -225,6 +225,7 @@ impl Game<'_> {
             Some(BlockEntity::Crafter(c)) => (Kind::CrafterBlock, c.items.to_vec()),
             _ => return false,
         };
+        let furnace = matches!(kind, Kind::Furnace(_));
         // CrafterBlockEntity.containerData: the disabled slots, then triggered.
         let crafter_data = match self.world.block_entities.get(&pos) {
             Some(BlockEntity::Crafter(c)) => Some((c.disabled, c.triggered)),
@@ -283,6 +284,12 @@ impl Game<'_> {
                 }
             }
             _ => {}
+        }
+        // FurnaceResultSlot.checkTakeAchievements: the guest took from the output.
+        let count = |s: Option<&ItemStack>| s.map_or(0, |s| s.count);
+        if furnace && count(menu.slot(2)) < count(items[2].as_ref()) {
+            let at = host.hub.guests[gi].position;
+            self.award_furnace_recipes(pos, at);
         }
         host.play.entry(conn).or_default().crafting.machine = Some((p.container, menu));
         host.hub.inventory_clicked(conn, p, &self.world, &changed);
