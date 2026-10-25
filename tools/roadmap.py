@@ -45,7 +45,8 @@ STALE_DAYS = 14  # a Now item needs an open pull request, or one merged this rec
 LABEL_PREFIX = "roadmap:"
 # GitHub label colours by status, from the design system's palette.
 LABEL_COLOURS = {"now": "5b3fd6", "next": "9a86ff", "later": "c5c7d1", "help-wanted": "1d7a48", "shipped": "646875"}
-ITEM_KEYS = {"id", "title", "status", "area", "plain", "dev", "links", "focus", "ongoing", "shipped_in", "post"}
+ITEM_KEYS = {"id", "title", "status", "area", "plain", "dev", "links", "focus", "ongoing", "shipped_in", "post",
+             "announce"}
 
 ISSUE = re.compile(r"#(\d+)$")
 ID = re.compile(r"[a-z0-9]+(-[a-z0-9]+)*$")
@@ -127,6 +128,9 @@ def validate(data, root=ROOT):
                 problems.append(f"{where}: shipped_in {shipped_in!r} is not a release tag or \"website\"")
         elif shipped_in:
             problems.append(f"{where}: only shipped items have shipped_in")
+        for key in ("focus", "ongoing", "announce"):
+            if key in item and not isinstance(item[key], bool):
+                problems.append(f"{where}: {key} is true or false")
         if item.get("ongoing") and status not in ("now", "next", "later"):
             problems.append(f"{where}: only Now, Next and Later items are ongoing")
         if item.get("focus") and status != "now":

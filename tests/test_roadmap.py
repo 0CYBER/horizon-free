@@ -114,6 +114,10 @@ class Rules(unittest.TestCase):
         self.assertTrue(any("link" in p for p in self.problems(links=["docs/nothing-here.md"])))
         self.assertTrue(any("link" in p for p in self.problems(links=["http://example.com"])))
 
+    def test_flags_are_true_or_false(self):
+        self.assertEqual(self.problems(announce=True), [])
+        self.assertTrue(any("announce is true or false" in p for p in self.problems(announce="yes")))
+
     def test_three_to_five_items_in_focus(self):
         self.assertTrue(any("focus" in p for p in self.problems(focus=False)))
 

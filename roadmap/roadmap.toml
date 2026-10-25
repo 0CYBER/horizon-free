@@ -91,6 +91,7 @@ id = "modpack-worldgen"
 title = "Modpacks' world generation, natively"
 status = "now"
 area = "modpacks"
+announce = true
 focus = true
 plain = """Making the world-generation mods of popular modpacks (new structures, YUNG's dungeons and mineshafts, \
 packs built on Lithostitched) generate their worlds in Horizon, natively and fast."""
@@ -135,6 +136,7 @@ id = "mod-registry"
 title = "Horizon's mod registry"
 status = "now"
 area = "mods"
+announce = true
 focus = true
 plain = """One place for mods, modpacks and resource packs made for Horizon: browse them on the website and \
 install them from the launcher in one click."""
@@ -185,6 +187,7 @@ id = "discord-presence"
 title = "Discord Rich Presence"
 status = "now"
 area = "extras"
+announce = true
 plain = """Your Discord profile can show that you are playing Horizon, with a switch to turn it off."""
 dev = """A Discord IPC client on its own thread (#1787) and the presence with its setting (#1788). Merged: it ships \
 with the next release."""
@@ -210,6 +213,7 @@ id = "microsoft-sign-in"
 title = "Microsoft sign-in (coming soon)"
 status = "next"
 area = "launcher"
+announce = true
 plain = """Coming soon: sign in with your Microsoft account to play on online-mode servers. The code is ready; it \
 waits for Microsoft's approval."""
 dev = """Device-code sign-in in the launcher and online-mode login in the client (docs/microsoft-account.md). It is \
@@ -222,6 +226,7 @@ id = "curseforge"
 title = "CurseForge in the mod browser (coming soon)"
 status = "next"
 area = "modpacks"
+announce = true
 plain = """Coming soon: search and download CurseForge mods and modpacks from the launcher, as you can with \
 Modrinth today."""
 dev = """The mod browser lists CurseForge as coming soon (docs/mod-browser.md): it needs CurseForge API access. \

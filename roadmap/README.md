@@ -20,6 +20,7 @@ dev = """26.3's dialog packets and model (#1720), ..."""             # crates, a
 links = ["#1720", "#1734", "docs/hosting.md"]                       # #N, a repository path, or https://
 shipped_in = "v0.2.58"           # shipped items only: a game tag, launcher@x.y.z, or "website"
 post = "..."                     # optional: the announcement when it ships, if `plain` doesn't read as one
+announce = true                  # optional: when it ships, Kira also posts it on X (`post`, else `plain`)
 ```
 
 - **No dates, ever**: Now, Next, Later. The check rejects month names, years, quarters and "next week".
