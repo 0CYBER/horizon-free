@@ -154,6 +154,8 @@ struct Pass {
     draw: bool,
     /// What `texture` reads instead of the block atlas.
     atlas: Option<wgpu::TextureView>,
+    /// Reads `mc_Entity`'s table (`PackPost::block_ids`).
+    ids: bool,
     groups: HashMap<u16, wgpu::BindGroup>,
 }
 
@@ -184,6 +186,8 @@ pub(super) struct World<'a> {
     pub lightmap: wgpu::TextureView,
     /// Terrain's geometry, when the pack draws it.
     pub terrain: Option<Geometry<'a>>,
+    /// `mc_Entity` of each block sprite layer: (id, 1 for fluids or -1) pairs.
+    pub block_ids: &'a [i32],
     /// The atlas of the sun and moon's sprites.
     pub celestial: Option<wgpu::TextureView>,
 }
@@ -207,6 +211,8 @@ pub struct PackPost {
     down: HashMap<wgpu::TextureFormat, (wgpu::RenderPipeline, wgpu::BindGroupLayout)>,
     /// The per-draw uniforms of gbuffers programs.
     draws: DrawUniforms,
+    /// `mc_Entity`'s table of flat terrain, and its bind group.
+    block_ids: Option<(wgpu::BindGroupLayout, wgpu::BindGroup)>,
     /// `HORIZON_SHADER_PACK_TIMING`: GPU time of each pass, in the log.
     timing: Option<super::pack_timing::PassTiming>,
     /// `shaders.properties`' custom uniforms, after the frame's in `uniforms.values`.
@@ -492,6 +498,42 @@ fn attach(
     })
 }
 
+/// `mc_Entity`'s table as a storage buffer (vertex stage) at set 3; -1 pairs when empty.
+fn block_ids(device: &wgpu::Device, table: &[i32]) -> (wgpu::BindGroupLayout, wgpu::BindGroup) {
+    let empty = [-1, -1];
+    let table = if table.is_empty() { &empty[..] } else { table };
+    let buffer = wgpu::util::DeviceExt::create_buffer_init(
+        device,
+        &wgpu::util::BufferInitDescriptor {
+            label: Some("Shader pack block ids"),
+            contents: bytemuck::cast_slice(table),
+            usage: wgpu::BufferUsages::STORAGE,
+        },
+    );
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("Shader pack block ids"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    });
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Shader pack block ids"),
+        layout: &layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: buffer.as_entire_binding(),
+        }],
+    });
+    (layout, group)
+}
+
 /// The game's geometry a gbuffers program draws: its vertex buffers and, for flat draws
 /// (flat.rs), the layout of their bind group 1.
 pub(super) struct Geometry<'a> {
@@ -501,6 +543,8 @@ pub(super) struct Geometry<'a> {
     pub depth_write: bool,
     /// What `texture` reads instead of the block atlas.
     pub atlas: Option<wgpu::TextureView>,
+    /// `mc_Entity`'s table at set 3 (flat terrain).
+    pub ids: Option<&'a wgpu::BindGroupLayout>,
 }
 
 /// The pass of program `p`: a quad, or `geometry` drawn by the game. `None` (with a note) when
@@ -663,6 +707,7 @@ fn build_pass(
                 Some(&layout),
                 geometry.and_then(|g| g.table),
                 draw.then_some(draws),
+                geometry.and_then(|g| g.ids),
             ],
             ..Default::default()
         });
@@ -745,6 +790,7 @@ fn build_pass(
         mipmaps: p.mipmaps,
         draw,
         atlas: geometry.and_then(|g| g.atlas.clone()),
+        ids: geometry.is_some_and(|g| g.ids.is_some()),
         groups: HashMap::new(),
     })
 }
@@ -796,13 +842,26 @@ impl PackPost {
             used |= pass.reads | pass.written | pass.flip;
             Some(pass)
         };
+        // Flat terrain reads `mc_Entity` from a table of the sprite layers.
+        let block_ids = world
+            .terrain
+            .as_ref()
+            .filter(|g| g.table.is_some())
+            .map(|_| block_ids(device, world.block_ids));
+        let terrain_geometry = world.terrain.as_ref().map(|g| Geometry {
+            buffers: g.buffers,
+            table: g.table,
+            depth_write: g.depth_write,
+            atlas: g.atlas.clone(),
+            ids: block_ids.as_ref().map(|i| &i.0),
+        });
         let terrain = post
             .terrain
-            .zip(world.terrain.as_ref())
+            .zip(terrain_geometry.as_ref())
             .and_then(|(p, g)| build(p, Some(g)));
         let water = post
             .water
-            .zip(world.terrain.as_ref())
+            .zip(terrain_geometry.as_ref())
             .and_then(|(p, g)| build(p, Some(g)));
         let sky = (post.sky.is_some() || post.sky_textured.is_some()).then(|| {
             let geometry = PackSky::new(device);
@@ -811,6 +870,7 @@ impl PackPost {
                 table: Some(&geometry.layout),
                 depth_write: false,
                 atlas: None,
+                ids: None,
             };
             let basic = post.sky.and_then(|p| build(p, Some(&basic)));
             let textured = Geometry {
@@ -818,6 +878,7 @@ impl PackPost {
                 table: None,
                 depth_write: false,
                 atlas: world.celestial.clone(),
+                ids: None,
             };
             let textured = post.sky_textured.and_then(|p| build(p, Some(&textured)));
             Sky {
@@ -981,6 +1042,7 @@ impl PackPost {
             mips_valid: 0,
             down,
             draws,
+            block_ids,
             timing: super::pack_timing::PassTiming::new(device, queue),
             custom,
             atlas: world.atlas.as_ref().map(|a| a.0.clone()),
@@ -1216,6 +1278,11 @@ impl PackPost {
             let mut rp = self.begin(encoder, &pass);
             rp.set_pipeline(&pass.pipeline);
             rp.set_bind_group(0, &group, &[]);
+            if pass.ids
+                && let Some((_, ids)) = &self.block_ids
+            {
+                rp.set_bind_group(3, ids, &[]);
+            }
             if pass.draw {
                 let stage = if translucent {
                     "TERRAIN_TRANSLUCENT"

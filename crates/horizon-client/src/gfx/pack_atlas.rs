@@ -127,6 +127,10 @@ impl PackAtlas {
                 "layout(set = 1, binding = 0) readonly buffer HzBlockSlots { uint hz_block_slots[]; };\n\
                  layout(set = 1, binding = 1) readonly buffer HzSlotOrigins { vec4 hz_slot_origins[]; };\n",
             );
+            // `mc_Entity` of each sprite layer: id, then 1 for fluids or -1 (the game's table).
+            declarations.push_str(
+                "layout(set = 3, binding = 0) readonly buffer HzBlockIds { int hz_block_ids[]; };\n",
+            );
             "hz_slot_origins[hz_block_slots[uint(gl_VertexIndex) >> 8u]]"
         } else {
             declarations.push_str("layout(location = 5) in vec4 hz_v_origin;\n");
@@ -153,8 +157,13 @@ impl PackAtlas {
             scale[0], scale[1],
         );
         declarations.push_str("vec2 hz_cell; vec2 hz_scale;\n");
+        let entity = if flat {
+            "vec4(float(hz_block_ids[2u * hz_layer]), float(hz_block_ids[2u * hz_layer + 1u]), 0.0, 0.0)"
+        } else {
+            "vec4(-1.0, -1.0, 0.0, 0.0)"
+        };
         let attributes = [
-            ("mc_Entity", "vec4(-1.0, -1.0, 0.0, 0.0)"),
+            ("mc_Entity", entity),
             (
                 "mc_midTexCoord",
                 "vec4((hz_cell + 0.5) * hz_scale, 0.0, 1.0)",

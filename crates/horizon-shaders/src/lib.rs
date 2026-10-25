@@ -12,6 +12,7 @@
 //! - [`load_post`]: a dimension's `prepare`, `deferred`, `composite` and `final` programs, in order (2.1).
 //! - [`Macros`] and [`eval_condition`]: the macros packs test, and the `#if` arithmetic (1.5).
 
+mod block_ids;
 mod condition;
 mod config;
 mod custom;
@@ -25,6 +26,7 @@ mod preprocess;
 mod properties;
 mod translate;
 
+pub use block_ids::BlockIds;
 pub use condition::eval_condition;
 pub use config::{BUFFERS, Buffer, Config, Format, Kind, buffer_index, draw_buffers};
 pub use custom::{Custom, Val};

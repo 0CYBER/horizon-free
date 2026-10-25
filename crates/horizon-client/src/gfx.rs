@@ -2764,12 +2764,14 @@ impl Renderer {
         self.world_post.scale = scale.clamp(0.25, 2.0);
         self.world_post.antialias = antialias;
     }
-    /// Runs `post` over the world from now on (`None`: no pack), for the dimension `dimension`.
+    /// Runs `post` over the world from now on (`None`: no pack), for the dimension `dimension`;
+    /// `block_ids` gives each block sprite layer's `mc_Entity` (id, fluid) pair.
     /// Returns the programs that run and the notes of loading them.
     pub fn set_shader_pack(
         &mut self,
         dimension: i32,
         pack: Option<horizon_shaders::Post>,
+        block_ids: &[i32],
     ) -> Option<(Vec<String>, Vec<String>)> {
         if pack.is_none() {
             self.pack_atlas = None;
@@ -2796,7 +2798,9 @@ impl Renderer {
                     table: self.flat.as_ref().filter(|_| flat).map(|f| &f.draw_layout),
                     depth_write: true,
                     atlas: None,
+                    ids: None,
                 }),
+                block_ids,
                 celestial: self
                     .hud
                     .atlas_texture
