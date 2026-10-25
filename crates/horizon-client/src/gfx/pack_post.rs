@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use horizon_shaders::{Format, Group, Kind, Post, Val};
 
 use super::pack_draw::DrawUniforms;
+use super::pack_entities::PackEntities;
 use super::pack_sky::PackSky;
 use super::pack_uniforms::{self, FrameUniforms, PackInputs};
 
@@ -130,6 +131,14 @@ struct Sky {
     textured: Option<Pass>,
 }
 
+/// Entities and block entities a pack draws (`gbuffers_entities`, `gbuffers_block` or their
+/// fallbacks), after terrain; Horizon draws the others.
+struct Entities {
+    geometry: PackEntities,
+    entity: Option<Pass>,
+    block: Option<Pass>,
+}
+
 struct Pass {
     name: String,
     group: Group,
@@ -203,6 +212,8 @@ pub struct PackPost {
     water: Option<Pass>,
     /// What draws the sky (`gbuffers_skybasic` or its fallback), before terrain, and its vertices.
     sky: Option<Sky>,
+    /// What draws entities and block entities, after terrain, and their vertices.
+    entities: Option<Entities>,
     /// A program after translucent terrain reads `depthtex1`: it is copied before water.
     depth1: bool,
     /// Buffers with mipmaps (filterable ones a program asks them for).
@@ -901,6 +912,28 @@ impl PackPost {
             }
         });
         let sky = sky.filter(|s| s.basic.is_some() || s.textured.is_some());
+        let entity_vertices = (post.entities.is_some() || post.block.is_some())
+            .then(|| PackEntities::new(device, &draws.layout));
+        let entity_buffers = super::pack_entities::buffers();
+        let entity_geometry = entity_vertices.as_ref().map(|e| Geometry {
+            buffers: &entity_buffers,
+            table: Some(&e.table),
+            depth_write: true,
+            atlas: world.celestial.clone(),
+            ids: None,
+            cull: false,
+        });
+        let entity = post.entities.zip(entity_geometry.as_ref());
+        let entity = entity.and_then(|(p, g)| build(p, Some(g)));
+        let block = post.block.zip(entity_geometry.as_ref());
+        let block = block.and_then(|(p, g)| build(p, Some(g)));
+        let entities = entity_vertices
+            .filter(|_| entity.is_some() || block.is_some())
+            .map(|geometry| Entities {
+                geometry,
+                entity,
+                block,
+            });
         // Developers' aid: `HORIZON_SHADER_PACK_SKIP=composite,final` leaves programs out.
         let skip = std::env::var("HORIZON_SHADER_PACK_SKIP").unwrap_or_default();
         let passes: Vec<Pass> = post
@@ -923,6 +956,14 @@ impl PackPost {
                 notes.push(format!("the {part} draw with {}", p.name));
             }
         }
+        for (part, pass) in entities
+            .iter()
+            .flat_map(|e| [("entities", &e.entity), ("block entities", &e.block)])
+        {
+            if let Some(p) = pass {
+                notes.push(format!("{part} draw with {}", p.name));
+            }
+        }
         let depth1 = water.is_some()
             && passes
                 .iter()
@@ -940,6 +981,11 @@ impl PackPost {
                 .iter()
                 .flat_map(|s| s.basic.iter().chain(&s.textured))
                 .chain(&terrain)
+                .chain(
+                    entities
+                        .iter()
+                        .flat_map(|e| e.entity.iter().chain(&e.block)),
+                )
                 .chain(&water)
                 .find(touched)
                 .map(|_| true)
@@ -955,6 +1001,7 @@ impl PackPost {
         let blit_depth = terrain.is_some()
             || water.is_some()
             || sky.is_some()
+            || entities.is_some()
             || passes.iter().any(|p| {
                 p.samplers
                     .iter()
@@ -1050,6 +1097,7 @@ impl PackPost {
             terrain,
             water,
             sky,
+            entities,
             depth1,
             mipped,
             mips_valid: 0,
@@ -1372,7 +1420,82 @@ impl PackPost {
         self.sky = Some(sky);
     }
 
-    /// The sky, when it shows, then terrain.
+    /// Entities and block entities with the pack's programs: each run `prepare_entities` kept
+    /// is one draw with its own `entityId` or `blockEntityId` and `entityColor`.
+    fn draw_entities(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        size: [u32; 2],
+    ) {
+        let Some(mut entities) = self.entities.take() else {
+            return;
+        };
+        let geometry = &entities.geometry;
+        for (block, pass) in [(false, &mut entities.entity), (true, &mut entities.block)] {
+            let Some(pass) = pass else { continue };
+            let mut draws = geometry
+                .draws
+                .iter()
+                .filter(|d| d.block == block)
+                .peekable();
+            if draws.peek().is_none() {
+                continue;
+            }
+            let group = self.bind(device, queue, pass, size);
+            {
+                let mut rp = self.begin(encoder, pass);
+                rp.set_pipeline(&pass.pipeline);
+                rp.set_bind_group(0, &group, &[]);
+                rp.set_bind_group(1, &geometry.table_group, &[]);
+                rp.set_vertex_buffer(0, geometry.vertices());
+                rp.set_index_buffer(geometry.indices.slice(..), wgpu::IndexFormat::Uint32);
+                for d in draws {
+                    if pass.draw {
+                        rp.set_bind_group(2, &geometry.group, &[geometry.offset(d.slot)]);
+                    }
+                    rp.draw_indexed(0..d.quads * 6, d.base as i32, 0..1);
+                }
+            }
+            self.mips_valid &= !pass.written;
+        }
+        self.entities = Some(entities);
+    }
+
+    /// Splits `entities` (`Frame::entities`) between the pack and Horizon by its runs
+    /// (`spans`): the pack's part is uploaded for this frame's draw, Horizon's goes to `rest`.
+    pub fn prepare_entities(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        entities: &[super::Vertex],
+        spans: &[super::pack_draw::EntitySpan],
+        rest: &mut Vec<super::Vertex>,
+    ) {
+        let Some(e) = &mut self.entities else {
+            rest.clear();
+            rest.extend_from_slice(entities);
+            return;
+        };
+        let drawn = [e.entity.is_some(), e.block.is_some()];
+        e.geometry.prepare(
+            device,
+            queue,
+            &self.draws.layout,
+            entities,
+            spans,
+            drawn,
+            rest,
+        );
+    }
+
+    /// Whether the pack draws entities or block entities itself.
+    pub fn has_entities(&self) -> bool {
+        self.entities.is_some()
+    }
+
+    /// The sky, when it shows, then terrain, entities and block entities.
     fn draw_opaque(
         &mut self,
         device: &wgpu::Device,
@@ -1386,6 +1509,7 @@ impl PackPost {
             self.draw_sky(device, queue, encoder, size, frame);
         }
         self.draw_terrain(device, queue, encoder, size, false, terrain);
+        self.draw_entities(device, queue, encoder, size);
     }
 
     /// Regenerates the mip chain of buffer `b`'s side that programs read.
@@ -1692,7 +1816,8 @@ impl PackPost {
         let mut passes = std::mem::take(&mut self.passes);
         let mut seen = (false, false);
         let mut shown = false;
-        let mut terrain_drawn = self.terrain.is_none() && self.sky.is_none();
+        let mut terrain_drawn =
+            self.terrain.is_none() && self.sky.is_none() && self.entities.is_none();
         let mut water_drawn = self.water.is_none();
         for pass in &mut passes {
             if !terrain_drawn && pass.group != Group::Prepare {

@@ -172,16 +172,19 @@ fn real_packs_read() {
             let inputs = horizon_shaders::GameInputs {
                 terrain: Some(terrain.clone()),
                 sky: Some(terrain.clone()),
-                celestial: Some(terrain),
+                celestial: Some(terrain.clone()),
+                entities: Some(terrain),
             };
             let post = load_post(&pack, &folder, &shaders, &Macros::standard(), &inputs);
             println!(
-                "  dimension {id} (folder `{folder}`): {} post programs, terrain {:?}, water {:?}, sky {:?} {:?}, {} notes, {:.0} ms",
+                "  dimension {id} (folder `{folder}`): {} post programs, terrain {:?}, water {:?}, sky {:?} {:?}, entities {:?} {:?}, {} notes, {:.0} ms",
                 post.programs.len(),
                 post.terrain.as_ref().map(|t| &t.name),
                 post.water.as_ref().map(|t| &t.name),
                 post.sky.as_ref().map(|t| &t.name),
                 post.sky_textured.as_ref().map(|t| &t.name),
+                post.entities.as_ref().map(|t| &t.name),
+                post.block.as_ref().map(|t| &t.name),
                 post.notes.len() + post.config.notes.len(),
                 start.elapsed().as_secs_f64() * 1000.0
             );

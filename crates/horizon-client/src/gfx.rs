@@ -70,6 +70,7 @@ mod lod;
 mod occlusion;
 mod pack_atlas;
 pub mod pack_draw;
+mod pack_entities;
 mod pack_post;
 mod pack_sky;
 mod pack_timing;
@@ -487,6 +488,8 @@ pub struct Renderer {
     world_post: world_post::Post,
     /// The shader pack's post-processing, and the dimension (legacy id) it was loaded for.
     pack_post: Option<(i32, Option<pack_post::PackPost>)>,
+    /// The entity vertices Horizon draws itself while a shader pack draws the others.
+    pack_entity_rest: Vec<Vertex>,
     /// The block sprites as one atlas, while a shader pack is loaded.
     pack_atlas: Option<pack_atlas::PackAtlas>,
     /// The pack's terrain program reads flat draws' vertices (`pack_terrain_inputs`).
@@ -2346,6 +2349,7 @@ impl Renderer {
             occlusion: occlusion::Occlusion::new(crate::chunk::MIN_Y, crate::chunk::HEIGHT / 16),
             world_post,
             pack_post: None,
+            pack_entity_rest: Vec::new(),
             pack_atlas: None,
             pack_terrain_flat: false,
             hud,
@@ -2832,6 +2836,7 @@ impl Renderer {
             terrain: self.pack_terrain_inputs(),
             sky: Some(pack_sky::inputs()),
             celestial: Some(pack_sky::celestial_inputs()),
+            entities: Some(pack_entities::inputs()),
         }
     }
 
@@ -3509,18 +3514,31 @@ impl Renderer {
             self.uploads
                 .buffer(&mut encoder, &self.outline, 0, bytemuck::cast_slice(&lines));
         }
+        // While a shader pack draws entities, the runs of `entity_spans` its programs draw are
+        // left out of Horizon's own entity draw.
+        let mut entities = frame.entities;
+        if !frame.title
+            && let Some((_, Some(post))) = &mut self.pack_post
+            && post.has_entities()
+        {
+            post.prepare_entities(
+                &self.device,
+                &self.queue,
+                frame.entities,
+                frame.entity_spans,
+                &mut self.pack_entity_rest,
+            );
+            entities = &self.pack_entity_rest;
+        }
         let [
             entity_quads,
             crumbling_quads,
             translucent_crumbling_quads,
             water_mask_quads,
             shadow_quads,
-        ] = self.entity_batch.update(
-            frame.entities,
-            frame.additive,
-            frame.hand,
-            frame.see_through,
-        );
+        ] = self
+            .entity_batch
+            .update(entities, frame.additive, frame.hand, frame.see_through);
         let weather_quads = frame.weather.len() as u32 / 4;
         let world_quads = entity_quads
             + crumbling_quads

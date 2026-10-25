@@ -132,7 +132,8 @@ impl PassTiming {
     fn report(&mut self) {
         let mut total = 0.0;
         let mut parts = Vec::new();
-        for (name, v) in &mut self.samples {
+        // A pass that did not run in this window (no entities, the sky out of sight) is left out.
+        for (name, v) in self.samples.iter_mut().filter(|s| !s.1.is_empty()) {
             v.sort_by(f32::total_cmp);
             let median = v[v.len() / 2];
             total += median;

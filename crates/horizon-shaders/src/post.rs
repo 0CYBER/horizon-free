@@ -103,6 +103,23 @@ const SKY_TEXTURED: [&str; 3] = [
     "gbuffers_basic",
 ];
 
+/// `gbuffers_entities` and its fallbacks (2.3).
+const ENTITIES: [&str; 4] = [
+    "gbuffers_entities",
+    "gbuffers_textured_lit",
+    "gbuffers_textured",
+    "gbuffers_basic",
+];
+
+/// `gbuffers_block` and its fallbacks (2.3).
+const BLOCK: [&str; 5] = [
+    "gbuffers_block",
+    "gbuffers_terrain",
+    "gbuffers_textured_lit",
+    "gbuffers_textured",
+    "gbuffers_basic",
+];
+
 /// The sun and moon's default blend: added to the sky, as vanilla draws them.
 pub const CELESTIAL_BLEND: Blend = [
     Factor::SrcAlpha,
@@ -149,6 +166,10 @@ pub struct Post {
     pub sky: Option<PostProgram>,
     /// What draws the sun and moon, between the sunset and the stars.
     pub sky_textured: Option<PostProgram>,
+    /// What draws entities, after terrain.
+    pub entities: Option<PostProgram>,
+    /// What draws block entities, after terrain.
+    pub block: Option<PostProgram>,
     /// The custom uniforms of `shaders.properties` (3.4).
     pub custom: Custom,
     pub config: Config,
@@ -174,6 +195,8 @@ pub struct GameInputs {
     pub terrain: Option<GbuffersInputs>,
     pub sky: Option<GbuffersInputs>,
     pub celestial: Option<GbuffersInputs>,
+    /// Entities and block entities (one vertex format).
+    pub entities: Option<GbuffersInputs>,
 }
 
 /// Loads the post-processing programs of `folder` and, for the geometry `inputs` describes, the
@@ -194,6 +217,8 @@ pub fn load_post(
         water: None,
         sky: None,
         sky_textured: None,
+        entities: None,
+        block: None,
         custom: Custom::parse(properties),
         config: Config::default(),
         notes: Vec::new(),
@@ -253,6 +278,21 @@ pub fn load_post(
         p.blend = blend(properties, &p.name).unwrap_or(Some(CELESTIAL_BLEND));
         p
     });
+    // Entities and block entities draw without blending, as terrain does and as vanilla's
+    // cutout entity types do, unless `blend.*` says otherwise (OQ-23).
+    let entity_blend = |p: Option<PostProgram>| {
+        p.map(|mut p| {
+            p.blend = blend(properties, &p.name).flatten();
+            p
+        })
+    };
+    let (entities, block) = match &inputs.entities {
+        Some(i) => (
+            entity_blend(gbuffers(&ENTITIES, Group::Gbuffers, i)),
+            entity_blend(gbuffers(&BLOCK, Group::Gbuffers, i)),
+        ),
+        None => (None, None),
+    };
     if let Some(inputs) = &inputs.terrain {
         let terrain = gbuffers(&TERRAIN, Group::Gbuffers, inputs);
         // gbuffers_water falls back to gbuffers_terrain's chain (2.3).
@@ -268,6 +308,8 @@ pub fn load_post(
     }
     loader.post.sky = sky;
     loader.post.sky_textured = sky_textured;
+    loader.post.entities = entities;
+    loader.post.block = block;
     post.config = std::mem::take(&mut post.config).finish();
     post
 }
@@ -530,8 +572,8 @@ mod tests {
         assert!(post.programs.iter().any(|p| p.name == "composite3"));
     }
 
-    /// Water falls back to the terrain chain and blends by default, as the sky does; `blend.*`
-    /// overrides.
+    /// Water falls back to the terrain chain and blends by default, as the sky does; entities
+    /// and block entities fall back along theirs; `blend.*` overrides.
     #[test]
     fn water_falls_back_to_terrain_and_blends() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/packs/terrain-test");
@@ -545,7 +587,8 @@ mod tests {
         let inputs = GameInputs {
             terrain: Some(inputs.clone()),
             sky: Some(inputs.clone()),
-            celestial: Some(inputs),
+            celestial: Some(inputs.clone()),
+            entities: Some(inputs),
         };
         let post = load_post(&pack, "", &Properties::default(), &macros, &inputs);
         let (terrain, water) = (post.terrain.unwrap(), post.water.unwrap());
@@ -569,6 +612,17 @@ mod tests {
         assert_eq!(
             (water.group, water.blend),
             (Group::Translucent, Some(TRANSLUCENT_BLEND))
+        );
+        // Entities fall back to gbuffers_textured, block entities to gbuffers_terrain; both
+        // draw without blending.
+        let (entities, block) = (post.entities.unwrap(), post.block.unwrap());
+        assert_eq!(
+            (entities.name.as_str(), entities.blend),
+            ("gbuffers_textured", None)
+        );
+        assert_eq!(
+            (block.name.as_str(), block.blend),
+            ("gbuffers_terrain", None)
         );
         let properties = Properties::parse(
             "blend.gbuffers_terrain = ONE ONE ZERO ONE\nblend.gbuffers_water = off\n",
