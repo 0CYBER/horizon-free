@@ -36,13 +36,31 @@ fn executable(dir: &Path, name: &str) -> PathBuf {
     })
 }
 
+/// `fs::canonicalize`, without the `\\?\` prefix it gives a Windows drive path: the
+/// home goes into `JAVA_HOME` and the PATH of preparers, whose lookups don't take it.
+fn real_path(path: PathBuf) -> PathBuf {
+    let real = fs::canonicalize(&path).unwrap_or(path);
+    if cfg!(windows) {
+        without_verbatim(real)
+    } else {
+        real
+    }
+}
+
+fn without_verbatim(path: PathBuf) -> PathBuf {
+    match path.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => path,
+    }
+}
+
 /// Resolve compiler symlinks before picking its sibling runtime. The first `java` on the
 /// PATH may be an older, runtime-only install; it must not be paired with a newer `javac`.
 fn path_jdks(path: &OsStr) -> Vec<PathBuf> {
     std::env::split_paths(path)
         .map(|dir| executable(&dir, "javac"))
         .filter(|javac| javac.is_file())
-        .map(|javac| fs::canonicalize(&javac).unwrap_or(javac))
+        .map(real_path)
         .filter_map(|javac| {
             let bin = javac.parent()?;
             // macOS's system tools are dispatchers, not a JDK home: JAVA_HOME=/usr
@@ -361,6 +379,22 @@ fn run(mut command: Command, log: &fs::File) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verbatim_drive_paths_lose_their_prefix() {
+        let jdk = r"C:\Program Files\Eclipse Adoptium\jdk-25\bin\javac.exe";
+        assert_eq!(
+            without_verbatim(PathBuf::from(format!(r"\\?\{jdk}"))),
+            PathBuf::from(jdk)
+        );
+        // A UNC share keeps its verbatim form: stripping it would leave no valid path.
+        let unc = r"\\?\UNC\server\jdk\bin\javac.exe";
+        assert_eq!(without_verbatim(PathBuf::from(unc)), PathBuf::from(unc));
+        assert_eq!(
+            without_verbatim(PathBuf::from("/usr/lib/jvm/bin/javac")),
+            PathBuf::from("/usr/lib/jvm/bin/javac")
+        );
+    }
 
     #[test]
     fn installed_jdks_prefer_the_pinned_major() {
