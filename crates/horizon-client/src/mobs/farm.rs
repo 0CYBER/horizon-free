@@ -136,61 +136,11 @@ pub fn sheep_color(climate: Climate, random: &mut impl RandomSource) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mobs::{Anim, Brain, Flags, MobType, Part, Species};
     use horizon_core::geometry::Vec3;
-    use serde_json::json;
-    use std::collections::HashMap;
 
+    /// `chicken_flap` reads only the ground flag: any mob type will do.
     fn chicken() -> Mob {
-        let model = Arc::new(Part::parse(
-            "root",
-            &json!({"children": {"right_wing": {}, "left_wing": {}}}),
-        ));
-        let kind = Arc::new(MobType {
-            id: "minecraft:chicken".into(),
-            species: Species::Chicken,
-            width: 0.4,
-            height: 0.7,
-            eye_height: 0.644,
-            category: "creature".into(),
-            max_health: 4.0,
-            speed: 0.25,
-            flying_speed: 0.4,
-            attack_damage: 0.0,
-            attack_knockback: 0.0,
-            follow_range: 16.0,
-            step_height: 0.6,
-            armor: 0.0,
-            armor_toughness: 0.0,
-            knockback_resistance: 0.0,
-            jump_strength: 0.42,
-            attributes: Arc::default(),
-            gravity: 0.08,
-            safe_fall_distance: 3.0,
-            fall_damage_multiplier: 1.0,
-            water_efficiency: 0.0,
-            water_slowdown: 0.8,
-            air_speed: 0.02,
-            baby_scale: 0.5,
-            head_rot_speed: 10.0,
-            max_head_x_rot: 40.0,
-            max_head_y_rot: 75.0,
-            ambient_interval: 120,
-            flags: Flags {
-                animal: true,
-                ..Default::default()
-            },
-            model,
-            layers: HashMap::new(),
-            texture: String::new(),
-            brain: Brain::Passive,
-            anim: Anim::Chicken,
-            sounds: [""; 3],
-            step_sound: None,
-            food: Arc::default(),
-            tempt: Arc::default(),
-        });
-        Mob::new(1, kind, Vec3::ZERO, 0.0)
+        Mob::new(1, crate::mobs::sensor_scan_tests::kind(), Vec3::ZERO, 0.0)
     }
 
     #[test]
