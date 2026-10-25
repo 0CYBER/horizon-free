@@ -200,6 +200,7 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
             }),
             // The GUI of a 1280 x 720 window at scale 3.
             gui_size: (427.0, 240.0),
+            held: None,
         });
         mods.tick(t);
         for _ in 0..FRAMES_PER_TICK {

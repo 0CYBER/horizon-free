@@ -89,6 +89,7 @@ Deprecations and breaking changes are in bold. The release notes of the game rel
 | Mod API: `log`, `game`, `chat`, `hud`, `storage`, `events` | preview | 0.1.0 |
 | Mod API: `ui`, `ui-events` (a mod's screens and settings page) | experimental | manifest `experimental = ["ui"]` |
 | Mod API: `render` (HUD shapes, camera shake; drawn by the game, no mod shaders) | experimental | manifest `experimental = ["render"]` |
+| Mod API: `input` (claimed items' use, the mod's keys) | experimental | manifest `experimental = ["input"]` |
 | Content mods (`registries`: data-driven blocks and items) | preview | manifest `api = "0.2"` |
 | Server mods (events, world, server commands) | not started | manifest `api = "0.3"`, experimental first |
 | Script mods (Lua run by an interpreter mod, [mods.md](mods.md#ways-in)) | not started | |

@@ -163,6 +163,48 @@ interface ui-events {
     settings-opened: func();
 }
 
+/// Capability `input` (experimental: the manifest needs
+/// `experimental = ["input"]`): the use button on items the mod claims, and
+/// the mod's own keys. Events wait for `poll`, at most 256.
+interface input {
+    /// The main hand's stack.
+    record held-item {
+        /// `minecraft:spyglass`, `<mod>:<path>`.
+        id: string,
+        count: u32,
+        /// The hotbar slot, 0 to 8.
+        slot: u32,
+    }
+    record item-use {
+        item: held-item,
+        /// Game ticks the button was held (0 on `use-start`).
+        ticks: u32,
+    }
+    variant event {
+        /// The use button went down with a claimed item in the main hand.
+        /// The game does nothing else with the click: no placing, no eating,
+        /// no swing.
+        use-start(item-use),
+        /// It came up again, or the item left the hand, or a screen opened.
+        use-stop(item-use),
+        /// A key `register-key` named went down or up while playing (no
+        /// screen open). The game's own mapping on that key still runs.
+        key-down(string),
+        key-up(string),
+    }
+    /// The items whose use the mod handles instead of the game, by id (at
+    /// most 64). Replaces the previous list.
+    claim-items: func(ids: list<string>);
+    /// A key of the mod's: `name` comes back in `key-down` and `key-up`,
+    /// `label` says what it does, `key` is the key as options.txt writes
+    /// it (`key.keyboard.r`). At most 16; an unknown key is an error.
+    register-key: func(name: string, label: string, key: string) -> result<_, string>;
+    /// The main hand's stack, as of this tick; none when it is empty.
+    held: func() -> option<held-item>;
+    /// The events since the last call, oldest first.
+    poll: func() -> list<event>;
+}
+
 /// Capability `render` (experimental: the manifest needs
 /// `experimental = ["render"]`): shapes the game draws for the mod with its
 /// own renderer, kept until the mod replaces them (no call per frame). A mod
@@ -280,6 +322,7 @@ world horizon-ui-mod {
     include horizon-mod;
     import ui;
     import render;
+    import input;
     export ui-events;
 }
 
@@ -292,4 +335,5 @@ world ui-host {
 /// The game's side of capability `render` (imports only).
 world render-host {
     import render;
+    import input;
 }

@@ -95,6 +95,8 @@ What real mods need next, in the order modpacks and servers need it:
 
 ## Changelog
 
+- Experimental `input` (`experimental = ["input"]`): `claim-items`, `register-key`, `held`, `poll` (use-start,
+  use-stop, key-down, key-up).
 - Experimental `render` (`experimental = ["render"]`): HUD shapes (fill, quad, sprite, item, text), `gui-size`, camera
   `shake`, drawn by the game's own renderer.
 - API 0.2 (content): data-driven blocks and items, tags, `horizon:add_to`, terrain adaptation.

@@ -14,6 +14,7 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `registries` | data files (`assets/`, `data/`), no interface | add blocks and items to your worlds |
 | `ui` | [`ui`](#ui) | show its own screens and a settings page |
 | `render` | [`render`](#render) | draw on your screen and shake the camera |
+| `input` | [`input`](#input) | take over the use button on its own items, and add keys |
 
 ## World `horizon-mod`
 
@@ -24,7 +25,7 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 
 A mod with widgets (capability `ui`): the SDK builds every mod against this world. Mods built for `horizon-mod` alone (no `ui-events` export) still load and simply hear nothing of their widgets.
 
-- Imports (what the game offers): `ui`, `render`, `log`, `game`, `chat`, `hud`, `storage`
+- Imports (what the game offers): `ui`, `render`, `input`, `log`, `game`, `chat`, `hud`, `storage`
 - Exports (what the mod provides): `ui-events`, `events`
 
 ## World `ui-host`
@@ -38,7 +39,7 @@ The game's side of `horizon-ui-mod` beyond `horizon-mod`.
 
 The game's side of capability `render` (imports only).
 
-- Imports (what the game offers): `render`
+- Imports (what the game offers): `render`, `input`
 - Exports (what the mod provides): 
 
 ## `log`
@@ -212,6 +213,45 @@ What the game calls on a mod that shows widgets (capability `ui`): what the play
 | `select` | `func(id: u32, row: u32)` | A row of one of the mod's `list` widgets was picked: the widget's `id` and the row, on the screen or the settings page that showed it. |
 | `closed` | `func()` | The player left the mod's screen (Esc or Done); not for a screen the mod closed itself or one that went away with the mod. |
 | `settings-opened` | `func()` | The player opened the mod's settings page in Options > Mods: call `ui::set-settings` now to fill it with fresh widgets. |
+
+## `input`
+
+Access: capability `input`.
+
+Capability `input` (experimental: the manifest needs `experimental = ["input"]`): the use button on items the mod claims, and the mod's own keys. Events wait for `poll`, at most 256.
+
+### record `held-item`
+
+The main hand's stack.
+
+| Field | Type | |
+| --- | --- | --- |
+| `id` | `string` | `minecraft:spyglass`, `<mod>:<path>`. |
+| `count` | `u32` |  |
+| `slot` | `u32` | The hotbar slot, 0 to 8. |
+
+### record `item-use`
+
+| Field | Type | |
+| --- | --- | --- |
+| `item` | `held-item` |  |
+| `ticks` | `u32` | Game ticks the button was held (0 on `use-start`). |
+
+### variant `event`
+
+| Case | Payload | |
+| --- | --- | --- |
+| `use-start` | `item-use` | The use button went down with a claimed item in the main hand. The game does nothing else with the click: no placing, no eating, no swing. |
+| `use-stop` | `item-use` | It came up again, or the item left the hand, or a screen opened. |
+| `key-down` | `string` | A key `register-key` named went down or up while playing (no screen open). The game's own mapping on that key still runs. |
+| `key-up` | `string` |  |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `claim-items` | `func(ids: list<string>)` | The items whose use the mod handles instead of the game, by id (at most 64). Replaces the previous list. |
+| `register-key` | `func(name: string, label: string, key: string) -> result<_, string>` | A key of the mod's: `name` comes back in `key-down` and `key-up`, `label` says what it does, `key` is the key as options.txt writes it (`key.keyboard.r`). At most 16; an unknown key is an error. |
+| `held` | `func() -> option<held-item>` | The main hand's stack, as of this tick; none when it is empty. |
+| `poll` | `func() -> list<event>` | The events since the last call, oldest first. |
 
 ## `render`
 

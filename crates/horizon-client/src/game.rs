@@ -96,6 +96,7 @@ mod maps;
 mod minecarts;
 mod mob_blocks;
 mod mob_gear;
+mod mod_input;
 mod mod_render;
 mod mods;
 mod mount_menu;
@@ -10479,6 +10480,10 @@ impl Game<'_> {
     }
     /// A mouse button while playing (window or control socket).
     fn play_mouse(&mut self, button: MouseButton, pressed: bool) -> Result<()> {
+        // A mod's claimed item takes the use button (capability `input`).
+        if self.mod_use(button, pressed) {
+            return Ok(());
+        }
         if self.sleeping.is_some() {
             return Ok(());
         }
@@ -11385,6 +11390,7 @@ impl ApplicationHandler for Game<'_> {
                         return Ok(());
                     };
                     self.extras_key(key, event.state == ElementState::Pressed, event.repeat);
+                    self.mod_key(key, event.state == ElementState::Pressed, event.repeat);
                     // key.smoothCamera toggles the cinematic camera.
                     if self.screen == Screen::Playing
                         && event.state == ElementState::Pressed

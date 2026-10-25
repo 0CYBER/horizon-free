@@ -87,9 +87,12 @@ pub enum Capability {
     /// Shapes on the HUD and the camera's shake, drawn by the game's own
     /// renderer (interface `render`).
     Render,
+    /// The use button on items the mod claims, and its own keys
+    /// (interface `input`).
+    Input,
 }
 impl Capability {
-    pub const ALL: [Capability; 7] = [
+    pub const ALL: [Capability; 8] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
@@ -97,6 +100,7 @@ impl Capability {
         Capability::Registries,
         Capability::Ui,
         Capability::Render,
+        Capability::Input,
     ];
     /// The WIT interface it grants, in `horizon:mods`.
     pub fn interface(self) -> &'static str {
@@ -108,12 +112,16 @@ impl Capability {
             Capability::Registries => "registries",
             Capability::Ui => "ui",
             Capability::Render => "render",
+            Capability::Input => "input",
         }
     }
     /// May change in any release: a mod uses it only with
     /// `experimental = ["<name>"]` in its manifest.
     pub fn is_experimental(self) -> bool {
-        matches!(self, Capability::Ui | Capability::Render)
+        matches!(
+            self,
+            Capability::Ui | Capability::Render | Capability::Input
+        )
     }
     /// What the player reads before turning the mod on: "May <this>".
     pub fn describe(self) -> &'static str {
@@ -125,6 +133,7 @@ impl Capability {
             Capability::Registries => "add blocks and items to your worlds",
             Capability::Ui => "show its own screens and a settings page",
             Capability::Render => "draw on your screen and shake the camera",
+            Capability::Input => "take over the use button on its own items, and add keys",
         }
     }
     /// The capability a component import needs, `Ok(None)` for one every
@@ -157,6 +166,7 @@ impl fmt::Display for Capability {
             Capability::Registries => "registries",
             Capability::Ui => "ui",
             Capability::Render => "render",
+            Capability::Input => "input",
         };
         f.write_str(name)
     }
