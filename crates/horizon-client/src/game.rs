@@ -540,6 +540,8 @@ struct GameLevel<'w> {
     seed: i64,
     behaviours: &'w Behaviours,
     items: &'w Items,
+    /// Cooking recipes' experience, which a removed furnace pays out.
+    recipes: &'w horizon_client::crafting::Recipes,
     /// Container loot tables (`unpackLootTable`).
     loot: Option<std::sync::Arc<horizon_world::loot::LootData>>,
     registry: &'static horizon_world::registry::BlockRegistry,
@@ -2436,6 +2438,7 @@ impl Game<'_> {
             seed: self.level.seed,
             behaviours: self.res.behaviours(),
             items: self.res.items(),
+            recipes: self.res.recipes(),
             loot: horizon_client::structure_blocks::loot_data(&self.options.resources),
             registry: self.pack.assets.registry,
             rules,
@@ -5977,6 +5980,12 @@ impl Game<'_> {
             // Attached after the slots were set: setting them is not a click.
             menu.merchant = session.map(|(s, _)| s);
         }
+        // `FurnaceResultSlot.checkTakeAchievements` pays out on what left the output slot.
+        let furnace_before = if matches!(kind, Kind::Furnace(_)) {
+            menu.slot(2).cloned().map_or(0, |s| s.count)
+        } else {
+            0
+        };
         let outcome = run(&mut menu, &env, &to_menu);
         let made = maps.made.take();
         match outcome {
@@ -5994,6 +6003,12 @@ impl Game<'_> {
             self.merchant_sync_out(s);
         }
         let after: Vec<Option<ItemStack>> = (0..total).map(|i| menu.slot(i).cloned()).collect();
+        // Only a furnace has a result slot to compare: an enchanting table has two slots.
+        let furnace_after = if matches!(kind, Kind::Furnace(_)) {
+            after[2].as_ref().map_or(0, |s| s.count)
+        } else {
+            0
+        };
         let carried = menu.carried.take();
         let dropped = std::mem::take(&mut menu.dropped);
         let sounds = std::mem::take(&mut menu.sounds);
@@ -6018,6 +6033,13 @@ impl Game<'_> {
                 self.player_drop(stack);
             }
             self.award_crafted(&crafted);
+            if furnace_before > furnace_after
+                && self.remote.is_none()
+                && let (Some(pos), Some(p)) = (self.container, self.player.as_ref())
+            {
+                let at = [p.position.x, p.position.y, p.position.z];
+                self.award_furnace_recipes(pos, at);
+            }
         }
         if kind == Kind::Loom {
             if let Some(s) = self.station.as_mut() {
@@ -8811,6 +8833,27 @@ impl Game<'_> {
             self.audio
                 .play("minecraft:entity.experience_orb.pickup", at, 0.1, pitch);
             self.give_orb_points(gained);
+        }
+    }
+    /// `FurnaceResultSlot.checkTakeAchievements`: the player took from the output of the
+    /// furnace at `pos`, which pops the experience of what it made at them
+    /// (`awardUsedRecipesAndPopExperience`) and forgets it.
+    pub(super) fn award_furnace_recipes(&mut self, pos: (i32, i32, i32), at: [f64; 3]) {
+        let used = match self.world.block_entities.get_mut(&pos) {
+            Some(BlockEntity::Furnace(f)) => {
+                let used = f.recipe_experience(self.res.recipes());
+                f.recipes_used.clear();
+                used
+            }
+            _ => return,
+        };
+        for (count, experience) in used {
+            let xp = horizon_client::containers::create_experience(
+                count,
+                experience,
+                &mut self.world.random,
+            );
+            self.spawn_orbs(at, xp);
         }
     }
     /// `Player.giveExperiencePoints`, and `giveExperienceLevels`' level-up
