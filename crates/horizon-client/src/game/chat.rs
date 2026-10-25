@@ -463,9 +463,8 @@ impl Game<'_> {
             self.chat_line(text, ChatSource::Server);
             return;
         }
-        // ChatListener.handleSystemMessage: the Chat option's Hidden level
-        // takes the server's messages too.
-        if !self.chat_abilities().receive_system_messages {
+        // The Chat option's Hidden level takes the server's messages too.
+        if !self.ui.chat.shows(ChatSource::Server) {
             return;
         }
         let focused = self.screen == Screen::Chat;
@@ -474,6 +473,7 @@ impl Game<'_> {
             &self.gui.atlas,
             text,
             Some(SYSTEM_INDICATOR),
+            ChatSource::Server,
             self.ticks,
             focused,
         );
@@ -610,9 +610,14 @@ impl Game<'_> {
             );
             let focused = self.screen == Screen::Chat;
             let heard = self.mods.running().then(|| line.plain());
-            self.ui
-                .chat
-                .add(&self.gui.atlas, line, None, self.ticks, focused);
+            self.ui.chat.add(
+                &self.gui.atlas,
+                line,
+                None,
+                ChatSource::Player,
+                self.ticks,
+                focused,
+            );
             if let Some(line) = heard {
                 self.mods_chat(&line);
             }
@@ -916,9 +921,14 @@ impl Game<'_> {
             Err(e) => Text::translate("screenshot.failure", &[Text::literal(e.clone())]),
         };
         let focused = self.screen == Screen::Chat;
-        self.ui
-            .chat
-            .add(&self.gui.atlas, message, None, self.ticks, focused);
+        self.ui.chat.add(
+            &self.gui.atlas,
+            message,
+            None,
+            ChatSource::Client,
+            self.ticks,
+            focused,
+        );
     }
 }
 /// `yyyy-MM-dd_HH.mm.ss[_n].png` (Util.getFilenameFormattedDateTime, local time

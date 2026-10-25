@@ -9136,6 +9136,9 @@ impl Game<'_> {
         )
     }
     fn apply_settings(&mut self) {
+        // LocalPlayer.refreshChatAbilities: the chat shows what the Chat option allows.
+        let abilities = self.chat_abilities();
+        self.ui.chat.set_abilities(&self.gui.atlas.font, abilities);
         if let Some(r) = &self.renderer {
             self.settings
                 .clamp_gui_scale([r.config.width as i32, r.config.height as i32]);

@@ -72,6 +72,14 @@ impl ChatAbilities {
             },
         }
     }
+    /// `visibleMessagesFilter`: the client's own lines always show.
+    pub fn shows(&self, source: ChatSource) -> bool {
+        match source {
+            ChatSource::Player => self.receive_player_messages,
+            ChatSource::Server => self.receive_system_messages,
+            ChatSource::Client => true,
+        }
+    }
     /// Whether the chat screen may send `input` (`hasAllowedInput`).
     pub fn allows(&self, input: &str) -> bool {
         if input.starts_with('/') {
@@ -79,6 +87,12 @@ impl ChatAbilities {
         } else {
             self.send_messages
         }
+    }
+}
+
+impl Default for ChatAbilities {
+    fn default() -> Self {
+        Self::new(ChatVisibility::Full)
     }
 }
 
@@ -143,6 +157,7 @@ struct Message {
     added: u64,
     content: Text,
     indicator: Option<u32>,
+    source: ChatSource,
 }
 /// A wrapped line (`GuiMessage.Line`).
 #[derive(Clone, Debug)]
@@ -177,6 +192,8 @@ pub struct Chat {
     pub log: bool,
     /// Messages added since the start, for the control socket's events.
     pub received: u64,
+    /// The Chat option's `visibleMessageFilter` (`set_abilities`).
+    abilities: ChatAbilities,
 }
 impl Chat {
     pub fn lines_per_page(&self, focused: bool) -> usize {
@@ -186,16 +203,32 @@ impl Chat {
     fn max_width(&self) -> i32 {
         (f64::from(self.options.width_px()) / self.options.scale).floor() as i32
     }
-    /// ChatComponent.addMessage: wrap, prepend and trim to 100 lines.
+    /// ChatComponent.addMessage: wrap, prepend and trim to 100 lines. A
+    /// message the Chat option hides is dropped, unlogged.
     pub fn add(
         &mut self,
         atlas: &HudAtlas,
         content: Text,
         indicator: Option<u32>,
+        source: ChatSource,
         ticks: u64,
         focused: bool,
     ) {
-        // ChatComponent.logChatMessage: every message is in the log.
+        self.add_message(&atlas.font, content, indicator, source, ticks, focused);
+    }
+    fn add_message(
+        &mut self,
+        font: &crate::font::Font,
+        content: Text,
+        indicator: Option<u32>,
+        source: ChatSource,
+        ticks: u64,
+        focused: bool,
+    ) {
+        if !self.abilities.shows(source) {
+            return;
+        }
+        // ChatComponent.logChatMessage: every message shown is in the log.
         crate::logging::write_only(log::Level::Info, &format!("[CHAT] {}", content.plain()));
         if self.log {
             println!("[CHAT] {}", content.plain());
@@ -204,16 +237,17 @@ impl Chat {
             added: ticks,
             content,
             indicator,
+            source,
         };
-        self.add_lines(atlas, &message, focused);
+        self.add_lines(font, &message, focused);
         self.messages.insert(0, message);
         self.messages.truncate(100);
         self.received += 1;
     }
-    fn add_lines(&mut self, atlas: &HudAtlas, message: &Message, focused: bool) {
+    fn add_lines(&mut self, font: &crate::font::Font, message: &Message, focused: bool) {
         let width = self.max_width();
         let content = self.displayed(&message.content);
-        for line in atlas.font.wrap_components(&content, width) {
+        for line in font.wrap_components(&content, width) {
             if focused && self.scroll > 0 {
                 self.new_since_scroll = true;
                 self.scroll_by(1, focused);
@@ -239,15 +273,37 @@ impl Chat {
             content.strip_legacy()
         }
     }
-    /// Re-wrap after a width or scale change (ChatComponent.rescaleChat).
+    /// Re-wrap after a width or scale change (ChatComponent.rescaleChat),
+    /// keeping only the messages the Chat option shows.
     pub fn rescale(&mut self, atlas: &HudAtlas) {
+        self.rewrap(&atlas.font);
+    }
+    fn rewrap(&mut self, font: &crate::font::Font) {
         self.scroll = 0;
         self.new_since_scroll = false;
         self.lines.clear();
-        let messages: Vec<Message> = self.messages.iter().rev().cloned().collect();
+        let messages: Vec<Message> = self
+            .messages
+            .iter()
+            .rev()
+            .filter(|m| self.abilities.shows(m.source))
+            .cloned()
+            .collect();
         for m in &messages {
-            self.add_lines(atlas, m, false);
+            self.add_lines(font, m, false);
         }
+    }
+    /// `ChatComponent.setVisibleMessageFilter`: the Chat option changed;
+    /// the messages it now hides leave the chat, those it shows again return.
+    pub fn set_abilities(&mut self, font: &crate::font::Font, abilities: ChatAbilities) {
+        if self.abilities != abilities {
+            self.abilities = abilities;
+            self.rewrap(font);
+        }
+    }
+    /// Whether a message from `source` would show (`visibleMessagesFilter`).
+    pub fn shows(&self, source: ChatSource) -> bool {
+        self.abilities.shows(source)
     }
     pub fn clear(&mut self) {
         self.messages.clear();

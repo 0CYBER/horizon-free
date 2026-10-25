@@ -412,3 +412,27 @@ fn restricted_input_says_why_it_will_not_send() {
             .any(|line| line == "chat_screen.commands_not_allowed")
     );
 }
+
+/// `ChatComponent.setVisibleMessageFilter`: a message the Chat option hides
+/// on arrival is dropped; one already in the chat leaves it while the option
+/// hides its kind and comes back when it shows it again.
+#[test]
+fn the_chat_option_filters_the_lines_both_ways() {
+    let font = font();
+    let mut chat = Chat::default();
+    let says = |chat: &mut Chat, text: &str, source| {
+        chat.add_message(&font, Text::literal(text), None, source, 0, false);
+    };
+    let shown =
+        |chat: &Chat| -> Vec<String> { chat.lines.iter().map(|l| l.content.plain()).collect() };
+    says(&mut chat, "player", ChatSource::Player);
+    says(&mut chat, "server", ChatSource::Server);
+    chat.set_abilities(&font, ChatAbilities::new(ChatVisibility::System));
+    assert_eq!(shown(&chat), ["server"]);
+    says(&mut chat, "dropped", ChatSource::Player);
+    chat.set_abilities(&font, ChatAbilities::new(ChatVisibility::Hidden));
+    says(&mut chat, "client", ChatSource::Client);
+    assert_eq!(shown(&chat), ["client"]);
+    chat.set_abilities(&font, ChatAbilities::new(ChatVisibility::Full));
+    assert_eq!(shown(&chat), ["client", "server", "player"]);
+}

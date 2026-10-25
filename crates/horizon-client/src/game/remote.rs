@@ -798,20 +798,14 @@ impl Game<'_> {
         Some(stack)
     }
     /// A line in the connection's chat, with its styles, click and hover
-    /// events (ChatComponent.addMessage). `ChatListener` drops the lines the
-    /// Chat option hides before they reach the chat.
+    /// events (ChatComponent.addMessage). The lines the Chat option hides
+    /// are dropped there (its `visibleMessageFilter`).
     pub(super) fn chat_line(
         &mut self,
         content: horizon_client::text::Text,
         source: horizon_client::chat::ChatSource,
     ) {
-        let abilities = self.chat_abilities();
-        let allowed = match source {
-            horizon_client::chat::ChatSource::Player => abilities.receive_player_messages,
-            horizon_client::chat::ChatSource::Server => abilities.receive_system_messages,
-            horizon_client::chat::ChatSource::Client => true,
-        };
-        if !allowed {
+        if !self.ui.chat.shows(source) {
             return;
         }
         let text = content.plain();
@@ -820,6 +814,7 @@ impl Game<'_> {
             &self.gui.atlas,
             content,
             None,
+            source,
             self.ticks,
             self.screen == Screen::Chat,
         );
