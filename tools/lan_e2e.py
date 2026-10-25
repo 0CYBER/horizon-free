@@ -250,6 +250,7 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - falling:   an item and a falling block the host summons high up fall smoothly on the guest, a
              little further every tick between the server's updates (every 20 ticks), as their own
              client tick moves them (they used to hang, then jump down once a second, #1568).
+- instant_digging: an instant survival break leaves no repeated stone hit sounds or stale server dig (#1908).
 - replant:   flowers and crops replanted after a short harvest click stay planted for both players;
              the server forgets the completed instant break (#1880).
 
@@ -5396,6 +5397,42 @@ def check_digging(host, guest, out):
 
 CHECKS += ['digging']
 CHECK_FNS.update(digging=check_digging)
+
+
+def check_instant_digging(host, guest, out):
+    """#1908: an instant survival START has no STOP. ServerPlayerGameMode.tick
+    forgets a dig once its block is air; it must neither hit air nor break a replacement.
+    Exercise the in-frame host and network guest (both are clients with --server-thread).
+    """
+    result = {}
+    for label, player in (('host', host), ('guest', guest)):
+        x, y, z = (int(v // 1) for v in pos_of(player))
+        cell = (x, y + 1, z + 2)
+        player('command', command='gamemode survival')
+        player('command', command='clear @s')
+        host('command', command=f'fill {x - 1} {y} {z + 1} {x + 1} {y + 3} {z + 4} minecraft:air')
+        host('command', command=f'setblock {x} {y} {z + 2} minecraft:sand')
+        host('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} minecraft:dead_bush')
+        player.wait(10)
+        before = heard(player, 'minecraft:block.stone.hit')
+        player.raw('look-at', x + 0.5, y + 1.4, z + 2.5)
+        player.raw('mouse', 'left', 'click')
+        player.wait(20)
+        broken = host.raw('block', *cell).get('block')
+        hits = heard(player, 'minecraft:block.stone.hit') - before
+        host('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} minecraft:dead_bush')
+        player.wait(20)
+        replacement = host.raw('block', *cell).get('block')
+        result[label] = {'broken': broken, 'stone_hits': hits, 'replacement': replacement}
+        assert broken == 'minecraft:air', f'{label}: the bush did not break: {result}'
+        assert hits == 0, f'{label}: hitting air after an instant break: {result}'
+        assert replacement == 'minecraft:dead_bush', f'{label}: the server kept digging: {result}'
+        host('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} minecraft:air')
+    return result
+
+
+CHECKS += ['instant_digging']
+CHECK_FNS.update(instant_digging=check_instant_digging)
 
 
 def check_vehicles(host, guest, out):
