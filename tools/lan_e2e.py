@@ -165,6 +165,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - riding:    the host and the guest each saddle and ride a horse (walk, jump), a pig and a strider
              (with their sticks), a camel and a donkey, sit on a llama and fly a happy ghast, and
              get off by sneaking; the other side sees the animal move.
+- riding_teleport: the host and the guest each /tp through chat while riding a horse; after 60
+             ticks each stays dismounted at the destination and both sides see the horse left
+             behind. The host also teleports a mounted guest by name.
 - lightning: a bolt summoned beside the host, then the guest: both sides get the bolt and flash the
              sky (on its server thread the host's window is a client of it too).
 - drops:     an item lies where the host, then the guest, places a block: it comes out of the block
@@ -5632,6 +5635,70 @@ def check_villagers(host, guest, out):
 
 CHECKS += ['villagers']
 CHECK_FNS.update(villagers=check_villagers)
+
+
+def check_riding_teleport(host, guest, out):
+    """#1473: a chat /tp dismounts each player and leaves the horse behind in both modes;
+    teleporting another player exercises the guest-target command path too."""
+    spots = apart(host, guest)
+    result = {}
+    for label, player, source in (('host', host, None), ('guest', guest, None),
+                                  ('guest-targeted', guest, host)):
+        x, y, z = spots['host' if player is host else 'guest']
+        horse_at = (x + 0.5, y, z + 2.5)
+        destination = (x + 3.5, y, z + 5.5)
+        tag = 'tp_horse'
+        try:
+            player('command', command='clear @s')
+            player('command', command='gamemode survival')
+            player('command', command=f'tp @s {x + 0.5} {y} {z + 0.5} 0 0')
+            player('command', command='item replace entity @s weapon.mainhand with minecraft:saddle')
+            player('command', command=f'summon minecraft:horse {horse_at[0]} {y} {horse_at[2]} '
+                                     f'{{Tame:1b,NoAI:1b,NoGravity:1b,Tags:["{tag}"]}}')
+            player.wait(5)
+            horses = [m for m in player.raw('mobs', 16)['near']
+                      if m['kind'] == 'minecraft:horse' and m['health'] > 0]
+            horse = next((m for m in horses if math.dist(m['pos'], horse_at) < 0.1), None)
+            assert horse, f'{label}: no live horse at {horse_at}: {horses}'
+            player.raw('look-at', horse_at[0], y + 0.8, horse_at[2])
+            player.raw('mouse', 'right', 'click')
+            player.wait(5)
+            player('command', command='item replace entity @s weapon.mainhand with minecraft:air')
+            player.wait(2)
+            player.raw('mouse', 'right', 'click')
+            player.wait(5)
+            assert player('status').get('riding') == horse['id'], f'{label}: not riding the horse'
+            player.shot(out, f'riding-tp-{label}-before')
+            coordinates = ' '.join(map(str, destination))
+            if source is None:
+                player.raw('key', 't', 'tap')
+                player.raw('type', f'/tp @s {coordinates}')
+                player.raw('key', 'enter', 'tap')
+            else:
+                source('command', command=f'tp {GUEST_NAME} {coordinates}')
+            player.wait(60)
+            player.shot(out, f'riding-tp-{label}-after')
+            seen = {'riding': player('status').get('riding'), 'client': pos_of(player),
+                    'server': server_player(host, player)['position'],
+                    'horse': mob_seen(player, horse['id'])['pos'],
+                    'other_horse': mob_seen(guest if player is host else host, horse['id'])['pos']}
+            assert seen['riding'] is None, f'{label}: still mounted after /tp: {seen}'
+            assert all(math.dist(seen[side], destination) < 0.01 for side in ('client', 'server')), \
+                f'{label}: /tp did not keep its destination after 60 ticks: {seen}'
+            assert all(math.dist(seen[side], horse_at) < 0.01 for side in ('horse', 'other_horse')), \
+                f'{label}: /tp moved the horse: {seen}'
+            result[label] = seen
+        finally:
+            back_to_game(player)
+            player('command', command=f'kill @e[tag={tag}]')
+            player('command', command=f'tp @s {x + 0.5} {y} {z + 0.5} 0 0')
+            # The next case uses this spot again: let the previous horse's death animation finish.
+            player.wait(25)
+    return result
+
+
+CHECKS += ['riding_teleport']
+CHECK_FNS.update(riding_teleport=check_riding_teleport)
 
 
 def check_recipe_removal(host, guest, out):

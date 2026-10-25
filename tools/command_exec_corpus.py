@@ -291,6 +291,36 @@ def entities():
     ]
 
 
+def riding_teleport():
+    """Player teleports remove the vehicle, leave it behind and keep the destination (#1473)."""
+    horse = '@e[tag=tp_horse,limit=1]'
+    operations = setup(
+        '/summon minecraft:horse 4.5 220 4.5 {Tame:1b,NoAI:1b,NoGravity:1b,Tags:["tp_horse"]}',
+        '/summon minecraft:marker 8.5 220 0.5 {Tags:["tp_destination"]}',
+    )
+    for teleport in ('/tp @s 8.5 220 0.5', '/teleport @s ~4 220 ~-4',
+                     '/tp @s @e[tag=tp_destination,limit=1]'):
+        operations += [
+            *setup('/tp @s 4.5 220 4.5'),
+            cmd(f'/ride @s mount {horse}'),
+            cmd('/execute on vehicle run say mounted'),
+            # An invalid destination must not dismount the player.
+            cmd('/tp @s 30000000 220 0'),
+            cmd('/execute on vehicle run say still mounted'),
+            cmd(teleport),
+            cmd('/execute on vehicle run say still riding after teleport'),
+            cmd('/data get entity @s Pos'),
+            cmd(f'/data get entity {horse} Pos'),
+            {'op': 'tick', 'n': 60},
+            cmd('/execute on vehicle run say still riding after ticks'),
+            cmd('/data get entity @s Pos'),
+            cmd(f'/data get entity {horse} Pos'),
+            cmd('/ride @s dismount'),
+        ]
+    return operations + setup('/kill @e[tag=tp_horse]', '/kill @e[tag=tp_destination]',
+                              '/tp @s 8.5 230 8.5 0 0')
+
+
 def scores():
     return [
         cmd('/scoreboard objectives add harness dummy'),
@@ -980,6 +1010,7 @@ def groups():
         ('player state', player_state()),
         ('blocks and border', world_blocks()),
         ('entities', entities()),
+        ('riding teleport', riding_teleport()),
         ('scores, teams and bossbars', scores()),
         ('execute', execute()),
         ('levels', levels()),
