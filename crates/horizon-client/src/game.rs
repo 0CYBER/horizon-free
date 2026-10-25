@@ -20,6 +20,7 @@ mod bossbars;
 mod breezes;
 mod cartography;
 mod chat;
+mod client_ambient;
 mod clipboard;
 mod combat;
 mod command_blocks;
@@ -4447,6 +4448,7 @@ impl Game<'_> {
                 self.tick_block_entity_anims()
             });
             horizon_client::spans::time("tick_particles", || self.tick_particles());
+            self.tick_client_ambient();
         }
         // ServerBossEvent broadcasts, after this level's entities have ticked.
         self.publish_boss_bars();
