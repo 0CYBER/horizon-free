@@ -41,6 +41,13 @@ pub trait BlockCollisionWorld {
         position: BlockPos,
         context: &CollisionContext<'_>,
     ) -> Result<VoxelShape, Self::Error>;
+    /// Whether a block of the chunk's section `section_y` (block y >> 4) may
+    /// have a large collision shape or be a moving piston: the only blocks
+    /// the scan keeps outside the box's own cells. False lets the scan pass
+    /// that section's outer cells without reading them; true reads them all.
+    fn may_reach_out(&mut self, _chunk: Self::Chunk, _section_y: i32) -> Result<bool, Self::Error> {
+        Ok(true)
+    }
 }
 
 #[derive(Debug)]
@@ -88,6 +95,8 @@ pub struct BlockCollisionScan<'w, 'c, W: BlockCollisionWorld> {
     count: usize,
     budget: usize,
     chunk: Option<(ChunkPos, W::Chunk)>,
+    /// `may_reach_out` of the last section an outer cell was in.
+    reach: Option<(ChunkPos, i32, bool)>,
     failed: bool,
 }
 impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
@@ -137,6 +146,7 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
             count,
             budget: candidate_budget,
             chunk: None,
+            reach: None,
             failed: false,
         })
     }
@@ -184,6 +194,27 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
             let Some(chunk) = chunk else {
                 continue;
             };
+            // An outer cell only counts for a block reaching out of its own
+            // cell: most sections hold none, so their outer cells go unread
+            // (the result is the same, with a fifth of the block reads for a
+            // mob's box).
+            if kind != 0 {
+                let section_y = p.y >> 4;
+                let reaches = match self.reach {
+                    Some((at, y, reaches)) if at == chunk_position && y == section_y => reaches,
+                    _ => {
+                        let reaches = self
+                            .world
+                            .may_reach_out(chunk, section_y)
+                            .map_err(CollisionScanError::World)?;
+                        self.reach = Some((chunk_position, section_y, reaches));
+                        reaches
+                    }
+                };
+                if !reaches {
+                    continue;
+                }
+            }
             let block = self
                 .world
                 .collision_block(chunk, p)
