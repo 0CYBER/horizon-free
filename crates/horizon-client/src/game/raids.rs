@@ -6,7 +6,6 @@ use super::{Dim, Game};
 use horizon_client::mobs::villager as mobs_villager;
 use horizon_client::{
     effects::{EffectInstance, OmenTick},
-    hud_overlays,
     mobs::{
         Mob, Species, raider,
         spawn_rules::{self, SpawnLevel},
@@ -15,9 +14,9 @@ use horizon_client::{
     },
     patrol::{GameplayAttributes, Member, PatrolLevel, PatrolSpawner},
     raid::{self, Action, BarName, RaidLevel, RaidPlayer, RaiderInfo, RaiderType, Raids, Spawn},
-    text::Text,
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_world::nbt::Tag;
 use std::collections::{HashMap, HashSet};
 
 /// Patrol and raid state owned by the game.
@@ -1063,37 +1062,18 @@ impl Game<'_> {
         }
     }
 
-    /// The raid boss bars: red and notched in tens, with the raid's title.
-    pub(super) fn raid_bars(&self, bars: &mut Vec<hud_overlays::BossBar>) {
-        for raid in self.raiding.raids.map.values() {
-            if !raid.bar.visible || !raid.bar.player || raid.is_stopped() {
-                continue;
-            }
-            let title = self.translate("event.minecraft.raid", "Raid");
-            let name = match raid.bar.name {
-                BarName::Raid => title,
-                BarName::Remaining(n) => format!(
-                    "{title} - {}",
-                    self.translate(
-                        "event.minecraft.raid.raiders_remaining",
-                        "Raiders Remaining: %s"
-                    )
-                    .replace("%s", &n.to_string())
-                ),
-                BarName::Victory => {
-                    self.translate("event.minecraft.raid.victory.full", "Raid - Victory")
-                }
-                BarName::Defeat => {
-                    self.translate("event.minecraft.raid.defeat.full", "Raid - Defeat")
-                }
-            };
-            bars.push(hud_overlays::BossBar {
-                name: Text::literal(name),
-                progress: raid.bar.progress,
-                color: 2,
-                overlay: 2,
-            });
+    /// The raid bar a living player at `at` is in (`Raid.getPlayers`): red,
+    /// notched in tens. The name is the translate component the client draws.
+    pub(super) fn raid_boss_at(&self, at: [f64; 3], alive: bool) -> Option<(i32, Tag, f32)> {
+        if !alive || self.dim != Dim::Overworld {
+            return None;
         }
+        let block = block_of(Vec3::new(at[0], at[1], at[2]));
+        let (id, raid) = self.raiding.raids.nearby(block)?;
+        if !raid.bar.visible || raid.is_stopped() {
+            return None;
+        }
+        Some((id, raid_name_tag(raid.bar.name), raid.bar.progress))
     }
     /// A firework a villager launches to celebrate (`CelebrateVillagersSurvivedRaid`).
     pub(super) fn villager_firework(&mut self, at: [f64; 3], color: usize, flight: u8) {
@@ -1236,6 +1216,36 @@ impl Game<'_> {
                 *self.stack_in_mut(slot) = None;
             }
         }
+    }
+}
+
+/// `Raid.raidEvent`'s name: the raid title, the remaining-raiders line, or
+/// the victory and defeat lines.
+fn raid_name_tag(name: BarName) -> Tag {
+    let key = |k: &str| Tag::compound([("translate", Tag::String(k.into()))]);
+    match name {
+        BarName::Raid => key("event.minecraft.raid"),
+        BarName::Victory => key("event.minecraft.raid.victory.full"),
+        BarName::Defeat => key("event.minecraft.raid.defeat.full"),
+        BarName::Remaining(n) => Tag::compound([
+            ("translate", Tag::String("event.minecraft.raid".into())),
+            (
+                "extra",
+                Tag::List(vec![
+                    Tag::String(" - ".into()),
+                    Tag::compound([
+                        (
+                            "translate",
+                            Tag::String("event.minecraft.raid.raiders_remaining".into()),
+                        ),
+                        (
+                            "with",
+                            Tag::List(vec![Tag::String(n.to_string().as_str().into())]),
+                        ),
+                    ]),
+                ]),
+            ),
+        ]),
     }
 }
 

@@ -90,6 +90,61 @@ Unknown keys are refused. `overrides/` may hold only `options.txt`, `horizon-gra
 capability `storage`), each at most 64 MiB and 256 MiB in all; anything else refuses the pack. The launcher copies
 them into the profile's game folder.
 
+## The registry repository
+
+[ludovic111/horizon-mods](https://github.com/ludovic111/horizon-mods) holds one `mods/<id>.toml` per project, written by
+the submission form or by hand, and `revoked.toml`. What an entry can't vouch for is read from its file by the kind's
+own check (`index::inspect`): a mod's API, side and capabilities, a modpack's mods, the size. Types and rules:
+`horizon_mods::index::registry`.
+
+```toml
+id = "coords_hud"                # the file's name, and the manifest's id
+kind = "mod"                     # mod | modpack | resourcepack; shader once its format exists
+name = "Coordinates HUD"
+summary = "One line, at most 160 characters."
+description = """Markdown."""    # optional
+authors = ["Horizon"]
+owners = ["ludovic111"]          # GitHub logins who may publish updates
+license = "MIT"
+source = "https://github.com/..."
+icon = "icons/coords_hud.png"    # optional: a PNG of at most 256 KiB in the repository, or https://
+key = "RWT..."                   # optional: the minisign public key every version is signed with
+
+[[versions]]                     # newest first
+version = "0.1.0"                # letters, digits, '.', '-', '_': the release tag is <id>-<version>
+published = "2026-10-24"
+game = "26.3"
+file = "coords_hud-0.1.0.hmod"   # the name players download
+sha256 = "e113..."               # pins the reviewed file
+signature = """untrusted comment: ..."""   # when the project has a key
+changelog = ""                   # optional
+```
+
+```toml
+# revoked.toml
+[[revoked]]
+id = "bad_mod"
+sha256 = "1111..."               # optional: without it, every version
+reason = "Sent chat messages it didn't declare."
+date = "2026-10-24"
+```
+
+The submission form's service (`crates/horizon-mod-registry`) writes these entries: it signs the creator in with GitHub, runs the file's checks, uploads the file to the repository's `staging` release as `<sha256>.<extension>` and opens the pull request. Only an entry's `owners` publish updates through it.
+
+Unknown keys are refused. Its CI runs `cargo-horizon-mod` (`crates/cargo-horizon-mod`):
+
+| Command | What it does |
+| --- | --- |
+| `cargo horizon-mod check <file> [--json]` | A submission's checks: its kind's (above), its signature with `--key` and `--signature`, and for a mod a trial run in the sandbox (40 ticks, 120 frames, a chat line, each command). |
+| `cargo horizon-mod registry check <base> <head> --files <dir>` | `check` on each file `head` lists and `base` doesn't: a pull request's new files. |
+| `cargo horizon-mod registry list <checkout>` | `<sha256> <id> <version> <file>` per version: the files to download. |
+| `cargo horizon-mod registry build <checkout> --files <dir> --out index.json` | Reads every entry and its file (`<dir>/<sha256>`), lists every problem, and writes the index with URLs `<release>/<id>-<version>/<file>`. |
+| `cargo horizon-mod registry review <base> <head> --author <login>` | A pull request's changes: a published file never changes and is never removed (take it down in `revoked.toml`), a kind never changes; changes by a non-owner and to owners or keys are pointed out for the reviewers. |
+
+Kinds open to submissions: `mod`, `modpack`, `resourcepack`. `shader` is in the schema and stays closed until
+Horizon's own shader pack format exists (Iris and OptiFine packs are for the Modrinth browser); its check will compile
+the pack in a headless Horizon. A new kind gets its own check before it opens.
+
 ## Changelog
 
 - Schema 1 (2026-10-24): kinds `mod`, `modpack`, `resourcepack`, `shader`; `.hpack` format 1.

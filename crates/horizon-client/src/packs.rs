@@ -517,7 +517,11 @@ fn build_overlay_uncached(
                     }
                 }
             } else if touched.contains(&child)
-                || (vanilla.join(&child).is_dir() && !filters.is_empty())
+                // Windows cannot link a directory the way unix does (`link` above), so an
+                // untouched one has to be mirrored: skipping it hid textures/font and the
+                // title panorama from the overlay, and a font json that names those sheets
+                // then failed to load (#1688).
+                || (vanilla.join(&child).is_dir() && (cfg!(not(unix)) || !filters.is_empty()))
             {
                 mirror(
                     &child,
