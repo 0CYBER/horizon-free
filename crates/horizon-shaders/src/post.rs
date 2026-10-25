@@ -120,6 +120,23 @@ const BLOCK: [&str; 5] = [
     "gbuffers_basic",
 ];
 
+/// `gbuffers_entities_translucent` and its fallbacks (2.3).
+const ENTITIES_TRANSLUCENT: [&str; 5] = [
+    "gbuffers_entities_translucent",
+    "gbuffers_entities",
+    "gbuffers_textured_lit",
+    "gbuffers_textured",
+    "gbuffers_basic",
+];
+
+/// `gbuffers_particles` and its fallbacks (2.3).
+const PARTICLES: [&str; 4] = [
+    "gbuffers_particles",
+    "gbuffers_textured_lit",
+    "gbuffers_textured",
+    "gbuffers_basic",
+];
+
 /// The sun and moon's default blend: added to the sky, as vanilla draws them.
 pub const CELESTIAL_BLEND: Blend = [
     Factor::SrcAlpha,
@@ -170,6 +187,14 @@ pub struct Post {
     pub entities: Option<PostProgram>,
     /// What draws block entities, after terrain.
     pub block: Option<PostProgram>,
+    /// What draws translucent entities (name tags, shadows), after the others.
+    pub entities_translucent: Option<PostProgram>,
+    /// What draws particles.
+    pub particles: Option<PostProgram>,
+    /// Translucent entities draw after deferred (`separateEntityDraws`, 3.2).
+    pub translucent_late: bool,
+    /// Particles draw after deferred (`particles.ordering`, `particles.before.deferred`, 3.2).
+    pub particles_late: bool,
     /// The custom uniforms of `shaders.properties` (3.4).
     pub custom: Custom,
     pub config: Config,
@@ -219,6 +244,10 @@ pub fn load_post(
         sky_textured: None,
         entities: None,
         block: None,
+        entities_translucent: None,
+        particles: None,
+        translucent_late: false,
+        particles_late: false,
         custom: Custom::parse(properties),
         config: Config::default(),
         notes: Vec::new(),
@@ -293,6 +322,26 @@ pub fn load_post(
         ),
         None => (None, None),
     };
+    // Translucent entities and particles blend (OQ-23). Particles keep vanilla's alpha cut at
+    // 0.1; translucent entities lose only fully transparent texels (a shadow fades out).
+    let translucent =
+        |names: &[&str],
+         cut: f32,
+         gbuffers: &mut dyn FnMut(&[&str], &GbuffersInputs) -> Option<PostProgram>| {
+            let i = inputs.entities.as_ref()?;
+            let mut i = i.clone();
+            i.alpha_test = Some(crate::AlphaTest {
+                op: ">",
+                reference: cut,
+            });
+            gbuffers(names, &i).map(|mut p| {
+                p.blend = blend(properties, &p.name).unwrap_or(Some(TRANSLUCENT_BLEND));
+                p
+            })
+        };
+    let mut gbuffers_dyn = |names: &[&str], i: &GbuffersInputs| gbuffers(names, Group::Gbuffers, i);
+    let entities_translucent = translucent(&ENTITIES_TRANSLUCENT, 0.0, &mut gbuffers_dyn);
+    let particles = translucent(&PARTICLES, 0.1, &mut gbuffers_dyn);
     if let Some(inputs) = &inputs.terrain {
         let terrain = gbuffers(&TERRAIN, Group::Gbuffers, inputs);
         // gbuffers_water falls back to gbuffers_terrain's chain (2.3).
@@ -310,6 +359,17 @@ pub fn load_post(
     loader.post.sky_textured = sky_textured;
     loader.post.entities = entities;
     loader.post.block = block;
+    loader.post.entities_translucent = entities_translucent;
+    loader.post.particles = particles;
+    let flag = |key: &str| properties.get(key).map(|v| v.trim() == "true");
+    loader.post.translucent_late = flag("separateEntityDraws").unwrap_or(false);
+    // `after` when the pack has a deferred program, else `mixed`; ours are all translucent, so
+    // `mixed` draws them after deferred too.
+    loader.post.particles_late = match properties.get("particles.ordering").map(str::trim) {
+        Some("before") => false,
+        Some(_) => true,
+        None => !flag("particles.before.deferred").unwrap_or(false),
+    };
     post.config = std::mem::take(&mut post.config).finish();
     post
 }
@@ -624,6 +684,24 @@ mod tests {
             (block.name.as_str(), block.blend),
             ("gbuffers_terrain", None)
         );
+        // Translucent entity parts and particles blend; particles draw after deferred unless
+        // the pack says otherwise, translucent entities before unless `separateEntityDraws`.
+        let (translucent, particles) = (
+            post.entities_translucent.as_ref().unwrap(),
+            post.particles.as_ref().unwrap(),
+        );
+        assert_eq!(
+            (translucent.name.as_str(), translucent.blend),
+            ("gbuffers_textured", Some(TRANSLUCENT_BLEND))
+        );
+        assert_eq!(particles.blend, Some(TRANSLUCENT_BLEND));
+        assert!(post.particles_late && !post.translucent_late);
+        let ordering = Properties::parse(
+            "particles.ordering = before\nseparateEntityDraws = true\n",
+            &macros,
+        );
+        let post = load_post(&pack, "", &ordering, &macros, &inputs);
+        assert!(!post.particles_late && post.translucent_late);
         let properties = Properties::parse(
             "blend.gbuffers_terrain = ONE ONE ZERO ONE\nblend.gbuffers_water = off\n",
             &macros,

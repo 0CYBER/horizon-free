@@ -6784,12 +6784,10 @@ impl Game<'_> {
         self.fangs_geometry(camera, alpha, &mut out);
         let mut see_through = std::mem::take(&mut self.see_through_vertices);
         see_through.clear();
-        // Name tags and shadows blend: Horizon keeps drawing them until the pack's entity
-        // programs draw translucent parts (`minecraft:name_tag`, `minecraft:entity_shadow`).
-        self.mark_stage(out.len(), "NONE");
         self.name_tag_geometry(camera, alpha, &mut out, &mut see_through);
         self.see_through_vertices = see_through;
         // Entity shadows (EntityRenderer.extractShadow).
+        self.mark_translucent_entity(out.len(), "minecraft:entity_shadow");
         if let Some(sprite) = self.gui.atlas.sprites.get("misc/shadow").copied() {
             let ambient = if self.dim == Dim::Nether { 0.1 } else { 0.0 };
             let darken = self.sky_darken();

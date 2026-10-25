@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use horizon_shaders::{Format, Group, Kind, Post, Val};
 
 use super::pack_draw::DrawUniforms;
-use super::pack_entities::PackEntities;
+use super::pack_entities::{PROGRAMS, PackEntities};
 use super::pack_sky::PackSky;
 use super::pack_uniforms::{self, FrameUniforms, PackInputs};
 
@@ -131,12 +131,13 @@ struct Sky {
     textured: Option<Pass>,
 }
 
-/// Entities and block entities a pack draws (`gbuffers_entities`, `gbuffers_block` or their
-/// fallbacks), after terrain; Horizon draws the others.
+/// Entities, block entities, translucent entity parts and particles a pack draws
+/// (`pack_entities::ENTITY`... order), after terrain or, `late`, after deferred; Horizon draws
+/// the others.
 struct Entities {
     geometry: PackEntities,
-    entity: Option<Pass>,
-    block: Option<Pass>,
+    passes: [Option<Pass>; PROGRAMS],
+    late: [bool; PROGRAMS],
 }
 
 struct Pass {
@@ -912,7 +913,16 @@ impl PackPost {
             }
         });
         let sky = sky.filter(|s| s.basic.is_some() || s.textured.is_some());
-        let entity_vertices = (post.entities.is_some() || post.block.is_some())
+        let programs = [
+            post.entities,
+            post.block,
+            post.entities_translucent,
+            post.particles,
+        ];
+        let late = [false, false, post.translucent_late, post.particles_late];
+        let entity_vertices = programs
+            .iter()
+            .any(Option::is_some)
             .then(|| PackEntities::new(device, &draws.layout));
         let entity_buffers = super::pack_entities::buffers();
         let entity_geometry = entity_vertices.as_ref().map(|e| Geometry {
@@ -923,16 +933,16 @@ impl PackPost {
             ids: None,
             cull: false,
         });
-        let entity = post.entities.zip(entity_geometry.as_ref());
-        let entity = entity.and_then(|(p, g)| build(p, Some(g)));
-        let block = post.block.zip(entity_geometry.as_ref());
-        let block = block.and_then(|(p, g)| build(p, Some(g)));
+        let entity_passes = programs.map(|p| {
+            p.zip(entity_geometry.as_ref())
+                .and_then(|(p, g)| build(p, Some(g)))
+        });
         let entities = entity_vertices
-            .filter(|_| entity.is_some() || block.is_some())
+            .filter(|_| entity_passes.iter().any(Option::is_some))
             .map(|geometry| Entities {
                 geometry,
-                entity,
-                block,
+                passes: entity_passes,
+                late,
             });
         // Developers' aid: `HORIZON_SHADER_PACK_SKIP=composite,final` leaves programs out.
         let skip = std::env::var("HORIZON_SHADER_PACK_SKIP").unwrap_or_default();
@@ -956,10 +966,13 @@ impl PackPost {
                 notes.push(format!("the {part} draw with {}", p.name));
             }
         }
-        for (part, pass) in entities
-            .iter()
-            .flat_map(|e| [("entities", &e.entity), ("block entities", &e.block)])
-        {
+        let parts = [
+            "entities",
+            "block entities",
+            "translucent entities",
+            "particles",
+        ];
+        for (part, pass) in entities.iter().flat_map(|e| parts.iter().zip(&e.passes)) {
             if let Some(p) = pass {
                 notes.push(format!("{part} draw with {}", p.name));
             }
@@ -981,11 +994,7 @@ impl PackPost {
                 .iter()
                 .flat_map(|s| s.basic.iter().chain(&s.textured))
                 .chain(&terrain)
-                .chain(
-                    entities
-                        .iter()
-                        .flat_map(|e| e.entity.iter().chain(&e.block)),
-                )
+                .chain(entities.iter().flat_map(|e| e.passes.iter().flatten()))
                 .chain(&water)
                 .find(touched)
                 .map(|_| true)
@@ -1420,7 +1429,8 @@ impl PackPost {
         self.sky = Some(sky);
     }
 
-    /// Entities and block entities with the pack's programs: each run `prepare_entities` kept
+    /// Entities, block entities, translucent entity parts and particles with the pack's
+    /// programs, those drawn before deferred or (`late`) after: each run `prepare_entities` kept
     /// is one draw with its own `entityId` or `blockEntityId` and `entityColor`.
     fn draw_entities(
         &mut self,
@@ -1428,17 +1438,20 @@ impl PackPost {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         size: [u32; 2],
+        late: bool,
     ) {
         let Some(mut entities) = self.entities.take() else {
             return;
         };
         let geometry = &entities.geometry;
-        for (block, pass) in [(false, &mut entities.entity), (true, &mut entities.block)] {
-            let Some(pass) = pass else { continue };
+        for (program, pass) in entities.passes.iter_mut().enumerate() {
+            let Some(pass) = pass.as_mut().filter(|_| entities.late[program] == late) else {
+                continue;
+            };
             let mut draws = geometry
                 .draws
                 .iter()
-                .filter(|d| d.block == block)
+                .filter(|d| d.program == program)
                 .peekable();
             if draws.peek().is_none() {
                 continue;
@@ -1478,7 +1491,7 @@ impl PackPost {
             rest.extend_from_slice(entities);
             return;
         };
-        let drawn = [e.entity.is_some(), e.block.is_some()];
+        let drawn = e.passes.each_ref().map(Option::is_some);
         e.geometry.prepare(
             device,
             queue,
@@ -1509,7 +1522,20 @@ impl PackPost {
             self.draw_sky(device, queue, encoder, size, frame);
         }
         self.draw_terrain(device, queue, encoder, size, false, terrain);
-        self.draw_entities(device, queue, encoder, size);
+        self.draw_entities(device, queue, encoder, size, false);
+    }
+
+    /// Translucent terrain, then the entity parts drawn after deferred.
+    fn draw_translucent(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        size: [u32; 2],
+        terrain: &mut TerrainDraw<'_>,
+    ) {
+        self.draw_terrain(device, queue, encoder, size, true, terrain);
+        self.draw_entities(device, queue, encoder, size, true);
     }
 
     /// Regenerates the mip chain of buffer `b`'s side that programs read.
@@ -1818,7 +1844,13 @@ impl PackPost {
         let mut shown = false;
         let mut terrain_drawn =
             self.terrain.is_none() && self.sky.is_none() && self.entities.is_none();
-        let mut water_drawn = self.water.is_none();
+        let late_entities = self.entities.as_ref().is_some_and(|e| {
+            e.passes
+                .iter()
+                .zip(e.late)
+                .any(|(p, late)| p.is_some() && late)
+        });
+        let mut water_drawn = self.water.is_none() && !late_entities;
         for pass in &mut passes {
             if !terrain_drawn && pass.group != Group::Prepare {
                 terrain_drawn = true;
@@ -1826,7 +1858,7 @@ impl PackPost {
             }
             if !water_drawn && matches!(pass.group, Group::Composite | Group::Final) {
                 water_drawn = true;
-                self.draw_terrain(device, queue, encoder, size, true, terrain);
+                self.draw_translucent(device, queue, encoder, size, terrain);
             }
             if pass.group == Group::Deferred && !seen.0 {
                 seen.0 = true;
@@ -1881,7 +1913,7 @@ impl PackPost {
             self.draw_opaque(device, queue, encoder, size, frame, terrain);
         }
         if !water_drawn {
-            self.draw_terrain(device, queue, encoder, size, true, terrain);
+            self.draw_translucent(device, queue, encoder, size, terrain);
         }
         let targets = self.targets.as_ref().expect("resized");
         let view = |m: u16, i: usize, alt: bool| {

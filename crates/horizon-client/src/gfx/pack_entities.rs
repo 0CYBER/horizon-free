@@ -1,5 +1,6 @@
-//! Entities and block entities drawn by a shader pack's `gbuffers_entities` and `gbuffers_block`
-//! (spec 2.3, 5.3, 5.4): the runs of `Frame::entities` the game marked (`EntitySpan`), each its
+//! Entities, block entities, translucent entity parts and particles drawn by a shader pack's
+//! `gbuffers_entities`, `gbuffers_block`, `gbuffers_entities_translucent` and
+//! `gbuffers_particles` (spec 2.3, 5.3, 5.4): the runs of `Frame::entities` the game marked (`EntitySpan`), each its
 //! own draw with its `entityId` or `blockEntityId` and `entityColor` in a per-draw slot of
 //! `HzDraw` (set 2). Horizon draws whatever the pack does not.
 
@@ -125,8 +126,8 @@ pub(super) struct Draw {
     /// The first vertex.
     pub base: u32,
     pub quads: u32,
-    /// `gbuffers_block` (or its fallback) draws it, not `gbuffers_entities`.
-    pub block: bool,
+    /// The program that draws it (`ENTITY`, `BLOCK`, `TRANSLUCENT`, `PARTICLE`).
+    pub program: usize,
     pub slot: u32,
 }
 
@@ -253,7 +254,7 @@ impl PackEntities {
         layout: &wgpu::BindGroupLayout,
         entities: &[Vertex],
         spans: &[EntitySpan],
-        drawn: [bool; 2],
+        drawn: [bool; PROGRAMS],
         rest: &mut Vec<Vertex>,
     ) {
         self.draws.clear();
@@ -264,7 +265,7 @@ impl PackEntities {
         rest.extend_from_slice(&entities[..first.min(entities.len())]);
         for (span, range) in runs(entities.len(), spans) {
             let run = &entities[range];
-            let Some(block) = drawn_by_pack(span.stage, drawn).filter(|_| plain(run)) else {
+            let Some(program) = drawn_by_pack(&span, drawn).filter(|_| plain(run)) else {
                 rest.extend_from_slice(run);
                 continue;
             };
@@ -273,7 +274,10 @@ impl PackEntities {
             }
             let start = self.scratch.len() as u32;
             self.scratch.extend_from_slice(run);
-            let (entity_id, block_id) = if block { (0, span.id) } else { (span.id, 0) };
+            let (entity_id, block_id) = match program {
+                BLOCK => (0, span.id),
+                _ => (span.id, 0),
+            };
             let mut bytes = [0u8; SLOT as usize];
             bytes[0..4].copy_from_slice(&(span.stage as i32).to_le_bytes());
             bytes[4..8].copy_from_slice(&entity_id.to_le_bytes());
@@ -287,7 +291,7 @@ impl PackEntities {
             self.draws.push(Draw {
                 base: start,
                 quads: run.len() as u32 / 4,
-                block,
+                program,
                 slot: self.draws.len() as u32,
             });
         }
@@ -340,16 +344,30 @@ fn plain(run: &[Vertex]) -> bool {
         .all(|v| !matches!(v.layer, 2 | 4 | 6 | 9 | 10 | 11 | 12))
 }
 
-/// Whether the pack draws a run of render stage `stage` (`Some(true)` with `gbuffers_block`),
-/// given which of `gbuffers_entities` and `gbuffers_block` (or their fallbacks) it has.
-pub fn drawn_by_pack(stage: u32, drawn: [bool; 2]) -> Option<bool> {
-    if stage == render_stage("ENTITIES") && drawn[0] {
-        Some(false)
-    } else if stage == render_stage("BLOCK_ENTITIES") && drawn[1] {
-        Some(true)
+/// The programs of entity runs, in the order they draw.
+pub const ENTITY: usize = 0;
+pub const BLOCK: usize = 1;
+pub const TRANSLUCENT: usize = 2;
+pub const PARTICLE: usize = 3;
+pub const PROGRAMS: usize = 4;
+
+/// Which program draws `span`'s run, given which of them (or their fallbacks) the pack has;
+/// `None`: Horizon draws it.
+pub fn drawn_by_pack(span: &EntitySpan, drawn: [bool; PROGRAMS]) -> Option<usize> {
+    let program = if span.stage == render_stage("ENTITIES") {
+        if span.translucent {
+            TRANSLUCENT
+        } else {
+            ENTITY
+        }
+    } else if span.stage == render_stage("BLOCK_ENTITIES") {
+        BLOCK
+    } else if span.stage == render_stage("PARTICLES") {
+        PARTICLE
     } else {
-        None
-    }
+        return None;
+    };
+    drawn[program].then_some(program)
 }
 
 /// Each span with its vertex range: from its start to the next span's (or the end).
@@ -378,6 +396,7 @@ mod tests {
             start,
             stage: render_stage(stage),
             id,
+            translucent: false,
         };
         let spans = [
             span(2, "ENTITIES", 7),
@@ -386,10 +405,18 @@ mod tests {
         ];
         let ranges: Vec<_> = runs(10, &spans).map(|(_, r)| r).collect();
         assert_eq!(ranges, [2..5, 5..6, 6..10]);
-        assert_eq!(drawn_by_pack(spans[0].stage, [true, false]), Some(false));
-        assert_eq!(drawn_by_pack(spans[1].stage, [true, true]), None);
-        assert_eq!(drawn_by_pack(spans[2].stage, [true, false]), None);
-        assert_eq!(drawn_by_pack(spans[2].stage, [false, true]), Some(true));
+        let all = [true; PROGRAMS];
+        assert_eq!(drawn_by_pack(&spans[0], all), Some(ENTITY));
+        assert_eq!(drawn_by_pack(&spans[1], all), Some(PARTICLE));
+        assert_eq!(drawn_by_pack(&spans[1], [true, true, true, false]), None);
+        assert_eq!(drawn_by_pack(&spans[2], [true, false, true, true]), None);
+        assert_eq!(drawn_by_pack(&spans[2], all), Some(BLOCK));
+        let shadow = EntitySpan {
+            translucent: true,
+            ..spans[0]
+        };
+        assert_eq!(drawn_by_pack(&shadow, all), Some(TRANSLUCENT));
+        assert_eq!(drawn_by_pack(&span(0, "DESTROY", 0), all), None);
         // A beacon beam's quads stay Horizon's.
         assert!(plain(&[v(0), v(0), v(0), v(0), v(1)]));
         assert!(!plain(&[v(0), v(0), v(0), v(0), v(6)]));

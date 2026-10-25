@@ -253,12 +253,16 @@ impl Game<'_> {
         const FADED: u32 = 0x7F;
         for tag in self.name_tags(camera, alpha) {
             let o = tag.at - camera;
+            // `gbuffers_entities` draws name tag text (2.3); a sneaking player's faded tag, on its
+            // background, blends.
             if tag.discrete {
+                self.mark_translucent_entity(out.len(), "minecraft:name_tag");
                 self.name_tag_quads(o, &tag.lines, FADED, true, 0, vertex_light(tag.light), out);
                 continue;
             }
             // LightCoordsUtil.lightCoordsWithEmission(lightCoords, 2).
             let lit = (tag.light >> 4).max(2) << 4 | (tag.light & 15).max(2);
+            self.mark_entity(out.len(), "minecraft:name_tag");
             self.name_tag_quads(o, &tag.lines, 0xFF, false, 0, vertex_light(lit), out);
             // RenderPipelines.TEXT_SEE_THROUGH: no depth test, no lightmap.
             self.name_tag_quads(o, &tag.lines, FADED, true, 2, 0, see_through);

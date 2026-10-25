@@ -16,6 +16,8 @@ pub struct EntitySpan {
     pub stage: u32,
     /// `entityId` for entities, `blockEntityId` for block entities (5.3), else 0.
     pub id: i32,
+    /// An entity part that blends (a name tag, a shadow): `gbuffers_entities_translucent`.
+    pub translucent: bool,
 }
 
 /// `HzDraw`'s size: `renderStage`, `entityId`, `blockEntityId`, a pad, `entityColor`.

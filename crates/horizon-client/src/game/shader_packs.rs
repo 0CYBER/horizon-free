@@ -146,9 +146,21 @@ impl Game<'_> {
     /// Starts a span of the entity geometry at vertex `start` for entity type `name`
     /// (`minecraft:zombie`; "" for one the pack cannot name). Nothing without a pack.
     pub(super) fn mark_entity(&self, start: usize, name: &str) {
+        self.mark_entity_part(start, name, false);
+    }
+
+    /// Starts a span for entity geometry that blends (name tags, shadows).
+    pub(super) fn mark_translucent_entity(&self, start: usize, name: &str) {
+        self.mark_entity_part(start, name, true);
+    }
+
+    fn mark_entity_part(&self, start: usize, name: &str, translucent: bool) {
         if let Some(ids) = &self.pack_ids {
             let id = ids.entities.get(name).copied();
             self.push_span(start, "ENTITIES", id.unwrap_or(ids.missing_entity));
+            if let Some(last) = self.entity_spans.borrow_mut().last_mut() {
+                last.translucent = translucent;
+            }
         }
     }
 
@@ -185,6 +197,7 @@ impl Game<'_> {
             start: start as u32,
             stage: horizon_shaders::render_stage(stage),
             id,
+            translucent: false,
         };
         // A span that drew nothing gives way to the next.
         match spans.last_mut() {
