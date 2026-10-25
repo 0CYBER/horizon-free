@@ -140,7 +140,7 @@ def main():
     # One worker thread: the chunks decorated in a fixed order (see above).
     vanilla_server = ['java', '-Xmx2g', '-Dmax.bg.threads=1', '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
     horizon_server = [binary, '--resources', RESOURCES, '--dedicated', '--nogui']
-    os.environ['HORIZON_NO_AUDIO'] = '1'
+    os.environ.update(lab.game_env())
 
     def one(seed):
         t0 = time.time()

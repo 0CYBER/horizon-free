@@ -2,7 +2,7 @@
 use super::{Column, Span, TileKey};
 use crate::{
     fast_hash::{FxHashMap, FxHashSet},
-    mesher::{FaceGroups, OPAQUE_LAYER, SectionMesh, TerrainVertex},
+    mesher::{OPAQUE_LAYER, SectionMesh, TerrainVertex},
     streaming::WorkerContext,
 };
 use horizon_assets::model::Direction;
@@ -558,7 +558,6 @@ fn mesh_columns_with_edges(
             emit(&mut mesh, key, rect)
         }
     }
-    mesh.faces = FaceGroups::group(&mut mesh.solid);
     mesh
 }
 
@@ -1003,7 +1002,6 @@ mod tests {
         }
         let mesh = mesh(&columns);
         assert_eq!(mesh.solid.len(), 6 * 4);
-        assert_eq!(mesh.faces.quads.iter().sum::<u32>(), 6);
         assert!(mesh.translucent.is_empty());
         for q in mesh.solid.as_chunks::<4>().0.iter() {
             let center = q
