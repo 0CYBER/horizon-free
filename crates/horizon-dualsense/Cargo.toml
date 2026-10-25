@@ -10,9 +10,8 @@ description = "The DualSense's output over HID: rumble, adaptive triggers, light
 log = "0.4"
 
 # hidapi has no iOS backend and its build script stops there, so the output's two
-# dependencies go only to the targets that have one. On iOS the crate builds empty: pads
-# are read through GameController (horizon-gamecontroller), which only reads, and the
-# DualSense's own output waits for a desktop.
+# dependencies go only to the targets that have one. On iOS the crate builds without
+# output: the Link never opens.
 [target.'cfg(not(target_os = "ios"))'.dependencies]
 # MIT; bundles the C hidapi under its BSD licence option. hidraw on Linux (libudev, as gilrs),
 # IOKit on macOS (opened shared, so gilrs keeps reading the pad), the HID API on Windows.

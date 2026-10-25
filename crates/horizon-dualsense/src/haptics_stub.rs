@@ -1,6 +1,5 @@
-//! No HD haptics on iOS: the trick plays vibrations through the pad's own four-channel audio
-//! device over USB, and a phone has neither that device nor the audio stack the real module
-//! needs. The motors' rumble through [`crate::Link`] covers vibration instead.
+//! No HD haptics on iOS: they play through the pad's own four-channel audio device over USB,
+//! which needs cpal, and cpal is left out there with hidapi (see Cargo.toml).
 
 /// The pad's audio output, playing the queued samples (left, right actuator).
 pub struct Haptics;

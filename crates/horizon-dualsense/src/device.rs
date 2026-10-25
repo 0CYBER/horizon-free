@@ -165,8 +165,7 @@ impl Link {
         }
     }
 
-    /// No output on iOS: hidapi has no backend there, and iOS reads pads through
-    /// GameController (horizon-gamecontroller), which only reads. The Link never opens.
+    /// No output on iOS: hidapi has no backend there. The Link never opens.
     #[cfg(target_os = "ios")]
     pub fn start() -> Link {
         Link {
