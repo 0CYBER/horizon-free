@@ -1807,18 +1807,19 @@ impl Game<'_> {
                 let drops = (g.game_mode != SPECTATOR)
                     .then(|| [at[0], at[1] + g.eye_height() - 0.3, at[2]]);
                 let cause = host.play.get_mut(&conn).and_then(|p| p.death_cause.take());
-                let me = self.player_text(&name, uuid);
-                let text = match cause {
-                    Some(key) => horizon_client::text::Text::translate(&key, &[me]),
-                    None if at[1] < f64::from(horizon_client::chunk::MIN_Y - 64) => {
-                        horizon_client::text::Text::translate("death.attack.outOfWorld", &[me])
-                    }
-                    None => self.guest_death_message(conn, me),
-                };
-                let message = horizon_client::lan::data::component_nbt(&text.component());
-                // ServerPlayer.die: the message goes to everyone unless the
-                // player's team hides it, and always to the dying player.
-                if self.ui.rules.bool("show_death_messages") {
+                // ServerPlayer.die: with showDeathMessages, the message goes to
+                // the dying player's death screen and to everyone the team lets
+                // see it; without it, the death screen gets an empty one.
+                let message = if self.ui.rules.bool("show_death_messages") {
+                    let me = self.player_text(&name, uuid);
+                    let text = match cause {
+                        Some(key) => horizon_client::text::Text::translate(&key, &[me]),
+                        None if at[1] < f64::from(horizon_client::chunk::MIN_Y - 64) => {
+                            horizon_client::text::Text::translate("death.attack.outOfWorld", &[me])
+                        }
+                        None => self.guest_death_message(conn, me),
+                    };
+                    let message = horizon_client::lan::data::component_nbt(&text.component());
                     let team = self.score.board.players_team(&name);
                     if horizon_client::scoreboard::own_death_message_shown(team) {
                         host.hub.system_message(message.clone());
@@ -1831,7 +1832,10 @@ impl Game<'_> {
                             self.system_message(text);
                         }
                     }
-                }
+                    message
+                } else {
+                    literal("")
+                };
                 host.hub.send_to(
                     conn,
                     &C::PlayerCombatKill(play::PlayerCombatKill { id, message }),
