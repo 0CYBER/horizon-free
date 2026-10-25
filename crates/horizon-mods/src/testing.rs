@@ -2,10 +2,14 @@
 //!
 //! [`TestGame`] loads one `.hmod` from a scratch copy (its `storage` lives and
 //! dies with the run) into the same sandbox the game uses, and plays the game's
-//! part: the snapshot, ticks, frames, chat lines and commands. [`Script`] is a
+//! part: the snapshot, ticks, frames, chat lines and commands, and for a
+//! server mod the players joining, leaving, chatting and breaking or placing
+//! blocks. [`Script`] is a
 //! test written in TOML, `tests/<name>.toml` in the mod's folder: steps, each
 //! saying what happens and what the mod must have shown by then.
-use crate::{Clock, Corner, Mods, Output, Panel, Player, Snapshot, Status};
+use crate::{
+    BlockPos, Clock, Corner, GameMode, Mods, Output, Panel, Player, ServerPlayer, Snapshot, Status,
+};
 use serde::Deserialize;
 use std::{
     path::{Path, PathBuf},
@@ -20,6 +24,10 @@ pub struct TestGame {
     /// What the mod reads with `game-read`; ticks move the clock as the game does.
     pub player: Option<Player>,
     pub clock: Option<Clock>,
+    /// The players on the server, for a server mod, in join order.
+    pub players: Vec<ServerPlayer>,
+    /// Every name that joined, for their id.
+    names: Vec<String>,
     tick: u64,
 }
 
@@ -60,6 +68,8 @@ impl TestGame {
                 game_time: 0,
                 day_time: 0,
             }),
+            players: Vec::new(),
+            names: Vec::new(),
             tick: 0,
         };
         copy_mod(hmod, &copy)?;
@@ -87,8 +97,12 @@ impl TestGame {
         self.mods.set_snapshot(Snapshot {
             player: self.player.clone(),
             clock: self.clock,
-            ..Snapshot::default()
+            players: self.players.clone(),
         });
+    }
+    /// Whether the mod is a server mod.
+    pub fn server(&self) -> bool {
+        self.mods.runs_server()
     }
 
     /// `n` game ticks; each moves the clock one tick on, as the game does.
@@ -101,6 +115,7 @@ impl TestGame {
             }
             self.snapshot();
             self.mods.tick(self.tick);
+            self.mods.server_tick(self.tick);
         }
     }
     /// `n` frames, 1/60 s apart.
@@ -122,13 +137,76 @@ impl TestGame {
         self.mods.command(line)
     }
 
+    /// A player named `name` joins the server, standing where a script starts
+    /// in survival. Their id is `00000000-0000-4000-8000-000000000001` for
+    /// the first name that joined, `...0002` for the second, and so on.
+    pub fn join(&mut self, name: &str) -> ServerPlayer {
+        let n = match self.names.iter().position(|n| n == name) {
+            Some(i) => i + 1,
+            None => {
+                self.names.push(name.to_owned());
+                self.names.len()
+            }
+        };
+        let p = default_player();
+        let player = ServerPlayer {
+            id: format!("00000000-0000-4000-8000-{n:012x}"),
+            name: name.to_owned(),
+            x: p.x,
+            y: p.y,
+            z: p.z,
+            dimension: p.dimension,
+            game_mode: GameMode::Survival,
+            health: p.health,
+        };
+        self.players.push(player.clone());
+        self.snapshot();
+        self.mods.player_joined(&player);
+        player
+    }
+    /// The player named `name` leaves; false when no such player is on.
+    pub fn leave(&mut self, name: &str) -> bool {
+        let Some(i) = self.players.iter().position(|p| p.name == name) else {
+            return false;
+        };
+        let player = self.players.remove(i);
+        self.snapshot();
+        self.mods.player_left(&player);
+        true
+    }
+    /// A chat message `player` sends, for a server mod.
+    pub fn player_chat(&mut self, player: &ServerPlayer, line: &str) {
+        self.snapshot();
+        self.mods.player_chat(player, line);
+    }
+    /// `/line` typed by `player`, for a server mod; false when the mod owns
+    /// no such command.
+    pub fn player_command(&mut self, player: &ServerPlayer, line: &str) -> bool {
+        self.snapshot();
+        self.mods.server_command(player, line)
+    }
+    /// `player` breaks (or places) `state` at `pos`.
+    pub fn block(&mut self, player: &ServerPlayer, pos: BlockPos, state: &str, placed: bool) {
+        self.snapshot();
+        if placed {
+            self.mods.block_placed(player, pos, state);
+        } else {
+            self.mods.block_broken(player, pos, state);
+        }
+    }
+
     /// The scratch copy the mod runs from; its `storage` is beside it.
     pub fn hmod(&self) -> &Path {
         &self.hmod
     }
     /// The commands the mod registered.
     pub fn commands(&self) -> Vec<String> {
-        self.mods.commands().map(str::to_owned).collect()
+        let server = self.mods.server_commands();
+        self.mods
+            .commands()
+            .chain(server)
+            .map(str::to_owned)
+            .collect()
     }
     pub fn panel(&self) -> Option<&Panel> {
         self.mods.panels().next()
@@ -164,7 +242,7 @@ fn copy_mod(from: &Path, to: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// A test in TOML: where the player starts, then steps run in order.
+/// A test in TOML: where a client mod's player starts, then steps run in order.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Script {
@@ -176,9 +254,11 @@ pub struct Script {
     pub steps: Vec<Step>,
 }
 
-/// Fields of the player to change; the others keep their values.
+/// Fields of the player to change; the others keep their values. A server
+/// mod's players have no `yaw`, `pitch` or `food`, and a client mod's player
+/// no `game-mode`.
 #[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct PlayerSet {
     x: Option<f64>,
     y: Option<f64>,
@@ -188,6 +268,37 @@ pub struct PlayerSet {
     health: Option<f32>,
     food: Option<u32>,
     dimension: Option<String>,
+    game_mode: Option<Mode>,
+}
+
+/// `players.game-mode` as a script spells it.
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Mode {
+    Survival,
+    Creative,
+    Adventure,
+    Spectator,
+}
+impl From<Mode> for GameMode {
+    fn from(m: Mode) -> GameMode {
+        match m {
+            Mode::Survival => GameMode::Survival,
+            Mode::Creative => GameMode::Creative,
+            Mode::Adventure => GameMode::Adventure,
+            Mode::Spectator => GameMode::Spectator,
+        }
+    }
+}
+
+/// A block a player breaks or places.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BlockSet {
+    x: i32,
+    y: i32,
+    z: i32,
+    state: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -198,8 +309,11 @@ pub struct ClockSet {
 }
 
 /// One step. Its parts happen in this order: `reload`, `title-screen`,
-/// `player`, `clock`, `ticks`, `frames`, `chat`, `command`; then `expect` is
-/// checked against what the mod showed during the step.
+/// `join`, `player`, `clock`, `ticks`, `frames`, `chat`, `command`, `break`,
+/// `place`, `leave`; then `expect` is checked against what the mod showed
+/// during the step. For a server mod, `player`, `chat`, `command`, `break`
+/// and `place` are the doing of the player named by `as`, or of the first
+/// player on.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Step {
@@ -216,6 +330,14 @@ pub struct Step {
     frames: u64,
     chat: Option<String>,
     command: Option<String>,
+    /// Server mods: a player joins, leaves, breaks or places a block.
+    join: Option<String>,
+    leave: Option<String>,
+    #[serde(rename = "as")]
+    actor: Option<String>,
+    #[serde(rename = "break")]
+    broken: Option<BlockSet>,
+    place: Option<BlockSet>,
     #[serde(default)]
     expect: Expect,
 }
@@ -231,6 +353,10 @@ pub struct Expect {
     /// The command's feedback, and its red error.
     feedback: Option<String>,
     error: Option<String>,
+    /// Server mods: every `players.tell` as `"Name: text"`, and every
+    /// `players.broadcast`, in order.
+    told: Option<Vec<String>>,
+    broadcast: Option<Vec<String>>,
     /// The panel's lines (`[]`: no panel) and its corner.
     panel: Option<Vec<String>>,
     corner: Option<String>,
@@ -274,6 +400,17 @@ impl PlayerSet {
             p.dimension.clone_from(d);
         }
     }
+    fn apply_server(&self, p: &mut ServerPlayer) {
+        let set = |to: &mut f64, v: Option<f64>| *to = v.unwrap_or(*to);
+        set(&mut p.x, self.x);
+        set(&mut p.y, self.y);
+        set(&mut p.z, self.z);
+        p.health = self.health.unwrap_or(p.health);
+        p.game_mode = self.game_mode.map_or(p.game_mode, GameMode::from);
+        if let Some(d) = &self.dimension {
+            p.dimension.clone_from(d);
+        }
+    }
 }
 
 impl ClockSet {
@@ -302,6 +439,17 @@ impl Step {
         if let Some(line) = &self.command {
             parts.push(format!("/{line}"));
         }
+        if let Some(name) = &self.join {
+            parts.insert(0, format!("{name} joins"));
+        }
+        for (what, b) in [("breaks", &self.broken), ("places", &self.place)] {
+            if let Some(b) = b {
+                parts.push(format!("{what} {} at {} {} {}", b.state, b.x, b.y, b.z));
+            }
+        }
+        if let Some(name) = &self.leave {
+            parts.push(format!("{name} leaves"));
+        }
         if parts.is_empty() {
             parts.push("checks".into());
         }
@@ -316,8 +464,35 @@ impl Step {
             game.player = None;
             game.clock = None;
         }
+        if let Some(name) = &self.join {
+            game.join(name);
+        }
+        let server = game.server();
+        let actor = |game: &TestGame| match &self.actor {
+            Some(name) => game
+                .players
+                .iter()
+                .position(|p| p.name == *name)
+                .ok_or_else(|| format!("{name} is not on the server")),
+            None => (!game.players.is_empty())
+                .then_some(0)
+                .ok_or_else(|| "no player is on the server: add join = \"Name\"".to_string()),
+        };
+        let acts = self.player.is_some()
+            || self.chat.is_some()
+            || self.command.is_some()
+            || self.broken.is_some()
+            || self.place.is_some();
+        let actor = if server && acts {
+            Some(actor(game)?)
+        } else {
+            None
+        };
         if let Some(set) = &self.player {
-            set.apply(game.player.get_or_insert_with(default_player));
+            match actor {
+                Some(i) => set.apply_server(&mut game.players[i]),
+                None => set.apply(game.player.get_or_insert_with(default_player)),
+            }
         }
         if let Some(set) = &self.clock {
             set.apply(game.clock.get_or_insert(Clock {
@@ -327,10 +502,32 @@ impl Step {
         }
         game.tick(self.ticks);
         game.frames(self.frames);
+        let who = actor.map(|i| game.players[i].clone());
         if let Some(line) = &self.chat {
-            game.chat(line);
+            match &who {
+                Some(p) => game.player_chat(p, line),
+                None => game.chat(line),
+            }
         }
-        let owned = self.command.as_ref().map(|line| game.command(line));
+        let owned = self.command.as_ref().map(|line| match &who {
+            Some(p) => game.player_command(p, line),
+            None => game.command(line),
+        });
+        for (b, placed) in [(&self.broken, false), (&self.place, true)] {
+            if let (Some(b), Some(p)) = (b, &who) {
+                let pos = BlockPos {
+                    x: b.x,
+                    y: b.y,
+                    z: b.z,
+                };
+                game.block(p, pos, &b.state, placed);
+            }
+        }
+        if let Some(name) = &self.leave
+            && !game.leave(name)
+        {
+            return Err(format!("{name} is not on the server"));
+        }
         let out = game.drain();
         let stopped = out.iter().find_map(|o| match o {
             Output::Stopped { reason, .. } => Some(reason.as_str()),
@@ -370,10 +567,38 @@ impl Step {
         }
         let feedback = |error: bool| {
             out.iter().rev().find_map(|o| match o {
-                Output::Feedback { text, error: e } if *e == error => Some(text.clone()),
+                Output::Feedback { text, error: e } | Output::Reply { text, error: e, .. }
+                    if *e == error =>
+                {
+                    Some(text.clone())
+                }
                 _ => None,
             })
         };
+        if let Some(want) = &e.told {
+            let name = |id: &str| {
+                let p = game.players.iter().find(|p| p.id == id);
+                p.map_or(id.to_owned(), |p| p.name.clone())
+            };
+            let got: Vec<String> = out
+                .iter()
+                .filter_map(|o| match o {
+                    Output::Tell { player, text, .. } => Some(format!("{}: {text}", name(player))),
+                    _ => None,
+                })
+                .collect();
+            same("told", want, &got)?;
+        }
+        if let Some(want) = &e.broadcast {
+            let got: Vec<String> = out
+                .iter()
+                .filter_map(|o| match o {
+                    Output::Broadcast { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect();
+            same("broadcast", want, &got)?;
+        }
         if let Some(want) = &e.feedback {
             same("feedback", &Some(want.clone()), &feedback(false))?;
         }

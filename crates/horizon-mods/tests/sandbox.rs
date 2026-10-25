@@ -407,22 +407,23 @@ capabilities = ["registries"]
     assert!(!mods.is_running());
 }
 
-/// `cargo horizon-mod test` on the example: its own `tests/*.toml` pass.
+/// `cargo horizon-mod test` on the examples: their own `tests/*.toml` pass.
 #[test]
 fn the_examples_test_scripts_pass() {
-    let tests =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../horizon-mod-sdk/examples/coords-hud/tests");
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../horizon-mod-sdk/examples");
     let mut ran = 0;
-    for entry in std::fs::read_dir(tests).unwrap() {
-        let path = entry.unwrap().path();
-        let script = Script::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        let mut game = TestGame::load(&mods_dir().join("coords_hud.hmod")).unwrap();
-        script
-            .run(&mut game)
-            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        ran += 1;
+    for (example, hmod) in [("coords-hud", "coords_hud"), ("welcome", "welcome")] {
+        for entry in std::fs::read_dir(examples.join(example).join("tests")).unwrap() {
+            let path = entry.unwrap().path();
+            let script = Script::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let mut game = TestGame::load(&mods_dir().join(format!("{hmod}.hmod"))).unwrap();
+            script
+                .run(&mut game)
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            ran += 1;
+        }
     }
-    assert_eq!(ran, 2);
+    assert_eq!(ran, 4);
 }
 
 #[test]
@@ -445,6 +446,13 @@ fn a_test_script_says_which_step_failed_and_why() {
     assert!(
         Script::parse("[[step]]\ntick = 1").is_err(),
         "a typo is an error"
+    );
+
+    let mut game = TestGame::load(&mods_dir().join("welcome.hmod")).unwrap();
+    let script = "[[step]]\njoin = \"Alex\"\n\n[[step]]\nas = \"Steve\"\ncommand = \"mined\"";
+    assert_eq!(
+        Script::parse(script).unwrap().run(&mut game).unwrap_err(),
+        "step 2 (/mined): Steve is not on the server"
     );
 }
 
