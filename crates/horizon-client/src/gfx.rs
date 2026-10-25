@@ -516,6 +516,18 @@ fn sprite_split() -> u32 {
 }
 /// Sprite arrays terrain.wgsl binds (`sprites`, `sprites_1`...).
 const SPRITE_ARRAYS: u32 = 8;
+/// The layers to give a square texture of `count` layers viewed as a 2D
+/// array. wgpu's OpenGL backend picks a texture's target from its layer
+/// count when it is created: one layer makes a 2D texture and a multiple of
+/// six a cube map, neither of which can be viewed as an array.
+fn array_layers(count: u32, gl: bool) -> u32 {
+    match count {
+        _ if !gl => count,
+        0 | 1 => 2,
+        n if n % 6 == 0 => n + 1,
+        n => n,
+    }
+}
 /// The views of terrain.wgsl's sprite arrays, the unused ones a 1-layer
 /// stand-in.
 fn sprite_views(
@@ -683,25 +695,31 @@ fn instance_descriptor(backends: wgpu::Backends) -> wgpu::InstanceDescriptor {
 }
 /// The backends to open a device on, each tried in turn until one gives a
 /// device. `api` is the player's choice (`GraphicsApi::with_env` applied);
-/// `wgpu_backend`: whether `WGPU_BACKEND` is set, which picks the backends
-/// itself. Only Windows has two: Auto tries Vulkan, then DirectX 12 when
-/// Vulkan has no adapter (no Vulkan driver) or no device. A native crash in
-/// the driver can't be caught in the game; the launcher switches the setting
-/// to DirectX 12 after one at the renderer's start (#746).
-fn backend_order(api: GraphicsApi, windows: bool, wgpu_backend: bool) -> Vec<wgpu::Backends> {
-    if !windows || wgpu_backend {
-        return vec![wgpu::Backends::default()];
+/// `os` is `std::env::consts::OS`; `wgpu_backend`: whether `WGPU_BACKEND` is set,
+/// which picks the backends itself. Auto tries Vulkan, then DirectX 12 on Windows,
+/// then OpenGL (Windows and Linux) for GPUs with neither driver, each when the one
+/// before has no surface, adapter or device. A native crash in the driver can't be
+/// caught in the game; the launcher switches the setting to DirectX 12 after one at
+/// the renderer's start (#746). macOS has Metal only.
+fn backend_order(api: GraphicsApi, os: &str, wgpu_backend: bool) -> Vec<wgpu::Backends> {
+    use wgpu::Backends;
+    if os == "macos" || wgpu_backend {
+        return vec![Backends::default()];
     }
+    let windows = os == "windows";
     match api {
-        GraphicsApi::Auto => vec![wgpu::Backends::VULKAN, wgpu::Backends::DX12],
-        GraphicsApi::Vulkan => vec![wgpu::Backends::VULKAN],
-        GraphicsApi::Dx12 => vec![wgpu::Backends::DX12],
+        GraphicsApi::Auto if windows => vec![Backends::VULKAN, Backends::DX12, Backends::GL],
+        GraphicsApi::Auto => vec![Backends::VULKAN, Backends::GL],
+        GraphicsApi::Dx12 if windows => vec![Backends::DX12],
+        GraphicsApi::Vulkan | GraphicsApi::Dx12 => vec![Backends::VULKAN],
+        GraphicsApi::OpenGl => vec![Backends::GL],
     }
 }
 fn backends_name(backends: wgpu::Backends) -> &'static str {
     match backends {
         wgpu::Backends::VULKAN => "Vulkan",
         wgpu::Backends::DX12 => "DirectX 12",
+        wgpu::Backends::GL => "OpenGL",
         _ => "graphics",
     }
 }
@@ -780,7 +798,7 @@ async fn open_device(
 ) -> Result<Opened> {
     let order = backend_order(
         api.with_env(),
-        cfg!(windows),
+        std::env::consts::OS,
         std::env::var_os("WGPU_BACKEND").is_some(),
     );
     let mut failures = Vec::new();
@@ -793,7 +811,13 @@ async fn open_device(
         let surface = if offscreen {
             None
         } else {
-            Some(instance.create_surface(window.clone())?)
+            match instance.create_surface(window.clone()) {
+                Ok(surface) => Some(surface),
+                Err(e) => {
+                    failures.push(format!("{name} surface: {e}"));
+                    continue;
+                }
+            }
         };
         let adapter = match instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -863,14 +887,14 @@ async fn open_device(
 /// Vulkan is loaded at run time (the game links no graphics library), so a
 /// missing driver shows here rather than as a missing-DLL dialog.
 #[cfg(target_os = "windows")]
-const NO_GPU_DRIVER: &str = "No graphics driver with Vulkan or DirectX 12 found: Horizon needs a GPU \
-     driver with one of them. Install the latest driver for your NVIDIA, AMD or Intel GPU and \
+const NO_GPU_DRIVER: &str = "No graphics driver with Vulkan, DirectX 12 or OpenGL found: Horizon needs \
+     a GPU driver with one of them. Install the latest driver for your NVIDIA, AMD or Intel GPU and \
      start the game again";
 #[cfg(target_os = "macos")]
 const NO_GPU_DRIVER: &str = "No Metal graphics device found";
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-const NO_GPU_DRIVER: &str = "No Vulkan graphics driver found: Horizon needs the Vulkan loader \
-     (libvulkan.so.1) and a Vulkan driver for your GPU (Mesa's, or NVIDIA's)";
+const NO_GPU_DRIVER: &str = "No Vulkan or OpenGL graphics driver found: Horizon needs the Vulkan loader \
+     (libvulkan.so.1) and a Vulkan driver for your GPU (Mesa's, or NVIDIA's), or OpenGL through EGL";
 /// Logs a step of the renderer's start, for a native crash in the graphics
 /// driver: it leaves no panic or crash report, so the log's last line is the
 /// only sign of where the game stopped. The log file is written unbuffered;
@@ -1300,13 +1324,17 @@ impl Renderer {
             PreparedTextures::new(sprite_pixels, sprite_size, layers, sprite_mips, forcefield)
         });
         let mut mip_levels = 1;
+        let gl = adapter.get_info().backend == wgpu::Backend::Gl;
         let sprite_textures: Vec<wgpu::Texture> = prepared
             .sprites
             .into_iter()
             .enumerate()
-            .map(|(array, (mips, levels))| {
+            .map(|(array, (mut mips, levels))| {
                 let first = array as u32 * split;
-                let count = layers.saturating_sub(first).clamp(1, split);
+                let used = layers.saturating_sub(first).clamp(1, split);
+                let count = array_layers(used, gl);
+                // The extra layers are empty.
+                mips.resize(mips.len() / used as usize * count as usize, 0);
                 mip_levels = levels;
                 device.create_texture_with_data(
                     &queue,
@@ -1340,6 +1368,7 @@ impl Renderer {
             sprite_mips,
             &sprite_textures,
             split,
+            animate::SpriteAnimator::compute(&adapter, &device),
         );
         let sprite_unused = device
             .create_texture(&wgpu::TextureDescriptor {
@@ -1347,7 +1376,7 @@ impl Renderer {
                 size: wgpu::Extent3d {
                     width: 1,
                     height: 1,
-                    depth_or_array_layers: 1,
+                    depth_or_array_layers: array_layers(1, gl),
                 },
                 mip_level_count: 1,
                 sample_count: 1,
@@ -2057,16 +2086,15 @@ impl Renderer {
         // One per blend and `.png.mcmeta` sampling (screen_effects::SAMPLE_*):
         // the shader is specialised, so a pixel pays for none of the others.
         let screen_pipelines: [wgpu::RenderPipeline; 8] = std::array::from_fn(|i| {
-            let (entry, blend) = if i & 4 == 0 {
-                ("fs_screen", alpha_blend)
-            } else {
-                ("fs_vignette", vignette_blend)
+            let blur = i as u32 & crate::screen_effects::SAMPLE_BLUR != 0;
+            let (entry, blend) = match (i & 4 == 0, blur) {
+                (true, false) => ("fs_screen", alpha_blend),
+                (true, true) => ("fs_screen_blur", alpha_blend),
+                (false, false) => ("fs_vignette", vignette_blend),
+                (false, true) => ("fs_vignette_blur", vignette_blend),
             };
-            let on = |bit: u32| f64::from(u8::from(i as u32 & bit != 0));
-            let constants = [
-                ("BLUR", on(crate::screen_effects::SAMPLE_BLUR)),
-                ("CLAMP", on(crate::screen_effects::SAMPLE_CLAMP)),
-            ];
+            let clamp = i as u32 & crate::screen_effects::SAMPLE_CLAMP != 0;
+            let constants = [("CLAMP", f64::from(u8::from(clamp)))];
             let compilation_options = wgpu::PipelineCompilationOptions {
                 constants: &constants,
                 ..Default::default()
@@ -2154,15 +2182,26 @@ impl Renderer {
             )
         });
         let sorted_indices = arena::Arena::indices(&device, 1 << 16, flat.is_some());
+        let multi_draw = device
+            .features()
+            .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
+            && adapter
+                .get_downlevel_capabilities()
+                .flags
+                .contains(wgpu::DownlevelFlags::INDIRECT_EXECUTION);
+        // Without indirect draws (OpenGL before 4.3 without compute shaders)
+        // even creating an indirect buffer fails; one draw per section reads
+        // `draws` on the CPU instead.
         let indirect = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Section draws"),
             size: 1024 * 20,
-            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+            usage: if multi_draw {
+                wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST
+            } else {
+                wgpu::BufferUsages::COPY_DST
+            },
             mapped_at_creation: false,
         });
-        let multi_draw = device
-            .features()
-            .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
         // HORIZON_GPU_CULL=0 turns occlusion culling off, `all` culls every
         // frame however few its draws and little it hides, `shader` tests in
         // the shader as on Metal (A/B checks).
@@ -4469,25 +4508,27 @@ mod tests {
         );
     }
     #[test]
-    fn windows_tries_vulkan_then_directx_12() {
+    fn auto_tries_vulkan_then_directx_12_then_opengl() {
         use super::{GraphicsApi, backend_order};
         use wgpu::Backends;
+        let order = |api, os| backend_order(api, os, false);
         assert_eq!(
-            backend_order(GraphicsApi::Auto, true, false),
-            [Backends::VULKAN, Backends::DX12]
+            order(GraphicsApi::Auto, "windows"),
+            [Backends::VULKAN, Backends::DX12, Backends::GL]
         );
+        assert_eq!(order(GraphicsApi::Vulkan, "windows"), [Backends::VULKAN]);
+        assert_eq!(order(GraphicsApi::Dx12, "windows"), [Backends::DX12]);
+        assert_eq!(order(GraphicsApi::OpenGl, "windows"), [Backends::GL]);
         assert_eq!(
-            backend_order(GraphicsApi::Vulkan, true, false),
-            [Backends::VULKAN]
+            order(GraphicsApi::Auto, "linux"),
+            [Backends::VULKAN, Backends::GL]
         );
-        assert_eq!(
-            backend_order(GraphicsApi::Dx12, true, false),
-            [Backends::DX12]
-        );
-        // WGPU_BACKEND picks the backends itself; other systems have one.
+        assert_eq!(order(GraphicsApi::Dx12, "linux"), [Backends::VULKAN]);
+        assert_eq!(order(GraphicsApi::OpenGl, "linux"), [Backends::GL]);
+        // WGPU_BACKEND picks the backends itself; macOS has Metal only.
         for api in GraphicsApi::ALL {
-            assert_eq!(backend_order(api, true, true), [Backends::default()]);
-            assert_eq!(backend_order(api, false, false), [Backends::default()]);
+            assert_eq!(backend_order(api, "windows", true), [Backends::default()]);
+            assert_eq!(order(api, "macos"), [Backends::default()]);
         }
     }
     /// Every WGSL shader file translates to HLSL as wgpu's DirectX 12 backend
@@ -4544,6 +4585,13 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{} {}: {e}", path.display(), entry.name));
                 assert!(!hlsl.is_empty());
             }
+        }
+    }
+    #[test]
+    fn gl_sprite_arrays_are_neither_2d_textures_nor_cube_maps() {
+        for (count, gl) in [(1, 2), (2, 2), (5, 5), (6, 7), (12, 13), (2048, 2048)] {
+            assert_eq!(super::array_layers(count, true), gl);
+            assert_eq!(super::array_layers(count, false), count);
         }
     }
     #[test]

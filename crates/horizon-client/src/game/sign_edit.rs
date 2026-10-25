@@ -248,13 +248,14 @@ impl Game<'_> {
         let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         batch.fill(atlas, 0.0, 0.0, w, h, rgba(16, 16, 16, 160));
-        let title = if sign.hanging {
-            "Edit Hanging Sign Message"
+        let (key, fallback) = if sign.hanging {
+            ("hanging_sign.edit", "Edit Hanging Sign Message")
         } else {
-            "Edit Sign Message"
+            ("sign.edit", "Edit Sign Message")
         };
-        let tw = HudBatch::text_width(atlas, title);
-        batch.text(atlas, title, (w - tw) / 2.0, 40.0, u32::MAX, true);
+        let title = self.translate(key, fallback);
+        let tw = HudBatch::text_width(atlas, &title);
+        batch.text(atlas, &title, (w - tw) / 2.0, 40.0, u32::MAX, true);
         let name = self
             .res
             .facts()

@@ -488,7 +488,12 @@ pub fn encode_block_entity(
             entries.push(("cooking_time_spent", Tag::Int(f.cooking_timer)));
             entries.push(("cooking_total_time", Tag::Int(f.cooking_total)));
             entries.push(("speed_multiplier", Tag::Float(f.speed.to_bits())));
-            entries.push(("RecipesUsed", Tag::Compound(Compound::new())));
+            let used: Compound = f
+                .recipes_used
+                .iter()
+                .map(|(id, count)| (id.as_str().into(), Tag::Int(*count as i32)))
+                .collect();
+            entries.push(("RecipesUsed", Tag::Compound(used)));
         }
         BlockEntity::Brewing(b) => {
             entries.push(("Items", encode_items(&b.items)));
@@ -639,6 +644,17 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
             f.cooking_total = int("cooking_total_time").unwrap_or(0);
             if let Some(speed) = float(tag.get("speed_multiplier")) {
                 f.speed = speed as f32;
+            }
+            // A save without it owes nothing: the field is newer than some worlds.
+            if let Some(Tag::Compound(used)) = tag.get("RecipesUsed") {
+                for (id, count) in used {
+                    let count = match count {
+                        Tag::Int(n) => *n,
+                        _ => continue,
+                    };
+                    f.recipes_used
+                        .insert(id.to_string_lossy(), count.max(0) as u32);
+                }
             }
         }
         BlockEntity::Brewing(b) => {
@@ -4275,5 +4291,22 @@ mod tests {
             .and_then(|a| number(a.get("flying")))
             .unwrap_or(0);
         assert_eq!(flying_survival, 0);
+    }
+
+    /// `RecipesUsed` is what a furnace owes in experience, so a save that drops it pays the
+    /// player nothing after a reload.
+    #[test]
+    fn a_furnaces_recipes_used_survive_a_save() {
+        use crate::containers::BlockEntity;
+        let Some(BlockEntity::Furnace(mut f)) = BlockEntity::for_block("minecraft:furnace") else {
+            panic!("a furnace");
+        };
+        f.recipes_used
+            .insert("minecraft:cooked_porkchop".to_owned(), 3);
+        let tag = encode_block_entity((1, 64, 2), &BlockEntity::Furnace(f), "minecraft:furnace");
+        let Some((_, BlockEntity::Furnace(back))) = decode_block_entity(&tag) else {
+            panic!("a furnace back");
+        };
+        assert_eq!(back.recipes_used.get("minecraft:cooked_porkchop"), Some(&3));
     }
 }
