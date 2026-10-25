@@ -54,6 +54,7 @@ pub mod debug_chart;
 pub mod debug_keys;
 pub mod debug_overlay;
 pub mod dialog;
+pub mod dialog_screen;
 pub mod dynamic_light;
 pub mod effects;
 pub mod enchant;
