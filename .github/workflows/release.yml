@@ -96,9 +96,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # target/ is gone after the clean checkout, and vanilla-data.sh builds the preparer only when it
+          # prepares afresh.
+          cargo build --release --locked -p horizon-prepare
+          # Compiled here, never taken from the runner's shared preparations: pull requests' parity jobs
+          # write those (vanilla-data.sh links .local/exporters to them).
+          rm -rf .local/exporters
           bundle=$(target/release/horizon-prepare compile-exporters --root "$PWD" | tail -1)
           mkdir -p exporters
           cp -R "$bundle/server" "$bundle/client" "$bundle/manifest.json" exporters/
+          # Only our classes and their manifest leave this runner.
+          stray=$(find exporters -type f ! -path exporters/manifest.json \
+            ! \( -name '*.class' \( -path 'exporters/server/dev/horizonlab/parity/*' -o -path 'exporters/client/dev/horizonlab/parity/*' \) \))
+          [ -z "$stray" ] || { echo "::error::not one of our classes: $stray"; exit 1; }
           python3 tools/check_prepare_exporters.py --binary target/release/horizon-prepare
       - uses: actions/upload-artifact@v4
         with:
