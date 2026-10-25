@@ -3,7 +3,18 @@
 use crate::text::Text;
 use horizon_protocol::entity_data::Value;
 use serde::Serialize;
+use std::sync::Arc;
 
+/// `TextDisplay.Align`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Align {
+    Center,
+    Left,
+    Right,
+}
+
+/// `Display` and `TextDisplay`'s synced data (ids 8 to 27); the default is
+/// what their `defineSynchedData` starts with.
 #[derive(Clone, Debug, Serialize)]
 pub struct TextDisplayData {
     pub interpolation_delay: i32,
@@ -21,8 +32,9 @@ pub struct TextDisplayData {
     pub width: f32,
     pub height: f32,
     pub glow_color: i32,
+    /// Shared: a frame's interpolated copy of the data must not copy it.
     #[serde(skip)]
-    pub text: Text,
+    pub text: Arc<Text>,
     pub line_width: i32,
     pub background: i32,
     pub opacity: i8,
@@ -47,7 +59,7 @@ impl Default for TextDisplayData {
             width: 0.0,
             height: 0.0,
             glow_color: -1,
-            text: Text::empty(),
+            text: Arc::new(Text::empty()),
             line_width: 200,
             background: 0x4000_0000,
             opacity: -1,
@@ -76,7 +88,7 @@ impl TextDisplayData {
                 (20, Value::Float(v)) => self.width = *v,
                 (21, Value::Float(v)) => self.height = *v,
                 (22, Value::Int(v)) => self.glow_color = *v,
-                (23, Value::Text(v)) => self.text = crate::entity_nbt::name_text(v),
+                (23, Value::Text(v)) => self.text = Arc::new(crate::entity_nbt::name_text(v)),
                 (24, Value::Int(v)) => self.line_width = *v,
                 (25, Value::Int(v)) => self.background = *v,
                 (26, Value::Byte(v)) => self.opacity = *v,
@@ -85,13 +97,14 @@ impl TextDisplayData {
             }
         }
     }
-    pub fn alignment(&self) -> &'static str {
+    /// `TextDisplay.getAlign`: the left flag wins over the right one.
+    pub fn align(&self) -> Align {
         if self.flags & 8 != 0 {
-            "LEFT"
+            Align::Left
         } else if self.flags & 16 != 0 {
-            "RIGHT"
+            Align::Right
         } else {
-            "CENTER"
+            Align::Center
         }
     }
 }
@@ -105,7 +118,7 @@ mod tests {
         d.apply(&[(24, 1, Value::Int(80)), (27, 0, Value::Byte(24))]);
         d.apply(&[(11, 0, Value::Floats(vec![1.0]))]);
         assert_eq!(d.line_width, 80);
-        assert_eq!(d.alignment(), "LEFT");
+        assert_eq!(d.align(), Align::Left);
         assert_eq!(d.translation, [0.0; 3]);
     }
 }
