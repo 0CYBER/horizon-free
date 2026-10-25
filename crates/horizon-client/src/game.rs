@@ -1573,6 +1573,8 @@ struct Game<'a> {
     cmds: commands::extra::CommandExtras,
     ui: chat::UiState,
     combat: combat::CombatTracker,
+    /// Each guest's own `CombatTracker`, out of `combat` between turns.
+    guest_combat: std::collections::HashMap<u32, combat::CombatTracker>,
     mount: mounts::MountState,
     stats: stats::Stats,
     score: scoreboard::ScoreState,
@@ -12068,6 +12070,7 @@ impl<'a> Game<'a> {
             cmds: Default::default(),
             ui: Default::default(),
             combat: Default::default(),
+            guest_combat: Default::default(),
             mount: Default::default(),
             stats: Default::default(),
             score: Default::default(),
