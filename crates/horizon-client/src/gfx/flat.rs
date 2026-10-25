@@ -96,17 +96,19 @@ pub struct Flat {
     pub calls: Vec<Call>,
     pub phase1_calls: usize,
     pub solid_calls: usize,
-    /// Frames with fewer section draws keep the per-section draws.
-    pub min_draws: usize,
+    /// Frames with fewer sections in view keep the per-section draws.
+    pub min_sections: usize,
     range_align: u64,
 }
 
-/// Section draws from which a frame is drawn flat. Below it the index list
-/// costs the GPU more than the draw calls cost the CPU: on an M4 Pro at
-/// render distance 16 (2,900 draws) the copy and the list add about 0.4 ms
-/// of GPU time for 0.5–0.8 ms less CPU time; at 32 (9,300 draws) the CPU
-/// saves 1.3 ms.
-const MIN_DRAWS: usize = 4096;
+/// Sections in view (and distant tiles) from which a frame is drawn flat.
+/// Below it the index list costs the GPU more than the draw calls cost the
+/// CPU: on an M4 Pro at render distance 16 (2,900 draws) the copy and the
+/// list add about 0.4 ms of GPU time for 0.5–0.8 ms less CPU time; at 32
+/// (9,300 draws) the CPU saves 1.3 ms. The bar was 4,096 draws when they
+/// were 2.2 to 2.5 per section; a section's draw count now depends on the
+/// sides it shows the eye (`mesher::Sides`), so it counts sections.
+const MIN_SECTIONS: usize = 1600;
 
 /// Whether flat draws apply: the backend emulates multi-draw, and vertex
 /// shaders can read storage buffers large enough for an index page.
@@ -337,10 +339,10 @@ impl Flat {
             calls: Vec::new(),
             phase1_calls: 0,
             solid_calls: 0,
-            min_draws: if std::env::var("HORIZON_FLAT_DRAWS").as_deref() == Ok("1") {
+            min_sections: if std::env::var("HORIZON_FLAT_DRAWS").as_deref() == Ok("1") {
                 0
             } else {
-                MIN_DRAWS
+                MIN_SECTIONS
             },
             range_align: (u64::from(device.limits().min_storage_buffer_offset_alignment) / 16)
                 .max(1),
