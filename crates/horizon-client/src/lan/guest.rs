@@ -223,6 +223,8 @@ pub struct Guest {
     /// Whether the guest was on the ground before the first of `moves`.
     pub moves_from_ground: bool,
     pub dead: bool,
+    /// `LivingEntity.deathTime`: ticks since the guest died.
+    pub death_time: u32,
     /// The join packets were sent (PlayerList.placeNewPlayer ran).
     pub placed: bool,
     /// The level the player is in (`ServerPlayer.level().dimension()`): the
@@ -349,6 +351,7 @@ impl Guest {
             moves: Vec::new(),
             moves_from_ground: false,
             dead: false,
+            death_time: 0,
             placed: false,
             dimension: "minecraft:overworld".into(),
             menu: None,

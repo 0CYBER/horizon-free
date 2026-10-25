@@ -99,6 +99,8 @@ pub struct UiState {
     /// Death screen cause and when the player died (buttons wait 20 ticks).
     pub death_text: Option<Text>,
     pub died_at: Option<std::time::Instant>,
+    /// `LivingEntity.deathTime` of the window's player: ticks since it died.
+    pub death_time: u32,
 }
 
 impl Game<'_> {

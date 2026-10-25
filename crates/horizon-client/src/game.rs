@@ -2175,6 +2175,11 @@ impl Game<'_> {
         // Player.drop: the drop statistics.
         self.stats.add("dropped", &thrown.item, thrown.count as i32);
         self.stats.custom("drop", 1);
+        self.throw_from_eyes(thrown, eye);
+    }
+    /// `Player.createItemStackToDrop`: an item entity thrown from the eyes
+    /// along the view direction.
+    fn throw_from_eyes(&mut self, thrown: ItemStack, eye: [f64; 3]) {
         let (yaw, pitch) = (
             f64::from(self.yaw).to_radians(),
             f64::from(self.pitch).to_radians(),
@@ -4338,7 +4343,8 @@ impl Game<'_> {
             // Out of the world.
             let _ = player.set_health(0.0, false);
         }
-        if player.health.dead_or_dying() && self.screen != Screen::Dead {
+        let dead = player.health.dead_or_dying();
+        if dead && self.screen != Screen::Dead {
             // Inventory.dropAll: every stack thrown in a random direction.
             let feet = [player.position.x, player.position.y, player.position.z];
             let at = [feet[0], feet[1] + 1.32, feet[2]];
@@ -4372,6 +4378,18 @@ impl Game<'_> {
             }
             self.screen = Screen::Dead;
             self.capture(false);
+            self.ui.death_time = 0;
+        } else if dead {
+            // LivingEntity.tickDeath: 20 ticks after dying the player is
+            // removed, and Player.remove's inventoryMenu.removed drops what
+            // the cursor held.
+            self.ui.death_time += 1;
+            if self.ui.death_time >= 20
+                && let Some(stack) = self.carried.take()
+                && let Some(eye) = self.eye_position()
+            {
+                self.throw_from_eyes(stack, eye);
+            }
         }
         self.tick_world(running)
     }
