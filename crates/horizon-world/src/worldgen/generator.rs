@@ -1048,12 +1048,22 @@ where
             )
             .map_err(stage("biomes"))?;
         let ids = &self.data.biome_ids;
+        // Names point into the source's parameter list: neighbouring quarts
+        // mostly resolve to the same entry, so skip the map lookup for it.
+        let mut last: Option<(*const str, BiomeId)> = None;
         chunk
-            .fill(min, min + height - 1, |quart| {
-                resolver
+            .fill(min, min + height - 1, |quart| -> Result<BiomeId, String> {
+                let name = resolver
                     .sample_prepared(context, volume.as_ref(), quart)
-                    .map_err(|e| e.to_string())
-                    .and_then(|name| ids.get(name).copied().ok_or_else(|| name.to_owned()))
+                    .map_err(|e| e.to_string())?;
+                if let Some((pointer, id)) = last {
+                    if std::ptr::eq(pointer, name) {
+                        return Ok(id);
+                    }
+                }
+                let id = ids.get(name).copied().ok_or_else(|| name.to_owned())?;
+                last = Some((name as *const str, id));
+                Ok(id)
             })
             .map_err(stage("biomes"))?;
         let chunk = Arc::new(chunk);
@@ -1163,7 +1173,8 @@ where
         );
         let mut clock = std::time::Instant::now();
         let mut neighbors = Vec::with_capacity(9);
-        let mut possible = BTreeSet::new();
+        // The biome ids present, as a bitset: ascending like a sorted set.
+        let mut seen: Vec<u64> = Vec::new();
         // Build the neighbours no other thread is building first, then wait
         // for the rest (each is built once, by whichever thread gets it).
         let around =
@@ -1179,20 +1190,38 @@ where
             };
             {
                 let mut section = 0;
+                let mut last = None;
                 while let Some(biomes) = chunk.section(section) {
-                    possible.extend(biomes.iter().copied());
+                    for &id in biomes {
+                        if last == Some(id) {
+                            continue;
+                        }
+                        last = Some(id);
+                        let word = id.0 as usize / 64;
+                        if seen.len() <= word {
+                            seen.resize(word + 1, 0);
+                        }
+                        seen[word] |= 1 << (id.0 % 64);
+                    }
                     section += 1;
                 }
                 neighbors.push((*chunk).clone());
             }
         }
+        let possible = seen.iter().enumerate().flat_map(|(word, &bits)| {
+            let mut bits = bits;
+            std::iter::from_fn(move || {
+                (bits != 0).then(|| {
+                    let bit = bits.trailing_zeros();
+                    bits &= bits - 1;
+                    BiomeId(word as u32 * 64 + bit)
+                })
+            })
+        });
         let center = neighbors[4].clone();
         let biomes =
             BiomeRegion::new(neighbors, obfuscate_seed(self.seed)).map_err(stage("biomes"))?;
-        let possible = possible
-            .into_iter()
-            .map(|id| data.biome_name(id).to_owned())
-            .collect();
+        let possible = possible.map(|id| data.biome_name(id).to_owned()).collect();
         worker.timings.biomes += lap(&mut clock);
         let mut chunk = TerrainChunk::new(
             pos,
