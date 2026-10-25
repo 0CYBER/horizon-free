@@ -155,6 +155,14 @@ pub(super) fn preflight(options: &mut Options) -> Result<bool> {
     for w in &props.warnings {
         log("WARN", w);
     }
+    // Horizon's own commands are the owner's choice, off as on vanilla.
+    if props
+        .raw
+        .get(horizon_client::command::vanilla::PREGEN_PROPERTY)
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"))
+    {
+        horizon_client::command::vanilla::set_horizon_commands(true);
+    }
     props.store(&settings)?;
     let eula_file = PathBuf::from("eula.txt");
     let agreed = match eula::agreed(&eula_file) {

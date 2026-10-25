@@ -5,6 +5,12 @@ Chunky does on a Java server. It is Horizon's own command (vanilla has none), av
 with cheats on and to operators (level 2) on a server, from the chat or the server console
 (`horizon-server cmd pregen start 2500`).
 
+It is off until you turn it on, so `/help` and the command tree stay vanilla's:
+
+- a server: `horizon-pregen = true` under `[properties]` in `server.toml` (or `horizon-pregen=true` in a
+  vanilla folder's `server.properties`), then restart it;
+- single player and LAN: start the game with `--pregen`.
+
 ```text
 /pregen start <radius> [square|circle] [<x> <z>]   radius in blocks; the centre defaults to where you
                                                    stand (the world spawn from the console)
