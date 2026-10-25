@@ -1234,6 +1234,24 @@ impl Game<'_> {
         Some(out)
     }
 
+    /// `LivingEntity.tickDeath`: 20 ticks after dying the player is removed,
+    /// and `Player.remove`'s `inventoryMenu.removed` drops what the cursor
+    /// held (`dropOrPlaceInInventory` for a removed player). Respawning
+    /// sooner removes it too.
+    fn guest_tick_death(&mut self, host: &mut LanHost, gi: usize) {
+        let g = &mut host.hub.guests[gi];
+        g.death_time += 1;
+        if g.death_time >= 20 {
+            self.guest_drop_carried(host, gi);
+        }
+    }
+
+    fn guest_drop_carried(&mut self, host: &mut LanHost, gi: usize) {
+        if let Some(c) = host.hub.guests[gi].carried.take() {
+            self.drop_guest_items(host, gi, vec![c]);
+        }
+    }
+
     /// `AbstractContainerMenu.removed`: what a closing player held on the
     /// cursor goes back into their inventory (`placeItemBackInInventory`,
     /// dropped only if it doesn't fit), and their client's cursor empties
@@ -1573,6 +1591,8 @@ impl Game<'_> {
         if !host.hub.guests[i].dead {
             return;
         }
+        // PlayerList.respawn removes the dead player (Player.remove).
+        self.guest_drop_carried(host, i);
         // PlayerList.respawn: a server's player comes back in its respawn
         // point's level: the Overworld, where the world spawn and beds are,
         // or another one's anchor or forced point, which its block resolves
@@ -1613,6 +1633,7 @@ impl Game<'_> {
         }
         let g = &mut host.hub.guests[i];
         g.dead = false;
+        g.death_time = 0;
         g.health = 20.0;
         g.food = 20;
         g.saturation = 5.0;
@@ -1694,7 +1715,11 @@ impl Game<'_> {
                 continue;
             };
             self.guest_sleep_tick(host, gi);
-            if host.hub.guests[gi].dead || self.on_server_trip(conn) {
+            if host.hub.guests[gi].dead {
+                self.guest_tick_death(host, gi);
+                continue;
+            }
+            if self.on_server_trip(conn) {
                 continue;
             }
             let play = host.play.entry(conn).or_default();
