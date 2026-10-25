@@ -122,8 +122,8 @@ pub fn locate(program: &str) -> std::path::PathBuf {
 /// Settings page's "Test the connection".
 pub fn self_test(exe: &Path) -> Result<usize, String> {
     use std::io::Write;
-    use std::process::{Command, Stdio};
-    let mut child = Command::new(exe)
+    use std::process::Stdio;
+    let mut child = crate::process::command(exe)
         .arg("mcp")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

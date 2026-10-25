@@ -54,6 +54,9 @@ pub(super) struct Mods {
     searching: bool,
     searched: bool,
     results: Vec<Project>,
+    results_list: cull::Cull,
+    installed_list: cull::Cull,
+    pub(super) report_list: cull::Cull,
     more: bool,
     error: Option<String>,
     installed: Vec<installed::Entry>,
@@ -72,6 +75,12 @@ pub(super) struct Mods {
 }
 
 impl Mods {
+    pub(super) fn reset_lists(&self) {
+        self.results_list.reset();
+        self.installed_list.reset();
+        self.report_list.reset();
+    }
+
     /// Whether the Modpacks tab is open (the sidebar marks the pack shown there).
     pub(super) fn on_modpacks(&self) -> bool {
         self.kind == PackKind::Modpack
@@ -94,6 +103,9 @@ impl Mods {
             searching: false,
             searched: false,
             results: Vec::new(),
+            results_list: cull::Cull::default(),
+            installed_list: cull::Cull::default(),
+            report_list: cull::Cull::default(),
             more: false,
             error: None,
             installed: Vec::new(),
@@ -158,6 +170,7 @@ impl Launcher {
         self.go(Page::Mods);
         if slug.is_some() {
             self.pack_open = slug;
+            self.mods.report_list.reset();
         }
         if self.mods.kind != PackKind::Modpack {
             self.mods.kind = PackKind::Modpack;
@@ -203,6 +216,7 @@ impl Launcher {
                     m.busy = None;
                     m.message = Some(result);
                     m.installed = installed::Installed::load(&backend::game_home()).entries;
+                    m.installed_list.reset();
                     if modpack {
                         // The Modpacks page reads its list again.
                         self.packs_loaded = None;
@@ -249,6 +263,8 @@ impl Launcher {
         if offset == 0 {
             m.results.clear();
             m.more = false;
+            m.results_list.reset();
+            m.installed_list.reset();
         }
         let query = Query {
             everything: m.everything,
@@ -295,8 +311,18 @@ impl Launcher {
                                 .ok_or_else(|| format!("{} isn't set up.", p.source.label()))
                                 .and_then(|source| {
                                     java::check_project(&home, &*source, &p, everything, &|_| {})
-                                })
-                                .map(|(_, c)| Box::new(c));
+                                });
+                            // The project's page, if open, shows the verdict beside its version.
+                            if let Ok((version, check)) = &result {
+                                let key = (p.source, p.id.clone());
+                                let _ =
+                                    tx.send(Event::Loaded(super::mods_project::Loaded::Checked(
+                                        key,
+                                        version.id.clone(),
+                                        check.verdict,
+                                    )));
+                            }
+                            let result = result.map(|(_, check)| Box::new(check));
                             let _ = tx.send(Event::Checked((p.source, p.id), result));
                         }
                     });
@@ -608,8 +634,8 @@ impl Launcher {
             return None;
         }
         let busy = self.mods.busy.is_some();
-        let mut list = div().flex().flex_col();
-        for (i, e) in entries.into_iter().enumerate() {
+        let row = |i: usize| {
+            let e = entries[i];
             let key = (e.source, e.project.clone());
             let mut right = div().flex().items_center().gap(px(8.));
             if let Some(number) = self.mods.updates.get(&key) {
@@ -654,6 +680,7 @@ impl Launcher {
                         installed::remove(&home, &id).map(|e| format!("Removed {}.", e.title)),
                     );
                     this.mods.installed = installed::Installed::load(&home).entries;
+                    this.mods.installed_list.reset();
                     this.mods.confirm_remove = None;
                 } else {
                     this.mods.confirm_remove = Some(id.clone());
@@ -689,14 +716,21 @@ impl Launcher {
                         .font_family(theme::MONO)
                         .child(format!("checked: {}", short_sum(&e.checksum))),
                 );
-            list = list.child(index_row(
+            index_row(
                 i + 1,
                 e.title.clone(),
                 Some(detail.into_any_element()),
                 Some(right.into_any_element()),
                 &t,
-            ));
-        }
+            )
+        };
+        let list = self.mods.installed_list.column(
+            &self.content_scroll.handle,
+            entries.len(),
+            8.,
+            |index| self.mods.confirm_remove.as_ref() == Some(&entries[index].project),
+            row,
+        );
         Some(
             div()
                 .flex()
@@ -709,8 +743,6 @@ impl Launcher {
 
     fn mods_results(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let found = self.mods.results.clone();
-        let icons: Vec<AnyElement> = found.iter().map(|p| self.mods_icon(p, 56.)).collect();
         let m = &self.mods;
         if let Some(e) = &m.error {
             return div().child(notice(e.clone(), &t));
@@ -725,10 +757,15 @@ impl Launcher {
             };
             return centered(line, &t);
         }
-        let busy = m.busy.as_ref().map(|b| b.0.as_str());
-        let mut icons = icons.into_iter();
-        let mut list = div().flex().flex_col();
-        for (i, p) in m.results.iter().enumerate() {
+        let result_count = m.results.len();
+        let rows = m.results_list.clone();
+        let scroll = self.content_scroll.handle.clone();
+        let row = |i: usize| {
+            let project = self.mods.results[i].clone();
+            let icon = self.mods_icon(&project, 56.);
+            let p = &project;
+            let m = &self.mods;
+            let busy = m.busy.as_ref().map(|b| b.0.as_str());
             let support = m.support(p);
             let checking = p.kind == PackKind::Mod
                 && matches!(
@@ -813,21 +850,23 @@ impl Launcher {
                 .items_center()
                 .gap(px(12.))
                 .cursor_pointer()
-                .child(icons.next().expect("one icon per result"))
+                .child(icon)
                 .child(div().hover(|s| s.underline()).child(p.title.clone()))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.mods_open(open.clone());
                     cx.notify();
                 }));
-            list = list.child(index_row(
+            index_row(
                 i + 1,
                 name,
                 Some(detail.into_any_element()),
                 Some(right.into_any_element()),
                 &t,
-            ));
-        }
+            )
+        };
+        let list = rows.column(&scroll, result_count, 8., |_| false, row);
         let mut out = div().flex().flex_col().child(list);
+        let m = &self.mods;
         if m.more {
             let mut more = button("mods-more", "More", Kind::Ghost, &t);
             if m.searching {

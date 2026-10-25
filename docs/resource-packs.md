@@ -33,6 +33,7 @@ harness named checks that loader against vanilla).
 | Overlays per format | `pack.mcmeta` `overlays` | works | `test_resource_pack_parity` (an overlay for 26.3 applied, an older one not) |
 | Filters | `pack.mcmeta` `filter` | works | `test_resource_pack_parity` (`packs/pattern.rs` regex subset) |
 | Folder and zip packs, order, built-in packs | `resourcepacks/` | works | `test_resource_pack_parity`, `test_pack_selection_parity` |
+| Server resource packs: the prompt, the server list's Server Resource Packs setting, download (250 MiB, SHA-1, `downloads/` keeps 20), applied on top of the player's packs, removed on leaving | the server's `resource_pack_push`/`_pop` | works, no download toasts | `tools/server_pack_e2e.py` (against vanilla's server and Horizon's), unit tests in `server_packs.rs`; `test_server_resource_pack_parity` for Horizon's server |
 | Other namespaces | `assets/<namespace>/` | works | `test_resource_pack_parity` |
 | Block states: variants, multipart, weights, rotations, uvlock | `blockstates/` | works | `test_blockstate_model_parity`, `test_model_choice_parity`, `test_blockstate_transform_parity` |
 | Block models: parents, elements, rotations, faces, cullface, tint, shade, light emission, ambient occlusion | `models/block/` | works | `test_model_resolution_parity`, `test_model_baking_parity`, `test_section_mesh_parity` |
@@ -74,7 +75,7 @@ harness named checks that loader against vanilla).
 | Core shaders | `shaders/core/`, `shaders/include/` | **no** | Horizon draws with WGSL; a pack's GLSL core shaders aren't run |
 | GPU warn list, regional compliance | `gpu_warnlist.json`, `regional_compliancies.json` | n/a | OpenGL driver warnings and play-time notices for some regions; not used |
 
-Summary: 44 rows; 31 work, 3 partly, 8 don't (interpolated animation, TrueType fonts, credits and end poem,
+Summary: 45 rows; 32 work, 3 partly, 8 don't (interpolated animation, TrueType fonts, credits and end poem,
 villager hats, trims on worn armour, locator bar styles, post effects, core shaders), 2 don't apply. Except the
 shaders, the missing pieces are missing vanilla features too, and each vanilla parity fix covers the pack case as well.
 
@@ -83,6 +84,7 @@ shaders, the missing pieces are missing vanilla features too, and each vanilla p
 | Gap | Size | Where |
 | --- | --- | --- |
 | Animation `interpolate` | small | fix PR (`gfx.rs` `animate_sprites`) |
+| Server pack download toasts (`download.pack.*`) | small | `game/server_packs.rs` |
 | GUI scaling `width`/`height`, `stretch_inner`, `tile`, `stretch` | small | next fix PR (`ui.rs`) |
 | Villager hats | small | [#334](https://github.com/ludovic111/horizon/issues/334) |
 | `blur`/`clamp` from packs | small | [#335](https://github.com/ludovic111/horizon/issues/335) |

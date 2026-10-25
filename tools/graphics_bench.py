@@ -53,15 +53,14 @@ guiScale:0
 
 def vscreen_env():
     out = subprocess.run(["vscreen", "env"], cwd=ROOT, capture_output=True, text=True, check=True)
-    env = dict(os.environ)
+    env = lab.game_env()
     for part in out.stdout.replace(";", " ").split():
         if "=" in part and not part.startswith("export"):
             k, v = part.split("=", 1)
             env[k] = v
     env.pop("DISPLAY", None)
-    # Benchmark games never play sound on the machine's speakers.
-    env["HORIZON_NO_AUDIO"] = "1"
-    # Nor reach the telemetry server (docs/telemetry.md).
+    # lab.game_env: no sound on the machine's speakers, and scratch folders instead of the player's.
+    # Benchmark games do not reach the telemetry server (docs/telemetry.md).
     env["HORIZON_TELEMETRY_URL"] = "off"
     return env
 
