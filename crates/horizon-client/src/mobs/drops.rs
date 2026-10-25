@@ -96,7 +96,8 @@ fn xp_reward(m: &Mob) -> i32 {
         _ => 0,
     }
 }
-fn is_animal(s: Species) -> bool {
+/// The mobs that extend `Animal`.
+pub fn is_animal(s: Species) -> bool {
     use Species as S;
     matches!(
         s,

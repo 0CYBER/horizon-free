@@ -318,23 +318,6 @@ impl ChunkData {
         )?))
     }
 
-    pub fn load_block_section<'r>(
-        &self,
-        block: BlockPos,
-        registry: &'r BlockRegistry,
-    ) -> io::Result<Option<BlockSection<'r>>> {
-        let Some(index) = self.section_index(block)? else {
-            return Ok(None);
-        };
-        let Tag::List(sections) = self.root.tag.get("sections").unwrap() else {
-            unreachable!()
-        };
-        sections[index]
-            .get("block_states")
-            .map(|tag| BlockSection::from_nbt(tag, registry))
-            .transpose()
-    }
-
     /// Storage-only mutation. The caller must arrange simulation-derived updates
     /// before treating this as a gameplay block placement.
     pub fn set_block_data(&mut self, block: BlockPos, state: BlockState) -> io::Result<BlockState> {

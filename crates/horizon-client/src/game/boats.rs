@@ -5,10 +5,10 @@
 use super::{Game, Keys, entity_culling::at, view_vector};
 use horizon_client::{
     blocks::Fluid,
-    collisions::SceneCollisions,
+    collisions::{EntityCollisions, SceneCollisions},
     items::ItemStack,
     mesher::Vertex,
-    mobs::{Part, anim::Poses},
+    mobs::{Part, anim::Poses, riders},
 };
 use horizon_core::{
     geometry::{Aabb, Vec3},
@@ -54,10 +54,8 @@ pub(super) struct Boat {
 }
 /// `ChestBoat.CONTAINER_SIZE`.
 pub(super) const CHEST_SLOTS: usize = 27;
-const WIDTH: f64 = 1.375;
+pub(super) const WIDTH: f64 = 1.375;
 const HEIGHT: f64 = 0.5625;
-/// Player.DEFAULT_VEHICLE_ATTACHMENT minus the boat's passenger attachment.
-pub(super) const SEAT: f64 = 0.1875 - 0.6;
 impl Boat {
     pub fn new(id: u32, wood: Arc<str>, position: Vec3, yaw: f32) -> Self {
         Self {
@@ -96,6 +94,54 @@ impl Boat {
         Aabb::new(
             Vec3::new(p.x - w, p.y, p.z - w),
             Vec3::new(p.x + w, p.y + HEIGHT, p.z + w),
+        )
+    }
+    /// `isUnderWater`; it stands in for `canAddPassenger`'s
+    /// `isEyeInFluid(WATER)` too.
+    pub fn under_water(&self) -> bool {
+        matches!(self.status, Status::UnderWater | Status::UnderFlowingWater)
+    }
+    /// `getMaxPassengers`: two, one beside a chest.
+    pub fn max_passengers(&self) -> usize {
+        if self.chest { 1 } else { 2 }
+    }
+    /// `rideHeight`: a third of a boat's height, 8/9 of a raft's.
+    fn ride_height(&self) -> f64 {
+        let height = HEIGHT as f32;
+        f64::from(if &*self.wood == "bamboo" {
+            height * 0.888_888_9
+        } else {
+            height / 3.0
+        })
+    }
+    /// Where the passenger at `index` of `count` stands, at the boat's current
+    /// (or, with `previous`, last) place: `getPassengerAttachmentPoint`
+    /// turned with the boat, less the passenger's `rider_offset`.
+    pub fn seat(
+        &self,
+        index: usize,
+        count: usize,
+        animal: bool,
+        rider_offset: f64,
+        previous: bool,
+    ) -> Vec3 {
+        let mut z = if self.chest { 0.15f32 } else { 0.0 };
+        if count > 1 {
+            z = if index == 0 { 0.2 } else { -0.6 };
+            if animal {
+                z += 0.2;
+            }
+        }
+        let (at, yaw) = if previous {
+            (self.previous, self.previous_yaw)
+        } else {
+            (self.position, self.yaw)
+        };
+        riders::seat(
+            [0.0, self.ride_height(), f64::from(z)],
+            rider_offset,
+            at,
+            yaw,
         )
     }
     /// `getRowingTime`.
@@ -320,6 +366,7 @@ impl Game<'_> {
         let mut vspeed = -0.04;
         let mut buoyancy = 0.0;
         let inv_friction: f32;
+        let obstacles = self.boat_move_obstacles(&b);
         let mut scene = SceneCollisions {
             world: &self.world,
             binding: self.collision,
@@ -401,6 +448,11 @@ impl Game<'_> {
             b.paddling = [right && !left || up, left && !right || up];
         }
         // Entity.move: collisions zero the blocked components.
+        let mut scene = EntityCollisions {
+            blocks: scene,
+            entities: &obstacles,
+            border: None,
+        };
         if let Ok(moved) = scene.resolve(b.bounds(), b.velocity, 0.0, b.on_ground) {
             b.position = Vec3::new(
                 b.position.x + moved.x,
@@ -477,6 +529,19 @@ impl Game<'_> {
                 i += 1;
             }
         }
+        // The rest of AbstractBoat.tick on the server, for every boat: the
+        // passengers of one under water too long get out, and it picks up or
+        // pushes what it touches.
+        for i in 0..self.boats.len() {
+            let p = self.boats[i].position;
+            if !ticking(p.x.floor() as i32, p.z.floor() as i32) {
+                continue;
+            }
+            if self.boats[i].out_of_control >= 60.0 {
+                self.eject_boat_mobs(i, false);
+            }
+            self.boat_contacts(i);
+        }
     }
     /// `LavaFluid.entityInside` (`lavaHurt`) from the two
     /// `applyEffectsFromBlocks` calls in `AbstractBoat.tick`: twice 40
@@ -540,13 +605,14 @@ impl Game<'_> {
         self.yaw += b.delta_rotation;
         let delta = (self.yaw - b.yaw + 180.0).rem_euclid(360.0) - 180.0;
         self.yaw += delta.clamp(-105.0, 105.0) - delta;
+        self.boats[i] = b;
+        let seat = self.player_boat_seat(i);
         if let Some(p) = self.player.as_mut() {
             self.previous_position = p.position;
-            p.position = Vec3::new(b.position.x, b.position.y + SEAT, b.position.z);
+            p.position = seat;
             p.velocity = Vec3::ZERO;
             p.fall_distance = 0.0;
         }
-        self.boats[i] = b;
         if self.boat_lava_tick(i) {
             self.riding = None;
         }
@@ -556,9 +622,18 @@ impl Game<'_> {
     /// floor there, else on top of the boat.
     pub(super) fn dismount(&mut self, i: usize) {
         self.riding = None;
+        let target = self.boat_dismount_target(i, 0.6, self.yaw);
+        if let Some(p) = self.player.as_mut() {
+            p.position = target;
+            p.velocity = Vec3::ZERO;
+        }
+    }
+    /// `getDismountLocationForPassenger` for a passenger `width` wide
+    /// facing `yaw`.
+    pub(super) fn boat_dismount_target(&self, i: usize, width: f64, yaw: f32) -> Vec3 {
         let b = &self.boats[i];
-        let r = self.yaw.to_radians();
-        let distance = (WIDTH * std::f64::consts::SQRT_2 + 0.6 + 1.0e-5) / 2.0;
+        let r = yaw.to_radians();
+        let distance = (WIDTH * std::f64::consts::SQRT_2 + width + 1.0e-5) / 2.0;
         let (s, c) = (-(r.sin()) as f64, r.cos() as f64);
         let m = s.abs().max(c.abs());
         let (x, z) = (
@@ -569,17 +644,13 @@ impl Game<'_> {
         let (bx, by, bz) = (x.floor() as i32, top.floor() as i32, z.floor() as i32);
         let below = self.res.facts().get(self.world.block(bx, by - 1, bz));
         let here = self.res.facts().get(self.world.block(bx, by, bz));
-        let target = if below.fluid != Fluid::Water
+        if below.fluid != Fluid::Water
             && !here.full_collision
             && (below.full_collision || below.legacy_solid)
         {
             Vec3::new(x, f64::from(by), z)
         } else {
             Vec3::new(b.position.x, top, b.position.z)
-        };
-        if let Some(p) = self.player.as_mut() {
-            p.position = target;
-            p.velocity = Vec3::ZERO;
         }
     }
     /// `BoatItem.use`: aim at a block or the water surface.
@@ -656,7 +727,7 @@ impl Game<'_> {
             binding: self.collision,
             subject: None,
         };
-        if !scene.unobstructed(inner).unwrap_or(false) {
+        if !scene.unobstructed(inner).unwrap_or(false) || self.boat_entity_collision(bb) {
             return false;
         }
         self.next_entity += 1;
@@ -711,7 +782,7 @@ impl Game<'_> {
             return false;
         }
         // ChestBoat.interact: sneaking (or a full seat) opens the chest.
-        if self.boats[i].chest && (sneaking || self.riding.is_some()) {
+        if self.boats[i].chest && (sneaking || self.riding.is_some() || !self.boat_has_room(i)) {
             let b = &self.boats[i];
             let key = (i32::MAX - 15, super::minecarts::CART_KEY_Y, b.id as i32);
             self.world.block_entities.insert(
@@ -728,6 +799,7 @@ impl Game<'_> {
             || self.boats[i].out_of_control >= 60.0
             || self.riding.is_some()
             || self.ridden_by_guest(self.boats[i].id)
+            || !self.boat_has_room(i)
         {
             return false;
         }
@@ -758,6 +830,7 @@ impl Game<'_> {
         b.damage += damage * 10.0;
         let destroyed = creative || b.damage > 40.0;
         if destroyed {
+            self.eject_boat_mobs(i, true);
             let b = self.boats.remove(i);
             let at = [b.position.x, b.position.y, b.position.z];
             if !creative && self.ui.rules.bool("entity_drops") {
