@@ -133,6 +133,30 @@ impl<W: EntityMovementWorld<Error = io::Error>> EntityMovementWorld for EntityCo
         border.collision_shape().map(Some).map_err(io::Error::other)
     }
 }
+impl EntityCollisions<'_, SceneCollisions<'_, '_>> {
+    /// `SceneCollisions::resolve` that also stops at the entity boxes.
+    pub fn resolve(
+        &mut self,
+        bounds: Aabb,
+        movement: Vec3,
+        max_step: f32,
+        on_ground: bool,
+    ) -> Result<Vec3> {
+        let context = self.blocks.context(bounds);
+        Ok(resolve_world_movement(
+            self,
+            MovementRequest {
+                entity: EntityIdentity(0),
+                context,
+                bounds,
+                movement,
+                max_step,
+                on_ground,
+                candidate_budget: 1_000_000,
+            },
+        )?)
+    }
+}
 impl SceneCollisions<'_, '_> {
     /// Position contexts permit geometric movement probes without inventing a
     /// player, inventory, effects or fluid-standing behavior; a lava walker

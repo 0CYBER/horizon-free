@@ -10,6 +10,22 @@ use horizon_core::geometry::Direction;
 use serde_json::value::RawValue;
 use std::{collections::BTreeSet, sync::Arc};
 
+/// `predicate_property` for resolvers that hold the bound physical properties
+/// (`block_feature` and `state_provider`), in `BlockProperty` order.
+pub(super) fn bound_property(
+    values: Option<&[BoundBlockProperty; 4]>,
+    property: BlockProperty,
+) -> Result<BoundBlockProperty, DecodeError> {
+    let values = values.ok_or(DecodeError::Field("predicate block property registry"))?;
+    Ok(values[match property {
+        BlockProperty::Solid => 0,
+        BlockProperty::Replaceable => 1,
+        BlockProperty::Liquid => 2,
+        BlockProperty::SolidRender => 3,
+    }]
+    .clone())
+}
+
 /// Resolve a block holder set against the same immutable registry used by world
 /// queries. Unknown blocks/tags fail during decoding, even in unused branches.
 pub trait PredicateBlockResolver {

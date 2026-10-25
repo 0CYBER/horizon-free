@@ -1,0 +1,482 @@
+# Horizon's roadmap: the one source of truth for ROADMAP.md, playhorizon.dev/roadmap and Kira's answers.
+# Edit this file, then run `python3 tools/roadmap.py build`. How to keep it current: roadmap/README.md.
+#
+# No dates, ever: an item is Now, Next or Later. Each item says the same thing twice: `plain` for players
+# (one or two sentences, at most 240 characters, so it fits a post when it ships) and `dev` for contributors
+# (crates, approach, what is left). Links are "#123" (an issue or a pull request), a path in the repository,
+# or an https URL. Only what is decided goes here; ideas wait in GitHub issues and the suggestion queue.
+# `focus = true` puts a Now item in the overview (3 to 5 of them). `ongoing = true` marks a workstream that goes on
+# after its linked pull requests merge: `sync` never ships it, so link its new pull requests as they open.
+
+[overview]
+today_plain = """Horizon is Minecraft: Java Edition 26.3 rewritten from scratch in Rust, so it runs faster on the \
+same computer. Single player, LAN, servers, resource packs and Horizon's own mods work today, on your own copy of \
+the game."""
+today_dev = """A native Rust and wgpu reimplementation of Java 26.3: the same saves, rules and terrain, checked \
+against the real game by more than 300 differential harnesses (a Java oracle and a Rust probe on the same inputs). \
+Single player runs on its own server thread, like vanilla's integrated server."""
+help_plain = """Play it and tell us what differs from vanilla (Discord or GitHub), run the benchmark on your \
+computer, vote for what you want next, or pick one of the Help wanted items."""
+help_dev = """Read CONTRIBUTING.md, pick a Help wanted item or a To do card, check vanilla's code for the \
+behaviour, and paste the block `python3 tools/pr_ready.py` prints in your pull request."""
+
+# Areas, in the project's order of priority: performance first, then modpacks and servers.
+[[area]]
+id = "performance"
+name = "Performance"
+
+[[area]]
+id = "modpacks"
+name = "Modpacks"
+
+[[area]]
+id = "servers"
+name = "Servers and multiplayer"
+
+[[area]]
+id = "mods"
+name = "Mods and API"
+
+[[area]]
+id = "gameplay"
+name = "Gameplay parity"
+
+[[area]]
+id = "rendering"
+name = "Rendering"
+
+[[area]]
+id = "launcher"
+name = "Launcher"
+
+[[area]]
+id = "extras"
+name = "Horizon extras"
+
+[[area]]
+id = "project"
+name = "Code and tools"
+
+# ---------------------------------------------------------------------------------------------------- Now
+
+[[item]]
+id = "smooth-frames"
+title = "Steady frames at long render distances"
+status = "now"
+area = "performance"
+focus = true
+plain = """Making Horizon faster than vanilla on every computer, with smooth camera movement even at 32 chunks, \
+by spreading the work better over the processor's cores."""
+dev = """Frame pacing at render distance 32 (#678): long frames come from work competing with the render thread. \
+In review: world generation workers build free structure starts instead of queueing them (#1760), the worker pool \
+leaves one core as vanilla does (#1778), and the terrain vertex arena is read as storage where flat draws run \
+(#1742). Still open: far terrain at 48 to 64 chunks (#718) and CPU-bound fields of block entities (#717). Every \
+change shows before and after numbers from `tools/perf_bench.py` against vanilla 26.3 (docs/benchmark.md)."""
+links = ["#678", "#1760", "#1778", "#1742", "#718", "#717", "docs/benchmark.md"]
+
+[[item]]
+id = "block-storage"
+title = "Faster block lookups"
+status = "now"
+area = "performance"
+plain = """Speeding up the code that reads and writes the blocks of the world, which almost everything in the game \
+goes through: generation, lighting, meshing and ticking."""
+dev = """`PalettedContainer` and `PackedStorage` find an entry's word by multiply and shift instead of an integer \
+division (#1790, #1794); meshing looks up baked models by index, not by name (#1747). Each change keeps the paletted \
+storage harnesses identical and shows its microbenchmark (docs/performance/paletted-container-access-results.md)."""
+links = ["#1790", "#1794", "#1747", "docs/performance/paletted-container-access-results.md"]
+
+[[item]]
+id = "modpack-worldgen"
+title = "Modpacks' world generation, natively"
+status = "now"
+area = "modpacks"
+announce = true
+focus = true
+plain = """Making the world-generation mods of popular modpacks (new structures, YUNG's dungeons and mineshafts, \
+packs built on Lithostitched) generate their worlds in Horizon, natively and fast."""
+dev = """`horizon-port-pack` carries a pack's data-driven content over; structure mods that need code get a native \
+port: YUNG's worldgen as written (#1746), Lithostitched's limited and guaranteed elements with pool and processor \
+modifiers (#1777), its processors as the game's own types (#1765). Proved by the structure blocks and layout \
+harnesses (#1753, #1757). Mods whose Java code does more than world generation don't run (docs/modpacks.md)."""
+links = ["#1746", "#1777", "#1765", "#1753", "#1757", "docs/modpacks.md"]
+
+[[item]]
+id = "server-clients"
+title = "Playing on servers: everything shows as it should"
+status = "now"
+ongoing = true
+area = "servers"
+focus = true
+plain = """When you play on a server, other players, mobs, items and menus look and behave as in vanilla: skins, \
+poses, item names, inventories and server networks."""
+dev = """Client-of-a-server fixes in `game/remote*.rs` and `horizon-protocol`: mobs' aggressive and item-use flags \
+(#1802, #1798), ghost items after a remote menu (#1795), skins (#1652), cookies and transfer packets for proxy \
+networks (#1650), firework boosts (#1671), living-entity attributes and simulation distance (#1731), styled item \
+names (#1702), primed TNT between updates (#1710)."""
+links = ["#1802", "#1798", "#1795", "#1652", "#1650", "#1671", "#1731", "#1702", "#1710"]
+
+[[item]]
+id = "server-thread"
+title = "Single player as a server: the last differences"
+status = "now"
+ongoing = true
+area = "gameplay"
+focus = true
+plain = """Single player now runs a small server in the background, as vanilla does. We are fixing what still \
+behaves differently there; every fix also works for LAN and server players."""
+dev = """Since #1514 single player runs on the server thread (`game/integrated.rs`) and the window joins it as a \
+client; `--in-frame` keeps the old path. The open `[server-thread]` issues list the gaps. In review: a tool that \
+changes a block ends the click (#1797), potions keep their potion over the connection (#1796), mobs' aggression \
+and arm swings (#1802). docs/server-levels.md."""
+links = ["#1514", "#1797", "#1796", "#1802", "docs/server-levels.md"]
+
+[[item]]
+id = "mod-registry"
+title = "Horizon's mod registry"
+status = "now"
+area = "mods"
+announce = true
+focus = true
+plain = """One place for mods, modpacks and resource packs made for Horizon: browse them on the website and \
+install them from the launcher in one click."""
+dev = """Merged: the registry index (schema 1, `.hpack`, checks before install, #1634), `cargo horizon-mod check` \
+(#1642) and the submission service (`crates/horizon-mod-registry`, #1659). In review: the website's /mods (#1596) \
+and /mods/submit (#1635), and in the launcher the registry as a source (#1636), install, enable and takedowns \
+(#1637), the Mods page (#1638) and modpacks as their own profiles (#1640)."""
+links = ["#1634", "#1642", "#1659", "#1596", "#1635", "#1636", "#1637", "#1638", "#1640", "docs/mods.md"]
+
+[[item]]
+id = "server-dialogs"
+title = "Server dialogs and login screens"
+status = "now"
+area = "servers"
+plain = """Servers that show dialogs, such as the register and login screens of AuthMe, will work in Horizon."""
+dev = """26.3's dialog packets and model (#1720), the dialog screen with its buttons and actions (#1734), then text \
+and boolean inputs (#1735)."""
+links = ["#1720", "#1734", "#1735"]
+
+[[item]]
+id = "languages"
+title = "Play in your language"
+status = "now"
+area = "gameplay"
+plain = """Item names, container titles and server messages follow the language you pick, as in vanilla. Today \
+parts of the game stay in English."""
+dev = """Translatable components resolved through the selected language for items, containers and server text \
+(#1806), on top of the bundled languages the prepared resources carry (#1594). Left: the client's own screens \
+(#1672) and the main menu with zh_cn (#1774)."""
+links = ["#1806", "#1594", "#1672", "#1774"]
+
+[[item]]
+id = "shader-packs"
+title = "Shader packs, written again from scratch"
+status = "now"
+ongoing = true
+area = "rendering"
+plain = """Shader packs were removed and are being rebuilt from scratch. They come back, off by default, once the \
+best-known packs draw properly."""
+dev = """A clean-room rewrite in `horizon-shaderpack`, from the packs' public format documentation only: reading \
+packs, the preprocessor and `.properties` files are merged (#1584, #1585, #1586); translating programs to WGSL \
+through naga, buffers, uniforms and the terrain, entity, sky, weather and hand stages are in review (#1698 to \
+#1801)."""
+links = ["#1561", "#1584", "#1586", "#1698", "#1771", "#1786", "#1801"]
+
+[[item]]
+id = "discord-presence"
+title = "Discord Rich Presence"
+status = "now"
+area = "extras"
+announce = true
+plain = """Your Discord profile can show that you are playing Horizon, with a switch to turn it off."""
+dev = """A Discord IPC client on its own thread (#1787) and the presence with its setting (#1788). Merged: it ships \
+with the next release."""
+links = ["#1787", "#1788"]
+
+[[item]]
+id = "lean-code"
+title = "A leaner codebase that builds faster"
+status = "now"
+ongoing = true
+area = "project"
+plain = """Cleaning up Horizon's code: removing what nothing uses and making it quicker to build, so fixes and new \
+features land faster."""
+dev = """A review of the whole tree: dead code and stubs removed (#1432, #1658), one probe binary per crate (#1453, \
+#1454), shared harness helpers (#1448), clippy clean on the whole tree (#1707). docs/architecture.md maps each \
+feature to its files and harnesses."""
+links = ["#1432", "#1658", "#1453", "#1454", "#1448", "#1707", "docs/architecture.md"]
+
+# ---------------------------------------------------------------------------------------------------- Next
+
+[[item]]
+id = "microsoft-sign-in"
+title = "Microsoft sign-in (coming soon)"
+status = "next"
+area = "launcher"
+announce = true
+plain = """Coming soon: sign in with your Microsoft account to play on online-mode servers. The code is ready; it \
+waits for Microsoft's approval."""
+dev = """Device-code sign-in in the launcher and online-mode login in the client (docs/microsoft-account.md). It is \
+turned on by setting the app's client id once Minecraft API access is approved; until then the launcher shows \
+"Coming soon"."""
+links = ["docs/microsoft-account.md", "#1270"]
+
+[[item]]
+id = "curseforge"
+title = "CurseForge in the mod browser (coming soon)"
+status = "next"
+area = "modpacks"
+announce = true
+plain = """Coming soon: search and download CurseForge mods and modpacks from the launcher, as you can with \
+Modrinth today."""
+dev = """The mod browser lists CurseForge as coming soon (docs/mod-browser.md): it needs CurseForge API access. \
+Meanwhile packs import from a CurseForge zip or instance folder, and jars only CurseForge hosts come from the \
+player's own instance (docs/modpacks.md)."""
+links = ["docs/mod-browser.md", "docs/modpacks.md"]
+
+[[item]]
+id = "benchmarks"
+title = "Fresh benchmarks against vanilla"
+status = "next"
+area = "performance"
+plain = """New public numbers comparing Horizon with vanilla on many kinds of computers, measured the same way \
+every time, on the website's Benchmarks page."""
+dev = """Redo the comparison after the current performance work (#1073); reliability, coverage and presentation \
+(#1346); a scene must count as loaded only once its first chunk arrives (#1749). Players' reports come in through \
+`--benchmark` and `horizon-launcher data benchmark` (docs/benchmark.md)."""
+links = ["#1073", "#1346", "#1749", "docs/benchmark.md"]
+
+[[item]]
+id = "pistons-push"
+title = "Pistons push players and mobs"
+status = "next"
+area = "gameplay"
+plain = """Pistons and slime blocks will push players, mobs and items as in vanilla. Today moving blocks pass \
+through them."""
+dev = """Port `PistonMovingBlockEntity.moveCollidedEntities` and `moveStuckEntities` (honey), the slime bounce and \
+`Entity.limitPistonMovement` for `MoverType.PISTON`, in single player and for a server's players. Issues #1496, \
+#1609, #1608, #1704, #1758."""
+links = ["#1496", "#1609", "#1608", "#1704", "#1758"]
+
+[[item]]
+id = "intel-mac"
+title = "Horizon on Intel Macs"
+status = "next"
+area = "launcher"
+plain = """Builds of the game and the launcher for Macs with an Intel processor."""
+dev = """x86_64 game and launcher builds, picked per processor (#1171). Before it ships it needs a run on a real \
+Intel Mac: Rosetta on Apple Silicon only proves the CPU code. Requests: #1161, #1792."""
+links = ["#1171", "#1161", "#1792"]
+
+# ---------------------------------------------------------------------------------------------------- Later
+
+[[item]]
+id = "ai-companion"
+title = "An optional AI teammate"
+status = "later"
+area = "extras"
+plain = """An AI teammate that plays beside you and that you can talk to. It is off unless you turn it on, and the \
+No AI switch hides it completely."""
+dev = """Draft pull requests: the companion (#1068), its safety modes and their evaluation (#1069), and a route \
+that finishes the game (#1070). Local models first; it ships only once the safety evaluation passes."""
+links = ["#1068", "#1069", "#1070"]
+
+[[item]]
+id = "new-versions"
+title = "Following new Minecraft versions"
+status = "later"
+area = "gameplay"
+plain = """When Mojang releases a new version of the game, Horizon follows it, and every system is checked against \
+the new version again."""
+dev = """The port pipeline detects a release, diffs its classes against 26.3 and writes a port report \
+(docs/version-ports.md); the harnesses then run against the new version."""
+links = ["docs/version-ports.md"]
+
+# ---------------------------------------------------------------------------------------------------- Help wanted
+
+[[item]]
+id = "benchmark-your-pc"
+title = "Benchmark your computer"
+status = "help-wanted"
+area = "performance"
+plain = """Run Horizon's built-in benchmark and share the report: every new computer makes the performance work \
+more accurate. No coding needed."""
+dev = """`horizon-launcher play --arg=--benchmark --arg=standard` writes a JSON report; `horizon-launcher data \
+benchmark <report>` shows what would be sent and uploads it (website/docs/performance.md). Results from three \
+installs with the same hardware appear on the Benchmarks page. Example: #1711."""
+links = ["website/docs/performance.md", "#1711"]
+
+[[item]]
+id = "end-city-banners"
+title = "End city banners keep their pattern"
+status = "help-wanted"
+area = "gameplay"
+plain = """Banners in End cities show as plain magenta instead of with their pattern."""
+dev = """Compare the banner block entities the End city templates place with vanilla's (`EndCityPieces`, the \
+templates' block entity NBT, `BannerBlockEntity`'s patterns), in `crates/horizon-world/src/worldgen/structure/`. \
+Issue #1438; possibly related: #526."""
+links = ["#1438", "#526"]
+
+[[item]]
+id = "end-city-loot"
+title = "Enchanted loot in End cities"
+status = "help-wanted"
+area = "gameplay"
+plain = """Armour and tools in End city chests should come enchanted, as in vanilla."""
+dev = """`loot.rs` implements `enchant_with_levels`: find why the End city chest table's rolls come out bare, and \
+compare them with vanilla's for a few seeds. Issues #1437, #1660."""
+links = ["#1437", "#1660"]
+
+[[item]]
+id = "item-cooldowns"
+title = "Cooldowns drawn on items"
+status = "help-wanted"
+area = "gameplay"
+plain = """After you throw an ender pearl, its slot should show the cooldown sweeping away, as in vanilla."""
+dev = """Vanilla draws `ItemCooldowns`' percent as a white overlay over the slot \
+(`GuiGraphicsExtractor.itemDecorations` and `itemCooldown`) in the hotbar and in inventories. Issue #1763."""
+links = ["#1763"]
+
+[[item]]
+id = "chat-settings"
+title = "Chat settings and team prefixes"
+status = "help-wanted"
+area = "gameplay"
+plain = """The Hidden and Commands Only chat settings should hide chat, and team prefixes should appear before \
+names in chat."""
+dev = """Vanilla checks `ChatVisiblity` before it delivers chat and system messages (#1376), and chat uses the \
+team-formatted display name (#1378). Both issues have exact steps to reproduce."""
+links = ["#1376", "#1378"]
+
+[[item]]
+id = "pointer-hand"
+title = "A pointing hand over buttons"
+status = "help-wanted"
+area = "gameplay"
+plain = """The mouse pointer should turn into a pointing hand over menu buttons, as in vanilla 26.3."""
+dev = """26.3's `AbstractWidget` asks for a cursor from `CursorTypes` when it is hovered; winit's \
+`CursorIcon::Pointer` gives the same shape. Issue #1347."""
+links = ["#1347"]
+
+[[item]]
+id = "text-field-keys"
+title = "Ctrl+Backspace and scroll bars in menus"
+status = "help-wanted"
+area = "gameplay"
+plain = """Ctrl+Backspace should delete a whole word in the creative search, and every list's scroll bar should be \
+draggable."""
+dev = """`EditBox` deletes by word with Ctrl (#1764); the Game Rules and Statistics lists' scroll bars can't be \
+dragged (#1782, after #978)."""
+links = ["#1764", "#1782"]
+
+[[item]]
+id = "chicken-flap"
+title = "Chickens flap while they fall"
+status = "help-wanted"
+area = "gameplay"
+plain = """Chickens should flap their wings while they fall, not stand still in the air."""
+dev = """Vanilla's `Chicken.aiStep` updates `flap` and `flapSpeed` when the chicken isn't on the ground, and the \
+model's wings follow them. Issue #1706."""
+links = ["#1706"]
+
+# ---------------------------------------------------------------------------------------------------- Shipped
+# Newest first: `tools/roadmap.py sync` adds each newly shipped item on top.
+
+[[item]]
+id = "server-resource-packs"
+title = "Server resource packs"
+status = "shipped"
+shipped_in = "v0.2.48"
+area = "servers"
+plain = """Servers can send you their resource pack: Horizon asks, downloads it and applies it, like vanilla."""
+dev = """The dedicated server offers server.properties' pack (#1562); the client's pack manager, downloads, prompt \
+and Server Resource Packs setting (#1569, #1570)."""
+links = ["#1562", "#1569", "#1570"]
+
+[[item]]
+id = "server-thread-default"
+title = "Single player on its own server thread"
+status = "shipped"
+shipped_in = "v0.2.39"
+area = "gameplay"
+plain = """Single player runs on a server thread, as vanilla does, so the world keeps ticking smoothly while the \
+window draws."""
+dev = """`game/integrated.rs` runs a second `Game` with one level per dimension; the window joins it through \
+memory like a LAN guest (#1514)."""
+links = ["#1514", "docs/server-levels.md"]
+
+[[item]]
+id = "metal-occlusion"
+title = "GPU occlusion culling on Macs"
+status = "shipped"
+shipped_in = "v0.2.17"
+area = "performance"
+plain = """On Macs the GPU now skips terrain hidden behind hills and caves: 8 to 48% more frames per second at 32 \
+chunks on an M4 Pro."""
+dev = """GPU occlusion culling on Metal (#1434)."""
+links = ["#1434"]
+
+[[item]]
+id = "gpu-animated-textures"
+title = "Animated textures on the GPU"
+status = "shipped"
+shipped_in = "v0.2.5"
+area = "performance"
+plain = """Water, lava and other animated blocks are now animated by the graphics card: 1.7 to 2.4 times better 1% \
+lows on Intel graphics."""
+dev = """Frames uploaded once, no per-tick CPU blend or copy (#1239)."""
+links = ["#1239"]
+
+[[item]]
+id = "far-detail"
+title = "Far Detail for integrated graphics"
+status = "shipped"
+shipped_in = "v0.2.5"
+area = "performance"
+plain = """An optional Reduced setting for far terrain, suggested on integrated graphics, that saves 2 to 4 ms of GPU \
+time per frame."""
+dev = """Opt-in reduced far terrain (#1199), on far-terrain chunk summaries built on the workers (#1029)."""
+links = ["#1199", "#1029"]
+
+[[item]]
+id = "mod-browser"
+title = "The launcher's mod browser"
+status = "shipped"
+shipped_in = "launcher@0.2.0"
+area = "modpacks"
+plain = """Search Modrinth for mods, modpacks and resource packs from the launcher; it says before installing what \
+works in Horizon."""
+dev = """The Mods page (#1154), Java mods checked before install (#1242), project pages, filters and galleries \
+(#1243), modpacks ported in the same step (#1246). docs/mod-browser.md."""
+links = ["#1154", "#1242", "#1243", "#1246", "docs/mod-browser.md"]
+
+[[item]]
+id = "launcher-look"
+title = "A blocky, Minecraft-like launcher"
+status = "shipped"
+shipped_in = "launcher@0.2.0"
+area = "launcher"
+plain = """The launcher got a new blocky look in Horizon's purple, in dark and light."""
+dev = """The Blocks look (#1269), from `horizon-theme` (docs/design-system.md)."""
+links = ["#1269", "docs/design-system.md"]
+
+[[item]]
+id = "dynamic-lights"
+title = "Dynamic lights"
+status = "shipped"
+shipped_in = "v2026.10.22"
+area = "extras"
+plain = """An optional extra: torches you hold, drop or set on fire light up what is around them."""
+dev = """Held, dropped and burning light sources (#1162), in Horizon Extras, off by default."""
+links = ["#1162"]
+
+[[item]]
+id = "servers-page"
+title = "Host a server from the launcher"
+status = "shipped"
+shipped_in = "launcher-v0.15.0"
+area = "servers"
+plain = """The launcher's Servers page creates, starts, backs up and updates a Horizon server with buttons, and \
+invites friends."""
+dev = """The launcher's Servers page (#1026) over `horizon-server` (docs/hosting.md)."""
+links = ["#1026", "docs/hosting.md"]

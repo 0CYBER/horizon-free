@@ -17,7 +17,7 @@ pub mod pyjson;
 mod sounds;
 mod survival;
 
-pub use sounds::{fonts, packs, panorama, sounds, BUILT_IN_PACKS};
+pub use sounds::{fonts, languages, packs, panorama, sounds, BUILT_IN_PACKS};
 
 use pyjson::Value;
 use sha2::Digest;

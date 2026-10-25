@@ -39,9 +39,6 @@ for (const [width, height] of sizes) {
     scrollTo({ top: 0, behavior: "instant" });
   });
   await page.waitForTimeout(800);
-  // A full-page capture draws the fixed bar once, at the top, over the hero: show it as the
-  // hero sees it, not in its scrolled state.
-  await page.evaluate(() => document.querySelector(".nav").classList.remove("is-scrolled"));
   const report = await page.evaluate((touch) => {
     const out = [];
     const doc = document.documentElement;

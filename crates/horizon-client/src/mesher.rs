@@ -3,9 +3,9 @@
 //! `ModelBlockRenderer`/`BlockModelLighter` (smooth light, ambient occlusion,
 //! cardinal shading, tint sources, block offsets; see `lighting`). Fluids
 //! follow `FluidRenderer` (see `fluid`).
-mod facing;
 mod fluid;
 mod lighting;
+mod sides;
 use crate::{
     assets::{Assets, RenderAssets},
     biome::Biomes,
@@ -13,7 +13,6 @@ use crate::{
     chunk::{Chunk, MIN_Y},
     models::catalog::BakedFace,
 };
-pub use facing::{FaceGroups, GROUPS as FACE_GROUPS};
 use horizon_core::{
     biome::BiomeZoom, geometry::Direction, position::BlockPos, random::position_seed,
 };
@@ -22,6 +21,7 @@ use horizon_world::{
     fluid::{FluidKind, FluidState},
     registry::BlockStateId,
 };
+pub use sides::Sides;
 use std::sync::Arc;
 
 /// An entity, item and effect vertex (the entity pipelines), with a face
@@ -116,8 +116,10 @@ mod vertex_tests {
 }
 pub struct SectionMesh {
     pub solid: Vec<TerrainVertex>,
-    /// `solid`'s quads by the side they face (`facing`).
-    pub faces: FaceGroups,
+    /// The buckets `solid` is sorted in by the side its quads face: empty
+    /// until `sort_solid`, which the meshing workers call; `solid` is in
+    /// model order before.
+    pub sides: Sides,
     pub translucent: Vec<TerrainVertex>,
     /// VisGraph: bit `a * 6 + b` is set when faces `a` and `b` (Direction
     /// order) are connected through non-opaque blocks.
@@ -131,11 +133,18 @@ impl Default for SectionMesh {
     fn default() -> Self {
         Self {
             solid: Vec::new(),
-            faces: FaceGroups::default(),
+            sides: Sides::default(),
             translucent: Vec::new(),
             visibility: ALL_VISIBLE,
             block_entities: Vec::new(),
         }
+    }
+}
+impl SectionMesh {
+    /// Sorts the solid quads by the side they face, for the renderer to
+    /// leave out those facing away from the eye (`sides`).
+    pub fn sort_solid(&mut self) {
+        self.sides = sides::sort(&mut self.solid);
     }
 }
 pub const ALL_VISIBLE: u64 = (1 << 36) - 1;
@@ -230,8 +239,6 @@ fn visibility(pad: &Padded, info: &[Info]) -> u64 {
     result
 }
 #[cfg(test)]
-mod leaf_culling_tests;
-#[cfg(test)]
 mod particle_tests;
 #[cfg(test)]
 mod visibility_tests;
@@ -277,7 +284,6 @@ struct Info {
     overlay: bool,
     /// `LeavesBlock`: with opaque leaves the faces between two leaf blocks are skipped.
     leaves: bool,
-    mangrove_roots: bool,
     blocks_flow: bool,
     ice: bool,
     sturdy: u8,
@@ -440,7 +446,6 @@ impl MeshTables {
                 legacy_solid: s.legacy_solid,
                 overlay: s.has_class("HalfTransparentBlock") || s.has_class("LeavesBlock"),
                 leaves: s.has_class("LeavesBlock"),
-                mangrove_roots: s.has_class("MangroveRootsBlock"),
                 blocks_flow: assets.blocks_fluid_flow.contains(&*s.name),
                 ice: s.has_class("IceBlock"),
                 sturdy: s.sturdy_full,
@@ -692,18 +697,10 @@ pub struct Mesher<'a> {
     pub smooth_lighting: bool,
     /// The `cutoutLeaves` option (fancy graphics); off makes leaves opaque.
     pub cutout_leaves: bool,
-    /// Cull shared leaf and mangrove-root faces, including transparent leaves.
-    pub cull_leaves: bool,
 }
 impl Mesher<'_> {
     /// `region[dz][dx]` are the chunks around the meshed column (centre 1,1).
     pub fn mesh(&mut self, region: &[[Option<&Chunk>; 3]; 3], sy: i32) -> SectionMesh {
-        let mut out = self.tesselate(region, sy);
-        out.faces = facing::group(&mut out.solid);
-        out
-    }
-    /// The section's quads in model order, before `facing::group`.
-    pub(crate) fn tesselate(&mut self, region: &[[Option<&Chunk>; 3]; 3], sy: i32) -> SectionMesh {
         let mut out = SectionMesh::default();
         let center = region[1][1].expect("centre chunk");
         let section = &center.sections[sy as usize];
@@ -721,6 +718,8 @@ impl Mesher<'_> {
             [center.x, center.z, base_y],
         );
         let info = &self.tables.info;
+        let catalog = &self.render.model_catalog;
+        let mut models = Vec::new();
         for y in 0..16 {
             for z in 0..16 {
                 for x in 0..16 {
@@ -750,13 +749,15 @@ impl Mesher<'_> {
                         continue;
                     }
                     let world = BlockPos::new(center.x * 16 + x, base_y + y, center.z * 16 + z);
-                    let Ok(models) = self.render.model_catalog.collect(BlockStateId(id), world)
-                    else {
+                    if catalog
+                        .models_at(BlockStateId(id), world, &mut models)
+                        .is_err()
+                    {
                         continue;
-                    };
+                    }
                     // ModelBlockRenderer: the first part decides smooth lighting
                     // for all; light-emitting blocks are always lit flat.
-                    let Some((_, first)) = models.first() else {
+                    let Some(first) = models.first() else {
                         continue;
                     };
                     let ao = self.smooth_lighting && state.emission == 0 && first.ambient_occlusion;
@@ -773,12 +774,9 @@ impl Mesher<'_> {
                         let [dx, dy, dz] = d.normal();
                         let neighbor = pad.blocks[pi(x + dx, y + dy, z + dz)];
                         let other = &info[neighbor as usize];
-                        // Adapted from CullLeaves (MIT); see THIRD_PARTY_NOTICES.md.
-                        let shared_foliage = (state.leaves
-                            && other.leaves
-                            && (!self.cutout_leaves || self.cull_leaves))
-                            || (self.cull_leaves && state.mangrove_roots && other.mangrove_roots);
-                        visible[d as usize] = !shared_foliage
+                        // LeavesBlock.skipRendering with opaque leaves.
+                        let opaque_leaves = !self.cutout_leaves && state.leaves && other.leaves;
+                        visible[d as usize] = !opaque_leaves
                             && self
                                 .visibility
                                 .should_render_face(
@@ -789,7 +787,7 @@ impl Mesher<'_> {
                                 )
                                 .unwrap_or(true);
                     }
-                    for (_, model) in &models {
+                    for model in &models {
                         for face in &model.faces {
                             if face.quad.cull.is_some_and(|d| !visible[d as usize]) {
                                 continue;

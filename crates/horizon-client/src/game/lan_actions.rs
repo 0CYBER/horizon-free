@@ -1277,10 +1277,24 @@ impl Game<'_> {
         id: i32,
         location: Option<[f64; 3]>,
     ) -> Option<([f64; 3], [f64; 3])> {
+        let eye = {
+            let g = &host.hub.guests[gi];
+            [g.position[0], g.position[1] + g.eye_height(), g.position[2]]
+        };
         let object = || {
             let (lo, hi, origin) = self.object_target(id)?;
             let middle = [0, 1, 2].map(|k| (lo[k] + hi[k]) / 2.0);
             let Some(l) = location else {
+                // A boat's mobs sit over its middle: aim low at its near
+                // side, so the ray meets the boat before them (the server
+                // attacks the entity it is sent).
+                let carries = u32::try_from(id).is_ok_and(|v| {
+                    self.boats.iter().any(|b| b.id == v) && !self.boat_mobs(v).is_empty()
+                });
+                if carries {
+                    let near = |k: usize| eye[k].clamp(lo[k] + 0.01, hi[k] - 0.01);
+                    return Some([near(0), lo[1] + 0.05, near(2)]);
+                }
                 return Some(middle);
             };
             let point = [0, 1, 2].map(|k| origin[k] + l[k]);
@@ -1311,7 +1325,6 @@ impl Game<'_> {
             }
         };
         let g = &mut host.hub.guests[gi];
-        let eye = [g.position[0], g.position[1] + g.eye_height(), g.position[2]];
         let d = [centre[0] - eye[0], centre[1] - eye[1], centre[2] - eye[2]];
         let horizontal = (d[0] * d[0] + d[2] * d[2]).sqrt();
         g.yaw = (-d[0].atan2(d[2])).to_degrees() as f32;
@@ -1926,7 +1939,7 @@ impl Game<'_> {
         let in_wall = !g.sleeping && self.in_wall(g.position, g.eye_height());
         let at = g.position;
         let sneaking = g.sneaking;
-        let sounds = self.as_guest(host, conn, |game| {
+        let events = self.as_guest(host, conn, |game| {
             let (rules, motion) = (game.world.health_rules, game.motion);
             let health = &motion.health;
             let Some(player) = game.player.as_mut() else {
@@ -2023,20 +2036,17 @@ impl Game<'_> {
             // A hurt since the last tick marked the velocity (Entity.markHurt):
             // ServerEntity.sendChanges sends it as it is after this travel.
             let marked = std::mem::take(&mut player.health.sync_velocity);
-            let sounds = events
-                .into_iter()
-                .filter_map(|e| match e {
-                    MotionEvent::HurtSound(sound) => Some(sound),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
-            (sounds, marked.then_some(player.velocity))
+            (events, marked.then_some(player.velocity))
         });
-        let Some((sounds, marked)) = sounds else {
+        let Some((events, marked)) = events else {
             return;
         };
-        for sound in sounds {
-            self.player_hurt_sound(sound, at);
+        for event in events {
+            match event {
+                MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, at),
+                MotionEvent::Fall(event) => self.landing_block_updates(&event),
+                _ => {}
+            }
         }
         if let (Some(v), Some(g)) = (marked, host.hub.guest(conn)) {
             g.send(&C::SetEntityMotion(play::SetEntityMotion {
@@ -2439,6 +2449,32 @@ impl Game<'_> {
             .map_or(&[][..], |log| log.get(logged..).unwrap_or(&[]))
             .to_vec();
         let facts = self.res.facts();
+        // BlockItem.place: `playSound(player, ...)`, for the others only. The
+        // placer's client plays it as its block appears.
+        let placed: Vec<([f64; 3], String)> = changed
+            .iter()
+            .map(|&(x, y, z)| {
+                let at = [f64::from(x) + 0.5, f64::from(y) + 0.5, f64::from(z) + 0.5];
+                let name = &facts.get(self.world.block(x, y, z)).sounds.place;
+                (at, name.trim_start_matches("minecraft:").to_owned())
+            })
+            .collect();
+        if let Some(capture) = self.audio.capture.as_mut() {
+            let mut i = heard.min(capture.len());
+            while i < capture.len() {
+                let (name, at, ..) = &capture[i];
+                let place = placed
+                    .iter()
+                    .any(|(p, n)| p == at && name.trim_start_matches("minecraft:") == n.as_str());
+                if place {
+                    let (name, at, volume, pitch) = capture.remove(i);
+                    let source = horizon_client::settings::sound_source(&name) as i32;
+                    host.hub.sound(&name, at, volume, pitch, source, Some(conn));
+                } else {
+                    i += 1;
+                }
+            }
+        }
         if changed.is_empty()
             || !changed.iter().all(|&(x, y, z)| {
                 super::remote::hand_operated(&facts.get(self.world.block(x, y, z)).name)
