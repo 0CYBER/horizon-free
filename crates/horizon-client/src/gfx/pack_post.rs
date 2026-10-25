@@ -168,6 +168,8 @@ pub struct PackPost {
     water: Option<Pass>,
     /// A program after translucent terrain reads `depthtex1`: it is copied before water.
     depth1: bool,
+    /// `HORIZON_SHADER_PACK_TIMING`: GPU time of each pass, in the log.
+    timing: Option<super::pack_timing::PassTiming>,
     /// `shaders.properties`' custom uniforms, after the frame's in `uniforms.values`.
     custom: horizon_shaders::Custom,
     atlas: Option<wgpu::TextureView>,
@@ -853,6 +855,7 @@ impl PackPost {
             terrain,
             water,
             depth1,
+            timing: super::pack_timing::PassTiming::new(device, queue),
             custom,
             atlas: world.atlas.as_ref().map(|a| a.0.clone()),
             lightmap: world.lightmap,
@@ -1053,9 +1056,11 @@ impl PackPost {
                 .and_then(|t| attach(&t[usize::from(self.main & 1 << buffer != 0)], load));
         }
         {
+            let timestamp_writes = self.timing.as_mut().and_then(|t| t.writes(&pass.name));
             let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(&pass.name),
                 color_attachments: &attachments,
+                timestamp_writes,
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &targets.depth,
                     depth_ops: Some(wgpu::Operations {
@@ -1164,6 +1169,9 @@ impl PackPost {
         terrain: &mut dyn FnMut(&mut wgpu::RenderPass<'_>, bool),
     ) {
         self.resize(device, size);
+        if let Some(t) = &mut self.timing {
+            t.begin(device, queue);
+        }
         self.uniforms.update(frame, inputs, size);
         self.uniforms.eval_custom(&mut self.custom);
         let Some(targets) = &self.targets else { return };
@@ -1214,6 +1222,7 @@ impl PackPost {
             encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Shader pack clear"),
                 color_attachments: &attachments,
+                timestamp_writes: self.timing.as_mut().and_then(|t| t.writes("clear")),
                 ..Default::default()
             });
         }
@@ -1250,6 +1259,7 @@ impl PackPost {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Shader pack world"),
                 color_attachments: &attachments,
+                timestamp_writes: self.timing.as_mut().and_then(|t| t.writes("world")),
                 depth_stencil_attachment: self.blit_depth.then_some(
                     wgpu::RenderPassDepthStencilAttachment {
                         view: &targets.depth,
@@ -1314,6 +1324,7 @@ impl PackPost {
                 let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some(&pass.name),
                     color_attachments: &attachments,
+                    timestamp_writes: self.timing.as_mut().and_then(|t| t.writes(&pass.name)),
                     ..Default::default()
                 });
                 rp.set_pipeline(&pass.pipeline);

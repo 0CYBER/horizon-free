@@ -70,6 +70,7 @@ mod lod;
 mod occlusion;
 mod pack_atlas;
 mod pack_post;
+mod pack_timing;
 pub mod pack_uniforms;
 mod page_runs;
 pub mod panorama;
