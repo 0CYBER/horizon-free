@@ -101,12 +101,14 @@ impl Post {
 
     /// The world's colour and depth targets this frame, or `None` to draw
     /// it straight to the screen.
+    /// `always`: a target even at scale 1 without FXAA (a shader pack reads it).
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
         window: [u32; 2],
+        always: bool,
     ) -> Option<(wgpu::TextureView, wgpu::TextureView)> {
-        if self.scale == 1.0 && !self.antialias {
+        if self.scale == 1.0 && !self.antialias && !always {
             self.target = None;
             return None;
         }
@@ -153,6 +155,11 @@ impl Post {
         self.target
             .as_ref()
             .map(|t| (t.color.clone(), t.depth.clone()))
+    }
+
+    /// The size of the world's own target, when it has one.
+    pub fn size(&self) -> Option<[u32; 2]> {
+        self.target.as_ref().map(|t| t.size)
     }
 
     /// Bindings that copy (or anti-alias) `view` onto the screen in `finish_with`.

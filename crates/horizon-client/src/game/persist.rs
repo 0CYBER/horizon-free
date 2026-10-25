@@ -156,6 +156,8 @@ impl Game<'_> {
                     kind.as_str(),
                     "minecraft:experience_orb"
                         | "minecraft:arrow"
+                        | "minecraft:fireball"
+                        | "minecraft:small_fireball"
                         | "minecraft:falling_block"
                         | "minecraft:end_crystal"
                         | "minecraft:ender_dragon"
@@ -192,6 +194,11 @@ impl Game<'_> {
                             if let Some(a) = p.arrow.as_mut() {
                                 a.last_state = in_block.and_then(|t| self.state_from_nbt(&t));
                             }
+                            self.creatures.projectiles.push(p);
+                        }
+                    }
+                    "minecraft:fireball" | "minecraft:small_fireball" => {
+                        if let Some(p) = entity_nbt::fireball_from_nbt(&tag, player_uuid) {
                             self.creatures.projectiles.push(p);
                         }
                     }
@@ -642,13 +649,15 @@ impl Game<'_> {
             } else {
                 None
             };
-            let (uuid, raw) = anon(&self.persist, "minecraft:arrow", p.position);
+            let (uuid, raw) = anon(&self.persist, p.kind.id(), p.position);
             let in_block = p
                 .arrow
                 .as_ref()
                 .and_then(|a| a.last_state)
                 .map(|s| self.state_to_nbt(s));
-            if let Some(tag) = entity_nbt::arrow_to_nbt(p, uuid, owner, in_block, raw.as_ref()) {
+            let tag = entity_nbt::arrow_to_nbt(p, uuid, owner, in_block, raw.as_ref())
+                .or_else(|| entity_nbt::fireball_to_nbt(p, uuid, owner, raw.as_ref()));
+            if let Some(tag) = tag {
                 out.entry(chunk_of(p.position)).or_default().push(tag);
             }
         }
