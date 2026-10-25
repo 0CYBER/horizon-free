@@ -594,6 +594,15 @@ impl ProtoChunk {
     pub fn is_decorated(&self) -> bool {
         self.decorated
     }
+    /// The structure starts this chunk holds itself (`structures.starts`).
+    pub fn own_starts(&self) -> Vec<Arc<super::structure::start::StructureStart>> {
+        let pos = self.position();
+        self.structure_starts
+            .iter()
+            .filter(|s| s.chunk == pos)
+            .cloned()
+            .collect()
+    }
     /// Also restores a saved proto chunk that was decorated before it was saved.
     pub fn set_decorated(&mut self) {
         self.decorated = true;

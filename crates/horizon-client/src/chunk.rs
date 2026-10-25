@@ -147,6 +147,9 @@ pub struct Chunk {
     /// Structure starts reaching into this chunk (`structures.References`):
     /// structure id and the start's chunk.
     pub structure_refs: Vec<(Arc<str>, (i32, i32))>,
+    /// The starts generation made in this chunk (`structures.starts`), saved
+    /// with the state their placement has reached by then.
+    pub structure_starts: Vec<Arc<horizon_world::worldgen::structure::start::StructureStart>>,
 }
 impl Chunk {
     pub fn empty(x: i32, z: i32) -> Self {
@@ -164,6 +167,7 @@ impl Chunk {
             block_entities: Vec::new(),
             block_names: Vec::new(),
             structure_refs: Vec::new(),
+            structure_starts: Vec::new(),
             postprocess: Vec::new(),
             saved: None,
             entities: Vec::new(),
