@@ -39,6 +39,11 @@ pub(super) struct ModsState {
     /// The chat's command tree while a running mod owns commands.
     #[cfg(feature = "mods")]
     tree: Option<Dispatcher>,
+    /// `command.run` lines for this window's own world, run on the next tick:
+    /// run at once, their chat lines would reach the mods while their output
+    /// is still being shown, and a mod answering its own lines would recurse.
+    #[cfg(feature = "mods")]
+    commands: Vec<String>,
 }
 impl ModsState {
     /// The chat's command tree: vanilla's, plus the running mods' commands.
@@ -283,6 +288,11 @@ impl Game<'_> {
     }
     /// A game tick.
     pub(super) fn tick_mods(&mut self) {
+        // Here, at the player's level: shown inside a console call (a control
+        // socket command set the hook off), they would run as the console.
+        for line in std::mem::take(&mut self.mods.commands) {
+            self.run_command(&line);
+        }
         if !self.mods.mods.is_running() {
             return;
         }
@@ -345,13 +355,13 @@ impl Game<'_> {
                 // Vanilla's commands only: a mod running a mod command could loop.
                 Output::Command { line } => {
                     let name = line.split(' ').next().unwrap_or_default();
-                    // As handle_chat_input, without the chat history.
                     if !vanilla_command(name) {
-                        // dropped
+                        // Dropped.
                     } else if self.remote.is_some() {
+                        // The server checks the player's permissions.
                         self.send_chat(&format!("/{line}"));
                     } else {
-                        self.run_command(&line);
+                        self.mods.commands.push(line);
                     }
                     continue;
                 }
