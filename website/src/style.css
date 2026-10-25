@@ -645,7 +645,7 @@ code { border-radius: 0; background: var(--well); box-shadow: 0 0 0 1px var(--ou
 
 /* Releases: a filter, then every release as a panel that opens. */
 .release-filter { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 32px; }
-.release-filter .button[aria-pressed="true"], .hub-detail .button[aria-pressed="true"] { background: var(--face); color: var(--on-face); box-shadow: inset 0 var(--block-bevel) 0 var(--face-bevel), inset 0 calc(-1 * var(--block-lip)) 0 var(--face-lip); }
+.release-filter .button[aria-pressed="true"], .hub-detail .button[aria-pressed="true"], .button.hub-vote[aria-pressed="true"] { background: var(--face); color: var(--on-face); box-shadow: inset 0 var(--block-bevel) 0 var(--face-bevel), inset 0 calc(-1 * var(--block-lip)) 0 var(--face-lip); }
 .release-count { margin: 16px 0 12px; }
 .release-list { display: grid; gap: 8px; }
 .release-list .release + .release { margin-top: 0; }
@@ -825,6 +825,29 @@ code { border-radius: 0; background: var(--well); box-shadow: 0 0 0 1px var(--ou
   .hub-board { grid-template-columns: minmax(0, 1fr); }
   .hub-rows .row > a { grid-template-columns: var(--index) minmax(0, 1fr); }
   .hub-rows .row-meta { grid-column: 2; text-align: left; }
+}
+
+/* --- Hub: votes, the report and suggestion forms, the contributors ---------------------- */
+.hub-vote { margin-left: auto; }
+.hub-vote-count { margin-left: -2px; }
+.hub-vote-count:empty { display: none; }
+.hub-form { display: grid; gap: 16px; max-width: 46rem; margin-top: 8px; }
+.hub-form-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.hub-field { display: grid; gap: 6px; font-size: var(--text-label); color: var(--ink-soft); }
+.hub-field input, .hub-field textarea, .hub-field select {
+  width: 100%; min-height: 36px; padding: 8px 10px; font: var(--text-ui) / 1.4 var(--font); color: var(--ink);
+  background: var(--well); border: 0; box-shadow: 0 0 0 var(--block-outline) var(--outline);
+}
+.hub-field textarea { resize: vertical; }
+.hub-field input:focus-visible, .hub-field textarea:focus-visible, .hub-field select:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+.hub-field input::placeholder, .hub-field textarea::placeholder { color: var(--muted); }
+.hub-trap { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+.hub-form-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.hub-form-foot [data-status] { color: var(--ink); }
+.hub-form-foot .button:disabled { opacity: 0.4; cursor: default; }
+.hub-form-closed { color: var(--ink-soft); }
+@media (max-width: 720px) {
+  .hub-form-pair { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* The registry (/mods): a search and the kind filter, rows as panels, then a page per project. */
