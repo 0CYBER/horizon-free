@@ -133,7 +133,9 @@ impl Capability {
             Capability::Registries => "add blocks and items to your worlds",
             Capability::Ui => "show its own screens and a settings page",
             Capability::Render => "draw on your screen and shake the camera",
-            Capability::Input => "take over the use button on its own items, and add keys",
+            Capability::Input => {
+                "see the keys you hold and your clicks, take over the use button on its own items, and add keys"
+            }
         }
     }
     /// The capability a component import needs, `Ok(None)` for one every

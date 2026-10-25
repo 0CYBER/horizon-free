@@ -14,7 +14,7 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `registries` | data files (`assets/`, `data/`), no interface | add blocks and items to your worlds |
 | `ui` | [`ui`](#ui) | show its own screens and a settings page |
 | `render` | [`render`](#render) | draw on your screen and shake the camera |
-| `input` | [`input`](#input) | take over the use button on its own items, and add keys |
+| `input` | [`input`](#input) | see the keys you hold and your clicks, take over the use button on its own items, and add keys |
 
 ## World `horizon-mod`
 
