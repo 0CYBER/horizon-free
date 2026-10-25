@@ -1183,7 +1183,17 @@ pub fn fireball_to_nbt(
         "acceleration_power",
         Tag::Double(p.acceleration.to_bits()),
     );
-    put(&mut tag, "LeftOwner", Tag::Byte(i8::from(p.left_owner)));
+    // Projectile: LeftOwner only when set; HasBeenShot once it has ticked
+    // (a fireball saved before its first tick keeps what it was loaded with).
+    if let Tag::Compound(map) = &mut tag {
+        map.remove(&"LeftOwner".into());
+    }
+    if p.left_owner {
+        put(&mut tag, "LeftOwner", Tag::Byte(1));
+    }
+    if p.age > 0 || tag.get("HasBeenShot").is_none() {
+        put(&mut tag, "HasBeenShot", Tag::Byte(i8::from(p.age > 0)));
+    }
     if let Some(power) = power {
         put(&mut tag, "ExplosionPower", Tag::Byte(power as i8));
     }
@@ -2214,6 +2224,9 @@ mod fireball_nbt_tests {
         let back = fireball_to_nbt(&p, [1, 2, 3, 4], None, None).unwrap();
         assert_eq!(number(back.get("ExplosionPower")), Some(4));
         assert_eq!(float(back.get("acceleration_power")), Some(0.0));
+        // Projectile.addAdditionalSaveData: no LeftOwner unless set, HasBeenShot always.
+        assert!(back.get("LeftOwner").is_none());
+        assert_eq!(number(back.get("HasBeenShot")), Some(0));
         assert_eq!(
             read_doubles::<3>(back.get("Motion")),
             Some([0.0, -0.5, 1.0])
