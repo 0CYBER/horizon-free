@@ -44,6 +44,7 @@ mod enchant_effects;
 mod end;
 mod entity_culling;
 mod events;
+mod execution_role;
 mod explosion;
 mod extras;
 mod falling_damage;
@@ -291,8 +292,8 @@ struct Options {
     /// as vanilla's does: the default. `--in-frame` (or `--no-server-thread`,
     /// or `HORIZON_SERVER_THREAD=0`) runs the world in the frame instead.
     server_thread: bool,
-    /// Set on the integrated server's own options: it draws nothing, so it skips meshing.
-    integrated: bool,
+    /// What this Game executes; independent of its current server connection.
+    execution_role: execution_role::ExecutionRole,
 }
 impl Options {
     /// The name to join servers with: the one given, else the offline name kept
@@ -349,7 +350,7 @@ impl Options {
             // itself, without the event loop: it stays in the frame.
             server_thread: std::env::var("HORIZON_SERVER_THREAD").map_or(true, |v| v != "0")
                 && std::env::var_os("HORIZON_COMMAND_SCRIPT").is_none(),
-            integrated: false,
+            execution_role: execution_role::ExecutionRole::Client,
         };
         let mut session_file = std::env::var("HORIZON_SESSION_FILE").ok();
         let mut args = std::env::args().skip(1);
@@ -363,6 +364,7 @@ impl Options {
                     return Ok(None);
                 }
                 "--dedicated" => {
+                    o.execution_role = execution_role::ExecutionRole::DedicatedServer;
                     o.dedicated = Some(args.by_ref().collect());
                     break;
                 }
@@ -7529,7 +7531,11 @@ impl Game<'_> {
         }
         self.join_world_rest()?;
         let save_root = std::env::current_dir()?.join("saves").join(folder);
-        if integrated::wanted(&self.options, &save_root) {
+        if self
+            .options
+            .execution_role
+            .starts_integrated_server(self.options.server_thread)
+        {
             return self.open_integrated(folder, name, seed, creative, create);
         }
         let request = world_loading::WorldRequest::new(folder, name, seed, creative, create)?;
@@ -10565,7 +10571,7 @@ impl Game<'_> {
         }
         // The loading screen's chunk map fills ring by ring, as vanilla's.
         self.streaming.loading =
-            self.options.dedicated.is_none() && self.loading_reason().is_some();
+            self.options.execution_role.is_client() && self.loading_reason().is_some();
         let (uploads, unloaded) =
             horizon_client::spans::time("streaming", || self.streaming.update(&mut self.world));
         if let Some(lod) = &mut self.lod {
@@ -12254,7 +12260,7 @@ fn synchronous_startup(options: &Options) -> bool {
         || options.world_frames.is_some()
         || options.benchmark.is_some()
         || options.control.is_some()
-        || options.dedicated.is_some()
+        || !options.execution_role.is_client()
         || std::env::var_os("HORIZON_DISPENSE_FIXTURE").is_some()
         || std::env::var_os("HORIZON_SCULK_FIXTURE").is_some()
         || std::env::var_os("HORIZON_COMMAND_SCRIPT").is_some()
@@ -12795,7 +12801,7 @@ fn start_game<'a>(
         game.sculk_fixture(&spec)?;
         return Ok(None);
     }
-    if game.options.dedicated.is_some() {
+    if game.options.execution_role == execution_role::ExecutionRole::DedicatedServer {
         game.run_dedicated()?;
         return Ok(None);
     }
@@ -13072,7 +13078,7 @@ impl Loading {
         );
         let renderer_ms = renderer_at.elapsed().as_millis();
         // Audio is created on the main thread, after the core is ready.
-        let audio = if options.dedicated.is_some() {
+        let audio = if !options.execution_role.is_client() {
             Audio::silent(&options.resources)
         } else {
             Audio::new(&options.resources)
@@ -13247,13 +13253,15 @@ pub fn run() -> Result<()> {
     let Some(mut options) = Options::read()? else {
         return Ok(());
     };
-    if options.dedicated.is_some() && !dedicated::preflight(&mut options)? {
+    if options.execution_role == execution_role::ExecutionRole::DedicatedServer
+        && !dedicated::preflight(&mut options)?
+    {
         return Ok(());
     }
     // Before any worker starts: on Linux they go behind the server thread
     // and the render thread.
     horizon_threads::put_helpers_behind();
-    if options.dedicated.is_none() {
+    if options.execution_role.is_client() {
         // The render thread, like the server thread, ahead of the workers on
         // macOS and Windows. While terrain loads, the worker pools (two with
         // single player's server thread) and other programs outnumber the
@@ -13263,7 +13271,7 @@ pub fn run() -> Result<()> {
     }
     // Someone is playing: the anonymous ping behind the launcher's "N playing now". Not for a
     // server, a benchmark or a run that quits by itself.
-    if options.dedicated.is_none()
+    if options.execution_role.is_client()
         && options.benchmark.is_none()
         && !options.offscreen
         && options.frames.is_none()
@@ -13304,7 +13312,7 @@ pub fn run() -> Result<()> {
     )?;
     let gui = loaded.gui.ok_or("missing menu bundle")?;
     options.resources = loaded.root.clone();
-    let audio = if options.dedicated.is_some() {
+    let audio = if !options.execution_role.is_client() {
         Audio::silent(&options.resources)
     } else {
         Audio::new(&options.resources)
