@@ -121,12 +121,13 @@ fn share_samplers(module: &mut naga::Module, slot: &HashMap<u32, u32>) {
     }
 }
 
-/// The game's geometry a gbuffers pass draws.
-#[derive(Clone, Copy, PartialEq)]
-enum Gbuffers {
-    Sky,
-    Terrain,
-    Water,
+/// The sky's geometry and the programs that draw it: `gbuffers_skybasic` (disc, sunset, stars,
+/// void) and `gbuffers_skytextured` (sun, moon), each with its fallbacks. A part without a
+/// program is Horizon's own.
+struct Sky {
+    geometry: PackSky,
+    basic: Option<Pass>,
+    textured: Option<Pass>,
 }
 
 struct Pass {
@@ -151,6 +152,8 @@ struct Pass {
     mipmaps: u16,
     /// Reads the per-draw block (`DrawUniforms`).
     draw: bool,
+    /// What `texture` reads instead of the block atlas.
+    atlas: Option<wgpu::TextureView>,
     groups: HashMap<u16, wgpu::BindGroup>,
 }
 
@@ -181,6 +184,8 @@ pub(super) struct World<'a> {
     pub lightmap: wgpu::TextureView,
     /// Terrain's geometry, when the pack draws it.
     pub terrain: Option<Geometry<'a>>,
+    /// The atlas of the sun and moon's sprites.
+    pub celestial: Option<wgpu::TextureView>,
 }
 
 pub struct PackPost {
@@ -191,7 +196,7 @@ pub struct PackPost {
     /// What draws translucent terrain (`gbuffers_water` or its fallback), after `deferred`.
     water: Option<Pass>,
     /// What draws the sky (`gbuffers_skybasic` or its fallback), before terrain, and its vertices.
-    sky: Option<(Pass, PackSky)>,
+    sky: Option<Sky>,
     /// A program after translucent terrain reads `depthtex1`: it is copied before water.
     depth1: bool,
     /// Buffers with mipmaps (filterable ones a program asks them for).
@@ -494,6 +499,8 @@ pub(super) struct Geometry<'a> {
     pub table: Option<&'a wgpu::BindGroupLayout>,
     /// Writes depth (the sky does not).
     pub depth_write: bool,
+    /// What `texture` reads instead of the block atlas.
+    pub atlas: Option<wgpu::TextureView>,
 }
 
 /// The pass of program `p`: a quad, or `geometry` drawn by the game. `None` (with a note) when
@@ -737,6 +744,7 @@ fn build_pass(
         written,
         mipmaps: p.mipmaps,
         draw,
+        atlas: geometry.and_then(|g| g.atlas.clone()),
         groups: HashMap::new(),
     })
 }
@@ -796,15 +804,29 @@ impl PackPost {
             .water
             .zip(world.terrain.as_ref())
             .and_then(|(p, g)| build(p, Some(g)));
-        let sky = post.sky.and_then(|p| {
-            let sky = PackSky::new(device);
-            let geometry = Geometry {
+        let sky = (post.sky.is_some() || post.sky_textured.is_some()).then(|| {
+            let geometry = PackSky::new(device);
+            let basic = Geometry {
                 buffers: &PackSky::buffers(),
-                table: Some(&sky.layout),
+                table: Some(&geometry.layout),
                 depth_write: false,
+                atlas: None,
             };
-            Some((build(p, Some(&geometry))?, sky))
+            let basic = post.sky.and_then(|p| build(p, Some(&basic)));
+            let textured = Geometry {
+                buffers: &PackSky::celestial_buffers(),
+                table: None,
+                depth_write: false,
+                atlas: world.celestial.clone(),
+            };
+            let textured = post.sky_textured.and_then(|p| build(p, Some(&textured)));
+            Sky {
+                geometry,
+                basic,
+                textured,
+            }
         });
+        let sky = sky.filter(|s| s.basic.is_some() || s.textured.is_some());
         // Developers' aid: `HORIZON_SHADER_PACK_SKIP=composite,final` leaves programs out.
         let skip = std::env::var("HORIZON_SHADER_PACK_SKIP").unwrap_or_default();
         let passes: Vec<Pass> = post
@@ -819,8 +841,13 @@ impl PackPost {
         if let Some(w) = &water {
             notes.push(format!("translucent terrain draws with {}", w.name));
         }
-        if let Some((s, _)) = &sky {
-            notes.push(format!("the sky draws with {}", s.name));
+        for (part, pass) in sky
+            .iter()
+            .flat_map(|s| [("sky", &s.basic), ("sun and moon", &s.textured)])
+        {
+            if let Some(p) = pass {
+                notes.push(format!("the {part} draw with {}", p.name));
+            }
         }
         let depth1 = water.is_some()
             && passes
@@ -837,7 +864,7 @@ impl PackPost {
             // Gbuffers passes cover part of their targets: a clear is needed if they touch it.
             let first = sky
                 .iter()
-                .map(|s| &s.0)
+                .flat_map(|s| s.basic.iter().chain(&s.textured))
                 .chain(&terrain)
                 .chain(&water)
                 .find(touched)
@@ -1083,7 +1110,11 @@ impl PackPost {
                     Source::Noise => &self.noise,
                     Source::Dummy => &self.dummy,
                     Source::Shadow => &self.shadow.0,
-                    Source::Atlas => self.atlas.as_ref().unwrap_or(&self.dummy),
+                    Source::Atlas => pass
+                        .atlas
+                        .as_ref()
+                        .or(self.atlas.as_ref())
+                        .unwrap_or(&self.dummy),
                     Source::Lightmap => &self.lightmap,
                 };
                 let sampler = match SamplerKind::of(s.source, s.filtering) {
@@ -1113,46 +1144,12 @@ impl PackPost {
         group.clone()
     }
 
-    /// The sky, terrain or translucent terrain with the pack's program into the buffers it
-    /// writes, in place, tested against the world's depth; `draw` issues the game's terrain
-    /// draws (`true`: translucent), the sky draws itself.
-    #[allow(clippy::too_many_arguments)]
-    fn draw_gbuffers(
+    /// A render pass into the buffers `pass` writes, in place, tested against the world's depth.
+    fn begin<'e>(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        size: [u32; 2],
-        frame: &super::Frame,
-        which: Gbuffers,
-        draw: &mut dyn FnMut(&mut wgpu::RenderPass<'_>, bool),
-    ) {
-        let translucent = which == Gbuffers::Water;
-        let (mut pass, sky) = match which {
-            Gbuffers::Sky => match self.sky.take() {
-                Some((pass, sky)) => (pass, Some(sky)),
-                None => return,
-            },
-            Gbuffers::Terrain => match self.terrain.take() {
-                Some(pass) => (pass, None),
-                None => return,
-            },
-            Gbuffers::Water => match self.water.take() {
-                Some(pass) => (pass, None),
-                None => return,
-            },
-        };
-        if translucent
-            && let Some(t) = &self.targets
-            && let Some((copy, _)) = &t.depth1
-        {
-            encoder.copy_texture_to_texture(
-                t.depth_texture.as_image_copy(),
-                copy.as_image_copy(),
-                t.depth_texture.size(),
-            );
-        }
-        let group = self.bind(device, queue, &mut pass, size);
+        encoder: &'e mut wgpu::CommandEncoder,
+        pass: &Pass,
+    ) -> wgpu::RenderPass<'e> {
         let targets = self.targets.as_ref().expect("resized");
         let load = wgpu::Operations {
             load: wgpu::LoadOp::Load,
@@ -1168,50 +1165,126 @@ impl PackPost {
                 .as_ref()
                 .and_then(|t| attach(&t[usize::from(self.main & 1 << buffer != 0)], load));
         }
-        {
-            let timestamp_writes = self.timing.as_mut().and_then(|t| t.writes(&pass.name));
-            let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some(&pass.name),
-                color_attachments: &attachments,
-                timestamp_writes,
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &targets.depth,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
+        let timestamp_writes = self.timing.as_mut().and_then(|t| t.writes(&pass.name));
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(&pass.name),
+            color_attachments: &attachments,
+            timestamp_writes,
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &targets.depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
                 }),
-                ..Default::default()
-            });
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        })
+    }
+
+    /// Terrain (or, `translucent`, translucent terrain) with the pack's program; `draw` issues
+    /// the game's draws.
+    fn draw_terrain(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        size: [u32; 2],
+        translucent: bool,
+        draw: &mut dyn FnMut(&mut wgpu::RenderPass<'_>, bool),
+    ) {
+        let slot = if translucent {
+            &mut self.water
+        } else {
+            &mut self.terrain
+        };
+        let Some(mut pass) = slot.take() else {
+            return;
+        };
+        if translucent
+            && let Some(t) = &self.targets
+            && let Some((copy, _)) = &t.depth1
+        {
+            encoder.copy_texture_to_texture(
+                t.depth_texture.as_image_copy(),
+                copy.as_image_copy(),
+                t.depth_texture.size(),
+            );
+        }
+        let group = self.bind(device, queue, &mut pass, size);
+        {
+            let mut rp = self.begin(encoder, &pass);
             rp.set_pipeline(&pass.pipeline);
             rp.set_bind_group(0, &group, &[]);
-            let draws = pass.draw.then_some(&self.draws);
-            match &sky {
-                Some(sky) => sky.draw(queue, &mut rp, frame, &|rp, stage| {
-                    if let Some(d) = draws {
-                        d.bind(rp, stage);
-                    }
-                }),
-                None => {
-                    if let Some(d) = draws {
-                        let stage = if translucent {
-                            "TERRAIN_TRANSLUCENT"
-                        } else {
-                            "TERRAIN_SOLID"
-                        };
-                        d.bind(&mut rp, stage);
-                    }
-                    draw(&mut rp, translucent);
-                }
+            if pass.draw {
+                let stage = if translucent {
+                    "TERRAIN_TRANSLUCENT"
+                } else {
+                    "TERRAIN_SOLID"
+                };
+                self.draws.bind(&mut rp, stage);
             }
+            draw(&mut rp, translucent);
         }
         self.mips_valid &= !pass.written;
-        match (which, sky) {
-            (Gbuffers::Sky, Some(sky)) => self.sky = Some((pass, sky)),
-            (Gbuffers::Water, _) => self.water = Some(pass),
-            _ => self.terrain = Some(pass),
+        if translucent {
+            self.water = Some(pass);
+        } else {
+            self.terrain = Some(pass);
         }
+    }
+
+    /// The sky's parts in vanilla's order, each with the program that draws it; one render pass
+    /// while consecutive programs write the same buffers.
+    fn draw_sky(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        size: [u32; 2],
+        frame: &super::Frame,
+    ) {
+        let Some(mut sky) = self.sky.take() else {
+            return;
+        };
+        let parts = sky.geometry.prepare(queue, frame);
+        let mut groups = [None, None];
+        for (i, pass) in [&mut sky.basic, &mut sky.textured].into_iter().enumerate() {
+            if let Some(pass) = pass {
+                groups[i] = Some(self.bind(device, queue, pass, size));
+                self.mips_valid &= !pass.written;
+            }
+        }
+        let passes = [&sky.basic, &sky.textured];
+        let mut open: Option<(wgpu::RenderPass<'_>, usize)> = None;
+        for part in parts {
+            let i = usize::from(part.textured);
+            let (Some(pass), Some(group)) = (passes[i], &groups[i]) else {
+                continue;
+            };
+            let current = open.as_ref().map(|o| o.1);
+            if current != Some(i) {
+                let same = current
+                    .and_then(|c| passes[c].as_ref())
+                    .is_some_and(|p| p.writes == pass.writes);
+                if !same {
+                    drop(open.take());
+                    open = Some((self.begin(encoder, pass).forget_lifetime(), i));
+                }
+                let rp = &mut open.as_mut().expect("open").0;
+                rp.set_pipeline(&pass.pipeline);
+                rp.set_bind_group(0, group, &[]);
+                sky.geometry.bind(rp, part.textured);
+                open.as_mut().expect("open").1 = i;
+            }
+            let rp = &mut open.as_mut().expect("open").0;
+            if pass.draw {
+                self.draws.bind(rp, part.stage);
+            }
+            rp.draw(part.range, 0..1);
+        }
+        drop(open);
+        self.sky = Some(sky);
     }
 
     /// The sky, when it shows, then terrain.
@@ -1225,17 +1298,9 @@ impl PackPost {
         terrain: &mut dyn FnMut(&mut wgpu::RenderPass<'_>, bool),
     ) {
         if super::sky_visible(frame) {
-            self.draw_gbuffers(device, queue, encoder, size, frame, Gbuffers::Sky, terrain);
+            self.draw_sky(device, queue, encoder, size, frame);
         }
-        self.draw_gbuffers(
-            device,
-            queue,
-            encoder,
-            size,
-            frame,
-            Gbuffers::Terrain,
-            terrain,
-        );
+        self.draw_terrain(device, queue, encoder, size, false, terrain);
     }
 
     /// Regenerates the mip chain of buffer `b`'s side that programs read.
@@ -1269,9 +1334,14 @@ impl PackPost {
         self.terrain.is_some()
     }
 
-    /// Whether the pack draws the sky itself.
+    /// Whether the pack draws the sky (disc, sunset, stars, void) itself.
     pub fn has_sky(&self) -> bool {
-        self.sky.is_some()
+        self.sky.as_ref().is_some_and(|s| s.basic.is_some())
+    }
+
+    /// Whether the pack draws the sun and moon itself.
+    pub fn has_celestial(&self) -> bool {
+        self.sky.as_ref().is_some_and(|s| s.textured.is_some())
     }
 
     /// Whether the pack draws translucent terrain itself.
@@ -1521,15 +1591,7 @@ impl PackPost {
             }
             if !water_drawn && matches!(pass.group, Group::Composite | Group::Final) {
                 water_drawn = true;
-                self.draw_gbuffers(
-                    device,
-                    queue,
-                    encoder,
-                    size,
-                    frame,
-                    Gbuffers::Water,
-                    terrain,
-                );
+                self.draw_terrain(device, queue, encoder, size, true, terrain);
             }
             if pass.group == Group::Deferred && !seen.0 {
                 seen.0 = true;
@@ -1584,15 +1646,7 @@ impl PackPost {
             self.draw_opaque(device, queue, encoder, size, frame, terrain);
         }
         if !water_drawn {
-            self.draw_gbuffers(
-                device,
-                queue,
-                encoder,
-                size,
-                frame,
-                Gbuffers::Water,
-                terrain,
-            );
+            self.draw_terrain(device, queue, encoder, size, true, terrain);
         }
         let targets = self.targets.as_ref().expect("resized");
         let view = |m: u16, i: usize, alt: bool| {

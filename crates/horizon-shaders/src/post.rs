@@ -96,6 +96,21 @@ const TERRAIN: [&str; 4] = [
 /// `gbuffers_skybasic` and its fallback (2.3).
 const SKY: [&str; 2] = ["gbuffers_skybasic", "gbuffers_basic"];
 
+/// `gbuffers_skytextured` and its fallbacks (2.3).
+const SKY_TEXTURED: [&str; 3] = [
+    "gbuffers_skytextured",
+    "gbuffers_textured",
+    "gbuffers_basic",
+];
+
+/// The sun and moon's default blend: added to the sky, as vanilla draws them.
+pub const CELESTIAL_BLEND: Blend = [
+    Factor::SrcAlpha,
+    Factor::One,
+    Factor::One,
+    Factor::OneMinusSrcAlpha,
+];
+
 const GROUPS: [(Group, &str); 4] = [
     (Group::Prepare, "prepare"),
     (Group::Deferred, "deferred"),
@@ -132,6 +147,8 @@ pub struct Post {
     pub water: Option<PostProgram>,
     /// What draws the sky (disc, sunset, stars, void) before terrain.
     pub sky: Option<PostProgram>,
+    /// What draws the sun and moon, between the sunset and the stars.
+    pub sky_textured: Option<PostProgram>,
     /// The custom uniforms of `shaders.properties` (3.4).
     pub custom: Custom,
     pub config: Config,
@@ -156,6 +173,7 @@ pub fn dimension_folder(pack: &Pack, id: i32) -> String {
 pub struct GameInputs {
     pub terrain: Option<GbuffersInputs>,
     pub sky: Option<GbuffersInputs>,
+    pub celestial: Option<GbuffersInputs>,
 }
 
 /// Loads the post-processing programs of `folder` and, for the geometry `inputs` describes, the
@@ -175,6 +193,7 @@ pub fn load_post(
         terrain: None,
         water: None,
         sky: None,
+        sky_textured: None,
         custom: Custom::parse(properties),
         config: Config::default(),
         notes: Vec::new(),
@@ -221,6 +240,12 @@ pub fn load_post(
         p.blend = blend(properties, &p.name).unwrap_or(Some(TRANSLUCENT_BLEND));
         p
     });
+    let celestial = inputs.celestial.as_ref();
+    let sky_textured = celestial.and_then(|i| gbuffers(&SKY_TEXTURED, Group::Gbuffers, i));
+    let sky_textured = sky_textured.map(|mut p| {
+        p.blend = blend(properties, &p.name).unwrap_or(Some(CELESTIAL_BLEND));
+        p
+    });
     if let Some(inputs) = &inputs.terrain {
         let terrain = gbuffers(&TERRAIN, Group::Gbuffers, inputs);
         // gbuffers_water falls back to gbuffers_terrain's chain (2.3).
@@ -235,6 +260,7 @@ pub fn load_post(
         }
     }
     loader.post.sky = sky;
+    loader.post.sky_textured = sky_textured;
     post.config = std::mem::take(&mut post.config).finish();
     post
 }
@@ -511,7 +537,8 @@ mod tests {
         };
         let inputs = GameInputs {
             terrain: Some(inputs.clone()),
-            sky: Some(inputs),
+            sky: Some(inputs.clone()),
+            celestial: Some(inputs),
         };
         let post = load_post(&pack, "", &Properties::default(), &macros, &inputs);
         let (terrain, water) = (post.terrain.unwrap(), post.water.unwrap());
@@ -525,6 +552,12 @@ mod tests {
                 Group::Gbuffers,
                 Some(TRANSLUCENT_BLEND)
             )
+        );
+        // gbuffers_skytextured falls back to gbuffers_textured, then gbuffers_basic.
+        let sun = post.sky_textured.unwrap();
+        assert_eq!(
+            (sun.name.as_str(), sun.blend),
+            ("gbuffers_textured", Some(CELESTIAL_BLEND))
         );
         assert_eq!(
             (water.group, water.blend),

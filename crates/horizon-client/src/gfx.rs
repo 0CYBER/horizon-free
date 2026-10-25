@@ -2792,7 +2792,13 @@ impl Renderer {
                     buffers: if flat { &buffers[..1] } else { &buffers },
                     table: self.flat.as_ref().filter(|_| flat).map(|f| &f.draw_layout),
                     depth_write: true,
+                    atlas: None,
                 }),
+                celestial: self
+                    .hud
+                    .atlas_texture
+                    .as_ref()
+                    .map(|t| t.create_view(&Default::default())),
             };
             pack_post::PackPost::new(
                 &self.device,
@@ -2815,6 +2821,7 @@ impl Renderer {
         horizon_shaders::GameInputs {
             terrain: self.pack_terrain_inputs(),
             sky: Some(pack_sky::inputs()),
+            celestial: Some(pack_sky::celestial_inputs()),
         }
     }
 
@@ -3739,6 +3746,12 @@ impl Renderer {
                 .as_ref()
                 .and_then(|p| p.1.as_ref())
                 .is_some_and(|p| p.has_sky());
+        let pack_draws_celestial = pack_post
+            && self
+                .pack_post
+                .as_ref()
+                .and_then(|p| p.1.as_ref())
+                .is_some_and(|p| p.has_celestial());
         let pack_draws_water = pack_draws_terrain
             && self
                 .pack_post
@@ -3814,7 +3827,7 @@ impl Renderer {
                     if frame.end_sky {
                         self.end_sky.draw(&mut pass);
                     }
-                    if celestial_vertices > 0 {
+                    if celestial_vertices > 0 && !pack_draws_celestial {
                         pass.set_vertex_buffer(0, self.celestial_buffer.slice(..));
                         pass.draw_indexed(0..(celestial_vertices as u32 / 4) * 6, 0, 0..1);
                     }

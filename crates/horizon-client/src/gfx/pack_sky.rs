@@ -1,7 +1,8 @@
 //! The vanilla sky's geometry for a shader pack's `gbuffers_skybasic` (spec 2.3): the sky disc,
 //! the sunset fan, the stars and the void disc, as Horizon's own sky draws them (terrain.wgsl,
 //! stars.rs), built once into a vertex buffer. The frame's colours and rotations sit in a small
-//! uniform (set 1) that the vertex inputs read.
+//! uniform (set 1) that the vertex inputs read. `gbuffers_skytextured` draws the frame's sun and
+//! moon quads, textured from the shared atlas.
 
 use std::ops::Range;
 
@@ -35,6 +36,21 @@ struct Uniform {
     /// cos and sin of the sunset fan's turn, star brightness.
     sun: [f32; 4],
 }
+
+/// A sun or moon vertex: position, atlas UV, RGBA8 colour.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Celestial {
+    pos: [f32; 3],
+    uv: [f32; 2],
+    color: u32,
+}
+
+/// Quads of the sun and moon (and room to spare).
+const CELESTIAL_QUADS: usize = 4;
+
+const CELESTIAL_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
+    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Unorm8x4];
 
 pub(super) const ATTRIBUTES: [wgpu::VertexAttribute; 2] =
     wgpu::vertex_attr_array![0 => Float32x3, 1 => Uint32];
@@ -83,6 +99,37 @@ pub fn inputs() -> horizon_shaders::GbuffersInputs {
     }
 }
 
+/// What `gbuffers_skytextured` reads from the sun and moon's vertices.
+pub fn celestial_inputs() -> horizon_shaders::GbuffersInputs {
+    horizon_shaders::GbuffersInputs {
+        declarations:
+            "layout(location = 0) in vec3 hz_v_pos;\nlayout(location = 1) in vec2 hz_v_uv;\n\
+             layout(location = 2) in vec4 hz_v_color;\n"
+                .into(),
+        body: "    hz_Vertex = vec4(hz_v_pos, 1.0);\n    \
+             hz_MultiTexCoord0 = vec4(hz_v_uv, 0.0, 1.0);\n    \
+             hz_MultiTexCoord1 = vec4(0.0, 240.0, 0.0, 1.0);\n    \
+             hz_MultiTexCoord2 = hz_MultiTexCoord1;\n    \
+             hz_Color = hz_v_color;\n    \
+             hz_Normal = vec3(0.0, 0.0, 1.0);\n"
+            .into(),
+        attributes: vec![
+            ("vaPosition".into(), "hz_Vertex.xyz".into()),
+            ("vaUV0".into(), "hz_v_uv".into()),
+            ("vaColor".into(), "hz_Color".into()),
+            ("vaNormal".into(), "hz_Normal".into()),
+        ],
+        after: "    gl_Position.z = gl_Position.w;\n".into(),
+    }
+}
+
+/// One draw of the sky: its render stage, whether `gbuffers_skytextured` draws it, its vertices.
+pub(super) struct Part {
+    pub stage: &'static str,
+    pub textured: bool,
+    pub range: Range<u32>,
+}
+
 /// A disc fan at height `y`, radius 512, as triangles (SkyRenderer's sky and void discs).
 fn disc(y: f32, kind: u32, out: &mut Vec<Vertex>) {
     let sign = y.signum();
@@ -104,6 +151,7 @@ fn disc(y: f32, kind: u32, out: &mut Vec<Vertex>) {
 
 pub(super) struct PackSky {
     vertices: wgpu::Buffer,
+    celestial: wgpu::Buffer,
     uniform: wgpu::Buffer,
     pub layout: wgpu::BindGroupLayout,
     group: wgpu::BindGroup,
@@ -144,6 +192,12 @@ impl PackSky {
             contents: bytemuck::cast_slice(&v),
             usage: wgpu::BufferUsages::VERTEX,
         });
+        let celestial = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Shader pack sun and moon"),
+            size: (std::mem::size_of::<Celestial>() * 6 * CELESTIAL_QUADS) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Shader pack sky"),
             size: std::mem::size_of::<Uniform>() as u64,
@@ -173,6 +227,7 @@ impl PackSky {
         });
         Self {
             vertices,
+            celestial,
             uniform,
             layout,
             group,
@@ -188,15 +243,18 @@ impl PackSky {
         })]
     }
 
-    /// Draws the frame's sky, each part with its render stage: the disc, the sunset fan while
-    /// the sun is near the horizon, the stars and, with the camera low, the void.
-    pub fn draw(
-        &self,
-        queue: &wgpu::Queue,
-        pass: &mut wgpu::RenderPass<'_>,
-        frame: &super::Frame,
-        stage: &dyn Fn(&mut wgpu::RenderPass<'_>, &str),
-    ) {
+    pub fn celestial_buffers() -> [Option<wgpu::VertexBufferLayout<'static>>; 1] {
+        [Some(wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Celestial>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &CELESTIAL_ATTRIBUTES,
+        })]
+    }
+
+    /// Writes the frame's sky and returns its draws in vanilla's order: the disc, the sunset
+    /// fan while the sun is near the horizon, the sun and the moon, the stars and, with the
+    /// camera low, the void.
+    pub fn prepare(&self, queue: &wgpu::Queue, frame: &super::Frame) -> Vec<Part> {
         let sun_angle = frame.sky.sun_angle.to_radians();
         // The fan turns to the other horizon in the afternoon (terrain.wgsl's sunrise_weight).
         let flip = if sun_angle.sin() < 0.0 { 180f32 } else { 0.0 };
@@ -210,20 +268,52 @@ impl PackSky {
             sun: [theta.cos(), theta.sin(), brightness.clamp(0.0, 1.0), 0.0],
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniform));
-        pass.set_bind_group(1, &self.group, &[]);
-        pass.set_vertex_buffer(0, self.vertices.slice(..));
+        // The sun's quad, then the moon's (Game::celestial_geometry), as triangles.
+        let quads = frame
+            .celestial
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .take(CELESTIAL_QUADS);
+        let triangles: Vec<Celestial> = quads
+            .clone()
+            .flat_map(|q| [0, 1, 2, 0, 2, 3].map(|i| q[i]))
+            .map(|v| Celestial {
+                pos: v.pos,
+                uv: v.uv,
+                color: v.color,
+            })
+            .collect();
+        queue.write_buffer(&self.celestial, 0, bytemuck::cast_slice(&triangles));
         let [sky, sunset, stars, void] = self.ranges.clone();
-        let parts = [
-            ("SKY", sky, true),
-            ("SUNSET", sunset, frame.sky.sunrise_color[3] > 0.001),
-            ("STARS", stars, frame.stars.is_some()),
-            ("VOID", void, frame.dark_disc),
-        ];
-        for (name, range, shown) in parts {
-            if shown {
-                stage(pass, name);
-                pass.draw(range, 0..1);
-            }
+        let part = |stage, textured, range| Part {
+            stage,
+            textured,
+            range,
+        };
+        let mut parts = vec![part("SKY", false, sky)];
+        if frame.sky.sunrise_color[3] > 0.001 {
+            parts.push(part("SUNSET", false, sunset));
+        }
+        for (i, stage) in ["SUN", "MOON"].into_iter().enumerate().take(quads.len()) {
+            parts.push(part(stage, true, i as u32 * 6..i as u32 * 6 + 6));
+        }
+        if frame.stars.is_some() {
+            parts.push(part("STARS", false, stars));
+        }
+        if frame.dark_disc {
+            parts.push(part("VOID", false, void));
+        }
+        parts
+    }
+
+    /// Binds the vertices of the `textured` (sun and moon) or other parts.
+    pub fn bind(&self, pass: &mut wgpu::RenderPass<'_>, textured: bool) {
+        if textured {
+            pass.set_vertex_buffer(0, self.celestial.slice(..));
+        } else {
+            pass.set_bind_group(1, &self.group, &[]);
+            pass.set_vertex_buffer(0, self.vertices.slice(..));
         }
     }
 }

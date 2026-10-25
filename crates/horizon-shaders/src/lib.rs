@@ -34,8 +34,8 @@ pub use macros::{MC_VERSION, Macros, RENDER_STAGES, render_stage};
 pub use options::switches_on;
 pub use pack::{Pack, PackError};
 pub use post::{
-    Blend, Factor, GameInputs, Group, Post, PostProgram, TRANSLUCENT_BLEND, dimension_folder,
-    load_post,
+    Blend, CELESTIAL_BLEND, Factor, GameInputs, Group, Post, PostProgram, TRANSLUCENT_BLEND,
+    dimension_folder, load_post,
 };
 pub use preprocess::{Diagnostic, Origin, Preprocessed, preprocess};
 pub use properties::{Entry, Note, Properties};
