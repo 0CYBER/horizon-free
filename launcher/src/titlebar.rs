@@ -22,9 +22,8 @@ pub fn render(_theme: &Theme, _window: &Window) -> Option<Div> {
 
 /// macOS keeps the window's appearance on the system setting, so a launcher set to Dark still
 /// draws a light title bar on a light desktop. Pin the NSWindow's appearance to the choice
-/// instead (`System` clears the pin, handing the chrome back to the system), honouring the same
-/// `HORIZON_LAUNCHER_APPEARANCE` override the theme does. Other platforms' chrome already
-/// follows the setting (ours is drawn, Windows and Linux follow the system either way).
+/// instead (`theme::pinned_dark`: `System` clears the pin, handing the chrome back to the
+/// system). Elsewhere the chrome is ours (Windows) or the system's (Linux).
 #[cfg(target_os = "macos")]
 pub fn apply_appearance(window: &Window, choice: Appearance) {
     use objc2_app_kit::{
@@ -33,17 +32,11 @@ pub fn apply_appearance(window: &Window, choice: Appearance) {
     };
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-    // Reading AppKit's name constants is unsafe to rustc only (`use of extern static`).
-    let name: Option<&'static NSAppearanceName> = unsafe {
-        match std::env::var("HORIZON_LAUNCHER_APPEARANCE").as_deref() {
-            Ok("light") => Some(NSAppearanceNameAqua),
-            Ok("dark") => Some(NSAppearanceNameDarkAqua),
-            _ => match choice {
-                Appearance::Dark => Some(NSAppearanceNameDarkAqua),
-                Appearance::Light => Some(NSAppearanceNameAqua),
-                Appearance::System => None,
-            },
-        }
+    // AppKit's name constants are extern statics: reading them is `unsafe` to rustc only.
+    let name: Option<&'static NSAppearanceName> = match crate::theme::pinned_dark(choice) {
+        Some(true) => Some(unsafe { NSAppearanceNameDarkAqua }),
+        Some(false) => Some(unsafe { NSAppearanceNameAqua }),
+        None => None,
     };
     // The trait, not `Window::window_handle` (which is gpui's own `AnyWindowHandle`).
     let Ok(handle) = HasWindowHandle::window_handle(window) else {
