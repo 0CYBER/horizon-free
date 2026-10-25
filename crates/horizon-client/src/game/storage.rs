@@ -273,7 +273,8 @@ impl Game<'_> {
             );
             let title = self.translate("container.shulkerBox", "Shulker Box");
             batch.text(atlas, &title, ox + 8.0, oy + 6.0, grey, false);
-            batch.text(atlas, "Inventory", ox + 8.0, oy + 73.0, grey, false);
+            let inventory = self.translate("container.inventory", "Inventory");
+            batch.text(atlas, &inventory, ox + 8.0, oy + 73.0, grey, false);
             return;
         }
         let rows = self.chest_rows().unwrap_or(3);
@@ -301,9 +302,10 @@ impl Game<'_> {
             grey,
             false,
         );
+        let inventory = self.translate("container.inventory", "Inventory");
         batch.text(
             atlas,
-            "Inventory",
+            &inventory,
             ox + 8.0,
             oy + 114.0 + rows as f32 * 18.0 - 94.0,
             grey,
