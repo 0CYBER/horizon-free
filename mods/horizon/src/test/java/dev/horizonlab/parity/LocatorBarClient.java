@@ -86,8 +86,10 @@ import net.minecraft.world.phys.Vec3;
  * handled everything this player sent before, and everything the server sent
  * this player before the reply has been recorded), {@code respawn NAME} (the
  * death screen's button, ServerboundClientCommandPacket PERFORM_RESPAWN),
- * {@code pickup NAME SLOT} (a left click on that slot of the player's
- * inventory menu, claiming nothing), {@code quit NAME}, {@code
+ * {@code use NAME PITCH} (the main hand's item used looking that way,
+ * ServerboundUseItemPacket), {@code pickup NAME SLOT} (a left click on that
+ * slot of the player's inventory menu, claiming nothing), {@code quit NAME},
+ * {@code
  * players on|off} (whether each player also records the other players added
  * to and removed from its level, and its own respawns into a dimension),
  * {@code chat on|off} (whether the system chat each player receives is
@@ -135,6 +137,7 @@ public final class LocatorBarClient {
                     case "still" -> players.get(w[1]).still();
                     case "respawn" -> players.get(w[1]).send(new net.minecraft.network.protocol.game.ServerboundClientCommandPacket(
                         net.minecraft.network.protocol.game.ServerboundClientCommandPacket.Action.PERFORM_RESPAWN));
+                    case "use" -> players.get(w[1]).use(Float.parseFloat(w[2]));
                     case "pickup" -> players.get(w[1]).send(new net.minecraft.network.protocol.game.ServerboundContainerClickPacket(
                         0, 0, Short.parseShort(w[2]), (byte) 0, net.minecraft.world.inventory.ContainerInput.PICKUP,
                         new it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap<>(), net.minecraft.network.HashedStack.EMPTY));
@@ -256,6 +259,13 @@ public final class LocatorBarClient {
             synchronized (lines) {
                 lines.add("step=" + step + " " + line);
             }
+        }
+
+        private int sequence;
+
+        void use(float pitch) throws Exception {
+            send(new net.minecraft.network.protocol.game.ServerboundUseItemPacket(
+                net.minecraft.world.InteractionHand.MAIN_HAND, ++sequence, position.yRot(), pitch));
         }
 
         void still() throws Exception {
