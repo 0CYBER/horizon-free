@@ -43,8 +43,6 @@ fn arrow_damage(arrow: &mut Projectile, fallback: &mut impl RandomSource) -> f32
 #[derive(Default)]
 pub(super) struct Creatures {
     pub projectiles: Vec<Projectile>,
-    /// Player status effects applied by mobs: (effect, ticks left, amplifier).
-    /// The wind charge's use cooldown (ticks).
     /// Wind bursts from a guest's turn, waiting for it to end (game/wind.rs).
     pub wind_bursts: Vec<super::wind::Burst>,
     /// Ticks left of the elder guardian's apparition (MobAppearanceParticle).
@@ -1559,7 +1557,6 @@ impl Game<'_> {
                 id, ticks, amplifier,
             ));
     }
-    /// Burning applied to the player by mobs.
     pub(super) fn hurt_player_by(&mut self, damage_type: &str, amount: f32) {
         if self.creative {
             return;
