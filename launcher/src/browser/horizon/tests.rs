@@ -19,6 +19,16 @@ fn sample() -> Index {
     index
 }
 
+fn scratch(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "horizon-launcher-registry-{name}-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
 fn hud(index: &Index) -> Project {
     project_of(index.project("coords_hud").unwrap()).unwrap()
 }
@@ -41,6 +51,80 @@ fn searches_by_kind_and_words() {
     let p = hud(&index);
     assert_eq!(p.support(), super::super::Support::Works);
     assert_eq!(p.page, "https://playhorizon.dev/mods/coords_hud");
+}
+
+#[test]
+fn installs_checked_turns_on_and_removes() {
+    let index = sample();
+    let home = scratch("install");
+    let p = hud(&index);
+    let done = install_from(&index, true, &p, &home, &|_, _| {}).unwrap();
+    assert_eq!(done[0].file, "horizon-mods/coords_hud.hmod");
+    assert_eq!(done[0].verdict.as_deref(), Some("Verified"));
+    assert!(done[0].checksum.starts_with("SHA-256:e1135345"));
+    assert!(home.join("horizon-mods/coords_hud.hmod").is_file());
+    let list = fs::read_to_string(home.join("horizon-mods.txt")).unwrap();
+    assert_eq!(list, "mod.coords_hud:true\n");
+    assert_eq!(
+        fs::read_dir(home.join("mod-browser/downloads"))
+            .unwrap()
+            .count(),
+        0
+    );
+    // Installed already: nothing to do.
+    let again = install_from(&index, true, &p, &home, &|_, _| {}).unwrap();
+    assert_eq!(again, done);
+
+    let mut revoked = index.clone();
+    revoked.revoked.push(index::Revoked {
+        id: "coords_hud".into(),
+        sha256: None,
+        reason: "Test.".into(),
+        date: String::new(),
+    });
+    let said = turn_off_revoked(&revoked, &home);
+    assert_eq!(said, ["Coordinates HUD was taken down and is off: Test."]);
+    assert_eq!(
+        fs::read_to_string(home.join("horizon-mods.txt")).unwrap(),
+        ""
+    );
+
+    installed::remove(&home, "coords_hud").unwrap();
+    assert!(!home.join("horizon-mods/coords_hud.hmod").exists());
+    assert!(installed::Installed::load(&home).entries.is_empty());
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
+fn refuses_a_changed_file_a_taken_id_and_local_files_from_the_real_registry() {
+    let index = sample();
+    let p = hud(&index);
+
+    let home = scratch("tampered");
+    let mut tampered = index.clone();
+    let cozy = tampered.projects[1].versions[0].file.url.clone();
+    tampered.projects[0].versions[0].file.url = cozy;
+    let e = install_from(&tampered, true, &p, &home, &|_, _| {}).unwrap_err();
+    assert!(e.contains("larger than its source says"), "{e}");
+    assert!(!home.join("horizon-mods").exists());
+
+    let e = install_from(&index, false, &p, &home, &|_, _| {}).unwrap_err();
+    assert!(e.contains("file servers"), "{e}");
+
+    fs::create_dir_all(home.join("horizon-mods/coords_hud")).unwrap();
+    let e = install_from(&index, true, &p, &home, &|_, _| {}).unwrap_err();
+    assert!(e.contains("already in horizon-mods"), "{e}");
+
+    let mut taken_down = index.clone();
+    taken_down.revoked.push(index::Revoked {
+        id: "coords_hud".into(),
+        sha256: Some(index.projects[0].versions[0].file.sha256.clone()),
+        reason: "Test.".into(),
+        date: String::new(),
+    });
+    let e = install_from(&taken_down, true, &p, &home, &|_, _| {}).unwrap_err();
+    assert!(e.contains("no version"), "{e}");
+    fs::remove_dir_all(&home).unwrap();
 }
 
 #[test]

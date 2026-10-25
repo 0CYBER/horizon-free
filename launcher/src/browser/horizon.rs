@@ -1,12 +1,13 @@
 //! Horizon's own registry (docs/api/mod-index.md): mods, modpacks and resource packs made for
 //! Horizon, reviewed as pull requests in ludovic111/horizon-mods. One file lists them all,
-//! `index.json`: this is the browser source that searches it and downloads its files, checked
-//! against the SHA-256 it lists. Versions the index says were taken down are blocked.
+//! `index.json`; every download is checked against it before it reaches the game folder
+//! (`horizon_mods::index::check_file`: size, SHA-256, the author's signature, the file's own
+//! manifest), and files the index says were taken down are refused and turned off.
 use super::{
     details::{Details, Link},
-    download, FileRef, Kind, Project, Query, Source, SourceId, Version, GAME,
+    download, installed, java, FileRef, Kind, Project, Query, Source, SourceId, Version, GAME,
 };
-use horizon_mods::index::{self, Index};
+use horizon_mods::index::{self, Index, Trust};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -108,6 +109,32 @@ fn kind_of(kind: &index::Kind) -> Option<Kind> {
         index::Kind::ResourcePack => Some(Kind::ResourcePack),
         index::Kind::Modpack | index::Kind::Shader | index::Kind::Other(_) => None,
     }
+}
+
+/// What the player reads about a registry project before installing it: whether its files are
+/// signed, and for a mod what it may do, in the game's words (Options > Mods).
+pub fn trust_and_capabilities(id: &str) -> Vec<String> {
+    let Ok(index) = index() else {
+        return Vec::new();
+    };
+    let Some(p) = index.project(id) else {
+        return Vec::new();
+    };
+    let mut lines = vec![match &p.key {
+        Some(_) => "Signed by its author: the launcher checks the signature".to_owned(),
+        None => "Unsigned: the launcher checks its checksum only".to_owned(),
+    }];
+    if let Some(v) = p.versions.first().filter(|_| p.kind == index::Kind::Mod) {
+        lines.extend(
+            v.capabilities
+                .iter()
+                .map(|c| format!("May {}", c.describe())),
+        );
+        if v.capabilities.is_empty() {
+            lines.push("Asks for nothing beyond its own log".into());
+        }
+    }
+    lines
 }
 
 fn project_of(p: &index::Project) -> Option<Project> {
@@ -274,6 +301,173 @@ fn fetch(
         }
         None => download::fetch(file, folder, progress),
     }
+}
+
+/// What the registry adds to an installed entry.
+fn trust_label(trust: Trust) -> &'static str {
+    match trust {
+        Trust::Verified => "Verified",
+        Trust::Unsigned => "Unsigned",
+    }
+}
+
+/// The game folder path a registry project's file goes to.
+fn relative(kind: Kind, id: &str, file_name: &str) -> Result<String, String> {
+    match kind {
+        Kind::Mod => Ok(format!("{}/{id}.hmod", java::MODS_DIR)),
+        Kind::ResourcePack => Ok(format!("resourcepacks/{file_name}")),
+        Kind::Modpack => {
+            Err("Modpacks from Horizon's registry install from the Modpacks page.".into())
+        }
+    }
+}
+
+/// Installs a registry project into the game folder `home`: its newest version for this game,
+/// downloaded into `mod-browser/downloads/`, checked against the index, then moved into place.
+/// A mod is `horizon-mods/<id>.hmod`, turned on in `horizon-mods.txt`.
+pub fn install(
+    project: &Project,
+    home: &Path,
+    progress: &dyn Fn(&str, f32),
+) -> Result<Vec<installed::Entry>, String> {
+    install_from(&*index()?, local(), project, home, progress)
+}
+
+fn install_from(
+    index: &Index,
+    local: bool,
+    project: &Project,
+    home: &Path,
+    progress: &dyn Fn(&str, f32),
+) -> Result<Vec<installed::Entry>, String> {
+    let p = index
+        .project(&project.id)
+        .ok_or_else(|| format!("{} isn't in Horizon's registry.", project.title))?;
+    let v = p
+        .versions
+        .iter()
+        .find(|v| v.game == GAME && index.revoked(&p.id, &v.file.sha256).is_none())
+        .ok_or_else(|| format!("{} has no version for {GAME} to install.", project.title))?;
+    let relative = relative(project.kind, &p.id, &v.file.name)?;
+    let mut list = installed::Installed::load(home);
+    let ours = |e: &installed::Entry| e.source == SourceId::Horizon && e.project == p.id;
+    let old = list.entries.iter().find(|e| ours(e)).cloned();
+    if old.as_ref().is_some_and(|o| o.version == v.version) {
+        return Ok(vec![old.expect("checked")]);
+    }
+    let target = home.join(&relative);
+    let taken_by = list.entries.iter().find(|e| !ours(e) && e.file == relative);
+    let folder_mod = home.join(java::MODS_DIR).join(&p.id);
+    if let Some(other) = taken_by {
+        return Err(format!(
+            "{relative} belongs to {}: remove it first.",
+            other.title
+        ));
+    }
+    if (target.exists() && old.as_ref().is_none_or(|o| o.file != relative)) || folder_mod.exists() {
+        return Err(format!(
+            "A mod with the id {} is already in {}: move it away first.",
+            p.id,
+            java::MODS_DIR
+        ));
+    }
+    let line = format!("{} {}", p.name, v.version);
+    let file = &version_of(index, p, v).files[0];
+    let staging = home.join("mod-browser/downloads");
+    let path = fetch(file, &staging, local, &|f| progress(&line, f))?;
+    let trust = index::check_file(index, p, v, &path).inspect_err(|_| {
+        let _ = fs::remove_file(&path);
+    })?;
+    if let Some(dir) = target.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    fs::rename(&path, &target).map_err(|e| format!("{}: {e}", target.display()))?;
+    if let Some(old) = old.as_ref().filter(|o| o.file != relative) {
+        let _ = fs::remove_file(home.join(&old.file));
+    }
+    if project.kind == Kind::Mod {
+        java::set_enabled(home, &p.id, true)?;
+    }
+    let entry = installed::Entry {
+        source: SourceId::Horizon,
+        project: p.id.clone(),
+        slug: p.id.clone(),
+        title: p.name.clone(),
+        kind: project.kind,
+        version: v.version.clone(),
+        number: v.version.clone(),
+        file: relative,
+        checksum: format!("SHA-256:{}", v.file.sha256),
+        page: project.page.clone(),
+        dependency: false,
+        verdict: Some(trust_label(trust).into()),
+        skipped: Vec::new(),
+        namespaces: Vec::new(),
+    };
+    list.entries.retain(|e| !ours(e));
+    list.entries.push(entry.clone());
+    list.save(home)?;
+    Ok(vec![entry])
+}
+
+/// The mod id of an installed mod (`horizon-mods/<id>` or `horizon-mods/<id>.hmod`).
+pub fn mod_id(entry: &installed::Entry) -> Option<&str> {
+    let rest = entry.file.strip_prefix(java::MODS_DIR)?.strip_prefix('/')?;
+    Some(rest.strip_suffix(".hmod").unwrap_or(rest))
+}
+
+/// Turns the registry's files that were taken down off in the game folder `home`, and says
+/// which. Their files stay, so the player sees them and can remove them.
+pub fn turn_off_revoked(index: &Index, home: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    for e in installed::Installed::load(home).entries {
+        let hash = e.checksum.strip_prefix("SHA-256:").unwrap_or_default();
+        let Some(r) = (e.source == SourceId::Horizon)
+            .then(|| index.revoked(&e.project, hash))
+            .flatten()
+        else {
+            continue;
+        };
+        if let (Kind::Mod, Some(id)) = (e.kind, mod_id(&e)) {
+            if java::is_enabled(home, id) && java::set_enabled(home, id, false).is_ok() {
+                out.push(format!(
+                    "{} was taken down and is off: {}",
+                    e.title, r.reason
+                ));
+            }
+        } else if e.kind == Kind::ResourcePack {
+            out.push(format!(
+                "{} was taken down: {} Remove it.",
+                e.title, r.reason
+            ));
+        }
+    }
+    out
+}
+
+/// Before the game starts: registry files taken down are turned off, by the index kept last
+/// time (no waiting on the network), and the index is fetched again in the background for the
+/// next start. Nothing happens when nothing came from the registry.
+pub fn before_play(home: &Path) {
+    let from_registry = installed::Installed::load(home)
+        .entries
+        .iter()
+        .any(|e| e.source == SourceId::Horizon);
+    if !from_registry {
+        return;
+    }
+    let kept = fs::read_to_string(home.join(CACHE)).ok();
+    if let Some(index) = kept.and_then(|t| Index::parse(&t).ok()) {
+        for line in turn_off_revoked(&index, home) {
+            eprintln!("{line}");
+        }
+    }
+    let home = home.to_owned();
+    std::thread::spawn(move || {
+        if let Ok(index) = index() {
+            turn_off_revoked(&index, &home);
+        }
+    });
 }
 
 #[cfg(test)]

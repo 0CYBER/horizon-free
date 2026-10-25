@@ -110,6 +110,16 @@ pub fn check_project(
     Ok((version, check))
 }
 
+/// Whether mod `id` is on in `horizon-mods.txt`.
+pub fn is_enabled(home: &Path, id: &str) -> bool {
+    let key = format!("mod.{id}");
+    fs::read_to_string(home.join(MODS_LIST))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| l.split_once(':'))
+        .any(|(k, v)| k.trim() == key && v.trim() == "true")
+}
+
 /// Turns mod `id` on (or off) in `horizon-mods.txt`, keeping the other lines.
 pub fn set_enabled(home: &Path, id: &str, on: bool) -> Result<(), String> {
     let path = home.join(MODS_LIST);

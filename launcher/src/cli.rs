@@ -199,6 +199,10 @@ enum ModsCmd {
     },
     /// Remove a pack the browser installed
     Remove { project: String },
+    /// Turn on a mod the browser installed (horizon-mods.txt, as the game's Options > Mods does)
+    Enable { project: String },
+    /// Turn off a mod the browser installed; it stays installed
+    Disable { project: String },
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -213,6 +217,8 @@ enum SourceArg {
     Modrinth,
     /// CurseForge support is coming soon
     Curseforge,
+    /// Horizon's own registry: mods, modpacks and resource packs made for Horizon, reviewed
+    Horizon,
 }
 
 impl SourceArg {
@@ -221,6 +227,7 @@ impl SourceArg {
         let id = match self {
             SourceArg::Modrinth => SourceId::Modrinth,
             SourceArg::Curseforge => SourceId::CurseForge,
+            SourceArg::Horizon => SourceId::Horizon,
         };
         browser::source(id).ok_or_else(|| browser::CURSEFORGE_SOON.into())
     }
@@ -1064,11 +1071,23 @@ fn servers(action: ServersCmd, as_json: bool) -> Result<(), String> {
 }
 
 fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
-    use horizon_launcher::browser::{installed, Kind, Query};
+    use horizon_launcher::browser::{horizon, installed, Kind, Query, SourceId};
     use horizon_launcher::modpacks;
     let home = backend::game_home();
     let entry_json = |e: &installed::Entry| serde_json::to_value(e).unwrap_or_default();
     let line = |label: &str, f: f32| progress(label.to_string())(f);
+    let from_registry = installed::Installed::load(&home)
+        .entries
+        .iter()
+        .any(|e| e.source == SourceId::Horizon);
+    if from_registry {
+        if let Ok(index) = horizon::index() {
+            for said in horizon::turn_off_revoked(&index, &home) {
+                eprintln!("{said}");
+            }
+        }
+    }
+    let on = matches!(action, ModsCmd::Enable { .. });
     match action {
         ModsCmd::List => {
             let list = installed::Installed::load(&home).entries;
@@ -1114,11 +1133,19 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                         "id": p.id, "slug": p.slug, "title": p.title, "summary": p.summary,
                         "author": p.author, "downloads": p.downloads, "page": p.page,
                         "license": p.license, "support": support.label(), "reason": support.reason(),
+                        "about": if p.source == SourceId::Horizon { horizon::trust_and_capabilities(&p.id) } else { Vec::new() },
                     })
                 }).collect());
             } else {
                 for p in &found {
                     let support = p.support();
+                    if p.source == SourceId::Horizon {
+                        println!("{}  ({})  {}\n  {}", p.title, p.slug, p.author, p.summary);
+                        for line in horizon::trust_and_capabilities(&p.id) {
+                            println!("  {line}");
+                        }
+                        continue;
+                    }
                     let unchecked = p.kind == Kind::Mod && support.installable();
                     println!(
                         "{}  ({})  {} · {} downloads\n  {}",
@@ -1250,6 +1277,29 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
         ModsCmd::Remove { project } => {
             let e = installed::remove(&home, &project)?;
             println!("Removed {} ({}).", e.title, e.file);
+        }
+        ModsCmd::Enable { project } | ModsCmd::Disable { project } => {
+            let e = installed::Installed::load(&home)
+                .lookup(&project)
+                .cloned()
+                .ok_or_else(|| format!("{project} wasn't installed by the browser."))?;
+            let id = horizon::mod_id(&e)
+                .filter(|_| e.kind == Kind::Mod)
+                .ok_or_else(|| format!("{} isn't a mod: only mods turn on and off.", e.title))?;
+            if on {
+                if let Some(r) = horizon::index()
+                    .ok()
+                    .filter(|_| e.source == SourceId::Horizon)
+                    .and_then(|i| {
+                        i.revoked(&e.project, e.checksum.trim_start_matches("SHA-256:"))
+                            .cloned()
+                    })
+                {
+                    return Err(format!("{} was taken down: {}", e.title, r.reason));
+                }
+            }
+            horizon_launcher::browser::java::set_enabled(&home, id, on)?;
+            println!("{} is {}.", e.title, if on { "on" } else { "off" });
         }
     }
     Ok(())

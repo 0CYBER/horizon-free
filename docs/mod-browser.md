@@ -149,6 +149,25 @@ horizon-launcher mods remove faithful-32x
 
 ## Sources
 
+**Horizon's registry.** Mods (`.hmod`) and resource packs made for Horizon, reviewed as pull requests in
+[ludovic111/horizon-mods](https://github.com/ludovic111/horizon-mods) ([api/mod-index.md](api/mod-index.md)). The
+launcher reads its `index.json` (`browser/horizon.rs`; `HORIZON_MOD_INDEX=<file or https address>` reads a test
+registry instead, whose files may then be on disk) at most every ten minutes, and keeps the last copy in
+`mod-browser/horizon-index.json`. Before a result is installed it shows whether its files are signed and, for a mod,
+what it may do, in the words of the game's Options > Mods. A download goes to `mod-browser/downloads/` and is moved
+into place only after `horizon_mods::index::check_file` passes (size, SHA-256, the author's signature when the project
+has a key, the file's own manifest against the index). A mod becomes `horizon-mods/<id>.hmod`, turned on;
+`mods disable` and `mods enable` switch it in `horizon-mods.txt`. When the index takes a file down, the launcher turns
+it off the next time it reads the index or starts the game, says why, and refuses to install it or turn it back on.
+Horizon modpacks (`.hpack`) and shader packs are listed by the index but not installed by this launcher yet.
+
+```sh
+horizon-launcher mods search --source horizon --kind mod coords   # with whether it is signed and what it may do
+horizon-launcher mods install --source horizon coords_hud
+horizon-launcher mods disable coords_hud
+```
+
+
 **Modrinth.** The public API (`api.modrinth.com/v2`) needs no key. The launcher names itself in its user agent, as
 Modrinth asks.
 
