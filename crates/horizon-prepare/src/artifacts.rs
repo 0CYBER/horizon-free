@@ -199,13 +199,22 @@ pub(crate) fn import_manifest(lock: &Lock, minecraft: &Path) -> Result<Value, St
         }
         let checksum = digest(&source, "sha1")?;
         if !lock.manifest_accepted(&checksum) {
-            return Err(format!(
-                "{} is a {version} version file Horizon does not know yet (sha1 {checksum}); \
-                 Mojang may have republished it. Update Horizon, or report it if this is the latest release.",
-                source.display()
-            ));
-        }
-        if !(destination.exists() && digest(&destination, "sha1")? == checksum) {
+            // Another launcher's rewrite of Mojang's file (HMCL and PCL add their own fields to
+            // the same jars, #1772), or one Mojang republished: Mojang's own copy saved as the
+            // imported one is used instead.
+            let pinned = lock.pin("manifest_sha1")?;
+            if !(destination.exists() && lock.manifest_accepted(&digest(&destination, "sha1")?)) {
+                return Err(format!(
+                    "{} is not a {version} version file Horizon knows (sha1 {checksum}): your \
+                     launcher may have rewritten it, or Mojang republished it. Prepare from the \
+                     Horizon launcher, which downloads Mojang's own, or save \
+                     https://piston-meta.mojang.com/v1/packages/{pinned}/{version}.json as {} \
+                     and prepare again.",
+                    source.display(),
+                    destination.display()
+                ));
+            }
+        } else if !(destination.exists() && digest(&destination, "sha1")? == checksum) {
             fs::create_dir_all(&lock.directory).map_err(|e| e.to_string())?;
             fs::copy(&source, &destination).map_err(|e| e.to_string())?;
         }
@@ -1095,6 +1104,50 @@ mod tests {
                 "{unsafe_name}"
             );
         }
+    }
+
+    /// A launcher that rewrites Mojang's version file in the official layout (HMCL, PCL: the same
+    /// id and jars, its own fields, #1772) is refused with what to do, and Mojang's own copy saved
+    /// as the imported one is then used.
+    #[test]
+    fn a_rewritten_version_file_falls_back_to_mojangs() {
+        let root = std::env::temp_dir().join(format!("horizon-rewritten-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let mojang = r#"{"id":"9.9","javaVersion":{"majorVersion":25},"downloads":{"client":{"sha1":"c"},"server":{"sha1":"s"}}}"#;
+        let rewritten = r#"{"id":"9.9","javaVersion":{"majorVersion":25},"downloads":{"client":{"sha1":"c"},"server":{"sha1":"s"}},"patches":[],"root":true}"#;
+        let minecraft = root.join("minecraft");
+        fs::create_dir_all(minecraft.join("versions/9.9")).unwrap();
+        fs::write(minecraft.join("versions/9.9/9.9.json"), rewritten).unwrap();
+        fs::write(root.join("mojang.json"), mojang).unwrap();
+        let pinned = digest(&root.join("mojang.json"), "sha1").unwrap();
+        fs::write(
+            root.join("research-lock.json"),
+            format!(
+                r#"{{"minecraft":{{"version":"9.9","java_major":25,"manifest_sha1":"{pinned}","client_sha1":"c","server_sha1":"s"}}}}"#
+            ),
+        )
+        .unwrap();
+        let lock = Lock::read(&root).unwrap();
+        let destination = lock.directory.join("manifest.json");
+
+        let error = import_manifest(&lock, &minecraft).unwrap_err();
+        assert!(error.contains("may have rewritten it"), "{error}");
+        assert!(
+            error.contains(&format!("packages/{pinned}/9.9.json")),
+            "{error}"
+        );
+        assert!(
+            error.contains(&destination.display().to_string()),
+            "{error}"
+        );
+        assert!(!destination.exists());
+
+        fs::create_dir_all(&lock.directory).unwrap();
+        fs::copy(root.join("mojang.json"), &destination).unwrap();
+        let manifest = import_manifest(&lock, &minecraft).unwrap();
+        assert!(manifest.get("patches").is_none());
+        assert_eq!(digest(&destination, "sha1").unwrap(), pinned);
+        fs::remove_dir_all(&root).unwrap();
     }
 
     /// scanfee's Prism Launcher 26.3 install on a Mac (#1487): Prism keeps natives under its own
