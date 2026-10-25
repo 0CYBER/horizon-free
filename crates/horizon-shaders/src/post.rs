@@ -93,6 +93,9 @@ const TERRAIN: [&str; 4] = [
     "gbuffers_basic",
 ];
 
+/// `gbuffers_skybasic` and its fallback (2.3).
+const SKY: [&str; 2] = ["gbuffers_skybasic", "gbuffers_basic"];
+
 const GROUPS: [(Group, &str); 4] = [
     (Group::Prepare, "prepare"),
     (Group::Deferred, "deferred"),
@@ -127,6 +130,8 @@ pub struct Post {
     pub terrain: Option<PostProgram>,
     /// What draws translucent terrain (water, stained glass) after deferred.
     pub water: Option<PostProgram>,
+    /// What draws the sky (disc, sunset, stars, void) before terrain.
+    pub sky: Option<PostProgram>,
     /// The custom uniforms of `shaders.properties` (3.4).
     pub custom: Custom,
     pub config: Config,
@@ -145,14 +150,22 @@ pub fn dimension_folder(pack: &Pack, id: i32) -> String {
     }
 }
 
-/// Loads the post-processing programs of `folder` and, given the game's terrain vertices, the
-/// program terrain draws with.
+/// The game's geometry a pack may draw with its gbuffers programs: each kind's vertex inputs,
+/// when the game can draw it with a pack.
+#[derive(Clone, Debug, Default)]
+pub struct GameInputs {
+    pub terrain: Option<GbuffersInputs>,
+    pub sky: Option<GbuffersInputs>,
+}
+
+/// Loads the post-processing programs of `folder` and, for the geometry `inputs` describes, the
+/// gbuffers programs it draws with.
 pub fn load_post(
     pack: &Pack,
     folder: &str,
     properties: &Properties,
     macros: &Macros,
-    terrain: Option<&GbuffersInputs>,
+    inputs: &GameInputs,
 ) -> Post {
     let mut post = Post {
         folder: folder.to_owned(),
@@ -161,6 +174,7 @@ pub fn load_post(
         composite_pre: flips(properties, "composite_pre"),
         terrain: None,
         water: None,
+        sky: None,
         custom: Custom::parse(properties),
         config: Config::default(),
         notes: Vec::new(),
@@ -191,17 +205,26 @@ pub fn load_post(
             }
         }
     }
-    if let Some(inputs) = terrain {
-        let mut gbuffers = |names: &[&str], group| {
-            names.iter().find_map(|name| {
-                loader.load(name.to_string(), group, |v, f| {
-                    translate_gbuffers(v, f, Target::Buffers, inputs)
-                })
+    let mut gbuffers = |names: &[&str], group, inputs: &GbuffersInputs| {
+        names.iter().find_map(|name| {
+            loader.load(name.to_string(), group, |v, f| {
+                translate_gbuffers(v, f, Target::Buffers, inputs)
             })
-        };
-        let terrain = gbuffers(&TERRAIN, Group::Gbuffers);
+        })
+    };
+    // The sky blends as vanilla draws its sunset fan and stars unless `blend.*` says otherwise.
+    let sky = inputs
+        .sky
+        .as_ref()
+        .and_then(|i| gbuffers(&SKY, Group::Gbuffers, i));
+    let sky = sky.map(|mut p| {
+        p.blend = blend(properties, &p.name).unwrap_or(Some(TRANSLUCENT_BLEND));
+        p
+    });
+    if let Some(inputs) = &inputs.terrain {
+        let terrain = gbuffers(&TERRAIN, Group::Gbuffers, inputs);
         // gbuffers_water falls back to gbuffers_terrain's chain (2.3).
-        let water = gbuffers(&WATER, Group::Translucent);
+        let water = gbuffers(&WATER, Group::Translucent, inputs);
         loader.post.terrain = terrain;
         loader.post.water = water.map(|mut p| {
             p.blend = blend(properties, &p.name).unwrap_or(Some(TRANSLUCENT_BLEND));
@@ -211,6 +234,7 @@ pub fn load_post(
             p.blend = blend(properties, &p.name).flatten();
         }
     }
+    loader.post.sky = sky;
     post.config = std::mem::take(&mut post.config).finish();
     post
 }
@@ -433,7 +457,13 @@ mod tests {
         );
         assert_eq!(dimension_folder(&pack, 0), "");
         assert_eq!(dimension_folder(&pack, -1), "world-1");
-        let post = load_post(&pack, "", &properties, &Macros::standard(), None);
+        let post = load_post(
+            &pack,
+            "",
+            &properties,
+            &Macros::standard(),
+            &GameInputs::default(),
+        );
         let names: Vec<&str> = post.programs.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["deferred", "composite", "composite2", "final"]);
         let p = &post.programs;
@@ -454,14 +484,21 @@ mod tests {
 
         let mut macros = Macros::standard();
         macros.define("HQ", "");
-        let post = load_post(&pack, "world-1", &properties, &macros, None);
+        let post = load_post(
+            &pack,
+            "world-1",
+            &properties,
+            &macros,
+            &GameInputs::default(),
+        );
         let names: Vec<&str> = post.programs.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["final"]);
-        let post = load_post(&pack, "", &properties, &macros, None);
+        let post = load_post(&pack, "", &properties, &macros, &GameInputs::default());
         assert!(post.programs.iter().any(|p| p.name == "composite3"));
     }
 
-    /// Water falls back to the terrain chain and blends by default; `blend.*` overrides.
+    /// Water falls back to the terrain chain and blends by default, as the sky does; `blend.*`
+    /// overrides.
     #[test]
     fn water_falls_back_to_terrain_and_blends() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/packs/terrain-test");
@@ -470,12 +507,25 @@ mod tests {
         let inputs = crate::GbuffersInputs {
             declarations: "layout(location = 0) in vec3 hz_v_pos;".into(),
             body: "    hz_Vertex = vec4(hz_v_pos, 1.0);\n    hz_Color = vec4(1.0);\n".into(),
-            attributes: Vec::new(),
+            ..Default::default()
         };
-        let post = load_post(&pack, "", &Properties::default(), &macros, Some(&inputs));
+        let inputs = GameInputs {
+            terrain: Some(inputs.clone()),
+            sky: Some(inputs),
+        };
+        let post = load_post(&pack, "", &Properties::default(), &macros, &inputs);
         let (terrain, water) = (post.terrain.unwrap(), post.water.unwrap());
         assert_eq!((terrain.group, terrain.blend), (Group::Gbuffers, None));
         assert_eq!(water.name, "gbuffers_terrain");
+        let sky = post.sky.unwrap();
+        assert_eq!(
+            (sky.name.as_str(), sky.group, sky.blend),
+            (
+                "gbuffers_skybasic",
+                Group::Gbuffers,
+                Some(TRANSLUCENT_BLEND)
+            )
+        );
         assert_eq!(
             (water.group, water.blend),
             (Group::Translucent, Some(TRANSLUCENT_BLEND))
@@ -504,7 +554,7 @@ mod tests {
             &dimension_folder(&pack, 0),
             &properties,
             &macros,
-            None,
+            &GameInputs::default(),
         );
         assert!(post.notes.is_empty(), "{:?}", post.notes);
         let names: Vec<&str> = post.programs.iter().map(|p| p.name.as_str()).collect();

@@ -109,6 +109,8 @@ pub struct GbuffersInputs {
     /// The value of each attribute a pack may declare (`mc_Entity`, `vaPosition`...), as a GLSL
     /// expression of the declared type's size; an attribute not listed reads zero.
     pub attributes: Vec<(String, String)>,
+    /// GLSL statements run last in `main`, with `gl_Position` in wgpu's clip space.
+    pub after: String,
 }
 
 /// Translates a composite-style program (`composite`, `deferred`, `final`...).
@@ -292,7 +294,8 @@ fn translate(
     }
     write!(
         vertex_main,
-        "    hz_main();\n    gl_Position = vec4(gl_Position.x, {flip}gl_Position.y, (gl_Position.z + gl_Position.w) * 0.5, gl_Position.w);\n}}\n"
+        "    hz_main();\n    gl_Position = vec4(gl_Position.x, {flip}gl_Position.y, (gl_Position.z + gl_Position.w) * 0.5, gl_Position.w);\n{}}}\n",
+        gbuffers.map_or("", |g| &g.after)
     )
     .unwrap();
     let mut fragment_main = String::from("\nvoid main() {\n");
@@ -597,6 +600,7 @@ mod tests {
                    hz_MultiTexCoord1 = vec4(240.0, 240.0, 0.0, 1.0);\n    hz_Color = vec4(1.0);\n    hz_Normal = vec3(0.0, 1.0, 0.0);\n"
                 .into(),
             attributes: vec![("mc_midTexCoord".into(), "vec2(game_uv) / 32768.0".into())],
+            ..Default::default()
         };
         let p = translate_gbuffers(
             &preprocess(&pack, "gbuffers_terrain.vsh", &m),

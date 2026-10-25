@@ -71,6 +71,7 @@ mod occlusion;
 mod pack_atlas;
 mod pack_draw;
 mod pack_post;
+mod pack_sky;
 mod pack_timing;
 pub mod pack_uniforms;
 mod page_runs;
@@ -88,6 +89,19 @@ const COMPLETE_COLUMN: u32 = (1 << (crate::chunk::HEIGHT / 16)) - 1;
 /// its fixed-point UVs (`terrain.wgsl`'s `terrain_uv`).
 /// The world pass again after occlusion culling's test: it loads both
 /// targets (phase 2 draws over phase 1, reading the test's results).
+/// LevelRenderer: no sky inside lava or powder snow (sky fog ends within 2 blocks).
+fn sky_open(frame: &Frame) -> bool {
+    match frame.fog {
+        Some(f) => f.sky_end > 2.0,
+        None => !frame.underwater,
+    }
+}
+
+/// The Overworld-style sky (disc, sunset, stars, void) draws this frame.
+fn sky_visible(frame: &Frame) -> bool {
+    !frame.title && frame.skybox && sky_open(frame)
+}
+
 fn world_pass_after_culling<'e>(
     encoder: &'e mut wgpu::CommandEncoder,
     view: &wgpu::TextureView,
@@ -2777,6 +2791,7 @@ impl Renderer {
                 terrain: self.pack_atlas.as_ref().map(|_| pack_post::Geometry {
                     buffers: if flat { &buffers[..1] } else { &buffers },
                     table: self.flat.as_ref().filter(|_| flat).map(|f| &f.draw_layout),
+                    depth_write: true,
                 }),
             };
             pack_post::PackPost::new(
@@ -2794,9 +2809,16 @@ impl Renderer {
         self.pack_post = Some((dimension, post));
         report
     }
-    /// What a shader pack's terrain program reads from Horizon's terrain vertices, in the
-    /// pack's block atlas (made here when missing); `None` when the atlas does not fit.
-    pub fn pack_terrain_inputs(&mut self) -> Option<horizon_shaders::GbuffersInputs> {
+    /// What a shader pack's gbuffers programs read from Horizon's geometry: the sky's, and
+    /// terrain's in the pack's block atlas (made here when missing; none when it does not fit).
+    pub fn pack_inputs(&mut self) -> horizon_shaders::GameInputs {
+        horizon_shaders::GameInputs {
+            terrain: self.pack_terrain_inputs(),
+            sky: Some(pack_sky::inputs()),
+        }
+    }
+
+    fn pack_terrain_inputs(&mut self) -> Option<horizon_shaders::GbuffersInputs> {
         if self.pack_atlas.is_none() {
             let mut encoder = self.device.create_command_encoder(&Default::default());
             let layers = self
@@ -3711,6 +3733,12 @@ impl Renderer {
         let pack_post = !frame.title && self.pack_post.as_ref().is_some_and(|p| p.1.is_some());
         // The pack's program reads the vertices this frame's draws bind.
         let pack_draws_terrain = pack_terrain && flat_frame == self.pack_terrain_flat;
+        let pack_draws_sky = pack_post
+            && self
+                .pack_post
+                .as_ref()
+                .and_then(|p| p.1.as_ref())
+                .is_some_and(|p| p.has_sky());
         let pack_draws_water = pack_draws_terrain
             && self
                 .pack_post
@@ -3770,13 +3798,9 @@ impl Renderer {
                 ..Default::default()
             });
             pass.set_bind_group(0, &self.group, &[]);
-            // LevelRenderer: no sky inside lava or powder snow (sky fog ends within 2 blocks).
-            let sky_visible = match frame.fog {
-                Some(f) => f.sky_end > 2.0,
-                None => !frame.underwater,
-            };
+            let sky_visible = sky_open(frame);
             if frame.title || (sky_visible && (frame.skybox || frame.end_sky)) {
-                if !frame.title && frame.skybox {
+                if !frame.title && frame.skybox && !pack_draws_sky {
                     pass.set_pipeline(&self.sky);
                     pass.draw(0..3, 0..1);
                 }
@@ -3796,11 +3820,11 @@ impl Renderer {
                     }
                     pass.set_bind_group(0, &self.group, &[]);
                 }
-                if !frame.title && frame.stars.is_some() {
+                if !frame.title && frame.stars.is_some() && !pack_draws_sky {
                     self.stars.draw(&mut pass);
                     pass.set_bind_group(0, &self.group, &[]);
                 }
-                if !frame.title && frame.dark_disc {
+                if !frame.title && frame.dark_disc && !pack_draws_sky {
                     pass.set_pipeline(&self.dark_disc);
                     pass.draw(0..3, 0..1);
                 }

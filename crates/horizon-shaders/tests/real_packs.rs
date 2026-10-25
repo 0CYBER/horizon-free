@@ -167,19 +167,19 @@ fn real_packs_read() {
                 declarations: "layout(location = 0) in vec3 hz_v_pos;".into(),
                 body: "    hz_Vertex = vec4(hz_v_pos, 1.0);\n    hz_Color = vec4(1.0);\n".into(),
                 attributes: vec![("mc_Entity".into(), "vec4(-1.0)".into())],
+                ..Default::default()
             };
-            let post = load_post(
-                &pack,
-                &folder,
-                &shaders,
-                &Macros::standard(),
-                Some(&terrain),
-            );
+            let inputs = horizon_shaders::GameInputs {
+                terrain: Some(terrain.clone()),
+                sky: Some(terrain),
+            };
+            let post = load_post(&pack, &folder, &shaders, &Macros::standard(), &inputs);
             println!(
-                "  dimension {id} (folder `{folder}`): {} post programs, terrain {:?}, water {:?}, {} notes, {:.0} ms",
+                "  dimension {id} (folder `{folder}`): {} post programs, terrain {:?}, water {:?}, sky {:?}, {} notes, {:.0} ms",
                 post.programs.len(),
                 post.terrain.as_ref().map(|t| &t.name),
                 post.water.as_ref().map(|t| &t.name),
+                post.sky.as_ref().map(|t| &t.name),
                 post.notes.len() + post.config.notes.len(),
                 start.elapsed().as_secs_f64() * 1000.0
             );
