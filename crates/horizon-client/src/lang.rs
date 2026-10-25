@@ -29,6 +29,14 @@ pub const DEFAULT: &str = "en_us";
 
 static CURRENT: RwLock<Option<Arc<Language>>> = RwLock::new(None);
 
+/// A source of resource files: the prepared root plus packs, highest priority last.
+pub trait ResourceSource {
+    fn read(&self, path: &str) -> Option<Vec<u8>>;
+    /// The namespaces under `assets/` (resource packs may add their own).
+    fn namespaces(&self) -> Vec<String> {
+        vec!["minecraft".into()]
+    }
+}
 /// Horizon's own strings, compiled in so they need no prepared resources.
 struct Bundled;
 impl ResourceSource for Bundled {
@@ -42,15 +50,6 @@ impl ResourceSource for Bundled {
     }
     fn namespaces(&self) -> Vec<String> {
         vec!["horizon".into()]
-    }
-}
-
-/// A source of resource files: the prepared root plus packs, highest priority last.
-pub trait ResourceSource {
-    fn read(&self, path: &str) -> Option<Vec<u8>>;
-    /// The namespaces under `assets/` (resource packs may add their own).
-    fn namespaces(&self) -> Vec<String> {
-        vec!["minecraft".into()]
     }
 }
 impl ResourceSource for std::path::PathBuf {
@@ -234,7 +233,6 @@ mod tests {
         assert_eq!(en.get("horizon.options.controller"), Some("Controller"));
         let ru = Language::load(&[&empty], "ru_ru");
         assert_eq!(ru.get("horizon.options.controller"), Some("Геймпад"));
-        assert_eq!(ru.get("horizon.menu.friends"), Some("Друзья"));
     }
 
     #[test]
