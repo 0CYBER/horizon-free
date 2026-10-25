@@ -27,6 +27,13 @@ fn fs_blit(@builtin(position) p: vec4<f32>) -> World {
     return out;
 }
 
+// The same without depthtex0, for packs that never read it.
+@fragment
+fn fs_blit_color(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
+    let size = vec2<i32>(textureDimensions(source));
+    return textureLoad(source, vec2<i32>(i32(p.x), size.y - 1 - i32(p.y)), 0);
+}
+
 @group(0) @binding(2) var linear: sampler;
 
 struct Full {
