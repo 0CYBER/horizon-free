@@ -5,27 +5,18 @@
 //!   processors pick a mob from a weighted list for each spawner. They become
 //!   `horizon:spawner_mobs` (`horizon_world::worldgen::structure::processor`),
 //!   with Repurposed's `rs_spawners` list written in.
-//! - YUNG's Better Dungeons and Better Desert Temples turn a spawner or a
-//!   placeholder block into a spawner of a fixed mob. That is vanilla's `rule`
-//!   processor with an `append_static` block entity.
 //! - Moog's vanilla loot swap only acts when its mod's "replace vanilla"
 //!   preset is on; one that ships off is a no-op and is taken out.
-//! - Lithostitched's `reference` runs other processor lists in turn: their
-//!   processors are written in its place (Choice Theorem's Overhauled
-//!   Villages builds most of its lists so). Its `apply_random` and
-//!   `condition` become the game's `horizon:apply_random` and
-//!   `horizon:condition`, with the lists inside them carried the same way,
-//!   and its `set_block` (simple or weighted states) `horizon:set_block`.
 //! - Repurposed Structures' mineshaft sky view becomes the game's
 //!   `horizon:mineshaft_sky_view`.
-//! - Choice Theorem's Overhauled Village's `modular_compat` runs another
-//!   list only when the mod it names is loaded: that list is written in its
-//!   place when the mod is ported along, and it is taken out (a no-op, as in
-//!   the mod) when it is not.
+//!
+//! The processors of YUNG's mods, Lithostitched and Choice Theorem's Overhauled
+//! Village are carried by `legacy_structure_mods`, called from [`carry`].
 //!
 //! What is not here is taken out of its list later and counted
 //! (`worldgen::upgrade`). The entity NBT is written in 26.3's shape (an
 //! `equipment` map, not 1.21.1's `HandItems` and `ArmorItems`).
+use crate::legacy_structure_mods::{ctov, lithostitched, yung};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -48,30 +39,10 @@ pub struct ProcessorData {
     pub compat_loaded: BTreeSet<String>,
 }
 
-/// Choice Theorem's Overhauled Village's processor that runs the list
-/// `reference` when mod `modid` is loaded (ModularCompatProcessor).
-const MODULAR_COMPAT: &str = "ctov:modular_compat";
-
 impl ProcessorData {
     /// Notes which mods its compat processors name are `loaded`.
     pub fn mark_loaded(&mut self, loaded: &dyn Fn(&str) -> bool) {
-        fn walk(v: &Value, out: &mut BTreeSet<String>) {
-            match v {
-                Value::Object(o) => {
-                    if o.get("processor_type").and_then(Value::as_str) == Some(MODULAR_COMPAT) {
-                        if let Some(id) = o.get("modid").and_then(Value::as_str) {
-                            out.insert(id.to_owned());
-                        }
-                    }
-                    o.values().for_each(|v| walk(v, out));
-                }
-                Value::Array(a) => a.iter().for_each(|v| walk(v, out)),
-                _ => {}
-            }
-        }
-        let mut named = BTreeSet::new();
-        self.lists.values().for_each(|l| walk(l, &mut named));
-        self.compat_loaded = named.into_iter().filter(|m| loaded(m)).collect();
+        ctov::mark_loaded(self, loaded);
     }
 
     pub fn read<R: Read + Seek>(zip: &mut zip::ZipArchive<R>) -> Self {
@@ -187,7 +158,7 @@ pub fn carry(
 
 /// The processors of one list carried: references written in, then each
 /// one with a data form replaced by it. Whether anything changed.
-fn carry_all(
+pub(crate) fn carry_all(
     list: Vec<Value>,
     data: &ProcessorData,
     carried: &mut BTreeMap<String, usize>,
@@ -202,18 +173,18 @@ fn carry_at(
     carried: &mut BTreeMap<String, usize>,
     depth: usize,
 ) -> (Vec<Value>, bool) {
-    let (expanded, mut changed) = references(list, data, carried, 0);
+    let (expanded, mut changed) = lithostitched::expand_references(list, data, carried);
     let mut out = Vec::with_capacity(expanded.len());
     for p in expanded {
         let kind = p["processor_type"].as_str().unwrap_or_default().to_owned();
-        let replacement = match kind.as_str() {
-            "lithostitched:apply_random" => apply_random(&p, data, carried).map(|p| vec![p]),
-            "lithostitched:condition" => condition(&p, data, carried).map(|p| vec![p]),
-            _ => match pillar_type(&kind) {
+        // Lithostitched's and YUNG's processors are carried apart from this
+        // code (`legacy_structure_mods`).
+        let replacement = lithostitched::processor(&kind, &p, data, carried).or_else(|| {
+            match pillar_type(&kind).or_else(|| yung::pillar_type(&kind)) {
                 Some(to) => Some(vec![pillar(&p, to, data, carried, depth)]),
-                None => as_data(&kind, &p, data),
-            },
-        };
+                None => as_data(&kind, &p, data).or_else(|| yung::processor(&kind, &p)),
+            }
+        });
         match replacement {
             Some(replacement) => {
                 *carried.entry(kind).or_default() += 1;
@@ -237,10 +208,6 @@ fn pillar_type(kind: &str) -> Option<&'static str> {
         "repurposed_structures:close_off_fluid_sources_processor"
         | "moogs_structures:close_off_fluid_sources_processor" => "horizon:close_off_fluid_sources",
         "repurposed_structures:close_off_air_sources_processor" => "horizon:close_off_air_sources",
-        "betterfortresses:pillar_processor" | "betterjungletemples:pillar_processor" => {
-            "horizon:yung_pillar"
-        }
-        "betterfortresses:stair_pillar_processor" => "horizon:stair_pillar",
         _ => return None,
     })
 }
@@ -248,8 +215,7 @@ fn pillar_type(kind: &str) -> Option<&'static str> {
 /// A pillar processor as the game's `to`. Its `pillar_processor_list`
 /// (which runs on each block of the column; Repurposed's often names the
 /// list it is in) is written in, carried; the pillars inside that copy lose
-/// theirs, as a column's blocks are never the mods' triggers. Better
-/// Fortresses' stair supports get the blocks its Java code names.
+/// theirs, as a column's blocks are never the mods' triggers.
 fn pillar(
     p: &Value,
     to: &str,
@@ -257,13 +223,6 @@ fn pillar(
     carried: &mut BTreeMap<String, usize>,
     depth: usize,
 ) -> Value {
-    if to == "horizon:stair_pillar" {
-        return json!({"processor_type": to,
-            "blocks": {"minecraft:stone_brick_stairs": "minecraft:red_nether_brick_stairs",
-                "minecraft:purpur_stairs": "minecraft:red_nether_bricks"},
-            "front": "minecraft:red_nether_brick_stairs",
-            "pillar": "minecraft:red_nether_bricks"});
-    }
     let mut out = p.clone();
     out["processor_type"] = to.into();
     let Some(o) = out.as_object_mut() else {
@@ -282,108 +241,6 @@ fn pillar(
         o.insert("pillar_processor_list".into(), json!({"processors": inner}));
     }
     out
-}
-
-/// A processor list inside a carried processor: an id stays (the game reads
-/// that file, carried on its own); an inline one is carried here.
-fn nested(list: &Value, data: &ProcessorData, carried: &mut BTreeMap<String, usize>) -> Value {
-    let mut list = list.clone();
-    if let Some(ps) = processors(&mut list) {
-        *ps = carry_all(std::mem::take(ps), data, carried).0;
-    }
-    list
-}
-
-/// Lithostitched's `apply_random` as `horizon:apply_random`: its weighted
-/// lists, or its set of lists at weight 1. A tag is not carried.
-fn apply_random(
-    p: &Value,
-    data: &ProcessorData,
-    carried: &mut BTreeMap<String, usize>,
-) -> Option<Value> {
-    let lists = &p["processor_lists"];
-    let weighted = lists.as_array().is_some_and(|a| {
-        a.iter()
-            .all(|e| e.get("weight").is_some() && e.get("data").is_some())
-    });
-    let entries: Vec<(Value, Value)> = if weighted {
-        lists
-            .as_array()?
-            .iter()
-            .map(|e| (e["weight"].clone(), e["data"].clone()))
-            .collect()
-    } else {
-        match lists {
-            Value::String(id) if !id.starts_with('#') => vec![(1.into(), lists.clone())],
-            Value::Array(a) if a.iter().any(|x| x.get("processor_type").is_some()) => {
-                vec![(1.into(), lists.clone())]
-            }
-            Value::Array(a)
-                if a.iter()
-                    .all(|x| x.as_str().is_some_and(|s| !s.starts_with('#')) || x.is_object()) =>
-            {
-                a.iter().map(|x| (1.into(), x.clone())).collect()
-            }
-            Value::Object(_) => vec![(1.into(), lists.clone())],
-            _ => return None,
-        }
-    };
-    let lists: Vec<Value> = entries
-        .into_iter()
-        .map(|(weight, list)| json!({"weight": weight, "data": nested(&list, data, carried)}))
-        .collect();
-    let mut out = json!({"processor_type": "horizon:apply_random", "processor_lists": lists});
-    if let Some(mode) = p.get("mode") {
-        out["mode"] = mode.clone();
-    }
-    Some(out)
-}
-
-/// Lithostitched's `condition` as `horizon:condition`, when the game runs
-/// every condition in it (true, all_of, any_of, not, random_chance,
-/// matching_blocks with plain property values); else it stays Java.
-fn condition(
-    p: &Value,
-    data: &ProcessorData,
-    carried: &mut BTreeMap<String, usize>,
-) -> Option<Value> {
-    fn runs(c: &Value) -> bool {
-        if let Some(all) = c.as_array() {
-            return all.iter().all(runs);
-        }
-        let kind = c["type"].as_str().unwrap_or_default();
-        match kind.strip_prefix("lithostitched:").unwrap_or(kind) {
-            "true" | "random_chance" => true,
-            "all_of" | "any_of" => c["conditions"]
-                .as_array()
-                .is_some_and(|a| a.iter().all(runs)),
-            "not" => runs(&c["condition"]),
-            "matching_blocks" => c.get("properties").is_none_or(|p| {
-                p.as_object()
-                    .is_some_and(|o| o.values().all(Value::is_string))
-            }),
-            _ => false,
-        }
-    }
-    if !runs(&p["if_true"]) {
-        return None;
-    }
-    // One processor or a list of them.
-    let mut branch = |key: &str| -> Value {
-        let list = match p.get(key) {
-            None => Vec::new(),
-            Some(Value::Array(a)) => a.clone(),
-            Some(one) => vec![one.clone()],
-        };
-        carry_all(list, data, carried).0.into()
-    };
-    let (then, otherwise) = (branch("then"), branch("else"));
-    let mut out = json!({"processor_type": "horizon:condition", "if_true": p["if_true"],
-        "then": then, "else": otherwise});
-    if let Some(mode) = p.get("random_mode") {
-        out["random_mode"] = mode.clone();
-    }
-    Some(out)
 }
 
 /// Repurposed Structures' rule tests and the game's types that run them
@@ -429,48 +286,9 @@ pub fn rule_tests(kind: &str, v: &mut Value, carried: &mut BTreeMap<String, usiz
     each_list(kind, v, &mut |list| rename(list, carried))
 }
 
-/// Lithostitched's references in a list, each replaced by the processors of
-/// the lists it names, in order (references in them too, to a depth of 8).
-/// One naming a tag or a list the mod does not have stays, to be dropped.
-/// Whether any was replaced.
-fn references(
-    list: Vec<Value>,
-    data: &ProcessorData,
-    carried: &mut BTreeMap<String, usize>,
-    depth: usize,
-) -> (Vec<Value>, bool) {
-    let mut out = Vec::with_capacity(list.len());
-    let mut changed = false;
-    for p in list {
-        if p["processor_type"] == MODULAR_COMPAT && depth < 8 {
-            *carried.entry(MODULAR_COMPAT.into()).or_default() += 1;
-            changed = true;
-            let loaded = p["modid"]
-                .as_str()
-                .is_some_and(|m| data.compat_loaded.contains(m));
-            if let Some(inner) = loaded.then(|| referenced(&p["reference"], data)).flatten() {
-                out.extend(references(inner, data, carried, depth + 1).0);
-            }
-            continue;
-        }
-        let named = (p["processor_type"] == "lithostitched:reference" && depth < 8)
-            .then(|| referenced(&p["processor_lists"], data))
-            .flatten();
-        match named {
-            Some(inner) => {
-                *carried.entry("lithostitched:reference".into()).or_default() += 1;
-                out.extend(references(inner, data, carried, depth + 1).0);
-                changed = true;
-            }
-            None => out.push(p),
-        }
-    }
-    (out, changed)
-}
-
 /// The processors of the lists a reference names: an id, an inline list, or
 /// a list of either.
-fn referenced(lists: &Value, data: &ProcessorData) -> Option<Vec<Value>> {
+pub(crate) fn referenced(lists: &Value, data: &ProcessorData) -> Option<Vec<Value>> {
     let one = |l: &Value| -> Option<Vec<Value>> {
         let mut list = match l {
             Value::String(id) if !id.starts_with('#') => {
@@ -497,7 +315,7 @@ fn referenced(lists: &Value, data: &ProcessorData) -> Option<Vec<Value>> {
 /// The data form of a Java processor: the processors to put in its place
 /// (none for a no-op), or `None` when it has none.
 fn as_data(kind: &str, p: &Value, data: &ProcessorData) -> Option<Vec<Value>> {
-    let (ns, _) = kind.split_once(':')?;
+    kind.split_once(':')?;
     Some(match kind {
         // Its structure voids keep the world's block, as vanilla's
         // block_ignore does (the templates hold them; vanilla places them).
@@ -593,171 +411,6 @@ fn as_data(kind: &str, p: &Value, data: &ProcessorData) -> Option<Vec<Value>> {
                 |s| config(s.get("ominous") == Some(&"true")),
             )]
         }
-        _ if ns == "betterdeserttemples"
-            && let Some(processor) = desert_temple(kind) =>
-        {
-            vec![processor]
-        }
-        "lithostitched:block_swap" => {
-            // The same map; the game's swap keeps the properties both have.
-            p["blocks"].as_object()?;
-            vec![json!({"processor_type": "horizon:block_swap", "blocks": p["blocks"]})]
-        }
-        "lithostitched:set_block" => {
-            // A simple or weighted state provider, the block entity left as
-            // it is.
-            let provider = p["state_provider"]["type"].as_str()?;
-            let modifier = p["block_entity_modifier"]["type"].as_str();
-            let plain =
-                modifier.is_none_or(|m| m.trim_start_matches("minecraft:") == "passthrough");
-            if !plain
-                || !matches!(
-                    provider,
-                    "minecraft:simple_state_provider" | "minecraft:weighted_state_provider"
-                )
-            {
-                return None;
-            }
-            let mut out = p.clone();
-            out["processor_type"] = "horizon:set_block".into();
-            if let Some(o) = out.as_object_mut() {
-                o.remove("block_entity_modifier");
-            }
-            vec![out]
-        }
-        "betterdungeons:small_dungeon_chest_processor" => {
-            // Its config's defaults: one chest at least, two at most, a
-            // fifth of the others kept until then; ChestBlock covers both.
-            vec![json!({"processor_type": "horizon:count_cap",
-                "blocks": ["minecraft:chest", "minecraft:trapped_chest"],
-                "min": 1, "max": 2, "chance": 0.2f32 as f64,
-                "replacement": block("minecraft:cave_air")})]
-        }
-        "betterwitchhuts:leg_processor" => vec![yung_leg(
-            "minecraft:brown_stained_glass",
-            json!({"id": "minecraft:oak_log", "properties": {"axis": "y"}}),
-            false,
-        )],
-        "betterwitchhuts:fence_leg_processor" => vec![yung_leg(
-            "minecraft:crimson_fence",
-            block("minecraft:oak_fence"),
-            true,
-        )],
-        _ if ns == "betteroceanmonuments" => ocean_monument(kind)?,
-        _ if ns == "betterdungeons" || ns == "betterdeserttemples" => vec![yung_spawner(kind, p)?],
-        _ => return None,
-    })
-}
-
-/// YUNG's leg processors (Better Ocean Monuments, Better Witch Huts): a
-/// placeholder block becomes `state` and a column of it runs down through
-/// air and fluids: the game's `horizon:yung_pillar` with fixed states, and
-/// the placeholder's properties kept for the fence legs.
-fn yung_leg(target: &str, state: Value, keep_properties: bool) -> Value {
-    let fixed = json!({"entries": [], "defaultBlockState": state});
-    json!({"processor_type": "horizon:yung_pillar", "target_block": block(target),
-        "target_block_output": fixed, "pillar_states": fixed,
-        "keep_properties": keep_properties})
-}
-
-/// Better Ocean Monuments' processors (no fields; what they do is in their
-/// Java code): placeholder blocks as vanilla's `rule` or the game's
-/// `horizon:pick` (a new `nextFloat` for each chance, as the mod draws),
-/// and its sea-level ones as the game's `horizon:flood_air`,
-/// `horizon:waterlog` and `horizon:keep_world_block`.
-fn ocean_monument(kind: &str) -> Option<Vec<Value>> {
-    let rule = |rules: &[(&str, Value)]| {
-        let rules: Vec<Value> = rules
-            .iter()
-            .map(|(from, to)| {
-                json!({"input_predicate": {"predicate_type": "minecraft:block_match", "block": from},
-                "location_predicate": {"predicate_type": "minecraft:always_true"},
-                "output_state": to})
-            })
-            .collect();
-        json!({"processor_type": "minecraft:rule", "rules": rules})
-    };
-    let state = |id: &str, props: Value| json!({"id": id, "properties": props});
-    let pick = |from: &str, picks: Vec<(f32, Value)>, default: Value, keep: bool| {
-        let picks: Vec<Value> = picks
-            .into_iter()
-            .map(|(below, state)| json!({"below": below as f64, "state": state}))
-            .collect();
-        json!({"processor_type": "horizon:pick", "block": from, "picks": picks,
-            "default": {"state": default}, "redraw": true, "keep_properties": keep})
-    };
-    let slabs = |from: &str, slab: &str, otherwise: &str| {
-        let wet = |t: &str| state(slab, json!({"type": t, "waterlogged": "true"}));
-        pick(
-            from,
-            vec![(0.4, wet("top")), (0.8, wet("bottom"))],
-            block(otherwise),
-            false,
-        )
-    };
-    // Exposed below 0.1, else weathered below a new 0.3, else oxidized,
-    // with the placeholder's properties for the stairs and slabs.
-    let copper = |kind: &str| {
-        let id = |age: &str| block(&format!("minecraft:{age}{kind}"));
-        pick(
-            &format!("minecraft:oxidized_{kind}"),
-            vec![(0.1, id("exposed_")), (0.3, id("weathered_"))],
-            id("oxidized_"),
-            true,
-        )
-    };
-    Some(match kind.strip_prefix("betteroceanmonuments:")? {
-        "random_prismarine_slab_decoration_processor" => vec![slabs(
-            "minecraft:lime_concrete",
-            "minecraft:prismarine_slab",
-            "minecraft:air",
-        )],
-        "random_dark_prismarine_slab_decoration_processor" => vec![slabs(
-            "minecraft:blue_concrete",
-            "minecraft:dark_prismarine_slab",
-            "minecraft:water",
-        )],
-        "sand_gravel_processor" => {
-            vec![rule(&[(
-                "minecraft:yellow_stained_glass",
-                block("minecraft:gravel"),
-            )])]
-        }
-        "random_oxidization_processor" => [
-            "copper",
-            "cut_copper",
-            "cut_copper_stairs",
-            "cut_copper_slab",
-        ]
-        .into_iter()
-        .map(copper)
-        .collect(),
-        "structure_void_processor" => vec![json!({"processor_type": "horizon:keep_world_block",
-            "blocks": ["minecraft:purpur_slab", "minecraft:brown_wool"]})],
-        "air_processor" => vec![json!({"processor_type": "horizon:flood_air"})],
-        "waterlog_processor" => vec![json!({"processor_type": "horizon:waterlog"})],
-        "seagrass_processor" => vec![rule(&[
-            (
-                "minecraft:red_sandstone_slab",
-                state("minecraft:tall_seagrass", json!({"half": "lower"})),
-            ),
-            (
-                "minecraft:end_stone_brick_slab",
-                state("minecraft:tall_seagrass", json!({"half": "upper"})),
-            ),
-            ("minecraft:brick_slab", block("minecraft:seagrass")),
-        ])],
-        "random_sponge_processor" => vec![pick(
-            "minecraft:orange_stained_glass",
-            vec![(0.75, block("minecraft:wet_sponge"))],
-            block("minecraft:water"),
-            false,
-        )],
-        "leg_processor" => vec![yung_leg(
-            "minecraft:blue_stained_glass",
-            block("minecraft:prismarine_bricks"),
-            false,
-        )],
         _ => return None,
     })
 }
@@ -885,110 +538,6 @@ pub fn upgrade_trial_spawner(config: &mut Value) -> bool {
     changed
 }
 
-/// A block state as 26.3 writes it.
-fn block(id: &str) -> Value {
-    json!({"id": id})
-}
-
-/// Better Desert Temples' placeholder blocks (glass, concrete and wool in
-/// the templates) as the mod's processors turn them: the fixed ones as
-/// vanilla's `rule`, the random ones as the game's `horizon:pick`, with the
-/// mod's bounds on one `nextFloat` (YUNG's BlockStateRandomizer adds its
-/// chances up in floats). The ones that read or change the world around
-/// (pillars, Diorite's waterlogging) stay dropped.
-fn desert_temple(kind: &str) -> Option<Value> {
-    let swap = |from: &str, to: &str| {
-        json!({"processor_type": "minecraft:rule", "rules": [{
-            "input_predicate": {"predicate_type": "minecraft:block_match", "block": from},
-            "location_predicate": {"predicate_type": "minecraft:always_true"},
-            "output_state": block(to)}]})
-    };
-    let pick = |from: &str, picks: Vec<Value>, default: Value| json!({"processor_type": "horizon:pick", "block": from, "picks": picks, "default": default});
-    // YUNG's BlockStateRandomizer: an entry wins below the sum of the
-    // chances so far, summed as floats.
-    let randomizer = |entries: &[(f32, &str)]| {
-        let mut bottom = 0f32;
-        entries
-            .iter()
-            .map(|(chance, id)| {
-                bottom += chance;
-                json!({"below": bottom as f64, "state": block(id)})
-            })
-            .collect::<Vec<_>>()
-    };
-    let at = |below: f32, id: &str| json!({"below": below as f64, "state": block(id)});
-    // Sandstone stairs, upside down, facing Plane.HORIZONTAL.getRandomDirection.
-    let stairs = || {
-        let states: Vec<Value> = ["north", "east", "south", "west"]
-            .iter()
-            .map(|facing| {
-                json!({"id": "minecraft:sandstone_stairs", "properties": {
-                    "facing": facing, "half": "top", "shape": "straight", "waterlogged": "false"}})
-            })
-            .collect();
-        json!({"states": states})
-    };
-    Some(match kind.strip_prefix("betterdeserttemples:")? {
-        "blue_concrete_processor" => swap("minecraft:blue_concrete", "minecraft:blue_terracotta"),
-        "yellow_concrete_processor" => {
-            swap("minecraft:yellow_concrete", "minecraft:yellow_terracotta")
-        }
-        "red_wool_processor" => swap("minecraft:red_wool", "minecraft:tnt"),
-        "white_stained_glass_processor" => pick(
-            "minecraft:white_stained_glass",
-            randomizer(&[(0.4, "minecraft:cobweb")]),
-            json!({"state": block("minecraft:air")}),
-        ),
-        "polished_diorite_processor" => pick(
-            "minecraft:polished_diorite",
-            randomizer(&[(0.6, "minecraft:cut_sandstone")]),
-            json!({"state": block("minecraft:sandstone")}),
-        ),
-        "orange_stained_glass_processor" => {
-            let mut sus = at(0.01, "minecraft:suspicious_sand");
-            sus["nbt"] = json!({"LootTable": "minecraft:archaeology/desert_pyramid"});
-            let mut stairs = stairs();
-            stairs["below"] = (0.45f32 as f64).into();
-            pick(
-                "minecraft:orange_stained_glass",
-                vec![
-                    sus,
-                    at(0.1, "minecraft:sand"),
-                    at(0.2, "minecraft:sandstone"),
-                    stairs,
-                ],
-                json!({"state": block("minecraft:cut_sandstone")}),
-            )
-        }
-        "red_stained_glass_processor" => pick(
-            "minecraft:red_stained_glass",
-            vec![at(0.3, "minecraft:sand"), at(0.75, "minecraft:sandstone")],
-            stairs(),
-        ),
-        "pot_processor" => {
-            // Four sherds, one float each; the pot back to its default state.
-            let values: Vec<Value> = [
-                (0.05f32, "archer"),
-                (0.1, "miner"),
-                (0.15, "prize"),
-                (0.2, "skull"),
-            ]
-            .iter()
-            .map(|(below, sherd)| {
-                json!({"below": *below as f64, "value": format!("minecraft:{sherd}_pottery_sherd")})
-            })
-            .collect();
-            pick(
-                "minecraft:decorated_pot",
-                Vec::new(),
-                json!({"state": block("minecraft:decorated_pot"), "lists": [{
-                    "key": "sherds", "count": 4, "values": values, "default": "minecraft:brick"}]}),
-            )
-        }
-        _ => return None,
-    })
-}
-
 /// [`as_data`]'s `horizon:spawner_mobs` for the mods' spawner randomizing
 /// processors, whose fields have the same names and defaults.
 fn spawner_mobs(p: &Value, mobs: Vec<Value>, rules: Option<Value>) -> Value {
@@ -1044,135 +593,6 @@ fn repurposed_light(p: &Value) -> Option<Option<Value>> {
         rules["sky_light_limit"] = json!({"min_inclusive": min, "max_exclusive": max});
     }
     Some(Some(rules))
-}
-
-/// An item as 26.3 saves it.
-fn item(id: &str) -> Value {
-    json!({"id": format!("minecraft:{id}"), "count": 1})
-}
-
-/// YUNG's processors that make a spawner of a fixed mob (YUNG's API's
-/// `MobSpawnerData`), as vanilla's `rule`: every `input` block becomes a
-/// spawner with that NBT.
-fn yung_spawner(kind: &str, p: &Value) -> Option<Value> {
-    const SPAWNER: &str = "minecraft:spawner";
-    // (input block, mob, fields other than the defaults, whether the mob is
-    // also the only potential, its equipment)
-    let (input, mob, fields, potential, equipment): (_, _, &[(&str, i64)], _, _) = match kind {
-        "betterdungeons:mob_spawner_processor" => {
-            (SPAWNER, p["spawner_mob"].as_str()?, &[], true, None)
-        }
-        "betterdungeons:zombie_mob_spawner_processor" => (
-            SPAWNER,
-            "minecraft:zombie",
-            &[("MaxNearbyEntities", 8)],
-            true,
-            None,
-        ),
-        "betterdungeons:skeleton_mob_spawner_processor" => (
-            SPAWNER,
-            "minecraft:skeleton",
-            &[
-                ("RequiredPlayerRange", 18),
-                ("MaxNearbyEntities", 8),
-                ("MaxSpawnDelay", 650),
-            ],
-            true,
-            None,
-        ),
-        "betterdungeons:small_nether_dungeon_mob_spawner_processor" => {
-            let mob = p["spawner_mob"].as_str()?;
-            // Wither skeletons get netherite armor that never drops and a
-            // stone sword (with the mod's default config, they and blazes
-            // keep their loot).
-            let armor = (mob == "minecraft:wither_skeleton").then(|| {
-                json!({
-                    "equipment": {
-                        "feet": item("netherite_boots"),
-                        "legs": item("netherite_leggings"),
-                        "chest": item("netherite_chestplate"),
-                        "head": item("netherite_helmet"),
-                        "mainhand": item("stone_sword"),
-                    },
-                    "drop_chances": {"feet": 0.0, "legs": 0.0, "chest": 0.0, "head": 0.0},
-                })
-            });
-            (SPAWNER, mob, &[], true, armor)
-        }
-        "betterdungeons:zombie_tombstone_spawner_processor" => (
-            "minecraft:black_stained_glass",
-            "minecraft:skeleton",
-            &[],
-            false,
-            Some(json!({"equipment": {"mainhand": item("iron_sword")}})),
-        ),
-        "betterdeserttemples:gravel_processor" => (
-            "minecraft:gravel",
-            "minecraft:husk",
-            &[("MaxNearbyEntities", 8), ("RequiredPlayerRange", 24)],
-            false,
-            None,
-        ),
-        // An empty hand list in 1.21.1: the skeletons spawn without a bow,
-        // since a spawn entry with more than its id is not finalized.
-        "betterdeserttemples:bone_block_processor" => (
-            "minecraft:bone_block",
-            "minecraft:skeleton",
-            &[("RequiredPlayerRange", 32)],
-            false,
-            Some(json!({"equipment": {}})),
-        ),
-        "betterdeserttemples:infested_cracked_stone_bricks_processor" => (
-            "minecraft:infested_cracked_stone_bricks",
-            "minecraft:silverfish",
-            &[("RequiredPlayerRange", 24)],
-            false,
-            None,
-        ),
-        // 1.21.1 ignores the items' old `Count` and `tag` (the shield's
-        // pattern, the boots' dye): plain items.
-        "betterdeserttemples:yellow_wool_processor" => (
-            "minecraft:yellow_wool",
-            "minecraft:husk",
-            &[("MaxNearbyEntities", 8), ("RequiredPlayerRange", 24)],
-            false,
-            Some(json!({"equipment": {
-                "mainhand": item("golden_sword"),
-                "offhand": item("shield"),
-                "feet": item("leather_boots"),
-                "legs": item("leather_leggings"),
-                "chest": item("golden_chestplate"),
-                "head": item("chainmail_helmet"),
-            }})),
-        ),
-        _ => return None,
-    };
-    let mut entity = json!({"id": mob});
-    if let Some(Value::Object(extra)) = equipment {
-        entity.as_object_mut()?.extend(extra);
-    }
-    let potentials = match potential {
-        true => json!([{"data": {"entity": entity.clone()}, "weight": 1}]),
-        false => json!([]),
-    };
-    let mut nbt = json!({
-        "Delay": 20, "MinSpawnDelay": 200, "MaxSpawnDelay": 800, "SpawnCount": 4,
-        "MaxNearbyEntities": 6, "RequiredPlayerRange": 16, "SpawnRange": 4,
-        "SpawnData": {"entity": entity},
-        "SpawnPotentials": potentials,
-    });
-    for (key, value) in fields {
-        nbt[*key] = (*value).into();
-    }
-    Some(json!({
-        "processor_type": "minecraft:rule",
-        "rules": [{
-            "input_predicate": {"predicate_type": "minecraft:block_match", "block": input},
-            "location_predicate": {"predicate_type": "minecraft:always_true"},
-            "output_state": {"Name": SPAWNER},
-            "block_entity_modifier": {"type": "minecraft:append_static", "data": nbt},
-        }],
-    }))
 }
 
 #[cfg(test)]
@@ -1247,54 +667,6 @@ mod tests {
     }
 
     #[test]
-    fn yungs_spawners_become_rules() {
-        let mut pool = json!({"elements": [{"element": {"processors": {"processors": [
-            {"processor_type": "betterdungeons:skeleton_mob_spawner_processor"},
-            {"processor_type": "betterdeserttemples:bone_block_processor"},
-            {"processor_type": "betterdungeons:small_nether_dungeon_mob_spawner_processor",
-             "spawner_mob": "minecraft:wither_skeleton"},
-            {"processor_type": "betterdungeons:candle_processor"}]}}}]});
-        let mut carried = BTreeMap::new();
-        assert!(carry("template_pool", &mut pool, &data(), &mut carried));
-        let p = &pool["elements"][0]["element"]["processors"]["processors"];
-        let rule = |i: usize| &p[i]["rules"][0];
-        assert_eq!(rule(0)["input_predicate"]["block"], "minecraft:spawner");
-        assert_eq!(
-            rule(0)["output_state"],
-            json!({"Name": "minecraft:spawner"})
-        );
-        let nbt = &rule(0)["block_entity_modifier"]["data"];
-        assert_eq!(
-            (
-                nbt["RequiredPlayerRange"].clone(),
-                nbt["MaxNearbyEntities"].clone()
-            ),
-            (json!(18), json!(8))
-        );
-        assert_eq!(nbt["MaxSpawnDelay"], 650);
-        assert_eq!(
-            nbt["SpawnPotentials"],
-            json!([{"data": {"entity": {"id": "minecraft:skeleton"}}, "weight": 1}])
-        );
-        // Bone blocks become bowless skeleton spawners with no potentials.
-        let bone = &rule(1)["block_entity_modifier"]["data"];
-        assert_eq!(rule(1)["input_predicate"]["block"], "minecraft:bone_block");
-        assert_eq!(
-            bone["SpawnData"],
-            json!({"entity": {"id": "minecraft:skeleton", "equipment": {}}})
-        );
-        assert_eq!(bone["SpawnPotentials"], json!([]));
-        let wither = &rule(2)["block_entity_modifier"]["data"]["SpawnData"]["entity"];
-        assert_eq!(
-            wither["equipment"]["head"]["id"],
-            "minecraft:netherite_helmet"
-        );
-        assert_eq!(wither["drop_chances"]["feet"], 0.0);
-        assert_eq!(p[3]["processor_type"], "betterdungeons:candle_processor");
-        assert_eq!(carried.values().sum::<usize>(), 3);
-    }
-
-    #[test]
     fn trial_spawners_and_vaults_drop_their_saved_state() {
         let mut list = json!({"processors": [
             {"processor_type": "moogs_structures:trial_spawner_randomizing_processor",
@@ -1356,41 +728,6 @@ mod tests {
     }
 
     #[test]
-    fn desert_temple_placeholders_become_rules_and_picks() {
-        let mut list = json!({"processors": [
-            {"processor_type": "betterdeserttemples:red_wool_processor"},
-            {"processor_type": "betterdeserttemples:white_stained_glass_processor"},
-            {"processor_type": "betterdeserttemples:orange_stained_glass_processor"},
-            {"processor_type": "betterdeserttemples:pot_processor"},
-            {"processor_type": "betterdeserttemples:quartz_pillar_processor"}]});
-        let mut carried = BTreeMap::new();
-        assert!(carry("processor_list", &mut list, &data(), &mut carried));
-        let p = list["processors"].as_array().unwrap();
-        assert_eq!(
-            p[0]["rules"][0]["output_state"],
-            json!({"id": "minecraft:tnt"})
-        );
-        assert_eq!(p[1]["processor_type"], "horizon:pick");
-        assert_eq!(p[1]["picks"][0]["below"], 0.4f32 as f64);
-        assert_eq!(p[1]["default"]["state"]["id"], "minecraft:air");
-        let glass = &p[2]["picks"];
-        assert_eq!(glass[0]["state"]["id"], "minecraft:suspicious_sand");
-        assert_eq!(
-            glass[0]["nbt"]["LootTable"],
-            "minecraft:archaeology/desert_pyramid"
-        );
-        assert_eq!(glass[3]["states"].as_array().unwrap().len(), 4);
-        assert_eq!(glass[3]["below"], 0.45f32 as f64);
-        assert_eq!(p[3]["default"]["lists"][0]["count"], 4);
-        // The pillar reads the world below: still Java, still dropped later.
-        assert_eq!(
-            p[4]["processor_type"],
-            "betterdeserttemples:quartz_pillar_processor"
-        );
-        assert_eq!(carried.values().sum::<usize>(), 4);
-    }
-
-    #[test]
     fn repurposed_waterlogging_follows_the_world() {
         let mut list = json!({"processors": [{"processor_type":
             "repurposed_structures:waterlogging_when_replacing_water_processor"},
@@ -1407,143 +744,6 @@ mod tests {
             json!([{"processor_type": "horizon:waterlog_in_world_water"},
                 {"processor_type": "horizon:mineshaft_sky_view"}])
         );
-    }
-
-    #[test]
-    fn small_dungeon_chests_are_capped() {
-        let mut list = json!({"processors": [
-            {"processor_type": "betterdungeons:small_dungeon_chest_processor"}]});
-        let mut carried = BTreeMap::new();
-        assert!(carry("processor_list", &mut list, &data(), &mut carried));
-        let cap = &list["processors"][0];
-        assert_eq!(cap["processor_type"], "horizon:count_cap");
-        assert_eq!(
-            (cap["min"].as_u64(), cap["max"].as_u64()),
-            (Some(1), Some(2))
-        );
-        assert_eq!(cap["replacement"], json!({"id": "minecraft:cave_air"}));
-    }
-
-    #[test]
-    fn lithostitched_block_swaps_become_the_games() {
-        let mut list = json!({"processors": [
-            {"processor_type": "lithostitched:block_swap",
-             "blocks": {"minecraft:cobblestone": "minecraft:mossy_cobblestone"}},
-            {"processor_type": "lithostitched:block_swap", "blocks": []}]});
-        let mut carried = BTreeMap::new();
-        assert!(carry("processor_list", &mut list, &data(), &mut carried));
-        let p = list["processors"].as_array().unwrap();
-        assert_eq!(
-            p[0],
-            json!({"processor_type": "horizon:block_swap",
-                   "blocks": {"minecraft:cobblestone": "minecraft:mossy_cobblestone"}})
-        );
-        // A map that is not one stays Java (dropped later).
-        assert_eq!(p[1]["processor_type"], "lithostitched:block_swap");
-    }
-
-    #[test]
-    fn modular_compat_runs_its_list_only_with_its_mod() {
-        let mut data = ProcessorData::default();
-        let swap = json!({"processor_type": "minecraft:rule", "rules": []});
-        data.lists
-            .insert("v:house_ns".into(), json!({"processors": [swap.clone()]}));
-        let compat = |m: &str| json!({"processor_type": "ctov:modular_compat", "modid": m, "reference": "v:house_ns"});
-        let gravity = json!({"processor_type": "minecraft:gravity"});
-        data.lists.insert(
-            "v:house".into(),
-            json!({"processors": [compat("ns"), compat("absent"), gravity.clone()]}),
-        );
-        data.mark_loaded(&|m| m == "ns");
-        assert_eq!(data.compat_loaded, BTreeSet::from(["ns".to_owned()]));
-        let mut v = json!({"processors": [compat("ns"), compat("absent"), gravity.clone()]});
-        let mut carried = BTreeMap::new();
-        assert!(carry("processor_list", &mut v, &data, &mut carried));
-        assert_eq!(v, json!({"processors": [swap, gravity]}));
-        assert_eq!(carried["ctov:modular_compat"], 2);
-    }
-
-    #[test]
-    fn lithostitched_references_are_written_in() {
-        let mut data = data();
-        let gravity = json!({"processor_type": "minecraft:gravity", "heightmap": "WORLD_SURFACE_WG", "offset": 0});
-        data.lists
-            .insert("v:road".into(), json!({"processors": [gravity.clone()]}));
-        data.lists.insert(
-            "v:house".into(),
-            json!({"processors": [
-                {"processor_type": "lithostitched:reference", "processor_lists": "v:road"},
-                {"processor_type": "lithostitched:block_swap", "blocks": {"minecraft:dirt": "minecraft:grass_block"}}]}),
-        );
-        let mut list = json!({"processors": [
-            {"processor_type": "lithostitched:reference", "processor_lists": ["v:house", "v:road"]},
-            {"processor_type": "lithostitched:reference", "processor_lists": "#v:roads"},
-            {"processor_type": "lithostitched:reference", "processor_lists": ["v:nowhere"]}]});
-        let mut carried = BTreeMap::new();
-        assert!(carry("processor_list", &mut list, &data, &mut carried));
-        let p = list["processors"].as_array().unwrap();
-        // House (its own reference to road first, then its swap), then road;
-        // the swap inside is carried too.
-        assert_eq!(p[0], gravity);
-        assert_eq!(p[1]["processor_type"], "horizon:block_swap");
-        assert_eq!(p[2], gravity);
-        // A tag or a list the mod lacks stays, to be dropped.
-        assert_eq!(p[3]["processor_lists"], "#v:roads");
-        assert_eq!(p[4]["processor_lists"], json!(["v:nowhere"]));
-        assert_eq!(carried["lithostitched:reference"], 2);
-    }
-
-    #[test]
-    fn lithostitched_random_and_condition_become_the_games() {
-        let mut data = data();
-        let swap = json!({"processor_type": "lithostitched:block_swap",
-            "blocks": {"minecraft:dirt": "minecraft:grass_block"}});
-        data.lists
-            .insert("v:green".into(), json!({"processors": [swap.clone()]}));
-        let mut list = json!({"processors": [
-            {"processor_type": "lithostitched:apply_random", "mode": "per_piece", "processor_lists": [
-                {"weight": 3, "data": "minecraft:empty"},
-                {"weight": 1, "data": {"processors": [
-                    {"processor_type": "lithostitched:reference", "processor_lists": "v:green"},
-                    {"processor_type": "v:java"}]}}]},
-            {"processor_type": "lithostitched:apply_random", "mode": "per_block",
-             "processor_lists": ["v:green", "v:red"]},
-            {"processor_type": "lithostitched:apply_random", "mode": "per_block",
-             "processor_lists": "#v:colours"},
-            {"processor_type": "lithostitched:condition",
-             "if_true": [{"type": "lithostitched:matching_blocks", "blocks": "minecraft:cobblestone"}],
-             "then": swap, "else": {"processor_type": "lithostitched:set_block", "state_provider":
-                {"type": "minecraft:simple_state_provider", "state": {"Name": "minecraft:stone"}}}},
-            {"processor_type": "lithostitched:condition",
-             "if_true": {"type": "lithostitched:matching_biomes", "biomes": "#c:is_cold"},
-             "then": []}]});
-        let mut carried = BTreeMap::new();
-        assert!(carry("processor_list", &mut list, &data, &mut carried));
-        let p = list["processors"].as_array().unwrap();
-        let green = json!({"processor_type": "horizon:block_swap",
-            "blocks": {"minecraft:dirt": "minecraft:grass_block"}});
-        // Inline lists are carried; Java left in them is dropped later.
-        assert_eq!(
-            p[0],
-            json!({"processor_type": "horizon:apply_random", "mode": "per_piece", "processor_lists": [
-                {"weight": 3, "data": "minecraft:empty"},
-                {"weight": 1, "data": {"processors": [green.clone(), {"processor_type": "v:java"}]}}]})
-        );
-        assert_eq!(
-            p[1]["processor_lists"],
-            json!([{"weight": 1, "data": "v:green"}, {"weight": 1, "data": "v:red"}])
-        );
-        assert_eq!(p[2]["processor_type"], "lithostitched:apply_random");
-        assert_eq!(
-            p[3],
-            json!({"processor_type": "horizon:condition",
-                "if_true": [{"type": "lithostitched:matching_blocks", "blocks": "minecraft:cobblestone"}],
-                "then": [green], "else": [{"processor_type": "horizon:set_block", "state_provider":
-                    {"type": "minecraft:simple_state_provider", "state": {"Name": "minecraft:stone"}}}]})
-        );
-        assert_eq!(p[4]["processor_type"], "lithostitched:condition");
-        assert_eq!(carried["lithostitched:apply_random"], 2);
-        assert_eq!(carried["lithostitched:condition"], 1);
     }
 
     #[test]
@@ -1598,71 +798,6 @@ mod tests {
             "repurposed_structures:y_value_pos_rule_test"}),
             &mut carried
         ));
-    }
-
-    #[test]
-    fn ocean_monuments_become_the_games() {
-        let names = [
-            "random_prismarine_slab_decoration_processor",
-            "random_dark_prismarine_slab_decoration_processor",
-            "sand_gravel_processor",
-            "random_oxidization_processor",
-            "structure_void_processor",
-            "air_processor",
-            "waterlog_processor",
-            "seagrass_processor",
-            "random_sponge_processor",
-            "leg_processor",
-        ];
-        let processors: Vec<Value> = names
-            .iter()
-            .map(|n| json!({"processor_type": format!("betteroceanmonuments:{n}")}))
-            .chain([json!({"processor_type": "betterwitchhuts:fence_leg_processor"})])
-            .collect();
-        let mut list = json!({"processors": processors});
-        let mut carried = BTreeMap::new();
-        assert!(carry(
-            "processor_list",
-            &mut list,
-            &ProcessorData::default(),
-            &mut carried
-        ));
-        let p = list["processors"].as_array().unwrap();
-        let types: Vec<&str> = p
-            .iter()
-            .map(|p| p["processor_type"].as_str().unwrap())
-            .collect();
-        let mut want = vec!["horizon:pick", "horizon:pick", "minecraft:rule"];
-        want.extend(["horizon:pick"; 4]);
-        want.extend([
-            "horizon:keep_world_block",
-            "horizon:flood_air",
-            "horizon:waterlog",
-            "minecraft:rule",
-            "horizon:pick",
-            "horizon:yung_pillar",
-            "horizon:yung_pillar",
-        ]);
-        assert_eq!(types, want);
-        assert_eq!(carried.values().sum::<usize>(), 11);
-        // Copper stairs keep their properties, each chance on a new float.
-        let stairs = &p[5];
-        assert_eq!(stairs["block"], "minecraft:oxidized_cut_copper_stairs");
-        assert_eq!(
-            stairs["picks"][1]["state"]["id"],
-            "minecraft:weathered_cut_copper_stairs"
-        );
-        assert_eq!(
-            (stairs["redraw"].clone(), stairs["keep_properties"].clone()),
-            (json!(true), json!(true))
-        );
-        assert_eq!(p[0]["picks"][0]["state"]["properties"]["type"], "top");
-        assert_eq!(p[1]["default"]["state"]["id"], "minecraft:water");
-        assert_eq!(
-            p[12]["target_block_output"]["defaultBlockState"]["id"],
-            "minecraft:prismarine_bricks"
-        );
-        assert_eq!(p[13]["keep_properties"], true);
     }
 
     #[test]
