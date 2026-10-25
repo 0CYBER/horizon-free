@@ -214,6 +214,7 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
             Output::Feedback { text, error } => {
                 format!("{}: {text}", if error { "error" } else { "feedback" })
             }
+            Output::Command { line } => format!("command: /{line}"),
             Output::Stopped { reason, .. } => return Err(format!("it stopped: {reason}")),
         });
     }
