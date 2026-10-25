@@ -43,6 +43,9 @@ copy is: the Mac mini. Its runner runs as the maintainer's account and keeps its
    modules, Java oracles and every Rust source their probes compile) changed since the merge base, plus any
    harness nothing is recorded about yet, and runs those that have no pass for their current inputs. A change to
    `Cargo.lock` or `research-lock.json` affects every harness. Each harness has 25 minutes, the job 45.
+   The selection runs with main's `tools/parity.py` and `tools/parity_reach.py` (`--changed <base> --list`), so a
+   branch made before a better selection landed gets it too, and the head's own `parity.py` then runs the named
+   harnesses. A branch that changes either file selects with its own code.
 
 Failed harnesses' logs are uploaded as the `parity-logs` artifact.
 
