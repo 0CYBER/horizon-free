@@ -143,3 +143,22 @@ fn registry_versions_run_when_made_for_this_game() {
         .collect();
     assert_eq!(pick(Kind::Mod, &versions, false).unwrap().number, "0.1.0");
 }
+
+#[test]
+fn owner_links_only_take_github_logins() {
+    for ok in ["Stink-O", "ludovic111", "a"] {
+        assert!(github_login(ok), "{ok}");
+    }
+    for bad in [
+        "",
+        "-x",
+        "x-",
+        "a--b",
+        "bad login",
+        "a/b",
+        "x?y=1",
+        &"a".repeat(40),
+    ] {
+        assert!(!github_login(bad), "{bad}");
+    }
+}

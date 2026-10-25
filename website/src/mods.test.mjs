@@ -53,3 +53,11 @@ test("the submit form sends what the service reads", () => {
   assert.equal(entry.icon, undefined);
   assert.equal(JSON.parse(JSON.stringify(entry)).key, undefined, "an empty key isn't sent");
 });
+
+test("a project's page links its owners' GitHub profiles, and only valid logins", () => {
+  const html = projectHtml(project({ owners: ["Stink-O", "bad login", "-x", "a--b", "ok\"><script>"] }));
+  assert.ok(html.includes('href="https://github.com/Stink-O"'));
+  assert.ok(html.includes("@Stink-O"));
+  for (const bad of ["bad login", "github.com/-x", "a--b", "<script>"]) assert.ok(!html.includes(bad), bad);
+  assert.ok(!projectHtml(project()).includes("Published by"));
+});

@@ -190,6 +190,18 @@ fn version_of(index: &Index, p: &index::Project, v: &index::Version) -> Version 
     }
 }
 
+/// A GitHub login as GitHub allows it (letters, digits, single dashes, at most 39), so an index
+/// entry can't turn a link into something else.
+fn github_login(login: &str) -> bool {
+    (1..=39).contains(&login.len())
+        && login
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && !login.starts_with('-')
+        && !login.ends_with('-')
+        && !login.contains("--")
+}
+
 /// The words of a query found in a project's id, name, summary or authors.
 fn matches(p: &index::Project, text: &str) -> bool {
     let hay = format!("{} {} {} {}", p.id, p.name, p.summary, p.authors.join(" ")).to_lowercase();
@@ -277,9 +289,14 @@ impl Source for Registry {
                 body.push_str(&format!("- {} {}{may}\n", m.name, w.version));
             }
         }
+        // Who publishes it: the GitHub accounts the registry checked at submission.
+        let owners = p.owners.iter().filter(|o| github_login(o)).map(|o| Link {
+            label: format!("@{o}"),
+            url: format!("https://github.com/{o}"),
+        });
         Ok(Details {
             body,
-            links: vec![
+            links: [
                 Link {
                     label: "Source".into(),
                     url: p.source.clone(),
@@ -292,7 +309,10 @@ impl Source for Registry {
                     label: "Report".into(),
                     url: format!("{REPORT}&title={}", p.id),
                 },
-            ],
+            ]
+            .into_iter()
+            .chain(owners)
+            .collect(),
             authors: p.authors.clone(),
             published: p
                 .versions
@@ -323,10 +343,19 @@ fn fetch(
 ) -> Result<PathBuf, String> {
     match file.url.strip_prefix("file://").filter(|_| local) {
         Some(path) => {
+            let path = local_path(path);
             let reader = fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
             download::save_from_anywhere(file, reader, folder, progress)
         }
         None => download::fetch(file, folder, progress),
+    }
+}
+
+/// The path of a `file:///` URL: on Windows `/C:/x` is `C:/x`.
+fn local_path(path: &str) -> &str {
+    match path.strip_prefix('/') {
+        Some(rest) if cfg!(windows) && rest.get(1..2) == Some(":") => rest,
+        _ => path,
     }
 }
 
