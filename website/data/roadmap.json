@@ -116,7 +116,8 @@
     "#1757",
     "docs/modpacks.md"
    ],
-   "focus": true
+   "focus": true,
+   "announce": true
   },
   {
    "id": "server-clients",
@@ -175,7 +176,8 @@
     "#1640",
     "docs/mods.md"
    ],
-   "focus": true
+   "focus": true,
+   "announce": true
   },
   {
    "id": "server-dialogs",
@@ -232,7 +234,8 @@
    "links": [
     "#1787",
     "#1788"
-   ]
+   ],
+   "announce": true
   },
   {
    "id": "lean-code",
@@ -262,7 +265,8 @@
    "links": [
     "docs/microsoft-account.md",
     "#1270"
-   ]
+   ],
+   "announce": true
   },
   {
    "id": "curseforge",
@@ -274,7 +278,8 @@
    "links": [
     "docs/mod-browser.md",
     "docs/modpacks.md"
-   ]
+   ],
+   "announce": true
   },
   {
    "id": "benchmarks",

@@ -33,7 +33,7 @@ test("an item's progress counts its pull requests and issues", () => {
 test("the roadmap renders every item once, with both texts, in its status's section", () => {
   const html = roadmapHtml(roadmap);
   for (const item of roadmap.items) {
-    assert.equal(html.split(`id="item-${item.id}"`).length, 2, item.id);
+    assert.equal(html.split(`id="${item.id}"`).length, 2, item.id);
   }
   assert.ok(html.indexOf('id="now"') < html.indexOf('id="next"'));
   assert.ok(html.includes('class="hub-plain"') && html.includes('class="hub-dev"'));
@@ -41,8 +41,15 @@ test("the roadmap renders every item once, with both texts, in its status's sect
   assert.ok(html.includes(`>${roadmap.items.find((i) => i.status === "shipped").shipped_in}<`));
 });
 
+test("an item is its own anchor (hub#<id>, as Kira links it) and takes no other id of the page", () => {
+  const page = readFileSync(new URL("./hub.html", import.meta.url), "utf8") + roadmapHtml(roadmap) + overviewHtml(roadmap);
+  const ids = [...page.matchAll(/ id="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(ids.filter((id, i) => ids.indexOf(id) !== i), []);
+  for (const item of roadmap.items) assert.ok(ids.includes(item.id), item.id);
+});
+
 test("the overview lists the focus items and never nests links", () => {
   const html = overviewHtml(roadmap);
-  for (const item of roadmap.items.filter((i) => i.focus)) assert.ok(html.includes(`href="#item-${item.id}"`), item.id);
+  for (const item of roadmap.items.filter((i) => i.focus)) assert.ok(html.includes(`href="#${item.id}"`), item.id);
   for (const row of html.match(/<li class="row">[\s\S]*?<\/li>/g)) assert.equal(row.split("<a ").length, 2, row);
 });

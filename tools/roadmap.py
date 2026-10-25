@@ -28,7 +28,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "roadmap" / "roadmap.toml"
 OUTPUT = ROOT / "ROADMAP.md"
-# What the website's hub reads (website/build.mjs), and serves at /hub/roadmap.json for Kira and others.
+# What the website's hub reads (website/build.mjs), and serves at /data/roadmap.json for Kira and others.
 SITE_DATA = ROOT / "website" / "data" / "roadmap.json"
 REPO = "ludovic111/horizon"
 SITE = "https://playhorizon.dev/hub"
@@ -52,6 +52,9 @@ ITEM_KEYS = {"id", "title", "status", "area", "plain", "dev", "links", "focus", 
 
 ISSUE = re.compile(r"#(\d+)$")
 ID = re.compile(r"[a-z0-9]+(-[a-z0-9]+)*$")
+# An item is the anchor playhorizon.dev/hub#<id>: it can't take the name of a tab, a section or a heading.
+RESERVED = {"main", "overview", "roadmap", "board", "journal", "contribute", "hub-data", *STATUSES}
+RESERVED_PREFIXES = ("h-", "tab-", "week-")
 RELEASE = re.compile(r"(v\d[\w.]*|launcher@\d[\w.]*|launcher-v\d[\w.]*|website)$")
 MONTHS = ("January|February|March|April|June|July|August|September|October|November|December")
 # Kira's rule: no dates and no promises of when. "Coming soon" is the one allowed phrase.
@@ -105,6 +108,8 @@ def validate(data, root=ROOT):
         ident = item.get("id", "")
         if ident and not ID.match(ident):
             problems.append(f"{where}: ids are lowercase words joined by dashes")
+        if ident in RESERVED or ident.startswith(RESERVED_PREFIXES):
+            problems.append(f"{where}: the id is taken by the hub page (hub#{ident} is a tab, a section or a heading)")
         if ident in seen:
             problems.append(f"{where}: the id appears twice")
         seen.add(ident)
@@ -231,7 +236,8 @@ def render(data):
 
 def site_data(data):
     """website/data/roadmap.json: the items as the hub and Kira read them, in the file's order."""
-    keys = ("id", "title", "status", "area", "plain", "dev", "links", "focus", "ongoing", "shipped_in", "post")
+    keys = ("id", "title", "status", "area", "plain", "dev", "links", "focus", "ongoing", "shipped_in", "post",
+            "announce")
     out = {
         "format": "horizon-roadmap",
         "version": 1,

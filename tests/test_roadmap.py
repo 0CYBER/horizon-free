@@ -121,6 +121,10 @@ class Rules(unittest.TestCase):
         self.assertTrue(any("link" in p for p in self.problems(links=["docs/nothing-here.md"])))
         self.assertTrue(any("link" in p for p in self.problems(links=["http://example.com"])))
 
+    def test_ids_are_free_anchors_of_the_hub(self):
+        for taken in ("roadmap", "now", "h-next", "tab-board"):
+            self.assertTrue(any("taken by the hub page" in p for p in self.problems(id=taken)), taken)
+
     def test_flags_are_true_or_false(self):
         self.assertEqual(self.problems(announce=True), [])
         self.assertTrue(any("announce is true or false" in p for p in self.problems(announce="yes")))

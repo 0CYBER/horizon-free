@@ -428,9 +428,9 @@ for (const { file, values: own } of docPages) {
   docPageFiles.push(file);
 }
 
-// The roadmap for other readers (Kira, scripts): /hub/roadmap.json, as tools/roadmap.py wrote it.
-await mkdir(join(dist, "hub"), { recursive: true });
-await cp(join(site, "data", "roadmap.json"), join(dist, "hub", "roadmap.json"));
+// The roadmap for other readers (Kira, scripts): /data/roadmap.json, as tools/roadmap.py wrote it.
+await mkdir(join(dist, "data"), { recursive: true });
+await cp(join(site, "data", "roadmap.json"), join(dist, "data", "roadmap.json"));
 
 // The pages' inline scripts (they mark the page as scripted and apply the saved theme before CSS
 // applies) and the inlined stylesheet: the Content-Security-Policy in the Caddyfile allows them by hash.

@@ -86,7 +86,7 @@ const areaName = (roadmap, id) => roadmap.areas.find((a) => a.id === id)?.name |
 export function itemHtml(item, roadmap, live) {
   const done = item.status === "shipped";
   const state = done ? "" : progress(item, live);
-  return `<article class="hub-item" id="item-${escape(item.id)}" data-area="${escape(item.area)}" data-item="${escape(item.id)}">
+  return `<article class="hub-item" id="${escape(item.id)}" data-area="${escape(item.area)}" data-item="${escape(item.id)}">
   <p class="hub-item-meta"><span class="badge">${escape(areaName(roadmap, item.area))}</span>${done ? `<span class="badge badge-game">${escape(item.shipped_in)}</span>` : ""}${item.ongoing ? `<span class="hub-ongoing">Ongoing</span>` : ""}</p>
   <h3 class="hub-item-title">${escape(item.title)}</h3>
   <p class="hub-plain">${inline(item.plain)}</p>
@@ -137,25 +137,25 @@ export function overviewHtml(roadmap, live = new Map()) {
   const focus = roadmap.items.filter((i) => i.focus);
   const next = roadmap.items.filter((i) => i.status === "next");
   const shipped = roadmap.items.filter((i) => i.status === "shipped").slice(0, 3);
-  const row = (item, i, meta) => `<li class="row"><a href="#item-${escape(item.id)}" data-goto="roadmap"><span class="row-index">${String(i + 1).padStart(2, "0")}</span><span class="hub-row-body"><span class="hub-row-title">${escape(item.title)}</span><span class="hub-plain">${inline(item.plain)}</span><span class="hub-dev">${inline(item.dev)}</span></span><span class="row-meta">${escape(meta(item))}</span></a></li>`;
+  const row = (item, i, meta) => `<li class="row"><a href="#${escape(item.id)}" data-goto="roadmap"><span class="row-index">${String(i + 1).padStart(2, "0")}</span><span class="hub-row-body"><span class="hub-row-title">${escape(item.title)}</span><span class="hub-plain">${inline(item.plain)}</span><span class="hub-dev">${inline(item.dev)}</span></span><span class="row-meta">${escape(meta(item))}</span></a></li>`;
   return `<div class="hub-today">
   <p class="hub-plain hub-lead">${inline(o.today_plain)}</p>
   <p class="hub-dev hub-lead">${inline(o.today_dev)}</p>
 </div>
-<section class="hub-block" aria-labelledby="h-focus">
-  <h2 class="title" id="h-focus">Being done now</h2>
+<section class="hub-block" aria-labelledby="h-ov-focus">
+  <h2 class="title" id="h-ov-focus">Being done now</h2>
   <ol class="index hub-rows">${focus.map((item, i) => row(item, i, (x) => progress(x, live))).join("")}</ol>
 </section>
-<section class="hub-block" aria-labelledby="h-next">
-  <h2 class="title" id="h-next">Next</h2>
+<section class="hub-block" aria-labelledby="h-ov-next">
+  <h2 class="title" id="h-ov-next">Next</h2>
   <ol class="index hub-rows">${next.map((item, i) => row(item, i, (x) => areaName(roadmap, x.area))).join("")}</ol>
 </section>
-<section class="hub-block" aria-labelledby="h-shipped">
-  <h2 class="title" id="h-shipped">Recently shipped</h2>
+<section class="hub-block" aria-labelledby="h-ov-shipped">
+  <h2 class="title" id="h-ov-shipped">Recently shipped</h2>
   <ol class="index hub-rows">${shipped.map((item, i) => row(item, i, (x) => `In ${x.shipped_in}`)).join("")}</ol>
 </section>
-<section class="hub-block hub-help" aria-labelledby="h-help">
-  <h2 class="title" id="h-help">How to help</h2>
+<section class="hub-block hub-help" aria-labelledby="h-ov-help">
+  <h2 class="title" id="h-ov-help">How to help</h2>
   <p class="hub-plain">${inline(o.help_plain)}</p>
   <p class="hub-dev">${inline(o.help_dev)}</p>
   <p class="hub-actions"><a class="button primary" href="#contribute" data-goto="contribute">Contribute</a><a class="button secondary" href="#help-wanted" data-goto="roadmap">Help wanted</a></p>
@@ -168,7 +168,7 @@ export function helpWantedHtml(roadmap) {
     .filter((i) => i.status === "help-wanted")
     .map((item, i) => {
       const first = (item.links || []).map(number).find(Boolean);
-      const href = first ? issueUrl(first) : `#item-${item.id}`;
+      const href = first ? issueUrl(first) : `#${item.id}`;
       return `<li class="row"><a href="${escape(href)}"><span class="row-index">${String(i + 1).padStart(2, "0")}</span><span class="hub-row-body"><span class="hub-row-title">${escape(item.title)}</span><span class="hub-plain">${inline(item.plain)}</span><span class="hub-dev">${inline(item.dev)}</span></span><span class="row-meta">${first ? `#${first}` : ""}</span></a></li>`;
     })
     .join("");

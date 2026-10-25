@@ -1,4 +1,4 @@
-// The hub page (/hub): its tabs (one per #hash, so /hub#roadmap and /hub#item-<id> can be linked), the
+// The hub page (/hub): its tabs (one per #hash, so /hub#roadmap and /hub#<item id> can be linked), the
 // Simple / Technical switch (remembered in localStorage), the area filter, and the live state of every
 // linked issue and pull request, refreshed from GitHub's public API. Without JavaScript, every tab reads
 // one after the other with what was baked at build time.
@@ -30,7 +30,7 @@ function choose(tab, { focus = false, push = false } = {}) {
   if (focus) tab.focus();
   if (push && location.hash !== `#${panelOf(tab).id}`) history.replaceState(null, "", `#${panelOf(tab).id}`);
 }
-// "#roadmap" opens its tab; "#item-x" or "#help-wanted" opens the tab holding it and scrolls there.
+// "#roadmap" opens its tab; "#<item id>" or "#help-wanted" opens the tab holding it and scrolls there.
 function follow() {
   const target = location.hash && document.getElementById(decodeURIComponent(location.hash.slice(1)));
   const tab = tabs.find((t) => target && (panelOf(t) === target || panelOf(t).contains(target))) || tabs[0];
@@ -116,4 +116,4 @@ async function refresh() {
 setUpTheme();
 setUpMenu();
 follow();
-refresh().then(() => location.hash.startsWith("#item-") && follow());
+refresh().then(() => data.roadmap.items.some((i) => `#${i.id}` === location.hash) && follow());

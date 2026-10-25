@@ -38,8 +38,11 @@
 	redir /roadmap /hub#roadmap permanent
 	@doc path_regexp doc ^/docs/([a-z-]+)$
 	rewrite @doc /docs/{re.doc.1}.html
-	@pages path / /index.html /404.html /privacy.html /releases /releases.html /benchmarks /benchmarks.html /benchmarks.json /hub /hub.html /hub/* /docs /docs/* /sitemap.xml
+	@pages path / /index.html /404.html /privacy.html /releases /releases.html /benchmarks /benchmarks.html /benchmarks.json /hub /hub.html /data/* /docs /docs/* /sitemap.xml
 	header @pages Cache-Control "no-cache"
+	# The hub's data for Kira and anyone else: readable from any origin.
+	@data path /data/*
+	header @data Access-Control-Allow-Origin "*"
 	@legal path /LEGAL.md /fonts/*.txt
 	header @legal Content-Type "text/plain; charset=utf-8"
 
