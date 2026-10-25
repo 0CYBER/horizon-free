@@ -1261,28 +1261,9 @@ impl Game<'_> {
         host: &LanHost,
         stack: &Option<horizon_protocol::item::Stack>,
     ) -> Option<ItemStack> {
-        use horizon_protocol::item::{Component, component};
         let s = stack.as_ref()?;
-        let name = host
-            .hub
-            .item_name(s.item)
-            .unwrap_or_else(|| "minecraft:air".into());
-        let mut out = ItemStack::new(&name, s.count.max(1) as u32);
-        out.damage = s.damage().max(0) as u32;
-        if let Some(Component::Enchantments(list)) = s.component(component::ENCHANTMENTS) {
-            for (id, level) in list {
-                if let Some(e) = host.hub.enchantment_name(*id) {
-                    out.enchant(&e, *level as u32);
-                }
-            }
-        }
-        if let Some(Component::Potion {
-            potion: Some(id), ..
-        }) = s.component(component::POTION_CONTENTS)
-            && let Some(potion) = host.hub.registry_name("minecraft:potion", *id)
-        {
-            out = out.with_potion(potion);
-        }
+        let mut out = host.hub.stack_from_network(s);
+        out.count = out.count.max(1);
         Some(out)
     }
 
