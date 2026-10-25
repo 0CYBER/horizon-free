@@ -6252,6 +6252,56 @@ CHECKS += ['crystals']
 CHECK_FNS.update(crystals=check_crystals)
 
 
+def check_crystal_blast(host, guest, out):
+    """#1533: TNT removes a crystal without a blast; a punched crystal blasts once.
+    Both clients must see the surviving distant and invulnerable crystals."""
+    spots = apart(host, guest)
+    seen = {}
+    for label, player, other in (('host', host, guest), ('guest', guest, host)):
+        x, y, z = spots[label]
+        y += 32
+        player('command', command='gamemode creative')
+        for offset, cause in enumerate(('tnt', 'melee')):
+            # Leave survivors in separate arenas; the scratch world is discarded.
+            z = spots[label][2] + (0 if label == 'host' else 80) + offset * 40
+            case = f'{label}-{cause}'
+            host('command', command=f'fill {x - 3} {y - 1} {z - 3} {x + 25} {y - 1} {z + 5} minecraft:bedrock')
+            host('command', command=f'fill {x - 3} {y} {z - 3} {x + 25} {y + 4} {z + 5} minecraft:air')
+            positions = [[x + dx, y, z + dz] for dx, dz in ((2.5, 0.5), (12.5, 0.5), (22.5, 0.5), (4.5, 3.5))]
+
+            def remaining(game):
+                crystals = [p for p in game('status')['projectiles'] if p['kind'] == 'minecraft:end_crystal']
+                return [i for i, at in enumerate(positions)
+                        if any(math.dist(p['position'], at) < 0.01 for p in crystals)]
+
+            for i, at in enumerate(positions):
+                host('command', command=f'summon minecraft:end_crystal {at[0]} {at[1]} {at[2]} {{Invulnerable:{1 if i == 3 else 0}b}}')
+            player('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+            other('command', command='gamemode creative')
+            other('command', command=f'tp @s {x + 0.5} {y} {z + 4.5}')
+            player('command', command='clear @s')
+            player.wait(20)
+            for game in (host, guest):
+                assert remaining(game) == [0, 1, 2, 3], f'{case}: crystals not tracked on {game.name}'
+            if cause == 'tnt':
+                player('command', command=f'summon minecraft:tnt {x + 0.5} {y} {z + 0.5} {{fuse:10s}}')
+            else:
+                player.raw('look-at', positions[0][0], y + 1, positions[0][2])
+                player.raw('mouse', 'left', 'click')
+            player.wait(80)
+            result = {game.name: remaining(game) for game in (host, guest)}
+            seen[case] = result
+            # TNT reaches the first crystal only. A direct crystal blast reaches
+            # the second too, but that crystal must not detonate the third.
+            expected = [1, 2, 3] if cause == 'tnt' else [2, 3]
+            assert all(ids == expected for ids in result.values()), f'{case}: expected {expected}, got {result}'
+    return seen
+
+
+CHECKS += ['crystal_blast']
+CHECK_FNS.update(crystal_blast=check_crystal_blast)
+
+
 def check_boat_dismount_pose(host, guest, out):
     """Removing a boat detaches its mobs on the server and every observing client."""
     x, y, z = map(math.floor, pos_of(host))

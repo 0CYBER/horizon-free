@@ -444,7 +444,7 @@ impl Game<'_> {
                     .find(|i| i.id == id)
                     .map(|i| i.stack.item.to_string())
                     .unwrap_or_default();
-                Text::literal(self.pack.names.item(&item))
+                Text::literal(self.pack.names.display_item(&item))
             }
             Target::Mob(id)
                 if self
