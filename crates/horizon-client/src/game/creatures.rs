@@ -1528,6 +1528,10 @@ impl Game<'_> {
             // hurt cooldown (a stronger hit there only adds its difference).
             if o.knockback {
                 let (xd, zd) = (from[0] - player.position.x, from[2] - player.position.z);
+                // dealDefaultKnockback's `indicateDamage`, unless blocked.
+                if o.blocked <= 0.0 {
+                    player.health.indicate_damage(xd, zd, player.yaw);
+                }
                 self.knock_back_player(f64::from(0.4_f32), xd, zd);
                 if let Some(p) = self.player.as_mut()
                     && let Some(r) = p.hurt_log.last_mut()
