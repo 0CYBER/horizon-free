@@ -42,7 +42,21 @@ until mkdir "$lock" 2>/dev/null; do
 done
 trap 'rmdir "$lock" 2>/dev/null || true' EXIT
 # horizon-prepare writes .local/horizon-client and its exporters' outputs beside it: all of them live in
-# $prepared, listed in $prepared/.entries, and .local/ links to them.
+# $prepared, listed in $prepared/.entries, and .local/ links to them. A real folder of that kind in .local/ is
+# what an older failed preparation left: it would hide the preparations (and a new one would not count it as its
+# own output), so it goes.
+outputs=$({ cat "$shared"/prepared/*/.entries; cd .local && ls -d horizon-client*; } 2>/dev/null || true)
+for name in $(echo "$outputs" | LC_ALL=C sort -u); do
+  if [ -e ".local/$name" ] && [ ! -L ".local/$name" ]; then
+    rm -rf ".local/${name:?}"
+    echo "Removed .local/$name, left by a failed preparation"
+  fi
+done
+# A preparation made while such a folder was there did not list it (horizon-client above all), so it is made again.
+if [ -f "$prepared/.entries" ] && ! grep -qx horizon-client "$prepared/.entries"; then
+  echo "Preparation $key lacks horizon-client: preparing again"
+  rm -rf "$prepared"
+fi
 if [ ! -f "$prepared/.entries" ]; then
   echo "Preparing resources with this checkout's horizon-prepare ($key)"
   rm -rf "$prepared" && mkdir -p "$prepared"
@@ -55,6 +69,9 @@ if [ ! -f "$prepared/.entries" ]; then
   cargo build --release --locked -p horizon-prepare
   if ! target/release/horizon-prepare --root "$PWD" > "$RUNNER_TEMP/prepare.log" 2>&1; then
     tail -40 "$RUNNER_TEMP/prepare.log"
+    # Nothing of a failed preparation stays in .local/: the next job prepares again.
+    LC_ALL=C comm -13 <(echo "$before") <(ls -1A .local | LC_ALL=C sort) |
+      while read -r name; do rm -rf ".local/${name:?}"; done
     rm -rf "$prepared"
     exit 1
   fi
