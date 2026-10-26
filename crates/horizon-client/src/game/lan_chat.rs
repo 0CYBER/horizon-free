@@ -28,7 +28,11 @@ impl Game<'_> {
 
     /// SignableCommand.of: the command's message arguments, by name, with
     /// their text, not past a redirect to the root (`execute ... run`).
-    fn signable_arguments(&mut self, permission: u8, command: &str) -> Vec<(String, String)> {
+    pub(super) fn signable_arguments(
+        &mut self,
+        permission: u8,
+        command: &str,
+    ) -> Vec<(String, String)> {
         let parse = self.parse_as(permission, command);
         let nodes = &vanilla::game_dispatcher().nodes;
         let root = parse.context.root;

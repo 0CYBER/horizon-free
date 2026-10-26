@@ -315,6 +315,13 @@ impl Game<'_> {
                             self.item_frames.push(f);
                         }
                     }
+                    "minecraft:cushion" => {
+                        self.next_entity += 1;
+                        if let Some(c) = entity_nbt::cushion_from_nbt(&tag, self.next_entity) {
+                            self.remember(c.id, uuid, tag);
+                            self.cushions.push(c);
+                        }
+                    }
                     "minecraft:painting" => {
                         if let Some((pos, facing, variant)) = entity_nbt::painting_from_nbt(&tag)
                             && let Some(v) = self.painting_variants.get(&variant).cloned()
@@ -801,6 +808,18 @@ impl Game<'_> {
                 out.entry(chunk_of(at)).or_default().push(tag);
             }
         }
+        for c in &self.cushions {
+            if keys.contains(&chunk_of(c.position)) {
+                let uuid = self
+                    .persist
+                    .uuids
+                    .get(&c.id)
+                    .copied()
+                    .unwrap_or_else(random_uuid);
+                let tag = entity_nbt::cushion_to_nbt(c, uuid, self.persist.raw.get(&c.id));
+                out.entry(chunk_of(c.position)).or_default().push(tag);
+            }
+        }
         for p in &self.paintings {
             let at = painting_center(p);
             if keys.contains(&chunk_of(at)) {
@@ -893,6 +912,13 @@ impl Game<'_> {
                 }
                 keep
             });
+            self.cushions.retain(|c| {
+                let keep = !gone(c.position);
+                if !keep {
+                    removed.push(c.id);
+                }
+                keep
+            });
             // Riders leave with their root vehicle, a boat's with the boat.
             let leaving: HashSet<u32> = (0..self.mobs.len())
                 .filter(|&i| {
@@ -959,6 +985,7 @@ impl Game<'_> {
             .chain(self.boats.iter().map(|e| e.id))
             .chain(self.carts.iter().map(|e| e.id))
             .chain(self.armor_stands.iter().map(|e| e.id))
+            .chain(self.cushions.iter().map(|e| e.id))
             .chain(self.item_frames.iter().map(|e| e.id))
             .chain(self.paintings.iter().map(|e| e.id))
             .chain(self.others.iter().map(|e| e.id))

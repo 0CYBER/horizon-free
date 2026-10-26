@@ -91,8 +91,8 @@ pub(super) struct Minecart {
     /// again while the items are still that roll.
     pub loot: Option<horizon_client::save::RolledLoot>,
 }
-const WIDTH: f64 = 0.98;
-const HEIGHT: f64 = 0.7;
+pub(super) const WIDTH: f64 = 0.98;
+pub(super) const HEIGHT: f64 = 0.7;
 /// AbstractMinecart.getDefaultDisplayOffset, in sixteenths of a block.
 fn display_offset(kind: CartKind) -> f64 {
     if kind == CartKind::Hopper { 1.0 } else { 6.0 }
@@ -100,7 +100,7 @@ fn display_offset(kind: CartKind) -> f64 {
 /// The minecart's passenger attachment minus Player.DEFAULT_VEHICLE_ATTACHMENT.
 pub(super) const SEAT: f64 = 0.1875 - 0.6;
 /// The placeholder container key under which an open cart's items live.
-pub(super) const CART_KEY_Y: i32 = -100_000;
+pub(super) const CART_KEY_Y: i32 = horizon_client::lan::menu::VEHICLE_KEY_Y;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Shape {
@@ -1121,22 +1121,35 @@ impl Game<'_> {
         self.swing_arm();
         true
     }
-    /// Closing a cart's container copies the items back.
-    pub(super) fn close_cart_container(&mut self) {
-        let Some(key) = self.container.filter(|k| k.1 == CART_KEY_Y) else {
+    /// Closing the cart's container open under `key` copies the items back.
+    pub(super) fn close_cart_container(&mut self, key: (i32, i32, i32)) {
+        if key.1 != CART_KEY_Y {
+            return;
+        }
+        self.store_cart_items(key);
+        self.world.block_entities.remove(&key);
+        if let Some(c) = self.carts.iter().find(|c| c.id as i32 == key.2)
+            && c.kind == CartKind::Chest
+        {
+            let at = [c.position.x, c.position.y, c.position.z];
+            let pitch = self.world.random.next_float() * 0.1 + 0.9;
+            self.audio
+                .play("minecraft:block.chest.close", Some(at), 0.5, pitch);
+        }
+    }
+    /// The menu of a chest or hopper minecart or a chest boat works on the
+    /// vehicle's own items (`ContainerEntity`): the placeholder under `key`
+    /// that the menu edits is copied back to the vehicle.
+    pub(super) fn store_cart_items(&mut self, key: (i32, i32, i32)) {
+        if key.1 != CART_KEY_Y {
+            return;
+        }
+        let Some(BlockEntity::Chest(items)) = self.world.block_entities.get(&key) else {
             return;
         };
-        let Some(BlockEntity::Chest(items)) = self.world.block_entities.remove(&key) else {
-            return;
-        };
+        let items = items.clone();
         if let Some(c) = self.carts.iter_mut().find(|c| c.id as i32 == key.2) {
             c.items = items;
-            let at = [c.position.x, c.position.y, c.position.z];
-            if c.kind == CartKind::Chest {
-                let pitch = self.world.random.next_float() * 0.1 + 0.9;
-                self.audio
-                    .play("minecraft:block.chest.close", Some(at), 0.5, pitch);
-            }
         } else if let Some(b) = self.boats.iter_mut().find(|b| b.id as i32 == key.2) {
             b.items = items;
         }

@@ -204,6 +204,14 @@ impl ItemStack {
     pub fn custom_name(&self) -> Option<&str> {
         self.data().and_then(|d| d.custom_name.as_deref())
     }
+    /// `minecraft:item_name` in the current language (`getItemName`'s
+    /// component). It stays in the patch as loaded, so a translatable name
+    /// saves and reaches clients unchanged; the ominous banner's is modelled
+    /// by `ominous_banner` instead.
+    pub fn item_name(&self) -> Option<String> {
+        let name = self.data()?.other("minecraft:item_name")?;
+        Some(crate::entity_nbt::name_text(name).plain())
+    }
     pub fn potion(&self) -> Option<&str> {
         self.data().and_then(|d| d.potion.as_deref())
     }

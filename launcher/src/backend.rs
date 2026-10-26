@@ -80,14 +80,18 @@ const CLIENT: &str = if cfg!(windows) {
     "horizon-client"
 };
 
-fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .user_agent(&format!("horizon-launcher/{VERSION}"))
-        .build()
+/// The agent `url` is fetched with: the launcher's own user agent, through the player's proxy when
+/// one is set (`proxy`).
+fn agent(url: &str) -> ureq::Agent {
+    crate::proxy::agent(
+        ureq::AgentBuilder::new().user_agent(&format!("horizon-launcher/{VERSION}")),
+        url,
+    )
+    .build()
 }
 
 fn get(url: &str) -> Result<ureq::Response, String> {
-    let mut request = agent().get(url);
+    let mut request = agent(url).get(url);
     // CI runners share addresses and hit GitHub's anonymous rate limit; they pass their own token.
     if let Some(token) = std::env::var("HORIZON_GITHUB_TOKEN")
         .ok()
@@ -421,6 +425,37 @@ pub fn version_dir(tag: &str) -> PathBuf {
 }
 
 const COMPLETE: &str = ".installed";
+
+/// The mod API level of the game players run: the selected version's, else the newest installed
+/// one's. None with no version installed: the launcher doesn't know yet which game will run mods.
+pub fn game_mod_api_level() -> Option<u32> {
+    let installed = installed();
+    let tag = Settings::load()
+        .selected
+        .filter(|s| installed.contains(s))
+        .or_else(|| installed.into_iter().next())?;
+    Some(mod_api_level(&tag))
+}
+
+/// A game version's mod API level, read once from the mark its program carries
+/// (`horizon_mods::api_level::MARK`). A program from before the mark serves level 0, the
+/// contract of Horizon 0.2.67 and 0.2.68.
+pub fn mod_api_level(tag: &str) -> u32 {
+    static LEVELS: Mutex<Vec<(String, u32)>> = Mutex::new(Vec::new());
+    let mut levels = LEVELS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(&(_, level)) = levels.iter().find(|(t, _)| t == tag) {
+        return level;
+    }
+    let level = program_mod_api_level(&version_dir(tag).join(CLIENT));
+    levels.push((tag.to_owned(), level));
+    level
+}
+
+/// The mod API level in the game program at `path`: its mark's, else 0.
+fn program_mod_api_level(path: &Path) -> u32 {
+    let program = fs::read(path).unwrap_or_default();
+    horizon_mods::api_level::read_mark(&program).unwrap_or(0)
+}
 
 /// Installed versions, newest tag first.
 pub fn installed() -> Vec<String> {
@@ -2499,6 +2534,10 @@ pub struct Settings {
     /// default. Appended after the launcher's own arguments, so they can add to or override them.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub game_args: String,
+    /// The HTTP proxy every download goes through (`proxy`), such as `http://127.0.0.1:7890`.
+    /// Unset means none: the environment's `HTTPS_PROXY` and `HTTP_PROXY` apply instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
     /// Dark, Light, or the system's: the launcher's look. Dark by default.
     #[serde(default)]
     pub appearance: Appearance,
@@ -2556,6 +2595,24 @@ mod java_tests;
 mod tests {
     use super::*;
     use std::cmp::Ordering::*;
+
+    /// The game program's mod API level is its mark's; a program from before the mark (0.2.68
+    /// and older) or none at all serves level 0.
+    #[test]
+    fn a_game_program_says_its_mod_api_level() {
+        let dir = std::env::temp_dir().join(format!("horizon-api-level-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let marked = dir.join("marked");
+        let mut program = b"\x7fELF code code".to_vec();
+        program.extend_from_slice(b"horizon-mod-api-level:0007;");
+        fs::write(&marked, &program).unwrap();
+        let old = dir.join("old");
+        fs::write(&old, b"\x7fELF code without a mark").unwrap();
+        assert_eq!(program_mod_api_level(&marked), 7);
+        assert_eq!(program_mod_api_level(&old), 0);
+        assert_eq!(program_mod_api_level(&dir.join("missing")), 0);
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     /// A preparation that reuses the imported game files still reads the assets from the
     /// launcher that has them: a Prism Launcher instance's are in the launcher root, linked into
