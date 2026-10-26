@@ -253,6 +253,28 @@ impl Game<'_> {
                 Victim::Host => land(self),
                 Victim::Guest(conn) => self.guest_struck_by(host, conn, land).unwrap_or(false),
             };
+        // ServerPlayer.awardKillScore: the blow that kills a player.
+        if hurt {
+            let died = match victim {
+                Victim::Host => self
+                    .player
+                    .as_ref()
+                    .is_some_and(|p| p.health.dead_or_dying()),
+                Victim::Guest(conn) => host
+                    .hub
+                    .guest(conn)
+                    .and_then(|g| g.motion.as_deref())
+                    .is_some_and(|p| p.health.dead_or_dying()),
+            };
+            if died {
+                match s.attacker {
+                    Some(conn) => {
+                        self.as_guest(host, conn, |g| g.stats.custom("player_kills", 1));
+                    }
+                    None => self.stats.custom("player_kills", 1),
+                }
+            }
+        }
         if hurt && s.crit {
             let target = match victim {
                 Victim::Host => self.player.as_ref().map(|p| (host.host_entity, p)),
