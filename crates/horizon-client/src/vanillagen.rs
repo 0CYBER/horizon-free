@@ -39,6 +39,8 @@ pub struct VanillaTerrain {
     tick_blocks: Vec<u32>,
     /// Block index -> default state id: `tick_blocks` the other way.
     tick_states: Vec<u32>,
+    /// Block state id -> the block entity type of its block, if it has one.
+    block_entity_types: Vec<Option<&'static str>>,
     seed: i64,
     dimension: String,
     /// When the last proto chunk was generated, in milliseconds since
@@ -51,6 +53,51 @@ enum VanillaProto {
     Ready(Box<ProtoChunk>),
     Failed(i32, i32),
 }
+/// WorldGenRegion.setBlock gives every block with a block entity a new
+/// one: the blocks nothing placed data for (a sculk patch's sensors) get
+/// vanilla's defaults.
+fn add_default_block_entities(kinds: &[Option<&str>], out: &mut Chunk, raw: &mut Vec<Tag>) {
+    let kind = |v: u32| kinds.get(v as usize).copied().flatten();
+    let mut states = [0u32; 4096];
+    for (si, section) in out.sections.iter().enumerate() {
+        if !section.blocks.maybe_has(|v| kind(v).is_some()) {
+            continue;
+        }
+        section.unpack(&mut states);
+        for (i, &v) in states.iter().enumerate() {
+            let Some(id) = kind(v) else {
+                continue;
+            };
+            let i = i as i32;
+            let pos = [
+                out.x * 16 + (i & 15),
+                MIN_Y + si as i32 * 16 + (i >> 8),
+                out.z * 16 + ((i >> 4) & 15),
+            ];
+            let at = |t: &Tag| {
+                ["x", "y", "z"]
+                    .iter()
+                    .zip(pos)
+                    .all(|(k, p)| t.get(k) == Some(&Tag::Int(p)))
+            };
+            if raw.iter().any(at) || out.block_entities.iter().any(|(p, _)| *p == pos.into()) {
+                continue;
+            }
+            let tag = Tag::compound([
+                ("id", Tag::String(id.into())),
+                ("x", Tag::Int(pos[0])),
+                ("y", Tag::Int(pos[1])),
+                ("z", Tag::Int(pos[2])),
+            ]);
+            let tag = crate::block_entity_nbt::canonical(&tag).unwrap_or(tag);
+            match crate::save::decode_block_entity(&tag) {
+                Some(modelled) => out.block_entities.push(modelled),
+                None => raw.push(tag),
+            }
+        }
+    }
+}
+
 impl VanillaTerrain {
     fn client_surface(&self, surface: SurfaceSample) -> crate::lod::Surface {
         crate::lod::Surface {
@@ -119,6 +166,7 @@ impl VanillaTerrain {
         }
         let mut tick_blocks = Vec::with_capacity(registry.len());
         let mut tick_states = Vec::new();
+        let mut block_entity_types = Vec::with_capacity(registry.len());
         let mut last: Option<&str> = None;
         let mut index = 0u32;
         for id in 0..registry.len() {
@@ -133,6 +181,7 @@ impl VanillaTerrain {
             }
             last = Some(name);
             tick_blocks.push(index);
+            block_entity_types.push(crate::lan::chunks::block_entity_type(name));
         }
         Ok(Self {
             generator,
@@ -141,6 +190,7 @@ impl VanillaTerrain {
             query: std::sync::Mutex::new(None),
             tick_blocks,
             tick_states,
+            block_entity_types,
             seed,
             dimension: dimension.to_owned(),
             last_proto: std::sync::atomic::AtomicU64::new(0),
@@ -553,7 +603,7 @@ impl ChunkGenerator for VanillaTerrain {
         // The block entities Horizon does not model (decorated pots with their
         // sherds and loot table, brushable blocks) stay as placed, like a
         // loaded chunk's.
-        let unmodelled: Vec<Tag> = chunk
+        let mut unmodelled: Vec<Tag> = chunk
             .block_entities
             .iter()
             .filter(|(pos, _)| {
@@ -573,6 +623,7 @@ impl ChunkGenerator for VanillaTerrain {
                 Some(Tag::Compound(nbt))
             })
             .collect();
+        add_default_block_entities(&self.block_entity_types, &mut out, &mut unmodelled);
         if !unmodelled.is_empty() || !rolled_loot.is_empty() {
             let mut extras = out
                 .saved
@@ -594,5 +645,37 @@ impl ChunkGenerator for VanillaTerrain {
         }
         out.fresh = true;
         out
+    }
+}
+
+#[cfg(test)]
+mod default_block_entity_tests {
+    use super::*;
+
+    #[test]
+    fn generated_blocks_get_their_block_entities() {
+        let mut out = Chunk::empty(-2, 3);
+        out.set(4, -40, 9, 7);
+        out.set(5, -40, 9, 6);
+        let mut kinds = vec![None; 8];
+        kinds[6] = Some("minecraft:potent_sulfur");
+        kinds[7] = Some("minecraft:sculk_sensor");
+        let mut raw = vec![];
+        add_default_block_entities(&kinds, &mut out, &mut raw);
+        assert!(matches!(
+            out.block_entities[..],
+            [((-28, -40, 57), crate::containers::BlockEntity::Sculk(_))]
+        ));
+        assert_eq!(raw.len(), 1);
+        assert_eq!(
+            raw[0].get("id"),
+            Some(&Tag::String("minecraft:potent_sulfur".into()))
+        );
+        add_default_block_entities(&kinds, &mut out, &mut raw);
+        assert_eq!(
+            (out.block_entities.len(), raw.len()),
+            (1, 1),
+            "a placed block entity is kept, not doubled"
+        );
     }
 }
