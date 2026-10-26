@@ -27,7 +27,9 @@ use {
         text::{self, Text},
         ui,
     },
-    horizon_mods::{Clock, ModKey, Mods, Output, Player, Snapshot, Status, UiScreen, UiWidget},
+    horizon_mods::{
+        Clock, ModKey, Mods, Output, Player, Runs, Snapshot, Status, UiScreen, UiWidget,
+    },
     std::time::Instant,
     winit::{event::MouseButton, keyboard::KeyCode},
 };
@@ -270,7 +272,7 @@ impl Game<'_> {
             .collect();
         let enabled = &self.settings.mods.enabled;
         let on = |id: &str| enabled.contains(id) || dev_ids.iter().any(|d| d == id);
-        let mods = Mods::load(&paths, on, vanilla_command);
+        let mods = Mods::load_for(Runs::Client, &paths, on, vanilla_command);
         self.mods.mods = mods;
         let chosen = &self.settings.mods;
         self.mods.mods.set_bindings(|id| chosen.keys_of(id));
@@ -412,6 +414,7 @@ impl Game<'_> {
             mappings,
             cps,
             font_widths: self.mods.font_widths.clone(),
+            players: Vec::new(),
         }
     }
     /// A game tick.
@@ -522,6 +525,8 @@ impl Game<'_> {
                     }
                     continue;
                 }
+                // Server mods' lines: this game runs no server mod yet.
+                Output::Tell { .. } | Output::Broadcast { .. } | Output::Reply { .. } => continue,
             };
             // Not through system_message: a mod must not hear its own lines.
             // Written by this client, so the Chat option doesn't hide it.

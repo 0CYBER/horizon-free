@@ -41,6 +41,11 @@ SCRIPT = [
     # Through an End portal (Entity.handlePortal), and back by command.
     ('bob-portal', ['cmd Bob setblock 2 101 3 minecraft:end_portal', 'cmd Bob tp @s 2.5 101 3.5']),
     ('bob-portal-back', [f'cmd Bob execute in {OVERWORLD} run tp @s 2.5 100 0.5']),
+    # Sent far into the Nether, then teleported within it before the far chunks load: a portal there
+    # still takes him (the abandoned arrival does not hold him).
+    ('bob-retarget', [f'cmd Bob execute in {NETHER} run tp @s 8192.5 100 0.5', 'cmd Bob tp @s 0.5 100 0.5']),
+    ('bob-retarget-portal', ['cmd Bob setblock 0 101 3 minecraft:end_portal', 'cmd Bob tp @s 0.5 101 3.5']),
+    ('bob-retarget-back', [f'cmd Bob execute in {OVERWORLD} run tp @s 2.5 100 0.5']),
 ]
 STEP_SECONDS = 5.0
 

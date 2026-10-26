@@ -1,7 +1,8 @@
 //! The sample index (`tests/index/index-v1.json`, the one docs/api/mod-index.md
 //! shows) and its files: `coords_hud-0.1.0.hmod`, signed with the throwaway
-//! key `test.pub` by minisign 0.12 (its secret key was deleted), and
-//! `cozy-1.0.0.hpack`, unsigned.
+//! key `test.pub` by minisign 0.12 (its secret key was deleted),
+//! `cozy-1.0.0.hpack`, unsigned, and `glow-1.0.0.hshader`, unsigned
+//! (`horizon-shader new --template post`, then `horizon-shader pack`).
 use super::*;
 use std::path::PathBuf;
 
@@ -25,8 +26,8 @@ fn reads_the_sample_and_keeps_unknown_kinds() {
     let index = sample();
     assert_eq!(index.schema, SCHEMA);
     let kinds: Vec<&str> = index.projects.iter().map(|p| p.kind.name()).collect();
-    assert_eq!(kinds, ["mod", "modpack", "world"]);
-    assert_eq!(index.projects[2].kind, Kind::Other("world".into()));
+    assert_eq!(kinds, ["mod", "modpack", "shader", "world"]);
+    assert_eq!(index.projects[3].kind, Kind::Other("world".into()));
     let hud = index.project("coords_hud").unwrap();
     assert_eq!(
         hud.versions[0].capabilities,
@@ -44,6 +45,8 @@ fn files_pass_against_their_entries() {
     assert_eq!(check(&index, "coords_hud", &hmod), Ok(Trust::Verified));
     let hpack = fixtures().join("cozy-1.0.0.hpack");
     assert_eq!(check(&index, "cozy", &hpack), Ok(Trust::Unsigned));
+    let hshader = fixtures().join("glow-1.0.0.hshader");
+    assert_eq!(check(&index, "glow", &hshader), Ok(Trust::Unsigned));
     let world = index.project("skyblock_start").unwrap();
     let e = check_file(&index, world, &world.versions[0], &hpack).unwrap_err();
     assert!(e.contains("bytes"), "{e}");
@@ -72,6 +75,15 @@ fn a_changed_file_key_or_manifest_is_refused() {
     more_caps.projects[0].versions[0].capabilities.pop();
     let e = check(&more_caps, "coords_hud", &hmod).unwrap_err();
     assert!(e.contains("isn't what the index lists"), "{e}");
+
+    let mut other_level = index.clone();
+    other_level.projects[0].versions[0].api_level = Some(1);
+    let e = check(&other_level, "coords_hud", &hmod).unwrap_err();
+    assert!(e.contains("isn't what the index lists"), "{e}");
+    // An index built before levels lists none: the file still passes.
+    let mut no_level = index.clone();
+    no_level.projects[0].versions[0].api_level = None;
+    assert_eq!(check(&no_level, "coords_hud", &hmod), Ok(Trust::Verified));
 
     let mut revoked = index.clone();
     revoked.revoked.push(Revoked {
@@ -162,6 +174,30 @@ fn resource_packs_need_a_pack_mcmeta() {
     let e = check_resource_pack(&pack(&[("pack.mcmeta", meta), ("../x", "")])).unwrap_err();
     assert!(e.contains("plain path"), "{e}");
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn the_newest_version_this_horizon_runs_is_installed() {
+    let mut index = sample();
+    let mut newer = index.projects[0].versions[0].clone();
+    newer.version = "0.2.0".into();
+    newer.file.sha256 = "2".repeat(64);
+    newer.api_level = Some(crate::api_level::LEVEL + 1);
+    index.projects[0].versions.insert(0, newer);
+    let p = index.project("coords_hud").unwrap();
+    let pick = |level| {
+        index
+            .installable(p, "26.3", level)
+            .map(|v| v.version.as_str())
+    };
+    assert_eq!(pick(crate::api_level::LEVEL), Some("0.1.0"));
+    assert_eq!(pick(crate::api_level::LEVEL + 1), Some("0.2.0"));
+    assert_eq!(index.installable(p, "26.4", crate::api_level::LEVEL), None);
+    // No level listed: runnable as far as the index knows.
+    index.projects[0].versions[0].api_level = None;
+    let p = index.project("coords_hud").unwrap();
+    let v = index.installable(p, "26.3", 0).unwrap();
+    assert_eq!(v.version, "0.2.0");
 }
 
 #[test]
