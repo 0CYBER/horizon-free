@@ -1,6 +1,8 @@
-//! Custom Windows chrome. Other platforms keep their native window decorations.
+//! Custom Windows chrome. Other platforms keep their native window decorations; on macOS,
+//! `apply_appearance` repaints that chrome (the title bar) to match the chosen look.
 use crate::theme::Theme;
 use gpui::{Div, TitlebarOptions, Window};
+use horizon_launcher::backend::Appearance;
 
 /// Whether the launcher draws its own title bar (`render`) rather than the system.
 pub const DRAWN: bool = cfg!(target_os = "windows");
@@ -17,6 +19,44 @@ pub fn options() -> TitlebarOptions {
 pub fn render(_theme: &Theme, _window: &Window) -> Option<Div> {
     None
 }
+
+/// macOS keeps the window's appearance on the system setting, so a launcher set to Dark still
+/// draws a light title bar on a light desktop. Pin the NSWindow's appearance to the choice
+/// instead (`theme::pinned_dark`: `System` clears the pin, handing the chrome back to the
+/// system). Elsewhere the chrome is ours (Windows) or the system's (Linux).
+#[cfg(target_os = "macos")]
+pub fn apply_appearance(window: &Window, choice: Appearance) {
+    use objc2_app_kit::{
+        NSAppearance, NSAppearanceCustomization, NSAppearanceName, NSAppearanceNameAqua,
+        NSAppearanceNameDarkAqua, NSView,
+    };
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    // AppKit's name constants are extern statics: reading them is `unsafe` to rustc only.
+    let name: Option<&'static NSAppearanceName> = match crate::theme::pinned_dark(choice) {
+        Some(true) => Some(unsafe { NSAppearanceNameDarkAqua }),
+        Some(false) => Some(unsafe { NSAppearanceNameAqua }),
+        None => None,
+    };
+    // The trait, not `Window::window_handle` (which is gpui's own `AnyWindowHandle`).
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+        return;
+    };
+    // The handle is the window's content view; its `window` is the NSWindow itself. Both outlive
+    // this call.
+    let view = unsafe { appkit.ns_view.cast::<NSView>().as_ref() };
+    let Some(native) = view.window() else {
+        return;
+    };
+    let appearance = name.and_then(NSAppearance::appearanceNamed);
+    native.setAppearance(appearance.as_deref());
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn apply_appearance(_: &Window, _: Appearance) {}
 
 #[cfg(target_os = "windows")]
 mod windows {
