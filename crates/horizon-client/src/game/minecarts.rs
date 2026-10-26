@@ -90,6 +90,8 @@ pub(super) struct Minecart {
     /// Chest minecarts: the loot table rolled into `items` on load, saved
     /// again while the items are still that roll.
     pub loot: Option<horizon_client::save::RolledLoot>,
+    /// `Entity.firstTick`: not ticked yet (saved as `HasTicked`).
+    pub first_tick: bool,
 }
 pub(super) const WIDTH: f64 = 0.98;
 pub(super) const HEIGHT: f64 = 0.7;
@@ -186,6 +188,7 @@ impl Minecart {
             fuse: -1,
             enabled: true,
             loot: None,
+            first_tick: true,
         }
     }
     pub fn bounds(&self) -> Aabb {
@@ -536,6 +539,7 @@ impl Game<'_> {
     }
     /// `AbstractMinecart.tick` for one cart; returns false once it is gone.
     fn tick_cart(&mut self, c: &mut Minecart, intent: [f64; 2]) -> bool {
+        c.first_tick = false;
         c.previous = c.position;
         c.previous_yaw = c.yaw;
         c.hurt_time = (c.hurt_time - 1).max(0);
@@ -1509,6 +1513,10 @@ impl Minecart {
                 map.insert(JavaString::from(k), v);
             };
             put("FlippedRotation", Tag::Byte(i8::from(self.flipped)));
+            // AbstractMinecart saves firstTick as HasTicked. A cart never burns:
+            // Entity.move sets -getFireImmuneTicks(), 0 for all but players.
+            put("HasTicked", Tag::Byte(i8::from(self.first_tick)));
+            put("Fire", Tag::Short(0));
             match self.kind {
                 CartKind::Chest | CartKind::Hopper => {
                     put("Items", horizon_client::save::encode_items(&self.items));
@@ -1558,6 +1566,7 @@ impl Minecart {
             _ => 0.0,
         };
         c.flipped = int("FlippedRotation").unwrap_or(0) != 0;
+        c.first_tick = int("HasTicked").unwrap_or(0) != 0;
         if kind.slots() > 0 {
             c.items = horizon_client::save::decode_items(tag.get("Items"), kind.slots());
         }
@@ -1581,5 +1590,31 @@ mod tests {
         assert_eq!(display_offset(CartKind::Tnt), 6.0);
         assert_eq!(display_offset(CartKind::CommandBlock), 6.0);
         assert_eq!(display_offset(CartKind::Rideable), 6.0);
+    }
+
+    #[test]
+    fn a_cart_saves_as_never_ticked_until_it_ticks() {
+        use horizon_world::nbt::Tag;
+        let generated = Tag::compound([
+            ("id", Tag::String("minecraft:chest_minecart".into())),
+            (
+                "Pos",
+                Tag::List(
+                    [0.5f64, 40.5, 0.5]
+                        .map(|v| Tag::Double(v.to_bits()))
+                        .to_vec(),
+                ),
+            ),
+            ("HasTicked", Tag::Byte(1)),
+            ("Fire", Tag::Short(0)),
+        ]);
+        let mut cart = Minecart::from_nbt(&generated, 1, CartKind::Chest).unwrap();
+        let saved = cart.to_nbt([0; 4], Some(&generated));
+        assert_eq!(saved.get("HasTicked"), Some(&Tag::Byte(1)));
+        assert_eq!(saved.get("Fire"), Some(&Tag::Short(0)));
+        cart.first_tick = false;
+        let saved = cart.to_nbt([0; 4], Some(&generated));
+        assert_eq!(saved.get("HasTicked"), Some(&Tag::Byte(0)));
+        assert_eq!(saved.get("Fire"), Some(&Tag::Short(0)));
     }
 }
