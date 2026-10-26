@@ -142,6 +142,27 @@ impl Game<'_> {
         let pitch = self.world.random.next_float() * 0.1 + 0.9;
         self.audio.play(sound, Some(at), 0.5, pitch);
     }
+    /// The close sound of the container block at `key`, if it has one.
+    pub(super) fn container_close_sound(&mut self, key: (i32, i32, i32)) {
+        let name = self
+            .res
+            .facts()
+            .get(self.world.block(key.0, key.1, key.2))
+            .name
+            .clone();
+        let sound = if is_shulker_box(&name) {
+            "minecraft:block.shulker_box.close"
+        } else if &*name == "minecraft:ender_chest" {
+            "minecraft:block.ender_chest.close"
+        } else if name.contains("chest") {
+            "minecraft:block.chest.close"
+        } else if &*name == "minecraft:barrel" {
+            "minecraft:block.barrel.close"
+        } else {
+            return;
+        };
+        self.container_sound(sound, key, &name);
+    }
     /// The other half of a double chest at `key`, for neighbour updates.
     pub(super) fn chest_other_half(&self, key: (i32, i32, i32)) -> Option<(i32, i32, i32)> {
         self.chest_partner(key).map(|p| p.0)

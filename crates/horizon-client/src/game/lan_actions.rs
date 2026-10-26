@@ -854,13 +854,16 @@ impl Game<'_> {
     }
 
     /// The guest's open container is closing (`AbstractContainerMenu.removed`):
-    /// it no longer counts among the openers of the lid.
+    /// it no longer counts among the openers of the lid, and the lid's close
+    /// sound is played for everyone around (`ChestBlockEntity.onClose`, a
+    /// `playSound` with no player), the guest included.
     pub(super) fn guest_container_closed(&mut self, host: &mut LanHost, conn: u32) {
         if let Some(g) = host.hub.guest(conn)
             && let Some(pos) = g.menu.as_ref().and_then(|m| m.pos)
             && !g.spectator()
         {
             self.container_openers_changed(pos, false);
+            self.container_close_sound(pos);
         }
     }
 
