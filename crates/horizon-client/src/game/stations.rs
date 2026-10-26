@@ -1094,6 +1094,9 @@ impl Game<'_> {
         let (ox, oy) = self.inventory_origin(batch);
         let local = (self.cursor.0 - ox, self.cursor.1 - oy);
         let mut tooltip: Option<Vec<(horizon_client::text::Text, u32)>> = None;
+        // Keep item tooltips as stacks until drawing: text alone loses the
+        // bundle contents component (including in the player's inventory).
+        let mut tooltip_stack: Option<ItemStack> = None;
         {
             let atlas = &self.gui.atlas;
             batch.fill(
@@ -1579,7 +1582,7 @@ impl Game<'_> {
                             );
                             self.draw_item(batch, &result, ox + x, oy + y);
                             if hover {
-                                tooltip = Some(self.stack_tooltip(&result));
+                                tooltip_stack = Some(result);
                             }
                         }
                     }
@@ -1606,13 +1609,16 @@ impl Game<'_> {
             );
             if self.carried.is_none()
                 && tooltip.is_none()
+                && tooltip_stack.is_none()
                 && let Some(stack) = self.slot_mut(slot).clone()
             {
-                tooltip = Some(self.stack_tooltip(&stack));
+                tooltip_stack = Some(stack);
             }
         }
         if self.carried.is_some() {
             self.draw_carried(batch);
+        } else if let Some(stack) = tooltip_stack {
+            self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
         } else if let Some(lines) = tooltip {
             self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
         }
