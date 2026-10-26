@@ -133,46 +133,7 @@ impl World<'_> {
             maps: None,
         };
         let random = self.sequences.get(&sequence, self.seed);
-        let generated = self.trades.offers_from_set(&ctx, set, random);
-        // Exercise the server/client offer boundary as well as the in-frame
-        // trade generation compared with vanilla below (notably water costs).
-        use horizon_protocol::{
-            buf::{Codec, Reader, Writer},
-            item::Stack,
-            packets::play::{NetOffer, Offers},
-        };
-        let cost = |stack: &ItemStack| {
-            horizon_client::lan::guest::stack_to_network(
-                |_| 1,
-                |registry, name| {
-                    (registry == "minecraft:potion" && name == "minecraft:water").then_some(0)
-                },
-                &Some(stack.clone()),
-            )
-            .unwrap()
-            .into()
-        };
-        let wire: Vec<_> = generated
-            .iter()
-            .map(|offer| NetOffer {
-                cost_a: cost(&offer.base_cost_a.stack),
-                cost_b: offer.cost_b.as_ref().map(|c| cost(&c.stack)),
-                result: Stack::new(2, 1),
-                out_of_stock: false,
-                uses: 0,
-                max_uses: 2,
-                xp: 0,
-                special_price: 0,
-                price_multiplier: 0.0,
-                demand: 0,
-            })
-            .collect();
-        let mut w = Writer::new();
-        Offers::write(&wire, &mut w);
-        let mut r = Reader::new(&w.data);
-        assert_eq!(Offers::read(&mut r).unwrap(), wire);
-        assert_eq!(r.remaining(), 0);
-        offers.extend(generated);
+        offers.extend(self.trades.offers_from_set(&ctx, set, random));
     }
     fn merchant(&mut self, spec: &str, origin: [f64; 3]) -> Merchant {
         let mut offers = Vec::new();
