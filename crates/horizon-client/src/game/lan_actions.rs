@@ -165,6 +165,8 @@ pub(super) struct GuestSwap {
     acting: (Option<u32>, Option<String>, Option<u128>),
     /// The packets queued for that guest.
     packets: Vec<play::Clientbound>,
+    /// The entity events queued for that guest.
+    entity_events: Vec<i8>,
     /// The host's count of swings started, kept while the guest acts.
     swings: u32,
     /// How many projectiles there were: those added since are the guest's.
@@ -389,6 +391,7 @@ impl Game<'_> {
             self.lan_acting_uuid.replace(g.uuid),
         );
         let packets = std::mem::take(&mut self.guest_packets);
+        let entity_events = std::mem::take(&mut self.guest_entity_events);
         let swings = self.swings_started;
         let projectiles = self.creatures.projectiles.len();
         let modifiers = std::mem::replace(
@@ -449,6 +452,7 @@ impl Game<'_> {
             death_cause,
             acting,
             packets,
+            entity_events,
             swings,
             projectiles,
             modifiers,
@@ -508,6 +512,7 @@ impl Game<'_> {
             combat,
             acting,
             packets,
+            entity_events,
             swings,
             projectiles,
             modifiers,
@@ -528,6 +533,17 @@ impl Game<'_> {
         self.swings_started = swings;
         for packet in std::mem::replace(&mut self.guest_packets, packets) {
             host.hub.send_to(conn, &packet);
+        }
+        // ServerPlayer.connection.send: the guest's own entity events.
+        let entity_id = host.hub.guests[i].entity_id;
+        for event in std::mem::replace(&mut self.guest_entity_events, entity_events) {
+            host.hub.send_to(
+                conn,
+                &C::EntityEvent(play::EntityEvent {
+                    id: entity_id,
+                    event,
+                }),
+            );
         }
         // ServerItemCooldowns.onCooldownStarted: the guest's own cooldown.
         for (group, duration) in std::mem::take(&mut self.guest_cooldowns) {
@@ -1910,21 +1926,8 @@ impl Game<'_> {
                 continue;
             }
             let play = host.play.entry(conn).or_default();
-            // Player.tick's ItemCooldowns.tick, once a tick for each player
-            // (the shield an axe disabled, a thrown pearl).
-            play.shield_cooldown = play.shield_cooldown.saturating_sub(1);
+            // ServerGamePacketListenerImpl.tick's dropSpamThrottler.
             play.creative_drops = play.creative_drops.saturating_sub(1);
-            // ServerItemCooldowns.onCooldownEnded: a finished entry is told to
-            // the guest (a duration of 0 removes it).
-            for group in play.cooldowns.tick() {
-                host.hub.send_to(
-                    conn,
-                    &C::Cooldown(play::Cooldown {
-                        group: group.to_string(),
-                        duration: 0,
-                    }),
-                );
-            }
             let digging = play.digging;
             let using = play.using.is_some();
             let delayed = play.destroy_delay > 0 || play.use_delay > 0 || play.attack_ticks < 100;
@@ -1960,6 +1963,24 @@ impl Game<'_> {
                 {
                     play.digging = None;
                 }
+            }
+            // Player.tick's ItemCooldowns.tick, once a tick for each player
+            // (the shield an axe disabled, a thrown pearl), after
+            // LivingEntity.tick's use: an entry a finished use starts has 20
+            // ticks left when the next tick's packets are handled, as the
+            // guest's own client counts.
+            let play = host.play.entry(conn).or_default();
+            play.shield_cooldown = play.shield_cooldown.saturating_sub(1);
+            // ServerItemCooldowns.onCooldownEnded: a finished entry is told to
+            // the guest (a duration of 0 removes it).
+            for group in play.cooldowns.tick() {
+                host.hub.send_to(
+                    conn,
+                    &C::Cooldown(play::Cooldown {
+                        group: group.to_string(),
+                        duration: 0,
+                    }),
+                );
             }
             // Player.tick: a different main-hand item resets the attack
             // strength, and detectEquipmentUpdates gives the guest its modifiers.
