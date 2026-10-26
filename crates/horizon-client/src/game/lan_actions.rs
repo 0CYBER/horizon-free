@@ -1983,6 +1983,7 @@ impl Game<'_> {
             self.as_guest(host, conn, |g| {
                 g.tick_fishing();
                 g.tick_maps();
+                g.tick_lodestone_compasses();
                 g.count_tick_stats(sleeping);
                 g.tick_advancements();
                 g.update_player_attributes();
