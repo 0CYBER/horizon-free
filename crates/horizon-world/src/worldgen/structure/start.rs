@@ -511,6 +511,18 @@ impl StructureRegistry {
             })
             .collect()
     }
+    /// How far from a chunk, in chunks, deciding its starts can look at
+    /// other sets' start chunks through exclusion zones: every set's zones
+    /// summed, a bound on any chain of them.
+    pub fn zone_reach(&self) -> i32 {
+        self.sets
+            .iter()
+            .map(|s| {
+                s.exclusion.as_ref().map_or(0, |e| e.1.max(0))
+                    + s.avoid.as_ref().map_or(0, |a| a.chunk_count.max(0))
+            })
+            .sum()
+    }
     /// The preferred biomes of a concentric-ring set (empty for others).
     pub fn ring_biomes(&self, set: usize) -> &BTreeSet<BiomeId> {
         static NONE: BTreeSet<BiomeId> = BTreeSet::new();
