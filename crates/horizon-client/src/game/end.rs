@@ -599,7 +599,9 @@ impl Game<'_> {
 
     /// EnderDragonFight without a dragon: once the centre of the main island
     /// is loaded, place the active exit portal (EndPodiumFeature) and the
-    /// first gateway (spawnNewGateway) if the portal is not there yet.
+    /// first gateway (spawnNewGateway) if the portal is not there yet. Like
+    /// scanState and spawnExitPortal, only while the fight has no exit portal
+    /// location: a podium that is later broken stays broken.
     fn ensure_exit_portal(&mut self) -> Result<()> {
         if self.travelling.is_some()
             || !(-1..=0).all(|cz| (-1..=0).all(|cx| self.streaming.is_lit(cx, cz)))
@@ -609,8 +611,15 @@ impl Game<'_> {
         }
         let won = self.fight.previously_killed;
         let gateway = self.first_gateway();
-        if (0..256).any(|y| &*self.block_name([0, y, 0]) == "minecraft:bedrock") {
-            // The podium exists; the gateway may have been out of range when it was placed.
+        let bedrock_top = (0..256)
+            .rev()
+            .find(|&y| &*self.block_name([0, y, 0]) == "minecraft:bedrock");
+        if bedrock_top.is_some() || self.exit_portal().is_some() {
+            if let Some(top) = bedrock_top {
+                // findExitPortal remembers the location of a podium that is already there.
+                self.set_exit_portal([0, top - 3, 0]);
+            }
+            // The gateway may have been out of range when it was placed.
             if won
                 && self.world.loaded(gateway[0], gateway[2])
                 && &*self.block_name(gateway) != "minecraft:end_gateway"
