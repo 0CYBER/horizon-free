@@ -9741,8 +9741,9 @@ impl Game<'_> {
         rain.extend(snow_vertices);
         rain
     }
-    /// Player.startSleepInBed: night or thunder, no monsters within 8 blocks;
-    /// the bed becomes the respawn point either way.
+    /// ServerPlayer.startSleepInBed: in reach, not obstructed, night or thunder,
+    /// and (outside creative) no monsters within 8 blocks; the bed becomes the
+    /// respawn point either way.
     fn try_sleep(&mut self, pos: [i32; 3]) {
         let Some(p) = self.player.as_ref() else {
             return;
@@ -9757,20 +9758,38 @@ impl Game<'_> {
             .state(state)
             .map(|s| s.properties.clone())
             .unwrap_or_default();
-        let head = if props.get("part").map(String::as_str) == Some("foot") {
-            let d = facing_offset(props.get("facing").map_or("north", String::as_str));
-            [pos[0] + d[0], pos[1], pos[2] + d[2]]
+        // The head and the foot: the block faces from the foot to the head.
+        let d = facing_offset(props.get("facing").map_or("north", String::as_str));
+        let (head, foot) = if props.get("part").map(String::as_str) == Some("foot") {
+            ([pos[0] + d[0], pos[1], pos[2] + d[2]], pos)
         } else {
-            pos
+            (pos, [pos[0] - d[0], pos[1], pos[2] - d[2]])
         };
-        let dist = ((p.position.x - f64::from(head[0]) - 0.5).powi(2)
-            + (p.position.z - f64::from(head[2]) - 0.5).powi(2))
-        .sqrt();
-        if dist > 3.0 {
+        // ServerPlayer.bedInRange / isReachableBedBlock: within 3 blocks
+        // sideways and 2 vertically of the head or the foot.
+        let reachable = |bed: [i32; 3]| {
+            (p.position.x - f64::from(bed[0]) - 0.5).abs() <= 3.0
+                && (p.position.y - f64::from(bed[1])).abs() <= 2.0
+                && (p.position.z - f64::from(bed[2]) - 0.5).abs() <= 3.0
+        };
+        if !reachable(head) && !reachable(foot) {
             self.message = Some((
                 "You may not rest now; the bed is too far away".into(),
                 Instant::now(),
             ));
+            return;
+        }
+        // ServerPlayer.bedBlocked: Player.freeAt (not suffocating) for the
+        // blocks above the head and the foot, as `in_wall` reads suffocating.
+        let blocked = [head, foot].iter().any(|bed| {
+            let f = self
+                .res
+                .facts()
+                .get(self.world.block(bed[0], bed[1] + 1, bed[2]));
+            f.full_collision && f.solid_render
+        });
+        if blocked {
+            self.message = Some(("This bed is obstructed".into(), Instant::now()));
             return;
         }
         // In reach (bedInRange), day or night: setRespawnPosition(
@@ -9802,13 +9821,15 @@ impl Game<'_> {
             ));
             return;
         }
-        let monsters = self.mobs.iter().any(|m| {
-            m.hostile()
-                && m.alive()
-                && (m.position.x - p.position.x).abs() < 8.0
-                && (m.position.y - p.position.y).abs() < 5.0
-                && (m.position.z - p.position.z).abs() < 8.0
-        });
+        // Creative players skip the monster check (`!this.isCreative()`).
+        let monsters = !self.creative
+            && self.mobs.iter().any(|m| {
+                m.hostile()
+                    && m.alive()
+                    && (m.position.x - p.position.x).abs() < 8.0
+                    && (m.position.y - p.position.y).abs() < 5.0
+                    && (m.position.z - p.position.z).abs() < 8.0
+            });
         if monsters {
             self.message = Some((
                 "You may not rest now; there are monsters nearby".into(),
@@ -9858,14 +9879,20 @@ impl Game<'_> {
             }
         }
         // ServerLevel.tick: once enough of the players have slept 100 ticks,
-        // skip to morning, clear the weather and wake everyone.
+        // skip to morning if `advance_time` is on, wake everyone, and
+        // resetWeatherCycle if `advance_weather` is on and it is raining.
         if self.enough_slept() {
-            let t = self.world.day_time;
-            self.world.day_time = t + 24000 - t.rem_euclid(24000);
-            self.world.weather.raining = false;
-            self.world.weather.thundering = false;
-            self.world.weather.rain_time = 0;
-            self.world.weather.thunder_time = 0;
+            if self.ui.rules.bool("advance_time") {
+                let t = self.world.day_time;
+                self.world.day_time = t + 24000 - t.rem_euclid(24000);
+            }
+            // Level.isRaining: the rain level is above 0.2.
+            if self.ui.rules.bool("advance_weather") && self.world.weather.levels(1.0).0 > 0.2 {
+                self.world.weather.raining = false;
+                self.world.weather.thundering = false;
+                self.world.weather.rain_time = 0;
+                self.world.weather.thunder_time = 0;
+            }
             if self.sleeping.is_some() {
                 self.wake_up();
             }
