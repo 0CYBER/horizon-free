@@ -850,6 +850,47 @@ impl Game<'_> {
             }
         }
     }
+    /// `LivingEntity.dropFromGiftLootTable`: the gift table from its random
+    /// sequence with the mob as `this` (a chicken's egg depends on its
+    /// variant); the loot data of the game's resources decides, and without it
+    /// the items' table engine (no entity) rolls it.
+    fn drop_gift_loot(&mut self, mob: u32, table: &'static str, at: [f64; 3]) {
+        use horizon_client::mobs::drops;
+        use horizon_world::loot::EntityLootParams;
+        let loot = horizon_client::structure_blocks::loot_data(&self.options.resources);
+        let this = self
+            .mobs
+            .iter()
+            .find(|m| m.id == mob)
+            .map(|m| drops::loot_entity(m, None));
+        let stacks = match (loot, this) {
+            (Some(loot), Some(this)) if loot.has_table(table) => {
+                let params = EntityLootParams {
+                    this,
+                    ..EntityLootParams::default()
+                };
+                let seed = self.level.seed;
+                match loot.random_sequence(table) {
+                    Some(id) => {
+                        let random = self.rand_sequences.get(id, seed);
+                        loot.roll_entity(table, random, &params)
+                            .iter()
+                            .filter(|s| !s.is_empty())
+                            .map(from_loot)
+                            .collect()
+                    }
+                    None => Vec::new(),
+                }
+            }
+            _ => self
+                .res
+                .items()
+                .loot_table(table, false, None, &mut self.world.random),
+        };
+        for d in stacks {
+            self.spawn_item(d, at, [0.0, 0.2, 0.0], 10);
+        }
+    }
     pub(super) fn handle_mob_events(&mut self, events: Vec<MobEvent>) -> Result<()> {
         for e in events {
             match e {
@@ -1251,15 +1292,7 @@ impl Game<'_> {
                         m.ai.aggressive |= aggressive;
                     }
                 }
-                MobEvent::GiftLoot { table, at } => {
-                    let drops =
-                        self.res
-                            .items()
-                            .loot_table(table, false, None, &mut self.world.random);
-                    for d in drops {
-                        self.spawn_item(d, at, [0.0, 0.2, 0.0], 10);
-                    }
-                }
+                MobEvent::GiftLoot { mob, table, at } => self.drop_gift_loot(mob, table, at),
             }
         }
         Ok(())

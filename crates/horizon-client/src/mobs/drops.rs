@@ -351,6 +351,9 @@ pub fn loot_entity(m: &Mob, vehicle: Option<LootEntity>) -> LootEntity {
             .to_owned(),
         );
     }
+    if s == S::Chicken {
+        e.chicken_variant = super::finalize::variant_component(m).map(|(_, id)| id);
+    }
     e.powered = s == S::Creeper && m.extra.charged;
     e.equipment = SLOTS
         .iter()

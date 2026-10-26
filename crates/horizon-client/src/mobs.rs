@@ -1149,8 +1149,10 @@ pub enum MobEvent {
         target: Who,
         aggressive: bool,
     },
-    /// Drop the loot of a gift table (chicken eggs, armadillo scutes).
+    /// Drop the loot of a gift table (chicken eggs, sniffer seeds) with the
+    /// mob as `this` (`LivingEntity.dropFromGiftLootTable`).
     GiftLoot {
+        mob: u32,
         table: &'static str,
         at: [f64; 3],
     },
