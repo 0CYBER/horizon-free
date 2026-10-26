@@ -33,7 +33,14 @@ fn motion_blocking_leaves(
     let mut y = from.min(MIN_Y + HEIGHT - 1);
     while y > MIN_Y {
         let f = facts.get(world.block(x, y, z));
-        if f.full_collision || f.fluid != Fluid::None || leaves && f.name.contains("leaves") {
+        // #minecraft:leaves block motion, but MOTION_BLOCKING_NO_LEAVES skips them
+        // (their water still counts).
+        let blocks = if f.name.ends_with("_leaves") {
+            leaves
+        } else {
+            f.full_collision
+        };
+        if blocks || f.fluid != Fluid::None {
             return y + 1;
         }
         y -= 1;
