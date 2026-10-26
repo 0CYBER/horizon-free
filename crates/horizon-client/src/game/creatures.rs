@@ -2830,10 +2830,15 @@ impl Game<'_> {
             {
                 consume = true;
                 m.add_effect("minecraft:poison", 900, 0);
-                m.damage(
+                let id = m.id;
+                let hurt = m.damage(
                     f32::MAX,
                     horizon_client::mobs::Damage::player(player_at.unwrap_or(center)),
                 );
+                // The feeder gets the kill, as for a normal player attack.
+                if hurt {
+                    self.last_hurt_by_player.insert(id, self.lan_acting);
+                }
             }
             // Parrot.mobInteract: parrot food may tame a wild one (one time in
             // ten); a parrot never takes it as Animal food (isFood is false).
