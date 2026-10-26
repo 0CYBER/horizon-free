@@ -97,7 +97,7 @@ fn display_offset(kind: CartKind) -> f64 {
 /// The minecart's passenger attachment minus Player.DEFAULT_VEHICLE_ATTACHMENT.
 pub(super) const SEAT: f64 = 0.1875 - 0.6;
 /// The placeholder container key under which an open cart's items live.
-pub(super) const CART_KEY_Y: i32 = -100_000;
+pub(super) const CART_KEY_Y: i32 = horizon_client::lan::menu::VEHICLE_KEY_Y;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Shape {

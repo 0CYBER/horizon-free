@@ -14,7 +14,7 @@ use horizon_client::{
         hub::{HostEvent, HostState, Hub, HubConfig, TickCtx},
         playerdata,
     },
-    mobs::{Mob, leash::Holder},
+    mobs::{Mob, Who, leash::Holder},
     text::Text,
 };
 use horizon_core::geometry::Vec3;
@@ -147,6 +147,7 @@ pub(super) fn baby_index(kind: &str) -> Option<u8> {
 fn mob_meta(
     m: &Mob,
     hub: &Hub,
+    player_entity: Option<i32>,
     meta: &mut Vec<(u8, i32, Value)>,
     defaults: &mut Vec<(u8, i32, Value)>,
 ) {
@@ -196,6 +197,32 @@ fn mob_meta(
     let e = &m.extra;
     let id = |registry: &str, name: &str| hub.registry_id(registry, &format!("minecraft:{name}"));
     match kind {
+        "minecraft:guardian" | "minecraft:elder_guardian" => {
+            // Guardian.DATA_ID_MOVING and DATA_ID_ATTACK_TARGET.
+            if e.flag2 {
+                meta.push((16, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            let target = if e.flag {
+                m.ai.target.and_then(|who| match who {
+                    Who::Player => player_entity,
+                    Who::Mob(id) => Some(id as i32),
+                })
+            } else {
+                None
+            };
+            if let Some(target) = target {
+                meta.push((17, serializer::INT, Value::Int(target)));
+            }
+            defaults.push((16, serializer::BOOLEAN, Value::Bool(false)));
+            defaults.push((17, serializer::INT, Value::Int(0)));
+        }
+        // Bat.DATA_ID_FLAGS: resting in bit 0, flying by default.
+        "minecraft:bat" => {
+            if e.flag {
+                meta.push((16, serializer::BYTE, Value::Byte(1)));
+            }
+            defaults.push((16, serializer::BYTE, Value::Byte(0)));
+        }
         // Sheep.DATA_WOOL_ID: the colour in the low nibble, 16 when sheared.
         "minecraft:sheep" => {
             let value = (e.color & 15) | if e.sheared { 16 } else { 0 };
@@ -637,6 +664,7 @@ impl Game<'_> {
         self.world.light_log = None;
         self.audio.capture = None;
         self.lan_events.clear();
+        self.lan_critical_hits.clear();
         self.streaming.extra.clear();
         if announce {
             self.system_message(Text::translate(
@@ -823,12 +851,13 @@ impl Game<'_> {
         for m in self.mobs.iter().filter(|m| !m.removed) {
             // The lead's holder: the player the mob sees (a guest, else the
             // host) or another mob. A fence knot isn't an entity here.
+            let player_entity = mob_players
+                .get(&m.id)
+                .and_then(|conn| hub.guest(*conn))
+                .map(|g| g.entity_id)
+                .or(host_entity);
             let leash = m.extra.leash.and_then(|h| match h {
-                Holder::Player => mob_players
-                    .get(&m.id)
-                    .and_then(|conn| hub.guest(*conn))
-                    .map(|g| g.entity_id)
-                    .or(host_entity),
+                Holder::Player => player_entity,
                 Holder::Mob(id) => Some(id as i32),
                 Holder::Knot(_) => None,
             });
@@ -838,7 +867,7 @@ impl Game<'_> {
             e.on_ground = m.on_ground;
             e.velocity = [m.velocity.x, m.velocity.y, m.velocity.z];
             e.needs_sync = m.needs_sync;
-            mob_meta(m, hub, &mut e.meta, &mut e.defaults);
+            mob_meta(m, hub, player_entity, &mut e.meta, &mut e.defaults);
             mob_equipment(m, hub, &mut e.equipment);
             self.mob_attributes(m, &mut e.attributes);
             e.leash = leash;
@@ -962,6 +991,9 @@ impl Game<'_> {
                 match event {
                     event @ (HostEvent::Chat { .. } | HostEvent::Warn(_) | HostEvent::Error(_)) => {
                         self.lan_log_event(event);
+                    }
+                    HostEvent::PlayerChat { sender, text } => {
+                        self.mod_player_chat(super::server_mods::Who::Uuid(sender), &text);
                     }
                     HostEvent::Joined(conn) => {
                         self.lan_guest_joined(&mut host, conn, state.as_ref(), entities, spawn);
@@ -1173,8 +1205,30 @@ impl Game<'_> {
             self.lan_entity_events.push((id, event, at));
         }
     }
+    /// `ServerPlayer.crit`: this window's emitter, and an animation for the
+    /// attacker's client and observers once the hub is back in place.
+    pub(super) fn critical_hit(
+        &mut self,
+        attacker: Option<u32>,
+        id: i32,
+        feet: [f64; 3],
+        width: f64,
+        height: f64,
+    ) {
+        use horizon_client::particles::{ParticleOptions, ParticleType};
+        self.particles.tracking_emitter(
+            ParticleOptions::simple(ParticleType::Crit),
+            feet,
+            width,
+            height,
+        );
+        if self.audio.capture.is_some() {
+            self.lan_critical_hits.push((attacker, id));
+        }
+    }
     /// Send the tick's level events, sounds and mob animations.
     fn lan_flush_effects(&mut self, host: &mut LanHost) {
+        let critical_hits = std::mem::take(&mut self.lan_critical_hits);
         for (kind, pos, data, acting) in std::mem::take(&mut self.lan_events) {
             if kind == 2001 {
                 host.broken
@@ -1247,6 +1301,14 @@ impl Game<'_> {
             seen.insert(m.id, (m.hurt_time, dead, swing));
         }
         host.mob_state.insert(self.dim, seen);
+        for (attacker, target) in critical_hits {
+            let Some(attacker) = attacker.map_or(Some(host.host_entity), |conn| {
+                host.hub.guest(conn).map(|g| g.entity_id)
+            }) else {
+                continue;
+            };
+            host.hub.critical_hit(attacker, target);
+        }
     }
 
     /// Keep the chunks around every guest loaded.
@@ -1414,7 +1476,11 @@ impl Game<'_> {
                 let tag = if secure { "" } else { "[Not Secure] " };
                 super::dedicated::log("INFO", &format!("{tag}{line}"));
             }
-            HostEvent::Chat { line, .. } => self.system_message(Text::literal(line)),
+            // Player chat (and `/say`'s or `/me`'s, which are chat messages
+            // too): the host's Chat option decides, as `ChatListener` does
+            // for the guests' packets. Command feedback is a system message
+            // and takes the system-message permission instead.
+            HostEvent::Chat { line, .. } => self.player_message(Text::literal(line)),
             HostEvent::Warn(line) if dedicated => super::dedicated::log("WARN", &line),
             HostEvent::Warn(line) => log::warn!("{line}"),
             HostEvent::Error(line) if dedicated => super::dedicated::log("ERROR", &line),

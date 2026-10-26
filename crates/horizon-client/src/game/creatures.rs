@@ -50,9 +50,9 @@ pub(super) struct Creatures {
     /// The wandering trader spawner's clock.
     pub trader: super::wandering_trader::Spawner,
 }
-struct ProjWorld<'a, 'w> {
-    w: &'a MobWorld<'w>,
-    targets: Vec<(Who, Aabb)>,
+pub(super) struct ProjWorld<'a, 'w> {
+    pub w: &'a MobWorld<'w>,
+    pub targets: Vec<(Who, Aabb)>,
 }
 impl ProjectileWorld for ProjWorld<'_, '_> {
     fn clip(&self, from: Vec3, to: Vec3) -> Option<(Vec3, [i32; 3], [i32; 3])> {
@@ -373,6 +373,7 @@ impl Game<'_> {
                 // Drawn seated (Entity.isPassenger); set apart because the
                 // json! above is at the macro recursion limit.
                 state["passenger"] = m.extra.passenger.into();
+                state["guardian_beam"] = serde_json::json!(horizon_client::mobs::guardian::beam(m, 0.0));
                 state
             })
             .collect();
@@ -391,6 +392,9 @@ impl Game<'_> {
     }
     pub(super) fn mob_world_base<'s>(&'s self, others: &'s [Seen]) -> MobWorld<'s> {
         let (rain, thunder) = self.world.weather.levels(1.0);
+        // Level.canHaveWeather: only the overworld's rain and thunder levels
+        // ever rise, so nothing rains or thunders in the Nether or the End.
+        let weather = self.dim == Dim::Overworld;
         let player = self.player_view();
         MobWorld {
             world: &self.world,
@@ -407,8 +411,8 @@ impl Game<'_> {
             daylight: self.dim != Dim::Nether && self.sky_darken() < 4,
             game_time: self.world.game_time,
             day_time: self.world.day_time,
-            raining: rain > 0.2,
-            thundering: thunder > 0.9,
+            raining: weather && rain > 0.2,
+            thundering: weather && thunder > 0.9,
             nether: self.dim == Dim::Nether,
             block_tags: &self.res.items().block_tags,
             biomes: self.res.biomes(),
@@ -1084,6 +1088,9 @@ impl Game<'_> {
                             self.ensure_item_particle_sprites();
                         }
                         let options = horizon_client::particles::ParticleOptions::simple(ty);
+                        if ty == horizon_client::particles::ParticleType::SonicBoom {
+                            self.lan_sonic_boom(&options, at);
+                        }
                         // Count 0: one particle exactly there, at rest.
                         if count == 0 {
                             self.particles.add(&options, at, [0.0; 3]);
