@@ -1324,6 +1324,11 @@ pub fn after_hurt(m: &mut Mob, source: &Damage) {
         Species::Warden => super::warden::hurt(m, source),
         Species::Wolf => super::tame::after_hurt(m, source),
         Species::Nautilus | Species::ZombieNautilus => super::nautilus::after_hurt(m, source),
+        Species::Zombie
+        | Species::Husk
+        | Species::Drowned
+        | Species::ZombieVillager
+        | Species::ZombifiedPiglin => super::undead::after_hurt(m, source),
         // NeutralMob: an iron golem hit by the player stays angry a while.
         // PiglinAi.wasHurtBy: drop what is being admired, no admiring for
         // a while after a player's hit, and anger.

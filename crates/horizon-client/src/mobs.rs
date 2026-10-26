@@ -1166,6 +1166,12 @@ pub enum MobEvent {
     DigParticles {
         at: [f64; 3],
     },
+    /// `Zombie.hurtServer`: a zombie hurt with a target in sight (its own,
+    /// else the attacker) may call a reinforcement against it on Hard.
+    Reinforcements {
+        mob: u32,
+        target: Who,
+    },
     /// `Warden.applyDarknessAround`: darkness for survival players nearby.
     Darkness {
         at: [f64; 3],
