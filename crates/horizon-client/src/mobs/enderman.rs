@@ -138,9 +138,10 @@ fn teleport_towards(
     let z = m.position.z + (m.random.next_double() - 0.5) * 8.0 - d[2] * 16.0;
     teleport_to(m, w, x, y, z, events)
 }
-/// Enderman.customServerAiStep: in daylight, flee by teleporting.
+/// Enderman.customServerAiStep: in daylight, flee by teleporting. The End has a
+/// fixed time, so `Level.isBrightOutside` is never true there.
 pub fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
-    if cx.w.daylight && m.age as i32 >= m.extra.counter + 600 {
+    if cx.w.daylight && !cx.w.end && m.age as i32 >= m.extra.counter + 600 {
         let br = super::hostile::mob_brightness(m, cx.w);
         let (x, y, z) = (
             m.position.x.floor() as i32,
@@ -330,8 +331,11 @@ impl Goal for TakeBlock {
     fn flags(&self) -> u8 {
         0
     }
-    fn can_use(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
-        m.extra.carried.is_none() && m.random.next_int_bound(reduced(20)).unwrap_or(1) == 0
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        // EndermanTakeBlockGoal.canUse: needs mobGriefing, checked before the draw.
+        m.extra.carried.is_none()
+            && cx.w.mob_griefing
+            && m.random.next_int_bound(reduced(20)).unwrap_or(1) == 0
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         let x = (m.position.x - 2.0 + m.random.next_double() * 4.0).floor() as i32;
@@ -378,8 +382,11 @@ impl Goal for LeaveBlock {
     fn flags(&self) -> u8 {
         0
     }
-    fn can_use(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
-        m.extra.carried.is_some() && m.random.next_int_bound(reduced(2000)).unwrap_or(1) == 0
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        // EndermanLeaveBlockGoal.canUse: needs mobGriefing, checked before the draw.
+        m.extra.carried.is_some()
+            && cx.w.mob_griefing
+            && m.random.next_int_bound(reduced(2000)).unwrap_or(1) == 0
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         let Some(carried) = m.extra.carried else {

@@ -80,6 +80,8 @@ IGNORED = {
     # chunk generation first), so counters and positions of live things move on.
     r'^chunk\.block_entities\.\(2, -60, 5\)\.(cooking_time_spent|lit_time_remaining|Items\[\]\.count)$':
         'the lit furnace keeps smelting',
+    r'^chunk\.block_entities\.\(14, -60, 5\)\.CookingTimes$':
+        'the lit campfire keeps cooking',
     r'^chunk\.block_entities\..*\.(ticks_since_song_started|Age|BrewTime|warning_level|ticks_in_hive|last_vibration_frequency|listener\..*|RecipesUsed\..*|'
     r'server_data\.state_updating_resumes_at)$':
         'block entity timers advance',

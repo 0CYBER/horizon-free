@@ -65,6 +65,35 @@ impl MobWorld<'_> {
     pub fn has_tag(&self, tag: &str, block: &str) -> bool {
         self.block_tags.get(tag).is_some_and(|s| s.contains(block))
     }
+    /// `findBlocksInBoxByManhattanDistance(at, range_xz, range_y).filterState(..).findFirst()`:
+    /// the first block `matches` accepts (given its position and name), going
+    /// out from `at` by Manhattan distance as `BlockPos.withinBoxByManhattanDistance` does.
+    pub fn nearest_block(
+        &self,
+        at: [i32; 3],
+        range_xz: i32,
+        range_y: i32,
+        matches: impl Fn([i32; 3], &str) -> bool,
+    ) -> Option<[i32; 3]> {
+        // Visiting order: distance, then x, then y, then +z before -z.
+        let mut best: Option<((i32, i32, i32, bool), [i32; 3])> = None;
+        for dx in -range_xz..=range_xz {
+            for dy in -range_y..=range_y {
+                for dz in -range_xz..=range_xz {
+                    let key = (dx.abs() + dy.abs() + dz.abs(), dx, dy, dz < 0);
+                    if best.is_some_and(|(k, _)| k <= key) {
+                        continue;
+                    }
+                    let p = [at[0] + dx, at[1] + dy, at[2] + dz];
+                    let state = self.world.block(p[0], p[1], p[2]);
+                    if !self.facts.is_air(state) && matches(p, &self.facts.get(state).name) {
+                        best = Some((key, p));
+                    }
+                }
+            }
+        }
+        best.map(|(_, p)| p)
+    }
     /// Level.clip with COLLIDER shapes (optionally stopping at any fluid): true on a miss.
     pub fn clear_between(&self, from: Vec3, to: Vec3, fluids_block: bool) -> bool {
         let mut scene = SceneCollisions {
