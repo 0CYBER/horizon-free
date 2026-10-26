@@ -407,6 +407,13 @@ impl Game<'_> {
             return;
         };
         self.server_packs.active = server.clone();
+        // The overlay swallows input until the apply (`LoadingOverlay`):
+        // release what is held so nothing keeps acting while it covers the
+        // frame (`KeyMapping.releaseAll` when a screen opens).
+        self.keys.clear();
+        self.physical_keys.clear();
+        self.left = false;
+        self.right = false;
         let vanilla = self.vanilla_root();
         if self.ui.vanilla_root.as_os_str().is_empty() {
             self.ui.vanilla_root = vanilla.clone();

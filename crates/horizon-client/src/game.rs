@@ -11314,6 +11314,19 @@ impl ApplicationHandler for Game<'_> {
         {
             return;
         }
+        // The pack reload's progress overlay takes no input
+        // (`LoadingOverlay`): `start_pack_reload` released what was held.
+        if self.server_packs.reload.is_some()
+            && !matches!(
+                &event,
+                WindowEvent::CloseRequested
+                    | WindowEvent::Focused(_)
+                    | WindowEvent::Resized(_)
+                    | WindowEvent::RedrawRequested
+            )
+        {
+            return;
+        }
         if self.pending_save.is_some() {
             match event {
                 WindowEvent::CloseRequested => {
