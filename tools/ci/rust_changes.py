@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
-"""Keep verify's Rust steps for any change beyond website content or documentation."""
+"""Keep verify's Rust steps for any change beyond documentation."""
 
 import argparse
 import subprocess
 
 
 def needs_rust(paths):
-    # horizon-theme's Rust tests check that the generated website tokens match.
-    return any(path == "website/src/tokens.css" or not (
-        path.startswith(("website/", "docs/")) or path.endswith(".md")
-    ) for path in paths)
+    return any(not (path.startswith("docs/") or path.endswith(".md")) for path in paths)
 
 
 def changed_paths(base, head):

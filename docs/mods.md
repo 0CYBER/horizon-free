@@ -15,7 +15,7 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | The contract (WIT) | `crates/horizon-mod-sdk/wit/horizon.wit` | 0.1: log, game-read, chat, hud, storage, command, ui; tick, frame, chat and command hooks |
 | SDK for mod authors | `crates/horizon-mod-sdk` | 0.1 |
 | Example mods | `crates/horizon-mod-sdk/examples/coords-hud`, `examples/predator-missile` | coordinates, facing and time HUD, `/where`, `/coords`; `/missile`, a guided missile from vanilla commands |
-| Horizon's official mods | `mods/official/` | the extras moving to the registry: FPS Counter (`fps-overlay`), Keystrokes, Zoom |
+| Horizon's official mods | `mods/official/` | the extras moving to the registry: FPS Counter (`fps-overlay`), Keystrokes, Zoom, Minimap |
 | Runtime | `crates/horizon-mods` | wasmtime 48 LTS, component model |
 | Authoring tool | `crates/cargo-horizon-mod` | `cargo horizon-mod new [--template code\|content] / build / run / test / check`, and the registry's CI (`registry build / review / list`) |
 | In the game | `crates/horizon-client/src/game/mods.rs`, Options > Mods | client mods |
@@ -83,7 +83,7 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | Interface | Capability | Functions |
 |---|---|---|
 | `log` | always | `write(level, message)`, in the game log as `[mod <id>]` |
-| `game` | `game-read` | `get-player()`: x y z, yaw, pitch, health, food, dimension; `get-clock()`: game time, day time |
+| `game` | `game-read` | `get-player()`: x y z, yaw, pitch, health, food, dimension; `get-clock()`: game time, day time; `raycast(distance)`: the first block along the view (fluids pass), up to 1024 blocks and across the distant terrain, with the point hit and the block's id |
 | `chat` | `chat` | `show(text)`: a line only the local player sees, after the mod's name (8 per call) |
 | `hud` | `hud` | `set-panel(corner, lines)`, `clear()`: up to 16 lines of 256 characters |
 | `storage` | `storage` | `get(key)`, `set(key, value)`, `delete(key)`: a per-mod folder of up to 64 files, 4 MiB total, at most 1 MiB written per call |
@@ -120,7 +120,7 @@ loading. Ordered by what the first native ports need:
 | `world-read` | blocks and biomes around the player, within the render distance | minimaps, schematics |
 | `render` (world) | world-space lines, boxes and billboards, beside the HUD shapes `render` has | Litematica-style placement, waypoints |
 | `registries` | new blocks, items, entities and recipes, mostly data: JSON models, textures, loot and recipes in the `.hmod`'s `assets/` and `data/` | server side; see [Multiplayer](#multiplayer) |
-| `server` | world events (block break/place, entity spawn/death, player join), game rules, server commands | runs where the world is simulated |
+| `server` | world events (entity spawn/death), game rules, world read/write, typed server commands | after [server mods 0.3](#server-mods-api-03-experimental)'s players, chat, blocks and commands |
 | `net` | a mod's own client↔server channel (custom payloads) | only between the two halves of the same mod |
 
 There is no file, socket, process or raw-input interface, on purpose.
@@ -251,7 +251,8 @@ key> --signature <file>.minisig`.
 `cargo horizon-mod test` builds the mod, then runs each `tests/<name>.toml` in
 the sandbox the game uses, with no game and no window: the test plays the
 game's part (the player and the clock the mod reads, ticks, frames, chat lines,
-commands) and checks what the mod showed. A script fails at its first wrong
+commands; for a server mod, players joining, chatting, typing commands,
+breaking and placing blocks and leaving) and checks what the mod showed. A script fails at its first wrong
 step, with what it expected and what it got; the command fails if any script
 does. `--debug` builds without optimizing, `--hmod <file>` tests a `.hmod`
 already built, and a name runs only the scripts whose path holds it. Each
@@ -288,6 +289,16 @@ A step's parts happen in this order:
 | `ticks = n`, `frames = n` | that many ticks (the game's tick counter and the clock move on), then frames 1/60 s apart |
 | `chat = "<Steve> hi"` | a chat line the player receives |
 | `command = "where north"` | the player types `/where north`; a command the mod doesn't own fails the step |
+| `break = { x = 1, y = 63, z = 0, state = "minecraft:stone" }`, `place = { ... }` | server mods: the player breaks or places that block |
+| `leave = "Alex"` | server mods: that player leaves |
+
+A server mod starts with nobody on: `join = "Alex"` (after `reload` and `title-screen`) brings a
+player in at the defaults, in survival, with the id
+`00000000-0000-4000-8000-000000000001` for the first name that joined, `...2`
+for the second, the same id when a name joins again. `player`, `chat`,
+`command`, `break` and `place` are then that player's doing: the one named by
+`as = "Steve"`, or the first one on. `player` takes `game-mode` there, and the
+script's own `[player]` and `[clock]` are a client mod's.
 
 Then `expect` checks what the mod did during the step; a key left out is not
 checked:
@@ -298,6 +309,7 @@ checked:
 | `chat = ["..."]` | every chat line it showed, in order (`[]`: none) |
 | `feedback = "..."`, `error = "..."` | the command's answer, shown plain or in red |
 | `panel = ["..."]`, `corner = "top-left"` | its HUD panel's lines (`[]`: no panel) and corner |
+| `told = ["Alex: Welcome!"]`, `broadcast = ["..."]` | server mods: every `players.tell` (as `name: text`) and `players.broadcast`, in order |
 | `stopped = "panic"` | the mod was turned off, for a reason holding this text; without it, a mod that traps, panics or overruns fails the test |
 
 Unknown keys are errors, so a typo never passes silently. The same runner is
@@ -452,6 +464,68 @@ none.
     "top": "carve", "bottom": "none", "rigid_junctions": true, "inflate": true } }
 ```
 
+### Server mods (API 0.3, experimental)
+
+A server mod runs where the world is simulated: on the dedicated server, on a
+LAN host and on single player's own server, never in a player's window. Its
+manifest says `side = "server"` and `api = "0.3"` (and only a server mod may);
+its component targets the WIT world `horizon-server-mod` instead of
+`horizon-mod`. Experimental: it may change in any release
+([stability](api/stability.md)).
+
+| Interface | Capability | Functions |
+|---|---|---|
+| `log` | always | as for client mods |
+| `storage` | `storage` | as for client mods, in the server's `horizon-mods/` |
+| `players` | `players` | `online()`: id, name, position, dimension, game mode, health of each player on; `tell(id, text)`, `broadcast(text)`: system messages after the mod's name, 8 per call |
+
+| Hook (export `server-events`) | When |
+|---|---|
+| `init() -> result<registration, string>` | once, after loading |
+| `tick(tick)` | each server tick |
+| `player-joined(player)`, `player-left(player)` | `registration.joins` |
+| `chat(player, text)` | `registration.chat`: each chat message a player sends |
+| `command(player, name, args)` | `/name args` typed by a player, for a command it registered; `ok(some)` is that player's feedback, `err` their red error |
+| `block-broken(player, pos, state)`, `block-placed(player, pos, state)` | `registration.blocks`, with the state as `minecraft:oak_log[axis=y]` |
+
+Capabilities that act on a local player (`game-read`, `chat`, `hud`) are for
+client mods; `players` is for server mods. In Rust: `impl
+horizon_mod_sdk::server::ServerMod` and `export_server_mod!`; the example is
+[`welcome`](../crates/horizon-mod-sdk/examples/welcome/src/lib.rs).
+
+**Where they run.** The game that simulates the world starts the server mods
+that are on, and only that one:
+
+| Mode | Runs server mods | Players they see |
+|---|---|---|
+| Single player (default) | the server thread | the window's player, a connection like any other |
+| Single player `--in-frame` | the window's own game, beside its client mods | the window's player |
+| Open to LAN, Play with Friends | the host's server thread (or its window, in-frame) | the host and every guest |
+| Dedicated server (`--dedicated`, `horizon-server`) | the server | every connected player |
+
+A window that is a client of a server (single player's window, a LAN guest,
+any multiplayer server) never runs them; its Mods page lists a server mod with
+the others, and its switch takes effect the next time a world opens. The mods
+live in `horizon-mods/` of the game folder, or of the server's folder on a
+dedicated server, and are turned on as client mods are: Options > Mods, or
+`mod.<id>:true` in `horizon-mods.txt`. `--dev-mod <file>` runs one always
+on and reloads it when its file changes, on a server too.
+
+**When hooks run.** At the end of each server tick the game tells the server
+mods who joined and who left since the last one, then what players said,
+broke and placed, in order, then calls `tick`. A command a player types
+reaches its mod at once, whatever the player's permission level, and its
+answer goes to that player. `tell` reaches one player, the window's own
+chat for the in-frame player and a system message for a connection;
+`broadcast` reaches every player and the server's log. With no server mod
+on, each of these points costs one branch (measured in the PR that added
+them).
+
+**Not yet.** Clients aren't sent server mods' commands with vanilla's
+command tree, so a player's chat box doesn't complete or colour them; typing
+them works. Block events are a player's own breaking and placing, not
+explosions, pistons or other mods.
+
 ## Publish your mod
 
 Horizon's registry lists mods, modpacks (`.hpack`) and resource packs made for Horizon, each reviewed before it is
@@ -470,6 +544,10 @@ published. Players find them at [playhorizon.dev/mods](https://playhorizon.dev/m
    reviewers there.
 5. A reviewer merges it: within minutes the file is a release of horizon-mods, and the project is on the site and in
    the launcher.
+
+Once it is published, its page and its card in the launcher show its downloads (GitHub's counts of its files,
+refreshed every hour) and its rating: players signed in with GitHub on its page give it 1 to 5 stars, one rating per
+account, which they can change. Its owners can't rate it, and nobody sees who rated.
 
 An update is the same form with a new version; only the project's `owners` can publish one, signed with its key if it
 has one. A published file never changes. Without the form, open the pull request by hand (the repository's README
@@ -490,6 +568,7 @@ so the same rustc and `Cargo.lock` give the same file.
 | FPS Counter | `fps_overlay` | Extras > FPS counter | `corner`: `top_left` (default), `top_right`, `bottom_left`, `bottom_right`; `lows`: `false` (default), `true` |
 | Keystrokes | `keystrokes` | Extras > Keystrokes | `corner`: as above, default `top_left`; `cps`: `true` (default), `false` |
 | Zoom | `zoom` | Extras > Zoom | `level`: `2`, `3`, `4` (default), `6`, `8`, `10`; `smooth`: `true` (default), `false`; `sensitivity` (slower turning): `true` (default), `false`. The key is the game's: `key.zoom.zoom` in `horizon-mods.txt`, default `key.keyboard.z` |
+| Minimap | `minimap` | Extras > Minimap | `corner`: as above, default `top_right`; `size`: `64`, `96` (default), `128`; `shape`: `square` (default), `round`; `zoom` (blocks per pixel): `0.5`, `1` (default), `2`, `4`; `rotate`: `false` (default), `true`. The game draws the map (`render.set-minimap`) |
 
 ## Versions and compatibility
 
@@ -500,6 +579,12 @@ so the same rustc and `Cargo.lock` give the same file.
   release cycle, so existing mods keep working while authors move.
 - The manifest's `api` names the line it needs (`0.1`); the game refuses a
   line it does not serve with a clear message.
+- Within a line, each function has an API level, the one it arrived at
+  ([stability](api/stability.md#mod-api-levels)). A mod needs the level of
+  the newest function it calls, read from its file: an older Horizon refuses
+  it with "made for a newer Horizon: update Horizon", and the registry lists
+  the level so installers take a version the game can run.
+  `cargo horizon-mod check` prints it ("needs mod API level 1 or newer").
 - Horizon follows Minecraft releases; the mod API does not have to. Vanilla
   concepts mods see (dimensions, block and item ids) are the game's own ids,
   so a version port changes the data, not the API.
@@ -510,10 +595,10 @@ so the same rustc and `Cargo.lock` give the same file.
   in single player and on any server, vanilla or Horizon. They see only what
   the client already knows (the snapshot), like F3 does, and act only on the
   local screen and chat. A server cannot see them.
-- **Server mods** (`side = "server"`) will run where the world is simulated:
-  Horizon's integrated server in single player and LAN, and the dedicated
-  server. Vanilla clients can join if the mod only uses vanilla content
-  (rules, commands, events).
+- **Server mods** (`side = "server"`, API 0.3) run where the world is
+  simulated: single player's server thread (or the window, in-frame), a LAN
+  host and the dedicated server ([Server mods](#server-mods-api-03-experimental)).
+  They use only vanilla messages, so any client, vanilla or Horizon, can join.
 - **Both** (`side = "both"`): a server mod with a client half (new blocks,
   their textures, a custom screen). On join the Horizon server announces its
   mods (id, version, SHA-256) on a `horizon:mods` custom payload channel; a

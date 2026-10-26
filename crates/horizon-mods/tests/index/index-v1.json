@@ -29,6 +29,7 @@
             "hud",
             "chat"
           ],
+          "api_level": 0,
           "game": "26.3",
           "file": {
             "name": "coords_hud-0.1.0.hmod",
@@ -71,6 +72,34 @@
             "url": "https://github.com/ludovic111/horizon-mods/releases/download/cozy-1.0.0/cozy-1.0.0.hpack",
             "size": 471,
             "sha256": "241ac840f9c5ea3f6252d849da10c90d36cb1da4d6cd8d1d268c2760a353cd65"
+          }
+        }
+      ]
+    },
+    {
+      "id": "glow",
+      "kind": "shader",
+      "name": "Soft Glow",
+      "summary": "A post-processing pass over the world.",
+      "authors": [
+        "Horizon"
+      ],
+      "owners": [
+        "ludovic111"
+      ],
+      "license": "MIT",
+      "source": "https://github.com/ludovic111/horizon-mods",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "published": "2026-10-26",
+          "api": "0.1",
+          "game": "26.3",
+          "file": {
+            "name": "glow-1.0.0.hshader",
+            "url": "https://github.com/ludovic111/horizon-mods/releases/download/glow-1.0.0/glow-1.0.0.hshader",
+            "size": 689,
+            "sha256": "331cfe29a666a0de804e9a9ff3d19d246eebcfbfa70b4f49bba8482d30ad9f02"
           }
         }
       ]

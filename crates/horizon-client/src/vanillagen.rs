@@ -158,6 +158,12 @@ impl VanillaTerrain {
             chunk.terrain.min_y().max(MIN_Y),
             (chunk.terrain.min_y() + chunk.terrain.height()).min(MIN_Y + HEIGHT),
         );
+        out.structure_refs = chunk
+            .structures()
+            .into_iter()
+            .map(|(id, start, _, _)| (Arc::from(id), (start.x, start.z)))
+            .collect();
+        out.structure_starts = chunk.own_starts();
         let mut values = Box::new([0u32; 4096]);
         for si in 0..SECTIONS as i32 {
             let base = MIN_Y + si * 16;
@@ -339,7 +345,9 @@ pub fn shared_data(
     if let Some((_, data)) = cache.iter().find(|(path, _)| path == dir) {
         return Ok(data.clone());
     }
+    let started = std::time::Instant::now();
     let data = GeneratorData::load(dir, registry)?;
+    log::info!("Horizon: worldgen data loaded in {:?}", started.elapsed());
     cache.push((dir.to_owned(), data.clone()));
     Ok(data)
 }
@@ -434,6 +442,14 @@ impl ChunkGenerator for VanillaTerrain {
             .iter()
             .map(|(pos, nbt)| {
                 let mut nbt = nbt.clone();
+                // Placed data can lack its type (a brushable block's loot table
+                // alone); vanilla saves every pending block entity with its id,
+                // and skips one without when the chunk finishes.
+                if let Some(id) =
+                    crate::lan::chunks::block_entity_type(chunk.block_name(pos[0], pos[1], pos[2]))
+                {
+                    nbt.insert("id".into(), Tag::String(id.into()));
+                }
                 for (key, v) in ["x", "y", "z"].into_iter().zip(pos) {
                     nbt.insert(key.into(), Tag::Int(*v));
                 }
@@ -564,11 +580,6 @@ impl ChunkGenerator for VanillaTerrain {
             extras.block_entities = unmodelled;
             out.saved = Some(Arc::new(extras));
         }
-        out.structure_refs = chunk
-            .structures()
-            .into_iter()
-            .map(|(id, start, _, _)| (Arc::from(id), (start.x, start.z)))
-            .collect();
         let entities = std::mem::take(&mut chunk.entities);
         out.entities = entities
             .into_iter()

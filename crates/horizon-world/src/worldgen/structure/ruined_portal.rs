@@ -25,6 +25,17 @@ pub enum Vertical {
     InNether,
 }
 impl Vertical {
+    /// `RuinedPortalPiece.VerticalPlacement.getSerializedName`.
+    fn saved_name(self) -> &'static str {
+        match self {
+            Self::OnLandSurface => "on_land_surface",
+            Self::PartlyBuried => "partly_buried",
+            Self::OnOceanFloor => "on_ocean_floor",
+            Self::InMountain => "in_mountain",
+            Self::Underground => "underground",
+            Self::InNether => "in_nether",
+        }
+    }
     fn heightmap(self) -> HeightmapType {
         if self == Self::OnOceanFloor {
             HeightmapType::OceanFloorWg
@@ -70,6 +81,9 @@ impl Setup {
 #[derive(Clone, Copy, Debug)]
 pub struct PortalProps {
     placement: Vertical,
+    mossiness: f32,
+    air_pocket: bool,
+    blackstone: bool,
     cold: bool,
     overgrown: bool,
     vines: bool,
@@ -182,6 +196,9 @@ pub fn start(
     };
     let props = PortalProps {
         placement: setup.placement,
+        mossiness: setup.mossiness,
+        air_pocket,
+        blackstone: setup.blackstone,
         cold,
         overgrown: setup.overgrown,
         vines: setup.vines,
@@ -378,4 +395,29 @@ pub fn post_process(piece: &TemplatePiece, c: &mut PieceContext<'_>) -> Result<(
         }
     }
     Ok(())
+}
+
+impl PortalProps {
+    /// `RuinedPortalPiece`'s `VerticalPlacement` and `Properties` tags.
+    pub fn save(&self) -> [(&'static str, crate::nbt::Tag); 2] {
+        use crate::nbt::Tag;
+        let flag = |b: bool| Tag::Byte(i8::from(b));
+        [
+            (
+                "VerticalPlacement",
+                Tag::String(self.placement.saved_name().into()),
+            ),
+            (
+                "Properties",
+                Tag::compound([
+                    ("cold", flag(self.cold)),
+                    ("mossiness", Tag::Float(self.mossiness.to_bits())),
+                    ("air_pocket", flag(self.air_pocket)),
+                    ("overgrown", flag(self.overgrown)),
+                    ("vines", flag(self.vines)),
+                    ("replace_with_blackstone", flag(self.blackstone)),
+                ]),
+            ),
+        ]
+    }
 }

@@ -21,7 +21,7 @@ use horizon_core::{
 use serde_json::Value;
 use std::{collections::BTreeSet, sync::Arc};
 
-mod lithostitched;
+mod litho;
 mod pillars;
 mod sea_level;
 
@@ -238,6 +238,23 @@ impl Modifier {
         )
     }
 }
+impl Modifier {
+    /// RuleBlockEntityModifier.apply: the block entity the output gets.
+    fn apply(&self, nbt: Option<&Compound>, random: &mut impl ProcessorRandom) -> Option<Compound> {
+        match self {
+            Self::Passthrough => nbt.cloned(),
+            Self::Clear => Some(Compound::new()),
+            Self::AppendLoot(table) => {
+                let mut nbt = nbt.cloned().unwrap_or_default();
+                nbt.insert("LootTable".into(), Tag::String(table.as_str().into()));
+                nbt.insert("LootTableSeed".into(), Tag::Long(random.long()));
+                Some(nbt)
+            }
+            Self::AppendStatic(data) => Some(edited(nbt, &[], data)),
+            Self::Edit { remove, data } => Some(edited(nbt, remove, data)),
+        }
+    }
+}
 /// A block entity with `remove`'s keys taken out and `data` merged in
 /// (append_static is the one with nothing to remove).
 fn edited(nbt: Option<&Compound>, remove: &[String], data: &Compound) -> Compound {
@@ -292,17 +309,21 @@ pub enum Processor {
     SpawnerMobs(Box<SpawnerMobs>),
     Pick(Box<Pick>),
     CountCap(Box<CountCap>),
-    /// `horizon:block_swap` (Lithostitched's `block_swap`): blocks by name
-    /// become others, keeping the properties both have.
+    /// `lithostitched:block_swap`: blocks by name become others, keeping
+    /// the properties both have (a block the game lacks is left alone).
     BlockSwap(std::collections::BTreeMap<String, String>),
-    /// `horizon:apply_random` (Lithostitched's `apply_random`): a processor
-    /// list drawn by weight runs on the block.
-    ApplyRandom(Box<lithostitched::ApplyRandom>),
-    /// `horizon:condition` (Lithostitched's `condition`): `then` or `else`
+    /// `lithostitched:apply_random`: a processor list drawn by weight runs
+    /// on the block.
+    ApplyRandom(Box<litho::ApplyRandom>),
+    /// `lithostitched:reference`: the named lists run on the block in turn.
+    Reference(Vec<ProcessorList>),
+    /// `lithostitched:discard_input`: the world's block stays.
+    DiscardInput,
+    /// `lithostitched:condition`: `then` or `else`
     /// runs on the block, by a test of it.
-    Condition(Box<lithostitched::Conditional>),
-    /// `horizon:set_block` (Lithostitched's `set_block`).
-    SetBlock(Box<lithostitched::SetBlock>),
+    Condition(Box<litho::Conditional>),
+    /// `lithostitched:set_block`: the block from a state provider.
+    SetBlock(Box<litho::SetBlock>),
     /// `horizon:pillar` (Repurposed Structures' and Moog's pillars): a
     /// trigger block starts a column down to the ground.
     Pillar(Box<pillars::Pillar>),
@@ -685,7 +706,7 @@ fn holder_set(
     }
     Ok(Arc::new(out))
 }
-fn json_to_nbt(value: &Value) -> Tag {
+pub(super) fn json_to_nbt(value: &Value) -> Tag {
     match value {
         Value::Bool(b) => Tag::Byte(i8::from(*b)),
         Value::Number(n) => match n.as_i64() {
@@ -786,7 +807,7 @@ impl Processor {
                 })?))
             }
             "horizon:pick" => Self::Pick(Box::new(Pick::decode(value, state)?)),
-            "horizon:block_swap" => Self::BlockSwap(
+            "lithostitched:block_swap" => Self::BlockSwap(
                 value["blocks"]
                     .as_object()
                     .ok_or(DecodeError::Field("blocks"))?
@@ -801,12 +822,16 @@ impl Processor {
                     .collect::<Result<_, DecodeError>>()?,
             ),
             "horizon:count_cap" => Self::CountCap(Box::new(CountCap::decode(value, state)?)),
-            "horizon:apply_random" => Self::ApplyRandom(Box::new(
-                lithostitched::ApplyRandom::decode(value, resources, bindings)?,
+            "lithostitched:apply_random" => Self::ApplyRandom(Box::new(
+                litho::ApplyRandom::decode(value, resources, bindings)?,
             )),
-            "horizon:set_block" => {
-                Self::SetBlock(Box::new(lithostitched::SetBlock::decode(value, state)?))
+            "lithostitched:set_block" => {
+                Self::SetBlock(Box::new(litho::SetBlock::decode(value, state)?))
             }
+            "lithostitched:reference" => {
+                Self::Reference(litho::reference(value, resources, bindings)?)
+            }
+            "lithostitched:discard_input" => Self::DiscardInput,
             "horizon:pillar" => Self::Pillar(Box::new(pillars::Pillar::decode(
                 value, resources, bindings, state,
             )?)),
@@ -834,7 +859,7 @@ impl Processor {
             "horizon:keep_world_block" => {
                 Self::KeepWorldBlock(Box::new(sea_level::KeepWorldBlock::decode(value)?))
             }
-            "horizon:condition" => Self::Condition(Box::new(lithostitched::Conditional::decode(
+            "lithostitched:condition" => Self::Condition(Box::new(litho::Conditional::decode(
                 value, resources, bindings,
             )?)),
             _ => return Err(DecodeError::Field("structure processor type")),
@@ -1115,24 +1140,10 @@ fn process_block<W: PlacementContext>(
                 if !position_ok {
                     continue;
                 }
-                let nbt = match &rule.modifier {
-                    Modifier::Passthrough => info.nbt.clone(),
-                    Modifier::Clear => Some(Compound::new()),
-                    Modifier::AppendLoot(table) => {
-                        let mut nbt = info.nbt.clone().unwrap_or_default();
-                        nbt.insert("LootTable".into(), Tag::String(table.as_str().into()));
-                        nbt.insert("LootTableSeed".into(), Tag::Long(random.next_long()));
-                        Some(nbt)
-                    }
-                    Modifier::AppendStatic(data) => Some(edited(info.nbt.as_ref(), &[], data)),
-                    Modifier::Edit { remove, data } => {
-                        Some(edited(info.nbt.as_ref(), remove, data))
-                    }
-                };
                 return Ok(Some(BlockInfo {
                     pos: info.pos,
                     state: rule.output,
-                    nbt,
+                    nbt: rule.modifier.apply(info.nbt.as_ref(), &mut random),
                 }));
             }
             Some(info)
@@ -1165,8 +1176,7 @@ fn process_block<W: PlacementContext>(
             false => Some(info),
         },
         Processor::ApplyRandom(apply) => {
-            let seed = world.world_seed()?;
-            let mut random = apply.random.create(seed, position, reference, info.pos);
+            let mut random = apply.draws.random(world.world_seed()?, position, info.pos);
             match apply.pick(&mut random) {
                 Some(list) => {
                     return process_list(
@@ -1176,21 +1186,34 @@ fn process_block<W: PlacementContext>(
                 None => Some(info),
             }
         }
+        Processor::Reference(lists) => {
+            let mut current = info;
+            for list in lists {
+                match process_list(
+                    list, world, resources, position, reference, relative, current, settings,
+                )? {
+                    Some(next) => current = next,
+                    None => return Ok(None),
+                }
+            }
+            Some(current)
+        }
+        Processor::DiscardInput => None,
         Processor::SetBlock(set) => {
-            let seed = world.world_seed()?;
-            let state = set.state(seed, position, reference, info.pos);
-            let state = match set.preserves() {
+            let mut random = set.draws.random(world.world_seed()?, position, info.pos);
+            let state = set.state(&mut random);
+            let state = match set.preserve {
                 true => registry
                     .state(state)
                     .and_then(|s| with_properties_of(registry, &s.name, info.state))
                     .unwrap_or(state),
                 false => state,
             };
-            Some(BlockInfo { state, ..info })
+            let nbt = set.modifier.apply(info.nbt.as_ref(), &mut random);
+            Some(BlockInfo { state, nbt, ..info })
         }
         Processor::Condition(c) => {
-            let seed = world.world_seed()?;
-            let mut random = c.random.create(seed, position, reference, info.pos);
+            let mut random = c.draws.random(world.world_seed()?, position, info.pos);
             let location = world.block_state(info.pos)?;
             let passed = c
                 .condition
