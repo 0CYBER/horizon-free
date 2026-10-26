@@ -197,7 +197,8 @@ pub fn state(m: &Mob, alpha: f32) -> State {
     let walking = m.alive() && !m.extra.passenger;
     State {
         pos: if walking {
-            m.limb_position - m.limb_speed * (1.0 - alpha)
+            // WalkAnimationState.position(partial): babies' legs move 3 times as far.
+            (m.limb_position - m.limb_speed * (1.0 - alpha)) * if m.is_baby() { 3.0 } else { 1.0 }
         } else {
             0.0
         },
