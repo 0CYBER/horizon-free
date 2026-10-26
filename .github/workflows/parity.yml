@@ -1,6 +1,6 @@
 name: parity
-# The vanilla harnesses a pull request's changes can affect, on the Mac mini's runner, which holds the maintainer's
-# own Minecraft files (Horizon never downloads the game). Called by ci.yml for pull requests from this repository
+# The vanilla harnesses a pull request's changes can affect, on the Mac mini's runner or playhorizon's, which hold the
+# maintainer's own Minecraft files (Horizon never downloads the game). Called by ci.yml for pull requests from this repository
 # and by run-parity.yml when a maintainer labels a fork's pull request run-parity. See docs/release-flow.md.
 on:
   workflow_call:
@@ -13,6 +13,13 @@ on:
         description: The commit to check out and test
         type: string
         required: true
+      full:
+        description: >-
+          The pull request carries the full-parity label (a change every harness reaches, such as a crate split): it
+          runs on playhorizon's runner only, so the Mac mini's runners stay free for the others. While that runner is
+          busy the job waits for it.
+        type: boolean
+        default: false
 permissions:
   contents: read
 env:
@@ -21,8 +28,10 @@ env:
 
 jobs:
   parity:
-    runs-on: [self-hosted, horizon-game]
-    timeout-minutes: 120  # a change to core crates reruns ~300 harnesses: ~60-90 min on the Mac mini
+    runs-on: ${{ inputs.full && fromJSON('["self-hosted", "horizon-game", "playhorizon"]') || fromJSON('["self-hosted", "horizon-game"]') }}
+    # A change to core crates reruns ~350 harnesses: ~60-90 min on the Mac mini; on playhorizon (4 of its 8 vCPUs, 4
+    # harnesses at a time) up to a few hours, and any pull request's job may land there.
+    timeout-minutes: ${{ inputs.full && 360 || 180 }}
     steps:
       - uses: actions/checkout@v4
         with:

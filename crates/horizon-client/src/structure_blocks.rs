@@ -9,7 +9,7 @@ use horizon_world::{
 };
 use std::{
     path::Path,
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex},
 };
 
 /// The `custom_data` key holding an exploration map's search until the game
@@ -114,11 +114,13 @@ pub fn has_pending_map(item: &ItemStack) -> bool {
     })
 }
 
-static LOOT: OnceLock<Option<Arc<LootData>>> = OnceLock::new();
+/// None until `loot_data` runs; `Some(None)` when the tables failed to load.
+static LOOT: Mutex<Option<Option<Arc<LootData>>>> = Mutex::new(None);
 
 /// Loot data of the resource root, loaded once per process.
 pub fn loot_data(root: &Path) -> Option<Arc<LootData>> {
-    LOOT.get_or_init(|| match LootData::load(root) {
+    let mut loot = LOOT.lock().unwrap_or_else(|e| e.into_inner());
+    loot.get_or_insert_with(|| match LootData::load(root) {
         Ok(data) => Some(Arc::new(data)),
         Err(e) => {
             log::warn!("Horizon: loot tables unavailable, structure containers stay empty: {e}");
@@ -130,7 +132,16 @@ pub fn loot_data(root: &Path) -> Option<Arc<LootData>> {
 
 /// The loot data `loot_data` loaded, if it ran.
 pub fn loaded_loot_data() -> Option<Arc<LootData>> {
-    LOOT.get().cloned().flatten()
+    LOOT.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .flatten()
+}
+
+/// Let go of the loot data: for a preload no world used
+/// (game/world_loading.rs). The next `loot_data` loads it again.
+pub fn forget_loot_data() {
+    *LOOT.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 /// `RandomizableContainer.unpackLootTable` of a container at `pos`: `table`
