@@ -145,6 +145,18 @@ impl Game<'_> {
                 .iter()
                 .find(|m| m.id == id)
                 .map_or(0.0, |m| m.eye_y() - m.position.y),
+            Target::Stand(id) => self
+                .armor_stands
+                .iter()
+                .find(|a| a.id == id)
+                .map_or(0.0, |a| a.eye_height()),
+            // EntityType eyeHeight: boats 0.5625, items 0.2125; the rest keep
+            // the default of 0.85 of the height (minecarts 0.7, experience
+            // orbs and paintings 0.5), item frames 0.
+            Target::Boat(_) => f64::from(0.5625f32),
+            Target::Item(_) => f64::from(0.2125f32),
+            Target::Cart(_) => f64::from(0.7f32 * 0.85),
+            Target::Orb(_) | Target::Painting(_) => f64::from(0.5f32 * 0.85),
             _ => 0.0,
         }
     }

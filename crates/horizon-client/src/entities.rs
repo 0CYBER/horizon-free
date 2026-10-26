@@ -713,6 +713,17 @@ pub struct ArmorStand {
 }
 impl ArmorStand {
     pub const SLOTS: [&'static str; 6] = ["mainhand", "offhand", "feet", "legs", "chest", "head"];
+    /// The eye height of `getDimensionsMarker`: none for a marker, halved
+    /// (with `BABY_DIMENSIONS`' 0.9875) when small.
+    pub fn eye_height(&self) -> f64 {
+        if self.marker {
+            0.0
+        } else if self.small {
+            f64::from(0.9875f32)
+        } else {
+            f64::from(1.7775f32)
+        }
+    }
     pub fn new(id: u32, position: Vec3, yaw: f32) -> Self {
         Self {
             fire_ticks: 0,
