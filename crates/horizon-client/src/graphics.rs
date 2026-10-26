@@ -255,7 +255,7 @@ pub struct Graphics {
     pub resolution_scale: u32,
     /// FXAA over the world.
     pub fxaa: bool,
-    /// HDR output (scRGB), where the display path offers it.
+    /// HDR output (HDR10, or scRGB), where the display path offers it.
     pub hdr: bool,
     /// HDR paper white (where SDR white sits), in nits.
     pub hdr_paper_white: u32,
