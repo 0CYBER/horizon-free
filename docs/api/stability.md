@@ -26,12 +26,29 @@ promise, how something is deprecated and removed, and the tests that keep old mo
 ## What counts as a breaking change
 
 Breaking: removing or renaming anything; changing a type, a default, a unit or a meaning; making something optional
-required; refusing input that was accepted; a new case in a WIT `enum` or `variant` the game sends to mods (an older
-component cannot decode it); a JSON field that changes type.
+required; refusing input that was accepted; any change to a WIT type a function uses, a new `enum` or `variant` case
+included, in either direction (the runtime links a component only when each imported function's types match exactly:
+a mod built before the change no longer loads); a JSON field that changes type.
 
 Not breaking: a new function, interface, capability, command, endpoint, tool or `server.toml` key; a new optional
-argument or JSON field (readers must ignore fields they don't know); a new WIT case the mod *sends* (the game decodes
-every case it ever served); faster, or fixing behaviour to what the reference already says.
+argument or JSON field (readers must ignore fields they don't know); a new WIT function or type (mods built earlier
+don't import it); faster, or fixing behaviour to what the reference already says.
+
+### Mod API levels
+
+A new WIT function doesn't break older mods, but a mod that calls it can't run on a Horizon from before it. So every
+function the game offers mods has an **API level**, the one it arrived at (`crates/horizon-mods/src/api_level.rs`):
+level 0 is the contract of Horizon 0.2.67 to 0.2.69, level 1 adds `render.set-minimap` and server mods' `players`, level 2 `game.raycast`, level 3 `command.run-quiet`. A mod needs the level of
+the newest function it imports (a component imports only the functions it calls). The level is read from the file,
+never declared:
+
+- the game refuses a mod that needs a function it doesn't have, with "made for a newer Horizon (it uses
+  render.set-minimap): update Horizon to run it", instead of a linking error;
+- the registry's CI writes each mod version's level into the index (`api_level`), and installers take the newest
+  version the running game can run.
+
+A pull request that adds a function lists it in `api_level.rs` at the next level and raises `LEVEL`; the
+`api_reference` test fails until it does.
 
 ## Stability levels
 
@@ -86,10 +103,12 @@ Deprecations and breaking changes are in bold. The release notes of the game rel
 
 | Part | Level | Version |
 | --- | --- | --- |
-| Mod API: `log`, `game`, `chat`, `hud`, `storage`, `events` | preview | 0.1.0 |
+| Mod API: `log`, `game`, `chat`, `hud`, `storage`, `command`, `events` | preview | 0.1.0 |
 | Mod API: `ui`, `ui-events` (a mod's screens and settings page) | experimental | manifest `experimental = ["ui"]` |
+| Mod API: `render` (HUD shapes, camera shake and zoom; drawn by the game, no mod shaders) | experimental | manifest `experimental = ["render"]` |
+| Mod API: `input` (claimed items' use, the mod's keys, the mouse wheel) | experimental | manifest `experimental = ["input"]` |
 | Content mods (`registries`: data-driven blocks and items) | preview | manifest `api = "0.2"` |
-| Server mods (events, world, server commands) | not started | manifest `api = "0.3"`, experimental first |
+| Server mods: world `horizon-server-mod`, `players`, `server-events` | experimental | manifest `api = "0.3"` |
 | Script mods (Lua run by an interpreter mod, [mods.md](mods.md#ways-in)) | not started | |
 | `cargo horizon-mod` (`new`, `build`, `run`), `horizon-mod-sdk` | preview | 0.1.0 |
 | Shader API | not started | |
@@ -102,3 +121,16 @@ Deprecations and breaking changes are in bold. The release notes of the game rel
 | Telemetry batch and consent | stable | `"schema": 1`, consent `2` |
 | `horizon-graphics.txt`, `horizon-extras.txt`, `horizon-mods.txt` | preview | none |
 | `SHA256SUMS` and `SHA256SUMS.sig` | stable | |
+
+### The experimental mod APIs' choices
+
+- **What a mod may take from the game.** `input.claim-wheel` is the one input a mod consumes: while it holds the
+  wheel, the steps are its `wheel` events and the hotbar doesn't move. `claim-items` takes the use button only on the
+  items it names. A mod's keys (`register-key`) never consume: vanilla's mapping on the same key still runs. Whether
+  keys may consume too is decided before `input` becomes preview.
+- **`input`'s `wheel` event** is a new case in a variant the game sends, so it breaks mods built before it (allowed
+  because `input` is experimental): an `input` mod that calls `poll` needs a rebuild against the new WIT.
+- **`render.set-minimap`** draws a map the game makes, not one a mod composes: reading the blocks around the player
+  for a map image costs too much through hook calls, so the game keeps the tiles (vanilla's map colours) and the mod
+  picks the corner, side, scale and shape. One map shows at a time, the first loaded mod's. It is a new function and a
+  new type, so mods built before it keep loading.

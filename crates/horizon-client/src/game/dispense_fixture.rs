@@ -90,6 +90,10 @@ enum Target {
 impl Game<'_> {
     /// Run every case of `spec` ("CASES,OUTPUT") and write the results.
     pub(super) fn dispense_fixture(&mut self, spec: &str) -> Result<()> {
+        assert!(
+            !self.options.execution_role.is_client(),
+            "fixture requires a server Game"
+        );
         let (input, output) = spec
             .split_once(',')
             .ok_or("HORIZON_DISPENSE_FIXTURE=CASES,OUTPUT")?;
@@ -721,6 +725,11 @@ impl Game<'_> {
         match self.world.block_entities.get_mut(&p) {
             Some(BlockEntity::Jukebox(j)) => j.record = stack,
             Some(BlockEntity::Lectern(l)) => l.book = stack,
+            Some(BlockEntity::Campfire(c)) => {
+                if let Some(cell) = c.items.get_mut(slot) {
+                    *cell = stack;
+                }
+            }
             Some(e) => {
                 if let Some(cell) = e.slots_mut().get_mut(slot) {
                     *cell = stack;

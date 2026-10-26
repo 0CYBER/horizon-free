@@ -39,6 +39,35 @@ impl FreeList {
         }
         self.0.insert(start, len);
     }
+    /// `give` for many ranges: one merge of the sorted ranges into the list,
+    /// where giving them one by one costs a few tree lookups each.
+    fn give_all(&mut self, mut ranges: Vec<(u64, u64)>) {
+        if ranges.len() < 64 {
+            for (start, len) in ranges {
+                self.give(start, len);
+            }
+            return;
+        }
+        ranges.sort_unstable();
+        let mut free = std::mem::take(&mut self.0).into_iter().peekable();
+        let mut given = ranges.into_iter().peekable();
+        let mut merged: Vec<(u64, u64)> = Vec::new();
+        loop {
+            let next = match (free.peek(), given.peek()) {
+                (Some(a), Some(b)) if a.0 <= b.0 => free.next(),
+                (_, Some(_)) => given.next(),
+                (Some(_), None) => free.next(),
+                (None, None) => break,
+            };
+            let (start, len) = next.expect("peeked");
+            match merged.last_mut() {
+                Some(last) if last.0 + last.1 == start => last.1 += len,
+                _ => merged.push((start, len)),
+            }
+        }
+        // Sorted: the tree is built in one pass.
+        self.0 = merged.into_iter().collect();
+    }
 }
 
 /// One vertex buffer of the arena; only the newest page grows.
@@ -65,8 +94,15 @@ pub struct Arena {
 }
 
 impl Arena {
-    pub fn new(device: &wgpu::Device, stride: u64, capacity: u64) -> Self {
-        Self::with_usage(device, stride, capacity, wgpu::BufferUsages::VERTEX)
+    /// Vertices; `storage` also lets shaders read them as a storage buffer (a shader pack's
+    /// terrain program reads the other corners of a vertex's quad for its normal).
+    pub fn new(device: &wgpu::Device, stride: u64, capacity: u64, storage: bool) -> Self {
+        let usage = if storage {
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE
+        } else {
+            wgpu::BufferUsages::VERTEX
+        };
+        Self::with_usage(device, stride, capacity, usage)
     }
     /// Sorted translucent indices; `storage` when compute passes read them.
     pub fn indices(device: &wgpu::Device, capacity: u64, storage: bool) -> Self {
@@ -148,6 +184,11 @@ impl Arena {
     pub fn has_page(&self, page: u32) -> bool {
         self.pages.get(page as usize).is_some_and(Option::is_some)
     }
+    /// Each live page's buffer, by page.
+    pub fn page_buffers(&self) -> impl Iterator<Item = (u32, &wgpu::Buffer)> {
+        let pages = self.pages.iter().enumerate();
+        pages.filter_map(|(i, p)| Some((i as u32, &p.as_ref()?.buffer)))
+    }
     pub fn buffer(&self, page: u32) -> &wgpu::Buffer {
         &self.pages[page as usize]
             .as_ref()
@@ -224,6 +265,26 @@ impl Arena {
             .expect("live arena page")
             .free
             .give(start, len);
+    }
+    /// `release` for many ranges (page, start, vertices) at once.
+    pub fn release_all(&mut self, ranges: impl IntoIterator<Item = (u32, u64, u64)>) {
+        let mut by_page: Vec<Vec<(u64, u64)>> = Vec::new();
+        for (page, start, vertices) in ranges {
+            let page = page as usize;
+            if by_page.len() <= page {
+                by_page.resize_with(page + 1, Vec::new);
+            }
+            by_page[page].push((start, Self::span(vertices).min(self.page_limit)));
+        }
+        for (page, ranges) in by_page.into_iter().enumerate() {
+            if !ranges.is_empty() {
+                self.pages[page]
+                    .as_mut()
+                    .expect("live arena page")
+                    .free
+                    .give_all(ranges);
+            }
+        }
     }
     /// Moves a page into a larger buffer; false (the page unchanged) when
     /// there is no memory for it.
@@ -352,7 +413,7 @@ mod tests {
             eprintln!("no GPU adapter: skipped");
             return;
         };
-        let mut arena = Arena::new(&device, 4, GRAIN);
+        let mut arena = Arena::new(&device, 4, GRAIN, false);
         arena.page_limit = 2 * GRAIN;
         assert_eq!(arena.bytes(), 0);
         let (first, a) = alloc(&mut arena, &device, &queue, GRAIN).unwrap();
@@ -395,7 +456,7 @@ mod tests {
             return;
         };
         for mut arena in [
-            Arena::new(&device, 28, GRAIN),
+            Arena::new(&device, 28, GRAIN, false),
             Arena::indices(&device, GRAIN, false),
         ] {
             alloc(&mut arena, &device, &queue, GRAIN).unwrap();
@@ -421,6 +482,44 @@ mod tests {
         assert_eq!(free.take(2 * GRAIN), None);
         free.give(b, 2 * GRAIN);
         assert_eq!(free, FreeList::new(4 * GRAIN));
+    }
+
+    #[test]
+    fn many_ranges_given_at_once_coalesce_as_one_by_one() {
+        let fill = || {
+            let mut free = FreeList::new(1 << 30);
+            let taken: Vec<(u64, u64)> = (0..500u64)
+                .map(|i| {
+                    let len = GRAIN * (1 + i * 7 % 5);
+                    (free.take(len).unwrap(), len)
+                })
+                .collect();
+            for &(start, len) in taken.iter().step_by(3) {
+                free.give(start, len);
+            }
+            (free, taken)
+        };
+        // Every other range of those still taken, in a scattered order.
+        let (mut one_by_one, taken) = fill();
+        let (mut at_once, _) = fill();
+        let mut given: Vec<(u64, u64)> = (0..taken.len())
+            .filter(|i| i % 3 != 0 && i % 2 == 0)
+            .map(|i| taken[i])
+            .collect();
+        given.sort_by_key(|&(start, _)| start.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        assert!(given.len() >= 64);
+        for &(start, len) in &given {
+            one_by_one.give(start, len);
+        }
+        at_once.give_all(given);
+        assert_eq!(at_once, one_by_one);
+        // The rest too: everything is free again, in one range.
+        let rest: Vec<(u64, u64)> = (0..taken.len())
+            .filter(|i| i % 3 != 0 && i % 2 != 0)
+            .map(|i| taken[i])
+            .collect();
+        at_once.give_all(rest);
+        assert_eq!(at_once, FreeList::new(1 << 30));
     }
 
     #[test]

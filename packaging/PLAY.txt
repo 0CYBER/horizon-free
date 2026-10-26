@@ -17,7 +17,7 @@ Downloaded this archive directly?
   More about Horizon: https://playhorizon.dev
 
   To prepare this folder by hand you need Minecraft Java Edition 26.3, played
-  once from the official launcher, and Java 25 (a JDK). Then, in this folder:
+  once from the official launcher, and a Java 25 runtime. Then, in this folder:
     ./horizon-prepare --prepare --server-jar PATH/TO/server.jar
     ./horizon-prepare sounds               (optional, for sound)
   (Windows: horizon-prepare.exe.) The 26.3 server jar is the downloads.server.url

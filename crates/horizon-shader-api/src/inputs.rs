@@ -158,7 +158,7 @@ pub const POST_INPUT: Struct = Struct {
     doc: "One pixel of the picture, for `fn post(input: PostInput) -> vec4<f32>`.",
     fields: fields! {
         uv: "vec2<f32>" = "Where the pixel is, 0..1 from the top left.",
-        pixel: "vec2<f32>" = "The pixel's centre, in pixels from the top left.",
+        pixel: "vec2<f32>" = "The pixel's centre, in pixels from the top left of what the pass draws (the world's size; the window's for the last pass).",
         color: "vec4<f32>" = "The previous pass's colour here (the world's picture for the first pass).",
         depth: "f32" = "The world's depth here, reversed: 0 is the sky.",
     },

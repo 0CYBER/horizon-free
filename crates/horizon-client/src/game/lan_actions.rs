@@ -38,6 +38,11 @@ pub(super) struct GuestPlay {
     use_delay: u32,
     /// The shield's ItemCooldowns entry: an axe disabled it for this many ticks.
     pub(super) shield_cooldown: u32,
+    /// `ServerGamePacketListenerImpl.dropSpamThrottler` (`TickThrottler(20, 1480)`): 20 for each
+    /// item a creative player drops from the creative screen, one less each tick.
+    creative_drops: u32,
+    /// The guest's `Player.getCooldowns()` (`Game::cooldowns` for its turn).
+    pub(super) cooldowns: horizon_client::cooldowns::Cooldowns,
     attack_ticks: u32,
     /// The main hand's item at the guest's last tick (`Game::attack_item`).
     attack_item: Option<std::sync::Arc<str>>,
@@ -72,6 +77,10 @@ pub(super) struct GuestPlay {
     last_inventory: u64,
     /// `Entity.portalProcess` and `portalCooldown` (game/server_travel.rs).
     pub(super) portal: horizon_client::nether_portal::PortalState,
+    /// `ServerPlayer.wonGame`: the End poem is showing, the player waits for
+    /// its client's PERFORM_RESPAWN (`respawn_requested`).
+    pub(super) won_game: bool,
+    pub(super) respawn_requested: bool,
     /// `Player.takeXpDelay`: ticks until the next orb can be taken.
     xp_delay: u32,
     /// What last killed the guest outright (`/kill`): the death message's key.
@@ -84,15 +93,19 @@ pub(super) struct GuestPlay {
     equipped: Option<Vec<Option<ItemStack>>>,
     /// The guest's cast fishing hook (`Player.fishing`).
     pub(super) hook: Option<super::fishing::Hook>,
+    sculk: super::sculk::PlayerEvents,
 }
 
 /// A guest's command waiting for the hub (`LanHost::commands`).
 pub(super) struct GuestCommand {
-    conn: u32,
-    command: String,
-    permission: u8,
+    pub(super) conn: u32,
+    pub(super) command: String,
+    pub(super) permission: u8,
     /// An integrated server's: no level teleports (yet).
-    integrated: bool,
+    pub(super) integrated: bool,
+    /// A mod's quiet command (game/lan_quiet.rs): its output suppressed, as
+    /// `CommandSourceStack.withSuppressedOutput` does.
+    pub(super) quiet: bool,
 }
 
 /// The game's own state while a guest's is swapped in (`enter_guest`), and
@@ -125,6 +138,8 @@ pub(super) struct GuestSwap {
     using: Option<(usize, u32)>,
     use_delay: u32,
     pub(super) shield_cooldown: u32,
+    /// The guest's item cooldowns (`Game::cooldowns` for its turn).
+    cooldowns: horizon_client::cooldowns::Cooldowns,
     attack_ticks: u32,
     attack_item: Option<std::sync::Arc<str>>,
     swing: horizon_client::first_person::SwingState,
@@ -254,6 +269,7 @@ impl Game<'_> {
             // its effects' modifiers and armor protection included.
             play.equipped = None;
             play.potions = Default::default();
+            play.sculk = Default::default();
         }
         let g = &mut host.hub.guests[i];
         // The guest's body.
@@ -261,6 +277,7 @@ impl Game<'_> {
             host.play.insert(conn, play);
             return None;
         };
+        self.sculk.swap_player(&mut play.sculk);
         // The guest's own CombatTracker: damage to them is not the host's.
         // A new body starts with no record of the last one.
         let guest_combat = if fresh {
@@ -330,6 +347,7 @@ impl Game<'_> {
         let using = std::mem::replace(&mut self.using, play.using.take());
         let use_delay = std::mem::replace(&mut self.use_delay, play.use_delay);
         let shield_cooldown = std::mem::replace(&mut self.shield_cooldown, play.shield_cooldown);
+        let cooldowns = std::mem::replace(&mut self.cooldowns, std::mem::take(&mut play.cooldowns));
         let attack_ticks = std::mem::replace(&mut self.attack_ticks, play.attack_ticks);
         let attack_item = std::mem::replace(&mut self.attack_item, play.attack_item.take());
         let swing = std::mem::replace(&mut self.swing, play.swing);
@@ -420,6 +438,7 @@ impl Game<'_> {
             using,
             use_delay,
             shield_cooldown,
+            cooldowns,
             attack_ticks,
             attack_item,
             swing,
@@ -477,6 +496,7 @@ impl Game<'_> {
             using,
             use_delay,
             shield_cooldown,
+            cooldowns,
             attack_ticks,
             attack_item,
             swing,
@@ -500,6 +520,7 @@ impl Game<'_> {
             projectiles,
             modifiers,
         } = swap;
+        self.sculk.swap_player(&mut play.sculk);
         // The guest's damage record back into their slot, the host's in place.
         let guest_combat = std::mem::replace(&mut self.combat, combat);
         self.guest_combat.insert(conn, guest_combat);
@@ -515,6 +536,16 @@ impl Game<'_> {
         self.swings_started = swings;
         for packet in std::mem::replace(&mut self.guest_packets, packets) {
             host.hub.send_to(conn, &packet);
+        }
+        // ServerItemCooldowns.onCooldownStarted: the guest's own cooldown.
+        for (group, duration) in std::mem::take(&mut self.guest_cooldowns) {
+            host.hub.send_to(
+                conn,
+                &C::Cooldown(play::Cooldown {
+                    group: group.to_string(),
+                    duration,
+                }),
+            );
         }
         (self.lan_acting, self.lan_acting_name, self.lan_acting_uuid) = acting;
         play.death_cause = std::mem::replace(&mut self.ui.death_cause, death_cause);
@@ -545,6 +576,7 @@ impl Game<'_> {
         play.using = std::mem::replace(&mut self.using, using);
         play.use_delay = std::mem::replace(&mut self.use_delay, use_delay);
         play.shield_cooldown = std::mem::replace(&mut self.shield_cooldown, shield_cooldown);
+        play.cooldowns = std::mem::replace(&mut self.cooldowns, cooldowns);
         play.attack_ticks = std::mem::replace(&mut self.attack_ticks, attack_ticks);
         play.attack_item = std::mem::replace(&mut self.attack_item, attack_item);
         play.swing = std::mem::replace(&mut self.swing, swing);
@@ -855,7 +887,11 @@ impl Game<'_> {
             .filter(|g| host.hub.here(g))
             .filter(|g| {
                 g.menu.as_ref().is_some_and(|m| {
-                    m.slots.valid(&self.world) && !m.slots.still_valid(&self.world, g, m.pos)
+                    (m.slots.valid(&self.world) && !m.slots.still_valid(&self.world, g, m.pos))
+                        || m.pos.is_some_and(|k| {
+                            k.1 == super::minecarts::CART_KEY_Y
+                                && !self.chest_vehicle_still_valid(k.2, g)
+                        })
                 })
             })
             .map(|g| g.conn)
@@ -867,6 +903,35 @@ impl Game<'_> {
                 self.guest_carried_back(host, gi);
             }
         }
+    }
+
+    /// `ContainerEntity.isChestVehicleStillValid`: the chest minecart or chest
+    /// boat is still there and within the guest's entity interaction range
+    /// plus 4 of its box.
+    fn chest_vehicle_still_valid(&self, id: i32, g: &horizon_client::lan::guest::Guest) -> bool {
+        let bounds = self
+            .carts
+            .iter()
+            .find(|c| c.id as i32 == id)
+            .map(|c| c.bounds())
+            .or_else(|| {
+                self.boats
+                    .iter()
+                    .find(|b| b.id as i32 == id)
+                    .map(|b| b.bounds())
+            });
+        let Some(b) = bounds else {
+            return false;
+        };
+        let eye = [g.position[0], g.position[1] + g.eye_height(), g.position[2]];
+        let (lo, hi) = (b.min_position(), b.max_position());
+        let d = [
+            eye[0] - eye[0].clamp(lo.x, hi.x),
+            eye[1] - eye[1].clamp(lo.y, hi.y),
+            eye[2] - eye[2].clamp(lo.z, hi.z),
+        ];
+        let range = if g.creative() { 5.0 } else { 3.0 } + 4.0;
+        d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < range * range
     }
 
     /// A packet from a guest that the hub does not handle itself.
@@ -1072,6 +1137,35 @@ impl Game<'_> {
             }
             S::MoveVehicle(p) => self.guest_move_vehicle(host, conn, &p),
             S::PaddleBoat(p) => self.guest_paddle_boat(host, conn, [p.left, p.right]),
+            // handleSetCreativeModeSlot's drop: a slot below 0 is a stack thrown out of the
+            // creative screen (`handleCreativeModeItemDrop`), dropped from the player's hand.
+            S::SetCreativeModeSlot(p) if p.slot < 0 => {
+                if !host.hub.guests[gi].creative() {
+                    return;
+                }
+                let Some(stack) = self.item_from_network(host, &p.item) else {
+                    return;
+                };
+                if stack.count
+                    > self
+                        .res
+                        .items()
+                        .get(&stack.item)
+                        .map_or(64, |i| i.max_stack)
+                {
+                    return;
+                }
+                let play = host.play.entry(conn).or_default();
+                if play.creative_drops >= 1480 {
+                    eprintln!(
+                        "Player {} was dropping items too fast in creative mode, ignoring.",
+                        host.hub.guests[gi].name
+                    );
+                    return;
+                }
+                play.creative_drops += 20;
+                self.as_guest(host, conn, |g| g.player_drop(stack));
+            }
             S::SetCreativeModeSlot(p) => {
                 let g = &mut host.hub.guests[gi];
                 if !g.creative() || !(0..46).contains(&p.slot) {
@@ -1146,6 +1240,10 @@ impl Game<'_> {
                 {
                     self.container_changed(key);
                 }
+                // A vehicle's menu edits the vehicle's own items.
+                if let Some(Slots::Block(key)) = slots {
+                    self.store_cart_items(key);
+                }
                 self.drop_guest_items(host, gi, drops);
             }
             S::ContainerClose(p) => {
@@ -1160,6 +1258,9 @@ impl Game<'_> {
                 self.guest_carried_back(host, gi);
             }
             S::ChatCommand(c) => self.guest_chat_command(host, conn, &c.command),
+            S::CustomPayload(p) if p.channel == horizon_protocol::quiet::CHANNEL => {
+                self.guest_quiet_commands(host, conn, &p.data)
+            }
             S::ChatCommandSigned(p) => self.guest_signed_command(host, conn, p),
             S::ChangeDifficulty(p) if host.hub.guests[gi].permission >= 2 => {
                 if !self.level.difficulty_locked && (0..=3).contains(&p.difficulty) {
@@ -1258,6 +1359,13 @@ impl Game<'_> {
                 self.guest_suggestions(host, conn, &payload);
             }
             S::PlaceRecipe(p) => self.lan_place_recipe(host, conn, &p),
+            // handleClientCommand: PERFORM_RESPAWN after the poem leaves the End
+            // (the next server tick sends the player on).
+            S::ClientCommand(c)
+                if c.action == 0 && host.play.get(&conn).is_some_and(|p| p.won_game) =>
+            {
+                host.play.entry(conn).or_default().respawn_requested = true;
+            }
             S::ClientCommand(c) if c.action == 0 => self.guest_respawn(host, conn),
             // ServerStatsCounter.sendStats.
             S::ClientCommand(c) if c.action == 1 => {
@@ -1483,6 +1591,10 @@ impl Game<'_> {
             );
             return;
         }
+        // A server mod's command, for every player whatever their level.
+        if self.guest_server_mod_command(host, conn, command.trim_start_matches('/')) {
+            return;
+        }
         // An integrated server runs every player's commands at their own
         // permission level (`CommandSourceStack.permissions`); a LAN world
         // follows its Allow Commands, and a dedicated server leaves it to
@@ -1509,6 +1621,7 @@ impl Game<'_> {
             command: command.trim_start_matches('/').to_owned(),
             permission,
             integrated,
+            quiet: false,
         });
     }
 
@@ -1523,39 +1636,52 @@ impl Game<'_> {
                 return;
             }
             let c = host.commands.remove(0);
-            let mut host = self.lan.take().expect("checked above");
-            let Some(swap) = self.enter_guest(&mut host, c.conn) else {
-                self.lan = Some(host);
-                continue;
-            };
-            self.lan = Some(host);
-            self.chat_capture = Some(Vec::new());
-            let level = std::mem::replace(&mut self.ui.registries.permission, c.permission);
-            self.run_command(&c.command);
-            self.ui.registries.permission = level;
-            let lines = self.chat_capture.take().unwrap_or_default();
-            let mut host = self.lan.take().expect("a command puts the hub back");
-            self.leave_guest(&mut host, swap);
-            host.hub.sync_all_effects();
-            if !c.integrated {
-                // A teleport into another level happens before its feedback is sent.
-                self.run_level_teleports(&mut host);
-            }
-            // What the command earned is announced before its feedback.
-            self.announce_guest_advancements(&mut host);
-            for line in lines {
-                host.hub.send_to(
-                    c.conn,
-                    &C::SystemChat(play::SystemChat {
-                        content: horizon_client::lan::data::component_nbt(&line.component()),
-                        overlay: false,
-                    }),
-                );
-            }
-            // The other operators hear of it; never the player whose command it was.
-            self.send_admin_feedback(&mut host, Some(c.conn));
-            self.lan = Some(host);
+            self.run_guest_command(c);
         }
+    }
+
+    /// One guest's command as that guest, its feedback sent to them; false
+    /// when it failed (or the guest is gone).
+    pub(super) fn run_guest_command(&mut self, c: GuestCommand) -> bool {
+        let Some(mut host) = self.lan.take() else {
+            return false;
+        };
+        let Some(swap) = self.enter_guest(&mut host, c.conn) else {
+            self.lan = Some(host);
+            return false;
+        };
+        self.lan = Some(host);
+        self.chat_capture = Some(Vec::new());
+        let level = std::mem::replace(&mut self.ui.registries.permission, c.permission);
+        let ok = if c.quiet {
+            self.run_command_quietly(&c.command)
+        } else {
+            self.run_command(&c.command)
+        };
+        self.ui.registries.permission = level;
+        let lines = self.chat_capture.take().unwrap_or_default();
+        let mut host = self.lan.take().expect("a command puts the hub back");
+        self.leave_guest(&mut host, swap);
+        host.hub.sync_all_effects();
+        if !c.integrated {
+            // A teleport into another level happens before its feedback is sent.
+            self.run_level_teleports(&mut host);
+        }
+        // What the command earned is announced before its feedback.
+        self.announce_guest_advancements(&mut host);
+        for line in lines {
+            host.hub.send_to(
+                c.conn,
+                &C::SystemChat(play::SystemChat {
+                    content: horizon_client::lan::data::component_nbt(&line.component()),
+                    overlay: false,
+                }),
+            );
+        }
+        // The other operators hear of it; never the player whose command it was.
+        self.send_admin_feedback(&mut host, Some(c.conn));
+        self.lan = Some(host);
+        ok
     }
 
     /// The `broadcastToAdmins` lines a command queued (`source`: the guest
@@ -1781,12 +1907,28 @@ impl Game<'_> {
                 continue;
             }
             if self.on_server_trip(conn) {
+                // LivingEntity.hurt kills at once (die), whether the level
+                // has loaded around the player or not: its respawn request
+                // is taken as soon as it comes.
+                self.guest_die(host, gi, conn);
                 continue;
             }
             let play = host.play.entry(conn).or_default();
             // Player.tick's ItemCooldowns.tick, once a tick for each player
-            // (the shield an axe disabled).
+            // (the shield an axe disabled, a thrown pearl).
             play.shield_cooldown = play.shield_cooldown.saturating_sub(1);
+            play.creative_drops = play.creative_drops.saturating_sub(1);
+            // ServerItemCooldowns.onCooldownEnded: a finished entry is told to
+            // the guest (a duration of 0 removes it).
+            for group in play.cooldowns.tick() {
+                host.hub.send_to(
+                    conn,
+                    &C::Cooldown(play::Cooldown {
+                        group: group.to_string(),
+                        duration: 0,
+                    }),
+                );
+            }
             let digging = play.digging;
             let using = play.using.is_some();
             let delayed = play.destroy_delay > 0 || play.use_delay > 0 || play.attack_ticks < 100;
@@ -1812,14 +1954,13 @@ impl Game<'_> {
                         g.use_delay -= 1;
                     }
                 });
-                // ServerPlayerGameMode.handleBlockBreakAction: a creative
-                // player's START breaks the block once (destroyAndAck) and
-                // leaves nothing being destroyed; its client sends no STOP.
-                // Kept, the dig broke whatever was put there next, every
-                // destroy delay, for as long as the player broke nothing else.
+                // ServerPlayerGameMode.handleBlockBreakAction: creative and
+                // instant survival STARTs finish without a STOP from the client.
+                // tick_mining clears mining on completion; forget the START too,
+                // so a flower or crop planted here later is not broken again.
                 if digging.is_some()
-                    && host.hub.guests[gi].creative()
                     && let Some(play) = host.play.get_mut(&conn)
+                    && (host.hub.guests[gi].creative() || play.mining.is_none())
                 {
                     play.digging = None;
                 }
@@ -1855,69 +1996,72 @@ impl Game<'_> {
             self.guest_dig_feedback(host, conn);
             self.guest_pickups(host, gi);
             self.guest_orbs(host, gi);
-            if host.hub.guests[gi].health <= 0.0 && !host.hub.guests[gi].dead {
-                self.guest_forget_digging(host, conn);
-                // FishingHook.shouldStopFishing: its owner is dead.
-                if let Some(play) = host.play.get_mut(&conn) {
-                    play.hook = None;
-                }
+            self.guest_die(host, gi, conn);
+        }
+    }
+
+    /// `ServerPlayer.die` for a guest whose health has run out: the death
+    /// message, the loot and experience, the death screen.
+    fn guest_die(&mut self, host: &mut LanHost, gi: usize, conn: u32) {
+        if host.hub.guests[gi].health <= 0.0 && !host.hub.guests[gi].dead {
+            self.guest_forget_digging(host, conn);
+            // FishingHook.shouldStopFishing: its owner is dead.
+            if let Some(play) = host.play.get_mut(&conn) {
+                play.hook = None;
             }
-            let g = &mut host.hub.guests[gi];
-            if g.health <= 0.0 && !g.dead {
-                g.dead = true;
-                g.last_death = Some(g.position.map(|v| v.floor() as i32));
-                let (id, at) = (g.entity_id, g.position);
-                let reward = Experience {
-                    level: g.xp_level,
-                    progress: g.xp_progress,
-                    total: g.xp_total,
-                }
-                .death_reward(self.ui.rules.bool("keep_inventory") || g.game_mode == SPECTATOR);
-                let (name, uuid) = (g.name.clone(), g.uuid);
-                // ServerPlayer.die: dropAllDeathLoot unless a spectator, from the eyes less 0.3.
-                let drops = (g.game_mode != SPECTATOR)
-                    .then(|| [at[0], at[1] + g.eye_height() - 0.3, at[2]]);
-                let cause = host.play.get_mut(&conn).and_then(|p| p.death_cause.take());
-                // ServerPlayer.die: with showDeathMessages, the message goes to
-                // the dying player's death screen and to everyone the team lets
-                // see it; without it, the death screen gets an empty one.
-                let message = if self.ui.rules.bool("show_death_messages") {
-                    let me = self.player_text(&name, uuid);
-                    let text = match cause {
-                        Some(key) => horizon_client::text::Text::translate(&key, &[me]),
-                        None if at[1] < f64::from(horizon_client::chunk::MIN_Y - 64) => {
-                            horizon_client::text::Text::translate("death.attack.outOfWorld", &[me])
-                        }
-                        None => self.guest_death_message(conn, me),
-                    };
-                    let message = horizon_client::lan::data::component_nbt(&text.component());
-                    let team = self.score.board.players_team(&name);
-                    if horizon_client::scoreboard::own_death_message_shown(team) {
-                        host.hub.system_message(message.clone());
-                        if self.options.dedicated.is_some() {
-                            super::dedicated::log(
-                                "INFO",
-                                &format!("System chat: {}", text.plain()),
-                            );
-                        } else if self.player.is_some() {
-                            self.system_message(text);
-                        }
+        }
+        let g = &mut host.hub.guests[gi];
+        if g.health <= 0.0 && !g.dead {
+            g.dead = true;
+            g.last_death = Some(g.position.map(|v| v.floor() as i32));
+            let (id, at) = (g.entity_id, g.position);
+            let reward = Experience {
+                level: g.xp_level,
+                progress: g.xp_progress,
+                total: g.xp_total,
+            }
+            .death_reward(self.ui.rules.bool("keep_inventory") || g.game_mode == SPECTATOR);
+            let (name, uuid) = (g.name.clone(), g.uuid);
+            // ServerPlayer.die: dropAllDeathLoot unless a spectator, from the eyes less 0.3.
+            let drops =
+                (g.game_mode != SPECTATOR).then(|| [at[0], at[1] + g.eye_height() - 0.3, at[2]]);
+            let cause = host.play.get_mut(&conn).and_then(|p| p.death_cause.take());
+            // ServerPlayer.die: with showDeathMessages, the message goes to
+            // the dying player's death screen and to everyone the team lets
+            // see it; without it, the death screen gets an empty one.
+            let message = if self.ui.rules.bool("show_death_messages") {
+                let me = self.player_text(&name, uuid);
+                let text = match cause {
+                    Some(key) => horizon_client::text::Text::translate(&key, &[me]),
+                    None if at[1] < f64::from(horizon_client::chunk::MIN_Y - 64) => {
+                        horizon_client::text::Text::translate("death.attack.outOfWorld", &[me])
                     }
-                    message
-                } else {
-                    literal("")
+                    None => self.guest_death_message(conn, me),
                 };
-                host.hub.send_to(
-                    conn,
-                    &C::PlayerCombatKill(play::PlayerCombatKill { id, message }),
-                );
-                // LivingEntity.die: the death animation, the dying player included.
-                host.hub.entity_event(id, 3, at);
-                if let Some(eyes) = drops {
-                    self.as_guest(host, conn, |game| game.drop_inventory(eyes));
+                let message = horizon_client::lan::data::component_nbt(&text.component());
+                let team = self.score.board.players_team(&name);
+                if horizon_client::scoreboard::own_death_message_shown(team) {
+                    host.hub.system_message(message.clone());
+                    if self.options.dedicated.is_some() {
+                        super::dedicated::log("INFO", &format!("System chat: {}", text.plain()));
+                    } else if self.player.is_some() {
+                        self.system_message(text);
+                    }
                 }
-                self.spawn_orbs(at, reward);
+                message
+            } else {
+                literal("")
+            };
+            host.hub.send_to(
+                conn,
+                &C::PlayerCombatKill(play::PlayerCombatKill { id, message }),
+            );
+            // LivingEntity.die: the death animation, the dying player included.
+            host.hub.entity_event(id, 3, at);
+            if let Some(eyes) = drops {
+                self.as_guest(host, conn, |game| game.drop_inventory(eyes));
             }
+            self.spawn_orbs(at, reward);
         }
     }
 
@@ -2115,7 +2259,16 @@ impl Game<'_> {
             let _ = w.tick_environment_damage();
             let _ = w.apply_fire_contact();
             let _ = w.server_hazards_tick(in_wall);
+            // Player.tick ends with updatePlayerPose: a swimmer, or a player
+            // crawling under a block, takes the short box its moves are checked with.
+            let _ = w.update_player_pose();
             let mut events = std::mem::take(&mut w.player.events);
+            // LayeredCauldronBlock.handleEntityOnFireInside along those moves.
+            for event in &events {
+                if let MotionEvent::CauldronExtinguish { pos } = event {
+                    game.cauldron_extinguish(*pos);
+                }
+            }
             // WitherRoseBlock.entityInside along those moves.
             for event in &events {
                 if matches!(event, MotionEvent::InsideWitherRose) {
@@ -2157,6 +2310,7 @@ impl Game<'_> {
         let Some((events, marked)) = events else {
             return;
         };
+        self.as_guest(host, conn, |game| game.tick_player_sculk_events());
         for event in events {
             match event {
                 MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, at),

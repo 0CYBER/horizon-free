@@ -304,6 +304,7 @@ fn loot_stack(item: &str, count: i32) -> LootStack {
         map: false,
         exploration: None,
         ominous_amplifier: None,
+        stew_effects: Vec::new(),
     }
 }
 /// `Mob.dropChances.byEquipment(slot)`: the recorded chance, or the one the

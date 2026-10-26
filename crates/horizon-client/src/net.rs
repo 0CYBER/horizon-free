@@ -40,6 +40,8 @@ pub enum Event {
     Status(String),
     /// The server's `minecraft:brand` custom payload.
     Brand(String),
+    /// The server runs mods' quiet commands (`horizon_protocol::quiet`).
+    QuietCommands,
     /// Configuration finished: the play state begins with these registries.
     Joined {
         registries: Arc<Dynamic>,
@@ -55,6 +57,10 @@ pub enum Event {
     PackPush(cfg::ResourcePackPush),
     /// ClientboundResourcePackPopPacket: one pack, or every pack.
     PackPop(Option<u128>),
+    /// `show_dialog` in configuration: the dialog itself.
+    ShowDialog(horizon_world::nbt::Tag),
+    /// `clear_dialog` in configuration.
+    ClearDialog,
     /// `ClientboundTransferPacket`: the server sent us to another address.
     /// The connection ends right after; the game reconnects there with the
     /// stored cookies.
@@ -227,6 +233,25 @@ impl Session {
             cfg::Serverbound::ResourcePack(status).encode()
         } else {
             play::Serverbound::ResourcePack(status).encode()
+        };
+        if let Some(w) = writer.as_mut()
+            && w.send(&body).is_err()
+        {
+            w.shutdown();
+        }
+    }
+    /// ServerboundCustomClickActionPacket (a dialog's answer), in whichever
+    /// phase the connection is.
+    pub fn send_custom_click(&self, id: &str, payload: Option<horizon_world::nbt::Tag>) {
+        let click = cfg::CustomClickAction {
+            id: id.to_owned(),
+            payload,
+        };
+        let mut writer = self.writer.lock().unwrap();
+        let body = if self.configuring.load(Ordering::Relaxed) {
+            cfg::Serverbound::CustomClickAction(click).encode()
+        } else {
+            play::Serverbound::CustomClickAction(click).encode()
         };
         if let Some(w) = writer.as_mut()
             && w.send(&body).is_err()
@@ -602,6 +627,13 @@ fn configure(
             cfg::Clientbound::ResourcePackPop(p) => {
                 let _ = send.send(Event::PackPop(p.id));
             }
+            // The game shows it; the answer goes back from there.
+            cfg::Clientbound::ShowDialog(d) => {
+                let _ = send.send(Event::ShowDialog(d.dialog));
+            }
+            cfg::Clientbound::ClearDialog(_) => {
+                let _ = send.send(Event::ClearDialog);
+            }
             cfg::Clientbound::CookieRequest(q) => {
                 let payload = cookies.lock().unwrap().get(&q.key).cloned();
                 reply(cfg::Serverbound::CookieResponse(cfg::CookieResponse {
@@ -638,6 +670,8 @@ fn receive_brand(payload: &cfg::CustomPayload, send: &Sender<Event>) {
         && let Ok(brand) = horizon_protocol::buf::Reader::new(&payload.data).string(32767)
     {
         let _ = send.send(Event::Brand(brand));
+    } else if payload.channel == horizon_protocol::quiet::CHANNEL {
+        let _ = send.send(Event::QuietCommands);
     }
 }
 

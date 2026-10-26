@@ -7,7 +7,7 @@ rust-version = "1.85"
 description = "Write Horizon mods in Rust: WebAssembly components for the horizon:mod world (docs/mods.md)"
 
 [dependencies]
-wit-bindgen = { version = "0.57.1", default-features = false, features = ["macros", "realloc"] }
+wit-bindgen = { version = "0.60.0", default-features = false, features = ["macros", "realloc"] }
 
 [lints]
 workspace = true

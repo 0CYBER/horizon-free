@@ -8,6 +8,7 @@ use super::{
     download, installed, java, FileRef, Kind, Project, Query, Source, SourceId, Version, GAME,
 };
 use horizon_mods::index::{self, Index, Trust};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -27,6 +28,11 @@ const FRESH: Duration = Duration::from_secs(600);
 const MAX_INDEX: u64 = 16 << 20;
 /// The last index fetched, kept in the game folder for when the registry can't be reached.
 const CACHE: &str = "mod-browser/horizon-index.json";
+/// Players' ratings of every project (the registry service, crates/horizon-mod-registry).
+const RATINGS_URL: &str = "https://playhorizon.dev/api/mods/ratings";
+/// Where a player rates a project: the site's GitHub sign-in, which comes back to its page.
+/// The launcher has no GitHub account of its own.
+const RATE: &str = "https://playhorizon.dev/api/mods/auth/login?back=/mods/";
 
 /// Where the index comes from: `HORIZON_MOD_INDEX` (a file or an `https://` address, for a
 /// test registry), else [`INDEX_URL`].
@@ -89,7 +95,7 @@ fn fetch_index() -> Result<(Index, String), String> {
     use std::io::Read;
     let at = location();
     let text = if at.starts_with("https://") {
-        let response = download::agent().get(&at).call().map_err(|e| match e {
+        let response = download::agent(&at).get(&at).call().map_err(|e| match e {
             ureq::Error::Status(code, _) => format!("The mod registry answered {code}."),
             ureq::Error::Transport(t) => format!("The mod registry can't be reached: {t}"),
         })?;
@@ -110,14 +116,101 @@ fn fetch_index() -> Result<(Index, String), String> {
     Ok((index, text))
 }
 
+/// A project's ratings: 1 to 5 stars, their mean and how many.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rating {
+    pub average: f32,
+    pub count: u64,
+}
+
+/// When the ratings were fetched last, and every rated project's [`Rating`] (None: that failed).
+type Ratings = Option<Arc<HashMap<String, Rating>>>;
+static RATINGS: Mutex<Option<(Instant, Ratings)>> = Mutex::new(None);
+
+/// A project's rating as fetched last, without asking the network: None when the ratings
+/// aren't known (not fetched, or the service didn't answer), `Some(None)` when it has none.
+pub fn rating(id: &str) -> Option<Option<Rating>> {
+    let ratings = RATINGS.lock().unwrap();
+    let known = ratings.as_ref()?.1.as_ref()?;
+    Some(known.get(id).copied())
+}
+
+/// The page that signs the player in with GitHub on the site and lets them rate `id`.
+pub fn rate_url(id: &str) -> String {
+    format!("{RATE}{id}")
+}
+
+/// Fetches the ratings again when the last try is ten minutes old: from `HORIZON_MOD_RATINGS`
+/// (a file or an `https://` address, for a test registry), else [`RATINGS_URL`]; a local test
+/// registry has none unless given. After a failure the browser shows downloads only.
+fn refresh_ratings() {
+    if RATINGS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|(at, _)| at.elapsed() < FRESH)
+    {
+        return;
+    }
+    let given = std::env::var("HORIZON_MOD_RATINGS")
+        .ok()
+        .filter(|v| !v.is_empty());
+    if given.is_none() && local() {
+        return;
+    }
+    let at = given.unwrap_or_else(|| RATINGS_URL.to_owned());
+    let text = if at.starts_with("https://") {
+        download::agent(&at).get(&at).call().ok().and_then(|r| {
+            use std::io::Read;
+            let mut text = String::new();
+            r.into_reader()
+                .take(MAX_INDEX)
+                .read_to_string(&mut text)
+                .ok()
+                .map(|_| text)
+        })
+    } else {
+        fs::read_to_string(&at).ok()
+    };
+    let fetched = text.map(|t| Arc::new(parse_ratings(&t)));
+    *RATINGS.lock().unwrap() = Some((Instant::now(), fetched));
+}
+
+/// `{"projects": {"<id>": {"average", "count"}}}`, keeping only well-formed entries.
+fn parse_ratings(text: &str) -> HashMap<String, Rating> {
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(text) else {
+        return HashMap::new();
+    };
+    let Some(projects) = json["projects"].as_object() else {
+        return HashMap::new();
+    };
+    projects
+        .iter()
+        .filter_map(|(id, r)| {
+            let average = r["average"].as_f64().filter(|a| (1.0..=5.0).contains(a))?;
+            let count = r["count"].as_u64().filter(|&c| c > 0)?;
+            index::valid_id(id).then(|| {
+                (
+                    id.clone(),
+                    Rating {
+                        average: average as f32,
+                        count,
+                    },
+                )
+            })
+        })
+        .collect()
+}
+
 /// The browser's kind for a registry kind; None for one the launcher doesn't install yet
-/// (shader packs, kinds newer than this launcher).
+/// (kinds newer than this launcher).
 fn kind_of(kind: &index::Kind) -> Option<Kind> {
     match kind {
         index::Kind::Mod => Some(Kind::Mod),
         index::Kind::ResourcePack => Some(Kind::ResourcePack),
         index::Kind::Modpack => Some(Kind::Modpack),
-        index::Kind::Shader | index::Kind::Other(_) => None,
+        index::Kind::Shader => Some(Kind::Shader),
+        index::Kind::Other(_) => None,
     }
 }
 
@@ -157,7 +250,7 @@ fn project_of(p: &index::Project) -> Option<Project> {
         title: p.name.clone(),
         summary: p.summary.clone(),
         author: p.authors.join(", "),
-        downloads: 0,
+        downloads: p.downloads,
         page: format!("{SITE}/{}", p.id),
         icon: p.icon.clone(),
         license: p.license.clone(),
@@ -167,7 +260,14 @@ fn project_of(p: &index::Project) -> Option<Project> {
     })
 }
 
-fn version_of(index: &Index, p: &index::Project, v: &index::Version) -> Version {
+/// Version `v` of `p` as the browser shows it; blocked when taken down, or when it needs a newer
+/// mod API level than `level`, the game's.
+fn version_of(
+    index: &Index,
+    p: &index::Project,
+    v: &index::Version,
+    level: Option<u32>,
+) -> Version {
     Version {
         id: v.version.clone(),
         number: v.version.clone(),
@@ -186,7 +286,8 @@ fn version_of(index: &Index, p: &index::Project, v: &index::Version) -> Version 
         required: v.requires.iter().map(|r| r.id.clone()).collect(),
         blocked: index
             .revoked(&p.id, &v.file.sha256)
-            .map(|r| format!("taken down: {}", r.reason)),
+            .map(|r| format!("taken down: {}", r.reason))
+            .or_else(|| needs_newer(v, level).then(|| NEEDS_NEWER.to_string())),
     }
 }
 
@@ -209,14 +310,19 @@ fn matches(p: &index::Project, text: &str) -> bool {
         .all(|word| hay.contains(&word.to_lowercase()))
 }
 
-/// The projects of the query's kind whose words match, for this game unless `everything`.
+/// The projects of the query's kind whose words match, for this game unless `everything`: the
+/// most downloaded first.
 fn search(index: &Index, query: &Query) -> Vec<Project> {
-    index
+    let mut found: Vec<Project> = index
         .projects
         .iter()
         .filter(|p| kind_of(&p.kind) == Some(query.kind) && matches(p, &query.text))
         .filter(|p| query.everything || p.versions.iter().any(|v| v.game == GAME))
         .filter_map(project_of)
+        .collect();
+    found.sort_by_key(|p| std::cmp::Reverse(p.downloads));
+    found
+        .into_iter()
         .skip(query.offset)
         .take(query.limit)
         .collect()
@@ -231,7 +337,9 @@ impl Source for Registry {
     }
 
     fn search(&self, query: &Query) -> Result<Vec<Project>, String> {
-        Ok(search(&*index()?, query))
+        let found = search(&*index()?, query);
+        refresh_ratings();
+        Ok(found)
     }
 
     fn project(&self, id: &str) -> Result<Project, String> {
@@ -253,13 +361,15 @@ impl Source for Registry {
         let p = index
             .project(&project.id)
             .ok_or_else(|| format!("{} isn't in Horizon's registry.", project.title))?;
+        let level = crate::backend::game_mod_api_level();
         Ok(p.versions
             .iter()
-            .map(|v| version_of(&index, p, v))
+            .map(|v| version_of(&index, p, v, level))
             .collect())
     }
 
     fn details(&self, project: &Project) -> Result<Details, String> {
+        refresh_ratings();
         let index = index()?;
         let p = index
             .project(&project.id)
@@ -372,24 +482,29 @@ fn relative(kind: Kind, id: &str, file_name: &str) -> Result<String, String> {
     match kind {
         Kind::Mod => Ok(format!("{}/{id}.hmod", java::MODS_DIR)),
         Kind::ResourcePack => Ok(format!("resourcepacks/{file_name}")),
+        Kind::Shader => Ok(format!("shaderpacks/{file_name}")),
         Kind::Modpack => Err("A modpack installs as its own profile (pack::install).".into()),
     }
 }
 
-/// Installs a registry project into the game folder `home`: its newest version for this game,
-/// downloaded into `mod-browser/downloads/`, checked against the index, then moved into place.
-/// A mod is `horizon-mods/<id>.hmod`, turned on in `horizon-mods.txt`.
+/// Installs a registry project into the game folder `home`: its newest version for this game that
+/// the game the player runs can load, downloaded into `mod-browser/downloads/`, checked against
+/// the index, then moved into place. A mod is `horizon-mods/<id>.hmod`, turned on in
+/// `horizon-mods.txt`.
 pub fn install(
     project: &Project,
     home: &Path,
     progress: &dyn Fn(&str, f32),
 ) -> Result<Vec<installed::Entry>, String> {
-    install_from(&*index()?, local(), project, home, progress)
+    let level = crate::backend::game_mod_api_level();
+    install_from(&*index()?, local(), level, project, home, progress)
 }
 
+/// [`install`] from `index`, for a game serving mod API `level`.
 fn install_from(
     index: &Index,
     local: bool,
+    level: Option<u32>,
     project: &Project,
     home: &Path,
     progress: &dyn Fn(&str, f32),
@@ -397,28 +512,43 @@ fn install_from(
     let p = index
         .project(&project.id)
         .ok_or_else(|| format!("{} isn't in Horizon's registry.", project.title))?;
-    let v = newest(index, p)?;
+    let v = newest(index, p, level)?;
     install_version(index, local, p, v, home, progress).map(|e| vec![e])
 }
 
-/// A project's newest version for this game that wasn't taken down.
-fn newest<'a>(index: &Index, p: &'a index::Project) -> Result<&'a index::Version, String> {
-    let mut taken_down = None;
+/// A project's newest version for this game that wasn't taken down and that a game serving mod
+/// API `level` runs (any, when the level isn't known).
+fn newest<'a>(
+    index: &Index,
+    p: &'a index::Project,
+    level: Option<u32>,
+) -> Result<&'a index::Version, String> {
+    let (mut taken_down, mut too_new) = (None, false);
     for v in p.versions.iter().filter(|v| v.game == GAME) {
-        match index.revoked(&p.id, &v.file.sha256) {
-            None => return Ok(v),
-            Some(r) => {
-                taken_down.get_or_insert(r);
-            }
+        if let Some(r) = index.revoked(&p.id, &v.file.sha256) {
+            taken_down.get_or_insert(r);
+        } else if needs_newer(v, level) {
+            too_new = true;
+        } else {
+            return Ok(v);
         }
     }
     Err(match taken_down {
+        _ if too_new => format!("{} {NEEDS_NEWER}: update it first.", p.name),
         Some(r) => format!("{} was taken down: {}", p.name, r.reason),
         None => format!("{} has no version for {GAME} to install.", p.name),
     })
 }
 
-/// Installs version `v` of the registry's mod or resource pack `p` into the game folder `home`.
+const NEEDS_NEWER: &str = "needs a newer Horizon than the game you play";
+
+/// Whether version `v` calls mod API functions a game serving `level` doesn't have.
+fn needs_newer(v: &index::Version, level: Option<u32>) -> bool {
+    matches!((v.api_level, level), (Some(needed), Some(level)) if needed > level)
+}
+
+/// Installs version `v` of the registry's mod, resource pack or shader pack `p` into the game
+/// folder `home`.
 fn install_version(
     index: &Index,
     local: bool,
@@ -447,15 +577,19 @@ fn install_version(
             other.title
         ));
     }
-    if (target.exists() && old.as_ref().is_none_or(|o| o.file != relative)) || folder_mod.exists() {
+    let clash = target.exists() && old.as_ref().is_none_or(|o| o.file != relative);
+    if project.kind == Kind::Mod && (clash || folder_mod.exists()) {
         return Err(format!(
             "A mod with the id {} is already in {}: move it away first.",
             p.id,
             java::MODS_DIR
         ));
     }
+    if clash {
+        return Err(format!("{relative} is already there: move it away first."));
+    }
     let line = format!("{} {}", p.name, v.version);
-    let file = &version_of(index, p, v).files[0];
+    let file = &version_of(index, p, v, None).files[0];
     let staging = home.join("mod-browser/downloads");
     let path = fetch(file, &staging, local, &|f| progress(&line, f))?;
     let trust = index::check_file(index, p, v, &path).inspect_err(|_| {
@@ -518,7 +652,7 @@ pub fn turn_off_revoked(index: &Index, home: &Path) -> Vec<String> {
                     e.title, r.reason
                 ));
             }
-        } else if e.kind == Kind::ResourcePack {
+        } else if matches!(e.kind, Kind::ResourcePack | Kind::Shader) {
             out.push(format!(
                 "{} was taken down: {} Remove it.",
                 e.title, r.reason

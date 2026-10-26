@@ -592,6 +592,37 @@ impl Behaviours {
         {
             return InteractionResult::Pass;
         }
+        if self.data(state).chain.contains(&Class::CopperGolemStatue) {
+            return self.turn_statue(level, ticks, pos, state, item);
+        }
         self.use_without_item(level, ticks, pos, face, hit, player)
+    }
+
+    /// `CopperGolemStatueBlock.useItemOn` (and its weathering subclass's): anything but an axe
+    /// (`#minecraft:axes`, every one named `*_axe`), even an empty hand, turns the statue to its
+    /// next pose; honeycomb waxes a statue that still weathers instead.
+    fn turn_statue<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        state: BlockStateId,
+        item: Option<&str>,
+    ) -> InteractionResult {
+        let item = item.unwrap_or("minecraft:air");
+        let waxed = self.table.name(state).starts_with("minecraft:waxed_");
+        if item.ends_with("_axe") || (item == "minecraft:honeycomb" && !waxed) {
+            return InteractionResult::Pass;
+        }
+        let mut sim = self.sim(level, ticks);
+        sim.sound(
+            pos,
+            &"minecraft:entity.copper_golem_become_statue".into(),
+            1.0,
+            1.0,
+        );
+        sim.set_block_and_update(pos, self.table.cycle(state, self.props.copper_golem_pose));
+        sim.game_event(pos, "minecraft:block_change");
+        InteractionResult::Success
     }
 }

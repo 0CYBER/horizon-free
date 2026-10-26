@@ -57,14 +57,7 @@ impl Game<'_> {
                     .map(str::trim)
                     .filter(|v| !v.is_empty())
                     .ok_or("options-set KEY VALUE: missing the value")?;
-                let mut file = self.settings.to_file();
-                file.set_text(key, value)?;
-                let mut settings = horizon_client::settings::Settings::from_file(file);
-                // Horizon's own files are not in options.txt.
-                std::mem::swap(&mut settings.horizon, &mut self.settings.horizon);
-                std::mem::swap(&mut settings.controller, &mut self.settings.controller);
-                std::mem::swap(&mut settings.extras, &mut self.settings.extras);
-                self.settings = settings;
+                self.settings = self.settings.with_option(key, value)?;
                 // As the options screen applies a change.
                 self.handle_option_events(vec![Event::Changed])?;
                 match *key {
@@ -84,6 +77,10 @@ impl Game<'_> {
         std::env::current_dir()
             .unwrap_or_default()
             .join("options.txt")
+    }
+    /// `shaderpacks/` beside `options.txt`.
+    pub(super) fn shader_packs_dir() -> std::path::PathBuf {
+        Self::options_path().with_file_name(horizon_client::shader_pack_list::DIR)
     }
     pub(super) fn gui_size(&self) -> (f32, f32) {
         let size = self
@@ -237,6 +234,17 @@ impl Game<'_> {
                     let _ = std::fs::create_dir_all(&dir);
                     super::packs::open_folder(&dir);
                 }
+                Event::ListShaderPacks => {
+                    self.settings.shader_packs =
+                        horizon_client::shader_pack_list::scan(&Self::shader_packs_dir());
+                }
+                // Saved; the next frame's `shader_pack_inputs` loads the pick.
+                Event::ShaderPack => self.settings.save(&Self::options_path()),
+                Event::OpenShaderPackFolder => {
+                    let dir = Self::shader_packs_dir();
+                    let _ = std::fs::create_dir_all(&dir);
+                    super::packs::open_folder(&dir);
+                }
                 Event::ModSettings(i) => self.open_mod_screen(i, true),
                 Event::Credits => self.open_win_screen(false, super::win::Finish::Options),
             }
@@ -249,6 +257,7 @@ impl Game<'_> {
         lang::set(lang::Language::load(&[&root], code));
         self.refresh_remote_language();
         self.ui.chat.rescale(&self.gui.atlas);
+        self.creative_screen.forget_items();
     }
     /// Settings that Horizon applies beyond render distance, volume and GUI scale.
     pub(super) fn apply_ui_settings(&mut self) {
@@ -260,6 +269,11 @@ impl Game<'_> {
             r.animated_textures = s.horizon.animated_textures;
             r.set_mipmap_levels(s.mipmap_levels.max(0) as u32);
             r.set_world_post(s.horizon.resolution_scale as f32 / 100.0, s.horizon.fxaa);
+            r.set_hdr(
+                s.horizon.hdr,
+                s.horizon.hdr_paper_white as f32,
+                s.horizon.hdr_peak as f32,
+            );
         }
         // Window.updateFullscreenIfChanged: only a changed option asks the
         // window to change, so applying settings never undoes a fullscreen

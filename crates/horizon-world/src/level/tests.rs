@@ -47,6 +47,8 @@ pub(crate) struct TestLevel {
     pub day_time: i64,
     pub events: Vec<LevelEvent>,
     pub block_light: HashMap<BlockPos, i32>,
+    /// `Level.isClientSide`.
+    pub client_side: bool,
 }
 impl TestLevel {
     fn new(b: &Behaviours) -> Self {
@@ -58,10 +60,14 @@ impl TestLevel {
             day_time: 0,
             events: Vec::new(),
             block_light: HashMap::new(),
+            client_side: false,
         }
     }
 }
 impl LevelAccess for TestLevel {
+    fn is_client_side(&self) -> bool {
+        self.client_side
+    }
     fn block_state(&self, pos: BlockPos) -> BlockStateId {
         self.blocks.get(&pos).copied().unwrap_or(self.air)
     }
@@ -919,6 +925,100 @@ fn pistons_push_and_sticky_pistons_pull() {
     assert_eq!(w.get(BlockPos::new(2, 1, 0)), air);
 }
 
+/// `ServerLevel.runBlockEvents` reports a handled event for the clients
+/// (`ClientboundBlockEventPacket`), carrying the block the event named.
+#[test]
+fn a_handled_block_event_reaches_the_clients() {
+    let mut w = world!();
+    w.floor(0, 10, "stone");
+    let piston = w.id("piston", &[("facing", "east")]);
+    let block = w.id("redstone_block", &[]);
+    w.set(BlockPos::new(0, 1, 0), piston);
+    w.set(BlockPos::new(-1, 1, 0), block);
+    w.level.events.clear();
+    w.full_tick();
+    assert!(w.level.events.iter().any(|e| matches!(
+        e,
+        LevelEvent::BlockEntityEvent {
+            pos,
+            state,
+            a: 0,
+            ..
+        } if *pos == BlockPos::new(0, 1, 0) && *state == piston
+    )));
+}
+
+/// `ClientLevel.blockEvent`: the client re-runs `triggerEvent` on its own
+/// level, which builds the moving block entities a piston's `moveBlocks`
+/// makes, and ticks them to the placed block.
+#[test]
+fn a_client_replays_a_pistons_block_event() {
+    let mut w = world!();
+    w.floor(0, 10, "stone");
+    let piston = w.id("sticky_piston", &[("facing", "east")]);
+    let dirt = w.id("dirt", &[]);
+    let block = w.id("redstone_block", &[]);
+    w.put(BlockPos::new(0, 1, 0), piston);
+    w.put(BlockPos::new(1, 1, 0), dirt);
+    w.put(BlockPos::new(-1, 1, 0), block);
+    w.f.behaviours.client_block_event(
+        &mut w.level,
+        &mut w.ticks,
+        BlockPos::new(0, 1, 0),
+        0,
+        Direction::East as i32,
+    );
+    assert!(
+        w.ticks
+            .moving_pistons
+            .iter()
+            .any(|(p, _)| *p == BlockPos::new(2, 1, 0))
+    );
+    for _ in 0..3 {
+        w.level.time += 1;
+        w.f.behaviours
+            .client_tick_block_entities(&mut w.level, &mut w.ticks);
+    }
+    assert_eq!(w.get(BlockPos::new(2, 1, 0)), dirt);
+    assert_eq!(
+        w.name(BlockPos::new(1, 1, 0)),
+        "piston_head[facing=east,short=false,type=sticky]"
+    );
+    assert!(w.ticks.moving_pistons.is_empty());
+}
+
+/// A client's copy of a move doesn't start the pistons the moved block
+/// powers (`checkIfExtend` is server-only): their own block events come from
+/// the server.
+#[test]
+fn a_client_replay_starts_no_other_piston() {
+    let mut w = world!();
+    w.floor(0, 10, "stone");
+    w.level.client_side = true;
+    let piston = w.id("piston", &[("facing", "east")]);
+    let block = w.id("redstone_block", &[]);
+    let up = w.id("piston", &[("facing", "up")]);
+    w.put(BlockPos::new(0, 1, 0), piston);
+    w.put(BlockPos::new(1, 1, 0), block);
+    w.put(BlockPos::new(2, 2, 0), up);
+    w.f.behaviours.client_block_event(
+        &mut w.level,
+        &mut w.ticks,
+        BlockPos::new(0, 1, 0),
+        0,
+        Direction::East as i32,
+    );
+    for _ in 0..10 {
+        w.level.time += 1;
+        w.f.behaviours
+            .client_tick_block_entities(&mut w.level, &mut w.ticks);
+    }
+    assert_eq!(w.get(BlockPos::new(2, 1, 0)), block);
+    assert_eq!(w.get(BlockPos::new(2, 2, 0)), up);
+    assert!(w.ticks.moving_pistons.is_empty());
+    assert!(w.ticks.block_events.is_empty());
+}
+
 #[test]
 fn pistons_pop_fragile_blocks_and_refuse_obsidian() {
     let mut w = world!();
@@ -1282,4 +1382,45 @@ fn player_breaks_fire_with_extinguish_not_generic_break_event() {
         );
         assert_eq!(w.get(pos), w.b().air());
     }
+}
+
+#[test]
+fn big_dripleaf_tilts_under_an_entity_standing_on_it() {
+    let mut w = world!();
+    w.floor(0, 2, "clay");
+    let pos = BlockPos::new(0, 1, 0);
+    let leaf = w.id("big_dripleaf", &[("facing", "north")]);
+    w.put(pos, leaf);
+    let stand = |w: &mut World, on_ground: bool, feet: f64| {
+        w.f.behaviours
+            .entity_on_big_dripleaf(&mut w.level, &mut w.ticks, pos, on_ground, feet);
+    };
+    // canEntityTilt: in the air, or with its feet at or under 0.6875, nothing.
+    stand(&mut w, false, 1.9375);
+    stand(&mut w, true, 1.6875);
+    assert_eq!(w.prop(pos, "tilt"), "none");
+    // Standing on the leaf's top (15/16): UNSTABLE, then PARTIAL and FULL
+    // 10 ticks apart, and back to NONE 100 ticks later.
+    stand(&mut w, true, 1.9375);
+    assert_eq!(w.prop(pos, "tilt"), "unstable");
+    for _ in 0..10 {
+        w.tick();
+    }
+    assert_eq!(w.prop(pos, "tilt"), "partial");
+    for _ in 0..10 {
+        w.tick();
+    }
+    assert_eq!(w.prop(pos, "tilt"), "full");
+    // A tilted leaf doesn't restart under the entity.
+    stand(&mut w, true, 1.9375);
+    assert_eq!(w.prop(pos, "tilt"), "full");
+    for _ in 0..100 {
+        w.tick();
+    }
+    assert_eq!(w.prop(pos, "tilt"), "none");
+    // A powered leaf doesn't tilt.
+    let power = w.id("redstone_block", &[]);
+    w.put(BlockPos::new(1, 1, 0), power);
+    stand(&mut w, true, 1.9375);
+    assert_eq!(w.prop(pos, "tilt"), "none");
 }

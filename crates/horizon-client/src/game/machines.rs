@@ -159,8 +159,10 @@ impl Containers<'_> {
             });
         }
         let entity = self.world.block_entities.get(&pos)?;
-        // A beehive keeps bees, not items: it is no `Container`.
-        if matches!(entity, BlockEntity::Beehive(_)) {
+        // A beehive keeps bees, not items, and a campfire cooks its own: neither
+        // is a `Container` (HopperBlockEntity.getContainerAt), so a dropper drops
+        // in front of them and a hopper leaves them alone.
+        if matches!(entity, BlockEntity::Beehive(_) | BlockEntity::Campfire(_)) {
             return None;
         }
         let kind = match (entity, name) {
@@ -923,15 +925,16 @@ impl Game<'_> {
             batch.rect_uv(ox, oy, 176.0, height, r, u32::MAX);
         }
         let grey = horizon_client::hud::rgba(64, 64, 64, 255);
-        let title = self
-            .remote_menu_title()
-            .unwrap_or_else(|| self.container_title(self.translate(key, fallback)));
+        let title = &self.remote_menu_title().unwrap_or_else(|| {
+            horizon_client::text::Text::literal(self.container_title(self.translate(key, fallback)))
+                .resolve_legacy()
+        });
         let title_x = if screen == Screen::Hopper {
             8.0
         } else {
-            (176.0 - horizon_client::hud::HudBatch::text_width(atlas, &title)) / 2.0
+            (176.0 - atlas.font.width_text(title)) / 2.0
         };
-        batch.text(atlas, &title, ox + title_x, oy + 6.0, grey, false);
+        batch.text_styled(atlas, title, ox + title_x, oy + 6.0, grey, false);
         let inventory = self.translate("container.inventory", "Inventory");
         batch.text(atlas, &inventory, ox + 8.0, oy + height - 94.0, grey, false);
         true

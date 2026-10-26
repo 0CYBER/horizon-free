@@ -18,7 +18,7 @@ impl Game<'_> {
         container: i32,
         menu: String,
         kind: Kind,
-        title: String,
+        title: horizon_client::text::Text,
         pos: [i32; 3],
     ) {
         if let Some(r) = self.remote.as_mut() {

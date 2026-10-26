@@ -709,6 +709,9 @@ pub struct Extra {
     /// A copper golem's `openedChestPos`.
     pub opened_chest: Option<[i32; 3]>,
     pub point: Option<[f64; 3]>,
+    /// `NEAREST_REPELLENT`: the nearest repelling block a hoglin or piglin
+    /// sensed, looked up every 20 ticks.
+    pub repellent: Option<[i32; 3]>,
     pub vector: [f64; 3],
     /// Active status effects: (effect id, ticks left, amplifier).
     pub effects: Vec<(&'static str, i32, i32)>,
@@ -861,10 +864,18 @@ pub struct Mob {
     /// The skin texture of a player mob (`PlayerInfo.getSkin`), which
     /// replaces the type's default when its download is ready.
     pub skin: Option<String>,
+    /// A mannequin's `DATA_PROFILE` (ResolvableProfile): the profile's
+    /// `textures` property resolves to `skin` like a player's.
+    pub profile: Option<horizon_protocol::entity_data::Profile>,
 }
 /// Events a mob tick asks the game to act on.
 #[derive(Clone, Debug)]
 pub enum MobEvent {
+    /// Squid.handleEntityEvent(19), resetting the remote tentacle cycle.
+    SquidCycle {
+        mob: u32,
+        at: [f64; 3],
+    },
     /// Rabbit entity event 1, sent only when a ground jump actually happens.
     RabbitHop {
         mob: u32,
@@ -1240,6 +1251,10 @@ pub struct Seen {
     /// `MAX_HEALTH`, `JUMP_STRENGTH` and `MOVEMENT_SPEED` base values (a
     /// horse's breeding stock).
     pub stats: [f64; 3],
+    /// `Wolf.isInSittingPose`.
+    pub sitting: bool,
+    /// `Entity.isVehicle` or `isPassenger`.
+    pub ridden: bool,
 }
 impl Mob {
     pub fn burning_time(&self) -> f64 {
@@ -1312,6 +1327,8 @@ impl Mob {
                 m.extra.vector[0],
                 m.attrs.speed,
             ],
+            sitting: m.extra.sitting,
+            ridden: m.rider.is_some() || m.extra.rider.is_some() || m.extra.mount.is_some(),
         }
     }
     /// `EntityType.getCategory`'s name.
@@ -1586,6 +1603,7 @@ impl Mob {
             rider: None,
             outbox: Vec::new(),
             skin: None,
+            profile: None,
             attrs: Attrs {
                 speed: kind.speed,
                 attack_damage: kind.attack_damage,
@@ -1747,6 +1765,10 @@ impl Mob {
             self.invulnerable = 20;
             self.health -= amount;
             self.hurt_time = 10;
+        }
+        // Animal.actuallyHurt: damage taken ends love mode (`resetLove`).
+        if drops::is_animal(self.species()) {
+            self.extra.in_love = 0;
         }
         self.last_damage = Some((source, i64::from(self.age)));
         if let Some(who) = source.attacker {

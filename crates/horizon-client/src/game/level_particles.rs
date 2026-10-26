@@ -101,6 +101,39 @@ impl Game<'_> {
             }
         }
     }
+    /// `ServerLevel.globalLevelEvent`: heard by every player on the server
+    /// (an end portal opening, the dragon's death roar): here, and sent to
+    /// every guest whatever their dimension.
+    pub(super) fn global_level_event(&mut self, id: i32, pos: [i32; 3], data: i32) {
+        self.global_level_event_sound(id, pos);
+        if self.audio.capture.is_some() {
+            self.lan_global_events.push((id, pos, data));
+        }
+    }
+    /// `LevelEventHandler.globalLevelEvent`: the sound two blocks from the
+    /// camera towards the event, so it is heard from anywhere.
+    pub(super) fn global_level_event_sound(&mut self, id: i32, pos: [i32; 3]) {
+        let (sound, volume) = match id {
+            1023 => ("minecraft:entity.wither.spawn", 1.0),
+            1028 => ("minecraft:entity.ender_dragon.death", 5.0),
+            1038 => ("minecraft:block.end_portal.spawn", 1.0),
+            _ => return,
+        };
+        let at = self.eye_position().map(|eye| {
+            let d = [
+                f64::from(pos[0]) + 0.5 - eye[0],
+                f64::from(pos[1]) + 0.5 - eye[1],
+                f64::from(pos[2]) + 0.5 - eye[2],
+            ];
+            let length = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            if length < 1.0e-4 {
+                return eye;
+            }
+            [0, 1, 2].map(|k| eye[k] + d[k] / length * 2.0)
+        });
+        // Each guest plays it from the global packet.
+        self.audio.play_unshared(sound, at, volume, 1.0);
+    }
     /// Queue and play level event `id` at `pos` (`Level.levelEvent`).
     pub(super) fn level_event_at(&mut self, id: i32, pos: [i32; 3], data: i32) {
         self.level_events.push(LevelEvent::LevelEvent {

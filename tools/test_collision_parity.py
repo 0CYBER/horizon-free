@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import tempfile
 
@@ -37,6 +38,8 @@ def main():
     if args.prepare:
         lab.prepare()
     lock, jars, libraries = test_rust_parity.verify_artifacts()
+    for earlier in directory.glob("run-*"):  # one run per run used to stay behind: 5 GB here after a few weeks
+        shutil.rmtree(earlier, ignore_errors=True)
     base = Path(tempfile.mkdtemp(prefix="run-", dir=directory))
     oracle = lab.ROOT / "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaCollisionOracle.java"
     sources = [oracle, Path(__file__).resolve(), lab.ROOT / "tools/test_rust_parity.py", lab.ROOT / "Cargo.toml", lab.ROOT / "Cargo.lock", lab.ROOT / "crates/horizon-core/Cargo.toml", lab.ROOT / "crates/horizon-world/Cargo.toml", *sorted((lab.ROOT / "crates/horizon-core/src").rglob("*.rs")), *sorted((lab.ROOT / "crates/horizon-world/src").rglob("*.rs")), lab.ROOT / "crates/horizon-world/examples/probe/collision_fixture.rs"]

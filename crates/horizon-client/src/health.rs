@@ -261,11 +261,17 @@ impl PlayerHealth {
         self.hurt_animation_time = 10;
     }
     /// `LocalPlayer.hurtTo` with `flashOnSetHealth`: a drop below the current
-    /// health starts the hurt animation.
+    /// health starts the hurt animation; `damageCooldownTime` (20 on a drop,
+    /// 10 on a gain) is what lets `Hud.extractPlayerHealth` blink the hearts.
     pub fn flash_health_change(&mut self, health: f32) {
         let damage = self.health() - health;
-        if damage > 0.0 {
+        if damage <= 0.0 {
+            if damage < 0.0 {
+                self.hurt.cooldown = 10;
+            }
+        } else {
             self.hurt.last_hurt = damage;
+            self.hurt.cooldown = 20;
             self.animate_hurt();
         }
     }
@@ -290,6 +296,20 @@ impl PlayerMotion {
         amount: f32,
         blocking: Option<Blocking>,
     ) -> Result<BlockOutcome> {
+        self.hurt_caused_by(resources, rules, source, amount, blocking, false)
+    }
+    /// `hurt_blocking` from a source whose causing entity is a living
+    /// non-player (`living_cause`), which the `when_caused_by_living_non_player`
+    /// damage types scale with the difficulty.
+    pub fn hurt_caused_by(
+        &mut self,
+        resources: &HealthResources,
+        rules: HealthRules,
+        source: DamageTypeId,
+        amount: f32,
+        blocking: Option<Blocking>,
+        living_cause: bool,
+    ) -> Result<BlockOutcome> {
         if self.client_side {
             return Ok(BlockOutcome::default());
         }
@@ -309,6 +329,7 @@ impl PlayerMotion {
             invulnerable,
             rules,
             source,
+            living_cause,
             events: &mut self.events,
             dead: &mut h.dead,
             sync_velocity: &mut h.sync_velocity,
@@ -384,6 +405,8 @@ pub(crate) struct Environment<'a> {
     pub(crate) invulnerable: bool,
     pub(crate) rules: HealthRules,
     pub(crate) source: DamageSource<'a, ()>,
+    /// The causing entity is a living non-player (a mob, or its projectile's owner).
+    pub(crate) living_cause: bool,
     pub(crate) events: &'a mut Vec<MotionEvent>,
     pub(crate) dead: &'a mut bool,
     pub(crate) sync_velocity: &'a mut bool,
@@ -767,8 +790,13 @@ impl PlayerHurtWorld for Environment<'_> {
         Ok(())
     }
     fn scales_with_difficulty(&mut self, _: &mut State) -> io::Result<bool> {
-        Ok(self.source.definition().scaling == Scaling::Always)
-    } // no causing entity
+        // DamageSource.scalesWithDifficulty.
+        Ok(match self.source.definition().scaling {
+            Scaling::Never => false,
+            Scaling::Always => true,
+            Scaling::LivingNonPlayer => self.living_cause,
+        })
+    }
     fn difficulty(&mut self, _: &mut State) -> io::Result<Difficulty> {
         Ok(self.rules.difficulty)
     }

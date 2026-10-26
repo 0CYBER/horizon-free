@@ -558,12 +558,11 @@ fn frac(x: f32) -> f32 {
 /// `StringSplitter.splitLines(...).get(0)` for plain text: the first line,
 /// wrapped at the last space that fits or mid-word when none does.
 fn first_line(line: &str, max_width: f32, advance: &dyn Fn(char) -> f32) -> String {
-    let chars: Vec<char> = line.chars().collect();
     let mut width = 0.0;
     let mut last_space = None;
-    for (i, &c) in chars.iter().enumerate() {
+    for (i, c) in line.char_indices() {
         if c == '\n' {
-            return chars[..i].iter().collect();
+            return line[..i].to_owned();
         }
         if c == ' ' {
             last_space = Some(i);
@@ -572,9 +571,11 @@ fn first_line(line: &str, max_width: f32, advance: &dyn Fn(char) -> f32) -> Stri
         if width > max_width {
             let end = match last_space {
                 Some(s) if s > 0 => s,
-                _ => i.max(1),
+                _ if i > 0 => i,
+                // The first char alone is too wide: take that one char.
+                _ => c.len_utf8(),
             };
-            return chars[..end].iter().collect();
+            return line[..end].to_owned();
         }
     }
     line.to_owned()
@@ -730,6 +731,10 @@ pub struct Scene<'a> {
     pub sign: &'a dyn Fn([i32; 3]) -> Option<&'a crate::signs::SignData>,
     /// Banner layers at a position: pattern texture and RGB tint, bottom first.
     pub banner: &'a dyn Fn([i32; 3]) -> Vec<(String, u32)>,
+    /// The skin sprite a `player_head` shows at a position (`SkullBlockRenderer`
+    /// profile → skin): a downloaded `skins/<sha1>` slot or the profile's
+    /// `DefaultPlayerSkin` fallback; None keeps `SKIN_BY_TYPE` (`DefaultPlayerSkin.getDefaultTexture`, slim steve).
+    pub skull: &'a dyn Fn([i32; 3]) -> Option<&'a str>,
     /// Font glyph cell (none for blank glyphs such as the space) and advance.
     pub glyph: &'a dyn Fn(char) -> (Option<Rect>, f32),
 }
@@ -1278,6 +1283,13 @@ impl BlockEntityRenderer {
                     SkullType::Dragon => ("dragon_skull", "entity/enderdragon/dragon"),
                     SkullType::Piglin => ("piglin_head", "entity/piglin/piglin"),
                     SkullType::Player => ("player_head", "entity/player/slim/steve"),
+                };
+                // SkullBlockRenderer.getRenderType: the profile's skin when it
+                // resolves, `SKIN_BY_TYPE` (steve) otherwise.
+                let texture = if *kind == SkullType::Player {
+                    (scene.skull)(pos).unwrap_or(texture)
+                } else {
+                    texture
                 };
                 let (Some(model), Some(paint)) =
                     (self.models.get(model), paint(texture, 0xFFFFFF, packed))
@@ -1886,6 +1898,7 @@ mod tests {
             lid: &|_| 0.0,
             sign: &|_| None,
             banner: &|_| Vec::new(),
+            skull: &|_| None,
             glyph: &|_| (None, 0.0),
         };
         // Compare the cached world path with the original model renderer,
@@ -2085,5 +2098,14 @@ mod tests {
         assert_eq!(out.len(), 4);
         assert_eq!(out[1].pos, [2.0, 0.0, 0.0]);
         assert_eq!(out[2].uv, [0.5, 0.5]);
+    }
+
+    #[test]
+    fn first_line_wraps_on_bytes_without_splitting_a_char() {
+        let advance = |c: char| if c == ' ' { 4.0 } else { 6.0 };
+        assert_eq!(first_line("ab cd ef", 13.0, &advance), "ab");
+        assert_eq!(first_line("abcdef", 13.0, &advance), "ab");
+        assert_eq!(first_line("\u{6771}", 3.0, &advance), "\u{6771}");
+        assert_eq!(first_line("ab\ncd", 100.0, &advance), "ab");
     }
 }

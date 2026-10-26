@@ -19,6 +19,14 @@ import net.minecraft.world.phys.shapes.*;
 /** Exports private runtime data locally and invokes actual vanilla cached-shape queries. */
 public final class VanillaCollisionOracle {
     static { SharedConstants.tryDetectVersion(); Bootstrap.bootStrap(); }
+    private static final boolean REUSE = Boolean.getBoolean("horizon.prepare.reuse");
+    private static Map<String,byte[]> generated;
+    private static final Map<BlockState,Tag> encodedStates = new IdentityHashMap<>();
+    private static final Map<VoxelShape,CompoundTag> encodedGrids = new IdentityHashMap<>();
+    private static Tag encode(BlockState state) {
+        if (!REUSE) return BlockState.FULL_CODEC.encodeStart(NbtOps.INSTANCE,state).getOrThrow();
+        return encodedStates.computeIfAbsent(state, s -> BlockState.FULL_CODEC.encodeStart(NbtOps.INSTANCE,s).getOrThrow()).copy();
+    }
     private static final Field CACHE, COLLISION, DISCRETE;
     private static final Method INDEX;
     static {
@@ -37,6 +45,7 @@ public final class VanillaCollisionOracle {
         return shape;
     }
     private static CompoundTag grid(VoxelShape shape) throws ReflectiveOperationException {
+        if (REUSE && encodedGrids.containsKey(shape)) return encodedGrids.get(shape).copy();
         CompoundTag tag = new CompoundTag();
         tag.putByte("canonical",(byte)(shape==Shapes.empty()?1:shape==Shapes.block()?2:0));
         tag.putByte("cube", (byte)(shape instanceof CubeVoxelShape ? 1 : 0));
@@ -52,13 +61,14 @@ public final class VanillaCollisionOracle {
         byte[] bits = new byte[discrete.getXSize() * discrete.getYSize() * discrete.getZSize()];
         for (int x = 0; x < discrete.getXSize(); x++) for (int y = 0; y < discrete.getYSize(); y++) for (int z = 0; z < discrete.getZSize(); z++) bits[(x * discrete.getYSize() + y) * discrete.getZSize() + z] = (byte)(discrete.isFull(x, y, z) ? 1 : 0);
         tag.putByteArray("occupied", bits);
+        if (REUSE) encodedGrids.put(shape, tag.copy());
         return tag;
     }
     public static CompoundTag occlusionDefinitions() throws Exception {
         var method=BlockBehaviour.class.getDeclaredMethod("getOcclusionShape",BlockState.class);method.setAccessible(true);
         var states=new ListTag();var shapes=new ListTag();var ids=new IdentityHashMap<VoxelShape,Integer>();int[] mapping=new int[Block.BLOCK_STATE_REGISTRY.size()];int index=0;
         for(var state:Block.BLOCK_STATE_REGISTRY) {
-            states.add(BlockState.FULL_CODEC.encodeStart(NbtOps.INSTANCE,state).getOrThrow());
+            states.add(encode(state));
             var shape=(VoxelShape)method.invoke(state.getBlock(),state);Integer id=ids.get(shape);
             if(id==null){id=shapes.size();ids.put(shape,id);shapes.add(grid(shape));}
             mapping[index++]=id;
@@ -70,12 +80,16 @@ public final class VanillaCollisionOracle {
     }
     private static void inputValues(PrintWriter out, double... values) { for (double value : values) out.printf(" %016x", Double.doubleToRawLongBits(value)); }
     private static void generate(Path base) throws Exception {
+        if (REUSE && generated != null) {
+            for (var file : generated.entrySet()) Files.write(base.resolve(file.getKey()), file.getValue());
+            return;
+        }
         ListTag states = new ListTag(), shapes = new ListTag(); CompoundTag defaults = new CompoundTag();
         Map<VoxelShape,Integer> ids = new IdentityHashMap<>();Set<CompoundTag> grids=new HashSet<>(); int[] mapping = new int[Block.BLOCK_STATE_REGISTRY.size()]; int cachedCount = 0;
         for (BlockState state : Block.BLOCK_STATE_REGISTRY) {
             int id = states.size();
             if (Block.BLOCK_STATE_REGISTRY.getId(state) != id) throw new AssertionError("non-dense states");
-            Tag encoded = BlockState.FULL_CODEC.encodeStart(NbtOps.INSTANCE, state).getOrThrow(); states.add(encoded);
+            Tag encoded = encode(state); states.add(encoded);
             if (state == state.getBlock().defaultBlockState()) defaults.putInt(((CompoundTag)encoded).getStringOr("id", ""), id);
             VoxelShape shape = cached(state);
             if (shape == null) mapping[id] = -1;
@@ -108,6 +122,12 @@ public final class VanillaCollisionOracle {
                     inputValues(out, scenario == 4 ? 1e-8 : scenario == 5 ? -1e-7 : random.nextDouble() * 4 - 2); out.println();
                 }
             }
+        }
+        if (REUSE) {
+            // Consumers can overwrite block-registry.nbt; preserve the original bytes.
+            generated = new HashMap<>();
+            for (String file : List.of("block-registry.nbt", "cached-collision.nbt", "inputs.txt"))
+                generated.put(file, Files.readAllBytes(base.resolve(file)));
         }
         System.out.printf("HORIZON_COLLISION_RESULT {\"registry_states\":%d,\"cached_states\":%d,\"uncached_states\":%d,\"unique_shapes\":%d,\"unique_grids\":%d,\"queries\":%d}%n", mapping.length,cachedCount,mapping.length-cachedCount,shapes.size(),grids.size(),cachedCount*6);
     }

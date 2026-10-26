@@ -8,7 +8,7 @@ name: nightly audit
 #   gh workflow run "nightly audit" -f dry_run=true    # the audit, without touching issues
 on:
   schedule:
-    # GitHub's schedules are in UTC: both, and the first step keeps the one that is 03:00 in Paris.
+    # GitHub's schedules are in UTC: both, and the first step keeps the one that is 03:07 in Paris today.
     - cron: '7 1 * * *'
     - cron: '7 2 * * *'
   workflow_dispatch:
@@ -29,15 +29,21 @@ env:
 
 jobs:
   audit:
-    runs-on: [self-hosted, horizon-game]
-    timeout-minutes: 150
+    # The Mac mini's runners only: the audit compares with the previous one, so it stays on one platform.
+    runs-on: [self-hosted, horizon-game, macOS]
+    timeout-minutes: 240  # every harness (~80 min) plus lan_integration (~40 min an attempt under load, retried)
     steps:
-      - name: 03:00 in Paris
+      - name: 03:07 in Paris
         id: when
+        env:
+          SCHEDULE: ${{ github.event.schedule }}
         run: |
-          hour=$(TZ=Europe/Paris date +%H)
-          if [[ "${{ github.event_name }}" == schedule && "$hour" != 03 ]]; then
-            echo "It is ${hour}:00 in Paris: the other schedule runs the audit."
+          # Which cron is 03:07 in Paris, from Paris's offset today: GitHub can start a schedule hours late, so the
+          # clock at start time can't tell (on 2026-10-26 both started after 04:00 Paris and both skipped).
+          offset=$(TZ=Europe/Paris date +%z)
+          ours=$([ "$offset" = +0200 ] && echo '7 1 * * *' || echo '7 2 * * *')
+          if [[ "${{ github.event_name }}" == schedule && "$SCHEDULE" != "$ours" ]]; then
+            echo "Paris is at UTC${offset} today: the '$ours' schedule runs the audit."
             echo "run=false" >> "$GITHUB_OUTPUT"
           else
             echo "run=true" >> "$GITHUB_OUTPUT"
@@ -65,7 +71,8 @@ jobs:
         run: |
           echo "since=$(date +%Y-%m-%dT%H:%M:%S)" >> "$GITHUB_OUTPUT"
           set +e
-          python3 tools/parity.py --all --timeout 1800 2>&1 | tee "$RUNNER_TEMP/audit.log"
+          # lan_integration (the whole lan_e2e suite) takes ~2,400 s under load, past the usual 1,800.
+          python3 tools/parity.py --all --timeout 3000 2>&1 | tee "$RUNNER_TEMP/audit.log"
           echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
           { echo '```'; tail -40 "$RUNNER_TEMP/audit.log"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: Issues for the harnesses that regressed

@@ -2,7 +2,7 @@
 //! kept in the dropped item's `container` component) and ender chests (the
 //! player's `PlayerEnderChestContainer`, saved as `EnderItems`).
 use super::Game;
-use horizon_client::{containers::BlockEntity, items::ItemStack};
+use horizon_client::{containers::BlockEntity, items::ItemStack, text::Text};
 
 pub(super) fn is_shulker_box(name: &str) -> bool {
     name.ends_with("shulker_box")
@@ -233,7 +233,7 @@ impl Game<'_> {
         generic.then(|| self.container_size() / 9)
     }
     /// The title of the open chest-like menu.
-    fn chest_title(&self, rows: usize) -> String {
+    fn chest_title(&self, rows: usize) -> Text {
         if let Some((_, title)) = self.remote_chest_menu() {
             return title;
         }
@@ -246,7 +246,7 @@ impl Game<'_> {
             _ if rows > 3 => ("container.chestDouble", "Large Chest"),
             _ => ("container.chest", "Chest"),
         };
-        self.container_title(self.translate(key, fallback))
+        Text::literal(self.container_title(self.translate(key, fallback))).resolve_legacy()
     }
     /// `ContainerScreen` / `ShulkerBoxScreen`: the background with its
     /// container rows, the title and the inventory label.
@@ -294,7 +294,7 @@ impl Game<'_> {
             r.u1 = r.u0 + 176.0 * du;
             batch.rect_uv(ox, oy + top, 176.0, 96.0, r, u32::MAX);
         }
-        batch.text(
+        batch.text_styled(
             atlas,
             &self.chest_title(rows),
             ox + 8.0,

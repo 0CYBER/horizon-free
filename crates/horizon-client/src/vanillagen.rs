@@ -41,6 +41,10 @@ pub struct VanillaTerrain {
     tick_states: Vec<u32>,
     seed: i64,
     dimension: String,
+    /// When the last proto chunk was generated, in milliseconds since
+    /// `created`: the ring search waits for a pause in generation.
+    last_proto: std::sync::atomic::AtomicU64,
+    created: std::time::Instant,
 }
 /// A proto chunk, or the position of one whose generation failed.
 enum VanillaProto {
@@ -139,6 +143,8 @@ impl VanillaTerrain {
             tick_states,
             seed,
             dimension: dimension.to_owned(),
+            last_proto: std::sync::atomic::AtomicU64::new(0),
+            created: std::time::Instant::now(),
         })
     }
     /// A proto chunk's blocks, biomes, scheduled ticks and post-processing
@@ -152,6 +158,12 @@ impl VanillaTerrain {
             chunk.terrain.min_y().max(MIN_Y),
             (chunk.terrain.min_y() + chunk.terrain.height()).min(MIN_Y + HEIGHT),
         );
+        out.structure_refs = chunk
+            .structures()
+            .into_iter()
+            .map(|(id, start, _, _)| (Arc::from(id), (start.x, start.z)))
+            .collect();
+        out.structure_starts = chunk.own_starts();
         let mut values = Box::new([0u32; 4096]);
         for si in 0..SECTIONS as i32 {
             let base = MIN_Y + si * 16;
@@ -272,9 +284,53 @@ impl VanillaTerrain {
     pub fn origin(&self) -> crate::Result<ChunkPos> {
         Ok(self.generator.origin()?)
     }
-    /// Concentric ring positions of a structure set (strongholds), once known.
+    /// Concentric ring positions of a structure set (strongholds), searched
+    /// for now if no chunk needed them yet.
     pub fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>> {
-        self.generator.ring_positions(set)
+        let mut worker = self.query.lock().unwrap_or_else(|e| e.into_inner());
+        let worker = worker.get_or_insert_with(|| self.generator.worker());
+        worker.ring_positions(set)
+    }
+    /// Searches the concentric rings on a thread of their own, as vanilla's
+    /// background executor does, once generation pauses for two seconds
+    /// (at the latest a minute after the world opens) and in the idle
+    /// class: on a laptop's few cores, sharing them with the first chunks,
+    /// which don't need the rings, made those 3 s slower. An eye of ender
+    /// thrown later finds the rings ready, and a chunk or a query that
+    /// needs them first shares the remaining searches with this thread.
+    pub fn search_rings_behind(self: &Arc<Self>) {
+        const QUIET: u64 = 2_000;
+        const LATEST: u64 = 60_000;
+        let terrain = Arc::downgrade(self);
+        let spawned = std::thread::Builder::new()
+            .name("Ring search".into())
+            .spawn(move || {
+                horizon_threads::idle_current();
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    // The world closed: nothing to search for.
+                    let Some(terrain) = terrain.upgrade() else {
+                        return;
+                    };
+                    let now = terrain.elapsed_ms();
+                    let last = terrain
+                        .last_proto
+                        .load(std::sync::atomic::Ordering::Relaxed);
+                    if now >= LATEST || (last > 0 && now - last >= QUIET) {
+                        let _ = terrain
+                            .generator
+                            .worker()
+                            .ring_positions("minecraft:strongholds");
+                        return;
+                    }
+                }
+            });
+        if let Err(e) = spawned {
+            log::warn!("ring search thread: {e}");
+        }
+    }
+    fn elapsed_ms(&self) -> u64 {
+        u64::try_from(self.created.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 }
 /// The worldgen bundle at `dir`, loaded once and shared by every generator
@@ -289,7 +345,9 @@ pub fn shared_data(
     if let Some((_, data)) = cache.iter().find(|(path, _)| path == dir) {
         return Ok(data.clone());
     }
+    let started = std::time::Instant::now();
     let data = GeneratorData::load(dir, registry)?;
+    log::info!("Horizon: worldgen data loaded in {:?}", started.elapsed());
     cache.push((dir.to_owned(), data.clone()));
     Ok(data)
 }
@@ -323,6 +381,10 @@ impl ChunkGenerator for VanillaTerrain {
         }
     }
     fn proto(&self, worker: &mut GeneratorWorker, x: i32, z: i32) -> Proto {
+        self.last_proto.store(
+            self.elapsed_ms().max(1),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         match worker.generate_proto(ChunkPos::new(x, z)) {
             Ok(chunk) => Box::new(VanillaProto::Ready(Box::new(chunk))),
             Err(e) => {
@@ -380,6 +442,14 @@ impl ChunkGenerator for VanillaTerrain {
             .iter()
             .map(|(pos, nbt)| {
                 let mut nbt = nbt.clone();
+                // Placed data can lack its type (a brushable block's loot table
+                // alone); vanilla saves every pending block entity with its id,
+                // and skips one without when the chunk finishes.
+                if let Some(id) =
+                    crate::lan::chunks::block_entity_type(chunk.block_name(pos[0], pos[1], pos[2]))
+                {
+                    nbt.insert("id".into(), Tag::String(id.into()));
+                }
                 for (key, v) in ["x", "y", "z"].into_iter().zip(pos) {
                     nbt.insert(key.into(), Tag::Int(*v));
                 }
@@ -477,7 +547,9 @@ impl ChunkGenerator for VanillaTerrain {
             VanillaProto::Failed(x, z) => return Chunk::empty(x, z),
         };
         let mut out = self.column(&chunk);
-        out.block_entities = crate::structure_blocks::block_entities(&chunk, self.loot.as_deref());
+        let (block_entities, rolled_loot) =
+            crate::structure_blocks::block_entities(&chunk, self.loot.as_deref());
+        out.block_entities = block_entities;
         // The block entities Horizon does not model (decorated pots with their
         // sherds and loot table, brushable blocks) stay as placed, like a
         // loaded chunk's.
@@ -501,26 +573,20 @@ impl ChunkGenerator for VanillaTerrain {
                 Some(Tag::Compound(nbt))
             })
             .collect();
-        if !unmodelled.is_empty() {
+        if !unmodelled.is_empty() || !rolled_loot.is_empty() {
             let mut extras = out
                 .saved
                 .take()
                 .map(Arc::unwrap_or_clone)
                 .unwrap_or_default();
             extras.block_entities = unmodelled;
+            extras.rolled_loot = rolled_loot;
             out.saved = Some(Arc::new(extras));
         }
-        out.structure_refs = chunk
-            .structures()
-            .into_iter()
-            .map(|(id, start, _, _)| (Arc::from(id), (start.x, start.z)))
-            .collect();
         let entities = std::mem::take(&mut chunk.entities);
+        // Chest minecarts keep their loot table; the game rolls it on load.
         out.entities = entities
             .into_iter()
-            .map(|nbt| {
-                crate::structure_blocks::unpack_entity_loot(&chunk, nbt, self.loot.as_deref())
-            })
             .map(horizon_world::nbt::Tag::Compound)
             .collect();
         for s in &mut out.sections {

@@ -247,9 +247,12 @@ fn links_stay_inside_the_runtime() {
 #[test]
 fn java_runtime_lays_out_mojangs_runtime_with_its_executables_and_links() {
     const JAVAC: &[u8] = b"#!/bin/sh\necho javac 25.0.1\n";
+    const JAVA: &[u8] = b"#!/bin/sh\necho java 25.0.1\n";
     const LICENSE: &[u8] = b"a fake license";
     let manifest = serde_json::json!({"files": {
         "bin": {"type": "directory"},
+        "bin/java": {"type": "file", "executable": true, "downloads": {"raw":
+            {"sha1": sha1_hex(JAVA), "size": JAVA.len(), "url": "https://piston-data.mojang.com/java"}}},
         "bin/javac": {"type": "file", "executable": true, "downloads": {"raw":
             {"sha1": sha1_hex(JAVAC), "size": JAVAC.len(), "url": "https://piston-data.mojang.com/javac"}}},
         "legal/java.base/LICENSE": {"type": "file", "executable": false, "downloads": {"raw":
@@ -269,6 +272,7 @@ fn java_runtime_lays_out_mojangs_runtime_with_its_executables_and_links() {
                 "https://piston-meta.mojang.com/m.json".into(),
                 manifest.into_bytes(),
             ),
+            ("https://piston-data.mojang.com/java".into(), JAVA.to_vec()),
             (
                 "https://piston-data.mojang.com/javac".into(),
                 JAVAC.to_vec(),
