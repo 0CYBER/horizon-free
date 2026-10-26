@@ -127,10 +127,11 @@ impl Game<'_> {
             self.mods.browser.stacks = stacks;
             // The same title again (the mod updating its buttons) keeps the page.
             let old = self.mods.browser.recipes.take();
-            self.mods.browser.recipes =
-                self.mods.mods.browser_recipes(owner).map(|(title, list)| {
-                    super::mod_browser_recipes::Pages::new(items, title, list, old)
-                });
+            self.mods.browser.recipes = self
+                .mods
+                .mods
+                .browser_recipes(owner)
+                .map(|shown| super::mod_browser_recipes::Pages::new(items, shown, old));
             self.mods.browser.of = Some((owner, version));
         }
         Some(owner)
@@ -171,6 +172,9 @@ impl Game<'_> {
     /// as the mod sent it and as a stack.
     fn browser_pointed_stack(&self, layout: &Layout) -> Option<(BrowserStack, ItemStack)> {
         if self.mods.browser.recipes.is_some() {
+            if let Some((_, sent, stack)) = self.recipe_tab_hovered(layout) {
+                return Some((sent, stack));
+            }
             let (_, _, sent, stack) = self.recipe_slot_hovered(layout)?;
             return Some((sent, stack));
         }
