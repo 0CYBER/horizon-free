@@ -1292,9 +1292,25 @@ impl NearestTarget {
         self
     }
 }
+/// `AbstractIllager.canAttack`: a baby `AbstractVillager` is never attacked.
+fn illager_spares(attacker: Species, target: &Seen) -> bool {
+    matches!(
+        attacker,
+        Species::Pillager | Species::Vindicator | Species::Evoker | Species::Illusioner
+    ) && target.baby
+        && matches!(target.species, Species::Villager | Species::WanderingTrader)
+}
 /// TargetGoal.canContinueToUse
 pub fn target_continue(st: &mut TargetState, must_see: bool, m: &mut Mob, cx: &mut Cx) -> bool {
     let Some(who) = m.ai.target else { return false };
+    if let Who::Mob(id) = who
+        && cx
+            .w
+            .seen(id)
+            .is_some_and(|s| illager_spares(m.species(), s))
+    {
+        return false;
+    }
     let Some(t) = cx.w.target_info(who) else {
         return false;
     };
@@ -1353,10 +1369,12 @@ impl Goal for NearestTarget {
             prey => {
                 let pos = Vec3::new(m.position.x, m.eye_y(), m.position.z);
                 let id = m.id;
+                let attacker = m.species();
                 let candidates: Vec<(u32, Vec3)> =
                     cx.w.nearby(pos, range, move |s| {
                         s.id != id
                             && !s.playing_dead
+                            && !illager_spares(attacker, s)
                             && match prey {
                                 Prey::Species(list) => list.contains(&s.species),
                                 Prey::Filter(f) => f(s),
