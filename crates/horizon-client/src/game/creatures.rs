@@ -501,6 +501,7 @@ impl Game<'_> {
         let mut events = Vec::new();
         let mut mobs = std::mem::take(&mut self.mobs);
         let mut dead = Vec::new();
+        let mut corpses = Vec::new();
         let mut died = std::mem::take(&mut self.died);
         let ticking = self.entity_ticking_area();
         // With guests on, each mob sees its nearest player (game/lan_mobs.rs).
@@ -593,6 +594,11 @@ impl Game<'_> {
                 horizon_client::mobs::apply_mob_pushes(m, &mut pushes);
                 let from = events.len();
                 let kept = m.tick(&w, &mut scratch, &mut events);
+                // A killed mob's body is removed: its effects that act on
+                // death run (`LivingEntity.remove` with KILLED).
+                if !kept && !m.alive() && !m.removed && !m.extra.effects.is_empty() {
+                    corpses.push(m.clone());
+                }
                 horizon_client::mobs::take_mob_pushes(&mut events, from, &mut pushes);
                 if let Some(conn) = seen_guest {
                     // ShulkerBullet.finalTarget is the guest's entity: the
@@ -660,6 +666,15 @@ impl Game<'_> {
         self.villager_pickups();
         for m in dead {
             self.mob_died(&m);
+        }
+        for m in corpses {
+            let names: Vec<&'static str> = m
+                .extra
+                .effects
+                .iter()
+                .map(|e| e.0.trim_start_matches("minecraft:"))
+                .collect();
+            self.effects_on_death(&names, m.bounds(), false, Some(m.id));
         }
         self.handle_mob_events(events)?;
         self.lan_guest_mob_events(guest_events);
@@ -990,6 +1005,17 @@ impl Game<'_> {
                 }
                 MobEvent::BecomeStatue { mob } => self.golem_become_statue(mob),
                 MobEvent::EnterHive { mob, hive } => self.bee_enter_hive(mob, hive),
+                MobEvent::Infested { mob } => {
+                    if let Some(m) = self.mobs.iter().find(|m| m.id == mob) {
+                        let at = [
+                            m.position.x,
+                            m.position.y + f64::from(m.height()) / 2.0,
+                            m.position.z,
+                        ];
+                        let look = m.view_vector();
+                        self.infested_hurt(at, look);
+                    }
+                }
                 MobEvent::Gift { target, item } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == target)
                         && m.saddle_item().is_none()

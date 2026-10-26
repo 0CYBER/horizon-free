@@ -109,6 +109,10 @@ impl Game<'_> {
                 attacker,
             });
             self.combat.last_damage = now;
+            // InfestedMobEffect.onMobHurt.
+            if self.potions.effects.get("infested").is_some() {
+                self.player_infested();
+            }
         }
         self.combat.pending.clear();
         self.combat.fall_before = self.player.as_ref().map_or(0.0, |p| p.fall_distance);
