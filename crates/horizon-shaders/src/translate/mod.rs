@@ -154,7 +154,7 @@ pub fn translate_composite(
     fragment: &Preprocessed,
     target: Target,
 ) -> Result<Program, Vec<Error>> {
-    translate(vertex, fragment, target, None)
+    translate(vertex, fragment, target, None, false)
 }
 
 /// Translates a gbuffers-style program (`gbuffers_terrain`...) drawing the game's geometry
@@ -165,7 +165,18 @@ pub fn translate_gbuffers(
     target: Target,
     inputs: &GbuffersInputs,
 ) -> Result<Program, Vec<Error>> {
-    translate(vertex, fragment, target, Some(inputs))
+    translate(vertex, fragment, target, Some(inputs), false)
+}
+
+/// Translates a shadow program (`shadow`, `shadow_water`...) drawing the game's geometry
+/// described by `inputs` from the shadow light: its model-view and projection matrices are the
+/// shadow camera's (5.2).
+pub fn translate_shadow(
+    vertex: &Preprocessed,
+    fragment: &Preprocessed,
+    inputs: &GbuffersInputs,
+) -> Result<Program, Vec<Error>> {
+    translate(vertex, fragment, Target::Buffers, Some(inputs), true)
 }
 
 /// The matrices of the compatibility profile in a gbuffers-style program, from the frame's.
@@ -183,7 +194,13 @@ fn translate(
     fragment: &Preprocessed,
     target: Target,
     gbuffers: Option<&GbuffersInputs>,
+    shadow: bool,
 ) -> Result<Program, Vec<Error>> {
+    let matrices = if shadow {
+        GBUFFERS_MATRICES.replace("gbuffer", "shadow")
+    } else {
+        GBUFFERS_MATRICES.to_owned()
+    };
     let mut v = Stage::scan(vertex, ShaderStage::Vertex);
     let mut f = Stage::scan(fragment, ShaderStage::Fragment);
     v.gbuffers = gbuffers.is_some();
@@ -200,6 +217,9 @@ fn translate(
             "gbufferProjectionInverse",
         ] {
             uniforms.insert(name.to_owned(), "mat4".to_owned());
+            if shadow {
+                uniforms.insert(name.replace("gbuffer", "shadow"), "mat4".to_owned());
+            }
         }
     }
     let mut samplers: BTreeMap<String, String> = BTreeMap::new();
@@ -327,7 +347,7 @@ fn translate(
              hz_MultiTexCoord0 = hz_Vertex;\n    hz_Color = vec4(1.0);\n    hz_Normal = vec3(0.0, 0.0, 1.0);\n",
         ),
         Some(inputs) => {
-            vertex_main.push_str(GBUFFERS_MATRICES);
+            vertex_main.push_str(&matrices);
             vertex_main.push_str(&inputs.body);
         }
     }
@@ -361,7 +381,7 @@ fn translate(
     .unwrap();
     let mut fragment_main = String::from("\nvoid main() {\n");
     if gbuffers.is_some() {
-        fragment_main.push_str(GBUFFERS_MATRICES);
+        fragment_main.push_str(&matrices);
     }
     fragment_main.push_str(fog);
     if f.frag_coord {
@@ -795,7 +815,7 @@ mod tests {
         let files: Vec<(&str, &str)> = files.iter().map(|(p, t)| (p.as_str(), *t)).collect();
         let pack = Pack::from_zip_bytes("P.zip", zip(&files)).unwrap();
         let m = Macros::standard();
-        let inputs = GbuffersInputs {
+        let game = GbuffersInputs {
             declarations: "layout(location = 0) in vec3 game_pos;\nlayout(location = 1) in uvec2 game_uv;".into(),
             body: "    hz_Vertex = vec4(game_pos, 1.0);\n    hz_MultiTexCoord0 = vec4(vec2(game_uv) / 32768.0, 0.0, 1.0);\n    \
                    hz_MultiTexCoord1 = vec4(240.0, 240.0, 0.0, 1.0);\n    hz_Color = vec4(1.0);\n    hz_Normal = vec3(0.0, 1.0, 0.0);\n"
@@ -807,7 +827,7 @@ mod tests {
             &preprocess(&pack, "gbuffers_terrain.vsh", &m),
             &preprocess(&pack, "gbuffers_terrain.fsh", &m),
             Target::Buffers,
-            &inputs,
+            &game,
         )
         .unwrap_or_else(|e| panic!("{e:?}"));
         let names: Vec<&str> = p
@@ -842,6 +862,19 @@ mod tests {
             inputs.contains(&"game_pos") && inputs.contains(&"game_uv"),
             "{inputs:?}"
         );
+        // From the light, the compatibility matrices are the shadow camera's.
+        let shadow = translate_shadow(
+            &preprocess(&pack, "gbuffers_terrain.vsh", &m),
+            &preprocess(&pack, "gbuffers_terrain.fsh", &m),
+            &game,
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        let names: Vec<&str> = (shadow.interface.uniforms.iter())
+            .map(|u| u.name.as_str())
+            .collect();
+        for name in ["shadowModelView", "shadowProjection", "gbufferModelView"] {
+            assert!(names.contains(&name), "{name} missing from {names:?}");
+        }
     }
 
     #[test]

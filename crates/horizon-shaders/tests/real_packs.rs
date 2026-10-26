@@ -180,8 +180,12 @@ fn real_packs_read() {
             };
             let post = load_post(&pack, &folder, &shaders, &Macros::standard(), &inputs);
             println!(
-                "  dimension {id} (folder `{folder}`): {} post programs, terrain {:?}, water {:?}, sky {:?} {:?}, entities {:?} {:?}, {} notes, {:.0} ms",
+                "  dimension {id} (folder `{folder}`): {} post programs, shadow pass {} ({:?}, {:?}, {} shadowcomp), terrain {:?}, water {:?}, sky {:?} {:?}, entities {:?} {:?}, {} notes, {:.0} ms",
                 post.programs.len(),
+                post.shadow_pass,
+                post.shadow.as_ref().map(|t| &t.name),
+                post.shadow_water.as_ref().map(|t| &t.name),
+                post.shadow_comp.len(),
                 post.terrain.as_ref().map(|t| &t.name),
                 post.water.as_ref().map(|t| &t.name),
                 post.sky.as_ref().map(|t| &t.name),
