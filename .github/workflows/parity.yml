@@ -36,7 +36,19 @@ jobs:
       - name: Tools from the runner
         run: bash tools/ci/runner-env.sh
       - name: Vanilla data, and resources prepared by this preparer
-        run: bash tools/ci/vanilla-data.sh
+        env:
+          BASE_SHA: ${{ inputs.base }}
+        run: |
+          # main's script: one written before a fix to it left a real .local/horizon-client without sounds.json on
+          # the runner, and every later job there failed `subtitle`. A branch that changes the script runs its own.
+          set -euo pipefail
+          if git rev-parse --verify -q origin/main >/dev/null \
+            && git diff --quiet "$(git merge-base "$BASE_SHA" HEAD)" HEAD -- tools/ci/vanilla-data.sh; then
+            git show origin/main:tools/ci/vanilla-data.sh > "$RUNNER_TEMP/vanilla-data.sh"
+            bash "$RUNNER_TEMP/vanilla-data.sh"
+          else
+            bash tools/ci/vanilla-data.sh
+          fi
       - name: The prepared output is the one the preparer's OUTPUT_VERSION says
         env:
           BASE_SHA: ${{ inputs.base }}
