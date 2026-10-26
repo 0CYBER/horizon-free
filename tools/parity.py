@@ -1245,14 +1245,20 @@ def affected_harnesses(found, records, changed, reach=True, base=None):
     commit), only declarations of modules the harness doesn't reach changed (tools/parity_reach.py)."""
     if changed & SHARED_INPUTS:
         return set(found)
-    graph = None
+    graph, stop = None, frozenset()
+    # Parses are keyed by content, so every worktree sharing the vanilla data shares them.
+    cache_path = (SHARED if SHARED.is_dir() else STATE_DIR) / "reach-cache.json"
     if reach and any(path.startswith("crates/") for path in changed):
-        cache_path = STATE_DIR / "reach-cache.json"
         try:
             cache = json.loads(cache_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             cache = {}
         graph = parity_reach.SourceGraph(ROOT, rust_code, cache)
+        # A changed file that differs in more than its `mod` declarations counts as soon as a harness reaches it,
+        # so the search for that harness can stop there.
+        stop = frozenset(path for path in changed if parity_reach.is_workspace_rust(path)
+                         and parity_reach.declarations_changed(ROOT, path, (), base, True))
+    budget, started, over = float(os.environ.get("PARITY_REACH_BUDGET") or 180), time.monotonic(), False
     affected = set()
     for name, script in found.items():
         record = records.get(name) or {}
@@ -1265,16 +1271,31 @@ def affected_harnesses(found, records, changed, reach=True, base=None):
             affected.add(name)
             continue
         plain = {path.split(KEEP)[0] for path in dependencies}
-        if graph is not None and plain & changed:
-            narrowed = parity_reach.narrow(dependencies, recorded_artifacts(record), graph, changed)
-            if any(path.split(KEEP)[0] in changed and (children is None or parity_reach.declarations_changed(
-                    ROOT, path.split(KEEP)[0], children, base, whole)) for path, (whole, children) in narrowed.items()):
-                affected.add(name)
-        elif plain & changed:
+        hit = plain & changed
+        if not hit:
+            continue
+        if graph is None or any(not path.startswith("crates/") for path in hit):
+            affected.add(name)  # no narrowing, or a file narrowing always keeps (tools/, Java oracles)
+            continue
+        if not over and time.monotonic() - started > budget:
+            over = True
+            print(f"note: choosing harnesses took over {budget:.0f} s (PARITY_REACH_BUDGET): the rest count every "
+                  "source their probes link", flush=True)
+        if over:
+            affected.add(name)
+            continue
+        narrowed = parity_reach.narrow(dependencies, recorded_artifacts(record), graph, changed, stop)
+        if any(path.split(KEEP)[0] in changed and (children is None or parity_reach.declarations_changed(
+                ROOT, path.split(KEEP)[0], children, base, whole)) for path, (whole, children) in narrowed.items()):
             affected.add(name)
     if graph is not None:
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(json.dumps(graph.saved_cache()), encoding="utf-8")
+        saved = graph.saved_cache()
+        if len(cache) + len(saved) < 4 * max(len(saved), 1):
+            saved = {**cache, **saved}  # other worktrees' versions of the files too, within bounds
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = cache_path.with_suffix(f".{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(saved), encoding="utf-8")
+        temporary.replace(cache_path)
     return affected
 
 

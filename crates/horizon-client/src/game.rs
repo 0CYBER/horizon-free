@@ -37,6 +37,7 @@ mod debug_keys;
 mod decorated_pot;
 mod dedicated;
 mod deflect;
+mod dialogs;
 mod discord;
 mod dispense_fixture;
 mod dispenser;
@@ -97,12 +98,16 @@ mod maps;
 mod minecarts;
 mod mob_blocks;
 mod mob_gear;
+mod mod_input;
+mod mod_render;
 mod mods;
 mod mount_menu;
 mod mounts;
+mod moved_extras;
 mod moving_pistons;
 mod music;
 mod names;
+mod native_shaders;
 mod natural_spawning;
 mod nautili;
 mod net_harness;
@@ -126,6 +131,7 @@ mod pumpkin;
 mod raids;
 mod recipe_book;
 mod remote;
+mod remote_chunks;
 mod remote_mob_data;
 mod remote_mob_use;
 mod remote_objects;
@@ -349,10 +355,7 @@ impl Options {
             dedicated: None,
             benchmark: None,
             dev_mods: Vec::new(),
-            // The command harness (HORIZON_COMMAND_SCRIPT) drives the world
-            // itself, without the event loop: it stays in the frame.
-            server_thread: std::env::var("HORIZON_SERVER_THREAD").map_or(true, |v| v != "0")
-                && std::env::var_os("HORIZON_COMMAND_SCRIPT").is_none(),
+            server_thread: std::env::var("HORIZON_SERVER_THREAD").map_or(true, |v| v != "0"),
             execution_role: execution_role::ExecutionRole::Client,
         };
         let mut session_file = std::env::var("HORIZON_SESSION_FILE").ok();
@@ -361,7 +364,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A Horizon mod (.hmod or folder) to develop: always on, reloaded when rebuilt\n  --in-frame              Run single player's world in the frame, not on its server thread\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
+                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A Horizon mod (.hmod or folder) to develop: always on, reloaded when rebuilt\n  --in-frame              Run single player's world in the frame, not on its server thread\n  --pregen                Add Horizon's /pregen command (docs/pregeneration.md)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
                         horizon_core::VANILLA_VERSION
                     );
                     return Ok(None);
@@ -378,6 +381,8 @@ impl Options {
                 "--control" => o.control = Some(horizon_client::control::default_path()),
                 "--server-thread" => o.server_thread = true,
                 "--in-frame" | "--no-server-thread" => o.server_thread = false,
+                // Horizon's own commands (/pregen), off by default as on vanilla.
+                "--pregen" => horizon_client::command::vanilla::set_horizon_commands(true),
                 _ => {
                     let value = args
                         .next()
@@ -554,6 +559,8 @@ struct GameLevel<'w> {
     /// Where the chunk tickets let blocks tick.
     tickets: horizon_client::ticket_levels::Levels,
     random_tick_sections: &'w mut horizon_client::random_tick_sections::RandomTickSections,
+    /// Players with each chest open (a trapped chest's signal).
+    lid_openers: &'w HashMap<(i32, i32, i32), i32>,
 }
 struct PlayerCollision {
     y: f64,
@@ -689,6 +696,10 @@ impl LevelAccess for GameLevel<'_> {
         _state: BlockStateId,
         _direction: Direction,
     ) -> i32 {
+        // TrappedChestBlock.getSignal: the players with it open, at most 15.
+        if let Some(count) = self.lid_openers.get(&(pos.x, pos.y, pos.z)) {
+            return (*count).clamp(0, 15);
+        }
         jukebox::jukebox_signals(self.world, self.items, pos).map_or(0, |(signal, _)| signal)
     }
     fn biome_name(&self, pos: BlockPos) -> Option<&str> {
@@ -1141,6 +1152,7 @@ struct Game<'a> {
     pending_pack_reload: bool,
     /// A server's resource packs (game/server_packs.rs).
     server_packs: server_packs::ServerPackState,
+    dialogs: dialogs::DialogState,
     world_renderer_ready: bool,
     collision: &'a BlockCollisionRegistry<'a>,
     motion: &'a MotionResources,
@@ -1209,6 +1221,8 @@ struct Game<'a> {
     left: bool,
     right: bool,
     cursor: (f32, f32),
+    /// The cursor icon the window shows (`widgets::take_cursor` each frame).
+    cursor_icon: horizon_client::widgets::Cursor,
     captured: bool,
     focused: bool,
     /// The keyboard's modifier state (`KeyEvent.modifiers`).
@@ -1240,6 +1254,11 @@ struct Game<'a> {
     luminance: Option<horizon_client::dynamic_light::Luminance>,
     /// Name tags drawn over everything (`RenderPipelines.TEXT_SEE_THROUGH`).
     see_through_vertices: Vec<Vertex>,
+    /// Runs of `entity_vertices` by entity, for a shader pack's per-entity draws; recorded only
+    /// while `pack_ids` is set (game/shader_packs.rs).
+    entity_spans: std::cell::RefCell<Vec<horizon_client::gfx::pack_draw::EntitySpan>>,
+    /// The shader pack's entity and block entity ids, while one draws entities.
+    pack_ids: Option<shader_packs::PackIds>,
     started: Instant,
     previous: Instant,
     /// FramerateLimitTracker.latestInputTime.
@@ -1326,6 +1345,10 @@ struct Game<'a> {
     hand: Hand,
     /// The shield's item cooldown after an axe disabled it (ticks).
     shield_cooldown: u32,
+    /// `Player.getCooldowns()`: the `use_cooldown` component's entries, what
+    /// `itemDecorations` shades a slot by. A server's players have their own
+    /// (`GuestPlay::cooldowns`), swapped in for their turn.
+    cooldowns: horizon_client::cooldowns::Cooldowns,
     /// The source of a command run through /execute (the player otherwise).
     command_source: Option<commands::execute::Source>,
     titles: titles::Titles,
@@ -1489,15 +1512,20 @@ struct Game<'a> {
     pending_bench: Option<(Instant, std::sync::mpsc::Sender<String>)>,
     /// Recent frame times for the performance overlay.
     frame_graph: horizon_client::perf_overlay::FrameGraph,
-    /// Horizon's extras (zoom, FPS counter, keystrokes): `game/extras.rs`.
+    /// Horizon's extras (minimap, auto-reconnect; mods' counters): `game/extras.rs`.
     extras: extras::ExtrasState,
     /// Horizon mods (`game/mods.rs`), none running unless turned on.
     mods: mods::ModsState,
+    /// Horizon's own shader pack, while one is picked (`game/native_shaders.rs`).
+    native_shaders: native_shaders::NativeShaders,
     /// Meshed sections waiting for an upload budget (Horizon settings).
     pending_uploads: Vec<((i32, i32, i32), horizon_client::mesher::SectionMesh)>,
     /// This frame's view frustum, for culling entities and block entities.
     view_frustum: Option<horizon_client::gfx::Frustum>,
     entity_culler: Option<horizon_client::entity_culling::Culler>,
+    /// `Renderer::pack_shadow_casters` for this frame's entities: (keep what the culler hides,
+    /// build the player's model in first person); (false, false) without a shader pack.
+    pack_shadow_casters: (bool, bool),
     /// A scripted flight from the control socket (`fly`).
     flight: Option<control::Flight>,
     /// The running agent action from the control socket (game/agent.rs).
@@ -1552,6 +1580,8 @@ struct Game<'a> {
     /// position) for the guests.
     lan_block_events: Vec<([i32; 3], i32, i32, u32)>,
     lan_entity_events: Vec<(i32, i8, [f64; 3])>,
+    /// Global level events for every guest (`ServerLevel.globalLevelEvent`).
+    lan_global_events: Vec<(i32, [i32; 3], i32)>,
     /// `ContainerOpenersCounter`: how many players (the host and the guests)
     /// have each chest open.
     lid_openers: HashMap<(i32, i32, i32), i32>,
@@ -1564,6 +1594,9 @@ struct Game<'a> {
     chat_capture: Option<Vec<horizon_client::text::Text>>,
     /// Packets for the guest acting now, sent once its action returns.
     guest_packets: Vec<horizon_protocol::packets::play::Clientbound>,
+    /// The acting guest's cooldowns, as (item, ticks): their packet needs the
+    /// hub's item registry, which the guest's turn does not hold.
+    guest_cooldowns: Vec<(Arc<str>, i32)>,
     /// `broadcastToAdmins` lines a guest's command queued, sent once it
     /// returns: the line, whether operators get it and whether the console
     /// logs it.
@@ -2177,7 +2210,7 @@ impl Game<'_> {
         self.player_drop(thrown);
     }
     /// `Player.drop`: the statistics and a thrown item entity in front of the player.
-    fn player_drop(&mut self, thrown: ItemStack) {
+    pub(super) fn player_drop(&mut self, thrown: ItemStack) {
         let Some(eye) = self.eye_position() else {
             return;
         };
@@ -2239,7 +2272,13 @@ impl Game<'_> {
                 let speed = self.world.random.next_float() * 0.2 + 0.1;
                 item.move_towards_closest_space(&self.world, self.res.facts(), speed);
             }
-            let alive = item.tick(&self.world, self.res.facts(), self.collision, no_physics);
+            let alive = item.tick(
+                &self.world,
+                self.res.facts(),
+                self.collision,
+                no_physics,
+                &self.res.motion().fluids,
+            );
             cells.moved(i, item.previous, item.position);
             // ItemEntity.tick: merge every 2 ticks while moving between
             // blocks, every 40 otherwise, before the lifetime check.
@@ -2448,6 +2487,7 @@ impl Game<'_> {
             spill: &mut self.spill,
             tickets: self.tickets.levels(),
             random_tick_sections: &mut self.random_tick_sections,
+            lid_openers: &self.lid_openers,
         };
         let result = f(self.res.behaviours(), &mut level, &mut self.block_ticks);
         self.flush_spill();
@@ -2584,9 +2624,40 @@ impl Game<'_> {
                 }
             }
         }
+        // BigDripleafBlock.entityInside also asks whether the player stands on
+        // the ground and how high its feet are: the leaves its box's feet
+        // layer is inside (the host and the LAN guests).
+        let mut standing = Vec::new();
+        let feet = self
+            .player
+            .iter()
+            .filter(|_| !self.spectator())
+            .map(|p| {
+                (
+                    [p.position.x, p.position.y, p.position.z],
+                    p.ground.on_ground,
+                    f64::from(p.dimensions.width) / 2.0,
+                )
+            })
+            .chain(
+                self.lan_guest_feet()
+                    .into_iter()
+                    .map(|(at, on_ground)| (at, on_ground, 0.3)),
+            );
+        for (at, on_ground, w) in feet {
+            let y = (at[1] + 1e-7).floor() as i32;
+            for x in (at[0] - w + 1e-7).floor() as i32..=(at[0] + w - 1e-7).floor() as i32 {
+                for z in (at[2] - w + 1e-7).floor() as i32..=(at[2] + w - 1e-7).floor() as i32 {
+                    standing.push((BlockPos::new(x, y, z), on_ground, at[1]));
+                }
+            }
+        }
         self.with_level(|b, level, ticks| {
             for pos in inside {
                 b.entity_inside(level, ticks, pos);
+            }
+            for (pos, on_ground, feet_y) in standing {
+                b.entity_on_big_dripleaf(level, ticks, pos, on_ground, feet_y);
             }
         });
         self.process_level_events()?;
@@ -2765,7 +2836,13 @@ impl Game<'_> {
                             }
                             _ => 1.0,
                         };
-                        self.audio.play(name, c, volume, pitch);
+                        if matches!(id, 1029 | 1030) {
+                            // Clients play the anvil sound from its level event;
+                            // capturing it also sends a duplicate sound packet.
+                            self.audio.play_unshared(name, c, volume, pitch);
+                        } else {
+                            self.audio.play(name, c, volume, pitch);
+                        }
                     }
                 }
                 LevelEvent::Sound {
@@ -3403,6 +3480,25 @@ impl Game<'_> {
             || self.interact_mob()?
             || self.interact_knot())
     }
+    /// `ItemStack.applyAfterUseComponentSideEffects`: a used stack with a
+    /// `use_cooldown` component starts its entry (`UseCooldown.apply`). A
+    /// server's guest also gets `ClientboundCooldownPacket`
+    /// (`ServerItemCooldowns.onCooldownStarted`), queued for their turn's end.
+    pub(super) fn apply_use_cooldown(&mut self, stack: &ItemStack) {
+        let default = self
+            .res
+            .items()
+            .get(&stack.item)
+            .and_then(|i| i.use_cooldown.clone());
+        let Some(component) = horizon_client::cooldowns::component(stack, default.as_ref()) else {
+            return;
+        };
+        let group = horizon_client::cooldowns::group(stack, default.as_ref());
+        self.cooldowns.add(Arc::clone(&group), component.ticks());
+        if self.lan_acting.is_some() {
+            self.guest_cooldowns.push((group, component.ticks()));
+        }
+    }
     /// One hand's turn in `startUseItem`: `useItemOn` the block aimed at,
     /// then `useItem`. Whether the click ends here (it acted or failed).
     fn use_hand(&mut self, block_hit: Option<&Hit>) -> Result<bool> {
@@ -3487,6 +3583,17 @@ impl Game<'_> {
         let Some(info) = self.res.items().get(&stack.item).cloned() else {
             return Ok(false);
         };
+        // ServerPlayerGameMode.useItem and useItemOn: an item on cooldown is
+        // not used (PASS, so the other hand may still act).
+        if self
+            .cooldowns
+            .is_on_cooldown(&horizon_client::cooldowns::group(
+                &stack,
+                info.use_cooldown.as_ref(),
+            ))
+        {
+            return Ok(false);
+        }
         if block_hit.is_some() && (self.use_bone_meal(&stack)? || self.ignite_tnt(&stack)?) {
             return Ok(true);
         }
@@ -3813,6 +3920,8 @@ impl Game<'_> {
         }
         if ticks >= duration {
             self.using = None;
+            // ItemStack.finishUsingItem's applyAfterUseComponentSideEffects.
+            self.apply_use_cooldown(&stack);
             self.finish_consuming(&info, consumable, &stack);
         } else {
             self.using = Some((slot, ticks));
@@ -4310,6 +4419,7 @@ impl Game<'_> {
                 MotionEvent::Snowflake { position, velocity } => self.snowflake(position, velocity),
                 MotionEvent::EnterBlock { state } => self.trigger_enter_block(state),
                 MotionEvent::InsidePortal { pos } => self.player_inside_nether_portal(pos),
+                MotionEvent::CauldronExtinguish { pos } => self.cauldron_extinguish(pos),
                 MotionEvent::InsideWitherRose => self.wither_rose_contact(),
                 MotionEvent::SmashLanding {
                     state,
@@ -4415,6 +4525,7 @@ impl Game<'_> {
         // Player.tick's ItemCooldowns.tick for the window's player (a
         // server's players count theirs down in `tick_guests`).
         self.shield_cooldown = self.shield_cooldown.saturating_sub(1);
+        self.cooldowns.tick();
         horizon_client::spans::time("tick_using", || self.tick_using());
         horizon_client::spans::time("tick_hud", || self.tick_hud());
         // The player's digging comes in with its packets, before the level
@@ -4692,6 +4803,24 @@ impl Game<'_> {
         }
         window.set_cursor_visible(!self.captured);
     }
+    /// `GuiGraphicsExtractor.applyCursor` -> `Window.selectCursor` at the end
+    /// of a frame: the cursor the frame's widgets asked for, set on the window
+    /// only when it changes.
+    fn apply_cursor_icon(&mut self) {
+        use horizon_client::widgets::Cursor;
+        let wanted = horizon_client::widgets::take_cursor();
+        if wanted == self.cursor_icon {
+            return;
+        }
+        if let Some(window) = &self.window {
+            window.set_cursor(match wanted {
+                Cursor::Arrow => winit::window::CursorIcon::Default,
+                Cursor::PointingHand => winit::window::CursorIcon::Pointer,
+                Cursor::NotAllowed => winit::window::CursorIcon::NotAllowed,
+            });
+        }
+        self.cursor_icon = wanted;
+    }
     /// LevelLoadingScreen.onClose -> Gui.setScreen(null) -> grabMouse.
     fn capture_loaded_world(&mut self) {
         // Loading may finish after focus was lost or another screen opened.
@@ -4797,17 +4926,17 @@ impl Game<'_> {
         count_text: Option<String>,
     ) {
         // GuiGraphicsExtractor.itemDecorations, laid out at the origin and
-        // moved to (x, y). Horizon tracks no item cooldowns to shade yet.
-        let max_damage = self
-            .res
-            .items()
-            .get(&stack.item)
-            .map_or(0, |info| info.max_damage as i32);
+        // moved to (x, y): the damage bar, the cooldown shade and the count.
+        let info = self.res.items().get(&stack.item);
+        let max_damage = info.map_or(0, |info| info.max_damage as i32);
+        let cooldown =
+            horizon_client::cooldowns::group(stack, info.and_then(|i| i.use_cooldown.as_ref()));
+        let partial = self.clock.fraction() as f32;
         let decorations = hud_overlays::ItemDecorations {
             count: stack.count,
             count_text,
             bar: hud_overlays::damage_bar(stack.damage as i32, max_damage),
-            cooldown: 0.0,
+            cooldown: self.cooldowns.percent(&cooldown, partial),
         };
         let mut draws = vec![hud_layout::GuiDraw::Push(vec![
             hud_layout::PoseOp::Translate(x, y),
@@ -4824,11 +4953,14 @@ impl Game<'_> {
     fn hud(&mut self, size: [u32; 2]) -> HudBatch {
         // The pack prompt replaces the connecting screen (setScreen), but
         // in game it opens over the world.
-        let mut batch = if self.server_packs.prompt.is_some() && self.player.is_none() {
+        let mut batch = if (self.server_packs.prompt.is_some() || self.dialog_open())
+            && self.player.is_none()
+        {
             HudBatch::new(size)
         } else {
             self.hud_layers(size)
         };
+        self.draw_dialog(&mut batch);
         self.draw_pack_prompt(&mut batch);
         // Gui.extractRenderState: the debug overlay comes after the screen
         // and the toasts, so it is over everything, menus included.
@@ -4927,6 +5059,7 @@ impl Game<'_> {
             // Hud: the action bar and titles draw over the hotbar (nextStratum).
             self.draw_boss_bars(&mut batch);
             self.draw_extras(&mut batch);
+            self.draw_mod_shapes(&mut batch);
         }
         if show_hud {
             // Hud.nextContextualInfoState: the jump bar, the experience bar or
@@ -5141,7 +5274,8 @@ impl Game<'_> {
                 | BlockEntity::TrialSpawner(_)
                 | BlockEntity::Vault(_)
                 | BlockEntity::Beehive(_)
-                | BlockEntity::CommandBlock(_),
+                | BlockEntity::CommandBlock(_)
+                | BlockEntity::Skull(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -5410,7 +5544,8 @@ impl Game<'_> {
                     | BlockEntity::TrialSpawner(_)
                     | BlockEntity::Vault(_)
                     | BlockEntity::Beehive(_)
-                    | BlockEntity::CommandBlock(_),
+                    | BlockEntity::CommandBlock(_)
+                    | BlockEntity::Skull(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
@@ -5472,6 +5607,8 @@ impl Game<'_> {
         self.craft_size = 2;
         self.craft_table = None;
         if let Some(key) = self.container.take() {
+            // A cart's or chest boat's items go back to it.
+            self.close_cart_container(key);
             self.container_opener_event(key, false);
             self.post_block_game_event(
                 "minecraft:container_close",
@@ -5511,7 +5648,6 @@ impl Game<'_> {
             self.world.modified.insert((key.0 >> 4, key.2 >> 4));
         }
         self.close_ender_chest();
-        self.close_cart_container();
     }
     /// `quickMoveStack` of the open plain menu for a shift-click.
     fn inventory_quick_move(&mut self, slot: usize) -> bool {
@@ -6391,7 +6527,11 @@ impl Game<'_> {
         use horizon_client::menu::Input;
         let button = i32::from(right);
         if self.remote.is_some() {
-            self.remote_throw(right, input);
+            if self.screen == Screen::Creative {
+                self.remote_creative_drop(right);
+            } else {
+                self.remote_throw(right, input);
+            }
             return;
         }
         let before = self.carried.clone();
@@ -6748,8 +6888,10 @@ impl Game<'_> {
         alpha: f64,
         mut out: Vec<Vertex>,
     ) -> Vec<Vertex> {
+        self.entity_spans.borrow_mut().clear();
         self.prepare_entity_culling(camera);
         self.prepare_trims();
+        self.mark_entity(out.len(), "minecraft:entity_flame");
         let fire_yaw = if self.camera_type == perspective::CameraType::ThirdPersonFront {
             self.yaw + 180.0
         } else {
@@ -6841,14 +6983,21 @@ impl Game<'_> {
             }
         }
         // `ItemEntityRenderer`.
+        self.mark_entity(out.len(), "minecraft:item");
         self.dropped_item_geometry(camera, alpha, &mut out);
         // `VaultRenderer`.
+        self.mark_entity(out.len(), "");
         self.vault_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:ominous_item_spawner");
         self.ominous_item_spawner_geometry(camera, alpha, &mut out);
-        // Mobs and their projectiles.
+        // Mobs and their projectiles (a span each).
         self.mob_geometry(camera, alpha, &mut out);
+        // In first person only a shader pack's shadow pass draws the player.
+        self.mark_player(out.len(), self.camera_type.first_person());
         self.player_model_geometry(camera, self.clock.camera_fraction(), &mut out);
+        self.mark_entity(out.len(), "minecraft:player");
         self.guest_model_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:evoker_fangs");
         self.fangs_geometry(camera, alpha, &mut out);
         let mut see_through = std::mem::take(&mut self.see_through_vertices);
         see_through.clear();
@@ -6856,6 +7005,7 @@ impl Game<'_> {
         self.text_display_geometry(camera, alpha, &mut out, &mut see_through);
         self.see_through_vertices = see_through;
         // Entity shadows (EntityRenderer.extractShadow).
+        self.mark_translucent_entity(out.len(), "minecraft:entity_shadow");
         if let Some(sprite) = self.gui.atlas.sprites.get("misc/shadow").copied() {
             let ambient = if self.dim == Dim::Nether { 0.1 } else { 0.0 };
             let darken = self.sky_darken();
@@ -6919,6 +7069,7 @@ impl Game<'_> {
                     _ => None,
                 },
                 banner: &|p| self.banner_layers_at(p),
+                skull: &|p| self.skull_skin_at(p),
                 glyph: &|c| self.gui.atlas.glyph_cell(c),
             };
             // Block entities outside the view frustum are skipped (with a
@@ -6949,13 +7100,14 @@ impl Game<'_> {
                         v.intersects(o - glam::Vec3::ONE, o + glam::Vec3::splat(2.0))
                     })
             });
-            if self.entity_culler.is_some() {
+            if self.entity_culler.is_some() || self.pack_ids.is_some() {
                 for block in visible {
                     let start = out.len();
+                    self.mark_block_entity(start, block.1);
                     self.res
                         .block_entity_render()
                         .render(&scene, std::iter::once(block), &mut out);
-                    if !off_screen(block.1) {
+                    if !off_screen(block.1) && self.entity_culler.is_some() {
                         self.cull_entity_vertices(&mut out, start);
                     }
                 }
@@ -6964,6 +7116,7 @@ impl Game<'_> {
                     .block_entity_render()
                     .render(&scene, visible, &mut out);
             }
+            self.mark_stage(out.len(), "DESTROY");
             for (pos, stage) in self.cracks(camera) {
                 let state = self.world.block(pos[0], pos[1], pos[2]);
                 self.res
@@ -6972,6 +7125,7 @@ impl Game<'_> {
             }
         }
         // Experience orbs (ExperienceOrbRenderer): pulsing billboards from a 4x4 icon sheet.
+        self.mark_entity(out.len(), "minecraft:experience_orb");
         if let Some(r) = self
             .gui
             .atlas
@@ -7035,6 +7189,7 @@ impl Game<'_> {
             }
         }
         // Falling blocks use their baked model, including non-cubic shapes.
+        self.mark_entity(out.len(), "minecraft:falling_block");
         for f in &self.falling {
             let Some((_, tint)) = self.block_face_sprite(f.state) else {
                 continue;
@@ -7065,20 +7220,35 @@ impl Game<'_> {
                 vertex.color = horizon_client::hud_layout::multiply(vertex.color, tint);
             }
         }
+        self.mark_entity(out.len(), "");
         self.moving_piston_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:tnt");
         self.tnt_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:painting");
         self.painting_geometry(camera, &mut out);
+        self.mark_entity(out.len(), "minecraft:item_frame");
         self.frame_geometry(camera, &mut out);
+        self.mark_entity(out.len(), "minecraft:armor_stand");
         self.armor_stand_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:oak_boat");
         self.boat_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:minecart");
         self.cart_geometry(camera, alpha, &mut out);
+        // Beams: `gbuffers_beaconbeam`, not a block entity's program (5.4 has no stage for them).
+        self.mark_stage(out.len(), "NONE");
         self.beacon_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:fishing_bobber");
         self.fishing_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:leash_knot");
         self.leash_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:trident");
         self.trident_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:firework_rocket");
         self.rocket_geometry(camera, alpha, &mut out);
+        self.mark_entity(out.len(), "minecraft:splash_potion");
         self.thrown_potion_geometry(camera, alpha, &mut out);
         // Particles (ParticleEngine.extract): camera-facing quads.
+        self.mark_stage(out.len(), "PARTICLES");
         let world = &self.world;
         self.particles.render(
             camera,
@@ -7089,6 +7259,7 @@ impl Game<'_> {
             &mut out,
         );
         // Breaking progress overlays (destroy_stage_0..9): ours and the other players'.
+        self.mark_stage(out.len(), "DESTROY");
         for (pos, stage) in self.cracks(camera) {
             let o = (glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]))
                 - camera)
@@ -8401,6 +8572,8 @@ impl Game<'_> {
             1.0,
             1.0,
         );
+        // ItemStack.useOn: a use that acted counts as one of the item.
+        self.stats.add("used", &stack.item, 1);
         self.damage_held(damage);
         self.post_block_game_event("minecraft:block_change", pos, self.sculk_actor(), Some(new));
         Ok(true)
@@ -8422,6 +8595,35 @@ impl Game<'_> {
         let id = registry.resolve(&state).unwrap_or(default);
         self.level_set(pos, id)?;
         Ok(true)
+    }
+    /// `LayeredCauldronBlock.handleEntityOnFireInside` for a burning player
+    /// in the cauldron at `pos` (`mayInteract`: not a spectator): the fill
+    /// level drops (`lowerFillLevel`, a `block_change` with no source). A
+    /// server's cauldron is the server's.
+    pub(super) fn cauldron_extinguish(&mut self, pos: BlockPos) {
+        if self.remote.is_some() {
+            return;
+        }
+        let at = [pos.x, pos.y, pos.z];
+        let registry = self.pack.assets.registry;
+        let Some(old) = registry
+            .state(self.world.block(at[0], at[1], at[2]))
+            .filter(|s| {
+                matches!(
+                    s.name.as_str(),
+                    "minecraft:water_cauldron" | "minecraft:powder_snow_cauldron"
+                )
+            })
+            .cloned()
+        else {
+            return;
+        };
+        let Ok(new) = registry.resolve(&horizon_client::cauldron::extinguished(&old)) else {
+            return;
+        };
+        if self.level_set(at, new).is_ok() {
+            self.post_block_game_event("minecraft:block_change", at, None, Some(new));
+        }
     }
     fn damage_held(&mut self, amount: u32) {
         if self.creative {
@@ -8605,6 +8807,14 @@ impl Game<'_> {
                     1.0,
                     1.0,
                 );
+                // HoneycombItem.useOn's game event, and ItemStack.useOn's used statistic.
+                self.post_block_game_event(
+                    "minecraft:block_change",
+                    hit.pos,
+                    self.sculk_actor(),
+                    Some(state),
+                );
+                self.stats.add("used", &stack.item, 1);
                 if !self.creative {
                     self.consume_held();
                 }
@@ -9196,10 +9406,9 @@ impl Game<'_> {
         )
     }
     fn apply_settings(&mut self) {
-        if let Some(r) = &self.renderer {
-            self.settings
-                .clamp_gui_scale([r.config.width as i32, r.config.height as i32]);
-        }
+        // LocalPlayer.refreshChatAbilities: the chat shows what the Chat option allows.
+        let abilities = self.chat_abilities();
+        self.ui.chat.set_abilities(&self.gui.atlas.font, abilities);
         self.streaming.radius = self.settings.render_distance;
         // Options.biomeBlendRadius, ambientOcclusion and cutoutLeaves:
         // LevelExtractor.allChanged when they change.
@@ -9962,6 +10171,7 @@ impl Game<'_> {
                 self.pitch,
             ),
         };
+        let (view_yaw, view_pitch) = self.shaken_view(view_yaw, view_pitch);
         self.audio
             .set_listener([camera.x, camera.y, camera.z], view_yaw, view_pitch);
         let block = [
@@ -10195,6 +10405,7 @@ impl Game<'_> {
         // geometry (game/maps.rs, world text) upload with this batch; draining
         // map_patches any earlier leaves them a frame behind.
         hud.patches.append(&mut self.map_patches);
+        let entity_spans = std::mem::take(self.entity_spans.get_mut());
         let frame = Frame {
             weather: &weather,
             weather_time: horizon_client::weather::Time::new(self.world.game_time, alpha as f32),
@@ -10259,6 +10470,7 @@ impl Game<'_> {
                 color: sky.cloud_color,
             }),
             entities: &entities,
+            entity_spans: &entity_spans,
             dynamic_lights: &self.dynamic_lights,
             lightning: horizon_client::gfx::lightning::Input {
                 bolts: &bolts,
@@ -10305,11 +10517,15 @@ impl Game<'_> {
             menu_blur: self.menu_blur(),
         };
         let result = match self.renderer.as_mut() {
-            Some(renderer) => horizon_client::spans::time("renderer", || renderer.render(&frame)),
+            Some(renderer) => {
+                renderer.set_pass_timing(self.debug);
+                horizon_client::spans::time("renderer", || renderer.render(&frame))
+            }
             None => Err("renderer".into()),
         };
         // Restore storage even when rendering fails (for example, a lost surface).
         self.entity_vertices = entities;
+        *self.entity_spans.get_mut() = entity_spans;
         self.see_through_vertices = see_through;
         result
     }
@@ -10381,6 +10597,7 @@ impl Game<'_> {
             || (self.title.is_none()
                 && self.player.is_some()
                 && (self.screen.blurs_background(self.pause_menu)
+                    || self.dialog_open()
                     || (self.screen == Screen::Win && self.win_screen_pauses())));
         let radius = self.settings.menu_blur as f32;
         (blurred && radius >= 1.0).then_some(radius)
@@ -10431,6 +10648,9 @@ impl Game<'_> {
             if matches!(key, KeyCode::Escape | KeyCode::ShiftLeft) {
                 self.wake_up();
             }
+            return Ok(());
+        }
+        if self.screen == Screen::Mod && self.mod_screen_key(key) {
             return Ok(());
         }
         if self.sort_key_press(key) {
@@ -10575,6 +10795,10 @@ impl Game<'_> {
     }
     /// A mouse button while playing (window or control socket).
     fn play_mouse(&mut self, button: MouseButton, pressed: bool) -> Result<()> {
+        // A mod's claimed item takes the use button (capability `input`).
+        if self.mod_use(button, pressed) {
+            return Ok(());
+        }
         if self.sleeping.is_some() {
             return Ok(());
         }
@@ -10694,6 +10918,7 @@ impl Game<'_> {
         // The loading screen's chunk map fills ring by ring, as vanilla's.
         self.streaming.loading =
             self.options.execution_role.is_client() && self.loading_reason().is_some();
+        self.tick_pregen();
         let (uploads, unloaded) =
             horizon_client::spans::time("streaming", || self.streaming.update(&mut self.world));
         if let Some(lod) = &mut self.lod {
@@ -11036,6 +11261,12 @@ impl ApplicationHandler for Game<'_> {
                         if self.screen == Screen::Advancements {
                             self.advancements_drag();
                         }
+                        if self.screen == Screen::Stats {
+                            self.stats_drag();
+                        }
+                        if self.screen == Screen::WorldOptions {
+                            self.world_options_drag();
+                        }
                         if self.screen == Screen::Creative {
                             let (_, oy) = Self::creative_origin(&b);
                             self.creative_screen.drag_scrollbar(self.cursor.1 - oy);
@@ -11072,7 +11303,9 @@ impl ApplicationHandler for Game<'_> {
                         }) * wheel_sensitivity
                     };
                     let d = scaled(raw_y) as f32;
-                    if let Some(title) = &mut self.title
+                    if self.dialog_open() {
+                        self.dialog_scroll(d);
+                    } else if let Some(title) = &mut self.title
                         && self.screen != Screen::Win
                     {
                         let size = self
@@ -11086,7 +11319,7 @@ impl ApplicationHandler for Game<'_> {
                     if self.screen == Screen::Playing
                         && self.sleeping.is_none()
                         && self.player.is_some()
-                        && !self.extras_scroll(d)
+                        && !self.mod_wheel(d)
                         && let Some((wheel, (_, vertical_steps))) =
                             self.mouse
                                 .on_scroll(raw_x, raw_y, discrete, wheel_sensitivity)
@@ -11140,6 +11373,11 @@ impl ApplicationHandler for Game<'_> {
                 {
                     if state == ElementState::Pressed && button == MouseButton::Left {
                         self.pack_prompt_click()?;
+                    }
+                }
+                WindowEvent::MouseInput { state, button, .. } if self.dialog_open() => {
+                    if state == ElementState::Pressed && button == MouseButton::Left {
+                        self.dialog_click()?;
                     }
                 }
                 WindowEvent::MouseInput { .. } if self.screen == Screen::Win => {}
@@ -11256,6 +11494,7 @@ impl ApplicationHandler for Game<'_> {
                                 return Ok(());
                             }
                             self.extras_mouse(button, pressed);
+                            self.mod_mouse_key(button, pressed);
                             match self.settings.keys.translate_mouse(button) {
                                 Some(Err(b)) => self.play_mouse(b, pressed)?,
                                 Some(Ok(k)) if pressed => {
@@ -11315,6 +11554,9 @@ impl ApplicationHandler for Game<'_> {
                         Screen::WorldOptions if pressed && button == MouseButton::Left => {
                             self.world_options_click()
                         }
+                        Screen::WorldOptions if button == MouseButton::Left => {
+                            self.world_options_release()
+                        }
                         Screen::Friends if pressed && button == MouseButton::Left => {
                             self.friends_screen_click()
                         }
@@ -11338,9 +11580,8 @@ impl ApplicationHandler for Game<'_> {
                                 .map_or([1, 1], |r| [r.config.width, r.config.height]);
                             self.stats_click(size);
                         }
-                        Screen::Mod if pressed && button == MouseButton::Left => {
-                            self.mod_screen_click()
-                        }
+                        Screen::Stats if button == MouseButton::Left => self.stats_release(),
+                        Screen::Mod if pressed => self.mod_screen_click(button),
                         _ => {}
                     }
                 }
@@ -11350,6 +11591,14 @@ impl ApplicationHandler for Game<'_> {
                         && event.physical_key == PhysicalKey::Code(KeyCode::Escape)
                     {
                         self.answer_pack_prompt(false)?;
+                    }
+                }
+                WindowEvent::KeyboardInput { event, .. } if self.dialog_open() => {
+                    let shortcut = self.edit_shortcut(&event);
+                    if event.state == ElementState::Pressed
+                        && let PhysicalKey::Code(key) = event.physical_key
+                    {
+                        self.dialog_key(key, shortcut, event.text.as_deref())?
                     }
                 }
                 WindowEvent::KeyboardInput { event, .. }
@@ -11481,7 +11730,7 @@ impl ApplicationHandler for Game<'_> {
                     let PhysicalKey::Code(key) = event.physical_key else {
                         return Ok(());
                     };
-                    self.extras_key(key, event.state == ElementState::Pressed, event.repeat);
+                    self.mod_key(key, event.state == ElementState::Pressed, event.repeat);
                     // key.smoothCamera toggles the cinematic camera.
                     if self.screen == Screen::Playing
                         && event.state == ElementState::Pressed
@@ -11573,12 +11822,14 @@ impl ApplicationHandler for Game<'_> {
                     }
                     self.extras_frame(elapsed);
                     self.mods_frame(elapsed);
+                    self.poll_moved_extras();
                     self.extras_retry()?;
                     self.apply_mouse_look();
                     self.pad_look(elapsed.as_secs_f32());
                     self.advance_flight();
                     let ticked = Instant::now();
                     let rendered = self.render()?;
+                    self.apply_cursor_icon();
                     if let Some(threshold) = self.options.spikes
                         && let Some(r) = self.renderer.as_ref()
                     {
@@ -11832,6 +12083,7 @@ impl<'a> Game<'a> {
             world_loader: None,
             pending_pack_reload: false,
             server_packs: Default::default(),
+            dialogs: Default::default(),
             world_renderer_ready: false,
             collision: res.collision(),
             motion: res.motion(),
@@ -11886,6 +12138,7 @@ impl<'a> Game<'a> {
             left: false,
             right: false,
             cursor: (0.0, 0.0),
+            cursor_icon: horizon_client::widgets::Cursor::Arrow,
             captured: false,
             focused: true,
             modifiers: winit::keyboard::ModifiersState::empty(),
@@ -11904,6 +12157,8 @@ impl<'a> Game<'a> {
             dynamic_lights: Vec::new(),
             luminance: None,
             see_through_vertices: Vec::new(),
+            entity_spans: Default::default(),
+            pack_ids: None,
             health_hud: hud_layout::HealthHud::default(),
             started: now,
             previous: now,
@@ -11961,6 +12216,7 @@ impl<'a> Game<'a> {
             offhand: None,
             hand: Hand::Main,
             shield_cooldown: 0,
+            cooldowns: Default::default(),
             command_source: None,
             titles: Default::default(),
             tool_highlight: Default::default(),
@@ -12076,10 +12332,12 @@ impl<'a> Game<'a> {
             agent: agent::Agent::default(),
             view_frustum: None,
             entity_culler: None,
+            pack_shadow_casters: (false, false),
             pending_uploads: Vec::new(),
             frame_graph: Default::default(),
             extras: Default::default(),
             mods: Default::default(),
+            native_shaders: Default::default(),
             sky_darken_memo: Default::default(),
             persist: Default::default(),
             remote: None,
@@ -12106,9 +12364,11 @@ impl<'a> Game<'a> {
             lan_events: Vec::new(),
             lan_block_events: Vec::new(),
             lan_entity_events: Vec::new(),
+            lan_global_events: Vec::new(),
             lid_openers: HashMap::new(),
             lan_acting: None,
             guest_packets: Vec::new(),
+            guest_cooldowns: Vec::new(),
             lan_acting_name: None,
             lan_acting_uuid: None,
             chat_capture: None,
@@ -12838,6 +13098,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         hud,
         nether_lighting: false,
         entities: &[],
+        entity_spans: &[],
         dynamic_lights: &[],
         clouds: None,
         lightning: Default::default(),
@@ -12912,6 +13173,7 @@ fn start_game<'a>(
     // Benchmarks measure the game alone.
     if game.options.benchmark.is_none() {
         game.mods.dev = game.options.dev_mods.clone();
+        game.start_moved_extras();
         game.start_mods();
     }
     game.start_agent_control()?;
@@ -12939,11 +13201,11 @@ fn start_game<'a>(
         );
     }
     if let Ok(spec) = std::env::var("HORIZON_DISPENSE_FIXTURE") {
-        game.dispense_fixture(&spec)?;
+        game.run_component_harness(integrated::ComponentHarness::Dispenser(spec))?;
         return Ok(None);
     }
     if let Ok(spec) = std::env::var("HORIZON_SCULK_FIXTURE") {
-        game.sculk_fixture(&spec)?;
+        game.run_component_harness(integrated::ComponentHarness::Sculk(spec))?;
         return Ok(None);
     }
     if game.options.execution_role == execution_role::ExecutionRole::DedicatedServer {
@@ -12965,8 +13227,8 @@ fn start_game<'a>(
         Some(folder) => {
             let (seed, creative) = (game.options.seed, game.options.creative);
             if std::env::var_os("HORIZON_COMMAND_SCRIPT").is_some() {
-                // The command harness runs before entering the window loop.
-                game.open_world(&folder, None, Some(seed), creative, None)?;
+                // Headless, but with the same server and memory connection as play.
+                game.open_integrated(&folder, None, Some(seed), creative, None)?;
             } else {
                 // Start after the window is handed over, so --world uses the
                 // same responsive initialization path as the title screen.
@@ -12993,11 +13255,10 @@ fn start_game<'a>(
             game.title = Some(title);
         }
     }
-    if let (Some(script), Some(output)) = (
-        std::env::var_os("HORIZON_COMMAND_SCRIPT"),
-        std::env::var_os("HORIZON_COMMAND_OUTPUT"),
-    ) {
-        game.run_command_harness(script.as_ref(), output.as_ref())?;
+    if std::env::var_os("HORIZON_COMMAND_SCRIPT").is_some()
+        && std::env::var_os("HORIZON_COMMAND_OUTPUT").is_some()
+    {
+        game.wait_command_harness()?;
         return Ok(None);
     }
     Ok(Some(game))
@@ -13098,10 +13359,6 @@ impl Loading {
                 return;
             }
         }
-        if let Some(r) = &self.renderer {
-            self.settings
-                .clamp_gui_scale([r.config.width as i32, r.config.height as i32]);
-        }
         horizon_client::hud::GUI_SCALE.store(self.settings.gui_scale, Ordering::Relaxed);
         self.window = Some(window);
     }
@@ -13140,8 +13397,6 @@ impl Loading {
             self.settings.horizon.api,
         ) {
             Ok(r) => {
-                self.settings
-                    .clamp_gui_scale([r.config.width as i32, r.config.height as i32]);
                 horizon_client::hud::GUI_SCALE.store(self.settings.gui_scale, Ordering::Relaxed);
                 self.renderer = Some(r);
             }

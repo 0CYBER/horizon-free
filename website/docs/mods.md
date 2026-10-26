@@ -32,7 +32,7 @@ cd my-mod
 cargo horizon-mod build
 ```
 
-The [Mod API](/docs/api/mods) lists what a mod can do today and what comes next, and its [reference](/docs/api/mods-reference) every function. Java mod jars don't run in Horizon: their code calls and patches Minecraft's Java classes, and Horizon has none. What carries over is the data and assets inside a jar ([modpacks](/docs/modpacks)).
+`cargo horizon-mod test` runs the mod's test scripts (`tests/*.toml`: ticks, commands and the player's position in, chat and HUD lines checked) with no game open. The [Mod API](/docs/api/mods) lists what a mod can do today and what comes next, and its [reference](/docs/api/mods-reference) every function. Java mod jars don't run in Horizon: their code calls and patches Minecraft's Java classes, and Horizon has none. What carries over is the data and assets inside a jar ([modpacks](/docs/modpacks)).
 
 ## Finding resource packs and modpacks
 

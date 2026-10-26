@@ -220,10 +220,21 @@ impl Game<'_> {
 
     /// One tick of interpolation, as `tick_remote_objects`.
     pub(super) fn tick_remote_projectiles(&mut self, mut step: impl FnMut(u32, Vec3) -> Vec3) {
-        for t in &mut self.tnts {
-            t.previous = t.position;
-            t.position = step(t.id, t.position);
-        }
+        // PrimedTnt.tick runs on a client too: it falls, bounces and burns its
+        // fuse down (the swell and flash follow it) between the server's
+        // updates (every 10 ticks), and a client discards it when the fuse
+        // runs out; only the server explodes it.
+        let (world, collision, assets, facts) = (
+            &self.world,
+            self.collision,
+            &self.pack.assets,
+            self.res.facts(),
+        );
+        self.tnts.retain_mut(|t| {
+            // A fluid lookup that fails leaves it where its move put it.
+            let _ = t.tick(world, collision, assets, facts);
+            t.fuse > 0
+        });
         // FallingBlockEntity.tick runs on a client too: the block falls by
         // itself between the server's updates (every 20 ticks), then waits
         // where it lands for the server to place it and remove it.
@@ -238,7 +249,25 @@ impl Game<'_> {
         for p in &mut self.creatures.projectiles {
             p.previous = p.position;
             p.age += 1;
-            p.position = step(p.id, p.position);
+            if matches!(p.kind, ProjectileKind::LargeFireball { .. }) {
+                // AbstractHurtingProjectile.tick advances on the client between
+                // the tracker updates (ten ticks apart for a ghast's fireball).
+                let at = p.position;
+                let water = self
+                    .res
+                    .facts()
+                    .get(self.world.block(
+                        at.x.floor() as i32,
+                        at.y.floor() as i32,
+                        at.z.floor() as i32,
+                    ))
+                    .fluid
+                    == horizon_client::blocks::Fluid::Water;
+                p.apply_hurting_inertia(water);
+                p.position = p.position.add_vector(p.velocity);
+            } else {
+                p.position = step(p.id, p.position);
+            }
         }
         for t in &mut self.tridents {
             let id = t.id;

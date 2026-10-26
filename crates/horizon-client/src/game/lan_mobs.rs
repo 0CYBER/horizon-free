@@ -171,6 +171,19 @@ impl Game<'_> {
             })
             .collect()
     }
+    /// The same guests' feet and whether they stand on the ground, for the
+    /// blocks that also ask that (`BigDripleafBlock.canEntityTilt`).
+    pub(super) fn lan_guest_feet(&self) -> Vec<([f64; 3], bool)> {
+        let Some(host) = self.lan.as_ref() else {
+            return Vec::new();
+        };
+        host.hub
+            .guests
+            .iter()
+            .filter(|g| host.hub.here(g) && g.loaded && !g.dead && !g.spectator())
+            .map(|g| (g.position, g.on_ground))
+            .collect()
+    }
 
     /// The guests a projectile can hit, under their entity ids.
     pub(super) fn lan_projectile_targets(&self) -> Vec<(Who, Aabb)> {

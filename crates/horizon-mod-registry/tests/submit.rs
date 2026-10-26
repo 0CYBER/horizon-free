@@ -342,11 +342,12 @@ async fn what_the_form_refuses() {
     );
     let (status, json) = client.submit(&csrf, &f, &file).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
-    // Shader packs aren't open.
+    // A shader pack runs the game's own check: a mod's file isn't one.
     let mut f = form();
     f["kind"] = json!("shader");
     let (status, json) = client.submit(&csrf, &f, &file).await;
-    refused(status, &json, "shader packs open");
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+    refused(status, &json, "horizon-shaders.toml: missing");
     // An update by someone who isn't an owner.
     let owned = "id = \"coords_hud\"\nkind = \"mod\"\nname = \"C\"\nsummary = \"s\"\nowners = [\"bob\"]\nlicense = \"MIT\"\nsource = \"https://x.test\"\n\n[[versions]]\nversion = \"0.0.1\"\npublished = \"2026-01-01\"\ngame = \"26.3\"\nfile = \"coords_hud-0.0.1.hmod\"\nsha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n";
     mock.lock()

@@ -190,6 +190,13 @@ impl Stage<'_> {
             }
             let replaced: Option<String> = match t {
                 "main" if depth == 0 && called => Some("hz_main".into()),
+                // naga's frontend leaves the code after an unconditional `discard` or `return;`
+                // unreachable but half-built (a module that fails validation): behind an `if`
+                // it stays reachable as far as naga knows.
+                "discard" => Some("if (true) discard".into()),
+                "return" if next(i).is_some_and(|j| self.tokens[j] == ";") => {
+                    Some("if (true) return".into())
+                }
                 // GLSL's `modf`, which naga's frontend lacks.
                 "modf" if called => Some("hz_modf".into()),
                 "texture2D" | "texture1D" | "texture3D" | "textureCube" if called => {

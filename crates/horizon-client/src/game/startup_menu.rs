@@ -272,8 +272,6 @@ impl Loading {
     }
     pub(super) fn apply_menu_settings(&mut self) {
         if let Some(renderer) = &mut self.renderer {
-            self.settings
-                .clamp_gui_scale([renderer.config.width as i32, renderer.config.height as i32]);
             renderer.gamma = self.settings.gamma;
             renderer.set_present_mode(self.settings.vsync, self.settings.horizon.present_mode);
         }
@@ -365,6 +363,16 @@ impl Loading {
                 }
                 Event::OpenModFolder => {
                     let dir = Game::options_path().with_file_name(horizon_client::mod_list::DIR);
+                    let _ = std::fs::create_dir_all(&dir);
+                    packs::open_folder(&dir);
+                }
+                Event::ListShaderPacks => {
+                    self.settings.shader_packs =
+                        horizon_client::shader_pack_list::scan(&Game::shader_packs_dir());
+                }
+                Event::ShaderPack => self.save_menu_settings(),
+                Event::OpenShaderPackFolder => {
+                    let dir = Game::shader_packs_dir();
                     let _ = std::fs::create_dir_all(&dir);
                     packs::open_folder(&dir);
                 }
