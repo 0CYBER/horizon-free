@@ -30,8 +30,8 @@ pub struct WorldOptions {
     pub difficulty: usize,
     /// Allow Cheats as toggled; unset follows the game mode.
     pub commands: Option<bool>,
-    /// The Superflat world preset instead of Default.
-    pub flat: bool,
+    /// The world preset the world is created with.
+    pub world_type: crate::save::WorldPreset,
     pub structures: bool,
     pub bonus_chest: bool,
     /// `getGameRules`: the Game Rules screen's values, saved with the world.
@@ -44,7 +44,7 @@ impl Default for WorldOptions {
             hardcore: false,
             difficulty: 2,
             commands: None,
-            flat: false,
+            world_type: crate::save::WorldPreset::Normal,
             structures: true,
             bonus_chest: false,
             rules: crate::gamerules::GameRules::default(),
@@ -66,7 +66,7 @@ impl WorldOptions {
                 .position(|d| *d == level.difficulty)
                 .unwrap_or(2),
             commands: Some(commands),
-            flat: generation.flat,
+            world_type: generation.preset,
             structures: generation.structures,
             bonus_chest: generation.bonus_chest,
             rules: crate::gamerules::GameRules::load(dir),
@@ -87,7 +87,7 @@ impl WorldOptions {
     }
     pub fn world_gen(&self) -> crate::save::WorldGen {
         crate::save::WorldGen {
-            flat: self.flat,
+            preset: self.world_type,
             structures: self.structures,
             bonus_chest: self.bonus_chest(),
         }
@@ -105,7 +105,7 @@ impl WorldOptions {
             }
             23 => self.difficulty = (self.difficulty + 1) % DIFFICULTIES.len(),
             24 => self.commands = Some(!self.commands(*creative)),
-            25 => self.flat = !self.flat,
+            25 => self.world_type = self.world_type.next(),
             27 => self.structures = !self.structures,
             28 => self.bonus_chest = !self.bonus_chest,
             _ => {}
@@ -236,14 +236,7 @@ pub(super) fn buttons(w: f32, h: f32, creative: bool, o: &WorldOptions) -> Vec<B
                 gx,
                 gy,
                 150.0,
-                labelled(
-                    "selectWorld.mapType",
-                    tr(if o.flat {
-                        "generator.minecraft.flat"
-                    } else {
-                        "generator.minecraft.normal"
-                    }),
-                ),
+                labelled("selectWorld.mapType", tr(o.world_type.label())),
                 true,
                 25,
             ),
