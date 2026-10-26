@@ -4587,6 +4587,9 @@ impl Game<'_> {
             let feet = [player.position.x, player.position.y, player.position.z];
             let at = [feet[0], feet[1] + 1.32, feet[2]];
             let killer = self.combat_killer_kind();
+            // Player.die: the dimension and block of the death.
+            self.level.last_death =
+                Some((self.dim.id().to_owned(), feet.map(|v| v.floor() as i32)));
             self.death_message();
             // ServerPlayer.die: deaths, and the time-since counters restart.
             self.stats.custom("deaths", 1);

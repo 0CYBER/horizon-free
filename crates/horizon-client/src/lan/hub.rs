@@ -557,16 +557,24 @@ impl Hub {
 
     // ---- joining -------------------------------------------------------
 
-    fn spawn_info(&self, game_mode: i32) -> play::SpawnInfo {
+    fn spawn_info(&self, i: usize) -> play::SpawnInfo {
+        let g = &self.guests[i];
         play::SpawnInfo {
             dimension_type: self.dimension_type,
             dimension: self.config.dimension.clone(),
             seed: horizon_core::biome::obfuscate_seed(self.config.seed),
-            game_type: game_mode,
+            game_type: g.game_mode,
             previous_game_type: None,
             debug: false,
             flat: false,
-            last_death: None,
+            // Player.getLastDeathLocation.
+            last_death: g
+                .last_death
+                .as_ref()
+                .map(|(dimension, pos)| play::GlobalPos {
+                    dimension: dimension.clone(),
+                    pos: *pos,
+                }),
             portal_cooldown: 0,
             sea_level: 63,
         }
@@ -635,7 +643,7 @@ impl Hub {
             reduced_debug_info: false,
             show_death_screen: true,
             limited_crafting: false,
-            spawn: self.spawn_info(mode),
+            spawn: self.spawn_info(i),
             // MinecraftServer.usesAuthentication, enforceSecureProfile.
             online_mode: self.lan.shared.config.online.is_some(),
             enforces_secure_chat: self.enforces_secure_chat(),
@@ -2361,14 +2369,7 @@ impl Hub {
     /// level loading screen from the Respawn packet until the level info's "level chunks load
     /// start" event and the chunk under the player, so the packets follow vanilla's order.
     pub fn respawn(&mut self, i: usize, at: [f64; 3], ctx: &TickCtx) {
-        let mode = self.guests[i].game_mode;
-        let mut info = self.spawn_info(mode);
-        // Player.getLastDeathLocation, set where the player died.
-        // The level they died in: theirs until now.
-        info.last_death = self.guests[i].last_death.map(|pos| play::GlobalPos {
-            dimension: self.guests[i].dimension.clone(),
-            pos,
-        });
+        let info = self.spawn_info(i);
         self.close_container_for(i);
         let g = &mut self.guests[i];
         // PlayerList.respawn: into the level in place (the respawn level).
@@ -2481,8 +2482,7 @@ impl Hub {
         portal_sound: bool,
         ctx: &TickCtx,
     ) {
-        let mode = self.guests[i].game_mode;
-        let info = self.spawn_info(mode);
+        let info = self.spawn_info(i);
         self.close_container_for(i);
         let g = &mut self.guests[i];
         g.dimension = self.config.dimension.clone();
