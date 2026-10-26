@@ -447,6 +447,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             if !b.table.bool(state, b.props.powered) {
                 self.detector_rail_check_pressed(pos, state);
             }
+        } else if data.is(Class::Button) {
+            // ButtonBlock.entityInside: a wooden button an arrow is inside.
+            if data.set_type.as_ref().is_some_and(|s| s.arrows)
+                && !b.table.bool(state, b.props.powered)
+            {
+                self.button_check_pressed(pos, state);
+            }
         } else if data.is(Class::TripWire)
             && !b.table.bool(state, b.props.powered)
             && !self.ticks.has_block_tick(pos, b.block(state))
