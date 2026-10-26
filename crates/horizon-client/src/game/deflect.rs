@@ -120,6 +120,11 @@ impl Game<'_> {
         p.guest = guest;
         // Not into the one who turned it on its way out.
         p.left_owner = false;
+        // `AbstractHurtingProjectile.onDeflection` by an attack, and the
+        // `needsSync` that `AIM_DEFLECT` sets: a server's players see it turn
+        // at once, not at the fireball's next update ten ticks later.
+        p.acceleration = 0.1;
+        p.needs_sync = true;
         self.reset_attack_strength();
         self.swing_arm();
         let from = self

@@ -912,6 +912,9 @@ impl Game<'_> {
             for m in &mut self.mobs {
                 m.needs_sync = false;
             }
+            for p in &mut self.creatures.projectiles {
+                p.needs_sync = false;
+            }
             let entities = states.as_slice();
             let spawn = self.spawn.map_or([0.5, 80.0, 0.5], |s| [s.x, s.y, s.z]);
             let events = {
