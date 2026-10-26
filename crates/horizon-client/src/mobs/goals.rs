@@ -601,10 +601,7 @@ impl Mob {
             return false;
         }
         // LivingEntity.getVisibilityPercent
-        let mut visibility = 1.0;
-        if p.sneaking {
-            visibility *= 0.8;
-        }
+        let mut visibility = p.visibility_percent();
         if let Some(head) = &p.head {
             let skull = match self.species() {
                 Species::Zombie | Species::Husk | Species::Drowned | Species::ZombieVillager => {

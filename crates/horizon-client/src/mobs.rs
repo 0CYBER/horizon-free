@@ -1448,6 +1448,8 @@ pub struct PlayerView {
     pub off_hand: Option<Arc<str>>,
     pub head: Option<Arc<str>>,
     pub armor_cover: f32,
+    /// The Invisibility effect (`isInvisible`).
+    pub invisible: bool,
     pub spectator: bool,
     /// `PiglinAi.isWearingSafeArmor`: some golden armour.
     pub gold_armor: bool,
@@ -1467,6 +1469,19 @@ pub struct PlayerView {
     /// A LAN guest: its own client moves it, and touching mobs push it there
     /// (`EntitySelector.pushableBy` on the client).
     pub remote: bool,
+}
+impl PlayerView {
+    /// `LivingEntity.getVisibilityPercent` without the worn-skull scaling.
+    pub fn visibility_percent(&self) -> f64 {
+        let mut visibility = 1.0;
+        if self.sneaking {
+            visibility *= 0.8;
+        }
+        if self.invisible {
+            visibility *= 0.7 * f64::from(self.armor_cover).max(0.1);
+        }
+        visibility
+    }
 }
 #[derive(Clone)]
 pub struct MobWorld<'a> {
