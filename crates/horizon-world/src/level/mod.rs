@@ -288,6 +288,11 @@ pub enum LevelEvent {
 
 /// The world as seen by block behaviour. Implemented by the game and tests.
 pub trait LevelAccess {
+    /// `Level.isClientSide`: this level is a client's copy (false on a
+    /// server, a host or the test harness).
+    fn is_client_side(&self) -> bool {
+        false
+    }
     /// `getBlockState`. Unloaded or out-of-bounds positions read as air.
     fn block_state(&self, pos: BlockPos) -> BlockStateId;
     /// Storage write (`LevelChunkSection.setBlockState`). Returns the previous
