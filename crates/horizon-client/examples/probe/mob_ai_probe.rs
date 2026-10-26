@@ -1097,6 +1097,7 @@ pub fn main() -> horizon_client::Result<()> {
                     block_tags: &items.block_tags,
                     biomes: &biomes,
                     mob_griefing: true,
+                    mob_drops: true,
                     difficulty: LocalDifficulty::new(s.difficulty, world.day_time, 0, 0.0),
                     end: false,
                     world_seed: 0,
