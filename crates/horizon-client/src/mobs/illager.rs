@@ -72,6 +72,8 @@ pub fn register_vindicator(m: &mut Mob) {
     let g = &mut m.ai.goals;
     g.add(0, Float);
     g.add(1, avoid_creaking(1.0, 1.2));
+    g.add(2, super::doors::BreakDoor::vindicator());
+    g.add(3, super::doors::RaiderOpenDoor::default());
     g.add(4, super::raider::HoldGroundAttack::new(10.0));
     g.add(5, MeleeAttack::new(1.0, false));
     g.add(8, Stroll::new(0.6));
@@ -85,6 +87,13 @@ pub fn register_vindicator(m: &mut Mob) {
             .interval(0)
             .when(|m, _| m.custom_name.as_deref() == Some("Johnny")),
     );
+}
+/// `Vindicator.customServerAiStep`: its navigation opens doors while a raid
+/// is at its position.
+pub fn vindicator_server_ai_step(m: &mut Mob) {
+    if super::doors::can_navigate_ground(m) {
+        m.ai.nav.can_open_doors = super::raider::state(m).is_some_and(|s| s.raided);
+    }
 }
 // Evoker state: `counter` spellCastingTickCount, `variant2` the spell
 // being cast (0 none, 1 vexes, 2 fangs, 3 wololo), `counter2` the wololo

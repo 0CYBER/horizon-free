@@ -796,6 +796,8 @@ impl Game<'_> {
             let s = m.extra.raider.get_or_insert_with(Box::default);
             s.rider = has_rider;
             s.in_village = in_village;
+            // Vindicator.customServerAiStep: `ServerLevel.isRaided`.
+            s.raided = species == Species::Vindicator && raids.nearby(block).is_some();
             if s.raid_id.is_some_and(|id| raids.get(id).is_none()) {
                 s.raid_id = None;
                 s.ticks_outside_raid = 0;

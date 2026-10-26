@@ -35,6 +35,8 @@ pub fn placement_ok(species: Species, w: &MobWorld, x: i32, y: i32, z: i32) -> b
 #[derive(Clone, Copy, Debug)]
 pub struct LocalDifficulty {
     pub effective: f32,
+    /// The world difficulty is normal.
+    pub normal: bool,
     /// The world difficulty is hard.
     pub hard: bool,
 }
@@ -45,9 +47,11 @@ impl LocalDifficulty {
     /// the overworld clock, the chunk's inhabited time and the moon.
     pub fn new(base: u8, total: i64, inhabited: i64, moon: f32) -> Self {
         let hard = base == 3;
+        let normal = base == 2;
         if base == 0 {
             return Self {
                 effective: 0.0,
+                normal,
                 hard,
             };
         }
@@ -60,6 +64,7 @@ impl LocalDifficulty {
         }
         Self {
             effective: f32::from(base) * (0.75 + global + local),
+            normal,
             hard,
         }
     }

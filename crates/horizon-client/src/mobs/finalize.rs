@@ -1144,7 +1144,8 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                     }
                 }
             }
-            m.extra.can_break_doors = self.float() < special * 0.1;
+            let can_break_doors = self.float() < special * 0.1;
+            super::doors::set_can_break_doors(m, can_break_doors);
             if reason != Reason::Conversion {
                 self.populate(m);
                 self.enchant(m);
@@ -1205,7 +1206,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
             ) {
                 m.health = max_health(m);
             }
-            m.extra.can_break_doors = true;
+            super::doors::set_can_break_doors(m, true);
         }
     }
     fn husk(&mut self, m: &mut Mob, g: Option<Group>, reason: Reason) -> Option<Group> {
