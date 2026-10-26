@@ -161,6 +161,7 @@ fn mob_meta(
     m: &Mob,
     hub: &Hub,
     player_entity: Option<i32>,
+    game_time: i64,
     meta: &mut Vec<(u8, i32, Value)>,
     defaults: &mut Vec<(u8, i32, Value)>,
 ) {
@@ -272,6 +273,14 @@ fn mob_meta(
                 meta.push((collar, serializer::INT, Value::Int(i32::from(e.color & 15))));
             }
             defaults.push((collar, serializer::INT, Value::Int(red)));
+            // Wolf.DATA_ANGER_END_TIME: the game time the anger ends, -1 when calm.
+            if kind == "minecraft:wolf" {
+                if e.anger > 0 {
+                    let end = game_time + i64::from(e.anger);
+                    meta.push((22, serializer::LONG, Value::Long(end)));
+                }
+                defaults.push((22, serializer::LONG, Value::Long(-1)));
+            }
         }
         "minecraft:horse"
         | "minecraft:donkey"
@@ -323,6 +332,115 @@ fn mob_meta(
                     Value::Ids(vec![t, p, level]),
                 ));
             }
+        }
+        // Frog.DATA_VARIANT_ID, Pig's, Cow's, Chicken's and ZombieNautilus's
+        // (after the entries of their parents): registry holders.
+        "minecraft:frog"
+        | "minecraft:pig"
+        | "minecraft:cow"
+        | "minecraft:chicken"
+        | "minecraft:zombie_nautilus" => {
+            let (index, serializer, registry) = match kind {
+                "minecraft:frog" => (18, serializer::FROG_VARIANT, "minecraft:frog_variant"),
+                "minecraft:pig" => (19, serializer::PIG_VARIANT, "minecraft:pig_variant"),
+                "minecraft:cow" => (18, serializer::COW_VARIANT, "minecraft:cow_variant"),
+                "minecraft:chicken" => {
+                    (18, serializer::CHICKEN_VARIANT, "minecraft:chicken_variant")
+                }
+                _ => (
+                    21,
+                    serializer::ZOMBIE_NAUTILUS_VARIANT,
+                    "minecraft:zombie_nautilus_variant",
+                ),
+            };
+            let name = horizon_client::mobs::finalize::variant_name(m.species(), e.variant);
+            if let Some(v) = id(registry, name.trim_start_matches("minecraft:")) {
+                meta.push((index, serializer, Value::Id(v)));
+            }
+        }
+        // Axolotl.DATA_VARIANT (after AgeableMob's two), Fox.DATA_TYPE_ID,
+        // Rabbit.DATA_TYPE_ID and Parrot.DATA_VARIANT_ID (after
+        // TamableAnimal's two and its flags and owner).
+        "minecraft:axolotl" | "minecraft:fox" | "minecraft:rabbit" | "minecraft:parrot" => {
+            let index = if kind == "minecraft:parrot" { 20 } else { 18 };
+            if e.variant != 0 {
+                meta.push((index, serializer::INT, Value::Int(i32::from(e.variant))));
+            }
+        }
+        // Panda.MAIN_GENE_ID and HIDDEN_GENE_ID (after its three counters).
+        "minecraft:panda" => {
+            if e.variant != 0 {
+                meta.push((21, serializer::BYTE, Value::Byte(e.variant as i8)));
+            }
+            if e.variant2 != 0 {
+                meta.push((22, serializer::BYTE, Value::Byte(e.variant2 as i8)));
+            }
+        }
+        // Bee.DATA_FLAGS_ID (rolling 2, stung 4, nectar 8) and
+        // DATA_ANGER_END_TIME: the texture shows the nectar and the anger.
+        "minecraft:bee" => {
+            let bee = horizon_client::mobs::bee::get(m);
+            let flags = bee.map_or(0, |b| b.flags);
+            if flags != 0 {
+                meta.push((18, serializer::BYTE, Value::Byte(flags as i8)));
+            }
+            defaults.push((18, serializer::BYTE, Value::Byte(0)));
+            let anger_end = bee.map_or(-1, |b| b.anger_end);
+            if anger_end != -1 {
+                meta.push((19, serializer::LONG, Value::Long(anger_end)));
+            }
+            defaults.push((19, serializer::LONG, Value::Long(-1)));
+        }
+        // AbstractFish.FROM_BUCKET takes 16: Salmon.DATA_TYPE (small 0,
+        // medium 1, large 2; medium is the data's default, so always sent),
+        // Pufferfish.PUFF_STATE and TropicalFish.DATA_ID_TYPE_VARIANT: the
+        // pattern's packed id (size, then index << 8), base colour << 16 and
+        // pattern colour << 24.
+        "minecraft:salmon" => {
+            meta.push((17, serializer::INT, Value::Int(i32::from(e.variant.min(2)))));
+        }
+        "minecraft:pufferfish" => {
+            if e.size > 0 {
+                meta.push((17, serializer::INT, Value::Int(e.size)));
+            }
+            defaults.push((17, serializer::INT, Value::Int(0)));
+        }
+        "minecraft:tropical_fish" => {
+            let pattern = e.variant.min(11);
+            let packed = i32::from(pattern >= 6)
+                | i32::from(pattern % 6) << 8
+                | i32::from(e.variant2 & 15) << 16
+                | i32::from(e.variant3 & 15) << 24;
+            if packed != 0 {
+                meta.push((17, serializer::INT, Value::Int(packed)));
+            }
+        }
+        // CopperGolem.DATA_WEATHER_STATE: unaffected 0 to oxidized 3, and it
+        // goes back down when the golem is scraped.
+        "minecraft:copper_golem" => {
+            if e.variant != 0 {
+                meta.push((
+                    16,
+                    serializer::WEATHERING_COPPER_STATE,
+                    Value::Id(i32::from(e.variant.min(3))),
+                ));
+            }
+            defaults.push((16, serializer::WEATHERING_COPPER_STATE, Value::Id(0)));
+        }
+        // Ghast.DATA_IS_CHARGING: the shooting texture.
+        "minecraft:ghast" => {
+            if e.flag {
+                meta.push((16, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((16, serializer::BOOLEAN, Value::Bool(false)));
+        }
+        // WitherBoss.DATA_ID_INV (after the three head targets): the
+        // invulnerable ticks, the blinking texture and the growing scale.
+        "minecraft:wither" => {
+            if e.counter > 0 {
+                meta.push((19, serializer::INT, Value::Int(e.counter)));
+            }
+            defaults.push((19, serializer::INT, Value::Int(0)));
         }
         // AbstractCubeMob.ID_SIZE.
         "minecraft:slime" | "minecraft:magma_cube" => {
@@ -877,7 +995,14 @@ impl Game<'_> {
             e.on_ground = m.on_ground;
             e.velocity = [m.velocity.x, m.velocity.y, m.velocity.z];
             e.needs_sync = m.needs_sync;
-            mob_meta(m, hub, player_entity, &mut e.meta, &mut e.defaults);
+            mob_meta(
+                m,
+                hub,
+                player_entity,
+                self.world.game_time,
+                &mut e.meta,
+                &mut e.defaults,
+            );
             mob_equipment(m, hub, &mut e.equipment);
             self.mob_attributes(m, &mut e.attributes);
             e.leash = leash;

@@ -4,9 +4,9 @@
 //! own simulation, which a client of a server doesn't run.
 use super::Game;
 use horizon_client::mobs::render::{PROFESSIONS, VILLAGER_TYPES};
-use horizon_client::mobs::{Mob, Species, Who, bat, tame};
+use horizon_client::mobs::{Mob, Species, Who, bat, bee, finalize, tame};
 use horizon_protocol::entity_data::Value;
-use horizon_protocol::registry::Builtin;
+use horizon_protocol::registry::{Builtin, Dynamic};
 
 /// The values `apply` takes from one SetEntityData packet, by vanilla's entry
 /// indices (Entity 0..=7, LivingEntity 8..=14, Mob 15, then the subclasses).
@@ -79,6 +79,54 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             (Species::Slime | Species::MagmaCube, 18, Value::Int(size)) => {
                 m.extra.size = (*size).clamp(1, 127);
             }
+            // AbstractHorse's flags take 18. Horse.DATA_ID_TYPE_VARIANT: the
+            // colour in the low byte, the markings in the next.
+            (Species::Horse, 19, Value::Int(v)) => {
+                m.extra.variant = (v & 0xFF).clamp(0, 6) as u8;
+                m.extra.variant2 = ((v >> 8) & 0xFF).clamp(0, 4) as u8;
+            }
+            // AbstractChestedHorse.DATA_ID_CHEST, then Llama.DATA_STRENGTH_ID
+            // and DATA_VARIANT_ID.
+            (
+                Species::Donkey | Species::Mule | Species::Llama | Species::TraderLlama,
+                19,
+                Value::Bool(chested),
+            ) => m.extra.chested = *chested,
+            (Species::Llama | Species::TraderLlama, 20, Value::Int(strength)) => {
+                m.extra.variant2 = (*strength).clamp(1, 5) as u8;
+            }
+            (Species::Llama | Species::TraderLlama, 21, Value::Int(variant)) => {
+                m.extra.variant = (*variant).clamp(0, 3) as u8;
+            }
+            // Axolotl.DATA_VARIANT (lucy 0 to blue 4), Fox.DATA_TYPE_ID (red
+            // 0, snow 1) and Parrot.DATA_VARIANT_ID (after TamableAnimal's
+            // flags and owner).
+            (Species::Axolotl, 18, Value::Int(v)) => m.extra.variant = (*v).clamp(0, 4) as u8,
+            (Species::Fox, 18, Value::Int(v)) => m.extra.variant = (*v).clamp(0, 1) as u8,
+            (Species::Parrot, 20, Value::Int(v)) => m.extra.variant = (*v).clamp(0, 4) as u8,
+            // Rabbit.DATA_TYPE_ID: the killer bunny's 99 has no model here.
+            (Species::Rabbit, 18, Value::Int(t)) if (0..=5).contains(t) => {
+                m.extra.variant = *t as u8;
+            }
+            // Panda.MAIN_GENE_ID and HIDDEN_GENE_ID (after the three counters).
+            (Species::Panda, 21, Value::Byte(gene)) => m.extra.variant = (*gene).clamp(0, 6) as u8,
+            (Species::Panda, 22, Value::Byte(gene)) => m.extra.variant2 = (*gene).clamp(0, 6) as u8,
+            // Bee.DATA_FLAGS_ID and DATA_ANGER_END_TIME (after Animal's).
+            (Species::Bee, 18, Value::Byte(flags)) => bee::set_synced(m, Some(*flags as u8), None),
+            (Species::Bee, 19, Value::Long(end)) => bee::set_synced(m, None, Some(*end)),
+            // AbstractFish.FROM_BUCKET takes 16: Salmon.DATA_TYPE (small 0
+            // to large 2), Pufferfish.PUFF_STATE and
+            // TropicalFish.DATA_ID_TYPE_VARIANT.
+            (Species::Salmon, 17, Value::Int(v)) => m.extra.variant = (*v).clamp(0, 2) as u8,
+            (Species::Pufferfish, 17, Value::Int(state)) => m.extra.size = (*state).clamp(0, 2),
+            (Species::TropicalFish, 17, Value::Int(v)) => tropical_fish(m, *v),
+            // Ghast.DATA_IS_CHARGING and WitherBoss.DATA_ID_INV.
+            (Species::Ghast, 16, Value::Bool(charging)) => m.extra.flag = *charging,
+            (Species::Wither, 19, Value::Int(ticks)) => m.extra.counter = (*ticks).max(0),
+            // CopperGolem.DATA_WEATHER_STATE: the oxidation the texture shows.
+            (Species::CopperGolem, 16, Value::Id(state)) => {
+                m.extra.variant = (*state).clamp(0, 3) as u8;
+            }
             // Pillager.IS_CHARGING_CROSSBOW: the charge pose (Raider's
             // IS_CELEBRATING takes 16).
             (Species::Pillager, 17, Value::Bool(charging)) => m.extra.flag = *charging,
@@ -96,6 +144,56 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
                 m.profile = Some(profile.clone());
             }
             _ => {}
+        }
+    }
+}
+
+/// A tropical fish's packed variant: the pattern's id (the size, then the
+/// index << 8), the base colour << 16 and the pattern colour << 24. Here the
+/// pattern is 0 to 5 for the small ones and 6 to 11 for the large ones.
+fn tropical_fish(m: &mut Mob, packed: i32) {
+    let (size, index) = (packed & 0xFF, (packed >> 8) & 0xFF);
+    // TropicalFish.Pattern.byId: an unknown id is a kob.
+    m.extra.variant = if size <= 1 && index < 6 {
+        (size * 6 + index) as u8
+    } else {
+        0
+    };
+    m.extra.variant2 = ((packed >> 16) & 0xFF) as u8 & 15;
+    m.extra.variant3 = ((packed >> 24) & 0xFF) as u8 & 15;
+}
+
+/// The values of one SetEntityData packet that name an entry of a
+/// synchronized registry (the variants of the cat, wolf, frog, pig, cow,
+/// chicken and zombie nautilus) or count game time (a wolf's anger).
+/// `game_time` is the client level's.
+fn apply_registry_data(
+    m: &mut Mob,
+    values: &[(u8, i32, Value)],
+    registries: &Dynamic,
+    game_time: i64,
+) {
+    let species = m.species();
+    for (index, _, value) in values {
+        let registry = match (species, *index, value) {
+            (Species::Cat, 20, Value::Id(_)) => "minecraft:cat_variant",
+            (Species::Wolf, 23, Value::Id(_)) => "minecraft:wolf_variant",
+            (Species::Frog, 18, Value::Id(_)) => "minecraft:frog_variant",
+            (Species::Pig, 19, Value::Id(_)) => "minecraft:pig_variant",
+            (Species::Cow, 18, Value::Id(_)) => "minecraft:cow_variant",
+            (Species::Chicken, 18, Value::Id(_)) => "minecraft:chicken_variant",
+            (Species::ZombieNautilus, 21, Value::Id(_)) => "minecraft:zombie_nautilus_variant",
+            // Wolf.DATA_ANGER_END_TIME: the angry texture while it lies ahead.
+            (Species::Wolf, 22, Value::Long(end)) => {
+                m.extra.anger = (end - game_time).clamp(0, i64::from(i32::MAX)) as i32;
+                continue;
+            }
+            _ => continue,
+        };
+        if let Value::Id(id) = value
+            && let Some(name) = registries.name(registry, *id)
+        {
+            m.extra.variant = finalize::variant_index(species, name);
         }
     }
 }
@@ -130,6 +228,7 @@ impl Game<'_> {
         };
         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id as u32) {
             apply(m, values, &r.builtin, r.entity_id);
+            apply_registry_data(m, values, &r.registries, self.world.game_time);
         }
     }
 }
