@@ -290,14 +290,22 @@ impl Game<'_> {
                     "minecraft:ender_dragon" => {
                         let seed = self.world.random.next_long();
                         if self.dragon.is_none()
-                            && let Some(d) = super::dragon::Dragon::from_nbt(&tag, seed)
+                            && let Some(mut d) = super::dragon::Dragon::from_nbt(&tag, seed)
                         {
+                            // EnderDragon's constructor takes its id and its
+                            // parts' from the entity counter.
+                            d.id = self.next_entity + 1;
+                            self.next_entity += 9;
                             self.dragon = Some(d);
                         }
                     }
                     "minecraft:end_crystal" => {
                         let time = self.world.random.next_int_bound(100_000).unwrap_or(0);
-                        if let Some(c) = super::dragon::Crystal::from_nbt(&tag, time) {
+                        if let Some(mut c) = super::dragon::Crystal::from_nbt(&tag, time) {
+                            // EndCrystal's constructor takes an id from the
+                            // entity counter.
+                            self.next_entity += 1;
+                            c.id = self.next_entity;
                             self.crystals.push(c);
                         }
                     }
@@ -530,6 +538,14 @@ impl Game<'_> {
     pub(super) fn forget_entity(&mut self, id: u32) {
         self.persist.uuids.remove(&id);
         self.persist.raw.remove(&id);
+    }
+    /// The compound an entity without a Horizon entity ID was loaded with
+    /// (the crystals and the dragon), found again by type and position.
+    pub(super) fn persist_anon(&self, kind: &str, p: Vec3) -> (Option<[i32; 4]>, Option<&Tag>) {
+        self.persist
+            .anon
+            .get(&anon_key(kind, p))
+            .map_or((None, None), |(_, uuid, raw)| (*uuid, Some(raw)))
     }
     /// The compound an entity was loaded with (and commands have edited).
     pub(super) fn persist_raw(&self, id: u32) -> Option<&Tag> {
