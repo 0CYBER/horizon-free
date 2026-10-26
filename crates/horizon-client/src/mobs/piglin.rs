@@ -234,7 +234,7 @@ fn hoglin_repellent(m: &mut Mob, w: &MobWorld) {
         m.extra.ints[1] = m.ai.last_hurt_by_time;
         m.extra.ints[0] = 0;
     }
-    if m.age.wrapping_add(m.id) % 20 == 0 {
+    if m.age.wrapping_add(m.id).is_multiple_of(20) {
         m.extra.repellent = find_repellent(m, w);
     }
     if m.extra.ints[0] <= 0 && m.extra.repellent.is_some() {
