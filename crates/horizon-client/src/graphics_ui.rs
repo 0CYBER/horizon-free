@@ -37,6 +37,9 @@ pub enum H {
     Overlay,
     ResolutionScale,
     Antialiasing,
+    Hdr,
+    HdrPaperWhite,
+    HdrPeak,
     BatteryMode,
     GraphicsApi,
 }
@@ -222,6 +225,21 @@ pub fn rows(level: Level) -> Vec<Row> {
                 "FXAA smooths jagged edges of the world; slightly softer image.",
             ),
             h(
+                H::Hdr,
+                None,
+                "HDR output on an HDR display: lava, fire and sunlight shine brighter.",
+            ),
+            h(
+                H::HdrPaperWhite,
+                None,
+                "HDR: how bright white paper and menus look. Match your desktop.",
+            ),
+            h(
+                H::HdrPeak,
+                None,
+                "HDR: how bright the brightest highlights get. Your display's peak.",
+            ),
+            h(
                 H::PresentMode,
                 None,
                 "How frames reach the screen while VSync is off.",
@@ -324,6 +342,8 @@ impl H {
             }
             H::Workers => Some(g.workers as f32 / max_workers() as f32),
             H::ResolutionScale => Some((g.resolution_scale as f32 - 50.0) / 150.0),
+            H::HdrPaperWhite => Some((g.hdr_paper_white as f32 - 80.0) / 400.0),
+            H::HdrPeak => Some((g.hdr_peak as f32 - 200.0) / 1800.0),
             _ => None,
         }
     }
@@ -365,6 +385,9 @@ impl H {
             },
             H::ResolutionScale => labelled("Resolution Scale", format!("{}%", g.resolution_scale)),
             H::Antialiasing => labelled("Anti-aliasing", if g.fxaa { "FXAA" } else { "Off" }),
+            H::Hdr => labelled("HDR", on_off(g.hdr)),
+            H::HdrPaperWhite => labelled("Paper White", format!("{} nits", g.hdr_paper_white)),
+            H::HdrPeak => labelled("Peak Brightness", format!("{} nits", g.hdr_peak)),
             H::BatteryMode => labelled("Battery Mode", on_off(g.battery)),
             H::GraphicsApi => labelled("Graphics API", g.api.label()),
             H::Overlay => labelled(
@@ -387,6 +410,8 @@ impl H {
             }
             H::Workers => g.workers = (v * max_workers() as f32).round() as u32,
             H::ResolutionScale => g.resolution_scale = (50.0 + (v * 30.0).round() * 5.0) as u32,
+            H::HdrPaperWhite => g.hdr_paper_white = (80.0 + (v * 40.0).round() * 10.0) as u32,
+            H::HdrPeak => g.hdr_peak = (200.0 + (v * 36.0).round() * 50.0) as u32,
             _ => {}
         }
     }
@@ -418,6 +443,7 @@ impl H {
             H::AnimatedTextures => g.animated_textures = !g.animated_textures,
             H::PresentMode => g.present_mode = step(&PresentMode::ALL, g.present_mode, back),
             H::Antialiasing => g.fxaa = !g.fxaa,
+            H::Hdr => g.hdr = !g.hdr,
             H::BatteryMode => g.battery = !g.battery,
             H::GraphicsApi => g.api = step(&GraphicsApi::ALL, g.api, back),
             H::Pacing => {
@@ -453,6 +479,7 @@ impl Item {
             Item::Horizon(H::Weather) => g.weather,
             Item::Horizon(H::AnimatedTextures) => g.animated_textures,
             Item::Horizon(H::Antialiasing) => g.fxaa,
+            Item::Horizon(H::Hdr) => g.hdr,
             Item::Horizon(H::BatteryMode) => g.battery,
             Item::Vanilla(Opt::ViewBobbing) => s.view_bobbing,
             Item::Vanilla(Opt::Vsync) => s.vsync,

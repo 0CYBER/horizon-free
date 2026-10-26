@@ -128,6 +128,11 @@ impl PassTiming {
         }
     }
 
+    /// Whether the frame being recorded is timed.
+    pub fn recording(&self) -> bool {
+        matches!(self.stage, Stage::Recording)
+    }
+
     /// Timestamp writes for the pass `name`, in a timed frame.
     pub fn writes(&mut self, name: &str) -> Option<wgpu::RenderPassTimestampWrites<'_>> {
         let i = self.push(name)?;

@@ -16,7 +16,7 @@ use serde_json::Value;
 use std::{
     collections::HashMap,
     fs::{self, File},
-    io::{self, BufReader},
+    io,
     path::Path,
     sync::Arc,
 };
@@ -582,8 +582,10 @@ fn fail(message: &str) -> io::Error {
     invalid(message)
 }
 
+/// From the file's bytes in memory: several times faster than through a
+/// reader on gameplay-facts.json (55 MB), which a first start parses.
 fn read_json(path: &Path) -> io::Result<Value> {
-    serde_json::from_reader(BufReader::new(File::open(path)?)).map_err(|e| invalid(e.to_string()))
+    serde_json::from_slice(&fs::read(path)?).map_err(|e| invalid(e.to_string()))
 }
 
 fn interned(cache: &mut HashMap<String, Arc<str>>, text: &str) -> Arc<str> {

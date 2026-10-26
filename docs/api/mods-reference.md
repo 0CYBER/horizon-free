@@ -1,7 +1,7 @@
 <!-- Generated from crates/horizon-mod-sdk/wit/horizon.wit and the manifest's capabilities by crates/horizon-mods/tests/api_reference.rs; a test fails when this file is out of date. Update it with: HORIZON_WRITE_DOCS=1 cargo test -p horizon-mods --features pack --test api_reference -->
 # Mod API reference
 
-The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`, every interface, type, function and hook in it, and the capabilities a manifest may list. The guide is [mods.md](../mods.md); stability and versions: [stability.md](stability.md). Manifest `api` lines this game serves: `0.1`, `0.2`.
+The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`, every interface, type, function and hook in it, and the capabilities a manifest may list. The guide is [mods.md](../mods.md); stability and versions: [stability.md](stability.md). Manifest `api` lines this game serves: `0.1`, `0.2`, `0.3`.
 
 ## Capabilities
 
@@ -16,11 +16,21 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `ui` | [`ui`](#ui) | show its own screens and a settings page |
 | `render` | [`render`](#render) | draw on your screen, shake and zoom the camera |
 | `input` | [`input`](#input) | see the keys you hold and your clicks, take over the use button on its own items and the mouse wheel, and add keys |
+| `players` | [`players`](#players) | see who is on the server and message them |
 
 ## World `horizon-mod`
 
+A client mod: runs in the player's game.
+
 - Imports (what the game offers): `log`, `game`, `chat`, `hud`, `storage`, `command`
 - Exports (what the mod provides): `events`
+
+## World `horizon-server-mod`
+
+A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs where the world is simulated, on the dedicated server, a LAN host and single player's own server.
+
+- Imports (what the game offers): `log`, `storage`, `players`
+- Exports (what the mod provides): `server-events`
 
 ## World `horizon-ui-mod`
 
@@ -66,7 +76,7 @@ The mod's log, in the game's log under the mod's id. Always granted.
 
 Access: capability `game-read`.
 
-Capability `game-read`: the local player and the world clock.
+Capability `game-read`: the local player, the world clock and the block the player looks at.
 
 ### record `player`
 
@@ -88,10 +98,25 @@ Capability `game-read`: the local player and the world clock.
 | `game-time` | `u64` | Ticks since the world was created. |
 | `day-time` | `u64` | 24000 ticks per day; 0 is 6:00 on the first day. |
 
+### record `hit`
+
+A block along the player's view.
+
+| Field | Type | |
+| --- | --- | --- |
+| `block-x` | `s32` | The block hit. |
+| `block-y` | `s32` |  |
+| `block-z` | `s32` |  |
+| `x` | `f64` | The point on its face where the view meets it. |
+| `y` | `f64` |  |
+| `z` | `f64` |  |
+| `block` | `string` | `minecraft:stone`, ... |
+
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `get-player` | `func() -> option<player>` | None on the title screen. |
 | `get-clock` | `func() -> option<clock>` | None on the title screen. |
+| `raycast` | `func(distance: f32) -> option<hit>` | The first block along the player's view (fluids pass), up to `distance` blocks (at most 1024; past the loaded chunks, across the distant terrain when LOD Distance is on), as of this tick. None when nothing is hit, and on the title screen. |
 
 ## `chat`
 
@@ -434,3 +459,76 @@ What the game calls. Only the hooks `init` asks for are ever called.
 | `frame` | `func(seconds: f32)` | Each rendered frame, with the seconds since the last one. |
 | `command` | `func(name: string, args: string) -> result<option<string>, string>` | `/name args`: ok(some(text)) is shown as feedback, err(text) in red. |
 | `chat` | `func(text: string)` | Each chat line the player receives, as plain text. |
+
+## `players`
+
+Access: capability `players`.
+
+Capability `players`, server mods only (manifest `api = "0.3"`, experimental): the players on the server, and messages to them.
+
+### enum `game-mode`
+
+| Case | |
+| --- | --- |
+| `survival` |  |
+| `creative` |  |
+| `adventure` |  |
+| `spectator` |  |
+
+### record `player`
+
+| Field | Type | |
+| --- | --- | --- |
+| `id` | `string` | The player's UUID, `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`. |
+| `name` | `string` |  |
+| `x` | `f64` | Feet position, in blocks. |
+| `y` | `f64` |  |
+| `z` | `f64` |  |
+| `dimension` | `string` | `minecraft:overworld`, `minecraft:the_nether`, ... |
+| `game-mode` | `game-mode` |  |
+| `health` | `f32` | Hit points as vanilla counts them: 20 is full health without effects. |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `online` | `func() -> list<player>` | The players online, in the order they joined. |
+| `tell` | `func(player: string, text: string) -> bool` | A system message to one player, after the mod's name; false when no player with that id is online. Up to 8 messages per call. |
+| `broadcast` | `func(text: string)` | A system message to every player and the server's log, after the mod's name. Counts toward the same 8 per call. |
+
+## `server-events`
+
+Access: exported by the mod: the game calls it.
+
+What the server calls in a server mod (manifest `api = "0.3"`, experimental). Only the hooks `init` asks for are ever called. The player in each event is as the server saw them when it happened.
+
+### type `player`
+
+`type player = player`
+
+### record `registration`
+
+| Field | Type | |
+| --- | --- | --- |
+| `commands` | `list<string>` | Commands players may type, without the slash. A name vanilla already uses is refused (vanilla's command runs). |
+| `tick` | `bool` | Call `tick` every server tick (20 per second). |
+| `joins` | `bool` | Call `player-joined` and `player-left`. |
+| `chat` | `bool` | Call `chat` for each chat message a player sends. |
+| `blocks` | `bool` | Call `block-broken` and `block-placed`. |
+
+### record `block-pos`
+
+| Field | Type | |
+| --- | --- | --- |
+| `x` | `s32` |  |
+| `y` | `s32` |  |
+| `z` | `s32` |  |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `init` | `func() -> result<registration, string>` | Once, after loading. An error keeps the mod off and is logged. |
+| `tick` | `func(tick: u64)` | Each server tick, with the server's tick counter. |
+| `player-joined` | `func(player: player)` | A player joined the server; they are in `players.online` already. |
+| `player-left` | `func(player: player)` | A player left the server; they are no longer in `players.online`. |
+| `chat` | `func(player: player, text: string)` | A chat message a player sent, as plain text. |
+| `command` | `func(player: player, name: string, args: string) -> result<option<string>, string>` | `/name args` typed by `player`: ok(some(text)) is their feedback, err(text) their error in red. |
+| `block-broken` | `func(player: player, pos: block-pos, state: string)` | A player broke the block at `pos` in their dimension: `state` is what was there, as `minecraft:oak_log[axis=y]`. |
+| `block-placed` | `func(player: player, pos: block-pos, state: string)` | A player placed `state` at `pos` in their dimension. |

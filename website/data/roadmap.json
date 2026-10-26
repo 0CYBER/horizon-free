@@ -1034,58 +1034,65 @@
   {
    "id": "item-cooldowns",
    "title": "Cooldowns drawn on items",
-   "status": "help-wanted",
+   "status": "now",
    "area": "gameplay",
    "plain": "After you throw an ender pearl, its slot should show the cooldown sweeping away, as in vanilla.",
    "dev": "Vanilla draws `ItemCooldowns`' percent as a white overlay over the slot (`GuiGraphicsExtractor.itemDecorations` and `itemCooldown`) in the hotbar and in inventories. Issue #1763.",
    "links": [
-    "#1763"
+    "#1763",
+    "#1933"
    ]
   },
   {
    "id": "chat-settings",
    "title": "Chat settings and team prefixes",
-   "status": "help-wanted",
+   "status": "now",
    "area": "gameplay",
    "plain": "The Hidden and Commands Only chat settings should hide chat, and team prefixes should appear before names in chat.",
    "dev": "Vanilla checks `ChatVisiblity` before it delivers chat and system messages (#1376), and chat uses the team-formatted display name (#1378). Both issues have exact steps to reproduce.",
    "links": [
     "#1376",
-    "#1378"
+    "#1378",
+    "#1932",
+    "#1841"
    ]
   },
   {
    "id": "pointer-hand",
    "title": "A pointing hand over buttons",
-   "status": "help-wanted",
+   "status": "now",
    "area": "gameplay",
    "plain": "The mouse pointer should turn into a pointing hand over menu buttons, as in vanilla 26.3.",
    "dev": "26.3's `AbstractWidget` asks for a cursor from `CursorTypes` when it is hovered; winit's `CursorIcon::Pointer` gives the same shape. Issue #1347.",
    "links": [
-    "#1347"
+    "#1347",
+    "#1897"
    ]
   },
   {
    "id": "text-field-keys",
    "title": "Ctrl+Backspace and scroll bars in menus",
-   "status": "help-wanted",
+   "status": "now",
    "area": "gameplay",
    "plain": "Ctrl+Backspace should delete a whole word in the creative search, and every list's scroll bar should be draggable.",
    "dev": "`EditBox` deletes by word with Ctrl (#1764); the Game Rules and Statistics lists' scroll bars can't be dragged (#1782, after #978).",
    "links": [
     "#1764",
-    "#1782"
+    "#1782",
+    "#1884",
+    "#1931"
    ]
   },
   {
    "id": "chicken-flap",
    "title": "Chickens flap while they fall",
-   "status": "help-wanted",
+   "status": "now",
    "area": "gameplay",
    "plain": "Chickens should flap their wings while they fall, not stand still in the air.",
    "dev": "Vanilla's `Chicken.aiStep` updates `flap` and `flapSpeed` when the chicken isn't on the ground, and the model's wings follow them. Issue #1706.",
    "links": [
-    "#1706"
+    "#1706",
+    "#1892"
    ]
   },
   {

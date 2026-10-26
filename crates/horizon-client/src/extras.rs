@@ -378,12 +378,6 @@ impl Cps {
 pub enum Item {
     Fullbright,
     DynamicLights,
-    Minimap,
-    MinimapCorner,
-    MinimapSize,
-    MinimapShape,
-    MinimapZoom,
-    MinimapRotate,
     AutoReconnect,
     MouseTweaks,
     MouseTweaksWheel,
@@ -402,13 +396,6 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
         Err("Lighting"),
         Ok(Fullbright),
         Ok(DynamicLights),
-        Err("Minimap"),
-        Ok(Minimap),
-        Ok(MinimapCorner),
-        Ok(MinimapSize),
-        Ok(MinimapShape),
-        Ok(MinimapZoom),
-        Ok(MinimapRotate),
         Err("Inventory"),
         Ok(MouseTweaks),
         Ok(MouseTweaksWheel),
@@ -418,32 +405,11 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
         Ok(AutoReconnect),
     ]
 }
-/// "1 block", "2 blocks", "½ block".
-fn block_count(n: f32) -> String {
-    if n < 1.0 {
-        "½ block".into()
-    } else if n == 1.0 {
-        "1 block".into()
-    } else {
-        format!("{n} blocks")
-    }
-}
-fn next<T: Copy + PartialEq>(all: &[T], current: T, back: bool) -> T {
-    let i = all.iter().position(|v| *v == current).unwrap_or(0);
-    let n = all.len();
-    all[if back { (i + n - 1) % n } else { (i + 1) % n }]
-}
 impl Item {
     pub fn caption(self) -> &'static str {
         match self {
             Item::Fullbright => "Fullbright",
             Item::DynamicLights => "Dynamic lights",
-            Item::MinimapCorner => "Corner",
-            Item::Minimap => "Minimap",
-            Item::MinimapSize => "Size",
-            Item::MinimapShape => "Shape",
-            Item::MinimapZoom => "Zoom",
-            Item::MinimapRotate => "Turn with the player",
             Item::AutoReconnect => "Auto-reconnect",
             Item::MouseTweaks => "Mouse Tweaks controls",
             Item::MouseTweaksWheel => "Scroll wheel moves items",
@@ -458,10 +424,9 @@ impl Item {
     pub fn parent(self) -> Option<Item> {
         use Item::*;
         Some(match self {
-            MinimapCorner | MinimapSize | MinimapShape | MinimapZoom | MinimapRotate => Minimap,
             MouseTweaksWheel => MouseTweaks,
             SortKey => Sort,
-            Fullbright | DynamicLights | Minimap | MouseTweaks | Sort | AutoReconnect | NoAi
+            Fullbright | DynamicLights | MouseTweaks | Sort | AutoReconnect | NoAi
             | AgentControl | DiscordPresence => {
                 return None;
             }
@@ -474,12 +439,6 @@ impl Item {
             Item::DynamicLights => {
                 "Torches and other light sources held, dropped or on fire light the blocks around them."
             }
-            Item::MinimapCorner => "Overlays in one corner stack.",
-            Item::Minimap => "A map of the loaded terrain around you, in map colours.",
-            Item::MinimapSize => "How big the map is on screen.",
-            Item::MinimapShape => "Square or round.",
-            Item::MinimapZoom => "Blocks per pixel: smaller shows more detail, larger more land.",
-            Item::MinimapRotate => "Forward is up; off keeps north up.",
             Item::AutoReconnect => {
                 "Rejoins a server after a lost connection or a restart, never after a kick or ban."
             }
@@ -511,7 +470,7 @@ impl Item {
         use crate::graphics_style::Cost;
         match self {
             Item::Fullbright => Some(Cost::None),
-            Item::Minimap | Item::DynamicLights => Some(Cost::Low),
+            Item::DynamicLights => Some(Cost::Low),
             Item::AutoReconnect | Item::MouseTweaks | Item::Sort => Some(Cost::None),
             _ => None,
         }
@@ -521,8 +480,6 @@ impl Item {
         Some(match self {
             Item::Fullbright => e.fullbright,
             Item::DynamicLights => e.dynamic_lights,
-            Item::Minimap => e.minimap,
-            Item::MinimapRotate => e.minimap_rotate,
             Item::AutoReconnect => e.auto_reconnect,
             Item::MouseTweaks => e.mouse_tweaks,
             Item::MouseTweaksWheel => e.mouse_tweaks_wheel,
@@ -537,38 +494,22 @@ impl Item {
     pub fn value(self, e: &Extras) -> String {
         match self {
             Item::SortKey => crate::keybinds::display_name(&e.sort_key).plain(),
-            Item::MinimapCorner => e.minimap_corner.label().into(),
-            Item::MinimapSize => MINIMAP_SIZES
-                .iter()
-                .find(|s| s.0 == e.minimap_size)
-                .map_or("Medium", |s| s.1)
-                .into(),
-            Item::MinimapShape => if e.minimap_round { "Round" } else { "Square" }.into(),
-            Item::MinimapZoom => format!("{} per pixel", block_count(e.minimap_zoom)),
             other => match other.switch(e) {
                 Some(true) => "On".into(),
                 _ => "Off".into(),
             },
         }
     }
-    /// A click (`back` for the right button). The sort key binds instead.
-    pub fn cycle(self, e: &mut Extras, back: bool) {
+    /// A click (`_back` for the right button: every item left is a switch,
+    /// so both flip it). The sort key binds instead.
+    pub fn cycle(self, e: &mut Extras, _back: bool) {
         match self {
             Item::Fullbright => e.fullbright = !e.fullbright,
             Item::DynamicLights => e.dynamic_lights = !e.dynamic_lights,
-            Item::Minimap => e.minimap = !e.minimap,
-            Item::MinimapRotate => e.minimap_rotate = !e.minimap_rotate,
             Item::AutoReconnect => e.auto_reconnect = !e.auto_reconnect,
             Item::MouseTweaks => e.mouse_tweaks = !e.mouse_tweaks,
             Item::MouseTweaksWheel => e.mouse_tweaks_wheel = !e.mouse_tweaks_wheel,
             Item::Sort => e.sort = !e.sort,
-            Item::MinimapCorner => e.minimap_corner = next(&Corner::ALL, e.minimap_corner, back),
-            Item::MinimapSize => {
-                let sizes: Vec<u8> = MINIMAP_SIZES.iter().map(|s| s.0).collect();
-                e.minimap_size = next(&sizes, e.minimap_size, back);
-            }
-            Item::MinimapShape => e.minimap_round = !e.minimap_round,
-            Item::MinimapZoom => e.minimap_zoom = next(&MINIMAP_ZOOMS, e.minimap_zoom, back),
             Item::NoAi => e.no_ai = !e.no_ai,
             Item::AgentControl => e.agent_control = !e.agent_control,
             Item::DiscordPresence => e.discord_presence = !e.discord_presence,
@@ -712,12 +653,9 @@ mod tests {
     #[test]
     fn items_cycle_through_their_values() {
         let mut e = Extras::default();
-        Item::MinimapCorner.cycle(&mut e, true);
-        assert_eq!(e.minimap_corner, Corner::TopLeft);
-        Item::MinimapZoom.cycle(&mut e, true);
-        assert_eq!(Item::MinimapZoom.value(&e), "½ block per pixel");
-        Item::MinimapSize.cycle(&mut e, false);
-        assert_eq!(Item::MinimapSize.value(&e), "Large");
+        Item::Sort.cycle(&mut e, true);
+        assert_eq!(Item::Sort.value(&e), "On");
+        // The minimap's old keys still parse, for the move to its mod.
         assert_eq!(
             Extras::parse("minimapSize:7\nminimapZoom:3").minimap_zoom,
             1.0

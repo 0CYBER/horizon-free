@@ -1,7 +1,7 @@
 # Mod API
 
-Mods are Rust crates compiled to sandboxed WebAssembly components. They run in the player's game and, once server
-mods land, wherever a world is simulated. Design and the runtime: [mods.md](../mods.md).
+Mods are Rust crates compiled to sandboxed WebAssembly components. Client mods run in the player's game; server mods
+(experimental) run wherever a world is simulated: single player, a LAN host, the dedicated server. Design and the runtime: [mods.md](../mods.md).
 
 ## Overview
 
@@ -13,14 +13,14 @@ the player before the mod is turned on, and checked against the component's real
 
 | | Count |
 | --- | --- |
-| Interfaces the game offers | 5: `log`, `game`, `chat`, `hud`, `storage` |
-| Functions in them | 9 |
-| Hooks a mod exports | 5: `init`, `tick`, `frame`, `command`, `chat` |
-| Capabilities | 5: `game-read`, `chat`, `hud`, `storage`, `registries` |
-| Manifest `api` lines served | 2: `0.1` (code), `0.2` (content) |
-| SDK | the `Mod` trait (5 methods), `Registration` (4 builders), `export_mod!`, log helpers |
+| Interfaces the game offers | 6: `log`, `game`, `chat`, `hud`, `storage`; `players` for server mods |
+| Functions in them | 12 |
+| Hooks a mod exports | 5: `init`, `tick`, `frame`, `command`, `chat`; a server mod 8: `init`, `tick`, `player-joined`, `player-left`, `chat`, `command`, `block-broken`, `block-placed` |
+| Capabilities | 6: `game-read`, `chat`, `hud`, `storage`, `registries`, `players` |
+| Manifest `api` lines served | 3: `0.1` (code), `0.2` (content), `0.3` (server mods, experimental) |
+| SDK | the `Mod` trait (5 methods), `Registration` (4 builders), `export_mod!`, log helpers; `server::ServerMod` (8 methods), `server::Registration` (5 builders), `export_server_mod!` |
 | `cargo horizon-mod` | `new` (templates `code` and `content`), `build`, `run`, `test`, `check` |
-| Example mods | `coords-hud` (code), `ruby-content` (content) |
+| Example mods | `coords-hud` (code), `ruby-content` (content), `welcome` (server) |
 
 ## Guide
 
@@ -49,6 +49,8 @@ call, 4 MiB of storage, fuel per call).
 - `crates/horizon-mod-sdk/examples/coords-hud`: coordinates, facing and time on the HUD; `/where`, `/coords`; storage.
 - `crates/horizon-mod-sdk/examples/ruby-content`: no code; a gem and a block of ruby from vanilla templates, with
   their recipes, loot, tags, models, textures and names.
+- `crates/horizon-mod-sdk/examples/welcome`: a server mod; greets players who join, announces newcomers (kept in
+  storage), `/online` and `/mined`.
 - `crates/horizon-mods/tests/guest`: a mod that misbehaves on command (spins, panics, grows its memory), for the
   sandbox tests.
 
@@ -78,15 +80,17 @@ scripting runtime in the game.
 ## Stability
 
 Preview ([stability.md](stability.md)): API 0.1 and content 0.2 are served together; a mod built for 0.1.0 keeps
-loading on every 0.1.x game. Server mods come as their own line, `api = "0.3"`, experimental first.
+loading on every 0.1.x game. Server mods are their own line, `api = "0.3"`, experimental: they may change in any
+release.
 
 ## Not there yet
 
 What real mods need next, in the order modpacks and servers need it:
 
-- **Server mods** (`api = "0.3"`): the same component running on the server thread and the dedicated server, with world events (block
-  broken or placed, entity spawned or killed, player joined or left), game rules and server commands with typed
-  arguments.
+- **More for server mods** (`api = "0.3"`, [Server mods](../mods.md#server-mods-api-03-experimental)): they run
+  on the server thread, a LAN host and the dedicated server today, with joins, chat, commands and players' block
+  breaking and placing; next entity events, game rules, server commands with typed arguments sent to clients'
+  command trees.
 - **World and blocks**: read blocks, block states and biomes in loaded chunks; change them through the server's block
   log, so clients and the parity harnesses see vanilla's updates.
 - **Items and inventories**: the player's inventory, held item and open container; item stacks with components.
@@ -102,6 +106,9 @@ What real mods need next, in the order modpacks and servers need it:
 
 ## Changelog
 
+- Server mods run in the game: single player (server thread and in-frame), LAN hosts, the dedicated server.
+- API 0.3 (server mods, experimental): world `horizon-server-mod`, capability `players`, the `server-events`
+  hooks; SDK `server::ServerMod`; example `welcome`.
 - SDK: `cargo horizon-mod test` and `horizon_mods::testing`, test scripts in TOML; the template has one.
 - Experimental: `ui` button widget; `render.set-corner`, `text-width`, `frame-stats`; `input.mapping`,
   `clicks-per-second` (what the official FPS, keystrokes and zoom mods need).

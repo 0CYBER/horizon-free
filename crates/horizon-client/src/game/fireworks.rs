@@ -17,6 +17,8 @@ use horizon_core::{
     random::RandomSource,
 };
 
+pub(super) const FIREWORK_EXPLODE_EVENT: i8 = 17;
+
 pub(super) struct Rocket {
     /// The entity id a server tracks it by (0 until it is tracked).
     pub id: u32,
@@ -70,6 +72,18 @@ impl Rocket {
     pub(super) fn motion(&self) -> (Vec3, Vec3) {
         (self.position, self.velocity)
     }
+}
+/// `damageAmount * (float)Math.sqrt((5.0 - this.distanceTo(target)) / 5.0)`
+/// from the rocket at `from` to a target at `to`; `Entity.distanceTo` sums
+/// the squared offsets in floats.
+fn blast_damage(damage: f32, from: Vec3, to: Vec3) -> f32 {
+    let (x, y, z) = (
+        (from.x - to.x) as f32,
+        (from.y - to.y) as f32,
+        (from.z - to.z) as f32,
+    );
+    let distance = f64::from(x * x + y * y + z * z).sqrt() as f32;
+    damage * ((5.0 - f64::from(distance)) / 5.0).sqrt() as f32
 }
 pub(super) fn fireworks_of(stack: &ItemStack) -> (u8, Vec<FireworkExplosion>) {
     // The item's default component: flight 1, no explosions.
@@ -249,23 +263,34 @@ impl Game<'_> {
     /// `FireworkRocketEntity.explode` and `dealExplosionDamage`.
     fn explode_rocket(&mut self, r: &Rocket) {
         let at = [r.position.x, r.position.y, r.position.z];
+        // FireworkRocketEntity.explode broadcasts before discard. Send now:
+        // tick_lan removes missing tracked entities before flushing effects.
+        if r.id != 0
+            && let Some(host) = &self.lan
+        {
+            host.hub
+                .entity_event(r.id as i32, FIREWORK_EXPLODE_EVENT, at);
+        }
         if !r.explosions.is_empty() {
             let damage = 5.0 + r.explosions.len() as f32 * 2.0;
-            // The player it boosts takes the full damage, a guest as well.
-            if r.attached {
-                match r.guest {
-                    None => self.hurt_player_by("minecraft:fireworks", damage),
-                    Some(conn) => {
-                        if let Some(mut host) = self.lan.take() {
-                            self.as_guest(&mut host, conn, |g| {
-                                g.hurt_player_by("minecraft:fireworks", damage);
-                            });
-                            self.lan = Some(host);
-                        }
-                    }
-                }
-            }
             let from = r.position;
+            // `attachedToEntity` takes the full damage, a guest as well; every
+            // other player in range and in sight takes the blast.
+            let boosted = r.guest.filter(|_| r.attached);
+            if r.attached && boosted.is_none() {
+                self.rocket_hurt_player(damage);
+            } else {
+                self.rocket_blast_player(from, damage);
+            }
+            if let Some(conn) = boosted
+                && let Some(mut host) = self.lan.take()
+            {
+                self.as_guest(&mut host, conn, |g| g.rocket_hurt_player(damage));
+                self.lan = Some(host);
+            }
+            // Every other player in the level (LAN guests, the players of a
+            // server thread), each swapped in as the player.
+            self.each_guest_hit_except(boosted, |g| g.rocket_blast_player(from, damage));
             let hits: Vec<(u32, f32)> = {
                 let world = self.mob_world_base(&[]);
                 self.mobs
@@ -285,7 +310,7 @@ impl Game<'_> {
                                 );
                                 world.clear_between(from, to, false)
                             });
-                        sees.then(|| (m.id, damage * ((5.0 - d2.sqrt()) / 5.0).sqrt() as f32))
+                        sees.then(|| (m.id, blast_damage(damage, from, m.position)))
                     })
                     .collect()
             };
@@ -306,6 +331,59 @@ impl Game<'_> {
         let v = [r.velocity.x, r.velocity.y, r.velocity.z];
         self.particles
             .fireworks(at, v, r.explosions.clone(), camera);
+    }
+    /// FireworkRocketEntity.handleEntityEvent: use the synchronized item data.
+    pub(super) fn remote_firework_explosion(&mut self, id: i32) {
+        let camera = self.eye_position();
+        if let Some(r) = self.rockets.iter().find(|r| r.id == id as u32) {
+            let at = [r.position.x, r.position.y, r.position.z];
+            let v = [r.velocity.x, r.velocity.y, r.velocity.z];
+            self.particles
+                .fireworks(at, v, r.explosions.clone(), camera.unwrap_or(at));
+        }
+    }
+    /// `dealExplosionDamage` on a player that is not the rocket's
+    /// `attachedToEntity`: within 5 blocks, when the rocket sees its feet or
+    /// its middle (`ClipContext.Block.COLLIDER`, no fluids).
+    fn rocket_blast_player(&mut self, from: Vec3, damage: f32) {
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let feet = p.position;
+        let d2 = (feet.x - from.x).powi(2) + (feet.y - from.y).powi(2) + (feet.z - from.z).powi(2);
+        if d2 > 25.0 {
+            return;
+        }
+        let height = f64::from(p.dimensions.height);
+        let sees = {
+            let world = self.mob_world_base(&[]);
+            (0..2).any(|step| {
+                let to = Vec3::new(feet.x, feet.y + height * 0.5 * f64::from(step), feet.z);
+                world.clear_between(from, to, false)
+            })
+        };
+        if sees {
+            self.rocket_hurt_player(blast_damage(damage, from, feet));
+        }
+    }
+    /// `hurtServer` with `damageSources().fireworks`: armor absorbs it and
+    /// wears (`hurtArmor`); creative and spectator players are immune.
+    fn rocket_hurt_player(&mut self, amount: f32) {
+        if self.creative || self.spectator() {
+            return;
+        }
+        let hurt = if let Some(p) = self.player.as_mut()
+            && !p.health.dead_or_dying()
+            && let Some(id) = self.motion.health.damage.id("minecraft:fireworks")
+        {
+            p.hurt(&self.motion.health, self.world.health_rules, id, amount)
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        if hurt {
+            self.hurt_armor(amount);
+        }
     }
     /// `FireworkEntityRenderer.submit`: the item (GROUND) facing the camera,
     /// lit at the rocket's light probe.

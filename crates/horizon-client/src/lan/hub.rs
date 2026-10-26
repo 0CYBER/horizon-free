@@ -128,6 +128,11 @@ pub enum HostEvent {
         line: String,
         secure: bool,
     },
+    /// A chat message a player sent (after it was broadcast), for server mods.
+    PlayerChat {
+        sender: u128,
+        text: String,
+    },
     /// A server log warning (ServerGamePacketListenerImpl's LOGGER.warn).
     Warn(String),
     /// A server log error (LOGGER.error).
@@ -371,9 +376,21 @@ impl Hub {
         id
     }
     pub fn stack(&mut self, s: &Option<ItemStack>) -> Option<horizon_protocol::item::Stack> {
-        let id = s.as_ref().map(|s| self.item_id(&s.item))?;
+        let item = s.as_ref()?.item.clone();
+        let id = self.item_id(&item);
         let sync = self.sync.clone();
-        stack_to_network(|_| id, |registry, name| sync.id(registry, name), s)
+        // The stacks inside it (a bundle's contents, a crossbow's projectiles)
+        // have ids of their own.
+        let item_id = |name: &str| {
+            if name == &*item {
+                return id;
+            }
+            sync.builtin
+                .get("minecraft:item")
+                .and_then(|i| i.id(name))
+                .unwrap_or(0)
+        };
+        stack_to_network(item_id, |registry, name| sync.id(registry, name), s)
     }
 
     pub fn broadcast(&self, packet: &C) {
@@ -2175,17 +2192,24 @@ impl Hub {
         if g.spectator() || g.sleeping {
             return (false, false);
         }
-        let height = if g.fall_flying {
-            0.6
+        // getBoundingBox: the box of the body's pose (swimming and crawling
+        // are 0.6 tall), so a swimmer under a ceiling isn't sent back.
+        let (half, height) = if g.fall_flying {
+            (0.3, 0.6)
+        } else if let Some(m) = &g.motion {
+            (
+                f64::from(m.dimensions.width) / 2.0,
+                f64::from(m.dimensions.height),
+            )
         } else if g.sneaking {
-            1.5
+            (0.3, 1.5)
         } else {
-            1.8
+            (0.3, 1.8)
         };
         let at = |p: [f64; 3]| {
             Aabb::new(
-                Vec3::new(p[0] - 0.3, p[1], p[2] - 0.3),
-                Vec3::new(p[0] + 0.3, p[1] + height, p[2] + 0.3),
+                Vec3::new(p[0] - half, p[1], p[2] - half),
+                Vec3::new(p[0] + half, p[1] + height, p[2] + half),
             )
         };
         let (old, new) = (at(g.position), at(to));
