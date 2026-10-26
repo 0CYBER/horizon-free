@@ -2,7 +2,8 @@
 //! of each widget, `/ui_settings` sets a settings page, `/ui_close` closes
 //! the screen; the `ui-events` calls answer in chat so the host sees them.
 //! `/render_hud`, `/render_clear` and `/render_shake` test `render`;
-//! `/input_claim`, `/input_poll` and `/input_held` test `input`;
+//! `/input_claim`, `/input_poll`, `/input_held` and `/input_wheel` test
+//! `input`; `/zoom FACTOR SMOOTH TURN` tests `render.set-zoom`;
 //! `/corner` and `/readings` the calls the official extras mods use.
 use horizon_mod_sdk::{
     Mod, Registration, chat,
@@ -93,6 +94,8 @@ impl Mod for Guest {
             "input_claim",
             "input_poll",
             "input_held",
+            "input_wheel",
+            "zoom",
             "corner",
             "readings",
         ]
@@ -100,7 +103,7 @@ impl Mod for Guest {
         .fold(Registration::new(), Registration::command);
         Ok((Guest, hooks))
     }
-    fn command(&mut self, name: &str, _args: &str) -> Result<Option<String>, String> {
+    fn command(&mut self, name: &str, args: &str) -> Result<Option<String>, String> {
         match name {
             "ui_screen" => ui::open_screen(&Screen {
                 title: "Guest's screen".into(),
@@ -167,6 +170,7 @@ impl Mod for Guest {
                         Event::UseStop(u) => format!("use-stop {} {}", u.item.id, u.ticks),
                         Event::KeyDown(k) => format!("key-down {k}"),
                         Event::KeyUp(k) => format!("key-up {k}"),
+                        Event::Wheel(steps) => format!("wheel {steps}"),
                     });
                 }
             }
@@ -175,6 +179,19 @@ impl Mod for Guest {
                     format!("{} x{} in {}", h.id, h.count, h.slot)
                 });
                 chat::show(&format!("holding {held}"));
+            }
+            "input_wheel" => input::claim_wheel(args != "off"),
+            "zoom" => {
+                let mut words = args.split(' ');
+                let mut number = || words.next().and_then(|w| w.parse().ok()).unwrap_or(f32::NAN);
+                let factor = number();
+                let smooth = number() == 1.0;
+                let turn = number();
+                render::set_zoom(render::Zoom {
+                    factor,
+                    smooth,
+                    turn,
+                });
             }
             // Clamped to (1, 10); the two after it shake nothing.
             "render_shake" => {

@@ -13,8 +13,8 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `storage` | [`storage`](#storage) | save its own settings to disk |
 | `registries` | data files (`assets/`, `data/`), no interface | add blocks and items to your worlds |
 | `ui` | [`ui`](#ui) | show its own screens and a settings page |
-| `render` | [`render`](#render) | draw on your screen and shake the camera |
-| `input` | [`input`](#input) | see the keys you hold and your clicks, take over the use button on its own items, and add keys |
+| `render` | [`render`](#render) | draw on your screen, shake and zoom the camera |
+| `input` | [`input`](#input) | see the keys you hold and your clicks, take over the use button on its own items and the mouse wheel, and add keys |
 
 ## World `horizon-mod`
 
@@ -251,8 +251,9 @@ The main hand's stack.
 | --- | --- | --- |
 | `use-start` | `item-use` | The use button went down with a claimed item in the main hand. The game does nothing else with the click: no placing, no eating, no swing. |
 | `use-stop` | `item-use` | It came up again, or the item left the hand, or a screen opened. |
-| `key-down` | `string` | A key `register-key` named went down or up while playing (no screen open). The game's own mapping on that key still runs. |
+| `key-down` | `string` | A key `register-key` named went down or up while playing (no screen open). The game's own mapping on that key still runs. A screen opening lets every held key up. |
 | `key-up` | `string` |  |
+| `wheel` | `f32` | Mouse wheel steps while the mod holds the wheel (`claim-wheel`): positive away from the player, as the hotbar reads them. |
 
 ### record `mapping-state`
 
@@ -269,6 +270,7 @@ A mapping as the player has bound it.
 | `register-key` | `func(name: string, label: string, key: string) -> result<_, string>` | A key of the mod's: `name` comes back in `key-down` and `key-up`, `label` says what it does, `key` is the key as options.txt writes it (`key.keyboard.r`). At most 16; an unknown key is an error. |
 | `held` | `func() -> option<held-item>` | The main hand's stack, as of this tick; none when it is empty. |
 | `poll` | `func() -> list<event>` | The events since the last call, oldest first. |
+| `claim-wheel` | `func(on: bool)` | Takes the mouse wheel while playing (true) or gives it back: while taken, its steps are the mod's `wheel` events and the hotbar doesn't move. The game gives it back when the mod stops. |
 | `mapping` | `func(name: string) -> option<mapping-state>` | A movement or click mapping as the player has bound it: `key.forward`, `key.left`, `key.back`, `key.right`, `key.jump`, `key.sneak`, `key.sprint`, `key.attack` or `key.use`. None for another name. |
 | `clicks-per-second` | `func() -> tuple<u32, u32>` | Clicks of the attack and use buttons in the last second. |
 
@@ -369,6 +371,14 @@ Any four-cornered shape (a wheel's segment, an arrow): the corners in order roun
 | `min` | `u32` | The slowest frame's rate, and the 1% low (the 99th percentile frame time's rate), over the last 5 seconds. |
 | `low` | `u32` |  |
 
+### record `zoom`
+
+| Field | Type | |
+| --- | --- | --- |
+| `factor` | `f32` | The field of view is divided by it: 1 is none, at most 10. |
+| `smooth` | `bool` | Ease in and out through the game's field-of-view easing, as the spyglass does, instead of at once. |
+| `turn` | `f32` | Mouse turning is multiplied by it while zoomed: 1 keeps the player's sensitivity, at least 0.05. |
+
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `set-hud` | `func(shapes: list<shape>)` | Replaces the mod's HUD shapes: up to 1024, drawn every frame in order over the HUD (after the hotbar, under chat and screens), hidden with the HUD (F1). An empty list removes them. |
@@ -378,6 +388,7 @@ Any four-cornered shape (a wheel's segment, an arrow): the corners in order roun
 | `clear-corner` | `func()` | Removes the mod's corner panel. |
 | `text-width` | `func(text: string) -> f32` | The width of one line of text in GUI pixels, in the HUD's font: exact for Latin letters (U+0000 to U+024F), 6 per other character. |
 | `frame-stats` | `func() -> frame-rate` | The game's frame counter, recomputed twice a second. |
+| `set-zoom` | `func(zoom: zoom)` | Zooms the camera until the next call (`factor` 1 ends it), only while playing: a screen opening or the spyglass's own view (which wins) leave the camera vanilla's. With several mods, the strongest zoom counts. |
 
 ## `events`
 

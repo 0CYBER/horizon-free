@@ -53,7 +53,7 @@ pub use render_bindings::horizon::mods::input::{Event as InputEvent, HeldItem, I
 /// What capability `render` asks the game to draw (WIT `interface render`).
 pub use render_bindings::horizon::mods::render::{
     Corner as RenderCorner, FillShape, FrameRate, ItemShape, Point as RenderPoint, QuadShape,
-    Rect as RenderRect, Shape, SpriteShape, TextShape,
+    Rect as RenderRect, Shape, SpriteShape, TextShape, Zoom as ModZoom,
 };
 use render_bindings::{RenderHost, horizon::mods::render};
 
@@ -189,6 +189,8 @@ struct State {
     shapes: Vec<Shape>,
     /// Capability `render`'s corner panel.
     corner: Option<CornerPanel>,
+    /// Capability `render`'s zoom, when the mod zooms.
+    zoom: Option<ModZoom>,
     input: InputState,
     /// Capability `storage`'s folder; made on first `set`.
     data_dir: PathBuf,
@@ -331,6 +333,7 @@ impl Mods {
             ui: UiState::default(),
             shapes: Vec::new(),
             corner: None,
+            zoom: None,
             input: InputState::default(),
             data_dir,
             storage_budget: STORAGE_WRITE_BUDGET,
@@ -587,6 +590,16 @@ impl Mods {
                 .map(|k| k.name.clone())
                 .collect();
             for name in names {
+                let held = input.down.iter().position(|n| *n == name);
+                match (down, held) {
+                    (true, None) => input.down.push(name.clone()),
+                    (false, Some(i)) => {
+                        input.down.swap_remove(i);
+                    }
+                    // Already let go when a screen opened.
+                    (false, None) => continue,
+                    (true, Some(_)) => {}
+                }
                 input.push(if down {
                     InputEvent::KeyDown(name)
                 } else {
@@ -594,6 +607,35 @@ impl Mods {
                 });
             }
         }
+    }
+    /// A screen opened, or the game stopped playing: every mod key held
+    /// lets go (`key-up`), so a key needs a new press afterwards.
+    pub fn release_keys(&mut self) {
+        for run in self.entries.iter_mut().filter_map(|e| e.run.as_mut()) {
+            let input = &mut run.store.data_mut().input;
+            for name in std::mem::take(&mut input.down) {
+                input.push(InputEvent::KeyUp(name));
+            }
+        }
+    }
+    /// Some running mod holds the mouse wheel.
+    pub fn wheel_claimed(&self) -> bool {
+        self.inputs().any(|i| i.wheel)
+    }
+    /// Wheel steps while playing: `wheel` to the mods holding it; false
+    /// when none does (the hotbar takes them).
+    pub fn wheel(&mut self, steps: f32) -> bool {
+        let event = InputEvent::Wheel(steps);
+        let claimed = self.wheel_claimed();
+        self.push_input(|i| i.wheel, &event);
+        claimed
+    }
+    /// The strongest zoom a running mod asks for (capability `render`).
+    pub fn zoom(&self) -> Option<ModZoom> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref()?.store.data().zoom)
+            .max_by(|a, b| a.factor.total_cmp(&b.factor))
     }
     fn inputs(&self) -> impl Iterator<Item = &InputState> {
         self.entries
@@ -824,6 +866,10 @@ struct InputState {
     claimed: Vec<String>,
     keys: Vec<ModKey>,
     events: std::collections::VecDeque<InputEvent>,
+    /// The mod's keys held now, by name.
+    down: Vec<String>,
+    /// It holds the mouse wheel.
+    wheel: bool,
 }
 /// Events kept for `poll`, items claimed and keys, per mod.
 const INPUT_EVENTS: usize = 256;
@@ -889,12 +935,19 @@ impl input::Host for State {
     fn clicks_per_second(&mut self) -> (u32, u32) {
         self.snapshot.cps
     }
+    fn claim_wheel(&mut self, on: bool) {
+        self.input.wheel = on;
+    }
 }
 
 /// HUD shapes one mod may keep (capability `render`).
 const SHAPES: usize = 1024;
 /// The longest jolt `render.shake` makes, in seconds.
 const SHAKE_SECONDS: f32 = 10.0;
+/// `render.set-zoom`'s limits: `Camera.tickFov` keeps the modifier at 0.1
+/// or more, and turning never stops.
+const ZOOM_MAX: f32 = 10.0;
+const TURN_MIN: f32 = 0.05;
 
 /// A mod's corner panel: shapes in a `width` × `height` box the game
 /// places in `corner`, stacked with the other overlays.
@@ -962,6 +1015,19 @@ impl render::Host for State {
             .map(|c| widths.get(c as usize).copied().unwrap_or(6.0))
             .sum::<f32>()
             .ceil()
+    }
+    fn set_zoom(&mut self, zoom: ModZoom) {
+        let finite = |v: f32, lo: f32, hi: f32| if v.is_finite() { v.clamp(lo, hi) } else { lo };
+        let factor = finite(zoom.factor, 1.0, ZOOM_MAX);
+        self.zoom = (factor > 1.0).then(|| ModZoom {
+            factor,
+            smooth: zoom.smooth,
+            turn: if zoom.turn.is_finite() {
+                zoom.turn.clamp(TURN_MIN, 1.0)
+            } else {
+                1.0
+            },
+        });
     }
     fn frame_stats(&mut self) -> FrameRate {
         let (fps, min, low) = self.snapshot.frame;

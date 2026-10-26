@@ -55,6 +55,9 @@ pub(super) struct ModsState {
     /// The HUD font's advances for `render.text-width`, made once.
     #[cfg(feature = "mods")]
     font_widths: std::sync::Arc<[f32]>,
+    /// Playing at the last frame, for `mod_input_frame`.
+    #[cfg(feature = "mods")]
+    pub(super) playing: bool,
 }
 
 /// The mappings `input.mapping` answers for, with the default key their
@@ -399,6 +402,7 @@ impl Game<'_> {
         if !self.mods.mods.is_running() {
             return;
         }
+        self.mod_input_frame();
         if self.mods.mods.wants_frames() {
             let snapshot = self.mod_snapshot();
             self.mods.mods.set_snapshot(snapshot);
