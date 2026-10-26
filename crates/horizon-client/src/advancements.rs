@@ -458,7 +458,7 @@ fn range_f(v: &Value, x: f64) -> bool {
         _ => false,
     }
 }
-fn range_i(v: &Value, x: i64) -> bool {
+pub fn range_i(v: &Value, x: i64) -> bool {
     range_f(v, x as f64)
 }
 /// A registry id, `#tag`, or list matched against one id.
