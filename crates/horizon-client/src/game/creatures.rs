@@ -20,7 +20,7 @@ use horizon_client::{
     projectiles::{Hit, Projectile, ProjectileKind, ProjectileWorld},
 };
 use horizon_core::{
-    geometry::{Aabb, Vec3, traverse_blocks},
+    geometry::{Aabb, Direction, Vec3, traverse_blocks},
     position::BlockPos,
     random::RandomSource,
 };
@@ -1877,6 +1877,22 @@ impl Game<'_> {
             None => self.projectile_hit(p, hit),
         }
     }
+    /// `BellBlock.onProjectileHit`: a projectile that strikes the bell proper
+    /// rings it, and a player's shot counts as the player's ring.
+    fn bell_projectile_hit(&mut self, p: &Projectile, pos: [i32; 3], at: Vec3, face: [i32; 3]) {
+        let Some(face) = Direction::ALL.into_iter().find(|d| d.normal() == face) else {
+            return;
+        };
+        let block = BlockPos::new(pos[0], pos[1], pos[2]);
+        let rang = self
+            .with_level(|b, level, ticks| b.bell_projectile_hit(level, ticks, block, face, at.y));
+        if rang {
+            let _ = self.process_level_events();
+            if p.owner == Some(Who::Player) {
+                self.stats.custom("bell_ring", 1);
+            }
+        }
+    }
     /// What an arrow's tick asked for: its particles and sounds.
     fn arrow_event(&mut self, at: Vec3, event: horizon_client::arrows::ArrowEvent) {
         use horizon_client::arrows::{ArrowEvent, ArrowParticle, ArrowSound, BlockReaction};
@@ -2002,6 +2018,13 @@ impl Game<'_> {
         }
     }
     pub(super) fn projectile_hit(&mut self, p: &Projectile, hit: Hit) -> Result<()> {
+        // Projectile.onHitBlock: BlockState.onProjectileHit, for every
+        // projectile (a wind charge out of the world's top has no face).
+        if let Hit::Block { pos, at, face } = hit
+            && face != [0; 3]
+        {
+            self.bell_projectile_hit(p, pos, at, face);
+        }
         self.combat.projectile_owner = match p.owner {
             Some(Who::Mob(id)) => Some(id),
             _ => None,
