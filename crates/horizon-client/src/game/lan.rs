@@ -952,6 +952,16 @@ impl Game<'_> {
                 host.hub.block_event(pos, b0, b1, state);
             }
             let entities = states.as_slice();
+            // An entity that left the level since the last tick (a snowball
+            // that hit) is dropped by the tracker below: its event goes out
+            // first, as `Level.broadcastEntityEvent` precedes the discard.
+            let (gone, later): (Vec<_>, Vec<_>) = std::mem::take(&mut self.lan_entity_events)
+                .into_iter()
+                .partition(|(id, ..)| !entities.iter().any(|e| e.id == *id));
+            self.lan_entity_events = later;
+            for (id, event, at) in gone {
+                host.hub.entity_event(id, event, at);
+            }
             let spawn = self.spawn.map_or([0.5, 80.0, 0.5], |s| [s.x, s.y, s.z]);
             let events = {
                 let clock_rate = self.network_clock_rate();
