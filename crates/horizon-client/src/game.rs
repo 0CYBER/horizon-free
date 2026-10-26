@@ -18,6 +18,7 @@ mod boats;
 mod books;
 mod bossbars;
 mod breezes;
+mod campfire;
 mod cartography;
 mod chat;
 mod client_ambient;
@@ -5302,7 +5303,8 @@ impl Game<'_> {
                 | BlockEntity::Vault(_)
                 | BlockEntity::Beehive(_)
                 | BlockEntity::CommandBlock(_)
-                | BlockEntity::Skull(_),
+                | BlockEntity::Skull(_)
+                | BlockEntity::Campfire(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -5572,7 +5574,8 @@ impl Game<'_> {
                     | BlockEntity::Vault(_)
                     | BlockEntity::Beehive(_)
                     | BlockEntity::CommandBlock(_)
-                    | BlockEntity::Skull(_),
+                    | BlockEntity::Skull(_)
+                    | BlockEntity::Campfire(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
@@ -7037,6 +7040,9 @@ impl Game<'_> {
         // `VaultRenderer`.
         self.mark_entity(out.len(), "");
         self.vault_geometry(camera, alpha, &mut out);
+        // `CampfireRenderer`.
+        self.mark_entity(out.len(), "");
+        self.campfire_geometry(camera, &mut out);
         self.mark_entity(out.len(), "minecraft:ominous_item_spawner");
         self.ominous_item_spawner_geometry(camera, alpha, &mut out);
         // Mobs and their projectiles (a span each).
@@ -8739,6 +8745,13 @@ impl Game<'_> {
             && self.use_on_cauldron(hit.pos)?
         {
             return Ok(UseResult::Success { swing: true });
+        }
+        if allow_block_actions
+            && let Some(hit) = self.pick()
+            && let Some(placed) = self.use_on_campfire(hit.pos)?
+        {
+            // SUCCESS_SERVER swings; a full campfire's CONSUME does not.
+            return Ok(UseResult::Success { swing: placed });
         }
         // BucketItem has no useOn: a guest's UseItemOn leaves it to UseItem.
         let bucket = horizon_client::items::bucket_contents(&stack.item);
