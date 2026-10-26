@@ -447,6 +447,11 @@ impl Creative {
         });
         items
     }
+    /// Drop the shown items, so the next `items` works them out again: a
+    /// reload can rename items without changing the Search label.
+    pub fn forget_items(&self) {
+        *self.shown.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
     pub fn rows(&self, names: &Names) -> usize {
         self.items(names).len().div_ceil(9)
     }
