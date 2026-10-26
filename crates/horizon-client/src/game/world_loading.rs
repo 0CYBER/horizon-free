@@ -46,6 +46,10 @@ impl WorldRequest {
         options: &Options,
         settings: &Settings,
     ) -> Result<PreparedWorld> {
+        // Before any chunk is read: a loaded container with a loot table is rolled as its chunk
+        // is decoded (`save::roll_loaded_loot`), and the spawn chunks are read while the world
+        // opens. Every world opens here: in-frame, on the server thread, on a dedicated server.
+        horizon_client::structure_blocks::loot_data(&options.resources);
         let Self {
             save_root,
             folder,
