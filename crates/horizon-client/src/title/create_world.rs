@@ -32,6 +32,8 @@ pub struct WorldOptions {
     pub commands: Option<bool>,
     /// The Superflat world preset instead of Default.
     pub flat: bool,
+    /// CreateFlatWorldScreen's layers and biome, kept with the world type.
+    pub flat_settings: Option<super::flat::FlatSettings>,
     pub structures: bool,
     pub bonus_chest: bool,
 }
@@ -43,6 +45,7 @@ impl Default for WorldOptions {
             difficulty: 2,
             commands: None,
             flat: false,
+            flat_settings: None,
             structures: true,
             bonus_chest: false,
         }
@@ -64,6 +67,10 @@ impl WorldOptions {
                 .unwrap_or(2),
             commands: Some(commands),
             flat: generation.flat,
+            flat_settings: generation
+                .flat
+                .then(|| super::flat::FlatSettings::from_world(dir))
+                .flatten(),
             structures: generation.structures,
             bonus_chest: generation.bonus_chest,
             ..Self::default()
@@ -88,6 +95,12 @@ impl WorldOptions {
             bonus_chest: self.bonus_chest(),
         }
     }
+    /// The custom layers, as `write_world_gen_settings_with` takes them.
+    pub fn flat_settings(&self) -> Option<horizon_world::nbt::Tag> {
+        self.flat_settings
+            .as_ref()
+            .map(super::flat::FlatSettings::to_tag)
+    }
     /// A press on one of the open tab's cycle buttons or switches.
     pub(super) fn press(&mut self, id: u8, creative: &mut bool) {
         match id {
@@ -101,7 +114,13 @@ impl WorldOptions {
             }
             23 => self.difficulty = (self.difficulty + 1) % DIFFICULTIES.len(),
             24 => self.commands = Some(!self.commands(*creative)),
-            25 => self.flat = !self.flat,
+            25 => {
+                self.flat = !self.flat;
+                if self.flat {
+                    // setWorldType starts the generator from the flat preset.
+                    self.flat_settings = Some(super::flat::FlatSettings::default());
+                }
+            }
             27 => self.structures = !self.structures,
             28 => self.bonus_chest = !self.bonus_chest,
             _ => {}
@@ -243,13 +262,13 @@ pub(super) fn buttons(w: f32, h: f32, creative: bool, o: &WorldOptions) -> Vec<B
                 true,
                 25,
             ),
-            // Horizon has no preset editor (CreateFlatWorldScreen) yet.
+            // CreateFlatWorldScreen: only a flat generator has a preset editor.
             b(
                 gx + 160.0,
                 gy,
                 150.0,
                 tr("selectWorld.customizeType"),
-                false,
+                o.flat,
                 26,
             ),
             // SwitchGrid: 44-wide value-only buttons at the grid's right.
