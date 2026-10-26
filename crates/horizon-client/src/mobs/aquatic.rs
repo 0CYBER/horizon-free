@@ -37,8 +37,9 @@ pub fn spawn_ink(m: &mut Mob) {
     } else {
         "squid_ink"
     };
+    // makeSound draws the voice pitch even for a silent squid.
+    let pitch = m.voice_pitch();
     if !m.silent {
-        let pitch = m.voice_pitch();
         let at = [m.position.x, m.position.y, m.position.z];
         m.outbox.push(MobEvent::Sound(
             sound,
