@@ -48,6 +48,9 @@ pub(super) struct Fight {
     respawn: Option<(Respawn, i32)>,
     /// The four crystals on the exit portal driving the respawn.
     respawn_crystals: Vec<Vec3>,
+    /// The player behind the crystal blast under way, whose `explosion`
+    /// damage source names them (`EndCrystal.hurtServer`).
+    blast_by: Option<FightWho>,
     dirty: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -899,8 +902,12 @@ impl Game<'_> {
                 .any(|p| p.distance_squared(c.position) < 0.01);
         if damage == CrystalDamage::Direct {
             let at = [c.position.x, c.position.y, c.position.z];
+            // The blast's damage source carries the player, so the dragon
+            // remembers them before the blast can kill it.
+            self.fight.blast_by = by;
             let _ =
                 self.server_explode(at, 6.0, super::explosion::BlockInteraction::Destroy, false);
+            self.fight.blast_by = None;
         }
         if respawn_crystal {
             self.abort_respawn();
@@ -1003,10 +1010,13 @@ impl Game<'_> {
             return Hurt::Refused;
         };
         let was_down = d.down();
+        let (cooldown, last_hurt) = (d.invulnerable, d.last_hurt);
         let hurt = d.hurt(part, damage, counts, arrow);
-        // LivingEntity.hurtServer: a player's hit sets lastHurtByPlayer (100 ticks).
+        // LivingEntity.hurtServer: damage that is applied sets lastHurtByPlayer
+        // (100 ticks); a hit the damage cooldown absorbs returns before that.
         if counts
             && matches!(hurt, Hurt::Landed { .. })
+            && (d.invulnerable != cooldown || d.last_hurt != last_hurt)
             && let Some(who) = by
         {
             d.hurt_by_player = Some((who, d.ticks));
@@ -2787,8 +2797,9 @@ impl Game<'_> {
             let (lo, hi) = (b.min_position(), b.max_position());
             self.seen_percent(center, [lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z])
         });
+        let by = self.fight.blast_by;
         for (part, amount) in hits {
-            self.hurt_dragon(part, amount, true, None, false);
+            self.hurt_dragon(part, amount, true, by, false);
         }
     }
 }
