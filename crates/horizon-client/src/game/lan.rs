@@ -161,12 +161,19 @@ fn mob_meta(
     m: &Mob,
     hub: &Hub,
     player_entity: Option<i32>,
+    game_time: i64,
     meta: &mut Vec<(u8, i32, Value)>,
     defaults: &mut Vec<(u8, i32, Value)>,
 ) {
     let kind = m.kind.id.as_str();
     if m.fire_ticks > 0 {
         meta.push((0, serializer::BYTE, Value::Byte(1)));
+    }
+    // Entity.DATA_POSE: the pose the species keeps in its own fields (a
+    // pose back at standing goes out by the entity's own default).
+    let pose = horizon_client::mobs::sync::pose_id(m);
+    if pose != 0 {
+        meta.push((6, serializer::POSE, Value::Id(i32::from(pose))));
     }
     if let Some(name) = &m.custom_name {
         meta.push((
@@ -357,6 +364,41 @@ fn mob_meta(
             }
             defaults.push((17, serializer::BYTE, Value::Byte(0)));
         }
+        // Warden.CLIENT_ANGER_LEVEL: the heartbeat's pace.
+        "minecraft:warden" => {
+            let anger = e.warden.as_ref().map_or(0, |w| w.client_anger);
+            if anger != 0 {
+                meta.push((16, serializer::INT, Value::Int(anger)));
+            }
+            defaults.push((16, serializer::INT, Value::Int(0)));
+        }
+        // Sniffer.DATA_STATE (after AgeableMob's two).
+        "minecraft:sniffer" => {
+            if e.variant != 0 {
+                meta.push((
+                    18,
+                    serializer::SNIFFER_STATE,
+                    Value::Id(i32::from(e.variant)),
+                ));
+            }
+            defaults.push((18, serializer::SNIFFER_STATE, Value::Id(0)));
+        }
+        // Shulker.DATA_ATTACH_FACE_ID, DATA_PEEK_ID and DATA_COLOR_ID (16
+        // for none).
+        "minecraft:shulker" => {
+            if e.variant3 != 0 {
+                meta.push((16, serializer::DIRECTION, Value::Id(i32::from(e.variant3))));
+            }
+            defaults.push((16, serializer::DIRECTION, Value::Id(0)));
+            if e.counter != 0 {
+                meta.push((17, serializer::BYTE, Value::Byte(e.counter as i8)));
+            }
+            defaults.push((17, serializer::BYTE, Value::Byte(0)));
+            if e.color != 16 {
+                meta.push((18, serializer::BYTE, Value::Byte(e.color as i8)));
+            }
+            defaults.push((18, serializer::BYTE, Value::Byte(16)));
+        }
         // Enderman.DATA_CARRY_STATE.
         "minecraft:enderman" => {
             if let Some(state) = e.carried {
@@ -368,6 +410,18 @@ fn mob_meta(
             }
         }
         _ => {}
+    }
+    // Camel.DASH and LAST_POSE_CHANGE_TICK (after AbstractHorse's flags).
+    if horizon_client::mobs::camel::is_camel(m.species()) {
+        if e.flag2 {
+            meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+        }
+        defaults.push((19, serializer::BOOLEAN, Value::Bool(false)));
+        let tick = horizon_client::mobs::camel::synced_pose_tick(m, game_time);
+        if tick != 0 {
+            meta.push((20, serializer::LONG, Value::Long(tick)));
+        }
+        defaults.push((20, serializer::LONG, Value::Long(0)));
     }
 }
 
@@ -877,7 +931,14 @@ impl Game<'_> {
             e.on_ground = m.on_ground;
             e.velocity = [m.velocity.x, m.velocity.y, m.velocity.z];
             e.needs_sync = m.needs_sync;
-            mob_meta(m, hub, player_entity, &mut e.meta, &mut e.defaults);
+            mob_meta(
+                m,
+                hub,
+                player_entity,
+                self.world.game_time,
+                &mut e.meta,
+                &mut e.defaults,
+            );
             mob_equipment(m, hub, &mut e.equipment);
             self.mob_attributes(m, &mut e.attributes);
             e.leash = leash;
