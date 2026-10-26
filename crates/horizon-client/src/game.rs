@@ -1952,6 +1952,7 @@ impl Game<'_> {
             .as_ref()
             .is_some_and(|s| &*s.item == "minecraft:leather_boots");
         let freeze_immune = self.wears_freeze_immune();
+        let burn_immune = self.wears_burn_from_stepping_immunity();
         let Some(player) = self.player.as_mut() else {
             return;
         };
@@ -1963,6 +1964,7 @@ impl Game<'_> {
         player.glider = glider;
         player.leather_boots = leather_boots;
         player.freeze_immune = freeze_immune;
+        player.burn_from_stepping_immune = burn_immune;
         player.fluids.fast_lava = self.dim == Dim::Nether;
     }
     fn held_slot(&self) -> usize {
@@ -4518,6 +4520,11 @@ impl Game<'_> {
             }
         }
         self.powder_snow_fire()?;
+        // LivingEntity.baseTick: a new block position runs the worn
+        // enchantments' location_changed effects (frost walker) on the server.
+        if self.remote.is_none() {
+            self.location_changed_effects(before.2, before.0);
+        }
         self.tick_totem();
         let Some(player) = self.player.as_mut() else {
             return Ok(());

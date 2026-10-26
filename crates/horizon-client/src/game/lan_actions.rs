@@ -2187,6 +2187,7 @@ impl Game<'_> {
             let (rules, motion) = (game.world.health_rules, game.motion);
             let health = &motion.health;
             let freeze_immune = game.wears_freeze_immune();
+            let burn_immune = game.wears_burn_from_stepping_immunity();
             let Some(player) = game.player.as_mut() else {
                 return (Vec::new(), None);
             };
@@ -2251,6 +2252,7 @@ impl Game<'_> {
             // lit campfires and grown sweet berry bushes hurt (#1305).
             w.player.shift_key_down = sneaking;
             w.player.freeze_immune = freeze_immune;
+            w.player.burn_from_stepping_immune = burn_immune;
             let _ = w.server_block_damage(start);
             let _ = w.tick_environment_damage();
             let _ = w.apply_fire_contact();
@@ -2276,6 +2278,9 @@ impl Game<'_> {
             for d in travelled {
                 game.movement_stats(Vec3::new(d[0], d[1], d[2]));
             }
+            // LivingEntity.baseTick: a new block position runs the worn
+            // enchantments' location_changed effects (frost walker).
+            game.location_changed_effects([start.x, start.y, start.z], from_ground);
             // LivingEntity.baseTick: outside the world border, then tickEffects.
             game.border_damage();
             game.tick_mob_effects();

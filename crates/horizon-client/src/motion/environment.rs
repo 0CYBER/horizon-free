@@ -10,6 +10,12 @@ impl MotionWorld<'_, '_, '_> {
         if self.player.invulnerable || self.player.spectator {
             return Ok(());
         }
+        // Frost walker's `damage_immunity`: #burn_from_stepping (magma, campfire).
+        if self.player.burn_from_stepping_immune
+            && matches!(source, "minecraft:hot_floor" | "minecraft:campfire")
+        {
+            return Ok(());
+        }
         let id = self
             .resources
             .health
