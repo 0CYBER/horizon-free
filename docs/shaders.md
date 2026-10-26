@@ -127,11 +127,11 @@ one keeps drawing), the launcher before it installs one, and the registry's CI b
 6. Every entry point translated for Vulkan (SPIR-V), Metal and DirectX 12 (HLSL), with the options at their
    defaults, minimums and maximums.
 
-`[budget] gpu_ms` is the GPU time your pack aims to add to a frame; the game's overlay will show each pass's time
-against it.
+`[budget] gpu_ms` is the GPU time your pack aims to add to a frame. To compare, open F3 in the game: while it is
+open, each pass is timed on the GPU and the overlay shows the pack's total and its costliest passes, by their `name`
+(the median of the last 15 timed frames). Timing waits for nothing, so it does not slow the game.
 
 ## Next
 
-The renderer hooks (shared with the Iris/OptiFine loader), then the post stage in the game with hot reload and the
-GPU time per pass, Options > Shader packs listing these packs, then the material and sky stages, and the registry's
-`shader` kind with installs from the launcher.
+Options > Shader packs listing these packs, then the material and sky stages, and the registry's `shader` kind with
+installs from the launcher.
