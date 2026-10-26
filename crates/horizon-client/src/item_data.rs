@@ -198,6 +198,19 @@ impl ItemStack {
     pub fn has_any_enchantments(&self) -> bool {
         !self.enchantments().is_empty() || !self.stored_enchantments().is_empty()
     }
+    /// `ItemStack.hasFoil`: an explicit `minecraft:enchantment_glint_override`
+    /// component wins, then the item's default override (`item_glint`), then a
+    /// non-empty `minecraft:enchantments` component (`Item.isFoil` is
+    /// `ItemStack.isEnchanted`; stored book enchantments do not count).
+    pub fn has_foil(&self, item_glint: bool) -> bool {
+        if let Some(Tag::Byte(flag)) = self
+            .data()
+            .and_then(|d| d.other("minecraft:enchantment_glint_override"))
+        {
+            return *flag != 0;
+        }
+        item_glint || !self.enchantments().is_empty()
+    }
     pub fn repair_cost(&self) -> u32 {
         self.data().map_or(0, |d| d.repair_cost)
     }
