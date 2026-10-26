@@ -11626,16 +11626,17 @@ impl ApplicationHandler for Game<'_> {
                             }
                             self.extras_mouse(button, pressed);
                             self.mod_mouse_key(button, pressed);
-                            match self.settings.keys.translate_mouse(button) {
-                                Some(Err(b)) => self.play_mouse(b, pressed)?,
-                                Some(Ok(k)) if pressed => {
-                                    self.keys.insert(k);
-                                    self.key_pressed(k)?;
+                            for mapped in self.settings.keys.translate_mouse_all(button) {
+                                match mapped {
+                                    Err(b) => self.play_mouse(b, pressed)?,
+                                    Ok(k) if pressed => {
+                                        self.keys.insert(k);
+                                        self.key_pressed(k)?;
+                                    }
+                                    Ok(k) => {
+                                        self.keys.remove(&k);
+                                    }
                                 }
-                                Some(Ok(k)) => {
-                                    self.keys.remove(&k);
-                                }
-                                None => {}
                             }
                         }
                         Screen::Inventory | Screen::Creative
@@ -11883,18 +11884,24 @@ impl ApplicationHandler for Game<'_> {
                     {
                         self.smooth_camera = !self.smooth_camera;
                     }
-                    // Key binds: act as the default key of the bound mapping.
-                    let key = match self.settings.keys.translate(key) {
-                        Some(Ok(k)) => k,
-                        Some(Err(button)) => {
-                            if self.screen == Screen::Playing && !event.repeat {
-                                self.play_mouse(button, event.state == ElementState::Pressed)?;
+                    // Key binds: act as the default key of every mapping bound
+                    // to it (KeyMapping.set drives them all).
+                    for mapped in self.settings.keys.translate_all(key) {
+                        match mapped {
+                            Ok(k) => {
+                                self.mapped_key(
+                                    k,
+                                    event.state == ElementState::Pressed,
+                                    event.repeat,
+                                )?;
                             }
-                            return Ok(());
+                            Err(button) => {
+                                if self.screen == Screen::Playing && !event.repeat {
+                                    self.play_mouse(button, event.state == ElementState::Pressed)?;
+                                }
+                            }
                         }
-                        None => return Ok(()),
-                    };
-                    self.mapped_key(key, event.state == ElementState::Pressed, event.repeat)?;
+                    }
                 }
                 WindowEvent::RedrawRequested => {
                     self.observe_fullscreen();
