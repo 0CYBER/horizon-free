@@ -128,6 +128,27 @@ fn text(nbt: &Compound, key: &str) -> Option<String> {
     }
 }
 
+/// The client block entity for one of a chunk's generated block entities,
+/// before a container's loot is unpacked: `StructureTemplate.placeInWorld`
+/// hands the template's block entity NBT to the level's block entity.
+fn generated_block_entity(block: &str, nbt: &Compound) -> Option<BlockEntity> {
+    let mut entity = BlockEntity::for_block(block)?;
+    match &mut entity {
+        // MonsterRoomFeature and the structures' setEntityId.
+        BlockEntity::Spawner(s) => {
+            **s = crate::mobs::spawner::Spawner::load(&Tag::Compound(nbt.clone()));
+        }
+        BlockEntity::TrialSpawner(s) => {
+            **s = crate::mobs::trial_spawner::TrialSpawner::load(&Tag::Compound(nbt.clone()));
+        }
+        BlockEntity::Vault(v) => **v = crate::vault::Vault::load(&Tag::Compound(nbt.clone())),
+        // BannerBlockEntity.loadAdditional: the End cities' black triangles.
+        BlockEntity::Banner(b) => *b = crate::save::decode_banner(&Tag::Compound(nbt.clone())),
+        _ => {}
+    }
+    Some(entity)
+}
+
 /// Client block entities for the generated block entities of a chunk.
 pub fn block_entities(
     chunk: &ProtoChunk,
@@ -137,19 +158,9 @@ pub fn block_entities(
     for (pos, nbt) in &chunk.block_entities {
         let [x, y, z] = *pos;
         let block = chunk.block_name(x, y, z);
-        let Some(mut entity) = BlockEntity::for_block(block) else {
+        let Some(mut entity) = generated_block_entity(block, nbt) else {
             continue;
         };
-        // MonsterRoomFeature and the structures' setEntityId.
-        if let BlockEntity::Spawner(s) = &mut entity {
-            **s = crate::mobs::spawner::Spawner::load(&Tag::Compound(nbt.clone()));
-        }
-        if let BlockEntity::TrialSpawner(s) = &mut entity {
-            **s = crate::mobs::trial_spawner::TrialSpawner::load(&Tag::Compound(nbt.clone()));
-        }
-        if let BlockEntity::Vault(v) = &mut entity {
-            **v = crate::vault::Vault::load(&Tag::Compound(nbt.clone()));
-        }
         if let (BlockEntity::Chest(slots), Some(table), Some(loot)) =
             (&mut entity, text(nbt, "LootTable"), loot)
         {
@@ -277,5 +288,44 @@ mod tests {
         // A plain item has nothing pending.
         stack.exploration = None;
         assert!(!has_pending_map(&loot_item(&stack)));
+    }
+
+    /// The End cities' tower tops save their banners' patterns in the
+    /// template; the placed banner must keep them (`EndCityPieces`).
+    #[test]
+    fn a_generated_banner_keeps_its_template_patterns() {
+        let patterns = Tag::List(vec![
+            Tag::compound([
+                ("color", Tag::String("black".into())),
+                ("pattern", Tag::String("minecraft:triangle_top".into())),
+            ]),
+            Tag::compound([
+                ("color", Tag::String("black".into())),
+                ("pattern", Tag::String("minecraft:triangle_bottom".into())),
+            ]),
+        ]);
+        let nbt = Tag::compound([
+            ("id", Tag::String("minecraft:banner".into())),
+            ("patterns", patterns),
+        ]);
+        let Tag::Compound(nbt) = nbt else {
+            unreachable!()
+        };
+        let Some(BlockEntity::Banner(banner)) =
+            generated_block_entity("minecraft:magenta_banner", &nbt)
+        else {
+            panic!("a banner block makes a banner block entity");
+        };
+        assert_eq!(banner.layers.len(), 2);
+        assert_eq!(&*banner.layers[0].pattern, "minecraft:triangle_top");
+        assert_eq!(&*banner.layers[1].pattern, "minecraft:triangle_bottom");
+        assert_eq!(&*banner.layers[0].color, "black");
+        // A banner the template saved without patterns stays bare.
+        let Some(BlockEntity::Banner(bare)) =
+            generated_block_entity("minecraft:white_banner", &Compound::new())
+        else {
+            panic!("a banner block makes a banner block entity");
+        };
+        assert!(bare.layers.is_empty());
     }
 }
