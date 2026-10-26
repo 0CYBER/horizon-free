@@ -146,6 +146,15 @@ impl Game<'_> {
         };
         let hurt = match target {
             Target::Player => {
+                // `DamageSource(type, by)`: the death message names `by`.
+                match by {
+                    Some(Target::Mob(i)) => self.note_attacker(&ty, i),
+                    Some(t @ (Target::Player | Target::Guest(_))) => {
+                        let name = self.target_name(t);
+                        self.note_direct_entity(&ty, name);
+                    }
+                    _ => {}
+                }
                 if self.creative || self.spectator() {
                     false
                 } else if let Some(player) = self.player.as_mut() {

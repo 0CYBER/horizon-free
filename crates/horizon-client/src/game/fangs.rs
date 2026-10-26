@@ -71,12 +71,23 @@ impl Game<'_> {
         let b = horizon_core::geometry::Aabb::new(lo, hi);
         // Every player in the box, the server's players too.
         let pos = f.pos;
+        // `EvokerFangs.dealDamageTo`: indirectMagic(fangs, owner) while the
+        // owner lives, plain magic (nobody to name) once it is gone.
+        let owner = self
+            .mobs
+            .iter()
+            .any(|m| m.id == f.owner && m.alive())
+            .then_some(f.owner);
         let bite = move |g: &mut Self| {
             if let Some(p) = g.player_view()
                 && p.alive
                 && p.bounds.intersects(b)
             {
-                g.mob_hits_player_kind(6.0, pos, "minecraft:indirect_magic");
+                let kind = match owner {
+                    Some(_) => "minecraft:indirect_magic",
+                    None => "minecraft:magic",
+                };
+                g.mob_hits_player_caused(6.0, pos, kind, owner);
             }
         };
         bite(self);
