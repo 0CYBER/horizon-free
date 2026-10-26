@@ -1,7 +1,7 @@
 //! The player's `CombatTracker`: the damage taken lately, who dealt it and
 //! where the player fell from, turned into the vanilla death message.
 use super::{Game, chat::PLAYER_NAME};
-use horizon_client::{health::HealthEvent, lang, motion::MotionEvent, text::Text};
+use horizon_client::{health::HealthEvent, motion::MotionEvent, text::Text};
 
 struct Entry {
     damage_type: String,
@@ -287,19 +287,8 @@ impl Game<'_> {
         {
             return Text::translate(&format!("{key}.player"), &[me, name.clone()]);
         }
-        killerless_message(&key, me)
+        // No entity at all: the one-argument message, as vanilla sends it (a
+        // template that names a killer then shows as written).
+        Text::translate(&key, &[me])
     }
-}
-/// A death message with no entity behind it. One that names a second actor
-/// (`%2$s`) has nobody to name here, so it falls back to its plain sibling
-/// (`indirectMagic` to `magic`, anything else to `generic`) instead of
-/// showing the raw template.
-fn killerless_message(key: &str, me: Text) -> Text {
-    if key == "death.attack.indirectMagic" {
-        return Text::translate("death.attack.magic", &[me]);
-    }
-    if lang::get(key).contains("%2$s") {
-        return Text::translate("death.attack.generic", &[me]);
-    }
-    Text::translate(key, &[me])
 }
