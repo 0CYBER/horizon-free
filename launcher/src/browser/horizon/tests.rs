@@ -59,7 +59,7 @@ fn installs_checked_turns_on_and_removes() {
     let index = sample();
     let home = scratch("install");
     let p = hud(&index);
-    let done = install_from(&index, true, &p, &home, &|_, _| {}).unwrap();
+    let done = install_from(&index, true, None, &p, &home, &|_, _| {}).unwrap();
     assert_eq!(done[0].file, "horizon-mods/coords_hud.hmod");
     assert_eq!(done[0].verdict.as_deref(), Some("Verified"));
     assert!(done[0].checksum.starts_with("SHA-256:e1135345"));
@@ -73,7 +73,7 @@ fn installs_checked_turns_on_and_removes() {
         0
     );
     // Installed already: nothing to do.
-    let again = install_from(&index, true, &p, &home, &|_, _| {}).unwrap();
+    let again = install_from(&index, true, None, &p, &home, &|_, _| {}).unwrap();
     assert_eq!(again, done);
 
     let mut revoked = index.clone();
@@ -102,7 +102,7 @@ fn installs_a_shader_pack_into_shaderpacks() {
     let home = scratch("shader");
     let p = project_of(index.project("glow").unwrap()).unwrap();
     assert_eq!(p.support(), super::super::Support::Works);
-    let done = install_from(&index, true, &p, &home, &|_, _| {}).unwrap();
+    let done = install_from(&index, true, None, &p, &home, &|_, _| {}).unwrap();
     assert_eq!(done[0].file, "shaderpacks/glow-1.0.0.hshader");
     assert_eq!(done[0].kind, Kind::Shader);
     assert!(home.join("shaderpacks/glow-1.0.0.hshader").is_file());
@@ -123,7 +123,7 @@ fn installs_a_shader_pack_into_shaderpacks() {
     assert!(!home.join("shaderpacks/glow-1.0.0.hshader").exists());
     // A file of the same name the registry didn't put there is left alone.
     fs::write(home.join("shaderpacks/glow-1.0.0.hshader"), b"mine").unwrap();
-    let e = install_from(&index, true, &p, &home, &|_, _| {}).unwrap_err();
+    let e = install_from(&index, true, None, &p, &home, &|_, _| {}).unwrap_err();
     assert_eq!(
         e,
         "shaderpacks/glow-1.0.0.hshader is already there: move it away first."
@@ -140,15 +140,15 @@ fn refuses_a_changed_file_a_taken_id_and_local_files_from_the_real_registry() {
     let mut tampered = index.clone();
     let cozy = tampered.projects[1].versions[0].file.url.clone();
     tampered.projects[0].versions[0].file.url = cozy;
-    let e = install_from(&tampered, true, &p, &home, &|_, _| {}).unwrap_err();
+    let e = install_from(&tampered, true, None, &p, &home, &|_, _| {}).unwrap_err();
     assert!(e.contains("larger than its source says"), "{e}");
     assert!(!home.join("horizon-mods").exists());
 
-    let e = install_from(&index, false, &p, &home, &|_, _| {}).unwrap_err();
+    let e = install_from(&index, false, None, &p, &home, &|_, _| {}).unwrap_err();
     assert!(e.contains("file servers"), "{e}");
 
     fs::create_dir_all(home.join("horizon-mods/coords_hud")).unwrap();
-    let e = install_from(&index, true, &p, &home, &|_, _| {}).unwrap_err();
+    let e = install_from(&index, true, None, &p, &home, &|_, _| {}).unwrap_err();
     assert!(e.contains("already in horizon-mods"), "{e}");
 
     let mut taken_down = index.clone();
@@ -158,7 +158,7 @@ fn refuses_a_changed_file_a_taken_id_and_local_files_from_the_real_registry() {
         reason: "Test.".into(),
         date: String::new(),
     });
-    let e = install_from(&taken_down, true, &p, &home, &|_, _| {}).unwrap_err();
+    let e = install_from(&taken_down, true, None, &p, &home, &|_, _| {}).unwrap_err();
     assert_eq!(e, "Coordinates HUD was taken down: Test.");
     fs::remove_dir_all(&home).unwrap();
 }
@@ -175,7 +175,7 @@ fn registry_versions_run_when_made_for_this_game() {
     let versions: Vec<Version> = p
         .versions
         .iter()
-        .map(|x| version_of(&index, p, x))
+        .map(|x| version_of(&index, p, x, None))
         .collect();
     assert_eq!(pick(Kind::Mod, &versions, false).unwrap().number, "0.1.0");
 }
@@ -197,4 +197,22 @@ fn owner_links_only_take_github_logins() {
     ] {
         assert!(!github_login(bad), "{bad}");
     }
+}
+
+/// A version that calls mod API functions the game doesn't have is marked and skipped.
+#[test]
+fn versions_for_a_newer_horizon_are_not_installed() {
+    let mut index = sample();
+    index.projects[0].versions[0].api_level = Some(1);
+    let p = index.project("coords_hud").unwrap();
+    let e = newest(&index, p, Some(0)).unwrap_err();
+    assert_eq!(
+        e,
+        "Coordinates HUD needs a newer Horizon than the game you play: update it first."
+    );
+    assert!(newest(&index, p, Some(1)).is_ok());
+    assert!(newest(&index, p, None).is_ok());
+    let v = version_of(&index, p, &p.versions[0], Some(0));
+    assert_eq!(v.blocked.as_deref(), Some(NEEDS_NEWER));
+    assert_eq!(version_of(&index, p, &p.versions[0], Some(1)).blocked, None);
 }
