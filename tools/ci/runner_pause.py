@@ -36,6 +36,8 @@ GPU_BUSY = int(os.environ.get("GPU_BUSY", 50))
 INTERVAL = int(os.environ.get("INTERVAL", 15))
 RESUME_AFTER = int(os.environ.get("RESUME_AFTER", 300))
 THROTTLE_CPUS = int(os.environ.get("THROTTLE_CPUS", 2))
+# Working, the slice gets half the threads: on all of them ludodesktop's CPU sits at 92 °C through a cargo build.
+NORMAL_CPUS = int(os.environ.get("NORMAL_CPUS", max(1, (os.cpu_count() or 2) // 2)))
 INPUT_PAUSE = int(os.environ.get("INPUT_PAUSE", 60))
 IDLE_AFTER = int(os.environ.get("IDLE_AFTER", 900))
 TEMP_LIMIT = int(os.environ.get("TEMP_LIMIT", 90))
@@ -199,7 +201,7 @@ def throttle(on):
     if on:
         systemctl("set-property", "--runtime", SLICE, "CPUWeight=1", "IOWeight=1", f"CPUQuota={THROTTLE_CPUS * 100}%")
     else:
-        systemctl("set-property", "--runtime", SLICE, "CPUWeight=20", "IOWeight=20", "CPUQuota=")
+        systemctl("set-property", "--runtime", SLICE, "CPUWeight=20", "IOWeight=20", f"CPUQuota={NORMAL_CPUS * 100}%")
 
 
 def pause_reason(hot, keys):

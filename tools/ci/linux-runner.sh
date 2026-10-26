@@ -131,6 +131,7 @@ Description=Horizon CI: the runner's jobs and parity workers sent from other mac
 [Slice]
 CPUWeight=20
 IOWeight=20
+CPUQuota=$(( threads * 50 ))%
 MemoryHigh=$(( $(awk '/MemTotal/ {print int($2 / 1048576)}' /proc/meminfo) / 2 ))G
 MemoryMax=$(( $(awk '/MemTotal/ {print int($2 / 1048576)}' /proc/meminfo) * 2 / 3 ))G
 EOF
