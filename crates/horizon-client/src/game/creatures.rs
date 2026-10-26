@@ -2559,6 +2559,12 @@ impl Game<'_> {
             .items()
             .get(&item)
             .is_some_and(|i| i.max_damage > 0);
+        let parrot_poisonous = self
+            .res
+            .items()
+            .item_tags
+            .get("minecraft:parrot_poisonous_food")
+            .is_some_and(|t| t.contains(&*item));
         let m = &mut self.mobs[index];
         if !m.alive() {
             return Ok(false);
@@ -2758,6 +2764,15 @@ impl Game<'_> {
             Species::Cat
                 if m.extra.tame && !(is_food && m.extra.age == 0 && m.extra.in_love <= 0) =>
             {
+                m.extra.sitting = !m.extra.sitting;
+                self.world.modified.insert((
+                    m.position.x.floor() as i32 >> 4,
+                    m.position.z.floor() as i32 >> 4,
+                ));
+            }
+            // Parrot.mobInteract: the owner makes a tame parrot on the ground
+            // sit or stand (poisonous food is handled apart).
+            Species::Parrot if m.extra.tame && m.on_ground && !parrot_poisonous => {
                 m.extra.sitting = !m.extra.sitting;
                 self.world.modified.insert((
                     m.position.x.floor() as i32 >> 4,

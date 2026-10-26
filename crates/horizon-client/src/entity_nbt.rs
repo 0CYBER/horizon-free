@@ -246,6 +246,14 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             map.entry("sound_variant".into())
                 .or_insert_with(|| string("minecraft:classic"));
         }
+        "minecraft:parrot" => {
+            if let Some(owner) = m.extra.owner {
+                map.insert("Owner".into(), Tag::IntArray(owner.to_vec()));
+            } else {
+                map.remove(&"Owner".into());
+            }
+            map.insert("Sitting".into(), Tag::Byte(i8::from(m.extra.sitting)));
+        }
         "minecraft:wolf" => {
             if let Some(owner) = m.extra.owner {
                 map.insert("Owner".into(), Tag::IntArray(owner.to_vec()));
@@ -772,6 +780,11 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
                 .position(|n| *n == v)
                 .unwrap_or(0) as u8;
         }
+    }
+    if m.species() == crate::mobs::Species::Parrot {
+        m.extra.owner = crate::save::uuid_from_tag(tag.get("Owner"));
+        m.extra.tame = m.extra.owner.is_some();
+        m.extra.sitting = flag(tag, "Sitting");
     }
     if m.species() == crate::mobs::Species::Wolf {
         let health = m.health;

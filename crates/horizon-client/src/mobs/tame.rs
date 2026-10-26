@@ -100,6 +100,17 @@ pub fn register(m: &mut Mob) {
         ),
     );
 }
+/// `Parrot.registerGoals`: a tamed parrot sits when told to and follows its
+/// owner from five blocks away (the wander and the shoulder come as they are).
+pub fn register_parrot(m: &mut Mob) {
+    let g = &mut m.ai.goals;
+    g.add(0, TamePanic(Panic::new(1.25)));
+    g.add(0, Float);
+    g.add(1, LookAtPlayer::new(8.0));
+    g.add(2, SitWhenOrdered);
+    g.add(2, FollowOwner::new(1.0, 5.0, 1.0));
+    g.add(2, Stroll::avoiding_water(1.0));
+}
 /// `Wolf.PREY_SELECTOR`: sheep, rabbits and foxes.
 fn wolf_prey(s: &super::Seen) -> bool {
     matches!(s.species, Species::Sheep | Species::Rabbit | Species::Fox)
