@@ -7,6 +7,9 @@ struct Hud {
 @group(0) @binding(0) var<uniform> hud: Hud;
 @group(0) @binding(1) var atlas: texture_2d<f32>;
 @group(0) @binding(2) var atlas_sampler: sampler;
+// enchanted_glint_item on its own repeating texture (vanilla's GlintSampler).
+@group(0) @binding(3) var glint_tex: texture_2d<f32>;
+@group(0) @binding(4) var glint_sampler: sampler;
 struct Out {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -31,7 +34,7 @@ struct Out {
     if in.uv.x >= 2.0 {
         let mask = textureSample(atlas, atlas_sampler, in.uv - vec2(2.0, 0.0)).a;
         if mask < 0.1 { discard; }
-        let glint = hud.size.w * textureSample(atlas, atlas_sampler, in.glint_uv);
+        let glint = hud.size.w * textureSample(glint_tex, glint_sampler, in.glint_uv);
         return vec4(glint.rgb * glint.rgb, mask);
     }
     let c = textureSample(atlas, atlas_sampler, in.uv) * in.color;

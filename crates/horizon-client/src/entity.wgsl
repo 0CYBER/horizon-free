@@ -27,6 +27,9 @@ struct Globals {
 @group(0) @binding(2) var atlas_sampler: sampler;
 @group(0) @binding(3) var lightmap: texture_2d<f32>;
 @group(0) @binding(4) var lightmap_sampler: sampler;
+// enchanted_glint_item on its own repeating texture (vanilla's GlintSampler).
+@group(0) @binding(5) var glint_tex: texture_2d<f32>;
+@group(0) @binding(6) var glint_sampler: sampler;
 struct Out {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -214,7 +217,7 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
         // Enchantment glint: item.fsh's GLINT path, sampled from
         // enchanted_glint_item at the `GLINT_TEXTURING` UV.
         let alpha = globals.fog_ends.w;
-        let glint = alpha * textureSample(atlas, atlas_sampler, in.glint_uv);
+        let glint = alpha * textureSample(glint_tex, glint_sampler, in.glint_uv);
         color = vec4(color.rgb + glint.rgb * glint.rgb, max(color.a, alpha));
     }
     let f = max(linear_fog(in.spherical, globals.fog.x, globals.fog.y),

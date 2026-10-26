@@ -50,10 +50,9 @@ pub struct ItemQuad {
     /// `MaterialInfo.lightEmission` (block light floor).
     pub light_emission: u8,
 }
-/// `TextureTransform.setupGlintTexturing`'s inputs and the glint sprite.
+/// `TextureTransform.setupGlintTexturing`'s inputs.
 #[derive(Clone, Copy, Debug)]
 pub struct Glint {
-    pub rect: crate::hud::Rect,
     /// `options.glintSpeed` (vanilla default 0.5).
     pub speed: f32,
     /// `options.glintStrength` / shader `GlintAlpha` (vanilla default 0.75).
@@ -65,21 +64,19 @@ pub struct Glint {
     pub scale: f32,
 }
 impl Glint {
-    /// `TextureTransform.setupGlintTexturing(scale)`: translation(-o0, o1) *
-    /// rotateZ(PI/18) * scale, wrapped and mapped into the glint sprite.
-    pub fn atlas_uv(&self, model: [f32; 2]) -> [f32; 2] {
+    /// `TextureTransform.setupGlintTexturing(scale)` applied to the model UV:
+    /// translation(-o0, o1) * rotateZ(PI/18) * scale. The result repeats:
+    /// the shader samples the dedicated glint texture with vanilla's
+    /// repeating `GlintSampler`, so the UVs stay unwrapped.
+    pub fn uv(&self, model: [f32; 2]) -> [f32; 2] {
         let millis = (f64::from(self.millis) * f64::from(self.speed) * 8.0) as i64;
         let offset0 = (millis % 110000) as f32 / 110000.0;
         let offset1 = (millis % 30000) as f32 / 30000.0;
         let angle = std::f32::consts::PI / 18.0;
         let (sin, cos) = angle.sin_cos();
-        let x = model[0] * self.scale * cos - model[1] * self.scale * sin - offset0;
-        let y = model[0] * self.scale * sin + model[1] * self.scale * cos + offset1;
-        let u = (x - x.floor()).clamp(0.5 / self.rect.w as f32, 1.0 - 0.5 / self.rect.w as f32);
-        let v = (y - y.floor()).clamp(0.5 / self.rect.h as f32, 1.0 - 0.5 / self.rect.h as f32);
         [
-            self.rect.u0 + u * (self.rect.u1 - self.rect.u0),
-            self.rect.v0 + v * (self.rect.v1 - self.rect.v0),
+            model[0] * self.scale * cos - model[1] * self.scale * sin - offset0,
+            model[0] * self.scale * sin + model[1] * self.scale * cos + offset1,
         ]
     }
 }
@@ -739,7 +736,7 @@ impl ItemSink for WorldSink<'_> {
         };
         let overlay = if glint.is_some() { 7 } else { 0 };
         for (i, (p, uv)) in q.pos.iter().zip(q.uv).enumerate() {
-            let glint_uv = glint.map_or([0.0, 0.0], |glint| glint.atlas_uv(q.foil_uv[i]));
+            let glint_uv = glint.map_or([0.0, 0.0], |glint| glint.uv(q.foil_uv[i]));
             self.out.push(Vertex {
                 normal: [0; 4],
                 pos: p.to_array(),

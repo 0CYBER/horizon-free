@@ -67,6 +67,9 @@ pub struct HudAtlas {
     pub fire_animations: Vec<(Rect, crate::sprites::SpriteAnimation)>,
     /// The default font (bitmap sheets in this atlas, unifont rasterized on demand).
     pub font: crate::font::Font,
+    /// `misc/enchanted_glint_item` as its own image: vanilla's `GlintSampler`
+    /// repeats it per pixel, which one sprite inside this atlas cannot.
+    pub glint: (Vec<u8>, u32, u32),
     white: Rect,
 }
 /// Atlas rows reserved for glyphs rasterized at run time.
@@ -526,6 +529,7 @@ impl HudAtlas {
             }
         }
         let white = sprites["horizon/white"];
+        let glint = Self::glint_texture(root, defaults);
         let font = crate::font::Font::load(
             root,
             &sprites,
@@ -542,9 +546,19 @@ impl HudAtlas {
             translucent,
             flags,
             fire_animations,
+            glint,
             font,
             white,
         })
+    }
+    /// `misc/enchanted_glint_item.png` on its own, or a transparent texel if
+    /// the resource pack lacks it.
+    fn glint_texture(root: &Path, defaults: &Path) -> (Vec<u8>, u32, u32) {
+        let mut path = root.join("assets/minecraft/textures/misc/enchanted_glint_item.png");
+        if !path.exists() && defaults != root {
+            path = defaults.join("assets/minecraft/textures/misc/enchanted_glint_item.png");
+        }
+        decode(&path).map_or((vec![0; 4], 1, 1), |(w, h, pixels)| (pixels, w, h))
     }
 }
 #[repr(C)]
@@ -554,7 +568,8 @@ pub struct HudVertex {
     pub uv: [f32; 2],
     pub color: u32,
     pub depth: f32,
-    /// The glint sprite UV (`GLINT_TEXTURING`), unused unless `uv.x >= 2`.
+    /// The `GLINT_TEXTURING` UV into the repeating glint texture, unused
+    /// unless `uv.x >= 2`.
     pub glint_uv: [f32; 2],
 }
 /// The GUI Scale option (0 = auto).
@@ -1080,6 +1095,8 @@ impl HudRenderer {
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
         view: &wgpu::TextureView,
+        glint_view: &wgpu::TextureView,
+        glint_sampler: &wgpu::Sampler,
     ) -> Result<Self> {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Horizon HUD"),
@@ -1124,6 +1141,22 @@ impl HudRenderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1141,6 +1174,14 @@ impl HudRenderer {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(glint_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(glint_sampler),
                 },
             ],
         });

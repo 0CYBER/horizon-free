@@ -111,7 +111,7 @@ fn emit(batch: &mut HudBatch, fan: &[Point], color: impl Fn(Vec2) -> u32, glint:
             batch.quad_glint(
                 corners.map(|v| v.p.to_array()),
                 corners.map(|v| [v.uv[0] + 2.0, v.uv[1]]),
-                corners.map(|v| glint.atlas_uv(v.glint_uv)),
+                corners.map(|v| glint.uv(v.glint_uv)),
                 u32::MAX,
             );
             batch.blend_since(start, crate::hud::Blend::Additive);
@@ -157,7 +157,18 @@ pub fn draw(
         return;
     }
     let start = batch.vertices.len();
-    draw_now(state, renderer, sprites, host, batch, x, y, time);
+    draw_now(
+        state,
+        renderer,
+        sprites,
+        host,
+        batch,
+        x,
+        y,
+        time,
+        glint_speed,
+        glint_alpha,
+    );
     if let Some(key) = key
         && let Ok(mut drawn) = renderer.gui_drawn.lock()
     {
@@ -231,6 +242,8 @@ fn draw_now(
     x: f32,
     y: f32,
     time: f32,
+    glint_speed: f32,
+    glint_alpha: f32,
 ) {
     let pose = Mat4::from_translation(Vec3::new(x + 8.0, y + 8.0, 0.0))
         * Mat4::from_scale(Vec3::new(16.0, -16.0, 16.0));
@@ -252,10 +265,8 @@ fn draw_now(
         [x, y, x + 16.0, y + 16.0]
     };
     let glint = sprites
-        .get("misc/enchanted_glint_item")
-        .copied()
-        .map(|rect| Glint {
-            rect,
+        .contains_key("misc/enchanted_glint_item")
+        .then_some(Glint {
             speed: glint_speed,
             alpha: glint_alpha,
             millis: time * 1000.0,

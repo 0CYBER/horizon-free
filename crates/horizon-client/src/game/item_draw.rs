@@ -307,8 +307,7 @@ impl Game<'_> {
             .sprites
             .get("misc/enchanted_glint_item")
             .copied()
-            .map(|rect| item_render::Glint {
-                rect,
+            .map(|_| item_render::Glint {
                 speed: self.settings.file.double("glintSpeed") as f32,
                 alpha: self.settings.file.double("glintStrength") as f32,
                 millis: self.started.elapsed().as_secs_f32() * 1000.0,
