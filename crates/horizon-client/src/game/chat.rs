@@ -18,7 +18,7 @@ fn chat_tree<'a>(
     mods: &'a super::mods::ModsState,
 ) -> &'a horizon_client::command::Dispatcher {
     match remote.as_ref().and_then(|r| r.commands.as_ref()) {
-        Some(tree) => tree,
+        Some(tree) => mods.remote_dispatcher().unwrap_or(tree),
         None => mods.dispatcher(),
     }
 }
@@ -99,6 +99,8 @@ pub struct UiState {
     /// Death screen cause and when the player died (buttons wait 20 ticks).
     pub death_text: Option<Text>,
     pub died_at: Option<std::time::Instant>,
+    /// `LivingEntity.deathTime` of the window's player: ticks since it died.
+    pub death_time: u32,
 }
 
 impl Game<'_> {
@@ -586,7 +588,7 @@ impl Game<'_> {
         } else {
             let line = Text::translate(
                 "chat.type.text",
-                &[Text::literal(PLAYER_NAME), Text::literal(message)],
+                &[self.player_display_name(), Text::literal(message)],
             );
             let focused = self.screen == Screen::Chat;
             let heard = self.mods.running().then(|| line.plain());
