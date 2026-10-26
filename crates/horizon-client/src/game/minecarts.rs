@@ -88,8 +88,8 @@ pub(super) struct Minecart {
     /// Hopper minecarts: an unpowered activator rail enables them.
     pub enabled: bool,
 }
-const WIDTH: f64 = 0.98;
-const HEIGHT: f64 = 0.7;
+pub(super) const WIDTH: f64 = 0.98;
+pub(super) const HEIGHT: f64 = 0.7;
 /// AbstractMinecart.getDefaultDisplayOffset, in sixteenths of a block.
 fn display_offset(kind: CartKind) -> f64 {
     if kind == CartKind::Hopper { 1.0 } else { 6.0 }
