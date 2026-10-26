@@ -4996,7 +4996,7 @@ impl Game<'_> {
             self.capture(true);
         }
     }
-    fn draw_item(&mut self, batch: &mut HudBatch, stack: &ItemStack, x: f32, y: f32) {
+    fn draw_item(&self, batch: &mut HudBatch, stack: &ItemStack, x: f32, y: f32) {
         // `GuiGraphics.renderItem`: the resolved item model (tints, foil and
         // special renderers included), then the decorations.
         self.draw_item_model(batch, stack, x, y);
@@ -5086,7 +5086,7 @@ impl Game<'_> {
     /// `GuiGraphicsExtractor.itemDecorations`: the count (or `count_text`)
     /// and damage bar.
     fn draw_item_decorations(
-        &mut self,
+        &self,
         batch: &mut HudBatch,
         stack: &ItemStack,
         x: f32,
@@ -5213,12 +5213,12 @@ impl Game<'_> {
                 for d in &draws {
                     if let hud_layout::GuiDraw::Item { slot, x, y, .. } = *d {
                         let stack = if slot == 40 {
-                            self.offhand.clone()
+                            self.offhand.as_ref()
                         } else {
-                            self.inventory[slot as usize].clone()
+                            self.inventory[slot as usize].as_ref()
                         };
                         if let Some(stack) = stack {
-                            self.draw_item(&mut batch, &stack, x as f32, y as f32);
+                            self.draw_item(&mut batch, stack, x as f32, y as f32);
                         }
                     }
                 }
