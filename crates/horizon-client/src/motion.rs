@@ -167,6 +167,9 @@ pub enum MotionEvent {
     InsidePortal {
         pos: BlockPos,
     },
+    /// `WitherRoseBlock.entityInside`: the player's box swept through a
+    /// wither rose; the server adds its Wither unless peaceful.
+    InsideWitherRose,
     /// `ServerPlayer.checkFallDamage` after a mace smash: block particles
     /// from the landing block, more the further the fall.
     SmashLanding {
@@ -1083,11 +1086,26 @@ impl MotionWorld<'_, '_, '_> {
     }
     /// What `applyEffectsFromBlocks` does to a server's player along the
     /// moves its client sent since `from` (in its history): the damage of
-    /// magma, cactus, lit campfires and grown sweet berry bushes. Its client
-    /// moves it, so the slowing and the rest are the client's.
+    /// magma, cactus, lit campfires and grown sweet berry bushes, and powder
+    /// snow's FREEZE, then `LivingEntity.aiStep`'s freezing and its damage.
+    /// Its client moves it, so the slowing and the rest are the client's.
     pub fn server_block_damage(&mut self, from: Vec3) -> Result<()> {
         self.player.old_position = from;
-        self.effects_from_blocks(true)
+        // Entity.baseTick
+        self.player.was_in_powder_snow = self.player.in_powder_snow;
+        self.player.in_powder_snow = false;
+        self.effects_from_blocks(true)?;
+        // LivingEntity.aiStep "freezing" (server).
+        if !self.player.in_powder_snow || !self.player.can_freeze() {
+            self.player.ticks_frozen = (self.player.ticks_frozen - 2).max(0);
+        }
+        if self.player.health.tick_count % 40 == 0
+            && self.player.is_fully_frozen()
+            && self.player.can_freeze()
+        {
+            self.freeze_damage()?;
+        }
+        Ok(())
     }
     fn effects_from_blocks(&mut self, damage_only: bool) -> Result<()> {
         use horizon_world::entity_move::MovementRecord;
@@ -1191,7 +1209,7 @@ impl MotionWorld<'_, '_, '_> {
                 groups += 1;
                 last_step = step;
             }
-            if groups == 1 {
+            if groups == 1 && !damage_only {
                 // A later group finds the fire already out.
                 self.player.powder_snow_entered.push(p);
             }
@@ -1259,21 +1277,22 @@ impl MotionWorld<'_, '_, '_> {
                 continue;
             }
             let powder_snow = name == "minecraft:powder_snow";
+            let lava_cauldron = name == "minecraft:lava_cauldron";
             // getEntityInsideCollisionShape is the whole block but for powder
             // snow (its collision shape, the whole block when it is empty),
             // filled cauldrons, end portals and tripwires; Horizon doesn't
-            // follow the player into those last three.
+            // follow the player into the water and powder snow cauldrons, end
+            // portals or tripwires yet.
             if matches!(
                 name,
                 "minecraft:water_cauldron"
-                    | "minecraft:lava_cauldron"
                     | "minecraft:powder_snow_cauldron"
                     | "minecraft:end_portal"
                     | "minecraft:tripwire"
             ) {
                 continue;
             }
-            let inside = !powder_snow || {
+            let inside = !(powder_snow || lava_cauldron) || {
                 let context = self.context();
                 let binding = self.collision_binding;
                 let shape = binding.collision_shape_with_context(
@@ -1282,21 +1301,33 @@ impl MotionWorld<'_, '_, '_> {
                     p,
                     &context,
                 )?;
-                shape.is_empty() || shape.boxes() == VoxelShape::block().boxes() || {
-                    let boxes: Vec<_> = shape
-                        .moved(Vec3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z)))
-                        .boxes()
-                        .to_vec();
-                    self.player
-                        .dimensions
-                        .bounds(from)
-                        .collided_along_vector(to.subtract(from), &boxes)
-                }
+                powder_snow && (shape.is_empty() || shape.boxes() == VoxelShape::block().boxes())
+                    || {
+                        let offset = Vec3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z));
+                        let mut boxes: Vec<_> = shape.moved(offset).boxes().to_vec();
+                        if lava_cauldron {
+                            // LavaCauldronBlock.FILLED_SHAPE: the cauldron's
+                            // shape or its lava, Block.column(12, 4, 15).
+                            boxes.push(Aabb::new(
+                                Vec3::new(2.0 / 16.0, 4.0 / 16.0, 2.0 / 16.0).add_vector(offset),
+                                Vec3::new(14.0 / 16.0, 15.0 / 16.0, 14.0 / 16.0).add_vector(offset),
+                            ));
+                        }
+                        self.player
+                            .dimensions
+                            .bounds(from)
+                            .collided_along_vector(to.subtract(from), &boxes)
+                    }
             };
             if inside && visited.insert(p.pack()) {
-                // CactusBlock and CampfireBlock.entityInside (`entity.hurt`).
+                // CactusBlock, CampfireBlock and LavaCauldronBlock.entityInside
+                // (`entity.hurt`), and WitherRoseBlock's server-side effect.
                 match name {
                     "minecraft:cactus" => self.environment_hurt("minecraft:cactus", 1.0)?,
+                    "minecraft:lava_cauldron" => self.lava_cauldron_inside()?,
+                    "minecraft:wither_rose" => {
+                        self.player.events.push(MotionEvent::InsideWitherRose);
+                    }
                     "minecraft:campfire" | "minecraft:soul_campfire" => {
                         let lit = self
                             .assets
@@ -1316,6 +1347,8 @@ impl MotionWorld<'_, '_, '_> {
                     "minecraft:sweet_berry_bush" if damage_only => {
                         self.sweet_berry_bush_damage(state)?;
                     }
+                    // PowderSnowBlock.entityInside's FREEZE.
+                    "minecraft:powder_snow" if damage_only => entered.push((step, p)),
                     _ => {}
                 }
                 if damage_only {
@@ -1353,6 +1386,14 @@ impl MotionWorld<'_, '_, '_> {
             self.player.stuck_multiplier = multiplier;
         }
         self.player.impulse.try_reset();
+    }
+    /// `LavaCauldronBlock.entityInside`: CLEAR_FREEZE, LAVA_IGNITE
+    /// (`Entity.lavaIgnite`, 15 seconds) and then `Entity.lavaHurt` (lava,
+    /// 4), as ordinary lava does to the player.
+    fn lava_cauldron_inside(&mut self) -> Result<()> {
+        self.player.ticks_frozen = 0;
+        self.player.ignite_for_ticks(300)?;
+        self.environment_hurt("minecraft:lava", 4.0)
     }
     /// `WebBlock.entityInside`: stuck at a quarter of the speed, half with
     /// the Weaving effect.
@@ -2366,6 +2407,124 @@ mod tests {
             .unwrap();
         }
         assert_eq!(player.position.y, 4.0);
+    }
+
+    #[test]
+    fn a_lava_cauldron_burns_the_player_inside_it() {
+        let root = std::env::var_os("HORIZON_TEST_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../.local/horizon-client")
+                    .join(horizon_core::VANILLA_VERSION)
+            });
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 1).unwrap();
+        let cauldron = assets
+            .registry
+            .default_state("minecraft:lava_cauldron")
+            .unwrap();
+        scene.set(20, 4, 20, cauldron).unwrap();
+        let mut tick = |player: &mut PlayerMotion| {
+            MotionWorld {
+                entities: &[],
+                player,
+                scene: &mut scene,
+                assets: &assets,
+                collision_binding: &binding,
+                resources: &resources,
+            }
+            .controlled_simulation_tick(Default::default())
+            .unwrap();
+        };
+        // Standing on the cauldron's floor, in its lava.
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.25, 20.5)).unwrap();
+        player.ticks_frozen = 40;
+        tick(&mut player);
+        assert!(player.health.health() < 20.0, "the lava must hurt");
+        assert!(player.fire_ticks > 0, "the lava must ignite");
+        assert_eq!(player.ticks_frozen, 0);
+        // Beside it, nothing.
+        let mut away = PlayerMotion::new(&resources, Vec3::new(22.5, 4.0, 20.5)).unwrap();
+        tick(&mut away);
+        assert_eq!(away.health.health(), 20.0);
+        assert!(away.fire_ticks <= 0);
+    }
+
+    #[test]
+    fn standing_in_a_wither_rose_asks_for_its_effect() {
+        let root = std::env::var_os("HORIZON_TEST_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../.local/horizon-client")
+                    .join(horizon_core::VANILLA_VERSION)
+            });
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 1).unwrap();
+        let rose = assets
+            .registry
+            .default_state("minecraft:wither_rose")
+            .unwrap();
+        scene.set(20, 4, 20, rose).unwrap();
+        let roses = |player: &PlayerMotion| {
+            player
+                .events
+                .iter()
+                .filter(|e| matches!(e, MotionEvent::InsideWitherRose))
+                .count()
+        };
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
+        MotionWorld {
+            entities: &[],
+            player: &mut player,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        }
+        .controlled_simulation_tick(Default::default())
+        .unwrap();
+        assert_eq!(roses(&player), 1);
+        // A server's player: its client moved it, the server applies the effect.
+        player.events.clear();
+        let from = player.position;
+        MotionWorld {
+            entities: &[],
+            player: &mut player,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        }
+        .server_block_damage(from)
+        .unwrap();
+        assert_eq!(roses(&player), 1);
+        // Two blocks away, nothing.
+        let mut away = PlayerMotion::new(&resources, Vec3::new(22.5, 4.0, 20.5)).unwrap();
+        MotionWorld {
+            entities: &[],
+            player: &mut away,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        }
+        .controlled_simulation_tick(Default::default())
+        .unwrap();
+        assert_eq!(roses(&away), 0);
     }
 
     #[test]
