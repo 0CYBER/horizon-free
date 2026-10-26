@@ -106,6 +106,7 @@ mod mounts;
 mod moving_pistons;
 mod music;
 mod names;
+mod native_shaders;
 mod natural_spawning;
 mod nautili;
 mod net_harness;
@@ -1507,6 +1508,8 @@ struct Game<'a> {
     extras: extras::ExtrasState,
     /// Horizon mods (`game/mods.rs`), none running unless turned on.
     mods: mods::ModsState,
+    /// Horizon's own shader pack, while one is picked (`game/native_shaders.rs`).
+    native_shaders: native_shaders::NativeShaders,
     /// Meshed sections waiting for an upload budget (Horizon settings).
     pending_uploads: Vec<((i32, i32, i32), horizon_client::mesher::SectionMesh)>,
     /// This frame's view frustum, for culling entities and block entities.
@@ -12309,6 +12312,7 @@ impl<'a> Game<'a> {
             frame_graph: Default::default(),
             extras: Default::default(),
             mods: Default::default(),
+            native_shaders: Default::default(),
             sky_darken_memo: Default::default(),
             persist: Default::default(),
             remote: None,
