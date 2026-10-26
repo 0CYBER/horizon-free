@@ -107,6 +107,9 @@ impl Game<'_> {
             | "minecraft:experience_bottle" => {
                 self.potions.add_remote_thrown(id, kind, at, velocity);
             }
+            "minecraft:dragon_fireball" => self
+                .dragon_fireballs
+                .push(super::dragon::DragonFireball::remote(id, at, velocity)),
             "minecraft:area_effect_cloud" => self.potions.clouds.push(RemoteCloud {
                 id,
                 at: position,
@@ -356,6 +359,25 @@ impl Game<'_> {
             [at.x, at.y, at.z]
         });
         self.tick_remote_clouds();
+        // The dragon's fireballs fly on between the tracker's updates, with
+        // their dragon_breath trail (`AbstractHurtingProjectile.getTrailParticle`).
+        let trail = ParticleOptions::simple(ParticleType::DragonBreath);
+        for b in &mut self.dragon_fireballs {
+            let at = b.position;
+            let water = self
+                .res
+                .facts()
+                .get(self.world.block(
+                    at.x.floor() as i32,
+                    at.y.floor() as i32,
+                    at.z.floor() as i32,
+                ))
+                .fluid
+                == horizon_client::blocks::Fluid::Water;
+            b.remote_step(water);
+            let p = b.position;
+            self.particles.add(&trail, [p.x, p.y + 0.5, p.z], [0.0; 3]);
+        }
     }
 
     /// `AreaEffectCloud.clientTick`: while waiting, now and then two
@@ -416,6 +438,7 @@ impl Game<'_> {
         self.crystals.retain(|c| c.id != id);
         self.potions.remove_remote_thrown(id);
         self.potions.clouds.retain(|c| c.id != id);
+        self.dragon_fireballs.retain(|b| b.id != id);
         self.end.remove_remote_eye(id);
         self.remove_remote_hook(id);
     }
@@ -430,6 +453,7 @@ impl Game<'_> {
         self.crystals.clear();
         self.potions.clear_thrown();
         self.potions.clouds.clear();
+        self.dragon_fireballs.clear();
         self.end.clear_remote_eyes();
         self.clear_remote_hooks();
     }

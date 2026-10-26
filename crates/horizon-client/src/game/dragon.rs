@@ -2038,6 +2038,7 @@ impl Game<'_> {
         // assignDirectionalMovement: the direction times the acceleration power 0.1.
         let velocity = Vec3::new(v.x * 0.1, v.y * 0.1, v.z * 0.1);
         self.dragon_fireballs.push(DragonFireball {
+            id: 0,
             position: at,
             previous: at,
             velocity,
@@ -2204,10 +2205,44 @@ impl Game<'_> {
     }
 }
 pub(super) struct DragonFireball {
-    position: Vec3,
-    previous: Vec3,
-    velocity: Vec3,
+    /// Its entity id once a server's players track it (0 until then).
+    pub(super) id: u32,
+    pub(super) position: Vec3,
+    pub(super) previous: Vec3,
+    pub(super) velocity: Vec3,
     age: i32,
+}
+impl DragonFireball {
+    /// One a server sent (`handleAddEntity`).
+    pub(super) fn remote(id: u32, at: Vec3, velocity: Vec3) -> Self {
+        Self {
+            id,
+            position: at,
+            previous: at,
+            velocity,
+            age: 0,
+        }
+    }
+    /// `AbstractHurtingProjectile.tick` on a server's client: accelerate
+    /// along the motion (power 0.1, inertia 0.95 or 0.8 in water) and move;
+    /// only the server decides what it hits.
+    pub(super) fn remote_step(&mut self, water: bool) {
+        self.previous = self.position;
+        self.age += 1;
+        let v = self.velocity;
+        self.position = Vec3::new(
+            self.position.x + v.x,
+            self.position.y + v.y,
+            self.position.z + v.z,
+        );
+        let l = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt().max(1.0e-9);
+        let inertia = if water { 0.8 } else { 0.95 };
+        self.velocity = Vec3::new(
+            (v.x + v.x / l * 0.1) * inertia,
+            (v.y + v.y / l * 0.1) * inertia,
+            (v.z + v.z / l * 0.1) * inertia,
+        );
+    }
 }
 pub(super) struct Breath {
     /// Its entity id once a server's players track it (0 until then).
