@@ -1615,7 +1615,6 @@ impl Game<'_> {
                     r.knockback = Some([p.velocity.x, p.velocity.y, p.velocity.z]);
                 }
             }
-            self.hurt_armor(amount);
             // The thorns hurt the entity that caused the hit, if there is one.
             if let Some(a) = attacker.or(owner) {
                 self.thorns(a);

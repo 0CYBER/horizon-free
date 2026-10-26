@@ -4511,6 +4511,7 @@ impl Game<'_> {
         self.tick_avatar(before, riding);
         self.end_spin_attack(spin_hit);
         self.record_combat(&events);
+        self.wear_armor(&events);
         for event in events {
             match event {
                 MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, feet),
@@ -8603,15 +8604,54 @@ impl Game<'_> {
         }
         self.apply_enchantment_attributes();
     }
-    /// Inventory.hurtArmor: each piece loses max(1, damage / 4) durability.
-    fn hurt_armor(&mut self, damage: f32) {
+    /// The armor hits among a tick's motion events (`Player.hurtArmor` from
+    /// `getDamageAfterArmorAbsorb`), whatever the damage: a mob, an explosion,
+    /// a cactus, lava, a campfire.
+    fn wear_armor(&mut self, events: &[MotionEvent]) {
+        for event in events {
+            if let MotionEvent::Health(horizon_client::health::HealthEvent::ArmorHurt {
+                source,
+                amount,
+            }) = event
+            {
+                self.hurt_armor(*source, *amount);
+            }
+        }
+    }
+    /// `Player.hurtArmor` -> `LivingEntity.doHurtEquipment`: each worn piece that
+    /// wears when its wearer is hurt loses max(1, damage / 4) durability, except
+    /// to a fire source when the piece resists fire (`ItemStack.canBeHurtBy`).
+    fn hurt_armor(&mut self, source: horizon_world::damage_source::DamageTypeId, damage: f32) {
+        if damage <= 0.0 {
+            return;
+        }
         let amount = ((damage / 4.0) as u32).max(1);
+        let name = self
+            .motion
+            .health
+            .damage
+            .definition(source)
+            .map(|d| d.name.clone())
+            .unwrap_or_default();
+        let fire = self
+            .motion
+            .health
+            .damage
+            .in_tag(source, "minecraft:is_fire");
         let mut broke = false;
         let losses: Vec<u32> = (0..4)
-            .map(|i| {
-                self.armor[i]
-                    .clone()
-                    .map_or(amount, |s| self.durability_loss(&s, amount))
+            .map(|i| match self.armor[i].clone() {
+                Some(s)
+                    if self
+                        .res
+                        .items()
+                        .get(&s.item)
+                        .is_some_and(|info| info.equip_damage_on_hurt)
+                        && !(fire && self.res.items().resists_fire(&s, &name)) =>
+                {
+                    self.durability_loss(&s, amount)
+                }
+                _ => 0,
             })
             .collect();
         for (slot, amount) in self.armor.iter_mut().zip(losses) {
