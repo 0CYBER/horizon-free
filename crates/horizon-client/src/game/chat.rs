@@ -900,9 +900,19 @@ impl Game<'_> {
             None => self.combat_death_message(),
         };
         self.ui.death_text = Some(message.clone());
-        // ServerPlayer.die: a team that hides death messages keeps it out of
-        // the dying player's own chat (the death screen still shows it).
-        if horizon_client::scoreboard::own_death_message_shown(self.player_team()) {
+        // ServerPlayer.die: the team's death message visibility decides who
+        // hears it, the dying player's own chat included (the death screen
+        // still shows it).
+        let board = &self.score.board;
+        if let Some(host) = &self.lan {
+            host.hub.system_message_to(
+                horizon_client::lan::data::component_nbt(&message.component()),
+                |other| {
+                    horizon_client::scoreboard::death_message_reaches(board, PLAYER_NAME, other)
+                },
+            );
+        }
+        if horizon_client::scoreboard::death_message_reaches(board, PLAYER_NAME, PLAYER_NAME) {
             self.system_message(message);
         }
     }
