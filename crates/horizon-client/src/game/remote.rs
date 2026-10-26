@@ -58,6 +58,12 @@ fn remote_text(tag: &Tag) -> horizon_client::text::Text {
     comp_text(&tag_to_json(tag))
 }
 
+/// `ClientboundOpenScreenPacket.title` as a container screen draws it: the
+/// component's styles, and the `§` codes a literal holds (`StringDecomposer`).
+fn menu_title(tag: &Tag) -> horizon_client::text::Text {
+    remote_text(tag).resolve_legacy()
+}
+
 /// A section's sky and block light layers from the wire.
 type LightLayers = (Option<Vec<u8>>, Option<Vec<u8>>);
 
@@ -130,8 +136,8 @@ pub(super) struct Remote {
     predictions: HashMap<[i32; 3], (i32, i32)>,
     /// Open container: (window id, menu name).
     pub(super) menu: Option<(i32, String)>,
-    /// The open menu's title as the server named it.
-    pub(super) menu_title: Option<String>,
+    /// The open menu's title as the server named it, with its styles.
+    pub(super) menu_title: Option<horizon_client::text::Text>,
     state_id: i32,
     use_target: Option<[i32; 3]>,
     entities: HashMap<i32, Tracked>,
@@ -4793,14 +4799,7 @@ impl Game<'_> {
             return;
         }
         if let Some(kind) = Self::remote_station_kind(&menu) {
-            let title = plain(
-                &p.title,
-                &self
-                    .remote
-                    .as_ref()
-                    .map(|r| r.lang.clone())
-                    .unwrap_or_default(),
-            );
+            let title = menu_title(&p.title);
             let pos = target.map_or([0, 0, 0], |t| [t.0, t.1, t.2]);
             self.remote_open_station(p.container, menu, kind, title, pos);
             return;
@@ -4865,14 +4864,7 @@ impl Game<'_> {
                 return;
             }
         };
-        let title = plain(
-            &p.title,
-            &self
-                .remote
-                .as_ref()
-                .map(|r| r.lang.clone())
-                .unwrap_or_default(),
-        );
+        let title = menu_title(&p.title);
         if let Some(r) = self.remote.as_mut() {
             r.menu = Some((p.container, menu.clone()));
             r.menu_title = Some(title);
@@ -4916,7 +4908,7 @@ impl Game<'_> {
         Some(self.remote.as_ref()?.menu.as_ref()?.1.as_str())
     }
     /// The title the server gave the menu it opened.
-    pub(super) fn remote_menu_title(&self) -> Option<String> {
+    pub(super) fn remote_menu_title(&self) -> Option<horizon_client::text::Text> {
         self.remote.as_ref()?.menu_title.clone()
     }
     /// A language change reaches the server-sent components too: their titles
@@ -4929,7 +4921,7 @@ impl Game<'_> {
         }
     }
     /// A server's chest-like menu (`MenuType.GENERIC_9xN`): its rows and title.
-    pub(super) fn remote_chest_menu(&self) -> Option<(usize, String)> {
+    pub(super) fn remote_chest_menu(&self) -> Option<(usize, horizon_client::text::Text)> {
         let r = self.remote.as_ref()?;
         let rows = r
             .menu
@@ -4938,7 +4930,12 @@ impl Game<'_> {
             .strip_prefix("minecraft:generic_9x")?
             .parse()
             .ok()?;
-        Some((rows, r.menu_title.clone().unwrap_or_default()))
+        Some((
+            rows,
+            r.menu_title
+                .clone()
+                .unwrap_or_else(horizon_client::text::Text::empty),
+        ))
     }
     /// ServerboundPlayerCommandPacket STOP_SLEEPING.
     pub(super) fn remote_stop_sleeping(&mut self) {
