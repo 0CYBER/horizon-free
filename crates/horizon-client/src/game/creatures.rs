@@ -192,6 +192,8 @@ impl Game<'_> {
             last_hurt: self.combat.last_hurt_mob.map(|(id, at)| (Who::Mob(id), at)),
             velocity: p.velocity,
             yaw: self.yaw,
+            sprinting: p.sprinting,
+            riding: self.riding.is_some(),
             hero: self.potions.effects.get("hero_of_the_village").is_some(),
             effects: self.potions.effects.list.iter().map(|e| e.id).collect(),
             uuid: self.level.player_uuid.unwrap_or_default(),

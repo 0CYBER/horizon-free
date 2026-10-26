@@ -1007,7 +1007,7 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, a: &Animations) -> bool {
             p,
             s,
             &Armadillo {
-                hiding_in_shell: false,
+                hiding_in_shell: super::armadillo::hiding_in_shell(m),
                 roll_out: st[0],
                 roll_up: st[1],
                 peek: st[2],
