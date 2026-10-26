@@ -13,7 +13,7 @@ reopened; labels never start it):
 | Job | Runs on | What | Time |
 | --- | --- | --- | --- |
 | `verify` | GitHub `ubuntu-latest` | Public-tree check, Python tests, rustfmt, clippy with warnings denied, Rust tests. Dependencies and the workspace build come from a cache saved by main's runs | ~4 min cold, less warm |
-| `parity / parity` | The Mac mini's runner (`ludovics-mac-mini`, label `horizon-game`) | Only for a change to a harness, an oracle, a probe or the runner (or the `run-parity` label): the vanilla harnesses the change can affect (`tools/parity.py --changed <base>`). Other pull requests skip it: [parity-main](#parity-on-main) checks them on main | seconds when nothing is affected; minutes per affected harness |
+| `parity / parity` | A runner with the label `horizon-game`: the Mac mini's two, and the desktop's while nobody uses it (below) | Only for a change to a harness, an oracle, a probe or the runner (or the `run-parity` label): the vanilla harnesses the change can affect (`tools/parity.py --changed <base>`). Other pull requests skip it: [parity-main](#parity-on-main) checks them on main | seconds when nothing is affected; minutes per affected harness |
 
 Pushes to main run `verify` only; the nightly audit covers main's harnesses.
 
@@ -28,10 +28,13 @@ The job is `.github/workflows/parity.yml`, a reusable workflow: `checks` calls i
 repository, `run-parity.yml` for a fork's pull request a maintainer labels `run-parity`.
 
 Horizon never downloads the game, so harnesses that compare with vanilla run only where the maintainer's own
-copy is: the Mac mini. Its runner runs as the maintainer's account and keeps its checkout between runs
-(`clean: false`), so the probes build incrementally into `.local/parity-target` and earlier passes stand.
+copy is: the Mac mini and his Linux desktop. Their runners run as the maintainer's account and keep their checkout
+between runs (`clean: false`), so the probes build incrementally into `.local/parity-target` and earlier passes
+stand.
 
-1. `tools/ci/runner-env.sh` puts the machine's Python 3.13 and the JDK `research-lock.json` pins on the PATH.
+1. `tools/ci/runner-env.sh` puts the machine's Python 3.13 and the JDK `research-lock.json` pins on the PATH
+   (Homebrew and `java_home` on the Mac; on NixOS what `linux-runner.sh` pinned, else nixpkgs), and sccache when
+   the machine has it.
 2. `tools/ci/vanilla-data.sh` links `.local/` to the runner's copy of the vanilla data, cloned once from
    `~/code/horizon-parity/shared-local` into `~/.actions-runners/horizon/_work/horizon/shared-local`, and
    prepares `.local/horizon-client` with the pull request's own `horizon-prepare` once per preparer version
@@ -70,6 +73,26 @@ after new pushes, remove the label and add it again.
 release's macOS build back. Each keeps its own checkout, `target/` and Rust install; the second's
 `_work/horizon/shared-local` links to the first's, so they share the vanilla data, the preparations (one at a
 time, under a lock) and the parity passes and slots.
+
+**The desktop's runner.** `ludodesktop-horizon` (labels `self-hosted`, `Linux`, `X64`, `ludodesktop`, and
+`horizon-game` once a full trial has passed there) runs on the maintainer's Linux desktop while nobody uses it: its
+screen locked, or untouched for 15 minutes (his rule, 2026-10-26). `tools/ci/linux-runner.sh install`, run there as
+him, registers it and installs two systemd user services: `horizon-runner` (the runner, in
+`~/.actions-runners/horizon`, nice 19, in `horizon-ci.slice` with CPU and I/O weight 20, half the threads (on all of
+them the CPU package reached 92–96 °C) and memory capped at two thirds of the RAM; `CARGO_BUILD_JOBS` and the harness slots at 8, after the machine froze under ~7 cold cargo
+builds on 2026-10-14; its own Rust install; the JDK, sccache and the build libraries from nixpkgs; its own
+`vscreen` so no game it starts reaches his screen) and `horizon-runner-pause` (`tools/ci/runner_pause.py`), the
+only thing that starts the runner. The watcher stops it at once on keyboard, mouse or gamepad input (read from
+`/dev/input`: only whether bytes came, never what), while an unlocked session has had input in the last 15 minutes,
+while the CPU package is at 90 °C or more, while a game runs (Steam, gamescope, Wine, Proton or Minecraft
+processes, fleet-load's own detection, or a process outside the CI slice using the GPU at 50 % or more), or while
+`~/.actions-runners/horizon/pause` exists, and starts it again 5 minutes after the last such sign. A job already
+under way is throttled to 2 threads at the lowest weight and the runner stops after it: freezing the job would make
+GitHub drop it as lost and the harnesses time out. Old pull requests' `runner-env.sh` know only the Mac: the
+runner's `.env` and `.path` give their jobs Python, the JDK and the vanilla data (`HORIZON_SHARED_SOURCE`) all the
+same. The nightly audit and parity-main stay on the Mac mini's runners: the audit compares with the previous night,
+so it stays on one platform, and a parity-main job slowed down on the desktop because he came back could time out,
+and its failures bisect and comment on merges.
 
 ## Merging
 
