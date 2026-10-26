@@ -221,6 +221,12 @@ impl Game<'_> {
                 if !b.visual_only {
                     self.bolt_fire(b.at, 4);
                     self.strike_rod(b.at);
+                }
+                // LightningBolt.tick runs clearCopperOnLightningStrike for
+                // every server bolt, a skeleton trap's visual one included;
+                // a client's copy of a server bolt (spawn_remote_bolt) only
+                // flashes.
+                if self.remote.is_none() {
                     self.bolt_clear_copper(b.at);
                 }
             }
