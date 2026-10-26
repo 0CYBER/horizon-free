@@ -3140,6 +3140,10 @@ impl Game<'_> {
             .name
             .clone();
         let key = (pos[0], pos[1], pos[2]);
+        if self.chest_menu_blocked(key, &name) {
+            // The use still succeeds, but no menu, stat or piglin anger.
+            return;
+        }
         if &*name == "minecraft:lectern" {
             self.open_lectern(pos);
             return;
