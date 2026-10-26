@@ -284,12 +284,14 @@ pub fn xp(m: &Mob) -> i32 {
     m.extra.trade.as_ref().map_or(0, |t| t.xp)
 }
 /// `Villager.setVillagerData(withProfession)`: a new profession forgets the
-/// offers.
+/// offers (`offers = null`), so the next `getOffers` rolls the new
+/// profession's trades.
 pub fn set_profession(m: &mut Mob, profession: u8) {
     if m.extra.variant2 != profession {
         m.extra.variant2 = profession;
         if let Some(t) = m.extra.trade.as_mut() {
             t.offers.clear();
+            t.unset = true;
         }
     }
 }
@@ -845,6 +847,70 @@ pub fn read_nbt(m: &mut Mob, tag: &horizon_world::nbt::Tag) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn villager() -> Mob {
+        use crate::mobs::{Anim, Brain, Flags, MobType, Part, Species};
+        use std::{collections::HashMap, sync::Arc};
+        let kind = Arc::new(MobType {
+            id: "minecraft:villager".into(),
+            species: Species::Villager,
+            width: 0.6,
+            height: 1.95,
+            eye_height: 1.62,
+            category: "misc".into(),
+            max_health: 20.0,
+            speed: 0.5,
+            flying_speed: 0.02,
+            attack_damage: 0.0,
+            attack_knockback: 0.0,
+            follow_range: 48.0,
+            step_height: 0.6,
+            armor: 0.0,
+            armor_toughness: 0.0,
+            knockback_resistance: 0.0,
+            jump_strength: 0.42,
+            attributes: Arc::default(),
+            gravity: 0.08,
+            safe_fall_distance: 3.0,
+            fall_damage_multiplier: 1.0,
+            water_efficiency: 0.0,
+            water_slowdown: 0.8,
+            air_speed: 0.02,
+            baby_scale: 0.5,
+            head_rot_speed: 10.0,
+            max_head_x_rot: 40.0,
+            max_head_y_rot: 75.0,
+            ambient_interval: 80,
+            flags: Flags::default(),
+            model: Arc::new(Part::parse("root", &serde_json::json!({}))),
+            layers: HashMap::new(),
+            texture: String::new(),
+            brain: Brain::Passive,
+            anim: Anim::Villager,
+            sounds: [""; 3],
+            step_sound: None,
+            food: Arc::default(),
+            tempt: Arc::default(),
+        });
+        Mob::new(1, kind, horizon_core::geometry::Vec3::ZERO, 0.0)
+    }
+    #[test]
+    fn a_new_profession_rolls_new_offers() {
+        let mut m = villager();
+        set_profession(&mut m, 1);
+        // Offers made for the first profession.
+        m.extra.trade.get_or_insert_default().unset = false;
+        // The same profession keeps them.
+        set_profession(&mut m, 1);
+        assert!(!m.extra.trade.as_ref().unwrap().unset);
+        // A new one forgets them (offers = null), so the next getOffers
+        // (ensure_offers) rolls the new profession's trades.
+        set_profession(&mut m, 2);
+        let t = m.extra.trade.as_ref().unwrap();
+        assert!(t.offers.is_empty());
+        assert!(t.unset);
+        assert_eq!(m.extra.variant2, 2);
+    }
 
     fn stack(item: &str, count: u32) -> ItemStack {
         ItemStack::new(item, count)
