@@ -159,6 +159,7 @@ public final class VanillaMobAiOracle {
     static final class Scenario {
         String name;
         int ticks;
+        int difficulty = 2;
         long time = 6000;
         boolean rain, thunder;
         int originX, originZ;
@@ -204,6 +205,7 @@ public final class VanillaMobAiOracle {
                         switch (kv[0]) {
                             case "ticks" -> s.ticks = Integer.parseInt(kv[1]);
                             case "time" -> s.time = Long.parseLong(kv[1]);
+                            case "difficulty" -> s.difficulty = Integer.parseInt(kv[1]);
                             case "rain" -> s.rain = true;
                             case "thunder" -> s.thunder = true;
                             case "levelseed" -> s.levelSeed = Long.parseLong(kv[1]);
@@ -494,6 +496,7 @@ public final class VanillaMobAiOracle {
         }
 
         void run(Scenario s, ServerLevel level) throws Exception {
+            this.setDifficulty(net.minecraft.world.Difficulty.byId(s.difficulty), true);
             out.println("== " + s.name);
             var clock = level.registryAccess().lookupOrThrow(Registries.WORLD_CLOCK).getOrThrow(WorldClocks.OVERWORLD);
             this.clockManager().setTotalTicks(clock, s.time);
@@ -553,6 +556,10 @@ public final class VanillaMobAiOracle {
                     String v = kv.length > 1 ? kv[1] : "";
                     switch (kv[0]) {
                         case "persistent" -> mob.setPersistenceRequired();
+                        case "named" -> {
+                            mob.setCustomName(net.minecraft.network.chat.Component.literal("Peaceful regression"));
+                            mob.setPersistenceRequired();
+                        }
                         case "ridden" -> mob.setItemSlot(net.minecraft.world.entity.EquipmentSlot.BODY,
                             new net.minecraft.world.item.ItemStack(BuiltInRegistries.ITEM.getValue(
                                 net.minecraft.resources.Identifier.parse("minecraft:red_harness"))));
