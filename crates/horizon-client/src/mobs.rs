@@ -69,6 +69,7 @@ pub mod tame;
 pub mod trader;
 pub mod transport_items;
 pub mod trial_spawner;
+pub mod turtle;
 pub mod undead;
 pub mod vex;
 pub mod villager;
@@ -1202,6 +1203,12 @@ pub enum MobEvent {
     Reinforcements {
         mob: u32,
         target: Who,
+    },
+    /// `LevelEvent.PARTICLES_DESTROY_BLOCK` (2001) at `pos` for the block at
+    /// `block`: a turtle's digging.
+    BlockBreakEffect {
+        pos: [i32; 3],
+        block: [i32; 3],
     },
     /// `Warden.applyDarknessAround`: darkness for survival players nearby.
     Darkness {
