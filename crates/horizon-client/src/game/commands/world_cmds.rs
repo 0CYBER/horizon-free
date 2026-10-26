@@ -140,27 +140,30 @@ impl Game<'_> {
             Some(Arg::Entity(_)) => self.entities(ctx, "entity", false)?.first().copied(),
             _ => None,
         };
+        let cause = match ctx.get("cause") {
+            Some(Arg::Entity(_)) => self.entities(ctx, "cause", false)?.first().copied(),
+            _ => None,
+        };
         let from = match ctx.get("location") {
             Some(Arg::Coords(_)) => self.position_arg(ctx, "location"),
             _ => by.and_then(|t| self.target_position(t)),
         };
         let hurt = match target {
+            // The causing mob is the one the hit is credited to and thorns
+            // answer; the source position gives the knockback its direction.
             Target::Player => {
-                if self.creative || self.spectator() {
+                if self.spectator() {
                     false
-                } else if let Some(player) = self.player.as_mut() {
-                    match self.motion.health.damage.id(&ty) {
-                        Some(id) => player
-                            .hurt(&self.motion.health, self.world.health_rules, id, amount)
-                            .unwrap_or(false),
-                        None => false,
-                    }
                 } else {
-                    false
+                    let attacker = match cause.or(by) {
+                        Some(Target::Mob(i)) => Some(Some(i)),
+                        _ => Some(None),
+                    };
+                    self.hurt_player_from(amount, from, &ty, attacker)
                 }
             }
             Target::Mob(id) => {
-                let attacker = by.and_then(|t| match t {
+                let attacker = cause.or(by).and_then(|t| match t {
                     Target::Player => Some(Who::Player),
                     Target::Mob(i) => Some(Who::Mob(i)),
                     _ => None,
