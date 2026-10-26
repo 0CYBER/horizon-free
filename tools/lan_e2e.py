@@ -7235,9 +7235,15 @@ def check_cushions(host, guest, out):
         assert player('status').get('riding') is None, seen
         player('command', command='gamemode creative')
         player.raw('look-at', at[0], at[1] + .125, at[2])
+        before = {g.name: g('status').get('particles', {}).get('block', 0) for g in (host, guest)}
         player.raw('mouse', 'left', 'click')
         player.wait(10)
         assert not cushions(host) and not cushions(player), seen
+        seen[label]['break_particles'] = {
+            g.name: g('status').get('particles', {}).get('block', 0) - before[g.name]
+            for g in (host, guest)
+        }
+        assert all(n == 10 for n in seen[label]['break_particles'].values()), seen
     return seen
 
 
