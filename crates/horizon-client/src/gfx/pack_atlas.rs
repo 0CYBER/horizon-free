@@ -169,6 +169,7 @@ impl PackAtlas {
         ];
         let columns = self.columns;
         // UVs past a sprite (models up to 2, distant tiles) cannot repeat in an atlas: clamped.
+        // The colour's alpha holds HDR's emission level (`mesher::EMISSION_BITS`): packs get 1.
         let body = format!(
             "    vec4 hz_origin = {origin};\n    \
              uint hz_layer = hz_v_layer & 32767u;\n    \
@@ -178,7 +179,7 @@ impl PackAtlas {
              hz_MultiTexCoord0 = vec4((hz_cell + clamp(vec2(hz_v_uv) * hz_origin.w, 0.0, 1.0)) * hz_scale, 0.0, 1.0);\n    \
              hz_MultiTexCoord1 = vec4(float(hz_v_light.y), float(hz_v_light.x), 0.0, 1.0);\n    \
              hz_MultiTexCoord2 = hz_MultiTexCoord1;\n    \
-             hz_Color = hz_v_color;\n    \
+             hz_Color = vec4(hz_v_color.rgb, 1.0);\n    \
              hz_Normal = vec3(0.0, 1.0, 0.0);\n    \
              hz_tangent = vec4(1.0, 0.0, 0.0, 1.0);\n",
             scale[0], scale[1],

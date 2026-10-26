@@ -4,7 +4,7 @@
 //! them where it says and interpolates their moves.
 use super::{FallStep, FallingBlock, Game, fireworks::fireworks_of, view_vector};
 use horizon_client::particles::{ParticleOptions, ParticleType};
-use horizon_client::projectiles::{Projectile, ProjectileKind};
+use horizon_client::projectiles::{Hit, Projectile, ProjectileKind, ProjectileWorld};
 use horizon_core::{geometry::Vec3, position::BlockPos, random::RandomSource};
 use horizon_protocol::entity_data::Value;
 use horizon_world::registry::BlockStateId;
@@ -50,6 +50,32 @@ fn projectile_kind(kind: &str) -> Option<ProjectileKind> {
         "minecraft:wither_skull" => ProjectileKind::WitherSkull { dangerous: false },
         _ => return None,
     })
+}
+
+/// `AbstractArrow.tick` on a client: water drag before the move, air drag
+/// after it, then gravity; a block it reaches holds it (`inGround`).
+fn remote_arrow_tick(p: &mut Projectile, w: &impl ProjectileWorld) {
+    p.previous = p.position;
+    p.age += 1;
+    if p.stuck {
+        return;
+    }
+    let water = w.in_water(p.position);
+    if water {
+        p.velocity = p.velocity.scale(0.6);
+    }
+    let to = p.position.add_vector(p.velocity);
+    if let Some((at, _, _)) = w.clip(p.position, to) {
+        p.position = at;
+        p.velocity = Vec3::ZERO;
+        p.stuck = true;
+        return;
+    }
+    p.position = to;
+    if !water {
+        p.velocity = p.velocity.scale(0.99);
+    }
+    p.velocity.y -= 0.05;
 }
 
 impl Game<'_> {
@@ -296,29 +322,34 @@ impl Game<'_> {
             }
         }
         self.falling = falling;
-        for p in &mut self.creatures.projectiles {
-            p.previous = p.position;
-            p.age += 1;
-            if matches!(p.kind, ProjectileKind::LargeFireball { .. }) {
-                // AbstractHurtingProjectile.tick advances on the client between
-                // the tracker updates (ten ticks apart for a ghast's fireball).
-                let at = p.position;
-                let water = self
-                    .res
-                    .facts()
-                    .get(self.world.block(
-                        at.x.floor() as i32,
-                        at.y.floor() as i32,
-                        at.z.floor() as i32,
-                    ))
-                    .fluid
-                    == horizon_client::blocks::Fluid::Water;
-                p.apply_hurting_inertia(water);
-                p.position = p.position.add_vector(p.velocity);
-            } else {
-                p.position = step(p.id, p.position);
+        // Projectiles tick on the client too and fly on between the tracker's
+        // updates (10 to 20 ticks apart); a block stops them there, and only
+        // the server decides what they hit.
+        let mut projectiles = std::mem::take(&mut self.creatures.projectiles);
+        {
+            let w = self.mob_world_base(&[]);
+            let world = super::creatures::ProjWorld {
+                w: &w,
+                targets: Vec::new(),
+            };
+            for p in &mut projectiles {
+                match p.kind {
+                    ProjectileKind::Arrow { .. } => remote_arrow_tick(p, &world),
+                    // ShulkerBullet.tick: only the server steers it.
+                    ProjectileKind::ShulkerBullet { .. } => {
+                        p.previous = p.position;
+                        p.age += 1;
+                        p.position = p.position.add_vector(p.velocity);
+                    }
+                    _ => {
+                        if !matches!(p.tick(&world).1, Hit::None) {
+                            p.velocity = Vec3::ZERO;
+                        }
+                    }
+                }
             }
         }
+        self.creatures.projectiles = projectiles;
         for t in &mut self.tridents {
             let id = t.id;
             t.remote_step(|at| step(id, at));
@@ -352,12 +383,9 @@ impl Game<'_> {
             c.time += 1;
             c.position = step(c.id, c.position);
         }
-        self.potions.step_remote_thrown(&mut step);
+        self.step_remote_thrown();
         self.step_remote_hooks(&mut step);
-        self.end.step_remote_eyes(|id, at| {
-            let at = step(id, Vec3::new(at[0], at[1], at[2]));
-            [at.x, at.y, at.z]
-        });
+        self.end.step_remote_eyes();
         self.tick_remote_clouds();
         // The dragon's fireballs fly on between the tracker's updates, with
         // their dragon_breath trail (`AbstractHurtingProjectile.getTrailParticle`).
@@ -451,6 +479,8 @@ impl Game<'_> {
         self.tridents.clear();
         self.rockets.clear();
         self.crystals.clear();
+        // The dragon a server sent goes with its crystals.
+        self.dragon = None;
         self.potions.clear_thrown();
         self.potions.clouds.clear();
         self.dragon_fireballs.clear();

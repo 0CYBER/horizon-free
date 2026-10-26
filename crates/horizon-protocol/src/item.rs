@@ -35,6 +35,7 @@ pub mod component {
     pub const MAP_ID: i32 = 48;
     pub const MAP_POST_PROCESSING: i32 = 50;
     pub const CHARGED_PROJECTILES: i32 = 51;
+    pub const BUNDLE_CONTENTS: i32 = 52;
     pub const POTION_CONTENTS: i32 = 53;
     pub const WRITABLE_BOOK_CONTENT: i32 = 56;
     pub const WRITTEN_BOOK_CONTENT: i32 = 57;
@@ -192,7 +193,7 @@ impl Component {
                     resolved: r.bool()?,
                 })
             }
-            CHARGED_PROJECTILES => {
+            CHARGED_PROJECTILES | BUNDLE_CONTENTS => {
                 let n = r.count(1024)?;
                 Self::Stacks((0..n).map(|_| Template::read(r)).collect::<Result<_>>()?)
             }
@@ -778,6 +779,21 @@ mod tests {
         assert_eq!(
             stack.component(component::CHARGED_PROJECTILES),
             Some(&Component::Stacks(vec![Stack::new(9, 1)]))
+        );
+        let mut w = Writer::new();
+        Slot::write(&Some(stack), &mut w);
+        assert_eq!(w.data, bytes);
+    }
+
+    #[test]
+    fn bundle_contents_are_item_stack_templates() {
+        // A bundle (id 7) holding 32 of item 9: BundleContents is a list of
+        // ItemStackTemplate, as ChargedProjectiles is.
+        let bytes = [1, 7, 1, 0, 52, 1, 9, 32, 0, 0];
+        let stack = Slot::read(&mut Reader::new(&bytes)).unwrap().unwrap();
+        assert_eq!(
+            stack.component(component::BUNDLE_CONTENTS),
+            Some(&Component::Stacks(vec![Stack::new(9, 32)]))
         );
         let mut w = Writer::new();
         Slot::write(&Some(stack), &mut w);

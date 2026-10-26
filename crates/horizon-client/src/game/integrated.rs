@@ -222,7 +222,6 @@ impl Game<'_> {
         options.report = None;
         options.server = None;
         options.world = None;
-        options.dev_mods.clear();
         self.join_world_rest()?;
         let (res, pack, settings) = (self.res.clone(), self.pack.clone(), self.settings.clone());
         let flags = Arc::new(Flags::default());
@@ -292,6 +291,9 @@ impl Game<'_> {
             launch.create.as_ref(),
         )?)?;
         let saved = Box::new(self.level.clone());
+        // IntegratedServer runs the server mods; the window the client mods.
+        self.mods.dev = self.options.dev_mods.clone();
+        self.start_mods();
         // Math.max(2, options.renderDistance): past vanilla's 32 when the
         // window's render distance is (Horizon's options go to 64).
         let view_distance = self.settings.render_distance.max(2);

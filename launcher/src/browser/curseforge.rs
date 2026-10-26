@@ -55,7 +55,7 @@ impl CurseForge {
     }
 
     fn get(&self, url: &str) -> Result<Value, String> {
-        let response = super::download::agent()
+        let response = super::download::agent(url)
             .get(url)
             .set("x-api-key", &self.key)
             .set("Accept", "application/json")

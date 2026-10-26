@@ -84,7 +84,7 @@ fn install_in(
     if p.kind != idx::Kind::Modpack {
         return Err(format!("{} is a {}, not a modpack.", p.name, p.kind.name()));
     }
-    let v = newest(index, p)?;
+    let v = newest(index, p, None)?;
     let work = dir.join(&p.id);
     let fresh = !work.exists();
     let result = install_version_in(index, local, p, v, &work, progress);
