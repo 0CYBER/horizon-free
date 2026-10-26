@@ -21,7 +21,7 @@ Level: preview ([stability.md](stability.md)). Schema 1.
     "license": "MIT", "source": "https://github.com/...", "icon": "https://...png", "key": "RWT...",
     "versions": [{
       "version": "0.1.0", "published": "2026-10-24", "changelog": "",
-      "api": "0.1", "side": "client", "capabilities": ["game-read", "hud", "chat"], "game": "26.3",
+      "api": "0.1", "side": "client", "capabilities": ["game-read", "hud", "chat"], "api_level": 0, "game": "26.3",
       "file": { "name": "coords_hud-0.1.0.hmod", "url": "https://github.com/ludovic111/horizon-mods/releases/download/...",
                 "size": 438, "sha256": "e113...", "signature": "untrusted comment: ...\n...\ntrusted comment: ...\n...\n" }
     }]
@@ -43,6 +43,7 @@ Level: preview ([stability.md](stability.md)). Schema 1.
 | `versions` | Newest first, at least one. |
 | `api` | A mod's API line (its manifest's `api`); a modpack's manifest format (`1`). |
 | `side`, `capabilities` | A mod's, read from its manifest by CI, never typed by hand. |
+| `api_level` | The mod API level a mod's code needs ([stability.md](stability.md#mod-api-levels)): its newest imported function's, read from the file by CI. Absent for content-only mods and in indexes built before levels. Installers take the newest version whose level the running game serves. |
 | `game` | The Minecraft version it is for. |
 | `requires` | A modpack's mods: `{ id, version, sha256 }`, each a version in this index with that hash. |
 | `file` | A plain name with the kind's extension (`.hmod`, `.hpack`, `.zip`), an `https://` URL, the size (at most 64 MiB), the lowercase hex SHA-256, and the `.minisig` text when the project has a key. |
@@ -57,7 +58,8 @@ changing what one means, makes schema 2.
 
 1. Its size and SHA-256 are the ones the entry lists, and it isn't revoked.
 2. With a project key: its signature verifies with that key (minisign's prehashed and legacy signatures both).
-3. What the file says matches the entry: a mod's `horizon-mod.toml` (id, version, API, side, capabilities) and its
+3. What the file says matches the entry: a mod's `horizon-mod.toml` (id, version, API, side, capabilities), its API
+   level when the entry lists one, and its
    content's fence ([mods.md](../mods.md#content-mods-api-02)); a modpack's manifest (id, version, format, game,
    mods); a resource pack's `pack.mcmeta`.
 4. A kind this build can't install is refused with "this Horizon can't install a … yet".

@@ -327,6 +327,12 @@ impl Mods {
             .map(|(name, _)| name.to_string())
             .collect();
         m.check_imports(imports.iter().map(String::as_str))?;
+        // A function this Horizon doesn't have: say so, not wasmtime's linking error.
+        let functions = crate::api_level::imports(wasm)?;
+        let (level, function) = crate::api_level::needed(functions.iter().map(String::as_str));
+        if let Some(why) = crate::api_level::too_new(level, function) {
+            return Err(why);
+        }
         let data_dir = path
             .parent()
             .unwrap_or(Path::new("."))
