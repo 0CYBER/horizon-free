@@ -191,6 +191,24 @@ fn client_jars(base: &Path, version: &str) -> Vec<String> {
             jars.push(jar);
         }
     }
+    jars.extend(loader_jars(base, version));
+    jars
+}
+
+/// The client jars the Modrinth App keeps for a mod loader's profile: `versions/<v>-<loader>/`,
+/// the vanilla jar under the loader's name, when only a Fabric or Quilt profile of the version
+/// was ever played (#1783). The jar is checked against the pin like the others.
+fn loader_jars(base: &Path, version: &str) -> Vec<String> {
+    let prefix = format!("{version}-");
+    let mut jars: Vec<String> = fs::read_dir(base.join("versions"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.starts_with(&prefix))
+        .map(|name| format!("versions/{name}/{name}.jar"))
+        .collect();
+    jars.sort();
     jars
 }
 

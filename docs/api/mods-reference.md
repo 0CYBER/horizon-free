@@ -11,12 +11,28 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `chat` | [`chat`](#chat) | show you chat messages |
 | `hud` | [`hud`](#hud) | draw text on your screen |
 | `storage` | [`storage`](#storage) | save its own settings to disk |
+| `command` | [`command`](#command) | run commands as you, with your permissions |
 | `registries` | data files (`assets/`, `data/`), no interface | add blocks and items to your worlds |
+| `ui` | [`ui`](#ui) | show its own screens and a settings page |
 
 ## World `horizon-mod`
 
-- Imports (what the game offers): `log`, `game`, `chat`, `hud`, `storage`
+- Imports (what the game offers): `log`, `game`, `chat`, `hud`, `storage`, `command`
 - Exports (what the mod provides): `events`
+
+## World `horizon-ui-mod`
+
+A mod with widgets (capability `ui`): the SDK builds every mod against this world. Mods built for `horizon-mod` alone (no `ui-events` export) still load and simply hear nothing of their widgets.
+
+- Imports (what the game offers): `ui`, `log`, `game`, `chat`, `hud`, `storage`, `command`
+- Exports (what the mod provides): `ui-events`, `events`
+
+## World `ui-host`
+
+The game's side of `horizon-ui-mod` beyond `horizon-mod`.
+
+- Imports (what the game offers): `ui`
+- Exports (what the mod provides): `ui-events`
 
 ## `log`
 
@@ -116,6 +132,89 @@ Capability `storage`: a per-mod folder of small key/value files, quota'd (docs/m
 | `get` | `func(key: string) -> option<list<u8>>` | None if `key` has never been `set`, or the key is not well-formed. |
 | `set` | `func(key: string, value: list<u8>) -> result<_, string>` | Errs on a malformed key or over quota (bytes for the whole mod). |
 | `delete` | `func(key: string)` | No error if `key` was already absent. |
+
+## `command`
+
+Access: capability `command`.
+
+Capability `command`: vanilla commands run as the player, with the player's permissions, after the hook call returns (8 per call). A mod's own commands are not run this way.
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `run` | `func(line: string)` | `line` without its slash; its feedback goes to the chat as if typed. |
+
+## `ui`
+
+Access: capability `ui`.
+
+Capability `ui`: widgets the game draws with its own menus' widgets, for a screen the mod owns and a settings page in Options > Mods. Layout and drawing are the game's: a mod says what its widgets hold, never where they sit or how they look, and the game clips everything it is handed.
+
+### record `text-widget`
+
+A line of text.
+
+| Field | Type | |
+| --- | --- | --- |
+| `id` | `u32` | The mod's own name for the widget; `ui-events` calls echo it. |
+| `text` | `string` | Up to 256 characters. |
+| `color` | `u32` | 0xRRGGBB; 0 is the menus' white. |
+
+### record `item-widget`
+
+An item's icon and a name beside it, as recipe viewers show them.
+
+| Field | Type | |
+| --- | --- | --- |
+| `id` | `u32` | The mod's own name for the widget. |
+| `item` | `string` | `minecraft:diamond`, `<mod>:<path>`; an unknown id draws a "?". |
+| `name` | `string` | The name shown beside the icon (empty: the item's own). |
+
+### record `list-widget`
+
+Rows the player picks one of, as an options page lists choices: a pick is `ui-events::select`, `selected` is the row to mark now.
+
+| Field | Type | |
+| --- | --- | --- |
+| `id` | `u32` | The mod's own name for the widget; `ui-events::select` echoes it. |
+| `rows` | `list<string>` | The rows' texts, at most 512, each up to 256 characters. |
+| `selected` | `option<u32>` | The row to mark as the current choice, if any. |
+
+### variant `widget`
+
+A thing on a mod's screen or settings page.
+
+| Case | Payload | |
+| --- | --- | --- |
+| `text` | `text-widget` | Text the player reads. |
+| `item` | `item-widget` | An item's icon and name. |
+| `list` | `list-widget` | Rows the player picks from. |
+
+### record `screen`
+
+A screen the mod owns: a title over widgets stacked down the middle, the Done button the game adds, and Esc to leave it.
+
+| Field | Type | |
+| --- | --- | --- |
+| `title` | `string` | Its title, up to 256 characters. |
+| `widgets` | `list<widget>` | Its widgets, in order, at most 64. |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `open-screen` | `func(screen: screen)` | Show `screen` over the game; a second call while it is open replaces it. Only the last call of one hook counts. |
+| `close-screen` | `func()` | Close the mod's screen when it is open (the mod hears no `closed` for this: it was its own doing). |
+| `set-settings` | `func(widgets: list<widget>)` | The mod's page in Options > Mods, reached from a settings button on its row: the widgets it shows, an empty list for no page. The player opening the page is `ui-events::settings-opened`: push fresh widgets then; later calls update the page while it shows. |
+
+## `ui-events`
+
+Access: exported by the mod: the game calls it.
+
+What the game calls on a mod that shows widgets (capability `ui`): what the player did with them.
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `select` | `func(id: u32, row: u32)` | A row of one of the mod's `list` widgets was picked: the widget's `id` and the row, on the screen or the settings page that showed it. |
+| `closed` | `func()` | The player left the mod's screen (Esc or Done); not for a screen the mod closed itself or one that went away with the mod. |
+| `settings-opened` | `func()` | The player opened the mod's settings page in Options > Mods: call `ui::set-settings` now to fill it with fresh widgets. |
 
 ## `events`
 

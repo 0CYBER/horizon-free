@@ -51,5 +51,6 @@ Every page has the same parts: **Overview** (what you can build), **Guide** (whe
 **Examples**, **Stability** (the level of each part, per [stability.md](stability.md)), **Changelog** and
 **Not there yet** (what is planned, so nobody builds on a guess).
 
-The website's summary for players and authors is [playhorizon.dev/docs/apis](https://playhorizon.dev/docs/apis)
+The website shows these pages at [playhorizon.dev/docs/api](https://playhorizon.dev/docs/api), built from this
+folder, and a summary for players and authors at [playhorizon.dev/docs/apis](https://playhorizon.dev/docs/apis)
 (`website/docs/apis.md`).

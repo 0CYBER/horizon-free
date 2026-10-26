@@ -8,10 +8,12 @@
 // atlas, wrapped as repeat reads it (hud.rs), so the hardware's bilinear
 // sample is GL_LINEAR with repeat; clamp-to-edge keeps the sample point half
 // a texel inside. Each sampling has its own pipeline (gfx.rs), so a pixel
-// costs what it did with nearest and repeat only: one sample.
+// costs what it did with nearest and repeat only: one sample. Each entry
+// point reads `atlas` through one sampler only: GLSL (wgpu's OpenGL backend)
+// combines a texture with its sampler, and an override would not remove the
+// other sampler's branch.
 @group(0) @binding(2) var nearest_sampler: sampler;
 @group(0) @binding(4) var linear_sampler: sampler;
-override BLUR: bool = false;
 override CLAMP: bool = false;
 struct Out {
     @builtin(position) clip: vec4<f32>,
@@ -32,28 +34,36 @@ struct Out {
     out.edges = vec4(rect.xy + half, rect.zw - half);
     return out;
 }
-fn sample(in: Out) -> vec4<f32> {
+// The sprite's atlas coordinates of this pixel.
+fn atlas_uv(in: Out) -> vec2<f32> {
     var f = in.uv;
     if !CLAMP {
         // Repeat: one period of the sprite.
         f = fract(f);
     }
-    var uv = in.rect.xy + f * (in.rect.zw - in.rect.xy);
+    let uv = in.rect.xy + f * (in.rect.zw - in.rect.xy);
     if CLAMP {
-        uv = clamp(uv, in.edges.xy, in.edges.zw);
+        return clamp(uv, in.edges.xy, in.edges.zw);
     }
-    if BLUR {
-        return textureSampleLevel(atlas, linear_sampler, uv, 0.0) * in.color;
-    }
-    return textureSampleLevel(atlas, nearest_sampler, uv, 0.0) * in.color;
+    return uv;
 }
-@fragment fn fs_screen(in: Out) -> @location(0) vec4<f32> {
-    let c = sample(in);
+fn screen(c: vec4<f32>) -> vec4<f32> {
     if c.a <= 0.0 { discard; }
     return c;
+}
+@fragment fn fs_screen(in: Out) -> @location(0) vec4<f32> {
+    return screen(textureSampleLevel(atlas, nearest_sampler, atlas_uv(in), 0.0) * in.color);
+}
+@fragment fn fs_screen_blur(in: Out) -> @location(0) vec4<f32> {
+    return screen(textureSampleLevel(atlas, linear_sampler, atlas_uv(in), 0.0) * in.color);
 }
 // RenderPipelines.VIGNETTE blends ZERO, ONE_MINUS_SRC_COLOR: output the
 // texture colour; the blend state darkens the frame by it.
 @fragment fn fs_vignette(in: Out) -> @location(0) vec4<f32> {
-    return vec4(sample(in).rgb, 1.0);
+    let c = textureSampleLevel(atlas, nearest_sampler, atlas_uv(in), 0.0) * in.color;
+    return vec4(c.rgb, 1.0);
+}
+@fragment fn fs_vignette_blur(in: Out) -> @location(0) vec4<f32> {
+    let c = textureSampleLevel(atlas, linear_sampler, atlas_uv(in), 0.0) * in.color;
+    return vec4(c.rgb, 1.0);
 }

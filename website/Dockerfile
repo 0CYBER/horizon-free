@@ -5,6 +5,7 @@ WORKDIR /site
 COPY build.mjs ./
 COPY src ./src
 COPY docs ./docs
+COPY data ./data
 COPY public ./public
 COPY LEGAL.md ./
 ARG GITHUB_TOKEN
