@@ -1089,6 +1089,9 @@ fn render_visible(
             }
         }
     }
+    // One Poses for every layer: a humanoid with armour redraws five to seven
+    // models, and each used to allocate its own maps.
+    let mut layer_poses = Poses::default();
     for layer in all_layers {
         let Some(part) = m.kind.layer(&layer.model).cloned() else {
             continue;
@@ -1096,8 +1099,8 @@ fn render_visible(
         let Some(uv) = atlas(&layer.texture) else {
             continue;
         };
-        let mut poses = Poses::new(&part);
-        anim::setup(m, &s, &mut poses, &data.animations);
+        layer_poses.reset(&part);
+        anim::setup(m, &s, &mut layer_poses, &data.animations);
         if matches!(m.species(), Species::Villager | Species::ZombieVillager)
             && let Some((folder, variant)) = layer
                 .texture
@@ -1108,7 +1111,7 @@ fn render_visible(
             data.villager_hats
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .apply(folder, variant, profession, &mut poses);
+                .apply(folder, variant, profession, &mut layer_poses);
         }
         let light = if layer.full_bright {
             240 | 240 << 8
@@ -1123,7 +1126,16 @@ fn render_visible(
             None => overlay,
         };
         let start = out.len();
-        draw(&part, base, &poses, uv, layer.color, light, overlay, out);
+        draw(
+            &part,
+            base,
+            &layer_poses,
+            uv,
+            layer.color,
+            light,
+            overlay,
+            out,
+        );
         if layer.full_bright && m.species() != Species::Warden {
             for vertex in &mut out[start..] {
                 vertex.normal = [0; 4];
