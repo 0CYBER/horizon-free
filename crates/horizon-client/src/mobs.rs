@@ -663,6 +663,8 @@ pub struct Extra {
     pub saddled: bool,
     /// The durability a wolf's body armor (`extra.head`) has lost.
     pub body_damage: i32,
+    /// The components (dye, name...) of that armor stack.
+    pub body_extra: Option<Box<crate::item_data::StackData>>,
     /// The saddle's components (name, enchantments...) when it is not a bare
     /// one; `saddled` stays the gameplay flag.
     pub saddle_stack: Option<crate::items::ItemStack>,
@@ -1858,6 +1860,7 @@ impl Mob {
         if after >= WOLF_ARMOR_DURABILITY {
             self.extra.head = None;
             self.extra.body_damage = 0;
+            self.extra.body_extra = None;
             self.outbox
                 .push(MobEvent::Sound("item.wolf_armor.break", at, 1.0, 1.0));
         } else {

@@ -385,7 +385,11 @@ fn mob_equipment(
                 } else {
                     0
                 },
-                extra: None,
+                extra: if slot == 5 && m.species() == horizon_client::mobs::Species::Wolf {
+                    e.body_extra.clone()
+                } else {
+                    None
+                },
             };
             out.push((slot, hub.stack(&Some(stack))));
         }

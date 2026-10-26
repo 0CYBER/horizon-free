@@ -328,6 +328,14 @@ impl Game<'_> {
             .collect()
     }
     /// The UUID of the player acting: the guest `as_guest` runs, else the host.
+    /// The owner a wolf, cat or parrot gets when the acting player tames it
+    /// (a host with no UUID yet owns under `[0, 0, 0, 1]`).
+    pub(super) fn acting_owner(&self) -> Option<[i32; 4]> {
+        self.lan_acting_uuid
+            .map(horizon_client::lan::playerdata::uuid_ints)
+            .or(self.level.player_uuid)
+            .or(Some([0, 0, 0, 1]))
+    }
     pub(super) fn acting_uuid(&self) -> [i32; 4] {
         self.lan_acting_uuid
             .map(horizon_client::lan::playerdata::uuid_ints)

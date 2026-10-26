@@ -286,6 +286,7 @@ pub fn clear_slot(m: &mut Mob, slot: &str) {
         "body" if body => {
             m.extra.head = None;
             m.extra.body_damage = 0;
+            m.extra.body_extra = None;
             return;
         }
         "saddle" => {

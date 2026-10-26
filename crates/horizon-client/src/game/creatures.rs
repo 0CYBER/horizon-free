@@ -2559,10 +2559,11 @@ impl Game<'_> {
             .items()
             .get(&item)
             .is_some_and(|i| i.max_damage > 0);
-        let me = self.level.player_uuid.or(Some([0, 0, 0, 1]));
+        let me = self.acting_owner();
         let sneaking = self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)
             || self.keys.contains(&winit::keyboard::KeyCode::ShiftRight);
         let held_damage = held.as_ref().map_or(0, |h| h.damage as i32);
+        let held_extra = held.as_ref().and_then(|h| h.extra.clone());
         let m = &mut self.mobs[index];
         if !m.alive() {
             return Ok(false);
@@ -2653,6 +2654,7 @@ impl Game<'_> {
             {
                 let mut stack = ItemStack::new("minecraft:wolf_armor", 1);
                 stack.damage = m.extra.body_damage.max(0) as u32;
+                stack.extra = m.extra.body_extra.take();
                 armor_drop = Some(stack);
                 m.extra.head = None;
                 m.extra.body_damage = 0;
@@ -2682,6 +2684,7 @@ impl Game<'_> {
             {
                 m.extra.head = Some(item.as_str().into());
                 m.extra.body_damage = held_damage;
+                m.extra.body_extra = held_extra;
                 consume = true;
                 eat = Some(("item.armor.equip_wolf", 1.0, 1.0));
             }
@@ -2745,7 +2748,7 @@ impl Game<'_> {
                 let tamed = m.random.next_int_bound(3).unwrap_or(1) == 0;
                 if tamed {
                     horizon_client::mobs::tame::set_tame(m, true);
-                    m.extra.owner = self.level.player_uuid.or(Some([0, 0, 0, 1]));
+                    m.extra.owner = me;
                     m.persistent = true;
                     m.nav_stop();
                     m.ai.target = None;
@@ -2821,7 +2824,7 @@ impl Game<'_> {
                 let tamed = m.random.next_int_bound(3).unwrap_or(1) == 0;
                 if tamed {
                     m.extra.tame = true;
-                    m.extra.owner = self.level.player_uuid.or(Some([0, 0, 0, 1]));
+                    m.extra.owner = me;
                     m.extra.sitting = true;
                 }
                 eat = eating_sound(m, &mut self.world.random);
@@ -2877,7 +2880,7 @@ impl Game<'_> {
                 let tamed = m.random.next_int_bound(10).unwrap_or(1) == 0;
                 if tamed {
                     m.extra.tame = true;
-                    m.extra.owner = self.level.player_uuid.or(Some([0, 0, 0, 1]));
+                    m.extra.owner = me;
                 }
                 let kind = if tamed { "heart" } else { "smoke" };
                 // TamableAnimal.spawnTamingParticles (entity event 7 or 6).
