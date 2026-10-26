@@ -296,12 +296,14 @@ impl Game<'_> {
             if !creative
                 && !spectator
                 && hurtable
-                && let Ok(o) = p.hurt_blocking(
+                && let Ok(o) = p.hurt_caused_by(
                     &self.motion.health,
                     self.world.health_rules,
                     id,
                     amount,
                     blocking,
+                    // The exploding mob is the causing entity.
+                    exploding.is_some(),
                 )
             {
                 outcome = o;

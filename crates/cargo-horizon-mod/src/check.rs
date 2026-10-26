@@ -47,6 +47,7 @@ impl Report {
             "api": self.facts.api,
             "side": self.facts.side,
             "capabilities": self.facts.capabilities,
+            "api_level": self.facts.api_level,
             "game": self.facts.game,
             "requires": requires,
             "sha256": self.sha256,
@@ -87,6 +88,9 @@ impl Report {
             ")\n  {} bytes, SHA-256 {}, {signed}\n",
             self.size, self.sha256
         );
+        if let Some(level) = f.api_level {
+            out += &format!("  needs mod API level {level} or newer\n");
+        }
         for c in &f.capabilities {
             out += &format!("  may {}\n", c.describe());
         }
@@ -258,6 +262,9 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
                 format!("{}: {text}", if error { "error" } else { "feedback" })
             }
             Output::Command { line } => format!("command: /{line}"),
+            Output::QuietCommands { lines, .. } => {
+                format!("{} quiet command(s)", lines.len())
+            }
             Output::Stopped { reason, .. } => return Err(format!("it stopped: {reason}")),
             Output::OpenScreen { .. } => "opened a screen".to_string(),
             Output::CloseScreen { .. } => "closed its screen".to_string(),
