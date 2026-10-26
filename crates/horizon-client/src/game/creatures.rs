@@ -2969,6 +2969,9 @@ impl Game<'_> {
         if !parent.alive()
             || stack.item.strip_suffix("_spawn_egg") != Some(parent.kind.id.as_str())
             || !horizon_client::mobs::drops::can_be_baby(parent.species())
+            // WanderingTrader.getBreedOffspring returns null: no offspring, the
+            // click carries on to trading.
+            || parent.species() == Species::WanderingTrader
         {
             return false;
         }
