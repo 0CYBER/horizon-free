@@ -839,7 +839,10 @@ impl Game<'_> {
                         remote.brand = brand;
                     }
                 }
-                Event::Reconfigured(registries) => self.set_registries(registries),
+                Event::Reconfigured(registries) => {
+                    self.boss_overlay.reset();
+                    self.set_registries(registries);
+                }
                 // handleTransfer: "Cannot transfer to server from
                 // singleplayer" (no ServerData), so the world just closes.
                 Event::Transfer { host, port } => {

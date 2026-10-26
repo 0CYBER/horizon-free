@@ -175,6 +175,34 @@ fn count(n: u64) -> String {
     }
 }
 
+/// A registry project's rating: five pixel stars, the mean's nearest whole number of them lit, the
+/// mean and how many; None while the ratings aren't known.
+pub(super) fn stars(id: &str, t: &theme::Theme) -> Option<Div> {
+    let row = div().flex().items_center().gap(px(2.));
+    Some(match horizon::rating(id)? {
+        None => row.text_color(t.muted).child("No ratings yet"),
+        Some(r) => {
+            let lit = r.average.round() as usize;
+            row.children((0..5).map(|i| {
+                blocks::icon(
+                    "star",
+                    12.,
+                    if i < lit {
+                        t.warn
+                    } else {
+                        t.muted.opacity(0.6)
+                    },
+                )
+            }))
+            .child(div().ml(px(4.)).child(format!(
+                "{:.1} ({})",
+                r.average,
+                count(r.count)
+            )))
+        }
+    })
+}
+
 /// A checksum as the page shows it: the algorithm and the first and last hex digits.
 fn short_sum(checksum: &str) -> String {
     let (algo, hex) = checksum.split_once(':').unwrap_or(("", checksum));
@@ -968,9 +996,7 @@ impl Launcher {
             if !p.author.is_empty() {
                 by.push(format!("by {}", p.author));
             }
-            if p.source != SourceId::Horizon {
-                by.push(format!("{} downloads", count(p.downloads)));
-            }
+            by.push(format!("{} downloads", count(p.downloads)));
             by.push(format!("from {}", p.source.label()));
             if !p.license.is_empty() {
                 by.push(p.license.clone());
@@ -980,6 +1006,11 @@ impl Launcher {
                 .flex_col()
                 .child(div().truncate().child(p.summary.clone()))
                 .child(by.join(" · "))
+                .children(
+                    (p.source == SourceId::Horizon)
+                        .then(|| stars(&p.id, &t))
+                        .flatten(),
+                )
                 .children(
                     support
                         .reason()

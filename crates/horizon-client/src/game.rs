@@ -80,6 +80,7 @@ mod lan_mobs;
 mod lan_mount_menu;
 mod lan_particles;
 mod lan_pvp;
+mod lan_quiet;
 mod lan_screen;
 mod lan_stations;
 mod lan_trading;
@@ -147,6 +148,7 @@ mod scoreboard;
 mod screens;
 mod sculk;
 mod sculk_fixture;
+mod server_mods;
 mod server_packs;
 mod server_travel;
 mod shader_packs;
@@ -3338,6 +3340,7 @@ impl Game<'_> {
         self.pad_rumble(horizon_client::gamepad::Rumble::BlockBroken);
         // ServerPlayerGameMode.destroyBlock.
         let state = self.world.block(pos[0], pos[1], pos[2]);
+        let broken = state;
         let facts = self.res.facts().get(state).clone();
         let state = self.crack_mined_pot(pos, state);
         // Block.playerWillDestroy: mining their gold angers all nearby piglins.
@@ -3369,6 +3372,9 @@ impl Game<'_> {
                 creative,
             )
         });
+        if removed {
+            self.mod_block_event(pos, broken, false);
+        }
         if removed && !creative {
             let held = self.held().cloned();
             self.mine_block_with_held(&facts.name, facts.hardness);
@@ -3711,6 +3717,7 @@ impl Game<'_> {
             return Ok(true);
         };
         let target = [pos.x, pos.y, pos.z];
+        self.mod_block_event(target, state, true);
         if let Some(entity) = BlockEntity::for_block(&self.res.facts().get(state).name) {
             let key = (target[0], target[1], target[2]);
             self.world.block_entities.insert(key, entity);
@@ -4244,6 +4251,7 @@ impl Game<'_> {
         self.update_totem_ready();
         self.tick_command_extras();
         self.tick_mods();
+        self.tick_server_mods();
         let camera_eye = self.camera_eye_height();
         let stick = self.pad_move();
         if self.riding.is_some() && self.player.is_some() {
@@ -9945,8 +9953,7 @@ impl Game<'_> {
         } else if self.carried.is_none()
             && let Some(item) = hovered
         {
-            let lines = self.stack_tooltip(&item);
-            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
+            self.draw_stack_tooltip(batch, &item, self.cursor.0, self.cursor.1);
         }
         self.draw_inventory_effects(batch, (ox, oy), Creative::WIDTH as i32);
     }

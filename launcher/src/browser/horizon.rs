@@ -8,6 +8,7 @@ use super::{
     download, installed, java, FileRef, Kind, Project, Query, Source, SourceId, Version, GAME,
 };
 use horizon_mods::index::{self, Index, Trust};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -27,6 +28,11 @@ const FRESH: Duration = Duration::from_secs(600);
 const MAX_INDEX: u64 = 16 << 20;
 /// The last index fetched, kept in the game folder for when the registry can't be reached.
 const CACHE: &str = "mod-browser/horizon-index.json";
+/// Players' ratings of every project (the registry service, crates/horizon-mod-registry).
+const RATINGS_URL: &str = "https://playhorizon.dev/api/mods/ratings";
+/// Where a player rates a project: the site's GitHub sign-in, which comes back to its page.
+/// The launcher has no GitHub account of its own.
+const RATE: &str = "https://playhorizon.dev/api/mods/auth/login?back=/mods/";
 
 /// Where the index comes from: `HORIZON_MOD_INDEX` (a file or an `https://` address, for a
 /// test registry), else [`INDEX_URL`].
@@ -110,6 +116,92 @@ fn fetch_index() -> Result<(Index, String), String> {
     Ok((index, text))
 }
 
+/// A project's ratings: 1 to 5 stars, their mean and how many.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rating {
+    pub average: f32,
+    pub count: u64,
+}
+
+/// When the ratings were fetched last, and every rated project's [`Rating`] (None: that failed).
+type Ratings = Option<Arc<HashMap<String, Rating>>>;
+static RATINGS: Mutex<Option<(Instant, Ratings)>> = Mutex::new(None);
+
+/// A project's rating as fetched last, without asking the network: None when the ratings
+/// aren't known (not fetched, or the service didn't answer), `Some(None)` when it has none.
+pub fn rating(id: &str) -> Option<Option<Rating>> {
+    let ratings = RATINGS.lock().unwrap();
+    let known = ratings.as_ref()?.1.as_ref()?;
+    Some(known.get(id).copied())
+}
+
+/// The page that signs the player in with GitHub on the site and lets them rate `id`.
+pub fn rate_url(id: &str) -> String {
+    format!("{RATE}{id}")
+}
+
+/// Fetches the ratings again when the last try is ten minutes old: from `HORIZON_MOD_RATINGS`
+/// (a file or an `https://` address, for a test registry), else [`RATINGS_URL`]; a local test
+/// registry has none unless given. After a failure the browser shows downloads only.
+fn refresh_ratings() {
+    if RATINGS
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|(at, _)| at.elapsed() < FRESH)
+    {
+        return;
+    }
+    let given = std::env::var("HORIZON_MOD_RATINGS")
+        .ok()
+        .filter(|v| !v.is_empty());
+    if given.is_none() && local() {
+        return;
+    }
+    let at = given.unwrap_or_else(|| RATINGS_URL.to_owned());
+    let text = if at.starts_with("https://") {
+        download::agent().get(&at).call().ok().and_then(|r| {
+            use std::io::Read;
+            let mut text = String::new();
+            r.into_reader()
+                .take(MAX_INDEX)
+                .read_to_string(&mut text)
+                .ok()
+                .map(|_| text)
+        })
+    } else {
+        fs::read_to_string(&at).ok()
+    };
+    let fetched = text.map(|t| Arc::new(parse_ratings(&t)));
+    *RATINGS.lock().unwrap() = Some((Instant::now(), fetched));
+}
+
+/// `{"projects": {"<id>": {"average", "count"}}}`, keeping only well-formed entries.
+fn parse_ratings(text: &str) -> HashMap<String, Rating> {
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(text) else {
+        return HashMap::new();
+    };
+    let Some(projects) = json["projects"].as_object() else {
+        return HashMap::new();
+    };
+    projects
+        .iter()
+        .filter_map(|(id, r)| {
+            let average = r["average"].as_f64().filter(|a| (1.0..=5.0).contains(a))?;
+            let count = r["count"].as_u64().filter(|&c| c > 0)?;
+            index::valid_id(id).then(|| {
+                (
+                    id.clone(),
+                    Rating {
+                        average: average as f32,
+                        count,
+                    },
+                )
+            })
+        })
+        .collect()
+}
+
 /// The browser's kind for a registry kind; None for one the launcher doesn't install yet
 /// (kinds newer than this launcher).
 fn kind_of(kind: &index::Kind) -> Option<Kind> {
@@ -158,7 +250,7 @@ fn project_of(p: &index::Project) -> Option<Project> {
         title: p.name.clone(),
         summary: p.summary.clone(),
         author: p.authors.join(", "),
-        downloads: 0,
+        downloads: p.downloads,
         page: format!("{SITE}/{}", p.id),
         icon: p.icon.clone(),
         license: p.license.clone(),
@@ -218,14 +310,19 @@ fn matches(p: &index::Project, text: &str) -> bool {
         .all(|word| hay.contains(&word.to_lowercase()))
 }
 
-/// The projects of the query's kind whose words match, for this game unless `everything`.
+/// The projects of the query's kind whose words match, for this game unless `everything`: the
+/// most downloaded first.
 fn search(index: &Index, query: &Query) -> Vec<Project> {
-    index
+    let mut found: Vec<Project> = index
         .projects
         .iter()
         .filter(|p| kind_of(&p.kind) == Some(query.kind) && matches(p, &query.text))
         .filter(|p| query.everything || p.versions.iter().any(|v| v.game == GAME))
         .filter_map(project_of)
+        .collect();
+    found.sort_by_key(|p| std::cmp::Reverse(p.downloads));
+    found
+        .into_iter()
         .skip(query.offset)
         .take(query.limit)
         .collect()
@@ -240,7 +337,9 @@ impl Source for Registry {
     }
 
     fn search(&self, query: &Query) -> Result<Vec<Project>, String> {
-        Ok(search(&*index()?, query))
+        let found = search(&*index()?, query);
+        refresh_ratings();
+        Ok(found)
     }
 
     fn project(&self, id: &str) -> Result<Project, String> {
@@ -270,6 +369,7 @@ impl Source for Registry {
     }
 
     fn details(&self, project: &Project) -> Result<Details, String> {
+        refresh_ratings();
         let index = index()?;
         let p = index
             .project(&project.id)

@@ -1142,6 +1142,9 @@ impl Game<'_> {
         let local = (self.cursor.0 - ox, self.cursor.1 - oy);
         let mut tooltip: Option<Vec<(horizon_client::text::Text, u32)>> = None;
         let mut anvil_name = false;
+        // Keep item tooltips as stacks until drawing: text alone loses the
+        // bundle contents component (including in the player's inventory).
+        let mut tooltip_stack: Option<ItemStack> = None;
         {
             let atlas = &self.gui.atlas;
             batch.fill(
@@ -1617,7 +1620,7 @@ impl Game<'_> {
                             );
                             self.draw_item(batch, &result, ox + x, oy + y);
                             if hover {
-                                tooltip = Some(self.stack_tooltip(&result));
+                                tooltip_stack = Some(result);
                             }
                         }
                     }
@@ -1647,13 +1650,16 @@ impl Game<'_> {
             );
             if self.carried.is_none()
                 && tooltip.is_none()
+                && tooltip_stack.is_none()
                 && let Some(stack) = self.slot_mut(slot).clone()
             {
-                tooltip = Some(self.stack_tooltip(&stack));
+                tooltip_stack = Some(stack);
             }
         }
         if self.carried.is_some() {
             self.draw_carried(batch);
+        } else if let Some(stack) = tooltip_stack {
+            self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
         } else if let Some(lines) = tooltip {
             self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
         }
@@ -1948,32 +1954,65 @@ impl Game<'_> {
         if lines.is_empty() {
             return;
         }
-        let lines: Vec<_> = lines
+        let lines = Self::resolved(lines);
+        let atlas = &self.gui.atlas;
+        let (x, y, w, h) =
+            Self::tooltip_geometry(atlas, &lines, (x, y), (batch.width, batch.height), 0.0);
+        Self::tooltip_box(batch, atlas, x, y, w, h);
+        Self::tooltip_text(batch, atlas, &lines, x, y);
+    }
+    /// A tooltip's lines with their legacy codes resolved and their colours.
+    fn resolved<T: Clone + Into<horizon_client::text::Text>>(
+        lines: &[(T, u32)],
+    ) -> Vec<(horizon_client::text::Text, u32)> {
+        lines
             .iter()
             .map(|(text, color)| {
                 let text: horizon_client::text::Text = text.clone().into();
                 (text.resolve_legacy(), *color)
             })
-            .collect();
-        let atlas = &self.gui.atlas;
+            .collect()
+    }
+    /// The tooltip's text's top-left corner and the box's size: beside the
+    /// cursor, kept on screen, `extra` pixels taller than the text.
+    fn tooltip_geometry(
+        atlas: &horizon_client::hud::HudAtlas,
+        lines: &[(horizon_client::text::Text, u32)],
+        (x, y): (f32, f32),
+        (width, height): (f32, f32),
+        extra: f32,
+    ) -> (f32, f32, f32, f32) {
         let w = lines
             .iter()
             .map(|(t, _)| atlas.font.width_text(t))
-            .fold(0.0, f32::max);
-        let h = if lines.len() == 1 {
+            .fold(0.0, f32::max)
+            .max(if extra > 0.0 { 96.0 } else { 0.0 });
+        let text_h = if lines.len() == 1 {
             8.0
         } else {
             8.0 + 2.0 + (lines.len() - 1) as f32 * 10.0
         };
+        let h = text_h + extra;
         let mut x = x + 12.0;
         let mut y = y - 12.0;
-        if x + w > batch.width - 4.0 {
+        if x + w > width - 4.0 {
             x = (x - 28.0 - w).max(4.0);
         }
-        if y + h + 3.0 > batch.height {
-            y = batch.height - h - 3.0;
+        if y + h + 3.0 > height {
+            y = height - h - 3.0;
         }
         y = y.max(4.0);
+        (x, y, w, h)
+    }
+    /// The box and its frame sprites.
+    fn tooltip_box(
+        batch: &mut HudBatch,
+        atlas: &horizon_client::hud::HudAtlas,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    ) {
         batch.fill(atlas, x - 3.0, y - 4.0, w + 6.0, 1.0, rgba(16, 0, 16, 240));
         batch.fill(
             atlas,
@@ -2009,10 +2048,135 @@ impl Game<'_> {
             h + 4.0,
             rgba(60, 0, 190, 80),
         );
+    }
+    fn tooltip_text(
+        batch: &mut HudBatch,
+        atlas: &horizon_client::hud::HudAtlas,
+        lines: &[(horizon_client::text::Text, u32)],
+        x: f32,
+        y: f32,
+    ) {
         let mut ty = y;
         for (i, (text, color)) in lines.iter().enumerate() {
             batch.text_styled(atlas, text, x, ty, *color, true);
             ty += if i == 0 { 12.0 } else { 10.0 };
+        }
+    }
+    /// A stack's tooltip: its lines, and under them a bundle's contents
+    /// (`ClientBundleTooltip`: the 4 wide grid, the `+N` of what it leaves
+    /// out, and the weight bar).
+    pub(super) fn draw_stack_tooltip(
+        &mut self,
+        batch: &mut HudBatch,
+        stack: &ItemStack,
+        x: f32,
+        y: f32,
+    ) {
+        let lines = Self::resolved(&self.stack_tooltip(stack));
+        if lines.is_empty() {
+            return;
+        }
+        // The component's height does not depend on where it is drawn, so a
+        // probe at the origin gives the box its extra height.
+        let probe = horizon_client::bundle::tooltip_layout(self.res.items(), stack, 0.0, 0.0, 96.0);
+        let extra = probe.as_ref().map_or(0.0, |l| l.height + 2.0);
+        let atlas = &self.gui.atlas;
+        let (x, y, w, h) =
+            Self::tooltip_geometry(atlas, &lines, (x, y), (batch.width, batch.height), extra);
+        Self::tooltip_box(batch, atlas, x, y, w, h);
+        let text_h = h - extra;
+        Self::tooltip_text(batch, atlas, &lines, x, y);
+        let Some(layout) =
+            horizon_client::bundle::tooltip_layout(self.res.items(), stack, x, y + text_h + 2.0, w)
+        else {
+            return;
+        };
+        self.draw_bundle_tooltip(batch, &layout);
+    }
+    /// `ClientBundleTooltip.extractImage`: the slots, the count past them and
+    /// the progress bar.
+    fn draw_bundle_tooltip(
+        &mut self,
+        batch: &mut HudBatch,
+        layout: &horizon_client::bundle::TooltipLayout,
+    ) {
+        for (at, stack) in &layout.slots {
+            // Each draw takes the atlas on its own: the item's needs `&mut self`.
+            horizon_client::ui::nine_slice(
+                batch,
+                &self.gui.atlas,
+                "gui/sprites/container/bundle/slot_background",
+                at[0],
+                at[1],
+                24.0,
+                24.0,
+                u32::MAX,
+            );
+            let stack = stack.clone();
+            let [x, y] = *at;
+            self.draw_item(batch, &stack, x + 4.0, y + 4.0);
+        }
+        let atlas = &self.gui.atlas;
+        if let Some((at, hidden)) = layout.overflow {
+            let label = horizon_client::text::Text::literal(format!("+{hidden}"));
+            let w = atlas.font.width_text(&label);
+            batch.text_styled(
+                atlas,
+                &label,
+                at[0] + 12.0 - (w / 2.0).floor(),
+                at[1] + 10.0,
+                u32::MAX,
+                true,
+            );
+        }
+        if let Some((at, description)) = layout
+            .empty_description
+            .zip(Some("item.minecraft.bundle.empty.description"))
+        {
+            let text = horizon_client::text::Text::translate(description, &[]);
+            let mut ty = at[1];
+            for line in atlas.font.split_lines(&text, layout.width) {
+                batch.text_styled(atlas, &line.0, at[0], ty, 0xFFAA_AAAA, false);
+                ty += 9.0;
+            }
+        }
+        let [bx, by] = layout.bar;
+        let fill_sprite = if layout.full {
+            "gui/sprites/container/bundle/bundle_progressbar_full"
+        } else {
+            "gui/sprites/container/bundle/bundle_progressbar_fill"
+        };
+        horizon_client::ui::nine_slice(
+            batch,
+            atlas,
+            fill_sprite,
+            bx + 1.0,
+            by,
+            layout.fill,
+            13.0,
+            u32::MAX,
+        );
+        horizon_client::ui::nine_slice(
+            batch,
+            atlas,
+            "gui/sprites/container/bundle/bundle_progressbar_border",
+            bx,
+            by,
+            96.0,
+            13.0,
+            u32::MAX,
+        );
+        if let Some(key) = layout.label {
+            let label = horizon_client::text::Text::translate(key, &[]);
+            let w = atlas.font.width_text(&label);
+            batch.text_styled(
+                atlas,
+                &label,
+                bx + 48.0 - (w / 2.0).floor(),
+                by + 3.0,
+                u32::MAX,
+                true,
+            );
         }
     }
     /// Hovered-slot tooltip on the plain inventory, crafting and container screens.
@@ -2025,8 +2189,7 @@ impl Game<'_> {
         };
         let stack = self.slot_view(slot);
         if let Some(stack) = stack {
-            let lines = self.stack_tooltip(&stack);
-            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
+            self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
         } else if let Some(text) = self.crafter_tooltip(slot) {
             self.draw_tooltip_lines(
                 batch,
