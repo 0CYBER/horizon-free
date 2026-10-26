@@ -311,9 +311,10 @@ impl Game<'_> {
                     });
                     let damage = 8.0 + if aquatic { 2.5 * impaling } else { 0.0 };
                     t.dealt_damage = true;
+                    let mut hurt = false;
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
                         let from = Some([t.position.x, t.position.y, t.position.z]);
-                        m.damage(
+                        hurt = m.damage(
                             damage,
                             Damage {
                                 kind: DamageKind::Arrow,
@@ -321,6 +322,16 @@ impl Game<'_> {
                                 from,
                             },
                         );
+                    }
+                    if hurt && let Some(m) = self.mobs.iter().find(|m| m.id == id) {
+                        // LivingEntity.hurtServer: PLAYER_HURT_ENTITY.
+                        let victim = self.mob_entity(m);
+                        let direct = horizon_client::advancements::EntityView {
+                            kind: "minecraft:trident".into(),
+                            position: [t.position.x, t.position.y, t.position.z],
+                            ..Default::default()
+                        };
+                        self.player_hit(&victim, "minecraft:trident", Some(direct), damage);
                     }
                     self.audio.play(
                         "minecraft:item.trident.hit",
