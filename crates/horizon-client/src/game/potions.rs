@@ -71,6 +71,8 @@ pub(super) struct BodyPotions {
 pub(super) struct PotionState {
     pub(super) effects: PlayerEffects,
     thrown: Vec<ThrownPotion>,
+    /// The area effect clouds a server tracks (game/remote_projectiles.rs).
+    pub(super) clouds: Vec<super::remote_projectiles::RemoteCloud>,
     applied: Vec<(&'static str, &'static str, f64, &'static str)>,
     /// Armor the protection table was computed for.
     protection_for: Option<Vec<Option<ItemStack>>>,

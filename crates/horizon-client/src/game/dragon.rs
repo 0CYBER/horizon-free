@@ -1558,6 +1558,7 @@ impl Game<'_> {
                         y -= 1.0;
                     }
                     self.breath_clouds.push(Breath {
+                        id: 0,
                         at: [x, y.floor() + 1.0, z],
                         radius: 5.0,
                         age: 0,
@@ -2083,6 +2084,7 @@ impl Game<'_> {
             });
             if hit_block || hit_player || b.age > 600 {
                 self.breath_clouds.push(Breath {
+                    id: 0,
                     at: [next.x, next.y, next.z],
                     radius: 3.0,
                     age: 0,
@@ -2208,9 +2210,11 @@ pub(super) struct DragonFireball {
     age: i32,
 }
 pub(super) struct Breath {
-    at: [f64; 3],
-    radius: f32,
-    age: i32,
+    /// Its entity id once a server's players track it (0 until then).
+    pub(super) id: u32,
+    pub(super) at: [f64; 3],
+    pub(super) radius: f32,
+    pub(super) age: i32,
     duration: i32,
     from_dragon: bool,
 }
