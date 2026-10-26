@@ -38,6 +38,9 @@ pub(super) struct GuestPlay {
     use_delay: u32,
     /// The shield's ItemCooldowns entry: an axe disabled it for this many ticks.
     pub(super) shield_cooldown: u32,
+    /// `ServerGamePacketListenerImpl.dropSpamThrottler` (`TickThrottler(20, 1480)`): 20 for each
+    /// item a creative player drops from the creative screen, one less each tick.
+    creative_drops: u32,
     /// The guest's `Player.getCooldowns()` (`Game::cooldowns` for its turn).
     pub(super) cooldowns: horizon_client::cooldowns::Cooldowns,
     attack_ticks: u32,
@@ -1086,6 +1089,35 @@ impl Game<'_> {
             }
             S::MoveVehicle(p) => self.guest_move_vehicle(host, conn, &p),
             S::PaddleBoat(p) => self.guest_paddle_boat(host, conn, [p.left, p.right]),
+            // handleSetCreativeModeSlot's drop: a slot below 0 is a stack thrown out of the
+            // creative screen (`handleCreativeModeItemDrop`), dropped from the player's hand.
+            S::SetCreativeModeSlot(p) if p.slot < 0 => {
+                if !host.hub.guests[gi].creative() {
+                    return;
+                }
+                let Some(stack) = self.item_from_network(host, &p.item) else {
+                    return;
+                };
+                if stack.count
+                    > self
+                        .res
+                        .items()
+                        .get(&stack.item)
+                        .map_or(64, |i| i.max_stack)
+                {
+                    return;
+                }
+                let play = host.play.entry(conn).or_default();
+                if play.creative_drops >= 1480 {
+                    eprintln!(
+                        "Player {} was dropping items too fast in creative mode, ignoring.",
+                        host.hub.guests[gi].name
+                    );
+                    return;
+                }
+                play.creative_drops += 20;
+                self.as_guest(host, conn, |g| g.player_drop(stack));
+            }
             S::SetCreativeModeSlot(p) => {
                 let g = &mut host.hub.guests[gi];
                 if !g.creative() || !(0..46).contains(&p.slot) {
@@ -1159,6 +1191,10 @@ impl Game<'_> {
                     && slots.and_then(|s| s.read(&self.world, &host.hub.guests[gi])) != before
                 {
                     self.container_changed(key);
+                }
+                // A vehicle's menu edits the vehicle's own items.
+                if let Some(Slots::Block(key)) = slots {
+                    self.store_cart_items(key);
                 }
                 self.drop_guest_items(host, gi, drops);
             }
@@ -1799,12 +1835,17 @@ impl Game<'_> {
                 continue;
             }
             if self.on_server_trip(conn) {
+                // LivingEntity.hurt kills at once (die), whether the level
+                // has loaded around the player or not: its respawn request
+                // is taken as soon as it comes.
+                self.guest_die(host, gi, conn);
                 continue;
             }
             let play = host.play.entry(conn).or_default();
             // Player.tick's ItemCooldowns.tick, once a tick for each player
             // (the shield an axe disabled, a thrown pearl).
             play.shield_cooldown = play.shield_cooldown.saturating_sub(1);
+            play.creative_drops = play.creative_drops.saturating_sub(1);
             // ServerItemCooldowns.onCooldownEnded: a finished entry is told to
             // the guest (a duration of 0 removes it).
             for group in play.cooldowns.tick() {
@@ -1883,69 +1924,72 @@ impl Game<'_> {
             self.guest_dig_feedback(host, conn);
             self.guest_pickups(host, gi);
             self.guest_orbs(host, gi);
-            if host.hub.guests[gi].health <= 0.0 && !host.hub.guests[gi].dead {
-                self.guest_forget_digging(host, conn);
-                // FishingHook.shouldStopFishing: its owner is dead.
-                if let Some(play) = host.play.get_mut(&conn) {
-                    play.hook = None;
-                }
+            self.guest_die(host, gi, conn);
+        }
+    }
+
+    /// `ServerPlayer.die` for a guest whose health has run out: the death
+    /// message, the loot and experience, the death screen.
+    fn guest_die(&mut self, host: &mut LanHost, gi: usize, conn: u32) {
+        if host.hub.guests[gi].health <= 0.0 && !host.hub.guests[gi].dead {
+            self.guest_forget_digging(host, conn);
+            // FishingHook.shouldStopFishing: its owner is dead.
+            if let Some(play) = host.play.get_mut(&conn) {
+                play.hook = None;
             }
-            let g = &mut host.hub.guests[gi];
-            if g.health <= 0.0 && !g.dead {
-                g.dead = true;
-                g.last_death = Some(g.position.map(|v| v.floor() as i32));
-                let (id, at) = (g.entity_id, g.position);
-                let reward = Experience {
-                    level: g.xp_level,
-                    progress: g.xp_progress,
-                    total: g.xp_total,
-                }
-                .death_reward(self.ui.rules.bool("keep_inventory") || g.game_mode == SPECTATOR);
-                let (name, uuid) = (g.name.clone(), g.uuid);
-                // ServerPlayer.die: dropAllDeathLoot unless a spectator, from the eyes less 0.3.
-                let drops = (g.game_mode != SPECTATOR)
-                    .then(|| [at[0], at[1] + g.eye_height() - 0.3, at[2]]);
-                let cause = host.play.get_mut(&conn).and_then(|p| p.death_cause.take());
-                // ServerPlayer.die: with showDeathMessages, the message goes to
-                // the dying player's death screen and to everyone the team lets
-                // see it; without it, the death screen gets an empty one.
-                let message = if self.ui.rules.bool("show_death_messages") {
-                    let me = self.player_text(&name, uuid);
-                    let text = match cause {
-                        Some(key) => horizon_client::text::Text::translate(&key, &[me]),
-                        None if at[1] < f64::from(horizon_client::chunk::MIN_Y - 64) => {
-                            horizon_client::text::Text::translate("death.attack.outOfWorld", &[me])
-                        }
-                        None => self.guest_death_message(conn, me),
-                    };
-                    let message = horizon_client::lan::data::component_nbt(&text.component());
-                    let team = self.score.board.players_team(&name);
-                    if horizon_client::scoreboard::own_death_message_shown(team) {
-                        host.hub.system_message(message.clone());
-                        if self.options.dedicated.is_some() {
-                            super::dedicated::log(
-                                "INFO",
-                                &format!("System chat: {}", text.plain()),
-                            );
-                        } else if self.player.is_some() {
-                            self.system_message(text);
-                        }
+        }
+        let g = &mut host.hub.guests[gi];
+        if g.health <= 0.0 && !g.dead {
+            g.dead = true;
+            g.last_death = Some(g.position.map(|v| v.floor() as i32));
+            let (id, at) = (g.entity_id, g.position);
+            let reward = Experience {
+                level: g.xp_level,
+                progress: g.xp_progress,
+                total: g.xp_total,
+            }
+            .death_reward(self.ui.rules.bool("keep_inventory") || g.game_mode == SPECTATOR);
+            let (name, uuid) = (g.name.clone(), g.uuid);
+            // ServerPlayer.die: dropAllDeathLoot unless a spectator, from the eyes less 0.3.
+            let drops =
+                (g.game_mode != SPECTATOR).then(|| [at[0], at[1] + g.eye_height() - 0.3, at[2]]);
+            let cause = host.play.get_mut(&conn).and_then(|p| p.death_cause.take());
+            // ServerPlayer.die: with showDeathMessages, the message goes to
+            // the dying player's death screen and to everyone the team lets
+            // see it; without it, the death screen gets an empty one.
+            let message = if self.ui.rules.bool("show_death_messages") {
+                let me = self.player_text(&name, uuid);
+                let text = match cause {
+                    Some(key) => horizon_client::text::Text::translate(&key, &[me]),
+                    None if at[1] < f64::from(horizon_client::chunk::MIN_Y - 64) => {
+                        horizon_client::text::Text::translate("death.attack.outOfWorld", &[me])
                     }
-                    message
-                } else {
-                    literal("")
+                    None => self.guest_death_message(conn, me),
                 };
-                host.hub.send_to(
-                    conn,
-                    &C::PlayerCombatKill(play::PlayerCombatKill { id, message }),
-                );
-                // LivingEntity.die: the death animation, the dying player included.
-                host.hub.entity_event(id, 3, at);
-                if let Some(eyes) = drops {
-                    self.as_guest(host, conn, |game| game.drop_inventory(eyes));
+                let message = horizon_client::lan::data::component_nbt(&text.component());
+                let team = self.score.board.players_team(&name);
+                if horizon_client::scoreboard::own_death_message_shown(team) {
+                    host.hub.system_message(message.clone());
+                    if self.options.dedicated.is_some() {
+                        super::dedicated::log("INFO", &format!("System chat: {}", text.plain()));
+                    } else if self.player.is_some() {
+                        self.system_message(text);
+                    }
                 }
-                self.spawn_orbs(at, reward);
+                message
+            } else {
+                literal("")
+            };
+            host.hub.send_to(
+                conn,
+                &C::PlayerCombatKill(play::PlayerCombatKill { id, message }),
+            );
+            // LivingEntity.die: the death animation, the dying player included.
+            host.hub.entity_event(id, 3, at);
+            if let Some(eyes) = drops {
+                self.as_guest(host, conn, |game| game.drop_inventory(eyes));
             }
+            self.spawn_orbs(at, reward);
         }
     }
 
@@ -2143,6 +2187,9 @@ impl Game<'_> {
             let _ = w.tick_environment_damage();
             let _ = w.apply_fire_contact();
             let _ = w.server_hazards_tick(in_wall);
+            // Player.tick ends with updatePlayerPose: a swimmer, or a player
+            // crawling under a block, takes the short box its moves are checked with.
+            let _ = w.update_player_pose();
             let mut events = std::mem::take(&mut w.player.events);
             // LayeredCauldronBlock.handleEntityOnFireInside along those moves.
             for event in &events {

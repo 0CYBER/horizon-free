@@ -1,6 +1,6 @@
 //! The whole submission against a mock GitHub: sign in, submit the sample
 //! signed mod (`crates/horizon-mods/tests/index`), and what lands on GitHub;
-//! then what is refused.
+//! then what is refused. Then ratings: who may rate what, and what is shown.
 use axum::{
     Json, Router,
     body::{Body, Bytes},
@@ -55,7 +55,9 @@ async fn mock_github() -> (String, Shared) {
         .route(
             "/user",
             get(|State(s): State<Shared>| async move {
-                Json(json!({"login": s.lock().unwrap().login, "id": 7}))
+                let login = s.lock().unwrap().login.clone();
+                let id = if login == "alice" { 7 } else { 8 };
+                Json(json!({"login": login, "id": id}))
             }),
         )
         .route(
@@ -174,7 +176,16 @@ impl Client {
     }
 
     async fn sign_in(&mut self) -> String {
-        let (status, _, location) = self.send(self.get("/api/mods/auth/login")).await;
+        self.sign_in_from("").await
+    }
+
+    /// Signs in from the page `back` (`?back=` of the sign-in; "" for none).
+    async fn sign_in_from(&mut self, back: &str) -> String {
+        let login = match back {
+            "" => "/api/mods/auth/login".to_owned(),
+            back => format!("/api/mods/auth/login?back={back}"),
+        };
+        let (status, _, location) = self.send(self.get(&login)).await;
         assert_eq!(status, StatusCode::SEE_OTHER);
         let location = location.unwrap();
         assert!(location.contains(
@@ -197,10 +208,11 @@ impl Client {
             .send(self.get(&format!("/api/mods/auth/callback?code=good&state={state}")))
             .await;
         assert_eq!(status, StatusCode::SEE_OTHER);
-        assert_eq!(
-            location.as_deref(),
-            Some("https://playhorizon.test/mods/submit")
-        );
+        let page = match back {
+            "/mods" | "/mods/zoom" => back,
+            _ => "/mods/submit",
+        };
+        assert_eq!(location, Some(format!("https://playhorizon.test{page}")));
         let (status, me, _) = self.send(self.get("/api/mods/me")).await;
         assert_eq!(status, StatusCode::OK);
         me["csrf"].as_str().unwrap().to_owned()
@@ -265,9 +277,10 @@ async fn setup() -> (Client, Shared) {
             "bot".into(),
         ),
         scratch,
+        database: ":memory:".into(),
     };
     let client = Client {
-        app: router(App::new(config)),
+        app: router(App::new(config).unwrap()),
         cookies: HashMap::new(),
     };
     (client, mock)
@@ -342,11 +355,12 @@ async fn what_the_form_refuses() {
     );
     let (status, json) = client.submit(&csrf, &f, &file).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
-    // Shader packs aren't open.
+    // A shader pack runs the game's own check: a mod's file isn't one.
     let mut f = form();
     f["kind"] = json!("shader");
     let (status, json) = client.submit(&csrf, &f, &file).await;
-    refused(status, &json, "shader packs open");
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+    refused(status, &json, "horizon-shaders.toml: missing");
     // An update by someone who isn't an owner.
     let owned = "id = \"coords_hud\"\nkind = \"mod\"\nname = \"C\"\nsummary = \"s\"\nowners = [\"bob\"]\nlicense = \"MIT\"\nsource = \"https://x.test\"\n\n[[versions]]\nversion = \"0.0.1\"\npublished = \"2026-01-01\"\ngame = \"26.3\"\nfile = \"coords_hud-0.0.1.hmod\"\nsha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n";
     mock.lock()
@@ -374,4 +388,96 @@ async fn what_the_form_refuses() {
         m.assets.is_empty() && m.pulls.is_empty(),
         "nothing reached GitHub"
     );
+}
+
+const ENTRY: &str = "kind = \"mod\"\nname = \"N\"\nsummary = \"s\"\nlicense = \"MIT\"\nsource = \"https://x.test\"\n\n[[versions]]\nversion = \"1.0.0\"\npublished = \"2026-01-01\"\ngame = \"26.3\"\nfile = \"f.hmod\"\nsha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\n";
+
+impl Client {
+    async fn rate(&mut self, csrf: &str, id: &str, body: &str) -> (StatusCode, Value) {
+        let request = Request::post(format!("/api/mods/{id}/rating"))
+            .header(header::COOKIE, self.cookie_header())
+            .header(header::ORIGIN, PUBLIC)
+            .header("x-csrf-token", csrf)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_owned()))
+            .unwrap();
+        let (status, json, _) = self.send(request).await;
+        (status, json)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ratings() {
+    let (mut client, mock) = setup().await;
+    {
+        let mut m = mock.lock().unwrap();
+        m.main.insert(
+            "mods/zoom.toml".into(),
+            format!("id = \"zoom\"\nowners = [\"bob\"]\n{ENTRY}"),
+        );
+        m.main.insert(
+            "mods/mine.toml".into(),
+            format!("id = \"mine\"\nowners = [\"Alice\"]\n{ENTRY}"),
+        );
+    }
+    // Nothing rated yet; signed out, no own rating and no rating at all.
+    let (status, json, _) = client.send(client.get("/api/mods/ratings")).await;
+    assert_eq!((status, json), (StatusCode::OK, json!({"projects": {}})));
+    let (status, ..) = client.send(client.get("/api/mods/zoom/rating")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = client.rate("x", "zoom", r#"{"stars": 4}"#).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // A sign-in from a project's page comes back to it; anywhere else is the form.
+    client.sign_in_from("https://evil.test/").await;
+    let csrf = client.sign_in_from("/mods/zoom").await;
+    let (status, json) = client.rate("wrong", "zoom", r#"{"stars": 4}"#).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{json}");
+    for stars in ["0", "6"] {
+        let (status, json) = client
+            .rate(&csrf, "zoom", &format!(r#"{{"stars": {stars}}}"#))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+    }
+    let (status, json) = client.rate(&csrf, "zoom", r#"{"stars": 4}"#).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json, json!({"stars": 4, "average": 4.0, "count": 1}));
+    // Changing it replaces it.
+    let (status, json) = client.rate(&csrf, "zoom", r#"{"stars": 2}"#).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["count"], 1);
+    let (_, json, _) = client.send(client.get("/api/mods/zoom/rating")).await;
+    assert_eq!(json, json!({"stars": 2}));
+    let (_, json, _) = client.send(client.get("/api/mods/minimap/rating")).await;
+    assert_eq!(json, json!({"stars": null}));
+
+    // Not one's own project, nor one that isn't published.
+    let (status, json) = client.rate(&csrf, "mine", r#"{"stars": 5}"#).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{json}");
+    let (status, json) = client.rate(&csrf, "nothing", r#"{"stars": 5}"#).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{json}");
+
+    // Another account's rating counts once more; the totals never say whose.
+    let mut other = Client {
+        app: client.app.clone(),
+        cookies: HashMap::new(),
+    };
+    mock.lock().unwrap().login = "carol".into();
+    let carol = other.sign_in().await;
+    let (status, json) = other.rate(&carol, "zoom", r#"{"stars": 5}"#).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json, json!({"stars": 5, "average": 3.5, "count": 2}));
+    let (status, json, _) = client.send(client.get("/api/mods/ratings")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json,
+        json!({"projects": {"zoom": {"average": 3.5, "count": 2}}})
+    );
+
+    // The limit per account and hour.
+    let mut last = StatusCode::OK;
+    for _ in 0..40 {
+        (last, _) = client.rate(&csrf, "zoom", r#"{"stars": 3}"#).await;
+    }
+    assert_eq!(last, StatusCode::TOO_MANY_REQUESTS);
 }
