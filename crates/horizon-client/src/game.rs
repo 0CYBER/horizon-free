@@ -4519,7 +4519,6 @@ impl Game<'_> {
             player.dimensions.eye_height
         };
         self.eye += (camera_eye.unwrap_or(eye_height) - self.eye) * 0.5;
-        let crouching = player.pose == horizon_client::pose::Pose::Crouching;
         // `ItemStack.hurtAndBreak` for the glide: Unbreaking can save the wear.
         if glider_wear > 0
             && !self.creative
@@ -4539,10 +4538,12 @@ impl Game<'_> {
                 MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, feet),
                 MotionEvent::Emission {
                     state, in_water, ..
-                } if !crouching => {
+                } => {
                     let sounds = self.res.facts().get(state).sounds.clone();
                     // Entity.playStepSound: the block's step sound at 0.15 volume,
-                    // muffled under the swim sound in water.
+                    // muffled under the swim sound in water. Whether it plays is
+                    // Player.getMovementEmission's call (shift on the ground),
+                    // not the pose: a forced crouch still steps.
                     let (volume, pitch) = if in_water {
                         (sounds.volume * 0.05, sounds.pitch * 0.8)
                     } else {
