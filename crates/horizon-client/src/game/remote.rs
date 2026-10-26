@@ -3555,7 +3555,7 @@ impl Game<'_> {
                         m.extra.main_hand.clone()
                     };
                     if let Some(item) = item {
-                        let eye = if m.extra.crouching { 1.27 } else { 1.62 };
+                        let eye = m.eye_height();
                         let at = [m.position.x, m.position.y, m.position.z];
                         using.push((
                             item,

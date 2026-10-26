@@ -2182,7 +2182,7 @@ impl Game<'_> {
         }
         let in_wall = !g.sleeping && self.in_wall(g.position, g.eye_height());
         let at = g.position;
-        let sneaking = g.sneaking;
+        let (sneaking, sleeping) = (g.sneaking, g.sleeping);
         let events = self.as_guest(host, conn, |game| {
             let (rules, motion) = (game.world.health_rules, game.motion);
             let health = &motion.health;
@@ -2250,6 +2250,7 @@ impl Game<'_> {
             // Entity.applyEffectsFromBlocks along those moves: magma, cactus,
             // lit campfires and grown sweet berry bushes hurt (#1305).
             w.player.shift_key_down = sneaking;
+            let _ = w.player.set_sleeping(sleeping);
             w.player.freeze_immune = freeze_immune;
             let _ = w.server_block_damage(start);
             let _ = w.tick_environment_damage();
@@ -2626,8 +2627,7 @@ impl Game<'_> {
     /// with Mending and gives the rest as points. Everyone near hears it.
     fn guest_orbs(&mut self, host: &mut LanHost, gi: usize) {
         let g = &host.hub.guests[gi];
-        // Player's standing and crouching boxes: 1.8 and 1.5 high.
-        let height = if g.sneaking { 1.5 } else { 1.8 };
+        let height = f64::from(g.dimensions().height);
         let (conn, id, at) = (g.conn, g.entity_id, g.position);
         let unable = g.spectator() || g.dead || g.health <= 0.0;
         let play = host.play.entry(conn).or_default();

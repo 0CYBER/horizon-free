@@ -713,12 +713,7 @@ impl Game<'_> {
                 host.hub.here(g) && g.loaded && !g.dead && !g.spectator() && g.vehicle.is_none()
             }) {
                 let [x, y, z] = g.position;
-                let height = if g.sneaking { 1.5 } else { 1.8 };
-                let bb = Aabb::new(
-                    Vec3::new(x - 0.3, y, z - 0.3),
-                    Vec3::new(x + 0.3, y + height, z + 0.3),
-                );
-                pushers.push((Vec3::new(x, y, z), bb));
+                pushers.push((Vec3::new(x, y, z), g.bounds()));
             }
         }
         for (feet, bb) in pushers {

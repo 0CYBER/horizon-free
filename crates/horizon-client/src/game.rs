@@ -1983,9 +1983,11 @@ impl Game<'_> {
     /// item in use (LocalPlayer.modifyInput), the helmet's Respiration
     /// (decreaseAirSupply), the wings, leather boots on powder snow
     /// (PowderSnowBlock.canEntityWalkOnPowderSnow), freeze-immune wear
-    /// (LivingEntity.canFreeze) and the dimension's FAST_LAVA.
+    /// (LivingEntity.canFreeze), the dimension's FAST_LAVA and the sleeping
+    /// pose.
     pub(crate) fn sync_player_body(&mut self) {
         let glider = self.glider_worn();
+        let sleeping = self.sleeping.is_some();
         let item_use_speed = self
             .using
             .and_then(|(slot, _)| {
@@ -2013,6 +2015,7 @@ impl Game<'_> {
         player.item_use_speed = item_use_speed;
         player.respiration = respiration;
         player.glider = glider;
+        let _ = player.set_sleeping(sleeping);
         player.leather_boots = leather_boots;
         player.freeze_immune = freeze_immune;
         player.fluids.fast_lava = self.dim == Dim::Nether;

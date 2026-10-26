@@ -16,6 +16,7 @@ use crate::{
     collisions::SceneCollisions,
     effects::{EffectInstance, PlayerEffects},
     items::ItemStack,
+    pose::Pose,
     world::World,
 };
 use horizon_core::geometry::{Aabb, ShapeOp, Vec3, VoxelShape};
@@ -1507,7 +1508,7 @@ impl Hub {
         position: [f64; 3],
         rot: (f32, f32, f32),
         on_ground: bool,
-        flags: (bool, bool, bool, bool),
+        flags: (bool, bool, bool, bool, bool),
         living_flags: i8,
         bed: Option<[i32; 3]>,
         skin: u8,
@@ -1515,12 +1516,14 @@ impl Hub {
         equipment: Vec<(u8, Option<horizon_protocol::item::Stack>)>,
         attributes: Vec<play::AttributeSnapshot>,
     ) -> EntityState {
-        let (sneaking, sprinting, gliding, sleeping) = flags;
+        let (sneaking, sprinting, gliding, sleeping, swimming) = flags;
         let shared = shared_flags(sneaking, sprinting, gliding);
         let pose = if sleeping {
             2
         } else if gliding {
             1
+        } else if swimming {
+            3
         } else if sneaking {
             5
         } else {
@@ -1607,7 +1610,7 @@ impl Hub {
                 h.position,
                 (h.yaw, h.pitch, h.head_yaw),
                 h.on_ground,
-                (h.sneaking, h.sprinting, false, h.bed.is_some()),
+                (h.sneaking, h.sprinting, false, h.bed.is_some(), false),
                 h.living_flags,
                 h.bed,
                 0x7F,
@@ -1639,7 +1642,13 @@ impl Hub {
                     g.position,
                     (g.yaw, g.pitch, g.head_yaw),
                     g.on_ground,
-                    (g.sneaking, g.sprinting, g.fall_flying, g.sleeping),
+                    (
+                        g.sneaking,
+                        g.sprinting,
+                        g.fall_flying,
+                        g.sleeping,
+                        g.pose() == Pose::Swimming,
+                    ),
                     g.living_flags,
                     g.bed,
                     g.info.model_customisation,
@@ -2194,18 +2203,8 @@ impl Hub {
         }
         // getBoundingBox: the box of the body's pose (swimming and crawling
         // are 0.6 tall), so a swimmer under a ceiling isn't sent back.
-        let (half, height) = if g.fall_flying {
-            (0.3, 0.6)
-        } else if let Some(m) = &g.motion {
-            (
-                f64::from(m.dimensions.width) / 2.0,
-                f64::from(m.dimensions.height),
-            )
-        } else if g.sneaking {
-            (0.3, 1.5)
-        } else {
-            (0.3, 1.8)
-        };
+        let d = g.dimensions();
+        let (half, height) = (f64::from(d.width) / 2.0, f64::from(d.height));
         let at = |p: [f64; 3]| {
             Aabb::new(
                 Vec3::new(p[0] - half, p[1], p[2] - half),

@@ -281,6 +281,15 @@ impl Mob {
             return (f64::from(0.2_f32), f64::from(0.2_f32), f64::from(0.2_f32));
         }
         let k = &self.kind;
+        // Avatar.POSES: a player's or mannequin's box follows its pose.
+        if matches!(&*k.id, "minecraft:player" | "minecraft:mannequin") {
+            let d = self.extra.avatar_pose.dimensions(1.0);
+            return (
+                f64::from(d.width),
+                f64::from(d.height),
+                f64::from(d.eye_height),
+            );
+        }
         let (mut w, mut h, mut e) = (k.width as f32, k.height as f32, k.eye_height as f32);
         // Sniffer.DIGGING_DIMENSIONS: 0.4 lower, its eyes at 0.81.
         if k.species == super::Species::Sniffer && super::sniffer::digging(self) {

@@ -638,6 +638,9 @@ pub struct Attrs {
 pub struct Extra {
     /// Players: crouching and riding (HumanoidModel's poses).
     pub crouching: bool,
+    /// A player's or mannequin's synced pose (`Entity.DATA_POSE`), which
+    /// sets its box (`Avatar.POSES`).
+    pub avatar_pose: crate::pose::Pose,
     pub passenger: bool,
     /// AgeableMob.age: negative while a baby (a tadpole counts up to 24000).
     pub age: i32,
