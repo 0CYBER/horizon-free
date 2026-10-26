@@ -42,7 +42,7 @@ class PreparedReportTests(unittest.TestCase):
             fallback.mkdir(parents=True)
             for name in ('registries.json', 'commands.json'):
                 (fallback / name).write_text('{}')
-            self.assertEqual(require_server_reports(resources).resolve(), fallback)
+            self.assertEqual(require_server_reports(resources).resolve(), fallback.resolve())
             (resources / 'registries.json').write_text('{}')
             with self.assertRaisesRegex(ValueError, 'installed together'):
                 require_server_reports(resources)
