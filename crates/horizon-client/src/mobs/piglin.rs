@@ -214,7 +214,7 @@ impl Goal for GoToWantedItem {
 }
 /// `HoglinSpecificSensor.findNearestRepellent`: the nearest `#hoglin_repellents`
 /// block within 8 blocks sideways and 4 up or down.
-fn find_repellent(m: &Mob, w: &MobWorld) -> Option<[i32; 3]> {
+fn find_hoglin_repellent(m: &Mob, w: &MobWorld) -> Option<[i32; 3]> {
     let tag = w.block_tags.get("minecraft:hoglin_repellents")?;
     let at = [
         m.position.x.floor() as i32,
@@ -235,7 +235,7 @@ fn hoglin_repellent(m: &mut Mob, w: &MobWorld) {
         m.extra.ints[0] = 0;
     }
     if m.age.wrapping_add(m.id).is_multiple_of(20) {
-        m.extra.repellent = find_repellent(m, w);
+        m.extra.repellent = find_hoglin_repellent(m, w);
     }
     if m.extra.ints[0] <= 0 && m.extra.repellent.is_some() {
         m.extra.ints[0] = 200;
