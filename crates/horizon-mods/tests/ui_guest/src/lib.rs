@@ -8,8 +8,11 @@
 //! `/raycast DISTANCE` says what `game.raycast` sees; `/quiet A;B` runs
 //! lines with `command.run-quiet` (`/quiet_many N`: N of them). `/recipes`
 //! counts what `recipes` reads; `/recipes ID` describes that recipe.
+//! `/browser ID...` fills `browser`'s panel (`/browser N`: the first N
+//! items, `/browser` alone empties it) and registers the keys `recipe` (R)
+//! and `uses` (U); `/browser_poll` says what the player did on it.
 use horizon_mod_sdk::{
-    Mod, Registration, chat, command, game,
+    Mod, Registration, browser, chat, command, game,
     input::{self, Event},
     recipes,
     render::{self, FillShape, ItemShape, Point, QuadShape, Rect, Shape, SpriteShape, TextShape},
@@ -105,6 +108,8 @@ impl Mod for Guest {
             "quiet",
             "quiet_many",
             "recipes",
+            "browser",
+            "browser_poll",
             "corner",
             "readings",
         ]
@@ -278,6 +283,57 @@ impl Mod for Guest {
                             .count()
                     ),
                 });
+            }
+            "browser" => {
+                let stack = |item: &str| {
+                    let (item, components) = match item.find('[') {
+                        Some(at) => (&item[..at], &item[at..]),
+                        None => (item, ""),
+                    };
+                    browser::Stack {
+                        item: item.into(),
+                        count: 1,
+                        components: components.into(),
+                    }
+                };
+                let items: Vec<browser::Stack> = match args.parse::<usize>() {
+                    Ok(n) => recipes::items()
+                        .iter()
+                        .skip(1)
+                        .take(n)
+                        .map(|i| stack(&i.id))
+                        .collect(),
+                    Err(_) => args.split_whitespace().map(stack).collect(),
+                };
+                browser::set_items(&items);
+                input::register_key("recipe", "Show recipes", "key.keyboard.r")?;
+                input::register_key("uses", "Show uses", "key.keyboard.u")?;
+                chat::show(&format!("panel of {}", items.len()));
+            }
+            "browser_poll" => {
+                let stack = |s: &browser::Stack| format!("{} x{}{}", s.item, s.count, s.components);
+                // A hook shows at most 8 chat lines: the count, then the first 7.
+                let events = browser::poll();
+                chat::show(&format!("{} events", events.len()));
+                for event in events.into_iter().take(7) {
+                    chat::show(&match event {
+                        browser::Event::Clicked(c) => {
+                            format!(
+                                "clicked {} {}",
+                                c.index,
+                                if c.right { "right" } else { "left" }
+                            )
+                        }
+                        browser::Event::Search(text) => format!("search {text:?}"),
+                        browser::Event::Key(k) => format!("key {} on {}", k.key, stack(&k.stack)),
+                        browser::Event::SlotClicked(c) => {
+                            format!("slot {} {} {}", c.recipe, c.slot, stack(&c.stack))
+                        }
+                        browser::Event::Action(i) => format!("action {i}"),
+                        browser::Event::Page(step) => format!("page {step}"),
+                        browser::Event::Back => "back".into(),
+                    });
+                }
             }
             // Clamped to (1, 10); the two after it shake nothing.
             "render_shake" => {

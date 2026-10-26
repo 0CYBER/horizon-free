@@ -37,7 +37,7 @@ A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs whe
 
 A mod with widgets (capability `ui`): the SDK builds every mod against this world. Mods built for `horizon-mod` alone (no `ui-events` export) still load and simply hear nothing of their widgets.
 
-- Imports (what the game offers): `ui`, `render`, `input`, `recipes`, `log`, `game`, `chat`, `hud`, `storage`, `command`
+- Imports (what the game offers): `ui`, `render`, `input`, `recipes`, `browser`, `log`, `game`, `chat`, `hud`, `storage`, `command`
 - Exports (what the mod provides): `ui-events`, `events`
 
 ## World `ui-host`
@@ -58,7 +58,7 @@ The game's side of capability `render` (imports only).
 
 The game's side of capability `recipes` (imports only).
 
-- Imports (what the game offers): `recipes`
+- Imports (what the game offers): `recipes`, `browser`
 - Exports (what the mod provides): 
 
 ## `log`
@@ -530,6 +530,68 @@ The station a recipe is made at.
 | `items` | `func() -> list<item>` | Every item, in the registry's order: `stack.item` indexes this list. |
 | `all` | `func() -> list<recipe>` | Every recipe: the book's in its order, then campfire, stonecutting, smithing and brewing. They don't change while a world is open. |
 | `known` | `func() -> list<s32>` | The `book-id`s of the recipes the player's recipe book holds now. |
+
+## `browser`
+
+Access: not granted by any capability.
+
+Capability `ui` (experimental): a recipe viewer's panel beside the game's inventory and container screens (not the creative inventory), on the right of the screen. The game draws it with its own widgets and slots, pages it and keeps its search box; the mod says what it holds. The first loaded mod with a panel shows.
+
+### record `stack`
+
+An item to show: its id, a count (1 draws none) and its components beyond the item's own, in vanilla's item syntax, or "".
+
+| Field | Type | |
+| --- | --- | --- |
+| `item` | `string` |  |
+| `count` | `u32` |  |
+| `components` | `string` |  |
+
+### record `click`
+
+A click on an item of the panel, by its index in `set-items`'s list.
+
+| Field | Type | |
+| --- | --- | --- |
+| `index` | `u32` |  |
+| `right` | `bool` |  |
+
+### record `item-key`
+
+A key the mod registered (`input.register-key`) went down while the pointer was on an item: a slot of the screen's, or the panel's.
+
+| Field | Type | |
+| --- | --- | --- |
+| `key` | `string` |  |
+| `stack` | `stack` |  |
+
+### record `slot-click`
+
+A click on a slot of the recipe the panel shows (`set-recipes`).
+
+| Field | Type | |
+| --- | --- | --- |
+| `recipe` | `u32` | The recipe's index on the page and the slot's in it; the results come after the slots. |
+| `slot` | `u32` |  |
+| `stack` | `stack` | The stack the slot showed at that moment. |
+| `right` | `bool` |  |
+
+### variant `event`
+
+| Case | Payload | |
+| --- | --- | --- |
+| `clicked` | `click` |  |
+| `search` | `string` | The search box's text, each time the player changes it. |
+| `key` | `item-key` |  |
+| `slot-clicked` | `slot-click` |  |
+| `action` | `u32` | The action button of the recipe at this index on the page. |
+| `page` | `s32` | The page arrows of `set-recipes`: -1 or 1. |
+| `back` |  | The back button of `set-recipes`. |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `set-items` | `func(items: list<stack>)` | The panel's items, at most 8192 (an empty list hides the panel). |
+| `poll` | `func() -> list<event>` | What the player did on the panel since the last poll, at most 256 kept. |
 
 ## `players`
 

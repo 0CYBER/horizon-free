@@ -85,11 +85,16 @@ mod recipes_bindings {
         world: "recipes-host",
     });
 }
+/// Capability `ui`'s recipe viewer panel (WIT `interface browser`).
+pub use recipes_bindings::horizon::mods::browser::{
+    Click as BrowserClick, Event as BrowserEvent, ItemKey as BrowserItemKey,
+    SlotClick as BrowserSlotClick, Stack as BrowserStack,
+};
 /// What capability `recipes` reads (WIT `interface recipes`).
 pub use recipes_bindings::horizon::mods::recipes::{
     Item as RecipeItem, Kind as RecipeKind, Recipe, Stack as RecipeStack,
 };
-use recipes_bindings::{RecipesHost, horizon::mods::recipes};
+use recipes_bindings::{RecipesHost, horizon::mods::browser, horizon::mods::recipes};
 
 /// A mod's linear memory cap.
 const MEMORY: usize = 64 << 20;
@@ -309,6 +314,28 @@ struct UiState {
     close: bool,
 }
 
+/// Capability `ui`'s panel beside container screens (`browser`).
+#[derive(Default)]
+struct BrowserState {
+    items: Vec<BrowserStack>,
+    /// Which `set-items` call the items are from, unique across mods and
+    /// reloads, so the game converts them once.
+    version: u64,
+    events: std::collections::VecDeque<BrowserEvent>,
+}
+static BROWSER_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+/// Items a panel may hold, and events kept for `browser.poll`.
+const BROWSER_ITEMS: usize = 8192;
+const BROWSER_EVENTS: usize = 256;
+impl BrowserState {
+    fn push(&mut self, event: BrowserEvent) {
+        if self.events.len() == BROWSER_EVENTS {
+            self.events.pop_front();
+        }
+        self.events.push_back(event);
+    }
+}
+
 struct State {
     name: String,
     id: String,
@@ -325,6 +352,7 @@ struct State {
     /// Capability `render`'s minimap, when the mod shows one.
     minimap: Option<ModMinimap>,
     input: InputState,
+    browser: BrowserState,
     /// Capability `storage`'s folder; made on first `set`.
     data_dir: PathBuf,
     /// Bytes `storage::set` may still write before this hook call ends
@@ -490,6 +518,7 @@ impl Mods {
             zoom: None,
             minimap: None,
             input: InputState::default(),
+            browser: BrowserState::default(),
             data_dir,
             storage_budget: STORAGE_WRITE_BUDGET,
             limits: StoreLimitsBuilder::new()
@@ -799,6 +828,40 @@ impl Mods {
             .iter()
             .any(|e| e.run.as_ref().is_some_and(|r| r.raycasts))
     }
+    /// The panel beside container screens (`browser.set-items`): the first
+    /// running mod with items, its index, the items' version and the items.
+    pub fn browser_items(&self) -> Option<(usize, u64, &[BrowserStack])> {
+        self.entries.iter().enumerate().find_map(|(i, e)| {
+            let b = &e.run.as_ref()?.store.data().browser;
+            (!b.items.is_empty()).then_some((i, b.version, b.items.as_slice()))
+        })
+    }
+    /// The player did `event` on mod `owner`'s panel.
+    pub fn browser_event(&mut self, owner: usize, event: BrowserEvent) {
+        if let Some(run) = self.entries.get_mut(owner).and_then(|e| e.run.as_mut()) {
+            run.store.data_mut().browser.push(event);
+        }
+    }
+    /// The key `key` went down with the pointer on `stack` in a container
+    /// screen: each mod with a key on it hears its own name for it.
+    pub fn browser_key(&mut self, key: &str, stack: &BrowserStack) {
+        for run in self.entries.iter_mut().filter_map(|e| e.run.as_mut()) {
+            let data = run.store.data_mut();
+            let names: Vec<String> = data
+                .input
+                .keys
+                .iter()
+                .filter(|k| k.key == key)
+                .map(|k| k.name.clone())
+                .collect();
+            for key in names {
+                data.browser.push(BrowserEvent::Key(BrowserItemKey {
+                    key,
+                    stack: stack.clone(),
+                }));
+            }
+        }
+    }
     /// Some running mod reads capability `recipes`: the snapshot needs
     /// [`Snapshot::recipes`] and [`Snapshot::known_recipes`].
     pub fn wants_recipes(&self) -> bool {
@@ -1101,7 +1164,10 @@ fn reason(e: &wasmtime::Error) -> String {
 }
 
 fn clip(text: String) -> String {
-    match text.char_indices().nth(LINE_CHARS) {
+    clip_to(text, LINE_CHARS)
+}
+fn clip_to(text: String, chars: usize) -> String {
+    match text.char_indices().nth(chars) {
         Some((at, _)) => text[..at].to_string(),
         None => text,
     }
@@ -1160,6 +1226,23 @@ impl game::Host for State {
         let (at, hit) = self.snapshot.view_hit.as_ref()?;
         // NaN compares false: no hit.
         (*at <= distance.min(RAYCAST_MAX) && !distance.is_nan()).then(|| hit.clone())
+    }
+}
+impl browser::Host for State {
+    fn set_items(&mut self, items: Vec<BrowserStack>) {
+        self.browser.items = items
+            .into_iter()
+            .take(BROWSER_ITEMS)
+            .map(|s| BrowserStack {
+                item: clip(s.item),
+                components: clip_to(s.components, 4096),
+                ..s
+            })
+            .collect();
+        self.browser.version = BROWSER_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    fn poll(&mut self) -> Vec<BrowserEvent> {
+        self.browser.events.drain(..).collect()
     }
 }
 impl recipes::Host for State {
