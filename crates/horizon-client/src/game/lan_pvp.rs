@@ -256,10 +256,12 @@ impl Game<'_> {
         // ServerPlayer.awardKillScore: the blow that kills a player.
         if hurt {
             let died = match victim {
+                // A totem that fired is applied on the next tick_totem, so the
+                // host is still at zero health but is not dying.
                 Victim::Host => self
                     .player
                     .as_ref()
-                    .is_some_and(|p| p.health.dead_or_dying()),
+                    .is_some_and(|p| p.health.dead_or_dying() && !p.health.totem_used),
                 Victim::Guest(conn) => host
                     .hub
                     .guest(conn)

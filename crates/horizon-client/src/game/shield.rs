@@ -121,13 +121,6 @@ impl Game<'_> {
         attacker: Option<u32>,
         projectile: bool,
     ) {
-        // LivingEntity.hurtServer: the damage the shield took, in tenths.
-        if outcome.blocked > 0.0 {
-            self.stats.custom(
-                "damage_blocked_by_shield",
-                (outcome.blocked * 10.0).round() as i32,
-            );
-        }
         let Some((slot, _)) = self.using else { return };
         let Some(stack) = self.stack_in(slot).cloned() else {
             return;

@@ -74,11 +74,14 @@ impl Game<'_> {
         for e in events {
             let (name, amount) = match e {
                 // LivingEntity.getDamageAfterMagicAbsorb (Resistance) and
-                // Player.actuallyHurt (absorption hearts), in tenths.
+                // Player.actuallyHurt (absorption hearts) and
+                // LivingEntity.hurtServer (the shield, only for an accepted
+                // hit), in tenths.
                 MotionEvent::Health(HealthEvent::Statistic { name, amount }) => {
                     match *name {
                         "resisted" => self.stats.custom("damage_resisted", *amount),
                         "absorbed" => self.stats.custom("damage_absorbed", *amount),
+                        "blocked" => self.stats.custom("damage_blocked_by_shield", *amount),
                         _ => {}
                     }
                     continue;
