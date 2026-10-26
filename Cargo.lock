@@ -5331,6 +5331,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 
 [[package]]
+name = "zoom"
+version = "1.0.0"
+dependencies = [
+ "horizon-mod-sdk",
+]
+
+[[package]]
 name = "zopfli"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
