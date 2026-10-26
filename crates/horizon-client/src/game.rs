@@ -7467,7 +7467,8 @@ impl Game<'_> {
     }
     /// The damage and knockback part of `Player.doSweepAttack` after a sweep
     /// hit on the mob at `target`: every other living mob in its box grown by
-    /// (1, 0.25, 1) and within the player's reach, but the player's allies
+    /// (1, 0.25, 1) and closer than 3 blocks (`distanceToSqr < 9`, in creative
+    /// too), but the player's allies
     /// (`isAlliedTo`), takes `1 + sweeping_damage_ratio * baseDamage` with the
     /// weapon's enchantments, scaled by the attack strength, and is pushed 0.4
     /// along the player's yaw.
@@ -7495,7 +7496,6 @@ impl Game<'_> {
         let hit_box = self.mobs[target]
             .bounds()
             .inflate(horizon_core::geometry::Vec3::new(1.0, 0.25, 1.0));
-        let reach = if self.creative { 5.0 } else { 3.0 };
         let (uuid, allies) = (
             self.level.player_uuid.or(Some([0, 0, 0, 1])),
             self.player_allies(),
@@ -7511,7 +7511,7 @@ impl Game<'_> {
                     && !allies.contains(&m.id)
                     && !mace::ally_of_player(m, uuid)
                     && m.bounds().intersects(hit_box)
-                    && m.position.distance_squared(p.position) < reach * reach
+                    && m.position.distance_squared(p.position) < 9.0
             })
             .map(|(i, _)| i)
             .collect();
