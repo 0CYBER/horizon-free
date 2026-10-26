@@ -50,6 +50,7 @@ pub mod cooldowns;
 pub mod crafting;
 pub mod crash;
 pub mod creative;
+pub mod cushion;
 pub mod data_cmd;
 pub mod datapack;
 pub mod debug_chart;

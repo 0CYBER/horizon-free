@@ -587,6 +587,9 @@ impl Game<'_> {
     }
     /// The player's tick while riding: steer, tick the boat, sit in it.
     pub(super) fn tick_riding(&mut self, keys: Keys) -> horizon_client::Result<()> {
+        if self.tick_cushion_riding(keys) {
+            return Ok(());
+        }
         let Some(i) = self.boats.iter().position(|b| Some(b.id) == self.riding) else {
             if self.tick_cart_riding(keys) || self.tick_mount_riding(keys) {
                 return Ok(());

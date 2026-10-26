@@ -245,6 +245,16 @@ impl Game<'_> {
             }
             out.push(e);
         }
+        for c in &self.cushions {
+            let p = c.position;
+            let mut e = state(c.id, "minecraft:cushion", [p.x, p.y, p.z], c.yaw, false);
+            // Cushion.DATA_COLOR, set unless it is the default white.
+            if c.color != 0 {
+                e.meta
+                    .push((8, serializer::DYE_COLOR, Value::Id(i32::from(c.color))));
+            }
+            out.push(e);
+        }
         self.lan_projectile_states(host_entity, hub, out);
         for o in &self.others {
             let p = o.position;
