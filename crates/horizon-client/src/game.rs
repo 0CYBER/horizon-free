@@ -4614,9 +4614,14 @@ impl Game<'_> {
             if let Some(host) = &self.lan {
                 host.hub.entity_event(host.host_entity, 3, feet);
             }
-            self.screen = Screen::Dead;
-            self.capture(false);
-            self.ui.death_time = 0;
+            if self.ui.rules.bool("immediate_respawn") {
+                // Gui.setScreen: without the death screen the player respawns at once.
+                self.respawn_player()?;
+            } else {
+                self.screen = Screen::Dead;
+                self.capture(false);
+                self.ui.death_time = 0;
+            }
         } else if dead {
             // LivingEntity.tickDeath: 20 ticks after dying the player is
             // removed, and Player.remove's inventoryMenu.removed drops what
