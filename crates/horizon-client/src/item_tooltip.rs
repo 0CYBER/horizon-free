@@ -190,7 +190,7 @@ pub fn name_line(stack: &ItemStack, translate: &dyn Fn(&str) -> Option<String>) 
         return name.to_owned();
     }
     if let Some(name) = stack.item_name() {
-        return name.to_owned();
+        return name;
     }
     if stack.data().is_some_and(|d| d.ominous_banner) {
         return translate("block.minecraft.ominous_banner")
@@ -616,7 +616,10 @@ mod tests {
         banner.data_mut().custom_name = Some("Captain's Standard".into());
         assert_eq!(name_line(&banner, &translate), "Captain's Standard");
         let mut custom_item = ItemStack::new("minecraft:diamond_sword", 1);
-        custom_item.data_mut().item_name = Some("Excalibur".into());
+        custom_item.data_mut().other.push((
+            "minecraft:item_name".into(),
+            Tag::String("Excalibur".into()),
+        ));
         assert_eq!(name_line(&custom_item, &translate), "Excalibur");
         custom_item.data_mut().custom_name = Some("Custom Blade".into());
         assert_eq!(name_line(&custom_item, &translate), "Custom Blade");
