@@ -138,6 +138,15 @@ fn teleport_towards(
     let z = m.position.z + (m.random.next_double() - 0.5) * 8.0 - d[2] * 16.0;
     teleport_to(m, w, x, y, z, events)
 }
+/// `Enderman.SPEED_MODIFIER_ATTACKING`, an ADD_VALUE modifier `setTarget`
+/// adds while the enderman has a target.
+pub fn attacking_speed(m: &Mob) -> f64 {
+    if m.species() == Species::Enderman && m.ai.target.is_some() {
+        f64::from(0.15f32)
+    } else {
+        0.0
+    }
+}
 /// Enderman.customServerAiStep: in daylight, flee by teleporting. The End has a
 /// fixed time, so `Level.isBrightOutside` is never true there.
 pub fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
