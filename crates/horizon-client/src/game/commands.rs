@@ -752,7 +752,8 @@ impl Game<'_> {
                     && !id.ends_with("get")
                     && let Ok(t) = self.entities(ctx, "target", false)
                 {
-                    self.cmds.waypoint_dirty.push(t[0]);
+                    let target = self.waypoint_target(t[0]);
+                    self.cmds.waypoint_dirty.push(target);
                 }
                 result
             }
@@ -2841,9 +2842,14 @@ impl Game<'_> {
             capture.push(line.clone());
         }
         let focused = self.screen == Screen::Chat;
-        self.ui
-            .chat
-            .add(&self.gui.atlas, line, None, self.ticks, focused);
+        self.ui.chat.add(
+            &self.gui.atlas,
+            line,
+            None,
+            horizon_client::chat::ChatSource::Player,
+            self.ticks,
+            focused,
+        );
         Ok(1)
     }
     /// MessageArgument: `@p`-style selectors in a message become names.
