@@ -36,5 +36,8 @@
  "local_only": {
   "save_roundtrip": "runs the game on a virtual screen (vscreen) with a null ALSA device, or offscreen in the logged-in macOS session"
  },
- "linux_only": {}
+ "linux_only": {},
+ "named_only": {
+  "lan_integration": "the whole lan_e2e suite: ~40 min a run on a loaded runner, and single checks flake under load; run it by name, or tools/lan_e2e.py"
+ }
 }

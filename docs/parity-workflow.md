@@ -53,7 +53,7 @@ A harness can declare, at the top level of its script:
 
 ### Which harnesses a change affects
 
-`--changed` and `--changed-files` narrow each harness's Rust sources to those its probes can reach (`tools/parity_reach.py`), so a change to one module of `horizon-client` no longer reruns every harness whose probe links the crate. The narrowing works on items, not files: from the probe modules a harness ran (or the binary it built), a free item (fn, type, const, static) is reached when a reached item names it in its own module, through a path or an import of a module that is named, or through a glob import; an inherent impl's methods count one by one once their type is reached and their name is mentioned; a trait impl counts once its trait and its type are reached (std's traits and types always are); a macro counts once invoked. Names match by spelling, so the result only over-approximates. A reached file's parent modules count through their `mod` declarations of it, compared with the merge base; Rust files a change adds take part, a dependency that was deleted counts as changed, code under `#[cfg(test)]` never counts, and a harness whose probe can't be found keeps every source. Parses are cached by content in `.local/parity-runner/reach-cache.json`. `--by-crate` turns the narrowing off. On the last 20 pull requests merged on 2026-10-25, the harnesses picked went from 2255 to 1061 (2384 to 1592 harness-minutes; game-binary harnesses, which link all of `game/`, set the floor), and every harness a CI parity run failed in the week before was still picked; every source file a sample of probes executed (LLVM `-C instrument-coverage`) is among those kept. Building the graph takes 15 s cold, under a second warm, and up to a minute and a half on a change that reaches many harnesses.
+`--changed` and `--changed-files` narrow each harness's Rust sources to those its probes can reach (`tools/parity_reach.py`), so a change to one module of `horizon-client` no longer reruns every harness whose probe links the crate. The narrowing works on items, not files: from the probe modules a harness ran (or the binary it built), a free item (fn, type, const, static) is reached when a reached item names it in its own module, through a path or an import of a module that is named, or through a glob import; an inherent impl's methods count one by one once their type is reached and their name is mentioned; a trait impl counts once its trait and its type are reached (std's traits and types always are); a macro counts once invoked. Names match by spelling, so the result only over-approximates. A reached file's parent modules count through their `mod` declarations of it, compared with the merge base; Rust files a change adds take part, a dependency that was deleted counts as changed, code under `#[cfg(test)]` never counts, and a harness whose probe can't be found keeps every source. Parses are cached by content in `reach-cache.json` of the shared parity folder (beside `passes/`), so a new worktree starts warm; a harness's search stops as soon as it reaches a changed file, and after `PARITY_REACH_BUDGET` seconds (default 180) the remaining harnesses count every source their probes link, so choosing never holds a slow machine for long. `--by-crate` turns the narrowing off. On the last 20 pull requests merged on 2026-10-25, the harnesses picked went from 2255 to 1061 (2384 to 1592 harness-minutes; game-binary harnesses, which link all of `game/`, set the floor), and every harness a CI parity run failed in the week before was still picked; every source file a sample of probes executed (LLVM `-C instrument-coverage`) is among those kept. Building the graph takes 15 s cold, under a second warm, and up to a minute and a half on a change that reaches many harnesses.
 
 ## The gate
 
@@ -80,6 +80,84 @@ An agent working an area merges the integration branch first, uses `tools/parity
 
 On ludodesktop, source `~/code/horizon-parity/env.sh` first: it sets the ALSA build path and the Cargo job cap. Debug builds carry line tables only (`[profile.dev]` in `Cargo.toml`), which keeps backtraces readable while keeping each worktree's build small; a fresh worktree builds `horizon-client` and its tests in under a minute.
 
+## Server execution in game fixtures
+
+`HORIZON_COMMAND_SCRIPT` runs on the integrated server's `Server thread`, with the
+headless client joined through the normal memory connection. Commands use the connected
+owner's body and dimension. The script owns the clock: each `tick` calls `tick_server`,
+while login and portal arrival pump connection-only passes. The client acknowledges
+terrain and teleports without predicting movement, matching the command oracle's stationary
+player. Script and save errors return through server shutdown; output keeps the existing
+styled messages and `CommandResultCallback` schema. `--in-frame` is not needed.
+
+`HORIZON_DISPENSE_FIXTURE` and `HORIZON_SCULK_FIXTURE` are component probes. They construct
+a server `Game` on a server thread and retain the oracles' synthetic levels, seeded random
+streams and explicit entity/block phases. A synthetic sculk player controls warning levels,
+not client input; dispenser probes call one activation without running unrelated world ticks.
+Keep those controls when extending the fixtures. Player interactions belong in connected-client
+coverage alongside the components:
+
+```sh
+python3 tools/test_command_exec_parity.py
+python3 tools/test_dispenser_parity.py
+python3 tools/test_sculk_parity.py
+python3 tools/lan_e2e.py --server-thread --check machines --check fireball --check sculk_container
+```
+
+The LAN checks open and fill machines through the guest's inventory packets, observe a
+powered dispenser's projectile on both clients, and open a chest to activate a sculk sensor
+and shrieker. They supplement the deterministic component comparisons.
+
 ## Reading vanilla
 
 Besides the Vineflower sources in `.local/minecraft/<version>/sources/`, `tools/rea_vanilla.py` queries the shipped bytecode through REA (callers through lambdas, overloads, a second decompiler); see [decompilation status](decompilation-status.md#querying-the-shipped-bytecode-with-rea).
+
+## Player-facing integration and deterministic fixtures
+
+`python3 tools/lan_e2e.py` runs every LAN check with an integrated server thread,
+the same path as normal single player. `python3 tools/test_friends.py --client
+target/fast/horizon-client --relay target/fast/horizon-relay --baseline` covers
+plain LAN, direct invitations, a local relay and ended invitations in that mode.
+Both accept `--in-frame` for comparison and retain `--server-thread` for existing
+callers. Run Linux games under `xvfb-run -a` when no display is available. Each
+process gets scratch game, launcher, XDG data and config homes; telemetry, audio
+and launcher self-update are disabled.
+
+`lan_integration` and `friends_integration` register these suites with `parity.py`.
+`friends_integration` (under a minute) is selected like any harness when the
+drivers or game implementation change. `lan_integration` is the whole LAN suite
+(~40 minutes on a loaded runner, and single checks flake under load), so
+`tools/parity_hosts.json` lists it under `named_only`: no automatic selection
+(`--changed`, `--failed`, `--flake-check`, CI, parity-main) picks it; it runs
+when named and in the nightly audit (`--all`). LAN writes `results.json`
+with the host mode and each result beside its screenshots and logs. A skipped
+case is recorded explicitly and does not count as passing coverage.
+
+The game-binary fixture audit keeps these complementary direct rule tests:
+
+- `command_harness.rs`: command feedback, styled spans and result callbacks,
+  held player position, explicit ticks and portal completion matching
+  `VanillaCommandExecOracle`. LAN `commands`, `feedback`, `styles`, `levels` and
+  `portals` cover command input, packet feedback and travel across the boundary.
+- `dispense_fixture.rs`: seeded synthetic worlds, block/event traces, item
+  use/mining and combat hooks matching `VanillaDispenserOracle`. These isolate
+  rule results and RNG order; LAN machines, crafting, clicks, fireball, mining
+  and combat exercise real input and server handling separately. The new
+  `dispenser_input_host` / `dispenser_input_guest` checks press a button and
+  verify authoritative inventory consumption and exactly one drop on both clients.
+- `sculk_fixture.rs`: scripted events and exact per-tick sculk/warden traces
+  matching `VanillaSculkOracle`; introducing wall-clock network ticks would
+  destroy that deterministic oracle contract. `sculk_input_host` and
+  `sculk_input_guest` separately exercise real footsteps reaching a sensor;
+  failures remain visible rather than changing the oracle trace.
+- `net_harness.rs`: already a real network client of a dedicated server; keep
+  its handshake, world loading, chat and command packet assertions.
+
+Library probes, `lan_bot`'s protocol hub fixture, generation/save tests and
+streaming/mesh tests remain fast deterministic coverage. They do not become
+full game launches. Setup and authoritative reads use the owning server;
+interactions stay on the client. `server-hold on|off` provides a prediction-test
+barrier between server ticks, including player packet handling, while transport
+threads and control calls remain responsive. `stall MILLISECONDS` stalls only
+the window to test recovery from a hung frame without process signals interrupting
+socket reads. Neither mechanism changes normal gameplay.

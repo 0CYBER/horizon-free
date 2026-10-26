@@ -300,6 +300,8 @@ struct Glide {
 pub(super) struct Agent {
     task: Option<Task>,
     glide: Option<Glide>,
+    /// Control-fixture barrier: hold simulation and packet handling, not transport threads.
+    pub hold_server: bool,
 }
 
 pub(super) enum Handled {
@@ -390,6 +392,9 @@ impl Game<'_> {
         Ok(())
     }
     pub(super) fn screen_label(&self) -> &'static str {
+        if self.dialog_open() {
+            return "dialog";
+        }
         if self.title.is_some() {
             return "title";
         }
@@ -476,6 +481,8 @@ impl Game<'_> {
                 "absorption": p.health.absorption(),
                 // The hurt animation's ticks left (the camera's hurt tilt).
                 "hurt_time": p.health.hurt_animation_time,
+                // LivingEntity.deathTime while dead (the camera's death roll).
+                "death_time": self.death_time(),
                 "air": p.air,
                 "food": p.health.food.food,
                 "saturation": p.health.food.saturation,
@@ -485,6 +492,7 @@ impl Game<'_> {
             })
         });
         json!({
+            "dialog": self.dialog_status(),
             "screen": self.screen_label(),
             "menu": self.title.as_ref().map(|_| self.title_value()),
             "world": (self.title.is_none()).then(|| match &self.integrated {
@@ -663,6 +671,7 @@ impl Game<'_> {
         });
         if let Some(chat) = &self.ui.chat_screen {
             v["chat_input"] = json!(chat.input.value);
+            v["chat_suggestions"] = json!(chat.suggestions_visible());
         }
         if self.title.is_some() {
             v["menu"] = self.title_value();
@@ -682,6 +691,18 @@ impl Game<'_> {
             v["craft_size"] = json!(self.craft_size);
             v["station"] = json!(self.station.as_ref().map(|s| format!("{:?}", s.kind)));
             v["container"] = json!(self.container);
+            // The title a server gave the menu, span by span as it is drawn.
+            if let Some(title) = self.remote_menu_title() {
+                let spans = title.spans.iter().map(|s| {
+                    json!({
+                        "text": s.text,
+                        "color": s.style.color.map(|c| format!("#{c:06X}")),
+                        "bold": s.style.is_bold(),
+                        "italic": s.style.is_italic(),
+                    })
+                });
+                v["title"] = json!(spans.collect::<Vec<_>>());
+            }
             // The recipe book's buttons (GUI pixels): the book button, then
             // the recipe buttons of the page, page arrows, filter and tabs.
             let book = self.recipe_book_targets();
