@@ -76,7 +76,7 @@ The mod's log, in the game's log under the mod's id. Always granted.
 
 Access: capability `game-read`.
 
-Capability `game-read`: the local player and the world clock.
+Capability `game-read`: the local player, the world clock and the block the player looks at.
 
 ### record `player`
 
@@ -98,10 +98,25 @@ Capability `game-read`: the local player and the world clock.
 | `game-time` | `u64` | Ticks since the world was created. |
 | `day-time` | `u64` | 24000 ticks per day; 0 is 6:00 on the first day. |
 
+### record `hit`
+
+A block along the player's view.
+
+| Field | Type | |
+| --- | --- | --- |
+| `block-x` | `s32` | The block hit. |
+| `block-y` | `s32` |  |
+| `block-z` | `s32` |  |
+| `x` | `f64` | The point on its face where the view meets it. |
+| `y` | `f64` |  |
+| `z` | `f64` |  |
+| `block` | `string` | `minecraft:stone`, ... |
+
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `get-player` | `func() -> option<player>` | None on the title screen. |
 | `get-clock` | `func() -> option<clock>` | None on the title screen. |
+| `raycast` | `func(distance: f32) -> option<hit>` | The first block along the player's view (fluids pass), up to `distance` blocks (at most 1024; past the loaded chunks, across the distant terrain when LOD Distance is on), as of this tick. None when nothing is hit, and on the title screen. |
 
 ## `chat`
 
