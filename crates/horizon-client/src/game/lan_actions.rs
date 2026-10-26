@@ -2111,6 +2111,12 @@ impl Game<'_> {
             let _ = w.apply_fire_contact();
             let _ = w.server_hazards_tick(in_wall);
             let mut events = std::mem::take(&mut w.player.events);
+            // LayeredCauldronBlock.handleEntityOnFireInside along those moves.
+            for event in &events {
+                if let MotionEvent::CauldronExtinguish { pos } = event {
+                    game.cauldron_extinguish(*pos);
+                }
+            }
             // WitherRoseBlock.entityInside along those moves.
             for event in &events {
                 if matches!(event, MotionEvent::InsideWitherRose) {
