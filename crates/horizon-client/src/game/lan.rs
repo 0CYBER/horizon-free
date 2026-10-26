@@ -71,6 +71,8 @@ pub(super) struct LanHost {
     /// Guests' commands waiting for the hub to be back in `self.lan`, where
     /// a command can reach every player (game/lan_actions.rs).
     pub commands: Vec<super::lan_actions::GuestCommand>,
+    /// Mods' quiet commands waiting to run a few a tick (game/lan_quiet.rs).
+    pub quiet: std::collections::VecDeque<super::lan_quiet::QuietBatch>,
     /// The entities the guests track, described again every tick
     /// (`lan_entities`) over last tick's states.
     states: lan::entity::States,
@@ -213,6 +215,13 @@ fn mob_meta(
             }
             defaults.push((16, serializer::BOOLEAN, Value::Bool(false)));
             defaults.push((17, serializer::INT, Value::Int(0)));
+        }
+        // Bat.DATA_ID_FLAGS: resting in bit 0, flying by default.
+        "minecraft:bat" => {
+            if e.flag {
+                meta.push((16, serializer::BYTE, Value::Byte(1)));
+            }
+            defaults.push((16, serializer::BYTE, Value::Byte(0)));
         }
         // Sheep.DATA_WOOL_ID: the colour in the low nibble, 16 when sheared.
         "minecraft:sheep" => {
@@ -616,6 +625,7 @@ impl Game<'_> {
             waypoint_dead: Default::default(),
             border_sent: None,
             commands: Vec::new(),
+            quiet: std::collections::VecDeque::new(),
             states: Default::default(),
         });
         self.audio.capture = Some(Vec::new());
@@ -654,6 +664,7 @@ impl Game<'_> {
         self.world.light_log = None;
         self.audio.capture = None;
         self.lan_events.clear();
+        self.lan_critical_hits.clear();
         self.streaming.extra.clear();
         if announce {
             self.system_message(Text::translate(
@@ -981,6 +992,9 @@ impl Game<'_> {
                     event @ (HostEvent::Chat { .. } | HostEvent::Warn(_) | HostEvent::Error(_)) => {
                         self.lan_log_event(event);
                     }
+                    HostEvent::PlayerChat { sender, text } => {
+                        self.mod_player_chat(super::server_mods::Who::Uuid(sender), &text);
+                    }
                     HostEvent::Joined(conn) => {
                         self.lan_guest_joined(&mut host, conn, state.as_ref(), entities, spawn);
                         if self.options.dedicated.is_some()
@@ -1049,6 +1063,14 @@ impl Game<'_> {
                 }
             }
             host.states = states;
+        }
+        if !host.quiet.is_empty() {
+            self.lan = Some(host);
+            self.run_quiet_commands();
+            host = self
+                .lan
+                .take()
+                .expect("the hub is back after the quiet commands");
         }
         self.lan_flush_effects(&mut host);
         if !paused {
@@ -1183,8 +1205,30 @@ impl Game<'_> {
             self.lan_entity_events.push((id, event, at));
         }
     }
+    /// `ServerPlayer.crit`: this window's emitter, and an animation for the
+    /// attacker's client and observers once the hub is back in place.
+    pub(super) fn critical_hit(
+        &mut self,
+        attacker: Option<u32>,
+        id: i32,
+        feet: [f64; 3],
+        width: f64,
+        height: f64,
+    ) {
+        use horizon_client::particles::{ParticleOptions, ParticleType};
+        self.particles.tracking_emitter(
+            ParticleOptions::simple(ParticleType::Crit),
+            feet,
+            width,
+            height,
+        );
+        if self.audio.capture.is_some() {
+            self.lan_critical_hits.push((attacker, id));
+        }
+    }
     /// Send the tick's level events, sounds and mob animations.
     fn lan_flush_effects(&mut self, host: &mut LanHost) {
+        let critical_hits = std::mem::take(&mut self.lan_critical_hits);
         for (kind, pos, data, acting) in std::mem::take(&mut self.lan_events) {
             if kind == 2001 {
                 host.broken
@@ -1257,6 +1301,14 @@ impl Game<'_> {
             seen.insert(m.id, (m.hurt_time, dead, swing));
         }
         host.mob_state.insert(self.dim, seen);
+        for (attacker, target) in critical_hits {
+            let Some(attacker) = attacker.map_or(Some(host.host_entity), |conn| {
+                host.hub.guest(conn).map(|g| g.entity_id)
+            }) else {
+                continue;
+            };
+            host.hub.critical_hit(attacker, target);
+        }
     }
 
     /// Keep the chunks around every guest loaded.
@@ -1424,7 +1476,11 @@ impl Game<'_> {
                 let tag = if secure { "" } else { "[Not Secure] " };
                 super::dedicated::log("INFO", &format!("{tag}{line}"));
             }
-            HostEvent::Chat { line, .. } => self.system_message(Text::literal(line)),
+            // Player chat (and `/say`'s or `/me`'s, which are chat messages
+            // too): the host's Chat option decides, as `ChatListener` does
+            // for the guests' packets. Command feedback is a system message
+            // and takes the system-message permission instead.
+            HostEvent::Chat { line, .. } => self.player_message(Text::literal(line)),
             HostEvent::Warn(line) if dedicated => super::dedicated::log("WARN", &line),
             HostEvent::Warn(line) => log::warn!("{line}"),
             HostEvent::Error(line) if dedicated => super::dedicated::log("ERROR", &line),

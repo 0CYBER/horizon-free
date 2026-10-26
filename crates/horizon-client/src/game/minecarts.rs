@@ -1117,22 +1117,35 @@ impl Game<'_> {
         self.swing_arm();
         true
     }
-    /// Closing a cart's container copies the items back.
-    pub(super) fn close_cart_container(&mut self) {
-        let Some(key) = self.container.filter(|k| k.1 == CART_KEY_Y) else {
+    /// Closing the cart's container open under `key` copies the items back.
+    pub(super) fn close_cart_container(&mut self, key: (i32, i32, i32)) {
+        if key.1 != CART_KEY_Y {
+            return;
+        }
+        self.store_cart_items(key);
+        self.world.block_entities.remove(&key);
+        if let Some(c) = self.carts.iter().find(|c| c.id as i32 == key.2)
+            && c.kind == CartKind::Chest
+        {
+            let at = [c.position.x, c.position.y, c.position.z];
+            let pitch = self.world.random.next_float() * 0.1 + 0.9;
+            self.audio
+                .play("minecraft:block.chest.close", Some(at), 0.5, pitch);
+        }
+    }
+    /// The menu of a chest or hopper minecart or a chest boat works on the
+    /// vehicle's own items (`ContainerEntity`): the placeholder under `key`
+    /// that the menu edits is copied back to the vehicle.
+    pub(super) fn store_cart_items(&mut self, key: (i32, i32, i32)) {
+        if key.1 != CART_KEY_Y {
+            return;
+        }
+        let Some(BlockEntity::Chest(items)) = self.world.block_entities.get(&key) else {
             return;
         };
-        let Some(BlockEntity::Chest(items)) = self.world.block_entities.remove(&key) else {
-            return;
-        };
+        let items = items.clone();
         if let Some(c) = self.carts.iter_mut().find(|c| c.id as i32 == key.2) {
             c.items = items;
-            let at = [c.position.x, c.position.y, c.position.z];
-            if c.kind == CartKind::Chest {
-                let pitch = self.world.random.next_float() * 0.1 + 0.9;
-                self.audio
-                    .play("minecraft:block.chest.close", Some(at), 0.5, pitch);
-            }
         } else if let Some(b) = self.boats.iter_mut().find(|b| b.id as i32 == key.2) {
             b.items = items;
         }

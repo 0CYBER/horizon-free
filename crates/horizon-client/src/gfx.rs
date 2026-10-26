@@ -67,6 +67,7 @@ mod end_sky;
 mod flat;
 pub mod lightning;
 mod lod;
+mod native_material;
 mod native_pack;
 mod native_post;
 mod native_sky;
@@ -88,6 +89,7 @@ mod stars;
 mod timing;
 pub mod translucency;
 pub(crate) mod upload;
+mod wgsl_prefix;
 mod world_post;
 
 /// A column whose every section has its mesh (`Renderer::lod_detail_columns`).
@@ -428,6 +430,8 @@ pub struct Renderer {
     /// The mipmap levels sampled (the Mipmap Levels option), at most `mip_levels - 1`.
     mipmaps: u32,
     terrain_layout: wgpu::BindGroupLayout,
+    /// terrain.wgsl's `SPRITE_ARRAYS` and `SPRITE_SPLIT`, for a shader pack's terrain.
+    terrain_sprites: [f64; 2],
     sprite_sampler: wgpu::Sampler,
     lightmap_view: wgpu::TextureView,
     lightmap_sampler: wgpu::Sampler,
@@ -459,7 +463,7 @@ pub struct Renderer {
     lod_retiring: crate::fast_hash::FxHashSet<SectionKey>,
     /// Finished tile meshes `upload_lods` has yet to upload.
     lod_pending: Option<lod::Pending>,
-    detail_columns: HashMap<(i32, i32), u32>,
+    detail_columns: crate::fast_hash::FxHashMap<(i32, i32), u32>,
     /// Bumped whenever a column becomes or stops being complete.
     detail_revision: u64,
     arena: arena::Arena,
@@ -493,7 +497,7 @@ pub struct Renderer {
     /// The shadow camera's draws by page, in bands of distance from the light.
     shadow_runs: page_runs::PageRuns,
     /// Block-entity blocks per meshed section (world position, state id).
-    block_entities: HashMap<SectionKey, Vec<([i32; 3], u32)>>,
+    block_entities: crate::fast_hash::FxHashMap<SectionKey, Vec<([i32; 3], u32)>>,
     /// Changes whenever `block_entities` does (unique across renderers).
     block_entity_revision: u64,
     /// VisGraph face connectivity per meshed section (cave culling).
@@ -2369,6 +2373,7 @@ impl Renderer {
             mip_levels,
             mipmaps: mip_levels - 1,
             terrain_layout: bindings,
+            terrain_sprites: sprite_constants.map(|(_, v)| v),
             sprite_sampler,
             lightmap_view,
             lightmap_sampler,
@@ -2390,7 +2395,7 @@ impl Renderer {
             lod_cutout: Default::default(),
             lod_retiring: Default::default(),
             lod_pending: None,
-            detail_columns: HashMap::new(),
+            detail_columns: Default::default(),
             detail_revision: 0,
             arena,
             sorted_indices,
@@ -2411,7 +2416,7 @@ impl Renderer {
             solid_runs: page_runs::PageRuns::default(),
             phase2_runs: page_runs::PageRuns::default(),
             shadow_runs: page_runs::PageRuns::default(),
-            block_entities: HashMap::new(),
+            block_entities: Default::default(),
             block_entity_revision: next_block_entity_revision(),
             occlusion: occlusion::Occlusion::new(crate::chunk::MIN_Y, crate::chunk::HEIGHT / 16),
             world_post,
@@ -2847,18 +2852,47 @@ impl Renderer {
             self.detail_columns.insert(column, next);
         }
     }
-    pub fn remove(&mut self, key: SectionKey) {
-        self.set_detail(key, false);
-        if self.block_entities.remove(&key).is_some() {
+    /// Every section of these columns goes: one lookup per column where the
+    /// tables are by column, and the meshes' ranges freed in one batch. A
+    /// teleport removes a few thousand columns in one frame.
+    pub fn remove_columns(&mut self, columns: impl IntoIterator<Item = (i32, i32)>) {
+        let mut released = Vec::new();
+        let mut block_entities = false;
+        for (x, z) in columns {
+            if self.detail_columns.remove(&(x, z)) == Some(COMPLETE_COLUMN) {
+                self.detail_revision += 1;
+            }
+            self.occlusion.remove_column(x, z);
+            let retiring = !self.lod_cutout.is_empty() && self.lod_cutout.contains(&(x, z));
+            for sy in 0..crate::chunk::SECTIONS as i32 {
+                let key = (x, sy, z);
+                block_entities |= self.block_entities.remove(&key).is_some();
+                if retiring {
+                    // Distant tiles still leave its column out: drawn until they don't.
+                    self.lod_retiring.insert(key);
+                } else if let Some(section) = self.sections.remove(key) {
+                    released.push(section);
+                }
+            }
+        }
+        if block_entities {
             self.block_entity_revision = next_block_entity_revision();
         }
-        self.occlusion.remove(key);
-        if !self.lod_cutout.is_empty() && self.lod_cutout.contains(&(key.0, key.2)) {
-            // Distant tiles still leave its column out: drawn until they don't.
-            self.lod_retiring.insert(key);
-        } else {
-            self.release_section(key);
+        if let Some(flat) = &mut self.flat {
+            for id in released.iter().filter_map(|s| s.flat_id) {
+                flat.remove(id);
+            }
         }
+        self.sorted_indices
+            .release_all(released.iter().filter_map(|s| {
+                let (page, start) = s.sorted_indices?;
+                Some((page, start, u64::from(s.translucent) * 6))
+            }));
+        self.arena.release_all(
+            released
+                .iter()
+                .map(|s| (s.page, s.start, u64::from(s.solid + s.translucent) * 4)),
+        );
     }
     /// Horizon's resolution scale (world pixels per window pixel) and FXAA.
     pub fn set_world_post(&mut self, scale: f32, antialias: bool) {
@@ -2936,9 +2970,9 @@ impl Renderer {
         self.native = None;
         self.pack_atlas = None;
     }
-    /// Runs the sky and post stages of one of Horizon's own shader packs from now on (`None`:
-    /// no pack), with its options' values; replaces a `shaders/` pack. Returns the stages'
-    /// labels; on an error the pack that ran keeps running.
+    /// Runs the sky, material and post stages of one of Horizon's own shader packs from now
+    /// on (`None`: no pack), with its options' values; replaces a `shaders/` pack. Returns the
+    /// stages' labels; on an error the pack that ran keeps running.
     pub fn set_native_shader_pack(
         &mut self,
         pack: Option<(horizon_shader_api::Report, Vec<(String, f64)>)>,
@@ -2947,14 +2981,14 @@ impl Renderer {
             self.native = None;
             return Ok(Vec::new());
         };
-        let format = self.config.format.remove_srgb_suffix();
-        let (pack, labels) = native_pack::NativePack::new(
-            &self.device,
-            &self.terrain_layout,
-            report,
-            &constants,
-            format,
-        )?;
+        let terrain = native_material::TerrainShape {
+            globals: &self.terrain_layout,
+            flat: self.flat.as_ref().map(|f| &f.draw_layout),
+            sprites: self.terrain_sprites,
+            format: self.config.format.remove_srgb_suffix(),
+        };
+        let (pack, labels) =
+            native_pack::NativePack::new(&self.device, &terrain, report, &constants)?;
         self.native = pack.draws().then_some(pack);
         if self.native.is_some() {
             self.pack_post = None;
@@ -4178,6 +4212,21 @@ impl Renderer {
             pass.set_bind_group(0, &self.group, &[]);
             sky.draw(&mut pass, &native.frame);
         }
+        // One of Horizon's own packs with a material stage: terrain draws with its pipelines,
+        // which read the pack's frame at group 3.
+        let material = self
+            .native
+            .as_ref()
+            .filter(|_| !frame.title)
+            .and_then(|n| Some((n.material.as_ref()?, &n.frame.group)));
+        let solid_pipeline = material.map_or(&self.solid, |(m, _)| &m.solid);
+        let translucent_pipeline = material.map_or(&self.translucent, |(m, _)| &m.translucent);
+        let pack_flat = material.and_then(|(m, _)| m.flat.as_ref());
+        let pack_frame = |pass: &mut wgpu::RenderPass<'_>| {
+            if let Some((_, group)) = material {
+                pass.set_bind_group(horizon_shader_api::stages::GROUP, group, &[]);
+            }
+        };
         {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: world_view,
@@ -4211,6 +4260,7 @@ impl Renderer {
                 ..Default::default()
             });
             pass.set_bind_group(0, &self.group, &[]);
+            pack_frame(&mut pass);
             if frame.title || (sky_visible && (frame.skybox || frame.end_sky)) {
                 if !frame.title && frame.skybox && !pack_draws_sky && !native_sky_pass {
                     match self
@@ -4259,7 +4309,7 @@ impl Renderer {
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                 }
                 Some(flat) => {
-                    pass.set_pipeline(&flat.solid);
+                    pass.set_pipeline(pack_flat.map_or(&flat.solid, |p| &p.0));
                     let vertices = |p| self.arena.buffer(p);
                     match cull {
                         // As below: phase 1, the test, then phase 2's draws
@@ -4277,7 +4327,8 @@ impl Renderer {
                                 pack_reads_world,
                             );
                             pass.set_bind_group(0, &self.group, &[]);
-                            pass.set_pipeline(&flat.solid);
+                            pack_frame(&mut pass);
+                            pass.set_pipeline(pack_flat.map_or(&flat.solid, |p| &p.0));
                             flat.draw_phase2(&mut pass, vertices);
                         }
                         None => flat.draw(&mut pass, &flat.calls[..flat.solid_calls], vertices),
@@ -4286,7 +4337,7 @@ impl Renderer {
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                 }
                 None => {
-                    pass.set_pipeline(&self.solid);
+                    pass.set_pipeline(solid_pipeline);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.set_vertex_buffer(1, self.instances.slice(..));
                     match cull {
@@ -4306,7 +4357,8 @@ impl Renderer {
                                 pack_reads_world,
                             );
                             pass.set_bind_group(0, &self.group, &[]);
-                            pass.set_pipeline(&self.solid);
+                            pack_frame(&mut pass);
+                            pass.set_pipeline(solid_pipeline);
                             pass.set_index_buffer(
                                 self.indices.slice(..),
                                 wgpu::IndexFormat::Uint32,
@@ -4398,7 +4450,7 @@ impl Renderer {
                 // The pack draws translucent terrain after its deferred programs.
                 _ if pack_draws_water => {}
                 Some(flat) => {
-                    pass.set_pipeline(&flat.translucent);
+                    pass.set_pipeline(pack_flat.map_or(&flat.translucent, |p| &p.1));
                     flat.draw(&mut pass, flat.translucent_calls(), |p| {
                         self.arena.buffer(p)
                     });
@@ -4406,7 +4458,7 @@ impl Renderer {
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                 }
                 None => {
-                    pass.set_pipeline(&self.translucent);
+                    pass.set_pipeline(translucent_pipeline);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.set_vertex_buffer(1, self.instances.slice(..));
                     self.draw_sections(
