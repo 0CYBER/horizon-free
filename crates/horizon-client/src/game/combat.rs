@@ -52,10 +52,15 @@ impl Game<'_> {
     /// Remember who deals the next `damage_type` damage to the player.
     pub(super) fn note_attacker(&mut self, damage_type: &str, mob: u32) {
         if let Some(name) = self.mob_display_name(mob) {
-            self.combat
-                .pending
-                .push((damage_type.to_owned(), (mob, name)));
+            self.note_named_attacker(damage_type, mob, name);
         }
+    }
+    /// `note_attacker` for an entity that is not one of `self.mobs` (the
+    /// ender dragon).
+    pub(super) fn note_named_attacker(&mut self, damage_type: &str, id: u32, name: Text) {
+        self.combat
+            .pending
+            .push((damage_type.to_owned(), (id, name)));
     }
     /// `LivingEntity.handleDamageEvent` for the player: the hurt sound of the
     /// source's `DamageEffects` (`Player.getHurtSound`).

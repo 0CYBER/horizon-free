@@ -1024,6 +1024,10 @@ fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
     if m.species() == Species::Mannequin {
         return true;
     }
+    // Mob.checkDespawn discards disallowed types even when persistent or NoAI.
+    if w.difficulty.effective == 0.0 && !super::spawn_rules::allowed_in_peaceful(m.species()) {
+        return false;
+    }
     let Some(p) = w.nearest_player else {
         return true;
     };

@@ -283,6 +283,7 @@ fn version(entry: &Entry, v: &EntryVersion, src: &Sources) -> Result<Version, St
         api: facts.api,
         side: facts.side,
         capabilities: facts.capabilities,
+        api_level: facts.api_level,
         game: v.game.clone(),
         requires: facts.requires,
         file: File {

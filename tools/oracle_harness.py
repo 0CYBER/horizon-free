@@ -9,13 +9,16 @@ import subprocess
 
 try:
     from . import lab, test_rust_parity as base, test_model_baking_parity as baking
+    from .integration_env import run_game
 except ImportError:
     import lab, test_rust_parity as base, test_model_baking_parity as baking
+    from integration_env import run_game
 
 
 def run_logged(command, build, name, timeout=900, **kwargs):
     with (build / (name + '.log')).open('w') as log:
-        subprocess.run([str(c) for c in command], cwd=lab.ROOT, check=True, timeout=timeout,
+        runner = run_game if Path(command[0]).name == 'horizon-client' else subprocess.run
+        runner([str(c) for c in command], cwd=lab.ROOT, check=True, timeout=timeout,
                        stdout=log, stderr=subprocess.STDOUT, **kwargs)
 
 

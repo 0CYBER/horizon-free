@@ -25,6 +25,33 @@ fn rgb(c: [f32; 4]) -> [f32; 3] {
 }
 
 impl Game<'_> {
+    /// `SonicBoom.tick` uses `ServerLevel.sendParticles` for each ray point.
+    /// Keep the local event's rendering; connected players receive one at rest.
+    pub(super) fn lan_sonic_boom(&self, options: &ParticleOptions, at: [f64; 3]) {
+        let (Some(host), Some(particle)) = (&self.lan, self.network_particle(options, None)) else {
+            return;
+        };
+        let packet = C::LevelParticles(play::LevelParticles {
+            particle,
+            override_limiter: false,
+            always_show: false,
+            pos: at,
+            dist: [0.0; 3],
+            max_speed: [0.0; 3],
+            count: 0,
+            randomization: 0,
+        });
+        for g in host.hub.guests.iter().filter(|g| host.hub.here(g)) {
+            // ServerLevel compares the player's block centre, strictly within 32.
+            let distance: f64 = (0..3)
+                .map(|k| (g.position[k].floor() + 0.5 - at[k]).powi(2))
+                .sum();
+            if distance < 32.0 * 32.0 {
+                g.send(&packet);
+            }
+        }
+    }
+
     /// `ParticleTypes.STREAM_CODEC`'s value for `options`: the type's
     /// network id and the data it carries (`state` for the block particles).
     /// None while not serving, or for a particle whose data isn't sent from

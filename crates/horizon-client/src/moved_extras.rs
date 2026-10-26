@@ -164,21 +164,21 @@ pub fn fetch_index() -> Result<Index, String> {
 
 /// Installs `m` into the game folder `dir` (where `options.txt` is), for a
 /// player whose extras were `e`: its newest version for this game that
-/// wasn't taken down, checked against the index (size, SHA-256, signature,
-/// manifest), as `horizon-mods/<id>.hmod`, turned on, with the extra's
-/// settings in its storage unless the mod has its own already.
+/// wasn't taken down and that this Horizon's mod API level runs, checked
+/// against the index (size, SHA-256, signature, manifest), as
+/// `horizon-mods/<id>.hmod`, turned on, with the extra's settings in its
+/// storage unless the mod has its own already.
 pub fn install(index: &Index, m: &Moved, e: &Extras, dir: &Path) -> Result<(), String> {
     let project = index
         .project(m.id)
         .ok_or_else(|| format!("{} isn't in Horizon's registry yet", m.id))?;
-    let version = project
-        .versions
-        .iter()
-        .find(|v| {
-            v.game == horizon_core::version::VERSION_ID
-                && index.revoked(&project.id, &v.file.sha256).is_none()
-        })
-        .ok_or_else(|| format!("{} has no version for this game", m.id))?;
+    let version = index
+        .installable(
+            project,
+            horizon_core::version::VERSION_ID,
+            horizon_mods::api_level::LEVEL,
+        )
+        .ok_or_else(|| format!("{} has no version this Horizon can run", m.id))?;
     let mods = dir.join(crate::mod_list::DIR);
     fs::create_dir_all(&mods).map_err(|e| format!("{}: {e}", mods.display()))?;
     let target = mods.join(format!("{}.hmod", m.id));

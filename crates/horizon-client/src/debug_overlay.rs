@@ -221,18 +221,17 @@ pub fn scale(
 pub fn draw(font: &Font, columns: [&[String]; 2], scale: f32, width: i32) -> Vec<GuiDraw> {
     let mut out = vec![GuiDraw::Push(vec![PoseOp::Scale(scale, scale)])];
     for (lines, align_left) in [(columns[0], true), (columns[1], false)] {
-        let placed: Vec<(&String, i32, i32)> = lines
+        let placed: Vec<(&String, i32, i32, i32)> = lines
             .iter()
             .enumerate()
             .filter(|(_, l)| !l.is_empty())
             .map(|(i, l)| {
                 let w = font.width(l) as i32;
                 let left = if align_left { 2 } else { width - 2 - w };
-                (l, left, 2 + LINE_HEIGHT * i as i32)
+                (l, left, 2 + LINE_HEIGHT * i as i32, w)
             })
             .collect();
-        for (line, left, top) in &placed {
-            let w = font.width(line) as i32;
+        for (_, left, top, w) in &placed {
             out.push(fill(
                 left - 1,
                 top - 1,
@@ -241,7 +240,7 @@ pub fn draw(font: &Font, columns: [&[String]; 2], scale: f32, width: i32) -> Vec
                 BACKGROUND,
             ));
         }
-        for (line, left, top) in placed {
+        for (line, left, top, _) in placed {
             out.push(GuiDraw::Text {
                 text: Text::literal(line.clone()),
                 x: left,

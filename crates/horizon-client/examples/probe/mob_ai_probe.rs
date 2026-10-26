@@ -49,6 +49,7 @@ struct Scenario {
     name: String,
     ticks: i32,
     time: i64,
+    difficulty: u8,
     rain: bool,
     thunder: bool,
     origin: [i32; 2],
@@ -85,11 +86,13 @@ fn parse(text: &str) -> Vec<Scenario> {
             "scenario" => {
                 s.name = f[1].to_owned();
                 s.time = 6000;
+                s.difficulty = 2;
                 for kv in &f[2..] {
                     let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
                     match k {
                         "ticks" => s.ticks = v.parse().unwrap(),
                         "time" => s.time = v.parse().unwrap(),
+                        "difficulty" => s.difficulty = v.parse().unwrap(),
                         "rain" => s.rain = true,
                         "thunder" => s.thunder = true,
                         "levelseed" => {}
@@ -954,6 +957,10 @@ pub fn main() -> horizon_client::Result<()> {
             for flag in &spec.flags {
                 match flag.as_str() {
                     "persistent" => m.persistent = true,
+                    "named" => {
+                        m.custom_name = Some("Peaceful regression".into());
+                        m.persistent = true;
+                    }
                     "ridden" => {
                         m.extra.head = Some("minecraft:red_harness".into());
                         m.rider = Some(horizon_client::mobs::equine::Rider::default());
@@ -1090,7 +1097,7 @@ pub fn main() -> horizon_client::Result<()> {
                     block_tags: &items.block_tags,
                     biomes: &biomes,
                     mob_griefing: true,
-                    difficulty: LocalDifficulty::new(2, world.day_time, 0, 0.0),
+                    difficulty: LocalDifficulty::new(s.difficulty, world.day_time, 0, 0.0),
                     end: false,
                     world_seed: 0,
                     // FlatLevelSource.getSeaLevel.

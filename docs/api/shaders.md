@@ -91,11 +91,12 @@ pack exist ([stability.md](stability.md)).
 
 ## Not there yet
 
-The material stage in the game (the sky and post stages run, with hot reload), option values other than the defaults,
-then the overlay, lighting and shadow stages.
+Option values other than the defaults (the three stages run, with hot reload), then the overlay, lighting and shadow
+stages.
 
 ## Changelog
 
+- 2026-10-26: the material stage in the game: terrain's surfaces through the pack's `material`.
 - 2026-10-26: the sky stage in the game: the pack's `sky` gets vanilla's colour along each ray.
 - 2026-10-26: the post stage in the game (`HORIZON_SHADER_PACK`, hot reload with the last good pack kept).
 - 2026-10-25: `horizon-shader` (`new`, `check`, `pack`), three templates, the example pack and the guide.
