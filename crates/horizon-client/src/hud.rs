@@ -851,6 +851,12 @@ impl HudBatch {
         r.v1 = cv;
         self.rect_uv(x, y, w, h, r, color);
     }
+    /// Any four-cornered shape in one colour, corners in order round it.
+    pub fn fill_quad(&mut self, atlas: &HudAtlas, corners: [[f32; 2]; 4], color: u32) {
+        let w = atlas.white;
+        let uv = [(w.u0 + w.u1) / 2.0, (w.v0 + w.v1) / 2.0];
+        self.quad(corners, [uv; 4], color);
+    }
     /// GuiGraphics.fillGradient: `top` to `bottom`, down the rectangle.
     pub fn fill_gradient(
         &mut self,

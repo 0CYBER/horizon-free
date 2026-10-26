@@ -33,7 +33,11 @@ impl Cost {
 #[derive(Clone, Debug)]
 pub struct Enchantment {
     pub id: Arc<str>,
+    /// The name the pinned English map gave at load: the fallback for a
+    /// language that has no entry for the key below.
     pub description: String,
+    /// `description`'s translation key (`enchantment.minecraft.<name>`).
+    pub description_key: String,
     pub max_level: u32,
     pub weight: u32,
     pub anvil_cost: u32,
@@ -224,6 +228,7 @@ impl Enchantments {
                     .get(key)
                     .cloned()
                     .unwrap_or_else(|| id.trim_start_matches("minecraft:").replace('_', " ")),
+                description_key: key.to_owned(),
                 max_level: v["max_level"].as_u64().unwrap_or(1) as u32,
                 weight: v["weight"].as_u64().unwrap_or(1) as u32,
                 anvil_cost: v["anvil_cost"].as_u64().unwrap_or(0) as u32,
@@ -329,16 +334,26 @@ impl Enchantments {
     }
     /// `Enchantment.getFullname` as plain text and whether it is a curse (red).
     pub fn full_name(&self, id: &str, level: u32) -> (String, bool) {
+        let language = crate::lang::current();
+        self.full_name_in(language.as_deref(), id, level)
+    }
+    /// `full_name` against `language`; `None` (no language loaded: a
+    /// dedicated server, the probes) keeps the English names loaded above.
+    pub fn full_name_in(
+        &self,
+        language: Option<&crate::lang::Language>,
+        id: &str,
+        level: u32,
+    ) -> (String, bool) {
+        let tr = |key: &str| language.and_then(|l| l.get(key).map(str::to_owned));
         let Some(e) = self.get(id) else {
             return (format!("{id} {}", level_name(level)), false);
         };
-        let mut name = e.description.clone();
+        let mut name = tr(&e.description_key).unwrap_or_else(|| e.description.clone());
         if level != 1 || e.max_level != 1 {
             name.push(' ');
             name.push_str(
-                self.lang
-                    .get(&format!("enchantment.level.{level}"))
-                    .map_or(&level_name(level), |s| s),
+                &tr(&format!("enchantment.level.{level}")).unwrap_or_else(|| level_name(level)),
             );
         }
         (name, self.is_curse(id))
@@ -771,7 +786,7 @@ pub(crate) mod tests {
         let defs = [
             (
                 "minecraft:sharpness",
-                json!({"anvil_cost":1,"exclusive_set":"#minecraft:exclusive_set/damage","max_cost":{"base":21,"per_level_above_first":11},"max_level":5,"min_cost":{"base":1,"per_level_above_first":11},"primary_items":"#minecraft:enchantable/melee_weapon","supported_items":"#minecraft:enchantable/sharp_weapon","weight":10,"slots":["mainhand"],"effects":{"minecraft:damage":[{"effect":{"type":"minecraft:add","value":{"type":"minecraft:linear","base":1.0,"per_level_above_first":0.5}}}]}}),
+                json!({"anvil_cost":1,"description":{"translate":"enchantment.minecraft.sharpness"},"exclusive_set":"#minecraft:exclusive_set/damage","max_cost":{"base":21,"per_level_above_first":11},"max_level":5,"min_cost":{"base":1,"per_level_above_first":11},"primary_items":"#minecraft:enchantable/melee_weapon","supported_items":"#minecraft:enchantable/sharp_weapon","weight":10,"slots":["mainhand"],"effects":{"minecraft:damage":[{"effect":{"type":"minecraft:add","value":{"type":"minecraft:linear","base":1.0,"per_level_above_first":0.5}}}]}}),
             ),
             (
                 "minecraft:smite",
@@ -795,6 +810,7 @@ pub(crate) mod tests {
             .map(|(id, v)| Enchantment {
                 id: Arc::from(*id),
                 description: id.trim_start_matches("minecraft:").into(),
+                description_key: v["description"]["translate"].as_str().unwrap_or("").into(),
                 max_level: v["max_level"].as_u64().unwrap() as u32,
                 weight: v["weight"].as_u64().unwrap() as u32,
                 anvil_cost: v["anvil_cost"].as_u64().unwrap() as u32,
@@ -1087,5 +1103,34 @@ pub(crate) mod tests {
         assert_eq!(lines, ["sharpness II", "unbreaking III", "mending"]);
         assert!(!e.compatible("minecraft:sharpness", "minecraft:smite"));
         assert!(e.compatible("minecraft:sharpness", "minecraft:unbreaking"));
+    }
+
+    /// The enchantment's name and its level come from the selected language,
+    /// with the English name loaded above as the fallback.
+    #[test]
+    fn names_follow_the_language() {
+        struct Mem(HashMap<String, Vec<u8>>);
+        impl crate::lang::ResourceSource for Mem {
+            fn read(&self, path: &str) -> Option<Vec<u8>> {
+                self.0.get(path).cloned()
+            }
+        }
+        let ru = Mem(HashMap::from([(
+            "assets/minecraft/lang/ru_ru.json".to_owned(),
+            r#"{"enchantment.minecraft.sharpness":"Острота","enchantment.level.5":"V"}"#
+                .as_bytes()
+                .to_vec(),
+        )]));
+        let ru = crate::lang::Language::load(&[&ru], "ru_ru");
+        let e = sample();
+        assert_eq!(
+            e.full_name_in(Some(&ru), "minecraft:sharpness", 5).0,
+            "Острота V"
+        );
+        // mending carries no key in the fixture: the English name stays.
+        assert_eq!(
+            e.full_name_in(Some(&ru), "minecraft:mending", 1).0,
+            "mending"
+        );
     }
 }

@@ -3076,8 +3076,13 @@ mod tests {
             if client_side {
                 w.player.health.flash_health_change(20.0);
                 assert_eq!(w.player.health.hurt_animation_time, 0);
+                assert_eq!(w.player.health.hurt.cooldown, 0);
                 w.player.health.flash_health_change(12.0);
                 assert_eq!(w.player.health.hurt_animation_time, 10);
+                // LocalPlayer.hurtTo's damageCooldownTime: the HUD's hearts blink.
+                assert_eq!(w.player.health.hurt.cooldown, 20);
+                w.player.health.flash_health_change(25.0);
+                assert_eq!(w.player.health.hurt.cooldown, 10);
             }
         }
     }

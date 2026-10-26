@@ -45,7 +45,18 @@ pub struct Interface {
     pub samplers: Vec<Sampler>,
     /// The fragment stage's output locations.
     pub outputs: Vec<u32>,
+    /// A gbuffers program reads `DRAW_UNIFORMS`: the block at set 2, binding 0, set per draw.
+    pub draw: bool,
 }
+
+/// The uniforms a gbuffers program reads per draw (5.3's "D"), in a block of their own
+/// (`HzDraw`, std140: three ints, a pad, a vec4; 32 bytes) the game sets for each draw.
+pub const DRAW_UNIFORMS: [(&str, &str); 4] = [
+    ("renderStage", "int"),
+    ("entityId", "int"),
+    ("blockEntityId", "int"),
+    ("entityColor", "vec4"),
+];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Uniform {
@@ -98,6 +109,43 @@ pub struct GbuffersInputs {
     /// The value of each attribute a pack may declare (`mc_Entity`, `vaPosition`...), as a GLSL
     /// expression of the declared type's size; an attribute not listed reads zero.
     pub attributes: Vec<(String, String)>,
+    /// GLSL statements run last in `main`, with `gl_Position` in wgpu's clip space.
+    pub after: String,
+    /// The alpha test applied to output 0 (`gl_FragData[0]`, `gl_FragColor`), the loader's
+    /// (3.2 `alphaTest.<program>`): `None` keeps every fragment.
+    pub alpha_test: Option<AlphaTest>,
+}
+
+/// A fragment stays when its output 0's alpha compares to `reference` as `op` says (a GLSL
+/// comparison operator, `true` for GL's `ALWAYS`, `false` for `NEVER`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AlphaTest {
+    pub op: &'static str,
+    pub reference: f32,
+}
+
+impl AlphaTest {
+    /// `alphaTest.<program>`'s value: `off`, or a GL comparison and a reference.
+    pub fn parse(value: &str) -> Option<Option<Self>> {
+        let mut words = value.split_whitespace();
+        let func = words.next()?;
+        if func == "off" {
+            return Some(None);
+        }
+        let op = match func.trim_start_matches("GL_") {
+            "NEVER" => "false",
+            "LESS" => "<",
+            "EQUAL" => "==",
+            "LEQUAL" => "<=",
+            "GREATER" => ">",
+            "NOTEQUAL" => "!=",
+            "GEQUAL" => ">=",
+            "ALWAYS" => return Some(None),
+            _ => return None,
+        };
+        let reference = words.next()?.parse().ok()?;
+        Some(Some(Self { op, reference }))
+    }
 }
 
 /// Translates a composite-style program (`composite`, `deferred`, `final`...).
@@ -106,7 +154,7 @@ pub fn translate_composite(
     fragment: &Preprocessed,
     target: Target,
 ) -> Result<Program, Vec<Error>> {
-    translate(vertex, fragment, target, None)
+    translate(vertex, fragment, target, None, false)
 }
 
 /// Translates a gbuffers-style program (`gbuffers_terrain`...) drawing the game's geometry
@@ -117,7 +165,18 @@ pub fn translate_gbuffers(
     target: Target,
     inputs: &GbuffersInputs,
 ) -> Result<Program, Vec<Error>> {
-    translate(vertex, fragment, target, Some(inputs))
+    translate(vertex, fragment, target, Some(inputs), false)
+}
+
+/// Translates a shadow program (`shadow`, `shadow_water`...) drawing the game's geometry
+/// described by `inputs` from the shadow light: its model-view and projection matrices are the
+/// shadow camera's (5.2).
+pub fn translate_shadow(
+    vertex: &Preprocessed,
+    fragment: &Preprocessed,
+    inputs: &GbuffersInputs,
+) -> Result<Program, Vec<Error>> {
+    translate(vertex, fragment, Target::Buffers, Some(inputs), true)
 }
 
 /// The matrices of the compatibility profile in a gbuffers-style program, from the frame's.
@@ -135,7 +194,13 @@ fn translate(
     fragment: &Preprocessed,
     target: Target,
     gbuffers: Option<&GbuffersInputs>,
+    shadow: bool,
 ) -> Result<Program, Vec<Error>> {
+    let matrices = if shadow {
+        GBUFFERS_MATRICES.replace("gbuffer", "shadow")
+    } else {
+        GBUFFERS_MATRICES.to_owned()
+    };
     let mut v = Stage::scan(vertex, ShaderStage::Vertex);
     let mut f = Stage::scan(fragment, ShaderStage::Fragment);
     v.gbuffers = gbuffers.is_some();
@@ -152,6 +217,9 @@ fn translate(
             "gbufferProjectionInverse",
         ] {
             uniforms.insert(name.to_owned(), "mat4".to_owned());
+            if shadow {
+                uniforms.insert(name.replace("gbuffer", "shadow"), "mat4".to_owned());
+            }
         }
     }
     let mut samplers: BTreeMap<String, String> = BTreeMap::new();
@@ -170,6 +238,17 @@ fn translate(
             samplers.insert(name.clone(), ty.clone());
         }
     }
+    // Per-draw values move to their own block; another type than the documented one keeps
+    // the frame's block (and reads zero).
+    let mut draw = false;
+    if gbuffers.is_some() {
+        for (name, ty) in DRAW_UNIFORMS {
+            if uniforms.get(name).is_some_and(|t| t == ty) {
+                uniforms.remove(name);
+                draw = true;
+            }
+        }
+    }
     let samplers: Vec<Sampler> = samplers
         .into_iter()
         .enumerate()
@@ -180,13 +259,30 @@ fn translate(
         })
         .collect();
 
-    // Varyings by name: the vertex outputs, then fragment inputs the vertex stage lacks.
+    // Varyings by name: the vertex outputs, then fragment inputs the vertex stage lacks. A
+    // matrix or array travels as one varying per column or element (`varying_parts`).
     let mut locations: BTreeMap<String, (u32, String)> = BTreeMap::new();
+    let mut split: BTreeMap<String, (String, Vec<(String, String)>)> = BTreeMap::new();
     for var in v.outs.iter().chain(&f.ins) {
-        let next = locations.len() as u32;
-        locations
-            .entry(var.name.clone())
-            .or_insert((next, var.decl.clone()));
+        if locations.contains_key(&var.name) || split.contains_key(&var.name) {
+            continue;
+        }
+        match varying_parts(&var.decl) {
+            Some((global, parts)) => {
+                let mut copies = Vec::new();
+                for (k, (decl, access)) in parts.into_iter().enumerate() {
+                    let part = format!("hz_v_{}_{k}", var.name);
+                    let next = locations.len() as u32;
+                    locations.insert(part.clone(), (next, decl));
+                    copies.push((part, access));
+                }
+                split.insert(var.name.clone(), (global, copies));
+            }
+            None => {
+                let next = locations.len() as u32;
+                locations.insert(var.name.clone(), (next, var.decl.clone()));
+            }
+        }
     }
 
     let header = |stage: &Stage| {
@@ -203,6 +299,12 @@ fn translate(
             .unwrap();
         }
         h.push_str(" };\n");
+        if draw {
+            h.push_str(
+                "layout(set = 2, binding = 0) uniform HzDraw { int renderStage; int entityId; \
+                 int blockEntityId; int hz_draw_pad; vec4 entityColor; };\n",
+            );
+        }
         for s in &samplers {
             let (texture, sampler) = split_sampler(&s.ty);
             writeln!(
@@ -225,6 +327,9 @@ fn translate(
             )
             .unwrap();
         }
+        for (name, (global, _)) in &split {
+            writeln!(h, "{}", global.replace("@", name)).unwrap();
+        }
         if let (Some(inputs), ShaderStage::Vertex) = (gbuffers, stage.kind) {
             h.push_str(&inputs.declarations);
             h.push('\n');
@@ -242,7 +347,7 @@ fn translate(
              hz_MultiTexCoord0 = hz_Vertex;\n    hz_Color = vec4(1.0);\n    hz_Normal = vec3(0.0, 0.0, 1.0);\n",
         ),
         Some(inputs) => {
-            vertex_main.push_str(GBUFFERS_MATRICES);
+            vertex_main.push_str(&matrices);
             vertex_main.push_str(&inputs.body);
         }
     }
@@ -262,14 +367,21 @@ fn translate(
     for name in &v.inits {
         writeln!(vertex_main, "    {name} = hz_init_{name}();").unwrap();
     }
+    vertex_main.push_str("    hz_main();\n");
+    for (name, (_, copies)) in &split {
+        for (part, access) in copies {
+            writeln!(vertex_main, "    {part} = {name}{access};").unwrap();
+        }
+    }
     write!(
         vertex_main,
-        "    hz_main();\n    gl_Position = vec4(gl_Position.x, {flip}gl_Position.y, (gl_Position.z + gl_Position.w) * 0.5, gl_Position.w);\n}}\n"
+        "    gl_Position = vec4(gl_Position.x, {flip}gl_Position.y, (gl_Position.z + gl_Position.w) * 0.5, gl_Position.w);\n{}}}\n",
+        gbuffers.map_or("", |g| &g.after)
     )
     .unwrap();
     let mut fragment_main = String::from("\nvoid main() {\n");
     if gbuffers.is_some() {
-        fragment_main.push_str(GBUFFERS_MATRICES);
+        fragment_main.push_str(&matrices);
     }
     fragment_main.push_str(fog);
     if f.frag_coord {
@@ -278,10 +390,31 @@ fn translate(
             Target::Buffers => "    hz_FragCoord = gl_FragCoord;\n",
         });
     }
+    for (name, (_, copies)) in &split {
+        for (part, access) in copies {
+            writeln!(fragment_main, "    {name}{access} = {part};").unwrap();
+        }
+    }
     for name in &f.inits {
         writeln!(fragment_main, "    {name} = hz_init_{name}();").unwrap();
     }
-    fragment_main.push_str("    hz_main();\n}\n");
+    fragment_main.push_str("    hz_main();\n");
+    // With `out` variables the pack tests alpha itself.
+    if let Some(t) = gbuffers.and_then(|g| g.alpha_test)
+        && f.outputs.contains(&0)
+        && !f.frag_outs.iter().any(|(n, _)| *n == 0)
+    {
+        match t.op {
+            "false" => fragment_main.push_str("    discard;\n"),
+            op => writeln!(
+                fragment_main,
+                "    if (!(hz_out0.a {op} {:?})) {{ discard; }}",
+                t.reference
+            )
+            .unwrap(),
+        }
+    }
+    fragment_main.push_str("}\n");
 
     let v_text = format!(
         "{}{}{vertex_main}",
@@ -327,8 +460,55 @@ fn translate(
             uniforms,
             samplers,
             outputs,
+            draw,
         },
     })
+}
+
+/// A matrix or array varying (`flat mat3 @[2];`): wgpu's stage interfaces take only scalars
+/// and vectors (WGSL), so it becomes a private global (`mat3 @[2];`) and one varying per
+/// column or element, each with the qualifiers and how to reach it (`[1][2]`). `None` for
+/// scalars and vectors, and for sizes that are not plain numbers.
+fn varying_parts(decl: &str) -> Option<(String, Vec<(String, String)>)> {
+    let (before, after) = decl.split_once('@')?;
+    let mut words: Vec<&str> = before.split_whitespace().collect();
+    let ty = words.pop()?;
+    let qualifiers: String = words.iter().map(|w| format!("{w} ")).collect();
+    let array = after.trim().trim_end_matches(';').trim();
+    let mut sizes = Vec::new();
+    let mut rest = array;
+    while let Some(r) = rest.strip_prefix('[') {
+        let (n, r) = r.split_once(']')?;
+        sizes.push(n.trim().parse::<usize>().ok()?);
+        rest = r.trim_start();
+    }
+    if !rest.is_empty() {
+        return None;
+    }
+    // matC or matCxR: C columns of R rows.
+    let column = ty.strip_prefix("mat").and_then(|d| {
+        let (c, r) = d.split_once('x').unwrap_or((d, d));
+        Some((c.parse::<usize>().ok()?, r.parse::<usize>().ok()?))
+    });
+    if sizes.is_empty() && column.is_none() {
+        return None;
+    }
+    let part_ty = column.map_or(ty.to_owned(), |(_, r)| format!("vec{r}"));
+    if let Some((c, _)) = column {
+        sizes.push(c);
+    }
+    let count: usize = sizes.iter().product();
+    let parts = (0..count)
+        .map(|mut k| {
+            let mut access = String::new();
+            for &size in sizes.iter().rev() {
+                access.insert_str(0, &format!("[{}]", k % size));
+                k /= size;
+            }
+            (format!("{qualifiers}{part_ty} @;"), access)
+        })
+        .collect();
+    Some((format!("{ty} @{array};"), parts))
 }
 
 /// `sampler2DShadow` → (`texture2D`, `samplerShadow`); `isampler3D` → (`itexture3D`, `sampler`).
@@ -394,7 +574,11 @@ fn compile(stage: &Stage, text: &str, header_lines: usize) -> Result<naga::Modul
 /// The uniform block's size and member offsets, from naga's layout.
 fn block_layout(module: &naga::Module) -> (u32, Vec<(String, u32)>) {
     for (_, var) in module.global_variables.iter() {
-        if var.space != naga::AddressSpace::Uniform {
+        let frame = var
+            .binding
+            .as_ref()
+            .is_some_and(|b| b.group == 0 && b.binding == 0);
+        if var.space != naga::AddressSpace::Uniform || !frame {
             continue;
         }
         if let naga::TypeInner::Struct { members, span } = &module.types[var.ty].inner {
@@ -472,6 +656,21 @@ mod tests {
         assert_eq!(i.outputs, [0, 1]);
     }
 
+    /// naga drops non-constant global initializers: they run in our `main`, one per declarator,
+    /// converting as GLSL's initialization does.
+    #[test]
+    fn global_initializers_read_uniforms() {
+        let fsh = "#version 120\nuniform float rainStrength;\nuniform ivec2 atlasSize;\n\
+                   vec2 size = atlasSize;\nvec3 a = vec3(rainStrength), b = a * 2.0, c;\n\
+                   const float k = rainStrength > 0.5 ? 1.0 : 0.0;\nfloat w[] = float[](rainStrength, 1.0);\n\
+                   void main() { c = b; gl_FragColor = vec4(a + c, size.x * k + w[0]); }\n";
+        let p = program(
+            &[("composite.vsh", VSH_120), ("composite.fsh", fsh)],
+            Target::Window,
+        );
+        assert!(p.is_ok(), "{:?}", p.err());
+    }
+
     #[test]
     fn core_programs_translate() {
         let vsh = "#version 330 core\nin vec3 vaPosition;\nin vec2 vaUV0;\nuniform mat4 modelViewMatrix, projectionMatrix;\n\
@@ -523,6 +722,79 @@ mod tests {
         }
     }
 
+    /// Code after an unconditional `discard` (BSL's `gbuffers_clouds` with its own clouds on)
+    /// or `return;` still makes a valid module.
+    #[test]
+    fn code_after_discard_or_return_translates() {
+        let vsh = "#version 120\nvoid main() { gl_Position = ftransform(); }\n";
+        for fsh in [
+            "#version 120\nuniform sampler2D texture;\nvoid main() {\n    discard;\n    vec4 c = texture2D(texture, vec2(0.5));\n    gl_FragData[0] = c;\n}\n",
+            "#version 120\nvoid main() {\n    gl_FragData[0] = vec4(1.0);\n    return;\n    gl_FragData[0] = vec4(0.5);\n}\n",
+        ] {
+            let files = [
+                ("shaders/gbuffers_clouds.vsh", vsh),
+                ("shaders/gbuffers_clouds.fsh", fsh),
+            ];
+            let pack = Pack::from_zip_bytes("P.zip", zip(&files)).unwrap();
+            let m = Macros::standard();
+            let inputs = GbuffersInputs {
+                body: "    hz_Vertex = vec4(0.0, 0.0, 0.0, 1.0);\n".into(),
+                ..Default::default()
+            };
+            translate_gbuffers(
+                &preprocess(&pack, "gbuffers_clouds.vsh", &m),
+                &preprocess(&pack, "gbuffers_clouds.fsh", &m),
+                Target::Buffers,
+                &inputs,
+            )
+            .unwrap_or_else(|e| panic!("{fsh}: {e:?}"));
+        }
+    }
+
+    #[test]
+    fn the_alpha_test_discards_below_its_reference() {
+        assert_eq!(
+            AlphaTest::parse("GREATER 0.1"),
+            Some(Some(AlphaTest {
+                op: ">",
+                reference: 0.1
+            }))
+        );
+        assert_eq!(AlphaTest::parse("off"), Some(None));
+        assert_eq!(AlphaTest::parse("GL_ALWAYS 0"), Some(None));
+        assert_eq!(AlphaTest::parse("SOMETIMES 0.5"), None);
+        let vsh = "#version 120\nvoid main() { gl_Position = ftransform(); }\n";
+        let legacy = "#version 120\nvoid main() { gl_FragData[0] = vec4(0.5); }\n";
+        let outs =
+            "#version 330\nlayout(location = 0) out vec4 c;\nvoid main() { c = vec4(0.5); }\n";
+        for (fsh, kills) in [(legacy, true), (outs, false)] {
+            let files = [
+                ("shaders/gbuffers_entities.vsh", vsh),
+                ("shaders/gbuffers_entities.fsh", fsh),
+            ];
+            let pack = Pack::from_zip_bytes("P.zip", zip(&files)).unwrap();
+            let m = Macros::standard();
+            let inputs = GbuffersInputs {
+                body: "    hz_Vertex = vec4(0.0, 0.0, 0.0, 1.0);\n".into(),
+                alpha_test: AlphaTest::parse("GREATER 0.1").unwrap(),
+                ..Default::default()
+            };
+            let p = translate_gbuffers(
+                &preprocess(&pack, "gbuffers_entities.vsh", &m),
+                &preprocess(&pack, "gbuffers_entities.fsh", &m),
+                Target::Buffers,
+                &inputs,
+            )
+            .unwrap_or_else(|e| panic!("{e:?}"));
+            let functions = p.fragment.functions.iter().map(|(_, f)| f);
+            let kill = functions
+                .chain([&p.fragment.entry_points[0].function])
+                .any(|f| format!("{:?}", f.body).contains("Kill"));
+            // With `out` variables the pack tests alpha itself.
+            assert_eq!(kill, kills, "{fsh}");
+        }
+    }
+
     #[test]
     fn gbuffers_programs_read_the_games_vertices() {
         let vsh = "#version 120\nattribute vec4 mc_Entity;\nattribute vec2 mc_midTexCoord;\nvarying vec2 uv;\nvarying vec2 light;\n\
@@ -531,9 +803,9 @@ mod tests {
                    light = (gl_TextureMatrix[1] * gl_MultiTexCoord1).xy;\n    color = gl_Color;\n    \
                    normal = normalize(gl_NormalMatrix * gl_Normal);\n    id = mc_Entity.x + mc_midTexCoord.x;\n}\n";
         let fsh = "#version 120\nuniform sampler2D texture;\nuniform sampler2D lightmap;\nuniform mat4 gbufferModelView;\n\
-                   varying vec2 uv;\nvarying vec2 light;\nvarying vec4 color;\nvarying vec3 normal;\nvarying float id;\n\
+                   uniform int renderStage;\nvarying vec2 uv;\nvarying vec2 light;\nvarying vec4 color;\nvarying vec3 normal;\nvarying float id;\n\
                    void main() {\n    vec4 c = texture2D(texture, uv) * texture2D(lightmap, light) * color;\n    \
-                   /* DRAWBUFFERS:02 */\n    gl_FragData[0] = c * gl_FragCoord.z;\n    \
+                   /* DRAWBUFFERS:02 */\n    gl_FragData[0] = c * gl_FragCoord.z * float(renderStage);\n    \
                    gl_FragData[1] = vec4(normal * 0.5 + 0.5, id);\n}\n";
         let files: Vec<(String, &str)> =
             [("gbuffers_terrain.vsh", vsh), ("gbuffers_terrain.fsh", fsh)]
@@ -543,18 +815,19 @@ mod tests {
         let files: Vec<(&str, &str)> = files.iter().map(|(p, t)| (p.as_str(), *t)).collect();
         let pack = Pack::from_zip_bytes("P.zip", zip(&files)).unwrap();
         let m = Macros::standard();
-        let inputs = GbuffersInputs {
+        let game = GbuffersInputs {
             declarations: "layout(location = 0) in vec3 game_pos;\nlayout(location = 1) in uvec2 game_uv;".into(),
             body: "    hz_Vertex = vec4(game_pos, 1.0);\n    hz_MultiTexCoord0 = vec4(vec2(game_uv) / 32768.0, 0.0, 1.0);\n    \
                    hz_MultiTexCoord1 = vec4(240.0, 240.0, 0.0, 1.0);\n    hz_Color = vec4(1.0);\n    hz_Normal = vec3(0.0, 1.0, 0.0);\n"
                 .into(),
             attributes: vec![("mc_midTexCoord".into(), "vec2(game_uv) / 32768.0".into())],
+            ..Default::default()
         };
         let p = translate_gbuffers(
             &preprocess(&pack, "gbuffers_terrain.vsh", &m),
             &preprocess(&pack, "gbuffers_terrain.fsh", &m),
             Target::Buffers,
-            &inputs,
+            &game,
         )
         .unwrap_or_else(|e| panic!("{e:?}"));
         let names: Vec<&str> = p
@@ -571,6 +844,14 @@ mod tests {
             assert!(names.contains(&name), "{name} missing from {names:?}");
         }
         assert_eq!(p.interface.outputs, vec![0, 1]);
+        // renderStage is set per draw, in its own block.
+        assert!(p.interface.draw && !names.contains(&"renderStage"));
+        let per_draw = p.fragment.global_variables.iter().any(|(_, v)| {
+            v.binding
+                .as_ref()
+                .is_some_and(|b| b.group == 2 && b.binding == 0)
+        });
+        assert!(per_draw);
         let inputs: Vec<&str> = p.vertex.entry_points[0]
             .function
             .arguments
@@ -581,6 +862,46 @@ mod tests {
             inputs.contains(&"game_pos") && inputs.contains(&"game_uv"),
             "{inputs:?}"
         );
+        // From the light, the compatibility matrices are the shadow camera's.
+        let shadow = translate_shadow(
+            &preprocess(&pack, "gbuffers_terrain.vsh", &m),
+            &preprocess(&pack, "gbuffers_terrain.fsh", &m),
+            &game,
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        let names: Vec<&str> = (shadow.interface.uniforms.iter())
+            .map(|u| u.name.as_str())
+            .collect();
+        for name in ["shadowModelView", "shadowProjection", "gbufferModelView"] {
+            assert!(names.contains(&name), "{name} missing from {names:?}");
+        }
+    }
+
+    #[test]
+    fn matrix_and_array_varyings_travel_in_parts() {
+        let vsh = "#version 120\nvarying mat3 tbn;\nflat varying ivec2 ids[2];\nvarying mat2x3 m[2];\n\
+                   void main() {\n    gl_Position = ftransform();\n    tbn = mat3(2.0);\n    \
+                   ids[1] = ivec2(3);\n    m[1][0] = vec3(4.0);\n}\n";
+        let fsh = "#version 120\nvarying mat3 tbn;\nflat varying ivec2 ids[2];\nvarying mat2x3 m[2];\n\
+                   void main() { gl_FragColor = vec4(tbn[2] + m[1][0], float(ids[1].x)); }\n";
+        let p = program(
+            &[("composite.vsh", vsh), ("composite.fsh", fsh)],
+            Target::Buffers,
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        let inputs = p.fragment.entry_points[0].function.arguments.len();
+        // 3 columns + 2 elements + 2 x 2 columns, and the fragment position.
+        assert!(inputs >= 9, "{inputs} inputs");
+        assert_eq!(
+            varying_parts("flat ivec2 @[2];").unwrap().1,
+            [
+                ("flat ivec2 @;".to_owned(), "[0]".to_owned()),
+                ("flat ivec2 @;".to_owned(), "[1]".to_owned())
+            ]
+        );
+        assert_eq!(varying_parts("mat2x3 @[2];").unwrap().1[3].1, "[1][1]");
+        assert!(varying_parts("vec4 @;").is_none());
+        assert!(varying_parts("vec4 @[N];").is_none());
     }
 
     #[test]

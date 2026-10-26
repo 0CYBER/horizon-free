@@ -57,6 +57,8 @@ pub(in crate::game) struct CommandExtras {
     /// The `CommandResultCallback` results of the outermost source, when a
     /// harness records them.
     pub results: Option<Vec<(bool, i32)>>,
+    /// The running `/pregen` task.
+    pub pregen: Option<super::pregen::PregenTask>,
 }
 
 use horizon_core::version::{BUILD_TIME, DATA_VERSION, STABLE, VANILLA_VERSION, VERSION_ID};

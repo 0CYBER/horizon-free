@@ -1971,9 +1971,10 @@ impl Game<'_> {
             self.spawn_orbs([p.x, p.y, p.z], (xp as f32 * 0.08) as u32);
         }
         if t == 1 {
-            // Level event 1028: the death roar, heard everywhere.
-            self.audio
-                .play("minecraft:entity.ender_dragon.death", None, 5.0, 1.0);
+            // EnderDragon.tickDeath: global level event 1028, the death
+            // roar, heard everywhere.
+            let at = [p.x, p.y, p.z].map(|v| v.floor() as i32);
+            self.global_level_event(1028, at, 0);
         }
         if let Some(d) = self.dragon.as_mut() {
             d.position.y += 0.1;

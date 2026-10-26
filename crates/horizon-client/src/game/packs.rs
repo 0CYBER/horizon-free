@@ -142,6 +142,8 @@ impl Game<'_> {
         }
         let server = &self.server_packs.active;
         let root = startup_root(&vanilla, &self.settings.resource_packs, server)?;
+        let root =
+            super::mods::content_root(&root, &self.settings.mods.enabled, &self.options.dev_mods);
         self.reload_resources(&root)
     }
     fn reload_resources(&mut self, root: &Path) -> horizon_client::Result<()> {
@@ -192,6 +194,10 @@ impl Game<'_> {
         let context = pack.context.clone();
         self.pack = pack;
         self.gui = gui;
+        // The atlas's sprites moved: the particle engine re-reads every rect
+        // and the packs' sprite sets, or every particle draws a stale region.
+        self.particles
+            .reload(root, &self.gui.atlas.sprites, &self.gui.atlas.translucent);
         horizon_client::ui_theme::reset_atlas();
         // Villager hats come from the pack's texture metadata (shared data, swapped in place).
         *self

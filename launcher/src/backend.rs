@@ -628,17 +628,13 @@ pub fn resources_summary(prepared: bool, sounds: bool, version: &str) -> String 
     }
 }
 
-/// Whether the resources `from` prepared are the ones preparing `to` would make. The output
-/// depends on the Horizon version, not only on Minecraft's: the manifest records the hashes of
-/// the vanilla exporters it was made with (mods/horizon/src/test/java/.../parity), and the
-/// preparer writes every file and the manifest's `schema`. So both need the same pinned
-/// Minecraft jars (research-lock.json), the same preparer and the same exporter sources. The
-/// preparer is crates/horizon-prepare (its sources ship in the release folder beside the
-/// binary) and tools/prepare_native_client.py (the Python preparer of older versions, a wrapper
-/// of the binary since); a file only one of the two versions has is a different preparer. The
-/// helpers the Python preparer imported (lab.py and the test_*_parity.py modules) change
-/// between releases in how they find and check the player's files, which the output does not
-/// depend on; they are not compared.
+/// Whether the resources `from` prepared are the ones preparing `to` would make: both pin the same
+/// Minecraft jars (research-lock.json) and their preparers make the same output. A preparer
+/// declares what it makes with `OUTPUT_VERSION` (crates/horizon-prepare/src/lib.rs, whose sources
+/// ship in the release folder), bumped by hand when the output changes and checked by CI
+/// (tools/prepare_output.py), so a release that changes the preparer's code but not its output
+/// keeps the resources. Preparers from before the number are known by their sources
+/// (`LEGACY_OUTPUT_VERSIONS`); older ones still are compared file by file (`same_preparer`).
 fn resources_compatible(from: &Path, to: &Path, manifest: &serde_json::Value) -> bool {
     let pins = |dir: &Path| {
         read_json(&dir.join("research-lock.json")).map(|lock| {
@@ -651,6 +647,108 @@ fn resources_compatible(from: &Path, to: &Path, manifest: &serde_json::Value) ->
     if a != b || a.iter().any(|v| !v.is_string()) {
         return false;
     }
+    match (output_version_at(from), output_version_at(to)) {
+        (Some(a), Some(b)) => a == b,
+        (None, None) => same_preparer(from, to, manifest),
+        _ => false,
+    }
+}
+
+/// The `OUTPUT_VERSION` of a version folder's preparer: the constant in its sources, or for a
+/// preparer from before it, the number `LEGACY_OUTPUT_VERSIONS` gives its fingerprint. None for
+/// an unknown older preparer.
+fn output_version_at(dir: &Path) -> Option<u32> {
+    output_version_in(dir, &LEGACY_OUTPUT_VERSIONS)
+}
+
+fn output_version_in(dir: &Path, legacy: &[(&str, u32)]) -> Option<u32> {
+    let crate_dir = dir.join(PREPARER_CRATE);
+    let lib = fs::read_to_string(crate_dir.join("src/lib.rs")).ok()?;
+    let declared = lib.lines().find_map(|line| {
+        line.strip_prefix("pub const OUTPUT_VERSION: u32 = ")?
+            .strip_suffix(';')?
+            .parse()
+            .ok()
+    });
+    if declared.is_some() {
+        return declared;
+    }
+    let fingerprint = legacy_fingerprint(dir)?;
+    legacy
+        .iter()
+        .find(|(known, _)| *known == fingerprint)
+        .map(|&(_, version)| version)
+}
+
+/// Preparers from before `OUTPUT_VERSION`, by `legacy_fingerprint`, whose output
+/// tools/prepare_output.py measured: what they prepare is version 1's.
+const LEGACY_OUTPUT_VERSIONS: [(&str, u32); 2] = [
+    // v0.2.52 to v0.2.64
+    (
+        "54218ade1c058b1f15ea4094bf8c1a7893adb37b1ed5cc803ddae8e950c31704",
+        1,
+    ),
+    // v0.2.49 to v0.2.51
+    (
+        "da9ffe7558129c38b44abf43289e81946fe9f2512e5e07272eeae0cf0b4f1254",
+        1,
+    ),
+];
+
+/// The vanilla exporters those preparers ran (the `*_exporters_sha256` of their manifests), in
+/// mods/horizon/src/test/java/dev/horizonlab/parity.
+const LEGACY_EXPORTERS: [&str; 18] = [
+    "ParityData.java",
+    "VanillaBlockBehaviourExporter.java",
+    "VanillaBlockLandingOracle.java",
+    "VanillaBlockStateBindingOracle.java",
+    "VanillaCollisionOracle.java",
+    "VanillaCommandParseOracle.java",
+    "VanillaCreativeTabsExporter.java",
+    "VanillaCuboidModelOracle.java",
+    "VanillaDamageSourceOracle.java",
+    "VanillaEntityAttributeOracle.java",
+    "VanillaEntityModelExporter.java",
+    "VanillaEntityTypesExporter.java",
+    "VanillaFaceVisibilityOracle.java",
+    "VanillaGameplayFactsExporter.java",
+    "VanillaHeightmapOracle.java",
+    "VanillaMobDataExporter.java",
+    "VanillaMovementRegistryOracle.java",
+    "VanillaPlayerHealthOracle.java",
+];
+
+/// A version folder's preparer as the launchers before `OUTPUT_VERSION` compared it: the digest
+/// of its sources (`horizon_prepare::sources_sha256`) and of the exporters it ran, line endings
+/// as checked out ignored.
+fn legacy_fingerprint(dir: &Path) -> Option<String> {
+    use sha2::Digest;
+    let sources = horizon_prepare::sources_sha256(&dir.join(PREPARER_CRATE))?;
+    let mut hash = sha2::Sha256::new();
+    hash.update(sources.as_bytes());
+    for name in LEGACY_EXPORTERS {
+        let path = format!("mods/horizon/src/test/java/dev/horizonlab/parity/{name}");
+        let data: Vec<u8> = fs::read(dir.join(&path))
+            .ok()?
+            .into_iter()
+            .filter(|b| *b != b'\r')
+            .collect();
+        hash.update(format!("{path}\0{}\0", data.len()));
+        hash.update(&data);
+    }
+    Some(hash.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// How launchers before `OUTPUT_VERSION` compared two preparers, for versions older than the
+/// ones `LEGACY_OUTPUT_VERSIONS` knows. The manifest records the hashes of the vanilla exporters
+/// the resources were made with (mods/horizon/src/test/java/.../parity), and the preparer writes
+/// every file and the manifest's `schema`, so both need the same preparer and the same exporter
+/// sources. The preparer is crates/horizon-prepare and tools/prepare_native_client.py (the
+/// Python preparer of older versions, a wrapper of the binary since); a file only one of the two
+/// versions has is a different preparer. The helpers the Python preparer imported (lab.py and
+/// the test_*_parity.py modules) change between releases in how they find and check the
+/// player's files, which the output does not depend on; they are not compared.
+fn same_preparer(from: &Path, to: &Path, manifest: &serde_json::Value) -> bool {
     let Some(fields) = manifest.as_object() else {
         return false;
     };
@@ -719,7 +817,7 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
         if entry.file_type()?.is_dir() {
             copy_dir(&entry.path(), &target)?;
         } else {
-            fs::copy(entry.path(), target)?;
+            horizon_prepare::clone_or_copy(&entry.path(), &target)?;
         }
     }
     Ok(())
@@ -1096,17 +1194,23 @@ fn download_for_owner(
     }
 }
 
-/// The home of a JDK whose compiler and runtime support `major`. Forward even an installed
-/// JDK to external preparers: older versions may otherwise rediscover incompatible PATH tools.
+/// The Java home for this version: a runtime for precompiled exporters, a JDK for older
+/// preparers or changed sources. Forward the selection to external preparers too.
 /// Else try the official launcher's Java in `games`, then download the runtime named by
 /// `manifest` into Horizon's game folder (Mojang's runtimes are whole JDKs).
 fn java(
     major: i64,
+    compiler: bool,
     games: &[PathBuf],
     manifest: &Path,
     log: &dyn Fn(String),
 ) -> Result<PathBuf, String> {
-    if let Ok(jdk) = horizon_prepare::java::find(major, &[]) {
+    let find = if compiler {
+        horizon_prepare::java::find
+    } else {
+        horizon_prepare::java::find_runtime
+    };
+    if let Ok(jdk) = find(major, &[]) {
         return Ok(jdk.home());
     }
     let mut runtimes: Vec<PathBuf> = Vec::new();
@@ -1118,7 +1222,7 @@ fn java(
             runtimes.push(home);
         }
     }
-    let missing = match horizon_prepare::java::find(major, &runtimes) {
+    let missing = match find(major, &runtimes) {
         Ok(jdk) => return Ok(jdk.home()),
         Err(e) => e,
     };
@@ -1129,7 +1233,7 @@ fn java(
     // musl distributions) it cannot start, so don't download it.
     if cfg!(all(target_os = "linux", target_arch = "x86_64")) && !Path::new(GLIBC_LOADER).exists() {
         return Err(format!(
-            "{missing}\n  • Minecraft's own Java from Mojang needs glibc ({GLIBC_LOADER} is missing; on NixOS, enable programs.nix-ld), so install a JDK instead."
+            "{missing}\n  • Minecraft's own Java from Mojang needs glibc ({GLIBC_LOADER} is missing; on NixOS, enable programs.nix-ld), so install compatible Java instead."
         ));
     }
     let fetch = |url: &str| -> Result<Vec<u8>, String> {
@@ -1144,13 +1248,13 @@ fn java(
     let home = mojang::java_runtime(&component, &runtime, 8, &fetch, log).map_err(|e| {
         format!("{missing}\n  • Horizon also tried to download Minecraft's own Java from Mojang, but: {e}")
     })?;
-    horizon_prepare::java::find(major, &[home]).map(|jdk| jdk.home())
+    find(major, &[home]).map(|jdk| jdk.home())
 }
 
 /// The dynamic loader glibc programs on x86-64 Linux start through.
 const GLIBC_LOADER: &str = "/lib64/ld-linux-x86-64.so.2";
 
-/// Runs `cmd` with the JDK at `home`: JAVA_HOME names it and its `bin` leads the PATH, as the
+/// Runs `cmd` with Java at `home`: JAVA_HOME names it and its `bin` leads the PATH, as the
 /// versions' own preparers look for Java.
 fn with_java(cmd: &mut Command, home: &Path) {
     let mut path = vec![home.join("bin")];
@@ -1253,7 +1357,7 @@ pub fn preparer(
             "This version prepares with Python: Python 3.10 or newer is needed. Install it, or pick a newer version.",
         )?),
     };
-    // The JDK the version pins, found as horizon-prepare finds it, so a missing one is
+    // The Java the version pins, found as horizon-prepare finds it, so a missing one is
     // reported (or downloaded) before the server jar is downloaded. Versions from before
     // java_major ran Java 25.
     let major = read_json(&dir.join("research-lock.json"))
@@ -1267,7 +1371,13 @@ pub fn preparer(
             .into_iter()
             .map(|(_, dir)| dir),
     );
-    let java_home = java(major, &games, &manifest, log)?;
+    let java_home = java(
+        major,
+        !horizon_prepare::exporters::available(&dir),
+        &games,
+        &manifest,
+        log,
+    )?;
     let jar = data_dir()
         .join("server-jars")
         .join(format!("{version}.jar"));
@@ -3147,6 +3257,102 @@ mod tests {
         release("v2026.10.20", "26.3");
         write("v2026.10.20", crate_file, "rust preparer, changed");
         assert_eq!(reuse_prepared(&versions, "v2026.10.20"), None);
+        let _ = fs::remove_dir_all(&versions);
+    }
+
+    #[test]
+    fn prepared_resources_follow_the_preparers_output_version() {
+        let versions = std::env::temp_dir().join(format!(
+            "horizon-launcher-output-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&versions);
+        let write = |tag: &str, path: &str, text: &str| {
+            let path = versions.join(tag).join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        };
+        let lib = "crates/horizon-prepare/src/lib.rs";
+        // A preparer with its sources (as releases ship them) and the exporters it runs.
+        let release = |tag: &str, code: &str| {
+            write(tag, COMPLETE, "");
+            let lock = serde_json::json!({"minecraft": {"version": "26.3", "client_sha1": "c", "server_sha1": "s"}});
+            write(tag, "research-lock.json", &lock.to_string());
+            write(tag, "crates/horizon-prepare/Cargo.toml", "[package]");
+            write(tag, "crates/horizon-prepare/build.rs", "fn main() {}");
+            write(tag, lib, code);
+            for name in LEGACY_EXPORTERS {
+                write(
+                    tag,
+                    &format!("mods/horizon/src/test/java/dev/horizonlab/parity/{name}"),
+                    name,
+                );
+            }
+        };
+        let prepared = |tag: &str| {
+            write(
+                tag,
+                &format!(".local/horizon-client/26.3/{RESOURCES_MANIFEST}"),
+                r#"{"schema": 7}"#,
+            );
+            write(tag, ".local/horizon-client/26.3/facts.json", tag);
+        };
+        let facts = |tag: &str| {
+            fs::read_to_string(resources_at(&versions.join(tag)).join("facts.json")).ok()
+        };
+
+        // The preparer's code changed, not what it makes: the resources are kept.
+        release(
+            "v0.3.0",
+            "pub const OUTPUT_VERSION: u32 = 1;\nfn prepare() {}",
+        );
+        prepared("v0.3.0");
+        release(
+            "v0.3.1",
+            "pub const OUTPUT_VERSION: u32 = 1;\nfn prepare() { faster() }",
+        );
+        assert_eq!(reuse_prepared(&versions, "v0.3.1"), Some("v0.3.0".into()));
+        assert_eq!(facts("v0.3.1").as_deref(), Some("v0.3.0"));
+        // Its output changed, so the number did: prepare again.
+        release(
+            "v0.3.2",
+            "pub const OUTPUT_VERSION: u32 = 2;\nfn prepare() {}",
+        );
+        assert_eq!(reuse_prepared(&versions, "v0.3.2"), None);
+        assert_eq!(facts("v0.3.2"), None);
+        // Another Minecraft jar, same number: prepare again.
+        release(
+            "v0.3.3",
+            "pub const OUTPUT_VERSION: u32 = 1;\nfn prepare() {}",
+        );
+        let lock = serde_json::json!({"minecraft": {"version": "26.3", "client_sha1": "other", "server_sha1": "s"}});
+        write("v0.3.3", "research-lock.json", &lock.to_string());
+        assert_eq!(reuse_prepared(&versions, "v0.3.3"), None);
+
+        // A preparer from before the number is known by its fingerprint.
+        release("v0.2.64", "fn prepare() {}");
+        let fingerprint = legacy_fingerprint(&versions.join("v0.2.64")).unwrap();
+        let legacy = [(fingerprint.as_str(), 1)];
+        let at = |tag: &str| output_version_in(&versions.join(tag), &legacy);
+        assert_eq!(at("v0.2.64"), Some(1));
+        assert_eq!(at("v0.3.2"), Some(2));
+        // Line endings as checked out don't count; an exporter's or the sources' change does.
+        write(
+            "v0.2.64",
+            "mods/horizon/src/test/java/dev/horizonlab/parity/ParityData.java",
+            "ParityData.java\r",
+        );
+        assert_eq!(at("v0.2.64"), Some(1));
+        write(
+            "v0.2.64",
+            "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaCollisionOracle.java",
+            "changed",
+        );
+        assert_eq!(at("v0.2.64"), None);
+        release("v0.2.65", "fn prepare() { changed() }");
+        assert_eq!(at("v0.2.65"), None);
+        // A folder without the preparer's sources has no number.
+        assert_eq!(output_version_in(&versions.join("missing"), &legacy), None);
         let _ = fs::remove_dir_all(&versions);
     }
 

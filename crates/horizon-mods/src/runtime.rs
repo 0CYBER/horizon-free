@@ -32,7 +32,7 @@ pub use bindings::horizon::mods::{
 use bindings::{
     HorizonMod,
     exports::horizon::mods::events::Registration,
-    horizon::mods::{chat, game, hud, log as mod_log, storage},
+    horizon::mods::{chat, command, game, hud, log as mod_log, storage},
 };
 /// The widget model a `ui` screen or settings page shows (WIT `interface
 /// ui`), for the game to draw with its menus' own widgets.
@@ -40,6 +40,22 @@ pub use ui_bindings::horizon::mods::ui::{
     ItemWidget, ListWidget, Screen as UiScreen, TextWidget, Widget as UiWidget,
 };
 use ui_bindings::{UiHost, horizon::mods::ui};
+/// Capability `render`'s imports (docs/mods.md): the game draws the shapes.
+mod render_bindings {
+    wasmtime::component::bindgen!({
+        path: "../horizon-mod-sdk/wit",
+        world: "render-host",
+    });
+}
+use render_bindings::horizon::mods::input;
+/// Capability `input`'s records (WIT `interface input`).
+pub use render_bindings::horizon::mods::input::{Event as InputEvent, HeldItem, ItemUse};
+/// What capability `render` asks the game to draw (WIT `interface render`).
+pub use render_bindings::horizon::mods::render::{
+    FillShape, ItemShape, Point as RenderPoint, QuadShape, Rect as RenderRect, Shape, SpriteShape,
+    TextShape,
+};
+use render_bindings::{RenderHost, horizon::mods::render};
 
 /// A mod's linear memory cap.
 const MEMORY: usize = 64 << 20;
@@ -70,6 +86,10 @@ const STORAGE_WRITE_BUDGET: u64 = 1 << 20;
 pub struct Snapshot {
     pub player: Option<Player>,
     pub clock: Option<Clock>,
+    /// The screen in GUI pixels (capability `render`'s `gui-size`).
+    pub gui_size: (f32, f32),
+    /// The main hand's stack (capability `input`'s `held`).
+    pub held: Option<HeldItem>,
 }
 
 /// What mods asked the game to show since the last [`Mods::drain`].
@@ -79,6 +99,9 @@ pub enum Output {
     Chat { name: String, text: String },
     /// A mod command's feedback, red when `error`.
     Feedback { text: String, error: bool },
+    /// `command.run`: a vanilla command line, without its slash, to run as
+    /// the player.
+    Command { line: String },
     /// The mod was turned off: it trapped, overran or failed to start.
     Stopped { name: String, reason: String },
     /// `ui.open-screen`: the mod's entry in `entries()`; what it shows is
@@ -86,6 +109,8 @@ pub enum Output {
     OpenScreen { owner: usize },
     /// `ui.close-screen`: the mod closed its own screen (no `closed` back).
     CloseScreen { owner: usize },
+    /// `render.shake`: strength 0 to 1, fading out over `seconds` (≤ 10).
+    Shake { strength: f32, seconds: f32 },
 }
 
 /// A mod's text panel, drawn every frame until it changes.
@@ -153,6 +178,9 @@ struct State {
     out: Vec<Output>,
     panel: Option<Panel>,
     ui: UiState,
+    /// Capability `render`'s HUD shapes, drawn until replaced.
+    shapes: Vec<Shape>,
+    input: InputState,
     /// Capability `storage`'s folder; made on first `set`.
     data_dir: PathBuf,
     /// Bytes `storage::set` may still write before this hook call ends
@@ -231,6 +259,8 @@ impl Mods {
                 .map_err(|e| e.to_string())?;
             UiHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
+            RenderHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
+                .map_err(|e| e.to_string())?;
             self.engine = Some((engine, linker));
         }
         Ok(self.engine.as_ref().expect("made above"))
@@ -290,6 +320,8 @@ impl Mods {
             out: Vec::new(),
             panel: None,
             ui: UiState::default(),
+            shapes: Vec::new(),
+            input: InputState::default(),
             data_dir,
             storage_budget: STORAGE_WRITE_BUDGET,
             limits: StoreLimitsBuilder::new()
@@ -481,6 +513,86 @@ impl Mods {
             .iter()
             .filter_map(|e| e.run.as_ref()?.store.data().panel.as_ref())
     }
+    /// Some running mod claimed items (capability `input`).
+    pub fn claims_any(&self) -> bool {
+        self.inputs().any(|i| !i.claimed.is_empty())
+    }
+    /// Some running mod claimed the item `id`.
+    pub fn claims(&self, id: &str) -> bool {
+        self.inputs().any(|i| i.claimed.iter().any(|c| c == id))
+    }
+    /// Some running mod registered a key.
+    pub fn has_keys(&self) -> bool {
+        self.inputs().any(|i| !i.keys.is_empty())
+    }
+    /// The mods' keys: (mod name, key name, label, key), for Controls.
+    pub fn mod_keys(&self) -> impl Iterator<Item = (&str, &ModKey)> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref())
+            .flat_map(|r| {
+                let d = r.store.data();
+                d.input.keys.iter().map(move |k| (d.name.as_str(), k))
+            })
+    }
+    /// The use button went down with `item`: `use-start` to each mod that
+    /// claimed it.
+    pub fn use_start(&mut self, item: &HeldItem) {
+        let event = InputEvent::UseStart(ItemUse {
+            item: item.clone(),
+            ticks: 0,
+        });
+        self.push_input(|i| i.claimed.contains(&item.id), &event);
+    }
+    /// The claimed use ended after `ticks`.
+    pub fn use_stop(&mut self, item: &HeldItem, ticks: u32) {
+        let event = InputEvent::UseStop(ItemUse {
+            item: item.clone(),
+            ticks,
+        });
+        self.push_input(|i| i.claimed.contains(&item.id), &event);
+    }
+    /// The key `key` (`key.keyboard.r`) went down or up: each mod with a
+    /// key on it hears its own name for it.
+    pub fn key(&mut self, key: &str, down: bool) {
+        for run in self.entries.iter_mut().filter_map(|e| e.run.as_mut()) {
+            let input = &mut run.store.data_mut().input;
+            let names: Vec<String> = input
+                .keys
+                .iter()
+                .filter(|k| k.key == key)
+                .map(|k| k.name.clone())
+                .collect();
+            for name in names {
+                input.push(if down {
+                    InputEvent::KeyDown(name)
+                } else {
+                    InputEvent::KeyUp(name)
+                });
+            }
+        }
+    }
+    fn inputs(&self) -> impl Iterator<Item = &InputState> {
+        self.entries
+            .iter()
+            .filter_map(|e| Some(&e.run.as_ref()?.store.data().input))
+    }
+    fn push_input(&mut self, to: impl Fn(&InputState) -> bool, event: &InputEvent) {
+        for run in self.entries.iter_mut().filter_map(|e| e.run.as_mut()) {
+            let input = &mut run.store.data_mut().input;
+            if to(input) {
+                input.push(event.clone());
+            }
+        }
+    }
+    /// The running mods' HUD shapes (capability `render`), each mod's in
+    /// its own order, mods in load order.
+    pub fn hud_shapes(&self) -> impl Iterator<Item = &Shape> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref())
+            .flat_map(|r| &r.store.data().shapes)
+    }
     /// The screen mod `i` last pushed with `ui.open-screen`, while it is up.
     pub fn screen(&self, i: usize) -> Option<&UiScreen> {
         self.entries
@@ -665,6 +777,143 @@ impl chat::Host for State {
                 name,
                 text: clip(text),
             });
+        }
+    }
+}
+/// A key a mod registered (capability `input`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModKey {
+    /// The mod's own name for it, echoed in `key-down`.
+    pub name: String,
+    /// What it does, for Controls.
+    pub label: String,
+    /// `key.keyboard.r`.
+    pub key: String,
+}
+
+/// What capability `input` holds for one mod.
+#[derive(Default)]
+struct InputState {
+    claimed: Vec<String>,
+    keys: Vec<ModKey>,
+    events: std::collections::VecDeque<InputEvent>,
+}
+/// Events kept for `poll`, items claimed and keys, per mod.
+const INPUT_EVENTS: usize = 256;
+const CLAIMS: usize = 64;
+const KEYS: usize = 16;
+
+/// `key.keyboard.<name>` or `key.mouse.<name>`, as options.txt writes keys;
+/// the game knows which names exist and ignores a key it has none for.
+fn key_ok(key: &str) -> bool {
+    let rest = key
+        .strip_prefix("key.keyboard.")
+        .or_else(|| key.strip_prefix("key.mouse."));
+    rest.is_some_and(|r| {
+        (1..=32).contains(&r.len())
+            && r.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.')
+    })
+}
+
+impl InputState {
+    fn push(&mut self, event: InputEvent) {
+        if self.events.len() == INPUT_EVENTS {
+            self.events.pop_front();
+        }
+        self.events.push_back(event);
+    }
+}
+
+impl input::Host for State {
+    fn claim_items(&mut self, ids: Vec<String>) {
+        self.input.claimed = ids.into_iter().take(CLAIMS).map(clip).collect();
+    }
+    fn register_key(&mut self, name: String, label: String, key: String) -> Result<(), String> {
+        if !key_ok(&key) {
+            return Err(format!(
+                "{key:?} is not a key as options.txt writes them (key.keyboard.r)"
+            ));
+        }
+        let (name, label) = (clip(name), clip(label));
+        if let Some(k) = self.input.keys.iter_mut().find(|k| k.name == name) {
+            (k.label, k.key) = (label, key);
+            return Ok(());
+        }
+        if self.input.keys.len() == KEYS {
+            return Err(format!("a mod may register {KEYS} keys"));
+        }
+        self.input.keys.push(ModKey { name, label, key });
+        Ok(())
+    }
+    fn held(&mut self) -> Option<HeldItem> {
+        self.snapshot.held.clone()
+    }
+    fn poll(&mut self) -> Vec<InputEvent> {
+        self.input.events.drain(..).collect()
+    }
+}
+
+/// HUD shapes one mod may keep (capability `render`).
+const SHAPES: usize = 1024;
+/// The longest jolt `render.shake` makes, in seconds.
+const SHAKE_SECONDS: f32 = 10.0;
+
+impl render::Host for State {
+    fn set_hud(&mut self, shapes: Vec<Shape>) {
+        self.shapes = shapes
+            .into_iter()
+            .take(SHAPES)
+            .map(|shape| match shape {
+                Shape::Sprite(mut s) => {
+                    s.sprite = clip(s.sprite);
+                    Shape::Sprite(s)
+                }
+                Shape::Item(mut i) => {
+                    i.item = clip(i.item);
+                    i.scale = if i.scale.is_finite() {
+                        i.scale.clamp(0.0, 16.0)
+                    } else {
+                        1.0
+                    };
+                    Shape::Item(i)
+                }
+                Shape::Text(mut t) => {
+                    t.text = clip(t.text);
+                    t.color &= 0xFF_FFFF;
+                    Shape::Text(t)
+                }
+                other => other,
+            })
+            .collect();
+    }
+    fn gui_size(&mut self) -> (f32, f32) {
+        self.snapshot.gui_size
+    }
+    fn shake(&mut self, strength: f32, seconds: f32) {
+        let ok = |v: f32, max: f32| {
+            if v.is_finite() {
+                v.clamp(0.0, max)
+            } else {
+                0.0
+            }
+        };
+        let (strength, seconds) = (ok(strength, 1.0), ok(seconds, SHAKE_SECONDS));
+        if strength > 0.0 && seconds > 0.0 {
+            self.out.push(Output::Shake { strength, seconds });
+        }
+    }
+}
+
+impl command::Host for State {
+    fn run(&mut self, line: String) {
+        let queued = self
+            .out
+            .iter()
+            .filter(|o| matches!(o, Output::Command { .. }))
+            .count();
+        if queued < CHAT_PER_CALL {
+            self.out.push(Output::Command { line: clip(line) });
         }
     }
 }
