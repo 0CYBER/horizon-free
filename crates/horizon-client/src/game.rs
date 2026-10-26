@@ -127,6 +127,7 @@ mod packs;
 mod pad;
 mod pad_menu;
 mod paintings;
+mod pandas;
 mod passengers;
 mod persist;
 mod perspective;

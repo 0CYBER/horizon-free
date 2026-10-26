@@ -3468,16 +3468,18 @@ impl Game<'_> {
         // server never sends the fluid contact, and the renderers read it (cod, salmon and
         // tropical fish lie on their side without `in_water`, #1591).
         // A frozen level ticks only the players, as below.
-        let fluids: Vec<_> = {
+        let (fluids, thundering): (Vec<_>, bool) = {
             let w = self.mob_world_base(&[]);
             let players = self.remote.as_ref().map(|r| &r.level_players);
-            self.mobs
+            let fluids = self
+                .mobs
                 .iter()
                 .map(|m| {
                     (running || players.is_some_and(|p| p.contains_key(&(m.id as i32))))
                         .then(|| w.fluids(m.bounds(), m.eye_y()))
                 })
-                .collect()
+                .collect();
+            (fluids, w.thundering)
         };
         for (m, fluids) in self.mobs.iter_mut().zip(fluids) {
             if let Some(fluids) = fluids {
@@ -3588,6 +3590,9 @@ impl Game<'_> {
             }
             if m.species() == horizon_client::mobs::Species::Bat {
                 horizon_client::mobs::bat::setup_animation_states(m);
+            }
+            if m.species() == horizon_client::mobs::Species::Panda {
+                horizon_client::mobs::panda::client_tick(m, thundering);
             }
         }
         for o in self.orbs.iter_mut().filter(|_| running) {

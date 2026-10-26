@@ -33,5 +33,6 @@ impl Game<'_> {
             }
         }
         self.eye_particles();
+        self.panda_effects();
     }
 }

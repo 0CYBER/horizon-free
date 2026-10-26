@@ -350,6 +350,29 @@ fn mob_meta(
             }
             defaults.push((17, serializer::BOOLEAN, Value::Bool(false)));
         }
+        // Panda: UNHAPPY_COUNTER, SNEEZE_COUNTER and EAT_COUNTER (after
+        // AgeableMob's two), MAIN_GENE_ID, HIDDEN_GENE_ID and DATA_ID_FLAGS;
+        // the client animates the states from them.
+        "minecraft:panda" => {
+            let (flags, counters) = horizon_client::mobs::panda::get(m)
+                .map_or((0, [0; 3]), |s| (s.flags, [s.unhappy, s.sneeze, s.eat]));
+            for (index, value) in (18..).zip(counters) {
+                if value != 0 {
+                    meta.push((index, serializer::INT, Value::Int(value)));
+                }
+                defaults.push((index, serializer::INT, Value::Int(0)));
+            }
+            for (index, gene) in [(21, e.variant), (22, e.variant2)] {
+                if gene != 0 {
+                    meta.push((index, serializer::BYTE, Value::Byte(gene as i8)));
+                }
+                defaults.push((index, serializer::BYTE, Value::Byte(0)));
+            }
+            if flags != 0 {
+                meta.push((23, serializer::BYTE, Value::Byte(flags as i8)));
+            }
+            defaults.push((23, serializer::BYTE, Value::Byte(0)));
+        }
         // SpellcasterIllager.DATA_SPELL_CASTING_ID: the casting pose.
         "minecraft:evoker" | "minecraft:illusioner" => {
             if e.variant2 != 0 {

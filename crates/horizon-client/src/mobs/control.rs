@@ -135,6 +135,12 @@ impl Mob {
         if self.species() == super::Species::Rabbit {
             return super::rabbit::move_control(self, w);
         }
+        // Panda.PandaMoveControl: only while it can act.
+        if self.species() == super::Species::Panda
+            && !super::panda::can_perform_action(self, w.thundering)
+        {
+            return;
+        }
         let attr_speed = self.movement_speed();
         match self.ai.mov.kind {
             MoveKind::Custom => super::ai::custom_move_control(self, w, events),

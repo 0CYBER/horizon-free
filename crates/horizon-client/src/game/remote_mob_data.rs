@@ -4,7 +4,7 @@
 //! own simulation, which a client of a server doesn't run.
 use super::Game;
 use horizon_client::mobs::render::{PROFESSIONS, VILLAGER_TYPES};
-use horizon_client::mobs::{Mob, Species, Who, bat, tame};
+use horizon_client::mobs::{Mob, Species, Who, bat, panda, tame};
 use horizon_protocol::entity_data::Value;
 use horizon_protocol::registry::Builtin;
 
@@ -59,6 +59,14 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
                     Who::Mob(*target as u32)
                 });
             }
+            // Panda: the counters, the two genes and DATA_ID_FLAGS (after
+            // AgeableMob's two entries).
+            (Species::Panda, 18, Value::Int(n)) => panda::set_unhappy(m, *n),
+            (Species::Panda, 19, Value::Int(n)) => panda::set_sneeze(m, *n),
+            (Species::Panda, 20, Value::Int(n)) => panda::set_eat(m, *n),
+            (Species::Panda, 21, Value::Byte(gene)) => m.extra.variant = (*gene).clamp(0, 6) as u8,
+            (Species::Panda, 22, Value::Byte(gene)) => m.extra.variant2 = (*gene).clamp(0, 6) as u8,
+            (Species::Panda, 23, Value::Byte(flags)) => panda::set_flags(m, *flags as u8),
             // Bat.DATA_ID_FLAGS: resting in bit 0.
             (Species::Bat, 16, Value::Byte(flags)) => bat::set_resting(m, flags & 1 != 0),
             // Sheep.DATA_WOOL_ID: the colour in the low nibble, 16 sheared.

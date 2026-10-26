@@ -259,6 +259,18 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             map.entry("sound_variant".into())
                 .or_insert_with(|| string("minecraft:classic"));
         }
+        "minecraft:panda" => {
+            use crate::mobs::panda::GENES;
+            for (key, gene) in [
+                ("MainGene", m.extra.variant),
+                ("HiddenGene", m.extra.variant2),
+            ] {
+                map.insert(
+                    key.into(),
+                    string(GENES[usize::from(gene).min(GENES.len() - 1)]),
+                );
+            }
+        }
         "minecraft:piglin" | "minecraft:piglin_brute" | "minecraft:hoglin" => {
             map.insert(
                 "IsImmuneToZombification".into(),
@@ -807,6 +819,11 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
                 .position(|n| *n == v)
                 .unwrap_or(0) as u8;
         }
+    }
+    if m.species() == crate::mobs::Species::Panda {
+        let gene = |key| text(tag.get(key)).map_or(0, |n| crate::mobs::panda::gene_from_name(&n));
+        m.extra.variant = gene("MainGene");
+        m.extra.variant2 = gene("HiddenGene");
     }
     if m.species() == crate::mobs::Species::Wolf {
         let health = m.health;

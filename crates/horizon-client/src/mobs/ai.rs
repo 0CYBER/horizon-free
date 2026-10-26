@@ -106,6 +106,7 @@ pub enum Family {
     Strider,
     Bat,
     Bee,
+    Panda,
 }
 pub fn family(s: Species) -> Family {
     use Species as S;
@@ -167,6 +168,7 @@ pub fn family(s: Species) -> Family {
         S::Strider => Family::Strider,
         S::Bat => Family::Bat,
         S::Bee => Family::Bee,
+        S::Panda => Family::Panda,
         _ => Family::Generic,
     }
 }
@@ -227,6 +229,7 @@ pub fn register(m: &mut Mob) {
         Family::Strider => super::strider::register(m),
         Family::Bat => super::bat::register(m),
         Family::Bee => super::bee::register(m),
+        Family::Panda => super::panda::register(m),
     }
     // FloatGoal's constructor lets the navigation float, as do the
     // constructors of these brain-driven and flying mobs. A floater rises
@@ -428,6 +431,9 @@ pub fn tick(
     }
     if m.species() == Species::Bee {
         super::bee::tick(m, level_random);
+    }
+    if m.species() == Species::Panda {
+        super::panda::tick(m, w, events);
     }
     true
 }
@@ -1126,6 +1132,17 @@ pub fn voice_sounds(m: &Mob) -> [&'static str; 3] {
     match m.species() {
         Species::Nautilus | Species::ZombieNautilus => super::nautilus::sounds(m),
         Species::SulfurCube => super::sulfur_cube::sounds(m),
+        // Panda.getAmbientSound.
+        Species::Panda => {
+            let ambient = if super::panda::is_aggressive(m) {
+                "entity.panda.aggressive_ambient"
+            } else if super::panda::is_worried(m) {
+                "entity.panda.worried_ambient"
+            } else {
+                m.kind.sounds[0]
+            };
+            [ambient, m.kind.sounds[1], m.kind.sounds[2]]
+        }
         // The sound variant's baby_sounds (classic sets, like the rest here).
         Species::Pig if m.is_baby() => [
             "entity.baby_pig.ambient",
@@ -1324,6 +1341,11 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage, _amount: f32) -> bool {
             super::bee::hurt(m);
             true
         }
+        // Panda.hurtServer: up first, whatever the damage.
+        Species::Panda => {
+            super::panda::hurt(m);
+            true
+        }
         Species::Enderman => super::enderman::on_damage(m, source),
         Species::WitherSkeleton | Species::Blaze | Species::MagmaCube | Species::Strider
             if source.is_fire() =>
@@ -1374,6 +1396,9 @@ pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
     }
     if m.species() == Species::Ravager {
         super::ravager::on_attack(m, cx.events);
+    }
+    if m.species() == Species::Panda {
+        super::panda::bit(m);
     }
     if super::creaking::is_creaking(m) {
         super::creaking::on_attack(m, cx.events);
@@ -1452,6 +1477,12 @@ pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
     // Mob.doHurtTarget ends with playAttackSound once the hit landed.
     if super::creaking::is_creaking(m) {
         m.voice("entity.creaking.attack", cx.events);
+    }
+    // Panda.playAttackSound: playSound(PANDA_BITE, 1.0, 1.0).
+    if m.species() == Species::Panda && !m.silent {
+        let at = [m.position.x, m.position.y, m.position.z];
+        cx.events
+            .push(MobEvent::Sound("entity.panda.bite", at, 1.0, 1.0));
     }
     // Axolotl.playAttackSound: playSound(AXOLOTL_ATTACK, 1.0, 1.0).
     if m.species() == Species::Axolotl {

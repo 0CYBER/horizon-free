@@ -137,6 +137,10 @@ pub fn body(m: &Mob) -> (String, String) {
             baby_or(m, "wolf#main", "wolf_baby#main"),
             super::tame::texture(m),
         ),
+        S::Panda => (
+            baby_or(m, "panda#main", "panda_baby#main"),
+            super::panda::texture(m),
+        ),
         S::HappyGhast => (
             baby_or(m, "happy_ghast#main", "happy_ghast_baby#main"),
             if baby {
@@ -854,6 +858,7 @@ fn flip_degrees(m: &Mob) -> f32 {
 fn species_rotations(m: &Mob, alpha: f32) -> glam::Mat4 {
     match m.species() {
         Species::Cat => super::tame::cat_rotations(m, alpha),
+        Species::Panda => super::panda::rotations(m, alpha),
         Species::Shulker => super::shulker::rotations(m),
         _ => glam::Mat4::IDENTITY,
     }
@@ -1279,6 +1284,12 @@ pub fn held_item_transform(
     data: &MobData,
     left: bool,
 ) -> Option<glam::Mat4> {
+    // PandaHoldsItemLayer: the main hand's item in its mouth.
+    if m.species() == Species::Panda {
+        return super::panda::item_offset(m, alpha)
+            .filter(|_| !left)
+            .map(|offset| base_transform(m, alpha, camera) * offset);
+    }
     if !super::illager::shows_item(m) {
         return None;
     }
