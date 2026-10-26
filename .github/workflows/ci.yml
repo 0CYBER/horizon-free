@@ -144,6 +144,7 @@ jobs:
     with:
       base: ${{ github.event.pull_request.base.sha }}
       head: ${{ github.event.pull_request.head.sha }}
+      full: ${{ contains(github.event.pull_request.labels.*.name, 'full-parity') }}
   # Horizon never downloads the game. These jobs need a self-hosted Linux runner
   # (label horizon-game) holding the maintainer's own copy: the official launcher's
   # game directory in HORIZON_MINECRAFT_DIR and the pinned server jar in
