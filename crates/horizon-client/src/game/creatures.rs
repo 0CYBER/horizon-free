@@ -1426,6 +1426,10 @@ impl Game<'_> {
             }
             // Offspring inherit a parent's variant (pigs/cows/chickens) or mixed wool.
             child.extra.variant = p.extra.variant;
+            // Fox.getBreedOffspring: either parent's variant.
+            if p.species() == Species::Fox && !coin {
+                child.extra.variant = q.as_ref().map_or(p.extra.variant, |q| q.extra.variant);
+            }
             if p.species() == Species::Sheep {
                 child.extra.color = p.extra.color;
             }

@@ -61,6 +61,11 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             }
             // Bat.DATA_ID_FLAGS: resting in bit 0.
             (Species::Bat, 16, Value::Byte(flags)) => bat::set_resting(m, flags & 1 != 0),
+            // Fox.DATA_TYPE_ID and DATA_FLAGS_ID.
+            (Species::Fox, 17, Value::Int(variant)) => {
+                m.extra.variant = (*variant).clamp(0, 1) as u8
+            }
+            (Species::Fox, 18, Value::Byte(flags)) => m.extra.ints[0] = i32::from(*flags as u8),
             // Sheep.DATA_WOOL_ID: the colour in the low nibble, 16 sheared.
             (Species::Sheep, 18, Value::Byte(wool)) => {
                 m.extra.color = (*wool & 15) as u8;

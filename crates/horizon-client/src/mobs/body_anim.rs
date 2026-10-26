@@ -1028,7 +1028,7 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, a: &Animations) -> bool {
             a,
         ),
         Species::Rabbit => rabbit(p, s, &st[0], &st[1], a),
-        Species::Fox => fox(p, s, &Fox::default(), a),
+        Species::Fox => fox(p, s, &super::fox::pose(m), a),
         _ => return false,
     }
     true

@@ -1525,6 +1525,10 @@ pub struct AvoidEntity {
     pub sprint: f64,
     /// Extra condition on the avoider (e.g. untamed cats only).
     pub when: Option<fn(&Mob) -> bool>,
+    /// Extra condition on the player or mob avoided (`AvoidEntityGoal`'s
+    /// predicate: a sneaking player, a tame wolf).
+    pub player_when: Option<fn(&super::PlayerView) -> bool>,
+    pub seen_when: Option<fn(&Seen) -> bool>,
     from: Vec3,
     /// The mob being avoided (`toAvoid`), when it is one.
     pub found: Option<u32>,
@@ -1537,12 +1541,22 @@ impl AvoidEntity {
             walk,
             sprint,
             when: None,
+            player_when: None,
+            seen_when: None,
             from: Vec3::ZERO,
             found: None,
         }
     }
     pub fn when(mut self, f: fn(&Mob) -> bool) -> Self {
         self.when = Some(f);
+        self
+    }
+    pub fn player_when(mut self, f: fn(&super::PlayerView) -> bool) -> Self {
+        self.player_when = Some(f);
+        self
+    }
+    pub fn seen_when(mut self, f: fn(&Seen) -> bool) -> Self {
+        self.seen_when = Some(f);
         self
     }
 }
@@ -1565,6 +1579,7 @@ impl Goal for AvoidEntity {
                     .filter(|p| {
                         p.alive
                             && !p.creative
+                            && self.player_when.is_none_or(|f| f(p))
                             && m.distance_sqr(p.position) <= max * max
                             && (p.position.y - m.position.y).abs() <= max + 3.0
                     })
@@ -1573,10 +1588,12 @@ impl Goal for AvoidEntity {
             Avoid::Species(list) => {
                 let id = m.id;
                 let y = m.position.y;
+                let seen_when = self.seen_when;
                 let hit =
                     cx.w.nearby(m.position, max, move |s| {
                         s.id != id
                             && list.contains(&s.species)
+                            && seen_when.is_none_or(|f| f(s))
                             && (s.position.y - y).abs() <= 3.0 + max
                     })
                     .map(|s| (s.id, s.position))

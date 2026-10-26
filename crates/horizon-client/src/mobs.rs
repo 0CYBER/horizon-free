@@ -29,6 +29,7 @@ pub mod drops;
 pub mod enderman;
 pub mod equine;
 pub mod farm;
+pub mod fox;
 pub mod finalize;
 pub mod gear;
 pub mod goals;
