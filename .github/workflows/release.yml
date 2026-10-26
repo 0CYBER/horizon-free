@@ -82,7 +82,8 @@ jobs:
     if: needs.decide.outputs.release == 'true'
     # This runner holds the maintainer's own pinned Minecraft jars. Only our classes leave it.
     runs-on: ${{ vars.MAC_RUNNER || 'ludovics-mac-mini' }}
-    timeout-minutes: 30
+    # Three full preparations (two isolated, one batched) besides the compile.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
