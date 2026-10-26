@@ -701,12 +701,13 @@ impl Game<'_> {
                     screen.suggest_command(&m, &c, &command);
                 }
             }
-            None => {}
+            // Screen.defaultHandleClickEvent: a page link means nothing in chat.
+            Some(ClickEvent::ChangePage(_)) | None => {}
         }
     }
     /// `Screen.clickUrlAction`: nothing with Web Links off, else the link
     /// opens, after the confirmation unless Prompt on Links is off.
-    fn click_url(&mut self, url: String) {
+    pub(super) fn click_url(&mut self, url: String) {
         if !self.settings.chat_links {
             return;
         }

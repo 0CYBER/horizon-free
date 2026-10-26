@@ -8,7 +8,7 @@ use horizon_client::{
     containers::{BlockEntity, Lectern},
     first_person::Hand,
     hud::{HudBatch, rgba},
-    item_data::WrittenBook,
+    item_data::{StackData, WrittenBook},
     items::ItemStack,
     menu::{Kind, Menu},
     text::Text,
@@ -59,14 +59,86 @@ pub(super) enum BookScreen {
         page_edit: ui::EditBox,
     },
     View {
-        pages: Vec<String>,
+        pages: Vec<Text>,
         page: usize,
         lectern: Option<(i32, i32, i32)>,
     },
 }
+/// The pages a book screen reads: a written book's components (so their
+/// click events stay), else a writable book's text.
+fn view_pages(data: Option<&StackData>) -> Vec<Text> {
+    let Some(data) = data else { return Vec::new() };
+    let Some(w) = &data.written else {
+        return data.writable_pages.iter().map(Text::literal).collect();
+    };
+    let tagged = w.page_tags.len() == w.pages.len();
+    w.pages
+        .iter()
+        .enumerate()
+        .map(|(i, page)| match tagged.then(|| &w.page_tags[i]) {
+            Some(tag @ horizon_world::nbt::Tag::Compound(_)) => {
+                horizon_client::entity_nbt::name_text(tag)
+            }
+            _ => Text::literal(page),
+        })
+        .collect()
+}
 impl Game<'_> {
     fn book_lines(&self, page: &str) -> Vec<Text> {
-        self.gui.atlas.font.split(&Text::literal(page), 114.0)
+        self.page_lines(&Text::literal(page))
+    }
+    fn page_lines(&self, page: &Text) -> Vec<Text> {
+        self.gui.atlas.font.split(page, 114.0)
+    }
+    /// `BookViewScreen.mouseClicked`: the click event of the text under the
+    /// cursor on the page.
+    fn book_link_at(&self, page: &Text, left: f32) -> Option<horizon_client::text::ClickEvent> {
+        let (mx, my) = self.cursor;
+        let row = ((my - 32.0) / 9.0).floor();
+        if row < 0.0 || row >= LINES as f32 {
+            return None;
+        }
+        let lines = self.page_lines(page);
+        let line = lines.get(row as usize)?.resolve_legacy();
+        let mut x = mx - (left + 36.0);
+        if x < 0.0 {
+            return None;
+        }
+        for (c, style) in line.chars() {
+            x -= self.gui.atlas.font.advance(c, style);
+            if x < 0.0 {
+                return style.click.clone();
+            }
+        }
+        None
+    }
+    /// `BookViewScreen.handleClickEvent`: a page link turns to its page
+    /// (`forcePage`), a web link goes through the confirm-link flow.
+    fn book_follow_link(
+        &mut self,
+        link: horizon_client::text::ClickEvent,
+        count: usize,
+        lectern: Option<(i32, i32, i32)>,
+    ) {
+        use horizon_client::text::ClickEvent;
+        match link {
+            ClickEvent::ChangePage(target) => {
+                let target = (target - 1).clamp(0, count.saturating_sub(1) as i32);
+                let Some(BookScreen::View { page, .. }) = self.book.as_mut() else {
+                    return;
+                };
+                if let Some(key) = lectern {
+                    // LecternScreen.forcePage: the menu's button 100 + page.
+                    if target != *page as i32 {
+                        self.lectern_button(key, 100 + target);
+                    }
+                } else if target != *page as i32 {
+                    *page = target as usize;
+                }
+            }
+            ClickEvent::OpenUrl(url) => self.click_url(url),
+            _ => {}
+        }
     }
     /// `WritableBookItem.use` / `WrittenBookItem.use` (`Player.openItemGui`).
     /// A server's player writes in its own client's editor
@@ -115,11 +187,7 @@ impl Game<'_> {
                 }
             }
             "minecraft:written_book" => BookScreen::View {
-                pages: stack
-                    .data()
-                    .and_then(|d| d.written.as_ref())
-                    .map(|w| w.pages.clone())
-                    .unwrap_or_default(),
+                pages: view_pages(stack.data()),
                 page: 0,
                 lectern: None,
             },
@@ -215,6 +283,7 @@ impl Game<'_> {
                 author,
                 generation: 0,
                 pages,
+                page_tags: Vec::new(),
             });
             *stack = written;
         } else {
@@ -685,11 +754,7 @@ impl Game<'_> {
             return false;
         };
         let Some(book) = &l.book else { return false };
-        let data = book.data();
-        let pages = data
-            .and_then(|d| d.written.as_ref().map(|w| w.pages.clone()))
-            .or_else(|| data.map(|d| d.writable_pages.clone()))
-            .unwrap_or_default();
+        let pages = view_pages(book.data());
         let page = (l.page.max(0) as usize).min(pages.len().saturating_sub(1));
         self.stats.custom("interact_with_lectern", 1);
         self.open_book(BookScreen::View {
@@ -811,11 +876,7 @@ impl Game<'_> {
             page,
         }) = self.book.as_mut()
         {
-            let data = book.as_ref().and_then(ItemStack::data);
-            *pages = data
-                .and_then(|d| d.written.as_ref().map(|w| w.pages.clone()))
-                .or_else(|| data.map(|d| d.writable_pages.clone()))
-                .unwrap_or_default();
+            *pages = view_pages(book.as_ref().and_then(ItemStack::data));
             *page = (*page).min(pages.len().saturating_sub(1));
         }
     }
@@ -955,7 +1016,10 @@ impl Game<'_> {
                 lectern,
             }) => {
                 let (page, count, lectern) = (*page, pages.len(), *lectern);
-                if page + 1 < count && inside(left + 116.0, 159.0, 23.0, 13.0) {
+                // The text's click event first, then the buttons.
+                if let Some(link) = pages.get(page).and_then(|t| self.book_link_at(t, left)) {
+                    self.book_follow_link(link, count, lectern);
+                } else if page + 1 < count && inside(left + 116.0, 159.0, 23.0, 13.0) {
                     self.turn_page(true);
                 } else if page > 0 && inside(left + 43.0, 159.0, 23.0, 13.0) {
                     self.turn_page(false);
@@ -1195,7 +1259,7 @@ impl Game<'_> {
             } => {
                 indicator(batch, *page, pages.len());
                 if let Some(text) = pages.get(*page) {
-                    for (i, line) in self.book_lines(text).iter().take(LINES).enumerate() {
+                    for (i, line) in self.page_lines(text).iter().take(LINES).enumerate() {
                         batch.text_styled(
                             atlas,
                             line,

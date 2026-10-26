@@ -127,6 +127,9 @@ pub struct WrittenBook {
     pub author: String,
     pub generation: u8,
     pub pages: Vec<String>,
+    /// Each page's component when it is not a plain string, so that its
+    /// click events survive; empty or one per page.
+    pub page_tags: Vec<Tag>,
 }
 impl StackData {
     pub fn is_empty(&self) -> bool {
@@ -522,11 +525,14 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
             ));
         }
         if let Some(w) = &d.written {
-            let pages = w
-                .pages
-                .iter()
-                .map(|p| raw(Tag::String(p.as_str().into())))
-                .collect();
+            let pages = if w.page_tags.len() == w.pages.len() {
+                w.page_tags.iter().cloned().map(raw).collect()
+            } else {
+                w.pages
+                    .iter()
+                    .map(|p| raw(Tag::String(p.as_str().into())))
+                    .collect()
+            };
             entries.push((
                 "minecraft:written_book_content",
                 Tag::compound({
@@ -705,6 +711,13 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
                 generation: b.get("generation").and_then(int).unwrap_or(0).clamp(0, 3) as u8,
                 pages: match b.get("pages") {
                     Some(Tag::List(pages)) => pages.iter().filter_map(filterable_text).collect(),
+                    _ => Vec::new(),
+                },
+                page_tags: match b.get("pages") {
+                    Some(Tag::List(pages)) => pages
+                        .iter()
+                        .map(|p| p.get("raw").unwrap_or(p).clone())
+                        .collect(),
                     _ => Vec::new(),
                 },
             }),

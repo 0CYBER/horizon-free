@@ -631,11 +631,14 @@ fn network_stack(
                         title: w.title.clone(),
                         author: w.author.clone(),
                         generation: i32::from(w.generation),
-                        pages: w
-                            .pages
-                            .iter()
-                            .map(|p| horizon_protocol::text::literal(p))
-                            .collect(),
+                        pages: if w.page_tags.len() == w.pages.len() {
+                            w.page_tags.clone()
+                        } else {
+                            w.pages
+                                .iter()
+                                .map(|p| horizon_protocol::text::literal(p))
+                                .collect()
+                        },
                         resolved: true,
                     },
                 ),

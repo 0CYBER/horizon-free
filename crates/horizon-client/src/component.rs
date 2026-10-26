@@ -177,6 +177,13 @@ fn object_style(o: &serde_json::Map<String, Value>) -> Style {
             Some("open_url") => text("url")
                 .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
                 .map(crate::text::ClickEvent::OpenUrl),
+            // ClickEvent.ChangePage.CODEC: ExtraCodecs.POSITIVE_INT.
+            Some("change_page") => e
+                .get("page")
+                .and_then(Value::as_i64)
+                .and_then(|p| i32::try_from(p).ok())
+                .filter(|p| *p >= 1)
+                .map(crate::text::ClickEvent::ChangePage),
             Some("suggest_command") => text("command").map(crate::text::ClickEvent::SuggestCommand),
             Some("copy_to_clipboard") => {
                 text("value").map(crate::text::ClickEvent::CopyToClipboard)
