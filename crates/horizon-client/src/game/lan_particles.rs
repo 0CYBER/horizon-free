@@ -161,12 +161,12 @@ impl Game<'_> {
                 + (self.particles.random().next_float() - self.particles.random().next_float())
                     * 0.2)
                 * 0.7;
-            self.audio.play(
-                "minecraft:entity.generic.explode",
-                Some(p.center),
-                4.0,
-                pitch,
-            );
+            // The packet's explosionSound: a wind charge's burst, a bed's
+            // or anchor's blast, a modded sound.
+            let sound = self
+                .remote_sound_name(&p.sound)
+                .unwrap_or_else(|| "minecraft:entity.generic.explode".to_owned());
+            self.audio.play(&sound, Some(p.center), 4.0, pitch);
         }
         if let Some(options) = self.received_particle(&p.particle, p.center) {
             self.particles.add(&options, p.center, [1.0, 0.0, 0.0]);

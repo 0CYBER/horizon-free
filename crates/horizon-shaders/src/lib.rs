@@ -4,12 +4,35 @@
 //!
 //! - [`Pack`]: a pack as a folder or a zip, with paths relative to its `shaders` folder (spec 1.1).
 //! - [`discover`]: the packs in a `shaderpacks` folder.
+//! - [`Properties`]: `shaders.properties` and the id files, with their conditional directives (3.1, 1.5).
 //! - [`Lang`]: the pack's translated names (8.4).
+//! - [`preprocess`]: a stage file through `#include` and the GLSL preprocessor, lines mapped back (1.4, 1.5).
+//! - [`translate_composite`], [`translate_gbuffers`]: a program into naga modules and its interface (1.6, 2.2).
+//! - [`Config`] and [`draw_buffers`]: the buffer settings and output lists stage files carry (1.7, 6.1).
+//! - [`load_post`]: a dimension's `prepare`, `deferred`, `composite` and `final` programs, in order (2.1).
+//! - [`Macros`] and [`eval_condition`]: the macros packs test, and the `#if` arithmetic (1.5).
 
+mod condition;
+mod config;
 mod discover;
 mod lang;
+mod macros;
 mod pack;
+mod post;
+mod preprocess;
+mod properties;
+mod translate;
 
+pub use condition::eval_condition;
+pub use config::{BUFFERS, Buffer, Config, Format, Kind, buffer_index, draw_buffers};
 pub use discover::{Found, discover};
 pub use lang::Lang;
+pub use macros::{MC_VERSION, Macros, RENDER_STAGES};
 pub use pack::{Pack, PackError};
+pub use post::{Group, Post, PostProgram, dimension_folder, load_post};
+pub use preprocess::{Diagnostic, Origin, Preprocessed, preprocess};
+pub use properties::{Entry, Note, Properties};
+pub use translate::{
+    Error, GbuffersInputs, Interface, Program, Sampler, Target, Uniform, translate_composite,
+    translate_gbuffers,
+};

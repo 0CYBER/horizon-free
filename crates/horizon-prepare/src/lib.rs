@@ -31,6 +31,15 @@ pub type Log<'a> = &'a dyn Fn(&str);
 /// The manifest's `schema`: the prepared files' layout, which the launcher compares.
 pub const SCHEMA: i64 = 7;
 
+/// What this preparer makes. The launcher copies a prepared version's resources to a newly installed
+/// version whose preparer has the same number (and the same pinned jars), so a release that changes
+/// this crate without changing its output asks nobody to prepare again. Bump it, and append the new
+/// digest to output-versions.txt, when the prepared files change: CI prepares with every change to
+/// the preparer and fails when the output is not the one output-versions.txt gives this number
+/// (`python3 tools/prepare_output.py check`). The launcher reads this line from the version
+/// folder's sources: keep it on one line, as it is.
+pub const OUTPUT_VERSION: u32 = 1;
+
 /// Digest of this crate's sources (build.rs): the launcher prepares a version in-process when
 /// that version ships these same sources, and runs the version's own binary otherwise.
 pub const SOURCES_SHA256: &str = env!("HORIZON_PREPARE_SOURCES_SHA256");
@@ -1207,6 +1216,29 @@ mod tests {
             install_datagen_reports(&root, &reports).unwrap();
         }
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn output_versions_end_at_the_output_version() {
+        let text = include_str!("../output-versions.txt");
+        let versions: Vec<(u32, &str)> = text
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+            .map(|l| {
+                let (n, digest) = l.split_once(' ').unwrap();
+                (n.parse().unwrap(), digest.trim())
+            })
+            .collect();
+        let numbers: Vec<u32> = versions.iter().map(|v| v.0).collect();
+        assert_eq!(numbers, (1..=OUTPUT_VERSION).collect::<Vec<_>>());
+        for (i, (_, digest)) in versions.iter().enumerate() {
+            assert_eq!(digest.len(), 64);
+            assert!(!versions[..i].iter().any(|(_, d)| d == digest));
+        }
+        // The launcher finds the number with this line in a version folder's sources.
+        let lib = include_str!("lib.rs");
+        let line = format!("pub const OUTPUT_VERSION: u32 = {OUTPUT_VERSION};");
+        assert!(lib.lines().any(|l| l == line));
     }
 
     #[test]

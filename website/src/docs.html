@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="no-js">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>{{DOC_TITLE}} · Horizon docs</title>
     <meta name="description" content="{{DOC_DESC}}">
     <meta name="theme-color" content="#ece7f7" media="(prefers-color-scheme: light)">
@@ -19,22 +19,14 @@
     <meta property="og:url" content="https://playhorizon.dev{{DOC_PATH}}">
     <meta property="og:image" content="https://playhorizon.dev/og.png">
     <link rel="stylesheet" href="{{CSS}}">
-    <script>try { const t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t } catch {}</script>
+    <script>document.documentElement.classList.replace("no-js", "js"); try { const t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t } catch {}</script>
+    <script type="module" src="{{DOCS_JS}}"></script>
   </head>
   <body class="docs-page">
     <a class="skip" href="#main">Skip to the content</a>
-    <header class="docs-bar">
-      <div class="docs-bar-inner">
-        <a class="nav-mark" href="/" aria-label="Horizon, home"><svg class="mark" viewBox="0 0 16 16" aria-hidden="true"><path class="mark-stem" d="M4 3h2v4H4zM10 3h2v4h-2z"/><path class="mark-low" d="M4 8h2v4H4zM10 8h2v4h-2z"/><path class="mark-line" d="M1 7h14v1H1z"/></svg>Horizon</a>
-        <a class="docs-bar-title" href="/docs/">Docs</a>
-        <span class="docs-bar-end">
-          <a class="docs-bar-link" href="https://github.com/ludovic111/horizon">GitHub</a>
-          <a class="button primary small" href="/docs/install">Download</a>
-        </span>
-      </div>
-    </header>
+{{SITE_NAV}}
 
-    <div class="docs">
+    <div class="docs" data-menu-content>
       <details class="docs-nav-wrap" open>
         <summary>Docs menu</summary>
         <nav class="docs-nav" aria-label="Documentation">
@@ -54,7 +46,7 @@
         <nav class="docs-pager" aria-label="Next and previous pages">
 {{DOC_PAGER}}
         </nav>
-        <p class="docs-edit"><a href="https://github.com/ludovic111/horizon/blob/main/website/docs/{{DOC_FILE}}">Edit this page on GitHub</a> · Spotted something wrong? <a href="https://github.com/ludovic111/horizon/issues">Open an issue</a> or ask on <a href="{{DISCORD}}">Discord</a>.</p>
+        <p class="docs-edit"><a href="https://github.com/ludovic111/horizon/blob/main/{{DOC_FILE}}">Edit this page on GitHub</a> · Spotted something wrong? <a href="https://github.com/ludovic111/horizon/issues">Open an issue</a> or ask on <a href="{{DISCORD}}">Discord</a>.</p>
         <p class="disclaimer">Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft.</p>
       </main>
     </div>

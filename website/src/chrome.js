@@ -1,5 +1,5 @@
 // What every page with the site's top bar shares: the light and dark switch and the phone menu.
-// Used by main.js (the home page) and page.js (Releases, Benchmarks).
+// Used by Home, Releases, Benchmarks and Docs.
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 // The page follows the system; the toggle picks the other appearance and remembers it.
@@ -27,7 +27,7 @@ export function setUpMenu() {
   const bar = document.querySelector(".nav");
   const button = document.querySelector(".menu-button");
   const menu = document.getElementById("menu");
-  const main = document.getElementById("main");
+  const content = document.querySelector("[data-menu-content]") || document.getElementById("main");
   if (!bar || !button || !menu) return;
   const label = button.querySelector(".menu-label");
   const items = [...menu.querySelectorAll("nav a")];
@@ -38,7 +38,7 @@ export function setUpMenu() {
     button.setAttribute("aria-expanded", String(open));
     label.textContent = open ? "Close" : "Menu";
     bar.classList.toggle("is-menu", open);
-    main.inert = open;
+    content.inert = open;
     document.body.style.overflow = open ? "hidden" : "";
     if (open) {
       menu.hidden = false;
@@ -57,7 +57,7 @@ export function setUpMenu() {
       button.focus();
     }
   });
-  matchMedia("(min-width: 1120px)").addEventListener("change", (e) => e.matches && setOpen(false));
+  matchMedia("(min-width: 1280px)").addEventListener("change", (e) => e.matches && setOpen(false));
 }
 
 // GitHub answers, cached for ten minutes in the tab.

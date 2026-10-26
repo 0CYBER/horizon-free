@@ -18,7 +18,10 @@ use horizon_core::{
     random::{LegacyRandom, RandomSource},
 };
 use horizon_world::block_collision::BlockCollisionRegistry;
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 macro_rules! particle_types {
     ($($variant:ident = $name:literal),* $(,)?) => {
@@ -195,6 +198,35 @@ impl ParticleType {
                 | Self::VaultConnection
                 | Self::OminousSpawning
         )
+    }
+    /// `SingleQuadParticle.Layer.translucent`: types whose vanilla particle class
+    /// hardcodes the translucent layer, drawn after translucent terrain.
+    /// `TerrainParticle`, `BreakingItemParticle` and `BlockMarker` resolve their
+    /// layer from the sprite instead (`Layer.bySprite`); see the `translucent`
+    /// sprite set on the engine.
+    pub fn translucent_layer(self) -> bool {
+        match self {
+            // CampfireSmokeParticle.
+            Self::CampfireCosySmoke | Self::CampfireSignalSmoke
+            // PlayerCloudParticle.
+            | Self::Cloud | Self::Sneeze
+            // SpellParticle.
+            | Self::Effect | Self::InstantEffect | Self::EntityEffect
+            | Self::Witch | Self::Infested | Self::TrialOmen | Self::RaidOmen
+            // EmissiveRisingParticle.
+            | Self::Soul | Self::SculkSoul
+            // SculkChargeParticle, SculkChargePopParticle, ShriekParticle,
+            // VibrationSignalParticle, FireflyParticle, OverlayParticle.
+            | Self::SculkCharge | Self::SculkChargePop | Self::Shriek
+            | Self::Vibration | Self::Firefly | Self::Flash
+            // SimpleAnimatedParticle and its subclasses: EndRodParticle,
+            // SparkParticle (firework), SquidInkParticle, TotemParticle.
+            | Self::EndRod | Self::Firework | Self::SquidInk | Self::GlowSquidInk
+            | Self::TotemOfUndying
+            // FlyTowardsPositionParticle: its LifetimeAlpha(0, 0.6, 0.25, 1) is not opaque.
+            | Self::VaultConnection => true,
+            _ => false,
+        }
     }
 }
 
@@ -1147,7 +1179,9 @@ pub struct ParticleEngine {
     pub requested: Option<Vec<(ParticleOptions, [f64; 3], [f64; 3])>>,
     names: Vec<String>,
     rects: Vec<Option<Rect>>,
-    atlas: HashMap<String, Rect>,
+    /// Each named sprite, and whether `SingleQuadParticle.Layer.bySprite` puts
+    /// it on the translucent layer (a texel with 0 < alpha < 255).
+    atlas: HashMap<String, (Rect, bool)>,
     sets: HashMap<ParticleType, u32>,
     set_sprites: Vec<Vec<u32>>,
     /// `TrackingEmitter`s: particle type, entity feet position, width, height, ticks left.
@@ -1167,7 +1201,7 @@ pub struct ParticleEngine {
 /// `ParticleGroup.MAX_PARTICLES` (per render group; one group here).
 const MAX_PARTICLES: usize = 16384;
 impl ParticleEngine {
-    pub fn new(root: &Path, atlas: &HashMap<String, Rect>) -> Self {
+    pub fn new(root: &Path, atlas: &HashMap<String, Rect>, translucent: &HashSet<String>) -> Self {
         let mut engine = Self {
             particles: Vec::new(),
             pending: Vec::new(),
@@ -1178,7 +1212,10 @@ impl ParticleEngine {
             requested: None,
             names: Vec::new(),
             rects: Vec::new(),
-            atlas: atlas.clone(),
+            atlas: atlas
+                .iter()
+                .map(|(name, &rect)| (name.clone(), (rect, translucent.contains(name))))
+                .collect(),
             sets: HashMap::new(),
             set_sprites: Vec::new(),
             emitters: Vec::new(),
@@ -1220,7 +1257,7 @@ impl ParticleEngine {
             return i as u32;
         }
         self.names.push(name.to_owned());
-        self.rects.push(self.atlas.get(name).copied());
+        self.rects.push(self.atlas.get(name).map(|&(rect, _)| rect));
         (self.names.len() - 1) as u32
     }
     pub fn len(&self) -> usize {
@@ -3760,9 +3797,18 @@ impl ParticleEngine {
             {
                 continue;
             }
-            let rect = match &p.sprite {
-                Sprite::Index(i) => self.rects.get(*i as usize).copied().flatten(),
-                Sprite::Named(name) => self.atlas.get(name).copied(),
+            // `SubmitNodeCollection.submitQuadParticleGroup`: the translucent
+            // layer draws after translucent terrain, so a crumb of stained
+            // glass cannot hide the glass behind it (`getLayer`).
+            let (rect, layer) = match &p.sprite {
+                Sprite::Index(i) => (
+                    self.rects.get(*i as usize).copied().flatten(),
+                    p.ty.translucent_layer(),
+                ),
+                Sprite::Named(name) => match self.atlas.get(name) {
+                    Some(&(rect, translucent)) => (Some(rect), translucent),
+                    None => (None, false),
+                },
             };
             let Some(r) = rect else { continue };
             let a = f64::from(partial);
@@ -3867,7 +3913,11 @@ impl ParticleEngine {
                         normal: [0; 4],
                         pos: v.to_array(),
                         uv,
-                        layer: 0,
+                        layer: if layer {
+                            crate::gfx::TRANSLUCENT_PARTICLE_OVERLAY
+                        } else {
+                            0
+                        },
                         color,
                         light,
                     });
@@ -3891,7 +3941,7 @@ mod tests {
 
     #[test]
     fn egg_teleport_unpacks_offsets_and_preserves_seeded_draw_order() {
-        let mut engine = ParticleEngine::new(Path::new(""), &HashMap::new());
+        let mut engine = ParticleEngine::new(Path::new(""), &HashMap::new(), &HashSet::new());
         engine.seed_randoms(0, 0, 0);
         // Destination offset (-15, 7, 15); the unused top byte is ignored.
         engine.block_teleportation([4, 12, -5], 0xff01_0f1fu32 as i32, [16, 8, 16], 0);
@@ -3916,7 +3966,7 @@ mod tests {
 
     #[test]
     fn consume_teleport_unpacks_offsets_within_127() {
-        let mut engine = ParticleEngine::new(Path::new(""), &HashMap::new());
+        let mut engine = ParticleEngine::new(Path::new(""), &HashMap::new(), &HashSet::new());
         engine.seed_randoms(0, 0, 0);
         // TeleportRandomlyConsumeEffect: BlockUtil.clampedPackDifferenceInPosition
         // of the move (-7, -3, 9) with radii 127, from (4, 12, -5) to (-3, 9, 4).
@@ -3941,7 +3991,8 @@ mod tests {
             (2, 0, 99_413_408_083_437),
         ] {
             for distant in [false, true] {
-                let mut engine = ParticleEngine::new(Path::new(""), &HashMap::new());
+                let mut engine =
+                    ParticleEngine::new(Path::new(""), &HashMap::new(), &HashSet::new());
                 engine.seed_randoms(0, 0, 0);
                 if distant {
                     engine.camera = [1000.0; 3];

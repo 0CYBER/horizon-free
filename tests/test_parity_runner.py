@@ -300,3 +300,17 @@ class LargeOutputTests(unittest.TestCase):
             self.assertFalse((own / "dump.txt").exists())
             # chunk_generation may still be writing there.
             self.assertTrue((shared / "dump.txt").exists())
+
+    def test_rust_named_directories_and_big_oracle_outputs_go_too(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            local, state = Path(tmp) / ".local", Path(tmp) / "state"
+            own = local / "rust-state-provider-parity"
+            own.mkdir(parents=True)
+            for name, size in (("rust.txt", 16), ("server.txt", 16), ("client.txt", 64), ("report.json", 4)):
+                (own / name).write_bytes(b"x" * size)
+            trace = {"commands": [["java", "Oracle", str(own)], ["probe", "fixture", str(own)]]}
+            with mock.patch.multiple(parity, LOCAL=local, STATE_DIR=state, LARGE_OUTPUT=8, KEPT_ORACLE_OUTPUT=32):
+                listing = parity.outputs_listing("state_provider#2", fresh=True)
+                listing.write_text(f"{own / 'server.txt'}\n{own / 'client.txt'}\n")
+                parity.clear_large_outputs("state_provider#2", trace)
+            self.assertEqual(sorted(path.name for path in own.iterdir()), ["report.json", "server.txt"])
