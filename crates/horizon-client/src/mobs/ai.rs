@@ -458,7 +458,7 @@ fn axolotl_air_supply(m: &mut Mob, w: &MobWorld) {
         m.position.z.floor() as i32,
     );
     let top = (m.position.y + f64::from(m.height())).floor() as i32;
-    let in_rain = w.raining && (w.can_see_sky(x, y, z) || w.can_see_sky(x, top, z));
+    let in_rain = w.raining_at(x, y, z) || w.raining_at(x, top, z);
     if m.fluids.in_water || in_rain {
         m.air = super::axolotl::MAX_AIR;
     } else {
