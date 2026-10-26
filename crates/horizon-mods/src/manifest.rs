@@ -16,7 +16,10 @@ pub const API: &str = "0.1";
 /// The manifest `api` lines this build loads. 0.2 is 0.1 plus content:
 /// `assets/` and `data/` in the `.hmod`, with blocks and items declared in
 /// `data/<id>/horizon/` (docs/modpacks.md). Code still links API 0.1.
-pub const APIS: [&str; 2] = [API, "0.2"];
+/// 0.3 is a server mod (experimental): the `horizon-server-mod` world.
+pub const APIS: [&str; 3] = [API, "0.2", SERVER_API];
+/// The line of server mods, experimental: `side = "server"`.
+pub const SERVER_API: &str = "0.3";
 /// Namespaces no mod may claim: vanilla's, the convention tags' (mods add
 /// to those, docs/mods.md) and the game's own.
 const RESERVED_NAMESPACES: [&str; 3] = ["minecraft", "c", "horizon"];
@@ -63,7 +66,7 @@ pub enum Side {
     /// Runs in the player's game only (HUD, keys, chat commands).
     #[default]
     Client,
-    /// Runs where the world is simulated (rules, blocks); not run yet.
+    /// Runs where the world is simulated (rules, blocks): `api = "0.3"`.
     Server,
     /// Both, and the server tells clients which version it expects.
     Both,
@@ -92,9 +95,11 @@ pub enum Capability {
     /// The use button on items the mod claims, and its own keys
     /// (interface `input`).
     Input,
+    /// The players on the server and messages to them (server mods).
+    Players,
 }
 impl Capability {
-    pub const ALL: [Capability; 9] = [
+    pub const ALL: [Capability; 10] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
@@ -104,7 +109,12 @@ impl Capability {
         Capability::Ui,
         Capability::Render,
         Capability::Input,
+        Capability::Players,
     ];
+    /// Whether a server mod may have it: the others act on a local player.
+    pub fn on_server(self) -> bool {
+        matches!(self, Capability::Storage | Capability::Players)
+    }
     /// The WIT interface it grants, in `horizon:mods`.
     pub fn interface(self) -> &'static str {
         match self {
@@ -117,6 +127,7 @@ impl Capability {
             Capability::Ui => "ui",
             Capability::Render => "render",
             Capability::Input => "input",
+            Capability::Players => "players",
         }
     }
     /// May change in any release: a mod uses it only with
@@ -141,6 +152,7 @@ impl Capability {
             Capability::Input => {
                 "see the keys you hold and your clicks, take over the use button on its own items and the mouse wheel, and add keys"
             }
+            Capability::Players => "see who is on the server and message them",
         }
     }
     /// The capability a component import needs, `Ok(None)` for one every
@@ -175,6 +187,7 @@ impl fmt::Display for Capability {
             Capability::Ui => "ui",
             Capability::Render => "render",
             Capability::Input => "input",
+            Capability::Players => "players",
         };
         f.write_str(name)
     }
@@ -204,6 +217,20 @@ impl Manifest {
             return Err(format!(
                 "{MANIFEST}: capability registries needs api = \"0.2\""
             ));
+        }
+        let server = m.side == Side::Server;
+        if server != (m.api == SERVER_API) {
+            return Err(format!(
+                "{MANIFEST}: a server mod is side = \"server\" with api = \"{SERVER_API}\", and only it"
+            ));
+        }
+        if let Some(c) = m
+            .capabilities
+            .iter()
+            .find(|c| c.on_server() != server && **c != Capability::Storage)
+        {
+            let side = if server { "client" } else { "server" };
+            return Err(format!("{MANIFEST}: capability {c} is for {side} mods"));
         }
         if let Some(c) = m
             .capabilities
@@ -435,10 +462,30 @@ capabilities = ["game-read", "hud"]
     fn refuses_bad_ids_and_apis() {
         let bad_id = EXAMPLE.replace("coords_hud", "Coords HUD");
         assert!(Manifest::parse(&bad_id).unwrap_err().contains("is not"));
-        let bad_api = EXAMPLE.replace("api = \"0.1\"", "api = \"0.3\"");
-        assert!(Manifest::parse(&bad_api).unwrap_err().contains("API 0.3"));
+        let bad_api = EXAMPLE.replace("api = \"0.1\"", "api = \"0.4\"");
+        assert!(Manifest::parse(&bad_api).unwrap_err().contains("API 0.4"));
         let unknown = format!("{EXAMPLE}network = true\n");
         assert!(Manifest::parse(&unknown).is_err());
+    }
+
+    #[test]
+    fn server_mods_are_api_0_3_with_server_capabilities() {
+        let server = |api: &str, side: &str, caps: &str| {
+            Manifest::parse(&format!(
+                "id = \"w\"\nname = \"W\"\nversion = \"1\"\napi = \"{api}\"\nside = \"{side}\"\ncapabilities = [{caps}]\n"
+            ))
+        };
+        let m = server("0.3", "server", "\"players\", \"storage\"").unwrap();
+        let imports = ["horizon:mods/players@0.1.0", "horizon:mods/storage@0.1.0"];
+        assert_eq!(m.check_imports(imports), Ok(()));
+        for (api, side) in [("0.3", "client"), ("0.3", "both"), ("0.1", "server")] {
+            let e = server(api, side, "").unwrap_err();
+            assert!(e.contains("a server mod is side"), "{e}");
+        }
+        let e = server("0.3", "server", "\"hud\"").unwrap_err();
+        assert!(e.contains("capability hud is for client mods"), "{e}");
+        let e = server("0.1", "client", "\"players\"").unwrap_err();
+        assert!(e.contains("capability players is for server mods"), "{e}");
     }
 
     #[test]

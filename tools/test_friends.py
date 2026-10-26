@@ -15,8 +15,9 @@ is off: nothing leaves the machine.
 
     python3 tools/test_friends.py --client target/fast/horizon-client --relay target/fast/horizon-relay
 
-`--server-thread` runs the host's world on its integrated server's own
-thread (the window is a client of it, as Open to LAN publishes it).
+The host runs on its integrated server thread by default (the window is a
+client of it). `--in-frame` compares the fallback; `--server-thread` is accepted
+for compatibility.
 
 `--role host|guest` runs one side only (two machines, e.g. over a tailnet):
 the host prints the code, the guest takes it with `--code` (`--relay-url`
@@ -36,8 +37,10 @@ import urllib.request
 
 try:
     from . import lab
+    from .integration_env import game_environment, require_server_reports
 except ImportError:
     import lab
+    from integration_env import game_environment, require_server_reports
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -84,7 +87,7 @@ class Game:
     prefix = []
     extra = []
     # The host's world on its server thread (`--server-thread`), else in the window.
-    server_thread = False
+    server_thread = True
 
     def __init__(self, client, resources, work, name, env):
         # Either way explicitly, whatever the game's default.
@@ -96,7 +99,8 @@ class Game:
         self.process = subprocess.Popen(Game.prefix + [
             str(client), '--resources', str(resources), '--render-distance', '2', '--test-terrain',
             '--control-socket', str(self.endpoint), '--timeout-seconds', '600',
-        ] + Game.extra, cwd=self.home, env=lab.game_env(HORIZON_HOME=self.home, **env),
+        ] + Game.extra, cwd=self.home,
+            env={**game_environment({**os.environ, **env}, self.home), 'HORIZON_HOME': str(self.home)},
             stdout=self.log, stderr=subprocess.STDOUT)
         wait_for(self.endpoint, 'screen', lambda v: v['screen'] == 'title', 120, f'{name} title')
 
@@ -149,10 +153,11 @@ def play_together(host, guest, name, round_index):
     before = guest_pos(host, name)
     guest('look 0 0')
     guest('key w down')
-    time.sleep(1.5)
-    guest('key w up')
-    host.wait('lan status', lambda v: math.dist(before, next(g['position'] for g in v['guests'] if g['name'] == name)) > 1.0,
-              20, 'guest movement on the host')
+    try:
+        host.wait('lan status', lambda v: math.dist(before, next(g['position'] for g in v['guests'] if g['name'] == name)) > 1.0,
+                  20, 'guest movement on the host')
+    finally:
+        guest('key w up')
     # The host moves; the guest sees the host's player there.
     hp = host('status')['player']['position']
     target = [hp[0] + 3.0, hp[1], hp[2] + 1.0]
@@ -179,10 +184,11 @@ def play_together(host, guest, name, round_index):
     guest.wait('status', lambda v: v['target']['pos'] == block, 10, 'the guest aiming at the block')
     # Held for a few ticks, as a player clicks (creative breaks at once).
     guest('mouse left down')
-    time.sleep(0.25)
-    guest('mouse left up')
-    host.wait(f'getblock {block[0]} {block[1]} {block[2]}', lambda v: v['block'] == 'minecraft:air', 20,
-              'the guest breaking the block, on the host')
+    try:
+        host.wait(f'getblock {block[0]} {block[1]} {block[2]}', lambda v: v['block'] == 'minecraft:air', 20,
+                  'the guest breaking the block, on the host')
+    finally:
+        guest('mouse left up')
     guest.wait(f'getblock {block[0]} {block[1]} {block[2]}', lambda v: v['block'] == 'minecraft:air', 20,
                'the broken block on the guest')
 
@@ -250,7 +256,7 @@ def full(args, work):
         join(guest, code, 'Guest')
         play_together(host, guest, 'Guest', 1)
         assert host('friends status')['direct'] == 1, host('friends status')
-        print('code alone: chat, movement and blocks both ways, no server involved')
+        print('code alone: chat, movement and blocks both ways, no relay involved')
         leave(host, guest, 'Guest')
         host('friends stop')
         assert host('friends status')['code'] is None
@@ -316,8 +322,8 @@ def one_side(args, work):
         if args.role == 'host':
             code = host_world(game)
             print(f'CODE {code}', flush=True)
-            game.wait('lan status', lambda v: v['guests'], args.wait, 'a guest')
-            game.wait('lan status', lambda v: not v['guests'], args.wait, 'the guest leaving')
+            game.wait('lan status', lambda v: any(g['name'] == 'Remote' for g in v['guests']), args.wait, 'a guest')
+            game.wait('lan status', lambda v: all(g['name'] != 'Remote' for g in v['guests']), args.wait, 'the guest leaving')
             print(f'host: {game("friends status")}')
         else:
             join(game, args.code, 'Remote')
@@ -347,16 +353,25 @@ def main():
     parser.add_argument('--hold', type=float, default=0, help='guest: stay this many seconds before leaving')
     parser.add_argument('--baseline', action='store_true', help='first run the same checks over plain LAN')
     parser.add_argument('--offscreen', action='store_true', help='run the games without a window')
-    parser.add_argument('--server-thread', action='store_true', help="the host's world on its server thread")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--server-thread', dest='server_thread', action='store_true', default=True,
+                      help='host on its server thread (default; retained for existing callers)')
+    mode.add_argument('--in-frame', dest='server_thread', action='store_false',
+                      help='host the world in the window, for comparison')
     parser.add_argument('--xvfb', action='store_true', help='run the games under xvfb-run (headless Linux)')
     args = parser.parse_args()
     Game.prefix = ['xvfb-run', '-a'] if args.xvfb else []
     Game.extra = ['--offscreen'] if args.offscreen else []
     Game.server_thread = args.server_thread
     args.client, args.resources = args.client.resolve(), args.resources.resolve()
+    try:
+        require_server_reports(args.resources)
+    except ValueError as error:
+        parser.error(str(error))
     # Short: Unix socket paths are limited to about 100 bytes.
     with tempfile.TemporaryDirectory(prefix='hzf-', dir='/tmp') as directory:
         work = Path(directory)
+        print(f'Friends host mode: {"server-thread" if Game.server_thread else "in-frame"}')
         if args.role:
             return one_side(args, work)
         assert args.relay, 'give --relay (the relay binary, run locally for the relay half)'
