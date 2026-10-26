@@ -39,6 +39,7 @@ enum Source {
     Lightmap,
 }
 
+#[derive(Clone)]
 struct Binding {
     source: Source,
     binding: u32,
@@ -140,6 +141,7 @@ struct Entities {
     late: [bool; PROGRAMS],
 }
 
+#[derive(Clone)]
 struct Pass {
     name: String,
     group: Group,
@@ -204,6 +206,8 @@ pub(super) struct World<'a> {
     pub celestial: Option<wgpu::TextureView>,
     /// Set 1 of the clouds' draw: their offset and palette.
     pub clouds: Option<&'a wgpu::BindGroupLayout>,
+    /// The game can hand its rain and snow to the pack.
+    pub weather: bool,
 }
 
 /// This frame's clouds, when the pack draws them: their vertices, uniform, quad indices and
@@ -213,6 +217,16 @@ pub(super) struct Clouds {
     pub group: wgpu::BindGroup,
     pub indices: wgpu::Buffer,
     pub quads: u32,
+}
+
+/// This frame's rain and snow, when the pack draws them: their vertices, the quad indices, the
+/// quads of each kind (rain, snow), each kind's sprite, and a number that changes with them.
+pub(super) struct Weather {
+    pub vertices: wgpu::Buffer,
+    pub indices: wgpu::Buffer,
+    pub quads: [std::ops::Range<u32>; 2],
+    pub sprites: [Option<wgpu::TextureView>; 2],
+    pub generation: u64,
 }
 
 pub struct PackPost {
@@ -232,6 +246,11 @@ pub struct PackPost {
     /// The pack has `gbuffers_clouds`, even one that writes nothing (a pack drawing its own
     /// clouds discards vanilla's): the game's clouds are not drawn.
     hides_clouds: bool,
+    /// What draws rain and snow (the same program, each with its kind's sprite as `texture`),
+    /// after translucent terrain, this frame's weather and the sprites' generation bound.
+    weather: Option<[Pass; 2]>,
+    weather_draw: Option<Weather>,
+    weather_generation: u64,
     /// A program after translucent terrain reads `depthtex1`: it is copied before water.
     depth1: bool,
     /// Buffers with mipmaps (filterable ones a program asks them for).
@@ -970,6 +989,23 @@ impl PackPost {
             cull: false,
         });
         let hides_clouds = post.clouds.is_some() && cloud_geometry.is_some();
+        let weather_geometry = world.weather.then(|| Geometry {
+            buffers: &entity_buffers,
+            table: None,
+            depth_write: true,
+            atlas: None,
+            ids: None,
+            cull: false,
+        });
+        let weather = post
+            .weather
+            .zip(weather_geometry.as_ref())
+            .and_then(|(p, g)| build(p, Some(g)))
+            .map(|rain| {
+                let mut snow = rain.clone();
+                snow.name = format!("{} (snow)", rain.name);
+                [rain, snow]
+            });
         let clouds = post
             .clouds
             .zip(cloud_geometry.as_ref())
@@ -1005,6 +1041,9 @@ impl PackPost {
         if let Some(c) = &clouds {
             notes.push(format!("clouds draw with {}", c.name));
         }
+        if let Some([w, _]) = &weather {
+            notes.push(format!("rain and snow draw with {}", w.name));
+        }
         for (part, pass) in entities.iter().flat_map(|e| parts.iter().zip(&e.passes)) {
             if let Some(p) = pass {
                 notes.push(format!("{part} draw with {}", p.name));
@@ -1015,6 +1054,7 @@ impl PackPost {
                 .iter()
                 .filter(|p| matches!(p.group, Group::Composite | Group::Final))
                 .chain(&water)
+                .chain(weather.iter().take(1).flatten())
                 .any(|p| p.samplers.iter().any(|s| s.source == Source::Depth1));
         // A clear only matters when a program reads the buffer before one writes all of it
         // (composite passes cover their whole target, terrain does not); the others are skipped.
@@ -1030,6 +1070,7 @@ impl PackPost {
                 .chain(entities.iter().flat_map(|e| e.passes.iter().flatten()))
                 .chain(&clouds)
                 .chain(&water)
+                .chain(weather.iter().take(1).flatten())
                 .find(touched)
                 .map(|_| true)
                 .or_else(|| {
@@ -1046,6 +1087,7 @@ impl PackPost {
             || sky.is_some()
             || entities.is_some()
             || clouds.is_some()
+            || weather.is_some()
             || passes.iter().any(|p| {
                 p.samplers
                     .iter()
@@ -1145,6 +1187,9 @@ impl PackPost {
             clouds,
             cloud_draw: None,
             hides_clouds,
+            weather,
+            weather_draw: None,
+            weather_generation: 0,
             depth1,
             mipped,
             mips_valid: 0,
@@ -1613,6 +1658,57 @@ impl PackPost {
     ) {
         self.draw_terrain(device, queue, encoder, size, true, terrain);
         self.draw_entities(device, queue, encoder, size, true);
+        self.draw_weather(device, queue, encoder, size);
+    }
+
+    /// The rain, then the snow, `set_weather` gave for this frame, with `gbuffers_weather`.
+    fn draw_weather(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        size: [u32; 2],
+    ) {
+        let (Some(mut passes), Some(weather)) = (self.weather.take(), self.weather_draw.take())
+        else {
+            return;
+        };
+        if weather.generation != self.weather_generation {
+            self.weather_generation = weather.generation;
+            for (pass, sprite) in passes.iter_mut().zip(&weather.sprites) {
+                pass.atlas = sprite.clone();
+                pass.groups.clear();
+            }
+        }
+        for (pass, quads) in passes.iter_mut().zip(weather.quads.clone()) {
+            if quads.is_empty() {
+                continue;
+            }
+            let group = self.bind(device, queue, pass, size);
+            {
+                let mut rp = self.begin(encoder, pass);
+                rp.set_pipeline(&pass.pipeline);
+                rp.set_bind_group(0, &group, &[]);
+                if pass.draw {
+                    self.draws.bind(&mut rp, "RAIN_SNOW");
+                }
+                rp.set_vertex_buffer(0, weather.vertices.slice(..));
+                rp.set_index_buffer(weather.indices.slice(..), wgpu::IndexFormat::Uint32);
+                rp.draw_indexed(quads.start * 6..quads.end * 6, 0, 0..1);
+            }
+            self.mips_valid &= !pass.written;
+        }
+        self.weather = Some(passes);
+    }
+
+    /// Whether the pack draws rain and snow itself.
+    pub fn has_weather(&self) -> bool {
+        self.weather.is_some()
+    }
+
+    /// The rain and snow to draw this frame (`None`: none).
+    pub fn set_weather(&mut self, weather: Option<Weather>) {
+        self.weather_draw = weather;
     }
 
     /// Regenerates the mip chain of buffer `b`'s side that programs read.
@@ -1929,7 +2025,7 @@ impl PackPost {
                 .zip(e.late)
                 .any(|(p, late)| p.is_some() && late)
         });
-        let mut water_drawn = self.water.is_none() && !late_entities;
+        let mut water_drawn = self.water.is_none() && self.weather.is_none() && !late_entities;
         for pass in &mut passes {
             if !terrain_drawn && pass.group != Group::Prepare {
                 terrain_drawn = true;
