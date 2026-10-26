@@ -823,6 +823,17 @@ fn login_and_configure(
             _ => {}
         }
     };
+    // A Horizon client hears that this server runs its mods' quiet commands
+    // (horizon_protocol::quiet); a vanilla one is told nothing.
+    if brand == "horizon" {
+        send(
+            c,
+            cfg::Clientbound::CustomPayload(cfg::CustomPayload {
+                channel: horizon_protocol::quiet::CHANNEL.into(),
+                data: Vec::new(),
+            }),
+        )?;
+    }
     for packet in sync.registry_packets(known_pack) {
         send(c, cfg::Clientbound::RegistryData(packet))?;
     }
