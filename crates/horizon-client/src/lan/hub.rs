@@ -1930,6 +1930,7 @@ impl Hub {
                 | S::PlayerLoaded(_)
                 | S::ChunkBatchReceived(_)
                 | S::ClientInformation(_)
+                | S::RecipeBookChangeSettings(_)
                 | S::ClientTickEnd(_)
                 | S::KeepAlive(_) => false,
                 S::MovePlayerPos(p) => self.moved_far(i, [p.x, p.y, p.z]),
@@ -1996,6 +1997,15 @@ impl Hub {
                     g.max_unacknowledged = 10;
                 }
                 S::ClientTickEnd(_) => self.guests[i].position_this_tick = false,
+                // ServerGamePacketListenerImpl.handleRecipeBookChangeSettingsPacket.
+                S::RecipeBookChangeSettings(p) => {
+                    if let Some(book) = crate::recipe_book::BookType::ALL.get(p.book_type as usize)
+                    {
+                        let settings = &mut self.guests[i].recipe_book;
+                        settings.open[book.index()] = p.open;
+                        settings.filtering[book.index()] = p.filtering;
+                    }
+                }
                 S::ClientInformation(info) => {
                     let g = &mut self.guests[i];
                     g.view_distance =

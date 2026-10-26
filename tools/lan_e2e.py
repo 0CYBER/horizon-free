@@ -5877,6 +5877,65 @@ CHECKS += ['recipe_removal']
 CHECK_FNS.update(recipe_removal=check_recipe_removal)
 
 
+def check_recipe_settings(host, guest, out):
+    """RecipeBookComponent sends both settings to the server; each player's
+    own book keeps them when the authoritative world saves and reopens (#2290)."""
+    def inventory(game):
+        back_to_game(game)
+        game.raw('key', 'e', 'tap')
+        game.wait(5)
+        return game('screen')['recipe_book']
+
+    def flags(book):
+        return {'open': book['open'], 'filtering': book['filtering']}
+
+    def set_flags(game, opened, filtering):
+        book = inventory(game)
+        if not book['open']:
+            game.raw('click-at', *centre(book['targets'][0]))
+            game.wait(5)
+            book = game('screen')['recipe_book']
+        if book['filtering'] != filtering:
+            target = next(t for t in book['targets'] if t[2:] == [26.0, 16.0])
+            game.raw('click-at', *centre(target))
+            game.wait(5)
+        if not opened:
+            book = game('screen')['recipe_book']
+            game.raw('click-at', *centre(book['targets'][0]))
+            game.wait(5)
+        actual = flags(game('screen')['recipe_book'])
+        assert actual == {'open': opened, 'filtering': filtering}, f'{game.name}: {actual}'
+        game.shot(out, 'recipe-settings-before')
+        back_to_game(game)
+        return actual
+
+    # Deliberately different settings ensure neither player's book overwrites the other's.
+    before = {host.name: set_flags(host, True, True),
+              guest.name: set_flags(guest, False, True)}
+    host.wait(20)
+    guest.raw('disconnect')
+    host.raw('pause')
+    host.raw('click-button', 'Save and Quit to Title')
+    host.raw('wait-for', 'screen', 'title', '--timeout', 120)
+    host.raw('open', 'Lan')
+    host('wait_ready', seconds=400)
+    port = host.raw('lan', 'open', 0, 'commands')['port']
+    guest.raw('connect', f'127.0.0.1:{port}', GUEST_NAME)
+    guest.raw('wait-for', 'loaded', '--timeout', 300)
+    guest.wait(20)
+    after = {}
+    for game in (host, guest):
+        after[game.name] = flags(inventory(game))
+        game.shot(out, 'recipe-settings-reopened')
+        back_to_game(game)
+    assert after == before, f'saved recipe settings reset: before={before}, after={after}'
+    return {'before': before, 'reopened': after}
+
+
+CHECKS += ['recipe_settings']
+CHECK_FNS.update(recipe_settings=check_recipe_settings)
+
+
 def check_shulker_bullets(host, guest, out):
     """ShulkerAttackGoal's bullets reach ClientPacketListener.handleAddEntity, then the existing
     projectile renderer and interpolation, with distinct ids from the server's entity counter."""

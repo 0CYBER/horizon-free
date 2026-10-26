@@ -686,9 +686,12 @@ impl Game<'_> {
             // the recipe buttons of the page, page arrows, filter and tabs.
             let book = self.recipe_book_targets();
             if !book.is_empty() {
+                let (open, filtering) = self.recipe_book_flags().unwrap_or_default();
                 v["recipe_book"] = json!({
                     "targets": book.iter().map(|t| t.rect).collect::<Vec<_>>(),
                     "known": self.recipe_book_known(),
+                    "open": open,
+                    "filtering": filtering,
                 });
             }
             v["slot_ids"] = json!(
