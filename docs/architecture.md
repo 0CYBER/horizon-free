@@ -46,7 +46,7 @@ file selects ~103.
 | 29 | Title, worlds, startup (49) | `L/title.rs` + `L/title/`, `G/startup_menu.rs`, `L/title_edition.rs` | world_options; `cargo test -p horizon-client --lib title` |
 | 30 | Dedicated server, horizon-server (48) | `G/dedicated.rs`, `G/dedicated/status.rs`, `crates/horizon-server/`, `crates/horizon-server-files/` | dedicated_server, server_files, user_cache, online_mode, server_ops_feedback |
 | 31 | Particles and client effects (46) | `L/particles.rs`, `G/render_tick.rs`, `G/level_particles.rs`, `L/animate_tick.rs` | particle_providers, block_particles, entity_particles, emitter_particles, marker_particles |
-| 32 | Bosses and the End (45) | `G/dragon.rs`, `G/wither.rs`, `G/end.rs` | server_dragon, end_podium, end_gateway |
+| 32 | Bosses and the End (45) | `G/dragon.rs`, `G/wither.rs`, `G/end.rs` | server_dragon, forced_end, end_podium, end_gateway |
 | 33 | Protocol and packets (44) | `crates/horizon-protocol/src/` (`packets/play.rs`, `entity_data.rs`, `connection.rs`) | dedicated_server, online_mode, secure_chat; `cargo test -p horizon-protocol` |
 | 34 | Multiplayer and LAN screens, friends (44) | `L/multiplayer.rs`, `G/lan_screen.rs`, `G/friends.rs`, `L/friends_screen.rs`, `crates/horizon-friends/`, `crates/horizon-relay/` | lan, world_options; `python3 tools/test_friends.py` |
 | 35 | Dispensers (43) | `G/dispenser.rs`, `G/dispense_fixture.rs` (the harness side) | dispenser |
