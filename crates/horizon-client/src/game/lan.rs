@@ -1177,6 +1177,9 @@ impl Game<'_> {
         for (id, event, at) in std::mem::take(&mut self.lan_entity_events) {
             host.hub.entity_event(id, event, at);
         }
+        for (kind, pos, data) in std::mem::take(&mut self.lan_global_events) {
+            host.hub.global_level_event(kind, pos, data);
+        }
         self.lan_broadcast_effects(host);
         if host.hub.guests.is_empty() {
             host.mob_state.clear();
