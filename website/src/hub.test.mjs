@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { boardFrom, boardHtml, fixesIn, itemOf, journalFrom, journalHtml, journalJson, overviewHtml, progress, roadmapHtml, slimIssue } from "./hub.js";
+import { boardFrom, boardHtml, creditFrom, creditHtml, fixesIn, itemOf, journalFrom, journalHtml, journalJson, overviewHtml, progress, roadmapHtml, slimIssue, suggestItemsHtml } from "./hub.js";
 
 const roadmap = JSON.parse(readFileSync(new URL("../data/roadmap.json", import.meta.url), "utf8"));
 
@@ -136,4 +136,24 @@ test("journal.json is the flat feed Kira reads: merges, releases, shipped items,
     assert.ok(e.id && ["merge", "release", "weekly", "shipped"].includes(e.kind) && e.date && e.title, e.id);
     assert.match(e.url, /^https:\/\/(github\.com|playhorizon\.dev)\//, e.id);
   }
+});
+
+test("items still to come take votes and suggestions; shipped ones don't", () => {
+  const html = roadmapHtml(roadmap);
+  for (const item of roadmap.items) {
+    assert.equal(html.includes(`data-vote="${item.id}"`), item.status !== "shipped", item.id);
+    assert.equal(suggestItemsHtml(roadmap).includes(`value="${item.id}"`), item.status !== "shipped", item.id);
+  }
+  // Hidden until the hub's server answers.
+  assert.ok(html.includes('aria-pressed="false" hidden>'));
+});
+
+test("the contributors carry the Discord name of those who agreed on Kira", () => {
+  const github = [{ login: "Alex", html_url: "https://github.com/Alex", avatar_url: "", contributions: 3 }, { login: "sam", html_url: "https://github.com/sam", avatar_url: "", contributions: 1 }];
+  const kira = { contributors: [{ github: "alex", discord: "Alex <b>" }, { github: 5 }, null] };
+  const credit = creditFrom(github, kira);
+  assert.deepEqual(credit.map((c) => c.discord), ["Alex <b>", ""]);
+  const html = creditHtml(credit);
+  assert.ok(html.includes("3 commits · Alex &lt;b&gt; on Discord") && html.includes("1 commit</span>"));
+  assert.deepEqual(creditFrom(github, "not json").map((c) => c.discord), ["", ""]);
 });

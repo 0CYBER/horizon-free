@@ -343,10 +343,19 @@ fn fetch(
 ) -> Result<PathBuf, String> {
     match file.url.strip_prefix("file://").filter(|_| local) {
         Some(path) => {
+            let path = local_path(path);
             let reader = fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
             download::save_from_anywhere(file, reader, folder, progress)
         }
         None => download::fetch(file, folder, progress),
+    }
+}
+
+/// The path of a `file:///` URL: on Windows `/C:/x` is `C:/x`.
+fn local_path(path: &str) -> &str {
+    match path.strip_prefix('/') {
+        Some(rest) if cfg!(windows) && rest.get(1..2) == Some(":") => rest,
+        _ => path,
     }
 }
 

@@ -1,6 +1,6 @@
 # Horizon documentation
 
-To play, use [the launcher](../launcher/README.md); the project site is [playhorizon.dev](https://playhorizon.dev). These pages are for developers.
+To play, use [the launcher](../launcher/README.md); the project site is [playhorizon.dev](https://playhorizon.dev). These pages are for developers. What is being done now and next, the work board and how to help: [the hub](https://playhorizon.dev/hub) ([ROADMAP.md](../ROADMAP.md), [roadmap/README.md](../roadmap/README.md) for keeping it current).
 
 ## Build and run
 
@@ -35,6 +35,7 @@ To play, use [the launcher](../launcher/README.md); the project site is [playhor
 ## Architecture: world generation
 
 - [World generation](world-generation.md): the pipeline from noise to features.
+- [Pregeneration](pregeneration.md): `/pregen`, generating, lighting and saving an area ahead of the players.
 - [Noise generation](noise-generation.md), [compiled density functions](density-functions.md), [structure density](structure-density.md), [terrain filling](terrain-filling.md).
 - Biomes: [lookup](biome-lookup.md), [temperatures](biome-temperatures.md).
 - Surfaces: [material surfaces](material-surfaces.md), [material conditions](material-conditions.md), [rule libraries](material-rule-libraries.md), [vertical anchors](vertical-anchors.md), [value providers](value-providers.md).
