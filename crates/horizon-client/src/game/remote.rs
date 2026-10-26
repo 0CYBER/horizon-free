@@ -3136,6 +3136,8 @@ impl Game<'_> {
         // server says the entry ended. `onCooldownEnded` is the plain
         // ItemCooldowns' no-op on a client.
         self.cooldowns.tick();
+        // Leaving a slot clears its bundle's selection here and on the server.
+        self.tick_bundle_hover();
         // Options.broadcastOptions: a changed render distance or Chat option
         // is sent again.
         let view = client_view_distance(self.settings.render_distance);
