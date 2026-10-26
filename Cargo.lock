@@ -2083,6 +2083,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "minimap"
+version = "1.0.0"
+dependencies = [
+ "horizon-mod-sdk",
+]
+
+[[package]]
 name = "minisign-verify"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
