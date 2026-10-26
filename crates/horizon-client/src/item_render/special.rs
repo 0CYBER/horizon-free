@@ -60,7 +60,7 @@ pub(super) fn load_parts(root: &Path) -> HashMap<String, ModelPart> {
         .chain(COPPER_GOLEM_LAYERS.iter())
         .filter_map(|(key, layer)| {
             all.get(*layer)
-                .map(|v| ((*key).to_owned(), ModelPart::parse_layer(layer, v)))
+                .map(|v| ((*key).to_owned(), ModelPart::parse(v)))
         })
         .collect()
 }

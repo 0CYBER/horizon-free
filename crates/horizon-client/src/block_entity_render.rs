@@ -66,24 +66,6 @@ impl ModelPart {
             children,
         }
     }
-    /// `parse` of the entity model layer `layer`. Vanilla culls back faces for the pot's
-    /// `top` and `bottom` planes (`DecoratedPotRenderer.createBaseLayer`), so only the
-    /// up face of `top` and the down face of `bottom` show; ours draws both faces of each
-    /// plane, which fight for the same pixels, so the culled face is dropped here.
-    pub fn parse_layer(layer: &str, v: &Value) -> Self {
-        let mut part = Self::parse(v);
-        if layer == "minecraft:decorated_pot_base#main" {
-            // `ModelPart.Cube` polygon order: down, up, west, north, east, south.
-            for (name, face) in [("top", 1), ("bottom", 0)] {
-                if let Some((_, plane)) = part.children.iter_mut().find(|(n, _)| n == name)
-                    && let Some(&polygon) = plane.polygons.get(face)
-                {
-                    plane.polygons = vec![polygon];
-                }
-            }
-        }
-        part
-    }
     pub fn child(&self, name: &str) -> Option<&ModelPart> {
         self.children
             .iter()
@@ -812,10 +794,7 @@ impl BlockEntityRenderer {
         let all: Value = serde_json::from_slice(&std::fs::read(root.join("entity-models.json"))?)?;
         let models = MODELS
             .iter()
-            .filter_map(|(key, layer)| {
-                all.get(*layer)
-                    .map(|v| (*key, ModelPart::parse_layer(layer, v)))
-            })
+            .filter_map(|(key, layer)| all.get(*layer).map(|v| (*key, ModelPart::parse(v))))
             .collect();
         let mut renderer = Self::new(models, registry);
         renderer.visibility = Some(Mutex::new(crate::models::load_visibility(root, registry)?));
