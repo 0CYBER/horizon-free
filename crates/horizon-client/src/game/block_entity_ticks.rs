@@ -56,6 +56,7 @@ impl Game<'_> {
                 Some(BlockEntity::Beehive(_)) => self.tick_beehive(pos),
                 Some(BlockEntity::Furnace(_)) => self.tick_furnace(pos)?,
                 Some(BlockEntity::Brewing(_)) => self.tick_brewing_stand(pos)?,
+                Some(BlockEntity::Campfire(_)) => self.tick_campfire(pos)?,
                 _ => {}
             }
         }
@@ -92,7 +93,10 @@ impl Game<'_> {
                     | "minecraft:vault"
                     | "minecraft:beehive"
                     | "minecraft:bee_nest"
-                    | "minecraft:brewing_stand" => Ticking::Yes,
+                    | "minecraft:brewing_stand"
+                    // Lit, cookTick; unlit, cooldownTick.
+                    | "minecraft:campfire"
+                    | "minecraft:soul_campfire" => Ticking::Yes,
                     "minecraft:jukebox" => {
                         let record = registry
                             .state(state)

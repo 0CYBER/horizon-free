@@ -938,6 +938,11 @@ pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
         BlockEntity::Sign(sign) => Some(Tag::compound(sign.encode())),
         BlockEntity::Spawner(s) => Some(s.update_tag()),
         BlockEntity::Jukebox(_) | BlockEntity::Lectern(_) => None,
+        // CampfireBlockEntity.getUpdateTag: the items alone.
+        BlockEntity::Campfire(c) => Some(Tag::compound([(
+            "Items",
+            crate::save::encode_items(&c.items),
+        )])),
         _ => None,
     }
 }
