@@ -269,7 +269,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         m.extra.counter2 = 0;
     }
     // PiglinSpecificSensor (every 20 ticks): the nearest repelling block.
-    if m.species() == Species::Piglin && m.alive() && m.age.wrapping_add(m.id) % 20 == 0 {
+    if m.species() == Species::Piglin && m.alive() && m.age.wrapping_add(m.id).is_multiple_of(20) {
         m.extra.repellent = find_repellent(m, w);
     }
 }
