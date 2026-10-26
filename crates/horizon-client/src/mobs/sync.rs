@@ -15,11 +15,13 @@
 //!   them in `entity_event`;
 //! - run its client side animation in `client_tick`, sharing the function
 //!   with the server's `ai_step` where the server computes the same.
-use super::{Mob, Species, breeze, camel, shulker, sniffer, warden};
+use super::{Mob, Species, breeze, camel, frog, shulker, sniffer, warden};
 
 // `Pose.id` of the poses mobs take.
 pub const STANDING: u8 = 0;
 pub const LONG_JUMPING: u8 = 6;
+pub const CROAKING: u8 = 8;
+pub const USING_TONGUE: u8 = 9;
 pub const SITTING: u8 = 10;
 pub const ROARING: u8 = 11;
 pub const SNIFFING: u8 = 12;
@@ -36,14 +38,16 @@ pub fn pose_id(m: &Mob) -> u8 {
         Species::Warden => warden::pose_id(m),
         Species::Breeze => breeze::pose_id(m),
         Species::Camel | Species::CamelHusk if camel::sitting(m) => SITTING,
+        Species::Frog => m.extra.pose,
         _ => STANDING,
     }
 }
 
 /// `Entity.onSyncedDataUpdated(DATA_POSE)` on a client.
 pub fn set_pose(m: &mut Mob, id: u8) {
-    m.extra.pose = id;
+    let old = std::mem::replace(&mut m.extra.pose, id);
     match m.species() {
+        Species::Frog if old != id => frog::pose_changed(m),
         Species::Warden => warden::set_pose_id(m, id),
         Species::Breeze => breeze::set_pose_id(m, id),
         _ => {}
@@ -60,6 +64,7 @@ pub fn client_tick(m: &mut Mob, game_time: i64) {
         Species::Breeze => breeze::ai_step(m),
         Species::Camel | Species::CamelHusk => camel::client_tick(m, game_time),
         Species::Shulker => shulker::client_tick(m),
+        Species::Frog => frog::tick(m),
         _ => {}
     }
 }

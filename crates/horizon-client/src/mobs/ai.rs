@@ -178,6 +178,7 @@ pub fn register(m: &mut Mob) {
         Family::Undead => undead::register(m),
         Family::Hostile => hostile::register(m),
         Family::Aquatic => aquatic::register(m),
+        Family::Generic if m.species() == Species::Frog => super::frog::register(m),
         Family::Generic => {
             generic(m);
             if m.species() == Species::Rabbit {
@@ -964,6 +965,7 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         Species::Evoker if m.extra.counter > 0 => m.extra.counter -= 1,
         Species::Bat => super::bat::server_ai_step(m, cx.w, cx.events),
         Species::Bee => super::bee::server_ai_step(m, cx),
+        Species::Frog => super::frog::server_ai_step(m, cx.w),
         _ => {}
     }
 }
@@ -1016,6 +1018,7 @@ fn species_ai_step(
         }
         Species::Nautilus | Species::ZombieNautilus => super::nautilus::ai_step(m, w, events),
         Species::Chicken => farm::chicken_ai_step(m, w, events),
+        Species::Frog => super::frog::tick(m),
         Species::Turtle => super::turtle::ai_step(m, w, events),
         Species::Sheep if m.extra.anim_ticks > 0 => {
             m.extra.anim_ticks -= 1;

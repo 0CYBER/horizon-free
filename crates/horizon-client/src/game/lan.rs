@@ -399,6 +399,15 @@ fn mob_meta(
             }
             defaults.push((18, serializer::BYTE, Value::Byte(16)));
         }
+        // Frog.DATA_TONGUE_TARGET_ID (after the variant): the entity id plus
+        // one, 0 for none.
+        "minecraft:frog" => {
+            if let Some(target) = e.frog.tongue_target {
+                let id = i32::try_from(target).map_or(0, |t| t + 1);
+                meta.push((19, serializer::OPTIONAL_UNSIGNED_INT, Value::Id(id)));
+            }
+            defaults.push((19, serializer::OPTIONAL_UNSIGNED_INT, Value::Id(0)));
+        }
         // Enderman.DATA_CARRY_STATE.
         "minecraft:enderman" => {
             if let Some(state) = e.carried {
