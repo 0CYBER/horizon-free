@@ -183,7 +183,12 @@ impl Mod for Guest {
             "input_wheel" => input::claim_wheel(args != "off"),
             "zoom" => {
                 let mut words = args.split(' ');
-                let mut number = || words.next().and_then(|w| w.parse().ok()).unwrap_or(f32::NAN);
+                let mut number = || {
+                    words
+                        .next()
+                        .and_then(|w| w.parse().ok())
+                        .unwrap_or(f32::NAN)
+                };
                 let factor = number();
                 let smooth = number() == 1.0;
                 let turn = number();

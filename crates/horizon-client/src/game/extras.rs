@@ -234,7 +234,11 @@ impl Game<'_> {
     fn zoom_now(&self) -> (f32, bool, f64) {
         let factor = self.zoom_factor();
         let e = &self.settings.extras;
-        let own = (factor, e.zoom_smooth, turn_scale(factor, e.zoom_sensitivity));
+        let own = (
+            factor,
+            e.zoom_smooth,
+            turn_scale(factor, e.zoom_sensitivity),
+        );
         match self.mod_zoom() {
             Some(z) if z.factor > factor => (z.factor, z.smooth, f64::from(z.turn)),
             _ => own,
