@@ -687,6 +687,16 @@ def portals(host, guest, out, x, y, z, hx, hy, hz):
     guest('command', command=f'tp @s {arrived[0] + 0.5} {arrived[1]} {arrived[2] - 2.5}')
     guest.wait(30)
     guest('command', command=f'tp @s {arrived[0] + 0.5} {arrived[1]} {arrived[2] + 0.5}')
+    # ServerPlayer.showEndCredits: the host's first exit from the End rolls the poem and credits;
+    # closing them (WinScreen.onClose sends PERFORM_RESPAWN) takes it home.
+    credits = False
+    for _ in range(60):
+        host.wait(5)
+        if host('screen').get('screen') == 'win':
+            credits = True
+            host.raw('key', 'esc', 'tap')
+            break
+    assert credits, 'the host left the End without the credits'
     home = wait_dimension(host, 'minecraft:overworld', 600)
     back = wait_dimension(guest, 'minecraft:overworld', 600)
     guest.wait(40)
@@ -694,7 +704,7 @@ def portals(host, guest, out, x, y, z, hx, hy, hz):
     guest.shot(out, 'portals-back')
     assert home.get('dimension') == 'minecraft:overworld', f'the host stayed in {home.get("dimension")}'
     assert back.get('dimension') == 'minecraft:overworld', f'the guest stayed in {back.get("dimension")}'
-    return {'guest_nether': arrived, 'host_end': [ex, ey, ez], 'back': pos_of(guest)}
+    return {'guest_nether': arrived, 'host_end': [ex, ey, ez], 'credits': credits, 'back': pos_of(guest)}
 
 
 NETHER, END, OVERWORLD = 'minecraft:the_nether', 'minecraft:the_end', 'minecraft:overworld'
