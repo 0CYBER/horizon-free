@@ -7619,6 +7619,69 @@ impl Game<'_> {
         self.audio
             .play("minecraft:entity.player.attack.sweep", from, 1.0, 1.0);
     }
+    /// The damage and knockback part of `Player.doSweepAttack` after a sweep
+    /// hit on the mob at `target`: every other living mob in its box grown by
+    /// (1, 0.25, 1) and closer than 3 blocks (`distanceToSqr < 9`, in creative
+    /// too), but the player's allies
+    /// (`isAlliedTo`), takes `1 + sweeping_damage_ratio * baseDamage` with the
+    /// weapon's enchantments, scaled by the attack strength, and is pushed 0.4
+    /// along the player's yaw.
+    pub(super) fn sweep_damage(&mut self, target: usize, scale: f32) {
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let from = [p.position.x, p.position.y, p.position.z];
+        // `baseDamage` of `Player.attack` before a critical hit (a sweep has
+        // none) and the enchantments: the attack damage attribute with the
+        // strength and weakness effects, scaled by the attack strength.
+        let hand_damage = 1.0 + self.attack_item_info().map_or(0.0, |i| i.attack_damage);
+        let base_damage = (hand_damage + self.effect_attack_bonus()) * (0.2 + scale * scale * 0.8);
+        // The enchantment's attribute modifier on the attribute's 0 to 1 range.
+        let ratio = self
+            .res
+            .stations()
+            .enchantments
+            .attribute_add(
+                self.inventory[self.selected].as_ref(),
+                "minecraft:sweeping_damage_ratio",
+            )
+            .clamp(0.0, 1.0) as f32;
+        let sweep_damage = 1.0 + ratio * base_damage;
+        let hit_box = self.mobs[target]
+            .bounds()
+            .inflate(horizon_core::geometry::Vec3::new(1.0, 0.25, 1.0));
+        let (uuid, allies) = (
+            self.level.player_uuid.or(Some([0, 0, 0, 1])),
+            self.player_allies(),
+        );
+        let nearby: Vec<usize> = self
+            .mobs
+            .iter()
+            .enumerate()
+            .filter(|(i, m)| {
+                *i != target
+                    && m.alive()
+                    && !m.removed
+                    && !allies.contains(&m.id)
+                    && !mace::ally_of_player(m, uuid)
+                    && m.bounds().intersects(hit_box)
+                    && m.position.distance_squared(p.position) < 9.0
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let (xd, zd) = self.extra_knockback_direction();
+        for i in nearby {
+            let kind = self.mobs[i].kind.id.clone();
+            let kind = format!("minecraft:{}", kind.trim_start_matches("minecraft:"));
+            let damage = (sweep_damage + self.enchant_damage_bonus(&kind)) * scale;
+            let source = self.attack_source(from);
+            if self.hurt_by_player(i, damage, source) {
+                self.mobs[i].knockback(0.4, xd, zd);
+                self.last_hurt_by_player
+                    .insert(self.mobs[i].id, self.lan_acting);
+            }
+        }
+    }
     /// `Player.attack`'s sounds when a vehicle takes the hit (it always does,
     /// and can't be hit critically): knockback when sprinting at full
     /// strength, then strong or weak. Before `swing_arm` resets the charge.
@@ -7792,6 +7855,7 @@ impl Game<'_> {
             // Player.playServerSideSound: at the player.
             if let Some(at) = sweep {
                 self.sweep_attack(at, from);
+                self.sweep_damage(index, scale);
             } else {
                 self.audio.play(sound, from, 1.0, 1.0);
             }
