@@ -164,6 +164,15 @@ def cases(layer, model=None):
     cases_out = [{**c, **DEFAULTS.get(name, {})} for c in cases_out]
     yield from cases_out
     yield from species_cases(layer, cases_out)
+    # Exercise render-state extraction with a live walk clock, including the
+    # first mounted frame. Existing setupAnim cases bypass anim::state.
+    if name == 'skeleton':
+        for passenger in [False, True]:
+            for alive in [False, True]:
+                for partial in [0.0, 0.5, 1.0]:
+                    yield {**cases_out[2], 'isPassenger': passenger,
+                           '@walkTicks': [0.5, 1.0, 0.75],
+                           '@alive': alive, '@partial': partial}
     part = model and scaled_part(model)
     if part:
         for index, scale in enumerate(PART_SCALES):
@@ -387,6 +396,10 @@ def main():
             skipped.add(layer); continue
         checked += 1
         bad = []
+        if 'walk' in v:
+            for a, b in zip(v['walk'], r['walk']):
+                if abs(a - b) > args.tolerance * (1.0 + abs(a)):
+                    bad.append(('@walk', f'{v["walk"]} != {r["walk"]}'))
         for path, expected in v['parts'].items():
             got = r['parts'].get(path)
             if got is None:

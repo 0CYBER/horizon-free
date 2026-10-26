@@ -393,7 +393,7 @@ pub fn main() -> horizon_client::Result<()> {
             mob.extra.age = -24000;
         }
         mob.age = f("ageInTicks") as u32;
-        let state = State {
+        let mut state = State {
             pos: f("walkAnimationPos"),
             speed: f("walkAnimationSpeed"),
             age: f("ageInTicks"),
@@ -405,6 +405,20 @@ pub fn main() -> horizon_client::Result<()> {
         };
         let mut poses = Poses::new(&model);
         entity_state(&mut mob, def.species, case);
+        if let Some(ticks) = case["@walkTicks"].as_array() {
+            for speed in ticks {
+                mob.previous_limb_speed = mob.limb_speed;
+                mob.limb_speed += (speed.as_f64().unwrap() as f32 - mob.limb_speed) * 0.4;
+                mob.limb_position += mob.limb_speed;
+            }
+            if !case["@alive"].as_bool().unwrap() {
+                mob.health = 0.0;
+            }
+            let extracted = anim::state(&mob, f("@partial"));
+            state.pos = extracted.pos;
+            state.speed = extracted.speed;
+        }
+
         let flag = |k: &str| case[k].as_bool().unwrap_or(false);
         let num = |k: &str| case[k].as_f64().unwrap_or(0.0) as f32;
         let started = |k: &str| AnimationState {
@@ -598,7 +612,11 @@ pub fn main() -> horizon_client::Result<()> {
             }
             _ => anim::setup(&mob, s, p, &animations),
         }
-        out.push_str(&format!("{}\n", emit(&model, &mut poses, case, layer)));
+        let mut result = emit(&model, &mut poses, case, layer);
+        if case["@walkTicks"].is_array() {
+            result["walk"] = json!([state.pos, state.speed]);
+        }
+        out.push_str(&format!("{result}\n"));
     }
     fs::write(&args[2], out)?;
     Ok(())
