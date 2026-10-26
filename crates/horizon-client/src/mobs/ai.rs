@@ -664,8 +664,10 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
     m.ai.xxa *= 0.98;
     m.ai.zza *= 0.98;
     // LivingEntity.isImmobile: no goals or input (a biting, stunned or
-    // roaring ravager).
-    let immobile = m.species() == Species::Ravager && super::ravager::immobile(m);
+    // roaring ravager). A mannequin is an Avatar, not a Mob: LivingEntity's
+    // serverAiStep has no goals, so it only falls and is pushed.
+    let immobile = (m.species() == Species::Ravager && super::ravager::immobile(m))
+        || m.species() == Species::Mannequin;
     if m.alive() && !immobile {
         server_ai_step(m, w, level_random, events);
     } else {
@@ -1018,6 +1020,10 @@ pub fn despawn_check(m: &mut Mob, w: &MobWorld) -> bool {
 /// Mob.checkDespawn, before the tick (players are the only despawn
 /// reference). Returns false when the mob is discarded.
 fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
+    // A mannequin is a LivingEntity, which never despawns.
+    if m.species() == Species::Mannequin {
+        return true;
+    }
     let Some(p) = w.nearest_player else {
         return true;
     };

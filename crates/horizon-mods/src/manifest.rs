@@ -52,6 +52,12 @@ pub struct Manifest {
     /// that are on may share one (`content::clash`).
     #[serde(default)]
     pub namespaces: Vec<String>,
+    /// The experimental capabilities the mod opts into (`["ui"]`): each one
+    /// it lists in `capabilities` must be named here too, since it may change
+    /// in any release (docs/api/stability.md). One no longer experimental is
+    /// accepted here, so the manifest keeps loading once it is promoted.
+    #[serde(default)]
+    pub experimental: Vec<Capability>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -75,9 +81,20 @@ pub enum Capability {
     Chat,
     Hud,
     Storage,
+    /// Runs vanilla commands as the player, with the player's permissions.
+    Command,
     /// New blocks and items from the mod's `data/` (API 0.2): no WIT
     /// interface, the game reads them before the world loads.
     Registries,
+    /// A screen the mod owns and a settings page in Options > Mods, drawn
+    /// with the menus' own widgets (interface `ui`, calls `ui-events`).
+    Ui,
+    /// Shapes on the HUD and the camera's shake, drawn by the game's own
+    /// renderer (interface `render`).
+    Render,
+    /// The use button on items the mod claims, and its own keys
+    /// (interface `input`).
+    Input,
     /// The players on the server and messages to them (server mods).
     Players,
     /// Blocks in the server's loaded chunks, and changes to them (server
@@ -85,12 +102,16 @@ pub enum Capability {
     World,
 }
 impl Capability {
-    pub const ALL: [Capability; 7] = [
+    pub const ALL: [Capability; 11] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
         Capability::Storage,
+        Capability::Command,
         Capability::Registries,
+        Capability::Ui,
+        Capability::Render,
+        Capability::Input,
         Capability::Players,
         Capability::World,
     ];
@@ -108,10 +129,22 @@ impl Capability {
             Capability::Chat => "chat",
             Capability::Hud => "hud",
             Capability::Storage => "storage",
+            Capability::Command => "command",
             Capability::Registries => "registries",
+            Capability::Ui => "ui",
+            Capability::Render => "render",
+            Capability::Input => "input",
             Capability::Players => "players",
             Capability::World => "world",
         }
+    }
+    /// May change in any release: a mod uses it only with
+    /// `experimental = ["<name>"]` in its manifest.
+    pub fn is_experimental(self) -> bool {
+        matches!(
+            self,
+            Capability::Ui | Capability::Render | Capability::Input
+        )
     }
     /// What the player reads before turning the mod on: "May <this>".
     pub fn describe(self) -> &'static str {
@@ -120,7 +153,13 @@ impl Capability {
             Capability::Chat => "show you chat messages",
             Capability::Hud => "draw text on your screen",
             Capability::Storage => "save its own settings to disk",
+            Capability::Command => "run commands as you, with your permissions",
             Capability::Registries => "add blocks and items to your worlds",
+            Capability::Ui => "show its own screens and a settings page",
+            Capability::Render => "draw on your screen, shake and zoom the camera",
+            Capability::Input => {
+                "see the keys you hold and your clicks, take over the use button on its own items and the mouse wheel, and add keys"
+            }
             Capability::Players => "see who is on the server and message them",
             Capability::World => "read and change the world's blocks",
         }
@@ -152,7 +191,11 @@ impl fmt::Display for Capability {
             Capability::Chat => "chat",
             Capability::Hud => "hud",
             Capability::Storage => "storage",
+            Capability::Command => "command",
             Capability::Registries => "registries",
+            Capability::Ui => "ui",
+            Capability::Render => "render",
+            Capability::Input => "input",
             Capability::Players => "players",
             Capability::World => "world",
         };
@@ -198,6 +241,16 @@ impl Manifest {
         {
             let side = if server { "client" } else { "server" };
             return Err(format!("{MANIFEST}: capability {c} is for {side} mods"));
+        }
+        if let Some(c) = m
+            .capabilities
+            .iter()
+            .find(|c| c.is_experimental() && !m.experimental.contains(c))
+        {
+            return Err(format!(
+                "{MANIFEST}: capability {c} is experimental and may change in any release: \
+                 add experimental = [\"{c}\"] to use it"
+            ));
         }
         if !m.namespaces.is_empty() && !m.capabilities.contains(&Capability::Registries) {
             return Err(format!(
@@ -406,6 +459,10 @@ capabilities = ["game-read", "hud"]
             storage,
             Err("uses capability storage, missing from horizon-mod.toml".into())
         );
+        assert_eq!(
+            m.check_imports(["horizon:mods/command@0.1.0"]),
+            Err("uses capability command, missing from horizon-mod.toml".into())
+        );
         let with_storage = EXAMPLE.replace("\"hud\"", "\"hud\", \"storage\"");
         let m = Manifest::parse(&with_storage).unwrap();
         assert_eq!(m.check_imports(["horizon:mods/storage@0.1.0"]), Ok(()));
@@ -470,5 +527,22 @@ capabilities = ["game-read", "hud"]
         assert_eq!(p.manifest.id, "coords_hud");
         assert_eq!(p.wasm.as_deref(), Some(&b"\0asm"[..]));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn experimental_capabilities_need_the_opt_in() {
+        let base = "id = \"m\"\nname = \"M\"\nversion = \"1\"\napi = \"0.1\"\n";
+        let err = Manifest::parse(&format!("{base}capabilities = [\"ui\"]\n")).unwrap_err();
+        assert!(err.contains("experimental = [\"ui\"]"), "{err}");
+        let m = Manifest::parse(&format!(
+            "{base}capabilities = [\"ui\"]\nexperimental = [\"ui\"]\n"
+        ))
+        .unwrap();
+        assert_eq!(m.experimental, [Capability::Ui]);
+        // A capability that is (or became) stable is fine in the list.
+        Manifest::parse(&format!(
+            "{base}capabilities = [\"hud\"]\nexperimental = [\"hud\"]\n"
+        ))
+        .unwrap();
     }
 }

@@ -86,6 +86,7 @@ impl Fake {
                     .map(|b| format!("{b:02x}"))
                     .collect(),
             ),
+            sha256: None,
             sha1: None,
             primary: true,
         };

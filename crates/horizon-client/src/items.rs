@@ -77,6 +77,8 @@ pub struct ItemInfo {
     pub consumable: Option<horizon_world::consumable::Consumable<String, ConsumeEffect>>,
     /// `use_remainder`: what a finished use leaves (`UseRemainder`).
     pub use_remainder: Option<String>,
+    /// `use_cooldown`: the cooldown a use starts (`UseCooldown`).
+    pub use_cooldown: Option<crate::cooldowns::UseCooldown>,
     pub model: String,
     /// Main-hand `attack_damage` / `attack_speed` modifier amounts.
     pub attack_damage: f32,
@@ -568,6 +570,9 @@ impl Items {
                     use_remainder: c["minecraft:use_remainder"]["id"]
                         .as_str()
                         .map(str::to_owned),
+                    use_cooldown: c
+                        .get("minecraft:use_cooldown")
+                        .and_then(crate::cooldowns::UseCooldown::from_json),
                     model: c["minecraft:item_model"]
                         .as_str()
                         .unwrap_or(name)
