@@ -32,8 +32,8 @@ Two more Java servers, both dev-only downloads into .local/server-bench/jars (ne
   SHA-256 it publishes, with Paper's own defaults except `connection-throttle` (off: the bots all join from
   one address). Paperclip patches the pinned server jar (your copy, put in
   its cache so nothing is fetched from Mojang).
-- `fabric`: the pinned vanilla server on the pinned Fabric loader (packs/fabric.lock.json) with Lithium from
-  packs/mods.lock.json (and Fabric API only if Lithium asks for it), checked against the lock's SHA-512.
+- `fabric`: the pinned vanilla server on the pinned Fabric loader (tools/benchmark-deps/fabric.lock.json) with Lithium from
+  tools/benchmark-deps/mods.lock.json (and Fabric API only if Lithium asks for it), checked against the lock's SHA-512.
 Both run with the same heap as vanilla (`--heap`).
 """
 
@@ -45,7 +45,6 @@ from pathlib import Path
 import platform
 import re
 import shutil
-import socket
 import statistics
 import subprocess
 import sys
@@ -79,12 +78,6 @@ PROPERTIES = {
     'difficulty': 'easy',
     'sync-chunk-writes': 'true',
 }
-
-
-def free_port():
-    with socket.socket() as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
 
 
 def cpu_seconds(text):
@@ -127,7 +120,7 @@ class Server:
         self.process = subprocess.Popen([str(c) for c in command], cwd=directory, stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                         encoding='utf-8', errors='replace',
-                                        env=dict(os.environ, HORIZON_NO_AUDIO='1'))
+                                        env=lab.game_env())
         threading.Thread(target=self._read, daemon=True).start()
 
     def _read(self):
@@ -197,8 +190,8 @@ def paper_jar():
 
 
 def fabric_mods():
-    """Lithium from packs/mods.lock.json, plus Fabric API if Lithium depends on it (checked, cached)."""
-    lock = json.loads((ROOT / 'packs/mods.lock.json').read_text())
+    """Lithium from tools/benchmark-deps/mods.lock.json, plus Fabric API if Lithium depends on it (checked, cached)."""
+    lock = json.loads((ROOT / 'tools/benchmark-deps/mods.lock.json').read_text())
     def fetch(name):
         project = lock['projects'][name]
         return runtime.fetch(project['url'], JARS / project['filename'], project['hashes']['sha512'], 'sha512')
@@ -282,7 +275,7 @@ def run_once(kind, bots, behaviour, args, out):
     directory = out / name
     shutil.rmtree(directory, ignore_errors=True)
     directory.mkdir(parents=True)
-    port = free_port()
+    port = lab.free_port()
     props = dict(PROPERTIES, **{'server-port': str(port), 'level-seed': str(args.seed)})
     (directory / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in props.items()))
     (directory / 'eula.txt').write_text('eula=true\n')

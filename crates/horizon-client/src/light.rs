@@ -203,7 +203,7 @@ impl LightTables {
         Ok(tables)
     }
     /// Assembled tables (tests and benchmarks): derives the packed light cache.
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn from_parts(cells: Vec<Cell>, occludes: Vec<bool>, faces: usize) -> Self {
         let mut tables = Self {
             cells,

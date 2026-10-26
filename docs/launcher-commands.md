@@ -130,16 +130,6 @@ Play offline, without an account.
 
 MCP: `account_offline`.
 
-## `horizon-launcher update-channel`
-
-Show or set which Horizon releases install by themselves: stable (a tested build about once a day) or alpha (every release as soon as it is built; can break).
-
-    horizon-launcher update-channel [CHANNEL]
-
-- `CHANNEL` (stable, alpha): Omit to show the current channel
-
-MCP: `update_channel`.
-
 ## `horizon-launcher settings`
 
 Show the launcher's settings, or set one (the Settings page): selected-version TAG, minecraft-dir PATH, server-dir PATH ("default" resets a folder), install-new-versions on|off, opening-animation on|off.
@@ -331,9 +321,9 @@ Search for packs Horizon loads.
     horizon-launcher mods search [TEXT]...
 
 - `TEXT`
-- `--kind` (mod, resource, shader, modpack)
+- `--kind` (mod, resource, modpack)
 - `--everything`: Also what was made for other versions or runs only partly, each marked
-- `--source` (modrinth, curseforge)
+- `--source` (modrinth, curseforge, horizon)
 
 MCP: `mods_search`.
 
@@ -345,7 +335,7 @@ Say how well a Java mod runs in Horizon: its jar is downloaded (checksum checked
 
 - `PROJECT`
 - `--everything`: Allow a version made for another Minecraft version (1.21 and later)
-- `--source` (modrinth, curseforge)
+- `--source` (modrinth, curseforge, horizon)
 
 MCP: `mods_check`.
 
@@ -357,7 +347,7 @@ Install a pack and what it needs, by its id or slug (checksums checked); a Java 
 
 - `PROJECT`
 - `--everything`: Allow a version made for another Minecraft version
-- `--source` (modrinth, curseforge)
+- `--source` (modrinth, curseforge, horizon)
 
 MCP: `mods_install`.
 
@@ -381,6 +371,26 @@ Remove a pack the browser installed.
 - `PROJECT`
 
 MCP: `mods_remove`, needs `confirm: true`.
+
+## `horizon-launcher mods enable`
+
+Turn on a mod the browser installed (horizon-mods.txt, as the game's Options > Mods does).
+
+    horizon-launcher mods enable <PROJECT>
+
+- `PROJECT`
+
+MCP: `mods_enable`.
+
+## `horizon-launcher mods disable`
+
+Turn off a mod the browser installed; it stays installed.
+
+    horizon-launcher mods disable <PROJECT>
+
+- `PROJECT`
+
+MCP: `mods_disable`.
 
 ## `horizon-launcher servers list`
 

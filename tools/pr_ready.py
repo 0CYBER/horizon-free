@@ -108,7 +108,7 @@ def touched_crates(paths, packages):
 
 def area(path):
     """The part of the project a path belongs to; None for what goes with any change (docs, tests, harnesses)."""
-    if is_doc(path) or path.startswith(("tests/", "mods/", "docs/")) or path == "research-lock.json" or \
+    if is_doc(path) or path.startswith(("tests/", "mods/", "docs/", "roadmap/")) or path == "research-lock.json" or \
             (path.startswith("tools/") and not path.startswith("tools/ci/")):
         return None
     if path.startswith(("launcher/", "crates/horizon-prepare/")):
@@ -274,11 +274,23 @@ def parity_summary(output):
     return text
 
 
+def mod_features(crates):
+    """Code mods are off by default (docs/mods.md): on wherever horizon-mods is checked, as in CI."""
+    if crates is not None and "horizon-mods" not in crates:
+        return ""
+    features = ["horizon-mods/runtime", "horizon-mods/pack"]
+    if crates is None or "horizon-client" in crates:
+        features.append("horizon-client/mods")
+    return f" --features {','.join(features)}"
+
+
 def plan(args, base, changed, crates_of, libraries, dependencies):
     """The checks for these changed files, in the order they run."""
     rust = any(workspace_rust(path) for path in changed)
     launcher = any(launcher_rust(path) for path in changed)
-    python = any(path.endswith(".py") or path.startswith(("tests/", "tools/")) for path in changed)
+    # The Python tests also hold ROADMAP.md to roadmap/roadmap.toml (tests/test_roadmap.py).
+    python = any(path.endswith(".py") or path.startswith(("tests/", "tools/", "roadmap/")) or path == "ROADMAP.md"
+                 for path in changed)
     crates = touched_crates(changed, crates_of) if rust or TOKENS in changed else []
     # An unrecognised Rust path must not silently skip validation.
     if rust and crates == []:
@@ -297,10 +309,10 @@ def plan(args, base, changed, crates_of, libraries, dependencies):
         Step("Python tests", "python3 -m unittest discover -s tests", where="here",
              skip=None if python else "no Python change", summary=unittest_passed),
         Step("rustfmt", "cargo fmt --all -- --check", skip=None if rust else no_rust),
-        Step("clippy", f"cargo clippy {clippy_selection} --all-targets --locked -- -D warnings",
+        Step("clippy", f"cargo clippy {clippy_selection}{mod_features(clippy_crates)} --all-targets --locked -- -D warnings",
              skip=None if rust else no_rust),
         Step("tests" + (": workspace" if crates is None else f": {', '.join(crates)}" if crates else ""),
-             f"cargo test --locked {selection} --tests",
+             f"cargo test --locked {selection}{mod_features(crates)} --tests",
              skip=test_skip, summary=tests_passed),
         Step("doc tests", f"cargo test --locked {doc_selection} --doc",
              skip=test_skip or (None if doc_crates else "no library touched"), summary=tests_passed),

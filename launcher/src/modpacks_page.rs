@@ -1,6 +1,7 @@
 //! Imported modpacks, on the Mods page's Modpacks tab: import a pack, read its coverage report,
 //! port what this computer can and play it as its own profile (`horizon_launcher::modpacks`).
 use super::*;
+use horizon_launcher::browser::horizon::pack as horizon_pack;
 use horizon_launcher::modpacks::{self, Imported};
 use horizon_port_pack::report::Status;
 use std::path::PathBuf;
@@ -50,6 +51,7 @@ impl Launcher {
         self.pack_busy = false;
         match result {
             Ok(pack) => {
+                self.mods.report_list.reset();
                 self.pack_open = Some(pack.slug.clone());
                 self.packs.retain(|p| p.slug != pack.slug);
                 self.packs.push(*pack);
@@ -127,7 +129,9 @@ impl Launcher {
     /// Reads the imported packs, once (the sidebar and the Modpacks tab both show them).
     pub(super) fn load_packs(&mut self) {
         if self.packs_loaded.is_none() {
+            self.mods.report_list.reset();
             self.packs = modpacks::list();
+            self.registry_packs = horizon_pack::list();
             if self.pack_open.is_none() {
                 self.pack_open = self.packs.first().map(|p| p.slug.clone());
             }
@@ -175,6 +179,12 @@ impl Launcher {
         if let Some(e) = &self.pack_error {
             page = page.child(notice(e.clone(), &t));
         }
+        if !self.registry_packs.is_empty() {
+            page = page.child(self.registry_pack_rows(cx));
+        }
+        if self.packs.is_empty() && !self.registry_packs.is_empty() {
+            return page;
+        }
         if self.packs.is_empty() {
             return page.child(
                 text(theme::CAPTION)
@@ -193,6 +203,7 @@ impl Launcher {
                     button(format!("open-{slug}"), "Open", Kind::Ghost, &t)
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             this.pack_open = Some(slug.clone());
+                            this.mods.report_list.reset();
                             cx.notify();
                         }))
                         .into_any_element()
@@ -211,6 +222,78 @@ impl Launcher {
             Some(detail) => page.child(detail),
             None => page,
         }
+    }
+
+    /// The modpacks installed from Horizon's registry: each plays its own profile.
+    fn registry_pack_rows(&self, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let mut list = div().flex().flex_col();
+        for (i, p) in self.registry_packs.iter().enumerate() {
+            let (play, remove) = (p.work.clone(), p.work.clone());
+            let id = p.id.clone();
+            let key = format!("horizon:{id}");
+            let confirming = self.confirm_remove.as_deref() == Some(key.as_str());
+            let right = div()
+                .flex()
+                .gap(px(8.))
+                .child(
+                    button(format!("play-pack-{id}"), "Play", Kind::Primary, &t).on_click(
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.play_pack(play.clone());
+                            cx.notify();
+                        }),
+                    ),
+                )
+                .child(
+                    button(
+                        format!("remove-pack-{id}"),
+                        if confirming {
+                            "Remove for good"
+                        } else {
+                            "Remove"
+                        },
+                        if confirming {
+                            Kind::Secondary
+                        } else {
+                            Kind::Ghost
+                        },
+                        &t,
+                    )
+                    .when(confirming, |b| b.text_color(t.danger))
+                    .on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            if this.confirm_remove.as_ref() == Some(&key) {
+                                match horizon_pack::remove(&remove) {
+                                    Ok(()) => this.packs_loaded = None,
+                                    Err(e) => this.pack_error = Some(e),
+                                }
+                                this.confirm_remove = None;
+                            } else {
+                                this.confirm_remove = Some(key.clone());
+                            }
+                            cx.notify();
+                        },
+                    )),
+                );
+            let detail = format!(
+                "{} from Horizon's registry, its own profile: {}",
+                p.version,
+                p.mods.join(", ")
+            );
+            list = list.child(index_row(
+                i + 1,
+                p.name.clone(),
+                Some(
+                    text(theme::CAPTION)
+                        .text_color(t.muted)
+                        .child(detail)
+                        .into_any_element(),
+                ),
+                Some(right.into_any_element()),
+                &t,
+            ));
+        }
+        list
     }
 
     fn pack_log_plate(&self, t: &Theme) -> Div {
@@ -317,6 +400,7 @@ impl Launcher {
                     Ok(()) => {
                         this.packs.retain(|p| p.slug != slug);
                         this.pack_open = this.packs.first().map(|p| p.slug.clone());
+                        this.mods.report_list.reset();
                     }
                     Err(e) => this.pack_error = Some(e),
                 }
@@ -354,12 +438,13 @@ impl Launcher {
             move |value, _, cx| {
                 let _ = this.update(cx, |this, cx| {
                     this.pack_filter = value;
+                    this.mods.report_list.reset();
                     cx.notify();
                 });
             }
         });
-        let mut list = div().flex().flex_col();
-        for (i, r) in rows.iter().enumerate() {
+        let row = |i: usize| {
+            let r = rows[i];
             let color = match r.status {
                 Status::Ported => t.success,
                 Status::Partial => t.accent,
@@ -372,7 +457,7 @@ impl Launcher {
                 format!("{}  ({})", r.name, r.key)
             };
             let detail = format!("{} · {} · {}: {}", r.class, r.tier, r.license, r.reason);
-            list = list.child(index_row(
+            index_row(
                 i + 1,
                 name,
                 Some(detail.into_any_element()),
@@ -383,8 +468,15 @@ impl Launcher {
                         .into_any_element(),
                 ),
                 &t,
-            ));
-        }
+            )
+        };
+        let list = self.mods.report_list.column(
+            &self.content_scroll.handle,
+            rows.len(),
+            8.,
+            |_| false,
+            row,
+        );
         Some(
             div()
                 .flex()

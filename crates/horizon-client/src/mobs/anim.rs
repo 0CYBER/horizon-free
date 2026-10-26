@@ -239,10 +239,6 @@ pub enum ArmPose {
     /// Raising a trident to throw it (or to launch with Riptide).
     ThrowTrident,
 }
-/// HumanoidModel.setupAnim for piglins: `PiglinModel` poses the arms itself.
-pub fn humanoid_item(p: &mut Poses, s: &State, _holding: bool) {
-    humanoid(p, s, &Hum::new(ArmPose::Empty, ArmPose::Empty));
-}
 /// HumanoidModel.setupAnim with empty hands (endermen).
 pub fn humanoid_pub(p: &mut Poses, s: &State, _m: &Mob) {
     humanoid(p, s, &Hum::new(ArmPose::Empty, ArmPose::Empty));
@@ -646,7 +642,7 @@ pub fn setup(
             } else {
                 ArmPose::Empty
             };
-            let mut h = if m.extra.main_hand_left {
+            let mut h = if m.main_arm_left() {
                 Hum::new(ArmPose::Empty, main)
             } else {
                 Hum::new(main, ArmPose::Empty)
@@ -697,7 +693,7 @@ pub fn setup(
             } else {
                 ArmPose::Empty
             };
-            let mut h = if m.extra.main_hand_left {
+            let mut h = if m.main_arm_left() {
                 Hum::new(off, pose)
             } else {
                 Hum::new(pose, off)

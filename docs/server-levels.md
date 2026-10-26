@@ -26,18 +26,23 @@ the other dimensions' levels as `Parked` values and swaps one into place (`enter
 The packets of a guest are read in its own level's pass (`Hub::tick_level`), so its actions and
 commands run with its level in place.
 
-The window's own game (single player's default, `--no-server-thread`, `HORIZON_SERVER_THREAD=0`, and the
-command harness) keeps one level, which follows its player (`enter_dimension`). LAN guests of a world run
-that way stay in the host's dimension. It is the default again only until the server thread reaches parity
-(`--server-thread` or `HORIZON_SERVER_THREAD=1` opts in), so it gets no multi-level work.
+The window's own game (`--in-frame`, `--no-server-thread`, `HORIZON_SERVER_THREAD=0`, and the command
+harness) keeps one level, which follows its player (`enter_dimension`). LAN guests of a world run that way
+stay in the host's dimension. That mode is the escape hatch, so it gets no multi-level work.
 
 ## One code path for both
 
-The dedicated server and the server thread are the same code. The server thread runs a `Game` with
-`options.dedicated` set and a hub without a host player. The window joins it through memory as one
-more player. Everything above serves both, and `server_dimension_players` (vanilla clients on Horizon's
-dedicated server) and `lan_e2e --server-thread` (Horizon clients on the server thread) check it from
-the two sides.
+The dedicated server and the server thread are the same code. Each `Game` has an explicit
+`ExecutionRole`: `Client`, `IntegratedServer` or `DedicatedServer`, selected before construction in
+`Options.execution_role`. Startup, world loading and opening other dimensions use that role. Only
+clients mesh chunks and show loading progress; a client can still run its simulation in-frame.
+Connecting or disconnecting changes `remote`, independently of the execution role.
+
+The server thread has a hub without a host player. The window joins it through memory as one
+more player. It still sets `options.dedicated` for gameplay checks outside the role migration's
+startup/world-loading scope. Everything above serves both servers, and `server_dimension_players`
+(vanilla clients on Horizon's dedicated server) and `lan_e2e --server-thread` (Horizon clients on the
+server thread) check it from the two sides.
 
 ## Cost of an extra level
 

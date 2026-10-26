@@ -17,5 +17,18 @@ sha1 = "0.10"
 # Secure chat: SHA256withRSA message signatures.
 sha2 = "0.10"
 
+# The name servers of Windows' network adapters, for Minecraft SRV redirects.
+[target.'cfg(windows)'.dependencies]
+ipconfig = "0.3.4"
+
+# Its own name, not `probe`: Cargo copies every crate's examples into one target/<profile>/examples.
+[[example]]
+name = "protocol_probe"
+path = "examples/probe.rs"
+
+[[example]]
+name = "item_wire_probe"
+path = "examples/item_wire_probe.rs"
+
 [lints]
 workspace = true

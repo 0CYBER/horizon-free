@@ -37,8 +37,9 @@ pub struct Release {
     pub body: String,
     pub date: String,
     pub asset: Option<(String, u64)>,
-    /// A beta: a game release not promoted to stable yet (a GitHub pre-release, docs/release-flow.md).
-    pub beta: bool,
+    /// A GitHub pre-release: the Alpha builds from before every release went out as the release
+    /// (v0.2.1 on, docs/release-flow.md). Listed and installed by hand, never as an update.
+    pub prerelease: bool,
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -264,7 +265,7 @@ fn parse_releases(
                 .take(10)
                 .collect(),
             asset: found,
-            beta: r["prerelease"].as_bool().unwrap_or(false),
+            prerelease: r["prerelease"].as_bool().unwrap_or(false),
         });
     }
     out.sort_by(|a, b| compare_versions(&b.tag, &a.tag));
@@ -279,11 +280,6 @@ fn is_launcher_tag(tag: &str) -> bool {
 /// releases are left out.
 pub fn releases() -> Result<Vec<Release>, String> {
     Ok(parse_releases(&release_list()?, ASSET, is_game_tag))
-}
-
-/// Published launcher releases (`launcher-v…`), newest first, with this platform's archive.
-pub fn launcher_releases() -> Result<Vec<Release>, String> {
-    Ok(launcher_releases_in(&release_list()?))
 }
 
 /// The launcher releases in `list` (the newest 100 releases). Game releases come out several times
@@ -348,75 +344,14 @@ pub fn latest(releases: &[Release]) -> Option<&Release> {
     releases.iter().find(|r| r.asset.is_some())
 }
 
-/// The releases a launcher installs by itself: stable ones, and betas too on the Alpha channel.
-pub fn channel(releases: &[Release], channel: UpdateChannel) -> Vec<Release> {
-    releases
-        .iter()
-        .filter(|r| channel.takes(r))
-        .cloned()
-        .collect()
+/// The releases a launcher installs by itself: every one that is published as a release, so
+/// GitHub's latest when it comes out. The pre-releases of the old Alpha channel are left out.
+pub fn installable_updates(releases: &[Release]) -> Vec<Release> {
+    releases.iter().filter(|r| !r.prerelease).cloned().collect()
 }
 
-/// Which game releases install by themselves (Settings, "Updates"; docs/release-flow.md, "Channels").
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum UpdateChannel {
-    /// A tested build about once a day: the betas promote.yml makes stable.
-    #[default]
-    Stable,
-    /// Every release as soon as it is built, pre-releases included. It was called "nightly"
-    /// while the channels were new: that name is still read.
-    #[serde(alias = "nightly")]
-    Alpha,
-}
-
-impl UpdateChannel {
-    pub fn name(self) -> &'static str {
-        match self {
-            UpdateChannel::Stable => "stable",
-            UpdateChannel::Alpha => "alpha",
-        }
-    }
-
-    /// Its name in Settings and on the Versions page.
-    pub fn label(self) -> &'static str {
-        match self {
-            UpdateChannel::Stable => "Stable",
-            UpdateChannel::Alpha => "Alpha",
-        }
-    }
-
-    pub fn parse(name: &str) -> Option<Self> {
-        match name {
-            "stable" => Some(UpdateChannel::Stable),
-            "alpha" | "nightly" => Some(UpdateChannel::Alpha),
-            _ => None,
-        }
-    }
-
-    /// Whether this channel installs `release`: betas only reach Alpha.
-    pub fn takes(self, release: &Release) -> bool {
-        self == UpdateChannel::Alpha || !release.beta
-    }
-
-    /// How often a launcher left open looks for new releases: Alpha's come many times a day,
-    /// Stable's once.
-    pub fn check_every(self) -> std::time::Duration {
-        std::time::Duration::from_secs(match self {
-            UpdateChannel::Stable => 4 * 3600,
-            UpdateChannel::Alpha => 30 * 60,
-        })
-    }
-
-    /// The channel a release is on when it is listed: betas are Alpha's only.
-    pub fn of(release: &Release) -> Self {
-        if release.beta {
-            UpdateChannel::Alpha
-        } else {
-            UpdateChannel::Stable
-        }
-    }
-}
+/// How often a launcher left open looks for new releases: they come out several times a day.
+pub const CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 /// The community, sponsor and website links, from `launcher/links.json` on main, so they can change
 /// without a launcher release. An empty address hides its button.
@@ -617,12 +552,25 @@ pub fn install(release: &Release, progress: impl Fn(f32)) -> Result<(), String> 
     fs::write(target.join(COMPLETE), "").map_err(|e| e.to_string())?;
     let _ = fs::remove_dir_all(&partial);
     reuse_prepared(&root, tag);
+    complete_assets(tag);
     progress(1.0);
     Ok(())
 }
 
 pub fn remove(tag: &str) -> Result<(), String> {
-    fs::remove_dir_all(version_dir(tag)).map_err(|e| e.to_string())
+    let dir = version_dir(tag);
+    // Windows holds a file for a moment after the game, a scan or the launcher's own reader lets
+    // go of it, and remove_dir_all stops at the first one. Retry for a second; a folder that is
+    // already gone is removed.
+    for attempt in 1.. {
+        match fs::remove_dir_all(&dir) {
+            Ok(()) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Err(e) if attempt == 5 => return Err(e.to_string()),
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(250)),
+        }
+    }
+    Ok(())
 }
 
 /// The Minecraft version a Horizon build targets, from its research-lock.json.
@@ -826,9 +774,15 @@ fn reuse_prepared(versions: &Path, tag: &str) -> Option<String> {
 /// `reuse_prepared` for every installed version that is not prepared, oldest first, so a
 /// version prepared this way can serve the next. Launchers before 0.1.4 installed new versions
 /// without it; this catches those up. Returns each (version, where its resources came from).
-/// Prepared versions also get the run-time reports they lack (`complete_reports`).
+/// Prepared versions also get the run-time reports (`complete_reports`) and the built-in packs,
+/// panorama and sounds (`complete_assets`) they lack.
 pub fn reuse_prepared_everywhere() -> Vec<(String, String)> {
-    reuse_prepared_in(&versions_dir())
+    let versions = versions_dir();
+    let reused = reuse_prepared_in(&versions);
+    for tag in installed_in(&versions) {
+        complete_assets(&tag);
+    }
+    reused
 }
 
 fn reuse_prepared_in(versions: &Path) -> Vec<(String, String)> {
@@ -902,6 +856,151 @@ fn complete_reports(versions: &Path, tag: &str) -> bool {
     complete
 }
 
+/// What a prepared version may lack that the launcher adds without preparing again, each copied
+/// from the player's own Minecraft asset store as `horizon-prepare <kind>` does: what the
+/// player misses without it, whether the resources lack it, and the copy.
+type Completion = (
+    &'static str,
+    fn(&Path) -> bool,
+    fn(&Path, Option<&Path>, horizon_prepare::Log) -> Result<PathBuf, String>,
+);
+
+const COMPLETIONS: [Completion; 5] = [
+    // Preparers before #1538 left the built-in packs out.
+    (
+        "Programmer Art and High Contrast",
+        lacks_packs,
+        horizon_prepare::packs,
+    ),
+    // A preparation that could not read the asset store keeps the client jar's 1x1 grey
+    // placeholders, its English alone, and no sounds (#1867: Prism Launcher installs prepared
+    // since 0.2.48).
+    (
+        "The title panorama",
+        lacks_panorama,
+        horizon_prepare::panorama,
+    ),
+    ("The Unifont glyphs", lacks_unifont, horizon_prepare::fonts),
+    ("The languages", lacks_languages, horizon_prepare::languages),
+    (
+        "The sounds",
+        |resources| !sounds_in(resources),
+        horizon_prepare::sounds,
+    ),
+];
+
+fn lacks_unifont(resources: &Path) -> bool {
+    !resources
+        .join("assets/minecraft/font/unifont.zip")
+        .is_file()
+}
+
+/// Whether `en_us`, the one language the client jar has, is the only one.
+fn lacks_languages(resources: &Path) -> bool {
+    fs::read_dir(resources.join("assets/minecraft/lang")).map_or(true, |dir| dir.count() <= 1)
+}
+
+fn lacks_packs(resources: &Path) -> bool {
+    horizon_prepare::BUILT_IN_PACKS
+        .iter()
+        .any(|pack| !resources.join("assets").join(pack).is_file())
+}
+
+/// Whether the first panorama face is missing or the client jar's 1x1 placeholder (a PNG's
+/// width is the big-endian word at byte 16, in the IHDR chunk).
+fn lacks_panorama(resources: &Path) -> bool {
+    let face = resources.join("assets/minecraft/textures/gui/title/background/panorama_0.png");
+    fs::read(face).map_or(true, |png| {
+        png.get(16..20).is_none_or(|width| width == [0, 0, 0, 1])
+    })
+}
+
+/// Adds what a prepared version lacks of `COMPLETIONS`: a new version reuses the resources of the
+/// one before (`reuse_prepared`), which may come from a preparer that left them out. Without them
+/// in any Minecraft folder, one line each in the log, once per launcher run, and the version plays
+/// as before. Nothing is prepared again.
+pub fn complete_assets(tag: &str) {
+    complete_assets_in(&versions_dir(), tag, minecraft_folders, &|line| {
+        eprintln!("{line}")
+    });
+}
+
+/// `folders`: where to look, asked only when the version lacks something.
+fn complete_assets_in(
+    versions: &Path,
+    tag: &str,
+    folders: impl Fn() -> Vec<PathBuf>,
+    log: &dyn Fn(String),
+) {
+    // The versions tried this run. Held while copying: the start, an install and Play can
+    // complete the same version at once, and the copies' temporary names are per process.
+    static TRIED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+    let root = versions.join(tag);
+    let resources = resources_at(&root);
+    let lacking = || -> Vec<&Completion> {
+        if !resources.join(RESOURCES_MANIFEST).exists() {
+            return Vec::new();
+        }
+        COMPLETIONS
+            .iter()
+            .filter(|(_, lacks, _)| lacks(&resources))
+            .collect()
+    };
+    if lacking().is_empty() {
+        return;
+    }
+    let mut tried = TRIED.lock().unwrap_or_else(|e| e.into_inner());
+    let lacking = lacking();
+    if tried.contains(&root) || lacking.is_empty() {
+        return;
+    }
+    tried.push(root.clone());
+    let folders = folders();
+    for (what, _, copy) in lacking {
+        let mut first_error = None;
+        let added = folders.iter().any(|folder| {
+            let copied = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                copy(&root, Some(folder), &|line| log(line.to_string()))
+            }))
+            .unwrap_or_else(|_| Err("the copy stopped unexpectedly".into()));
+            copied.map_err(|e| first_error.get_or_insert(e)).is_ok()
+        });
+        if !added {
+            log(format!(
+                "{tag}: {what} not added: {}",
+                first_error.unwrap_or_else(|| "no Minecraft folder found".into())
+            ));
+        }
+    }
+}
+
+/// The Minecraft folders whose asset store can hold what a prepared version lacks: the one
+/// chosen in the launcher, the official launcher's (or HORIZON_MINECRAFT_DIR), the folder
+/// other launchers' files are linked into and Horizon's own download, then every launcher's
+/// default folder.
+fn minecraft_folders() -> Vec<PathBuf> {
+    let mut folders: Vec<PathBuf> = Settings::load().minecraft_dir.into_iter().collect();
+    folders.extend([
+        horizon_prepare::artifacts::minecraft_dir(None),
+        data_dir().join("linked-minecraft"),
+        data_dir().join("minecraft"),
+    ]);
+    folders.extend(
+        sources::Folders::current()
+            .map(|f| sources::known_folders(sources::Os::current(), &f))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(_, dir)| dir),
+    );
+    let mut found: Vec<PathBuf> = Vec::new();
+    for folder in folders {
+        if folder.is_dir() && !found.contains(&folder) {
+            found.push(folder);
+        }
+    }
+    found
+}
+
 /// The official launcher's game directory, else the first other launcher's found
 /// (sources.rs); preparing looks in all of them anyway.
 pub fn default_minecraft_dir() -> Option<PathBuf> {
@@ -913,7 +1012,7 @@ pub fn default_minecraft_dir() -> Option<PathBuf> {
 }
 
 fn found(program: &str, arg: &str) -> bool {
-    Command::new(program)
+    crate::process::command(program)
         .arg(arg)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -997,21 +1096,18 @@ fn download_for_owner(
     }
 }
 
-/// A JDK of at least `major` for the preparation. `None` when horizon-prepare finds one by
-/// itself (JAVA_HOME, the PATH, an installed JDK): the preparation then runs as before, in an
-/// unchanged environment (a JDK found on the PATH can be a stub such as macOS's
-/// /usr/bin/javac, whose folder is no Java home: `JAVA_HOME=/usr` makes it call itself
-/// forever). Else the home of the Java the official launcher downloaded into one of the
-/// `games` folders, else of Minecraft's own Java downloaded from Mojang into Horizon's game
-/// folder, the runtime the version JSON at `manifest` names (Mojang's runtimes are whole JDKs).
+/// The home of a JDK whose compiler and runtime support `major`. Forward even an installed
+/// JDK to external preparers: older versions may otherwise rediscover incompatible PATH tools.
+/// Else try the official launcher's Java in `games`, then download the runtime named by
+/// `manifest` into Horizon's game folder (Mojang's runtimes are whole JDKs).
 fn java(
     major: i64,
     games: &[PathBuf],
     manifest: &Path,
     log: &dyn Fn(String),
-) -> Result<Option<PathBuf>, String> {
-    if horizon_prepare::java::find(major, &[]).is_ok() {
-        return Ok(None);
+) -> Result<PathBuf, String> {
+    if let Ok(jdk) = horizon_prepare::java::find(major, &[]) {
+        return Ok(jdk.home());
     }
     let mut runtimes: Vec<PathBuf> = Vec::new();
     for home in games
@@ -1023,7 +1119,7 @@ fn java(
         }
     }
     let missing = match horizon_prepare::java::find(major, &runtimes) {
-        Ok(jdk) => return Ok(Some(jdk.home())),
+        Ok(jdk) => return Ok(jdk.home()),
         Err(e) => e,
     };
     let component = read_json(manifest)
@@ -1048,7 +1144,7 @@ fn java(
     let home = mojang::java_runtime(&component, &runtime, 8, &fetch, log).map_err(|e| {
         format!("{missing}\n  • Horizon also tried to download Minecraft's own Java from Mojang, but: {e}")
     })?;
-    horizon_prepare::java::find(major, &[home]).map(|jdk| Some(jdk.home()))
+    horizon_prepare::java::find(major, &[home]).map(|jdk| jdk.home())
 }
 
 /// The dynamic loader glibc programs on x86-64 Linux start through.
@@ -1069,6 +1165,34 @@ fn with_java(cmd: &mut Command, home: &Path) {
     }
 }
 
+/// The Minecraft folder a preparation whose game files are imported already reads: the sounds,
+/// the title panorama, the fonts and the languages come from its asset store. It is the one
+/// `resolve` found, linked into the official layout for another launcher's files; without one, the
+/// chosen folder, and the preparation goes without them, saying so. Before, such a preparation
+/// read the chosen folder as it was, which a Prism Launcher or Modrinth App install does not
+/// keep its assets in: the game was silent and its title screen grey.
+fn assets_folder(
+    resolved: Result<sources::Resolved, String>,
+    chosen: &Path,
+    version: &str,
+    log: &dyn Fn(String),
+) -> PathBuf {
+    match resolved {
+        Ok(sources::Resolved::Folder(dir)) => dir,
+        Ok(sources::Resolved::NotFound(_)) => {
+            log(format!(
+                "Minecraft {version}'s assets were not found in any launcher folder: the game \
+                 will be silent and the title screen plain"
+            ));
+            chosen.to_path_buf()
+        }
+        Err(e) => {
+            log(format!("Minecraft {version}'s assets: {e}"));
+            chosen.to_path_buf()
+        }
+    }
+}
+
 /// Checks what the preparation needs and picks how to run it. PLAY.txt describes the same
 /// steps: the player's own launcher install, the server jar from that version's own json, and
 /// Java (and Python, for versions before horizon-prepare). Also returns the Minecraft folder
@@ -1083,9 +1207,8 @@ pub fn preparer(
     let dir = version_dir(tag);
     let reused = horizon_prepare::artifacts::reuse_imported(&dir, &|line| log(line.to_string()))?;
     let chosen = minecraft.to_path_buf();
-    let minecraft = if reused {
-        minecraft.to_path_buf()
-    } else {
+    // Resolved even when the game files are reused: the assets still come from the install.
+    let minecraft = {
         let pins = read_json(&dir.join("research-lock.json"))
             .and_then(|lock| sources::Pins::read(&lock))
             .ok_or("The version's research-lock.json doesn't pin the Minecraft files")?;
@@ -1105,12 +1228,17 @@ pub fn preparer(
             Ok(body)
         };
         let linked = data_dir().join("linked-minecraft");
-        match sources::resolve(minecraft, &pins, &known, &linked, &fetch, log)? {
-            sources::Resolved::Folder(dir) => dir,
-            sources::Resolved::NotFound(checked) => {
-                let not_found = sources::not_found(&version, &checked, minecraft);
-                download_for_owner(&pins, &own, &fetch, log).map_err(|e| not_found + &e)?;
-                own
+        let resolved = sources::resolve(minecraft, &pins, &known, &linked, &fetch, log);
+        if reused {
+            assets_folder(resolved, &chosen, &version, log)
+        } else {
+            match resolved? {
+                sources::Resolved::Folder(dir) => dir,
+                sources::Resolved::NotFound(checked) => {
+                    let not_found = sources::not_found(&version, &checked, minecraft);
+                    download_for_owner(&pins, &own, &fetch, log).map_err(|e| not_found + &e)?;
+                    own
+                }
             }
         }
     };
@@ -1171,14 +1299,12 @@ pub fn preparer(
                 import: !reused,
                 minecraft_dir: Some(minecraft.clone()),
                 server_jar: (!reused).then_some(jar),
-                java_home: java_home.clone(),
+                java_home: Some(java_home.clone()),
             };
             return Ok((Preparer::InProcess(options), minecraft));
         }
         let mut cmd = Command::new(binary);
-        if let Some(home) = &java_home {
-            with_java(&mut cmd, home);
-        }
+        with_java(&mut cmd, &java_home);
         cmd.current_dir(&dir).arg("--root").arg(&dir);
         if !reused {
             cmd.args(["--prepare", "--server-jar"]).arg(&jar);
@@ -1187,9 +1313,7 @@ pub fn preparer(
         return Ok((Preparer::Process(cmd), minecraft));
     }
     let mut cmd = Command::new(python.unwrap());
-    if let Some(home) = &java_home {
-        with_java(&mut cmd, home);
-    }
+    with_java(&mut cmd, &java_home);
     cmd.current_dir(&dir)
         .args(["-u", "tools/prepare_native_client.py"]);
     if !reused {
@@ -1209,14 +1333,14 @@ pub fn sounds(tag: &str, minecraft: &Path, log: &dyn Fn(String)) {
     let own = horizon_prepare::sources_sha256(&dir.join(PREPARER_CRATE)).as_deref()
         == Some(horizon_prepare::SOURCES_SHA256);
     let binary = preparer_binary(&dir).filter(|binary| {
-        !own && Command::new(binary)
+        !own && crate::process::command(binary)
             .arg("--help")
             .output()
             .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("horizon-prepare sounds"))
     });
     log("Copying the sounds from your Minecraft install".into());
     let result = match binary {
-        Some(binary) => Command::new(binary)
+        Some(binary) => crate::process::command(binary)
             .current_dir(&dir)
             .arg("sounds")
             .arg("--root")
@@ -1494,7 +1618,7 @@ pub fn append_game_args(cmd: &mut Command) {
 pub fn client_command(tag: &str) -> Command {
     let home = game_home();
     let _ = fs::create_dir_all(&home);
-    let mut cmd = Command::new(version_dir(tag).join(CLIENT));
+    let mut cmd = Command::new(client_program(tag));
     cmd.current_dir(home).arg("--resources").arg(resources(tag));
     // PipeWire remembers volume and mute per application name. The game's own name is
     // "PipeWire ALSA [horizon-client]", shared with development and test runs, where
@@ -1506,6 +1630,18 @@ pub fn client_command(tag: &str) -> Command {
         );
     }
     cmd
+}
+
+/// The game's program: on macOS the one inside the version's Horizon.app, so the Dock and Cmd+Tab
+/// show Horizon's name and icon (game_app.rs); the bare binary elsewhere, or if that fails.
+fn client_program(tag: &str) -> PathBuf {
+    let dir = version_dir(tag);
+    #[cfg(target_os = "macos")]
+    match crate::game_app::ensure(&dir) {
+        Ok(program) => return program,
+        Err(e) => eprintln!("Starting the game outside {}: {e}", crate::game_app::APP),
+    }
+    dir.join(CLIENT)
 }
 
 pub fn server_command(tag: &str, folder: &Path) -> Command {
@@ -1593,6 +1729,8 @@ pub fn need_prepared(tag: &str) -> Result<(), String> {
 /// The client's command, once its resources are prepared.
 pub fn client(tag: &str) -> Result<Command, String> {
     need_prepared(tag)?;
+    complete_assets(tag);
+    crate::browser::horizon::before_play(&game_home());
     let mut cmd = client_command(tag);
     // A sign-in that can't be renewed (no network, expired) still lets the game start, offline.
     if let Err(e) = crate::account::attach_session(&mut cmd, &game_home()) {
@@ -1745,17 +1883,10 @@ fn launcher_update_from(releases: &[Release], own: &str) -> Option<Release> {
 pub fn releases_and_updates(
     on_releases: impl FnOnce(Result<Vec<Release>, String>),
 ) -> Result<Updates, String> {
-    releases_and_updates_with(
-        Settings::load().update_channel,
-        release_list,
-        installed,
-        launcher_releases_in,
-        on_releases,
-    )
+    releases_and_updates_with(release_list, installed, launcher_releases_in, on_releases)
 }
 
 fn releases_and_updates_with(
-    update_channel: UpdateChannel,
     load: impl FnOnce() -> Result<serde_json::Value, String>,
     installed: impl FnOnce() -> Vec<String>,
     launchers: impl FnOnce(&serde_json::Value) -> Vec<Release>,
@@ -1769,7 +1900,7 @@ fn releases_and_updates_with(
         }
     };
     let releases = parse_releases(&list, ASSET, is_game_tag);
-    let horizon = horizon_update(&channel(&releases, update_channel), &installed());
+    let horizon = horizon_update(&installable_updates(&releases), &installed());
     on_releases(Ok(releases));
     Ok(Updates {
         horizon,
@@ -1791,15 +1922,14 @@ pub fn select_after_update(selected: Option<&str>, installed_before: &[String]) 
     }
 }
 
-/// Installs `tag` (or with "latest" the newest release of the player's channel), then updates the selection as
+/// Installs `tag` (or with "latest" the newest release, pre-releases left out), then updates the selection as
 /// `select_after_update` says when `as_update`, or always selects it otherwise.
 pub fn install_tag(tag: &str, as_update: bool, progress: impl Fn(f32)) -> Result<String, String> {
     let releases = releases()?;
     let release = if tag == "latest" {
-        let update_channel = Settings::load().update_channel;
         releases
             .iter()
-            .find(|r| r.asset.is_some() && update_channel.takes(r))
+            .find(|r| r.asset.is_some() && !r.prerelease)
             .ok_or("No release has a build for this platform yet.")?
     } else {
         releases
@@ -1842,16 +1972,10 @@ fn parse_version_output(out: &str) -> Option<&str> {
 /// The version of the launcher binary now at `path`, which is not this process's once another
 /// update (the command line, another window) has replaced the file.
 fn installed_launcher_version(path: &Path) -> Option<String> {
-    let mut cmd = Command::new(path);
+    let mut cmd = crate::process::command(path);
     cmd.arg("--version")
         .stdin(Stdio::null())
         .stderr(Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
     let out = cmd.output().ok()?;
     parse_version_output(&String::from_utf8_lossy(&out.stdout)).map(String::from)
 }
@@ -2146,6 +2270,8 @@ pub enum Msg {
     Links(Links),
     Progress(String, f32),
     Installed(String, Result<(), String>),
+    /// A version's files are gone (or could not be deleted).
+    Removed(String, Result<(), String>),
     Line(Job, String),
     Exit(Job, Result<(), String>),
     Updates(Result<Updates, String>),
@@ -2185,6 +2311,7 @@ impl Running {
 }
 
 pub fn spawn(job: Job, mut cmd: Command, tx: Sender<Msg>) -> Result<Running, String> {
+    crate::process::hide_console(&mut cmd);
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -2262,10 +2389,6 @@ pub struct Settings {
     /// default. Appended after the launcher's own arguments, so they can add to or override them.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub game_args: String,
-    /// Which releases install by themselves: Stable by default. Launchers before 0.2 had a "Beta
-    /// builds" switch instead; [`Settings::parse`] reads its `beta_builds: true` as Alpha.
-    #[serde(default)]
-    pub update_channel: UpdateChannel,
     /// Dark, Light, or the system's: the launcher's look. Dark by default.
     #[serde(default)]
     pub appearance: Appearance,
@@ -2284,20 +2407,7 @@ impl Settings {
             return Self::default();
         };
         if let Some(fields) = value.as_object_mut() {
-            // The switch from before 0.2: on meant every release at once, the Alpha channel.
-            if fields.remove("beta_builds") == Some(serde_json::Value::Bool(true)) {
-                fields
-                    .entry("update_channel")
-                    .or_insert_with(|| UpdateChannel::Alpha.name().into());
-            }
-            // A channel this launcher doesn't know is Stable, not a reason to lose every setting.
-            if fields
-                .get("update_channel")
-                .is_some_and(|c| c.as_str().and_then(UpdateChannel::parse).is_none())
-            {
-                fields.remove("update_channel");
-            }
-            // The same for an appearance from a newer launcher.
+            // An appearance from a newer launcher is Dark, not a reason to lose every setting.
             if fields
                 .get("appearance")
                 .is_some_and(|a| serde_json::from_value::<Appearance>(a.clone()).is_err())
@@ -2329,9 +2439,60 @@ impl Settings {
 mod release_loading_tests;
 
 #[cfg(test)]
+#[path = "backend/java_tests.rs"]
+mod java_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::cmp::Ordering::*;
+
+    /// A preparation that reuses the imported game files still reads the assets from the
+    /// launcher that has them: a Prism Launcher instance's are in the launcher root, linked into
+    /// the official layout (jan.sonki on Discord: silent, grey title screen since 0.2.48).
+    #[test]
+    fn reused_imports_take_the_assets_from_the_launcher_that_has_them() {
+        let dir =
+            std::env::temp_dir().join(format!("horizon-reused-assets-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let client = b"fake client jar";
+        let manifest = br#"{"id": "26.3"}"#;
+        let write = |path: &str, data: &[u8]| {
+            let path = dir.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, data).unwrap();
+        };
+        let prism = "PrismLauncher";
+        write(
+            &format!("{prism}/libraries/com/mojang/minecraft/26.3/minecraft-26.3-client.jar"),
+            client,
+        );
+        write(&format!("{prism}/assets/indexes/34.json"), b"{}");
+        let instance = dir.join(prism).join("instances/26.3/minecraft");
+        fs::create_dir_all(&instance).unwrap();
+        let pins = sources::Pins::read(&serde_json::json!({ "minecraft": {
+            "version": "26.3",
+            "client_sha1": sources::sha1_hex(client),
+            "manifest_sha1": sources::sha1_hex(manifest),
+        }}))
+        .unwrap();
+        let linked = dir.join("linked");
+        let fetch = |_: &str| Ok(manifest.to_vec());
+        let lines = std::cell::RefCell::new(Vec::new());
+        let log = |line: String| lines.borrow_mut().push(line);
+        let resolved = sources::resolve(&instance, &pins, &[], &linked, &fetch, &log);
+        let folder = assets_folder(resolved, &instance, "26.3", &log);
+        assert_eq!(folder, linked);
+        assert!(folder.join("assets/indexes/34.json").is_file());
+
+        // Nothing found: the chosen folder, and a line saying what the game will lack.
+        let empty = dir.join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        let resolved = sources::resolve(&empty, &pins, &[], &linked, &fetch, &log);
+        assert_eq!(assets_folder(resolved, &empty, "26.3", &log), empty);
+        assert!(lines.borrow().last().unwrap().contains("will be silent"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn resources_without_sounds_are_reported() {
@@ -2517,41 +2678,35 @@ mod tests {
         assert_eq!(offered(&["v2026.10.15.1", "v2026.10.14"]), None);
     }
 
-    /// Betas (GitHub pre-releases) install by themselves only on the Alpha channel; Stable waits
-    /// for promote.yml's daily promotion (docs/release-flow.md, "Channels").
+    /// Every release is published as the release, and launchers update to it. The pre-releases
+    /// of the old Alpha channel (v0.2.1 on) are only installed by hand: a launcher that
+    /// had one installed waits for the next release instead of going back.
     #[test]
-    fn updates_follow_the_stable_channel_unless_alpha_is_picked() {
+    fn updates_follow_every_release_and_leave_the_old_alpha_ones_out() {
         let asset = ASSET.unwrap_or("horizon-linux-x86_64.tar.gz");
         let list = serde_json::json!([
-            {"tag_name": "v2026.10.19.02", "prerelease": true, "assets": [{"name": asset, "browser_download_url": "b", "size": 1}]},
-            {"tag_name": "v2026.10.19.01", "assets": [{"name": asset, "browser_download_url": "s", "size": 1}]},
+            {"tag_name": "v0.2.13", "assets": [{"name": asset, "browser_download_url": "n", "size": 1}]},
+            {"tag_name": "v0.2.12", "prerelease": true, "assets": [{"name": asset, "browser_download_url": "a", "size": 1}]},
+            {"tag_name": "v0.2.0", "assets": [{"name": asset, "browser_download_url": "s", "size": 1}]},
         ]);
         let releases = parse_releases(&list, Some(asset), is_game_tag);
         assert_eq!(
-            releases.iter().map(|r| r.beta).collect::<Vec<_>>(),
-            [true, false]
+            releases.iter().map(|r| r.prerelease).collect::<Vec<_>>(),
+            [false, true, false]
         );
-        let offered = |alpha: bool, installed: &[&str]| {
+        let offered = |releases: &[Release], installed: &[&str]| {
             let installed: Vec<String> = installed.iter().map(|t| t.to_string()).collect();
-            let on = if alpha {
-                UpdateChannel::Alpha
-            } else {
-                UpdateChannel::Stable
-            };
-            horizon_update(&channel(&releases, on), &installed).map(|r| r.tag)
+            horizon_update(&installable_updates(releases), &installed).map(|r| r.tag)
         };
-        assert_eq!(offered(false, &[]), Some("v2026.10.19.01".into()));
-        assert_eq!(
-            offered(true, &["v2026.10.19.01"]),
-            Some("v2026.10.19.02".into())
-        );
-        assert_eq!(offered(false, &["v2026.10.19.01"]), None);
-        // A beta installed earlier is never "updated" to an older stable build.
-        assert_eq!(offered(false, &["v2026.10.19.02"]), None);
-        assert_eq!(
-            releases.iter().map(UpdateChannel::of).collect::<Vec<_>>(),
-            [UpdateChannel::Alpha, UpdateChannel::Stable]
-        );
+        assert_eq!(offered(&releases, &[]), Some("v0.2.13".into()));
+        assert_eq!(offered(&releases, &["v0.2.0"]), Some("v0.2.13".into()));
+        assert_eq!(offered(&releases, &["v0.2.12"]), Some("v0.2.13".into()));
+        assert_eq!(offered(&releases, &["v0.2.13"]), None);
+        // Before the first release of the single channel: the old Alpha one stays where it is.
+        let before = &releases[1..];
+        assert_eq!(offered(before, &["v0.2.0"]), None);
+        assert_eq!(offered(before, &["v0.2.12", "v0.2.0"]), None);
+        assert_eq!(CHECK_EVERY.as_secs(), 30 * 60);
     }
 
     #[test]
@@ -2573,48 +2728,20 @@ mod tests {
     }
 
     #[test]
-    fn the_update_channel_is_stored_by_name_and_the_old_beta_switch_reads_as_alpha() {
-        let read = |text: &str| Settings::parse(text).update_channel;
-        assert_eq!(read(""), UpdateChannel::Stable);
-        assert_eq!(read("{}"), UpdateChannel::Stable);
-        assert_eq!(
-            read(r#"{"update_channel": "stable"}"#),
-            UpdateChannel::Stable
-        );
-        assert_eq!(read(r#"{"update_channel": "alpha"}"#), UpdateChannel::Alpha);
-        // The channel's first name, from launchers built while it was called Nightly.
-        assert_eq!(
-            read(r#"{"update_channel": "nightly"}"#),
-            UpdateChannel::Alpha
-        );
-        assert_eq!(UpdateChannel::parse("nightly"), Some(UpdateChannel::Alpha));
-        // Launchers before 0.2: "Beta builds" on is Alpha, off is Stable.
-        assert_eq!(read(r#"{"beta_builds": true}"#), UpdateChannel::Alpha);
-        assert_eq!(read(r#"{"beta_builds": false}"#), UpdateChannel::Stable);
-        // Once a channel is picked, it wins over a switch left behind.
-        let both = r#"{"beta_builds": true, "update_channel": "stable"}"#;
-        assert_eq!(read(both), UpdateChannel::Stable);
-        // An unknown channel is Stable, and the rest of the settings survive it.
-        let odd =
-            Settings::parse(r#"{"update_channel": "beta", "game_args": "--x", "beta_builds": 1}"#);
-        assert_eq!(odd.update_channel, UpdateChannel::Stable);
-        assert_eq!(odd.game_args, "--x");
-        // Saved as a name, without the old switch.
-        let mut settings = Settings::parse(r#"{"selected": "v0.2.0", "beta_builds": true}"#);
-        let saved = serde_json::to_value(&settings).unwrap();
-        assert_eq!(saved["update_channel"], "alpha");
-        assert!(saved.get("beta_builds").is_none());
-        assert_eq!(saved["selected"], "v0.2.0");
-        settings.update_channel = UpdateChannel::Stable;
-        let text = serde_json::to_string(&settings).unwrap();
-        assert_eq!(read(&text), UpdateChannel::Stable);
-        for c in [UpdateChannel::Stable, UpdateChannel::Alpha] {
-            assert_eq!(UpdateChannel::parse(c.name()), Some(c));
+    fn the_old_update_channel_settings_are_dropped_and_the_rest_kept() {
+        for old in [
+            r#"{"update_channel": "alpha", "game_args": "--x", "selected": "v0.2.0"}"#,
+            r#"{"update_channel": "stable", "game_args": "--x", "selected": "v0.2.0"}"#,
+            r#"{"beta_builds": true, "game_args": "--x", "selected": "v0.2.0"}"#,
+            r#"{"beta_builds": false, "update_channel": "nightly", "game_args": "--x", "selected": "v0.2.0"}"#,
+        ] {
+            let settings = Settings::parse(old);
+            assert_eq!(settings.game_args, "--x", "{old}");
+            assert_eq!(settings.selected.as_deref(), Some("v0.2.0"), "{old}");
+            let saved = serde_json::to_value(&settings).unwrap();
+            assert!(saved.get("update_channel").is_none(), "{old}");
+            assert!(saved.get("beta_builds").is_none(), "{old}");
         }
-        // An open launcher looks again every 4 hours on Stable, every 30 minutes on Alpha.
-        let minutes = |c: UpdateChannel| c.check_every().as_secs() / 60;
-        assert_eq!(minutes(UpdateChannel::Stable), 240);
-        assert_eq!(minutes(UpdateChannel::Alpha), 30);
     }
 
     #[test]
@@ -2635,7 +2762,7 @@ mod tests {
             body: String::new(),
             date: String::new(),
             asset: Some(("u".into(), 1)),
-            beta: false,
+            prerelease: false,
         };
         assert!(launcher_update(&[r(own_tag())]).is_none());
         assert_eq!(launcher_version(&own_tag()), Some(VERSION));
@@ -2675,7 +2802,7 @@ mod tests {
             body: String::new(),
             date: String::new(),
             asset: Some(("u".into(), 1)),
-            beta: false,
+            prerelease: false,
         };
         let mut list = vec![
             r("launcher-v0.16.0"),
@@ -2744,10 +2871,14 @@ mod tests {
         ]);
         let releases = parse_releases(&list, Some(asset), is_game_tag);
         let installed = ["v2026.10.19.15".to_string(), "v2026.10.12".to_string()];
-        let offered = |on| horizon_update(&channel(&releases, on), &installed).map(|r| r.tag);
-        // A beta 0.2.0 reaches launchers on Alpha; Stable ones wait for its promotion.
-        assert_eq!(offered(UpdateChannel::Alpha), Some("v0.2.0".into()));
-        assert_eq!(offered(UpdateChannel::Stable), None);
+        // A pre-release 0.2.0 is not an update; once published as the release, it is one.
+        let offered = |releases: &[Release]| {
+            horizon_update(&installable_updates(releases), &installed).map(|r| r.tag)
+        };
+        assert_eq!(offered(&releases), None);
+        let mut released = releases.clone();
+        released[0].prerelease = false;
+        assert_eq!(offered(&released), Some("v0.2.0".into()));
         let mut sorted = vec![
             "v2026.10.19.15".to_string(),
             "v0.2.1".into(),
@@ -2837,7 +2968,7 @@ mod tests {
             body: String::new(),
             date: String::new(),
             asset: Some(("u".into(), 1)),
-            beta: false,
+            prerelease: false,
         };
         let releases = [r("v2026.10.13"), r("v2026.10.12")];
         assert_eq!(
@@ -3076,6 +3207,159 @@ mod tests {
             .collect();
         assert!(left.is_empty());
         let _ = fs::remove_dir_all(&versions);
+    }
+
+    #[test]
+    fn prepared_versions_get_what_the_asset_store_adds_without_preparing_again() {
+        let dir = std::env::temp_dir().join(format!(
+            "horizon-launcher-packs-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        let (versions, store, empty) = (dir.join("versions"), dir.join("store"), dir.join("none"));
+        let write = |path: PathBuf, data: &[u8]| {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, data).unwrap();
+        };
+        // An official launcher folder whose asset store holds the two packs, a panorama (fake
+        // 2x2 PNG headers), Unifont, a language and the sound list.
+        let background = "minecraft/textures/gui/title/background";
+        let png = |n: u8| {
+            let mut data = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR\0\0\0\x02\0\0\0\x02".to_vec();
+            data.push(n);
+            data
+        };
+        let mut assets: Vec<(String, Vec<u8>)> = horizon_prepare::BUILT_IN_PACKS
+            .iter()
+            .map(|name| (name.to_string(), name.as_bytes().to_vec()))
+            .collect();
+        for face in ["0", "1", "2", "3", "4", "5", "overlay"] {
+            assets.push((
+                format!("{background}/panorama_{face}.png"),
+                png(face.as_bytes()[0]),
+            ));
+        }
+        for name in [
+            "minecraft/font/include/unifont.json",
+            "minecraft/font/unifont.zip",
+            "pack.mcmeta",
+            "minecraft/lang/fr_fr.json",
+            "minecraft/sounds.json",
+        ] {
+            assets.push((name.into(), format!("{{\"{name}\": 1}}").into_bytes()));
+        }
+        let mut index = serde_json::Map::new();
+        for (name, data) in &assets {
+            let hash = sources::sha1_hex(data);
+            write(
+                store.join("assets/objects").join(&hash[..2]).join(&hash),
+                data,
+            );
+            index.insert(
+                name.clone(),
+                serde_json::json!({"hash": hash, "size": data.len()}),
+            );
+        }
+        let index = serde_json::json!({ "objects": index }).to_string();
+        write(store.join("assets/indexes/7.json"), index.as_bytes());
+        let manifest = serde_json::json!({
+            "id": "9.9",
+            "assetIndex": {"id": "7", "sha1": sources::sha1_hex(index.as_bytes())},
+            "downloads": {"client": {"sha1": "c"}, "server": {"sha1": "s"}},
+            "javaVersion": {"majorVersion": 25},
+        })
+        .to_string();
+        write(store.join("versions/9.9/9.9.json"), manifest.as_bytes());
+        fs::create_dir_all(&empty).unwrap();
+        // The client jar's 1x1 placeholder.
+        let placeholder = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR\0\0\0\x01\0\0\0\x01";
+        let release = |tag: &str, prepared: bool| {
+            let root = versions.join(tag);
+            write(root.join(COMPLETE), b"");
+            let lock = serde_json::json!({"minecraft": {"version": "9.9", "java_major": 25,
+                "client_sha1": "c", "server_sha1": "s", "manifest_sha1": sources::sha1_hex(manifest.as_bytes())}});
+            write(root.join("research-lock.json"), lock.to_string().as_bytes());
+            if prepared {
+                let resources = resources_at(&root);
+                write(resources.join(RESOURCES_MANIFEST), b"{}");
+                write(resources.join("assets/minecraft/lang/en_us.json"), b"{}");
+                write(
+                    resources
+                        .join("assets")
+                        .join(background)
+                        .join("panorama_0.png"),
+                    placeholder,
+                );
+            }
+        };
+        let lines = std::cell::RefCell::new(Vec::new());
+        let log = |line: String| lines.borrow_mut().push(line);
+        let asset = |tag: &str, name: &str| {
+            fs::read(resources_at(&versions.join(tag)).join("assets").join(name)).ok()
+        };
+
+        // Resources prepared without any of them: a folder without an asset store is skipped.
+        release("v0.2.1", true);
+        complete_assets_in(
+            &versions,
+            "v0.2.1",
+            || vec![empty.clone(), store.clone()],
+            &log,
+        );
+        assert_eq!(
+            *lines.borrow(),
+            [
+                "Built-in pack assets ready: 2 files, 0.0 MB",
+                "Panorama assets ready: 7 files, 0.0 MB",
+                "Font assets ready: 2 files, 0.0 MB",
+                "Language assets ready: 2 files, 0.0 MB",
+                "Sound assets ready: 1 files, 0.0 MB",
+            ]
+        );
+        for (name, data) in &assets {
+            assert_eq!(asset("v0.2.1", name).as_ref(), Some(data), "{name}");
+        }
+        // Nothing else is prepared again.
+        let resources = resources_at(&versions.join("v0.2.1"));
+        assert_eq!(fs::read(resources.join(RESOURCES_MANIFEST)).unwrap(), b"{}");
+
+        // No asset store anywhere: one line each, the version stays prepared, and no second try.
+        lines.borrow_mut().clear();
+        release("v0.2.2", true);
+        complete_assets_in(&versions, "v0.2.2", || vec![empty.clone()], &log);
+        complete_assets_in(&versions, "v0.2.2", || vec![empty.clone()], &log);
+        let what = lines
+            .borrow()
+            .iter()
+            .map(|line| line.split(" not added: ").next().unwrap().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            what,
+            [
+                "v0.2.2: Programmer Art and High Contrast",
+                "v0.2.2: The title panorama",
+                "v0.2.2: The Unifont glyphs",
+                "v0.2.2: The languages",
+                "v0.2.2: The sounds",
+            ]
+        );
+        assert!(resources_at(&versions.join("v0.2.2"))
+            .join(RESOURCES_MANIFEST)
+            .exists());
+        assert_eq!(
+            asset("v0.2.2", &format!("{background}/panorama_0.png")).as_deref(),
+            Some(&placeholder[..])
+        );
+
+        // Not prepared, or complete: nothing to do, without even looking for a Minecraft folder.
+        lines.borrow_mut().clear();
+        release("v0.2.3", false);
+        let unasked = || -> Vec<PathBuf> { unreachable!("no folder is needed") };
+        complete_assets_in(&versions, "v0.2.3", unasked, &log);
+        complete_assets_in(&versions, "v0.2.1", unasked, &log);
+        assert!(lines.borrow().is_empty());
+        assert!(!resources_at(&versions.join("v0.2.3")).exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

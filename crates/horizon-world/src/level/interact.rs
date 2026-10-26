@@ -543,6 +543,33 @@ impl Behaviours {
         self.sim(level, ticks)
             .use_without_item(pos, face, hit, player)
     }
+    /// `DoorBlock.setOpen`: a mob opens or closes the door at `pos` (either half), with its sound
+    /// and game event. False when it is no door or already so.
+    pub fn set_door_open<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        open: bool,
+    ) -> bool {
+        let state = level.block_state(pos);
+        if !self.data(state).is(Class::Door) || self.table.bool(state, self.props.open) == open {
+            return false;
+        }
+        let mut sim = self.sim(level, ticks);
+        let next = self.table.set_bool(state, self.props.open, open);
+        sim.set_block(pos, next, 10);
+        sim.door_sound(pos, next, open);
+        sim.game_event(
+            pos,
+            if open {
+                "minecraft:block_open"
+            } else {
+                "minecraft:block_close"
+            },
+        );
+        true
+    }
     /// `BlockState.useItemOn` with `item` in the main hand, then, when the
     /// block asks to try with an empty hand (the default), `useWithoutItem`.
     /// `SweetBerryBushBlock.useItemOn` passes bone meal on a bush that can

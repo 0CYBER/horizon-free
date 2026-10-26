@@ -1,12 +1,15 @@
 //! Horizon launcher: installs Horizon builds, prepares them from the player's own Minecraft,
 //! and starts the client or a dedicated server.
 
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 mod agents_page;
 mod art;
 mod blocks;
 mod cli;
 mod cli_tools;
 mod collection;
+mod console;
 mod cull;
 mod game_tools;
 mod internet;
@@ -19,12 +22,13 @@ mod perf;
 mod scrollbar;
 mod servers_page;
 mod theme;
+mod titlebar;
 
 use gpui::{
-    div, ease_out_quint, prelude::*, px, relative, size, Animation, AnimationExt, AnyElement, App,
-    Application, Bounds, ClickEvent, Context, Div, ElementId, FocusHandle, FontWeight, Hsla,
-    KeyDownEvent, PathPromptOptions, SharedString, Stateful, Subscription, TitlebarOptions, Window,
-    WindowBounds, WindowOptions,
+    actions, div, ease_out_quint, prelude::*, px, relative, size, Animation, AnimationExt,
+    AnyElement, App, Application, Bounds, ClickEvent, Context, Div, ElementId, FocusHandle,
+    FontWeight, Hsla, KeyBinding, KeyDownEvent, Menu, MenuItem, PathPromptOptions, SharedString,
+    Stateful, Subscription, Window, WindowBounds, WindowOptions,
 };
 use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
@@ -42,7 +46,7 @@ use theme::Theme;
 enum Page {
     Play,
     Versions,
-    /// Mods, resource and shader packs, and modpacks (imported ones and the browser's).
+    /// Mods, resource packs and modpacks (imported ones and the browser's).
     Mods,
     Servers,
     Notes,
@@ -140,6 +144,9 @@ struct Launcher {
     releases: Load<Vec<Release>>,
     installed: Vec<String>,
     installing: Option<(String, f32)>,
+    /// The version being deleted on a background thread. It is already out of `installed`, so
+    /// nothing can launch, select or prepare it, and its row can't install or remove it again.
+    removing: Option<String>,
     install_error: Option<(String, String)>,
     confirm_remove: Option<String>,
     picker_open: bool,
@@ -198,6 +205,8 @@ struct Launcher {
     /// The Modpacks page: the imported packs (read when the page first opens), the one shown,
     /// the report's filter, and the pipeline step running now with its log.
     packs: Vec<horizon_launcher::modpacks::Imported>,
+    /// Modpacks installed from Horizon's registry, each its own profile.
+    registry_packs: Vec<horizon_launcher::browser::horizon::pack::Installed>,
     packs_loaded: Option<Instant>,
     pack_open: Option<String>,
     pack_filter: Option<horizon_port_pack::report::Status>,
@@ -238,15 +247,16 @@ impl Launcher {
         if settings.minecraft_dir.is_none() {
             settings.minecraft_dir = backend::default_minecraft_dir();
         }
-        // Release builds on Linux keep their entry in the applications menu up to date (a moved
-        // binary changes it); `HORIZON_LAUNCHER_DESKTOP_ENTRY=1` does it in a development build.
+        // Release builds on Linux put their entry back in the applications menu when there is
+        // none or it starts a program that is gone (a moved or deleted binary), never over one
+        // that works; `HORIZON_LAUNCHER_DESKTOP_ENTRY=1` does it in a development build.
         if cfg!(target_os = "linux")
             && settings.desktop_entry()
             && (!cfg!(debug_assertions)
                 || std::env::var_os("HORIZON_LAUNCHER_DESKTOP_ENTRY").is_some())
         {
             std::thread::spawn(|| {
-                let _ = horizon_launcher::desktop::install(backend::exe_path());
+                let _ = horizon_launcher::desktop::repair(backend::exe_path());
             });
         }
         let installed = backend::installed();
@@ -257,6 +267,9 @@ impl Launcher {
         {
             settings.selected = installed.first().cloned();
         }
+        // Pin the window's chrome (macOS title bar) to the choice before the theme reads
+        // `window.appearance()`, so both draw the same look.
+        titlebar::apply_appearance(window, settings.appearance);
         let mut this = Self {
             theme: Theme::for_appearance(settings.appearance, window.appearance()),
             page: Page::from_env(),
@@ -281,6 +294,7 @@ impl Launcher {
             releases: Load::Loading,
             installed,
             installing: None,
+            removing: None,
             install_error: None,
             confirm_remove: None,
             picker_open: false,
@@ -321,6 +335,7 @@ impl Launcher {
             play_pressed: None,
             bench: perf::Bench::from_env(),
             packs: Vec::new(),
+            registry_packs: Vec::new(),
             packs_loaded: None,
             pack_open: None,
             pack_filter: None,
@@ -365,6 +380,9 @@ impl Launcher {
             self.switches += 1;
             self.content_scroll = Scrollbar::default();
             self.long_list = cull::Cull::default();
+            if page == Page::Mods {
+                self.mods.reset_lists();
+            }
         }
         self.picker_open = false;
     }
@@ -407,7 +425,7 @@ impl Launcher {
         let Some(release) = self.updates.horizon.clone() else {
             return;
         };
-        if self.installing.is_some() {
+        if self.installing.is_some() || self.removing.as_ref() == Some(&release.tag) {
             return;
         }
         let select =
@@ -534,6 +552,17 @@ impl Launcher {
                         Err(e) => self.install_error = Some((tag, e)),
                     }
                 }
+                Msg::Removed(tag, result) => {
+                    if self.removing.as_ref() == Some(&tag) {
+                        self.removing = None;
+                    }
+                    self.installed = backend::installed();
+                    self.settings.selected =
+                        selection_after_removal(&self.installed, Settings::load().selected);
+                    if let Err(e) = result {
+                        self.install_error = Some((tag, e));
+                    }
+                }
                 Msg::Updates(Ok(updates)) => {
                     self.update_error = None;
                     self.updates = updates;
@@ -658,8 +687,10 @@ impl Launcher {
                 changed = true;
             }
         }
-        let every = self.settings.update_channel.check_every();
-        if self.checked.is_some_and(|at| at.elapsed() > every) {
+        if self
+            .checked
+            .is_some_and(|at| at.elapsed() > backend::CHECK_EVERY)
+        {
             self.check_updates();
         }
         if changed {
@@ -696,7 +727,7 @@ impl Launcher {
     }
 
     fn install(&mut self, release: &Release) {
-        if release.asset.is_none() {
+        if release.asset.is_none() || self.removing.as_ref() == Some(&release.tag) {
             return;
         }
         let (release, tx) = (release.clone(), self.tx.clone());
@@ -714,15 +745,26 @@ impl Launcher {
         });
     }
 
+    /// Deletes an installed version on a background thread: a version is thousands of files and
+    /// the window must keep drawing meanwhile. `Msg::Removed` ends it.
     fn remove(&mut self, tag: &str) {
-        if let Err(e) = backend::remove_version(tag) {
-            self.install_error = Some((tag.to_string(), e));
-        }
         self.confirm_remove = None;
-        self.installed = backend::installed();
-        self.settings.selected = Settings::load()
-            .selected
-            .or_else(|| self.installed.first().cloned());
+        if self.removing.is_some()
+            || self.installing.as_ref().is_some_and(|(t, _)| t == tag)
+            || !self.installed.iter().any(|t| t == tag)
+        {
+            return;
+        }
+        self.install_error = None;
+        self.removing = Some(tag.to_string());
+        self.installed.retain(|t| t != tag);
+        self.settings.selected =
+            selection_after_removal(&self.installed, self.settings.selected.take());
+        let (tag, tx) = (tag.to_string(), self.tx.clone());
+        std::thread::spawn(move || {
+            let result = backend::remove_version(&tag);
+            let _ = tx.send(Msg::Removed(tag, result));
+        });
     }
 
     fn prepare(&mut self) {
@@ -789,12 +831,14 @@ impl Launcher {
         // A little earlier than the spawn: file times can be coarse.
         self.client_started =
             Some(std::time::SystemTime::now() - std::time::Duration::from_secs(2));
-        // The session (a network round trip when the token needs renewing) comes first;
-        // `drain` starts the game when it arrives.
-        self.starting_client = Some(tag);
+        // What the resources lack (built-in packs, panorama, sounds) and the session (a network
+        // round trip when the token needs renewing) come first; `drain` starts the game when the
+        // session arrives.
+        self.starting_client = Some(tag.clone());
         self.play_pressed = Some(Instant::now());
         let tx = self.tx.clone();
         std::thread::spawn(move || {
+            backend::complete_assets(&tag);
             let session = (|| {
                 let mut accounts = Accounts::load();
                 let Some((a, secrets)) = account::session_for_launch(
@@ -1147,6 +1191,14 @@ fn segments<T: Copy + PartialEq + 'static>(
         }))
 }
 
+/// The selected version once one has been removed: the saved choice if it is still installed,
+/// else the newest left.
+fn selection_after_removal(installed: &[String], saved: Option<String>) -> Option<String> {
+    saved
+        .filter(|s| installed.contains(s))
+        .or_else(|| installed.first().cloned())
+}
+
 fn disabled(b: Stateful<Div>) -> Stateful<Div> {
     b.opacity(theme::DISABLED).cursor_default().tab_stop(false)
 }
@@ -1309,11 +1361,11 @@ fn megabytes(bytes: u64) -> String {
 // ----- Pages -------------------------------------------------------------------------------------
 
 impl Launcher {
-    /// The top bar: the mark and the name over the sidebar, the pages with their icons, then
-    /// the account playing and the Settings button.
+    /// The top bar: the mark and the name over the sidebar (in the title bar on Windows), the
+    /// pages with their icons, then the account playing and the Settings button.
     fn topbar(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
-        let mut nav = div().flex().h_full().gap(px(2.));
+        let mut nav = div().flex().flex_none().h_full().gap(px(2.));
         for (page, label, icon) in Page::ALL {
             if page == Page::Settings {
                 continue;
@@ -1368,6 +1420,8 @@ impl Launcher {
         let account = keyboard(div().id("account"), &t)
             .relative()
             .flex()
+            .min_w_0()
+            .max_w(px(180.))
             .items_center()
             .gap(px(10.))
             .h(px(40.))
@@ -1391,8 +1445,10 @@ impl Launcher {
                 div()
                     .flex()
                     .flex_col()
+                    .min_w_0()
                     .child(
                         blocks::pixel(14., FontWeight::MEDIUM)
+                            .truncate()
                             .text_color(t.ink)
                             .child(name),
                     )
@@ -1444,25 +1500,29 @@ impl Launcher {
             .bg(t.side)
             .border_b_2()
             .border_color(t.outline)
-            .child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .gap(px(10.))
-                    .w(px(theme::SIDEBAR - 18.))
-                    .child(mark(24., &t))
-                    .child(
-                        blocks::pixel(20., FontWeight::SEMIBOLD)
-                            .text_color(t.ink)
-                            .child("HORIZON"),
-                    ),
-            )
+            // Where the title bar is drawn here (Windows), it carries the mark and the name.
+            .when(!titlebar::DRAWN, |bar| {
+                bar.child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap(px(10.))
+                        .w(px(theme::SIDEBAR - 18.))
+                        .child(mark(24., &t))
+                        .child(
+                            blocks::pixel(20., FontWeight::SEMIBOLD)
+                                .text_color(t.ink)
+                                .child("HORIZON"),
+                        ),
+                )
+            })
             .child(nav)
             .child(
                 div()
                     .ml_auto()
                     .flex()
+                    .flex_none()
                     .items_center()
                     .gap(px(8.))
                     .child(account)
@@ -1698,14 +1758,10 @@ impl Launcher {
             ));
         }
         foot = foot.child(
-            caps(format!(
-                "Launcher {}  ·  {}",
-                backend::VERSION,
-                self.settings.update_channel.label()
-            ))
-            .px(px(8.))
-            .pt(px(6.))
-            .text_color(t.muted),
+            caps(format!("Launcher {}", backend::VERSION))
+                .px(px(8.))
+                .pt(px(6.))
+                .text_color(t.muted),
         );
         div()
             .id("sidebar")
@@ -1835,7 +1891,7 @@ impl Launcher {
         wrap
     }
 
-    fn play_page(&mut self, cx: &mut Context<Self>) -> Div {
+    fn play_page(&mut self, banner_width: f32, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let Some(tag) = self.selected().cloned() else {
             // No hero without a version: the page starts below the top bar like the others.
@@ -1994,7 +2050,7 @@ impl Launcher {
 
         // The banner: Horizon's landscape (`art.rs`) under a veil of the page colour, the hero and
         // the Play row over it. It reaches the content's edges and the top bar.
-        let scene = self.art.scene(t.dark, self.scale);
+        let (scene, scene_width) = self.art.scene(t.dark, self.scale, banner_width);
         let veil = |angle: f32, from: f32, to: f32, at: f32| {
             div()
                 .absolute()
@@ -2007,15 +2063,14 @@ impl Launcher {
                     gpui::linear_color_stop(t.page.opacity(to), at),
                 ))
         };
-        let (w, h) = art::SCENE_SIZE;
         let banner = div()
             .relative()
             .flex()
             .flex_col()
             .justify_end()
             .min_h(px(340.))
-            .mx(px(-32.))
-            .px(px(32.))
+            .mx(px(-theme::PAGE_GUTTER))
+            .px(px(theme::PAGE_GUTTER))
             .pb(px(28.))
             .gap(px(24.))
             .overflow_hidden()
@@ -2027,8 +2082,8 @@ impl Launcher {
                     .absolute()
                     .bottom_0()
                     .left_0()
-                    .w(px(w as f32 * art::SCENE_TEXEL))
-                    .h(px(h as f32 * art::SCENE_TEXEL)),
+                    .w(px(scene_width))
+                    .h(px(art::SCENE_HEIGHT as f32 * art::SCENE_TEXEL)),
             )
             .child(veil(90., 0.82, 0., 0.62))
             .child(veil(180., 0., 0.75, 1.))
@@ -2339,25 +2394,6 @@ impl Launcher {
                 cx.notify();
             }),
         );
-        use backend::UpdateChannel::{Alpha, Stable};
-        let this = cx.entity().downgrade();
-        let update_channel = segments(
-            "update-channel",
-            &[(Stable, Stable.label()), (Alpha, Alpha.label())],
-            self.settings.update_channel,
-            &t,
-            move |picked, _, cx| {
-                let _ = this.update(cx, |this, cx| {
-                    if this.settings.update_channel != picked {
-                        this.settings.update_channel = picked;
-                        this.settings.save();
-                        // What counts as new changed: check again (and install it if that is on).
-                        this.check_updates();
-                    }
-                    cx.notify();
-                });
-            },
-        );
         let opening = switch("opening", !self.settings.skip_opening, &t).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 this.settings.skip_opening = !this.settings.skip_opening;
@@ -2453,6 +2489,7 @@ impl Launcher {
                     let _ = this.update(cx, |this, cx| {
                         this.settings.appearance = choice;
                         this.settings.save();
+                        titlebar::apply_appearance(window, choice);
                         this.theme = Theme::for_appearance(choice, window.appearance());
                         cx.notify();
                     });
@@ -2485,22 +2522,6 @@ impl Launcher {
                             "Your selected version only changes if you were playing the newest one.",
                         )),
                         Some(toggle.into_any_element()),
-                        &t,
-                    ))
-                    .child(index_row(
-                        n + 2,
-                        "Updates",
-                        Some(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .child("Stable: a tested build about once a day.")
-                                .child(
-                                    "Alpha: every change as soon as it is built, several times a day; can break.",
-                                )
-                                .into_any_element(),
-                        ),
-                        Some(update_channel.into_any_element()),
                         &t,
                     ))
                     .child(group("Launcher", "monitor"))
@@ -2936,7 +2957,7 @@ impl Launcher {
                 ))
             }
             Load::Ready(r) if r.is_empty() => return page.child(centered("No releases yet.", &t)),
-            Load::Ready(r) => r.clone(),
+            Load::Ready(r) => r,
         };
         // A hundred releases: only the rows near the screen are drawn.
         let keep = |i: usize| {
@@ -2944,6 +2965,7 @@ impl Launcher {
             self.installing.as_ref().is_some_and(|(t, _)| t == tag)
                 || self.install_error.as_ref().is_some_and(|(t, _)| t == tag)
                 || self.confirm_remove.as_ref() == Some(tag)
+                || self.removing.as_ref() == Some(tag)
         };
         let list = self.long_list.clone().column(
             &self.content_scroll.handle,
@@ -2955,8 +2977,7 @@ impl Launcher {
                 let tag = release.tag.clone();
                 let installed = self.installed.contains(&tag);
                 let selected = self.selected() == Some(&tag);
-                let channel = backend::UpdateChannel::of(&release).label();
-                let mut meta = vec![channel.to_string(), release.date.clone()];
+                let mut meta = vec![release.date.clone()];
                 if let Some((_, size)) = release.asset {
                     meta.push(megabytes(size));
                 }
@@ -2980,6 +3001,15 @@ impl Launcher {
                                 .text_color(t.muted)
                                 .child(format!("{:.0}%", p * 100.)),
                         )
+                        .into_any_element()
+                } else if self.removing.as_ref() == Some(&tag) {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .w(px(180.))
+                        .child(progress_bar(None, &t))
+                        .child(text(theme::MICRO).text_color(t.muted).child("Removing…"))
                         .into_any_element()
                 } else if installed {
                     let confirming = self.confirm_remove.as_ref() == Some(&tag);
@@ -3174,7 +3204,7 @@ impl Launcher {
                     ),
                 )
             }
-            Load::Ready(r) => r.clone(),
+            Load::Ready(r) => r,
         };
         let list = self.long_list.clone().column(
             &self.content_scroll.handle,
@@ -3287,21 +3317,23 @@ impl Render for Launcher {
         self.friend_focused = self.friend_focus.is_focused(window);
         self.mods.note_focus(window);
         self.args_focused = self.args_focus.is_focused(window);
+        let size = window.viewport_size();
+        let banner_width = f32::from(size.width) - theme::SIDEBAR - scrollbar::GUTTER;
         let content = match self.page {
-            Page::Play => self.play_page(cx),
+            Page::Play => self.play_page(banner_width, cx),
             Page::Versions => self.versions_page(cx),
             Page::Mods => self.mods_page(cx),
             Page::Servers => self.servers_page(cx),
             Page::Notes => self.notes_page(cx),
             Page::Settings => self.settings_page(cx),
         };
+        self.art.free_replaced(window);
         // The new page fades in and rises a few pixels.
         let content = div()
             .relative()
             .w_full()
             // Let the page shrink inside the padded flex row so long notices can wrap.
             .min_w_0()
-            .max_w(px(1152.))
             .child(content)
             .with_animation(
                 ElementId::named_usize("page", self.switches),
@@ -3313,7 +3345,6 @@ impl Render for Launcher {
         if self.opening.is_none() && window.focused(cx).is_none() {
             window.focus(&self.root_focus);
         }
-        let size = window.viewport_size();
         let stone = self.art.stone(t.page_rgb, t.dark, window.scale_factor());
         let topbar = self.topbar(cx);
         let sidebar = self.sidebar(cx);
@@ -3369,7 +3400,9 @@ impl Render for Launcher {
                                         .child(
                                             div()
                                                 .flex()
-                                                .px(px(32.))
+                                                .w_full()
+                                                .min_w_0()
+                                                .px(px(theme::PAGE_GUTTER))
                                                 .pt(px(if self.page == Page::Play {
                                                     0.
                                                 } else {
@@ -3447,7 +3480,13 @@ impl Render for Launcher {
                     }),
             );
         }
-        root
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .bg(t.side)
+            .children(titlebar::render(&t, window))
+            .child(root.flex_1().min_h_0())
     }
 }
 
@@ -3494,7 +3533,49 @@ impl Launcher {
     }
 }
 
+actions!(horizon_launcher, [Quit, CloseWindow]);
+
+/// What closing the last window does: stop the servers this launcher started, send the telemetry,
+/// exit. A game that is running keeps running. Cmd+Q goes through here too.
+fn shut_down(cx: &mut App) {
+    servers_page::stop_on_quit();
+    telemetry::send_before_exit();
+    cx.quit()
+}
+
+/// The macOS shortcuts: Cmd+Q quits, Cmd+W closes the window.
+#[cfg(target_os = "macos")]
+fn key_bindings() -> Vec<KeyBinding> {
+    vec![
+        KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-w", CloseWindow, None),
+    ]
+}
+
+#[cfg(not(target_os = "macos"))]
+fn key_bindings() -> Vec<KeyBinding> {
+    Vec::new()
+}
+
+/// The menu bar on macOS, where "Quit" belongs to the app menu.
+fn menus() -> Vec<Menu> {
+    vec![
+        Menu {
+            name: "Horizon Launcher".into(),
+            items: vec![MenuItem::action("Quit Horizon Launcher", Quit)],
+        },
+        Menu {
+            name: "Window".into(),
+            items: vec![MenuItem::action("Close Window", CloseWindow)],
+        },
+    ]
+}
+
 fn main() {
+    if let Err(error) = console::attach_for_cli() {
+        eprintln!("Could not restore the launcher's terminal streams: {error}");
+        std::process::exit(1);
+    }
     perf::process_started();
     backend::exe_path();
     if let Some(code) = cli::run() {
@@ -3514,33 +3595,74 @@ fn main() {
                     Cow::Borrowed(horizon_theme::fonts::PIXEL_BOLD),
                 ])
                 .expect("bundled fonts");
+            cx.bind_keys(key_bindings());
+            cx.on_action(|_: &Quit, cx| shut_down(cx));
+            // The key press is being handled inside the window, so the window can only be
+            // removed once that update has finished.
+            cx.on_action(|_: &CloseWindow, cx| {
+                cx.defer(|cx| {
+                    for window in cx.windows() {
+                        let _ = window.update(cx, |_, window, _| window.remove_window());
+                    }
+                })
+            });
+            cx.set_menus(menus());
             let bounds = Bounds::centered(None, size(px(1180.), px(760.)), cx);
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     window_min_size: Some(size(px(960.), px(600.))),
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("Horizon".into()),
-                        ..Default::default()
-                    }),
+                    titlebar: Some(titlebar::options()),
                     app_id: Some("horizon-launcher".into()),
                     ..Default::default()
                 },
                 |window, cx| cx.new(|cx| Launcher::new(window, cx)),
             )
             .expect("window");
-            cx.on_window_closed(|cx| {
-                servers_page::stop_on_quit();
-                telemetry::send_before_exit();
-                cx.quit()
-            })
-            .detach();
+            cx.on_window_closed(shut_down).detach();
             cx.activate(true);
         });
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cmd_q_quits_and_cmd_w_closes_the_window() {
+        use super::{key_bindings, CloseWindow, Quit};
+        use gpui::{Keymap, Keystroke};
+        let keymap = Keymap::new(key_bindings());
+        let key = |s: &str| [Keystroke::parse(s).unwrap()];
+        let (hit, _) = keymap.bindings_for_input(&key("cmd-q"), &[]);
+        assert!(hit.iter().any(|b| b.action().partial_eq(&Quit)));
+        let (hit, _) = keymap.bindings_for_input(&key("cmd-w"), &[]);
+        assert!(hit.iter().any(|b| b.action().partial_eq(&CloseWindow)));
+    }
+
+    #[test]
+    fn the_selection_survives_a_removal_or_moves_to_the_newest_left() {
+        let left = ["v0.2.49".to_string(), "v0.2.48".to_string()];
+        let pick =
+            |saved: Option<&str>| super::selection_after_removal(&left, saved.map(String::from));
+        assert_eq!(pick(Some("v0.2.48")).as_deref(), Some("v0.2.48"));
+        assert_eq!(pick(Some("v0.2.47")).as_deref(), Some("v0.2.49"));
+        assert_eq!(pick(None).as_deref(), Some("v0.2.49"));
+        assert_eq!(
+            super::selection_after_removal(&[], Some("v0.2.47".into())),
+            None
+        );
+    }
+
+    #[test]
+    fn the_app_menu_has_quit() {
+        let menus = super::menus();
+        assert_eq!(menus[0].name, "Horizon Launcher");
+        assert!(matches!(
+            &menus[0].items[0],
+            gpui::MenuItem::Action { name, .. } if name == "Quit Horizon Launcher"
+        ));
+    }
+
     #[test]
     fn the_offline_name_is_read_from_its_key() {
         use super::player_name;

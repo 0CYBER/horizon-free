@@ -71,7 +71,6 @@ passes on without checking it).
 | Dedicated server here: start, console, log, stop | Servers | yes | yes | yes | yes | `server`; MCP `server`, `server_command`, `server_log`, `server_stop` |
 | Hosted servers: list, create, set up, run a command, forget | Servers | yes | no | yes | yes | `servers ...`; `servers_forget` needs `confirm` |
 | Accounts: list, sign in, sign out, select, offline | Settings | yes | part | yes | yes | names and UUIDs only; sign-in is a device code; `account_offline` was missing |
-| Update channel (Alpha, Stable) | Settings | yes | yes | yes | yes | |
 | Game folder, server folder, install new versions, opening animation | Settings | no | no | yes | yes | `settings [KEY VALUE]` |
 | Extra game arguments | Settings | yes | no | yes | yes | `game-args` |
 | Applications menu entry (Linux) | Settings | yes | no | yes | yes | `desktop-entry` |
@@ -79,7 +78,7 @@ passes on without checking it).
 | Patch notes, links | Patch notes, footer | yes | yes | yes | yes | |
 | Game log, crash reports | Settings | yes | yes | yes | yes | `logs [--crash]` |
 | Data collection: status, allow, deny, show, delete, send, bug, benchmark upload | Settings > Data | yes | part | yes | yes | sending was missing in MCP; `data_delete` needs `confirm` |
-| Mod browser: search, check, install, update, remove, list (mods, resource packs, shader packs, modpacks) | Mods | yes | no | yes | yes | `mods ...`; `mods_remove` needs `confirm` |
+| Mod browser: search, check, install, update, remove, list (mods, resource packs, modpacks) | Mods | yes | no | yes | yes | `mods ...`; `mods_remove` needs `confirm` |
 | Modpacks: import, port, play, remove, list | Modpacks | yes | no | yes | yes | `modpack ...`; `modpack_remove` needs `confirm` |
 | Launcher benchmark | (none) | yes | no | yes | yes | |
 | The game it started | (the game) | (horizon-ctl) | yes | (horizon-ctl) | yes | `game_*` |
@@ -102,10 +101,10 @@ passes on without checking it).
 | Open to LAN | Pause > Open to LAN | part | no | yes | yes | `lan open\|close\|status` |
 | Play with Friends: host, stop, status | Pause | part | no | yes | yes | `friends host\|stop\|status` |
 | Vanilla options, every page | Options | yes | part | yes | yes | `options-get`, `options-set` (all of options.txt, typed); `options PAGE` was socket-only |
-| Horizon Settings: Graphics, Shader Packs, Controller, Extras, Mods, AI Agent | Horizon Settings | part | part | yes | yes | `options horizon\|graphics\|extras\|agent...`, then `ui`/`click`/`set` |
+| Horizon Settings: Graphics, Controller, Extras, Mods, AI Agent | Horizon Settings | part | part | yes | yes | `options horizon\|graphics\|extras\|agent...`, then `ui`/`click`/`set` |
 | Agent control on or off, status, connection details | Horizon Settings > AI Agent | no | no | yes | yes | new page (#1353) |
 | Key binds | Controls > Key Binds | yes | yes | yes | yes | `options-set key_key.jump key.keyboard.j` |
-| Resource packs, shader packs | Options > Resource Packs, Shader Packs | part | part | yes | yes | `options packs`, `options shader-packs`, then `ui` rows and `click`; `options-set resourcePacks` |
+| Resource packs | Options > Resource Packs | part | part | yes | yes | `options packs`, then `ui` rows and `click`; `options-set resourcePacks` |
 | Chat and commands | Chat | yes | yes | yes | yes | `chat`, `command`, `messages`, `chat-log` |
 | Inventory, containers, stations | Inventory, Chest... | yes | part | yes | yes | `inventory`, `screen`, `click-slot`; `container X Y Z` was socket-only |
 | Crafting, recipe book | Crafting | part | part | yes | yes | the grid by `click-slot`; the recipe book by `ui`/`click` |
@@ -148,7 +147,7 @@ The switch is in three places: Settings > AI in the launcher, Horizon Settings i
 | Companion (#1068) | uses the same switch (see horizon-parity companion-notes.md) |
 
 Every other launcher command stays usable: versions, install, remove, prepare, play, server,
-notes, links, account, update-channel, settings, game-args, logs, update, desktop-entry, data,
+notes, links, account, settings, game-args, logs, update, desktop-entry, data,
 modpack, mods, servers, no-ai and benchmark. None of them drives the game for an agent. The
 launcher itself, packagers, the docs and players' scripts need them, and `no-ai` has to stay to
 turn the switch off.

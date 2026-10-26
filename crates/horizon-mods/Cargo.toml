@@ -17,15 +17,28 @@ wasmtime = { version = "48.0.7", default-features = false, features = ["runtime"
 # Turns a mod's core module into a component (cargo horizon-mod build, the tests).
 wit-component = { version = "0.254", optional = true }
 wit-parser = { version = "0.254", optional = true }
+# The registry index's checks (feature `index`): SHA-256, and minisign signatures (no dependencies of its own).
+sha2 = { version = "0.10", optional = true }
+minisign-verify = { version = "0.3", optional = true }
 
 [features]
-default = ["runtime"]
-# Loads and runs mods; without it only manifests and packaging (cargo horizon-mod).
+# Loads and runs mods (the game's `mods` feature); without it only manifests,
+# content and packaging. Off by default so builds that don't run mods (the
+# game's tests and probes) skip wasmtime and cranelift.
 runtime = ["dep:wasmtime"]
 pack = ["dep:wit-component", "dep:wit-parser"]
+# The mod registry's index (docs/api/mod-index.md): the launcher, the registry server and its CI.
+index = ["dep:sha2", "dep:minisign-verify"]
 
-[dev-dependencies]
-horizon-mods = { path = ".", features = ["pack"] }
+# Runs real mods: `cargo test -p horizon-mods --features runtime,pack`.
+[[test]]
+name = "sandbox"
+required-features = ["runtime", "pack"]
+
+# docs/api/mods-reference.md from the WIT contract (HORIZON_WRITE_DOCS=1 rewrites it).
+[[test]]
+name = "api_reference"
+required-features = ["pack"]
 
 [lints]
 workspace = true

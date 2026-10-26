@@ -103,7 +103,10 @@ pub fn shadow(
                 let v = |wz: f64| (-((wz - pos.z) as f32) / 2.0 / radius + 0.5).clamp(0.0, 1.0);
                 let a = (alpha * 255.0) as u32;
                 let color = a << 24 | 0x00FF_FFFF;
-                let top = f64::from(y) + 0.001;
+                // ShadowFeatureRenderer: relativeY + shapeBelow.minY, the block top
+                // itself. A model's feet sit 0.001 above it (LivingEntityRenderer's
+                // translate(0, -1.501, 0)), so a lifted shadow fights with them.
+                let top = f64::from(y);
                 for (wx, wz) in [(bx0, bz0), (bx0, bz1), (bx1, bz1), (bx1, bz0)] {
                     let p = DVec3::new(wx, top, wz) - camera;
                     out.push(Vertex {
@@ -113,7 +116,7 @@ pub fn shadow(
                             sprite.u0 + (sprite.u1 - sprite.u0) * u(wx),
                             sprite.v0 + (sprite.v1 - sprite.v0) * v(wz),
                         ],
-                        layer: 0,
+                        layer: crate::gfx::SHADOW_OVERLAY,
                         color,
                         light: 240 | 240 << 8,
                     });
@@ -126,6 +129,52 @@ pub fn shadow(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shadows_lie_on_the_block_top_under_model_feet() {
+        use crate::chunk::Chunk;
+        use horizon_world::level::data;
+        use std::{path::PathBuf, sync::Arc};
+        let root = std::env::var_os("HORIZON_RESOURCES")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../.local/horizon-client")
+                    .join(horizon_core::VANILLA_VERSION)
+            });
+        if !root.join("gameplay-facts.json").exists() {
+            eprintln!("skipping resource-backed shadow check: {}", root.display());
+            return;
+        }
+        let registry = data::load_registry(&root).unwrap();
+        let facts = BlockFacts::load(&root, &registry).unwrap();
+        let stone = registry.default_state("minecraft:stone").unwrap();
+        let mut world = World::new(facts.air, 0);
+        world.chunks.insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        for x in 0..16 {
+            for z in 0..16 {
+                world.set(x, 63, z, stone).unwrap();
+            }
+        }
+        let (camera, pos) = (DVec3::new(8.5, 66.0, 4.0), DVec3::new(8.5, 64.0, 8.5));
+        let mut out = Vec::new();
+        let sprite = Rect {
+            u0: 0.0,
+            v0: 0.0,
+            u1: 1.0,
+            v1: 1.0,
+            w: 16,
+            h: 16,
+        };
+        shadow(
+            &world, &facts, sprite, camera, pos, 0.3, 1.0, 0.0, 0, &mut out,
+        );
+        assert_eq!(out.len(), 4);
+        let feet = (pos.y + (1.501 - 24.0 / 16.0) - camera.y) as f32;
+        for v in &out {
+            assert_eq!(v.pos[1], (pos.y - camera.y) as f32);
+            assert!(v.pos[1] < feet);
+        }
+    }
     #[test]
     fn vanilla_radii() {
         assert_eq!(shadow_params("minecraft:zombie"), (0.5, 1.0));

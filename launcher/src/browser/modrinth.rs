@@ -11,7 +11,6 @@ pub struct Modrinth;
 fn project_type(kind: Kind) -> &'static str {
     match kind {
         Kind::ResourcePack => "resourcepack",
-        Kind::ShaderPack => "shader",
         Kind::Modpack => "modpack",
         Kind::Mod => "mod",
     }
@@ -36,7 +35,7 @@ pub(super) fn facets(query: &Query) -> String {
     }
     let loaders: Vec<String> = match &f.loader {
         Some(l) => vec![format!("categories:{l}")],
-        None => details::default_loaders(query.kind, query.everything)
+        None => details::default_loaders(query.kind)
             .iter()
             .map(|l| format!("categories:{l}"))
             .collect(),
@@ -140,6 +139,7 @@ pub(super) fn parse_version(v: &Value) -> Option<Version> {
                 name: f["filename"].as_str()?.to_owned(),
                 size: f["size"].as_u64().unwrap_or(0),
                 sha512: f["hashes"]["sha512"].as_str().map(str::to_ascii_lowercase),
+                sha256: None,
                 sha1: f["hashes"]["sha1"].as_str().map(str::to_ascii_lowercase),
                 primary: f["primary"].as_bool().unwrap_or(false),
             })

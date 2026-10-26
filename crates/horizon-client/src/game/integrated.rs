@@ -6,15 +6,15 @@
 //! the world's options) with [`Integrated::call`], as vanilla's client calls
 //! into its `IntegratedServer`.
 //!
-//! Opt-in again (`--server-thread` or `HORIZON_SERVER_THREAD=1`) until a
-//! server's players reach parity with the in-frame world: on the server
-//! thread, signs open no editor, books don't open, a totem doesn't save its
-//! holder and death keeps the inventory (#1380, #1366, #1292, #1284 and the
-//! other `[server-thread]` issues). LAN guests and dedicated servers use the
-//! same code either way.
+//! On by default. `--in-frame` (or `--no-server-thread`, or
+//! `HORIZON_SERVER_THREAD=0`) runs the world in the frame instead, the
+//! escape hatch. LAN guests and dedicated servers use the same code either
+//! way.
 use super::{
     Game, Options, PackResources, Resources, UiResources,
+    execution_role::ExecutionRole,
     lan::{LanSettings, Owner},
+    world_loading::WorldRequest,
 };
 use horizon_client::{
     Result,
@@ -28,7 +28,6 @@ use horizon_protocol::connection::Pipe;
 use horizon_protocol::{crypto::offline_uuid, text::translatable};
 use std::{
     net::TcpListener,
-    path::Path,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU32, Ordering},
@@ -172,11 +171,6 @@ struct Launch {
     player: String,
 }
 
-/// Whether this world opens on a server thread: asked for.
-pub(super) fn wanted(options: &Options, _world: &Path) -> bool {
-    options.server_thread && options.dedicated.is_none()
-}
-
 impl Game<'_> {
     /// `Minecraft.hasSingleplayerServer`: a world of this window's own, run
     /// in the frame or on its server thread.
@@ -217,9 +211,10 @@ impl Game<'_> {
         };
         let mut options = self.options.clone();
         // A server without a console: no local player, no window, no control socket.
+        // Compatibility for gameplay checks outside startup/world loading.
         options.dedicated = Some(Vec::new());
         options.server_thread = false;
-        options.integrated = true;
+        options.execution_role = ExecutionRole::IntegratedServer;
         options.control = None;
         options.benchmark = None;
         options.frames = None;
@@ -289,13 +284,13 @@ impl Game<'_> {
         tasks: Receiver<Task>,
         ready: &Sender<Ready>,
     ) -> Result<()> {
-        self.open_world(
+        self.load_world(WorldRequest::new(
             &launch.folder,
             launch.name.as_deref(),
             launch.seed,
             launch.creative,
             launch.create.as_ref(),
-        )?;
+        )?)?;
         let saved = Box::new(self.level.clone());
         // Math.max(2, options.renderDistance): past vanilla's 32 when the
         // window's render distance is (Horizon's options go to 64).
@@ -468,8 +463,10 @@ impl Game<'_> {
                 host = self.lan.take().expect("a command puts the hub back");
                 self.leave_guest(&mut host, swap);
                 host.hub.sync_all_effects();
-                // A teleport into another level happens before its feedback is sent.
+                // A teleport into another level happens before its feedback is
+                // sent, and what the command earned is announced before it too.
                 self.run_level_teleports(&mut host);
+                self.announce_guest_advancements(&mut host);
                 for line in lines {
                     out.push(line.plain());
                     host.hub.send_to(
@@ -493,6 +490,22 @@ impl Game<'_> {
             }
         }
         self.lan = Some(host);
+        out
+    }
+
+    /// Run `f` with the owner's level in place (the server holds one per
+    /// dimension), then put back the level that was.
+    pub(super) fn in_owner_level<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let owner = self.serving.as_ref().map(|s| s.owner);
+        let dim = self.lan.as_ref().and_then(|h| {
+            let g = h.hub.guests.iter().find(|g| Some(g.uuid) == owner)?;
+            Some(super::Dim::from_id(&g.dimension))
+        });
+        let back = dim.and_then(|d| self.enter_command_level(d));
+        let out = f(self);
+        if let Some(back) = back {
+            self.enter_command_level(back);
+        }
         out
     }
 

@@ -119,6 +119,88 @@ fn component_value(tag: &horizon_world::nbt::Tag) -> crate::server::json::Json {
     }
 }
 
+/// The inverse of [`component_value`]: a JSON component (a server.properties
+/// prompt) as ComponentSerialization.CODEC writes it with NbtOps. An array is
+/// its first component with the rest appended (`createFromList`); a list of
+/// components mixing plain strings and objects has the strings as `{text}`.
+pub fn component_tag(v: &crate::server::json::Json) -> horizon_world::nbt::Tag {
+    use crate::server::json::Json;
+    use horizon_world::nbt::{JavaString, Tag};
+    fn list(items: &[Json]) -> Tag {
+        same_kind(items.iter().map(component_tag).collect())
+    }
+    fn same_kind(mut tags: Vec<Tag>) -> Tag {
+        if tags.iter().any(|t| matches!(t, Tag::Compound(_))) {
+            for t in &mut tags {
+                if let Tag::String(s) = t {
+                    *t = Tag::compound([("text", Tag::String(s.clone()))]);
+                }
+            }
+        }
+        Tag::List(tags)
+    }
+    fn value(v: &Json) -> Tag {
+        match v {
+            Json::Bool(b) => Tag::Byte(i8::from(*b)),
+            Json::Number(n) => n.parse().map_or_else(
+                |_| Tag::Double(n.parse::<f64>().unwrap_or(0.0).to_bits()),
+                Tag::Int,
+            ),
+            Json::String(s) => Tag::String(JavaString::from(s.as_str())),
+            Json::Array(items) => list(items),
+            Json::Object(members) => Tag::compound(
+                members
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), value(v)))
+                    .collect::<Vec<_>>(),
+            ),
+            Json::Null => Tag::String(JavaString::from("")),
+        }
+    }
+    match v {
+        Json::Array(items) if !items.is_empty() => {
+            let mut first = component_tag(&items[0]);
+            if let Tag::String(s) = &first {
+                first = Tag::compound([("text", Tag::String(s.clone()))]);
+            }
+            if let Tag::Compound(map) = &mut first {
+                let mut extra = match map.remove(&JavaString::from("extra")) {
+                    Some(Tag::List(e)) => e,
+                    _ => Vec::new(),
+                };
+                extra.extend(items[1..].iter().map(component_tag));
+                map.insert(JavaString::from("extra"), same_kind(extra));
+            }
+            first
+        }
+        Json::Object(members) => {
+            if let [(key, Json::String(text))] = members.as_slice()
+                && key == "text"
+            {
+                return Tag::String(JavaString::from(text.as_str()));
+            }
+            Tag::compound(
+                members
+                    .iter()
+                    .map(|(k, v)| {
+                        let tag = match k.as_str() {
+                            "extra" | "with" => match v {
+                                Json::Array(items) => list(items),
+                                other => value(other),
+                            },
+                            _ => value(v),
+                        };
+                        (k.as_str(), tag)
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        }
+        Json::String(s) | Json::Number(s) => Tag::String(JavaString::from(s.as_str())),
+        Json::Bool(b) => Tag::String(JavaString::from(b.to_string().as_str())),
+        _ => Tag::String(JavaString::from("")),
+    }
+}
+
 /// StringUtil.isValidPlayerName.
 pub fn valid_name(name: &str) -> bool {
     (1..=16).contains(&name.len()) && name.chars().all(|c| c as u32 > 32 && (c as u32) < 127)
@@ -745,6 +827,14 @@ fn login_and_configure(
         send(c, cfg::Clientbound::RegistryData(packet))?;
     }
     send(c, cfg::Clientbound::UpdateTags(sync.tags.clone()))?;
+    if let Some(pack) = &shared.config.resource_pack
+        && let Some(rejected) = offer_pack(c, pack, &mut info)?
+    {
+        let (reason, text) = pack_rejected(shared, name, rejected);
+        let _ = send(c, cfg::Clientbound::Disconnect(cfg::Disconnect { reason }));
+        lost(shared, &format!("{name} ({})", uuid_string(uuid)), &text);
+        return Ok(None);
+    }
     send(c, cfg::Clientbound::FinishConfiguration(Empty))?;
     loop {
         let (id, payload) = c.recv().map_err(e)?;
@@ -761,6 +851,79 @@ fn login_and_configure(
         info,
         brand,
     }))
+}
+
+/// ServerboundResourcePackPacket.Action.DECLINED.
+const PACK_DECLINED: i32 = 1;
+
+/// ServerCommonPacketListenerImpl.handleResourcePackResponse: a player who
+/// declined the required pack is disconnected. The reason and its text.
+fn pack_rejected(shared: &Shared, name: &str, pack: u128) -> (horizon_world::nbt::Tag, String) {
+    let reason = translatable("multiplayer.requiredTexturePrompt.disconnect", &[]);
+    let Some(log) = &shared.config.log else {
+        return (reason, String::new());
+    };
+    let line = format!(
+        "Disconnecting {name} due to resource pack {} rejection",
+        uuid_string(pack)
+    );
+    (log.write)("Server thread", "INFO", &line);
+    let text = horizon_protocol::text::plain(&reason, &log.lang);
+    (reason, text)
+}
+
+/// ServerResourcePackConfigurationTask: offer the server's pack, then wait
+/// for the client's final answer (`Action.isTerminal`: anything but
+/// ACCEPTED or DOWNLOADED). The player may take a while to answer the
+/// prompt, so the connection is kept alive meanwhile, as
+/// ServerConfigurationPacketListenerImpl.tick does. The id of a required
+/// pack the client declined, which disconnects it.
+fn offer_pack(
+    c: &mut Connection,
+    pack: &crate::server::properties::ResourcePackInfo,
+    info: &mut ClientInformation,
+) -> Result<Option<u128>, String> {
+    let e = |e: horizon_protocol::Error| e.to_string();
+    let push = cfg::ResourcePackPush {
+        id: pack.id,
+        url: pack.url.clone(),
+        hash: pack.hash.clone(),
+        required: pack.required,
+        prompt: pack.prompt.as_ref().map(component_tag),
+    };
+    c.send(&cfg::Clientbound::ResourcePackPush(push).encode())
+        .map_err(e)?;
+    std::thread::scope(|scope| {
+        let (stop, stopped) = channel::<()>();
+        let writer = &mut c.writer;
+        scope.spawn(move || {
+            let start = Instant::now();
+            while stopped.recv_timeout(KEEP_ALIVE_EVERY) == Err(RecvTimeoutError::Timeout) {
+                let id = i64::try_from(start.elapsed().as_millis()).unwrap_or(0);
+                let keep_alive = cfg::Clientbound::KeepAlive(cfg::KeepAlive { id });
+                if writer.send(&keep_alive.encode()).is_err() {
+                    break;
+                }
+            }
+        });
+        let answer = loop {
+            let (id, payload) = match c.reader.recv() {
+                Ok(packet) => packet,
+                Err(err) => break Err(err.to_string()),
+            };
+            match cfg::Serverbound::decode(id, &payload) {
+                Ok(cfg::Serverbound::ResourcePack(r)) if !matches!(r.action, 3 | 4) => {
+                    let rejected = r.action == PACK_DECLINED && pack.required;
+                    break Ok(rejected.then_some(r.id));
+                }
+                Ok(cfg::Serverbound::ClientInformation(i)) => *info = i,
+                Ok(_) => {}
+                Err(err) => break Err(err.to_string()),
+            }
+        };
+        drop(stop);
+        answer
+    })
 }
 
 fn play(c: Connection, shared: &Arc<Shared>, parts: Parts, address: std::net::SocketAddr) {
@@ -784,6 +947,7 @@ fn play(c: Connection, shared: &Arc<Shared>, parts: Parts, address: std::net::So
             })
             .ok()
     };
+    let name = parts.name.clone();
     let joined = Joined {
         conn: conn_id,
         uuid: parts.uuid,
@@ -795,8 +959,20 @@ fn play(c: Connection, shared: &Arc<Shared>, parts: Parts, address: std::net::So
         latency,
         address,
     };
+    let required_pack = shared
+        .config
+        .resource_pack
+        .as_ref()
+        .is_some_and(|p| p.required);
     let reason = if events.send(NetEvent::Joined(Box::new(joined))).is_ok() {
-        read_loop(&mut reader, conn_id, &events, &alive)
+        match read_loop(&mut reader, conn_id, &events, &alive, required_pack) {
+            Ok(reason) => reason,
+            Err(rejected) => {
+                let (reason, text) = pack_rejected(shared, &name, rejected);
+                let _ = tx.send(Out::Disconnect(reason));
+                text
+            }
+        }
     } else {
         "server closed".to_owned()
     };
@@ -808,12 +984,16 @@ fn play(c: Connection, shared: &Arc<Shared>, parts: Parts, address: std::net::So
     shared.release(parts.uuid);
 }
 
+/// Forward the player's packets until the connection ends: why it did, or
+/// the id of a required resource pack the player declined (with
+/// `required_pack`), which disconnects them.
 fn read_loop(
     reader: &mut ConnReader,
     conn: u32,
     events: &Sender<NetEvent>,
     alive: &AtomicI64,
-) -> String {
+    required_pack: bool,
+) -> Result<String, u128> {
     loop {
         let (id, payload) = match reader.recv() {
             Ok(p) => p,
@@ -824,19 +1004,24 @@ fn read_loop(
                     || e.0.contains("reset by peer")
                     || e.0.contains("aborted") =>
             {
-                return "Disconnected".to_owned();
+                return Ok("Disconnected".to_owned());
             }
-            Err(e) => return e.to_string(),
+            Err(e) => return Ok(e.to_string()),
         };
         match play::Serverbound::decode(id, &payload) {
             Ok(play::Serverbound::KeepAlive(k)) => alive.store(k.id, Ordering::Relaxed),
+            Ok(play::Serverbound::ResourcePack(r))
+                if r.action == PACK_DECLINED && required_pack =>
+            {
+                return Err(r.id);
+            }
             Ok(p) => {
                 if events.send(NetEvent::Packet(conn, Box::new(p))).is_err() {
-                    return "server closed".to_owned();
+                    return Ok("server closed".to_owned());
                 }
             }
             // A malformed packet disconnects like vanilla's decoder exception.
-            Err(e) => return format!("Invalid packet {id}: {e}"),
+            Err(e) => return Ok(format!("Invalid packet {id}: {e}")),
         }
     }
 }
@@ -987,6 +1172,24 @@ fn write_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prompts_become_the_components_vanilla_sends() {
+        let tag = |json: &str| {
+            let tag = component_tag(&crate::server::json::parse(json, true).unwrap());
+            component_json(&tag)
+        };
+        assert_eq!(tag(r#"{"text":"Hi"}"#), r#""Hi""#);
+        assert_eq!(tag(r#""Hi""#), r#""Hi""#);
+        assert_eq!(
+            tag(r#"["Hi ",{"text":"there","bold":true}]"#),
+            r#"{"text":"Hi ","extra":[{"text":"there","bold":true}]}"#
+        );
+        assert_eq!(
+            tag(r#"{"translate":"a","with":["b",{"text":"c","color":"red"}]}"#),
+            r#"{"translate":"a","with":["b",{"text":"c","color":"red"}]}"#
+        );
+    }
 
     fn unpack(out: Out) -> Vec<Vec<u8>> {
         match out {

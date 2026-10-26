@@ -47,6 +47,8 @@ pub(super) struct Creatures {
     pub pearl_cooldown: u32,
     /// The wind charge's use cooldown (ticks).
     pub wind_cooldown: u32,
+    /// Wind bursts from a guest's turn, waiting for it to end (game/wind.rs).
+    pub wind_bursts: Vec<super::wind::Burst>,
     /// Ticks left of the elder guardian's apparition (MobAppearanceParticle).
     pub elder_apparition: i32,
     /// The wandering trader spawner's clock.
@@ -319,7 +321,7 @@ impl Game<'_> {
             .iter()
             .filter(|m| m.distance_sqr(center) <= radius * radius)
             .map(|m| {
-                serde_json::json!({
+                let mut state = serde_json::json!({
                     "id": m.id,
                     "kind": m.kind.id,
                     "pos": [m.position.x, m.position.y, m.position.z],
@@ -368,7 +370,11 @@ impl Game<'_> {
                         "patrol_target": s.patrol_target,
                         "vehicle": m.extra.mount,
                     })),
-                })
+                });
+                // Drawn seated (Entity.isPassenger); set apart because the
+                // json! above is at the macro recursion limit.
+                state["passenger"] = m.extra.passenger.into();
+                state
             })
             .collect();
         serde_json::json!({ "count": self.mobs.len(), "near": list, "projectiles": self.creatures.projectiles.len() })
@@ -976,7 +982,9 @@ impl Game<'_> {
                         m.ai.target = Some(target);
                     }
                 }
-                MobEvent::Projectile(p) => {
+                MobEvent::Projectile(mut p) => {
+                    self.next_entity += 1;
+                    p.id = self.next_entity;
                     let (owner, at) = (p.owner, [p.position.x, p.position.y, p.position.z]);
                     self.creatures.projectiles.push(p);
                     self.projectile_event("minecraft:projectile_shoot", owner, at);
@@ -1004,6 +1012,11 @@ impl Game<'_> {
                 ),
                 MobEvent::SetBlock { pos, state } => {
                     self.world.set(pos[0], pos[1], pos[2], state)?
+                }
+                MobEvent::SetDoorOpen { pos, open } => {
+                    let pos = BlockPos::new(pos[0], pos[1], pos[2]);
+                    self.with_level(|b, level, ticks| b.set_door_open(level, ticks, pos, open));
+                    self.process_level_events()?;
                 }
                 MobEvent::SetBlockName { pos, name, effect } => {
                     if effect {
@@ -1489,12 +1502,16 @@ impl Game<'_> {
                 o.hurt
             }
         {
-            let (xd, zd) = (from[0] - player.position.x, from[2] - player.position.z);
-            self.knock_back_player(f64::from(0.4_f32), xd, zd);
-            if let Some(p) = self.player.as_mut()
-                && let Some(r) = p.hurt_log.last_mut()
-            {
-                r.knockback = Some([p.velocity.x, p.velocity.y, p.velocity.z]);
+            // LivingEntity.hurtServer's dealDefaultKnockback: not inside the
+            // hurt cooldown (a stronger hit there only adds its difference).
+            if o.knockback {
+                let (xd, zd) = (from[0] - player.position.x, from[2] - player.position.z);
+                self.knock_back_player(f64::from(0.4_f32), xd, zd);
+                if let Some(p) = self.player.as_mut()
+                    && let Some(r) = p.hurt_log.last_mut()
+                {
+                    r.knockback = Some([p.velocity.x, p.velocity.y, p.velocity.z]);
+                }
             }
             self.hurt_armor(amount);
             self.thorns(from);
@@ -1544,6 +1561,16 @@ impl Game<'_> {
             .add(horizon_client::effects::EffectInstance::new(
                 id, ticks, amplifier,
             ));
+    }
+    /// `WitherRoseBlock.entityInside` for the player: on a server level that
+    /// isn't peaceful, `getBeeInteractionEffect` (Wither, 40 ticks) unless the
+    /// player is invulnerable to wither damage (creative, spectator). A
+    /// server's player gets it from the server.
+    pub(super) fn wither_rose_contact(&mut self) {
+        if self.remote.is_some() || self.ui.difficulty == 0 {
+            return;
+        }
+        self.give_player_effect("minecraft:wither", 40, 0);
     }
     /// Burning applied to the player by mobs.
     fn tick_player_effects(&mut self) {
@@ -1681,7 +1708,26 @@ impl Game<'_> {
                 targets: targets_guests,
             };
             let guest_entities = self.lan_guest_entities();
+            // ThrownEnderpearl.tick: a dead player's pearl is discarded in
+            // place of its tick while ender_pearls_vanish_on_death is on.
+            let vanish = self.ui.rules.bool("ender_pearls_vanish_on_death");
+            let host_dead = self.player_view().is_some_and(|p| !p.alive);
+            let dead_guests: Vec<u32> = self.lan.as_ref().map_or_else(Vec::new, |h| {
+                h.hub
+                    .guests
+                    .iter()
+                    .filter(|g| g.dead)
+                    .map(|g| g.conn)
+                    .collect()
+            });
             projectiles.retain_mut(|p| {
+                if vanish
+                    && matches!(p.kind, ProjectileKind::EnderPearl)
+                    && p.owner == Some(Who::Player)
+                    && p.guest.map_or(host_dead, |c| dead_guests.contains(&c))
+                {
+                    return false;
+                }
                 let mob_shot = !matches!(p.owner, Some(Who::Player));
                 // A player's arrows, snowballs and eggs meet every player; a
                 // guest's flies from that guest (Projectile.getOwner), not
@@ -1778,7 +1824,7 @@ impl Game<'_> {
                 _ => self.projectile_hit(&p, hit)?,
             }
         }
-        Ok(())
+        self.flush_wind_bursts()
     }
     /// `projectile_hit` for a projectile the guest `conn` shot, run as them;
     /// as the host's when they have left.
@@ -2413,13 +2459,14 @@ impl Game<'_> {
                     self.spawn_item(rest, self.eye_position().unwrap_or([0.0; 3]), [0.0; 3], 40);
                 }
             } else {
-                self.inventory[self.selected] = Some(filled);
+                *self.held_mut() = Some(filled);
             }
             self.swing_arm();
             return Ok(true);
         }
         let creative = self.creative;
-        let selected = self.selected;
+        // The hand's slot (Player.interactOn passes the hand).
+        let selected = self.held_slot();
         if self.interact_zombie_villager(index, &item) {
             return Ok(true);
         }
@@ -2451,10 +2498,10 @@ impl Game<'_> {
         // PiglinAi.mobInteract: hand over something gold to admire.
         if self.mobs[index].alive() && self.give_piglin(index, &item) {
             self.swing_arm();
-            if !creative && let Some(stack) = self.inventory[selected].as_mut() {
+            if !creative && let Some(stack) = self.stack_in_mut(selected).as_mut() {
                 stack.count -= 1;
                 if stack.count == 0 {
-                    self.inventory[selected] = None;
+                    *self.stack_in_mut(selected) = None;
                 }
             }
             return Ok(true);
@@ -2765,11 +2812,11 @@ impl Game<'_> {
         }
         if consume
             && !creative
-            && let Some(stack) = self.inventory[selected].as_mut()
+            && let Some(stack) = self.stack_in_mut(selected).as_mut()
         {
             stack.count -= 1;
             if stack.count == 0 {
-                self.inventory[selected] = None;
+                *self.stack_in_mut(selected) = None;
             }
         }
         if let Some(g) = give {
@@ -2779,8 +2826,8 @@ impl Game<'_> {
                 damage: 0,
                 extra: None,
             };
-            if self.inventory[selected].is_none() {
-                self.inventory[selected] = Some(stack);
+            if self.stack_in(selected).is_none() {
+                *self.stack_in_mut(selected) = Some(stack);
             } else if let Some(rest) = self.give(stack) {
                 let at = self.eye_position().unwrap_or(center);
                 self.spawn_item(rest, at, [0.0, 0.0, 0.0], 40);
@@ -2812,13 +2859,17 @@ impl Game<'_> {
         if self.creative {
             return;
         }
-        if let Some(stack) = self.inventory[self.selected].as_mut()
-            && let Some(info) = self.res.items().get(&stack.item)
-            && info.max_damage > 0
+        let slot = self.held_slot();
+        let max_damage = self
+            .held()
+            .and_then(|s| self.res.items().get(&s.item))
+            .map_or(0, |i| i.max_damage);
+        if max_damage > 0
+            && let Some(stack) = self.stack_in_mut(slot).as_mut()
         {
             stack.damage += 1;
-            if stack.damage >= info.max_damage {
-                self.inventory[self.selected] = None;
+            if stack.damage >= max_damage {
+                *self.stack_in_mut(slot) = None;
             }
         }
     }

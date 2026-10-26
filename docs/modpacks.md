@@ -7,9 +7,8 @@ pipeline, not a list of hand ports. It takes a pack as players download it and p
 Horizon mods. The pipeline is AI agents in dependency order, each port checked against the
 original mod running in a dev-only Java instance.
 
-This page is the design. It builds on [mods.md](mods.md) (the mod API, WASM in wasmtime) and
-[research/java-mod-compat.md](research/java-mod-compat.md) (why Java jars and Mixins cannot
-run in Horizon, so we port instead). The ATM10 inventory behind the numbers below is
+This page is the design. It builds on [mods.md](mods.md) (the mod API, WASM in wasmtime, and
+why Java jars cannot run in Horizon, so we port instead). The ATM10 inventory behind the numbers below is
 [modpacks/atm10-mods.csv](modpacks/atm10-mods.csv).
 
 ## In one picture
@@ -60,7 +59,7 @@ was downloaded.
 | **library** | APIs and code shared by other mods (Architectury, Curios, GeckoLib, Kotlin for Forge, Balm...) | no: maps to the Horizon API or the SDK | **80** |
 | **integration** | glue between two other mods (JEI plugins, AE2 ↔ Mekanism, Create add-on wiring) | after both sides are ported | **44** |
 | **client-ui** | client-only screens, HUDs, tooltips, maps, recipe viewers | yes: client API, or built in | **32** |
-| **other** | pack tooling and engine features: KubeJS, Almost Unified, Iris/shaders, CTM, crash/version tools | no: folded into the pipeline or the engine | **25** |
+| **other** | pack tooling and engine features: KubeJS, Almost Unified, shader mods, CTM, crash/version tools | no: folded into the pipeline or the engine | **25** |
 | **performance** | Sodium, FerriteCore, ModernFix, ImmediatelyFast, spark, AI and recipe speed-ups | no: Horizon is the replacement | **16** |
 | **server-only** | admin and server features: ranks, essentials, backups, claims, spawn control | yes: server API | **11** |
 | | | | **495** |
@@ -141,12 +140,13 @@ derivative work. These rules are part of the pipeline, not advice to users:
    has given written permission, recorded in the index entry. The tooling refuses to package
    anything else. No-derivatives and non-commercial licences (14 in ATM10) are never published.
    For them, even a local port gets a warning that the licence may not allow it.
-4. **Mod code never enters this repository.** Mod jars, decompiled sources, Java oracle builds
+4. **Mod code never enters this repository, and nobody reads it.** Mod jars, Java oracle builds
    with mod code, and ports of mods we have no permission to publish all live outside the
    repo: in the user's pipeline work directory, or for our own development in
-   `~/code/horizon-parity/modports/` (dev-only, never pushed). Ports are written from
-   observed behaviour and the harness, with decompiled code as a local reference only. The
-   repository holds the pipeline, the API, metadata (ids, names, versions, licences, counts)
+   `~/code/horizon-parity/modports/` (dev-only, never pushed). A mod's code is never
+   decompiled, read, quoted or paraphrased, by people or agents. Ports are written only from
+   the mod's observed behaviour (the oracle and the harness), its own data files and its
+   public documentation. The repository holds the pipeline, the API, metadata (ids, names, versions, licences, counts)
    and test fixtures we write ourselves.
 5. **Contacting authors or publishing any port is Ludovic's call.** Agents ask first.
 
@@ -177,7 +177,7 @@ frame, chat and command hooks. Server mods do not run yet. What a content pack n
 | Entities: types, attributes, AI goals and brains, spawning | — | deep (87) | 0.5 | `entity` interface, AI in the mod with vanilla goals reusable |
 | Custom renderers and animated models (block-entity, entity, item; GeckoLib's format) | — | deep | 0.5 | data models (Bedrock geometry + animations), plus a budgeted draw-list interface for the rest |
 | Dimensions: dimension types, levels, chunk generators | — | about 10 (Twilight Forest, Aether, Ad Astra, Undergarden, ...) | 0.5 | JSON part with worldgen; custom generators as mod code |
-| New hooks into vanilla behaviour (what Mixins do) | — | deep | as asked | each becomes a named hook, added for everyone ([java-mod-compat.md](research/java-mod-compat.md#3-a-porting-guide-outline)) |
+| New hooks into vanilla behaviour (what Mixins do) | — | deep | as asked | each becomes a named hook, added for everyone |
 | Client interfaces: `keys`, `target`, `inventory-read`, `ui`, `render`, `world-read` | planned | client tier (38) | 0.2–0.4 | as in [mods.md](mods.md#planned-interfaces) |
 
 Two rules from mods.md stay: **the sandbox** (no files, sockets or processes; memory cap; fuel
@@ -711,16 +711,16 @@ For tiers logic, machines and deep, in dependency order, as many agents at once 
 budget allows:
 
 - **Input:** the inventory record, the carried-over data, the oracle's exports and traces, the
-  harness, the Horizon mod API docs, the ports of its dependencies, and the mod's decompiled
-  code as a local reference (dev-only, in the work directory).
+  harness, the Horizon mod API docs, the ports of its dependencies, and the mod's public
+  documentation. Never its code: the agent doesn't decompile, read or quote it.
 - **Output:** a Rust crate in `mods/<id>/port/` built with `cargo horizon-mod build`, and its
   `.hmod`.
 - **Loop:** write → build → run the harness → read the differences → fix, until the harness
   passes or the agent reports what blocks it. Usually that is an API gap, which becomes an
   issue against the mod API ("needs a scheduled-tick hook"), the way version ports turn
   differences into work items.
-- **Rules:** the agent writes the port from observed behaviour and the harness, not by
-  transliterating decompiled Java; ports follow the mod's licence ([Licences](#licences)).
+- **Rules:** the agent writes the port from observed behaviour, the harness and the mod's
+  own data files only; ports follow the mod's licence ([Licences](#licences)).
   Players without an AI agent get the carry-over tiers. A port the licence lets us publish can
   be downloaded instead of regenerated.
 

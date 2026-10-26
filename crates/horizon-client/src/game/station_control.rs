@@ -10,7 +10,7 @@ pub(super) const HELP: &[&str] = &[
     "use X Y Z                      open the block's menu as if right-clicked",
     "click-slot ID [right] [shift]  click a menu slot (0-35 inventory, 300+ container, 600+ station, 650 result)",
     "click-gui X Y [right] [shift]  click at GUI pixel X Y relative to the menu's top-left corner",
-    "book [next|back|take|done]     the open book or lectern: its page, or press one of its buttons",
+    "book [next|back|take|sign|done] the open book or lectern: its page, or press one of its buttons",
     "type TEXT | type-back          type into the anvil name box / delete one character",
     "enchant ID LEVEL               enchant the held item (books store the enchantment)",
     "potion ITEM POTION             give a potion item (potion, splash_potion, lingering_potion, tipped_arrow)",

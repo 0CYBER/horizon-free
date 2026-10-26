@@ -48,10 +48,9 @@ impl Game<'_> {
         if let Some(id) = state.mob
             && state.session.villager
         {
-            // startTrading with the guest's reputation (their effects are
-            // not modelled on the host: no Hero of the Village).
+            // startTrading with the guest's reputation. The session already
+            // captured their Hero effect while they acted as the player.
             state.session.reputation = self.villager_reputation_of(id, uuid);
-            state.session.hero = None;
             state.session.update_special_prices();
         }
         let title = self.merchant_display_name(&state);
@@ -129,23 +128,6 @@ impl Game<'_> {
     }
     /// The screen title: the custom name, else the profession (the client
     /// adds the level itself).
-    #[allow(dead_code)]
-    fn merchant_title(&self, state: &MerchantState) -> String {
-        if let Some(name) = &state.name {
-            return name.clone();
-        }
-        let e = &self.res.stations().enchantments;
-        let profession = state.session.profession.trim_start_matches("minecraft:");
-        if state.session.villager {
-            e.translate(&format!("entity.minecraft.villager.{profession}"))
-                .unwrap_or(profession)
-                .to_owned()
-        } else {
-            e.translate("entity.minecraft.wandering_trader")
-                .unwrap_or("Wandering Trader")
-                .to_owned()
-        }
-    }
     /// `ServerPlayer.sendMerchantOffers`, when the offers changed.
     fn lan_send_offers(
         &mut self,

@@ -7,7 +7,8 @@ screen (the same screen as vanilla's) or in game, and every loader reloads from 
 ## How it works
 
 `packs.rs` finds the packs (`FolderRepositorySource`: folders and zips, plus the built-in Programmer Art and High
-Contrast), reads `pack.mcmeta` (format range, overlays, filters) and builds one overlay directory that layers the
+Contrast, which only the asset index holds: preparation copies them, `horizon-prepare packs` repairs older resources),
+reads `pack.mcmeta` (format range, overlays, filters) and builds one overlay directory that layers the
 selected packs over the prepared vanilla resources, later packs winning. Files vanilla reads as a resource *stack*
 (language files, `sounds.json`, font definitions, atlas definitions) are merged layer by layer as vanilla merges them.
 Every loader then reads that one tree; `game/packs.rs` (`reload_packs`) reloads all of them in game, as
@@ -32,6 +33,7 @@ harness named checks that loader against vanilla).
 | Overlays per format | `pack.mcmeta` `overlays` | works | `test_resource_pack_parity` (an overlay for 26.3 applied, an older one not) |
 | Filters | `pack.mcmeta` `filter` | works | `test_resource_pack_parity` (`packs/pattern.rs` regex subset) |
 | Folder and zip packs, order, built-in packs | `resourcepacks/` | works | `test_resource_pack_parity`, `test_pack_selection_parity` |
+| Server resource packs: the prompt, the server list's Server Resource Packs setting, download (250 MiB, SHA-1, `downloads/` keeps 20), applied on top of the player's packs, removed on leaving | the server's `resource_pack_push`/`_pop` | works, no download toasts | `tools/server_pack_e2e.py` (against vanilla's server and Horizon's), unit tests in `server_packs.rs`; `test_server_resource_pack_parity` for Horizon's server |
 | Other namespaces | `assets/<namespace>/` | works | `test_resource_pack_parity` |
 | Block states: variants, multipart, weights, rotations, uvlock | `blockstates/` | works | `test_blockstate_model_parity`, `test_model_choice_parity`, `test_blockstate_transform_parity` |
 | Block models: parents, elements, rotations, faces, cullface, tint, shade, light emission, ambient occlusion | `models/block/` | works | `test_model_resolution_parity`, `test_model_baking_parity`, `test_section_mesh_parity` |
@@ -70,10 +72,10 @@ harness named checks that loader against vanilla).
 | Paintings, mob effect icons | `atlases/paintings.json`, `textures/mob_effect/` | works | loaded from the overlay |
 | Locator bar styles | `waypoint_style/` | **no** | the locator bar isn't drawn yet |
 | Post effects (spectating a creeper, spider or enderman; glowing outlines) | `post_effect/`, `shaders/post/` | **no** | Horizon's effects are WGSL; a pack's GLSL post chain isn't run |
-| Core shaders | `shaders/core/`, `shaders/include/` | **no** | Horizon draws with WGSL; packs that replace core shaders need the GLSL translation of [shader-packs.md](shader-packs.md) |
+| Core shaders | `shaders/core/`, `shaders/include/` | **no** | Horizon draws with WGSL; a pack's GLSL core shaders aren't run |
 | GPU warn list, regional compliance | `gpu_warnlist.json`, `regional_compliancies.json` | n/a | OpenGL driver warnings and play-time notices for some regions; not used |
 
-Summary: 44 rows; 31 work, 3 partly, 8 don't (interpolated animation, TrueType fonts, credits and end poem,
+Summary: 45 rows; 32 work, 3 partly, 8 don't (interpolated animation, TrueType fonts, credits and end poem,
 villager hats, trims on worn armour, locator bar styles, post effects, core shaders), 2 don't apply. Except the
 shaders, the missing pieces are missing vanilla features too, and each vanilla parity fix covers the pack case as well.
 
@@ -82,6 +84,7 @@ shaders, the missing pieces are missing vanilla features too, and each vanilla p
 | Gap | Size | Where |
 | --- | --- | --- |
 | Animation `interpolate` | small | fix PR (`gfx.rs` `animate_sprites`) |
+| Server pack download toasts (`download.pack.*`) | small | `game/server_packs.rs` |
 | GUI scaling `width`/`height`, `stretch_inner`, `tile`, `stretch` | small | next fix PR (`ui.rs`) |
 | Villager hats | small | [#334](https://github.com/ludovic111/horizon/issues/334) |
 | `blur`/`clamp` from packs | small | [#335](https://github.com/ludovic111/horizon/issues/335) |
@@ -89,7 +92,7 @@ shaders, the missing pieces are missing vanilla features too, and each vanilla p
 | Trims on worn armour (paletted textures) | medium | [#337](https://github.com/ludovic111/horizon/issues/337) |
 | Credits and end poem screen | medium | [#338](https://github.com/ludovic111/horizon/issues/338) |
 | Locator bar | medium | [#339](https://github.com/ludovic111/horizon/issues/339) |
-| Post effects and core shaders | large | [shader-packs.md](shader-packs.md) |
+| Post effects and core shaders | large | none yet |
 
 ## Testing a pack
 

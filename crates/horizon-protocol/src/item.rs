@@ -2,10 +2,12 @@
 //! item's registry id and a data component patch, plus the hashed form the
 //! client sends back in container clicks (HashedStack).
 use crate::{
-    Error, Result,
+    Result,
     buf::{Codec, Reader, Writer},
 };
 use horizon_world::nbt::Tag;
+
+mod skip;
 
 /// minecraft:data_component_type registry ids (26.3).
 pub mod component {
@@ -32,8 +34,13 @@ pub mod component {
     pub const DYED_COLOR: i32 = 47;
     pub const MAP_ID: i32 = 48;
     pub const MAP_POST_PROCESSING: i32 = 50;
+    pub const CHARGED_PROJECTILES: i32 = 51;
+    pub const POTION_CONTENTS: i32 = 53;
     pub const WRITABLE_BOOK_CONTENT: i32 = 56;
     pub const WRITTEN_BOOK_CONTENT: i32 = 57;
+    pub const TRIM: i32 = 58;
+    pub const FIREWORK_EXPLOSION: i32 = 70;
+    pub const FIREWORKS: i32 = 71;
 }
 
 /// A written book's content (`WrittenBookContent.STREAM_CODEC`): the
@@ -61,6 +68,13 @@ pub enum Component {
     Lore(Vec<Tag>),
     Enchantments(Vec<(i32, i32)>),
     AttackRange([f32; 6]),
+    /// `PotionContents`: the potion's `minecraft:potion` id and the custom
+    /// colour; the custom effects and name stay their encoded bytes.
+    Potion {
+        potion: Option<i32>,
+        color: Option<i32>,
+        rest: Vec<u8>,
+    },
     Profile(Profile),
     CustomModelData {
         floats: Vec<f32>,
@@ -75,6 +89,59 @@ pub enum Component {
     /// `WritableBookContent`: the pages (raw text).
     WritableBook(Vec<String>),
     WrittenBook(WrittenBook),
+    /// `ChargedProjectiles`: a loaded crossbow's ammunition, as templates.
+    Stacks(Vec<Stack>),
+    /// `Fireworks`: flight duration and its explosions.
+    Fireworks {
+        flight: i32,
+        explosions: Vec<FireworkExplosion>,
+    },
+    /// `FireworkExplosion` (a firework star).
+    FireworkExplosion(FireworkExplosion),
+    /// `ArmorTrim` naming its material and pattern by registry id (`trim_material`,
+    /// `trim_pattern`); a trim with a direct holder stays [`Component::Raw`].
+    Trim {
+        material: i32,
+        pattern: i32,
+    },
+    /// A component Horizon reads past without interpreting it: its encoded
+    /// bytes, written back as they came.
+    Raw(Vec<u8>),
+}
+
+/// `FireworkExplosion.STREAM_CODEC`: shape id, colors, fade colors, trail
+/// and twinkle (FireworkExplosion.Shape's BY_ID order).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FireworkExplosion {
+    pub shape: i32,
+    pub colors: Vec<i32>,
+    pub fade: Vec<i32>,
+    pub trail: bool,
+    pub twinkle: bool,
+}
+impl FireworkExplosion {
+    fn read(r: &mut Reader) -> Result<Self> {
+        let ints = |r: &mut Reader| -> Result<Vec<i32>> {
+            let n = r.count(1024)?;
+            (0..n).map(|_| r.i32()).collect()
+        };
+        Ok(Self {
+            shape: r.varint()?,
+            colors: ints(r)?,
+            fade: ints(r)?,
+            trail: r.bool()?,
+            twinkle: r.bool()?,
+        })
+    }
+    fn write(&self, w: &mut Writer) {
+        w.varint(self.shape);
+        w.varint(self.colors.len() as i32);
+        self.colors.iter().for_each(|c| w.i32(*c));
+        w.varint(self.fade.len() as i32);
+        self.fade.iter().for_each(|c| w.i32(*c));
+        w.bool(self.trail);
+        w.bool(self.twinkle);
+    }
 }
 
 /// `Filterable.streamCodec`: the raw value, then an optional filtered one
@@ -125,6 +192,10 @@ impl Component {
                     resolved: r.bool()?,
                 })
             }
+            CHARGED_PROJECTILES => {
+                let n = r.count(1024)?;
+                Self::Stacks((0..n).map(|_| Template::read(r)).collect::<Result<_>>()?)
+            }
             DYED_COLOR => Self::Int(r.i32()?),
             UNBREAKABLE | CREATIVE_SLOT_LOCK => Self::Unit,
             ENCHANTMENT_GLINT_OVERRIDE => Self::Bool(r.bool()?),
@@ -142,6 +213,22 @@ impl Component {
                         .map(|_| Ok((r.varint()?, r.varint()?)))
                         .collect::<Result<_>>()?,
                 )
+            }
+            POTION_CONTENTS => {
+                let potion = if r.bool()? { Some(r.varint()?) } else { None };
+                let color = if r.bool()? { Some(r.i32()?) } else { None };
+                let start = r.position();
+                skip::potion_effects_and_name(r)?;
+                // No custom effects and no name: an empty tail.
+                let rest = match r.since(start) {
+                    [0, 0] => Vec::new(),
+                    bytes => bytes.to_vec(),
+                };
+                Self::Potion {
+                    potion,
+                    color,
+                    rest,
+                }
             }
             ATTACK_RANGE => {
                 let mut values = [0.0f32; 6];
@@ -217,11 +304,46 @@ impl Component {
                     hidden: (0..n).map(|_| r.varint()).collect::<Result<_>>()?,
                 }
             }
-            other => return Err(Error::new(format!("unsupported item component {other}"))),
+            FIREWORKS => {
+                let flight = r.varint()?;
+                let n = r.count(256)?;
+                Self::Fireworks {
+                    flight,
+                    explosions: (0..n)
+                        .map(|_| FireworkExplosion::read(r))
+                        .collect::<Result<_>>()?,
+                }
+            }
+            FIREWORK_EXPLOSION => Self::FireworkExplosion(FireworkExplosion::read(r)?),
+            // ArmorTrim.STREAM_CODEC: two holders, each a reference's id plus
+            // one. A direct material or pattern has no registry name: read past.
+            TRIM => {
+                let start = r.position();
+                skip::component(TRIM, r)?;
+                let bytes = r.since(start);
+                let mut ids = Reader::new(bytes);
+                match (ids.varint(), ids.varint()) {
+                    (Ok(material @ 1..), Ok(pattern @ 1..)) if ids.remaining() == 0 => Self::Trim {
+                        material: material - 1,
+                        pattern: pattern - 1,
+                    },
+                    _ => Self::Raw(bytes.to_vec()),
+                }
+            }
+            other => {
+                let start = r.position();
+                skip::component(other, r)?;
+                Self::Raw(r.since(start).to_vec())
+            }
         })
     }
     fn write(&self, kind: i32, w: &mut Writer) {
         match self {
+            Self::Raw(bytes) => w.bytes(bytes),
+            Self::Trim { material, pattern } => {
+                w.varint(material + 1);
+                w.varint(pattern + 1);
+            }
             Self::Int(v) if kind == component::DYED_COLOR => w.i32(*v),
             Self::Int(v) => w.varint(*v),
             Self::Unit => {}
@@ -240,6 +362,27 @@ impl Component {
                 }
             }
             Self::AttackRange(values) => values.iter().for_each(|v| w.f32(*v)),
+            Self::Potion {
+                potion,
+                color,
+                rest,
+            } => {
+                w.bool(potion.is_some());
+                if let Some(id) = potion {
+                    w.varint(*id);
+                }
+                w.bool(color.is_some());
+                if let Some(color) = color {
+                    w.i32(*color);
+                }
+                // An empty tail is no custom effects and no name.
+                if rest.is_empty() {
+                    w.varint(0);
+                    w.bool(false);
+                } else {
+                    w.bytes(rest);
+                }
+            }
             Self::Profile(p) => {
                 w.u8(0);
                 w.bool(p.name.is_some());
@@ -283,6 +426,16 @@ impl Component {
                 w.varint(hidden.len() as i32);
                 hidden.iter().for_each(|h| w.varint(*h));
             }
+            Self::Stacks(stacks) => {
+                w.varint(stacks.len() as i32);
+                stacks.iter().for_each(|s| Template::write(s, w));
+            }
+            Self::Fireworks { flight, explosions } => {
+                w.varint(*flight);
+                w.varint(explosions.len() as i32);
+                explosions.iter().for_each(|e| e.write(w));
+            }
+            Self::FireworkExplosion(e) => e.write(w),
             Self::WritableBook(pages) => {
                 w.varint(pages.len() as i32);
                 for page in pages {
@@ -486,6 +639,51 @@ mod tests {
     }
 
     #[test]
+    fn potion_contents_round_trip() {
+        let mut arrow = Stack::new(7, 3);
+        arrow.added.push((
+            component::POTION_CONTENTS,
+            Component::Potion {
+                potion: Some(31),
+                color: None,
+                rest: Vec::new(),
+            },
+        ));
+        round::<Option<Stack>, Slot>(Some(arrow));
+        // A custom colour, one custom effect (speed II for 600 ticks, shown,
+        // no hidden effect) and a custom name survive as they came.
+        let mut w = Writer::new();
+        w.bool(false);
+        w.bool(true);
+        w.i32(0x00FF_8800);
+        w.varint(1);
+        for v in [1, 1, 600] {
+            w.varint(v);
+        }
+        for b in [false, true, true, false] {
+            w.bool(b);
+        }
+        w.bool(true);
+        w.string("Tea");
+        let mut r = Reader::new(&w.data);
+        let read = Component::read(component::POTION_CONTENTS, &mut r).unwrap();
+        assert_eq!(r.remaining(), 0);
+        let Component::Potion {
+            potion,
+            color,
+            rest,
+        } = &read
+        else {
+            panic!("{read:?}");
+        };
+        assert_eq!((*potion, *color), (None, Some(0x00FF_8800)));
+        assert!(!rest.is_empty());
+        let mut again = Writer::new();
+        read.write(component::POTION_CONTENTS, &mut again);
+        assert_eq!(again.data, w.data);
+    }
+
+    #[test]
     fn stacks_round_trip() {
         round::<Option<Stack>, Slot>(None);
         round::<Option<Stack>, Slot>(Some(Stack::new(42, 64)));
@@ -534,6 +732,59 @@ mod tests {
     }
 
     #[test]
+    fn fireworks_components_round_trip() {
+        let mut rocket = Stack::new(42, 1);
+        rocket.added.push((
+            component::FIREWORKS,
+            Component::Fireworks {
+                flight: 3,
+                explosions: vec![
+                    FireworkExplosion {
+                        shape: 4,
+                        colors: vec![0xff0000, 0x00ff00],
+                        fade: vec![0x0000ff],
+                        trail: true,
+                        twinkle: false,
+                    },
+                    FireworkExplosion {
+                        shape: 0,
+                        colors: vec![],
+                        fade: vec![],
+                        trail: false,
+                        twinkle: true,
+                    },
+                ],
+            },
+        ));
+        rocket.added.push((
+            component::FIREWORK_EXPLOSION,
+            Component::FireworkExplosion(FireworkExplosion {
+                shape: 2,
+                colors: vec![7],
+                fade: vec![],
+                trail: false,
+                twinkle: false,
+            }),
+        ));
+        round::<Option<Stack>, Slot>(Some(rocket));
+    }
+
+    #[test]
+    fn charged_projectiles_are_item_stack_templates() {
+        // A crossbow (id 7) loaded with one arrow (id 9): ChargedProjectiles
+        // is a list of ItemStackTemplate, the item before the count.
+        let bytes = [1, 7, 1, 0, 51, 1, 9, 1, 0, 0];
+        let stack = Slot::read(&mut Reader::new(&bytes)).unwrap().unwrap();
+        assert_eq!(
+            stack.component(component::CHARGED_PROJECTILES),
+            Some(&Component::Stacks(vec![Stack::new(9, 1)]))
+        );
+        let mut w = Writer::new();
+        Slot::write(&Some(stack), &mut w);
+        assert_eq!(w.data, bytes);
+    }
+
+    #[test]
     fn filtered_book_pages_are_read_and_dropped() {
         // A writable book with one page "hi" and its filtered "**".
         let bytes = [1, 7, 1, 0, 56, 1, 2, b'h', b'i', 1, 2, b'*', b'*'];
@@ -556,7 +807,8 @@ mod tests {
 
     #[test]
     fn unknown_components_are_errors() {
-        let bytes = [1, 5, 1, 0, 99];
+        // 122 is past DataComponents' last id (cushion_color, 121).
+        let bytes = [1, 5, 1, 0, 122];
         assert!(Slot::read(&mut Reader::new(&bytes)).is_err());
     }
 
@@ -604,5 +856,45 @@ mod tests {
             profile.properties,
             [("textures".to_owned(), "x".to_owned(), None)]
         );
+    }
+
+    #[test]
+    fn components_read_past_keep_their_bytes() {
+        // Vanilla 26.3's encoding (tools/test_item_wire_parity.py) of a chestplate's
+        // armour trim (decoded: both holders are references), a banner's patterns
+        // (one direct), a pot's sherds and a stew's effects: one server's
+        // inventory, recipe book and advancements had them.
+        for (hex, kind) in [
+            ("01bd0801003a0502", 58),
+            ("01890b01004a02200e000b6d696e6563726166743a7801790b", 74),
+            ("01880301004c01f60801000001be0c0100000001d30c010000", 76),
+            ("01a408010037020f6412a001", 55),
+        ] {
+            let bytes: Vec<u8> = (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+                .collect();
+            let mut r = Reader::new(&bytes);
+            let stack = Slot::read(&mut r).unwrap();
+            assert_eq!(r.remaining(), 0, "component {kind}");
+            let expected = |c: &Component| match kind {
+                58 => {
+                    *c == Component::Trim {
+                        material: 4,
+                        pattern: 1,
+                    }
+                }
+                _ => matches!(c, Component::Raw(_)),
+            };
+            assert!(
+                stack
+                    .as_ref()
+                    .and_then(|s| s.component(kind))
+                    .is_some_and(expected)
+            );
+            let mut w = Writer::new();
+            Slot::write(&stack, &mut w);
+            assert_eq!(w.data, bytes, "component {kind}");
+        }
     }
 }

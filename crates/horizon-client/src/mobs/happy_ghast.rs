@@ -17,7 +17,6 @@ use horizon_core::{
 // Happy ghast state: `head` the harness, `scratch[0]` 1 once set up as a
 // baby and 2 as an adult, `ai.home` the restriction, `counter`
 // the end tick of the follow-an-adult range pick.
-pub const BABY_SCALE: f64 = 0.2375;
 /// `Attributes.FLYING_SPEED` and the speed `travel` uses (`* 5 / 3`).
 pub const FLYING_SPEED: f64 = 0.05;
 pub const AIR_SPEED: f32 = 0.05 * 5.0 / 3.0;
@@ -40,6 +39,10 @@ fn setup(m: &mut Mob, baby: bool) {
     m.ai.look.wanted = [0.0; 3];
     m.ai.look.cooldown = 0;
     m.extra.counter2 = 0;
+    // The new navigation's PathNavigation constructor.
+    m.ai.nav.required_path_length = 16.0;
+    m.ai.nav.max_visited_nodes =
+        (super::finalize::base_value(m, super::finalize::Attr::FollowRange) * 16.0).floor() as i32;
     if baby {
         m.ai.look.kind = LookKind::Default;
         m.ai.mov.kind = MoveKind::Flying {
@@ -49,7 +52,7 @@ fn setup(m: &mut Mob, baby: bool) {
         // BabyFlyingPathNavigation.
         m.ai.nav.kind = NavKind::Flying;
         m.ai.nav.can_float = true;
-        m.ai.nav.required_path_length = 48.0;
+        m.set_required_path_length(48.0);
         return;
     }
     if was == 1 {

@@ -210,7 +210,7 @@ impl Tool {
     pub fn call(&self, args: &Value) -> Result<String, String> {
         let words = self.argv(args)?;
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let out = std::process::Command::new(exe)
+        let out = horizon_launcher::process::command(exe)
             .arg("--json")
             .args(&words)
             .stdin(std::process::Stdio::null())
@@ -366,7 +366,6 @@ mod tests {
             "prepare",
             "notes",
             "update",
-            "update_channel",
             "game_args",
             "settings",
             "logs",
@@ -394,14 +393,15 @@ mod tests {
         assert_eq!(schema["inputSchema"]["properties"]["text"]["type"], "array");
         let kinds = &schema["inputSchema"]["properties"]["kind"]["enum"];
         assert!(
-            kinds.as_array().unwrap().contains(&json!("shader")),
+            kinds.as_array().unwrap().contains(&json!("modpack"))
+                && !kinds.as_array().unwrap().contains(&json!("shader")),
             "{kinds}"
         );
         assert_eq!(
             search
-                .argv(&json!({ "text": ["fresh", "animations"], "kind": "shader", "everything": true }))
+                .argv(&json!({ "text": ["fresh", "animations"], "kind": "resource", "everything": true }))
                 .unwrap(),
-            ["mods", "search", "--kind=shader", "--everything", "fresh", "animations"]
+            ["mods", "search", "--kind=resource", "--everything", "fresh", "animations"]
         );
         let run = tool("servers_run");
         assert_eq!(
@@ -420,6 +420,20 @@ mod tests {
         );
     }
 
+    /// Whether the reference on disk says `want`, whatever line endings the checkout gave it: Git
+    /// for Windows checks text out with CRLF (core.autocrlf) where .gitattributes does not pin LF.
+    fn up_to_date(have: &str, want: &str) -> bool {
+        have.replace("\r\n", "\n") == want
+    }
+
+    #[test]
+    fn a_windows_checkout_of_the_reference_is_up_to_date() {
+        let want = markdown();
+        assert!(up_to_date(&want, &want));
+        assert!(up_to_date(&want.replace('\n', "\r\n"), &want));
+        assert!(!up_to_date(&want.replacen("## ", "### ", 1), &want));
+    }
+
     #[test]
     fn the_launcher_reference_is_up_to_date() {
         let path =
@@ -430,7 +444,7 @@ mod tests {
         }
         let have = std::fs::read_to_string(&path).unwrap_or_default();
         assert!(
-            have == want,
+            up_to_date(&have, &want),
             "docs/launcher-commands.md is out of date: HORIZON_WRITE_DOCS=1 cargo test --manifest-path launcher/Cargo.toml the_launcher_reference"
         );
         for tool in all() {

@@ -25,9 +25,9 @@ The opening, then Play ([clip](docs/opening.webm)):
   or another installed Horizon version, so the original Minecraft install is
   only required when no valid imported copy exists.
 - **Mods**: search Modrinth (CurseForge support is coming soon) for resource
-  packs, Iris/OptiFine shader packs and modpacks, each marked Works, Partly or Doesn't run in
+  packs and modpacks, each marked Works, Partly or Doesn't run in
   Horizon; Java mod jars are never offered. Install puts a pack and what it needs in
-  `resourcepacks/` or `shaderpacks/` only after its SHA-512 matches, and a
+  `resourcepacks/` only after its SHA-512 matches, and a
   modpack goes to the Modpacks page; installed packs show their source and checksum, with Update
   and Remove ([docs/mod-browser.md](../docs/mod-browser.md)).
 - **Modpacks**: import a Java modpack (a Modrinth `.mrpack`, a CurseForge zip, or a Prism,
@@ -78,16 +78,13 @@ page `servers.json` (the list), `servers/<name>/` (the servers created there) an
 `server-runtime/` (the programs and game files they run).
 
 - **Settings**: install new Horizon versions automatically (on unless you turn it off; the
-  selected version only moves to the new one if you were on the newest), which ones (Updates,
-  below), the opening animation, the game's extra command-line arguments, and the launcher's own
-  version and update state.
-- **Updates**: **Stable** (the default) installs a tested build about once a day, the betas that
-  `promote.yml` makes stable; **Alpha** installs every release as soon as it is built, several
-  times a day, and can break (docs/release-flow.md, "Channels"). While it is open, the launcher
-  looks for new releases every 4 hours on Stable and every 30 minutes on Alpha. Kept as `update_channel` in
-  `settings.json`; a `beta_builds: true` from launchers before 0.2 reads as Alpha (so does a `nightly` from the channel's first name).
-  `horizon-launcher update-channel [stable|alpha]` shows or sets it. The **Versions** page
-  shows each release's channel. The launcher's own updates don't depend on it.
+  selected version only moves to the new one if you were on the newest), the opening animation,
+  the game's extra command-line arguments, and the launcher's own version and update state.
+- **Updates**: there is one channel. Every release is published as the release, GitHub's latest,
+  once its smoke test passed (docs/release-flow.md), and the launcher installs it. The game
+  pre-releases of the old Alpha channel (v0.2.1 on) stay on the Versions page to install
+  by hand, but are never installed as an update. The `update_channel` and `beta_builds` keys
+  older launchers wrote in `settings.json` are ignored and dropped on the next save.
 - **Game arguments**: extra arguments added to the game's command line (for example
   `--server-thread`), one line where quotes group a word with spaces. They are appended after the
   launcher's own arguments, kept as `game_args` in `settings.json`, and apply the next time the
@@ -100,9 +97,13 @@ page `servers.json` (the list), `servers/<name>/` (the servers created there) an
 Long pages, dialogs, the server console and data previews have a visible scrollbar when
 their content overflows. Drag the thumb or click the track to navigate without a mouse wheel.
 
+Pages and Home's landscape fill the window as it resizes. Windows uses a matching title
+bar with native dragging, resizing, Snap,
+minimize, maximize/restore and close; macOS and Linux keep their system title bars.
+
 ## Updates
 
-The launcher looks for a newer Horizon release when it starts and every four hours while it
+The launcher looks for a newer Horizon release when it starts and every 30 minutes while it
 is open, and shows a small "available, Install" line on Play.
 
 It also updates itself from GitHub releases tagged `launcher@X.Y.Z` (Horizon's own are `vX.Y.Z`;
@@ -111,8 +112,14 @@ every 0.2 tag counts as newer than all of those (docs/versioning.md). It downloa
 own binary, and offers "Restart" in the footer. Development builds and
 `HORIZON_LAUNCHER_NO_SELF_UPDATE=1` never replace themselves.
 
+On Linux a release build that starts writes its applications-menu entry only when there is
+none, or when the program the entry starts (its `TryExec`, else its `Exec`) no longer exists.
+An entry pointing at another launcher that works is left alone, so a test or development build
+never takes it over. Turning the Settings switch on, or `horizon-launcher desktop-entry`,
+points the entry at this launcher whatever is there.
+
 Linux packagers can set `HORIZON_LAUNCHER_DESKTOP_EXEC` to a wrapper's absolute path.
-Menu entries created by Settings or `desktop-entry` then start that wrapper, which can
+Menu entries the launcher writes then start that wrapper, which can
 set `HORIZON_LAUNCHER_NO_SELF_UPDATE=1` to keep launcher updates with the package manager.
 
 Launcher releases are automatic (docs/release-flow.md in the repository): when main changes the
@@ -124,7 +131,12 @@ and `horizon-launcher-windows-x64.zip`, never marked latest. The version is buil
 
 ## Command line
 
-The same binary is a command-line tool; without a subcommand it opens the window.
+The same binary is a command-line tool; without a subcommand it opens the window. On Windows it
+is a windowed program, so a desktop start opens no terminal; a subcommand writes to the terminal
+it was typed in, or to the pipes and files it was given (MCP keeps its stdio). Interactive `cmd`
+and PowerShell don't wait for a windowed program: they show the prompt again before its output
+and don't set `%ERRORLEVEL%` / `$LASTEXITCODE`. Scripts that need the exit code use
+`start /wait horizon-launcher …` or `Start-Process -Wait`, or read its output through a pipe.
 
     horizon-launcher versions [--installed]       releases on GitHub, or what is installed (* = selected)
     horizon-launcher install <tag|latest>
@@ -134,7 +146,6 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher server [--dir <dir>] [--version <tag>] [--accept-eula]
     horizon-launcher notes [<tag>]                  patch notes as plain text
     horizon-launcher links                          the Discord, sponsor and website links
-    horizon-launcher update-channel [stable|alpha]     show or set which releases install by themselves
     horizon-launcher game-args [<line>]             show or set the extra arguments the game starts with
     horizon-launcher update [--check]               Horizon and the launcher
     horizon-launcher logs [--lines N] [--crash]     the end of the game's log, or its newest crash report
@@ -168,7 +179,7 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher data benchmark <report.json>   upload a benchmark report, printed first
 
 `--json` prints JSON where there is something to report (`versions`, `install`, `notes`,
-`next`, `links`, `update-channel`, `game-args`, `update --check`, `logs`, `account`, `benchmark`, `data`, `modpack`). Errors go to stderr with exit code 1. `server` runs in the terminal,
+`next`, `links`, `game-args`, `update --check`, `logs`, `account`, `benchmark`, `data`, `modpack`). Errors go to stderr with exit code 1. `server` runs in the terminal,
 so lines you type reach its console. `HORIZON_LAUNCHER_HOME` replaces the data folder (for
 scripts and tests).
 
@@ -248,13 +259,19 @@ Each session writes its own measurements to `benchmarks/launcher-<time>-session.
 launcher's data folder, in the [benchmark report format](../docs/benchmark-report.md): start to the
 first frame, the release list fetch, installs and updates (download and unpack), preparing, Play to
 the game's first frame, memory, UI frame times and the binary's size, with the machine's CPU, RAM
-and OS. Attach it to an issue about the launcher being slow. `horizon-launcher benchmark` measures
-on purpose: it starts the launcher `--repeats` times (5; the first start is the cold one, as far
+and OS (read on a thread after the first frame: on Windows those queries take seconds). Attach it
+to an issue about the launcher being slow. `horizon-launcher benchmark` measures on purpose: it starts the launcher `--repeats` times (5; the first start is the cold one, as far
 as the OS's file cache allows), switches pages for a few seconds in each, rests 3 seconds to
 measure idle CPU, fetches the release list 3 times, and writes one report there with means and
 95% confidence intervals. Its window has to be on a screen that is awake. Session logs stay on
 your machine; a `benchmark` report is uploaded, dated to the day, only if you allowed benchmark
 uploads ([data collection](../docs/telemetry.md)).
+
+Long lists on Mods (results, installed entries, coverage reports and project versions), Versions
+and Patch notes build only nearby rows, including on their first frame. Variable row heights
+are measured as they enter view; hidden ranges share spacers in the existing page scrollbar.
+On Windows, `cargo test --bin horizon-launcher desktop_list_renders_the_viewport_after_scrollbar_jumps
+-- --ignored` checks 10,000 rows of different heights in a real GPUI window (requires an awake desktop/GPU).
 
 ## Building
 

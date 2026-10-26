@@ -461,14 +461,14 @@ impl Game<'_> {
                     count: 1,
                     ..h.clone()
                 });
-                self.inventory[self.selected] = Some(ItemStack {
+                *self.held_mut() = Some(ItemStack {
                     count: h.count - 1,
                     ..h
                 });
             }
             h => {
                 self.armor_stands[i].equipment[slot] = h;
-                self.inventory[self.selected] = current;
+                *self.held_mut() = current;
             }
         }
         let p = self.armor_stands[i].position;

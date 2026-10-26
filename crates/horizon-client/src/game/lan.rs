@@ -55,8 +55,8 @@ pub(super) struct LanHost {
     pub play: HashMap<u32, super::lan_actions::GuestPlay>,
     /// Blocks broken this tick (their sound is a level event for the guests).
     pub broken: Vec<[f64; 3]>,
-    /// Hurt and death state of the mobs guests see.
-    mob_state: HashMap<super::Dim, HashMap<u32, (i32, bool)>>,
+    /// Hurt time, death and swing time (while swinging) of the mobs guests see.
+    mob_state: HashMap<super::Dim, HashMap<u32, (i32, bool, Option<i32>)>>,
     /// The guest each mob sees as its player, when not the host (game/lan_mobs.rs).
     pub mob_players: HashMap<u32, u32>,
     /// An integrated server's owner (game/integrated.rs).
@@ -66,6 +66,8 @@ pub(super) struct LanHost {
     /// whose respawn replaces their waypoint.
     pub waypoints: std::collections::HashMap<String, lan::waypoints::Waypoints>,
     pub waypoint_dead: std::collections::HashSet<u128>,
+    /// The world border as the guests were last told of it (lan/border.rs).
+    pub border_sent: Option<lan::border::Sent>,
     /// Guests' commands waiting for the hub to be back in `self.lan`, where
     /// a command can reach every player (game/lan_actions.rs).
     pub commands: Vec<super::lan_actions::GuestCommand>,
@@ -160,17 +162,28 @@ fn mob_meta(
             meta.push((3, serializer::BOOLEAN, Value::Bool(true)));
         }
     }
+    // LivingEntity.DATA_LIVING_ENTITY_FLAGS: using an item 1, in the off
+    // hand 2 (a skeleton draws its bow, a witch raises her potion).
+    let using = i8::from(m.extra.using_item > 0) | i8::from(m.extra.using_off_hand) << 1;
+    if using != 0 {
+        meta.push((8, serializer::BYTE, Value::Byte(using)));
+    }
+    defaults.push((8, serializer::BYTE, Value::Byte(0)));
     // LivingEntity.DATA_HEALTH_ID: defined as 1, then set to the max health.
     let health = m.health.max(0.0);
     if health != 1.0 {
         meta.push((9, serializer::FLOAT, Value::Float(health)));
     }
     defaults.push((9, serializer::FLOAT, Value::Float(1.0)));
-    // Mob.DATA_MOB_FLAGS_ID: no AI 1, left-handed 2.
-    let flags = i8::from(m.no_ai) | i8::from(m.extra.left_handed) << 1;
+    // Mob.DATA_MOB_FLAGS_ID: no AI 1, left-handed 2, aggressive 4 (what
+    // draws a vindicator's axe, a skeleton's drawn bow, a piglin's raised
+    // weapon).
+    let flags =
+        i8::from(m.no_ai) | i8::from(m.extra.left_handed) << 1 | i8::from(m.ai.aggressive) << 2;
     if flags != 0 {
         meta.push((15, serializer::BYTE, Value::Byte(flags)));
     }
+    defaults.push((15, serializer::BYTE, Value::Byte(0)));
     // AgeableMob.DATA_BABY_ID (and Zombie's, Piglin's).
     if let Some(index) = baby_index(kind) {
         if m.is_baby() {
@@ -286,6 +299,21 @@ fn mob_meta(
             if e.flag {
                 meta.push((18, serializer::BOOLEAN, Value::Bool(true)));
             }
+        }
+        // Pillager.IS_CHARGING_CROSSBOW: the charge pose and the held
+        // item's loading animation.
+        "minecraft:pillager" => {
+            if e.flag {
+                meta.push((17, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((17, serializer::BOOLEAN, Value::Bool(false)));
+        }
+        // SpellcasterIllager.DATA_SPELL_CASTING_ID: the casting pose.
+        "minecraft:evoker" | "minecraft:illusioner" => {
+            if e.variant2 != 0 {
+                meta.push((17, serializer::BYTE, Value::Byte(e.variant2 as i8)));
+            }
+            defaults.push((17, serializer::BYTE, Value::Byte(0)));
         }
         // Enderman.DATA_CARRY_STATE.
         "minecraft:enderman" => {
@@ -409,7 +437,12 @@ impl Game<'_> {
                     "game_mode": g.game_mode,
                     // ItemCooldowns: the ticks the shield an axe disabled stays down.
                     "shield_cooldown": h.play.get(&g.conn).map_or(0, |p| p.shield_cooldown),
+                    // The item the server has this guest using: its slot and ticks.
+                    "using": h.play.get(&g.conn).and_then(|p| p.using())
+                        .map(|(slot, ticks)| json!({ "slot": slot, "ticks": ticks })),
                     "sneaking": g.sneaking,
+                    // The server's Elytra glide (shared flag 7).
+                    "fall_flying": g.fall_flying,
                     "sleeping": g.bed,
                     "health": g.health,
                     // The server's body: its air supply and golden hearts.
@@ -561,6 +594,7 @@ impl Game<'_> {
             owner: None,
             waypoints: Default::default(),
             waypoint_dead: Default::default(),
+            border_sent: None,
             commands: Vec::new(),
             states: Default::default(),
         });
@@ -826,8 +860,11 @@ impl Game<'_> {
         self.lan_object_states(host_entity, hub, out);
     }
 
-    /// Run the hub for this tick and apply what the guests did.
-    pub(super) fn tick_lan(&mut self) {
+    /// Run the hub for this tick and apply what the guests did. While the
+    /// single player game is `paused` only the connections run
+    /// (`IntegratedServer.tickPaused`): `ServerGamePacketListenerImpl.tick`
+    /// skips `tickPlayer`, so no player's air, hunger or damage moves on.
+    pub(super) fn tick_lan(&mut self, paused: bool) {
         let Some(mut host) = self.lan.take() else {
             return;
         };
@@ -867,6 +904,7 @@ impl Game<'_> {
                     .collect();
                 self.lan_riding(host_entity, &guests, &mut host.hub.riding);
                 self.lan_entities(host_entity, &host.mob_players, &mut host.hub, &mut states);
+                self.lan_hook_states(host_entity, &host.play, &host.hub, &mut states);
             } else {
                 states.clear();
             }
@@ -891,6 +929,7 @@ impl Game<'_> {
                     tick_frozen: self.clock.frozen(),
                     tick_steps: self.clock.step_state(),
                     collision: Some(self.collision),
+                    border: &self.border,
                 };
                 host.hub.movement_checks = (
                     self.ui.rules.bool("player_movement_check"),
@@ -966,6 +1005,7 @@ impl Game<'_> {
                         self.save_guest(&host, &guest);
                         host.models.remove(&guest.conn);
                         host.play.remove(&guest.conn);
+                        self.guest_combat.remove(&guest.conn);
                         if self.options.dedicated.is_some() && guest.placed {
                             super::dedicated::log(
                                 "INFO",
@@ -990,16 +1030,22 @@ impl Game<'_> {
             host.states = states;
         }
         self.lan_flush_effects(&mut host);
-        self.tick_guests(&mut host);
+        if !paused {
+            self.tick_guests(&mut host);
+        }
         self.lan_living_flags(&mut host);
         self.tick_server_travel(&mut host);
         self.lan_swings(&mut host);
         self.lan_update_streaming(&host);
         self.lan_update_models(&mut host);
         self.lan_update_waypoints(&mut host, state.as_ref());
+        self.lan_sync_scoreboard(&mut host);
+        self.lan_sync_border(&mut host);
         drop(holding);
         lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
         self.lan = Some(host);
+        // A mace's wind burst from a guest's attack.
+        let _ = self.flush_wind_bursts();
     }
 
     fn lan_guest_joined(
@@ -1055,6 +1101,7 @@ impl Game<'_> {
             }
             // A dedicated server has no host player.
             self.lan_entities(None, &host.mob_players, &mut host.hub, &mut theirs);
+            self.lan_hook_states(None, &host.play, &host.hub, &mut theirs);
             theirs.as_slice()
         } else {
             entities
@@ -1073,6 +1120,7 @@ impl Game<'_> {
             tick_frozen: self.clock.frozen(),
             tick_steps: self.clock.step_state(),
             collision: Some(self.collision),
+            border: &self.border,
         };
         host.hub.place_new_player(conn, &mut ctx);
         if elsewhere && let Err(e) = self.enter_level(Some(host), back) {
@@ -1087,8 +1135,14 @@ impl Game<'_> {
         }
         for e in events {
             if let horizon_world::level::LevelEvent::LevelEvent { id, pos, data } = e {
-                // The acting guest does not predict the egg's teleport particles.
-                let except = if *id == 2015 { None } else { self.lan_acting };
+                // The acting guest does not predict the egg's teleport
+                // particles, nor bone meal's growth (BoneMealItem.useOn's
+                // levelEvent names no player).
+                let except = if matches!(*id, 2015 | 1505) {
+                    None
+                } else {
+                    self.lan_acting
+                };
                 self.lan_events
                     .push((*id, [pos.x, pos.y, pos.z], *data, except));
             }
@@ -1122,6 +1176,9 @@ impl Game<'_> {
         }
         for (id, event, at) in std::mem::take(&mut self.lan_entity_events) {
             host.hub.entity_event(id, event, at);
+        }
+        for (kind, pos, data) in std::mem::take(&mut self.lan_global_events) {
+            host.hub.global_level_event(kind, pos, data);
         }
         self.lan_broadcast_effects(host);
         if host.hub.guests.is_empty() {
@@ -1166,7 +1223,17 @@ impl Game<'_> {
             if dead && !old.is_some_and(|o| o.1) {
                 host.hub.entity_event(m.id as i32, 3, at);
             }
-            seen.insert(m.id, (m.hurt_time, dead));
+            // LivingEntity.swing on a server (a melee hit, a thrown potion):
+            // ClientboundSwingAnimationPacket for the players around. A swing
+            // started since the last flush, or restarted (its time went back).
+            let swing = m.ai.swinging.then_some(m.ai.swing_time);
+            if let Some(time) = swing
+                && !dead
+                && old.and_then(|o| o.2).is_none_or(|before| time < before)
+            {
+                host.hub.swing(m.id as i32, 0, at, None);
+            }
+            seen.insert(m.id, (m.hurt_time, dead, swing));
         }
         host.mob_state.insert(self.dim, seen);
     }

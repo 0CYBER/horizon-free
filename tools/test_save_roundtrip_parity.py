@@ -109,15 +109,9 @@ BENIGN = re.compile(r'(Unpacking |OFFLINE/INSECURE|online-mode|authenticate user
 
 # ---------------------------------------------------------------- vanilla server
 
-def free_port():
-    with socket.socket() as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
-
-
 class Vanilla:
     def __init__(self, directory, port=None, world='world', extra=None):
-        port = port or free_port()
+        port = port or lab.free_port()
         directory.mkdir(parents=True, exist_ok=True)
         (directory / 'eula.txt').write_text('eula=true\n')
         props = {
@@ -336,7 +330,7 @@ def entity_uuid_text(i):
 
 def vscreen_env():
     text = subprocess.run(['vscreen', 'env'], capture_output=True, text=True, check=True).stdout
-    env = dict(os.environ)
+    env = lab.game_env()
     env.pop('DISPLAY', None)
     for match in re.finditer(r'(\w+)=(\S+)', text.split('unset')[0]):
         env[match.group(1)] = match.group(2)
@@ -352,7 +346,7 @@ def horizon_resave(source, destination, bin_dir):
     ctl = [str(bin_dir / 'horizon-ctl'), '--socket', str(socket)]
     extra = []
     if sys.platform == 'darwin':
-        env = dict(os.environ, HORIZON_NO_AUDIO='1')
+        env = lab.game_env()
         extra = ['--offscreen']
     else:
         alsa = destination / 'null-asound.conf'

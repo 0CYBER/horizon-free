@@ -8,6 +8,7 @@ use horizon_client::{
     text::Text,
 };
 use horizon_core::random::RandomSource;
+use horizon_protocol::packets::play::{self, Clientbound as C};
 use horizon_world::attribute_map::ValueKind;
 use horizon_world::nbt::Tag;
 
@@ -58,7 +59,15 @@ impl Game<'_> {
                 self.recipe_unlocked(&unlocked);
                 count as i32
             } else {
-                self.level.recipe_book.remove_recipes(index, &recipes) as i32
+                let removed = self.level.recipe_book.remove_recipes(index, &recipes);
+                let count = removed.len() as i32;
+                // A network player's client drops them from its book.
+                if self.lan_acting.is_some() && !removed.is_empty() {
+                    self.guest_packets.push(C::RecipeBookRemove(
+                        horizon_protocol::packets::recipes::RecipeBookRemove { ids: removed },
+                    ));
+                }
+                count
             };
             tracker.track(&h, n);
         }
@@ -344,7 +353,26 @@ impl Game<'_> {
             Some(Arg::Resource(s)) => Some(s.clone()),
             _ => None,
         };
-        self.audio.stop_sounds(sound.as_deref(), source);
+        // StopSoundCommand: each target's connection gets the packet; the
+        // window's own player stops its sounds.
+        let packet = C::StopSound(play::StopSound {
+            source: source.map(|s| s as i32),
+            sound: sound.clone(),
+        });
+        for &t in &targets {
+            match t {
+                Target::Player if self.lan_acting.is_some() => {
+                    self.guest_packets.push(packet.clone());
+                }
+                Target::Player => self.audio.stop_sounds(sound.as_deref(), source),
+                Target::Guest(conn) => {
+                    if let Some(host) = self.lan.as_ref() {
+                        host.hub.send_to(conn, &packet);
+                    }
+                }
+                _ => {}
+            }
+        }
         let key = match (source, &sound) {
             (Some(_), Some(_)) => "commands.stopsound.success.source.sound",
             (Some(_), None) => "commands.stopsound.success.source.any",
@@ -409,6 +437,8 @@ impl Game<'_> {
             ],
             _ => [1.0, 0.0, 0.0],
         };
+        // The block state of a block particle, for its packet.
+        let mut block_state = None;
         let options = match ty {
             ParticleType::Dust => ParticleOptions::dust(
                 rgb,
@@ -470,6 +500,7 @@ impl Game<'_> {
                 match block {
                     Ok(Arg::Block(b)) => {
                         let state = self.block_state(&b)?;
+                        block_state = Some(state);
                         let at = self
                             .position_arg(ctx, "pos")
                             .unwrap_or_else(|| self.source_position())
@@ -487,10 +518,9 @@ impl Game<'_> {
         let pos = self
             .position_arg(ctx, "pos")
             .unwrap_or_else(|| self.source_position());
-        let delta = self.position_arg(ctx, "delta").map_or([0.0; 3], |d| {
-            let s = self.source_position();
-            [d[0] - s[0], d[1] - s[1], d[2] - s[2]]
-        });
+        // Vec3Argument.getVec3: the spread as given (relative parts from the
+        // source), not a position to measure from the source.
+        let delta = self.position_arg(ctx, "delta").unwrap_or([0.0; 3]);
         let speed = match ctx.get("speed") {
             Some(Arg::Float(v)) => *v,
             _ => 0.0,
@@ -501,27 +531,74 @@ impl Game<'_> {
         };
         // ParticleCommand.sendParticles: the viewers it reached, each within
         // 32 blocks (512 with `force`) of the particle's block centre.
+        // Without viewers, every player (PlayerList.getPlayers).
         let viewers = if ctx.get("viewers").is_some() {
             self.entities(ctx, "viewers", true)?
         } else {
-            vec![Target::Player]
+            let acting = self.lan_acting;
+            let guests = self.lan.iter().flat_map(|h| h.hub.guests.iter());
+            self.player
+                .as_ref()
+                .map(|_| Target::Player)
+                .into_iter()
+                .chain(
+                    guests
+                        .filter(|g| g.placed && Some(g.conn) != acting)
+                        .map(|g| Target::Guest(g.conn)),
+                )
+                .collect()
         };
-        let limit = if ctx.has("force") { 512.0 } else { 32.0 };
-        let reached = viewers
-            .iter()
-            .filter(|&&t| {
+        let force = ctx.has("force");
+        let limit = if force { 512.0 } else { 32.0 };
+        let reached: Vec<Target> = viewers
+            .into_iter()
+            .filter(|&t| {
                 self.target_position(t).is_some_and(|p| {
                     let c = p.map(|v| v.floor() + 0.5);
                     (c[0] - pos[0]).powi(2) + (c[1] - pos[1]).powi(2) + (c[2] - pos[2]).powi(2)
                         < limit * limit
                 })
             })
-            .count() as i32;
-        if reached == 0 {
+            .collect();
+        if reached.is_empty() {
             return Err(err("commands.particle.failed", &[]));
         }
-        // `ServerLevel.sendParticles`: no count means one particle with the delta as velocity.
-        if count <= 0 {
+        // ServerLevel.sendParticles: each viewer a server serves is sent the
+        // particles (the player in place too when it is a guest); the
+        // window's own player draws them.
+        let packet = self
+            .network_particle(&options, block_state)
+            .map(|particle| {
+                C::LevelParticles(play::LevelParticles {
+                    particle,
+                    override_limiter: force,
+                    always_show: false,
+                    pos,
+                    dist: delta.map(|d| d as f32),
+                    max_speed: [speed; 3],
+                    count: count.max(0),
+                    randomization: 0,
+                })
+            });
+        let mut local = false;
+        for &t in &reached {
+            match (t, &packet) {
+                (Target::Player, Some(p)) if self.lan_acting.is_some() => {
+                    self.guest_packets.push(p.clone());
+                }
+                (Target::Player, _) => local = true,
+                (Target::Guest(conn), Some(p)) => {
+                    if let Some(host) = self.lan.as_ref() {
+                        host.hub.send_to(conn, p);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let reached = reached.len() as i32;
+        if !local {
+        } else if count <= 0 {
+            // No count: one particle with the delta as velocity.
             self.particles.create(&options, pos, delta);
         } else {
             for _ in 0..count {
@@ -997,15 +1074,15 @@ impl Game<'_> {
         };
         let name = self.target_name(target);
         if id == "ride.dismount" {
-            let vehicle = match target {
-                Target::Player => self.riding.map(Target::Mob),
-                _ => None,
-            };
-            let Some(v) = vehicle else {
+            let Some(v) = self.ride_vehicle(target) else {
                 return Err(err("commands.ride.not_riding", &[&name.plain()]));
             };
             let vehicle_name = self.target_name(v);
-            self.dismount_mount();
+            match target {
+                Target::Player => self.dismount_mount(),
+                Target::Mob(rider) => self.dismount_mob(rider),
+                _ => {}
+            }
             self.feedback(Text::translate(
                 "commands.ride.dismount.success",
                 &[name, vehicle_name],
@@ -1017,11 +1094,8 @@ impl Game<'_> {
             return Ok(0);
         };
         let vehicle_name = self.target_name(vehicle);
-        if target == Target::Player && self.riding.is_some() {
-            let current = self
-                .riding
-                .map(Target::Mob)
-                .map_or_else(Text::empty, |v| self.target_name(v));
+        if let Some(current) = self.ride_vehicle(target) {
+            let current = self.target_name(current);
             return Err(err(
                 "commands.ride.already_riding",
                 &[&name.plain(), &current.plain()],
@@ -1030,21 +1104,41 @@ impl Game<'_> {
         if vehicle == Target::Player {
             return Err(err("commands.ride.mount.failure.cant_ride_players", &[]));
         }
-        if target == vehicle {
-            return Err(err("commands.ride.mount.failure.loop", &[]));
+        // getSelfAndPassengers: the vehicle is the target or rides it.
+        let mut up = Some(vehicle);
+        while let Some(v) = up {
+            if v == target {
+                return Err(err("commands.ride.mount.failure.loop", &[]));
+            }
+            up = self.ride_vehicle(v);
         }
-        // The player can ride mobs that carry a rider.
+        // Players and mobs can ride mobs.
         let Target::Mob(mob_id) = vehicle else {
             return Err(err(
                 "commands.ride.mount.failure.generic",
                 &[&name.plain(), &vehicle_name.plain()],
             ));
         };
-        if target != Target::Player || !self.mobs.iter().any(|m| m.id == mob_id && m.alive()) {
+        let rider = match target {
+            Target::Mob(id) => Some(id),
+            _ => None,
+        };
+        if !(target == Target::Player || rider.is_some())
+            || !self.mobs.iter().any(|m| m.id == mob_id && m.alive())
+        {
             return Err(err(
                 "commands.ride.mount.failure.generic",
                 &[&name.plain(), &vehicle_name.plain()],
             ));
+        }
+        if let Some(rider) = rider {
+            // Entity.startRiding.
+            self.mount_mob(rider, mob_id);
+            self.feedback(Text::translate(
+                "commands.ride.mount.success",
+                &[name, vehicle_name],
+            ));
+            return Ok(1);
         }
         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob_id) {
             m.extra.flag = false;
@@ -1059,6 +1153,47 @@ impl Game<'_> {
             &[name, vehicle_name],
         ));
         Ok(1)
+    }
+
+    /// Entity.getVehicle: the player's mount, or a mob's.
+    pub(super) fn ride_vehicle(&self, t: Target) -> Option<Target> {
+        let id = match t {
+            Target::Player => return self.riding.map(Target::Mob),
+            Target::Mob(id) => self.mobs.iter().find(|m| m.id == id)?.extra.mount?,
+            _ => return None,
+        };
+        Some(if self.boats.iter().any(|b| b.id == id) {
+            Target::Boat(id)
+        } else {
+            Target::Mob(id)
+        })
+    }
+    /// LivingEntity.stopRiding for a mob: off its vehicle
+    /// (Entity.removePassenger), then to where the vehicle lets it out
+    /// (LivingEntity.dismountVehicle).
+    fn dismount_mob(&mut self, rider: u32) {
+        let Some(i) = self.mobs.iter().position(|m| m.id == rider) else {
+            return;
+        };
+        let Some(v) = self.mobs[i].extra.mount.take() else {
+            return;
+        };
+        let (width, yaw) = (f64::from(self.mobs[i].width()), self.mobs[i].yaw);
+        let at = if let Some(b) = self.boats.iter().position(|b| b.id == v) {
+            self.boat_dismount_target(b, width, yaw)
+        } else if let Some(m) = self.mobs.iter_mut().find(|m| m.id == v) {
+            m.extra.rider = None;
+            // Entity.getDismountLocationForPassenger: on top of the vehicle.
+            let p = m.position;
+            horizon_core::geometry::Vec3::new(p.x, p.y + f64::from(m.height()), p.z)
+        } else {
+            self.mobs[i].position
+        };
+        let m = &mut self.mobs[i];
+        m.extra.passenger = false;
+        m.extra.boarding_cooldown = super::super::boat_passengers::BOARDING_COOLDOWN;
+        m.position = at;
+        m.previous = at;
     }
 
     // ---- /spreadplayers -----------------------------------------------------------------------

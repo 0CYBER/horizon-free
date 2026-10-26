@@ -44,6 +44,10 @@ pub struct Furnace {
     pub cooking_timer: i32,
     pub cooking_total: i32,
     pub speed: f32,
+    /// `AbstractFurnaceBlockEntity.recipesUsed`: how many of each recipe this furnace has
+    /// made since a player last took from its output. The experience is owed per recipe
+    /// rather than per item, and a save keeps it as the `RecipesUsed` compound.
+    pub recipes_used: HashMap<String, u32>,
 }
 /// A hopper's slots: the only plain container with five.
 pub const HOPPER_SLOTS: usize = 5;
@@ -190,6 +194,7 @@ impl BlockEntity {
                 cooking_timer: 0,
                 cooking_total: 0,
                 speed: 1.0,
+                recipes_used: HashMap::new(),
             }));
         }
         if name == "minecraft:creaking_heart" {
@@ -251,24 +256,6 @@ impl BlockEntity {
             _ => return None,
         };
         Some(Self::Chest(vec![None; size]))
-    }
-    /// The vanilla block entity type id of a container block.
-    pub fn id_for_block(name: &str) -> Option<&'static str> {
-        Some(match name {
-            "minecraft:chest" => "minecraft:chest",
-            n if n.ends_with("copper_chest") => "minecraft:chest",
-            "minecraft:trapped_chest" => "minecraft:trapped_chest",
-            "minecraft:barrel" => "minecraft:barrel",
-            "minecraft:hopper" => "minecraft:hopper",
-            "minecraft:dispenser" => "minecraft:dispenser",
-            "minecraft:dropper" => "minecraft:dropper",
-            "minecraft:furnace" => "minecraft:furnace",
-            "minecraft:blast_furnace" => "minecraft:blast_furnace",
-            "minecraft:smoker" => "minecraft:smoker",
-            n if n.ends_with("shulker_box") => "minecraft:shulker_box",
-            "minecraft:crafter" => "minecraft:crafter",
-            _ => return None,
-        })
     }
     pub fn id(&self) -> &'static str {
         match self {
@@ -400,7 +387,7 @@ impl Providers {
         );
         Self { ints, floats }
     }
-    fn eval(&self, v: &Value, fast: bool, table: &HashMap<String, Value>, depth: u32) -> f64 {
+    fn eval(v: &Value, fast: bool, table: &HashMap<String, Value>, depth: u32) -> f64 {
         if depth > 16 {
             return 0.0;
         }
@@ -408,10 +395,10 @@ impl Providers {
             Value::Number(n) => n.as_f64().unwrap_or(0.0),
             Value::String(name) => table
                 .get(name)
-                .map_or(0.0, |v| self.eval(v, fast, table, depth + 1)),
+                .map_or(0.0, |v| Self::eval(v, fast, table, depth + 1)),
             Value::Object(o) => {
                 let f =
-                    |k: &str| self.eval(o.get(k).unwrap_or(&Value::Null), fast, table, depth + 1);
+                    |k: &str| Self::eval(o.get(k).unwrap_or(&Value::Null), fast, table, depth + 1);
                 match o.get("type").and_then(Value::as_str).unwrap_or("") {
                     "minecraft:div" => {
                         let r = f("right");
@@ -443,14 +430,14 @@ impl Providers {
     }
     /// A plain `context_int_provider` value or reference (no context conditions).
     pub fn int_value(&self, v: &Value) -> i32 {
-        self.eval(v, false, &self.ints, 0) as i32
+        Self::eval(v, false, &self.ints, 0) as i32
     }
     /// A plain `context_float_provider` value or reference; `default` when absent.
     pub fn float_value(&self, v: &Value, default: f32) -> f32 {
         if v.is_null() {
             default
         } else {
-            self.eval(v, false, &self.floats, 0) as f32
+            Self::eval(v, false, &self.floats, 0) as f32
         }
     }
     #[cfg(test)]
@@ -464,14 +451,14 @@ impl Providers {
         items
             .get(&stack.item)
             .and_then(|i| i.fuel.as_ref())
-            .map_or(0, |(time, _)| self.eval(time, fast, &self.ints, 0) as i32)
+            .map_or(0, |(time, _)| Self::eval(time, fast, &self.ints, 0) as i32)
     }
     pub fn speed(&self, items: &Items, stack: &ItemStack, fast: bool) -> f32 {
         items
             .get(&stack.item)
             .and_then(|i| i.fuel.as_ref())
             .map_or(1.0, |(_, speed)| {
-                self.eval(speed, fast, &self.floats, 0) as f32
+                Self::eval(speed, fast, &self.floats, 0) as f32
             })
     }
 }
@@ -500,6 +487,14 @@ impl Furnace {
                 .map_or(200, |recipe| total_time(recipe.time, self.speed));
             self.cooking_timer = 0;
         }
+    }
+    /// `recipesUsed`, each recipe with its `experience` (0 for one this data pack does
+    /// not have), in the order `getRecipesToAwardAndPopExperience` pays them.
+    pub fn recipe_experience(&self, recipes: &Recipes) -> Vec<(u32, f32)> {
+        self.recipes_used
+            .iter()
+            .map(|(id, count)| (*count, recipes.cooking_experience(id)))
+            .collect()
     }
     /// A menu click wrote its slots into `items`, and `before` was the input
     /// slot until then: the menu called `setItem` on it only if it changed
@@ -582,6 +577,7 @@ impl Furnace {
                                     Some(out) => out.count += recipe.result.count,
                                     None => self.items[2] = Some(recipe.result.clone()),
                                 }
+                                *self.recipes_used.entry(recipe.id.clone()).or_insert(0) += 1;
                                 if let Some(i) = self.items[0].as_mut() {
                                     i.count -= 1;
                                     if i.count == 0 {
@@ -610,5 +606,43 @@ fn total_time(time: u32, speed: f32) -> i32 {
         (time as f32 / speed).ceil() as i32
     } else {
         time as i32
+    }
+}
+
+/// `AbstractFurnaceBlockEntity.createExperience`: `count * experience`, floored, and one
+/// more with the chance of what is left over (a level random draw only when there is some).
+pub fn create_experience(
+    count: u32,
+    experience: f32,
+    random: &mut impl horizon_core::random::RandomSource,
+) -> u32 {
+    let total = count as f32 * experience;
+    let whole = total.floor();
+    let fraction = total - whole;
+    let mut xp = whole.max(0.0) as u32;
+    if fraction != 0.0 && random.next_float() < fraction {
+        xp += 1;
+    }
+    xp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_core::random::{LegacyRandom, RandomSource};
+
+    /// A whole amount pays itself without a draw; a fraction is a chance of one more.
+    #[test]
+    fn create_experience_rounds_the_fraction_by_chance() {
+        let mut random = LegacyRandom::new(7);
+        let mut untouched = LegacyRandom::new(7);
+        assert_eq!(create_experience(4, 0.5, &mut random), 2);
+        assert_eq!(create_experience(3, 0.0, &mut random), 0);
+        assert_eq!(random.next_long(), untouched.next_long());
+        let paid: u32 = (0..1000)
+            .map(|_| create_experience(1, 0.35, &mut random))
+            .sum();
+        assert!((250..450).contains(&paid), "{paid}");
+        assert!((0..100).all(|_| (1..=2).contains(&create_experience(1, 1.7, &mut random))));
     }
 }

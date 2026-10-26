@@ -137,8 +137,8 @@ Geist (400, 500, 600) and Geist Mono (400), bundled under the SIL Open Font Lice
 - **Launcher** (`launcher/`): drawn in the Blocks look below. A top bar (wordmark, the pages as
   tabs, the account chip, Settings), a sidebar (the instances, the hosted servers, the launcher's
   own version and channel at its foot), and the page over a stone texture. Home opens on a pixel
-  landscape banner with the hero, the version picker and Play; Mods holds the resource pack,
-  shader pack and modpack tabs; Versions and Patch notes are lists of panels; Settings is
+  landscape banner with the hero, the version picker and Play; Mods holds the mod, resource pack
+  and modpack tabs; Versions and Patch notes are lists of panels; Settings is
   grouped panels of rows. Dark by default, Light or System in Settings (Appearance).
 - **Website** (`website/`): the Blocks look below. The same page structure as before (what it
   is, screenshots, parity, launcher, patch notes, community), headings in Pixelify Sans, lists as

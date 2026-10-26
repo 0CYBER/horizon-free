@@ -89,6 +89,47 @@ impl Base<'_> {
 }
 
 /// `LivingEntity` + `Mob` (+ `AgeableMob`, creeper and skeleton specifics).
+/// The mobs whose class extends vanilla's `Animal` (and so save `InLove`):
+/// not allays, villagers, golems, dolphins or fish.
+fn is_animal(id: &str) -> bool {
+    matches!(
+        id.strip_prefix("minecraft:").unwrap_or(id),
+        "pig"
+            | "cow"
+            | "mooshroom"
+            | "sheep"
+            | "chicken"
+            | "rabbit"
+            | "horse"
+            | "donkey"
+            | "mule"
+            | "zombie_horse"
+            | "skeleton_horse"
+            | "llama"
+            | "trader_llama"
+            | "goat"
+            | "panda"
+            | "polar_bear"
+            | "fox"
+            | "wolf"
+            | "cat"
+            | "ocelot"
+            | "parrot"
+            | "bee"
+            | "turtle"
+            | "armadillo"
+            | "frog"
+            | "axolotl"
+            | "hoglin"
+            | "strider"
+            | "camel"
+            | "camel_husk"
+            | "sniffer"
+            | "happy_ghast"
+            | "nautilus"
+            | "zombie_nautilus"
+    )
+}
 pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     let base = Base {
         id: &m.kind.id,
@@ -175,11 +216,14 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         for (key, value) in [
             ("Age", Tag::Int(0)),
             ("ForcedAge", Tag::Int(0)),
-            ("InLove", Tag::Int(0)),
             ("AgeLocked", Tag::Byte(0)),
         ] {
             map.entry(key.into()).or_insert(value);
         }
+    }
+    // Animal.addAdditionalSaveData: the love ticks left, whatever the save had.
+    if is_animal(id) {
+        map.insert("InLove".into(), Tag::Int(m.extra.in_love.max(0)));
     }
     match id {
         "minecraft:creeper" => {
@@ -573,9 +617,23 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.head_pitch = pitch;
     m.on_ground = flag(tag, "OnGround");
     m.fall_distance = float(tag.get("fall_distance")).unwrap_or(0.0);
-    if let Some(h) = float(tag.get("Health")) {
-        m.health = h as f32;
+    // LivingEntity.readAdditionalSaveData: the saved attribute bases, then
+    // the health, the max health when there is none.
+    if let Some(Tag::List(attrs)) = tag.get("attributes") {
+        for a in attrs {
+            let (Some(id), Some(Tag::Double(bits))) = (text(a.get("id")), a.get("base")) else {
+                continue;
+            };
+            let v = f64::from_bits(*bits);
+            match id.as_str() {
+                "minecraft:max_health" => m.attrs.max_health = v as f32,
+                "minecraft:movement_speed" => m.attrs.speed = v,
+                "minecraft:attack_damage" => m.attrs.attack_damage = v as f32,
+                _ => {}
+            }
+        }
     }
+    m.health = float(tag.get("Health")).map_or(m.attrs.max_health, |h| h as f32);
     m.hurt_time = number(tag.get("HurtTime")).unwrap_or(0) as i32;
     // What it holds (equipment.mainhand / offhand), when saved.
     if let Some(eq) = tag.get("equipment") {
@@ -620,6 +678,9 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.extra.age = number(tag.get("Age")).unwrap_or(0) as i32;
         m.extra.forced_age = number(tag.get("ForcedAge")).unwrap_or(0) as i32;
         m.extra.age_locked = flag(tag, "AgeLocked");
+    }
+    if is_animal(&m.kind.id) {
+        m.extra.in_love = number(tag.get("InLove")).unwrap_or(0) as i32;
     }
     m.name_visible = flag(tag, "CustomNameVisible");
     m.no_ai = flag(tag, "NoAI");
@@ -688,12 +749,8 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
                 let (Some(id), Some(Tag::Double(bits))) = (text(a.get("id")), a.get("base")) else {
                     continue;
                 };
-                let v = f64::from_bits(*bits);
-                match id.as_str() {
-                    "minecraft:max_health" => m.attrs.max_health = v as f32,
-                    "minecraft:movement_speed" => m.attrs.speed = v,
-                    "minecraft:jump_strength" => m.extra.vector[0] = v,
-                    _ => {}
+                if id == "minecraft:jump_strength" {
+                    m.extra.vector[0] = f64::from_bits(*bits);
                 }
             }
         }
@@ -1106,6 +1163,72 @@ pub fn arrow_from_nbt(
     a.pickup_item = item;
     p.stuck = a.in_ground;
     Some((p, tag.get("inBlockState").cloned()))
+}
+
+/// `LargeFireball` and `SmallFireball`: `AbstractHurtingProjectile`'s
+/// `acceleration_power`, `Projectile`'s owner and flags, `ExplosionPower`.
+pub fn fireball_to_nbt(
+    p: &Projectile,
+    uuid: [i32; 4],
+    owner: Option<[i32; 4]>,
+    raw: Option<&Tag>,
+) -> Option<Tag> {
+    let power = match p.kind {
+        ProjectileKind::LargeFireball { power } => Some(power),
+        ProjectileKind::SmallFireball => None,
+        _ => return None,
+    };
+    let base = Base {
+        id: p.kind.id(),
+        uuid,
+        position: p.position,
+        motion: p.velocity,
+        rotation: [p.yaw, p.pitch],
+        on_ground: false,
+        fall_distance: 0.0,
+    };
+    let mut tag = base.tag(raw);
+    put(
+        &mut tag,
+        "acceleration_power",
+        Tag::Double(p.acceleration.to_bits()),
+    );
+    // Projectile: LeftOwner only when set; HasBeenShot once it has ticked
+    // (a fireball saved before its first tick keeps what it was loaded with).
+    if let Tag::Compound(map) = &mut tag {
+        map.remove(&"LeftOwner".into());
+    }
+    if p.left_owner {
+        put(&mut tag, "LeftOwner", Tag::Byte(1));
+    }
+    if p.age > 0 || tag.get("HasBeenShot").is_none() {
+        put(&mut tag, "HasBeenShot", Tag::Byte(i8::from(p.age > 0)));
+    }
+    if let Some(power) = power {
+        put(&mut tag, "ExplosionPower", Tag::Byte(power as i8));
+    }
+    if let Some(owner) = owner {
+        put(&mut tag, "Owner", Tag::IntArray(owner.to_vec()));
+    }
+    Some(tag)
+}
+
+pub fn fireball_from_nbt(tag: &Tag, player: Option<[i32; 4]>) -> Option<Projectile> {
+    let kind = match kind(tag)?.as_str() {
+        "minecraft:fireball" => ProjectileKind::LargeFireball {
+            power: number(tag.get("ExplosionPower")).unwrap_or(1) as i32,
+        },
+        "minecraft:small_fireball" => ProjectileKind::SmallFireball,
+        _ => return None,
+    };
+    let owner = uuid_from_tag(tag.get("Owner"));
+    let from_player = player.is_some() && owner == player;
+    let mut p = Projectile::new(kind, position(tag)?, from_player.then_some(Who::Player));
+    p.velocity = motion(tag);
+    [p.yaw, p.pitch] = rotation(tag);
+    p.left_owner = flag(tag, "LeftOwner");
+    p.acceleration = float(tag.get("acceleration_power")).unwrap_or(0.1);
+    Some(p)
 }
 
 /// `FallingBlockEntity`: BlockState, Time, DropItem, HurtEntities.
@@ -2090,5 +2213,43 @@ mod sheep_nbt_tests {
             .collect();
         let back = mob_from_nbt(&tag, &types, 2).unwrap();
         assert_eq!((back.extra.color, back.extra.sheared), (14, true));
+    }
+}
+
+#[cfg(test)]
+mod fireball_nbt_tests {
+    use super::*;
+    #[test]
+    fn a_fireball_round_trips_its_flight() {
+        let raw = Tag::compound([
+            ("id", Tag::String("minecraft:fireball".into())),
+            ("Pos", doubles(&[1.0, 70.0, -2.5])),
+            ("Motion", doubles(&[0.0, -0.5, 1.0])),
+            ("ExplosionPower", Tag::Byte(4)),
+            ("acceleration_power", Tag::Double(0.0f64.to_bits())),
+        ]);
+        let p = fireball_from_nbt(&raw, None).unwrap();
+        assert_eq!(p.kind, ProjectileKind::LargeFireball { power: 4 });
+        assert_eq!((p.velocity.z, p.acceleration), (1.0, 0.0));
+        let back = fireball_to_nbt(&p, [1, 2, 3, 4], None, None).unwrap();
+        assert_eq!(number(back.get("ExplosionPower")), Some(4));
+        assert_eq!(float(back.get("acceleration_power")), Some(0.0));
+        // Projectile.addAdditionalSaveData: no LeftOwner unless set, HasBeenShot always.
+        assert!(back.get("LeftOwner").is_none());
+        assert_eq!(number(back.get("HasBeenShot")), Some(0));
+        assert_eq!(
+            read_doubles::<3>(back.get("Motion")),
+            Some([0.0, -0.5, 1.0])
+        );
+        // A default fireball keeps vanilla's power and acceleration.
+        let plain = Tag::compound([
+            ("id", Tag::String("minecraft:fireball".into())),
+            ("Pos", doubles(&[0.0, 0.0, 0.0])),
+        ]);
+        let p = fireball_from_nbt(&plain, None).unwrap();
+        assert_eq!(
+            (p.kind, p.acceleration),
+            (ProjectileKind::LargeFireball { power: 1 }, 0.1)
+        );
     }
 }

@@ -2,7 +2,7 @@
 //! end crystals on a server's client (`ClientPacketListener.handleAddEntity`
 //! and `handleSetEntityData`): the server simulates them, the client draws
 //! them where it says and interpolates their moves.
-use super::{FallingBlock, Game};
+use super::{FallStep, FallingBlock, Game, fireworks::fireworks_of, view_vector};
 use horizon_client::projectiles::{Projectile, ProjectileKind};
 use horizon_core::{geometry::Vec3, position::BlockPos};
 use horizon_protocol::entity_data::Value;
@@ -24,6 +24,14 @@ fn projectile_kind(kind: &str) -> Option<ProjectileKind> {
         "minecraft:llama_spit" => ProjectileKind::LlamaSpit,
         "minecraft:wind_charge" => ProjectileKind::WindCharge,
         "minecraft:breeze_wind_charge" => ProjectileKind::BreezeWindCharge,
+        // Homing state stays on the server; the client interpolates its positions.
+        "minecraft:shulker_bullet" => ProjectileKind::ShulkerBullet {
+            target: horizon_client::mobs::Who::Player,
+            dir: None,
+            steps: 0,
+            delta: [0.0; 3],
+            seed: 0,
+        },
         "minecraft:wither_skull" => ProjectileKind::WitherSkull { dangerous: false },
         _ => return None,
     })
@@ -79,6 +87,17 @@ impl Game<'_> {
                 self.rockets
                     .push(super::fireworks::Rocket::remote(id, at, velocity));
             }
+            "minecraft:splash_potion"
+            | "minecraft:lingering_potion"
+            | "minecraft:experience_bottle" => {
+                self.potions.add_remote_thrown(id, kind, at, velocity);
+            }
+            "minecraft:eye_of_ender" => {
+                self.end
+                    .add_remote_eye(id, position, [velocity.x, velocity.y, velocity.z])
+            }
+            // FishingHook.recreateFromPacket: the owner's id is the data.
+            "minecraft:fishing_bobber" => self.spawn_remote_hook(id, at, data),
             "minecraft:end_crystal" => self.crystals.push(super::dragon::Crystal {
                 id,
                 position: at,
@@ -105,6 +124,49 @@ impl Game<'_> {
     /// `handleSetEntityData` for these types: what changes how they look.
     pub(super) fn remote_projectile_data(&mut self, id: i32, values: &[(u8, i32, Value)]) {
         let id = id as u32;
+        self.remote_hook_data(id, values);
+        if self.rockets.iter().any(|r| r.id == id) {
+            for (index, _, value) in values {
+                match (index, value) {
+                    // FireworkRocketEntity.DATA_ID_FIREWORKS_ITEM: its
+                    // explosions for `createFireworks`.
+                    (8, Value::Item(stack)) => {
+                        if let Some(stack) = self.to_stack(stack)
+                            && let Some(r) = self.rockets.iter_mut().find(|r| r.id == id)
+                        {
+                            let (_, explosions) = fireworks_of(&stack);
+                            r.explosions = explosions;
+                            r.item = stack;
+                        }
+                    }
+                    // DATA_ATTACHED_TO_TARGET (OptionalInt: the id plus 1).
+                    (9, Value::Id(v)) => {
+                        let v = (*v > 0).then(|| (*v - 1) as u32);
+                        if let Some(r) = self.rockets.iter_mut().find(|r| r.id == id) {
+                            r.attached_to = v;
+                        }
+                    }
+                    // DATA_SHOT_AT_ANGLE.
+                    (10, Value::Bool(a)) => {
+                        if let Some(r) = self.rockets.iter_mut().find(|r| r.id == id) {
+                            r.angled = *a;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if self.potions.has_thrown(id) {
+            // ThrowableItemProjectile.DATA_ITEM_STACK: the potion it is.
+            for (index, _, value) in values {
+                if let (8, Value::Item(stack)) = (index, value)
+                    && let Some(stack) = self.to_stack(stack)
+                {
+                    self.potions.remote_thrown_item(id, stack);
+                }
+            }
+            return;
+        }
         for (index, _, value) in values {
             if let Some(t) = self.tnts.iter_mut().find(|t| t.id == id) {
                 // PrimedTnt.DATA_FUSE_ID.
@@ -162,11 +224,17 @@ impl Game<'_> {
             t.previous = t.position;
             t.position = step(t.id, t.position);
         }
-        for f in &mut self.falling {
-            f.previous = f.position;
-            f.age += 1;
-            f.position = step(f.id, f.position);
+        // FallingBlockEntity.tick runs on a client too: the block falls by
+        // itself between the server's updates (every 20 ticks), then waits
+        // where it lands for the server to place it and remove it.
+        let mut falling = std::mem::take(&mut self.falling);
+        for f in &mut falling {
+            if let Ok(FallStep::Landed(_)) = self.fall_step(f, false) {
+                // Block.updateEntityMovementAfterFallOn, then the air drag.
+                f.velocity = Vec3::new(f.velocity.x * 0.98, 0.0, f.velocity.z * 0.98);
+            }
         }
+        self.falling = falling;
         for p in &mut self.creatures.projectiles {
             p.previous = p.position;
             p.age += 1;
@@ -176,14 +244,41 @@ impl Game<'_> {
             let id = t.id;
             t.remote_step(|at| step(id, at));
         }
+        // FireworkRocketEntity.tick: a rocket attached to the gliding local
+        // player boosts it client-side too (attachedToEntity.isFallFlying).
+        let me = self
+            .remote
+            .as_ref()
+            .and_then(|r| u32::try_from(r.entity_id).ok());
         for r in &mut self.rockets {
             let id = r.id;
             r.remote_step(|at| step(id, at));
+            if me.is_some()
+                && r.attached_to == me
+                && let Some(p) = self.player.as_mut()
+                && p.fall_flying
+            {
+                let look = view_vector(self.yaw, self.pitch);
+                let m = p.velocity;
+                p.velocity = Vec3::new(
+                    m.x + look[0] * 0.1 + (look[0] * 1.5 - m.x) * 0.5,
+                    m.y + look[1] * 0.1 + (look[1] * 1.5 - m.y) * 0.5,
+                    m.z + look[2] * 0.1 + (look[2] * 1.5 - m.z) * 0.5,
+                );
+                r.position = p.position;
+                r.velocity = p.velocity;
+            }
         }
         for c in &mut self.crystals {
             c.time += 1;
             c.position = step(c.id, c.position);
         }
+        self.potions.step_remote_thrown(&mut step);
+        self.step_remote_hooks(&mut step);
+        self.end.step_remote_eyes(|id, at| {
+            let at = step(id, Vec3::new(at[0], at[1], at[2]));
+            [at.x, at.y, at.z]
+        });
     }
 
     pub(super) fn remove_remote_projectile(&mut self, id: u32) {
@@ -193,6 +288,9 @@ impl Game<'_> {
         self.tridents.retain(|t| t.id != id);
         self.rockets.retain(|r| r.id != id);
         self.crystals.retain(|c| c.id != id);
+        self.potions.remove_remote_thrown(id);
+        self.end.remove_remote_eye(id);
+        self.remove_remote_hook(id);
     }
 
     /// Every one a server sent (a new connection, level or dimension).
@@ -203,6 +301,9 @@ impl Game<'_> {
         self.tridents.clear();
         self.rockets.clear();
         self.crystals.clear();
+        self.potions.clear_thrown();
+        self.end.clear_remote_eyes();
+        self.clear_remote_hooks();
     }
 
     /// Their kind and place, for `status`.
@@ -225,6 +326,13 @@ impl Game<'_> {
         for p in &self.creatures.projectiles {
             out.push(json!({"id": p.id, "kind": format!("{:?}", p.kind).split([' ', '{']).next().unwrap_or(""), "position": at(p.position)}));
         }
+        for (kind, p, _) in self.potions.thrown_entities() {
+            out.push(json!({"kind": kind, "position": at(p)}));
+        }
+        for (id, p) in self.end.eye_positions() {
+            out.push(json!({"id": id, "kind": "minecraft:eye_of_ender", "position": p}));
+        }
+        out.extend(self.hooks_status());
         out
     }
 }

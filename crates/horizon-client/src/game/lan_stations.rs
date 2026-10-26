@@ -588,17 +588,7 @@ impl Game<'_> {
             let [x, y, z] = gs.pos;
             let name = &self.res.facts().get(self.world.block(x, y, z)).name;
             let block = StationKind::from_block(name) == Some(gs.kind);
-            let eye = [g.position[0], g.position[1] + g.eye_height(), g.position[2]];
-            // The block interaction range (4.5, creative 5) and the buffer.
-            let reach = if g.creative() { 5.0 } else { 4.5 } + 4.0;
-            let near = (0..3)
-                .map(|k| {
-                    let lo = f64::from(gs.pos[k]);
-                    (lo - eye[k]).max(eye[k] - lo - 1.0).max(0.0).powi(2)
-                })
-                .sum::<f64>()
-                < reach * reach;
-            if !(block && near) {
+            if !(block && g.within_block_range(gs.pos, 4.0)) {
                 let window = gs.window;
                 self.lan_station_closed(host, conn, Some(window));
                 host.hub.send_to(
@@ -641,16 +631,7 @@ impl Game<'_> {
                 Some(BlockEntity::Lectern(l)) if l.book.is_some()
             );
             // Container.stillValidBlockEntity: the interaction range and its buffer.
-            let eye = [g.position[0], g.position[1] + g.eye_height(), g.position[2]];
-            let reach = if g.creative() { 5.0 } else { 4.5 } + 4.0;
-            let pos = [key.0, key.1, key.2];
-            let near = (0..3)
-                .map(|k| {
-                    let lo = f64::from(pos[k]);
-                    (lo - eye[k]).max(eye[k] - lo - 1.0).max(0.0).powi(2)
-                })
-                .sum::<f64>()
-                < reach * reach;
+            let near = g.within_block_range([key.0, key.1, key.2], 4.0);
             if has_book && near {
                 self.lan_send_lectern(host, conn, false);
             } else {

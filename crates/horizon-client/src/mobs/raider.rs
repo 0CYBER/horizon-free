@@ -426,7 +426,7 @@ impl Goal for MoveThroughVillage {
             self.visited.remove(0);
         }
         let Some(s) = state(m) else { return false };
-        if !(s.active_raid && !s.raid_over) || m.ai.target.is_some() {
+        if !s.active_raid || s.raid_over || m.ai.target.is_some() {
             return false;
         }
         let Some(homes) = s.homes.clone() else {

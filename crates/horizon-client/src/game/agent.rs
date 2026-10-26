@@ -9,6 +9,10 @@ use horizon_client::{
     block_entity_anim::Ticker,
     chunk::{MIN_Y, SECTIONS},
     items::ItemStack,
+    mobs::{
+        Species,
+        render::{PROFESSIONS, VILLAGER_TYPES},
+    },
     widgets,
 };
 use horizon_core::geometry::Vec3;
@@ -335,6 +339,12 @@ impl Game<'_> {
             Some(Ticker::Shulker { .. }) => v["lid"] = json!(self.block_anim(pos, 1.0).shulker.0),
             _ => {}
         }
+        // The lines of a sign, as this client has them.
+        if let Some(horizon_client::containers::BlockEntity::Sign(sign)) =
+            self.world.block_entities.get(&(pos[0], pos[1], pos[2]))
+        {
+            v["sign"] = json!({ "front": sign.front.lines, "back": sign.back.lines });
+        }
         v
     }
     pub(super) fn stack_value(&self, s: &ItemStack) -> Value {
@@ -406,6 +416,7 @@ impl Game<'_> {
             Screen::Friends => "friends",
             Screen::CommandBlock => "command-block",
             Screen::Win => "win",
+            Screen::Mod => "mod",
         }
     }
     pub(super) fn inventory_counts(&self) -> BTreeMap<String, i64> {
@@ -457,10 +468,14 @@ impl Game<'_> {
                 "velocity": [p.velocity.x, p.velocity.y, p.velocity.z],
                 "on_ground": p.ground.on_ground,
                 "flying": p.flying,
+                "fall_flying": p.fall_flying,
                 "sneaking": self.keys.contains(&KeyCode::ShiftLeft),
-                "sprinting": self.keys.contains(&KeyCode::ControlLeft),
+                "sprinting": p.sprinting,
+                "fov_modifier": self.view.fov_modifier,
                 "health": p.health.health(),
                 "absorption": p.health.absorption(),
+                // The hurt animation's ticks left (the camera's hurt tilt).
+                "hurt_time": p.health.hurt_animation_time,
                 "air": p.air,
                 "food": p.health.food.food,
                 "saturation": p.health.food.saturation,
@@ -585,10 +600,20 @@ impl Game<'_> {
             }
         };
         for m in self.mobs.iter().filter(|m| m.alive()) {
+            let mut v = json!({ "id": m.id, "kind": "mob", "health": m.health, "baby": m.is_baby(), "hurt_time": m.hurt_time });
+            // VillagerData as this game knows it: on a client, what the
+            // server's synched data says.
+            if matches!(m.species(), Species::Villager | Species::ZombieVillager) {
+                v["villager"] = json!({
+                    "type": VILLAGER_TYPES[m.extra.variant as usize % VILLAGER_TYPES.len()],
+                    "profession": PROFESSIONS[m.extra.variant2 as usize % PROFESSIONS.len()],
+                    "level": m.extra.variant3,
+                });
+            }
             push(
                 [m.position.x, m.position.y, m.position.z],
                 m.kind.id.as_ref(),
-                json!({ "id": m.id, "kind": "mob", "health": m.health, "baby": m.is_baby(), "hurt_time": m.hurt_time }),
+                v,
             );
         }
         for item in &self.dropped {
@@ -678,6 +703,8 @@ impl Game<'_> {
         json!({
             "chat": self.remote_chat(n).unwrap_or_else(|| self.ui.chat.recent_lines(n)),
             "order": "newest first",
+            // The chat lines as drawn: colours, click and hover events.
+            "styled": self.ui.chat.recent_components(n),
             "title": (titles.time > 0).then(|| titles.title.as_ref().map(|t| t.plain())).flatten(),
             "subtitle": (titles.time > 0).then(|| titles.subtitle.as_ref().map(|t| t.plain())).flatten(),
             "actionbar": (titles.overlay_time > 0).then(|| titles.overlay.as_ref().map(|t| t.plain())).flatten(),
@@ -1573,8 +1600,12 @@ impl Game<'_> {
                 if self.screen != Screen::Dead {
                     return Err("respawn needs the death screen".into());
                 }
-                let label =
-                    horizon_client::text::Text::translate("deathScreen.respawn", &[]).plain();
+                let key = if self.level.hardcore {
+                    "deathScreen.spectate"
+                } else {
+                    "deathScreen.respawn"
+                };
+                let label = horizon_client::text::Text::translate(key, &[]).plain();
                 let w = widgets::find(&widgets::last(), &label)?;
                 if !w.enabled {
                     // DeathScreen enables its buttons after 20 ticks.

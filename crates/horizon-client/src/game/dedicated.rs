@@ -6,7 +6,7 @@
 //! its simulation and the play-state hub that LAN hosting uses, configured
 //! from server.properties, with the operator, whitelist and ban lists and a
 //! console on standard input.
-use super::{Game, Options, lan::LanSettings};
+use super::{Game, Options, lan::LanSettings, world_loading::WorldRequest};
 use horizon_client::{
     Result,
     lan::{LoginGate, NetConfig, NetLog, OnlineMode, hub::HubConfig},
@@ -155,6 +155,14 @@ pub(super) fn preflight(options: &mut Options) -> Result<bool> {
     for w in &props.warnings {
         log("WARN", w);
     }
+    // Horizon's own commands are the owner's choice, off as on vanilla.
+    if props
+        .raw
+        .get(horizon_client::command::vanilla::PREGEN_PROPERTY)
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"))
+    {
+        horizon_client::command::vanilla::set_horizon_commands(true);
+    }
     props.store(&settings)?;
     let eula_file = PathBuf::from("eula.txt");
     let agreed = match eula::agreed(&eula_file) {
@@ -218,21 +226,22 @@ impl Lists {
             use_whitelist: false,
             enforce_whitelist: false,
         };
+        // DedicatedPlayerList's constructor order and its LOGGER.warn lines.
         let warn = |what: &str, r: std::result::Result<(), String>| {
             if let Err(e) = r {
-                log("WARN", &format!("Failed to load {what}: {e}"));
+                log("WARN", &format!("Failed to {what}: {e}"));
             }
         };
-        // DedicatedPlayerList's constructor order.
-        warn("user banlist", l.bans.load());
-        let _ = l.bans.save();
-        warn("ip banlist", l.ip_bans.load());
-        let _ = l.ip_bans.save();
-        warn("operators list", l.ops.load());
-        warn("white-list", l.white.load());
-        let _ = l.ops.save();
+        let saved = |r: std::io::Result<()>| r.map_err(|e| e.to_string());
+        warn("load user banlist", l.bans.load());
+        warn("save user banlist", saved(l.bans.save()));
+        warn("load ip banlist", l.ip_bans.load());
+        warn("save ip banlist", saved(l.ip_bans.save()));
+        warn("load operators list", l.ops.load());
+        warn("load white-list", l.white.load());
+        warn("save operators list", saved(l.ops.save()));
         if !l.white.file.exists() {
-            let _ = l.white.save();
+            warn("save white-list", saved(l.white.save()));
         }
         l
     }
@@ -546,13 +555,13 @@ impl Game<'_> {
         let lists = Arc::new(Mutex::new(lists));
         log("INFO", &format!("Preparing level \"{level_name}\""));
         let folder = world_dir.to_string_lossy().into_owned();
-        self.open_world(
+        self.load_world(WorldRequest::new(
             &folder,
             Some(&level_name),
             Some(props.seed),
             game_mode == 1,
             None,
-        )?;
+        )?)?;
         if new_world {
             self.level.hardcore = props.hardcore;
         }
@@ -608,6 +617,7 @@ impl Game<'_> {
                 lang: Arc::new(horizon_client::net::load_language(&self.options.resources)),
                 log_ips: props.log_ips,
             }),
+            resource_pack: props.resource_pack.clone(),
         };
         let config = HubConfig {
             default_game_mode: game_mode,
@@ -665,7 +675,9 @@ impl Game<'_> {
             self.poll_server_control(&mut state);
             let players = self.lan.as_ref().map_or(0, |h| h.hub.guests.len());
             if pause_after > 0 {
-                if players == 0 {
+                // A `/pregen` task keeps the server busy as a player would:
+                // paused, nothing would post-process its chunks.
+                if players == 0 && self.pregen_level().is_none() {
                     state.empty_ticks += 1;
                 } else {
                     state.empty_ticks = 0;

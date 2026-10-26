@@ -237,15 +237,8 @@ impl Game<'_> {
                     let _ = std::fs::create_dir_all(&dir);
                     super::packs::open_folder(&dir);
                 }
-                Event::OpenShaderPackFolder => {
-                    let dir = horizon_client::shader_pack::folder();
-                    let _ = std::fs::create_dir_all(&dir);
-                    super::packs::open_folder(&dir);
-                }
+                Event::ModSettings(i) => self.open_mod_screen(i, true),
                 Event::Credits => self.open_win_screen(false, super::win::Finish::Options),
-                Event::ReloadShaderPack => {
-                    self.load_shader_pack();
-                }
             }
         }
         Ok(())
@@ -254,6 +247,7 @@ impl Game<'_> {
     pub(super) fn load_language(&mut self, code: &str) {
         let root = self.options.resources.clone();
         lang::set(lang::Language::load(&[&root], code));
+        self.refresh_remote_language();
         self.ui.chat.rescale(&self.gui.atlas);
     }
     /// Settings that Horizon applies beyond render distance, volume and GUI scale.
@@ -293,14 +287,6 @@ impl Game<'_> {
             font.japanese = s.japanese_glyphs;
             font.reset_cache();
             self.ui.chat.rescale(&self.gui.atlas);
-        }
-        // A new renderer (resource reload, first window) takes the loaded pack.
-        let stale = self
-            .renderer
-            .as_ref()
-            .is_some_and(|r| r.shader_pack_id() != self.shader_packs.id());
-        if stale && let Err(e) = self.apply_shader_pack() {
-            log::warn!("Horizon: shader pack: {e}");
         }
     }
     /// `Window.updateFullscreenState`: a fullscreen change made by the window

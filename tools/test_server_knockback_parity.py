@@ -1,0 +1,320 @@
+#!/usr/bin/env python3
+"""Knockback on a dedicated server, against vanilla's, seen by vanilla clients.
+
+A vanilla dedicated server and Horizon's (`horizon-client --dedicated --nogui`) each serve a copy of one flat
+world vanilla generated first, in survival on Normal, with Alice and Bob as operators. KnockbackClient, two
+players made of vanilla's protocol code, joins them both and runs one script on each:
+
+- Alice hits a cow and a zombie: a plain hit, a sprinting hit, Knockback II, a critical hit, and a plain hit on
+  a mob in the air. The game is frozen around the hit (`/tick freeze`) and stepped a tick at a time: the mob's
+  Motion just after the hit and its Pos and Motion over the next 20 ticks are compared exactly. The mobs are
+  slowed to a stop (Slowness 128) so that their walking adds nothing;
+- Alice hits Bob: a plain hit, sprinting, Knockback II, a critical hit, Bob behind a raised shield, Bob in
+  netherite (knockback resistance), two plain hits a second apart, two sprinting hits a second apart (the
+  first stops Alice's sprint), a mace smash, and a weak hit then a stronger one inside Bob's hurt cooldown.
+  Bob's own ClientboundSetEntityMotionPacket (the knockback his client applies, Player.causeExtraKnockback),
+  Alice's motion packets and her sprint flag as the server sets it are compared exactly;
+- a zombie hits Bob, twice: the knockback reaches Bob's client once his server-side copy has
+  travelled a tick (the mob's hit, then ServerPlayer's travel, then ServerEntity.sendChanges). It is night, so
+  that no zombie burns (a burning mob is in its hurt cooldown).
+
+Each case is compared on its own. KNOWN lists the cases Horizon still gets wrong and why; one that matches
+again is reported, and should leave the list.
+"""
+import os
+from pathlib import Path
+import platform
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+try:
+    from . import lab, test_rust_parity as base
+    from .test_dedicated_server_parity import Server, free_port
+    from .test_locator_bar_parity import generate_world, ops_json
+except ImportError:
+    import lab
+    import test_rust_parity as base
+    from test_dedicated_server_parity import Server, free_port
+    from test_locator_bar_parity import generate_world, ops_json
+
+NAME = 'server-knockback-parity'
+PROPERTIES = {
+    'online-mode': 'false',
+    'white-list': 'false',
+    'level-seed': '12345',
+    'level-type': 'minecraft\\:flat',
+    'generate-structures': 'false',
+    'gamemode': 'survival',
+    'difficulty': 'normal',
+    'view-distance': '4',
+    'simulation-distance': '4',
+    'spawn-protection': '0',
+    'max-players': '5',
+    'pause-when-empty-seconds': '-1',
+}
+# Cases Horizon still gets wrong, and why.
+KNOWN = {
+    'pvp-mace': "a smash on a player runs none of MaceItem.hurtEnemy (the attacker's fall goes on)",
+}
+
+A = (0.5, -60.0, 0.5)  # Alice, facing east (yaw -90)
+V = (2.5, -60.0, 0.5)  # the mob or Bob, two blocks east
+SWORD = 'minecraft:wooden_sword'
+KNOCKBACK_SWORD = 'minecraft:wooden_sword[enchantments={"minecraft:knockback":2}]'
+
+
+def stand(name, at, yaw, ticks=3):
+    """Client ticks on the ground at `at` (one position a tick, as vanilla's client sends)."""
+    return [f'pos {name} {at[0]} {at[1]} {at[2]} {yaw} 0 1'] * ticks
+
+
+def falling(height):
+    """Alice off the ground and going down, so that her next hit is critical (or a mace smash)."""
+    return [f'pos Alice {A[0]} {A[1] + h} {A[2]} -90 0 0' for h in (height, height - 0.3)]
+
+
+def mob_case(kind, weapon=SWORD, sprint=False, crit=False, air=False):
+    mob = f'@e[type=minecraft:{kind},limit=1]'
+    summon = [f'cmd Alice summon minecraft:{kind} {V[0]} {V[1] + (1.5 if air else 0)} {V[2]} {{Rotation:[0f,0f]}}',
+              f'cmd Alice effect give {mob} minecraft:slowness 100000 127 true']
+    lines = ['cmd Alice kill @e[type=!player]', 'cmd Alice gamemode creative', 'cmd Bob gamemode creative',
+             f'cmd Alice item replace entity @s weapon.mainhand with {weapon}', 'cmd Alice tp Bob 2.5 -60 12.5',
+             *stand('Alice', A, -90), 'sleep 1.2']
+    # In the air: frozen before its first tick, so it has not landed.
+    lines += ['cmd Alice tick freeze', *summon] if air else [*summon, 'sleep 1.5', 'cmd Alice tick freeze']
+    lines += ['sleep 0.3', f'cmd Alice data get entity {mob} Pos']
+    if sprint:
+        lines.append('sprint Alice on')
+    if crit:
+        lines += falling(0.8)
+    lines += ['sleep 0.2', f'attack Alice {kind}', 'sleep 0.2', f'cmd Alice data get entity {mob} Motion']
+    for _ in range(20):
+        lines += ['cmd Alice tick step 1', 'sleep 0.25', f'cmd Alice data get entity {mob} Pos',
+                  f'cmd Alice data get entity {mob} Motion']
+    lines += ['cmd Alice tick unfreeze', 'cmd Alice kill @e[type=!player]']
+    if sprint:
+        lines.append('sprint Alice off')
+    lines += [*stand('Alice', A, -90), 'cmd Alice gamemode survival', 'cmd Bob gamemode survival',
+              f'cmd Alice tp Bob {V[0]} {V[1]} {V[2]} 90 0']
+    return lines
+
+
+def pvp_case(weapon=SWORD, sprint=False, crit=False, shield=False, armour=False, twice=False, mace=False,
+             cooldown=False):
+    lines = [f'cmd Alice item replace entity @s weapon.mainhand with {weapon}', 'cmd Bob clear @s',
+             'cmd Bob effect give @s minecraft:resistance 1000 4 true',
+             'cmd Bob effect give @s minecraft:instant_health 1 5 true', *stand('Alice', A, -90), *stand('Bob', V, 90)]
+    if armour:
+        lines += [f'cmd Bob item replace entity @s armor.{slot} with minecraft:netherite_{piece}'
+                  for slot, piece in (('head', 'helmet'), ('chest', 'chestplate'), ('legs', 'leggings'),
+                                      ('feet', 'boots'))]
+    if shield:
+        # A shield blocks from five ticks after it is raised.
+        lines += ['cmd Bob item replace entity @s weapon.mainhand with minecraft:shield', 'use Bob']
+    lines += ['sleep 1.5', *stand('Bob', V, 90, ticks=1)]
+    if sprint:
+        lines.append('sprint Alice on')
+    if crit:
+        lines += falling(0.8)
+    if mace:
+        lines += falling(3.0) + falling(1.5)
+    if cooldown:
+        # A swing at the air first: the hit is weak, and the stronger one four ticks later lands inside Bob's hurt
+        # cooldown (LivingEntity.hurtServer: it hurts by the difference, with no knockback and no motion packet).
+        lines += ['sleep 0.2', 'punch Alice', 'attack Alice Bob']
+    lines += ['sleep 0.2', 'attack Alice Bob', 'sleep 0.3']
+    if twice:
+        lines += [*stand('Bob', V, 90, ticks=20), 'sleep 1.5', 'attack Alice Bob', 'sleep 0.3']
+    if sprint:
+        lines.append('sprint Alice off')
+    lines += stand('Alice', A, -90)
+    if shield or armour:
+        lines.append('cmd Bob clear @s')
+    return lines
+
+
+def mob_hits_case(kind):
+    """A mob's own attack on Bob, twice: his motion packet. Alice is in creative, so the mob goes for Bob; each mob
+    is killed once its hit has come (`await`), and Bob stands back where he was before the next. (A mob with no
+    attack_knockback of its own: one with some, like a ravager, adds it along its own yaw, which its AI turns.)"""
+    mob = f'@e[type=minecraft:{kind},limit=1]'
+    hit = ['mark Bob', f'cmd Alice summon minecraft:{kind} {V[0] + 1} {V[1]} {V[2]} {{Rotation:[90f,0f]}}',
+           f'cmd Alice effect give {mob} minecraft:slowness 100000 127 true', 'await Bob', f'cmd Alice kill {mob}']
+    return ['cmd Bob clear @s', 'cmd Bob effect give @s minecraft:resistance 1000 4 true', 'cmd Alice gamemode creative',
+            *stand('Bob', V, 90), *hit, 'sleep 2', *stand('Bob', V, 90), *hit, 'sleep 1',
+            'cmd Alice kill @e[type=!player]', 'cmd Alice gamemode survival']
+
+
+CASES = {
+    'cow-plain': mob_case('cow'),
+    'cow-sprint': mob_case('cow', sprint=True),
+    'cow-knockback-2': mob_case('cow', weapon=KNOCKBACK_SWORD),
+    'cow-crit': mob_case('cow', crit=True),
+    'cow-air': mob_case('cow', air=True),
+    'zombie-plain': mob_case('zombie'),
+    'zombie-sprint': mob_case('zombie', sprint=True),
+    'zombie-knockback-2': mob_case('zombie', weapon=KNOCKBACK_SWORD),
+    'zombie-crit': mob_case('zombie', crit=True),
+    'zombie-air': mob_case('zombie', air=True),
+    'pvp-plain': pvp_case(),
+    'pvp-sprint': pvp_case(sprint=True),
+    'pvp-knockback-2': pvp_case(weapon=KNOCKBACK_SWORD),
+    'pvp-crit': pvp_case(crit=True),
+    'pvp-shield': pvp_case(shield=True),
+    'pvp-netherite': pvp_case(armour=True),
+    'pvp-twice': pvp_case(twice=True),
+    'pvp-sprint-twice': pvp_case(sprint=True, twice=True),
+    'pvp-mace': pvp_case(weapon='minecraft:mace', mace=True),
+    'pvp-cooldown': pvp_case(cooldown=True),
+    'zombie-hits-bob': mob_hits_case('zombie'),
+}
+SETUP = ['cmd Alice gamerule spawn_mobs false', 'cmd Alice gamerule spawn_monsters false',
+         'cmd Alice kill @e[type=!player]', 'cmd Alice gamerule advance_time false', 'cmd Alice time set midnight',
+         f'cmd Alice tp Alice {A[0]} {A[1]} {A[2]} -90 0', f'cmd Alice tp Bob {V[0]} {V[1]} {V[2]} 90 0', 'sleep 2']
+
+
+def server_dir(directory, world):
+    if directory.exists():
+        shutil.rmtree(directory)
+    directory.mkdir(parents=True)
+    port = free_port()
+    props = dict(PROPERTIES, **{'server-port': str(port)})
+    (directory / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in props.items()),
+                                                 encoding='iso-8859-1')
+    (directory / 'eula.txt').write_text('eula=true\n')
+    (directory / 'ops.json').write_text(ops_json())
+    shutil.copytree(world, directory / 'world')
+    (directory / 'world' / 'session.lock').unlink(missing_ok=True)
+    return port
+
+
+def run_side(label, server_command, client_command, build, world):
+    directory = build / label
+    port = server_dir(directory, world)
+    out = build / f'{label}.txt'
+    out.unlink(missing_ok=True)
+    server = Server(server_command, directory, label)
+    try:
+        server.wait_for(r'Done \(')
+        with (build / f'{label}-client.log').open('w') as log:
+            client = subprocess.Popen([*map(str, client_command), '127.0.0.1', str(port), str(out)],
+                                      cwd=lab.ROOT, stdin=subprocess.PIPE, stdout=log, stderr=subprocess.STDOUT,
+                                      text=True)
+
+            def send(line):
+                if line.startswith('sleep '):
+                    time.sleep(float(line.split()[1]))
+                else:
+                    client.stdin.write(line + '\n')
+                    client.stdin.flush()
+            try:
+                for name in ('Alice', 'Bob'):
+                    send(f'join {name}')
+                    server.wait_for(rf'{name} joined the game', timeout=120)
+                    time.sleep(2)
+                for line in SETUP:
+                    send(line)
+                for case, lines in CASES.items():
+                    send(f'step {case}')
+                    for line in lines:
+                        send(line)
+                    time.sleep(0.5)
+                send('end')
+                client.wait(timeout=60)
+            finally:
+                if client.poll() is None:
+                    client.kill()
+    finally:
+        server.stop()
+    if not out.exists():
+        raise AssertionError(f'{label}: the client wrote no transcript (see {build}/{label}-client.log)')
+    return out.read_text(encoding='utf-8').splitlines()
+
+
+DATA = re.compile(r'^chat \S+ has the following entity data: \[(.*)\]$')
+
+
+def compared(lines):
+    """Per case, what is compared: the mob's Pos and Motion (to 1e-9), and each player's motion packets and
+    sprint flag."""
+    cases = {}
+    for line in lines:
+        who, step, text = line.split(' ', 2)
+        step = step.removeprefix('step=')
+        if step not in CASES:
+            continue
+        kept = cases.setdefault(step, [])
+        data = DATA.match(text)
+        if who == 'Alice' and data:
+            kept.append('data ' + ' '.join(f'{float(v.rstrip("d")):.9f}' for v in data.group(1).split(', ')))
+        elif text.startswith('motion self') or text.startswith('sprinting'):
+            kept.append(f'{who} {text}')
+        elif text.startswith('error') or text.startswith('disconnected'):
+            kept.append(f'{who} {text}')
+    return cases
+
+
+def main():
+    lock, jars, libraries = base.verify_artifacts()
+    build = lab.LOCAL / NAME
+    build.mkdir(parents=True, exist_ok=True)
+    report = build / 'report.json'
+    report.unlink(missing_ok=True)
+    oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/KnockbackClient.java'
+    classes = build / 'classes'
+    shutil.rmtree(classes, ignore_errors=True)
+    classes.mkdir()
+    dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
+    subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none', '-nowarn', '-sourcepath',
+                    lab.ROOT / 'mods/horizon/src/test/java', '-cp', dependencies, '-d', classes, oracle],
+                   cwd=lab.ROOT, check=True, capture_output=True)
+    subprocess.run(['cargo', 'build', '--release', '-p', 'horizon-client', '--bin', 'horizon-client'], cwd=lab.ROOT,
+                   check=True, capture_output=True)
+    import json
+    metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
+                                                  cwd=lab.ROOT, text=True))
+    binary = Path(metadata['target_directory']) / 'release' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
+    vanilla_server = ['java', '-Xmx2g', '-Duser.timezone=UTC', '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
+    horizon_server = [binary, '--resources', lab.LOCAL / 'horizon-client/26.3', '--dedicated', '--nogui']
+    client = ['java', '-Xmx1g', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.KnockbackClient']
+
+    world = generate_world(vanilla_server, build)
+    vanilla = compared(run_side('vanilla', vanilla_server, client, build, world))
+    horizon = compared(run_side('horizon', horizon_server, client, build, world))
+    differ, fixed = [], []
+    for case in CASES:
+        want, got = vanilla.get(case, []), horizon.get(case, [])
+        if case not in vanilla or any(' error ' in f' {l} ' or 'disconnected' in l for l in want):
+            raise AssertionError(f'{case}: vanilla recorded nothing or failed: {want}')
+        if want == got:
+            if case in KNOWN:
+                fixed.append(case)
+            continue
+        if case in KNOWN:
+            continue
+        import difflib
+        differ.append(f'{case}:\n' + '\n'.join(difflib.unified_diff(want, got, 'vanilla', 'horizon', n=1, lineterm='')))
+    if fixed:
+        print('matching vanilla now, take them out of KNOWN: ' + ', '.join(fixed))
+    if differ:
+        raise AssertionError(f'{len(differ)} cases differ (see {build}/vanilla.txt and horizon.txt):\n'
+                             + '\n'.join(differ)[:8000])
+    lab.write_json(report, dict(
+        schema=1, minecraft=lock['minecraft']['version'], platform=platform.platform(),
+        java=subprocess.check_output(['java', '--version'], text=True).splitlines()[0],
+        cases=len(CASES), known=sorted(KNOWN), output_sha256=lab.digest(build / 'horizon.txt', 'sha256'),
+        scope='Knockback on a dedicated server, as two vanilla-codec players get it: a player hitting a cow and '
+              'a zombie (plain, sprinting, Knockback II, critical, in the air; the mob\'s motion and path over 20 '
+              'ticks), a player hitting a player (the same, a raised shield, netherite, two hits, a mace smash; '
+              'the victim\'s motion packet and the attacker\'s sprint) and a zombie hurting a player.'))
+    print(f'server knockback: {len(CASES) - len(KNOWN)} of {len(CASES)} cases identical')
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except AssertionError as error:
+        sys.exit(f'{NAME}: {error}')

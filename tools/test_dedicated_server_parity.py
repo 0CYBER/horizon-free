@@ -7,7 +7,9 @@ respawn_radius 0) and stops; a vanilla dedicated server and Horizon's
 server.properties, server-icon.png and lists. VanillaProtocolClient, a
 headless client made of vanilla's own codecs (any byte vanilla would not
 read is an error), pings each server, joins it in offline mode through
-login, configuration and play, accepts the spawn teleport, receives the
+login, configuration and play, accepts the spawn teleport (then, standing
+still until its death, sends its position every 20 ticks as LocalPlayer
+does: the server checks then which entities it sees), receives the
 chunks around the spawn (their bytes are compared: the world is loaded from
 the same files), chats, runs /list and commands that fail (`/random value
 7..7`, `/random value x`, `/trigger nope`), trades, is made an operator by
@@ -68,10 +70,12 @@ import zlib
 
 try:
     from . import lab, oracle_harness as oh, test_rust_parity as base
+    from .lab import free_port  # the other server harnesses import it from here
 except ImportError:
     import lab
     import oracle_harness as oh
     import test_rust_parity as base
+    from lab import free_port
 
 NAME = 'dedicated-server-parity'
 SEED = 12345
@@ -87,12 +91,6 @@ PROPERTIES = {
     'motd': '\\u00a7aHorizon \\u00a7rparity \\u00e9t\\u00e9',
     'pause-when-empty-seconds': '-1',
 }
-
-
-def free_port():
-    with socket.socket() as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
 
 
 def icon_png():
@@ -128,7 +126,7 @@ class Server:
         self.lines = []
         self.process = subprocess.Popen(list(map(str, command)), cwd=directory, stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                        encoding='utf-8', errors='replace')
+                                        encoding='utf-8', errors='replace', env=lab.game_env())
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
 
@@ -183,18 +181,23 @@ def settle(server, ticks=600, timeout=600):
             break
         time.sleep(2)
 
-    def game_time():
-        start = len(server.lines)
-        server.console('time query gametime')
-        while time.time() < deadline:
-            for line in server.lines[start:]:
-                if m := re.search(r'The (?:game )?time is (\d+)', line):
-                    return int(m.group(1))
-            time.sleep(0.2)
-        raise AssertionError(f'{server.log_path.name}: no game time in {timeout} s')
-    until = game_time() + ticks
-    while game_time() < until:
+    until = game_time(server, deadline - time.time()) + ticks
+    while game_time(server, deadline - time.time()) < until:
         time.sleep(2)
+
+
+def game_time(server, timeout=300):
+    """The server's game time, asked from its console: the console runs its queue in order, so every console
+    command sent before has run."""
+    deadline = time.time() + timeout
+    start = len(server.lines)
+    server.console('time query gametime')
+    while time.time() < deadline:
+        for line in server.lines[start:]:
+            if m := re.search(r'The (?:game )?time is (\d+)', line):
+                return int(m.group(1))
+        time.sleep(0.05)
+    raise AssertionError(f'{server.log_path.name}: no game time in {timeout:.0f} s')
 
 
 def legacy_ping(port):
@@ -246,6 +249,20 @@ def console_lines(lines):
         out[i:j] = sorted(out[i:j])
         i = j + 1 if j == i else j
     return out
+
+
+# What a failure's diff doesn't say: warnings, errors, panics and why a player left.
+NOTABLE = re.compile(r'/(WARN|ERROR)\]|Exception|panicked|lost connection')
+
+
+def notable_lines(path, limit=20):
+    """A server's notable lines from its `Done (` on (the startup warnings are every run's), or a client's."""
+    try:
+        lines = path.read_text(encoding='utf-8', errors='replace').splitlines()
+    except OSError:
+        return []
+    start = next((i for i, l in enumerate(lines) if 'Done (' in l), 0)
+    return [f'{path.name}: {l[:300]}' for l in lines[start:] if NOTABLE.search(l)][-limit:]
 
 
 def server_files(directory):
@@ -340,7 +357,7 @@ def horizon_client_joins(vanilla_server, binary, world, build, reference):
     server = Server(vanilla_server, directory, label)
     try:
         server.wait_for(r'Done \(')
-        env = dict(os.environ, HORIZON_NO_AUDIO='1', HORIZON_NET_REPORT=str(report))
+        env = lab.game_env(HORIZON_NET_REPORT=report)
         with (build / 'horizon-client-run.log').open('w') as log:
             subprocess.run([str(c) for c in [binary, '--resources', lab.RESOURCES, '--render-distance', 2,
                                              '--server', f'127.0.0.1:{port}', '--name', PLAYER]],
@@ -424,9 +441,13 @@ def main():
     (world / 'playerdata').mkdir(exist_ok=True)
 
     def client(port, out):
-        oh.run_logged(['java', '-Xmx1g', '-Duser.timezone=UTC', '-cp', str(classes) + os.pathsep + dependencies,
-                       'dev.horizonlab.parity.VanillaProtocolClient', '127.0.0.1', port, PLAYER, out], build,
-                      out.stem, timeout=300)
+        try:
+            oh.run_logged(['java', '-Xmx1g', '-Duser.timezone=UTC', '-cp', str(classes) + os.pathsep + dependencies,
+                           'dev.horizonlab.parity.VanillaProtocolClient', '127.0.0.1', port, PLAYER, out], build,
+                          out.stem, timeout=300)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            log = (build / f'{out.stem}.log').read_text(encoding='utf-8', errors='replace').splitlines()
+            raise AssertionError(f'{out.stem}: {error}:\n' + '\n'.join(log[-30:])) from None
 
     results = {}
     for label, command in [('vanilla', vanilla_server), ('horizon', horizon_server)]:
@@ -452,8 +473,10 @@ def main():
         if a != b:
             differences.append(f'chunk {key}: vanilla {a} horizon {b}')
     if differences or errors:
+        notes = [line for name in ('vanilla', 'vanilla-client', 'horizon', 'horizon-client')
+                 for line in notable_lines(build / f'{name}.log')]
         raise AssertionError(f'{len([d for d in differences if d[:1] in "+-" and d[:3] not in ("+++", "---")])} differing lines '
-                             f'(see {build}/vanilla.txt and horizon.txt):\n' + '\n'.join(differences[:80]))
+                             f'(see {build}/vanilla.txt and horizon.txt):\n' + '\n'.join(differences[:80] + notes))
     lab.write_json(report, dict(
         schema=1, minecraft=lock['minecraft']['version'], platform=platform.platform(),
         java=subprocess.check_output(['java', '--version'], text=True).splitlines()[0],

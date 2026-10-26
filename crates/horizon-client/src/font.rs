@@ -102,7 +102,8 @@ enum Provider {
 /// One font (`FontSet`): its providers and the glyphs resolved so far.
 struct FontSet {
     providers: Vec<Provider>,
-    glyphs: HashMap<char, Glyph>,
+    /// Every char drawn looks up here, so the hasher is Fx, not SipHash.
+    glyphs: crate::fast_hash::FxHashMap<char, Glyph>,
     /// `glyphsByWidth` for obfuscated text (built on first use).
     by_width: Option<HashMap<u32, Vec<char>>>,
 }
@@ -271,7 +272,10 @@ fn load_bitmap(
         .flatten();
     // The sheet: its size, and its pixels when they are not in the atlas.
     let (sw, sh, sheet) = match in_atlas {
-        Some(rect) => (rect.w, rect.h, None),
+        Some(rect) => {
+            let (w, h) = rect.texels(atlas);
+            (w, h, None)
+        }
         None => match crate::hud::decode(&root.join(resource_path(file, "textures", ""))) {
             Ok((w, h, rgba)) => (w, h, Some(Arc::new((w, rgba)))),
             Err(_) => {
@@ -644,7 +648,7 @@ impl Font {
             .collect();
         FontSet {
             providers,
-            glyphs: HashMap::new(),
+            glyphs: Default::default(),
             by_width: None,
         }
     }
@@ -887,8 +891,11 @@ impl Font {
         }
         s.chars().map(|c| self.glyph(c).advance).sum::<f32>().ceil()
     }
+    /// Font.width of a component: `§` codes in the spans are formatting,
+    /// not glyphs.
     pub fn width_text(&self, t: &Text) -> f32 {
-        t.chars()
+        t.resolved()
+            .chars()
             .map(|(c, s)| self.advance(c, s))
             .sum::<f32>()
             .ceil()

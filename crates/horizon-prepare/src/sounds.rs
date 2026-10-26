@@ -1,5 +1,5 @@
-//! The pinned version's sounds and title panorama from the player's own official
-//! launcher install, each object checked against the asset index's SHA-1, copied into
+//! The pinned version's sounds, title panorama, Unifont glyphs and built-in resource packs
+//! from the player's own official launcher install, each object checked against the asset index's SHA-1, copied into
 //! `.local/horizon-client/<version>/assets` where the game reads them (tools/fetch_sounds.py and
 //! the tools/lab.py functions it called). Nothing is downloaded.
 
@@ -112,6 +112,20 @@ pub fn fonts(root: &Path, minecraft: Option<&Path>, log: Log) -> Result<PathBuf,
     copy_assets(root, minecraft, log, is_font, "Font", &UNIFONT)
 }
 
+/// Every bundled language and the language list, both of which only the asset index holds
+/// (the client JAR carries `en_us` alone): `pack.mcmeta`'s `language` section is what the
+/// language screen offers, `minecraft/lang/<code>.json` the strings each one draws (#1272).
+/// Also usable on already-prepared resources without Java.
+pub fn languages(root: &Path, minecraft: Option<&Path>, log: Log) -> Result<PathBuf, String> {
+    copy_assets(root, minecraft, log, is_language, "Language", &LANGUAGES)
+}
+
+const LANGUAGES: [&str; 1] = ["pack.mcmeta"];
+
+fn is_language(name: &str) -> bool {
+    name == "pack.mcmeta" || name.starts_with("minecraft/lang/")
+}
+
 /// Full preparation can run from cached JARs without an official launcher install.
 pub(crate) fn optional_assets(root: &Path, minecraft: Option<&Path>, log: Log) {
     if let Err(error) = panorama(root, minecraft, log) {
@@ -122,6 +136,16 @@ pub(crate) fn optional_assets(root: &Path, minecraft: Option<&Path>, log: Log) {
     if let Err(error) = fonts(root, minecraft, log) {
         log(&format!(
             "Unifont glyphs not imported: {error}; run horizon-prepare fonts later"
+        ));
+    }
+    if let Err(error) = packs(root, minecraft, log) {
+        log(&format!(
+            "Programmer Art and High Contrast not imported: {error}; run horizon-prepare packs later"
+        ));
+    }
+    if let Err(error) = languages(root, minecraft, log) {
+        log(&format!(
+            "Languages not imported: {error}; run horizon-prepare languages later"
         ));
     }
 }
@@ -144,6 +168,31 @@ const UNIFONT: [&str; 2] = [
     "minecraft/font/include/unifont.json",
     "minecraft/font/unifont.zip",
 ];
+
+/// Adds the built-in Programmer Art and High Contrast packs, which only the asset index holds
+/// (`BuiltInPackSource.populatePackList` lists `minecraft:resourcepacks` of the vanilla pack).
+/// Packs made to sit on Programmer Art, like Golden Days, show the default textures without it.
+/// Also usable on prepared resources without Java.
+pub fn packs(root: &Path, minecraft: Option<&Path>, log: Log) -> Result<PathBuf, String> {
+    copy_assets(
+        root,
+        minecraft,
+        log,
+        is_built_in_pack,
+        "Built-in pack",
+        &BUILT_IN_PACKS,
+    )
+}
+
+/// The built-in packs `packs` copies, under the prepared resources' `assets`.
+pub const BUILT_IN_PACKS: [&str; 2] = [
+    "minecraft/resourcepacks/programmer_art.zip",
+    "minecraft/resourcepacks/high_contrast.zip",
+];
+
+fn is_built_in_pack(name: &str) -> bool {
+    name.starts_with("minecraft/resourcepacks/")
+}
 
 /// The fonts only the asset index holds (the JAR has the bitmap fonts).
 fn is_font(name: &str) -> bool {
@@ -228,11 +277,13 @@ mod tests {
         crate::hex(&sha1::Sha1::digest(data))
     }
 
-    /// Where the fixture's panorama objects start.
-    const FIRST_FACE: usize = 6;
+    /// Where the fixture's built-in packs and panorama objects start.
+    const FIRST_PACK: usize = 6;
+    const FIRST_FACE: usize = 8;
 
     /// A Horizon folder and an official launcher directory holding version `9.9` with
-    /// sounds, a language file and the full title panorama in its asset store.
+    /// sounds, a language file, Unifont, the built-in packs and the full title panorama in its
+    /// asset store.
     struct Fixture {
         dir: PathBuf,
         root: PathBuf,
@@ -246,6 +297,15 @@ mod tests {
         }
 
         fn with_panorama(name: &str, panorama: &[&'static str]) -> Fixture {
+            Self::with_extras(name, panorama, &[])
+        }
+
+        /// The same store with extra index entries, for the files the index alone holds.
+        fn with_extras(
+            name: &str,
+            panorama: &[&'static str],
+            extras: &[(&'static str, &'static [u8])],
+        ) -> Fixture {
             let dir = std::env::temp_dir().join(format!(
                 "horizon-prepare-sounds-{name}-{}",
                 std::process::id()
@@ -263,10 +323,15 @@ mod tests {
                     b"{\"providers\": [{\"type\": \"unihex\"}]}".to_vec(),
                 ),
                 (UNIFONT[1], b"PK unifont".to_vec()),
+                (BUILT_IN_PACKS[0], b"PK programmer art".to_vec()),
+                (BUILT_IN_PACKS[1], b"PK high contrast".to_vec()),
             ];
             for &name in panorama {
                 // Distinct object bytes let the test catch swapped faces too.
                 objects.push((name, name.as_bytes().to_vec()));
+            }
+            for &(name, data) in extras {
+                objects.push((name, data.to_vec()));
             }
             let mut index = String::from("{\"objects\": {");
             for (i, (name, data)) in objects.iter().enumerate() {
@@ -355,6 +420,32 @@ mod tests {
         assert_eq!(*lines.borrow(), ["Sound assets ready: 3 files, 0.0 MB"]);
         // Again: the verified copies are kept.
         f.run().unwrap();
+    }
+
+    #[test]
+    fn languages_come_from_the_asset_store() {
+        // The client JAR carries `en_us` alone, so every other language and the list in
+        // `pack.mcmeta` come from the index (#1272).
+        let f = Fixture::with_extras(
+            "languages",
+            &[],
+            &[("pack.mcmeta", b"{\"language\": {\"fr_fr\": {}}}")],
+        );
+        let lines = std::cell::RefCell::new(Vec::new());
+        let target = languages(&f.root, Some(&f.minecraft), &|l| {
+            lines.borrow_mut().push(l.to_string())
+        })
+        .unwrap();
+        assert!(fs::read(target.join("assets/pack.mcmeta"))
+            .unwrap()
+            .starts_with(b"{\"language\""));
+        assert_eq!(
+            fs::read(target.join("assets/minecraft/lang/fr_fr.json")).unwrap(),
+            b"{}"
+        );
+        // Each entry point copies its own set: the sounds stay where they belong.
+        assert!(!target.join("assets/minecraft/sounds.json").exists());
+        assert_eq!(*lines.borrow(), ["Language assets ready: 2 files, 0.0 MB"]);
     }
 
     /// #1076: the launcher holds an index Mojang republished under the same id, so its SHA-1
@@ -499,15 +590,33 @@ mod tests {
                 lines[0],
                 format!("Title panorama not imported: {error}; run horizon-prepare panorama later")
             );
-            // The fonts come on their own when only a panorama face is missing.
+            // The fonts and packs come on their own when only a panorama face is missing.
             match missing {
-                "last-object" => assert_eq!(lines[1], "Font assets ready: 2 files, 0.0 MB"),
-                _ => assert!(
-                    lines[1].starts_with("Unifont glyphs not imported: "),
-                    "{lines:?}"
+                "last-object" => assert_eq!(
+                    lines[1..],
+                    [
+                        "Font assets ready: 2 files, 0.0 MB",
+                        "Built-in pack assets ready: 2 files, 0.0 MB",
+                        // This store has no `pack.mcmeta`, so the languages report it.
+                        "Languages not imported: pack.mcmeta is missing from the asset index; \
+                         run horizon-prepare languages later"
+                    ]
                 ),
+                _ => {
+                    assert!(lines[1].starts_with("Unifont glyphs not imported: "));
+                    assert!(
+                        lines[2].starts_with("Programmer Art and High Contrast not imported: ")
+                            && lines[2].ends_with("; run horizon-prepare packs later"),
+                        "{lines:?}"
+                    );
+                    assert!(
+                        lines[3].starts_with("Languages not imported: ")
+                            && lines[3].ends_with("; run horizon-prepare languages later"),
+                        "{lines:?}"
+                    );
+                }
             }
-            assert_eq!(lines.len(), 2);
+            assert_eq!(lines.len(), 4);
             for name in PANORAMA {
                 assert_eq!(fs::read(target.join(name)).unwrap(), b"jar placeholder");
             }
@@ -528,12 +637,37 @@ mod tests {
             lines.borrow_mut().push(l.to_string())
         });
         assert_eq!(done.unwrap(), target);
-        for (name, data) in &f.objects[4..FIRST_FACE] {
+        for (name, data) in &f.objects[4..FIRST_PACK] {
             assert_eq!(&fs::read(target.join("assets").join(name)).unwrap(), data);
         }
         assert_eq!(*lines.borrow(), ["Font assets ready: 2 files, 0.0 MB"]);
         assert!(!target.join("assets/minecraft/sounds.json").exists());
         assert!(!target.join("assets/minecraft/textures").exists());
+    }
+
+    /// Golden Days is made to sit on Programmer Art, which the client JAR lacks: the asset
+    /// index has it, where `BuiltInPackSource` lists `minecraft:resourcepacks`.
+    #[test]
+    fn packs_add_programmer_art_and_high_contrast_where_the_pack_list_finds_them() {
+        let f = Fixture::new("packs");
+        let target = f.root.join(".local/horizon-client/9.9");
+        let lines = std::cell::RefCell::new(Vec::new());
+        let done = packs(&f.root, Some(&f.minecraft), &|l| {
+            lines.borrow_mut().push(l.to_string())
+        });
+        assert_eq!(done.unwrap(), target);
+        for (name, data) in &f.objects[FIRST_PACK..FIRST_FACE] {
+            assert_eq!(&fs::read(target.join("assets").join(name)).unwrap(), data);
+        }
+        assert!(target
+            .join("assets/minecraft/resourcepacks/programmer_art.zip")
+            .is_file());
+        assert_eq!(
+            *lines.borrow(),
+            ["Built-in pack assets ready: 2 files, 0.0 MB"]
+        );
+        assert!(!target.join("assets/minecraft/sounds.json").exists());
+        assert!(!target.join("assets/minecraft/font").exists());
     }
 
     #[test]

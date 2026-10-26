@@ -1,11 +1,11 @@
 //! Chat, the command registries and the per-world state behind commands
 //! (game rules, the world clock, difficulty), bound to the game.
-use super::{Dim, Game, Screen};
+use super::{Game, Screen};
 use horizon_client::{
     chat::{Chat, ChatAction, ChatScreen, Commands, SYSTEM_INDICATOR},
     command::Registries,
     gamerules::GameRules,
-    hud::{HudBatch, rgba},
+    hud::HudBatch,
     screen_draw::Measure,
     text::{ClickEvent, Style, Text},
 };
@@ -18,7 +18,7 @@ fn chat_tree<'a>(
     mods: &'a super::mods::ModsState,
 ) -> &'a horizon_client::command::Dispatcher {
     match remote.as_ref().and_then(|r| r.commands.as_ref()) {
-        Some(tree) => tree,
+        Some(tree) => mods.remote_dispatcher().unwrap_or(tree),
         None => mods.dispatcher(),
     }
 }
@@ -99,6 +99,8 @@ pub struct UiState {
     /// Death screen cause and when the player died (buttons wait 20 ticks).
     pub death_text: Option<Text>,
     pub died_at: Option<std::time::Instant>,
+    /// `LivingEntity.deathTime` of the window's player: ticks since it died.
+    pub death_time: u32,
 }
 
 impl Game<'_> {
@@ -450,11 +452,11 @@ impl Game<'_> {
         // Connected to a server (single player's own included), the chat on
         // screen is the connection's: the game's own messages join it.
         if self.remote.is_some() {
-            self.chat_line(text.plain());
+            self.chat_line(text);
             return;
         }
         let focused = self.screen == Screen::Chat;
-        let heard = self.mods.mods.is_running().then(|| text.plain());
+        let heard = self.mods.running().then(|| text.plain());
         self.ui.chat.add(
             &self.gui.atlas,
             text,
@@ -570,8 +572,14 @@ impl Game<'_> {
     /// ChatScreen.handleChatInput: history, then a command or a chat line.
     pub(super) fn handle_chat_input(&mut self, message: &str) {
         self.ui.chat.add_recent(message);
-        // On a server (single player's own included) the server runs it.
+        // On a server (single player's own included) the server runs it,
+        // unless a client mod owns the command.
         if self.remote.is_some() {
+            if let Some(command) = message.strip_prefix('/')
+                && self.mod_command(command)
+            {
+                return;
+            }
             self.send_chat(message);
             return;
         }
@@ -580,10 +588,10 @@ impl Game<'_> {
         } else {
             let line = Text::translate(
                 "chat.type.text",
-                &[Text::literal(PLAYER_NAME), Text::literal(message)],
+                &[self.player_display_name(), Text::literal(message)],
             );
             let focused = self.screen == Screen::Chat;
-            let heard = self.mods.mods.is_running().then(|| line.plain());
+            let heard = self.mods.running().then(|| line.plain());
             self.ui
                 .chat
                 .add(&self.gui.atlas, line, None, self.ticks, focused);
@@ -681,14 +689,21 @@ impl Game<'_> {
         let draws = screen.draw(&m, mouse, blink, background);
         horizon_client::screen_draw::paint(batch, &self.gui.atlas, &draws);
         self.ui.chat_screen = Some(screen);
+        // The hovered message part's tooltip, one row per line of its text.
+        if let Some(hover) = self.ui.chat.hover_at(
+            &self.gui.atlas.font,
+            batch.height as i32,
+            f64::from(self.cursor.0),
+            f64::from(self.cursor.1),
+        ) {
+            let lines = hover_rows(&hover);
+            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
+        }
     }
     /// Advance the overworld clock (ServerClockManager.tick) when
     /// `advance_time` allows it.
     pub(super) fn advance_clock(&mut self) {
-        if !self.ui.rules.bool("advance_time")
-            || self.ui.clock.paused
-            || self.dim == Dim::Nether && false
-        {
+        if !self.ui.rules.bool("advance_time") || self.ui.clock.paused {
             return;
         }
         let c = &mut self.ui.clock;
@@ -809,8 +824,12 @@ impl Game<'_> {
             ("data", data),
             ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
         ]);
-        let _ = horizon_client::save::write_dat(&path, root);
-        let _ = write_difficulty(&self.world_root, self.ui.difficulty);
+        if let Err(e) = horizon_client::save::write_dat(&path, root) {
+            log::warn!("the world clocks were not written: {e}");
+        }
+        if let Err(e) = write_difficulty(&self.world_root, self.ui.difficulty) {
+            log::warn!("the difficulty was not written: {e}");
+        }
     }
     /// Death message in chat (CombatTracker.getDeathMessage, as far as the
     /// cause is known to the client).
@@ -883,10 +902,6 @@ impl Game<'_> {
             .chat
             .add(&self.gui.atlas, message, None, self.ticks, focused);
     }
-    #[allow(dead_code)]
-    fn chat_debug_fill(&self, batch: &mut HudBatch) {
-        batch.fill(&self.gui.atlas, 0.0, 0.0, 1.0, 1.0, rgba(0, 0, 0, 0));
-    }
 }
 /// `yyyy-MM-dd_HH.mm.ss[_n].png` (Util.getFilenameFormattedDateTime, local time
 /// approximated as UTC).
@@ -952,4 +967,27 @@ fn write_difficulty(world: &std::path::Path, difficulty: u8) -> horizon_client::
 /// commands are allowed, else `ALL` (0).
 fn owner_permission(allow_commands: bool) -> u8 {
     if allow_commands { 4 } else { 0 }
+}
+
+/// A hover text's rows for the tooltip: split at line breaks, each in the
+/// colour of its first styled character (white without one).
+fn hover_rows(hover: &horizon_client::text::Text) -> Vec<(String, u32)> {
+    let mut rows = vec![(String::new(), None)];
+    for (c, style) in hover.resolve_legacy().chars() {
+        if c == '\n' {
+            rows.push((String::new(), None));
+            continue;
+        }
+        let row = rows.last_mut().expect("one row");
+        if row.0.is_empty() {
+            row.1 = style.color;
+        }
+        row.0.push(c);
+    }
+    rows.into_iter()
+        .map(|(text, color)| {
+            let [_, r, g, b] = color.unwrap_or(0xFF_FFFF).to_be_bytes();
+            (text, horizon_client::hud::rgba(r, g, b, 255))
+        })
+        .collect()
 }

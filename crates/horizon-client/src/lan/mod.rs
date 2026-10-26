@@ -6,6 +6,7 @@
 //! world that is not open to the network pays nothing.
 mod advancements;
 pub mod attributes;
+pub mod border;
 pub mod chunks;
 mod command_order;
 pub mod command_suggestions;
@@ -20,6 +21,7 @@ pub mod hub;
 pub mod menu;
 pub mod playerdata;
 mod recipes;
+pub mod scoreboard;
 pub mod tracking;
 pub mod waypoints;
 
@@ -137,6 +139,9 @@ pub struct NetConfig {
     /// Online mode: players are authenticated (none on a LAN world).
     pub online: Option<Arc<OnlineMode>>,
     pub log: Option<NetLog>,
+    /// server.properties `resource-pack`: offered to every player during
+    /// configuration (a dedicated server's; MinecraftServer.getServerResourcePack).
+    pub resource_pack: Option<crate::server::properties::ResourcePackInfo>,
 }
 impl NetConfig {
     /// MinecraftServer.enforceSecureProfile.
@@ -162,6 +167,7 @@ impl NetConfig {
             gate: None,
             online: None,
             log: None,
+            resource_pack: None,
         }
     }
 }
@@ -271,9 +277,6 @@ impl Shared {
     }
     pub fn max_players(&self) -> usize {
         self.max_players.load(Ordering::Relaxed)
-    }
-    pub fn set_max_players(&self, n: usize) {
-        self.max_players.store(n, Ordering::Relaxed);
     }
     pub fn release(&self, uuid: u128) {
         self.online.lock().unwrap().retain(|(u, _)| *u != uuid);
@@ -512,9 +515,6 @@ impl Lan {
     /// Reserve a uuid for the host so a guest cannot take the name.
     pub fn reserve(&self, uuid: u128) {
         self.shared.reserved.lock().unwrap().insert(uuid);
-    }
-    pub fn set_motd(&self, motd: &str) {
-        *self.shared.motd.lock().unwrap() = motd.to_owned();
     }
     pub fn stop(&mut self) {
         self.shared.stop.store(true, Ordering::Relaxed);

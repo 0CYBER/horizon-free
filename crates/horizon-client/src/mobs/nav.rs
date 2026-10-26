@@ -37,7 +37,11 @@ pub struct Navigation {
     reach_range: i32,
     pub max_visited_multiplier: f32,
     pub stuck: bool,
+    /// Set through [`Mob::set_required_path_length`].
     pub required_path_length: f32,
+    /// `PathFinder.maxVisitedNodes`: the base follow range times 16 when the
+    /// navigation is made, then [`Mob::update_max_visited_nodes`].
+    pub max_visited_nodes: i32,
     pub can_float: bool,
     pub can_open_doors: bool,
     pub can_pass_doors: bool,
@@ -68,6 +72,7 @@ impl Default for Navigation {
             max_visited_multiplier: 1.0,
             stuck: false,
             required_path_length: 16.0,
+            max_visited_nodes: 256,
             can_float: false,
             can_open_doors: false,
             can_pass_doors: true,
@@ -146,6 +151,16 @@ impl Mob {
     }
     fn max_path_length(&self) -> f32 {
         (self.attrs.follow_range as f32).max(self.ai.nav.required_path_length)
+    }
+    /// `PathNavigation.updatePathfinderMaxVisitedNodes`: after a follow range
+    /// change and a new required path length.
+    pub fn update_max_visited_nodes(&mut self) {
+        self.ai.nav.max_visited_nodes = (self.max_path_length() * 16.0).floor() as i32;
+    }
+    /// `PathNavigation.setRequiredPathLength`.
+    pub fn set_required_path_length(&mut self, length: f32) {
+        self.ai.nav.required_path_length = length;
+        self.update_max_visited_nodes();
     }
     fn can_update_path(&self) -> bool {
         match self.ai.nav.kind {
@@ -237,8 +252,8 @@ impl Mob {
             return Some(path.clone());
         }
         let pm = self.path_mob();
-        let max_visited = ((self.attrs.follow_range * 16.0).floor() as f32
-            * self.ai.nav.max_visited_multiplier) as i32;
+        let max_visited =
+            (self.ai.nav.max_visited_nodes as f32 * self.ai.nav.max_visited_multiplier) as i32;
         let finder = Finder::new(w, &pm, self.ai.nav.evaluator());
         let path = finder.find(targets, max_len, reach, max_visited);
         if let Some(p) = &path {
@@ -581,27 +596,5 @@ impl Mob {
             }
             NavKind::Amphibious => !w.facts.is_air(w.world.block(p[0], p[1] - 1, p[2])),
         }
-    }
-    pub fn should_recompute_path(&self, p: [i32; 3]) -> bool {
-        if self.ai.nav.delayed_recompute {
-            return false;
-        }
-        let Some(path) = &self.ai.nav.path else {
-            return false;
-        };
-        if path.is_done() || path.nodes.is_empty() {
-            return false;
-        }
-        let Some(end) = path.end() else { return false };
-        let mid = [
-            (f64::from(end.x) + self.position.x) / 2.0,
-            (f64::from(end.y) + self.position.y) / 2.0,
-            (f64::from(end.z) + self.position.z) / 2.0,
-        ];
-        let d = (f64::from(p[0]) + 0.5 - mid[0]).powi(2)
-            + (f64::from(p[1]) + 0.5 - mid[1]).powi(2)
-            + (f64::from(p[2]) + 0.5 - mid[2]).powi(2);
-        let r = (path.nodes.len() - path.next) as f64;
-        d < r * r
     }
 }

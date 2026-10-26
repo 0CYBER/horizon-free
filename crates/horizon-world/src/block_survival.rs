@@ -471,10 +471,10 @@ impl<'r> BlockSurvivalRegistry<'r> {
                         .ignition_odds
                         .get(&state.name)
                         .is_some_and(|value| *value > 0)
-                        && !state
+                        && state
                             .properties
                             .get("waterlogged")
-                            .is_some_and(|value| value == "true")
+                            .is_none_or(|value| value != "true")
                 })
                 .collect(),
             fence_gates: (0..registry.len())
@@ -523,14 +523,6 @@ impl<'r> BlockSurvivalRegistry<'r> {
             bubble_up: tag_states("minecraft:enables_bubble_column_push_up")?,
             bubble_down: tag_states("minecraft:enables_bubble_column_drag_down")?,
         })
-    }
-    pub fn supported_states(&self) -> usize {
-        self.rules.iter().filter(|r| r.is_some()).count()
-    }
-    pub fn supports_state(&self, state: BlockStateId) -> bool {
-        self.rules
-            .get(state.0 as usize)
-            .is_some_and(Option::is_some)
     }
     fn read<W: SurvivalWorld>(
         &self,

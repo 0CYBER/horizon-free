@@ -186,17 +186,7 @@ impl PredicateBlockResolver for StateProviderBindings<'_> {
         &self,
         property: BlockProperty,
     ) -> Result<BoundBlockProperty, DecodeError> {
-        let values = self
-            .physical_properties
-            .as_ref()
-            .ok_or(DecodeError::Field("predicate block property registry"))?;
-        Ok(values[match property {
-            BlockProperty::Solid => 0,
-            BlockProperty::Replaceable => 1,
-            BlockProperty::Liquid => 2,
-            BlockProperty::SolidRender => 3,
-        }]
-        .clone())
+        super::block_predicate::bound_property(self.physical_properties.as_ref(), property)
     }
     fn predicate_biome_set(
         &self,
@@ -343,12 +333,6 @@ impl BlockStateProvider {
             (Err(_), Ok(provider)) => Ok(provider),
             _ => Err(DecodeError::Field("exclusive state or provider")),
         }
-    }
-    pub fn from_typed_json(
-        json: &str,
-        bindings: &StateProviderBindings<'_>,
-    ) -> Result<Self, DecodeError> {
-        Self::decode_typed(json, bindings, 0, &mut 65536, None)
     }
     fn decode_typed(
         json: &str,

@@ -428,6 +428,43 @@ impl Text {
         }
         out
     }
+    /// `resolve_legacy` borrowing `self` when no span holds a `§` code (the
+    /// common case).
+    pub fn resolved(&self) -> std::borrow::Cow<'_, Text> {
+        if self.spans.iter().any(|s| s.text.contains('§')) {
+            std::borrow::Cow::Owned(self.resolve_legacy())
+        } else {
+            std::borrow::Cow::Borrowed(self)
+        }
+    }
+    /// The text without its legacy `§` codes (ChatFormatting.stripFormatting:
+    /// a `§` and a code character, `0`-`9`, `a`-`f`, `k`-`o` or `r`).
+    pub fn strip_legacy(&self) -> Text {
+        if !self.spans.iter().any(|s| s.text.contains('§')) {
+            return self.clone();
+        }
+        let code =
+            |c: char| matches!(c.to_ascii_lowercase(), '0'..='9' | 'a'..='f' | 'k'..='o' | 'r');
+        let mut out = Text::default();
+        for span in &self.spans {
+            let mut text = String::with_capacity(span.text.len());
+            let mut chars = span.text.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c == '§' && chars.peek().is_some_and(|&n| code(n)) {
+                    chars.next();
+                } else {
+                    text.push(c);
+                }
+            }
+            if !text.is_empty() {
+                out.spans.push(Span {
+                    text,
+                    style: span.style.clone(),
+                });
+            }
+        }
+        out
+    }
     /// Characters with their effective styles.
     pub fn chars(&self) -> impl Iterator<Item = (char, &Style)> {
         self.spans
@@ -454,9 +491,6 @@ impl Text {
             }
         }
         out
-    }
-    pub fn char_count(&self) -> usize {
-        self.spans.iter().map(|s| s.text.chars().count()).sum()
     }
 }
 
@@ -669,5 +703,21 @@ mod tests {
         assert_eq!(t.spans[0].style.color, Some(RED));
         assert_eq!(t.spans[1].style.color, Some(GOLD));
         assert_eq!(t.slice(1, 2).plain(), "y");
+    }
+    #[test]
+    fn resolved_borrows_clean_text_and_restyles_codes() {
+        let clean = Text::colored("Steve", GOLD);
+        assert!(matches!(clean.resolved(), std::borrow::Cow::Borrowed(_)));
+        // A colour code inside a span clears its decorations (a bold
+        // "§cSteve" draws "Steve" red, not bold).
+        let styled = Style {
+            bold: Some(true),
+            ..Style::default()
+        };
+        let styled = Text::styled("§cSteve", styled);
+        let resolved = styled.resolved();
+        assert_eq!(resolved.plain(), "Steve");
+        assert_eq!(resolved.spans[0].style.color, Some(RED));
+        assert_eq!(resolved.spans[0].style.bold, Some(false));
     }
 }

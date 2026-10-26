@@ -55,6 +55,9 @@ impl PlayerMotion {
         Ok(())
     }
     pub fn food_tick(&mut self, resources: &HealthResources, rules: HealthRules) -> Result<()> {
+        if self.client_side {
+            return Ok(());
+        }
         let h = &mut self.health;
         let mut world = TickWorld {
             resources,
@@ -156,6 +159,7 @@ impl FoodWorld for TickWorld<'_> {
             blocking: None,
             blocked: 0.0,
             block_sound: false,
+            knocked: false,
             totem: false,
             totem_fired: false,
         };

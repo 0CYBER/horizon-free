@@ -16,10 +16,91 @@ class ParityRunnerTests(unittest.TestCase):
 
     def test_artifacts_follow_profile_and_stop_at_program_arguments(self):
         self.assertEqual(parity.artifacts_of(["cargo", "build", "--release", "--example", "a", "--bin", "b"]),
-                         [["example", "a", "release"], ["bin", "b", "release"]])
+                         [["example", "a", "release", [], True], ["bin", "b", "release", [], True]])
         self.assertEqual(parity.artifacts_of(["cargo", "run", "--profile", "fast", "--example", "c", "--", "--example", "x"]),
-                         [["example", "c", "fast"]])
-        self.assertEqual(parity.artifacts_of(["cargo", "build", "--example", "d"]), [["example", "d", "dev"]])
+                         [["example", "c", "fast", [], True]])
+        self.assertEqual(parity.artifacts_of(["cargo", "build", "--example", "d"]), [["example", "d", "dev", [], True]])
+
+    def test_artifacts_keep_the_package_and_feature_selection(self):
+        self.assertEqual(parity.artifacts_of(["cargo", "build", "--locked", "--profile=fast", "-j", "4", "--package",
+                                              "horizon-client", "--bins", "-F", "x"]),
+                         [["bins", "", "fast", ["-p", "horizon-client", "--features", "x"], False]])
+        self.assertEqual(parity.artifacts_of(["cargo", "build", "--release", "-p", "horizon-world", "--bin=horizon-world"]),
+                         [["bin", "horizon-world", "release", ["-p", "horizon-world"], False]])
+
+    def test_prebuild_repeats_each_harness_selection(self):
+        artifacts = [
+            *parity.artifacts_of(["cargo", "build", "--release", "-p", "horizon-world", "--example", "a"]),
+            *parity.artifacts_of(["cargo", "build", "--release", "-p", "horizon-world", "--example", "b"]),
+            *parity.artifacts_of(["cargo", "build", "--release", "-p", "horizon-world", "--bin", "horizon-world"]),
+            *parity.artifacts_of(["cargo", "build", "--release", "--bin", "horizon-world"]),
+            *parity.artifacts_of(["cargo", "run", "--profile", "fast", "-p", "horizon-client", "--example", "c"]),
+            *parity.artifacts_of(["cargo", "build", "--release", "-p", "horizon-world", "--example", "renamed"]),
+            ["example", "old", "release"],  # recorded before selections were kept: its own crate's -p
+            ["example", "unknown", "release"],  # no longer in the workspace: left to its harness
+        ]
+        packages = {("example", "a"): "horizon-world", ("example", "b"): "horizon-world", ("example", "c"): "horizon-client",
+                    ("bin", "horizon-world"): "horizon-world", ("example", "old"): "horizon-world"}
+        self.assertEqual(parity.prebuild_commands(artifacts, packages), [
+            ["cargo", "build", "--locked", "--profile", "fast", "-p", "horizon-client", "--example", "c"],
+            ["cargo", "build", "--locked", "--profile", "release", "--bin", "horizon-world"],
+            ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-world", "--bin", "horizon-world"],
+            ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-world", "--example", "a", "--example", "b",
+             "--example", "old"],
+        ])
+
+    def test_a_probe_binary_depends_only_on_the_probes_it_ran(self):
+        commands = [["/t/release/examples/world_probe", "a_fixture", "/dir"],
+                    ["cargo", "run", "-p", "horizon-client", "--example", "client_probe", "--", "b_fixture"]]
+        self.assertEqual(parity.probes_run(commands), {"a_fixture", "b_fixture"})
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity, "ROOT", Path(temp)):
+            probe = Path(temp, "crates/w/examples/probe")
+            (probe / "support").mkdir(parents=True)
+            (probe / "a_fixture.rs").write_text('mod integration { include!("d_fixture.rs"); }')
+            (probe / "d_fixture.rs").write_text("use crate::support::shared as s;")
+            (probe / "b_fixture.rs").write_text("use crate::e_fixture;")
+            for name in ("c_fixture.rs", "dispatch.rs", "e_fixture.rs", "main.rs", "support/shared.rs", "support/other.rs"):
+                (probe / name).write_text("")
+            paths = [f"crates/w/examples/probe/{name}" for name in ("a_fixture.rs", "b_fixture.rs", "c_fixture.rs",
+                                                                    "d_fixture.rs", "dispatch.rs", "e_fixture.rs", "main.rs",
+                                                                    "support/other.rs", "support/shared.rs")]
+            self.assertEqual(parity.only_probes_run(["crates/w/src/lib.rs", *paths], {"a_fixture", "b_fixture"}),
+                             ["crates/w/src/lib.rs", *paths[:2], *paths[3:6], paths[8]])
+            self.assertEqual(parity.only_probes_run(paths, set()), paths)
+
+    def test_probe_names_are_each_crates_own_target(self):
+        self.assertEqual(parity.probes_run([
+            ["C:/t/debug/examples/client_probe.exe", "a_fixture"],
+            ["cargo", "run", "--release", "--example=world_probe", "--", "b_fixture", "x"],
+            ["/t/release/examples/probe", "old_fixture"],  # the shared name before 2026-10-24
+            ["cargo", "run", "--example", "probe", "--", "old_fixture"],
+            ["/t/release/examples/mod_port_probe", "not_a_fixture"],
+            ["cargo", "run", "--example", "mod_port_probe", "--", "not_a_fixture"],
+            ["cargo", "build", "--example", "world_probe"],
+        ]), {"a_fixture", "b_fixture"})
+
+    def test_records_of_the_shared_probe_name_build_their_crates_probe(self):
+        record = {"dependencies": ["crates/horizon-world/examples/probe/a_fixture.rs", "crates/horizon-world/src/lib.rs"],
+                  "artifacts": [["example", "probe", "release", ["-p", "horizon-client"], True],
+                                ["example", "probe", "release"],  # no selection: the crate of its probe sources
+                                ["example", "probe", "release", ["-p", "horizon-core", "-p", "horizon-world"], True],
+                                ["bin", "horizon-world", "release", ["-p", "horizon-world"], False]]}
+        artifacts = parity.recorded_artifacts(record)
+        self.assertEqual(artifacts, [["example", "client_probe", "release", ["-p", "horizon-client"], True],
+                                     ["example", "world_probe", "release"],
+                                     ["example", "world_probe", "release", ["-p", "horizon-core", "-p", "horizon-world"], True],
+                                     ["bin", "horizon-world", "release", ["-p", "horizon-world"], False]])
+        packages = {("example", "client_probe"): "horizon-client", ("example", "world_probe"): "horizon-world",
+                    ("bin", "horizon-world"): "horizon-world"}
+        self.assertEqual(parity.prebuild_commands(artifacts, packages), [
+            ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-client", "--example", "client_probe"],
+            ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-core", "-p", "horizon-world",
+             "--example", "world_probe"],
+            ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-world", "--bin", "horizon-world"],
+            ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-world", "--example", "world_probe"],
+        ])
+        self.assertEqual(parity.recorded_artifacts({"artifacts": [["example", "probe", "release"]]}),
+                         [["example", "probe", "release"]])  # no crate to tell: left to its harness
 
     def test_java_sources_include_classes_pulled_from_the_sourcepath(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -202,3 +283,34 @@ class OracleReuseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LargeOutputTests(unittest.TestCase):
+    def test_a_pass_clears_only_its_own_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            local, state = Path(tmp) / ".local", Path(tmp) / "state"
+            own, shared = local / "decorated-region-parity", local / "chunk-generation-parity"
+            for directory in (own, shared):
+                directory.mkdir(parents=True)
+                (directory / "dump.txt").write_bytes(b"x" * 16)
+            trace = {"commands": [["java", "-d", str(shared / "classes")], ["probe", str(own / "dump.txt")]]}
+            with mock.patch.multiple(parity, LOCAL=local, STATE_DIR=state, LARGE_OUTPUT=8):
+                parity.outputs_listing("decorated_region", fresh=True)
+                parity.clear_large_outputs("decorated_region", trace)
+            self.assertFalse((own / "dump.txt").exists())
+            # chunk_generation may still be writing there.
+            self.assertTrue((shared / "dump.txt").exists())
+
+    def test_rust_named_directories_and_big_oracle_outputs_go_too(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            local, state = Path(tmp) / ".local", Path(tmp) / "state"
+            own = local / "rust-state-provider-parity"
+            own.mkdir(parents=True)
+            for name, size in (("rust.txt", 16), ("server.txt", 16), ("client.txt", 64), ("report.json", 4)):
+                (own / name).write_bytes(b"x" * size)
+            trace = {"commands": [["java", "Oracle", str(own)], ["probe", "fixture", str(own)]]}
+            with mock.patch.multiple(parity, LOCAL=local, STATE_DIR=state, LARGE_OUTPUT=8, KEPT_ORACLE_OUTPUT=32):
+                listing = parity.outputs_listing("state_provider#2", fresh=True)
+                listing.write_text(f"{own / 'server.txt'}\n{own / 'client.txt'}\n")
+                parity.clear_large_outputs("state_provider#2", trace)
+            self.assertEqual(sorted(path.name for path in own.iterdir()), ["report.json", "server.txt"])

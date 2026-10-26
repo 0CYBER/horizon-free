@@ -45,6 +45,14 @@ pub(super) struct Strike {
     team: Option<horizon_client::scoreboard::Team>,
 }
 
+impl Strike {
+    /// Whether it has extra knockback, which stops the attacker's sprint
+    /// once it lands (Player.causeExtraKnockback).
+    pub(super) fn stops_sprint(&self) -> bool {
+        self.knockback.0 > 0.0
+    }
+}
+
 impl Game<'_> {
     /// The guest on the host's crosshair and how far, within reach.
     pub(super) fn guest_hit(&self) -> Option<(u32, f64)> {
@@ -74,7 +82,7 @@ impl Game<'_> {
         };
         if let Some(strike) = self.pvp_strike()
             && self.pvp_land(&mut host, Victim::Guest(conn), &strike)
-            && strike.knockback.0 > 0.0
+            && strike.stops_sprint()
         {
             self.stop_sprint_after_extra_knockback();
         }
@@ -240,7 +248,7 @@ impl Game<'_> {
             && harm
             && match victim {
                 Victim::Host => land(self),
-                Victim::Guest(conn) => self.guest_hit_by(host, conn, land).unwrap_or(false),
+                Victim::Guest(conn) => self.guest_struck_by(host, conn, land).unwrap_or(false),
             };
         let sound = match (hurt, s.crit, s.scale > 0.9) {
             (false, ..) => "minecraft:entity.player.attack.nodamage",

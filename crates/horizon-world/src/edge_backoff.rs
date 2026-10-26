@@ -77,9 +77,9 @@ pub fn back_off_from_edge<W: EdgeBackoffWorld>(
             );
             world.no_collision(bounds).map_err(EdgeBackoffError::World)
         };
-    if !grounded
-        && !(input.fall_distance < step && !can_fall(0.0, 0.0, step - input.fall_distance)?)
-    {
+    let should_back_off = grounded
+        || (input.fall_distance < step && !can_fall(0.0, 0.0, step - input.fall_distance)?);
+    if !should_back_off {
         return Ok(input.movement);
     }
     let mut x = input.movement.x;

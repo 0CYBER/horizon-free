@@ -38,9 +38,16 @@ impl Game<'_> {
             m.extra.rider = Some(rider);
         }
     }
-    /// Riders sit on their vehicles (`Entity.positionRider`), and let go when
-    /// the vehicle dies or is gone.
+    /// Riders sit on their vehicles (`Entity.positionRider`), mobs or boats,
+    /// and let go when the vehicle dies or is gone.
     pub(super) fn sync_riders(&mut self) {
+        // Entity.baseTick.
+        for m in &mut self.mobs {
+            if m.extra.boarding_cooldown > 0 {
+                m.extra.boarding_cooldown -= 1;
+            }
+        }
+        let boats: std::collections::HashSet<u32> = self.boats.iter().map(|b| b.id).collect();
         let index: HashMap<u32, usize> = self
             .mobs
             .iter()
@@ -54,9 +61,10 @@ impl Game<'_> {
             };
             let valid = self.mobs[i].alive()
                 && !self.mobs[i].removed
-                && index
-                    .get(&v)
-                    .is_some_and(|&j| self.mobs[j].alive() && !self.mobs[j].removed);
+                && (boats.contains(&v)
+                    || index
+                        .get(&v)
+                        .is_some_and(|&j| self.mobs[j].alive() && !self.mobs[j].removed));
             if valid {
                 riding.insert(v, self.mobs[i].id);
             } else {
@@ -68,6 +76,19 @@ impl Game<'_> {
         for m in &mut self.mobs {
             m.extra.rider = riding.get(&m.id).copied();
         }
+        self.position_riders();
+    }
+    /// `Entity.positionRider` for every mob passenger: in its boat, then on
+    /// its mob. A server's client places them itself too, as the server sends
+    /// no passenger's position.
+    pub(super) fn position_riders(&mut self) {
+        self.seat_boat_mobs();
+        let index: HashMap<u32, usize> = self
+            .mobs
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (m.id, i))
+            .collect();
         // Riders of riders settle over a few passes.
         for _ in 0..3 {
             for i in 0..self.mobs.len() {
@@ -126,8 +147,16 @@ impl Game<'_> {
                 }
             }
             Species::Strider if !baby => self.spawn_strider_jockey(id, at),
-            // ZombieHorse.finalizeSpawn: a zombie with an iron spear.
-            Species::ZombieHorse if natural => {
+            // ZombieHorse.finalizeSpawn: a zombie with an iron spear. The rider
+            // comes from EntityType.create, which makes no zombie in peaceful
+            // (canSpawn), so a peaceful zombie horse spawns without one.
+            Species::ZombieHorse
+                if natural
+                    && (self.ui.difficulty != 0
+                        || horizon_client::mobs::spawn_rules::allowed_in_peaceful(
+                            Species::Zombie,
+                        )) =>
+            {
                 if let Some(zombie) = self.spawn_mob("minecraft:zombie", at, false) {
                     if let Some(z) = self.mobs.iter_mut().find(|m| m.id == zombie) {
                         z.extra.main_hand = Some("minecraft:iron_spear".into());

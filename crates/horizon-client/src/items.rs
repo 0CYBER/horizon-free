@@ -120,6 +120,8 @@ pub struct ItemInfo {
     pub dye: Option<String>,
     /// `block_transformer`: the registry entry an axe, hoe or shovel uses on blocks.
     pub block_transformer: Option<String>,
+    /// Has a default `bundle_contents` (the bundles, `BundleItem`).
+    pub bundle: bool,
 }
 /// `Item.Properties.craftRemainder` (not a data component, so not in the
 /// default-component report): what an item leaves in the grid when crafted with.
@@ -593,6 +595,7 @@ impl Items {
                     jukebox_song: c["minecraft:jukebox_playable"].as_str().map(str::to_owned),
                     dye: c["minecraft:dye"].as_str().map(str::to_owned),
                     block_transformer: c["minecraft:block_transformer"].as_str().map(str::to_owned),
+                    bundle: c.get("minecraft:bundle_contents").is_some(),
                     crafting_remainder: CRAFT_REMAINDERS
                         .iter()
                         .find(|(item, _)| *item == name)
@@ -1048,7 +1051,7 @@ impl LootContext<'_> {
                 continue;
             }
             // LootPool: rolls.getInt (Mth.randomBetweenInclusive for uniform rolls).
-            let rolls = ctx.int_number(&pool["rolls"], random).max(0) as u32;
+            let rolls = LootContext::int_number(&pool["rolls"], random).max(0) as u32;
             for _ in 0..rolls {
                 let mut produced = Vec::new();
                 ctx.choose(
@@ -1082,7 +1085,7 @@ impl LootContext<'_> {
     fn enchantment_level(&self, id: &str) -> u32 {
         self.held.map_or(0, |h| h.enchantment_level(id))
     }
-    fn number<R: RandomSource>(&self, v: &Value, random: &mut R) -> f32 {
+    fn number<R: RandomSource>(v: &Value, random: &mut R) -> f32 {
         match v {
             Value::Number(n) => n.as_f64().unwrap_or(0.0) as f32,
             Value::Object(o) => match o
@@ -1094,8 +1097,8 @@ impl LootContext<'_> {
                     o.get("value").and_then(Value::as_f64).unwrap_or(0.0) as f32
                 }
                 "minecraft:uniform" => {
-                    let min = self.number(o.get("min").unwrap_or(&Value::Null), random);
-                    let max = self.number(o.get("max").unwrap_or(&Value::Null), random);
+                    let min = Self::number(o.get("min").unwrap_or(&Value::Null), random);
+                    let max = Self::number(o.get("max").unwrap_or(&Value::Null), random);
                     // UniformGenerator.getFloat / getInt (Mth.nextInt) differ; use int for counts.
                     if max <= min {
                         min
@@ -1104,8 +1107,8 @@ impl LootContext<'_> {
                     }
                 }
                 "minecraft:binomial" => {
-                    let n = self.number(o.get("n").unwrap_or(&Value::Null), random) as u32;
-                    let p = self.number(o.get("p").unwrap_or(&Value::Null), random);
+                    let n = Self::number(o.get("n").unwrap_or(&Value::Null), random) as u32;
+                    let p = Self::number(o.get("p").unwrap_or(&Value::Null), random);
                     (0..n).filter(|_| random.next_float() < p).count() as f32
                 }
                 _ => 1.0,
@@ -1113,22 +1116,22 @@ impl LootContext<'_> {
             _ => 1.0,
         }
     }
-    fn int_number<R: RandomSource>(&self, v: &Value, random: &mut R) -> i32 {
+    fn int_number<R: RandomSource>(v: &Value, random: &mut R) -> i32 {
         if let Value::Object(o) = v
             && o.get("type")
                 .and_then(Value::as_str)
                 .unwrap_or("minecraft:uniform")
                 == "minecraft:uniform"
         {
-            let min = self.int_number(o.get("min").unwrap_or(&Value::Null), random);
-            let max = self.int_number(o.get("max").unwrap_or(&Value::Null), random);
+            let min = Self::int_number(o.get("min").unwrap_or(&Value::Null), random);
+            let max = Self::int_number(o.get("max").unwrap_or(&Value::Null), random);
             return if max <= min {
                 min
             } else {
                 min + random.next_int_bound(max - min + 1).unwrap_or(0)
             };
         }
-        self.number(v, random).round() as i32
+        Self::number(v, random).round() as i32
     }
     fn condition<R: RandomSource>(&self, c: &Value, random: &mut R) -> bool {
         let (kind, c) = match c {
@@ -1154,7 +1157,7 @@ impl LootContext<'_> {
                 .into_iter()
                 .flatten()
                 .all(|t| self.condition(t, random)),
-            "minecraft:random_chance" => random.next_float() < self.number(&c["chance"], random),
+            "minecraft:random_chance" => random.next_float() < Self::number(&c["chance"], random),
             "minecraft:table_bonus" => {
                 // BonusLevelTableCondition: chances[min(level, len - 1)].
                 let level =
@@ -1375,7 +1378,7 @@ impl LootContext<'_> {
             }
             match f["type"].as_str().or(f["function"].as_str()).unwrap_or("") {
                 "minecraft:set_count" => {
-                    let n = self.int_number(&f["count"], random);
+                    let n = Self::int_number(&f["count"], random);
                     let base = if f["add"].as_bool() == Some(true) {
                         stack.count as i32
                     } else {
@@ -1418,7 +1421,7 @@ impl LootContext<'_> {
                     // Attacker's level x count, rounded (looting).
                     let level = self.enchantment_level(f["enchantment"].as_str().unwrap_or(""));
                     if level > 0 && self.killed_by_player && self.block.is_empty() {
-                        let add = level as f32 * self.number(&f["count"], random);
+                        let add = level as f32 * Self::number(&f["count"], random);
                         stack.count = (stack.count as i32 + add.round() as i32).max(0) as u32;
                         if let Some(limit) = f["limit"].as_i64().filter(|l| *l > 0) {
                             stack.count = stack.count.min(limit as u32);

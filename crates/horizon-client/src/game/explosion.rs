@@ -580,6 +580,7 @@ impl Game<'_> {
         self.particles.explosion(center, radius, block_count, &|b| {
             facts.is_air(world.block(b[0], b[1], b[2]))
         });
+        self.lan_explode(center, radius, block_count);
         Ok(())
     }
     /// `BlockBehaviour.onExplosionHit` (TNT: `wasExploded` primes a short fuse).

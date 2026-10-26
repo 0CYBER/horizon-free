@@ -7,14 +7,15 @@ use crate::{
         Vec3d, Writer,
     },
     chunk::{ChunkData, LightData},
-    entity_data::{EntityData, Value},
+    entity_data::{EntityData, Particle, Value},
     item::{Hashed, HashedSlot, Slot, Stack},
     packet, packet_enum,
     packets::{
         Empty,
         configuration::{
-            ClientInformation, CustomPayload, Disconnect, KeepAlive, Ping, ResourcePackPush,
-            ResourcePackResponse, UpdateTags,
+            ClientInformation, CookieRequest, CookieResponse, CustomPayload, Disconnect, KeepAlive,
+            Ping, ResourcePackPop, ResourcePackPush, ResourcePackResponse, StoreCookie, Transfer,
+            UpdateTags,
         },
         login::Property,
     },
@@ -461,6 +462,15 @@ packet!(OpenScreen { container: i32 => VarInt, menu: i32 => VarInt, title: Tag =
 // ClientboundMountScreenOpenPacket: a horse's or llama's inventory, with its
 // chest's columns (`getInventoryColumns`).
 packet!(MountScreenOpen { container: i32 => VarInt, columns: i32 => VarInt, entity: i32 => Int });
+packet!(
+    /// ClientboundOpenSignEditorPacket: the sign whose side the player edits.
+    OpenSignEditor { pos: [i32; 3] => Pos, front: bool => SignSide }
+);
+packet!(
+    /// ClientboundOpenBookPacket: the hand (InteractionHand, 0 main, 1 off)
+    /// whose written book the player reads.
+    OpenBook { hand: i32 => VarInt }
+);
 packet!(PlayerAbilities { flags: i8 => Byte, flying_speed: f32 => Float, walking_speed: f32 => Float });
 /// MessageSignature.Packed: an index into the last-seen cache or a full signature.
 pub struct PackedSignature;
@@ -883,6 +893,116 @@ impl Codec<SetObjective> for SetObjective {
         }
     }
 }
+/// ClientboundLevelParticlesPacket: a particle, whether it ignores the
+/// client's particle setting (`overrideLimiter`) and its distance limit
+/// (`alwaysShow`), where, the spread and the speed on each axis, how many
+/// (0: one, moving by speed times spread) and the randomization type
+/// (0 default: gaussian spread and speed).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LevelParticles {
+    pub particle: Particle,
+    pub override_limiter: bool,
+    pub always_show: bool,
+    pub pos: [f64; 3],
+    pub dist: [f32; 3],
+    pub max_speed: [f32; 3],
+    pub count: i32,
+    pub randomization: i32,
+}
+impl Codec<LevelParticles> for LevelParticles {
+    fn read(r: &mut Reader) -> Result<Self> {
+        Ok(Self {
+            particle: Particle::read(r)?,
+            override_limiter: r.bool()?,
+            always_show: r.bool()?,
+            pos: Vec3d::read(r)?,
+            dist: [r.f32()?, r.f32()?, r.f32()?],
+            max_speed: [r.f32()?, r.f32()?, r.f32()?],
+            count: r.varint()?,
+            randomization: r.varint()?,
+        })
+    }
+    fn write(v: &Self, w: &mut Writer) {
+        v.particle.write(w);
+        w.bool(v.override_limiter);
+        w.bool(v.always_show);
+        Vec3d::write(&v.pos, w);
+        for f in v.dist.iter().chain(&v.max_speed) {
+            w.f32(*f);
+        }
+        w.varint(v.count);
+        w.varint(v.randomization);
+    }
+}
+/// `ExplosionParticleInfo` in a `WeightedList`: a particle the blast
+/// scatters, its scaling and speed, then its weight.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExplosionParticle {
+    pub particle: Particle,
+    pub scaling: f32,
+    pub speed: f32,
+    pub weight: i32,
+}
+/// ClientboundExplodePacket: the centre, radius and blocks destroyed, the
+/// push the receiving player takes, the particle at the centre, the sound,
+/// the particles the blast scatters, and whether the sound plays.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Explode {
+    pub center: [f64; 3],
+    pub radius: f32,
+    pub block_count: i32,
+    pub knockback: Option<[f64; 3]>,
+    pub particle: Particle,
+    pub sound: (i32, Option<(String, Option<f32>)>),
+    pub block_particles: Vec<ExplosionParticle>,
+    pub play_sound: bool,
+}
+impl Codec<Explode> for Explode {
+    fn read(r: &mut Reader) -> Result<Self> {
+        let center = Vec3d::read(r)?;
+        let radius = r.f32()?;
+        let block_count = r.i32()?;
+        let knockback = <Opt<Vec3d>>::read(r)?;
+        let particle = Particle::read(r)?;
+        let sound = SoundHolder::read(r)?;
+        let n = r.varint()?;
+        let mut block_particles = Vec::new();
+        for _ in 0..n {
+            block_particles.push(ExplosionParticle {
+                particle: Particle::read(r)?,
+                scaling: r.f32()?,
+                speed: r.f32()?,
+                weight: r.varint()?,
+            });
+        }
+        Ok(Self {
+            center,
+            radius,
+            block_count,
+            knockback,
+            particle,
+            sound,
+            block_particles,
+            play_sound: r.bool()?,
+        })
+    }
+    fn write(v: &Self, w: &mut Writer) {
+        Vec3d::write(&v.center, w);
+        w.f32(v.radius);
+        w.i32(v.block_count);
+        <Opt<Vec3d>>::write(&v.knockback, w);
+        v.particle.write(w);
+        SoundHolder::write(&v.sound, w);
+        w.varint(v.block_particles.len() as i32);
+        for b in &v.block_particles {
+            b.particle.write(w);
+            w.f32(b.scaling);
+            w.f32(b.speed);
+            w.varint(b.weight);
+        }
+        w.bool(v.play_sound);
+    }
+}
 /// `ClientboundSetPlayerTeamPacket.Parameters`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TeamParameters {
@@ -999,6 +1119,42 @@ packet!(SoundEntity {
     pitch: f32 => Float,
     seed: i64 => Long,
 });
+
+/// ClientboundStopSoundPacket: bit 0 selects a source, bit 1 an event id.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StopSound {
+    pub source: Option<i32>,
+    pub sound: Option<String>,
+}
+impl Codec<StopSound> for StopSound {
+    fn read(r: &mut Reader) -> crate::Result<Self> {
+        let flags = r.u8()?;
+        let source = if flags & 1 != 0 {
+            let value = r.varint()?;
+            if !(0..11).contains(&value) {
+                return Err(crate::Error::new("invalid sound source"));
+            }
+            Some(value)
+        } else {
+            None
+        };
+        let sound = if flags & 2 != 0 {
+            Some(r.string(32767)?)
+        } else {
+            None
+        };
+        Ok(Self { source, sound })
+    }
+    fn write(p: &Self, w: &mut Writer) {
+        w.u8(u8::from(p.source.is_some()) | (u8::from(p.sound.is_some()) << 1));
+        if let Some(source) = p.source {
+            w.varint(source);
+        }
+        if let Some(sound) = &p.sound {
+            w.string(sound);
+        }
+    }
+}
 /// One entry of ClientboundCommandsPacket: a literal or an argument node.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommandNode {
@@ -1461,6 +1617,125 @@ impl Codec<Vec<(i32, i32, i32)>> for StatList {
     }
 }
 
+/// `ClientboundBossEventPacket` (`boss_event`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum BossAction {
+    Add {
+        name: Tag,
+        progress: f32,
+        /// `BossBarColor` ordinal.
+        color: i32,
+        /// `BossBarOverlay` ordinal.
+        overlay: i32,
+        darken: bool,
+        music: bool,
+        fog: bool,
+    },
+    Remove,
+    UpdateProgress {
+        progress: f32,
+    },
+    UpdateName {
+        name: Tag,
+    },
+    UpdateStyle {
+        color: i32,
+        overlay: i32,
+    },
+    UpdateProperties {
+        darken: bool,
+        music: bool,
+        fog: bool,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BossEvent {
+    pub id: u128,
+    pub action: BossAction,
+}
+fn boss_flags(darken: bool, music: bool, fog: bool) -> u8 {
+    u8::from(darken) | (u8::from(music) << 1) | (u8::from(fog) << 2)
+}
+fn split_flags(flags: u8) -> (bool, bool, bool) {
+    (flags & 1 != 0, flags & 2 != 0, flags & 4 != 0)
+}
+impl Codec<BossEvent> for BossEvent {
+    fn read(r: &mut Reader) -> Result<BossEvent> {
+        let id = r.uuid()?;
+        let action = match r.varint()? {
+            0 => {
+                let name = r.nbt()?;
+                let progress = r.f32()?;
+                let color = r.varint()?;
+                let overlay = r.varint()?;
+                let (darken, music, fog) = split_flags(r.u8()?);
+                BossAction::Add {
+                    name,
+                    progress,
+                    color,
+                    overlay,
+                    darken,
+                    music,
+                    fog,
+                }
+            }
+            1 => BossAction::Remove,
+            2 => BossAction::UpdateProgress { progress: r.f32()? },
+            3 => BossAction::UpdateName { name: r.nbt()? },
+            4 => BossAction::UpdateStyle {
+                color: r.varint()?,
+                overlay: r.varint()?,
+            },
+            5 => {
+                let (darken, music, fog) = split_flags(r.u8()?);
+                BossAction::UpdateProperties { darken, music, fog }
+            }
+            op => return Err(Error::new(format!("unknown boss event operation {op}"))),
+        };
+        Ok(BossEvent { id, action })
+    }
+    fn write(v: &BossEvent, w: &mut Writer) {
+        w.uuid(v.id);
+        match &v.action {
+            BossAction::Add {
+                name,
+                progress,
+                color,
+                overlay,
+                darken,
+                music,
+                fog,
+            } => {
+                w.varint(0);
+                w.nbt(name);
+                w.f32(*progress);
+                w.varint(*color);
+                w.varint(*overlay);
+                w.u8(boss_flags(*darken, *music, *fog));
+            }
+            BossAction::Remove => w.varint(1),
+            BossAction::UpdateProgress { progress } => {
+                w.varint(2);
+                w.f32(*progress);
+            }
+            BossAction::UpdateName { name } => {
+                w.varint(3);
+                w.nbt(name);
+            }
+            BossAction::UpdateStyle { color, overlay } => {
+                w.varint(4);
+                w.varint(*color);
+                w.varint(*overlay);
+            }
+            BossAction::UpdateProperties { darken, music, fog } => {
+                w.varint(5);
+                w.u8(boss_flags(*darken, *music, *fog));
+            }
+        }
+    }
+}
+
 packet_enum!(Clientbound, crate::ids::play::clientbound {
     BundleDelimiter(Empty) = BUNDLE_DELIMITER,
     AddEntity(AddEntity) = ADD_ENTITY,
@@ -1471,6 +1746,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     BlockEntityData(BlockEntityData) = BLOCK_ENTITY_DATA,
     BlockEvent(BlockEvent) = BLOCK_EVENT,
     BlockUpdate(BlockUpdate) = BLOCK_UPDATE,
+    BossEvent(BossEvent) = BOSS_EVENT,
     ChangeDifficulty(ChangeDifficulty) = CHANGE_DIFFICULTY,
     ChunkBatchFinished(ChunkBatchFinished) = CHUNK_BATCH_FINISHED,
     ChunkBatchStart(Empty) = CHUNK_BATCH_START,
@@ -1484,6 +1760,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     ContainerSetContent(ContainerSetContent) = CONTAINER_SET_CONTENT,
     ContainerSetData(ContainerSetData) = CONTAINER_SET_DATA,
     ContainerSetSlot(ContainerSetSlot) = CONTAINER_SET_SLOT,
+    CookieRequest(CookieRequest) = COOKIE_REQUEST,
     CustomPayload(CustomPayload) = CUSTOM_PAYLOAD,
     Disconnect(Disconnect) = DISCONNECT,
     DisguisedChat(DisguisedChat) = DISGUISED_CHAT,
@@ -1507,6 +1784,8 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     MerchantOffers(MerchantOffers) = MERCHANT_OFFERS,
     MountScreenOpen(MountScreenOpen) = MOUNT_SCREEN_OPEN,
     OpenScreen(OpenScreen) = OPEN_SCREEN,
+    OpenBook(OpenBook) = OPEN_BOOK,
+    OpenSignEditor(OpenSignEditor) = OPEN_SIGN_EDITOR,
     Ping(Ping) = PING,
     PongResponse(crate::packets::status::Ping) = PONG_RESPONSE,
     PlayerAbilities(PlayerAbilities) = PLAYER_ABILITIES,
@@ -1519,6 +1798,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     RemoveEntities(RemoveEntities) = REMOVE_ENTITIES,
     RemoveMobEffect(RemoveMobEffect) = REMOVE_MOB_EFFECT,
     ResetScore(ResetScore) = RESET_SCORE,
+    ResourcePackPop(ResourcePackPop) = RESOURCE_PACK_POP,
     ResourcePackPush(ResourcePackPush) = RESOURCE_PACK_PUSH,
     Respawn(Respawn) = RESPAWN,
     RotateHead(RotateHead) = ROTATE_HEAD,
@@ -1556,7 +1836,9 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SetTitlesAnimation(TitlesAnimation) = SET_TITLES_ANIMATION,
     Sound(Sound) = SOUND,
     SoundEntity(SoundEntity) = SOUND_ENTITY,
+    StopSound(StopSound) = STOP_SOUND,
     StartConfiguration(Empty) = START_CONFIGURATION,
+    StoreCookie(StoreCookie) = STORE_COOKIE,
     SwingAnimation(SwingAnimation) = SWING_ANIMATION,
     SystemChat(SystemChat) = SYSTEM_CHAT,
     TabList(TabList) = TAB_LIST,
@@ -1564,8 +1846,11 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     TeleportEntity(TeleportEntity) = TELEPORT_ENTITY,
     TickingState(TickingState) = TICKING_STATE,
     TickingStep(TickingStep) = TICKING_STEP,
+    Transfer(Transfer) = TRANSFER,
     UpdateAdvancements(UpdateAdvancements) = UPDATE_ADVANCEMENTS,
     UpdateAttributes(UpdateAttributes) = UPDATE_ATTRIBUTES,
+    LevelParticles(LevelParticles) = LEVEL_PARTICLES,
+    Explode(Explode) = EXPLODE,
     UpdateMobEffect(UpdateMobEffect) = UPDATE_MOB_EFFECT,
     UpdateTags(UpdateTags) = UPDATE_TAGS,
     TrackedWaypoint(TrackedWaypoint) = WAYPOINT,
@@ -1806,6 +2091,61 @@ packet!(
     RenameItem { name: String => Str }
 );
 packet!(
+    /// ServerboundSignUpdatePacket: the four lines the player wrote on a side.
+    SignUpdate { pos: [i32; 3] => Pos, lines: [String; 4] => SignLines, front: bool => SignSide }
+);
+packet!(
+    /// ServerboundEditBookPacket: the book's slot (a hotbar slot, or 40 for
+    /// the off hand), its pages and, to sign it, its title.
+    EditBook {
+        slot: i32 => VarInt,
+        pages: Vec<String> => BookPages,
+        title: Option<String> => Opt<StrN<32>>,
+    }
+);
+/// `stringUtf8(1024)` in `list(100)`: a book's pages.
+pub struct BookPages;
+impl Codec<Vec<String>> for BookPages {
+    fn read(r: &mut Reader) -> Result<Vec<String>> {
+        let n = r.varint()?;
+        if !(0..=100).contains(&n) {
+            return Err(Error::new(format!("{n} book pages, at most 100")));
+        }
+        (0..n).map(|_| r.string(1024)).collect()
+    }
+    fn write(v: &Vec<String>, w: &mut Writer) {
+        List::<StrN<1024>>::write(v, w);
+    }
+}
+/// SignTextSlot.STREAM_CODEC: VarInt 0 for the back, 1 for the front (any
+/// other id reads as the back, ByIdMap's ZERO strategy).
+pub struct SignSide;
+impl Codec<bool> for SignSide {
+    fn read(r: &mut Reader) -> Result<bool> {
+        Ok(r.varint()? == 1)
+    }
+    fn write(v: &bool, w: &mut Writer) {
+        w.varint(i32::from(*v));
+    }
+}
+/// `stringUtf8(384)` in `fixedSizeList(4)`: four lines, no count.
+pub struct SignLines;
+impl Codec<[String; 4]> for SignLines {
+    fn read(r: &mut Reader) -> Result<[String; 4]> {
+        Ok([
+            r.string(384)?,
+            r.string(384)?,
+            r.string(384)?,
+            r.string(384)?,
+        ])
+    }
+    fn write(v: &[String; 4], w: &mut Writer) {
+        for line in v {
+            w.string(line);
+        }
+    }
+}
+packet!(
     /// ServerboundSetBeaconPacket: `BeaconMenu.updateEffects`, each power an
     /// optional `mob_effect` id.
     SetBeacon { primary: Option<i32> => Opt<VarInt>, secondary: Option<i32> => Opt<VarInt> }
@@ -1887,7 +2227,9 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     ContainerButtonClick(ContainerButtonClick) = CONTAINER_BUTTON_CLICK,
     ContainerClick(ContainerClick) = CONTAINER_CLICK,
     ContainerClose(ContainerClose) = CONTAINER_CLOSE,
+    CookieResponse(CookieResponse) = COOKIE_RESPONSE,
     CustomPayload(CustomPayload) = CUSTOM_PAYLOAD,
+    EditBook(EditBook) = EDIT_BOOK,
     Interact(Interact) = INTERACT,
     KeepAlive(KeepAlive) = KEEP_ALIVE,
     MovePlayerPos(MovePlayerPos) = MOVE_PLAYER_POS,
@@ -1912,6 +2254,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     SetBeacon(SetBeacon) = SET_BEACON,
     SetCarriedItem(SetCarriedItem) = SET_CARRIED_ITEM,
     SetCreativeModeSlot(SetCreativeModeSlot) = SET_CREATIVE_MODE_SLOT,
+    SignUpdate(SignUpdate) = SIGN_UPDATE,
     UseItem(UseItem) = USE_ITEM,
     UseItemOn(UseItemOn) = USE_ITEM_ON,
 });
@@ -2270,6 +2613,34 @@ mod tests {
                 passengers: vec![3, 300],
             }),
             Clientbound::SetEntityLink(SetEntityLink { source: 2, dest: 0 }),
+            Clientbound::LevelParticles(LevelParticles {
+                particle: Particle {
+                    id: 21,
+                    data: Some(crate::entity_data::ParticleData::ColorScale(0xFF0000, 1.5)),
+                },
+                override_limiter: true,
+                always_show: false,
+                pos: [0.5, 101.0, 3.0],
+                dist: [0.2, 0.0, 0.2],
+                max_speed: [0.0; 3],
+                count: 60,
+                randomization: 0,
+            }),
+            Clientbound::Explode(Explode {
+                center: [1.0, 2.0, 3.0],
+                radius: 4.0,
+                block_count: 12,
+                knockback: Some([0.5, 0.1, 0.0]),
+                particle: Particle { id: 29, data: None },
+                sound: (-1, Some(("minecraft:entity.generic.explode".into(), None))),
+                block_particles: vec![ExplosionParticle {
+                    particle: Particle { id: 69, data: None },
+                    scaling: 0.5,
+                    speed: 1.0,
+                    weight: 1,
+                }],
+                play_sound: true,
+            }),
             Clientbound::ProjectilePower(ProjectilePower { id: 4, power: 0.1 }),
             Clientbound::SetEquipment(SetEquipment {
                 id: 2,
@@ -2552,10 +2923,11 @@ mod tests {
 
     #[test]
     fn unknown_packets_keep_their_payload() {
-        let p = Clientbound::decode(crate::ids::play::clientbound::BOSS_EVENT, &[1, 2, 3]).unwrap();
+        let p =
+            Clientbound::decode(crate::ids::play::clientbound::PLAYER_LOOK_AT, &[1, 2, 3]).unwrap();
         assert_eq!(
             p,
-            Clientbound::Unknown(crate::ids::play::clientbound::BOSS_EVENT, vec![1, 2, 3])
+            Clientbound::Unknown(crate::ids::play::clientbound::PLAYER_LOOK_AT, vec![1, 2, 3])
         );
         assert_eq!(p.encode()[1..], [1, 2, 3]);
     }
@@ -2607,5 +2979,86 @@ mod tests {
             patch: Some(patch),
         });
         round_trip(p, Clientbound::encode, Clientbound::decode);
+    }
+
+    #[test]
+    fn sign_packets_match_vanilla_stream_codecs() {
+        // ClientboundOpenSignEditorPacket: BlockPos, then SignTextSlot as a VarInt (FRONT is 1).
+        let open = Clientbound::OpenSignEditor(OpenSignEditor {
+            pos: [1, 2, 3],
+            front: true,
+        });
+        let body = open.encode();
+        assert_eq!(
+            body[1..9],
+            crate::buf::pack_block_pos([1, 2, 3]).to_be_bytes()
+        );
+        assert_eq!(body[9..], [1]);
+        round_trip(open, Clientbound::encode, Clientbound::decode);
+        // ServerboundSignUpdatePacket: BlockPos, four strings with no count, then the slot.
+        let update = Serverbound::SignUpdate(SignUpdate {
+            pos: [-4, 70, 9],
+            lines: ["Hi".into(), String::new(), "x".into(), String::new()],
+            front: false,
+        });
+        let body = update.encode();
+        assert_eq!(body[9..], [2, b'H', b'i', 0, 1, b'x', 0, 0]);
+        round_trip(update, Serverbound::encode, Serverbound::decode);
+    }
+
+    #[test]
+    fn book_packets_match_vanilla_stream_codecs() {
+        // ClientboundOpenBookPacket: InteractionHand as a VarInt.
+        let open = Clientbound::OpenBook(OpenBook { hand: 1 });
+        assert_eq!(open.encode()[1..], [1]);
+        round_trip(open, Clientbound::encode, Clientbound::decode);
+        // ServerboundEditBookPacket: the slot, the pages (a counted list), then an optional title.
+        let sign = Serverbound::EditBook(EditBook {
+            slot: 40,
+            pages: vec!["a".into(), String::new()],
+            title: Some("T".into()),
+        });
+        assert_eq!(sign.encode()[1..], [40, 2, 1, b'a', 0, 1, 1, b'T']);
+        round_trip(sign, Serverbound::encode, Serverbound::decode);
+        let mut w = Writer::new();
+        w.varint(101);
+        assert!(BookPages::read(&mut Reader::new(&w.data)).is_err());
+    }
+    #[test]
+    fn boss_event_round_trips() {
+        let add = Clientbound::BossEvent(BossEvent {
+            id: 0x0123_4567_89ab_cdef_fedc_ba98_7654_3210,
+            action: BossAction::Add {
+                name: Tag::String("Wither".into()),
+                progress: 0.5,
+                color: 5,
+                overlay: 0,
+                darken: true,
+                music: false,
+                fog: true,
+            },
+        });
+        let body = add.encode();
+        // Packet id 9, then the uuid, operation 0, and the property byte
+        // (darken 1, fog 4).
+        assert_eq!(body[0], 9);
+        assert_eq!(*body.last().unwrap(), 5);
+        round_trip(add, Clientbound::encode, Clientbound::decode);
+        round_trip(
+            Clientbound::BossEvent(BossEvent {
+                id: 7,
+                action: BossAction::UpdateProgress { progress: 0.25 },
+            }),
+            Clientbound::encode,
+            Clientbound::decode,
+        );
+        round_trip(
+            Clientbound::BossEvent(BossEvent {
+                id: 7,
+                action: BossAction::Remove,
+            }),
+            Clientbound::encode,
+            Clientbound::decode,
+        );
     }
 }

@@ -38,7 +38,7 @@ impl DebugHost for Host<'_, '_> {
         // the menu as it always has (key_pressed).
         let g = &mut *self.game;
         if without_menu && g.screen == Screen::Playing {
-            g.pause_menu = !(g.has_singleplayer_server() && !g.is_published());
+            g.pause_menu = !g.has_singleplayer_server() || g.is_published();
             g.screen = Screen::Paused;
             g.capture(false);
             g.mining = None;
@@ -82,8 +82,10 @@ impl Game<'_> {
             }
             return true;
         }
-        // Screens with a text box take every key press first
-        // (EditBox.keyPressed); releases still reach KeyboardHandler.
+        // Vanilla types into a focused EditBox through charTyped, which no
+        // debug key can swallow. Here the character comes with the key press,
+        // so a screen with a focused text box takes every press first;
+        // releases still reach KeyboardHandler.
         let typing = matches!(
             self.screen,
             Screen::Chat | Screen::Options | Screen::WorldOptions | Screen::CommandBlock
@@ -91,7 +93,11 @@ impl Game<'_> {
             || self.book.is_some()
             || (self.screen == Screen::Creative && self.creative_screen.tab().search)
             || self.recipe_search_focused()
-            || self.station_typing();
+            || self.station_typing()
+            || self
+                .title
+                .as_mut()
+                .is_some_and(|t| t.focused_field().is_some());
         // Container screens use Escape, the inventory key and the hotbar and
         // drop keys first; any other screen closes on Escape.
         let screen_key = match self.screen {
@@ -179,7 +185,9 @@ impl Game<'_> {
                 // Minecraft.emergencySaveAndCrash: the world is saved, then the
                 // game stops; main writes the crash report.
                 let crash = horizon_client::crash::DebugCrash::new();
-                let _ = self.save_game();
+                if let Err(e) = self.save_game() {
+                    log::error!("the emergency save before the crash failed: {e}");
+                }
                 return Err(crash.into());
             }
         }
@@ -593,7 +601,6 @@ impl Game<'_> {
             DebugAction::ReloadResourcePacks => {
                 self.debug_translated("debug.reload_resourcepacks.message");
                 self.reload_packs();
-                self.load_shader_pack();
                 true
             }
             DebugAction::CopyLocation if player => {

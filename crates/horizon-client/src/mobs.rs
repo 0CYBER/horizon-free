@@ -7,6 +7,7 @@
 //! behaviour, models, animations and sounds.
 pub mod ai;
 pub mod allay;
+pub mod ambient;
 pub mod anim;
 pub mod animal_brain;
 pub mod aquatic;
@@ -736,9 +737,13 @@ pub struct Extra {
     /// The sniffer's and the ghastling's brain.
     pub animal_brain: Option<Box<animal_brain::Brain>>,
     pub axolotl: axolotl::Animation,
-    /// The mob this one rides, and the mob riding it (`getVehicle`, `getFirstPassenger`).
+    /// The mob or boat this one rides, and the mob riding it (`getVehicle`,
+    /// `getFirstPassenger`).
     pub mount: Option<u32>,
     pub rider: Option<u32>,
+    /// `Entity.boardingCooldown`: ticks after leaving a boat before a boat
+    /// can pick this mob up again.
+    pub boarding_cooldown: i32,
     /// A chicken carrying a zombie (`IsChickenJockey`).
     pub jockey: bool,
     /// A skeleton horse waiting to spring its trap, and how long it has waited.
@@ -986,6 +991,12 @@ pub enum MobEvent {
     SetBlock {
         pos: [i32; 3],
         state: horizon_world::registry::BlockStateId,
+    },
+    /// `DoorBlock.setOpen` by a mob (`InteractWithDoor`): the door opens or
+    /// closes, both halves, with its sound and game event.
+    SetDoorOpen {
+        pos: [i32; 3],
+        open: bool,
     },
     /// Destroy a block, dropping nothing (sheep eating grass becomes dirt via SetBlock).
     BreakBlock {
@@ -1602,6 +1613,8 @@ impl Mob {
                 | Species::Fox
                 | Species::Panda
         );
+        // The PathNavigation constructor: the base follow range.
+        mob.ai.nav.max_visited_nodes = (mob.kind.follow_range * 16.0).floor() as i32;
         ai::register(&mut mob);
         mob
     }
@@ -1633,6 +1646,11 @@ impl Mob {
     }
     pub fn species(&self) -> Species {
         self.kind.species
+    }
+    /// `Mob.getMainArm`: the left arm when the mob is left-handed, a player's
+    /// `mainHand` option for a player mob.
+    pub fn main_arm_left(&self) -> bool {
+        self.extra.main_hand_left || self.extra.left_handed
     }
     /// The player hit this mob (melee): LivingEntity.hurt with knockback.
     pub fn hurt(
@@ -2277,7 +2295,7 @@ mod sensor_scan_tests {
     use horizon_core::geometry::Vec3;
     use serde_json::json;
 
-    fn kind() -> Arc<MobType> {
+    pub(super) fn kind() -> Arc<MobType> {
         Arc::new(MobType {
             id: "minecraft:cow".into(),
             species: Species::Cow,
@@ -2481,56 +2499,9 @@ mod sensor_scan_tests {
 }
 #[cfg(test)]
 mod push_tests {
+    use super::sensor_scan_tests::kind;
     use super::*;
     use horizon_core::geometry::Vec3;
-    use serde_json::json;
-
-    fn kind() -> Arc<MobType> {
-        Arc::new(MobType {
-            id: "minecraft:cow".into(),
-            species: Species::Cow,
-            width: 0.9,
-            height: 1.4,
-            eye_height: 1.3,
-            category: "creature".into(),
-            max_health: 10.0,
-            speed: 0.2,
-            flying_speed: 0.4,
-            attack_damage: 0.0,
-            attack_knockback: 0.0,
-            follow_range: 16.0,
-            step_height: 0.6,
-            armor: 0.0,
-            armor_toughness: 0.0,
-            knockback_resistance: 0.0,
-            jump_strength: 0.42,
-            attributes: Arc::default(),
-            gravity: 0.08,
-            safe_fall_distance: 3.0,
-            fall_damage_multiplier: 1.0,
-            water_efficiency: 0.0,
-            water_slowdown: 0.8,
-            air_speed: 0.02,
-            baby_scale: 0.5,
-            head_rot_speed: 10.0,
-            max_head_x_rot: 40.0,
-            max_head_y_rot: 75.0,
-            ambient_interval: 120,
-            flags: Flags {
-                animal: true,
-                ..Default::default()
-            },
-            model: Arc::new(Part::parse("root", &json!({}))),
-            layers: HashMap::new(),
-            texture: String::new(),
-            brain: Brain::Passive,
-            anim: Anim::Rabbit,
-            sounds: [""; 3],
-            step_sound: None,
-            food: Arc::default(),
-            tempt: Arc::default(),
-        })
-    }
 
     /// The pending pushes as one list, scanned for each mob, as before.
     fn take_old(events: &mut Vec<MobEvent>, from: usize, pending: &mut Vec<(u32, Vec3)>) {

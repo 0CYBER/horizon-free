@@ -1,13 +1,13 @@
 // The release notes on the site: the home page's "Recently added" block and the Releases page (every release,
 // newest first). Shared by build.mjs (baked into the pages) and the pages' scripts (refreshed from GitHub).
 // Tags: the game's vX.Y.Z and the launcher's launcher@X.Y.Z from 0.2, vYYYY.MM.DD[.N] and launcher-vX.Y.Z before
-// (src/versions.js). Alpha is a game pre-release, Stable a game release (docs/release-flow.md, "Channels").
+// (src/versions.js). One channel (docs/release-flow.md, "One channel"): a release is the game's or the launcher's.
 import { markdown, inline, escape } from "./markdown.js";
 import { isLauncher, launcherVersion, newestFirst } from "./versions.js";
 
 const REPO = "ludovic111/horizon";
 
-export const channel = (r) => (isLauncher(r.tag_name) ? "Launcher" : r.prerelease ? "Alpha" : "Stable");
+export const channel = (r) => (isLauncher(r.tag_name) ? "Launcher" : "Game");
 const anchor = (r) => `release-${r.tag_name.replace(/[^\w.-]/g, "-")}`;
 
 // "Horizon 0.2.3: Cave culling, weather" (before 0.2, "Horizon 2026.10.13: …") reads as the version and its line.
@@ -50,8 +50,12 @@ export function sections(body) {
 // An item without its pull request references: "Riptide (#123, fixes #45)" -> "Riptide".
 export const plainItem = (item) => item.replace(/\s*\((?:#\d+|fixes #\d+|[^()]*#\d+[^()]*)\)\s*/g, " ").replace(/\s+/g, " ").trim();
 
+// A game release's notes open with an HTML block sending people to the launcher (PLAYERS in tools/release_train.py):
+// GitHub's latest release is the game's. This site has its own download button, so it leaves the block out.
+export const notesText = (body) => (body || "").replace(/^<h3>Want to play\?[^\n]*(?:\r?\n)*/, "");
+
 // The notes' first sentence, for a release with no title line and no sections ("Rebuilt from the latest main.").
-const firstLine = (body) => ((body || "").split(/\r?\n/).find((l) => l.trim() && !/^#/.test(l)) || "").trim().replace(/[.:]$/, "");
+const firstLine = (body) => (notesText(body).split(/\r?\n/).find((l) => l.trim() && !/^#/.test(l)) || "").trim().replace(/[.:]$/, "");
 
 const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
@@ -90,7 +94,7 @@ export function recentHtml(list, { rows = 5, picks = 3 } = {}) {
     })
     .join("");
   // What landed last: the "New" items of the newest releases with the highest pull request numbers (a release's
-  // notes list everything since the last Stable, oldest first).
+  // notes list everything since the release before it, oldest first).
   const pr = (item) => Math.max(0, ...[...item.matchAll(/#(\d+)/g)].map((m) => Number(m[1])));
   const seen = new Set();
   const picked = game
@@ -135,7 +139,7 @@ function releaseHtml(r, open) {
                 ${o.text ? `<p class="release-counts">${escape(o.text)}</p>` : ""}
                 ${top.length ? `<ul>${top.map((t) => `<li>${inline(t)}</li>`).join("")}</ul>` : ""}
               </div>` : ""}
-              <div class="prose">${markdown(r.body || "") || "<p>No notes for this release.</p>"}</div>
+              <div class="prose">${markdown(notesText(r.body)) || "<p>No notes for this release.</p>"}</div>
               ${downloads ? `<div class="release-downloads"><p class="eyebrow">Downloads</p><ul>${downloads}</ul></div>` : ""}
               <p class="release-github"><a href="${escape(r.html_url)}">This release on GitHub</a></p>
             </div>

@@ -19,6 +19,8 @@ Usage: horizon-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [-
        horizon-prepare sounds [--minecraft-dir PATH] [--root PATH]
        horizon-prepare panorama [--minecraft-dir PATH] [--root PATH]
        horizon-prepare fonts [--minecraft-dir PATH] [--root PATH]
+       horizon-prepare packs [--minecraft-dir PATH] [--root PATH]
+       horizon-prepare languages [--minecraft-dir PATH] [--root PATH]
 
   --prepare             Import the pinned game files from your own copy first
   --server-jar PATH     The pinned server jar you downloaded yourself
@@ -34,7 +36,9 @@ The resources go to <root>/.local/horizon-client/<version>; pass that to horizon
 
 horizon-prepare panorama repairs the classic menu background in existing resources without Java.
 horizon-prepare fonts adds the GNU Unifont glyphs (characters the bitmap fonts lack) the same way.
-Full preparation also imports both after extracting the client JAR's placeholders.
+horizon-prepare packs adds the built-in Programmer Art and High Contrast resource packs the same way.
+horizon-prepare languages adds the bundled languages and the language list the JAR lacks the same way.
+Full preparation also imports all four after extracting the client JAR's placeholders.
 
 horizon-prepare sounds copies the pinned version's sounds (about 380 MB) from the official
 launcher's asset store into the same folder, checking every file. It is optional: without it the
@@ -66,7 +70,12 @@ fn main() -> ExitCode {
     };
     let mut root = None;
     let mut args = std::env::args_os().skip(1).peekable();
-    let assets = args.next_if(|a| a == "sounds" || a == "panorama" || a == "fonts");
+    let assets = args.next_if(|a| {
+        matches!(
+            a.to_str(),
+            Some("sounds" | "panorama" | "fonts" | "packs" | "languages")
+        )
+    });
     while let Some(arg) = args.next() {
         let text = arg.to_string_lossy().into_owned();
         let (flag, inline) = match text.split_once('=') {
@@ -131,6 +140,12 @@ fn main() -> ExitCode {
         }
         Some("fonts") => {
             horizon_prepare::fonts(&options.root, options.minecraft_dir.as_deref(), &log)
+        }
+        Some("packs") => {
+            horizon_prepare::packs(&options.root, options.minecraft_dir.as_deref(), &log)
+        }
+        Some("languages") => {
+            horizon_prepare::languages(&options.root, options.minecraft_dir.as_deref(), &log)
         }
         _ => horizon_prepare::prepare(&options, &log),
     };

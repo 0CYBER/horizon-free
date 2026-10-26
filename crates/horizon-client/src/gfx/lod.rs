@@ -119,10 +119,6 @@ impl Tile {
 }
 
 impl Renderer {
-    pub fn resident_lods(&self) -> usize {
-        self.lods.len()
-    }
-
     pub fn upload_lod(&mut self, key: TileKey, mesh: &SectionMesh) {
         self.remove_lod(key);
         if let Some(bounds) = Bounds::mesh(mesh)

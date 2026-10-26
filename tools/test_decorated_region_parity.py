@@ -66,7 +66,7 @@ def build_dir():
 
 
 def vanilla_order(binary, cx, cz, view):
-    out = subprocess.run([str(binary), str(cg.RESOURCES), '0', 'overworld'], capture_output=True, text=True, check=True,
+    out = subprocess.run([str(binary), 'chunk_dump', str(cg.RESOURCES), '0', 'overworld'], capture_output=True, text=True, check=True,
                          env=dict(os.environ, HORIZON_LIST_ORDER=f'{cx},{cz},{view}'), cwd=lab.ROOT).stdout
     return [tuple(map(int, line.split())) for line in out.splitlines()]
 

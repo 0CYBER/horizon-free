@@ -581,23 +581,57 @@ impl Title {
                 let cx = (w / 2.0).floor();
                 let y = (h / 4.0).floor() + 48.0;
                 let mut buttons = vec![
-                    b(cx - 100.0, y, 200.0, "Singleplayer", true, 1),
-                    b(cx - 100.0, y + 24.0, 200.0, "Multiplayer", true, 4),
-                    b(cx - 100.0, y + 48.0, 200.0, "Minecraft Realms", false, 0),
-                    b(cx - 100.0, y + 96.0, 98.0, "Options...", true, 3),
-                    b(cx + 2.0, y + 96.0, 98.0, "Quit Game", true, 2),
-                ];
-                for (i, (label, enabled, id, icon, size)) in [
-                    // Horizon's Join a Friend (an invite code) behind
-                    // vanilla's Friends button.
-                    ("Friends", true, 5, "friends/friends", 15.0),
-                    ("Language", true, 6, "icon/language", 15.0),
-                    (
-                        "Accessibility Settings",
+                    b(
+                        cx - 100.0,
+                        y,
+                        200.0,
+                        &lang::get_or("menu.singleplayer", "Singleplayer"),
                         true,
+                        1,
+                    ),
+                    b(
+                        cx - 100.0,
+                        y + 24.0,
+                        200.0,
+                        &lang::get_or("menu.multiplayer", "Multiplayer"),
+                        true,
+                        4,
+                    ),
+                    b(
+                        cx - 100.0,
+                        y + 48.0,
+                        200.0,
+                        &lang::get_or("menu.online", "Minecraft Realms"),
+                        false,
+                        0,
+                    ),
+                    b(
+                        cx - 100.0,
+                        y + 96.0,
+                        98.0,
+                        &lang::get_or("menu.options", "Options..."),
+                        true,
+                        3,
+                    ),
+                    b(
+                        cx + 2.0,
+                        y + 96.0,
+                        98.0,
+                        &lang::get_or("menu.quit", "Quit Game"),
+                        true,
+                        2,
+                    ),
+                ];
+                // CommonButtons' icon buttons; Horizon's Join a Friend (an
+                // invite code) sits behind vanilla's Friends button.
+                for (i, (key, plain, id, icon)) in [
+                    ("gui.friends.open", "Friends", 5, "friends/friends"),
+                    ("options.language", "Language...", 6, "icon/language"),
+                    (
+                        "options.accessibility",
+                        "Accessibility Settings...",
                         7,
                         "icon/accessibility",
-                        15.0,
                     ),
                 ]
                 .into_iter()
@@ -607,11 +641,11 @@ impl Title {
                         cx - 34.0 + i as f32 * 24.0,
                         y + 72.0,
                         20.0,
-                        label,
-                        enabled,
+                        &lang::get_or(key, plain),
+                        true,
                         id,
                     );
-                    button.icon = Some((icon, size));
+                    button.icon = Some((icon, 15.0));
                     buttons.push(button);
                 }
                 buttons
@@ -621,7 +655,7 @@ impl Title {
                     (w / 2.0).floor() - 154.0,
                     h - 52.0,
                     150.0,
-                    "Play Selected World",
+                    &lang::get_or("selectWorld.select", "Play Selected World"),
                     selected.is_some(),
                     10,
                 ),
@@ -629,7 +663,7 @@ impl Title {
                     (w / 2.0).floor() + 4.0,
                     h - 52.0,
                     150.0,
-                    "Create New World",
+                    &lang::get_or("selectWorld.create", "Create New World"),
                     true,
                     11,
                 ),
@@ -657,7 +691,14 @@ impl Title {
                     selected.is_some(),
                     15,
                 ),
-                b((w / 2.0).floor() + 83.0, h - 28.0, 71.0, "Back", true, 12),
+                b(
+                    (w / 2.0).floor() + 83.0,
+                    h - 28.0,
+                    71.0,
+                    &lang::get_or("gui.back", "Back"),
+                    true,
+                    12,
+                ),
             ],
             Mode::Create {
                 creative, options, ..
@@ -1150,7 +1191,7 @@ impl Title {
                 + 30.0;
             // Toast.xPos: in from the right edge by the visible portion.
             let x = w - width * slide.portion;
-            toast_background(atlas, batch, x, width);
+            crate::toasts::background(atlas, batch, x, 0.0, width);
             batch.text(atlas, &title, x + 18.0, 7.0, rgba(255, 255, 0, 255), false);
             batch.text(atlas, &message, x + 18.0, 19.0, u32::MAX, false);
         }
@@ -1553,36 +1594,6 @@ impl Title {
         }
     }
 }
-/// SystemToast's 32-pixel background keeps the notice icon and borders intact.
-fn toast_background(atlas: &HudAtlas, batch: &mut HudBatch, x: f32, width: f32) {
-    let Some(rect) = atlas.sprites.get("gui/sprites/toast/system").copied() else {
-        return;
-    };
-    let source_x = [0.0, 17.0, rect.w as f32 - 4.0, rect.w as f32];
-    let target_x = [x, x + 17.0, x + width - 4.0, x + width];
-    for col in 0..3 {
-        for (sy, sh, y, h) in [
-            (0.0, 28.0, 0.0, 28.0),
-            (rect.h as f32 - 4.0, 4.0, 28.0, 4.0),
-        ] {
-            let mut piece = rect;
-            let du = (rect.u1 - rect.u0) / rect.w as f32;
-            let dv = (rect.v1 - rect.v0) / rect.h as f32;
-            piece.u0 = rect.u0 + source_x[col] * du;
-            piece.u1 = rect.u0 + source_x[col + 1] * du;
-            piece.v0 = rect.v0 + sy * dv;
-            piece.v1 = rect.v0 + (sy + sh) * dv;
-            batch.rect_uv(
-                target_x[col],
-                y,
-                target_x[col + 1] - target_x[col],
-                h,
-                piece,
-                u32::MAX,
-            );
-        }
-    }
-}
 fn centered(atlas: &HudAtlas, batch: &mut HudBatch, text: &str, y: f32, color: u32) {
     batch.text(
         atlas,
@@ -1629,26 +1640,6 @@ fn caret_field<'a>(
         },
         _ => None,
     }
-}
-/// `yyyy/MM/dd HH:mm` (UTC) for a modification time in Unix seconds.
-pub fn date_label(secs: u64) -> String {
-    date_string(secs)
-}
-fn date_string(secs: u64) -> String {
-    // Civil date from Unix time (days-from-civil inverse), UTC.
-    let days = (secs / 86400) as i64;
-    let (h, m) = ((secs % 86400) / 3600, (secs % 3600) / 60);
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if mo <= 2 { y + 1 } else { y };
-    format!("{y}-{mo:02}-{d:02} {h:02}:{m:02}")
 }
 
 #[cfg(test)]
