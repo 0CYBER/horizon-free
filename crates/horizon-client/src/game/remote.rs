@@ -1413,6 +1413,22 @@ impl Game<'_> {
                 m.on_ground = on_ground;
                 return;
             }
+            if let Some(p) = self.creatures.projectiles.iter_mut().find(|p| {
+                p.id == id as u32
+                    && matches!(
+                        p.kind,
+                        horizon_client::projectiles::ProjectileKind::LargeFireball { .. }
+                    )
+            }) {
+                if path.is_some() {
+                    p.position = Vec3::new(position[0], position[1], position[2]);
+                }
+                if let Some((yaw, pitch)) = rotation {
+                    p.yaw = yaw;
+                    p.pitch = pitch;
+                }
+                return;
+            }
             if let Some(p) = r.pending_items.get_mut(&id) {
                 p.0 = position;
             }
@@ -2941,6 +2957,13 @@ impl Game<'_> {
             f.velocity = v;
         } else if let Some(t) = self.tnts.iter_mut().find(|t| t.id == id as u32) {
             t.velocity = v;
+        } else if let Some(p) = self
+            .creatures
+            .projectiles
+            .iter_mut()
+            .find(|p| p.id == id as u32)
+        {
+            p.velocity = v;
         } else if let Some(p) = self
             .remote
             .as_mut()
