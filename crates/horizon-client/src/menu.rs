@@ -3211,4 +3211,37 @@ pub(crate) mod tests {
             assert_eq!(menu.slot(0), stack("dirt", 1).as_ref());
         });
     }
+
+    /// #1832: a potion taken from the creative inventory and put in the
+    /// hotbar keeps its `PotionContents` (the brew), as vanilla's
+    /// `PotionContents.createItemStack` builds it: the item tab's stack is
+    /// the real one, and the hotbar slot holds it as it is.
+    #[test]
+    fn a_creative_potion_keeps_its_contents_in_the_hotbar() {
+        let snbt = r#"{components:{"minecraft:potion_contents":{potion:"minecraft:swiftness"}},count:1,id:"minecraft:potion"}"#;
+        let potion = crate::item_data::parse_stack(snbt).unwrap().unwrap();
+        assert_eq!(potion.potion(), Some("minecraft:swiftness"));
+        // The creative screen hands the stack over...
+        let mut carried = None;
+        crate::creative::click_display(
+            &mut carried,
+            Some(&potion),
+            |_: &ItemStack| 1,
+            0,
+            Input::Pickup,
+        );
+        assert_eq!(
+            carried.as_ref().and_then(|s| s.potion()),
+            Some("minecraft:swiftness")
+        );
+        // ... and the hotbar slot keeps it: it is not the uncraftable
+        // potion, which is a `minecraft:potion` with no contents at all.
+        with_menu(Kind::ItemPicker, |env, menu| {
+            menu.carried = carried;
+            menu.click(env, 45, 0, Input::Pickup).unwrap();
+            let in_hand = menu.slot(45).expect("the hotbar slot");
+            assert_eq!(in_hand.potion(), Some("minecraft:swiftness"));
+            assert_eq!(&*in_hand.item, "minecraft:potion");
+        });
+    }
 }
