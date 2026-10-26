@@ -67,6 +67,7 @@ mod end_sky;
 mod flat;
 pub mod lightning;
 mod lod;
+mod native_post;
 mod occlusion;
 mod pack_atlas;
 pub mod pack_draw;
@@ -499,6 +500,8 @@ pub struct Renderer {
     world_post: world_post::Post,
     /// The shader pack's post-processing, and the dimension (legacy id) it was loaded for.
     pack_post: Option<(i32, Option<pack_post::PackPost>)>,
+    /// The post passes of one of Horizon's own shader packs; never beside `pack_post`'s.
+    native_post: Option<native_post::NativePost>,
     /// The entity vertices Horizon draws itself while a shader pack draws the others.
     pack_entity_rest: Vec<Vertex>,
     /// Set 1 of the cloud pipeline, for a shader pack's `gbuffers_clouds`.
@@ -2409,6 +2412,7 @@ impl Renderer {
             occlusion: occlusion::Occlusion::new(crate::chunk::MIN_Y, crate::chunk::HEIGHT / 16),
             world_post,
             pack_post: None,
+            native_post: None,
             pack_entity_rest: Vec::new(),
             cloud_bindings,
             pack_weather: None,
@@ -2916,7 +2920,37 @@ impl Renderer {
             (programs, p.notes.clone())
         });
         self.pack_post = Some((dimension, post));
+        if self.pack_post.as_ref().is_some_and(|p| p.1.is_some()) {
+            self.native_post = None;
+        }
         report
+    }
+    /// Runs the post passes of one of Horizon's own shader packs over the world from now on
+    /// (`None`: no pack), with its options' values; replaces a `shaders/` pack. Returns the
+    /// passes' labels; on an error the passes that ran keep running.
+    pub fn set_native_shader_pack(
+        &mut self,
+        pack: Option<(horizon_shader_api::Report, Vec<(String, f64)>)>,
+    ) -> std::result::Result<Vec<String>, String> {
+        let stages = pack.map(|(report, constants)| {
+            let post: Vec<_> = report
+                .stages
+                .into_iter()
+                .filter(|s| s.kind == horizon_shader_api::StageKind::Post)
+                .collect();
+            (post, constants)
+        });
+        let Some((post, constants)) = stages.filter(|(post, _)| !post.is_empty()) else {
+            self.native_post = None;
+            return Ok(Vec::new());
+        };
+        let format = self.config.format.remove_srgb_suffix();
+        let post = native_post::NativePost::new(&self.device, post, &constants, format)?;
+        let labels = post.labels().into_iter().map(str::to_owned).collect();
+        self.pack_post = None;
+        self.pack_atlas = None;
+        self.native_post = Some(post);
+        Ok(labels)
     }
     /// What a shader pack's gbuffers programs read from Horizon's geometry: the sky's, and
     /// terrain's in the pack's block atlas (made here when missing; none when it does not fit).
@@ -3980,6 +4014,9 @@ impl Renderer {
         }
         // The world's targets: the screen, or the scaled target of `post`.
         let pack_post = !frame.title && self.pack_post.as_ref().is_some_and(|p| p.1.is_some());
+        // One of Horizon's own packs reads the same world target.
+        let native_post = !frame.title && self.native_post.is_some();
+        let pack_reads_world = pack_post || native_post;
         // The pack's program reads the vertices this frame's draws bind.
         let pack_draws_terrain = pack_terrain && flat_frame == self.pack_terrain_flat;
         // The shadow camera's lists, drawn by the pack's shadow programs.
@@ -4023,7 +4060,7 @@ impl Renderer {
         let scaled = self.world_post.prepare(
             &self.device,
             [self.config.width, self.config.height],
-            pack_post,
+            pack_reads_world,
         );
         let (world_view, world_depth) = match &scaled {
             Some((color, depth)) => (color, depth),
@@ -4062,7 +4099,7 @@ impl Renderer {
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(0.0),
                         // Phase 2 of occlusion culling draws over it; a shader pack reads it.
-                        store: if cull.is_some() || pack_post {
+                        store: if cull.is_some() || pack_reads_world {
                             wgpu::StoreOp::Store
                         } else {
                             wgpu::StoreOp::Discard
@@ -4128,7 +4165,7 @@ impl Renderer {
                                 &mut encoder,
                                 world_view,
                                 world_depth,
-                                pack_post,
+                                pack_reads_world,
                             );
                             pass.set_bind_group(0, &self.group, &[]);
                             pass.set_pipeline(&flat.solid);
@@ -4157,7 +4194,7 @@ impl Renderer {
                                 &mut encoder,
                                 world_view,
                                 world_depth,
-                                pack_post,
+                                pack_reads_world,
                             );
                             pass.set_bind_group(0, &self.group, &[]);
                             pass.set_pipeline(&self.solid);
@@ -4427,6 +4464,20 @@ impl Renderer {
                 &mut terrain,
             );
             self.pack_post = Some((dimension, Some(post)));
+        } else if let Some((color, depth)) = &scaled
+            && native_post
+            && let Some(post) = &mut self.native_post
+        {
+            let size = self.world_post.size().unwrap_or([1, 1]);
+            post.run(
+                &self.device,
+                &self.queue,
+                &mut encoder,
+                (color, depth),
+                &view_target,
+                frame,
+                size,
+            );
         } else if scaled.is_some() {
             self.world_post.finish(&mut encoder, &view_target);
         }
