@@ -533,10 +533,10 @@ interface browser {
         key: string,
         stack: stack,
     }
-    /// A click on a slot of the recipe the panel shows (`set-recipes`).
+    /// A click on a slot of a recipe the panel shows (`set-recipes`).
     record slot-click {
-        /// The recipe's index on the page and the slot's in it; the
-        /// results come after the slots.
+        /// The recipe's index in `set-recipes`'s list and the slot's in
+        /// it; the results come after the slots.
         recipe: u32,
         slot: u32,
         /// The stack the slot showed at that moment.
@@ -549,10 +549,12 @@ interface browser {
         search(string),
         key(item-key),
         slot-clicked(slot-click),
-        /// The action button of the recipe at this index on the page.
+        /// The action button of the recipe at this index in
+        /// `set-recipes`'s list.
         action(u32),
-        /// The page arrows of `set-recipes`: -1 or 1.
-        page(s32),
+        /// The player turned the recipes' page (`set-recipes`): the index
+        /// of the first recipe now shown.
+        page(u32),
         /// The back button of `set-recipes`.
         back,
     }

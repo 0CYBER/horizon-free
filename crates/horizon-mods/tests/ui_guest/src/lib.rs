@@ -330,7 +330,7 @@ impl Mod for Guest {
                             format!("slot {} {} {}", c.recipe, c.slot, stack(&c.stack))
                         }
                         browser::Event::Action(i) => format!("action {i}"),
-                        browser::Event::Page(step) => format!("page {step}"),
+                        browser::Event::Page(first) => format!("page {first}"),
                         browser::Event::Back => "back".into(),
                     });
                 }
