@@ -1707,10 +1707,6 @@ impl Game<'_> {
         };
         xp.respawn(self.ui.rules.bool("keep_inventory") || g.game_mode == SPECTATOR);
         (g.xp_level, g.xp_progress, g.xp_total) = (xp.level, xp.progress, xp.total);
-        // A new body: nothing given to the old one carries over.
-        if let Some(play) = host.play.get_mut(&conn) {
-            play.potions = Default::default();
-        }
         let clock_rate = self.network_clock_rate();
         let ctx = TickCtx {
             world: &mut self.world,
