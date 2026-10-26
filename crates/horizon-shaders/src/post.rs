@@ -531,8 +531,12 @@ fn load_shadow(loader: &mut Loader<'_>, terrain: Option<&GbuffersInputs>) {
             })
         })
     };
-    let shadow = load(&["shadow"]);
-    let water = load(&["shadow_water", "shadow"]);
+    // `shadowTerrain` and `shadowTranslucent` (3.2) leave terrain out of the shadow pass.
+    let keep = |key: &str| properties.get(key).is_none_or(|v| v.trim() != "false");
+    let shadow = keep("shadowTerrain").then(|| load(&["shadow"])).flatten();
+    let water = keep("shadowTranslucent")
+        .then(|| load(&["shadow_water", "shadow"]))
+        .flatten();
     if shadow.is_none() {
         loader
             .post
@@ -868,6 +872,8 @@ mod tests {
         };
         assert!(!none("").shadow_pass);
         assert!(none("shadow.enabled=true").shadow.is_some());
+        let post = none("shadow.enabled=true\nshadowTranslucent=false");
+        assert!(post.shadow.is_some() && post.shadow_water.is_none());
     }
 
     /// Water falls back to the terrain chain and blends by default, as the sky does; entities

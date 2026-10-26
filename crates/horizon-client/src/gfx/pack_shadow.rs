@@ -3,6 +3,29 @@
 //! with two sides that `shadowcomp` programs flip as composite programs flip colortex (6.1.6).
 //! Square, `shadowMapResolution` pixels.
 
+type Ops<T> = wgpu::Operations<T>;
+type Color = wgpu::Color;
+
+/// Loaded and stored.
+pub(super) fn load<T>() -> Ops<T> {
+    wgpu::Operations {
+        load: wgpu::LoadOp::Load,
+        store: wgpu::StoreOp::Store,
+    }
+}
+
+fn clear(c: [f32; 4]) -> Ops<Color> {
+    wgpu::Operations {
+        load: wgpu::LoadOp::Clear(wgpu::Color {
+            r: c[0].into(),
+            g: c[1].into(),
+            b: c[2].into(),
+            a: c[3].into(),
+        }),
+        store: wgpu::StoreOp::Store,
+    }
+}
+
 /// What the shadow pass writes and the programs read.
 pub(super) struct ShadowTargets {
     pub size: u32,
@@ -16,6 +39,11 @@ pub(super) struct ShadowTargets {
     pub clears: [Option<[f32; 4]>; 2],
     /// Bit n set: B is shadowcolor n's "main".
     pub main: u16,
+    /// Nothing cleared yet this frame: the first pass into the shadow buffers clears them as it
+    /// begins (`clear_ops`), which saves a pass that loads and stores them all on tiled GPUs.
+    fresh: bool,
+    /// Bit n set: shadowcolor n was cleared that way.
+    cleared: u8,
     /// Depth comparison for `sampler2DShadow` (hardware filtering): linear, as GL filters it.
     pub comparison: wgpu::Sampler,
 }
@@ -85,6 +113,8 @@ impl ShadowTargets {
                 b.clear.then(|| b.clear_color.unwrap_or([1.0; 4]))
             }),
             main: 0,
+            fresh: false,
+            cleared: 0,
             comparison: device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("Shader pack shadow comparison"),
                 compare: Some(wgpu::CompareFunction::LessEqual),
@@ -101,31 +131,59 @@ impl ShadowTargets {
         self.color.get(n)?.as_ref().map(|c| &c[side])
     }
 
-    /// Clears the shadow map and the shadowcolor buffers cleared every frame (6.3).
-    pub fn clear(&self, encoder: &mut wgpu::CommandEncoder) {
+    /// A new frame: the shadow map and the shadowcolor buffers cleared every frame (6.3) are
+    /// cleared by the first pass that begins (`clear_ops`), or else by `clear_rest`.
+    pub fn begin_frame(&mut self) {
+        self.fresh = true;
+        self.cleared = 0;
+    }
+
+    /// The load operations of a pass into the shadow map and shadowcolor buffers `writes`:
+    /// clears in the frame's first one, loads after.
+    pub fn clear_ops(
+        &mut self,
+        writes: impl Iterator<Item = usize>,
+    ) -> (Ops<f32>, [Ops<Color>; 2]) {
+        if !std::mem::take(&mut self.fresh) {
+            return (load(), [load(); 2]);
+        }
+        let mut colors = [load(); 2];
+        for n in writes.filter(|&n| n < 2) {
+            if let Some(c) = self.clears[n] {
+                colors[n] = clear(c);
+                self.cleared |= 1 << n;
+            }
+        }
+        let depth = wgpu::Operations {
+            load: wgpu::LoadOp::Clear(1.0),
+            store: wgpu::StoreOp::Store,
+        };
+        (depth, colors)
+    }
+
+    /// Clears what no pass has cleared this frame: all of it when no shadow program drew, the
+    /// cleared shadowcolor buffers the first one did not write.
+    pub fn clear_rest(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        let depth = std::mem::take(&mut self.fresh);
+        let cleared = std::mem::replace(&mut self.cleared, 0b11);
         let attachments: Vec<_> = (0..2)
+            .filter(|n| cleared & 1 << n == 0)
             .filter_map(|n| {
-                let c = self.clears[n]?;
                 Some(Some(wgpu::RenderPassColorAttachment {
                     view: self.color(n, false)?,
                     depth_slice: None,
                     resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: c[0].into(),
-                            g: c[1].into(),
-                            b: c[2].into(),
-                            a: c[3].into(),
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
+                    ops: clear(self.clears[n]?),
                 }))
             })
             .collect();
+        if !depth && attachments.is_empty() {
+            return;
+        }
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Shader pack shadow clear"),
             color_attachments: &attachments,
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            depth_stencil_attachment: depth.then_some(wgpu::RenderPassDepthStencilAttachment {
                 view: &self.depth.1,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
