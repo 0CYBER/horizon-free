@@ -323,12 +323,19 @@ pub fn sting(m: &mut Mob, who: Who, cx: &mut Cx) {
     match who {
         Who::Player => {
             cx.events.push(MobEvent::AttackPlayer(amount, from));
-            let seconds = if cx.w.difficulty.hard { 18 } else { 10 };
-            cx.events.push(MobEvent::EffectPlayer {
-                effect: "minecraft:poison",
-                ticks: seconds * 20,
-                amplifier: 0,
-            });
+            // Poison only on normal (10 s) and hard (18 s).
+            let seconds = match cx.w.difficulty.base {
+                2 => 10,
+                3 => 18,
+                _ => 0,
+            };
+            if seconds > 0 {
+                cx.events.push(MobEvent::EffectPlayer {
+                    effect: "minecraft:poison",
+                    ticks: seconds * 20,
+                    amplifier: 0,
+                });
+            }
         }
         Who::Mob(id) => cx.events.push(MobEvent::AttackMob {
             target: id,
