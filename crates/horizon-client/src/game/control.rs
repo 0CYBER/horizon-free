@@ -576,7 +576,7 @@ impl Game<'_> {
                     }
                     Screen::Creative if self.creative_screen.tab().search => {
                         // As typed: replaces a selected query, keeps the length limit.
-                        self.creative_search_edit(Some(text), false)
+                        self.creative_search_edit(Some(text))
                     }
                     _ => {
                         return Err(
@@ -806,6 +806,7 @@ impl Game<'_> {
             Screen::Friends => "friends",
             Screen::CommandBlock => "command-block",
             Screen::Win => "win",
+            Screen::Mod => "mod",
         }
     }
 

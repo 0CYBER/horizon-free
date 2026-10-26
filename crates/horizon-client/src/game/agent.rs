@@ -419,6 +419,7 @@ impl Game<'_> {
             Screen::Friends => "friends",
             Screen::CommandBlock => "command-block",
             Screen::Win => "win",
+            Screen::Mod => "mod",
         }
     }
     pub(super) fn inventory_counts(&self) -> BTreeMap<String, i64> {
@@ -472,7 +473,8 @@ impl Game<'_> {
                 "flying": p.flying,
                 "fall_flying": p.fall_flying,
                 "sneaking": self.keys.contains(&KeyCode::ShiftLeft),
-                "sprinting": self.keys.contains(&KeyCode::ControlLeft),
+                "sprinting": p.sprinting,
+                "fov_modifier": self.view.fov_modifier,
                 "health": p.health.health(),
                 "absorption": p.health.absorption(),
                 // The hurt animation's ticks left (the camera's hurt tilt).
@@ -1602,8 +1604,12 @@ impl Game<'_> {
                 if self.screen != Screen::Dead {
                     return Err("respawn needs the death screen".into());
                 }
-                let label =
-                    horizon_client::text::Text::translate("deathScreen.respawn", &[]).plain();
+                let key = if self.level.hardcore {
+                    "deathScreen.spectate"
+                } else {
+                    "deathScreen.respawn"
+                };
+                let label = horizon_client::text::Text::translate(key, &[]).plain();
                 let w = widgets::find(&widgets::last(), &label)?;
                 if !w.enabled {
                     // DeathScreen enables its buttons after 20 ticks.

@@ -18,6 +18,7 @@ use horizon_protocol::{
     text::{Language, plain, translatable},
 };
 use std::{
+    collections::HashMap,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -26,6 +27,12 @@ use std::{
     thread::JoinHandle,
     time::Duration,
 };
+
+/// `CommonListenerCookie.serverCookies`: cookies the server asked the client
+/// to store (`ClientboundStoreCookiePacket`), answered to
+/// `ClientboundCookieRequestPacket`. A `transfer` carries them to the next
+/// connection (`TransferState`), so a proxy's backend switch keeps them.
+pub type Cookies = Arc<Mutex<HashMap<String, Vec<u8>>>>;
 
 /// What the network thread reports to the game.
 pub enum Event {
@@ -52,6 +59,13 @@ pub enum Event {
     ShowDialog(horizon_world::nbt::Tag),
     /// `clear_dialog` in configuration.
     ClearDialog,
+    /// `ClientboundTransferPacket`: the server sent us to another address.
+    /// The connection ends right after; the game reconnects there with the
+    /// stored cookies.
+    Transfer {
+        host: String,
+        port: i32,
+    },
     /// The connection ended. `from_server`: the server gave the reason (or
     /// the connection was refused for good), rather than the connection
     /// failing (auto-reconnect retries only failures and shutdowns).
@@ -71,6 +85,8 @@ pub struct Session {
     pub address: String,
     pub name: String,
     pub counters: Arc<Mutex<Option<Arc<Counters>>>>,
+    /// The cookies this server stored on us (`ClientboundStoreCookiePacket`).
+    pub cookies: Cookies,
     /// HORIZON_NET_DEBUG=1 logs every packet sent from the game thread.
     debug: bool,
 }
@@ -83,7 +99,27 @@ impl Session {
         view_distance: i8,
         lang: Arc<Language>,
     ) -> Self {
-        Self::start(address, name, auth, view_distance, lang, None)
+        Self::start(address, name, auth, view_distance, lang, None, None)
+    }
+    /// `ConnectScreen.startConnecting` for a `transfer`: the cookies the
+    /// server stored carry to the new connection (`TransferState`).
+    pub fn connect_transferred(
+        address: &str,
+        name: &str,
+        auth: Option<Arc<AuthSession>>,
+        view_distance: i8,
+        lang: Arc<Language>,
+        cookies: Cookies,
+    ) -> Self {
+        Self::start(
+            address,
+            name,
+            auth,
+            view_distance,
+            lang,
+            None,
+            Some(cookies),
+        )
     }
     /// Join an integrated server through memory (`Connection.connectToLocalServer`).
     pub fn connect_local(
@@ -92,7 +128,7 @@ impl Session {
         view_distance: i8,
         lang: Arc<Language>,
     ) -> Self {
-        Self::start("local", name, None, view_distance, lang, Some(pipe))
+        Self::start("local", name, None, view_distance, lang, Some(pipe), None)
     }
     fn start(
         address: &str,
@@ -101,12 +137,18 @@ impl Session {
         view_distance: i8,
         lang: Arc<Language>,
         local: Option<horizon_protocol::connection::Pipe>,
+        cookies: Option<Cookies>,
     ) -> Self {
         let (send, events) = channel();
         let writer = Arc::new(Mutex::new(None));
         let configuring = Arc::new(AtomicBool::new(true));
         let counters = Arc::new(Mutex::new(None));
-        let (thread_writer, thread_counters) = (writer.clone(), counters.clone());
+        // Connection.initiateServerboundPlayConnection: a transfer's
+        // handshake says so (ClientIntent.TRANSFER).
+        let transferred = cookies.is_some();
+        let cookies = cookies.unwrap_or_default();
+        let (thread_writer, thread_counters, thread_cookies) =
+            (writer.clone(), counters.clone(), cookies.clone());
         let thread_configuring = configuring.clone();
         let (address_owned, name_owned) = (address.to_owned(), name.to_owned());
         let thread = std::thread::Builder::new()
@@ -123,6 +165,8 @@ impl Session {
                     &thread_writer,
                     &thread_configuring,
                     &thread_counters,
+                    &thread_cookies,
+                    transferred,
                 );
                 let from_server = result.is_ok();
                 let reason = result.unwrap_or_else(|e| e);
@@ -144,6 +188,7 @@ impl Session {
             address: address.to_owned(),
             name: name.to_owned(),
             counters,
+            cookies,
             debug,
         }
     }
@@ -314,6 +359,8 @@ fn run(
     shared_writer: &Mutex<Option<ConnWriter>>,
     configuring: &AtomicBool,
     shared_counters: &Mutex<Option<Arc<Counters>>>,
+    cookies: &Cookies,
+    transferred: bool,
 ) -> Result<String, String> {
     let (host, port, mut c) = if let Some(pipe) = local {
         (address.to_owned(), 0, Connection::local(pipe))
@@ -344,7 +391,11 @@ fn run(
             protocol: PROTOCOL_VERSION,
             host: host.clone(),
             port,
-            intent: handshake::LOGIN,
+            intent: if transferred {
+                handshake::TRANSFER
+            } else {
+                handshake::LOGIN
+            },
         })
         .encode(),
     )
@@ -414,11 +465,14 @@ fn run(
                 )
                 .map_err(e)?;
             }
+            // ClientHandshakePacketListenerImpl.handleRequestCookie: the
+            // cookies a transfer carried over (none on a plain join).
             login::Clientbound::CookieRequest(q) => {
+                let payload = cookies.lock().unwrap().get(&q.key).cloned();
                 c.send(
                     &login::Serverbound::CookieResponse(login::CookieResponse {
                         key: q.key,
-                        payload: None,
+                        payload,
                     })
                     .encode(),
                 )
@@ -442,13 +496,13 @@ fn run(
     .map_err(e)?;
     let (mut reader, writer) = c.split();
     *shared_writer.lock().unwrap() = Some(writer);
-    let registries = configure(&mut reader, shared_writer, configuring, lang, send)?;
+    let registries = configure(&mut reader, shared_writer, configuring, lang, send, cookies)?;
     let _ = send.send(Event::Joined {
         registries: Arc::new(registries),
         uuid: profile.uuid,
         name: profile.name,
     });
-    receive_play(&mut reader, shared_writer, configuring, lang, send)
+    receive_play(&mut reader, shared_writer, configuring, lang, send, cookies)
 }
 
 fn receive_play(
@@ -457,6 +511,7 @@ fn receive_play(
     configuring: &AtomicBool,
     lang: &Language,
     send: &Sender<Event>,
+    cookies: &Cookies,
 ) -> Result<String, String> {
     loop {
         let (id, payload) = reader.recv().map_err(|e| e.to_string())?;
@@ -492,8 +547,30 @@ fn receive_play(
                     let _ = w.send(&play::Serverbound::ConfigurationAcknowledged(Empty).encode());
                     configuring.store(true, Ordering::Relaxed);
                 }
-                let registries = configure(reader, shared_writer, configuring, lang, send)?;
+                let registries =
+                    configure(reader, shared_writer, configuring, lang, send, cookies)?;
                 let _ = send.send(Event::Reconfigured(Arc::new(registries)));
+            }
+            // ClientCommonPacketListenerImpl.handleRequestCookie: the stored
+            // cookie (or none) goes straight back.
+            play::Clientbound::CookieRequest(q) => {
+                let payload = cookies.lock().unwrap().get(&q.key).cloned();
+                reply(play::Serverbound::CookieResponse(cfg::CookieResponse {
+                    key: q.key,
+                    payload,
+                }));
+            }
+            play::Clientbound::StoreCookie(p) => {
+                cookies.lock().unwrap().insert(p.key, p.payload);
+            }
+            // ClientCommonPacketListenerImpl.handleTransfer: the connection
+            // ends and the game connects to the other address.
+            play::Clientbound::Transfer(p) => {
+                let _ = send.send(Event::Transfer {
+                    host: p.host,
+                    port: p.port,
+                });
+                return Ok(tr(lang, "disconnect.transfer"));
             }
             play::Clientbound::Disconnect(d) => return Ok(plain(&d.reason, lang)),
             play::Clientbound::CustomPayload(p) if p.channel == "minecraft:brand" => {
@@ -516,6 +593,7 @@ fn configure(
     configuring: &AtomicBool,
     lang: &Language,
     send: &Sender<Event>,
+    cookies: &Cookies,
 ) -> Result<Dynamic, String> {
     let mut registries = Dynamic::default();
     let reply = |p: cfg::Serverbound| -> Result<(), String> {
@@ -555,10 +633,21 @@ fn configure(
                 let _ = send.send(Event::ClearDialog);
             }
             cfg::Clientbound::CookieRequest(q) => {
+                let payload = cookies.lock().unwrap().get(&q.key).cloned();
                 reply(cfg::Serverbound::CookieResponse(cfg::CookieResponse {
                     key: q.key,
-                    payload: None,
+                    payload,
                 }))?
+            }
+            cfg::Clientbound::StoreCookie(p) => {
+                cookies.lock().unwrap().insert(p.key, p.payload);
+            }
+            cfg::Clientbound::Transfer(p) => {
+                let _ = send.send(Event::Transfer {
+                    host: p.host,
+                    port: p.port,
+                });
+                return Err(tr(lang, "disconnect.transfer"));
             }
             cfg::Clientbound::Disconnect(d) => return Err(plain(&d.reason, lang)),
             cfg::Clientbound::FinishConfiguration(_) => {
@@ -627,8 +716,14 @@ pub fn json_text(v: &serde_json::Value, lang: &Language) -> String {
     }
 }
 
-/// en_us.json from the prepared resources.
+/// The language a session resolves server-sent components with: the selected
+/// one as `lang` loaded it (`en_us` under it, packs included), so a menu title
+/// the server sends as a key follows the language screen. A process with no
+/// language set (a dedicated server's log) reads en_us.json.
 pub fn load_language(resources: &std::path::Path) -> Language {
+    if let Some(lang) = crate::lang::current() {
+        return lang.map().clone();
+    }
     std::fs::read(resources.join("assets/minecraft/lang/en_us.json"))
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
@@ -689,6 +784,7 @@ mod tests {
                 &AtomicBool::new(false),
                 &Language::new(),
                 &send,
+                &Cookies::default(),
             )
         });
         let mut server = Connection::local(server);
@@ -738,6 +834,7 @@ mod tests {
             address: "local".into(),
             name: "Player".into(),
             counters: Arc::new(Mutex::new(None)),
+            cookies: Cookies::default(),
             debug: false,
         };
         let (thread_writer, thread_configuring) =
@@ -749,6 +846,7 @@ mod tests {
                 &thread_configuring,
                 &Language::new(),
                 &send,
+                &Cookies::default(),
             )
         });
         let mut server = Connection::local(server);
@@ -777,6 +875,68 @@ mod tests {
         assert_eq!(play::Serverbound::decode(id, &body).unwrap(), tick_end);
         drop(session);
         assert!(thread.join().unwrap().is_err());
+    }
+
+    #[test]
+    fn play_answers_cookie_requests_from_stored_cookies_and_follows_transfers() {
+        let (client, server) = horizon_protocol::connection::Pipe::pair();
+        let (mut reader, writer) = Connection::local(client).split();
+        let writer = Arc::new(Mutex::new(Some(writer)));
+        let (send, events) = channel();
+        let cookies = Cookies::default();
+        let (thread_writer, thread_cookies) = (writer.clone(), cookies.clone());
+        let thread = std::thread::spawn(move || {
+            receive_play(
+                &mut reader,
+                &thread_writer,
+                &AtomicBool::new(false),
+                &Language::new(),
+                &send,
+                &thread_cookies,
+            )
+        });
+        let mut server = Connection::local(server);
+        let ask = |server: &mut Connection, key: &str| {
+            let request = play::Clientbound::CookieRequest(cfg::CookieRequest { key: key.into() });
+            server.send(&request.encode()).unwrap();
+            let (id, body) = server.recv().unwrap();
+            play::Serverbound::decode(id, &body).unwrap()
+        };
+        // handleRequestCookie answers an unknown key with no payload.
+        assert_eq!(
+            ask(&mut server, "proxy:session"),
+            play::Serverbound::CookieResponse(cfg::CookieResponse {
+                key: "proxy:session".into(),
+                payload: None,
+            })
+        );
+        let store = play::Clientbound::StoreCookie(cfg::StoreCookie {
+            key: "proxy:session".into(),
+            payload: vec![1, 2, 3],
+        });
+        server.send(&store.encode()).unwrap();
+        assert_eq!(
+            ask(&mut server, "proxy:session"),
+            play::Serverbound::CookieResponse(cfg::CookieResponse {
+                key: "proxy:session".into(),
+                payload: Some(vec![1, 2, 3]),
+            })
+        );
+        let transfer = play::Clientbound::Transfer(cfg::Transfer {
+            host: "example.net".into(),
+            port: 25566,
+        });
+        server.send(&transfer.encode()).unwrap();
+        assert!(thread.join().unwrap().is_ok());
+        assert!(matches!(
+            events.try_iter().last(),
+            Some(Event::Transfer { host, port: 25566 }) if host == "example.net"
+        ));
+        // The stored cookie stays for the next connection (TransferState).
+        assert_eq!(
+            cookies.lock().unwrap().get("proxy:session"),
+            Some(&vec![1, 2, 3])
+        );
     }
 
     #[test]

@@ -393,16 +393,20 @@ impl Client {
 /// Where Discord listens: `discord-ipc-0..9` in the temporary folders (and Flatpak's and
 /// Snap's subfolders) on Linux and macOS, named pipes on Windows.
 fn sockets() -> Vec<PathBuf> {
+    sockets_with(|key| std::env::var_os(key), cfg!(windows))
+}
+
+fn sockets_with(var: impl Fn(&str) -> Option<std::ffi::OsString>, windows: bool) -> Vec<PathBuf> {
     let names = (0..10).map(|n| format!("discord-ipc-{n}"));
-    if let Some(dir) = std::env::var_os(IPC_DIR_ENV) {
+    if let Some(dir) = var(IPC_DIR_ENV) {
         return names.map(|n| PathBuf::from(&dir).join(n)).collect();
     }
-    if cfg!(windows) {
+    if windows {
         return names.map(|n| PathBuf::from(r"\\?\pipe\").join(n)).collect();
     }
     let mut dirs: Vec<PathBuf> = ["XDG_RUNTIME_DIR", "TMPDIR", "TMP", "TEMP"]
         .into_iter()
-        .filter_map(std::env::var_os)
+        .filter_map(&var)
         .map(PathBuf::from)
         .collect();
     dirs.push("/tmp".into());
@@ -443,6 +447,57 @@ mod tests {
             dimension,
             mode: GameMode::Survival,
         }
+    }
+
+    /// The folders a real Discord listens in: `$TMPDIR` on macOS, `$XDG_RUNTIME_DIR` on Linux (and its
+    /// Flatpak and Snap subfolders), named pipes on Windows.
+    #[test]
+    fn sockets_cover_where_discord_listens() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |key: &str| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| *k == key)
+                    .map(|(_, v)| std::ffi::OsString::from(v))
+            }
+        };
+        let macos = sockets_with(env(&[("TMPDIR", "/var/folders/xy/abc/T/")]), false);
+        assert_eq!(
+            macos[0],
+            PathBuf::from("/var/folders/xy/abc/T/discord-ipc-0")
+        );
+        assert!(macos.contains(&PathBuf::from("/var/folders/xy/abc/T/discord-ipc-9")));
+        assert!(macos.contains(&PathBuf::from("/tmp/discord-ipc-0")));
+
+        let linux = sockets_with(
+            env(&[("XDG_RUNTIME_DIR", "/run/user/1000"), ("TMPDIR", "/tmp")]),
+            false,
+        );
+        assert_eq!(linux[0], PathBuf::from("/run/user/1000/discord-ipc-0"));
+        for path in [
+            "/run/user/1000/app/com.discordapp.Discord/discord-ipc-0",
+            "/run/user/1000/snap.discord/discord-ipc-0",
+            "/tmp/discord-ipc-0",
+        ] {
+            assert!(linux.contains(&PathBuf::from(path)), "{path}");
+        }
+        assert_eq!(linux.len(), 2 * 3 * 10, "/tmp is listed once");
+
+        let bare = sockets_with(env(&[]), false);
+        assert_eq!(bare[0], PathBuf::from("/tmp/discord-ipc-0"));
+
+        let windows = sockets_with(env(&[("TEMP", r"C:\Temp")]), true);
+        assert_eq!(windows.len(), 10);
+        // `Path::join` only uses `\` as the separator on Windows itself.
+        #[cfg(windows)]
+        assert_eq!(windows[0], PathBuf::from(r"\\?\pipe\discord-ipc-0"));
+
+        let fake = sockets_with(
+            env(&[("HORIZON_DISCORD_IPC_DIR", "/tmp/hz"), ("TMPDIR", "/x")]),
+            false,
+        );
+        assert_eq!(fake.len(), 10);
+        assert_eq!(fake[0], PathBuf::from("/tmp/hz/discord-ipc-0"));
     }
 
     #[test]
