@@ -8,7 +8,7 @@
 use super::{Foil, ItemQuad, ItemRenderState, ItemRenderer, SpecialHost};
 use crate::hud::{HudBatch, Rect};
 use glam::{EulerRot, Mat4, Vec2, Vec3};
-use std::{collections::HashMap, f32::consts::PI};
+use std::{collections::HashMap, f32::consts::PI, sync::Arc};
 
 mod depth;
 
@@ -148,6 +148,95 @@ pub fn draw(
     if state.is_empty() {
         return;
     }
+    // A static item drawn where it was drawn before gives the same vertices:
+    // take them instead of submitting, sorting and clipping its quads again.
+    let key = DrawnKey::of(state, renderer, sprites, x, y);
+    if let Some(key) = &key
+        && let Some(drawn) = renderer
+            .gui_drawn
+            .lock()
+            .ok()
+            .and_then(|d| d.get(key).cloned())
+    {
+        batch.vertices.extend_from_slice(&drawn);
+        return;
+    }
+    let start = batch.vertices.len();
+    draw_now(state, renderer, sprites, host, batch, x, y, time);
+    if let Some(key) = key
+        && let Ok(mut drawn) = renderer.gui_drawn.lock()
+    {
+        // GUI positions and items are few; a long scroll through every tab stays bounded.
+        if drawn.len() >= DRAWN_LIMIT {
+            drawn.clear();
+        }
+        drawn.insert(key, batch.vertices[start..].into());
+    }
+}
+
+/// Entries of `ItemRenderer::gui_drawn` before it starts over.
+const DRAWN_LIMIT: usize = 8192;
+
+/// What a GUI item's vertices depend on: its layers' baked models (kept for the
+/// renderer's life, so their addresses name them), tints and transforms, the
+/// atlas, and the exact position. None for items whose drawing changes with time
+/// or the host: a glint, or a special model renderer.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(crate) struct DrawnKey {
+    renderer: usize,
+    sprites: (usize, usize),
+    at: [u32; 2],
+    oversized: bool,
+    layers: Vec<(usize, Vec<i32>, [u32; 16], bool)>,
+}
+impl DrawnKey {
+    fn of(
+        state: &ItemRenderState,
+        renderer: &ItemRenderer,
+        sprites: &HashMap<String, Rect>,
+        x: f32,
+        y: f32,
+    ) -> Option<Self> {
+        if state.animated {
+            return None;
+        }
+        let layers = state
+            .layers
+            .iter()
+            .map(|layer| match &layer.geometry {
+                super::LayerGeometry::Quads(baked) if layer.foil == super::FoilType::None => {
+                    Some((
+                        Arc::as_ptr(baked) as usize,
+                        layer.tints.clone(),
+                        layer.matrix.to_cols_array().map(f32::to_bits),
+                        layer.uses_block_light,
+                    ))
+                }
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self {
+            renderer: std::ptr::from_ref(renderer) as usize,
+            sprites: (std::ptr::from_ref(sprites) as usize, sprites.len()),
+            at: [x.to_bits(), y.to_bits()],
+            oversized: state.oversized_in_gui,
+            layers,
+        })
+    }
+}
+
+/// [`draw`] without the cache.
+#[allow(clippy::too_many_arguments)]
+fn draw_now(
+    state: &ItemRenderState,
+    renderer: &ItemRenderer,
+    sprites: &HashMap<String, Rect>,
+    host: &dyn SpecialHost,
+    batch: &mut HudBatch,
+    x: f32,
+    y: f32,
+    time: f32,
+) {
     let pose = Mat4::from_translation(Vec3::new(x + 8.0, y + 8.0, 0.0))
         * Mat4::from_scale(Vec3::new(16.0, -16.0, 16.0));
     let mut quads: Vec<ItemQuad> = Vec::new();
