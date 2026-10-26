@@ -13,12 +13,15 @@ fn project_type(kind: Kind) -> &'static str {
         Kind::ResourcePack => "resourcepack",
         Kind::Modpack => "modpack",
         Kind::Mod => "mod",
+        Kind::Shader => "shader",
     }
 }
 
+/// The kind of a Modrinth project; its shader packs (the shaders/ format) are not offered.
 fn kind_of(project_type: &str) -> Option<Kind> {
     Kind::ALL
         .into_iter()
+        .filter(|k| *k != Kind::Shader)
         .find(|k| self::project_type(*k) == project_type)
 }
 
@@ -170,6 +173,9 @@ impl Source for Modrinth {
     }
 
     fn search(&self, query: &Query) -> Result<Vec<Project>, String> {
+        if query.kind == Kind::Shader {
+            return Err(super::SHADERS_ON_HORIZON.into());
+        }
         let found = get(&search_url(query))?;
         Ok(found["hits"]
             .as_array()

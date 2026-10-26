@@ -230,7 +230,7 @@ public final class VanillaTabListOracle {
         unsafeField.setAccessible(true);
         unsafe = unsafeField.get(null);
         allocate = unsafe.getClass().getMethod("allocateInstance", Class.class);
-        Font font = ParityFont.create(ParityFont.resources());
+        Font font = ParityFont.createDefault(ParityFont.resources(Path.of(args[2])));
         var gson = new Gson();
         var out = new StringBuilder();
         for (String line : Files.readAllLines(Path.of(args[0]))) {
@@ -284,6 +284,8 @@ public final class VanillaTabListOracle {
                 put(mc, Minecraft.class, "user", user);
                 var skins = skinManager(c);
                 put(mc, Minecraft.class, "skinManager", skins);
+                var profiles = new ArrayList<GameProfile>();
+                var lookups = new ArrayList<CompletableFuture<?>>();
                 for (var p : c.getAsJsonArray("players")) {
                     var o = p.getAsJsonObject();
                     var uuid = UUID.fromString(o.get("uuid").getAsString());
@@ -296,12 +298,22 @@ public final class VanillaTabListOracle {
                             : new Property("textures", t.get("value").getAsString(), sig.getAsString()));
                     }
                     var profile = new GameProfile(uuid, o.get("name").getAsString(), new PropertyMap(properties));
-                    // Let the lookup's unpacking and downloads run before the first frame,
-                    // as they would have by the time a player list shows.
-                    try {
-                        skins.get(profile).get(1, java.util.concurrent.TimeUnit.SECONDS);
-                    } catch (java.util.concurrent.TimeoutException pending) {
-                    }
+                    profiles.add(profile);
+                    lookups.add(skins.get(profile));
+                }
+                // Start every lookup before waiting: intentionally pending fake
+                // downloads must not add a second for each player in the list.
+                // Keep the same observation window and leave those futures pending.
+                try {
+                    CompletableFuture.allOf(lookups.toArray(CompletableFuture[]::new))
+                        .get(1, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (java.util.concurrent.TimeoutException pending) {
+                }
+                int profileIndex = 0;
+                for (var p : c.getAsJsonArray("players")) {
+                    var o = p.getAsJsonObject();
+                    var profile = profiles.get(profileIndex++);
+                    var uuid = profile.id();
                     var info = new PlayerInfo(profile, false);
                     put(info, PlayerInfo.class, "gameMode", GameType.byId(o.get("gameMode").getAsInt()));
                     put(info, PlayerInfo.class, "latency", o.get("latency").getAsInt());

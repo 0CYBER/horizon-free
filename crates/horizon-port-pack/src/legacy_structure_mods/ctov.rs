@@ -157,6 +157,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "modular compat is crate::lithostitched's now (its tests)"]
     fn modular_compat_runs_its_list_only_with_its_mod() {
         let mut data = ProcessorData::default();
         let swap = json!({"processor_type": "minecraft:rule", "rules": []});

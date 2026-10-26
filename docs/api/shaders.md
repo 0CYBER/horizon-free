@@ -91,11 +91,12 @@ pack exist ([stability.md](stability.md)).
 
 ## Not there yet
 
-The stages and everything that runs a pack (the format above is read and checked). The order: the renderer hooks shared with the format loader, then the material and post
-stages with options and hot reload, then the overlay, lighting, sky and shadow stages.
+The material stage in the game (the sky and post stages run, with hot reload), option values other than the defaults,
+then the overlay, lighting and shadow stages.
 
 ## Changelog
 
+- 2026-10-26: the sky stage in the game: the pack's `sky` gets vanilla's colour along each ray.
 - 2026-10-26: the post stage in the game (`HORIZON_SHADER_PACK`, hot reload with the last good pack kept).
 - 2026-10-25: `horizon-shader` (`new`, `check`, `pack`), three templates, the example pack and the guide.
 - 2026-10-25: the check (naga validation, signatures, options, budgets, SPIR-V/Metal/HLSL translation).

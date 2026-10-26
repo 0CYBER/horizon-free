@@ -522,16 +522,27 @@ impl Occlusion {
     }
     pub fn set(&mut self, key: SectionKey, vis: u64) {
         if self.columns.set(key, vis) {
-            self.edits.push(Edit::Set(key, vis));
-            self.dirty = true;
-            self.changed.push(key);
-            if self.running.is_some() {
-                self.changed_late.push(key);
-            }
+            self.changed(key, vis);
         }
     }
-    pub fn remove(&mut self, key: SectionKey) {
-        self.set(key, ALL_VISIBLE);
+    fn changed(&mut self, key: SectionKey, vis: u64) {
+        self.edits.push(Edit::Set(key, vis));
+        self.dirty = true;
+        self.changed.push(key);
+        if self.running.is_some() {
+            self.changed_late.push(key);
+        }
+    }
+    /// Every section of the column `x`, `z` goes (sees through every face).
+    pub fn remove_column(&mut self, x: i32, z: i32) {
+        let Some(column) = self.columns.map.remove(&(x, z)) else {
+            return;
+        };
+        for (y, &vis) in column.iter().enumerate() {
+            if vis != ALL_VISIBLE {
+                self.changed((x, y as i32, z), ALL_VISIBLE);
+            }
+        }
     }
     pub fn clear(&mut self) {
         self.columns.map.clear();

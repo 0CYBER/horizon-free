@@ -1,7 +1,7 @@
 # The launcher's mod browser
 
-Search Modrinth (CurseForge support is coming soon) for Java mods, modpacks, resource packs and shader
-packs, see how well each one runs before installing it, and install it with its checksum checked. This is item 16 of the roadmap and issue #577. The code is in
+Search Modrinth (CurseForge support is coming soon) for Java mods, modpacks and resource packs, and Horizon's
+registry for Horizon's own mods, modpacks, resource packs and shader packs; see how well each one runs before installing it, and install it with its checksum checked. This is item 16 of the roadmap and issue #577. The code is in
 `launcher/src/browser.rs` and `launcher/src/browser/`.
 
 ## What it offers
@@ -16,6 +16,7 @@ yet (Modrinth has no `horizon` loader).
 | Java mods (Fabric, NeoForge, Forge, Quilt) | ported into `horizon-mods/<mod id>/` and turned on | Checked from its jar before install: **Works**, **Partly** or **Doesn't run** ([below](#java-mods)) |
 | Resource packs | `resourcepacks/` beside `options.txt` | **Works** when made for 26.3 ([resource-packs.md](resource-packs.md) lists what Horizon reads). Older packs are **Partly**: they load with vanilla's compatibility warning |
 | Modpacks (`.mrpack`, CurseForge zip) | the Modpacks page's import | **Partly**: Horizon runs the mods it can port, from the player's own downloads ([modpacks.md](modpacks.md)) |
+| Shader packs (`.hshader`, Horizon's registry only) | `shaderpacks/` beside `options.txt` | **Works** when made for 26.3: checked by the game's own check before install ([shaders.md](shaders.md)). The `shaders/`-format packs on Modrinth and CurseForge are not offered |
 
 By default a search shows only what runs: Java mods made for 26.3, resource packs made for 26.3, and every modpack. **Show everything** lists the rest of the kind too, each marked with how well it runs; what doesn't run is
 never offered for install.
@@ -74,7 +75,8 @@ start); the hedge places and its recipe crafts 4.
 
 ## The Mods page
 
-The launcher's **Mods** page has the three kinds as tabs (Mods, Modpacks, Resource packs), a search field (Enter searches), **Show everything** and
+The launcher's **Mods** page has the four kinds as tabs (Mods, Modpacks, Resource packs, Shader packs; the last
+searches Horizon's registry), a search field (Enter searches), **Show everything** and
 the source: Modrinth, with **CurseForge (coming soon)** beside it, disabled. Each result is an index row: its summary, author,
 downloads, source and licence, how well it runs (and why), **Page** (the project's page on its source) and
 **Install** (**Import** for a modpack). The Modpacks tab lists the imported packs first, with their coverage
@@ -125,7 +127,8 @@ same name the player put there is never overwritten.
 
 - **Install** picks the newest version that runs, then its required dependencies, checked before any download: a
   dependency that isn't a pack Horizon loads (a Java mod) stops the install. Dependencies go in first. A resource
-  pack still has to be turned on in the game's Resource Packs screen, as in vanilla.
+  pack still has to be turned on in the game's Resource Packs screen, as in vanilla, and a shader pack picked in
+  the game's Shader Packs page.
 - **Update** installs the newer version and removes the old file.
 - **Remove** deletes the file and its entry. Packs installed as dependencies stay.
 - **A modpack** is downloaded (checked the same way) into `ports/downloads/`, imported, and ported straight away
@@ -149,7 +152,7 @@ horizon-launcher mods remove faithful-32x
 
 ## Sources
 
-**Horizon's registry.** Mods (`.hmod`) and resource packs made for Horizon, reviewed as pull requests in
+**Horizon's registry.** Mods (`.hmod`), modpacks (`.hpack`), resource packs and shader packs (`.hshader`) made for Horizon, reviewed as pull requests in
 [ludovic111/horizon-mods](https://github.com/ludovic111/horizon-mods) ([api/mod-index.md](api/mod-index.md)). The
 launcher reads its `index.json` (`browser/horizon.rs`; `HORIZON_MOD_INDEX=<file or https address>` reads a test
 registry instead, whose files may then be on disk) at most every ten minutes, and keeps the last copy in
@@ -164,7 +167,8 @@ checked pack, `pack.json` and `home/`, the profile's game folder, where each of 
 like any registry mod and turned on or off as the pack says; its overrides (settings, resource packs, a mod's saved
 settings) are copied in on the first install only, so the player's changes survive updates. A pack whose mod was taken
 down installs nothing. It is listed on the Modpacks tab with **Play** and **Remove**, and plays like an imported pack
-(`modpacks::apply_profile`). Shader packs are listed by the index but not installed by this launcher yet.
+(`modpacks::apply_profile`). A shader pack goes to `shaderpacks/<file>` once `check_file` has run the game's own
+check on it (`horizon_shader_api::check`); a taken-down one is named, for the player to remove.
 
 ```sh
 horizon-launcher mods search --source horizon --kind mod coords   # with whether it is signed and what it may do
