@@ -76,15 +76,14 @@ impl Game<'_> {
         let pos = ChunkPos::new(chunk.x, chunk.z);
         let time = self.world.game_time;
         let mut extras: ChunkExtras = chunk.saved.as_deref().cloned().unwrap_or_default();
+        // A chunk the scheduler hasn't registered yet (one loaded and
+        // unloaded again before the next tick) still holds its saved ticks:
+        // `register_chunk_ticks` empties that list once it takes them.
         if let Some(t) = self.block_ticks.blocks.chunk(pos) {
             extras.block_ticks = t.pack(time);
-        } else {
-            extras.block_ticks.clear();
         }
         if let Some(t) = self.block_ticks.fluids.chunk(pos) {
             extras.fluid_ticks = t.pack(time);
-        } else {
-            extras.fluid_ticks.clear();
         }
         extras.last_update = time;
         // TheEndGatewayBlockEntity saves its Age (the server copy's).

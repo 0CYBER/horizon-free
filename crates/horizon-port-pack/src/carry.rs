@@ -814,7 +814,6 @@ pub fn carry(
                     if kind == "structure" {
                         let path = rel.trim_start_matches("worldgen/structure/");
                         let structure = format!("{ns}:{}", path.trim_end_matches(".json"));
-                        changed |= crate::legacy_structure_mods::yung::disables(&structure, &mut v);
                         changed |=
                             crate::worldgen::add_piece_counts(&structure, &mut v, &piece_counts);
                     }

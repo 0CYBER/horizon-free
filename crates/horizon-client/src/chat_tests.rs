@@ -2,6 +2,11 @@ use super::*;
 use crate::{font::Font, hud::Rect};
 use std::{collections::HashMap, path::Path};
 
+/// The Chat option's default: no restriction.
+fn full() -> ChatAbilities {
+    ChatAbilities::new(ChatVisibility::Full)
+}
+
 fn font() -> Font {
     // The missing-glyph metrics let these tests run without game assets.
     Font::load(
@@ -139,7 +144,7 @@ fn locate_coordinates_fill_chat_with_teleport_without_submitting() {
         assert_eq!(link.component()["click_event"]["command"], expected);
         let mut chat = Chat::default();
         add(&mut chat, &font, Text::literal("Found at ").append(link));
-        let mut screen = ChatScreen::new(&m, &commands, "draft", 0, 640, 360);
+        let mut screen = ChatScreen::new(&m, &commands, "draft", 0, 640, 360, full());
         let x = 4.0 + f64::from(font.width("Found at "));
         assert!(!screen.click(&m, &commands, x, 315.0));
         let Some(ClickEvent::SuggestCommand(command)) = chat.click_at(&font, 360, x, 315.0) else {
@@ -176,7 +181,15 @@ fn history_arrows_recall_messages_and_restore_the_draft() {
         registries: &registries,
     };
     let history = vec!["first message".to_owned(), "latest message".to_owned()];
-    let mut screen = ChatScreen::new(&m, &commands, "unfinished draft", history.len(), 640, 360);
+    let mut screen = ChatScreen::new(
+        &m,
+        &commands,
+        "unfinished draft",
+        history.len(),
+        640,
+        360,
+        full(),
+    );
     for (key, expected) in [
         (ArrowUp, "latest message"),
         (ArrowUp, "first message"),
@@ -213,7 +226,7 @@ fn mod_commands_are_coloured_and_complete_like_vanilla_ones() {
             dispatcher,
             registries: &registries,
         };
-        let mut screen = ChatScreen::new(&m, &c, "", 0, 640, 360);
+        let mut screen = ChatScreen::new(&m, &c, "", 0, 640, 360, full());
         screen.type_text(&m, &c, line);
         screen
     };
@@ -259,7 +272,7 @@ fn ask_server_nodes_wait_for_the_servers_completions() {
     let tab = |screen: &mut ChatScreen| {
         screen.key(&m, &c, &[], winit::keyboard::KeyCode::Tab, false, false);
     };
-    let mut screen = ChatScreen::new(&m, &c, "", 0, 640, 360);
+    let mut screen = ChatScreen::new(&m, &c, "", 0, 640, 360, full());
     screen.type_text(&m, &c, "/bossbar get pt");
     let (request, sent) = screen.take_request().expect("the server is asked");
     assert_eq!(sent, "/bossbar get pt");
@@ -281,7 +294,7 @@ fn ask_server_nodes_wait_for_the_servers_completions() {
         dispatcher: local,
         registries: &registries,
     };
-    let mut screen = ChatScreen::new(&m, &c, "", 0, 640, 360);
+    let mut screen = ChatScreen::new(&m, &c, "", 0, 640, 360, full());
     screen.type_text(&m, &c, "/bossbar get pt");
     assert_eq!(screen.take_request(), None);
 }
@@ -326,4 +339,100 @@ fn a_server_component_keeps_its_click_and_hover_events() {
     // Past the (bold, so wider) text, nothing.
     let past = 4.0 + f64::from(font.width("CLICK")) + 20.0;
     assert!(chat.hover_at(&font, 360, past, 315.0).is_none());
+}
+
+/// `ChatVisiblity`: Commands Only keeps the chat out, Hidden takes the
+/// commands too (`ChatAbilities`), and Enter sends nothing the option hides.
+#[test]
+fn the_chat_option_decides_what_may_be_sent() {
+    let font = font();
+    let m = Measure(&font);
+    let registries = Registries::default();
+    let c = Commands {
+        dispatcher: crate::command::vanilla::game_dispatcher(),
+        registries: &registries,
+    };
+    let enter = |screen: &mut ChatScreen| {
+        screen.key(&m, &c, &[], winit::keyboard::KeyCode::Enter, false, false)
+    };
+    for (visibility, chat, command) in [
+        (ChatVisibility::Full, true, true),
+        (ChatVisibility::System, false, true),
+        (ChatVisibility::Hidden, false, false),
+    ] {
+        let abilities = ChatAbilities::new(visibility);
+        assert_eq!(abilities.allows("hi"), chat, "{visibility:?}");
+        assert_eq!(abilities.allows("/time set day"), command, "{visibility:?}");
+        for (line, allowed) in [("hi", chat), ("/time set day", command)] {
+            let mut screen = ChatScreen::new(&m, &c, "", 0, 640, 360, abilities);
+            screen.type_text(&m, &c, line);
+            match enter(&mut screen) {
+                ChatAction::Submit(sent) => {
+                    assert!(allowed, "{visibility:?} sent {sent}");
+                    assert_eq!(sent, line);
+                }
+                ChatAction::None => assert!(!allowed, "{visibility:?} kept {line}"),
+                ChatAction::Close => panic!("Enter does not close the chat"),
+            }
+        }
+    }
+}
+
+/// The restriction the option sets is a usage line: red, under the input, for
+/// a command the Chat option takes and for a message it takes.
+#[test]
+fn restricted_input_says_why_it_will_not_send() {
+    let font = font();
+    let m = Measure(&font);
+    let registries = Registries::default();
+    let c = Commands {
+        dispatcher: crate::command::vanilla::game_dispatcher(),
+        registries: &registries,
+    };
+    let usage = |visibility, line: &str| {
+        let mut screen = ChatScreen::new(&m, &c, "", 0, 640, 360, ChatAbilities::new(visibility));
+        screen.type_text(&m, &c, line);
+        screen.usage.iter().map(|t| t.plain()).collect::<Vec<_>>()
+    };
+    assert_eq!(usage(ChatVisibility::Full, "hi"), Vec::<String>::new());
+    // The font has no language files here, so the line is its key.
+    assert_eq!(
+        usage(ChatVisibility::System, "hi"),
+        ["chat_screen.messages_not_allowed"]
+    );
+    // A command the option allows says nothing about the restriction.
+    assert!(
+        !usage(ChatVisibility::System, "/time set day")
+            .iter()
+            .any(|line| line == "chat_screen.commands_not_allowed")
+    );
+    assert!(
+        usage(ChatVisibility::Hidden, "/time set day")
+            .iter()
+            .any(|line| line == "chat_screen.commands_not_allowed")
+    );
+}
+
+/// `ChatComponent.setVisibleMessageFilter`: a message the Chat option hides
+/// on arrival is dropped; one already in the chat leaves it while the option
+/// hides its kind and comes back when it shows it again.
+#[test]
+fn the_chat_option_filters_the_lines_both_ways() {
+    let font = font();
+    let mut chat = Chat::default();
+    let says = |chat: &mut Chat, text: &str, source| {
+        chat.add_message(&font, Text::literal(text), None, source, 0, false);
+    };
+    let shown =
+        |chat: &Chat| -> Vec<String> { chat.lines.iter().map(|l| l.content.plain()).collect() };
+    says(&mut chat, "player", ChatSource::Player);
+    says(&mut chat, "server", ChatSource::Server);
+    chat.set_abilities(&font, ChatAbilities::new(ChatVisibility::System));
+    assert_eq!(shown(&chat), ["server"]);
+    says(&mut chat, "dropped", ChatSource::Player);
+    chat.set_abilities(&font, ChatAbilities::new(ChatVisibility::Hidden));
+    says(&mut chat, "client", ChatSource::Client);
+    assert_eq!(shown(&chat), ["client"]);
+    chat.set_abilities(&font, ChatAbilities::new(ChatVisibility::Full));
+    assert_eq!(shown(&chat), ["client", "server", "player"]);
 }

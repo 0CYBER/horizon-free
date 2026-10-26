@@ -10,6 +10,7 @@ mod items;
 mod misc;
 mod place;
 mod players;
+pub(super) mod pregen;
 mod raid;
 mod terrain_cmds;
 mod text_commands;
@@ -214,7 +215,7 @@ impl Game<'_> {
     }
     /// Player.getDisplayName: the name (team-formatted), suggesting a
     /// `/tell`, showing the player on hover, inserting the name.
-    fn player_display_name(&self) -> Text {
+    pub(super) fn player_display_name(&self) -> Text {
         let name = self.acting_player_name().to_owned();
         let Some(uuid) = self.lan_acting_uuid else {
             return self.target_name(Target::Player);
@@ -444,7 +445,7 @@ impl Game<'_> {
                     .find(|i| i.id == id)
                     .map(|i| i.stack.item.to_string())
                     .unwrap_or_default();
-                Text::literal(self.pack.names.item(&item))
+                Text::literal(self.pack.names.display_item(&item))
             }
             Target::Mob(id)
                 if self
@@ -751,13 +752,15 @@ impl Game<'_> {
                     && !id.ends_with("get")
                     && let Ok(t) = self.entities(ctx, "target", false)
                 {
-                    self.cmds.waypoint_dirty.push(t[0]);
+                    let target = self.waypoint_target(t[0]);
+                    self.cmds.waypoint_dirty.push(target);
                 }
                 result
             }
             "ride.mount" | "ride.dismount" => self.cmd_ride(id, ctx),
             "spreadplayers" => self.cmd_spreadplayers(ctx),
             id if id.starts_with("forceload.") => self.cmd_forceload(id, ctx),
+            id if id.starts_with("pregen.") => self.cmd_pregen(id, ctx),
             "fillbiome" => self.cmd_fillbiome(ctx),
             id if id.starts_with("worldborder.") => self.cmd_worldborder(id, ctx),
             id if id.starts_with("loot.") => self.cmd_loot(id, ctx),
@@ -2499,12 +2502,14 @@ impl Game<'_> {
         };
         let max = Self::int(ctx, "maxCount").unwrap_or(-1);
         let counting = max == 0;
-        // Inventory.clearOrCountMatchingItems: main, armor, crafting grid, carried.
+        // Inventory slots 0..40: main, armor feet to head, off hand;
+        // then clearOrCountMatchingItems visits the crafting grid and carried stack.
         let mut removed = 0i32;
         let mut budget = if max < 0 { i32::MAX } else { max };
         let all = |g: &Self| -> Vec<Option<ItemStack>> {
             let mut v: Vec<Option<ItemStack>> = g.inventory.clone();
-            v.extend(g.armor.iter().cloned());
+            v.extend(g.armor.iter().rev().cloned());
+            v.push(g.offhand.clone());
             v.extend(g.craft_grid.iter().cloned());
             v.push(g.carried.clone());
             v
@@ -2518,7 +2523,8 @@ impl Game<'_> {
             .collect();
         let mut slots: Vec<&mut Option<ItemStack>> = Vec::new();
         slots.extend(self.inventory.iter_mut());
-        slots.extend(self.armor.iter_mut());
+        slots.extend(self.armor.iter_mut().rev());
+        slots.push(&mut self.offhand);
         slots.extend(self.craft_grid.iter_mut());
         slots.push(&mut self.carried);
         for (slot, matches) in slots.into_iter().zip(matching) {
@@ -2809,7 +2815,7 @@ impl Game<'_> {
         let name = match self.command_source.map(|s| s.entity) {
             Some(Some(t)) => self.target_name(t),
             Some(None) => Text::literal("Server"),
-            None => Text::literal(self.acting_player_name()),
+            None => self.player_display_name(),
         };
         let line = match id {
             "say" => Text::translate("chat.type.announcement", &[name, message]),
@@ -2819,14 +2825,14 @@ impl Game<'_> {
                 // Whispering to yourself: the incoming and outgoing lines.
                 let out = Text::translate(
                     "commands.message.display.outgoing",
-                    &[Text::literal(self.acting_player_name()), message.clone()],
+                    &[self.player_display_name(), message.clone()],
                 )
                 .with_color(text::GRAY)
                 .italic();
                 self.system_message(out);
                 Text::translate(
                     "commands.message.display.incoming",
-                    &[Text::literal(self.acting_player_name()), message],
+                    &[self.player_display_name(), message],
                 )
                 .with_color(text::GRAY)
                 .italic()
@@ -2836,9 +2842,14 @@ impl Game<'_> {
             capture.push(line.clone());
         }
         let focused = self.screen == Screen::Chat;
-        self.ui
-            .chat
-            .add(&self.gui.atlas, line, None, self.ticks, focused);
+        self.ui.chat.add(
+            &self.gui.atlas,
+            line,
+            None,
+            horizon_client::chat::ChatSource::Player,
+            self.ticks,
+            focused,
+        );
         Ok(1)
     }
     /// MessageArgument: `@p`-style selectors in a message become names.

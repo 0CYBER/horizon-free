@@ -108,7 +108,7 @@ def touched_crates(paths, packages):
 
 def area(path):
     """The part of the project a path belongs to; None for what goes with any change (docs, tests, harnesses)."""
-    if is_doc(path) or path.startswith(("tests/", "mods/", "docs/")) or path == "research-lock.json" or \
+    if is_doc(path) or path.startswith(("tests/", "mods/", "docs/", "roadmap/")) or path == "research-lock.json" or \
             (path.startswith("tools/") and not path.startswith("tools/ci/")):
         return None
     if path.startswith(("launcher/", "crates/horizon-prepare/")):
@@ -164,7 +164,8 @@ def affected_here(changed):
                 (parity.SHARED / "dependencies" / f"{name}.json").exists() for name in found)
     if not known and not changed & parity.SHARED_INPUTS:
         return None
-    return harness_names(name for name in found if name in parity.affected_harnesses(found, records, changed))
+    affected = parity.affected_harnesses(found, records, changed)
+    return harness_names(name for name in found if name in affected)
 
 
 def short_list(names, limit=12):
@@ -288,7 +289,9 @@ def plan(args, base, changed, crates_of, libraries, dependencies):
     """The checks for these changed files, in the order they run."""
     rust = any(workspace_rust(path) for path in changed)
     launcher = any(launcher_rust(path) for path in changed)
-    python = any(path.endswith(".py") or path.startswith(("tests/", "tools/")) for path in changed)
+    # The Python tests also hold ROADMAP.md to roadmap/roadmap.toml (tests/test_roadmap.py).
+    python = any(path.endswith(".py") or path.startswith(("tests/", "tools/", "roadmap/")) or path == "ROADMAP.md"
+                 for path in changed)
     crates = touched_crates(changed, crates_of) if rust or TOKENS in changed else []
     # An unrecognised Rust path must not silently skip validation.
     if rust and crates == []:
