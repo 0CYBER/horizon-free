@@ -102,6 +102,9 @@ pub struct UiState {
     /// Death screen cause and when the player died (buttons wait 20 ticks).
     pub death_text: Option<Text>,
     pub died_at: Option<std::time::Instant>,
+    /// `DeathScreen.TitleConfirmScreen` and when it opened (its buttons wait
+    /// 20 ticks, `setDelay`).
+    pub death_confirm: Option<std::time::Instant>,
     /// `LivingEntity.deathTime` of the window's player: ticks since it died.
     pub death_time: u32,
 }
@@ -886,6 +889,7 @@ impl Game<'_> {
         let cause = self.ui.death_cause.take();
         self.ui.died_at = Some(std::time::Instant::now());
         self.ui.death_text = None;
+        self.ui.death_confirm = None;
         if !self.ui.rules.bool("show_death_messages") {
             return;
         }

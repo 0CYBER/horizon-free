@@ -2185,6 +2185,7 @@ impl Game<'_> {
                 if p.health <= 0.0 && self.screen != Screen::Dead && self.player.is_some() {
                     self.screen = Screen::Dead;
                     self.ui.death_time = 0;
+                    self.ui.death_confirm = None;
                     self.capture(false);
                 }
             }
@@ -2202,6 +2203,7 @@ impl Game<'_> {
                 if me && self.screen != Screen::Dead && self.player.is_some() {
                     self.screen = Screen::Dead;
                     self.ui.death_time = 0;
+                    self.ui.death_confirm = None;
                     self.capture(false);
                 }
             }

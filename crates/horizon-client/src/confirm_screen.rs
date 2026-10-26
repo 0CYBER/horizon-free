@@ -64,12 +64,23 @@ impl Confirm {
         cursor: (f32, f32),
         labels: [&Text; 2],
     ) {
+        self.draw_active(batch, atlas, cursor, labels, true);
+    }
+    /// `draw` with the buttons greyed out while `setDelay` runs (`active` false).
+    pub fn draw_active(
+        &self,
+        batch: &mut HudBatch,
+        atlas: &HudAtlas,
+        cursor: (f32, f32),
+        labels: [&Text; 2],
+        active: bool,
+    ) {
         for (line, x, y) in &self.lines {
             batch.text_styled(atlas, line, *x, *y, u32::MAX, true);
         }
         for ((bx, by), label) in self.buttons.into_iter().zip(labels) {
-            let hover = ui::hovered(cursor, bx, by, 150.0, 20.0);
-            ui::button(batch, atlas, bx, by, 150.0, 20.0, label, true, hover);
+            let hover = active && ui::hovered(cursor, bx, by, 150.0, 20.0);
+            ui::button(batch, atlas, bx, by, 150.0, 20.0, label, active, hover);
         }
     }
 }

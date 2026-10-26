@@ -4281,6 +4281,7 @@ impl Game<'_> {
             self.screen = Screen::Dead;
             self.ui.died_at = Some(Instant::now());
             self.ui.death_text = None;
+            self.ui.death_confirm = None;
             self.capture(false);
         }
         self.previous_position = feet;
@@ -11858,6 +11859,20 @@ impl ApplicationHandler for Game<'_> {
                         Screen::Stats if button == MouseButton::Left => self.stats_release(),
                         Screen::Mod if pressed => self.mod_screen_click(button),
                         _ => {}
+                    }
+                }
+                // ConfirmScreen.keyPressed: Escape answers no, once its delay is over.
+                WindowEvent::KeyboardInput { event, .. }
+                    if self.screen == Screen::Dead && self.ui.death_confirm.is_some() =>
+                {
+                    if event.state == ElementState::Pressed
+                        && event.physical_key == PhysicalKey::Code(KeyCode::Escape)
+                        && self
+                            .ui
+                            .death_confirm
+                            .is_some_and(|t| t.elapsed().as_millis() >= 1000)
+                    {
+                        self.death_confirm_answer(false)?;
                     }
                 }
                 // ConfirmScreen.keyPressed: Escape answers no.
