@@ -163,6 +163,9 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
             if m.random.next_float() < 0.05 {
                 m.extra.age = i32::MIN / 2;
             }
+            // setCanBreakDoors(nextFloat() < special * 0.1), before the gear.
+            let can_break_doors = m.random.next_float() < difficulty.special() * 0.1;
+            super::doors::set_can_break_doors(m, can_break_doors);
             if m.species() != S::Drowned {
                 populate_armor(m, difficulty);
             }
@@ -196,6 +199,9 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
         // ZombifiedPiglin.populateDefaultEquipmentSlots: a golden sword, or
         // one time in 20 a golden spear.
         S::ZombifiedPiglin => {
+            // Zombie.finalizeSpawn's setCanBreakDoors.
+            let can_break_doors = m.random.next_float() < difficulty.special() * 0.1;
+            super::doors::set_can_break_doors(m, can_break_doors);
             let spear = m.random.next_int_bound(20).unwrap_or(1) == 0;
             m.extra.main_hand = Some(
                 if spear {
