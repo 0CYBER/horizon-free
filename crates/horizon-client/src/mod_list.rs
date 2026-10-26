@@ -26,6 +26,9 @@ pub struct Installed {
     pub problem: Option<String>,
     /// Loaded with `--dev-mod`: always on, reloaded when rebuilt.
     pub dev: bool,
+    /// The running mod set a page of widgets (capability `ui`): its row
+    /// gains a Settings button.
+    pub has_settings: bool,
 }
 
 impl ModList {
@@ -96,6 +99,7 @@ mod tests {
             description: String::new(),
             problem: None,
             dev,
+            has_settings: false,
         };
         let mut list = ModList {
             installed: vec![installed("a", false), installed("b", true)],

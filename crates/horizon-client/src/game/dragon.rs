@@ -336,6 +336,12 @@ enum StrafeRequest {
     /// Anything else: the player nearest the crystal.
     Nearest(Vec3),
 }
+/// Whether `EndCrystal.hurtServer` creates a blast before notifying the fight.
+#[derive(Clone, Copy, PartialEq)]
+enum CrystalDamage {
+    Direct,
+    Explosion,
+}
 /// What `EnderDragon.hurt` made of a hit.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Hurt {
@@ -867,27 +873,29 @@ impl Game<'_> {
             }
         }
     }
-    /// A crystal took damage: `EndCrystal.hurtServer` blows it up (power 6).
-    fn destroy_crystal(&mut self, index: usize, by: Option<FightWho>) {
+    /// `EndCrystal.hurtServer`: remove it, blast only for non-explosion damage,
+    /// then notify the dragon fight even when no blast was created.
+    fn destroy_crystal(&mut self, index: usize, by: Option<FightWho>, damage: CrystalDamage) {
         if index >= self.crystals.len() || self.crystals[index].invulnerable {
             return;
         }
         let c = self.crystals.remove(index);
-        if self.fight.respawn.is_some()
+        // Read before the blast, which can take other respawn crystals.
+        let respawn_crystal = self.fight.respawn.is_some()
             && self
                 .fight
                 .respawn_crystals
                 .iter()
-                .any(|p| p.distance_squared(c.position) < 0.01)
-        {
+                .any(|p| p.distance_squared(c.position) < 0.01);
+        if damage == CrystalDamage::Direct {
             let at = [c.position.x, c.position.y, c.position.z];
             let _ =
                 self.server_explode(at, 6.0, super::explosion::BlockInteraction::Destroy, false);
+        }
+        if respawn_crystal {
             self.abort_respawn();
             return;
         }
-        let at = [c.position.x, c.position.y, c.position.z];
-        let _ = self.server_explode(at, 6.0, super::explosion::BlockInteraction::Destroy, false);
         // EnderDragonFight.onCrystalDestroyed.
         self.count_crystals();
         if let Some(d) = self.dragon.as_mut() {
@@ -962,7 +970,7 @@ impl Game<'_> {
                 return Hurt::Refused;
             }
             let by = by_player.then(|| self.acting_player());
-            self.destroy_crystal(index, by);
+            self.destroy_crystal(index, by, CrystalDamage::Direct);
             Hurt::Landed { full: true }
         } else if id >= SPECIAL {
             self.hurt_dragon((id - SPECIAL) as usize, amount, by_player, arrow)
@@ -2634,8 +2642,8 @@ impl Crystal {
     }
 }
 impl Game<'_> {
-    /// `ServerExplosion.hurtEntities` on the end crystals (each in reach
-    /// blows up in turn) and the dragon (explosions always hurt dragons).
+    /// `ServerExplosion.hurtEntities`: crystals in reach are removed without
+    /// another blast; explosions always hurt dragons.
     pub(super) fn explosion_hits_special(&mut self, center: [f64; 3], radius: f32) {
         let diameter = f64::from(radius * 2.0);
         let in_reach = |p: Vec3| {
@@ -2651,9 +2659,9 @@ impl Game<'_> {
             .map(|c| c.position)
             .collect();
         for at in crystals {
-            // One blowing up may already have taken the next.
+            // Look up the current index after each removal.
             if let Some(i) = self.crystals.iter().position(|c| c.position == at) {
-                self.destroy_crystal(i, None);
+                self.destroy_crystal(i, None, CrystalDamage::Explosion);
             }
         }
         let Some(d) = self.dragon.as_ref() else {

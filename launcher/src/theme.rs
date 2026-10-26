@@ -74,22 +74,33 @@ fn c(hex: u32) -> Hsla {
     rgb(hex).into()
 }
 
+/// Whether the launcher is pinned dark (`Some(true)`) or light, or follows the system (`None`):
+/// `HORIZON_LAUNCHER_APPEARANCE=light` or `dark` (for screenshots and tests), else the player's
+/// choice in Settings.
+pub fn pinned_dark(choice: Appearance) -> Option<bool> {
+    match std::env::var("HORIZON_LAUNCHER_APPEARANCE").as_deref() {
+        Ok("light") => Some(false),
+        Ok("dark") => Some(true),
+        _ => match choice {
+            Appearance::Dark => Some(true),
+            Appearance::Light => Some(false),
+            Appearance::System => None,
+        },
+    }
+}
+
 impl Theme {
-    /// The player's choice in Settings (dark unless they picked another), the system's when they
-    /// asked to follow it. `HORIZON_LAUNCHER_APPEARANCE=light` or `dark` overrides both (for
-    /// screenshots and tests).
+    /// The pinned look (`pinned_dark`: dark unless the player picked another), the system's when
+    /// they asked to follow it.
     pub fn for_appearance(choice: Appearance, system: WindowAppearance) -> Self {
-        match std::env::var("HORIZON_LAUNCHER_APPEARANCE").as_deref() {
-            Ok("light") => return Self::light(),
-            Ok("dark") => return Self::dark(),
-            _ => {}
-        }
-        match (choice, system) {
-            (Appearance::Light, _) => Self::light(),
-            (Appearance::System, WindowAppearance::Light | WindowAppearance::VibrantLight) => {
-                Self::light()
-            }
-            _ => Self::dark(),
+        let system_dark = !matches!(
+            system,
+            WindowAppearance::Light | WindowAppearance::VibrantLight
+        );
+        if pinned_dark(choice).unwrap_or(system_dark) {
+            Self::dark()
+        } else {
+            Self::light()
         }
     }
 
