@@ -259,6 +259,7 @@ pub(super) fn preload_world_data(
                 horizon_client::vanillagen::forget_shared_data();
                 horizon_client::structure_blocks::forget_loot_data();
                 super::lan::forget_sync_data();
+                horizon_threads::release_free_memory();
                 *preload = Preload::Idle;
                 log::info!("Horizon: preloaded world data dropped, no world opened");
             }
