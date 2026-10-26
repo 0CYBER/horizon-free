@@ -871,6 +871,29 @@ impl LegacyPiece for FortressPiece {
     fn bounding_box(&self) -> BoundingBox {
         self.frame.bounding_box
     }
+    fn save(&self) -> Option<crate::nbt::Compound> {
+        use crate::nbt::Tag;
+        let mut tag = super::legacy::piece_tag(
+            self.type_name(),
+            self.frame.bounding_box,
+            self.frame.orientation,
+            self.depth,
+        );
+        let flag = Tag::Byte(i8::from(*self.flag.lock().unwrap()));
+        match self.kind {
+            Kind::BridgeEndFiller => {
+                tag.insert("Seed".into(), Tag::Int(self.seed));
+            }
+            Kind::SmallCorridorLeftTurn | Kind::SmallCorridorRightTurn => {
+                tag.insert("Chest".into(), flag);
+            }
+            Kind::MonsterThrone => {
+                tag.insert("Mob".into(), flag);
+            }
+            _ => {}
+        }
+        Some(tag)
+    }
     fn type_name(&self) -> &'static str {
         match self.kind {
             // StartPiece is built through the BridgeCrossing constructor.

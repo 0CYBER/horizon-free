@@ -1885,17 +1885,91 @@ impl Game<'_> {
                 }
             }
         }
-        let Some((_, new)) = horizon_client::save::decode_block_entity(&tag) else {
+        let Some((_, mut new)) = horizon_client::save::decode_block_entity(&tag) else {
             return false;
         };
+        let rolled = self.take_loot_table(key, &tag, &mut new);
         let after = horizon_client::save::encode_block_entity(key, &new, &name);
-        if after == before {
+        if after == before && !rolled {
             return false;
         }
         self.world.block_entities.insert(key, new);
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let _ = self.world.set(pos[0], pos[1], pos[2], state);
         true
+    }
+    /// RandomizableContainer.tryLoadLootTable for a tag a command gives a
+    /// container (`setblock`, `data`): an empty container with a `LootTable`
+    /// is rolled now, as a loaded chunk's are (`save::roll_loaded_loot`), and
+    /// the roll is kept with its chunk, so that the container saves, and
+    /// `data get` shows, its table and seed until its items change. A tag
+    /// without one drops what the container had. True when it had a table.
+    pub(super) fn take_loot_table(
+        &mut self,
+        key: (i32, i32, i32),
+        tag: &horizon_world::nbt::Tag,
+        entity: &mut horizon_client::containers::BlockEntity,
+    ) -> bool {
+        use horizon_client::{containers::BlockEntity, save, structure_blocks};
+        let table = save::text(tag.get("LootTable"));
+        let rolled = match (table, entity) {
+            (Some(table), BlockEntity::Chest(slots)) if slots.iter().all(Option::is_none) => {
+                let loot = structure_blocks::loot_data(&self.options.resources);
+                let at = Vec3::new(f64::from(key.0), f64::from(key.1), f64::from(key.2));
+                let biome = self.biome_name_at(at).unwrap_or_default();
+                Some(structure_blocks::roll_container(
+                    slots,
+                    loot.as_deref(),
+                    table,
+                    structure_blocks::loot_seed(tag),
+                    key,
+                    &biome,
+                ))
+            }
+            _ => None,
+        };
+        let Some(chunk) = self.world.chunks.get_mut(&(key.0 >> 4, key.2 >> 4)) else {
+            return false;
+        };
+        let held = |c: &horizon_client::chunk::Chunk| {
+            c.saved
+                .as_ref()
+                .is_some_and(|s| s.rolled_loot.iter().any(|r| r.pos == key))
+        };
+        if rolled.is_none() && !held(chunk) {
+            return false;
+        }
+        let chunk = std::sync::Arc::make_mut(chunk);
+        let mut extras = chunk
+            .saved
+            .take()
+            .map(std::sync::Arc::unwrap_or_clone)
+            .unwrap_or_default();
+        extras.rolled_loot.retain(|r| r.pos != key);
+        let taken = rolled.is_some();
+        extras.rolled_loot.extend(rolled);
+        chunk.saved = Some(std::sync::Arc::new(extras));
+        taken
+    }
+    /// The loot table and seed a container still holding its roll saves
+    /// (`RolledLoot::restore`), in place of its items.
+    pub(super) fn restore_loot_table(
+        &self,
+        key: (i32, i32, i32),
+        tag: &mut horizon_world::nbt::Tag,
+    ) {
+        let horizon_world::nbt::Tag::Compound(map) = tag else {
+            return;
+        };
+        let rolled = self
+            .world
+            .chunks
+            .get(&(key.0 >> 4, key.2 >> 4))
+            .and_then(|c| c.saved.as_ref())
+            .and_then(|s| s.rolled_loot.iter().find(|r| r.pos == key));
+        if let Some(r) = rolled {
+            r.restore(map);
+        }
     }
     fn cmd_fill(&mut self, ctx: &Context) -> R<i32> {
         let a = self.block_pos_arg(ctx, "from")?;
@@ -2593,38 +2667,7 @@ impl Game<'_> {
     /// `PoiTypes`: the point of interest type of a block state.
     fn poi_type(&self, state: horizon_world::registry::BlockStateId) -> Option<&'static str> {
         let s = self.pack.assets.registry.state(state)?;
-        let name = s.name.strip_prefix("minecraft:")?;
-        Some(match name {
-            "blast_furnace" => "minecraft:armorer",
-            "smoker" => "minecraft:butcher",
-            "cartography_table" => "minecraft:cartographer",
-            "brewing_stand" => "minecraft:cleric",
-            "composter" => "minecraft:farmer",
-            "barrel" => "minecraft:fisherman",
-            "fletching_table" => "minecraft:fletcher",
-            "cauldron" | "lava_cauldron" | "water_cauldron" | "powder_snow_cauldron" => {
-                "minecraft:leatherworker"
-            }
-            "lectern" => "minecraft:librarian",
-            "stonecutter" => "minecraft:mason",
-            "loom" => "minecraft:shepherd",
-            "smithing_table" => "minecraft:toolsmith",
-            "grindstone" => "minecraft:weaponsmith",
-            "bell" => "minecraft:meeting",
-            "beehive" => "minecraft:beehive",
-            "bee_nest" => "minecraft:bee_nest",
-            "nether_portal" => "minecraft:nether_portal",
-            "lodestone" => "minecraft:lodestone",
-            "test_instance_block" => "minecraft:test_instance",
-            n if n.ends_with("_bed") => {
-                if s.properties.get("part").map(String::as_str) != Some("head") {
-                    return None;
-                }
-                "minecraft:home"
-            }
-            n if n.ends_with("lightning_rod") => "minecraft:lightning_rod",
-            _ => return None,
-        })
+        horizon_client::save::poi_type(s).map(|(kind, _)| kind)
     }
     /// `LocateCommand.locatePoi`: `PoiManager.findClosestWithType` within
     /// 256 blocks of the source, over the loaded chunks.
