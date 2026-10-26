@@ -29,6 +29,15 @@ def corpus():
             if v[k] is not None:v[k]=[bits(n) for n in v[k]]
         return v
     def row(ops,player=False,order=(0,1,2)):return dict(ops=ops,player=player,order=order)
+    # Dropped items: the 0.25-wide box is deflated by Entity before scanning.
+    # Cover surface grazing, buoyancy depth, cell boundaries and repeated pushes.
+    for x in [.5, 1.0, 15.99]:
+        for y in [0, .1, .7, 8/9-.1, 8/9-.001, 8/9, 1]:
+            for flow in [(0,0,0),(1,0,0),(-1,0,1),(0,-1,0)]:
+                update=op(bounds=[x-.124,y+.001,.376,x+.124,y+.249,.624],
+                          base_y=y,eye=y+.2125,block=[int(x),int(y),0],
+                          default=cell(flow=flow))
+                yield row([update,op(mode='apply'),update,op(mode='apply')])
     values=[-float('inf'),-1,-.0,0,.1,.39999998,.4,.40000004,8/9,1,2,float('inf'),float('nan')]
     for kind in range(5):
         for height in values:

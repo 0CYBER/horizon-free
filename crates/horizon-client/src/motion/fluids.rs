@@ -103,10 +103,10 @@ fn is_tagged(kind: FluidKind, tag: FluidTagId) -> bool {
 }
 impl PlayerMotion {
     pub fn fluid_height(&self, tag: FluidTagId) -> f64 {
-        self.fluids.interaction.fluid_height(&Membership, tag)
+        self.fluids.interaction.fluid_height(&FluidTags, tag)
     }
     pub fn is_eye_in_fluid(&self, tag: FluidTagId) -> bool {
-        self.fluids.interaction.is_eye_in_fluid(&Membership, tag)
+        self.fluids.interaction.is_eye_in_fluid(&FluidTags, tag)
     }
     /// `LocalPlayer.isUnderWater`: `wasUnderwater`, the eye sample `Player.tick`
     /// takes before the base tick (`Entity.isUnderWater` also needs the body
@@ -116,11 +116,12 @@ impl PlayerMotion {
     }
     /// `Entity.isInLava`.
     pub fn is_in_lava(&self) -> bool {
-        !self.fluids.first_tick && self.fluids.interaction.is_in_fluid(&Membership, LAVA)
+        !self.fluids.first_tick && self.fluids.interaction.is_in_fluid(&FluidTags, LAVA)
     }
 }
-struct Membership;
-impl FluidMembership for Membership {
+/// Which fluids `FluidTags.WATER` and `FluidTags.LAVA` hold.
+pub struct FluidTags;
+impl FluidMembership for FluidTags {
     fn fluid_in_tag(&self, kind: FluidKind, tag: FluidTagId) -> bool {
         is_tagged(kind, tag)
     }

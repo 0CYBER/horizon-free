@@ -639,8 +639,12 @@ impl Streaming {
         self.lit.remove(&(x, z));
         self.meshed.remove(&(x, z));
         self.lighting.remove(&(x, z));
-        self.meshing.retain(|k, _| (k.0, k.2) != (x, z));
-        self.waiting.retain(|k| (k.0, k.2) != (x, z));
+        // By key, not by a pass over every pending section: a moved or
+        // shrunk storage forgets thousands of columns in one frame.
+        for sy in 0..SECTIONS as i32 {
+            self.meshing.remove(&(x, sy, z));
+            self.waiting.remove(&(x, sy, z));
+        }
         world.dirty_sections.take_column(x, z);
         world.chunks.remove(&(x, z))
     }
