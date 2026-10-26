@@ -315,6 +315,7 @@ impl Game<'_> {
     /// Every object a server sent (a new connection, level or dimension).
     pub(super) fn clear_remote_objects(&mut self) {
         self.text_displays.clear();
+        self.remote_knots.clear();
         self.carts.clear();
         self.boats.clear();
         self.armor_stands.clear();
