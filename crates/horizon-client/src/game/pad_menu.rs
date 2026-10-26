@@ -921,8 +921,10 @@ impl Game<'_> {
         } else if self.book.is_some() {
             self.book_input(key, text);
         } else if self.screen == Screen::Creative && self.creative_screen.tab().search {
-            if key != Some(KeyCode::Enter) {
-                self.creative_search_edit(text, backspace);
+            if backspace {
+                self.creative_search_backspace(false);
+            } else if key != Some(KeyCode::Enter) {
+                self.creative_search_edit(text);
             }
         } else if self.recipe_search_focused() {
             if key != Some(KeyCode::Enter) {

@@ -2,6 +2,7 @@ import datetime as dt
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from tools import release_train as train
 
@@ -146,6 +147,26 @@ class ReleaseTrainTests(unittest.TestCase):
         self.assertFalse(train.decision("game", [], NOW, force=True, blockers=[7])[0])
         self.assertFalse(train.decision("game", [], NOW, new_line="0.3", blockers=[7])[0])
         self.assertTrue(train.decision("game", [pr(1)], NOW, blockers=[])[0])
+
+    def test_game_releases_ship_only_what_parity_main_passed(self):
+        def runs(parity, checks):
+            def gh_json(*arguments):
+                table = parity if "parity-main" in arguments else checks
+                if "--commit" in arguments:
+                    sha = arguments[arguments.index("--commit") + 1]
+                    return [{"status": s, "conclusion": c} for h, s, c in table if h == sha]
+                return [{"headSha": h, "status": s, "conclusion": c} for h, s, c in table]
+            return mock.patch.object(train, "gh_json", gh_json)
+        checks = [("c", "in_progress", ""), ("b", "completed", "success"), ("a", "completed", "success")]
+        with runs([("c", "queued", ""), ("b", "completed", "cancelled"), ("a", "completed", "success")], checks):
+            self.assertEqual(train.green_main_head(), "b", "checks alone: the newest green checks")
+            self.assertEqual(train.green_main_head(parity=True), "a", "a superseded parity-main run counts for nothing")
+            self.assertTrue(train.passed_on("parity-main", "a"))
+            self.assertFalse(train.passed_on("parity-main", "b"))
+        with runs([("b", "completed", "failure"), ("a", "completed", "success")], checks):
+            self.assertIsNone(train.green_main_head(parity=True), "a failed batch holds releases until fixed")
+        with runs([("c", "completed", "success")], checks):
+            self.assertIsNone(train.green_main_head(parity=True), "its checks must pass too")
 
     def test_a_release_is_published_only_after_its_smoke_test_and_with_no_blocker(self):
         drew = {"error": None, "frames": 12710, "chunks": 81, "meshed_sections": 550, "player": [160.5, 71.0, 156.5]}

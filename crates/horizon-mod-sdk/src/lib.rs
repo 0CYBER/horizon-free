@@ -21,18 +21,24 @@
 //! ```
 //!
 //! Every interface but `log` is a capability: list the ones the mod uses in
-//! `horizon-mod.toml` (`game-read`, `chat`, `hud`, `storage`).
+//! `horizon-mod.toml` (`game-read`, `chat`, `hud`, `storage`, `command`, `ui`).
+//!
+//! Widgets (capability `ui`): a mod shows a screen it owns with
+//! [`ui::open_screen`] and a page in Options > Mods with
+//! [`ui::set_settings`]; what the player does with them comes back as
+//! [`Mod::ui_select`], [`Mod::ui_closed`] and [`Mod::ui_settings_opened`].
 
 wit_bindgen::generate!({
     path: "wit",
-    world: "horizon-mod",
+    world: "horizon-ui-mod",
     pub_export_macro: true,
     export_macro_name: "__export_horizon_mod",
     default_bindings_module: "horizon_mod_sdk",
 });
 
 pub use exports::horizon::mods::events::{Guest as __Guest, Registration};
-pub use horizon::mods::{chat, game, hud, log, storage};
+pub use exports::horizon::mods::ui_events::Guest as __UiEventsGuest;
+pub use horizon::mods::{chat, command, game, hud, log, storage, ui};
 
 /// The game's calls into a mod. Only the hooks [`Registration`] asks for
 /// are called; the others may stay as their defaults.
@@ -51,6 +57,14 @@ pub trait Mod: Sized + 'static {
     }
     /// A chat line the player received, when [`Registration::chat`] is set.
     fn chat(&mut self, _text: &str) {}
+    /// A row of one of the mod's `list` widgets was picked (capability
+    /// `ui`): the widget's `id` and the row.
+    fn ui_select(&mut self, _id: u32, _row: u32) {}
+    /// The player left the mod's screen (Esc or Done; capability `ui`).
+    fn ui_closed(&mut self) {}
+    /// The player opened the mod's settings page (capability `ui`): call
+    /// [`ui::set_settings`] for fresh widgets.
+    fn ui_settings_opened(&mut self) {}
 }
 
 impl Registration {
@@ -135,13 +149,27 @@ macro_rules! export_mod {
                     with(|m| $crate::Mod::chat(m, &text))
                 }
             }
+            impl $crate::__UiEventsGuest for Export {
+                fn select(id: u32, row: u32) {
+                    with(|m| $crate::Mod::ui_select(m, id, row))
+                }
+                fn closed() {
+                    with(|m| $crate::Mod::ui_closed(m))
+                }
+                fn settings_opened() {
+                    with(|m| $crate::Mod::ui_settings_opened(m))
+                }
+            }
             // Only WebAssembly has the component's exports: a host build (cargo test or
             // clippy on the workspace) checks the mod without them, which macOS
             // couldn't link (its exported-symbols list cuts names at the `#`).
             #[cfg(target_arch = "wasm32")]
             $crate::__export_horizon_mod!(Export);
             #[cfg(not(target_arch = "wasm32"))]
-            let _ = <Export as $crate::__Guest>::init;
+            let _ = (
+                <Export as $crate::__Guest>::init,
+                <Export as $crate::__UiEventsGuest>::select,
+            );
         };
     };
 }
