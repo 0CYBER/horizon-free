@@ -1749,6 +1749,11 @@ impl Launcher {
             }
             _ => {}
         }
+        // Sculk's banner, small, above the links: seen without scrolling, on every page but Servers, which
+        // shows it large.
+        if self.page != Page::Servers {
+            foot = foot.child(partner::banner("partner-side", theme::SIDEBAR - 20., &t).mb(px(8.)));
+        }
         if !self.links.discord.is_empty() {
             foot = foot.child(link(
                 "discord",
@@ -2131,8 +2136,7 @@ impl Launcher {
         if let Some(crash) = self.crash.clone() {
             page = page.child(self.crash_notice(crash, cx));
         }
-        // Below everything the player needs to start, so it never moves Play.
-        page.child(partner::banner("partner-home", 560., &t))
+        page
     }
 
     /// "Horizon crashed": the report and the logs, and where to report it.

@@ -1,5 +1,5 @@
-//! Sculk's banner: a server host that sponsors Horizon (Ludovic, 2026-10-26), on the Servers page
-//! and under Home's rows. The picture is in the binary, never fetched; a click opens Sculk's page in
+//! Sculk's banner: a server host that sponsors Horizon (Ludovic, 2026-10-26), large on the Servers page
+//! and small at the foot of the sidebar on the other pages, where it shows without scrolling. The picture is in the binary, never fetched; a click opens Sculk's page in
 //! the browser. A "Partner" label above it says it is an ad.
 use crate::theme::Theme;
 use gpui::{div, img, prelude::*, px, ClickEvent, Div, Image, ImageFormat, Stateful};
@@ -19,7 +19,7 @@ static BANNER: LazyLock<Arc<Image>> = LazyLock::new(|| {
 });
 
 /// The banner `width` logical pixels wide, under its label. Hovering lifts it a little and turns the
-/// label to ink. The narrowest window (960) leaves the page 648 pixels, so it always fits.
+/// label to ink. The narrowest window (960) leaves the page 648 pixels, so the Servers one always fits.
 pub fn banner(id: &'static str, width: f32, t: &Theme) -> Stateful<Div> {
     let t = *t;
     let el = div()
