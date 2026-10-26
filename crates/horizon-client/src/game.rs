@@ -18,6 +18,7 @@ mod boats;
 mod books;
 mod bossbars;
 mod breezes;
+mod campfire;
 mod cartography;
 mod chat;
 mod client_ambient;
@@ -33,6 +34,7 @@ mod copper_golems;
 mod creaking;
 mod creatures;
 mod crossbow;
+pub(crate) mod cushions;
 mod debug_keys;
 mod decorated_pot;
 mod dedicated;
@@ -1431,6 +1433,8 @@ struct Game<'a> {
     map_frame_model: frames::FrameModel,
     glow_map_frame_model: frames::FrameModel,
     armor_stands: Vec<horizon_client::entities::ArmorStand>,
+    /// `Cushion` decoration entities (game/cushions.rs).
+    cushions: Vec<horizon_client::entities::Cushion>,
     /// Entities of types Horizon does not simulate.
     others: Vec<commands::OtherEntity>,
     armor_stand_assets: armor_stands::ArmorStandAssets,
@@ -1446,6 +1450,8 @@ struct Game<'a> {
     boat_models: boats::BoatModels,
     /// EndCrystalModel's baked layer.
     crystal_model: Option<horizon_client::mobs::Part>,
+    /// CushionModel's baked layer.
+    cushion_model: Option<horizon_client::mobs::Part>,
     carts: Vec<minecarts::Minecart>,
     /// Songs playing from jukeboxes (tracked sound handles).
     jukebox_sounds: HashMap<(i32, i32, i32), u64>,
@@ -2789,6 +2795,9 @@ impl Game<'_> {
                     pos,
                     data,
                 } => self.consume_teleport_particles([pos.x, pos.y, pos.z], data),
+                LevelEvent::LevelEvent { id: 2003, pos, .. } => {
+                    self.eye_break_particles([pos.x, pos.y, pos.z]);
+                }
                 LevelEvent::LevelEvent {
                     id: 2013,
                     pos,
@@ -3490,6 +3499,7 @@ impl Game<'_> {
     fn interact_entity(&mut self) -> Result<bool> {
         Ok(self.interact_frame()
             || self.interact_armor_stand()
+            || self.interact_cushion()
             || self.interact_boat()
             || self.interact_cart()
             || self.interact_mob()?
@@ -3676,6 +3686,7 @@ impl Game<'_> {
                 || self.place_painting(hit, &stack)
                 || self.place_item_frame(hit, &stack)
                 || self.place_armor_stand(hit, &stack)
+                || self.place_cushion(hit, &stack)
                 || self.place_end_crystal(hit, &stack))
         {
             return Ok(true);
@@ -4566,6 +4577,7 @@ impl Game<'_> {
             horizon_client::spans::time("tick_paintings", || self.tick_paintings());
             horizon_client::spans::time("tick_item_frames", || self.tick_item_frames());
             horizon_client::spans::time("tick_armor_stands", || self.tick_armor_stands());
+            horizon_client::spans::time("tick_cushions", || self.tick_cushions());
             horizon_client::spans::time("tick_boats", || self.tick_boats());
             horizon_client::spans::time("tick_carts", || self.tick_carts());
             horizon_client::spans::time("tick_thunder", || self.tick_thunder());
@@ -5303,7 +5315,8 @@ impl Game<'_> {
                 | BlockEntity::Vault(_)
                 | BlockEntity::Beehive(_)
                 | BlockEntity::CommandBlock(_)
-                | BlockEntity::Skull(_),
+                | BlockEntity::Skull(_)
+                | BlockEntity::Campfire(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -5573,7 +5586,8 @@ impl Game<'_> {
                     | BlockEntity::Vault(_)
                     | BlockEntity::Beehive(_)
                     | BlockEntity::CommandBlock(_)
-                    | BlockEntity::Skull(_),
+                    | BlockEntity::Skull(_)
+                    | BlockEntity::Campfire(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
@@ -5723,8 +5737,9 @@ impl Game<'_> {
         if self.creative_screen.tab().search {
             // CreativeModeInventoryScreen.slotClicked: moveCursorToEnd, then
             // setHighlightPos(0), so typing replaces the whole query.
-            let search = &self.creative_screen.search;
-            self.text_selection.select(("creative.search", 0), search);
+            let search = &mut self.creative_screen.search;
+            search.move_cursor_to_end(false);
+            search.highlight = 0;
         }
         let items = self.creative_screen.items(&self.pack.names);
         let first = self.creative_screen.first_row(&self.pack.names);
@@ -6366,6 +6381,13 @@ impl Game<'_> {
             false,
         );
         if outside {
+            // AbstractRecipeBookScreen.mouseClicked: the book takes the click
+            // before the outside test, and its tabs sit left of the strip
+            // hasClickedOutside counts as the book.
+            if self.recipe_book_click(right) {
+                self.inv_clicks.skip_release();
+                return;
+            }
             // slotId -999: an empty hand throws nothing; a carried stack
             // starts a drag whose release drops it.
             match input {
@@ -7030,6 +7052,9 @@ impl Game<'_> {
         // `VaultRenderer`.
         self.mark_entity(out.len(), "");
         self.vault_geometry(camera, alpha, &mut out);
+        // `CampfireRenderer`.
+        self.mark_entity(out.len(), "");
+        self.campfire_geometry(camera, &mut out);
         self.mark_entity(out.len(), "minecraft:ominous_item_spawner");
         self.ominous_item_spawner_geometry(camera, alpha, &mut out);
         // Mobs and their projectiles (a span each).
@@ -7272,6 +7297,7 @@ impl Game<'_> {
         self.frame_geometry(camera, &mut out);
         self.mark_entity(out.len(), "minecraft:armor_stand");
         self.armor_stand_geometry(camera, alpha, &mut out);
+        self.cushion_geometry(camera, &mut out);
         self.mark_entity(out.len(), "minecraft:oak_boat");
         self.boat_geometry(camera, alpha, &mut out);
         self.mark_entity(out.len(), "minecraft:minecart");
@@ -7568,6 +7594,7 @@ impl Game<'_> {
                 .map_or(0.0, |i| i.attack_damage);
         if self.attack_frame()
             || self.attack_armor_stand()
+            || self.attack_cushion()
             || self.attack_boat(hand_damage)
             || self.attack_cart(hand_damage)
             || self.attack_dragon()
@@ -8312,6 +8339,7 @@ impl Game<'_> {
         self.boats.clear();
         self.carts.clear();
         self.armor_stands.clear();
+        self.cushions.clear();
         self.item_frames.clear();
         self.paintings.clear();
         self.others.clear();
@@ -8729,6 +8757,13 @@ impl Game<'_> {
             && self.use_on_cauldron(hit.pos)?
         {
             return Ok(UseResult::Success { swing: true });
+        }
+        if allow_block_actions
+            && let Some(hit) = self.pick()
+            && let Some(placed) = self.use_on_campfire(hit.pos)?
+        {
+            // SUCCESS_SERVER swings; a full campfire's CONSUME does not.
+            return Ok(UseResult::Success { swing: placed });
         }
         // BucketItem has no useOn: a guest's UseItemOn leaves it to UseItem.
         let bucket = horizon_client::items::bucket_contents(&stack.item);
@@ -9847,20 +9882,16 @@ impl Game<'_> {
             );
         }
         if tab.search {
-            // The search box: an unbordered EditBox of 80 at (82, 6), white.
-            let search = &self.creative_screen.search;
-            horizon_client::ui::append_field(
-                batch,
-                atlas,
-                search,
-                (ox + 82.0, oy + 6.0, 80.0),
-                (u32::MAX, true),
-                clipboard::CREATIVE_SEARCH_CHARS,
-                self.text_selection
-                    .covers(clipboard::CREATIVE_SEARCH, search),
-                true,
-                self.creative_screen.search_focused.elapsed().as_millis(),
-            );
+            // CreativeModeInventoryScreen: an unbordered EditBox of 50 at (82, 6).
+            let search = &mut self.creative_screen.search;
+            search.x = ox + 82.0;
+            search.y = oy + 6.0;
+            search.width = 80.0;
+            search.bordered = false;
+            search.focused = true;
+            search.text_color = u32::MAX;
+            search.max_length = clipboard::CREATIVE_SEARCH_CHARS;
+            search.draw(batch, atlas, None);
         }
         let mut hovered: Option<ItemStack> = None;
         if tab.inventory {
@@ -10021,6 +10052,9 @@ impl Game<'_> {
             }
             return;
         }
+        if !right && self.creative_search_click(ox, oy) {
+            return;
+        }
         // Holding the scrollbar scrolls as the mouse moves (mouseDragged).
         if !right
             && self
@@ -10032,6 +10066,24 @@ impl Game<'_> {
         if self.slot_at(&batch, cx, cy).is_some() || self.clicked_outside(&batch) {
             self.inventory_press(right);
         }
+    }
+    /// A click on the search tab's box (`EditBox.onClick`).
+    fn creative_search_click(&mut self, ox: f32, oy: f32) -> bool {
+        if !self.creative_screen.tab().search {
+            return false;
+        }
+        let (x, y, w, h) = (ox + 82.0, oy + 6.0, 80.0, 9.0);
+        let (mx, my) = self.cursor;
+        if mx < x || my < y || mx >= x + w || my >= y + h {
+            return false;
+        }
+        let shift = self.has_shift_down();
+        let search = &mut self.creative_screen.search;
+        search.x = x;
+        search.y = y;
+        search.width = w;
+        search.click(&self.gui.atlas, mx, shift, false);
+        true
     }
     /// Copy the live player and world state into the `Level` that gets saved.
     pub(super) fn sync_level(&mut self) {
@@ -11678,8 +11730,17 @@ impl ApplicationHandler for Game<'_> {
                         // The hovered slot took the key (`ignoreTextInput`).
                     } else if let Some(shortcut) = self.edit_shortcut(&event) {
                         self.creative_search_shortcut(shortcut);
-                    } else if event.physical_key == PhysicalKey::Code(KeyCode::Backspace) {
-                        self.creative_search_backspace(self.has_control_down());
+                    } else if let PhysicalKey::Code(key) = event.physical_key {
+                        // EditBox.keyPressed: arrows, Home, End, Delete and Backspace.
+                        let before = self.creative_screen.search.value.clone();
+                        let (ctrl, shift) = (self.has_control_down(), self.has_shift_down());
+                        if self.creative_screen.search.key(key, ctrl, shift) {
+                            if self.creative_screen.search.value != before {
+                                self.creative_screen.scroll = 0.0;
+                            }
+                        } else {
+                            self.creative_search_edit(event.text.as_deref());
+                        }
                     } else {
                         self.creative_search_edit(event.text.as_deref());
                     }
@@ -11700,6 +11761,9 @@ impl ApplicationHandler for Game<'_> {
                     // The anvil rename box takes every key but Escape (AnvilScreen.keyPressed).
                     if let Some(shortcut) = self.edit_shortcut(&event) {
                         self.station_shortcut(shortcut);
+                    } else if let PhysicalKey::Code(key) = event.physical_key
+                        && self.station_key(key)
+                    {
                     } else {
                         let backspace = event.physical_key == PhysicalKey::Code(KeyCode::Backspace);
                         self.station_text(event.text.as_deref(), backspace);
@@ -12316,6 +12380,7 @@ impl<'a> Game<'a> {
             map_frame_model: prepared.map_frame_model,
             glow_map_frame_model: prepared.glow_map_frame_model,
             armor_stands: Vec::new(),
+            cushions: Vec::new(),
             others: Vec::new(),
             armor_stand_assets: prepared.armor_stand_assets,
             waypoint_styles: prepared.waypoint_styles,
@@ -12325,6 +12390,7 @@ impl<'a> Game<'a> {
             boats: Vec::new(),
             boat_models: prepared.boat_models,
             crystal_model: prepared.crystal_model,
+            cushion_model: prepared.cushion_model,
             carts: Vec::new(),
             jukebox_sounds: HashMap::new(),
             bolts: Vec::new(),
@@ -12463,6 +12529,7 @@ struct GameCpuResources {
     boat_models: boats::BoatModels,
     cart_models: minecarts::CartModels,
     crystal_model: Option<horizon_client::mobs::Part>,
+    cushion_model: Option<horizon_client::mobs::Part>,
     dragon_model: Option<horizon_client::mobs::Part>,
     arrow_model: Option<horizon_client::mobs::Part>,
     trident_model: Option<horizon_client::mobs::Part>,
@@ -12483,6 +12550,7 @@ impl GameCpuResources {
             boat_models: boats::BoatModels::load(document.as_ref()),
             cart_models: minecarts::CartModels::load(document.as_ref()),
             crystal_model: model("minecraft:end_crystal#main"),
+            cushion_model: model("minecraft:cushion#main"),
             dragon_model: model("minecraft:ender_dragon#main"),
             arrow_model: model("minecraft:arrow#main"),
             trident_model: model("minecraft:trident#main"),
@@ -13838,7 +13906,7 @@ mod startup_cpu_tests {
             r#"{
             "minecraft:end_crystal#main": {}, "minecraft:ender_dragon#main": {},
             "minecraft:arrow#main": {}, "minecraft:trident#main": {},
-            "minecraft:armor_stand#main": {}
+            "minecraft:armor_stand#main": {}, "minecraft:cushion#main": {}
         }"#,
         )
         .unwrap();
@@ -13858,6 +13926,7 @@ mod startup_cpu_tests {
         .unwrap();
         std::fs::remove_dir_all(&root).unwrap();
         assert!(prepared.crystal_model.is_some());
+        assert!(prepared.cushion_model.is_some());
         assert!(prepared.dragon_model.is_some());
         assert!(prepared.arrow_model.is_some());
         assert!(prepared.trident_model.is_some());

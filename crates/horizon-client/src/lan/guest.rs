@@ -645,6 +645,13 @@ fn network_stack(
             horizon_protocol::item::Component::Text(horizon_protocol::text::literal(name)),
         ));
     }
+    // The component as loaded, so a translatable name stays one.
+    if let Some(name) = s.data().and_then(|d| d.other("minecraft:item_name")) {
+        stack.added.push((
+            horizon_protocol::item::component::ITEM_NAME,
+            horizon_protocol::item::Component::Text(name.clone()),
+        ));
+    }
     Some(stack)
 }
 

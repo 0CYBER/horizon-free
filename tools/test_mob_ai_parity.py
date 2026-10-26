@@ -519,7 +519,9 @@ def main():
         # The oracle's server world: cleared before each run, never left in /tmp.
         world = build / 'world'
         shutil.rmtree(world, ignore_errors=True)
-        oracle_harness.run_logged(['java', '-Xmx3g', '-Djava.awt.headless=true', '-cp', str(classes) + os.pathsep + dependencies,
+        # Each scenario forces 9x9 chunks 512 blocks past the last one, so a run generates ~80 chunks per scenario;
+        # 3g ran out of heap in PoiManager.tick on a busy runner (#2160's CI, 143 scenarios).
+        oracle_harness.run_logged(['java', '-Xmx4g', '-Djava.awt.headless=true', '-cp', str(classes) + os.pathsep + dependencies,
                                    'dev.horizonlab.parity.VanillaMobAiOracle', inputs, build / 'vanilla.txt', world],
                                   build, 'vanilla', timeout=3600)
     if not args.java_only:

@@ -398,8 +398,12 @@ impl GameLevel<'_> {
                     }
                 }
                 PreRemove::Campfire => {
-                    for _ in 0..4 {
-                        self.drop_item_stack(pos, None);
+                    let items = match &entity {
+                        Some(BlockEntity::Campfire(c)) => c.items.clone(),
+                        _ => Default::default(),
+                    };
+                    for stack in items {
+                        self.drop_item_stack(pos, stack);
                     }
                 }
                 PreRemove::Jukebox => {
