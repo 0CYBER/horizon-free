@@ -1612,7 +1612,9 @@ impl Recipes {
     }
     /// The `experience` of the cooking recipe with this file name, and 0 for one this data
     /// pack does not have (a save from another pack can name it).
+    /// `id` with or without the `minecraft:` namespace (a furnace keeps the full id).
     pub fn cooking_experience(&self, id: &str) -> f32 {
+        let id = id.strip_prefix("minecraft:").unwrap_or(id);
         self.cooking
             .iter()
             .find(|c| c.id == id)

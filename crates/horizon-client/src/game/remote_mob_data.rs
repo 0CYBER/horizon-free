@@ -4,7 +4,7 @@
 //! own simulation, which a client of a server doesn't run.
 use super::Game;
 use horizon_client::mobs::render::{PROFESSIONS, VILLAGER_TYPES};
-use horizon_client::mobs::{Mob, Species, tame};
+use horizon_client::mobs::{Mob, Species, bat, tame};
 use horizon_protocol::entity_data::Value;
 use horizon_protocol::registry::Builtin;
 
@@ -46,6 +46,8 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin) {
             _ => {}
         }
         match (species, *index, value) {
+            // Bat.DATA_ID_FLAGS: resting in bit 0.
+            (Species::Bat, 16, Value::Byte(flags)) => bat::set_resting(m, flags & 1 != 0),
             // Sheep.DATA_WOOL_ID: the colour in the low nibble, 16 sheared.
             (Species::Sheep, 18, Value::Byte(wool)) => {
                 m.extra.color = (*wool & 15) as u8;
@@ -126,6 +128,10 @@ pub(super) fn client_defaults(m: &mut Mob) {
     if matches!(m.species(), Species::Wolf | Species::Cat) {
         m.extra.color = tame::RED;
     }
+    if m.species() == Species::Bat {
+        // Bat's constructor sets resting only on the server; the data default is 0.
+        bat::set_resting(m, false);
+    }
 }
 
 #[cfg(test)]
@@ -172,6 +178,69 @@ mod tests {
         assert!(calf.is_baby());
         apply(&mut calf, &[(16, s::BOOLEAN, Value::Bool(false))]);
         assert!(!calf.is_baby());
+    }
+
+    #[test]
+    fn bat_flags_select_continuous_client_clocks_without_changing_motion() {
+        use horizon_client::mobs::{MobTypes, anim, keyframes::Animation};
+        use horizon_core::geometry::Vec3;
+        use serde_json::json;
+        use std::{collections::HashMap, fs, sync::Arc};
+
+        // Original minimal resources keep this regression runnable without vanilla data.
+        let root =
+            std::env::temp_dir().join(format!("horizon-bat-animation-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("entity-types.json"), r#"{"minecraft:bat": {}}"#).unwrap();
+        fs::write(
+            root.join("entity-models.json"),
+            r#"{"minecraft:bat#main": {"children": {"right_wing": {}, "head": {}}}}"#,
+        )
+        .unwrap();
+        let mut types = MobTypes::load(&root).unwrap();
+        fs::remove_dir_all(root).unwrap();
+        let position = Vec3::new(1.0, 2.25, 3.0);
+        let velocity = Vec3::new(0.2, 0.3, 0.4);
+        let mut m = Mob::new(
+            1,
+            Arc::new(types.types.remove("minecraft:bat").unwrap()),
+            position,
+            0.0,
+        );
+        assert!(bat::resting(&m));
+        client_defaults(&mut m);
+        assert!(!bat::resting(&m));
+        m.velocity = velocity;
+        m.age = 1;
+        bat::setup_animation_states(&mut m);
+        m.age = 4;
+        apply(&mut m, &[(16, s::BYTE, Value::Byte(2))]);
+        bat::setup_animation_states(&mut m);
+        assert_eq!(m.anim.states[0].started, Some(1.0));
+
+        let curve = Animation::parse(&json!({"length": 1, "looping": true,
+            "bones": {"right_wing": [{"target": "rotation", "keyframes":
+                [[0,[0,0,0],[0,0,0],"linear"],[1,[0,1,0],[0,1,0],"linear"]]}]}}));
+        let animations = HashMap::from([("BatAnimation.BAT_FLYING".into(), curve)]);
+        let wing = |partial| {
+            let mut poses = anim::Poses::new(&m.kind.model);
+            anim::setup(&m, &anim::state(&m, partial), &mut poses, &animations);
+            poses.get("right_wing")[4]
+        };
+        assert!(wing(0.5) > wing(0.0));
+
+        m.age = 5;
+        apply(&mut m, &[(16, s::BYTE, Value::Byte(3))]);
+        bat::setup_animation_states(&mut m);
+        assert!(bat::resting(&m));
+        assert_eq!(m.anim.states[0].started, None);
+        assert_eq!(m.anim.states[1].started, Some(5.0));
+        m.age = 7;
+        apply(&mut m, &[(16, s::BYTE, Value::Byte(0))]);
+        bat::setup_animation_states(&mut m);
+        assert_eq!(m.anim.states[0].started, Some(7.0));
+        assert_eq!(m.anim.states[1].started, None);
+        assert_eq!((m.position, m.velocity), (position, velocity));
     }
 
     #[test]

@@ -444,7 +444,7 @@ pub fn apply_preset(preset: Preset, s: &mut crate::settings::Settings) {
     let g = &mut s.horizon;
     g.preset = preset;
     g.cave_culling = true;
-    g.animated_textures = preset != Preset::Performance;
+    g.animated_textures = true;
     g.chunk_updates = 0;
     g.upload_budget_kib = 0;
     g.sky = true;

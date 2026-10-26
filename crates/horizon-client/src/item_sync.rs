@@ -317,6 +317,46 @@ mod tests {
         assert!(emerald.test(&ItemStack::new("minecraft:emerald", 2)));
     }
 
+    /// A bundle's contents cross the wire, so a server's client can draw
+    /// its tooltip (BundleContents' stream codec: a list of templates).
+    #[test]
+    fn a_bundle_keeps_its_contents_across_the_wire() {
+        let mut components = vec![String::new(); 60];
+        components[component::BUNDLE_CONTENTS as usize] = "minecraft:bundle_contents".into();
+        let items = ["minecraft:air", "minecraft:bundle", "minecraft:stone"];
+        let builtin = Builtin {
+            registries: [
+                (
+                    "minecraft:item".to_owned(),
+                    Ids::from_names(items.iter().map(|s| s.to_string()).collect()),
+                ),
+                (
+                    "minecraft:data_component_type".to_owned(),
+                    Ids::from_names(components),
+                ),
+            ]
+            .into(),
+        };
+        let dynamic = Dynamic {
+            registries: Default::default(),
+        };
+        let mut bundle = ItemStack::new("minecraft:bundle", 1);
+        bundle.data_mut().bundle_contents = vec![ItemStack::new("minecraft:stone", 32)];
+        let wire = crate::lan::guest::stack_to_network(
+            |name| items.iter().position(|i| *i == name).unwrap_or(0) as i32,
+            |_, _| None,
+            &Some(bundle),
+        )
+        .unwrap();
+        let back = from_network(&wire, &builtin, &dynamic);
+        let contents = &back.data().expect("components").bundle_contents;
+        assert_eq!(contents.len(), 1);
+        assert_eq!(
+            (&*contents[0].item, contents[0].count),
+            ("minecraft:stone", 32)
+        );
+    }
+
     /// What a creative client sends (`stack_to_network`) comes back whole on
     /// the server: damage, both enchantment lists, repair cost, name, trim.
     #[test]

@@ -10,6 +10,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GlyphSource;
 import net.minecraft.client.gui.font.glyphs.BakedGlyph;
@@ -31,9 +33,13 @@ import net.minecraft.util.RandomSource;
  */
 public final class ParityFont {
     public static ResourceManager resources() throws Exception {
+        return resources(Path.of("/nonexistent-horizon-assets"));
+    }
+
+    public static ResourceManager resources(Path assets) throws Exception {
         var method = net.minecraft.client.resources.ClientPackSource.class.getDeclaredMethod("createVanillaPackSource", Path.class);
         method.setAccessible(true);
-        var pack = (net.minecraft.server.packs.VanillaPackResources) method.invoke(null, Path.of("/nonexistent-horizon-assets"));
+        var pack = (net.minecraft.server.packs.VanillaPackResources) method.invoke(null, assets);
         return pack.asResourceManager();
     }
 
@@ -50,6 +56,38 @@ public final class ParityFont {
                 }
             }
         }
+        return create(providers);
+    }
+
+    /** The full default font, including references and the external Unihex fallback. */
+    public static Font createDefault(ResourceManager resources) throws Exception {
+        List<GlyphProvider> providers = new ArrayList<>();
+        loadProviders(resources, Identifier.withDefaultNamespace("default"), providers, new HashSet<>());
+        return create(providers);
+    }
+
+    private static void loadProviders(ResourceManager resources, Identifier font, List<GlyphProvider> providers,
+                                      Set<Identifier> visiting) throws Exception {
+        if (!visiting.add(font)) throw new IllegalArgumentException("Cyclic font reference: " + font);
+        var file = font.withPath("font/" + font.getPath() + ".json");
+        try (var reader = new InputStreamReader(resources.open(file), StandardCharsets.UTF_8)) {
+            var json = JsonParser.parseReader(reader).getAsJsonObject();
+            for (var element : json.getAsJsonArray("providers")) {
+                var conditional = GlyphProviderDefinition.Conditional.CODEC.parse(JsonOps.INSTANCE, element).getOrThrow();
+                if (!conditional.filter().apply(Set.of())) continue;
+                var definition = conditional.definition().unpack();
+                if (definition.left().isPresent()) {
+                    providers.add(definition.left().orElseThrow().load(resources));
+                } else {
+                    loadProviders(resources, definition.right().orElseThrow().id(), providers, visiting);
+                }
+            }
+        } finally {
+            visiting.remove(font);
+        }
+    }
+
+    private static Font create(List<GlyphProvider> providers) {
         GlyphSource source = new GlyphSource() {
             @Override
             public BakedGlyph getGlyph(int codepoint) {

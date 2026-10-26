@@ -17,7 +17,9 @@ import random
 import subprocess
 try:
     from . import block_update_harness as h, lab, test_rust_parity as base
+    from .integration_env import run_game
 except ImportError:
+    from integration_env import run_game
     import block_update_harness as h
     import lab
     import test_rust_parity as base
@@ -349,7 +351,8 @@ def voice(line):
 
 
 def run(command, **kwargs):
-    done = subprocess.run(command, capture_output=True, text=True, **kwargs)
+    runner = run_game if str(command[0]).endswith('/horizon-client') else subprocess.run
+    done = runner(command, capture_output=True, text=True, **kwargs)
     if done.returncode:
         print((done.stdout + done.stderr)[-4000:])
         raise SystemExit(f'{command[0]} failed')

@@ -94,11 +94,14 @@ pub(super) struct GuestPlay {
 
 /// A guest's command waiting for the hub (`LanHost::commands`).
 pub(super) struct GuestCommand {
-    conn: u32,
-    command: String,
-    permission: u8,
+    pub(super) conn: u32,
+    pub(super) command: String,
+    pub(super) permission: u8,
     /// An integrated server's: no level teleports (yet).
-    integrated: bool,
+    pub(super) integrated: bool,
+    /// A mod's quiet command (game/lan_quiet.rs): its output suppressed, as
+    /// `CommandSourceStack.withSuppressedOutput` does.
+    pub(super) quiet: bool,
 }
 
 /// The game's own state while a guest's is swapped in (`enter_guest`), and
@@ -1192,6 +1195,10 @@ impl Game<'_> {
                 {
                     self.container_changed(key);
                 }
+                // A vehicle's menu edits the vehicle's own items.
+                if let Some(Slots::Block(key)) = slots {
+                    self.store_cart_items(key);
+                }
                 self.drop_guest_items(host, gi, drops);
             }
             S::ContainerClose(p) => {
@@ -1206,6 +1213,9 @@ impl Game<'_> {
                 self.guest_carried_back(host, gi);
             }
             S::ChatCommand(c) => self.guest_chat_command(host, conn, &c.command),
+            S::CustomPayload(p) if p.channel == horizon_protocol::quiet::CHANNEL => {
+                self.guest_quiet_commands(host, conn, &p.data)
+            }
             S::ChatCommandSigned(p) => self.guest_signed_command(host, conn, p),
             S::ChangeDifficulty(p) if host.hub.guests[gi].permission >= 2 => {
                 if !self.level.difficulty_locked && (0..=3).contains(&p.difficulty) {
@@ -1529,6 +1539,10 @@ impl Game<'_> {
             );
             return;
         }
+        // A server mod's command, for every player whatever their level.
+        if self.guest_server_mod_command(host, conn, command.trim_start_matches('/')) {
+            return;
+        }
         // An integrated server runs every player's commands at their own
         // permission level (`CommandSourceStack.permissions`); a LAN world
         // follows its Allow Commands, and a dedicated server leaves it to
@@ -1555,6 +1569,7 @@ impl Game<'_> {
             command: command.trim_start_matches('/').to_owned(),
             permission,
             integrated,
+            quiet: false,
         });
     }
 
@@ -1569,39 +1584,52 @@ impl Game<'_> {
                 return;
             }
             let c = host.commands.remove(0);
-            let mut host = self.lan.take().expect("checked above");
-            let Some(swap) = self.enter_guest(&mut host, c.conn) else {
-                self.lan = Some(host);
-                continue;
-            };
-            self.lan = Some(host);
-            self.chat_capture = Some(Vec::new());
-            let level = std::mem::replace(&mut self.ui.registries.permission, c.permission);
-            self.run_command(&c.command);
-            self.ui.registries.permission = level;
-            let lines = self.chat_capture.take().unwrap_or_default();
-            let mut host = self.lan.take().expect("a command puts the hub back");
-            self.leave_guest(&mut host, swap);
-            host.hub.sync_all_effects();
-            if !c.integrated {
-                // A teleport into another level happens before its feedback is sent.
-                self.run_level_teleports(&mut host);
-            }
-            // What the command earned is announced before its feedback.
-            self.announce_guest_advancements(&mut host);
-            for line in lines {
-                host.hub.send_to(
-                    c.conn,
-                    &C::SystemChat(play::SystemChat {
-                        content: horizon_client::lan::data::component_nbt(&line.component()),
-                        overlay: false,
-                    }),
-                );
-            }
-            // The other operators hear of it; never the player whose command it was.
-            self.send_admin_feedback(&mut host, Some(c.conn));
-            self.lan = Some(host);
+            self.run_guest_command(c);
         }
+    }
+
+    /// One guest's command as that guest, its feedback sent to them; false
+    /// when it failed (or the guest is gone).
+    pub(super) fn run_guest_command(&mut self, c: GuestCommand) -> bool {
+        let Some(mut host) = self.lan.take() else {
+            return false;
+        };
+        let Some(swap) = self.enter_guest(&mut host, c.conn) else {
+            self.lan = Some(host);
+            return false;
+        };
+        self.lan = Some(host);
+        self.chat_capture = Some(Vec::new());
+        let level = std::mem::replace(&mut self.ui.registries.permission, c.permission);
+        let ok = if c.quiet {
+            self.run_command_quietly(&c.command)
+        } else {
+            self.run_command(&c.command)
+        };
+        self.ui.registries.permission = level;
+        let lines = self.chat_capture.take().unwrap_or_default();
+        let mut host = self.lan.take().expect("a command puts the hub back");
+        self.leave_guest(&mut host, swap);
+        host.hub.sync_all_effects();
+        if !c.integrated {
+            // A teleport into another level happens before its feedback is sent.
+            self.run_level_teleports(&mut host);
+        }
+        // What the command earned is announced before its feedback.
+        self.announce_guest_advancements(&mut host);
+        for line in lines {
+            host.hub.send_to(
+                c.conn,
+                &C::SystemChat(play::SystemChat {
+                    content: horizon_client::lan::data::component_nbt(&line.component()),
+                    overlay: false,
+                }),
+            );
+        }
+        // The other operators hear of it; never the player whose command it was.
+        self.send_admin_feedback(&mut host, Some(c.conn));
+        self.lan = Some(host);
+        ok
     }
 
     /// The `broadcastToAdmins` lines a command queued (`source`: the guest
@@ -2183,6 +2211,9 @@ impl Game<'_> {
             let _ = w.tick_environment_damage();
             let _ = w.apply_fire_contact();
             let _ = w.server_hazards_tick(in_wall);
+            // Player.tick ends with updatePlayerPose: a swimmer, or a player
+            // crawling under a block, takes the short box its moves are checked with.
+            let _ = w.update_player_pose();
             let mut events = std::mem::take(&mut w.player.events);
             // LayeredCauldronBlock.handleEntityOnFireInside along those moves.
             for event in &events {

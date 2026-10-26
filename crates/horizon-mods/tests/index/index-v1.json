@@ -29,6 +29,7 @@
             "hud",
             "chat"
           ],
+          "api_level": 0,
           "game": "26.3",
           "file": {
             "name": "coords_hud-0.1.0.hmod",

@@ -297,7 +297,7 @@ enum Cmd {
     },
     /// Show the launcher's settings, or set one (the Settings page): selected-version TAG,
     /// minecraft-dir PATH, server-dir PATH ("default" resets a folder), install-new-versions
-    /// on|off, opening-animation on|off
+    /// on|off, opening-animation on|off, proxy http://host:port ("default" removes it)
     Settings {
         #[arg(value_parser = SETTING_KEYS)]
         key: Option<String>,
@@ -399,12 +399,13 @@ pub fn command() -> clap::Command {
 pub const AI_COMMANDS: [&str; 2] = ["mcp", "agent-config"];
 
 /// The keys `settings` sets.
-const SETTING_KEYS: [&str; 5] = [
+const SETTING_KEYS: [&str; 6] = [
     "selected-version",
     "minecraft-dir",
     "server-dir",
     "install-new-versions",
     "opening-animation",
+    "proxy",
 ];
 
 fn on_off(value: &str) -> Result<bool, String> {
@@ -423,6 +424,15 @@ fn set_setting(s: &mut backend::Settings, key: &str, value: &str) -> Result<(), 
         "server-dir" => s.server_dir = folder(value),
         "install-new-versions" => s.install_new_versions = Some(on_off(value)?),
         "opening-animation" => s.skip_opening = !on_off(value)?,
+        "proxy" => {
+            if value == "default" || value.is_empty() {
+                s.proxy = None;
+            } else if let Some(why) = horizon_launcher::proxy::refuse(value) {
+                return Err(why);
+            } else {
+                s.proxy = Some(value.trim().to_string());
+            }
+        }
         _ => return Err(format!("No setting {key}.")),
     }
     Ok(())
@@ -437,6 +447,7 @@ fn settings_json(s: &backend::Settings) -> serde_json::Value {
         "install_new_versions": s.install_new_versions.unwrap_or(true),
         "opening_animation": !s.skip_opening,
         "game_args": s.game_args,
+        "proxy": s.proxy,
         "desktop_entry": s.desktop_entry.unwrap_or(true),
         "no_ai": backend::no_ai(),
     })
@@ -722,6 +733,7 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 let value = value.ok_or("settings KEY VALUE: the value is missing")?;
                 set_setting(&mut settings, &key, &value)?;
                 settings.save();
+                horizon_launcher::proxy::announce(settings.proxy.clone());
             }
             let all = settings_json(&settings);
             if as_json {
