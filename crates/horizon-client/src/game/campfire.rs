@@ -22,21 +22,22 @@ impl Game<'_> {
     /// input (`RecipePropertySet.CAMPFIRE_INPUT`): on a server level the food
     /// goes into the first free slot (`placeFood`), and the use is consumed
     /// whether or not there was room. A client of a server leaves the placing
-    /// to the server. False when this isn't a campfire use, so the item's own
-    /// use runs.
-    pub(super) fn use_on_campfire(&mut self, pos: [i32; 3]) -> Result<bool> {
+    /// to the server. Whether the food went in; None when this isn't a
+    /// campfire use, so the item's own use runs.
+    pub(super) fn use_on_campfire(&mut self, pos: [i32; 3]) -> Result<Option<bool>> {
         let state = self.world.block(pos[0], pos[1], pos[2]);
         if !is_campfire(&self.res.facts().get(state).name) {
-            return Ok(false);
+            return Ok(None);
         }
         let Some(held) = self.held().cloned() else {
-            return Ok(false);
+            return Ok(None);
         };
         let Some(time) = self.res.recipes().cook(KIND, &held).map(|r| r.time as i32) else {
-            return Ok(false);
+            return Ok(None);
         };
+        // A client of a server predicts the placing; the server decides.
         if self.remote.is_some() {
-            return Ok(true);
+            return Ok(Some(true));
         }
         let key = (pos[0], pos[1], pos[2]);
         let placed = match self.world.block_entities.get_mut(&key) {
@@ -58,7 +59,7 @@ impl Game<'_> {
             );
             self.mark_block_entity_updated(key);
         }
-        Ok(true)
+        Ok(Some(placed))
     }
 
     /// `CampfireBlockEntity.cookTick` of a lit campfire, `cooldownTick` of an

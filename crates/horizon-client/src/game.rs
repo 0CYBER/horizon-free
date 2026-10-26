@@ -8666,9 +8666,10 @@ impl Game<'_> {
         }
         if allow_block_actions
             && let Some(hit) = self.pick()
-            && self.use_on_campfire(hit.pos)?
+            && let Some(placed) = self.use_on_campfire(hit.pos)?
         {
-            return Ok(UseResult::Success { swing: true });
+            // SUCCESS_SERVER swings; a full campfire's CONSUME does not.
+            return Ok(UseResult::Success { swing: placed });
         }
         // BucketItem has no useOn: a guest's UseItemOn leaves it to UseItem.
         let bucket = horizon_client::items::bucket_contents(&stack.item);
