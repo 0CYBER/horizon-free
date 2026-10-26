@@ -687,7 +687,7 @@ impl<'r, 'a> SelectorParser<'r, 'a> {
 
     fn fill_selectors(builder: &mut SuggestionsBuilder) {
         for (s, tip) in SELECTOR_KINDS {
-            builder.suggest_tooltip(s, crate::lang::get(tip));
+            builder.suggest_tooltip(s, horizon_client_core::lang::get(tip));
         }
     }
 
@@ -785,7 +785,9 @@ impl<'r, 'a> SelectorParser<'r, 'a> {
             if self.can_use(o) && o.starts_with(&lower) {
                 b.suggest_tooltip(
                     format!("{o}="),
-                    crate::lang::get(&format!("argument.entity.options.{o}.description")),
+                    horizon_client_core::lang::get(&format!(
+                        "argument.entity.options.{o}.description"
+                    )),
                 );
             }
         }

@@ -9,6 +9,8 @@ description = "Horizon native development client"
 
 [dependencies]
 horizon-assets = { path = "../horizon-assets" }
+horizon-client-core = { path = "../horizon-client-core" }
+horizon-command = { path = "../horizon-command" }
 horizon-core = { path = "../horizon-core" }
 # The server thread ahead of the workers (MinecraftServer.spin's Thread.setPriority).
 horizon-threads = { path = "../horizon-threads" }

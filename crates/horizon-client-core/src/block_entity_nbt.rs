@@ -259,7 +259,7 @@ fn is_pos(tag: &Tag) -> bool {
     matches!(tag, Tag::IntArray(v) if v.len() == 3)
 }
 /// The loaded `SignText` of one side, or the empty text.
-pub(crate) fn sign_side(tag: Option<&Tag>) -> Tag {
+pub fn sign_side(tag: Option<&Tag>) -> Tag {
     let empty = || string("");
     let mut messages: Vec<Tag> = match tag.and_then(|t| t.get("messages")) {
         Some(Tag::List(list)) => list.iter().filter_map(component).collect(),

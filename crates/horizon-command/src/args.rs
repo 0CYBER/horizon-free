@@ -1,192 +1,8 @@
 //! Argument types (Brigadier's and Minecraft's `ArgumentType`s): parsing with
 //! the vanilla error messages and completion suggestions.
 use super::{CmdResult, CommandError, Context, Reader, SuggestionsBuilder};
-use std::collections::BTreeMap;
 
-/// Registry contents and source state used to validate and complete arguments.
-#[derive(Clone, Debug, Default)]
-pub struct Registries {
-    /// Permission level of the command source.
-    pub permission: u8,
-    pub items: Vec<String>,
-    pub item_tags: Vec<String>,
-    /// Block id -> (property, allowed values).
-    pub blocks: BTreeMap<String, Vec<(String, Vec<String>)>>,
-    pub block_tags: Vec<String>,
-    /// Entity types that `summon` can create.
-    pub summonable: Vec<String>,
-    /// Every entity type (selector `type=`).
-    pub entity_types: Vec<String>,
-    pub effects: Vec<String>,
-    pub enchantments: Vec<String>,
-    pub structures: Vec<String>,
-    pub biomes: Vec<String>,
-    pub dimensions: Vec<String>,
-    pub clocks: Vec<String>,
-    pub timelines: Vec<String>,
-    pub time_markers: Vec<String>,
-    pub advancements: Vec<String>,
-    /// Game rule name -> integer-valued.
-    pub game_rules: Vec<(String, bool)>,
-    pub players: Vec<String>,
-    /// Scoreboard objective names, team names and tracked score holders.
-    pub objectives: Vec<String>,
-    pub teams: Vec<String>,
-    pub tracked: Vec<String>,
-    /// Loaded datapack functions (`ns:path`) and function tags (`ns:path`).
-    pub functions: Vec<String>,
-    /// `/data ... storage` ids.
-    pub storages: Vec<String>,
-    /// Boss bar ids and datapack predicate ids.
-    pub bossbars: Vec<String>,
-    pub predicates: Vec<String>,
-    pub item_modifiers: Vec<String>,
-    pub schedules: Vec<String>,
-    pub stopwatches: Vec<String>,
-    pub recipes: Vec<String>,
-    pub sounds: Vec<String>,
-    pub damage_types: Vec<String>,
-    pub attributes: Vec<String>,
-    pub loot_tables: Vec<String>,
-    pub templates: Vec<String>,
-    pub random_sequences: Vec<String>,
-    pub datapacks_enabled: Vec<String>,
-    pub datapacks_disabled: Vec<String>,
-    pub function_tags: Vec<String>,
-    /// The block the source is looking at (relevant coordinates).
-    pub target_block: Option<[i32; 3]>,
-    /// Every registry's element and tag ids (`minecraft:item` -> ...), as
-    /// the server's registry access and reloadable registries hold them.
-    pub by_registry: BTreeMap<String, RegistryIds>,
-    /// Blocks whose default state has a block entity.
-    pub block_entities: std::collections::BTreeSet<String>,
-    /// Block tag -> member blocks.
-    pub block_tag_members: BTreeMap<String, Vec<String>>,
-    /// Data component types with a codec (not transient).
-    pub persistent_components: Vec<String>,
-    /// Recipes `/recipe` can give (not special).
-    pub learnable_recipes: Vec<String>,
-    /// Advancement id -> criterion names.
-    pub advancement_criteria: BTreeMap<String, Vec<String>>,
-    /// World clock -> time markers shown in commands.
-    pub clock_time_markers: BTreeMap<String, Vec<String>>,
-    /// Trigger objectives the source may use (`/trigger` suggestions).
-    pub trigger_objectives: Vec<String>,
-    /// Objectives with the `trigger` criterion -> holder -> whether its score is locked.
-    pub trigger_scores: BTreeMap<String, BTreeMap<String, bool>>,
-}
-/// The ids and tag ids of one registry.
-#[derive(Clone, Debug, Default)]
-pub struct RegistryIds {
-    pub ids: Vec<String>,
-    pub tags: Vec<String>,
-}
-const EMPTY: &[String] = &[];
-impl Registries {
-    /// Fill what the game did not build itself from vanilla's exported
-    /// registries (`command-registries.json`, written by
-    /// `VanillaCommandParseOracle registries`): built-in registries such as
-    /// mob effects, data component types and dialogs, block entities and tag
-    /// members. Registries that data packs reload stay with the game.
-    pub fn fill_from_export(&mut self, r: &serde_json::Value) {
-        fn strings(v: &serde_json::Value) -> Vec<String> {
-            v.as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|x| x.as_str().map(str::to_owned))
-                        .collect()
-                })
-                .unwrap_or_default()
-        }
-        let fill = |field: &mut Vec<String>, key: &str| {
-            if field.is_empty() {
-                *field = strings(&r[key]);
-            }
-        };
-        fill(&mut self.effects, "effects");
-        fill(&mut self.enchantments, "enchantments");
-        fill(&mut self.attributes, "attributes");
-        fill(&mut self.damage_types, "damage_types");
-        fill(&mut self.templates, "templates");
-        fill(&mut self.persistent_components, "persistent_components");
-        fill(&mut self.learnable_recipes, "learnable_recipes");
-        const RELOADED: [&str; 5] = [
-            "minecraft:advancement",
-            "minecraft:recipe",
-            "minecraft:loot_table",
-            "minecraft:predicate",
-            "minecraft:item_modifier",
-        ];
-        for (name, entry) in r["by_registry"].as_object().into_iter().flatten() {
-            if RELOADED.contains(&name.as_str()) || self.by_registry.contains_key(name) {
-                continue;
-            }
-            self.by_registry.insert(
-                name.clone(),
-                RegistryIds {
-                    ids: strings(&entry["ids"]),
-                    tags: strings(&entry["tags"]),
-                },
-            );
-        }
-        if self.block_entities.is_empty() {
-            self.block_entities = strings(&r["block_entities"]).into_iter().collect();
-        }
-        if self.block_tag_members.is_empty() {
-            for (tag, members) in r["block_tag_members"].as_object().into_iter().flatten() {
-                self.block_tag_members.insert(tag.clone(), strings(members));
-            }
-        }
-        if self.clock_time_markers.is_empty() {
-            for (clock, markers) in r["clock_time_markers"].as_object().into_iter().flatten() {
-                self.clock_time_markers
-                    .insert(clock.clone(), strings(markers));
-            }
-        }
-        if self.advancement_criteria.is_empty() {
-            for (id, criteria) in r["advancement_criteria"].as_object().into_iter().flatten() {
-                self.advancement_criteria
-                    .insert(id.clone(), strings(criteria));
-            }
-        }
-    }
-    /// The element ids of a registry (sorted).
-    pub fn ids(&self, registry: &str) -> &[String] {
-        if let Some(r) = self.by_registry.get(registry) {
-            return &r.ids;
-        }
-        match registry {
-            "minecraft:item" => &self.items,
-            "minecraft:entity_type" => &self.entity_types,
-            "minecraft:mob_effect" => &self.effects,
-            "minecraft:enchantment" => &self.enchantments,
-            "minecraft:worldgen/structure" => &self.structures,
-            "minecraft:worldgen/biome" => &self.biomes,
-            "minecraft:world_clock" => &self.clocks,
-            "minecraft:timeline" => &self.timelines,
-            "minecraft:attribute" => &self.attributes,
-            "minecraft:damage_type" => &self.damage_types,
-            "minecraft:sound_event" => &self.sounds,
-            "minecraft:predicate" => &self.predicates,
-            "minecraft:item_modifier" => &self.item_modifiers,
-            "minecraft:loot_table" => &self.loot_tables,
-            "minecraft:recipe" => &self.recipes,
-            "minecraft:advancement" => &self.advancements,
-            _ => EMPTY,
-        }
-    }
-    /// The tag ids of a registry (sorted).
-    pub fn tags(&self, registry: &str) -> &[String] {
-        if let Some(r) = self.by_registry.get(registry) {
-            return &r.tags;
-        }
-        match registry {
-            "minecraft:item" => &self.item_tags,
-            "minecraft:block" => &self.block_tags,
-            _ => EMPTY,
-        }
-    }
-}
+pub use horizon_client_core::registries::{Registries, RegistryIds};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Resource {
@@ -637,22 +453,7 @@ pub fn read_identifier(reader: &mut Reader) -> CmdResult<String> {
         }
     }
 }
-/// Identifier.parse: `ns:path` or `path`, validated.
-pub fn parse_identifier(raw: &str) -> Option<String> {
-    let (ns, path) = match raw.split_once(':') {
-        Some(("", path)) => ("minecraft", path),
-        Some((ns, path)) => (ns, path),
-        None => ("minecraft", raw),
-    };
-    let ns_ok = ns != ".."
-        && ns
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '-'));
-    let path_ok = path.chars().all(|c| {
-        c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '-' | '/')
-    });
-    (ns_ok && path_ok).then(|| format!("{ns}:{path}"))
-}
+pub use horizon_client_core::identifier::parse_identifier;
 pub fn normalize(id: &str) -> String {
     match id.split_once(':') {
         Some(("", path)) => format!("minecraft:{path}"),
@@ -1220,7 +1021,10 @@ impl ArgType {
                     reader.cursor = start;
                     return Err(CommandError::tr_at(
                         "argument.float.low",
-                        &[&crate::snbt::java_float(*min), &crate::snbt::java_float(v)],
+                        &[
+                            &horizon_client_core::snbt::java_float(*min),
+                            &horizon_client_core::snbt::java_float(v),
+                        ],
                         reader,
                     ));
                 }
@@ -1228,7 +1032,10 @@ impl ArgType {
                     reader.cursor = start;
                     return Err(CommandError::tr_at(
                         "argument.float.big",
-                        &[&crate::snbt::java_float(*max), &crate::snbt::java_float(v)],
+                        &[
+                            &horizon_client_core::snbt::java_float(*max),
+                            &horizon_client_core::snbt::java_float(v),
+                        ],
                         reader,
                     ));
                 }
@@ -1241,8 +1048,8 @@ impl ArgType {
                     return Err(CommandError::tr_at(
                         "argument.double.low",
                         &[
-                            &crate::snbt::java_double(*min),
-                            &crate::snbt::java_double(v),
+                            &horizon_client_core::snbt::java_double(*min),
+                            &horizon_client_core::snbt::java_double(v),
                         ],
                         reader,
                     ));
@@ -1252,8 +1059,8 @@ impl ArgType {
                     return Err(CommandError::tr_at(
                         "argument.double.big",
                         &[
-                            &crate::snbt::java_double(*max),
-                            &crate::snbt::java_double(v),
+                            &horizon_client_core::snbt::java_double(*max),
+                            &horizon_client_core::snbt::java_double(v),
                         ],
                         reader,
                     ));
@@ -1597,7 +1404,7 @@ impl ArgType {
                     return Err(CommandError::tr_at(key, &[&m], reader));
                 }
                 let text = &reader.string[start..reader.cursor];
-                match crate::component::parse_snbt(text) {
+                match horizon_client_core::component::parse_snbt(text) {
                     Ok((v, _)) => Arg::Str(v.to_string()),
                     Err(_) => Arg::Str(text.to_owned()),
                 }
@@ -1645,7 +1452,7 @@ impl ArgType {
                 }
                 let id = &reader.string[start..reader.cursor];
                 // ObjectiveCriteria.byName: statistics resolve to their canonical name.
-                match crate::scoreboard::criteria_by_name(id, reg) {
+                match horizon_client_core::scoreboard::criteria_by_name(id, reg) {
                     Ok(Some(canonical)) => Arg::Str(canonical),
                     Ok(None) => {
                         reader.cursor = start;
@@ -1667,7 +1474,7 @@ impl ArgType {
             }
             ArgType::ScoreboardSlot => {
                 let name = reader.read_unquoted_string();
-                if !crate::scoreboard::display_slot_valid(name) {
+                if !horizon_client_core::scoreboard::display_slot_valid(name) {
                     return Err(CommandError::tr_at(
                         "argument.scoreboardDisplaySlot.invalid",
                         &[&name],
@@ -1695,7 +1502,7 @@ impl ArgType {
             }
             ArgType::TeamColor => {
                 let name = reader.read_unquoted_string();
-                if crate::scoreboard::team_color_rgb(name).is_none() {
+                if horizon_client_core::scoreboard::team_color_rgb(name).is_none() {
                     return Err(CommandError::tr_at(
                         "argument.color.invalid",
                         &[&name],
@@ -1743,7 +1550,7 @@ impl ArgType {
                 let id = read_identifier(reader)?;
                 let known = reg.ids("minecraft:particle_type");
                 let exists = if known.is_empty() {
-                    crate::particles::ParticleType::from_name(&id).is_some()
+                    horizon_client_core::particle_type::ParticleType::from_name(&id).is_some()
                 } else {
                     known.contains(&id)
                 };
@@ -1931,15 +1738,16 @@ impl ArgType {
             }
             ArgType::Team => builder.suggest_matching(reg.teams.iter().map(String::as_str)),
             ArgType::Criteria => {
-                let mut ids: Vec<String> = crate::scoreboard::CUSTOM_CRITERIA
+                let mut ids: Vec<String> = horizon_client_core::scoreboard::CUSTOM_CRITERIA
                     .iter()
                     .map(|s| (*s).to_owned())
                     .collect();
-                for c in crate::scoreboard::team_colors() {
+                for c in horizon_client_core::scoreboard::team_colors() {
                     ids.push(format!("teamkill.{c}"));
                     ids.push(format!("killedByTeam.{c}"));
                 }
-                let stat = |ty: &str, key: &str| crate::scoreboard::stat_criteria(ty, key);
+                let stat =
+                    |ty: &str, key: &str| horizon_client_core::scoreboard::stat_criteria(ty, key);
                 ids.extend(reg.blocks.keys().map(|b| stat("mined", b)));
                 for ty in ["crafted", "used", "broken", "picked_up", "dropped"] {
                     ids.extend(reg.items.iter().map(|i| stat(ty, i)));
@@ -1948,14 +1756,14 @@ impl ArgType {
                     ids.extend(reg.entity_types.iter().map(|e| stat(ty, e)));
                 }
                 ids.extend(
-                    crate::scoreboard::CUSTOM_STATS
+                    horizon_client_core::scoreboard::CUSTOM_STATS
                         .iter()
                         .map(|c| stat("custom", &format!("minecraft:{c}"))),
                 );
                 builder.suggest_matching(ids.iter().map(String::as_str));
             }
             ArgType::ScoreboardSlot => {
-                let slots = crate::scoreboard::display_slots();
+                let slots = horizon_client_core::scoreboard::display_slots();
                 builder.suggest_matching(slots.iter().map(String::as_str));
             }
             ArgType::Operation => builder.suggest_matching(OPERATIONS),
@@ -1963,7 +1771,7 @@ impl ArgType {
             ArgType::Particle => {
                 let known = reg.ids("minecraft:particle_type");
                 if known.is_empty() {
-                    let names: Vec<String> = crate::particles::ParticleType::ALL
+                    let names: Vec<String> = horizon_client_core::particle_type::ParticleType::ALL
                         .iter()
                         .map(|t| format!("minecraft:{}", t.name()))
                         .collect();
@@ -1999,7 +1807,9 @@ impl ArgType {
                 suggest_resources(builder, reg.ids("minecraft:slot_source"), "");
             }
             ArgType::ResourceOrId(registry) => suggest_resources(builder, reg.ids(registry), ""),
-            ArgType::TeamColor => builder.suggest_matching(crate::scoreboard::team_colors()),
+            ArgType::TeamColor => {
+                builder.suggest_matching(horizon_client_core::scoreboard::team_colors())
+            }
             ArgType::Anchor => builder.suggest_matching(["eyes", "feet"]),
             ArgType::Component | ArgType::Style | ArgType::NbtTag => super::snbt::suggest(builder),
             ArgType::Swizzle | ArgType::Message | ArgType::Nbt => {}

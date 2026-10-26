@@ -129,7 +129,7 @@ def main():
                                     "Pack discovery, overlays, filters and the resource stacks vanilla merges.",
                                     sources=[lab.ROOT / "crates/horizon-client/src/packs.rs",
                                              lab.ROOT / "crates/horizon-client/src/sound_events.rs",
-                                             lab.ROOT / "crates/horizon-client/src/lang.rs"])
+                                             lab.ROOT / "crates/horizon-client-core/src/lang.rs"])
         total += len(QUERIES)
     print(f"{total} resource pack queries match the pinned client over {len(SELECTIONS)} selections")
 

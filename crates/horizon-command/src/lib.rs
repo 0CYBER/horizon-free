@@ -3,6 +3,7 @@
 //! relevant child and keeps the best result, completion suggestions, smart
 //! usage text and the vanilla error messages. Argument types live in
 //! [`args`]; the vanilla command tree in [`vanilla`].
+#![forbid(unsafe_code)]
 pub mod args;
 pub mod block;
 pub mod codec;
@@ -21,8 +22,8 @@ pub mod tree_world;
 pub mod vanilla;
 mod vanilla_order;
 
-use crate::text::Text;
 pub use args::{Arg, ArgType, Registries};
+use horizon_client_core::text::Text;
 
 /// The command id of a mod's command (`Dispatcher::with_mod_commands`).
 pub const MOD_COMMAND: &str = "mod";
@@ -623,8 +624,10 @@ impl Suggests {
                 for id in &reg.summonable {
                     if args::resource_matches(&contents, id) {
                         let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
-                        let name =
-                            crate::lang::get(&format!("entity.{ns}.{}", path.replace('/', ".")));
+                        let name = horizon_client_core::lang::get(&format!(
+                            "entity.{ns}.{}",
+                            path.replace('/', ".")
+                        ));
                         builder.suggest_tooltip(id.clone(), name);
                     }
                 }

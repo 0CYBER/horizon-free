@@ -40,7 +40,7 @@ GENERATORS = [
      lambda d: bool(d["commands"]["added"] or d["commands"]["removed"] or d["commands"]["changed"])),
     ("crates/horizon-client/src/lan/command_order.rs", "python3 tools/generate_lan_command_order.py",
      lambda d: bool(d["commands"]["added"] or d["commands"]["removed"])),
-    ("crates/horizon-client/src/command/vanilla_order.rs", "python3 tools/generate_command_order.py",
+    ("crates/horizon-command/src/vanilla_order.rs", "python3 tools/generate_command_order.py",
      lambda d: bool(d["commands"]["added"] or d["commands"]["removed"])),
     ("crates/horizon-world/src/datafix/block_state_data.txt", "python3 tools/gen_block_state_data.py",
      lambda d: "net/minecraft/util/datafix/fixes/BlockStateData" in d["classes"]["changed"]),

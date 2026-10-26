@@ -164,7 +164,7 @@ fn color(t: &Tag) -> R {
             _ => partial(format!("Invalid color value: {s}")),
         };
     }
-    if crate::text::named_color(&s).is_some() {
+    if horizon_client_core::text::named_color(&s).is_some() {
         Ok(())
     } else {
         partial(format!("Invalid color name: {s}"))
@@ -278,7 +278,7 @@ fn content(kind: &str, map: &Compound) -> bool {
         "nbt" => {
             let path_ok = get(map, "nbt")
                 .and_then(string_of)
-                .is_some_and(|p| crate::nbt_path::NbtPath::parse(&p).is_ok());
+                .is_some_and(|p| horizon_client_core::nbt_path::NbtPath::parse(&p).is_ok());
             let source = if let Some(e) = get(map, "entity") {
                 selector_string(e)
             } else if let Some(b) = get(map, "block") {
