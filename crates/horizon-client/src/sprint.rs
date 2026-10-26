@@ -134,3 +134,76 @@ impl SprintState {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn standing() -> Conditions {
+        Conditions {
+            enough_food: true,
+            on_ground: true,
+            ..Conditions::default()
+        }
+    }
+
+    fn step(state: &mut SprintState, keys: Keys, sprinting: &mut bool) {
+        let current = *sprinting;
+        let mut next = current;
+        state
+            .tick(
+                keys,
+                Conditions {
+                    sprinting: current,
+                    ..standing()
+                },
+                7,
+                |value| {
+                    next = value;
+                    Ok::<(), ()>(())
+                },
+            )
+            .unwrap();
+        *sprinting = next;
+    }
+
+    /// Vanilla sprint is a state. Releasing the sprint key, including on the
+    /// jump tick, keeps it while forward is held; releasing forward stops it.
+    #[test]
+    fn sprint_survives_releasing_the_key_through_a_jump() {
+        let mut state = SprintState::default();
+        let mut sprinting = false;
+        step(
+            &mut state,
+            Keys {
+                forward: true,
+                sprint: true,
+                ..Keys::default()
+            },
+            &mut sprinting,
+        );
+        assert!(sprinting);
+        step(
+            &mut state,
+            Keys {
+                forward: true,
+                jump: true,
+                ..Keys::default()
+            },
+            &mut sprinting,
+        );
+        assert!(
+            sprinting,
+            "a jump after the sprint key comes up must stay a sprint"
+        );
+        step(
+            &mut state,
+            Keys {
+                jump: true,
+                ..Keys::default()
+            },
+            &mut sprinting,
+        );
+        assert!(!sprinting);
+    }
+}

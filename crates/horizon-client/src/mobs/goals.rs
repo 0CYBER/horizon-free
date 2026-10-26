@@ -1210,6 +1210,9 @@ pub struct NearestTarget {
     pub interval: i32,
     /// Extra condition on the attacker, checked after the random interval.
     pub when: Option<fn(&Mob, &MobWorld) -> bool>,
+    /// Mobs closer than this squared distance are not picked
+    /// (`GuardianAttackSelector`: `distanceToSqr > 9`).
+    pub beyond_sqr: Option<f64>,
     /// A condition checked before anything else, by subclasses overriding
     /// `canUse` (SpiderTargetGoal: only in the dark).
     pub gate: Option<fn(&Mob, &MobWorld) -> bool>,
@@ -1242,6 +1245,7 @@ impl NearestTarget {
             must_reach: false,
             interval: reduced(10),
             when: None,
+            beyond_sqr: None,
             gate: None,
             label: None,
             found: None,
@@ -1274,6 +1278,10 @@ impl NearestTarget {
         self.when = Some(f);
         self
     }
+    pub fn beyond(mut self, distance_sqr: f64) -> Self {
+        self.beyond_sqr = Some(distance_sqr);
+        self
+    }
     pub fn gate(mut self, f: fn(&Mob, &MobWorld) -> bool) -> Self {
         self.gate = Some(f);
         self
@@ -1284,9 +1292,25 @@ impl NearestTarget {
         self
     }
 }
+/// `AbstractIllager.canAttack`: a baby `AbstractVillager` is never attacked.
+fn illager_spares(attacker: Species, target: &Seen) -> bool {
+    matches!(
+        attacker,
+        Species::Pillager | Species::Vindicator | Species::Evoker | Species::Illusioner
+    ) && target.baby
+        && matches!(target.species, Species::Villager | Species::WanderingTrader)
+}
 /// TargetGoal.canContinueToUse
 pub fn target_continue(st: &mut TargetState, must_see: bool, m: &mut Mob, cx: &mut Cx) -> bool {
     let Some(who) = m.ai.target else { return false };
+    if let Who::Mob(id) = who
+        && cx
+            .w
+            .seen(id)
+            .is_some_and(|s| illager_spares(m.species(), s))
+    {
+        return false;
+    }
     let Some(t) = cx.w.target_info(who) else {
         return false;
     };
@@ -1345,10 +1369,12 @@ impl Goal for NearestTarget {
             prey => {
                 let pos = Vec3::new(m.position.x, m.eye_y(), m.position.z);
                 let id = m.id;
+                let attacker = m.species();
                 let candidates: Vec<(u32, Vec3)> =
                     cx.w.nearby(pos, range, move |s| {
                         s.id != id
                             && !s.playing_dead
+                            && !illager_spares(attacker, s)
                             && match prey {
                                 Prey::Species(list) => list.contains(&s.species),
                                 Prey::Filter(f) => f(s),
@@ -1359,6 +1385,9 @@ impl Goal for NearestTarget {
                     .collect();
                 for (cid, cpos) in candidates {
                     if m.distance_sqr(cpos) > range * range {
+                        continue;
+                    }
+                    if self.beyond_sqr.is_some_and(|d| m.distance_sqr(cpos) <= d) {
                         continue;
                     }
                     if !m.sees(cx.w, Who::Mob(cid)) {
@@ -1762,6 +1791,10 @@ impl Goal for Breed {
         if tamable && (!m.extra.tame || m.extra.sitting) {
             return false;
         }
+        // TurtleBreedGoal.canUse: not while carrying an egg.
+        if species == Species::Turtle && super::turtle::has_egg(m) {
+            return false;
+        }
         let id = m.id;
         // Horses and donkeys breed together (AbstractHorse.canParent: tame).
         // Sniffer.canMate: calm states only.
@@ -1771,11 +1804,16 @@ impl Goal for Breed {
         }
         let llama = super::llama::is_llama(species);
         let equine = matches!(species, Species::Horse | Species::Donkey) || llama;
-        if equine && !m.extra.tame {
-            return false;
-        }
-        // Llama.canParent: not ridden, and at full health.
-        if llama && (m.rider.is_some() || m.health < m.attrs.max_health) {
+        // AbstractHorse.canParent: tame, an adult, not a vehicle or passenger
+        // and at full health.
+        if equine
+            && (!m.extra.tame
+                || m.is_baby()
+                || m.rider.is_some()
+                || m.extra.rider.is_some()
+                || m.extra.mount.is_some()
+                || m.health < m.attrs.max_health)
+        {
             return false;
         }
         self.partner =
@@ -1788,7 +1826,10 @@ impl Goal for Breed {
                     && s.in_love
                     && !s.baby
                     && (!tamable || s.tame)
-                    && (!equine || s.tame)
+                    // Wolf.canMate: a sitting wolf is no partner.
+                    && !(species == Species::Wolf && s.sitting)
+                    // AbstractHorse.canParent of the partner.
+                    && (!equine || s.tame && !s.ridden && s.health >= s.stats[0] as f32)
                     && (!sniffer || super::sniffer::can_mate_state(s.variant))
             })
             .map(|s| s.id)
@@ -1832,6 +1873,10 @@ impl Goal for Breed {
             });
             m.extra.in_love = 0;
             m.extra.age = 6000;
+            // TurtleBreedGoal.breed: the mother carries an egg, not a baby.
+            if m.species() == Species::Turtle {
+                m.extra.flag = true;
+            }
             cx.events.push(MobEvent::Breed {
                 parent: m.id,
                 partner: p.id,

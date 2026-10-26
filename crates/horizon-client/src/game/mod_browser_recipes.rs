@@ -272,8 +272,14 @@ impl Game<'_> {
         batch.text(atlas, &label, back[0] + 4.0, back[1] + 3.0, u32::MAX, true);
         horizon_client::widgets::record(&label, back, true);
         let room = layout.width() - back[2] - 4.0;
-        let fit = atlas.font.fit(&title, room);
-        let shown: String = title.chars().take(fit).collect();
+        // Cut to the panel with vanilla's ellipsis (CommonComponents.ELLIPSIS).
+        let shown = if atlas.font.fit(&title, room) >= title.chars().count() {
+            title
+        } else {
+            let fit = atlas.font.fit(&title, room - atlas.font.width("..."));
+            let kept: String = title.chars().take(fit).collect();
+            format!("{}...", kept.trim_end())
+        };
         batch.text(
             atlas,
             &shown,

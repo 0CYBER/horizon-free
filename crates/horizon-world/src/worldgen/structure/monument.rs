@@ -463,6 +463,16 @@ impl LegacyPiece for MonumentBuilding {
     fn type_name(&self) -> &'static str {
         "minecraft:omb"
     }
+    /// `MonumentBuilding`: the base fields only; vanilla builds its rooms
+    /// again after loading (`OceanMonumentStructure.regeneratePiecesAfterLoad`).
+    fn save(&self) -> Option<crate::nbt::Compound> {
+        Some(super::legacy::piece_tag(
+            "minecraft:omb",
+            self.frame.bounding_box,
+            self.frame.orientation,
+            0,
+        ))
+    }
     fn post_process(&self, c: &mut PieceContext<'_>) -> Result<()> {
         let sea = c.world.sea_level()?;
         let water = c.state("water");
