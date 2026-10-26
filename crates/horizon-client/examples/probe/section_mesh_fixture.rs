@@ -7,7 +7,7 @@ use horizon_client::{
     biome::{BiomeInfo, Biomes, GrassModifier},
     blocks::BlockFacts,
     chunk::{Chunk, Light, MIN_Y, index},
-    mesher::{MeshTables, Mesher, OPAQUE_LAYER, TerrainVertex},
+    mesher::{EMISSION_BITS, MeshTables, Mesher, OPAQUE_LAYER, TerrainVertex},
     models,
 };
 use horizon_core::biome::BiomeZoom;
@@ -161,7 +161,15 @@ fn scene(
                 .iter()
                 .map(|v| {
                     let ([x, y, z], [u, w]) = (v.pos, v.uv());
-                    json!([x, y, z, u, w, argb(v.color), light_coords(v.light)])
+                    json!([
+                        x,
+                        y,
+                        z,
+                        u,
+                        w,
+                        argb(v.color | EMISSION_BITS),
+                        light_coords(v.light)
+                    ])
                 })
                 .collect();
             quads.push(json!({"layer": layer, "sprite": sprite, "vertices": vertices}));

@@ -33,6 +33,9 @@ pub struct NativePost {
 /// The `frame` every stage of a pack reads (group 3, binding 0), written once a frame.
 pub struct NativeFrame {
     pub(super) buffer: wgpu::Buffer,
+    /// Group 3 of the stages that read only the frame (the sky).
+    pub layout: wgpu::BindGroupLayout,
+    pub group: wgpu::BindGroup,
     start: std::time::Instant,
     frames: u32,
 }
@@ -59,8 +62,22 @@ impl NativeFrame {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Native shader pack frame"),
+            entries: &[frame_entry(wgpu::ShaderStages::VERTEX_FRAGMENT)],
+        });
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Native shader pack frame"),
+            layout: &layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
+        });
         Self {
             buffer,
+            layout,
+            group,
             start: std::time::Instant::now(),
             frames: 0,
         }

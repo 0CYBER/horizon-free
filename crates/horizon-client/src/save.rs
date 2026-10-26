@@ -297,6 +297,35 @@ impl SaveTables {
     }
 }
 
+/// A container's loot table and what Horizon rolled from it. Vanilla keeps
+/// `LootTable` and `LootTableSeed` until the container is first opened;
+/// Horizon rolls when it generates or loads the chunk, and saves the table
+/// again while the container still holds exactly the rolled items.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RolledLoot {
+    pub pos: (i32, i32, i32),
+    pub table: String,
+    /// The saved `LootTableSeed`, written back unless 0 (trySaveLootTable).
+    pub seed: Option<i64>,
+    /// The rolled `Items`.
+    pub items: Tag,
+}
+impl RolledLoot {
+    /// Puts the loot table back in place of `Items` while they are still the
+    /// roll; false once the container holds anything else.
+    pub fn restore(&self, map: &mut Compound) -> bool {
+        if map.get(&"Items".into()) != Some(&self.items) {
+            return false;
+        }
+        map.remove(&"Items".into());
+        map.insert("LootTable".into(), string(&self.table));
+        if let Some(seed) = self.seed.filter(|s| *s != 0) {
+            map.insert("LootTableSeed".into(), Tag::Long(seed));
+        }
+        true
+    }
+}
+
 /// Save data loaded with a chunk that Horizon keeps but does not simulate.
 #[derive(Clone, Debug, Default)]
 pub struct ChunkExtras {
@@ -318,6 +347,8 @@ pub struct ChunkExtras {
     pub fluid_ticks: Vec<SavedTick>,
     /// Game time written as `LastUpdate`.
     pub last_update: i64,
+    /// Containers still holding their loot table's roll.
+    pub rolled_loot: Vec<RolledLoot>,
 }
 
 fn tick_list(ticks: &[SavedTick], name: impl Fn(u32) -> Option<String>) -> Tag {
@@ -526,6 +557,12 @@ pub fn encode_block_entity(
             }
         }
         BlockEntity::Sculk(s) => entries.extend(s.to_nbt()),
+        // CampfireBlockEntity.saveAdditional.
+        BlockEntity::Campfire(c) => {
+            entries.push(("Items", encode_items(&c.items)));
+            entries.push(("CookingTimes", Tag::IntArray(c.progress.to_vec())));
+            entries.push(("CookingTotalTimes", Tag::IntArray(c.total.to_vec())));
+        }
         BlockEntity::Crafter(c) => {
             entries.push(("Items", encode_items(&c.items)));
             entries.push((
@@ -593,6 +630,34 @@ pub fn decode_banner(tag: &Tag) -> crate::containers::Banner {
             _ => Compound::new(),
         },
     }
+}
+/// A loaded container with a loot table and no items yet, rolled as
+/// generation rolls it (Horizon does not unpack on first open).
+fn roll_loaded_loot(
+    chunk: &Chunk,
+    biomes: &Biomes,
+    tag: &Tag,
+    be: &mut ((i32, i32, i32), crate::containers::BlockEntity),
+) -> Option<RolledLoot> {
+    let crate::containers::BlockEntity::Chest(slots) = &mut be.1 else {
+        return None;
+    };
+    let table = text(tag.get("LootTable"))?;
+    if slots.iter().any(Option::is_some) {
+        return None;
+    }
+    let loot = crate::structure_blocks::loaded_loot_data()?;
+    let (x, y, z) = be.0;
+    let biome = &biomes.get(chunk.biome(x & 15, y, z & 15)).name;
+    let seed = crate::structure_blocks::loot_seed(tag);
+    Some(crate::structure_blocks::roll_container(
+        slots,
+        Some(&loot),
+        table,
+        seed,
+        be.0,
+        biome,
+    ))
 }
 pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
     use crate::containers::BlockEntity;
@@ -676,8 +741,10 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
                         Tag::Int(n) => *n,
                         _ => continue,
                     };
-                    f.recipes_used
-                        .insert(id.to_string_lossy(), count.max(0) as u32);
+                    // Saves from before the key was namespaced hold both forms of an id.
+                    *f.recipes_used
+                        .entry(crate::containers::recipe_used_key(&id.to_string_lossy()))
+                        .or_insert(0) += count.max(0) as u32;
                 }
             }
         }
@@ -704,6 +771,18 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         }
         BlockEntity::Sign(sign) => sign.decode(tag),
         BlockEntity::Sculk(s) => s.load(tag),
+        // CampfireBlockEntity.loadAdditional: missing time arrays stay zeros.
+        BlockEntity::Campfire(c) => {
+            for (slot, item) in decode_items(tag.get("Items"), 4).into_iter().enumerate() {
+                c.items[slot] = item;
+            }
+            let ints = |key: &str| match tag.get(key) {
+                Some(Tag::IntArray(v)) => std::array::from_fn(|i| v.get(i).copied().unwrap_or(0)),
+                _ => [0; 4],
+            };
+            c.progress = ints("CookingTimes");
+            c.total = ints("CookingTotalTimes");
+        }
         BlockEntity::Crafter(c) => {
             for (slot, item) in decode_items(tag.get("Items"), 9).into_iter().enumerate() {
                 c.items[slot] = item;
@@ -734,18 +813,67 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
     Some((pos, entity))
 }
 
+/// What a dimension's saved chunks depend on: skylight and the build height
+/// (`DimensionType.minY` and `height`). `Chunk` always holds the Overworld's
+/// sections; a level saves only the ones inside its own height.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LevelShape {
+    pub sky_light: bool,
+    pub min_y: i32,
+    pub height: i32,
+}
+impl LevelShape {
+    pub const OVERWORLD: Self = Self {
+        sky_light: true,
+        min_y: MIN_Y,
+        height: SECTIONS as i32 * 16,
+    };
+    pub const NETHER: Self = Self {
+        sky_light: false,
+        min_y: 0,
+        height: 256,
+    };
+    pub const END: Self = Self {
+        sky_light: true,
+        min_y: 0,
+        height: 256,
+    };
+    /// The shape of a dimension folder (`dimensions/minecraft/<name>`, or the
+    /// old `DIM-1` and `DIM1`).
+    pub fn for_dir(root: &Path) -> Self {
+        if root.ends_with("the_nether") || root.ends_with("DIM-1") {
+            Self::NETHER
+        } else if root.ends_with("the_end") || root.ends_with("DIM1") {
+            Self::END
+        } else {
+            Self::OVERWORLD
+        }
+    }
+    fn min_section(self) -> i32 {
+        self.min_y >> 4
+    }
+    fn section_count(self) -> usize {
+        (self.height >> 4) as usize
+    }
+    fn has_section(self, y: i32) -> bool {
+        (self.min_section()..self.min_section() + self.section_count() as i32).contains(&y)
+    }
+}
+
 /// A column's sections as `Heightmap.primeHeightmaps` reads them.
 struct HeightmapView<'a> {
     sections: &'a [Arc<Section>],
     tables: &'a SaveTables,
+    min_y: i32,
+    height: i32,
 }
 impl HeightmapChunk for HeightmapView<'_> {
     type State = crate::assets::StateFacts;
     fn min_y(&self) -> i32 {
-        MIN_Y
+        self.min_y
     }
     fn height(&self) -> i32 {
-        SECTIONS as i32 * 16
+        self.height
     }
     fn highest_section_y(&self) -> i32 {
         let top = self
@@ -765,7 +893,7 @@ impl HeightmapChunk for HeightmapView<'_> {
     }
 }
 /// Heightmaps kept after world generation (`ChunkStatus.FULL.heightmapsAfter`).
-fn heightmaps(chunk: &Chunk, tables: &SaveTables) -> Tag {
+fn heightmaps(chunk: &Chunk, tables: &SaveTables, shape: LevelShape) -> Tag {
     let kinds = [
         HeightmapType::WorldSurface,
         HeightmapType::OceanFloor,
@@ -774,11 +902,13 @@ fn heightmaps(chunk: &Chunk, tables: &SaveTables) -> Tag {
     ];
     let mut maps: Vec<Heightmap> = kinds
         .iter()
-        .filter_map(|k| Heightmap::new(*k, MIN_Y, SECTIONS as i32 * 16).ok())
+        .filter_map(|k| Heightmap::new(*k, shape.min_y, shape.height).ok())
         .collect();
     let view = HeightmapView {
         sections: &chunk.sections,
         tables,
+        min_y: shape.min_y,
+        height: shape.height,
     };
     let mut refs: Vec<&mut Heightmap> = maps.iter_mut().collect();
     if Heightmap::prime(&view, &mut refs).is_err() {
@@ -808,7 +938,12 @@ pub fn client_heightmaps_in(
         .iter()
         .filter_map(|(id, k)| Heightmap::new(*k, min_y, height).ok().map(|m| (*id, m)))
         .collect();
-    let view = HeightmapView { sections, tables };
+    let view = HeightmapView {
+        sections,
+        tables,
+        min_y,
+        height,
+    };
     let mut refs: Vec<&mut Heightmap> = maps.iter_mut().map(|(_, m)| m).collect();
     if Heightmap::prime(&view, &mut refs).is_err() {
         return Vec::new();
@@ -834,17 +969,18 @@ fn nibbles(light: &Light, sky: bool) -> Vec<u8> {
 }
 
 pub fn encode(chunk: &Chunk, registry: &BlockRegistry, biomes: &Biomes) -> NamedTag {
-    encode_with(chunk, registry, biomes, None, true)
+    encode_with(chunk, registry, biomes, None, LevelShape::OVERWORLD)
 }
 /// The chunk NBT vanilla's `SerializableChunkData.write` produces for a full
-/// chunk. `sky_light` is false in dimensions without skylight.
+/// chunk in a level of `shape`.
 pub fn encode_with(
     chunk: &Chunk,
     registry: &BlockRegistry,
     biomes: &Biomes,
     tables: Option<&SaveTables>,
-    sky_light: bool,
+    shape: LevelShape,
 ) -> NamedTag {
+    let sky_light = shape.sky_light;
     let mut sections = Vec::new();
     let air = tables.map_or(0, |t| t.air);
     // Sky layers below the highest section with light other than 15 are
@@ -856,6 +992,9 @@ pub fn encode_with(
     });
     for (si, section) in chunk.sections.iter().enumerate() {
         let y = (MIN_Y >> 4) + si as i32;
+        if !shape.has_section(y) {
+            continue;
+        }
         // PalettedContainer.pack: distinct states in index order, indices at
         // the saved width.
         let packed = section.blocks.pack();
@@ -959,7 +1098,16 @@ pub fn encode_with(
                 }
                 None => current,
             };
-            crate::block_entity_nbt::canonical(&merged).unwrap_or(merged)
+            let mut saved = crate::block_entity_nbt::canonical(&merged).unwrap_or(merged);
+            if let Some(r) = extras.and_then(|x| x.rolled_loot.iter().find(|r| r.pos == *p))
+                && let Tag::Compound(map) = &mut saved
+                && !r.restore(map)
+            {
+                // A loaded source still carries the table; kept, it rolls again on load.
+                map.remove(&"LootTable".into());
+                map.remove(&"LootTableSeed".into());
+            }
+            saved
         })
         .collect();
     if let Some(extras) = extras {
@@ -985,7 +1133,7 @@ pub fn encode_with(
         ("DataVersion", Tag::Int(DATA_VERSION)),
         ("xPos", Tag::Int(chunk.x)),
         ("zPos", Tag::Int(chunk.z)),
-        ("yPos", Tag::Int(MIN_Y >> 4)),
+        ("yPos", Tag::Int(shape.min_section())),
         ("Status", string("minecraft:full")),
         ("LastUpdate", Tag::Long(extras.map_or(0, |e| e.last_update))),
         ("isLightOn", Tag::Byte(i8::from(chunk.lit))),
@@ -1017,11 +1165,30 @@ pub fn encode_with(
                 .collect();
             s.insert("References".into(), Tag::Compound(refs));
         }
+        let starts: Compound = chunk
+            .structure_starts
+            .iter()
+            .filter_map(|start| match start.save() {
+                Some(tag) => Some((start.name.as_str().into(), tag)),
+                None => {
+                    log::warn!(
+                        "Horizon: structure start {} not saved: one of its pieces cannot be",
+                        start.name
+                    );
+                    None
+                }
+            })
+            .collect();
+        if !starts.is_empty()
+            && let Some(Tag::Compound(s)) = map.get_mut(&"structures".into())
+        {
+            s.insert("starts".into(), Tag::Compound(starts));
+        }
         map.entry("PostProcessing".into())
-            .or_insert_with(|| Tag::List(vec![Tag::List(Vec::new()); SECTIONS]));
+            .or_insert_with(|| Tag::List(vec![Tag::List(Vec::new()); shape.section_count()]));
     }
     if let Some(t) = tables {
-        put(&mut root, "Heightmaps", heightmaps(chunk, t));
+        put(&mut root, "Heightmaps", heightmaps(chunk, t, shape));
         let names = |k: u32| t.block_names.get(k as usize).cloned();
         let (blocks, fluids) = extras.map_or((&[][..], &[][..]), |e| {
             (&e.block_ticks[..], &e.fluid_ticks[..])
@@ -1189,9 +1356,12 @@ fn decode_column(
                 extras.block_entity_order.push((x, y, z));
             }
             match decode_block_entity(e) {
-                Some(be) => {
+                Some(mut be) => {
                     if let Some(name) = text(e.get("CustomName")) {
                         chunk.block_names.push((be.0, name));
+                    }
+                    if let Some(rolled) = roll_loaded_loot(&chunk, biomes, e, &mut be) {
+                        extras.rolled_loot.push(rolled);
                     }
                     extras.block_entity_sources.push((be.0, e.clone()));
                     chunk.block_entities.push(be);
@@ -1237,18 +1407,19 @@ pub fn encode_proto(
     registry: &BlockRegistry,
     biomes: &Biomes,
     tables: Option<&SaveTables>,
-    sky_light: bool,
+    shape: LevelShape,
 ) -> NamedTag {
-    let mut root = encode_with(&proto.column, registry, biomes, tables, sky_light);
+    let mut root = encode_with(&proto.column, registry, biomes, tables, shape);
     let status = if proto.decorated {
         ChunkStatus::Features
     } else {
         ChunkStatus::Terrain
     };
     // ProtoChunk.postProcessing: one list per section, packed section offsets.
-    let mut marks = vec![Vec::new(); SECTIONS];
+    let mut marks = vec![Vec::new(); shape.section_count()];
     for &[x, y, z] in &proto.column.postprocess {
-        if let Some(list) = marks.get_mut(((y - MIN_Y) >> 4) as usize) {
+        let section = usize::try_from((y - shape.min_y) >> 4).ok();
+        if let Some(list) = section.and_then(|s| marks.get_mut(s)) {
             list.push(Tag::Short(
                 ((x & 15) | (y & 15) << 4 | (z & 15) << 8) as i16,
             ));
@@ -1562,7 +1733,7 @@ struct Encoding {
     registry: &'static BlockRegistry,
     biomes: Arc<Biomes>,
     tables: Option<Arc<SaveTables>>,
-    sky_light: bool,
+    shape: LevelShape,
 }
 impl Record {
     fn tag(&self) -> Option<Arc<NamedTag>> {
@@ -1573,7 +1744,7 @@ impl Record {
                 e.registry,
                 &e.biomes,
                 e.tables.as_deref(),
-                e.sky_light,
+                e.shape,
             ))),
             Record::Delete => None,
         }
@@ -1610,12 +1781,12 @@ pub struct SaveDir {
     outstanding: Arc<Outstanding>,
     /// Set by `Persistent` before the first load.
     pub tables: OnceLock<Arc<SaveTables>>,
-    /// False in dimensions without skylight (no SkyLight layers are written).
-    pub sky_light: bool,
+    /// The dimension's skylight and height, from its folder name.
+    pub shape: LevelShape,
 }
 impl SaveDir {
     pub fn new(root: PathBuf) -> Self {
-        let sky_light = !root.ends_with("the_nether") && !root.ends_with("DIM-1");
+        let shape = LevelShape::for_dir(&root);
         Self {
             root,
             regions: Default::default(),
@@ -1625,7 +1796,7 @@ impl SaveDir {
             writer: Mutex::new(None),
             outstanding: Default::default(),
             tables: OnceLock::new(),
-            sky_light,
+            shape,
         }
     }
     fn region_path(&self, folder: &str, rx: i32, rz: i32) -> PathBuf {
@@ -1656,7 +1827,7 @@ impl SaveDir {
         let root = self.read_record("region", x, z)?;
         let tables = self.tables.get().map(|t| &**t);
         let mut chunk = decode_with(&root, registry, biomes, tables)?;
-        load_light(&root.tag, &mut chunk, self.sky_light);
+        load_light(&root.tag, &mut chunk, self.shape.sky_light);
         Some(chunk)
     }
     /// A proto chunk saved before it became final (`decode_proto`).
@@ -1681,7 +1852,7 @@ impl SaveDir {
         let records = protos
             .iter()
             .map(|p| {
-                let tag = encode_proto(p, registry, biomes, tables, self.sky_light);
+                let tag = encode_proto(p, registry, biomes, tables, self.shape);
                 ((p.column.x, p.column.z), Some(tag))
             })
             .collect();
@@ -1856,7 +2027,7 @@ impl SaveDir {
             .map(|c| {
                 (
                     (c.x, c.z),
-                    Some(encode_with(c, registry, biomes, tables, self.sky_light)),
+                    Some(encode_with(c, registry, biomes, tables, self.shape)),
                 )
             })
             .collect();
@@ -1875,7 +2046,7 @@ impl SaveDir {
             registry,
             biomes: biomes.clone(),
             tables: self.tables.get().cloned(),
-            sky_light: self.sky_light,
+            shape: self.shape,
         });
         let records = chunks
             .iter()
@@ -3345,7 +3516,7 @@ impl SaveDir {
         {
             return None;
         }
-        decode_lod_surfaces(&root, assets, biomes, self.sky_light)
+        decode_lod_surfaces(&root, assets, biomes, self.shape.sky_light)
     }
 }
 
@@ -3436,6 +3607,149 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unopened_rolled_containers_save_their_loot_table() {
+        let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let assets = crate::assets::Assets::load(&root).expect("assets");
+        let biomes = Biomes::load(&root).expect("biomes");
+        let tables = SaveTables::new(&assets);
+        let chest = assets.registry.default_state("minecraft:chest").unwrap();
+        let mut slots = vec![None; 27];
+        slots[3] = Some(crate::items::ItemStack::new("minecraft:bone", 2));
+        let mut chunk = Chunk::empty(0, 0);
+        chunk.set(1, 64, 2, chest.0);
+        chunk.block_entities.push((
+            (1, 64, 2),
+            crate::containers::BlockEntity::Chest(slots.clone()),
+        ));
+        let rolled = RolledLoot {
+            pos: (1, 64, 2),
+            table: "minecraft:chests/simple_dungeon".into(),
+            seed: Some(42),
+            items: encode_items(&slots),
+        };
+        chunk.saved = Some(Arc::new(ChunkExtras {
+            rolled_loot: vec![rolled],
+            ..ChunkExtras::default()
+        }));
+        let saved_chest = |chunk: &Chunk| -> Tag {
+            let saved = encode_with(
+                chunk,
+                assets.registry,
+                &biomes,
+                Some(&tables),
+                LevelShape::OVERWORLD,
+            );
+            let Some(Tag::List(list)) = saved.tag.get("block_entities") else {
+                panic!("no block entities");
+            };
+            list[0].clone()
+        };
+        let unopened = saved_chest(&chunk);
+        assert_eq!(
+            text(unopened.get("LootTable")).as_deref(),
+            Some("minecraft:chests/simple_dungeon")
+        );
+        assert_eq!(number(unopened.get("LootTableSeed")), Some(42));
+        assert!(unopened.get("Items").is_none());
+        // Taking an item makes the items the container's own.
+        if let crate::containers::BlockEntity::Chest(s) = &mut chunk.block_entities[0].1 {
+            s[3] = None;
+            s[4] = Some(crate::items::ItemStack::new("minecraft:bone", 1));
+        }
+        let opened = saved_chest(&chunk);
+        assert!(opened.get("LootTable").is_none());
+        assert!(opened.get("Items").is_some());
+        // Loaded with its table, rolled, then emptied: no table, or it refills on load.
+        let mut extras = ChunkExtras::clone(chunk.saved.as_ref().unwrap());
+        extras.block_entity_sources = vec![(
+            (1, 64, 2),
+            Tag::compound([
+                ("id", string("minecraft:chest")),
+                ("x", Tag::Int(1)),
+                ("y", Tag::Int(64)),
+                ("z", Tag::Int(2)),
+                ("LootTable", string("minecraft:chests/simple_dungeon")),
+                ("LootTableSeed", Tag::Long(42)),
+            ]),
+        )];
+        chunk.saved = Some(Arc::new(extras));
+        if let crate::containers::BlockEntity::Chest(s) = &mut chunk.block_entities[0].1 {
+            s.fill(None);
+        }
+        let emptied = saved_chest(&chunk);
+        assert!(emptied.get("LootTable").is_none());
+        assert!(emptied.get("LootTableSeed").is_none());
+    }
+
+    #[test]
+    fn nether_and_end_chunks_save_with_their_own_height() {
+        let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let assets = crate::assets::Assets::load(&root).expect("assets");
+        let biomes = Biomes::load(&root).expect("biomes");
+        let tables = SaveTables::new(&assets);
+        let rack = assets
+            .registry
+            .default_state("minecraft:netherrack")
+            .unwrap();
+        let mut chunk = Chunk::empty(0, 0);
+        for y in 0..128 {
+            chunk.set(0, y, 0, rack.0);
+        }
+        let saved = encode_with(
+            &chunk,
+            assets.registry,
+            &biomes,
+            Some(&tables),
+            LevelShape::NETHER,
+        );
+        assert_eq!(number(saved.tag.get("yPos")), Some(0));
+        let Some(Tag::List(sections)) = saved.tag.get("sections") else {
+            panic!("no sections");
+        };
+        let ys: Vec<i32> = sections
+            .iter()
+            .filter_map(|s| number(s.get("Y")).map(|y| y as i32))
+            .collect();
+        assert_eq!(ys, (0..16).collect::<Vec<_>>());
+        let Some(Tag::List(post)) = saved.tag.get("PostProcessing") else {
+            panic!("no PostProcessing");
+        };
+        assert_eq!(post.len(), 16);
+        // Heightmap values count from the level's minimum: the column's top
+        // block at y=127 reads 128 (vanilla), not 192 (from the Overworld's -64).
+        let Some(Tag::LongArray(surface)) = saved
+            .tag
+            .get("Heightmaps")
+            .and_then(|h| h.get("WORLD_SURFACE"))
+        else {
+            panic!("no WORLD_SURFACE");
+        };
+        assert_eq!(surface[0] & 0x1ff, 128);
+        let overworld = encode_with(
+            &chunk,
+            assets.registry,
+            &biomes,
+            Some(&tables),
+            LevelShape::OVERWORLD,
+        );
+        assert_eq!(number(overworld.tag.get("yPos")), Some(-4));
+        assert_eq!(
+            LevelShape::for_dir(Path::new("w/dimensions/minecraft/the_end")),
+            LevelShape::END
+        );
+        assert_eq!(
+            LevelShape::for_dir(Path::new("w/DIM-1")),
+            LevelShape::NETHER
+        );
+    }
+
     #[test]
     fn saved_far_surface_reads_builds_and_water_without_gameplay_chunks() {
         let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
@@ -3554,7 +3868,7 @@ mod tests {
             "unfinished proto saves must not suppress complete decoration"
         );
         let mut nether = SaveDir::new(dir.clone());
-        nether.sky_light = false;
+        nether.shape = LevelShape::NETHER;
         let dark = nether.lod_surfaces(-2, 3, &assets, &biomes).unwrap();
         assert!(
             dark.iter()
@@ -3871,6 +4185,31 @@ mod tests {
         assert!(back.triggered);
         assert_eq!(back.crafting_ticks, 3);
         assert_eq!(back.redstone_signal(), 2);
+    }
+    #[test]
+    fn campfire_block_entity_round_trips() {
+        let mut c = crate::containers::Campfire::default();
+        c.items[1] = Some(crate::items::ItemStack::new("minecraft:beef", 1));
+        c.progress[1] = 120;
+        c.total[1] = 600;
+        let tag = encode_block_entity(
+            (3, 64, -2),
+            &crate::containers::BlockEntity::Campfire(Box::new(c.clone())),
+            "minecraft:soul_campfire",
+        );
+        // One block entity type for both campfires.
+        assert_eq!(text(tag.get("id")).as_deref(), Some("minecraft:campfire"));
+        let (pos, back) = decode_block_entity(&tag).expect("campfire");
+        assert_eq!(pos, (3, 64, -2));
+        let crate::containers::BlockEntity::Campfire(back) = back else {
+            panic!("not a campfire");
+        };
+        assert_eq!(*back, c);
+        // The update tag a server's clients get: the items alone.
+        let update =
+            crate::lan::chunks::entity_tag(&crate::containers::BlockEntity::Campfire(Box::new(c)))
+                .expect("update tag");
+        assert!(update.get("Items").is_some() && update.get("CookingTimes").is_none());
     }
     #[test]
     fn spawner_block_entity_round_trips() {
@@ -4381,5 +4720,29 @@ mod tests {
             panic!("a furnace back");
         };
         assert_eq!(back.recipes_used.get("minecraft:cooked_porkchop"), Some(&3));
+    }
+
+    /// A save written before the key was namespaced holds an id twice, once bare: vanilla
+    /// refuses such a furnace, so a load merges them under the full id.
+    #[test]
+    fn a_furnaces_recipes_used_merges_bare_and_full_ids() {
+        use crate::containers::BlockEntity;
+        let Some(BlockEntity::Furnace(mut f)) = BlockEntity::for_block("minecraft:furnace") else {
+            panic!("a furnace");
+        };
+        f.recipes_used
+            .insert("iron_ingot_from_smelting_iron_ore".to_owned(), 2);
+        f.recipes_used
+            .insert("minecraft:iron_ingot_from_smelting_iron_ore".to_owned(), 3);
+        let tag = encode_block_entity((1, 64, 2), &BlockEntity::Furnace(f), "minecraft:furnace");
+        let Some((_, BlockEntity::Furnace(back))) = decode_block_entity(&tag) else {
+            panic!("a furnace back");
+        };
+        assert_eq!(back.recipes_used.len(), 1);
+        assert_eq!(
+            back.recipes_used
+                .get("minecraft:iron_ingot_from_smelting_iron_ore"),
+            Some(&5)
+        );
     }
 }

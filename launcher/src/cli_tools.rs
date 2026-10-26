@@ -394,7 +394,7 @@ mod tests {
         let kinds = &schema["inputSchema"]["properties"]["kind"]["enum"];
         assert!(
             kinds.as_array().unwrap().contains(&json!("modpack"))
-                && !kinds.as_array().unwrap().contains(&json!("shader")),
+                && kinds.as_array().unwrap().contains(&json!("shader")),
             "{kinds}"
         );
         assert_eq!(

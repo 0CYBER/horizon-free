@@ -4,9 +4,11 @@
 //! `/render_hud`, `/render_clear` and `/render_shake` test `render`;
 //! `/input_claim`, `/input_poll`, `/input_held` and `/input_wheel` test
 //! `input`; `/zoom FACTOR SMOOTH TURN` tests `render.set-zoom`;
-//! `/corner` and `/readings` the calls the official extras mods use.
+//! `/corner` and `/readings` the calls the official extras mods use;
+//! `/raycast DISTANCE` says what `game.raycast` sees; `/quiet A;B` runs
+//! lines with `command.run-quiet` (`/quiet_many N`: N of them).
 use horizon_mod_sdk::{
-    Mod, Registration, chat,
+    Mod, Registration, chat, command, game,
     input::{self, Event},
     render::{self, FillShape, ItemShape, Point, QuadShape, Rect, Shape, SpriteShape, TextShape},
     ui::{self, ItemWidget, ListWidget, Screen, TextWidget, Widget},
@@ -97,6 +99,9 @@ impl Mod for Guest {
             "input_wheel",
             "zoom",
             "minimap",
+            "raycast",
+            "quiet",
+            "quiet_many",
             "corner",
             "readings",
         ]
@@ -216,6 +221,25 @@ impl Mod for Guest {
                     round: words.get(3) == Some(&"1"),
                 });
                 render::set_minimap(map);
+            }
+            "quiet" => command::run_quiet(&args.split(';').map(str::to_owned).collect::<Vec<_>>()),
+            "quiet_many" => {
+                let n: usize = args.parse().unwrap_or(0);
+                command::run_quiet(
+                    &(0..n)
+                        .map(|i| format!("setblock {i} 300 0 stone"))
+                        .collect::<Vec<_>>(),
+                );
+            }
+            "raycast" => {
+                let distance = args.parse().unwrap_or(f32::NAN);
+                chat::show(&match game::raycast(distance) {
+                    Some(h) => format!(
+                        "hit {} at {} {} {} ({:.1} {:.1} {:.1})",
+                        h.block, h.block_x, h.block_y, h.block_z, h.x, h.y, h.z
+                    ),
+                    None => "no hit".into(),
+                });
             }
             // Clamped to (1, 10); the two after it shake nothing.
             "render_shake" => {
