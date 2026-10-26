@@ -158,7 +158,8 @@ const COLUMNS: [(&str, &str); 6] = [
 #[derive(Default)]
 pub(super) struct StatsUi {
     tab: usize,
-    scroll: f32,
+    /// The list's scrolling: the wheel and the held scrollbar.
+    scroll: horizon_client::ui::Scroll,
     sort: Option<(usize, i32)>,
 }
 /// `MenuTabBar` geometry: three tabs over at most 400 pixels.
@@ -181,6 +182,15 @@ impl Game<'_> {
         }
         self.stats_ui = StatsUi::default();
         self.screen = Screen::Stats;
+    }
+    /// The list's scrollbar column (right of the 280 pixel list) and the
+    /// pixels it scrolls.
+    fn stats_bar(w: f32) -> f32 {
+        ((w - 280.0) / 2.0).floor() + 280.0 + 6.0
+    }
+    fn stats_content(&self) -> f32 {
+        let (row_h, rows) = self.stats_rows();
+        row_h * rows as f32 + 4.0
     }
     fn stats_rows(&self) -> (f32, usize) {
         match self.stats_ui.tab {
@@ -260,10 +270,9 @@ impl Game<'_> {
         // The list.
         let (row_h, rows) = self.stats_rows();
         let content = row_h * rows as f32 + 4.0;
-        let max_scroll = (content - (bottom - top)).max(0.0);
-        self.stats_ui.scroll = self.stats_ui.scroll.clamp(0.0, max_scroll);
+        self.stats_ui.scroll.clamp(top, bottom, content);
         let left = ((w - 280.0) / 2.0).floor();
-        let scroll = self.stats_ui.scroll;
+        let scroll = self.stats_ui.scroll.amount;
         let row_y = |i: usize| top + 4.0 + i as f32 * row_h - scroll;
         let visible = |y: f32| y >= top && y + row_h <= bottom;
         match self.stats_ui.tab {
@@ -408,11 +417,11 @@ impl Game<'_> {
         ui::scrollbar(
             batch,
             atlas,
-            left + 280.0 + 6.0,
+            Self::stats_bar(w),
             top,
             bottom,
             content,
-            self.stats_ui.scroll,
+            self.stats_ui.scroll.amount,
         );
         self.draw_stats_footer(batch, w, h);
     }
@@ -433,6 +442,10 @@ impl Game<'_> {
         );
     }
     pub(super) fn stats_click(&mut self, size: [u32; 2]) {
+        // A press on the scrollbar holds it and clicks nothing else.
+        if self.stats_press_scrollbar(size) {
+            return;
+        }
         let b = HudBatch::new(size);
         let (w, h) = (b.width, b.height);
         let (x0, tw) = tabs(w);
@@ -441,7 +454,7 @@ impl Game<'_> {
                 && self.stats_ui.tab != i
             {
                 self.stats_ui.tab = i;
-                self.stats_ui.scroll = 0.0;
+                self.stats_ui.scroll.amount = 0.0;
                 self.audio
                     .play("minecraft:ui.button.click", None, 0.25, 1.0);
                 return;
@@ -461,7 +474,7 @@ impl Game<'_> {
         }
         if self.stats_ui.tab == 1 {
             let left = ((w - 280.0) / 2.0).floor();
-            let y = TAB_H + 4.0 - self.stats_ui.scroll;
+            let y = TAB_H + 4.0 - self.stats_ui.scroll.amount;
             for c in 0..COLUMNS.len() {
                 let x = left + 75.0 + 40.0 * c as f32 - 18.0;
                 if ui::hovered(self.cursor, x, y + 1.0, 18.0, 18.0) {
@@ -479,6 +492,35 @@ impl Game<'_> {
     }
     pub(super) fn stats_scroll(&mut self, amount: f32) {
         let (row_h, _) = self.stats_rows();
-        self.stats_ui.scroll -= amount * row_h / 2.0;
+        let h = self.gui_size().1;
+        let content = self.stats_content();
+        self.stats_ui
+            .scroll
+            .wheel(amount, row_h / 2.0, TAB_H, h - FOOTER, content);
+    }
+    /// A press on the statistics list's scrollbar holds it
+    /// (`AbstractSelectionList.updateScrolling`).
+    pub(super) fn stats_press_scrollbar(&mut self, size: [u32; 2]) -> bool {
+        let b = HudBatch::new(size);
+        let (w, h) = (b.width, b.height);
+        let content = self.stats_content();
+        self.stats_ui
+            .scroll
+            .press(self.cursor, Self::stats_bar(w), TAB_H, h - FOOTER, content)
+    }
+    /// The pointer moved while the scrollbar is held.
+    pub(super) fn stats_drag(&mut self) {
+        if !self.stats_ui.scroll.held() {
+            return;
+        }
+        let h = self.gui_size().1;
+        let content = self.stats_content();
+        self.stats_ui
+            .scroll
+            .drag(self.cursor.1, TAB_H, h - FOOTER, content);
+    }
+    /// The button came up: the scrollbar lets go.
+    pub(super) fn stats_release(&mut self) {
+        self.stats_ui.scroll.release();
     }
 }

@@ -752,7 +752,8 @@ impl Game<'_> {
                     && !id.ends_with("get")
                     && let Ok(t) = self.entities(ctx, "target", false)
                 {
-                    self.cmds.waypoint_dirty.push(t[0]);
+                    let target = self.waypoint_target(t[0]);
+                    self.cmds.waypoint_dirty.push(target);
                 }
                 result
             }
@@ -2501,12 +2502,14 @@ impl Game<'_> {
         };
         let max = Self::int(ctx, "maxCount").unwrap_or(-1);
         let counting = max == 0;
-        // Inventory.clearOrCountMatchingItems: main, armor, crafting grid, carried.
+        // Inventory slots 0..40: main, armor feet to head, off hand;
+        // then clearOrCountMatchingItems visits the crafting grid and carried stack.
         let mut removed = 0i32;
         let mut budget = if max < 0 { i32::MAX } else { max };
         let all = |g: &Self| -> Vec<Option<ItemStack>> {
             let mut v: Vec<Option<ItemStack>> = g.inventory.clone();
-            v.extend(g.armor.iter().cloned());
+            v.extend(g.armor.iter().rev().cloned());
+            v.push(g.offhand.clone());
             v.extend(g.craft_grid.iter().cloned());
             v.push(g.carried.clone());
             v
@@ -2520,7 +2523,8 @@ impl Game<'_> {
             .collect();
         let mut slots: Vec<&mut Option<ItemStack>> = Vec::new();
         slots.extend(self.inventory.iter_mut());
-        slots.extend(self.armor.iter_mut());
+        slots.extend(self.armor.iter_mut().rev());
+        slots.push(&mut self.offhand);
         slots.extend(self.craft_grid.iter_mut());
         slots.push(&mut self.carried);
         for (slot, matches) in slots.into_iter().zip(matching) {
@@ -2838,9 +2842,14 @@ impl Game<'_> {
             capture.push(line.clone());
         }
         let focused = self.screen == Screen::Chat;
-        self.ui
-            .chat
-            .add(&self.gui.atlas, line, None, self.ticks, focused);
+        self.ui.chat.add(
+            &self.gui.atlas,
+            line,
+            None,
+            horizon_client::chat::ChatSource::Player,
+            self.ticks,
+            focused,
+        );
         Ok(1)
     }
     /// MessageArgument: `@p`-style selectors in a message become names.

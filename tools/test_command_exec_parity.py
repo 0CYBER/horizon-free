@@ -4,7 +4,7 @@
 Java (VanillaCommandExecOracle) starts a stand-in integrated server: a real
 MinecraftServer with a generated world, Commands.CommandSelection.INTEGRATED
 and one single-player owner named Player. Rust runs the same script through
-the Horizon client headless (HORIZON_COMMAND_SCRIPT). Both run each command as
+Horizon's integrated server with a connected headless client (HORIZON_COMMAND_SCRIPT). Both run each command as
 the player through Commands.performPrefixedCommand and record every system or
 chat message the player receives (text and resolved style: colour, bold,
 italic, underlined, strikethrough, obfuscated) together with the results the
@@ -82,7 +82,7 @@ def main():
     rust_dir = build / 'rust'
     shutil.rmtree(rust_dir, ignore_errors=True)
     rust_dir.mkdir()
-    env = lab.game_env(HORIZON_COMMAND_SCRIPT=script_path, HORIZON_COMMAND_OUTPUT=build / 'rust.jsonl')
+    env = lab.game_env(HORIZON_SERVER_THREAD=1, HORIZON_PLAYER_NAME="Player", HORIZON_COMMAND_SCRIPT=script_path, HORIZON_COMMAND_OUTPUT=build / 'rust.jsonl')
     run([binary, '--resources', lab.RESOURCES, '--world', 'harness', '--seed', SEED, '--radius', 4], 'rust', cwd=rust_dir, env=env)
 
     vanilla = [json.loads(l) for l in (build / 'vanilla.jsonl').open(encoding='utf-8')]

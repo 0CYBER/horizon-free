@@ -15,7 +15,8 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | The contract (WIT) | `crates/horizon-mod-sdk/wit/horizon.wit` | 0.1: log, game-read, chat, hud, storage, command, ui; tick, frame, chat and command hooks |
 | SDK for mod authors | `crates/horizon-mod-sdk` | 0.1 |
 | Example mods | `crates/horizon-mod-sdk/examples/coords-hud`, `examples/predator-missile` | coordinates, facing and time HUD, `/where`, `/coords`; `/missile`, a guided missile from vanilla commands |
-| Runtime | `crates/horizon-mods` | wasmtime 36 LTS, component model |
+| Horizon's official mods | `mods/official/` | the extras moving to the registry: FPS Counter (`fps-overlay`), Keystrokes |
+| Runtime | `crates/horizon-mods` | wasmtime 48 LTS, component model |
 | Authoring tool | `crates/cargo-horizon-mod` | `cargo horizon-mod new [--template code\|content] / build / run / test / check`, and the registry's CI (`registry build / review / list`) |
 | In the game | `crates/horizon-client/src/game/mods.rs`, Options > Mods | client mods |
 | Launcher mod browser (Modrinth, CurseForge with a key) | [mod-browser.md](mod-browser.md) | resource packs, modpacks |
@@ -87,7 +88,9 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | `hud` | `hud` | `set-panel(corner, lines)`, `clear()`: up to 16 lines of 256 characters |
 | `storage` | `storage` | `get(key)`, `set(key, value)`, `delete(key)`: a per-mod folder of up to 64 files, 4 MiB total, at most 1 MiB written per call |
 | `command` | `command` | `run(line)`: a vanilla command run as the player, with the player's permissions, after the hook returns (8 per call); mods' own commands are not run |
-| `ui` | `ui` | `open-screen`, `close-screen`, `set-settings`: a screen the mod owns and a page in Options > Mods, of text, item and list widgets the game lays out and draws with its own menus' code. **Experimental:** the manifest needs `experimental = ["ui"]` |
+| `ui` | `ui` | `open-screen`, `close-screen`, `set-settings`: a screen the mod owns and a page in Options > Mods, of text, button, item and list widgets the game lays out and draws with its own menus' code. **Experimental:** the manifest needs `experimental = ["ui"]` |
+| `render` | `render` | `set-hud(shapes)`: up to 1024 fills, four-cornered shapes, GUI sprites, items and text, kept on the HUD (over the hotbar, under chat and screens, hidden with F1) until replaced; `set-corner(corner, w, h, shapes)`: a box the game places in a corner, stacked with its overlays and other panels, as `hud`'s panels are; `text-width(text)`; `frame-stats()`: the game's FPS, min and 1% low; `gui-size()`; `shake(strength, seconds)`: the view turns, the player doesn't, scaled by Distortion Effects; `set-zoom(zoom)`: the field of view divided by up to 10, eased or at once, with slower turning, while playing and not through a spyglass (the strongest of several mods' zooms counts). The game's own HUD renderer draws them: a mod never supplies shader code. **Experimental:** `experimental = ["render"]` |
+| `input` | `input` | `claim-items(ids)`: the use button on those items is the mod's (`use-start`, `use-stop` with the ticks held; the game doesn't place, eat or swing); `register-key(name, label, key)`: up to 16 keys (`key.keyboard.r`), heard while playing as `key-down` / `key-up` (the game's own mapping on that key still runs; a screen opening lets held keys up), mouse buttons as `key.mouse.4`; `claim-wheel(on)`: the wheel's steps become `wheel` events and the hotbar doesn't move (the one input a mod takes from the game; a mod's keys never do); `held()`; `mapping(name)`: a movement or click mapping's key label and whether it is held; `clicks-per-second()`; `poll()` returns the events, at most 256 kept. **Experimental:** `experimental = ["input"]` |
 
 | Hook (export) | When |
 |---|---|
@@ -115,7 +118,7 @@ loading. Ordered by what the first native ports need:
 | `inventory-read` | the player's inventory, held item, open container | AppleSkin, recipe viewers |
 | `recipes` | the recipe registry and lookups | JEI/EMI-style viewers |
 | `world-read` | blocks and biomes around the player, within the render distance | minimaps, schematics |
-| `render` | world-space lines, boxes and ghost blocks in a per-frame budget | Litematica-style placement, waypoints |
+| `render` (world) | world-space lines, boxes and billboards, beside the HUD shapes `render` has | Litematica-style placement, waypoints |
 | `registries` | new blocks, items, entities and recipes, mostly data: JSON models, textures, loot and recipes in the `.hmod`'s `assets/` and `data/` | server side; see [Multiplayer](#multiplayer) |
 | `server` | world events (block break/place, entity spawn/death, player join), game rules, server commands | runs where the world is simulated |
 | `net` | a mod's own client↔server channel (custom payloads) | only between the two halves of the same mod |
@@ -133,8 +136,10 @@ There is no file, socket, process or raw-input interface, on purpose.
 | native `cdylib` plugins | none | no: per OS and arch, unstable Rust ABI | yes | none | unsafe for players |
 | an embedded JVM | none per mod | yes | Java | 100+ MB, seconds of startup | see the research |
 
-wasmtime 36 is a long-term-support line (security fixes until August 2027)
-that builds on the client's Rust 1.90. Only its `runtime`, `cranelift`,
+wasmtime 48 is a long-term-support line (security fixes until August 2028)
+and needs Rust 1.95. It reads WebAssembly with the same wasm-tools release
+(0.254) as the `wit-component` that packs mods and the SDK's `wit-bindgen`, so
+the build carries one copy of them. Only its `runtime`, `cranelift`,
 `component-model` and `std` features are on: no WASI, no async, no GC
 proposal, no profiling. Its cranelift backend generates native code for x86-64
 and ARM64 on Windows, macOS and Linux, which is why one `.hmod` serves them
@@ -351,7 +356,7 @@ experimental = []            # experimental capabilities it uses, e.g. ["ui"]
 ```
 
 Unknown keys are refused, so a typo is an error, not a silently ignored
-permission. An experimental capability (today `ui`) may change in any release
+permission. An experimental capability (today `ui`, `render` and `input`) may change in any release
 ([stability](api/stability.md)): a mod uses it only by naming it in
 `experimental` as well, so nobody depends on it by accident.
 
@@ -431,14 +436,14 @@ A pool addition holds `"elements"` as a pool does. This is what lithostitched's
 NeoForge and Fabric, and `horizon-port-pack carry` writes them from those.
 
 A structure (and any of its pool elements, in place of the structure's) may
-hold `horizon:enhanced_terrain_adaptation`: YUNG's API's and
-MoogsStructureLib's terrain kernel, which carves or buries terrain around the
+hold `horizon:enhanced_terrain_adaptation`: MoogsStructureLib's terrain
+kernel, which carves or buries terrain around the
 pieces on top of vanilla's `terrain_adaptation`. `kernel_size` and
 `kernel_distance` shape the kernel; `top` and `bottom` (`carve`, `bury` or
 `none`) act above and below a piece's floor; `bottom_offset`, `padding`
 (`x`, `top`, `bottom`, `z`) and MoogsStructureLib's `band` (`bottom`, `top`,
 `piece_heights`) move the box it measures from. On a structure,
-`rigid_junctions` (YUNG's API) adds rigid pieces' junctions as well and
+`rigid_junctions` adds rigid pieces' junctions as well and
 `inflate` grows the start's box by the kernel radius. `kernel_size` 0 is
 none.
 
@@ -469,6 +474,21 @@ published. Players find them at [playhorizon.dev/mods](https://playhorizon.dev/m
 An update is the same form with a new version; only the project's `owners` can publish one, signed with its key if it
 has one. A published file never changes. Without the form, open the pull request by hand (the repository's README
 says how). The formats: [api/mod-index.md](api/mod-index.md).
+
+### Horizon's official mods
+
+The Horizon extras that are mods now live in `mods/official/<name>/`, one crate each in the game's workspace, so
+`cargo clippy --workspace` and pr_ready cover them. They use only the public API, like any other mod, with the same
+options on their settings page as the extra had and the same look. Each is published by a maintainer: build it on
+`main` with the toolchain CI uses (`cd mods/official/<name> && cargo horizon-mod build`), then open a pull request in
+horizon-mods with its `mods/<id>.toml` (owners `ludovic111`, `source` pointing at the folder) and the file's
+SHA-256. The reviewer builds it the same way and merges only when the hashes match: the `.wasm` holds no local paths,
+so the same rustc and `Cargo.lock` give the same file.
+
+| Mod | Id | Replaces | Settings (storage key: values) |
+|---|---|---|---|
+| FPS Counter | `fps_overlay` | Extras > FPS counter | `corner`: `top_left` (default), `top_right`, `bottom_left`, `bottom_right`; `lows`: `false` (default), `true` |
+| Keystrokes | `keystrokes` | Extras > Keystrokes | `corner`: as above, default `top_left`; `cps`: `true` (default), `false` |
 
 ## Versions and compatibility
 

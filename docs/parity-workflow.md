@@ -40,7 +40,7 @@ The game logs into `HORIZON_HOME` and falls back to the player's own game folder
 
 ### Other machines
 
-Harnesses can also run on the Mac mini and the ThinkPad (`tools/parity_hosts.json` describes them; its `default` list is empty, so pass `--hosts macmini,thinkpad` or set `PARITY_HOSTS`, after copying `shared-local/` to `~/code/horizon-parity/shared-local` on each host). The runner mirrors the worktree there with rsync (not `.git`, `.local`, `target` or ignored files) into `~/code/horizon-parity/remote/<host><path>`, whose `.local` links to the vanilla data in `~/code/horizon-parity/shared-local`, and starts `tools/parity.py --worker` over ssh. The worker builds the probes (about 80 s the first time) and runs what it is sent under the same tracer, admitting harnesses against its own free memory. One queue, longest first, feeds every machine, remote ones first: the Mac takes up to 14 harnesses, the desktop 3 and only those under 800 MB. Each pass comes back with the content hash of every file it depended on, so it is keyed on exactly what ran, and logs come back to `.local/parity-runner/logs/`; state, sharing and `gate.py` work as before. If a host can't be reached, or drops out, its harnesses run here.
+Harnesses can also run on the Mac mini, the ThinkPad and the desktop (`tools/parity_hosts.json` describes them; `desktop` uses its CI runner's environment and vanilla data, and refuses work, or stops it, while someone uses it: docs/release-flow.md, "The desktop's runner"; its `default` list is empty, so pass `--hosts macmini,thinkpad` or set `PARITY_HOSTS`, after copying `shared-local/` to `~/code/horizon-parity/shared-local` on each host). The runner mirrors the worktree there with rsync (not `.git`, `.local`, `target` or ignored files) into `~/code/horizon-parity/remote/<host><path>`, whose `.local` links to the vanilla data in `~/code/horizon-parity/shared-local`, and starts `tools/parity.py --worker` over ssh. The worker builds the probes (about 80 s the first time) and runs what it is sent under the same tracer, admitting harnesses against its own free memory. One queue, longest first, feeds every machine, remote ones first: the Mac takes up to 14 harnesses, the desktop 8. Each pass comes back with the content hash of every file it depended on, so it is keyed on exactly what ran, and logs come back to `.local/parity-runner/logs/`; state, sharing and `gate.py` work as before. If a host can't be reached, or drops out, its harnesses run here.
 
 Harnesses a host can't run are listed in the file: `local_only` (`save_roundtrip` runs the game on a virtual screen) and each host's `exclude`. The Mac excludes nothing: vanilla's `Math.sin`, `pow`, `log` and the like don't round the same on an Apple silicon Mac as on Linux (HotSpot uses fdlibm there, Intel's stubs on x86-64), and Rust's float functions round like neither (they call the platform libm), so code that mirrors a vanilla `Math` call uses `horizon_core::jmath`, which computes what HotSpot computes on the host architecture. The ThinkPad helps too, gently: Linux, 2 harnesses at `nice 19`, since it hosts the Claude account pool; it finds ALSA through `~/code/horizon-parity/alsa-dev` like the desktop.
 
@@ -79,6 +79,34 @@ An agent working an area merges the integration branch first, uses `tools/parity
 `check` and `integrate` start by trial-merging the candidates with `git merge-tree`, in the object database, without touching any worktree: each branch alone, every pair, then the largest set without conflicts, merged in turn. That takes about a second for ten branches and names the conflicting files. `integrate` merges that set, gates it once (formatting, lints and tests before the long harness run; the flake check covers everything the branches change) and pushes. If the gate fails it tries each half of the set in turn, so the branches that pass still land; `--no-bisect` turns that off.
 
 On ludodesktop, source `~/code/horizon-parity/env.sh` first: it sets the ALSA build path and the Cargo job cap. Debug builds carry line tables only (`[profile.dev]` in `Cargo.toml`), which keeps backtraces readable while keeping each worktree's build small; a fresh worktree builds `horizon-client` and its tests in under a minute.
+
+## Server execution in game fixtures
+
+`HORIZON_COMMAND_SCRIPT` runs on the integrated server's `Server thread`, with the
+headless client joined through the normal memory connection. Commands use the connected
+owner's body and dimension. The script owns the clock: each `tick` calls `tick_server`,
+while login and portal arrival pump connection-only passes. The client acknowledges
+terrain and teleports without predicting movement, matching the command oracle's stationary
+player. Script and save errors return through server shutdown; output keeps the existing
+styled messages and `CommandResultCallback` schema. `--in-frame` is not needed.
+
+`HORIZON_DISPENSE_FIXTURE` and `HORIZON_SCULK_FIXTURE` are component probes. They construct
+a server `Game` on a server thread and retain the oracles' synthetic levels, seeded random
+streams and explicit entity/block phases. A synthetic sculk player controls warning levels,
+not client input; dispenser probes call one activation without running unrelated world ticks.
+Keep those controls when extending the fixtures. Player interactions belong in connected-client
+coverage alongside the components:
+
+```sh
+python3 tools/test_command_exec_parity.py
+python3 tools/test_dispenser_parity.py
+python3 tools/test_sculk_parity.py
+python3 tools/lan_e2e.py --server-thread --check machines --check fireball --check sculk_container
+```
+
+The LAN checks open and fill machines through the guest's inventory packets, observe a
+powered dispenser's projectile on both clients, and open a chest to activate a sculk sensor
+and shrieker. They supplement the deterministic component comparisons.
 
 ## Reading vanilla
 

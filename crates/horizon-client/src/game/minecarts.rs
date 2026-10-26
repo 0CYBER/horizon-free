@@ -1463,6 +1463,7 @@ impl Game<'_> {
             lid: &lid,
             sign: &|_| None,
             banner: &|_| Vec::new(),
+            skull: &|_| None,
             glyph: &|c| self.gui.atlas.glyph_cell(c),
         };
         self.res

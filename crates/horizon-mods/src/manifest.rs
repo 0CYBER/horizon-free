@@ -86,9 +86,15 @@ pub enum Capability {
     /// A screen the mod owns and a settings page in Options > Mods, drawn
     /// with the menus' own widgets (interface `ui`, calls `ui-events`).
     Ui,
+    /// Shapes on the HUD and the camera's shake, drawn by the game's own
+    /// renderer (interface `render`).
+    Render,
+    /// The use button on items the mod claims, and its own keys
+    /// (interface `input`).
+    Input,
 }
 impl Capability {
-    pub const ALL: [Capability; 7] = [
+    pub const ALL: [Capability; 9] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
@@ -96,6 +102,8 @@ impl Capability {
         Capability::Command,
         Capability::Registries,
         Capability::Ui,
+        Capability::Render,
+        Capability::Input,
     ];
     /// The WIT interface it grants, in `horizon:mods`.
     pub fn interface(self) -> &'static str {
@@ -107,12 +115,17 @@ impl Capability {
             Capability::Command => "command",
             Capability::Registries => "registries",
             Capability::Ui => "ui",
+            Capability::Render => "render",
+            Capability::Input => "input",
         }
     }
     /// May change in any release: a mod uses it only with
     /// `experimental = ["<name>"]` in its manifest.
     pub fn is_experimental(self) -> bool {
-        matches!(self, Capability::Ui)
+        matches!(
+            self,
+            Capability::Ui | Capability::Render | Capability::Input
+        )
     }
     /// What the player reads before turning the mod on: "May <this>".
     pub fn describe(self) -> &'static str {
@@ -124,6 +137,10 @@ impl Capability {
             Capability::Command => "run commands as you, with your permissions",
             Capability::Registries => "add blocks and items to your worlds",
             Capability::Ui => "show its own screens and a settings page",
+            Capability::Render => "draw on your screen, shake and zoom the camera",
+            Capability::Input => {
+                "see the keys you hold and your clicks, take over the use button on its own items and the mouse wheel, and add keys"
+            }
         }
     }
     /// The capability a component import needs, `Ok(None)` for one every
@@ -156,6 +173,8 @@ impl fmt::Display for Capability {
             Capability::Command => "command",
             Capability::Registries => "registries",
             Capability::Ui => "ui",
+            Capability::Render => "render",
+            Capability::Input => "input",
         };
         f.write_str(name)
     }

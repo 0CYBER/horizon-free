@@ -103,5 +103,11 @@ What real mods need next, in the order modpacks and servers need it:
 ## Changelog
 
 - SDK: `cargo horizon-mod test` and `horizon_mods::testing`, test scripts in TOML; the template has one.
+- Experimental: `ui` button widget; `render.set-corner`, `text-width`, `frame-stats`; `input.mapping`,
+  `clicks-per-second` (what the official FPS, keystrokes and zoom mods need).
+- Experimental `input` (`experimental = ["input"]`): `claim-items`, `register-key`, `held`, `poll` (use-start,
+  use-stop, key-down, key-up).
+- Experimental `render` (`experimental = ["render"]`): HUD shapes (fill, quad, sprite, item, text), `gui-size`, camera
+  `shake`, drawn by the game's own renderer.
 - API 0.2 (content): data-driven blocks and items, tags, `horizon:add_to`, terrain adaptation.
 - API 0.1.0: `log`, `game`, `chat`, `hud`, `storage`; `init`, `tick`, `frame`, `command`, `chat`.

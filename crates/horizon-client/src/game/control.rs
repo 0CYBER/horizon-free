@@ -241,6 +241,13 @@ impl Game<'_> {
             "pad" => Ok(Some(self.pad_command(&words)?)),
             "key" => {
                 let key = key_code(arg(1)?).ok_or_else(|| format!("unknown key {}", words[1]))?;
+                // A server's dialog takes the keys, in configuration too.
+                if self.dialog_open() {
+                    if arg(2)? != "up" {
+                        self.dialog_key(key, None, None)?;
+                    }
+                    return ok();
+                }
                 self.require_world()?;
                 // The sign editor takes raw presses (Enter, arrows, Backspace, Escape).
                 if self.sign_edit.is_some() {
@@ -293,6 +300,11 @@ impl Game<'_> {
                 self.extras_key(physical, action != "up", action == "repeat");
                 if action == "tap" {
                     self.extras_key(physical, false, false);
+                }
+                // So do mods' keys (capability `input`).
+                self.mod_key(physical, action != "up", action == "repeat");
+                if action == "tap" {
+                    self.mod_key(physical, false, false);
                 }
                 // Text screens consume raw presses; releases follow key binds.
                 let typing = matches!(self.screen, Screen::Chat | Screen::Options);
@@ -533,13 +545,17 @@ impl Game<'_> {
                 ))
             }
             "type" => {
-                self.require_world()?;
                 let text = line
                     .trim_start()
                     .strip_prefix("type")
                     .unwrap_or("")
                     .strip_prefix(' ')
                     .unwrap_or("");
+                // A server's dialog, in configuration too.
+                if self.dialog_type(text) {
+                    return ok();
+                }
+                self.require_world()?;
                 if self.book.is_some() {
                     self.book_type(text);
                     return ok();

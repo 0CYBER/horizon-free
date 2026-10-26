@@ -16,7 +16,7 @@
 //! What is not here is taken out of its list later and counted
 //! (`worldgen::upgrade`). The entity NBT is written in 26.3's shape (an
 //! `equipment` map, not 1.21.1's `HandItems` and `ArmorItems`).
-use crate::legacy_structure_mods::{ctov, lithostitched, yung};
+use crate::legacy_structure_mods::{ctov, lithostitched};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -177,12 +177,12 @@ fn carry_at(
     let mut out = Vec::with_capacity(expanded.len());
     for p in expanded {
         let kind = p["processor_type"].as_str().unwrap_or_default().to_owned();
-        // Lithostitched's and YUNG's processors are carried apart from this
-        // code (`legacy_structure_mods`).
+        // Lithostitched's processors are carried apart from this code
+        // (`legacy_structure_mods`).
         let replacement = lithostitched::processor(&kind, &p, data, carried).or_else(|| {
-            match pillar_type(&kind).or_else(|| yung::pillar_type(&kind)) {
+            match pillar_type(&kind) {
                 Some(to) => Some(vec![pillar(&p, to, data, carried, depth)]),
-                None => as_data(&kind, &p, data).or_else(|| yung::processor(&kind, &p)),
+                None => as_data(&kind, &p, data),
             }
         });
         match replacement {
@@ -860,8 +860,10 @@ mod tests {
                 "horizon:bottom_pillar",
                 "horizon:close_off_fluid_sources",
                 "horizon:close_off_air_sources",
-                "horizon:yung_pillar",
-                "horizon:stair_pillar"
+                // YUNG's processors stay Java (dropped later) until the
+                // specification covers them.
+                "betterfortresses:pillar_processor",
+                "betterfortresses:stair_pillar_processor"
             ]
         );
         // The named list is written in once; its own pillar loses its list.
@@ -878,8 +880,7 @@ mod tests {
             p[4]["weighted_list_of_replacement_blocks"],
             json!([{"block": "minecraft:prismarine", "weight": 1}])
         );
-        assert_eq!(p[6]["pillar"], "minecraft:red_nether_bricks");
         assert_eq!(carried["repurposed_structures:pillar_processor"], 2);
-        assert_eq!(carried["betterfortresses:stair_pillar_processor"], 1);
+        assert!(!carried.contains_key("betterfortresses:stair_pillar_processor"));
     }
 }
