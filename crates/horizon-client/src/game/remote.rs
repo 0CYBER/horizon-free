@@ -3492,10 +3492,14 @@ impl Game<'_> {
         let head_lerps = &mut r.head_lerps;
         let players = &r.level_players;
         let mut using = Vec::new();
+        let mut wither_heads = Vec::new();
         for m in &mut self.mobs {
             let player = players.contains_key(&(m.id as i32));
             if !running && !player {
                 continue;
+            }
+            if m.species() == horizon_client::mobs::Species::Wither {
+                wither_heads.extend((0..3).map(|i| horizon_client::mobs::wither::head_pos(m, i)));
             }
             m.previous = m.position;
             m.previous_yaw = m.yaw;
@@ -3613,6 +3617,19 @@ impl Game<'_> {
             d.tick(world, facts, collision, false, &self.res.motion().fluids);
         }
         head_lerps.retain(|_, (_, steps)| *steps > 0);
+        // WitherBoss.aiStep runs on a client too: smoke around each head.
+        let smoke = horizon_client::particles::ParticleOptions::simple(
+            horizon_client::particles::ParticleType::Smoke,
+        );
+        for h in wither_heads {
+            let r = self.particles.random();
+            let at = [
+                h[0] + r.next_gaussian() * 0.3,
+                h[1] + r.next_gaussian() * 0.3,
+                h[2] + r.next_gaussian() * 0.3,
+            ];
+            self.particles.add(&smoke, at, [0.0; 3]);
+        }
         for (item, ticks, at, eye, pitch, yaw) in using {
             self.remote_player_eating(&item, ticks, at, eye, pitch, yaw);
         }
