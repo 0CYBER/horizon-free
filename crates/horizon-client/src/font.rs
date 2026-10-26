@@ -891,8 +891,11 @@ impl Font {
         }
         s.chars().map(|c| self.glyph(c).advance).sum::<f32>().ceil()
     }
+    /// Font.width of a component: `§` codes in the spans are formatting,
+    /// not glyphs.
     pub fn width_text(&self, t: &Text) -> f32 {
-        t.chars()
+        t.resolved()
+            .chars()
             .map(|(c, s)| self.advance(c, s))
             .sum::<f32>()
             .ceil()

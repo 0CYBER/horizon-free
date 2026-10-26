@@ -37,13 +37,56 @@ jobs:
         run: bash tools/ci/runner-env.sh
       - name: Vanilla data, and resources prepared by this preparer
         run: bash tools/ci/vanilla-data.sh
+      - name: The prepared output is the one the preparer's OUTPUT_VERSION says
+        env:
+          BASE_SHA: ${{ inputs.base }}
+        run: python3 tools/prepare_output.py check --cache --base "$BASE_SHA"
       - name: The version constants are the pinned jar's
         run: python3 tools/gen_version_consts.py --check
       - name: The harnesses this change can affect
         env:
           PARITY_HOSTS: ''
           BASE_SHA: ${{ inputs.base }}
-        run: python3 tools/parity.py --changed "$BASE_SHA" --timeout 2400  # world_spawn takes ~1480 s on a busy runner
+        run: |
+          # main's selection (tools/parity.py --changed --list with main's parity.py and parity_reach.py), so a
+          # branch made before a better selection landed gets it too; the head's own runner then runs those
+          # harnesses. A branch that changes the selection itself selects with its own code.
+          set -euo pipefail
+          own() { python3 tools/parity.py --changed "$BASE_SHA" --timeout 2400; }  # world_spawn takes ~1480 s on a busy runner
+          fork_point=$(git merge-base "$BASE_SHA" HEAD)
+          if ! git rev-parse --verify -q origin/main >/dev/null || ! git diff --quiet "$fork_point" HEAD -- tools/parity.py tools/parity_reach.py; then
+            own
+            exit
+          fi
+          had_reach=$(git ls-files tools/parity_reach.py)
+          git show origin/main:tools/parity.py > tools/parity.py
+          git show origin/main:tools/parity_reach.py > tools/parity_reach.py
+          status=0
+          python3 tools/parity.py --changed "$BASE_SHA" --list > .local/parity-selection.txt || status=$?
+          git checkout -- tools/parity.py
+          if [ -n "$had_reach" ]; then git checkout -- tools/parity_reach.py; else rm -f tools/parity_reach.py; fi
+          cat .local/parity-selection.txt
+          if [ "$status" != 0 ]; then
+            echo "main's selection failed: the head's own selection runs"
+            own
+            exit
+          fi
+          names=$(sed '$d' .local/parity-selection.txt | grep -E '^[A-Za-z0-9_#]+$' || true)
+          # The summary line says how many would run: a count that doesn't match the names read (a format change)
+          # must not let the job pass untested.
+          expected=$(tail -1 .local/parity-selection.txt | sed -nE 's/^([0-9]+) of [0-9]+ harnesses would run$/\1/p')
+          count=$(printf '%s' "$names" | grep -c . || true)
+          if [ -z "$expected" ] || [ "$expected" != "$count" ]; then
+            echo "main's selection listed $count names, its summary says '${expected:-?}': the head's own selection runs"
+            own
+            exit
+          fi
+          if [ "$count" = 0 ]; then
+            echo "Nothing to run."
+            exit 0
+          fi
+          # shellcheck disable=SC2086
+          python3 tools/parity.py $names --timeout 2400
       - name: Logs of the failed harnesses
         if: failure()
         uses: actions/upload-artifact@v4

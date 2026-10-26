@@ -21,6 +21,8 @@ pub struct Report {
     pub sha256: String,
     pub size: u64,
     pub signed: bool,
+    /// A mod has code to run (a content mod may have none).
+    pub code: bool,
     /// A mod's component imports.
     pub imports: Vec<String>,
     /// A mod's commands, each run once.
@@ -49,6 +51,7 @@ impl Report {
             "sha256": self.sha256,
             "size": self.size,
             "signed": self.signed,
+            "code": self.code,
             "imports": self.imports,
             "commands": self.commands,
             "output": self.output,
@@ -87,7 +90,9 @@ impl Report {
         for r in &f.requires {
             out += &format!("  needs {} {} ({})\n", r.id, r.version, &r.sha256[..12]);
         }
-        if self.kind == Kind::Mod {
+        if self.kind == Kind::Mod && !self.code {
+            out += "  no code: content only, nothing to run\n";
+        } else if self.kind == Kind::Mod {
             let commands = if self.commands.is_empty() {
                 String::new()
             } else {
@@ -142,6 +147,7 @@ pub fn check(
         sha256: index::sha256_file(path)?,
         size,
         signed,
+        code: false,
         imports: Vec::new(),
         commands: Vec::new(),
         output: Vec::new(),
@@ -153,10 +159,14 @@ pub fn check(
 }
 
 /// Runs a mod in the sandbox, as the game does, from a scratch copy so its
-/// storage lands in a folder removed afterwards.
+/// storage lands in a folder removed afterwards. A content mod has no code to
+/// run: `inspect` already read its content as the game does.
 fn trial_run(path: &Path, report: &mut Report) -> Result<(), String> {
     let package = Package::read(path)?;
-    let wasm = package.wasm.as_deref().ok_or("the .hmod has no mod.wasm")?;
+    let Some(wasm) = package.wasm.as_deref() else {
+        return Ok(());
+    };
+    report.code = true;
     report.imports = component_imports(wasm)?;
     package
         .manifest
@@ -214,7 +224,10 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
             Output::Feedback { text, error } => {
                 format!("{}: {text}", if error { "error" } else { "feedback" })
             }
+            Output::Command { line } => format!("command: /{line}"),
             Output::Stopped { reason, .. } => return Err(format!("it stopped: {reason}")),
+            Output::OpenScreen { .. } => "opened a screen".to_string(),
+            Output::CloseScreen { .. } => "closed its screen".to_string(),
         });
     }
     match failed(&mods) {
