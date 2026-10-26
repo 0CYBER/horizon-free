@@ -3185,6 +3185,8 @@ impl Game<'_> {
         self.with_level(|b, level, ticks| {
             b.client_tick_block_entities(level, ticks);
         });
+        let pushes = std::mem::take(&mut self.block_ticks.piston_pushes);
+        self.push_piston_entities(pushes);
         self.sync_moving_pistons();
         self.tick_hand();
         self.tick_particles();

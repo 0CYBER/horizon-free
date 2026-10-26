@@ -296,7 +296,7 @@ CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'si
           'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles',
           'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing',
           'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push',
-          'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles',
+          'piston-push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles',
           'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects',
           'portals', 'distance', 'growth', 'doors', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands',
           'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption',
@@ -2366,6 +2366,59 @@ def wait_state(game, pos, key, want, ticks):
             return want
         game.wait(10)
     return state_of(game, pos, key)
+
+
+def check_piston_push(host, guest, out):
+    """A moving piston pushes both players and a stationary mob on each host path."""
+    hx, _, hz = pos_of(host)
+    x, y, z = (int(hx // 16) * 16 + 8, 100, int(hz // 16) * 16 + 8)
+    host('command', command=f'fill {x-4} {y-1} {z-4} {x+7} {y-1} {z+4} minecraft:stone')
+    host('command', command=f'fill {x-4} {y} {z-4} {x+7} {y+5} {z+4} minecraft:air')
+    host('command', command=f'setblock {x} {y} {z} minecraft:piston[facing=east]')
+    results = {}
+    for player, name in ((host, host.player), (guest, GUEST_NAME)):
+        host('command', command=f'setblock {x-1} {y} {z} minecraft:air')
+        host.wait(10)
+        host('command', command=f'tp @s {x+5.5} {y} {z+2.5}')
+        host('command', command=f'tp {GUEST_NAME} {x+5.5} {y} {z-1.5}')
+        host('command', command=f'tp {"@s" if player is host else GUEST_NAME} {x+1.65} {y} {z+0.5}')
+        player.wait(15)
+        before = pos_of(player)
+        assert abs(before[0] - (x + 1.65)) < 0.1, f'{name} did not reach piston: {before}'
+        host('command', command=f'setblock {x-1} {y} {z} minecraft:redstone_block')
+        player.wait(30)
+        after = pos_of(player)
+        results[name] = after[0] - before[0]
+        assert results[name] > 0.3, f'piston did not push {name}: {before} -> {after}'
+    host('command', command=f'setblock {x-1} {y} {z} minecraft:air')
+    host.wait(10)
+    host('command', command=f'tp {GUEST_NAME} {x+5.5} {y} {z-1.5}')
+    host('command', command=f'tp @s {x+1.65} {y} {z+0.5}')
+    host.wait(10)
+    host.raw('key', 'e', 'tap')
+    host.raw('wait-for', 'screen', 'inventory')
+    before = pos_of(host)
+    guest('command', command=f'setblock {x-1} {y} {z} minecraft:redstone_block')
+    host.wait(30)
+    after = pos_of(host)
+    results['inventory'] = after[0] - before[0]
+    assert results['inventory'] > 0.3, f'piston did not push player with inventory open: {before} -> {after}'
+    host.raw('key', 'esc', 'tap')
+    host('command', command=f'setblock {x-1} {y} {z} minecraft:air')
+    host.wait(10)
+    host('command', command=f'tp @s {x+5.5} {y} {z+2.5}')
+    host('command', command=f'summon minecraft:pig {x+1.65} {y} {z+0.5} {{NoAI:1b}}')
+    host.wait(10)
+    pigs = host('entities', radius=16, type='pig')['entities']
+    pig = min(pigs, key=lambda p: abs(p['pos'][0] - (x + 1.65)) + abs(p['pos'][2] - (z + 0.5)))
+    before = pig['pos'][0]
+    host('command', command=f'setblock {x-1} {y} {z} minecraft:redstone_block')
+    host.wait(30)
+    pigs = host('entities', radius=16, type='pig')['entities']
+    after = next(p['pos'][0] for p in pigs if p['id'] == pig['id'])
+    results['pig'] = after - before
+    assert results['pig'] > 0.3, f'piston did not push pig: {before} -> {after}'
+    return results
 
 
 def check_plates(host, guest, out):
@@ -4679,7 +4732,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'cartography': check_cartography, 'hurt': check_hurt, 'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
              'effects': check_effects, 'portals': check_portals, 'distance': check_distance,
-             'clicks': check_clicks, 'sleep': check_sleep, 'push': check_push,
+             'clicks': check_clicks, 'sleep': check_sleep, 'push': check_push, 'piston-push': check_piston_push,
              'eat': check_eat, 'eating': check_eating, 'xp': check_xp,
              'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
              'light': check_light, 'plates': check_plates, 'swings': check_swings,

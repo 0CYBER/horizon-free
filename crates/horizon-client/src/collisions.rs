@@ -54,6 +54,27 @@ fn strider_liquid_shape() -> VoxelShape {
     VoxelShape::from_cube([1, 2, 1], &[true, false]).expect("a valid half-block column")
 }
 
+// Vanilla scopes this direction to Entity.move while a piston pushes it.
+thread_local! {
+    static PISTON_NOCLIP: std::cell::Cell<Option<horizon_core::geometry::Direction>> = const { std::cell::Cell::new(None) };
+}
+
+/// Suppress the moving part of pistons moving in this direction during a push.
+pub fn with_piston_noclip<T>(
+    direction: horizon_core::geometry::Direction,
+    f: impl FnOnce() -> T,
+) -> T {
+    struct Reset(Option<horizon_core::geometry::Direction>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            PISTON_NOCLIP.with(|value| value.set(self.0));
+        }
+    }
+    let previous = PISTON_NOCLIP.with(|value| value.replace(Some(direction)));
+    let _reset = Reset(previous);
+    f()
+}
+
 pub struct SceneCollisions<'w, 'r> {
     pub world: &'w World,
     pub binding: &'w BlockCollisionRegistry<'r>,
@@ -324,7 +345,7 @@ impl DynamicSupportWorld for SceneCollisions<'_, '_> {
             return Ok(None);
         };
         pistons
-            .collision_shape(self, p, piston, None)
+            .collision_shape(self, p, piston, PISTON_NOCLIP.with(|value| value.get()))
             .map(Some)
             .map_err(io::Error::other)
     }
@@ -473,5 +494,29 @@ impl PowderSnowWorld for LookupCollisions<'_, '_> {
     }
     fn feet_are_leather_boots(&mut self, _: EntityIdentity) -> io::Result<bool> {
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod piston_noclip_tests {
+    use super::*;
+    use horizon_core::geometry::Direction;
+
+    #[test]
+    fn piston_noclip_is_scoped_and_restored_after_unwind() {
+        assert_eq!(PISTON_NOCLIP.with(|value| value.get()), None);
+        with_piston_noclip(Direction::East, || {
+            assert_eq!(
+                PISTON_NOCLIP.with(|value| value.get()),
+                Some(Direction::East)
+            );
+            let _ =
+                std::panic::catch_unwind(|| with_piston_noclip(Direction::West, || panic!("test")));
+            assert_eq!(
+                PISTON_NOCLIP.with(|value| value.get()),
+                Some(Direction::East)
+            );
+        });
+        assert_eq!(PISTON_NOCLIP.with(|value| value.get()), None);
     }
 }
