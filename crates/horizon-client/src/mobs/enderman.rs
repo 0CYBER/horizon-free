@@ -186,7 +186,6 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     }
     if (m.fluids.in_water
         || w.raining
-            && !w.end
             && w.can_see_sky(
                 m.position.x.floor() as i32,
                 m.eye_y().floor() as i32,

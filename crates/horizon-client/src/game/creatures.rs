@@ -388,6 +388,9 @@ impl Game<'_> {
     }
     pub(super) fn mob_world_base<'s>(&'s self, others: &'s [Seen]) -> MobWorld<'s> {
         let (rain, thunder) = self.world.weather.levels(1.0);
+        // Level.canHaveWeather: only the overworld's rain and thunder levels
+        // ever rise, so nothing rains or thunders in the Nether or the End.
+        let weather = self.dim == Dim::Overworld;
         let player = self.player_view();
         MobWorld {
             world: &self.world,
@@ -404,8 +407,8 @@ impl Game<'_> {
             daylight: self.dim != Dim::Nether && self.sky_darken() < 4,
             game_time: self.world.game_time,
             day_time: self.world.day_time,
-            raining: rain > 0.2,
-            thundering: thunder > 0.9,
+            raining: weather && rain > 0.2,
+            thundering: weather && thunder > 0.9,
             nether: self.dim == Dim::Nether,
             block_tags: &self.res.items().block_tags,
             biomes: self.res.biomes(),
