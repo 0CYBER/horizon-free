@@ -713,7 +713,8 @@ impl Game<'_> {
         if let Some(rest) = self.give(stack)
             && let Some(eye) = self.eye_position()
         {
-            self.spawn_item(rest, [eye[0], eye[1] - 0.3, eye[2]], [0.0, 0.1, 0.0], 40);
+            // Inventory.placeItemBackInInventory: `player.drop(stack, false)`.
+            self.throw_from_eyes(rest, eye, false);
         }
     }
     /// `Player.giveExperienceLevels`.

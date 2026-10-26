@@ -453,6 +453,11 @@ impl Game<'_> {
         }
         // ArmorStand.swapItem.
         match held {
+            // A player with infinite materials puts a copy of one on an empty
+            // slot and keeps the stack.
+            Some(h) if self.creative && current.is_none() => {
+                self.armor_stands[i].equipment[slot] = Some(ItemStack { count: 1, ..h });
+            }
             Some(h) if h.count > 1 => {
                 if current.is_some() {
                     return true;
