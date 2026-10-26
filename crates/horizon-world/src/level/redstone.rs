@@ -1215,6 +1215,43 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.set_block(pos, next, 2);
         }
     }
+    /// `TargetBlock.onProjectileHit` for a projectile that hit `face` of the
+    /// block at `pos` at `location`: the output power from how near the
+    /// face's centre it landed (1 to 15), reset after 20 ticks for an arrow
+    /// and 8 for anything else, unless a reset is already scheduled. None
+    /// when the block is not a target block, else the strength.
+    pub(crate) fn target_projectile_hit(
+        &mut self,
+        pos: BlockPos,
+        location: [f64; 3],
+        face: [i32; 3],
+        arrow: bool,
+    ) -> Option<i32> {
+        let b = self.b;
+        let state = self.state(pos);
+        if !b.data(state).is(Class::Target) {
+            return None;
+        }
+        // `getRedstoneStrength`: the distance from the centre along the
+        // face's two other axes (Mth.frac of the location, minus a half).
+        let off = |v: f64| (v - v.floor() - 0.5).abs();
+        let [dx, dy, dz] = [off(location[0]), off(location[1]), off(location[2])];
+        let distance = if face[1] != 0 {
+            dx.max(dz)
+        } else if face[2] != 0 {
+            dx.max(dy)
+        } else {
+            dy.max(dz)
+        };
+        let strength = ((15.0 * ((0.5 - distance) / 0.5).clamp(0.0, 1.0)).ceil() as i32).max(1);
+        let block = b.block(state);
+        if !self.ticks.has_block_tick(pos, block) {
+            // `setOutputPower`.
+            self.set_block_and_update(pos, b.table.set_int(state, b.props.power, strength));
+            self.schedule_tick(pos, block, if arrow { 20 } else { 8 });
+        }
+        Some(strength)
+    }
 }
 
 /// Order `positions` as a `java.util.HashSet<BlockPos>` of capacity 16 would

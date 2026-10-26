@@ -2013,6 +2013,23 @@ impl Game<'_> {
             self.creatures.projectiles.push(arrow);
         }
     }
+    /// `TargetBlock.onProjectileHit`: a target block takes its power from
+    /// where the projectile landed and resets after 20 ticks for an arrow, 8
+    /// for any other projectile. A player's shot counts as a target hit.
+    fn target_block_hit(&mut self, p: &Projectile, pos: [i32; 3], at: Vec3, face: [i32; 3]) {
+        let block = BlockPos::new(pos[0], pos[1], pos[2]);
+        let arrow = p.arrow.is_some();
+        let location = [at.x, at.y, at.z];
+        let hit = self.with_level(|b, level, ticks| {
+            b.target_projectile_hit(level, ticks, block, location, face, arrow)
+        });
+        if hit.is_some() {
+            let _ = self.process_level_events();
+            if p.owner == Some(Who::Player) {
+                self.stats.custom("target_hit", 1);
+            }
+        }
+    }
     pub(super) fn projectile_hit(&mut self, p: &Projectile, hit: Hit) -> Result<()> {
         self.combat.projectile_owner = match p.owner {
             Some(Who::Mob(id)) => Some(id),
@@ -2022,6 +2039,13 @@ impl Game<'_> {
             Hit::Entity { at, .. } | Hit::Block { at, .. } => at,
             Hit::None => return Ok(()),
         };
+        // Projectile.onHitBlock: BlockState.onProjectileHit, for every
+        // projectile (a wind charge out of the world's top has no face).
+        if let Hit::Block { pos, face, .. } = hit
+            && face != [0; 3]
+        {
+            self.target_block_hit(p, pos, at, face);
+        }
         if let Hit::Entity {
             who: Who::Mob(id),
             at,
