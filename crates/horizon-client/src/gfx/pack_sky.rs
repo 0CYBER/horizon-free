@@ -255,8 +255,10 @@ impl PackSky {
 
     /// Writes the frame's sky and returns its draws in vanilla's order: the disc, the sunset
     /// fan while the sun is near the horizon, the sun and the moon, the stars and, with the
-    /// camera low, the void.
-    pub fn prepare(&self, queue: &wgpu::Queue, frame: &super::Frame) -> Vec<Part> {
+    /// camera low, the void. `tilt` is the pack's `sunPathRotation` (degrees): the sun, moon
+    /// and stars turn with it (7.1).
+    pub fn prepare(&self, queue: &wgpu::Queue, frame: &super::Frame, tilt: f32) -> Vec<Part> {
+        let turn = super::pack_uniforms::tilt_matrix(tilt);
         let sun_angle = frame.sky.sun_angle.to_radians();
         // The fan turns to the other horizon in the afternoon (terrain.wgsl's sunrise_weight).
         let flip = if sun_angle.sin() < 0.0 { 180f32 } else { 0.0 };
@@ -264,7 +266,7 @@ impl PackSky {
         let (rotation, brightness) = frame.stars.unwrap_or_default();
         let [r, g, b] = frame.sky.sky_color;
         let uniform = Uniform {
-            stars: rotation.to_cols_array_2d(),
+            stars: (turn * rotation).to_cols_array_2d(),
             color: [r, g, b, 1.0],
             sunrise: frame.sky.sunrise_color,
             sun: [theta.cos(), theta.sin(), brightness.clamp(0.0, 1.0), 0.0],
@@ -281,7 +283,7 @@ impl PackSky {
             .clone()
             .flat_map(|q| [0, 1, 2, 0, 2, 3].map(|i| q[i]))
             .map(|v| Celestial {
-                pos: v.pos,
+                pos: turn.transform_vector3(v.pos.into()).into(),
                 uv: v.uv,
                 color: v.color,
             })

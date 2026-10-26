@@ -30,7 +30,7 @@ mod translate;
 pub use biomes::{category as biome_category, precipitation as biome_precipitation};
 pub use block_ids::BlockIds;
 pub use condition::eval_condition;
-pub use config::{BUFFERS, Buffer, Config, Format, Kind, buffer_index, draw_buffers};
+pub use config::{BUFFERS, Buffer, Config, Format, Kind, Shadow, buffer_index, draw_buffers};
 pub use custom::{Custom, Val};
 pub use discover::{Found, discover};
 pub use lang::Lang;
