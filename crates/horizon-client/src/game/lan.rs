@@ -1400,6 +1400,18 @@ impl Game<'_> {
             let using = host.play.get(&g.conn).and_then(|p| p.using());
             m.extra.using_item = using.map_or(0, |(_, ticks)| ticks as i32 + 1);
             m.extra.using_off_hand = using.is_some_and(|(slot, _)| slot == OFFHAND_SLOT);
+            // AvatarRenderer.getArmPose: the used item's BLOCK animation (an
+            // item with `blocks_attacks`) raises the arm.
+            m.extra.blocking = using
+                .and_then(|(slot, _)| {
+                    if slot == OFFHAND_SLOT {
+                        m.extra.off_hand.as_ref()
+                    } else {
+                        m.extra.main_hand.as_ref()
+                    }
+                })
+                .and_then(|i| self.res.items().get(i))
+                .is_some_and(|i| i.blocks_attacks.is_some());
         }
     }
 
