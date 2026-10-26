@@ -1,7 +1,7 @@
 //! Zombies (zombie, husk, drowned, zombie villager) and skeletons (skeleton,
 //! stray, bogged, wither skeleton): goals, bow attacks, water conversion.
 use super::{
-    Mob, MobEvent, Species, Who,
+    Damage, Mob, MobEvent, Species, Who,
     goals::{
         Avoid, AvoidEntity, Cx, FleeSun, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, MeleeAttack,
         NearestTarget, RandomLookAround, RestrictSun, Stroll, goal_clone,
@@ -9,6 +9,16 @@ use super::{
 };
 use crate::projectiles::{Projectile, ProjectileKind};
 use horizon_core::{geometry::Vec3, random::RandomSource};
+
+/// `Zombie.hurtServer`, once the hit landed: a zombie with a target (its own,
+/// else a living attacker) asks the game to try calling a reinforcement; the
+/// difficulty, chance and spawn tests are the game's (`call_reinforcements`).
+pub fn after_hurt(m: &mut Mob, source: &Damage) {
+    if let Some(target) = m.ai.target.or(source.attacker) {
+        m.outbox
+            .push(MobEvent::Reinforcements { mob: m.id, target });
+    }
+}
 
 pub fn register(m: &mut Mob) {
     use Species as S;

@@ -181,6 +181,7 @@ mod win;
 mod wind;
 mod wither;
 mod world_loading;
+mod zombie_reinforcements;
 mod zombie_villagers;
 use horizon_client::{
     Result,
@@ -7648,6 +7649,9 @@ impl Game<'_> {
                 if let horizon_client::mobs::MobEvent::Sound(s, at, volume, pitch) = event {
                     self.audio
                         .play(&format!("minecraft:{s}"), Some(at), volume, pitch);
+                } else {
+                    // Left for the end of the tick.
+                    self.mobs[index].outbox.push(event);
                 }
             }
             self.weapon_hit(index);
