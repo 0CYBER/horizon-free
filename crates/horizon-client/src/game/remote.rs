@@ -4063,6 +4063,11 @@ impl Game<'_> {
             }
             if reacts {
                 self.predict_use(&changes, seq);
+            } else if self.predict_campfire_douse(hit.pos, held.as_ref(), seq) {
+                // CampfireBlock.useItemOn succeeded: this hand swings and the
+                // click ends, so a shield in the other hand is not raised.
+                self.with_hand(hand, Game::swing_arm);
+                return true;
             } else if let Some(stack) = held.as_ref()
                 && self.predict_item_on_block(stack, &hit)
             {
@@ -4230,7 +4235,7 @@ impl Game<'_> {
     /// predicted under the use's sequence until the server acknowledges it
     /// (`BlockStatePredictionHandler.retainKnownServerState`): a use the
     /// server refused goes back.
-    fn predict_blocks(&mut self, changes: &DryChanges, seq: i32) {
+    pub(super) fn predict_blocks(&mut self, changes: &DryChanges, seq: i32) {
         for &(p, state) in changes {
             let pos = [p.x, p.y, p.z];
             let before = self.world.block(p.x, p.y, p.z);
