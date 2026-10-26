@@ -142,8 +142,8 @@ const GENES: [&str; 7] = [
     "aggressive",
 ];
 const MEMORIES: [&str; 7] = [
-    "long_jump_cooldown",
-    "ram_cooldown",
+    "long_jump_cooling_down",
+    "ram_cooldown_ticks",
     "attack_target_cooldown",
     "hunted_recently",
     "dig_cooldown",

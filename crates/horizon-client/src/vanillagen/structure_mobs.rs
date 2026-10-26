@@ -8,7 +8,7 @@ use crate::{
     items::Items,
     mobs::{
         Mob, MobType, MobTypes,
-        finalize::{self, Ctx, FinalizeLevel, Reason, SpawnData, SpawnRegistries},
+        finalize::{self, Ctx, FinalizeLevel, Group, Reason, SpawnData, SpawnRegistries},
         spawning::{LocalDifficulty, MOON_BRIGHTNESS},
     },
 };
@@ -135,6 +135,8 @@ fn run<R: RandomSource>(
     difficulty: LocalDifficulty,
     data: &SpawnData<'_>,
     m: &mut Mob,
+    reason: Reason,
+    group: &mut Option<Group>,
 ) -> Vec<Mob> {
     let mut cx = Ctx {
         level,
@@ -144,7 +146,7 @@ fn run<R: RandomSource>(
         created: Vec::new(),
         jockey_rider: None,
     };
-    cx.finalize(m, Reason::Structure, None);
+    *group = cx.finalize(m, reason, group.take());
     if let Some(rider) = cx.jockey_rider {
         debug_assert_eq!(rider.id, m.id);
         *m = rider;
@@ -190,23 +192,78 @@ impl StructureMobs for StructureMobFinalizer {
         structures: &[String],
         random: &mut dyn PieceRandom,
     ) -> bool {
-        let Some(data) = self.data.get_or_init(|| {
-            let data = load(&self.root);
-            if data.is_none() {
-                log::error!("Horizon: no mob data, structure mobs are finalized when loaded");
-            }
-            data
-        }) else {
+        let Some(data) = self.data() else {
             return false;
         };
         let mut raw = Tag::Compound(nbt.clone());
         if let Tag::Compound(c) = &mut raw {
             c.remove(&"horizon:finalize".into());
         }
-        let Some(mut m) = entity_nbt::mob_from_nbt(&raw, &data.types, 1) else {
+        let Some(m) = entity_nbt::mob_from_nbt(&raw, &data.types, 1) else {
             // Not a mob: vanilla finalizes only Mob instances.
             return true;
         };
+        let reason = Reason::Structure;
+        match self.finish(
+            data,
+            m,
+            Some(raw),
+            biome,
+            structures,
+            random,
+            reason,
+            &mut None,
+        ) {
+            Some(saved) => {
+                *nbt = saved;
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+impl StructureMobFinalizer {
+    fn data(&self) -> Option<&Data> {
+        self.data
+            .get_or_init(|| {
+                let data = load(&self.root);
+                if data.is_none() {
+                    log::error!("Horizon: no mob data, structure mobs are finalized when loaded");
+                }
+                data
+            })
+            .as_ref()
+    }
+    /// A mob chunk generation spawns (`spawnOriginalMobs`): a new one of
+    /// `kind` finalized as a structure mob is, as the chunk saves it; `group`
+    /// carries a pack's group data from one member to the next.
+    pub fn spawn_generated(
+        &self,
+        kind: &str,
+        position: Vec3,
+        yaw: f32,
+        biome: &str,
+        random: &mut dyn PieceRandom,
+        group: &mut Option<Group>,
+    ) -> Option<Compound> {
+        let data = self.data()?;
+        let m = Mob::new(1, data.types.get(kind)?.clone(), position, yaw);
+        let reason = Reason::ChunkGeneration;
+        self.finish(data, m, None, biome, &[], random, reason, group)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn finish(
+        &self,
+        data: &Data,
+        mut m: Mob,
+        raw: Option<Tag>,
+        biome: &str,
+        structures: &[String],
+        random: &mut dyn PieceRandom,
+        reason: Reason,
+        group: &mut Option<Group>,
+    ) -> Option<Compound> {
         let base = self.difficulty.load(Ordering::Relaxed);
         let day_time = self.day_time.load(Ordering::Relaxed);
         let mut level = Level {
@@ -228,21 +285,20 @@ impl StructureMobs for StructureMobFinalizer {
         };
         let any = random.as_any();
         let created = if let Some(r) = any.downcast_mut::<LegacyRandom>() {
-            run(&mut level, r, difficulty, &spawn, &mut m)
+            run(&mut level, r, difficulty, &spawn, &mut m, reason, group)
         } else if let Some(r) = any.downcast_mut::<XoroshiroRandom>() {
-            run(&mut level, r, difficulty, &spawn, &mut m)
+            run(&mut level, r, difficulty, &spawn, &mut m, reason, group)
         } else {
             log::error!("Horizon: unknown region random, structure mobs are finalized when loaded");
-            return false;
+            return None;
         };
-        let mut mobs = vec![(m, Some(raw))];
+        let mut mobs = vec![(m, raw)];
         mobs.extend(created.into_iter().map(|c| (c, None)));
         let root = mobs
             .iter()
             .position(|(m, _)| m.extra.mount.is_none())
             .unwrap_or(0);
-        *nbt = tree(&mobs, root, &self.dimension);
-        true
+        Some(tree(&mobs, root, &self.dimension))
     }
 }
 

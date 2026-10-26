@@ -19,6 +19,7 @@ use horizon_world::{
         generator::{
             GeneratorData, GeneratorWorker, OverworldGenerator, ProtoChunk, SurfaceSample,
         },
+        structure::legacy::PieceRandom,
         terrain::PreLightChunkStage,
     },
 };
@@ -158,6 +159,24 @@ impl VanillaTerrain {
     /// mobs are finalized with.
     pub fn set_spawn_conditions(&self, difficulty: u8, day_time: i64) {
         self.structure_mobs.set_conditions(difficulty, day_time);
+    }
+    /// The random a chunk's generation steps draw from (`WorldGenRegion`).
+    pub fn region_random(&self, cx: i32, cz: i32) -> Box<dyn PieceRandom> {
+        self.generator.region_random(ChunkPos::new(cx, cz))
+    }
+    /// A mob chunk generation spawns, as the chunk saves it
+    /// (`StructureMobFinalizer::spawn_generated`).
+    pub fn spawn_generated(
+        &self,
+        kind: &str,
+        position: horizon_core::geometry::Vec3,
+        yaw: f32,
+        biome: &str,
+        random: &mut dyn PieceRandom,
+        group: &mut Option<crate::mobs::finalize::Group>,
+    ) -> Option<horizon_world::nbt::Compound> {
+        self.structure_mobs
+            .spawn_generated(kind, position, yaw, biome, random, group)
     }
     /// A proto chunk's blocks, biomes, scheduled ticks and post-processing
     /// marks as a column.

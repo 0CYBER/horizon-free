@@ -2,6 +2,7 @@
 //! it reads, the spawning chunks and caps of `ServerChunkCache.tickChunks`,
 //! and the mobs it adds (finalized with the game's `finalizeSpawn`).
 use super::{Dim, Game};
+use horizon_client::vanillagen::VanillaTerrain;
 use horizon_client::{
     biome::{BiomeInfo, SpawnEntry},
     blocks::BlockFacts,
@@ -19,9 +20,12 @@ use horizon_client::{
 };
 use horizon_core::{
     geometry::{Aabb, Vec3},
-    random::{LegacyRandom, RandomSource, WorldgenRandom},
+    random::{LegacyRandom, RandomSource, WorldgenRandom, XoroshiroRandom},
 };
-use horizon_world::registry::BlockStateId;
+use horizon_world::{
+    nbt::{Compound, Tag},
+    registry::BlockStateId,
+};
 use std::collections::HashMap;
 
 /// A player in the level in place, as spawning and despawning see it.
@@ -148,6 +152,16 @@ impl GameLevel<'_, '_> {
         let chunk = self.game.world.chunks.get(&(x >> 4, z >> 4))?;
         Some(self.game.res.biomes().get(chunk.biome(x, y, z)))
     }
+    /// The block whose noise cell `BiomeManager.getBiome` reads.
+    fn zoomed(&self, x: i32, y: i32, z: i32) -> [i32; 3] {
+        let zoom = self.game.streaming.biome_zoom;
+        let [qx, qy, qz] = zoom.quart_at_block(horizon_core::position::BlockPos::new(x, y, z));
+        [qx << 2, qy << 2, qz << 2]
+    }
+    fn zoomed_biome(&self, x: i32, y: i32, z: i32) -> Option<&BiomeInfo> {
+        let [x, y, z] = self.zoomed(x, y, z);
+        self.biome(x, y, z)
+    }
 }
 impl SpawnLevel for GameLevel<'_, '_> {
     fn state(&self, x: i32, y: i32, z: i32) -> BlockStateId {
@@ -162,7 +176,9 @@ impl SpawnLevel for GameLevel<'_, '_> {
     fn block_tag(&self, tag: &str, block: &str) -> bool {
         self.w.block_tag(tag, block)
     }
+    // Level.getBiome: the zoomed biome.
     fn biome_tag(&self, tag: &str, x: i32, y: i32, z: i32) -> bool {
+        let [x, y, z] = self.zoomed(x, y, z);
         self.w.biome_tag(tag, x, y, z)
     }
     fn sky_light(&self, x: i32, y: i32, z: i32) -> i32 {
@@ -228,11 +244,13 @@ impl NaturalLevel for GameLevel<'_, '_> {
             Category::from_name(&t.category),
         ))
     }
+    // The `natural_mob_spawns` attribute reads the zoomed biome
+    // (fullResolutionBiomes), the spawn probability the noise cell.
     fn biome_spawns(&self, x: i32, y: i32, z: i32) -> Option<&HashMap<String, Vec<SpawnEntry>>> {
-        self.biome(x, y, z).map(|b| &b.spawns)
+        self.zoomed_biome(x, y, z).map(|b| &b.spawns)
     }
     fn spawn_cost(&self, entity: &str, x: i32, y: i32, z: i32) -> Option<SpawnCost> {
-        self.biome(x, y, z)?.spawn_costs.get(entity).copied()
+        self.zoomed_biome(x, y, z)?.spawn_costs.get(entity).copied()
     }
     fn creature_probability(&self, x: i32, y: i32, z: i32) -> f32 {
         self.biome(x, y, z).map_or(0.1, |b| b.creature_probability)
@@ -553,37 +571,68 @@ impl<'a> Game<'a> {
     }
     /// `NoiseBasedChunkGenerator.spawnOriginalMobs`: creature packs for a
     /// freshly generated chunk, from the biome at its corner column's top,
-    /// with the chunk's decoration-seeded random (mobs are not generated in
+    /// with the chunk's decoration-seeded random, finalized with the
+    /// region's random as generation adds them (mobs are not generated in
     /// the End).
     pub(super) fn spawn_generation_creatures(&mut self, cx: i32, cz: i32) {
         if !self.world.chunks.contains_key(&(cx, cz)) || self.dim == Dim::End {
             return;
         }
+        let Some(terrain) = self.end.locator() else {
+            return;
+        };
+        let mut region = terrain.region_random(cx, cz);
+        let any = region.as_any();
+        let added = if let Some(r) = any.downcast_mut::<LegacyRandom>() {
+            self.generation_creatures(cx, cz, &terrain, r)
+        } else if let Some(r) = any.downcast_mut::<XoroshiroRandom>() {
+            self.generation_creatures(cx, cz, &terrain, r)
+        } else {
+            return;
+        };
+        for nbt in added {
+            self.load_mob(Tag::Compound(nbt), None);
+        }
+    }
+    fn generation_creatures<Q: RandomSource + 'static>(
+        &self,
+        cx: i32,
+        cz: i32,
+        terrain: &VanillaTerrain,
+        region: &mut Q,
+    ) -> Vec<Compound> {
         let mut random = WorldgenRandom::new(LegacyRandom::new(0));
         random.set_decoration_seed(self.level.seed, cx * 16, cz * 16);
-        // The region's own random: no creature's spawn predicate draws from it.
-        let mut rules = LegacyRandom::new(self.level.seed ^ (i64::from(cx) << 32 | i64::from(cz)));
-        let mut pending = Vec::new();
-        {
-            let level = self.natural_level();
-            let source = [cx * 16, level.max_y(), cz * 16];
-            let mut spawn = |l: &GameLevel, r: &SpawnRequest| {
-                let spawned = l.game.finalize_spawned(r, &mut pending);
-                if let Some(s) = &spawned {
-                    l.pending.borrow_mut().push(s.bounds);
+        let mut added = Vec::new();
+        let mut group = None;
+        let level = self.natural_level();
+        let source = [cx * 16, level.max_y(), cz * 16];
+        let mut spawn = |l: &GameLevel, r: &SpawnRequest, region: &mut Q| {
+            // Each pack starts without group data.
+            if r.group_index == 0 {
+                group = None;
+            }
+            let [x, y, z] = r.position;
+            let (bx, by, bz) = (x.floor() as i32, y.floor() as i32, z.floor() as i32);
+            let biome = l.zoomed_biome(bx, by, bz).map_or("", |b| b.name.as_str());
+            let at = Vec3::new(x, y, z);
+            match terrain.spawn_generated(r.entity, at, r.yaw, biome, region, &mut group) {
+                Some(nbt) => {
+                    added.push(nbt);
+                    true
                 }
-                spawned
-            };
-            spawn_selection::spawn_mobs_for_chunk_generation(
-                &level,
-                source,
-                (cx, cz),
-                &mut random,
-                &mut rules,
-                &mut spawn,
-                &mut |_| {},
-            );
-        }
-        self.add_spawned(pending, true);
+                None => false,
+            }
+        };
+        spawn_selection::spawn_mobs_for_chunk_generation(
+            &level,
+            source,
+            (cx, cz),
+            &mut random,
+            region,
+            &mut spawn,
+            &mut |_| {},
+        );
+        added
     }
 }

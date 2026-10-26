@@ -1565,7 +1565,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
             S::Frog => {
                 self.variant(m, |r| &r.frog);
                 let jump = self.uniform(100, 140);
-                set_memory(m, "long_jump_cooldown", i64::from(jump), i64::MAX);
+                set_memory(m, "long_jump_cooling_down", i64::from(jump), i64::MAX);
                 self.ageable(m, g)
             }
             S::ZombieNautilus => {
@@ -1680,9 +1680,9 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
             }
             S::Goat => {
                 let jump = self.uniform(600, 1200);
-                set_memory(m, "long_jump_cooldown", i64::from(jump), i64::MAX);
+                set_memory(m, "long_jump_cooling_down", i64::from(jump), i64::MAX);
                 let ram = self.uniform(600, 6000);
-                set_memory(m, "ram_cooldown", i64::from(ram), i64::MAX);
+                set_memory(m, "ram_cooldown_ticks", i64::from(ram), i64::MAX);
                 m.extra.screaming = self.random.next_double() < 0.02;
                 age_boundary_reached(m);
                 if !m.is_baby() && self.float() < 0.1 {

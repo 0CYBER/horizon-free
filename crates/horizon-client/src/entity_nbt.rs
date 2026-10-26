@@ -582,22 +582,31 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     if let Some(a) = m.extra.attributes.as_deref() {
         put_attributes(map, m, a);
     }
-    // Zombie and Piglin.setBaby, which their load runs even for an adult, make
-    // the speed attribute that AttributeMap.pack then saves.
-    if crate::mobs::doors::is_zombie(species) || species == crate::mobs::Species::Piglin {
-        let speed = crate::mobs::finalize::Attr::MovementSpeed;
-        let base = crate::mobs::finalize::base_value(m, speed);
+    // The attribute their load makes, which AttributeMap.pack then saves:
+    // Zombie and Piglin.setBaby (even for an adult) the speed, Rabbit.setVariant
+    // the attack damage.
+    use crate::mobs::finalize::Attr;
+    let made = if crate::mobs::doors::is_zombie(species) || species == crate::mobs::Species::Piglin
+    {
+        Some(Attr::MovementSpeed)
+    } else if species == crate::mobs::Species::Rabbit {
+        Some(Attr::AttackDamage)
+    } else {
+        None
+    };
+    if let Some(attr) = made {
+        let base = crate::mobs::finalize::base_value(m, attr);
         let mut list = match map.get(&"attributes".into()) {
             Some(Tag::List(l)) => l.clone(),
             _ => Vec::new(),
         };
-        let speed_id = format!("minecraft:{}", speed.name());
+        let attr_id = format!("minecraft:{}", attr.name());
         if !list
             .iter()
-            .any(|t| text(t.get("id")).as_deref() == Some(speed_id.as_str()))
+            .any(|t| text(t.get("id")).as_deref() == Some(attr_id.as_str()))
         {
             list.push(Tag::compound([
-                ("id", string(&speed_id)),
+                ("id", string(&attr_id)),
                 ("base", Tag::Double(base.to_bits())),
             ]));
             map.insert("attributes".into(), Tag::List(list));
