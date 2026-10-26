@@ -233,12 +233,18 @@ impl FrameUniforms {
         for (smoothed, target) in self.eye_smooth.iter_mut().zip(eye) {
             *smoothed = smooth(*smoothed, target, 10.0 / 20.0, dt);
         }
+        // Vanilla fades by the stronger of two linear fogs; a pack gets one: the pair (start
+        // and end together) of the one that is complete nearer (OQ-36). Mixing the nearer start
+        // of one with the nearer end of the other made fog begin at the camera on clear days.
         let (fog_color, fog_start, fog_end) = match &frame.fog {
-            Some(f) => (
-                [f.color[0], f.color[1], f.color[2]],
-                f.environmental_start.min(f.render_distance_start),
-                f.environmental_end.min(f.render_distance_end),
-            ),
+            Some(f) => {
+                let (start, end) = if f.environmental_end < f.render_distance_end {
+                    (f.environmental_start, f.environmental_end)
+                } else {
+                    (f.render_distance_start, f.render_distance_end)
+                };
+                ([f.color[0], f.color[1], f.color[2]], start, end)
+            }
             None => (frame.sky.fog_color, frame.distance * 0.9, frame.distance),
         };
         // The shadow camera (OQ-6, impl-plan.md): orthographic, `shadowDistance` (160) blocks
