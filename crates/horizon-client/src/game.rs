@@ -2800,6 +2800,34 @@ impl Game<'_> {
                     pos,
                     data,
                 } => self.composter_fill_event(pos, data == 1),
+                // LevelEventHandler 1504: the stalactite's drip particle.
+                LevelEvent::LevelEvent { id: 1504, pos, .. } => self.dripstone_drip_particle(pos),
+                // LevelEventHandler 2006: the dragon fireball's burst.
+                LevelEvent::LevelEvent {
+                    id: 2006,
+                    pos,
+                    data,
+                } => self.dragon_fireball_burst(pos, data),
+                // LevelEventHandler 2009: a wet sponge drying.
+                LevelEvent::LevelEvent { id: 2009, pos, .. } => {
+                    self.puffs_above_block(pos, horizon_client::particles::ParticleType::Cloud)
+                }
+                // LevelEventHandler 2012: a turtle egg laid.
+                LevelEvent::LevelEvent {
+                    id: 2012,
+                    pos,
+                    data,
+                } => self.turtle_egg_particles(pos, data),
+                // LevelEventHandler 2014: a straw bed destroyed, with no sound.
+                LevelEvent::LevelEvent {
+                    id: 2014,
+                    pos,
+                    data,
+                } => self.destroy_particles([pos.x, pos.y, pos.z], BlockStateId(data as u32)),
+                // LevelEventHandler 3009: a sniffer egg cracking.
+                LevelEvent::LevelEvent { id: 3009, pos, .. } => {
+                    self.sniffer_egg_crack_particles(pos)
+                }
                 LevelEvent::LevelEvent {
                     id: id @ 3011..=3021,
                     pos,
@@ -2815,6 +2843,16 @@ impl Game<'_> {
                         1501 => Some(("minecraft:block.lava.extinguish", 0.5)),
                         1009 => Some(("minecraft:block.fire.extinguish", 0.5)),
                         1502 => Some(("minecraft:block.redstone_torch.burnout", 0.5)),
+                        1033 => Some(("minecraft:block.chorus_flower.grow", 1.0)),
+                        1034 => Some(("minecraft:block.chorus_flower.death", 1.0)),
+                        1046 => Some((
+                            "minecraft:block.pointed_dripstone.drip_lava_into_cauldron",
+                            2.0,
+                        )),
+                        1047 => Some((
+                            "minecraft:block.pointed_dripstone.drip_water_into_cauldron",
+                            2.0,
+                        )),
                         1030 => Some(("minecraft:block.anvil.use", 1.0)),
                         1029 => Some(("minecraft:block.anvil.destroy", 1.0)),
                         1031 => Some(("minecraft:block.anvil.land", 0.3)),
@@ -2826,12 +2864,12 @@ impl Game<'_> {
                     };
                     if let Some((name, volume)) = sound {
                         let pitch = match id {
-                            1009 => {
+                            1009 | 1501 | 1502 => {
                                 2.6 + (self.world.random.next_float()
                                     - self.world.random.next_float())
                                     * 0.8
                             }
-                            1029 | 1030 | 1042 | 1043 | 1044 => {
+                            1029 | 1030 | 1042 | 1043 | 1044 | 1046 | 1047 => {
                                 self.world.random.next_float() * 0.1 + 0.9
                             }
                             _ => 1.0,
@@ -2843,6 +2881,15 @@ impl Game<'_> {
                         } else {
                             self.audio.play(name, c, volume, pitch);
                         }
+                    }
+                    // LevelEventHandler 1501 and 1502 draw their smoke after the sound.
+                    match id {
+                        1501 => self.puffs_above_block(
+                            pos,
+                            horizon_client::particles::ParticleType::LargeSmoke,
+                        ),
+                        1502 => self.torch_burnout_smoke(pos),
+                        _ => {}
                     }
                 }
                 LevelEvent::Sound {
