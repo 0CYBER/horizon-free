@@ -4875,16 +4875,20 @@ impl Game<'_> {
         if self.open_menu_name(p.container) != "minecraft:merchant" {
             return;
         }
-        let cost = |g: &Self, c: &play::NetCost| horizon_client::merchant::ItemCost {
-            stack: ItemStack::new(&g.item_name(c.item), c.count.max(0) as u32),
+        let cost = |g: &Self, c: &play::NetCost| {
+            g.to_stack(&Some(c.clone().into()))
+                .map(|stack| horizon_client::merchant::ItemCost { stack })
         };
         let offers: Vec<_> = p
             .offers
             .iter()
             .filter_map(|o| {
                 let mut offer = horizon_client::merchant::MerchantOffer {
-                    base_cost_a: cost(self, &o.cost_a),
-                    cost_b: o.cost_b.as_ref().map(|b| cost(self, b)),
+                    base_cost_a: cost(self, &o.cost_a)?,
+                    cost_b: match &o.cost_b {
+                        Some(b) => Some(cost(self, b)?),
+                        None => None,
+                    },
                     result: self.to_stack(&Some(o.result.clone()))?,
                     uses: o.uses,
                     max_uses: o.max_uses,

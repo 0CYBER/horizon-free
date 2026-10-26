@@ -238,6 +238,85 @@ mod tests {
     use super::*;
     use horizon_protocol::registry::Ids;
 
+    #[test]
+    fn merchant_water_cost_survives_the_offer_packet() {
+        use horizon_protocol::{
+            buf::{Codec, Reader, Writer},
+            packets::play::{NetOffer, Offers},
+        };
+        let mut components = vec![String::new(); component::POTION_CONTENTS as usize + 1];
+        components[component::POTION_CONTENTS as usize] = "minecraft:potion_contents".into();
+        let builtin = Builtin {
+            registries: [
+                (
+                    "minecraft:item".into(),
+                    Ids::from_names(vec!["minecraft:potion".into(), "minecraft:emerald".into()]),
+                ),
+                (
+                    "minecraft:potion".into(),
+                    Ids::from_names(vec!["minecraft:water".into()]),
+                ),
+                (
+                    "minecraft:data_component_type".into(),
+                    Ids::from_names(components),
+                ),
+            ]
+            .into(),
+        };
+        let dynamic = Dynamic::default();
+        let water = ItemStack::new("minecraft:potion", 1).with_potion("minecraft:water");
+        let wire = crate::lan::guest::stack_to_network(
+            |name| builtin.get("minecraft:item").unwrap().id(name).unwrap(),
+            |registry, name| builtin.get(registry)?.id(name),
+            &Some(water.clone()),
+        )
+        .unwrap();
+        let offers = vec![NetOffer {
+            cost_a: wire.into(),
+            result: Stack::new(1, 1),
+            cost_b: Some(Stack::new(1, 2).into()),
+            out_of_stock: false,
+            uses: 0,
+            max_uses: 2,
+            xp: 0,
+            special_price: 0,
+            price_multiplier: 0.05,
+            demand: 0,
+        }];
+        let mut w = Writer::new();
+        Offers::write(&offers, &mut w);
+        let mut r = Reader::new(&w.data);
+        let decoded = Offers::read(&mut r).unwrap();
+        assert_eq!(r.remaining(), 0);
+        let cost = crate::merchant::ItemCost {
+            stack: from_network(&decoded[0].cost_a.clone().into(), &builtin, &dynamic),
+        };
+        assert_eq!(cost.stack, water);
+        assert_eq!(cost.stack.potion(), Some("minecraft:water"));
+        let authoritative = crate::merchant::ItemCost {
+            stack: water.clone(),
+        };
+        for payment in [
+            water,
+            ItemStack::new("minecraft:potion", 1).with_potion("minecraft:swiftness"),
+            ItemStack::new("minecraft:potion", 1),
+        ] {
+            assert_eq!(cost.test(&payment), authoritative.test(&payment));
+        }
+        assert!(cost.test(&ItemStack::new("minecraft:potion", 1).with_potion("minecraft:water")));
+        assert!(
+            !cost.test(&ItemStack::new("minecraft:potion", 1).with_potion("minecraft:swiftness"))
+        );
+        let emerald = crate::merchant::ItemCost {
+            stack: from_network(
+                &decoded[0].cost_b.clone().unwrap().into(),
+                &builtin,
+                &dynamic,
+            ),
+        };
+        assert!(emerald.test(&ItemStack::new("minecraft:emerald", 2)));
+    }
+
     /// A bundle's contents cross the wire, so a server's client can draw
     /// its tooltip (BundleContents' stream codec: a list of templates).
     #[test]
