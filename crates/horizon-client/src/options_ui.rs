@@ -1424,7 +1424,10 @@ impl OptionsUi {
                 let mut rows = vec![Row::Big(Opt::Volume(0))];
                 let others: Vec<Opt> = (1..SOUND_SOURCES.len()).map(Opt::Volume).collect();
                 rows.extend(pairs(&others));
-                rows.extend(pairs(&[Opt::ShowSubtitles, Opt::MusicFrequency]));
+                rows.extend(pairs(&[Opt::ShowSubtitles]));
+                // SoundOptionsScreen: Music Frequency starts the next row (with
+                // Music Toast, not in Horizon yet).
+                rows.extend(pairs(&[Opt::MusicFrequency]));
                 rows
             }
             Page::Controls => {
