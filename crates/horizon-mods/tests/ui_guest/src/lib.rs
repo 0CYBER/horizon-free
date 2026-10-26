@@ -9,7 +9,7 @@ use horizon_mod_sdk::{
     Mod, Registration, chat,
     input::{self, Event},
     render::{self, FillShape, ItemShape, Point, QuadShape, Rect, Shape, SpriteShape, TextShape},
-    ui::{self, ItemWidget, KeyWidget, ListWidget, Screen, TextWidget, Widget},
+    ui::{self, ItemWidget, ListWidget, Screen, TextWidget, Widget},
 };
 
 /// One of each shape, the text too long by 44 characters.
@@ -162,10 +162,6 @@ impl Mod for Guest {
                 // Not a key: refused.
                 let bad = input::register_key("bad", "Bad", "R").unwrap_err();
                 chat::show(&format!("claimed; {bad}"));
-                ui::set_settings(&[Widget::Key(KeyWidget {
-                    id: 9,
-                    key: "wheel".into(),
-                })]);
             }
             "input_poll" => {
                 for event in input::poll() {
@@ -228,11 +224,6 @@ impl Mod for Guest {
             Widget::Button(ui::ButtonWidget {
                 id: 3,
                 label: "Corner: Top Right".into(),
-            }),
-            // `/input_claim`'s key; drawn as its name until registered.
-            Widget::Key(KeyWidget {
-                id: 9,
-                key: "wheel".into(),
             }),
         ]);
         chat::show("settings opened");

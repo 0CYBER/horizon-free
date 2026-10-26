@@ -449,7 +449,7 @@ fn ui_screens_settings_and_events() {
     assert_eq!(mods.settings_widgets(0).len(), 3);
     assert!(mods.entries()[0].has_ui_settings());
     mods.ui_settings_opened(0);
-    assert_eq!(mods.settings_widgets(0).len(), 3);
+    assert_eq!(mods.settings_widgets(0).len(), 2);
     // `/ui_close` closes the mod's own screen.
     assert!(mods.command("ui_close"));
     assert!(mods.drain().contains(&Output::CloseScreen { owner: 0 }));
@@ -566,10 +566,8 @@ fn the_players_key_choice_wins() {
     };
     let mut mods = load("horizon_mods_test_ui_guest.hmod");
     assert!(mods.command("input_claim"));
-    assert!(matches!(
-        &mods.settings_widgets(0)[0],
-        horizon_mods::UiWidget::Key(k) if k.id == 9 && k.key == "wheel"
-    ));
+    // Its keys alone give it a page in Options > Mods, where the game lists them.
+    assert!(mods.settings_widgets(0).is_empty() && mods.entries()[0].has_ui_settings());
     // Rebinding while held lets the old key go.
     mods.key("key.keyboard.r", true);
     assert!(mods.rebind(0, "wheel", "key.mouse.4"));
