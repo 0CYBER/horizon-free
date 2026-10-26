@@ -74,14 +74,74 @@ impl Game<'_> {
             self.spawn_bolt(at, trap);
         }
     }
-    /// `findLightningTargetAround`: a living entity under open sky in the
-    /// column (3 blocks around), else the top of the column.
+    /// `ServerLevel.findLightningRod`: `PoiManager.findClosest` over the
+    /// lightning rod points of interest within 128 blocks of `center` whose
+    /// block is the top (`WORLD_SURFACE`) of its column; the strike lands one
+    /// above it. Horizon keeps no point-of-interest index, so this scans the
+    /// loaded chunks the way `/locate poi` does.
+    fn find_lightning_rod(&self, center: [i32; 3]) -> Option<[i32; 3]> {
+        const RANGE: i32 = 128;
+        let facts = self.res.facts();
+        let mut is_rod: std::collections::HashMap<u32, bool> = std::collections::HashMap::new();
+        let mut best: Option<(i64, [i32; 3])> = None;
+        let (cx0, cz0) = ((center[0] - RANGE) >> 4, (center[2] - RANGE) >> 4);
+        let (cx1, cz1) = ((center[0] + RANGE) >> 4, (center[2] + RANGE) >> 4);
+        for cx in cx0..=cx1 {
+            for cz in cz0..=cz1 {
+                let Some(chunk) = self.world.chunks.get(&(cx, cz)) else {
+                    continue;
+                };
+                for (i, section) in chunk.sections.iter().enumerate() {
+                    let mut rod = |state: u32| {
+                        *is_rod.entry(state).or_insert_with(|| {
+                            facts
+                                .get(horizon_world::registry::BlockStateId(state))
+                                .name
+                                .ends_with("lightning_rod")
+                        })
+                    };
+                    if !section.blocks.maybe_has(&mut rod) {
+                        continue;
+                    }
+                    let base_y = horizon_client::chunk::MIN_Y + 16 * i as i32;
+                    for j in 0..4096 {
+                        if !rod(section.get(j)) {
+                            continue;
+                        }
+                        let p = [
+                            cx * 16 + (j & 15) as i32,
+                            base_y + (j >> 8) as i32,
+                            cz * 16 + ((j >> 4) & 15) as i32,
+                        ];
+                        let d = [p[0] - center[0], p[1] - center[1], p[2] - center[2]]
+                            .map(|d| i64::from(d) * i64::from(d))
+                            .iter()
+                            .sum::<i64>();
+                        if d > i64::from(RANGE * RANGE) || best.is_some_and(|(b, _)| d >= b) {
+                            continue;
+                        }
+                        let surface = self.world.world_surface(p[0], p[2], |s| facts.is_air(s));
+                        if p[1] == surface - 1 {
+                            best = Some((d, p));
+                        }
+                    }
+                }
+            }
+        }
+        best.map(|(_, p)| [p[0], p[1] + 1, p[2]])
+    }
+    /// `findLightningTargetAround`: the closest lightning rod, else a living
+    /// entity under open sky in the column (3 blocks around), else the top of
+    /// the column.
     fn lightning_target(&mut self, x: i32, z: i32) -> Option<[i32; 3]> {
         if !self.world.loaded(x, z) {
             return None;
         }
         let top =
             self.with_level(|b, level, _| b.motion_blocking_top(level, BlockPos::new(x, 0, z)));
+        if let Some(rod) = self.find_lightning_rod([x, top.y, z]) {
+            return Some(rod);
+        }
         let sees_sky = |g: &Self, p: [i32; 3]| g.world.light(p[0], p[1], p[2]) >> 4 == 15;
         let mut candidates: Vec<[i32; 3]> = self
             .mobs
