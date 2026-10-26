@@ -813,6 +813,8 @@ impl Api {
     }
 
     pub fn call(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value, String> {
+        // No proxy here on purpose: the server is on this computer, and this is asked every
+        // second (`proxy` never sends a loopback address through one either).
         let agent = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(10))
             .build();

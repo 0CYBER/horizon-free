@@ -63,7 +63,7 @@ pub fn fetch(home: &Path, url: &str, size: u32) -> Result<PathBuf, String> {
     if let Some(why) = refuse(url) {
         return Err(format!("{url}: {why}"));
     }
-    let response = super::download::agent()
+    let response = super::download::agent(url)
         .get(url)
         .call()
         .map_err(|e| format!("{url}: {e}"))?;

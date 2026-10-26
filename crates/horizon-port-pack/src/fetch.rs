@@ -143,7 +143,8 @@ pub fn fetch(
     if let Some((dest, url)) = crate::worldgen::loader_jar(work, &pack.loader, &pack.loader_version)
         .filter(|(dest, _)| !dest.exists())
     {
-        let sha1 = ureq::get(&format!("{url}.sha1"))
+        let sha1 = crate::net::agent()
+            .get(&format!("{url}.sha1"))
             .set("User-Agent", modrinth::AGENT)
             .call()
             .ok()
@@ -201,7 +202,8 @@ pub fn url_of(file: &PackFile, cache: &Cache) -> Option<String> {
 
 /// Downloads `url` to `dest`, kept only if its SHA-1 is `sha1`.
 fn download(url: &str, sha1: Option<&str>, dest: &Path) -> Result<(), String> {
-    let response = ureq::get(url)
+    let response = crate::net::agent()
+        .get(url)
         .set("User-Agent", modrinth::AGENT)
         .call()
         .map_err(|e| format!("{url}: {e}"))?;
