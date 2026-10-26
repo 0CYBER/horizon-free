@@ -50,9 +50,9 @@ pub(super) struct Creatures {
     /// The wandering trader spawner's clock.
     pub trader: super::wandering_trader::Spawner,
 }
-struct ProjWorld<'a, 'w> {
-    w: &'a MobWorld<'w>,
-    targets: Vec<(Who, Aabb)>,
+pub(super) struct ProjWorld<'a, 'w> {
+    pub w: &'a MobWorld<'w>,
+    pub targets: Vec<(Who, Aabb)>,
 }
 impl ProjectileWorld for ProjWorld<'_, '_> {
     fn clip(&self, from: Vec3, to: Vec3) -> Option<(Vec3, [i32; 3], [i32; 3])> {
@@ -312,6 +312,9 @@ impl Game<'_> {
     /// The `mobs` command: nearby mobs with position, health and running goals.
     pub(super) fn control_mobs(&self, radius: f64) -> serde_json::Value {
         let center = self.player.as_ref().map_or(Vec3::ZERO, |p| p.position);
+        self.control_mobs_at(radius, center)
+    }
+    pub(super) fn control_mobs_at(&self, radius: f64, center: Vec3) -> serde_json::Value {
         let list: Vec<serde_json::Value> = self
             .mobs
             .iter()
@@ -370,6 +373,7 @@ impl Game<'_> {
                 // Drawn seated (Entity.isPassenger); set apart because the
                 // json! above is at the macro recursion limit.
                 state["passenger"] = m.extra.passenger.into();
+                state["guardian_beam"] = serde_json::json!(horizon_client::mobs::guardian::beam(m, 0.0));
                 state
             })
             .collect();
@@ -388,6 +392,9 @@ impl Game<'_> {
     }
     pub(super) fn mob_world_base<'s>(&'s self, others: &'s [Seen]) -> MobWorld<'s> {
         let (rain, thunder) = self.world.weather.levels(1.0);
+        // Level.canHaveWeather: only the overworld's rain and thunder levels
+        // ever rise, so nothing rains or thunders in the Nether or the End.
+        let weather = self.dim == Dim::Overworld;
         let player = self.player_view();
         MobWorld {
             world: &self.world,
@@ -404,8 +411,8 @@ impl Game<'_> {
             daylight: self.dim != Dim::Nether && self.sky_darken() < 4,
             game_time: self.world.game_time,
             day_time: self.world.day_time,
-            raining: rain > 0.2,
-            thundering: thunder > 0.9,
+            raining: weather && rain > 0.2,
+            thundering: weather && thunder > 0.9,
             nether: self.dim == Dim::Nether,
             block_tags: &self.res.items().block_tags,
             biomes: self.res.biomes(),
@@ -504,6 +511,17 @@ impl Game<'_> {
             Some(host) if !guests.is_empty() => std::mem::take(&mut host.mob_players),
             _ => Default::default(),
         };
+        // The guests' entity ids by connection, for the shulker bullets fired
+        // at the guest a mob sees.
+        let guest_ids: Vec<(u32, u32)> = match self.lan.as_ref() {
+            Some(host) if !guests.is_empty() => host
+                .hub
+                .guests
+                .iter()
+                .map(|g| (g.conn, g.entity_id as u32))
+                .collect(),
+            _ => Vec::new(),
+        };
         let mut guest_events = Vec::new();
         let level_random;
         {
@@ -578,6 +596,19 @@ impl Game<'_> {
                 let kept = m.tick(&w, &mut scratch, &mut events);
                 horizon_client::mobs::take_mob_pushes(&mut events, from, &mut pushes);
                 if let Some(conn) = seen_guest {
+                    // ShulkerBullet.finalTarget is the guest's entity: the
+                    // bullet homes on it while the projectiles tick, where
+                    // `Who::Player` is the host's own player.
+                    if let Some(&(_, id)) = guest_ids.iter().find(|g| g.0 == conn) {
+                        for e in &mut events[from..] {
+                            if let MobEvent::Projectile(p) = e
+                                && let ProjectileKind::ShulkerBullet { target, .. } = &mut p.kind
+                                && *target == Who::Player
+                            {
+                                *target = Who::Mob(id);
+                            }
+                        }
+                    }
                     let mut k = from;
                     while k < events.len() {
                         if super::lan_mobs::acts_on_player(&events[k]) {
@@ -1036,7 +1067,10 @@ impl Game<'_> {
                 }
                 MobEvent::BreakBlock { pos, drop } => {
                     let old = self.world.block(pos[0], pos[1], pos[2]);
-                    self.destroy_particles(pos, old);
+                    // Block.spawnDestroyParticles: fire breaks leave nothing.
+                    if !self.res.facts().get(old).has_class("BaseFireBlock") {
+                        self.destroy_particles(pos, old);
+                    }
                     if drop {
                         let drops = self.res.items().block_drops_in(
                             self.pack.assets.registry,
@@ -1058,6 +1092,9 @@ impl Game<'_> {
                             self.ensure_item_particle_sprites();
                         }
                         let options = horizon_client::particles::ParticleOptions::simple(ty);
+                        if ty == horizon_client::particles::ParticleType::SonicBoom {
+                            self.lan_sonic_boom(&options, at);
+                        }
                         // Count 0: one particle exactly there, at rest.
                         if count == 0 {
                             self.particles.add(&options, at, [0.0; 3]);

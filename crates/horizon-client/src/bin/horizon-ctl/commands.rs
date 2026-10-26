@@ -143,6 +143,7 @@ const PAGES: Ty = Ty::Enum(&[
     "font",
     "packs",
     "mods",
+    "shader-packs",
     "graphics",
     "graphics-advanced",
     "extras",

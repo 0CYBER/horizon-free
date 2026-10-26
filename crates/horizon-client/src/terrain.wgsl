@@ -69,6 +69,8 @@ struct TerrainOut {
     @location(2) color: vec4<f32>,
     @location(3) spherical: f32,
     @location(4) cylindrical: f32,
+    // The light the face emits, 0 to 15 (mesher.rs's `EMISSION_BITS`).
+    @location(5) @interpolate(flat) emission: u32,
 }
 // Horizon Extras' dynamic lights (dynamic_light.rs): the block light, in the vertex's units
 // (16 per level), a vertex at camera-relative `pos` gets from the frame's light sources, one
@@ -121,7 +123,8 @@ fn terrain_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f3
     out.uv = uv;
     out.layer = layer;
     let block = max(f32(light.y), dynamic_block_light(pos));
-    out.color = color * sample_lightmap(f32(light.x) / 16.0, block / 16.0);
+    out.color = vec4(color.rgb, 1.0) * sample_lightmap(f32(light.x) / 16.0, block / 16.0);
+    out.emission = 15u - (u32(round(color.a * 255.0)) & 15u);
     out.spherical = length(pos);
     out.cylindrical = max(length(pos.xz), abs(pos.y));
     return out;
@@ -140,7 +143,10 @@ fn apply_fog(color: vec4<f32>, spherical: f32, cylindrical: f32) -> vec4<f32> {
     // Bit 15 of the layer marks opaque leaves (forceOpaque): no alpha cutout.
     let color = sprite(in.uv, in.layer & 0x7fffu) * in.color;
     if color.a < 0.5 && (in.layer & 0x8000u) == 0u { discard; }
-    return apply_fog(vec4(color.rgb, 1.0), in.spherical, in.cylindrical);
+    // Alpha 0 tells HDR output (hdr.wgsl) a light-emitting block's bright pixels
+    // may shine. Nothing else reads the frame's alpha.
+    let emissive = select(1.0, 0.0, in.emission > 0u);
+    return apply_fog(vec4(color.rgb, emissive), in.spherical, in.cylindrical);
 }
 @fragment fn fs_translucent(in: TerrainOut) -> @location(0) vec4<f32> {
     let color = sprite(in.uv, in.layer & 0x7fffu) * in.color;
@@ -227,8 +233,9 @@ fn sunrise_weight(d: vec3<f32>) -> f32 {
     }
     return best;
 }
-@fragment fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
-    let d = view_ray(in.ndc);
+// The sky's colour along the view ray `d` (a shader pack's sky stage gets it as its input:
+// gfx/native_sky.rs builds that stage from this section).
+fn sky_along_ray(d: vec3<f32>) -> vec3<f32> {
     var color = globals.fog_color.rgb;
     let dist = disc_distance(d, 16.0);
     if dist.x >= 0.0 {
@@ -238,7 +245,10 @@ fn sunrise_weight(d: vec3<f32>) -> f32 {
     if w > 0.0 {
         color = mix(color, globals.sunrise.rgb, w * globals.sunrise.a);
     }
-    return vec4(color, 1.0);
+    return color;
+}
+@fragment fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
+    return vec4(sky_along_ray(view_ray(in.ndc)), 1.0);
 }
 @fragment fn fs_dark_disc(in: SkyOut) -> @location(0) vec4<f32> {
     let d = view_ray(in.ndc);

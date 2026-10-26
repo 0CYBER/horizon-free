@@ -64,6 +64,31 @@ impl MobWorld<'_> {
         let b = bounds.deflate(Vec3::new(0.001, 0.001, 0.001));
         let (lo, hi) = (b.min_position(), b.max_position());
         let mut out = Fluids::default();
+        // The eye column below, in the box but for a box thinner than the
+        // deflation.
+        let (ex, ez) = (
+            ((lo.x + hi.x) / 2.0).floor() as i32,
+            ((lo.z + hi.z) / 2.0).floor() as i32,
+        );
+        // Most boxes are in sections without a fluid: no cell to read.
+        let cells = (
+            [
+                (lo.x.floor() as i32).min(ex),
+                lo.y.floor() as i32,
+                (lo.z.floor() as i32).min(ez),
+            ],
+            [
+                (hi.x.ceil() as i32 - 1).max(ex),
+                hi.y.ceil() as i32 - 1,
+                (hi.z.ceil() as i32 - 1).max(ez),
+            ],
+        );
+        if !self
+            .world
+            .may_hold(cells.0, cells.1, |s| self.facts.get(s).fluid != Fluid::None)
+        {
+            return out;
+        }
         for x in lo.x.floor() as i32..=(hi.x.ceil() as i32 - 1) {
             for y in lo.y.floor() as i32..=(hi.y.ceil() as i32 - 1) {
                 for z in lo.z.floor() as i32..=(hi.z.ceil() as i32 - 1) {
@@ -92,10 +117,6 @@ impl MobWorld<'_> {
         // EntityFluidInteraction.update: the eyes are in a fluid block of
         // the box in the entity's column, between its bottom and its height
         // for the camera.
-        let (ex, ez) = (
-            ((lo.x + hi.x) / 2.0).floor() as i32,
-            ((lo.z + hi.z) / 2.0).floor() as i32,
-        );
         for y in lo.y.floor() as i32..=(hi.y.ceil() as i32 - 1) {
             let (fluid, h) = self.fluid_height(ex, y, ez);
             if fluid != Fluid::Water || f64::from(y) + h < lo.y || eye_y < f64::from(y) {
@@ -155,14 +176,28 @@ impl MobWorld<'_> {
             let c = f64::from(c);
             c < area.max(axis) && c + 1.0 > area.min(axis)
         };
+        // Where no section of the cursor holds a block reaching out of its
+        // cell, only the cells meeting `area` can hold the support.
+        let (rx, ry, rz) = (range(Axis::X), range(Axis::Y), range(Axis::Z));
+        let outer = self.world.may_hold(
+            [*rx.start(), *ry.start(), *rz.start()],
+            [*rx.end(), *ry.end(), *rz.end()],
+            |s| self.collision.reaches_out(s),
+        );
         let mut best: Option<(f64, [i32; 3])> = None;
-        for x in range(Axis::X) {
-            for z in range(Axis::Z) {
+        for x in rx {
+            for z in rz.clone() {
+                let column = meets(Axis::X, x) && meets(Axis::Z, z);
+                if !outer && !column {
+                    continue;
+                }
                 let Some(chunk) = self.world.chunks.get(&(x >> 4, z >> 4)) else {
                     continue;
                 };
-                let column = meets(Axis::X, x) && meets(Axis::Z, z);
-                for y in range(Axis::Y) {
+                for y in ry.clone() {
+                    if !outer && !meets(Axis::Y, y) {
+                        continue;
+                    }
                     let state = chunk.block(x & 15, y, z & 15);
                     let Ok(block) = self.collision.collision_block(state) else {
                         continue;

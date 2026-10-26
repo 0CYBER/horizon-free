@@ -33,7 +33,7 @@ fn recipe_matches(condition: &Value, id: &str) -> bool {
 
 impl Game<'_> {
     /// `Level.setBlock` of one boolean property of the block at `pos`.
-    fn set_bool_prop(&mut self, pos: Pos, key: &str, value: bool, flags: i32) {
+    pub(crate) fn set_bool_prop(&mut self, pos: Pos, key: &str, value: bool, flags: i32) {
         let registry = self.pack.assets.registry;
         let old = self.world.block(pos.0, pos.1, pos.2);
         let Some(mut state) = registry.state(old).cloned() else {

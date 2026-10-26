@@ -52,7 +52,14 @@ jobs:
       - name: The prepared output is the one the preparer's OUTPUT_VERSION says
         env:
           BASE_SHA: ${{ inputs.base }}
-        run: python3 tools/prepare_output.py check --cache --base "$BASE_SHA"
+        run: |
+          # The job runs main's workflow on the head's files: a head made before OUTPUT_VERSION (#1947) has neither
+          # the tool nor the number, so there is nothing to check.
+          if [ ! -f tools/prepare_output.py ] || ! grep -q OUTPUT_VERSION crates/horizon-prepare/src/lib.rs; then
+            echo "This head's preparer has no OUTPUT_VERSION: nothing to check"
+            exit 0
+          fi
+          python3 tools/prepare_output.py check --cache --base "$BASE_SHA"
       - name: The version constants are the pinned jar's
         run: python3 tools/gen_version_consts.py --check
       - name: The harnesses this change can affect

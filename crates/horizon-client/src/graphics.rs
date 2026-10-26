@@ -255,12 +255,22 @@ pub struct Graphics {
     pub resolution_scale: u32,
     /// FXAA over the world.
     pub fxaa: bool,
+    /// HDR output (scRGB), where the display path offers it.
+    pub hdr: bool,
+    /// HDR paper white (where SDR white sits), in nits.
+    pub hdr_paper_white: u32,
+    /// HDR peak brightness the world's highlights reach, in nits.
+    pub hdr_peak: u32,
     /// Battery mode: at most 60 frames per second in a world and 30 in menus
     /// or behind other windows, and half the worker threads. Off by default;
     /// it changes when frames are drawn, never what they show or the ticks.
     pub battery: bool,
     /// The graphics API (Windows only; see `GraphicsApi`).
     pub api: GraphicsApi,
+    /// The shader pack picked in `shaderpacks/` (`shader_pack_list`); empty: none. Its key is
+    /// not `shaderPack`, which versions before the clean-room rewrite saved and which stays
+    /// ignored.
+    pub shader_pack: String,
 }
 impl Default for Graphics {
     fn default() -> Self {
@@ -282,8 +292,12 @@ impl Default for Graphics {
             overlay: Overlay::Off,
             resolution_scale: 100,
             fxaa: false,
+            hdr: false,
+            hdr_paper_white: 200,
+            hdr_peak: 1000,
             battery: false,
             api: GraphicsApi::Auto,
+            shader_pack: String::new(),
         }
     }
 }
@@ -332,8 +346,12 @@ impl Graphics {
                 "workers" => g.workers = number(g.workers).min(64),
                 "resolutionScale" => g.resolution_scale = number(g.resolution_scale).clamp(50, 200),
                 "fxaa" => g.fxaa = flag(g.fxaa),
+                "hdr" => g.hdr = flag(g.hdr),
+                "hdrPaperWhite" => g.hdr_paper_white = number(g.hdr_paper_white).clamp(80, 480),
+                "hdrPeak" => g.hdr_peak = number(g.hdr_peak).clamp(200, 2000),
                 "batteryMode" => g.battery = flag(g.battery),
                 "graphicsApi" => g.api = GraphicsApi::from_name(value).unwrap_or_default(),
+                "pickedShaderPack" => g.shader_pack = value.to_owned(),
                 "overlay" => {
                     g.overlay = match value {
                         "fps" => Overlay::Fps,
@@ -348,7 +366,7 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nbatteryMode:{}\ngraphicsApi:{}\n",
+            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nbatteryMode:{}\ngraphicsApi:{}\npickedShaderPack:{}\n",
             self.preset.name(),
             self.lod_distance,
             self.far_detail.name(),
@@ -373,8 +391,12 @@ impl Graphics {
             },
             self.resolution_scale,
             bool_text(self.fxaa),
+            bool_text(self.hdr),
+            self.hdr_paper_white,
+            self.hdr_peak,
             bool_text(self.battery),
             self.api.name(),
+            self.shader_pack,
         )
     }
     pub fn save(&self, dir: &Path) {
@@ -437,7 +459,7 @@ pub fn apply_preset(preset: Preset, s: &mut crate::settings::Settings) {
     let g = &mut s.horizon;
     g.preset = preset;
     g.cave_culling = true;
-    g.animated_textures = preset != Preset::Performance;
+    g.animated_textures = true;
     g.chunk_updates = 0;
     g.upload_budget_kib = 0;
     g.sky = true;
@@ -469,8 +491,12 @@ mod tests {
             overlay: Overlay::Graph,
             resolution_scale: 75,
             fxaa: true,
+            hdr: true,
+            hdr_paper_white: 240,
+            hdr_peak: 1400,
             battery: true,
             api: GraphicsApi::Dx12,
+            shader_pack: "Golden Hour".into(),
         };
         assert_eq!(Graphics::parse(&g.serialize()), g);
         assert_eq!(Graphics::parse(""), Graphics::default());

@@ -610,12 +610,17 @@ mod tests {
 
     #[test]
     fn unreachable_games_fail_with_status_3() {
-        let mut s = Session::new(std::env::temp_dir().join("horizon-ctl-nobody.sock"), None);
+        let home =
+            std::env::temp_dir().join(format!("horizon-ctl-unreachable-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        let mut s = Session::new(home.join("nobody.sock"), None);
+        s.home = home.clone();
         let f = s.run(&["state".to_owned()]).unwrap_err();
         assert_eq!(f.status, UNREACHABLE);
         assert_eq!(f.reply["kind"], "connection");
         let f = s.run(&["sleep".to_owned(), "x".to_owned()]).unwrap_err();
         assert_eq!(f.status, USAGE);
+        std::fs::remove_dir_all(home).unwrap();
     }
 
     #[test]

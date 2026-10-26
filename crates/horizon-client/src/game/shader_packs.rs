@@ -1,7 +1,8 @@
-//! Shader packs, for development until the Shader Packs page exists: `HORIZON_SHADER_PACK=<name>`
-//! runs `shaderpacks/<name>` (a folder or a zip beside `options.txt`) over the world; Horizon's
-//! own packs go to `game/native_shaders.rs`. The
-//! programs of the current dimension's folder are loaded when the dimension changes (spec 1.2).
+//! Shader packs: the one picked on Options > Horizon Settings > Shader Packs, or
+//! `HORIZON_SHADER_PACK=<name>` (development; it wins over the pick), runs `shaderpacks/<name>`
+//! (a folder or a zip beside `options.txt`) over the world; Horizon's own packs go to
+//! `game/native_shaders.rs`. The programs of the current dimension's folder are loaded when the
+//! dimension changes (spec 1.2).
 
 use horizon_client::camera::CameraFluid;
 use horizon_client::gfx::pack_uniforms::PackInputs;
@@ -34,25 +35,34 @@ impl Game<'_> {
     /// Loads the pack for the current dimension when it changed, and returns this frame's
     /// inputs to the pack's uniforms.
     pub(super) fn shader_pack_inputs(&mut self, camera: glam::DVec3, partial: f32) -> PackInputs {
-        let Some(name) = std::env::var_os("HORIZON_SHADER_PACK") else {
+        static DEV_PACK: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        let dev = DEV_PACK.get_or_init(|| std::env::var("HORIZON_SHADER_PACK").ok());
+        let picked = dev.as_deref().unwrap_or(&self.settings.horizon.shader_pack);
+        if self.native_shaders.picked != picked {
+            // Another pack, or none: drop what ran.
+            self.native_shaders = super::native_shaders::NativeShaders::picking(picked);
+            self.pack_ids = None;
+            if let Some(renderer) = &mut self.renderer {
+                renderer.drop_shader_packs();
+            }
+        }
+        if picked.is_empty() {
             return PackInputs::default();
-        };
+        }
+        let name = picked.to_owned();
         let dimension = match self.dim {
             Dim::Overworld => 0,
             Dim::Nether => -1,
             Dim::End => 1,
         };
-        let path = std::env::current_dir()
-            .unwrap_or_default()
-            .join("shaderpacks")
-            .join(&name);
+        let path = Self::shader_packs_dir().join(&name);
         if horizon_shader_api::package::is_pack(&path) {
             // One of Horizon's own packs (game/native_shaders.rs).
             self.tick_native_shader_pack(&path);
         } else if let Some(renderer) = &mut self.renderer
             && renderer.shader_pack_dimension() != Some(dimension)
         {
-            let name = name.to_string_lossy();
+            let name = name.as_str();
             let started = std::time::Instant::now();
             match Pack::open(&path) {
                 Ok(pack) => {
