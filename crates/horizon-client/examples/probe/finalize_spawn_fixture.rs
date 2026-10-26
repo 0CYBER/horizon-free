@@ -506,6 +506,7 @@ pub fn main() -> horizon_client::Result<()> {
                 difficulty,
                 data: &data,
                 created: Vec::new(),
+                jockey_rider: None,
             };
             group = finalize::finalize(&mut cx, &mut mob, reason, group);
             let created = std::mem::take(&mut cx.created);

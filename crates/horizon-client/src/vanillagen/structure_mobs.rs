@@ -142,8 +142,13 @@ fn run<R: RandomSource>(
         difficulty,
         data,
         created: Vec::new(),
+        jockey_rider: None,
     };
     cx.finalize(m, Reason::Structure, None);
+    if let Some(rider) = cx.jockey_rider {
+        debug_assert_eq!(rider.id, m.id);
+        *m = rider;
+    }
     cx.created
 }
 
@@ -154,6 +159,18 @@ fn tree(mobs: &[(Mob, Option<Tag>)], i: usize, dimension: &str) -> Compound {
         return Compound::new();
     };
     c.remove(&"UUID".into());
+    // Keys in vanilla's templates that no entity reads: the chunk keeps the
+    // entity as its save writes it (ProtoChunk.addEntity), without them.
+    for key in [
+        "CatType",
+        "OwnerUUID",
+        "Riches",
+        "Willing",
+        "food_level",
+        "lastRestock",
+    ] {
+        c.remove(&key.into());
+    }
     entity_nbt::put_brain(&mut c, m, dimension);
     let riders: Vec<Tag> = (0..mobs.len())
         .filter(|&j| mobs[j].0.extra.mount == Some(m.id))

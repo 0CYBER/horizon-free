@@ -88,6 +88,11 @@ impl Base<'_> {
     }
 }
 
+/// The mobs that save `Age` and `AgeLocked`.
+fn saves_age(s: crate::mobs::Species) -> bool {
+    use crate::mobs::{Species, drops::can_be_baby, finalize::ageable};
+    s == Species::Tadpole || (ageable(s) && can_be_baby(s))
+}
 /// `LivingEntity` + `Mob` (+ `AgeableMob`, creeper and skeleton specifics).
 /// The mobs whose class extends vanilla's `Animal` (and so save `InLove`):
 /// not allays, villagers, golems, dolphins or fish.
@@ -225,19 +230,14 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         map.entry(key.into()).or_insert(value);
     }
     let id = m.kind.id.as_str();
-    // Only breedable animals have an age; a loaded creature that was saved without
-    // one (a frog) stays without.
-    let aged = raw.is_none_or(|r| r.get("Age").is_some());
-    if (m.kind.category == "creature" || m.species() == crate::mobs::Species::Hoglin) && aged {
+    // AgeableMob.addAdditionalSaveData, only if canBeABaby (not a frog or a
+    // parrot); a tadpole saves its own age.
+    let species = m.species();
+    if saves_age(species) {
         map.insert("Age".into(), Tag::Int(m.extra.age));
         map.insert("AgeLocked".into(), Tag::Byte(i8::from(m.extra.age_locked)));
-        map.insert("ForcedAge".into(), Tag::Int(m.extra.forced_age));
-        for (key, value) in [
-            ("Age", Tag::Int(0)),
-            ("ForcedAge", Tag::Int(0)),
-            ("AgeLocked", Tag::Byte(0)),
-        ] {
-            map.entry(key.into()).or_insert(value);
+        if species != crate::mobs::Species::Tadpole {
+            map.insert("ForcedAge".into(), Tag::Int(m.extra.forced_age));
         }
     }
     // Animal.addAdditionalSaveData: the love ticks left, whatever the save had.
@@ -417,6 +417,8 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         }
         "minecraft:villager" => {
             map.insert("VillagerData".into(), villager_data(m));
+            // A loaded villager with VillagerData is finalized.
+            map.insert("VillagerDataFinalized".into(), Tag::Byte(1));
             let t = m.extra.trade.as_deref().cloned().unwrap_or_default();
             map.insert("Xp".into(), Tag::Int(t.xp));
             map.insert("LastRestock".into(), Tag::Long(t.last_restock));
@@ -566,8 +568,54 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     ) {
         map.insert("IsBaby".into(), Tag::Byte(i8::from(m.is_baby())));
     }
+    // NeutralMob.addPersistentAngerSaveData; the bee saves its own.
+    if matches!(
+        id,
+        "minecraft:iron_golem"
+            | "minecraft:wolf"
+            | "minecraft:polar_bear"
+            | "minecraft:zombified_piglin"
+            | "minecraft:enderman"
+    ) {
+        map.entry("anger_end_time".into()).or_insert(Tag::Long(-1));
+    }
     if let Some(a) = m.extra.attributes.as_deref() {
         put_attributes(map, m, a);
+    }
+    // Zombie and Piglin.setBaby, which their load runs even for an adult, make
+    // the speed attribute that AttributeMap.pack then saves.
+    if crate::mobs::doors::is_zombie(species) || species == crate::mobs::Species::Piglin {
+        let speed = crate::mobs::finalize::Attr::MovementSpeed;
+        let base = crate::mobs::finalize::base_value(m, speed);
+        let mut list = match map.get(&"attributes".into()) {
+            Some(Tag::List(l)) => l.clone(),
+            _ => Vec::new(),
+        };
+        let speed_id = format!("minecraft:{}", speed.name());
+        if !list
+            .iter()
+            .any(|t| text(t.get("id")).as_deref() == Some(speed_id.as_str()))
+        {
+            list.push(Tag::compound([
+                ("id", string(&speed_id)),
+                ("base", Tag::Double(base.to_bits())),
+            ]));
+            map.insert("attributes".into(), Tag::List(list));
+        }
+    }
+    // Mob.addAdditionalSaveData: the chances that are not the default.
+    if let Some(chances) = &m.extra.drop_chances {
+        let set: Vec<(&str, Tag)> = crate::mobs::drops::SLOTS
+            .iter()
+            .zip(chances.iter())
+            .filter(|(_, c)| **c != crate::mobs::drops::DEFAULT_DROP_CHANCE)
+            .map(|(slot, c)| (*slot, Tag::Float(c.to_bits())))
+            .collect();
+        if set.is_empty() {
+            map.remove(&"drop_chances".into());
+        } else {
+            map.insert("drop_chances".into(), Tag::compound(set));
+        }
     }
     crate::mobs::raider::write_nbt(m, map);
     crate::mobs::riders::write_nbt(m, map);
@@ -841,7 +889,16 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.custom_name = custom_name(tag);
     m.custom_name_text = tag.get("CustomName").map(name_text);
     m.extra.left_handed = flag(tag, "LeftHanded");
-    if m.kind.category == "creature" || m.species() == crate::mobs::Species::Hoglin {
+    if let Some(Tag::Compound(c)) = tag.get("drop_chances") {
+        let mut chances = [crate::mobs::drops::DEFAULT_DROP_CHANCE; 8];
+        for (chance, slot) in chances.iter_mut().zip(crate::mobs::drops::SLOTS) {
+            if let Some(Tag::Float(v)) = c.get(&slot.into()) {
+                *chance = f32::from_bits(*v);
+            }
+        }
+        m.extra.drop_chances = Some(Box::new(chances));
+    }
+    if saves_age(m.species()) {
         m.extra.age = number(tag.get("Age")).unwrap_or(0) as i32;
         m.extra.forced_age = number(tag.get("ForcedAge")).unwrap_or(0) as i32;
         m.extra.age_locked = flag(tag, "AgeLocked");
@@ -2566,6 +2623,33 @@ mod sheep_nbt_tests {
             .collect();
         let back = mob_from_nbt(&tag, &types, 2).unwrap();
         assert_eq!((back.extra.color, back.extra.sheared), (14, true));
+    }
+
+    #[test]
+    fn a_baby_villager_keeps_its_age() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let data = crate::mobs::MobTypes::load(&root).unwrap();
+        let types: HashMap<String, Arc<MobType>> = data
+            .types
+            .iter()
+            .map(|(k, v)| (k.clone(), Arc::new(v.clone())))
+            .collect();
+        let saved = Tag::compound([
+            ("id", string("minecraft:villager")),
+            ("Pos", doubles(&[0.5, 64.0, 0.5])),
+            ("Age", Tag::Int(-21359)),
+        ]);
+        let m = mob_from_nbt(&saved, &types, 1).unwrap();
+        assert_eq!(m.extra.age, -21359);
+        let tag = mob_to_nbt(&m, [1, 2, 3, 4], None);
+        assert_eq!(number(tag.get("Age")), Some(-21359));
+        assert_eq!(number(tag.get("AgeLocked")), Some(0));
+        assert_eq!(number(tag.get("VillagerDataFinalized")), Some(1));
     }
 }
 
