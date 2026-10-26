@@ -364,7 +364,25 @@ impl Mod for Guest {
                         }
                     })
                     .collect();
-                browser::set_recipes(&format!("Recipes for {args}"), &views);
+                // A tab per layout shown, the first selected.
+                let mut tabs: Vec<browser::Stack> = Vec::new();
+                for v in &views {
+                    let icon = match v.layout {
+                        browser::Layout::Grid => "minecraft:crafting_table",
+                        browser::Layout::Cooking => "minecraft:furnace",
+                        browser::Layout::Single => "minecraft:stonecutter",
+                        browser::Layout::Smithing => "minecraft:smithing_table",
+                        browser::Layout::Brewing => "minecraft:brewing_stand",
+                    };
+                    if !tabs.iter().any(|t| t.item == icon) {
+                        tabs.push(browser::Stack {
+                            item: icon.into(),
+                            count: 1,
+                            components: String::new(),
+                        });
+                    }
+                }
+                browser::set_recipes(&format!("Recipes for {args}"), &tabs, 0, &views);
                 chat::show(&format!("recipes shown: {}", views.len()));
             }
             "browser_poll" => {
@@ -389,6 +407,7 @@ impl Mod for Guest {
                         browser::Event::Action(i) => format!("action {i}"),
                         browser::Event::Page(first) => format!("page {first}"),
                         browser::Event::Back => "back".into(),
+                        browser::Event::Tab(i) => format!("tab {i}"),
                     });
                 }
             }
