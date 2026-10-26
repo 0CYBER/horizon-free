@@ -78,8 +78,8 @@ time, under a lock) and the parity passes and slots.
 `horizon-game` once a full trial has passed there) runs on the maintainer's Linux desktop while nobody uses it: its
 screen locked, or untouched for 15 minutes (his rule, 2026-10-26). `tools/ci/linux-runner.sh install`, run there as
 him, registers it and installs two systemd user services: `horizon-runner` (the runner, in
-`~/.actions-runners/horizon`, nice 19, in `horizon-ci.slice` with CPU and I/O weight 20 and memory capped at two
-thirds of the RAM; `CARGO_BUILD_JOBS` and the harness slots at 8, after the machine froze under ~7 cold cargo
+`~/.actions-runners/horizon`, nice 19, in `horizon-ci.slice` with CPU and I/O weight 20, half the threads (on all of
+them the CPU package reached 92–96 °C) and memory capped at two thirds of the RAM; `CARGO_BUILD_JOBS` and the harness slots at 8, after the machine froze under ~7 cold cargo
 builds on 2026-10-14; its own Rust install; the JDK, sccache and the build libraries from nixpkgs; its own
 `vscreen` so no game it starts reaches his screen) and `horizon-runner-pause` (`tools/ci/runner_pause.py`), the
 only thing that starts the runner. The watcher stops it at once on keyboard, mouse or gamepad input (read from
