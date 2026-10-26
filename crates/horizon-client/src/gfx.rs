@@ -65,6 +65,7 @@ mod arena;
 mod cull;
 mod end_sky;
 mod flat;
+mod hdr;
 pub mod lightning;
 mod lod;
 mod native_material;
@@ -504,6 +505,10 @@ pub struct Renderer {
     occlusion: occlusion::Occlusion,
     /// Resolution scale and FXAA (Horizon settings).
     world_post: world_post::Post,
+    /// HDR output (Horizon setting): `Some` while the swapchain is scRGB.
+    hdr: Option<hdr::Hdr>,
+    /// Whether the window's surface can present scRGB.
+    hdr_capable: bool,
     /// The shader pack's post-processing, and the dimension (legacy id) it was loaded for.
     pack_post: Option<(i32, Option<pack_post::PackPost>)>,
     /// The post passes of one of Horizon's own shader packs; never beside `pack_post`'s.
@@ -910,15 +915,24 @@ async fn open_device(
             limits.max_storage_buffer_binding_size,
             limits.max_texture_array_layers,
         ));
-        match adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("Horizon device"),
-                required_features: features,
-                required_limits: limits,
-                ..Default::default()
-            })
-            .await
-        {
+        let desc = wgpu::DeviceDescriptor {
+            label: Some("Horizon device"),
+            required_features: features,
+            required_limits: limits,
+            ..Default::default()
+        };
+        #[cfg(not(target_os = "macos"))]
+        let opened = match info.backend {
+            wgpu::Backend::Vulkan => horizon_hdr::open_vulkan_device(&adapter, &desc),
+            _ => None,
+        };
+        #[cfg(target_os = "macos")]
+        let opened = None;
+        let opened = match opened {
+            Some(opened) => opened,
+            None => adapter.request_device(&desc).await,
+        };
+        match opened {
             Ok((device, queue)) => {
                 return Ok(Opened {
                     instance,
@@ -1043,7 +1057,7 @@ impl Renderer {
         let info = adapter.get_info();
         crate::graphics::suggest_reduced_far_detail(crate::graphics::lod_capped(&info));
         let size = window.inner_size();
-        let (config, present_modes) = if let Some(surface) = &surface {
+        let (config, present_modes, hdr_capable) = if let Some(surface) = &surface {
             let mut config = surface
                 .get_default_config(&adapter, size.width.max(1), size.height.max(1))
                 .ok_or("surface has no supported configuration")?;
@@ -1071,7 +1085,7 @@ impl Renderer {
                 ));
             }
             surface.configure(&device, &config);
-            (config, caps.present_modes.clone())
+            (config, caps.present_modes.clone(), hdr::supported(&caps))
         } else {
             let format = wgpu::TextureFormat::Bgra8Unorm;
             let config = wgpu::SurfaceConfiguration {
@@ -1085,7 +1099,7 @@ impl Renderer {
                 view_formats: vec![format],
                 color_space: wgpu::SurfaceColorSpace::default(),
             };
-            (config, Vec::new())
+            (config, Vec::new(), false)
         };
         let offscreen = surface
             .is_none()
@@ -1929,14 +1943,20 @@ impl Renderer {
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format.remove_srgb_suffix(),
-                    // RenderPipelines.CELESTIAL: additive (src alpha, one).
+                    // RenderPipelines.CELESTIAL: additive (src alpha, one). The
+                    // alpha goes to 0: HDR output (hdr.wgsl) lets the sun and
+                    // moon shine; nothing else reads the frame's alpha.
                     blend: Some(wgpu::BlendState {
                         color: wgpu::BlendComponent {
                             src_factor: wgpu::BlendFactor::SrcAlpha,
                             dst_factor: wgpu::BlendFactor::One,
                             operation: wgpu::BlendOperation::Add,
                         },
-                        alpha: wgpu::BlendComponent::OVER,
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::Zero,
+                            dst_factor: wgpu::BlendFactor::Zero,
+                            operation: wgpu::BlendOperation::Add,
+                        },
                     }),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -2420,6 +2440,8 @@ impl Renderer {
             block_entity_revision: next_block_entity_revision(),
             occlusion: occlusion::Occlusion::new(crate::chunk::MIN_Y, crate::chunk::HEIGHT / 16),
             world_post,
+            hdr: None,
+            hdr_capable,
             pack_post: None,
             native: None,
             pass_timing: pack_timing::PassTiming::logging(),
@@ -2489,7 +2511,12 @@ impl Renderer {
         // Wayland allows only one tearing-control object per window surface.
         self.release_surface();
         let surface = self.instance.create_surface(self.window.clone())?;
-        surface.configure(&self.device, &self.config);
+        Self::configure(
+            &self.device,
+            &surface,
+            &self.surface_config(),
+            self.hdr.as_ref(),
+        );
         self.surface = Some(surface);
         Ok(())
     }
@@ -2552,7 +2579,12 @@ impl Renderer {
             && let Some(surface) = &self.surface
         {
             self.config.present_mode = mode;
-            surface.configure(&self.device, &self.config);
+            Self::configure(
+                &self.device,
+                surface,
+                &self.surface_config(),
+                self.hdr.as_ref(),
+            );
         }
     }
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -2563,7 +2595,12 @@ impl Renderer {
         self.config.width = width;
         self.config.height = height;
         if let Some(surface) = &self.surface {
-            surface.configure(&self.device, &self.config);
+            Self::configure(
+                &self.device,
+                surface,
+                &self.surface_config(),
+                self.hdr.as_ref(),
+            );
         } else {
             self.offscreen = Some(Self::offscreen_target(&self.device, &self.config));
         }
@@ -2895,6 +2932,63 @@ impl Renderer {
         );
     }
     /// Horizon's resolution scale (world pixels per window pixel) and FXAA.
+    /// Configures `surface` and, while HDR output is on, sends its HDR metadata
+    /// again: a new swapchain starts without it.
+    fn configure(
+        device: &wgpu::Device,
+        surface: &wgpu::Surface<'_>,
+        config: &wgpu::SurfaceConfiguration,
+        hdr: Option<&hdr::Hdr>,
+    ) {
+        surface.configure(device, config);
+        if let Some(hdr) = hdr {
+            horizon_hdr::set_metadata(device, surface, hdr.paper_white, hdr.peak);
+        }
+    }
+    fn configure_surface(&self) {
+        if let Some(surface) = &self.surface {
+            Self::configure(
+                &self.device,
+                surface,
+                &self.surface_config(),
+                self.hdr.as_ref(),
+            );
+        }
+    }
+    fn send_hdr_metadata(&self) {
+        if let (Some(surface), Some(hdr)) = (&self.surface, &self.hdr) {
+            horizon_hdr::set_metadata(&self.device, surface, hdr.paper_white, hdr.peak);
+        }
+    }
+    /// The swapchain's configuration: `config` (what every pipeline draws in), or
+    /// scRGB while HDR output is on.
+    fn surface_config(&self) -> wgpu::SurfaceConfiguration {
+        let mut config = self.config.clone();
+        if self.hdr.is_some() {
+            config.format = hdr::FORMAT;
+            config.view_formats = vec![hdr::FORMAT];
+            config.color_space = hdr::COLOR_SPACE;
+            config.usage = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        }
+        config
+    }
+    /// HDR output (Horizon setting): scRGB at `paper_white` nits, the world's
+    /// highlights expanded up to `peak` nits. Off where the surface can't present it.
+    pub fn set_hdr(&mut self, on: bool, paper_white: f32, peak: f32) {
+        let on = on && self.hdr_capable && self.surface.is_some();
+        if on != self.hdr.is_some() {
+            self.hdr =
+                on.then(|| hdr::Hdr::new(&self.device, self.config.format.remove_srgb_suffix()));
+            self.configure_surface();
+        }
+        if let Some(hdr) = &mut self.hdr
+            && (hdr.paper_white, hdr.peak) != (paper_white, peak)
+        {
+            hdr.paper_white = paper_white;
+            hdr.peak = peak;
+            self.send_hdr_metadata();
+        }
+    }
     pub fn set_world_post(&mut self, scale: f32, antialias: bool) {
         self.world_post.scale = scale.clamp(0.25, 2.0);
         self.world_post.antialias = antialias;
@@ -3230,7 +3324,12 @@ impl Renderer {
             }
             Some(wgpu::CurrentSurfaceTexture::Outdated) => {
                 if let Some(surface) = &self.surface {
-                    surface.configure(&self.device, &self.config);
+                    Self::configure(
+                        &self.device,
+                        surface,
+                        &self.surface_config(),
+                        self.hdr.as_ref(),
+                    );
                 }
                 return Ok(false);
             }
@@ -3242,9 +3341,11 @@ impl Renderer {
                 return Err("surface acquisition failed validation".into());
             }
         };
-        let target_texture = match &surface_frame {
-            Some(f) => f.texture.clone(),
-            None => self.offscreen.clone().ok_or("no offscreen target")?,
+        let size = [self.config.width, self.config.height];
+        let target_texture = match (&surface_frame, &mut self.hdr) {
+            (Some(_), Some(hdr)) => hdr.frame(&self.device, size),
+            (Some(f), None) => f.texture.clone(),
+            (None, _) => self.offscreen.clone().ok_or("no offscreen target")?,
         };
         // One command buffer for the frame, after the section copies staged
         // since the last one: Metal commits every command buffer wgpu-core
@@ -4642,6 +4743,9 @@ impl Renderer {
         } else if scaled.is_some() {
             self.world_post.finish(&mut encoder, &view_target);
         }
+        if let Some(hdr) = &self.hdr {
+            hdr.keep_world(&mut encoder);
+        }
         if hand_quads > 0 && !pack_draws_hand {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: &view_target,
@@ -4796,6 +4900,9 @@ impl Renderer {
             self.section_copy_bytes = 0;
             self.section_uploads.finish(&encoder);
         }
+        if let (Some(hdr), Some(f)) = (&self.hdr, &surface_frame) {
+            hdr.present(&self.queue, &mut encoder, &f.texture, !frame.title);
+        }
         let commands = crate::spans::time("encode", || encoder.finish());
         let first_frame = self.first_frame == FirstFrame::Submit;
         if first_frame {
@@ -4832,7 +4939,12 @@ impl Renderer {
             }
             self.queue.present(surface_frame);
             if reconfigure && let Some(surface) = &self.surface {
-                surface.configure(&self.device, &self.config);
+                Self::configure(
+                    &self.device,
+                    surface,
+                    &self.surface_config(),
+                    self.hdr.as_ref(),
+                );
             }
         } else {
             // No swapchain paces offscreen frames: keep two on the GPU at most.
