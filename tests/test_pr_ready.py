@@ -23,7 +23,7 @@ class PrReadyTests(unittest.TestCase):
                          ["horizon-client", "horizon-core", "xtask"])
         self.assertEqual(pr_ready.touched_crates({"crates/horizon-core/README.md"}, PACKAGES), [])
         # The generated stylesheet is checked by horizon-theme's tests.
-        self.assertEqual(pr_ready.touched_crates({"website/src/tokens.css"}, PACKAGES), ["horizon-theme"])
+        self.assertEqual(pr_ready.touched_crates({"crates/horizon-theme/tokens.css"}, PACKAGES), ["horizon-theme"])
         # A crate whose name prefixes another's directory doesn't own it.
         self.assertEqual(pr_ready.touched_crates({"crates/horizon-core-extra/x.rs"}, PACKAGES), [])
         # The workspace manifest and lock touch every crate.

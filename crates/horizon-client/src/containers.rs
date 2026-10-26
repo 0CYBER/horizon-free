@@ -49,6 +49,17 @@ pub struct Furnace {
     /// rather than per item, and a save keeps it as the `RecipesUsed` compound.
     pub recipes_used: HashMap<String, u32>,
 }
+/// The key `recipes_used` keeps a recipe under: its full id, as vanilla's `ResourceKey<Recipe>`
+/// writes it in `RecipesUsed`. Horizon's own recipe ids are file names without the namespace, so
+/// keeping both forms would write a key twice, and vanilla refuses such a furnace
+/// ("Duplicate entry for key").
+pub fn recipe_used_key(id: &str) -> String {
+    if id.contains(':') {
+        id.to_owned()
+    } else {
+        format!("minecraft:{id}")
+    }
+}
 /// A hopper's slots: the only plain container with five.
 pub const HOPPER_SLOTS: usize = 5;
 
@@ -83,8 +94,65 @@ pub enum BlockEntity {
     Beehive(Box<crate::beehive::Beehive>),
     /// `CommandBlockEntity` of the three command blocks (`crate::command_block`).
     CommandBlock(Box<crate::command_block::CommandBlock>),
+    /// `CampfireBlockEntity` of campfires and soul campfires.
+    Campfire(Box<Campfire>),
     /// `SkullBlockEntity` of every skull and head block.
     Skull(Skull),
+}
+/// `CampfireBlockEntity`: four cooking slots, each with its
+/// `cookingProgress` and `cookingTime` (the recipe's).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Campfire {
+    pub items: [Option<ItemStack>; 4],
+    pub progress: [i32; 4],
+    pub total: [i32; 4],
+}
+impl Campfire {
+    /// `placeFood`'s slot: the first empty one, given the item's
+    /// `campfire_cooking` time; it takes one item of `held`.
+    pub fn place_food(&mut self, held: &mut ItemStack, cooking_time: i32) -> bool {
+        let Some(slot) = self.items.iter().position(Option::is_none) else {
+            return false;
+        };
+        self.total[slot] = cooking_time;
+        self.progress[slot] = 0;
+        self.items[slot] = Some(ItemStack {
+            count: 1,
+            ..held.clone()
+        });
+        held.count = held.count.saturating_sub(1);
+        true
+    }
+    /// `cookTick` (lit): each item's progress rises by one; the slots whose
+    /// progress reached their cooking time give up their item (the caller
+    /// drops its result).
+    pub fn cook_tick(&mut self) -> Vec<(usize, ItemStack)> {
+        let mut done = Vec::new();
+        for i in 0..4 {
+            if self.items[i].is_none() {
+                continue;
+            }
+            self.progress[i] += 1;
+            if self.progress[i] >= self.total[i]
+                && let Some(item) = self.items[i].take()
+            {
+                done.push((i, item));
+            }
+        }
+        done
+    }
+    /// `cooldownTick` (unlit): the progress falls by two, no lower than 0.
+    /// Whether anything changed (`setChanged`).
+    pub fn cooldown_tick(&mut self) -> bool {
+        let mut changed = false;
+        for i in 0..4 {
+            if self.progress[i] > 0 {
+                changed = true;
+                self.progress[i] = (self.progress[i] - 2).clamp(0, self.total[i]);
+            }
+        }
+        changed
+    }
 }
 /// `SkullBlockEntity`: the player profile the head shows (kept as loaded:
 /// a compound, or a string when it names a player only), the note block
@@ -304,6 +372,9 @@ impl BlockEntity {
         if name == "minecraft:brewing_stand" {
             return Some(Self::Brewing(Box::new(crate::brewing::BrewingStand::new())));
         }
+        if name == "minecraft:campfire" || name == "minecraft:soul_campfire" {
+            return Some(Self::Campfire(Box::default()));
+        }
         let size = match name {
             "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel" => 27,
             n if n.ends_with("copper_chest") => 27,
@@ -341,6 +412,7 @@ impl BlockEntity {
             Self::Beehive(_) => "minecraft:beehive",
             Self::CommandBlock(_) => "minecraft:command_block",
             Self::Skull(_) => "minecraft:skull",
+            Self::Campfire(_) => "minecraft:campfire",
         }
     }
     pub fn contents(&self) -> Vec<ItemStack> {
@@ -362,6 +434,7 @@ impl BlockEntity {
             Self::Sculk(_) => Vec::new(),
             Self::Banner(_) => Vec::new(),
             Self::Crafter(c) => c.items.iter().flatten().cloned().collect(),
+            Self::Campfire(c) => c.items.iter().flatten().cloned().collect(),
         }
     }
     pub fn slots(&self) -> &[Option<ItemStack>] {
@@ -382,7 +455,9 @@ impl BlockEntity {
             | Self::TrialSpawner(_)
             | Self::Vault(_)
             | Self::Beehive(_)
-            | Self::CommandBlock(_) => &[],
+            | Self::CommandBlock(_)
+            // Not a Container (only Clearable): hoppers don't reach in.
+            | Self::Campfire(_) => &[],
         }
     }
     pub fn slots_mut(&mut self) -> &mut [Option<ItemStack>] {
@@ -403,7 +478,8 @@ impl BlockEntity {
             | Self::TrialSpawner(_)
             | Self::Vault(_)
             | Self::Beehive(_)
-            | Self::CommandBlock(_) => &mut [],
+            | Self::CommandBlock(_)
+            | Self::Campfire(_) => &mut [],
         }
     }
 }
@@ -638,7 +714,10 @@ impl Furnace {
                                     Some(out) => out.count += recipe.result.count,
                                     None => self.items[2] = Some(recipe.result.clone()),
                                 }
-                                *self.recipes_used.entry(recipe.id.clone()).or_insert(0) += 1;
+                                *self
+                                    .recipes_used
+                                    .entry(recipe_used_key(&recipe.id))
+                                    .or_insert(0) += 1;
                                 if let Some(i) = self.items[0].as_mut() {
                                     i.count -= 1;
                                     if i.count == 0 {
@@ -691,6 +770,41 @@ pub fn create_experience(
 mod tests {
     use super::*;
     use horizon_core::random::{LegacyRandom, RandomSource};
+
+    #[test]
+    fn campfire_slots_take_food_cook_it_and_cool_down() {
+        let mut c = Campfire::default();
+        let mut beef = ItemStack::new("minecraft:beef", 2);
+        // placeFood: the first free slot, one item, its recipe's time.
+        assert!(c.place_food(&mut beef, 600));
+        assert_eq!(beef.count, 1);
+        assert_eq!(c.items[0].as_ref().map(|s| s.count), Some(1));
+        assert_eq!((c.progress[0], c.total[0]), (0, 600));
+        let mut fish = ItemStack::new("minecraft:cod", 1);
+        assert!(c.place_food(&mut fish, 3));
+        assert_eq!(c.items[1].as_ref().map(|s| &*s.item), Some("minecraft:cod"));
+        // cookTick: the cod is done on its third tick, the beef keeps cooking.
+        assert!(c.cook_tick().is_empty());
+        assert!(c.cook_tick().is_empty());
+        let done = c.cook_tick();
+        assert_eq!(done.len(), 1);
+        assert_eq!((done[0].0, &*done[0].1.item), (1, "minecraft:cod"));
+        assert!(c.items[1].is_none());
+        assert_eq!(c.progress[0], 3);
+        // cooldownTick: two a tick, never below zero.
+        assert!(c.cooldown_tick());
+        assert_eq!(c.progress[0], 1);
+        assert!(c.cooldown_tick());
+        assert_eq!(c.progress[0], 0);
+        // Full: four slots, no fifth.
+        for _ in 0..3 {
+            let mut more = ItemStack::new("minecraft:potato", 1);
+            assert!(c.place_food(&mut more, 600));
+        }
+        let mut fifth = ItemStack::new("minecraft:potato", 1);
+        assert!(!c.place_food(&mut fifth, 600));
+        assert_eq!(fifth.count, 1);
+    }
 
     /// A whole amount pays itself without a draw; a fraction is a chance of one more.
     #[test]

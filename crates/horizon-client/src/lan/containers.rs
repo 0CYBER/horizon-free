@@ -120,6 +120,21 @@ impl Hub {
         );
     }
 
+    /// `ServerPlayer.crit`: send the victim's animation to the players tracking
+    /// the attacker and the attacker themselves (`sendToTrackingPlayersAndSelf`).
+    pub fn critical_hit(&self, attacker: i32, target: i32) {
+        let body = C::Animate(play::Animate {
+            id: target,
+            action: 1,
+        })
+        .encode();
+        for g in self.guests.iter().filter(|g| {
+            self.here(g) && (g.entity_id == attacker || g.tracker.is_tracking(attacker))
+        }) {
+            g.sender.send(body.clone());
+        }
+    }
+
     /// `ServerLevel.broadcastDamageEvent`: the clients around show the hurt
     /// entity's flash and hear its hurt sound.
     pub fn damage_event(

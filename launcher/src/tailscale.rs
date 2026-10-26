@@ -260,11 +260,14 @@ impl Api {
         body: Option<&Value>,
         if_match: Option<&str>,
     ) -> Result<(Value, Option<String>), String> {
-        let agent = ureq::AgentBuilder::new()
-            .timeout(Duration::from_secs(20))
-            .build();
+        let url = format!("{}/api/v2{path}", self.base);
+        let agent = crate::proxy::agent(
+            ureq::AgentBuilder::new().timeout(Duration::from_secs(20)),
+            &url,
+        )
+        .build();
         let mut request = agent
-            .request(method, &format!("{}/api/v2{path}", self.base))
+            .request(method, &url)
             .set("Authorization", &format!("Bearer {}", self.token))
             .set("Accept", "application/json");
         if let Some(etag) = if_match {

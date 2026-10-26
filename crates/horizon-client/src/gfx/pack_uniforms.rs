@@ -399,7 +399,8 @@ impl FrameUniforms {
                 _ => Value::i(&[0]),
             }
         };
-        self.values = NAMES.iter().map(|n| value(n)).collect();
+        self.values.clear();
+        self.values.extend(NAMES.iter().map(|n| value(n)));
         self.frame = (self.frame + 1) % 720_720;
     }
 
