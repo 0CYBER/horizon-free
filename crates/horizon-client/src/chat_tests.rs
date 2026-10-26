@@ -446,7 +446,7 @@ fn a_guests_line_follows_the_player_message_permission() {
     let font = font();
     let shown = |visibility, source| {
         let mut chat = Chat::default();
-        chat.abilities = ChatAbilities::new(visibility);
+        chat.set_abilities(&font, ChatAbilities::new(visibility));
         chat.add_message(&font, Text::literal("line"), None, source, 0, false);
         chat.messages.len()
     };
