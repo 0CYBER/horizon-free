@@ -79,6 +79,39 @@ fn mob_effect_id(id: &str) -> Option<&'static str> {
     .get(id)
     .copied()
 }
+/// `LivingEntity.canBeAffected` with the mob overrides (`WitherBoss` and
+/// `WitherSkeleton` shrug off wither, `Spider` and `AbstractNautilus` poison,
+/// `Parched` weakness): the immune-to-infested and immune-to-oozing tags
+/// decide first, then the tag of mobs that ignore poison and regeneration.
+fn mob_can_be_affected(
+    tags: &std::collections::HashMap<String, std::collections::HashSet<String>>,
+    kind: &str,
+    effect: &str,
+) -> bool {
+    let effect = effect.trim_start_matches("minecraft:");
+    let kind = kind.trim_start_matches("minecraft:");
+    let overridden = match kind {
+        "wither" | "wither_skeleton" => effect == "wither",
+        "spider" | "cave_spider" | "nautilus" | "zombie_nautilus" => effect == "poison",
+        "parched" => effect == "weakness",
+        _ => false,
+    };
+    if overridden {
+        return false;
+    }
+    let in_tag = |tag: &str| {
+        tags.get(tag)
+            .is_some_and(|t| t.contains(&format!("minecraft:{kind}")))
+    };
+    if in_tag("minecraft:immune_to_infested") {
+        effect != "infested"
+    } else if in_tag("minecraft:immune_to_oozing") {
+        effect != "oozing"
+    } else {
+        !in_tag("minecraft:ignores_poison_and_regen")
+            || (effect != "regeneration" && effect != "poison")
+    }
+}
 impl Game<'_> {
     /// A splash potion, lingering potion or experience bottle in flight (the
     /// player's throws and dispensers both end up here).
@@ -632,14 +665,20 @@ impl Game<'_> {
         for p in players.iter().filter(|p| p.bounds.intersects(area)) {
             inside.push((Victim::Player(p.who), p.position.x, p.position.z));
         }
-        for m in self
-            .mobs
-            .iter()
-            .filter(|m| m.alive() && m.bounds().intersects(area))
-        {
+        let effects = potion.effects;
+        let tags = &self.res.stations().enchantments.entity_tags;
+        // Only mobs that at least one of the cloud's effects can affect are
+        // taken (`allEffects.stream().anyMatch(entity::canBeAffected)`), so
+        // the others neither become victims nor use up its radius.
+        for m in self.mobs.iter().filter(|m| {
+            m.alive()
+                && m.bounds().intersects(area)
+                && effects
+                    .iter()
+                    .any(|(id, ..)| mob_can_be_affected(tags, &m.kind.id, id))
+        }) {
             inside.push((Victim::Mob(m.id), m.position.x, m.position.z));
         }
-        let effects = potion.effects;
         for (victim, x, z) in inside {
             let (dx, dz) = (x - c.at[0], z - c.at[2]);
             if potion.victims.iter().any(|(v, _)| *v == victim)
@@ -687,11 +726,8 @@ impl Game<'_> {
                     return;
                 };
                 // Undead invert healing and harming.
-                let inverted = self
-                    .res
-                    .stations()
-                    .enchantments
-                    .entity_tags
+                let tags = &self.res.stations().enchantments.entity_tags;
+                let inverted = tags
                     .get("minecraft:inverted_healing_and_harm")
                     .is_some_and(|t| t.contains(&self.mobs[i].kind.id));
                 for (id, duration, amp) in effects {
@@ -707,7 +743,11 @@ impl Game<'_> {
                             }
                         }
                         _ => {
-                            if let Some(name) = mob_effect_id(id) {
+                            // `LivingEntity.addEffect` refuses what the mob
+                            // cannot be affected by.
+                            if mob_can_be_affected(tags, &m.kind.id, id)
+                                && let Some(name) = mob_effect_id(id)
+                            {
                                 m.add_effect(name, scaled(*duration), *amp);
                             }
                         }
