@@ -120,12 +120,13 @@ impl Hub {
         );
     }
 
-    /// `ServerPlayer.crit`: send the victim's animation to the players tracking
-    /// the attacker and the attacker themselves (`sendToTrackingPlayersAndSelf`).
-    pub fn critical_hit(&self, attacker: i32, target: i32) {
+    /// `ServerPlayer.crit` (`magicCrit` when `magic`): send the victim's
+    /// animation to the players tracking the attacker and the attacker
+    /// themselves (`sendToTrackingPlayersAndSelf`).
+    pub fn critical_hit(&self, attacker: i32, target: i32, magic: bool) {
         let body = C::Animate(play::Animate {
             id: target,
-            action: 1,
+            action: if magic { 2 } else { 1 },
         })
         .encode();
         for g in self.guests.iter().filter(|g| {
