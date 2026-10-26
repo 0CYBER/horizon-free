@@ -1083,7 +1083,7 @@ impl MotionWorld<'_, '_, '_> {
     /// `Entity.applyEffectsFromBlocks` for the blocks Horizon's player reacts
     /// to inside its movement path: powder snow (`PowderSnowBlock.entityInside`
     /// and the FREEZE / EXTINGUISH effects), cobwebs, sweet berry bushes,
-    /// cactus and lit campfires, and the magma block it stands on
+    /// cactus and lit campfires, and the magma and slime blocks it stands on
     /// (`stepOn`). Pressure plates, tripwires and rails are the world tick's
     /// scan.
     pub fn apply_effects_from_blocks(&mut self) -> Result<()> {
@@ -1141,13 +1141,21 @@ impl MotionWorld<'_, '_, '_> {
         // MagmaBlock's hot floor hurts unless it steps carefully (sneaks).
         if self.player.ground.on_ground {
             let on = self.legacy_on_position()?;
-            let magma = self
-                .assets
-                .registry
-                .state(self.block(on))
-                .is_some_and(|s| s.name == "minecraft:magma_block");
+            let under = self.assets.registry.state(self.block(on));
+            let magma = under.is_some_and(|s| s.name == "minecraft:magma_block");
+            let slime = under.is_some_and(|s| s.name == "minecraft:slime_block");
             if magma && !self.player.shift_key_down {
                 self.environment_hurt("minecraft:hot_floor", 1.0)?;
+            }
+            // SlimeBlock.stepOn: a slow walk on slime drags the horizontal
+            // speed (the client moves its own player, so not the server's copy).
+            if slime && !damage_only && !self.player.shift_key_down {
+                let abs_delta_y = self.player.velocity.y.abs();
+                if abs_delta_y < 0.1 {
+                    let scale = 0.4 + abs_delta_y * 0.2;
+                    self.player.velocity.x *= scale;
+                    self.player.velocity.z *= scale;
+                }
             }
         }
         let mut visited = std::collections::HashSet::new();
