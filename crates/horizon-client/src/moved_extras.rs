@@ -25,7 +25,7 @@ pub struct Moved {
     pub name: &'static str,
 }
 
-pub const MOVED: [Moved; 3] = [
+pub const MOVED: [Moved; 4] = [
     Moved {
         id: "fps_overlay",
         name: "FPS counter",
@@ -38,6 +38,10 @@ pub const MOVED: [Moved; 3] = [
         id: "zoom",
         name: "Zoom",
     },
+    Moved {
+        id: "minimap",
+        name: "Minimap",
+    },
 ];
 
 impl Moved {
@@ -45,7 +49,8 @@ impl Moved {
         match self.id {
             "fps_overlay" => e.fps,
             "keystrokes" => e.keystrokes,
-            _ => e.zoom,
+            "zoom" => e.zoom,
+            _ => e.minimap,
         }
     }
     /// The extra's settings as the mod keeps them (its storage keys).
@@ -60,10 +65,20 @@ impl Moved {
                 ("corner", e.keystrokes_corner.name().into()),
                 ("cps", flag(e.keystrokes_cps)),
             ],
-            _ => vec![
+            "zoom" => vec![
                 ("level", e.zoom_level.to_string()),
                 ("smooth", flag(e.zoom_smooth)),
                 ("sensitivity", flag(e.zoom_sensitivity)),
+            ],
+            _ => vec![
+                ("corner", e.minimap_corner.name().into()),
+                ("size", e.minimap_size.to_string()),
+                (
+                    "shape",
+                    if e.minimap_round { "round" } else { "square" }.into(),
+                ),
+                ("zoom", e.minimap_zoom.to_string()),
+                ("rotate", flag(e.minimap_rotate)),
             ],
         }
     }
@@ -208,7 +223,7 @@ mod tests {
     fn only_extras_that_were_on_are_installed_and_each_once() {
         let mut e = Extras::default();
         assert!(pending(&e).is_empty());
-        assert_eq!(nothing_to_do(&e).len(), 3);
+        assert_eq!(nothing_to_do(&e).len(), 4);
         e.fps = true;
         e.fps_corner = Corner::BottomRight;
         e.fps_lows = true;
@@ -223,7 +238,7 @@ mod tests {
         );
         e.moved.push("fps_overlay".into());
         assert!(pending(&e).is_empty());
-        assert_eq!(nothing_to_do(&e), [&MOVED[1], &MOVED[2]]);
+        assert_eq!(nothing_to_do(&e), [&MOVED[1], &MOVED[2], &MOVED[3]]);
         // Zoom: its settings, and its key only when the player changed it.
         e.zoom = true;
         e.zoom_level = 8;
@@ -240,6 +255,23 @@ mod tests {
         assert!(MOVED[2].keys(&e).is_empty());
         e.zoom_key = "key.mouse.4".into();
         assert_eq!(MOVED[2].keys(&e), [("zoom", "key.mouse.4".into())]);
+        // The minimap: its five settings, in the extra's values.
+        e.minimap = true;
+        e.minimap_corner = Corner::BottomLeft;
+        e.minimap_size = 128;
+        e.minimap_round = true;
+        e.minimap_zoom = 0.5;
+        assert_eq!(pending(&e), [&MOVED[2], &MOVED[3]]);
+        assert_eq!(
+            MOVED[3].settings(&e),
+            [
+                ("corner", "bottom_left".into()),
+                ("size", "128".into()),
+                ("shape", "round".into()),
+                ("zoom", "0.5".into()),
+                ("rotate", "false".into())
+            ]
+        );
         assert_eq!(
             MOVED[0].notice(),
             "FPS counter moved to the mod browser: installed for you"
