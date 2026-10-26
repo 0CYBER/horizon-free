@@ -3492,6 +3492,9 @@ impl Game<'_> {
             if m.species() == horizon_client::mobs::Species::Rabbit {
                 horizon_client::mobs::rabbit::post_tick(m);
             }
+            if m.species() == horizon_client::mobs::Species::Bat {
+                horizon_client::mobs::bat::setup_animation_states(m);
+            }
         }
         for o in self.orbs.iter_mut().filter(|_| running) {
             o.previous = o.position;

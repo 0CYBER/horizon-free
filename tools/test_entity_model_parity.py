@@ -276,6 +276,14 @@ def species_cases(layer, base_cases):
     for extra in SPECIES.get(name, []):
         for index in (2, 3, 6):
             yield {**base_cases[index], **extra}
+    if name == 'bat':
+        # Entity clocks, rather than injected render clocks: flight, rest, transitions and
+        # unrelated flag bits. Exercise the in-frame tick and server-client visual update.
+        for flags in ([0] * 4, [1] * 4, [0, 0, 1, 1, 0, 0], [1, 1, 0, 0, 1, 1], [2, 3, 2, 2]):
+            for in_frame in (False, True):
+                for partial in (0.0, 0.5):
+                    yield {**base_cases[0], 'ageInTicks': len(flags) + partial,
+                           '@batTicks': flags, '@batInFrame': in_frame}
 
 
 def compare_vertices(v, r, args, stats):
