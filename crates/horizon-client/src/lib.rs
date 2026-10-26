@@ -96,6 +96,7 @@ pub mod inv_sort;
 pub mod inventory_effects;
 pub mod item_data;
 pub mod item_render;
+pub mod item_sync;
 pub mod item_tooltip;
 pub mod items;
 pub mod java_text;
