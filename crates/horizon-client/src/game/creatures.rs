@@ -3031,6 +3031,7 @@ impl Game<'_> {
                     continue;
                 }
             }
+            self.mark_entity(entity_start, &mob.kind.id);
             let light = self.world.light(
                 mob.position.x.floor() as i32,
                 (mob.position.y + mob.eye_height()).floor() as i32,

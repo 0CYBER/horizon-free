@@ -73,7 +73,8 @@ pub struct Flat {
     phase2_call_data: Vec<[u32; 5]>,
     /// The copy of phase 2's draws, and its ranges.
     phase2_group: Option<(wgpu::BindGroup, u32)>,
-    draw_layout: wgpu::BindGroupLayout,
+    /// The layout of a page's bind group 1 (shader packs' terrain pipelines share it).
+    pub(super) draw_layout: wgpu::BindGroupLayout,
     blocks_per_page: u64,
     pages: Vec<Option<PageTable>>,
     free_ids: Vec<u32>,
@@ -651,9 +652,21 @@ impl Flat {
         calls: &[Call],
         vertices: impl Fn(u32) -> &'a wgpu::Buffer,
     ) {
+        self.draw_with(pass, calls, vertices, |_, _| {});
+    }
+    /// `draw`, calling `page` before each run of calls from one arena page (a shader pack binds
+    /// that page's vertices for reading).
+    pub fn draw_with<'a>(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        calls: &[Call],
+        vertices: impl Fn(u32) -> &'a wgpu::Buffer,
+        page: impl Fn(&mut wgpu::RenderPass<'_>, u32),
+    ) {
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
         for call in calls {
             self.bind_page(pass, call.page, &vertices);
+            page(pass, call.page);
             pass.draw_indexed(call.first..call.first + call.count, 0, 0..1);
         }
     }

@@ -240,6 +240,42 @@ impl Game<'_> {
                 discrete: false,
             });
         }
+        // ItemFrameRenderer.shouldShowName/getNameTag: only the targeted
+        // frame's custom-named item, with the HUD visible (also glow frames).
+        if !self.ui.hide_gui
+            && let Some((i, distance)) = self.frame_hit()
+            && self.before_block(distance)
+            && self.mob_hit().is_none_or(|(_, d)| d > distance)
+            && let Some(name) = self.item_frames[i]
+                .item
+                .as_ref()
+                .and_then(|item| item.custom_name())
+        {
+            let frame = &self.item_frames[i];
+            let (lo, hi) = frame.bounds();
+            let center = glam::DVec3::from_array(std::array::from_fn(|a| (lo[a] + hi[a]) / 2.0));
+            if center.distance_squared(camera) < 64.0 * 64.0 {
+                // NAME_TAG is at the entity height (0.5), then the name
+                // submitter lifts it 0.5. ItemFrameRenderer offsets rendering
+                // 0.3 toward its facing and -0.25 vertically.
+                let step = frame.step();
+                tags.push(NameTag {
+                    at: center
+                        + glam::DVec3::new(
+                            f64::from(step[0] as f32 * 0.3),
+                            0.75,
+                            f64::from(step[2] as f32 * 0.3),
+                        ),
+                    lines: vec![(Text::literal(name).resolve_legacy(), 0.0)],
+                    light: self.world.light(
+                        center.x.floor() as i32,
+                        center.y.floor() as i32,
+                        center.z.floor() as i32,
+                    ),
+                    discrete: false,
+                });
+            }
+        }
         tags
     }
     /// `SubmitNodeCollection.submitNameTag`: a discrete name is drawn once,
