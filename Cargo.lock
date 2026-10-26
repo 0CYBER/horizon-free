@@ -1370,6 +1370,7 @@ dependencies = [
  "horizon-core",
  "horizon-dualsense",
  "horizon-friends",
+ "horizon-hdr",
  "horizon-items",
  "horizon-mods",
  "horizon-protocol",
@@ -1444,6 +1445,14 @@ dependencies = [
  "sha2",
  "socket2 0.5.10",
  "spake2",
+]
+
+[[package]]
+name = "horizon-hdr"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "wgpu",
 ]
 
 [[package]]
