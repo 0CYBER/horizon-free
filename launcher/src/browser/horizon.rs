@@ -111,13 +111,14 @@ fn fetch_index() -> Result<(Index, String), String> {
 }
 
 /// The browser's kind for a registry kind; None for one the launcher doesn't install yet
-/// (shader packs, kinds newer than this launcher).
+/// (kinds newer than this launcher).
 fn kind_of(kind: &index::Kind) -> Option<Kind> {
     match kind {
         index::Kind::Mod => Some(Kind::Mod),
         index::Kind::ResourcePack => Some(Kind::ResourcePack),
         index::Kind::Modpack => Some(Kind::Modpack),
-        index::Kind::Shader | index::Kind::Other(_) => None,
+        index::Kind::Shader => Some(Kind::Shader),
+        index::Kind::Other(_) => None,
     }
 }
 
@@ -372,6 +373,7 @@ fn relative(kind: Kind, id: &str, file_name: &str) -> Result<String, String> {
     match kind {
         Kind::Mod => Ok(format!("{}/{id}.hmod", java::MODS_DIR)),
         Kind::ResourcePack => Ok(format!("resourcepacks/{file_name}")),
+        Kind::Shader => Ok(format!("shaderpacks/{file_name}")),
         Kind::Modpack => Err("A modpack installs as its own profile (pack::install).".into()),
     }
 }
@@ -418,7 +420,8 @@ fn newest<'a>(index: &Index, p: &'a index::Project) -> Result<&'a index::Version
     })
 }
 
-/// Installs version `v` of the registry's mod or resource pack `p` into the game folder `home`.
+/// Installs version `v` of the registry's mod, resource pack or shader pack `p` into the game
+/// folder `home`.
 fn install_version(
     index: &Index,
     local: bool,
@@ -447,12 +450,16 @@ fn install_version(
             other.title
         ));
     }
-    if (target.exists() && old.as_ref().is_none_or(|o| o.file != relative)) || folder_mod.exists() {
+    let clash = target.exists() && old.as_ref().is_none_or(|o| o.file != relative);
+    if project.kind == Kind::Mod && (clash || folder_mod.exists()) {
         return Err(format!(
             "A mod with the id {} is already in {}: move it away first.",
             p.id,
             java::MODS_DIR
         ));
+    }
+    if clash {
+        return Err(format!("{relative} is already there: move it away first."));
     }
     let line = format!("{} {}", p.name, v.version);
     let file = &version_of(index, p, v).files[0];
@@ -518,7 +525,7 @@ pub fn turn_off_revoked(index: &Index, home: &Path) -> Vec<String> {
                     e.title, r.reason
                 ));
             }
-        } else if e.kind == Kind::ResourcePack {
+        } else if matches!(e.kind, Kind::ResourcePack | Kind::Shader) {
             out.push(format!(
                 "{} was taken down: {} Remove it.",
                 e.title, r.reason

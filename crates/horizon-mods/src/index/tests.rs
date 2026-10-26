@@ -1,7 +1,8 @@
 //! The sample index (`tests/index/index-v1.json`, the one docs/api/mod-index.md
 //! shows) and its files: `coords_hud-0.1.0.hmod`, signed with the throwaway
-//! key `test.pub` by minisign 0.12 (its secret key was deleted), and
-//! `cozy-1.0.0.hpack`, unsigned.
+//! key `test.pub` by minisign 0.12 (its secret key was deleted),
+//! `cozy-1.0.0.hpack`, unsigned, and `glow-1.0.0.hshader`, unsigned
+//! (`horizon-shader new --template post`, then `horizon-shader pack`).
 use super::*;
 use std::path::PathBuf;
 
@@ -25,8 +26,8 @@ fn reads_the_sample_and_keeps_unknown_kinds() {
     let index = sample();
     assert_eq!(index.schema, SCHEMA);
     let kinds: Vec<&str> = index.projects.iter().map(|p| p.kind.name()).collect();
-    assert_eq!(kinds, ["mod", "modpack", "world"]);
-    assert_eq!(index.projects[2].kind, Kind::Other("world".into()));
+    assert_eq!(kinds, ["mod", "modpack", "shader", "world"]);
+    assert_eq!(index.projects[3].kind, Kind::Other("world".into()));
     let hud = index.project("coords_hud").unwrap();
     assert_eq!(
         hud.versions[0].capabilities,
@@ -44,6 +45,8 @@ fn files_pass_against_their_entries() {
     assert_eq!(check(&index, "coords_hud", &hmod), Ok(Trust::Verified));
     let hpack = fixtures().join("cozy-1.0.0.hpack");
     assert_eq!(check(&index, "cozy", &hpack), Ok(Trust::Unsigned));
+    let hshader = fixtures().join("glow-1.0.0.hshader");
+    assert_eq!(check(&index, "glow", &hshader), Ok(Trust::Unsigned));
     let world = index.project("skyblock_start").unwrap();
     let e = check_file(&index, world, &world.versions[0], &hpack).unwrap_err();
     assert!(e.contains("bytes"), "{e}");

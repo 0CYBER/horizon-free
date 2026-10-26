@@ -14,7 +14,8 @@ Horizon's own format.
 | Templates | `crates/horizon-shader-api/templates/` | post, sky, material |
 | Example pack | `crates/horizon-shader-api/packs/golden_hour` | a warm sky and two post passes |
 | In the game: the post stage | `HORIZON_SHADER_PACK=<name>` (for development, until the Shader Packs page) | post passes, hot reload |
-| In the game: sky and material; the launcher and the registry | | not yet |
+| The registry and the launcher | `shader` kind ([api/mod-index.md](api/mod-index.md)); the Mods page's Shader packs tab | checked, then installed into `shaderpacks/` |
+| In the game: sky and material | | not yet |
 
 ## Quick start
 

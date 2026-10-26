@@ -449,7 +449,7 @@ pub fn check_file(
         (None, None) => Trust::Unsigned,
         _ => return Err("its signature and the project's key don't go together".into()),
     };
-    if matches!(project.kind, Kind::Shader | Kind::Other(_)) {
+    if matches!(project.kind, Kind::Other(_)) {
         return Err(format!(
             "this Horizon can't install a {} yet",
             project.kind.name()
