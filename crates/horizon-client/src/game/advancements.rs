@@ -9,6 +9,7 @@ use horizon_client::{
     text::{self, Style, Text},
     toasts::Slide,
 };
+use horizon_core::geometry::Vec3;
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -751,19 +752,12 @@ impl Game<'_> {
             .filter(|m| m.alive())
             .filter_map(|m| Some((m, super::ray_box(eye, dir, 100.0, m.bounds())?)))
             .min_by(|a, b| a.1.total_cmp(&b.1))?;
-        // Eye to the target's centre, two samples per block.
-        let to = m.center();
-        let reach = (0..3).map(|i| (to[i] - eye[i]).powi(2)).sum::<f64>().sqrt();
-        let steps = (reach * 2.0).ceil().max(1.0) as i32;
-        let clear = (1..steps).all(|i| {
-            let f = f64::from(i) / f64::from(steps);
-            let p = [0, 1, 2].map(|a| (eye[a] + (to[a] - eye[a]) * f).floor() as i32);
-            !self
-                .res
-                .facts()
-                .get(self.world.block(p[0], p[1], p[2]))
-                .full_collision
-        });
+        // `LivingEntity.hasLineOfSight`: eye to the target's eye height,
+        // `ClipContext.Block.COLLIDER`, no fluids, within 128 blocks.
+        let from = Vec3::new(eye[0], eye[1], eye[2]);
+        let to = Vec3::new(m.position.x, m.eye_y(), m.position.z);
+        let world = self.mob_world_base(&[]);
+        let clear = to.distance(from) <= 128.0 && world.clear_between(from, to, false);
         clear.then(|| self.mob_entity(m))
     }
     /// A player condition plus one item (`item` key).
