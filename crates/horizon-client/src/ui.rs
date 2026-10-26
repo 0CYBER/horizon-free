@@ -837,16 +837,24 @@ pub fn char_len(s: &str) -> usize {
 pub fn word_position(value: &str, dir: isize, from: usize) -> usize {
     let chars: Vec<char> = value.chars().collect();
     let mut pos = from.min(chars.len());
+    // A line break is a word of its own, so Ctrl+Backspace in a book page
+    // stops at the end of the previous line.
     if dir < 0 {
         while pos > 0 && chars[pos - 1] == ' ' {
             pos -= 1;
         }
-        while pos > 0 && chars[pos - 1] != ' ' {
+        if pos > 0 && chars[pos - 1] == '\n' {
+            return pos - 1;
+        }
+        while pos > 0 && !matches!(chars[pos - 1], ' ' | '\n') {
             pos -= 1;
         }
     } else {
-        while pos < chars.len() && chars[pos] != ' ' {
+        while pos < chars.len() && !matches!(chars[pos], ' ' | '\n') {
             pos += 1;
+        }
+        if pos < chars.len() && chars[pos] == '\n' {
+            return pos + 1;
         }
         while pos < chars.len() && chars[pos] == ' ' {
             pos += 1;
@@ -1496,6 +1504,12 @@ mod tests {
         assert_eq!(word_position("hello", 1, 5), 5);
         assert_eq!(word_position("hi", -1, 99), 0);
         assert_eq!(word_position("hi", 1, 99), 2);
+    }
+    #[test]
+    fn word_position_stops_at_line_breaks() {
+        assert_eq!(word_position("one\ntwo", -1, 7), 4);
+        assert_eq!(word_position("one\n", -1, 4), 3);
+        assert_eq!(word_position("one\ntwo", 1, 0), 4);
     }
     #[test]
     fn delete_words_removes_the_word_before_the_end() {
