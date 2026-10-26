@@ -3050,7 +3050,10 @@ impl Game<'_> {
     /// blocks and primed TNT.
     fn remote_motion(&mut self, id: i32, velocity: [f64; 3]) {
         let v = Vec3::new(velocity[0], velocity[1], velocity[2]);
-        if let Some(d) = self.dropped.iter_mut().find(|d| d.id == id as u32) {
+        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id as u32) {
+            // Squid.aiStep derives its body pitch and roll from network motion.
+            m.velocity = v;
+        } else if let Some(d) = self.dropped.iter_mut().find(|d| d.id == id as u32) {
             d.velocity = v;
         } else if let Some(f) = self.falling.iter_mut().find(|f| f.id == id as u32) {
             f.velocity = v;
