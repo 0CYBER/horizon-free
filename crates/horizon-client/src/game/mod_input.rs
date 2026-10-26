@@ -1,6 +1,7 @@
 //! Capability `input` (docs/mods.md): the use button on items a mod claims,
-//! and the mod's own keys. With no mod claiming items or keys, each hook
-//! here returns after one check.
+//! the mod's own keys and the mouse wheel; and `render`'s zoom. With no mod
+//! claiming items, keys or the wheel, each hook here returns after one
+//! check.
 use super::Game;
 use winit::{event::MouseButton, keyboard::KeyCode};
 #[cfg(feature = "mods")]
@@ -20,6 +21,21 @@ impl Game<'_> {
         false
     }
     pub(super) fn mod_key(&mut self, _key: KeyCode, _pressed: bool, _repeat: bool) {}
+    pub(super) fn mod_mouse_key(&mut self, _button: MouseButton, _pressed: bool) {}
+    pub(super) fn mod_wheel(&mut self, _steps: f32) -> bool {
+        false
+    }
+    pub(super) fn mod_zoom(&self) -> Option<ModZoom> {
+        None
+    }
+}
+
+/// A mod's zoom (`render.set-zoom`), clamped by the runtime.
+#[derive(Clone, Copy)]
+pub(super) struct ModZoom {
+    pub(super) factor: f32,
+    pub(super) smooth: bool,
+    pub(super) turn: f32,
 }
 
 #[cfg(feature = "mods")]
@@ -88,5 +104,47 @@ impl Game<'_> {
         if let Some(name) = horizon_client::keybinds::key_name(key) {
             self.mods.mods.key(name, pressed);
         }
+    }
+    /// A mouse button while playing: a mod's key bound to it
+    /// (`key.mouse.4`...), as `mod_key`.
+    pub(super) fn mod_mouse_key(&mut self, button: MouseButton, pressed: bool) {
+        if self.mods.mods.has_keys() {
+            let name = horizon_client::keybinds::mouse_name(button);
+            self.mods.mods.key(&name, pressed);
+        }
+    }
+    /// Wheel steps while playing: true when a mod holds the wheel, so the
+    /// hotbar doesn't move.
+    pub(super) fn mod_wheel(&mut self, steps: f32) -> bool {
+        self.mods.mods.wheel(steps)
+    }
+    /// Playing, with nothing over the world: mods' keys and zoom apply.
+    fn mod_playing(&self) -> bool {
+        self.screen == Screen::Playing
+            && self.title.is_none()
+            && self.sign_edit.is_none()
+            && self.book.is_none()
+    }
+    /// Once a frame, before the mods run: a screen that opened lets their
+    /// held keys up.
+    pub(super) fn mod_input_frame(&mut self) {
+        let playing = self.mod_playing();
+        if self.mods.playing && !playing {
+            self.mods.mods.release_keys();
+        }
+        self.mods.playing = playing;
+    }
+    /// The strongest zoom a mod asks for, while playing; the spyglass's
+    /// own view wins.
+    pub(super) fn mod_zoom(&self) -> Option<ModZoom> {
+        if !self.mod_playing() || self.scoping() {
+            return None;
+        }
+        let z = self.mods.mods.zoom()?;
+        Some(ModZoom {
+            factor: z.factor,
+            smooth: z.smooth,
+            turn: z.turn,
+        })
     }
 }

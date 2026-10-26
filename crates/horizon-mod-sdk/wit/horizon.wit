@@ -207,9 +207,13 @@ interface input {
         /// It came up again, or the item left the hand, or a screen opened.
         use-stop(item-use),
         /// A key `register-key` named went down or up while playing (no
-        /// screen open). The game's own mapping on that key still runs.
+        /// screen open). The game's own mapping on that key still runs. A
+        /// screen opening lets every held key up.
         key-down(string),
         key-up(string),
+        /// Mouse wheel steps while the mod holds the wheel (`claim-wheel`):
+        /// positive away from the player, as the hotbar reads them.
+        wheel(f32),
     }
     /// The items whose use the mod handles instead of the game, by id (at
     /// most 64). Replaces the previous list.
@@ -222,6 +226,10 @@ interface input {
     held: func() -> option<held-item>;
     /// The events since the last call, oldest first.
     poll: func() -> list<event>;
+    /// Takes the mouse wheel while playing (true) or gives it back: while
+    /// taken, its steps are the mod's `wheel` events and the hotbar doesn't
+    /// move. The game gives it back when the mod stops.
+    claim-wheel: func(on: bool);
     /// A mapping as the player has bound it.
     record mapping-state {
         /// The bound key's name as Controls shows it: `W`, `Space`, `LMB`.
@@ -339,6 +347,21 @@ interface render {
     }
     /// The game's frame counter, recomputed twice a second.
     frame-stats: func() -> frame-rate;
+    record zoom {
+        /// The field of view is divided by it: 1 is none, at most 10.
+        factor: f32,
+        /// Ease in and out through the game's field-of-view easing, as the
+        /// spyglass does, instead of at once.
+        smooth: bool,
+        /// Mouse turning is multiplied by it while zoomed: 1 keeps the
+        /// player's sensitivity, at least 0.05.
+        turn: f32,
+    }
+    /// Zooms the camera until the next call (`factor` 1 ends it), only
+    /// while playing: a screen opening or the spyglass's own view (which
+    /// wins) leave the camera vanilla's. With several mods, the strongest
+    /// zoom counts.
+    set-zoom: func(zoom: zoom);
 }
 
 /// What the game calls. Only the hooks `init` asks for are ever called.

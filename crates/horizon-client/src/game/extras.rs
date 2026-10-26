@@ -229,25 +229,38 @@ impl Game<'_> {
     fn zoom_factor(&self) -> f32 {
         self.extras.zoom.factor(self.scoping())
     }
+    /// The zoom in effect, the extra's or a mod's (`render.set-zoom`),
+    /// whichever is stronger: (factor, smooth, turning scale).
+    fn zoom_now(&self) -> (f32, bool, f64) {
+        let factor = self.zoom_factor();
+        let e = &self.settings.extras;
+        let own = (
+            factor,
+            e.zoom_smooth,
+            turn_scale(factor, e.zoom_sensitivity),
+        );
+        match self.mod_zoom() {
+            Some(z) if z.factor > factor => (z.factor, z.smooth, f64::from(z.turn)),
+            _ => own,
+        }
+    }
     /// The field-of-view modifier target, divided by a smooth zoom.
     pub(super) fn zoomed_fov_target(&self, vanilla: f32) -> f32 {
-        if self.settings.extras.zoom_smooth {
-            fov_target(vanilla, self.zoom_factor())
-        } else {
-            vanilla
+        match self.zoom_now() {
+            (factor, true, _) => fov_target(vanilla, factor),
+            _ => vanilla,
         }
     }
     /// The field of view in degrees, divided by an instant zoom.
     pub(super) fn zoomed_fov_degrees(&self, fov: f32) -> f32 {
-        if self.settings.extras.zoom_smooth {
-            fov
-        } else {
-            fov / self.zoom_factor()
+        match self.zoom_now() {
+            (factor, false, _) => fov / factor,
+            _ => fov,
         }
     }
     /// Mouse turning while zoomed.
     pub(super) fn zoom_turn_scale(&self) -> f64 {
-        turn_scale(self.zoom_factor(), self.settings.extras.zoom_sensitivity)
+        self.zoom_now().2
     }
     /// The FPS counter and keystrokes, in the HUD layer (hidden with F1 by
     /// the caller). The top left corner gives way to the debug screen.
