@@ -68,6 +68,11 @@ rustix = { version = "1", default-features = false, features = ["std", "time"] }
 # on the PATH.
 wgpu = { version = "30.0.1", default-features = false, features = ["dx12"] }
 
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+# OpenGL (WGL on Windows, EGL on Linux), the last fallback, for GPUs with no Vulkan or
+# DirectX 12 driver (`graphicsApi`, graphics.rs).
+wgpu = { version = "30.0.1", default-features = false, features = ["gles"] }
+
 [target.'cfg(windows)'.build-dependencies]
 # The icon resource in the .exe (build.rs).
 winresource = "0.1"

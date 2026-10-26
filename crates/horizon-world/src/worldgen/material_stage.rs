@@ -196,7 +196,10 @@ pub fn build_surface<R: RandomSource, S: MaterialSurfaceQueries, B: TerrainBlock
     rule: MaterialRule,
     inputs: SurfaceInputs<'_, R, S>,
     extensions: &MaterialExtensions<R::Positional>,
-) -> Result<(), SurfaceError> {
+) -> Result<(), SurfaceError>
+where
+    R::Positional: Clone,
+{
     let min = chunk.min_y();
     let max = min + chunk.height() - 1;
     if inputs.write_min_y < min
@@ -240,9 +243,13 @@ fn build_columns<R: RandomSource, S: MaterialSurfaceQueries, B: TerrainBlockStat
     extensions: &MaterialExtensions<R::Positional>,
     write_min_y: i32,
     write_max_y: i32,
-) -> Result<(), SurfaceError> {
+) -> Result<(), SurfaceError>
+where
+    R::Positional: Clone,
+{
     let min = chunk.min_y();
     let rule = worker.add_rule(rule)?;
+    let variants = worker.surface_variants(rule)?;
     let cx = chunk.position().x.wrapping_shl(4);
     let cz = chunk.position().z.wrapping_shl(4);
     for lx in 0..16 {
@@ -321,6 +328,8 @@ fn build_columns<R: RandomSource, S: MaterialSurfaceQueries, B: TerrainBlockStat
                     above = above.wrapping_add(1);
                     worker.update_y(above, y.wrapping_sub(bottom).wrapping_add(1), water, y);
                     if y >= write_min_y && y <= write_max_y {
+                        let above = variants.surface && y >= worker.minimum_surface_level()?;
+                        let rule = variants.rule(y, above);
                         if let Some(state) = worker.try_apply(rule, BlockPos::new(x, y, z))? {
                             column.set_block(y, state)?;
                         }
