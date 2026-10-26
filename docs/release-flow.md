@@ -13,7 +13,7 @@ reopened; labels never start it):
 | Job | Runs on | What | Time |
 | --- | --- | --- | --- |
 | `verify` | GitHub `ubuntu-latest` | Public-tree check, Python tests, rustfmt, clippy with warnings denied, Rust tests. Dependencies and the workspace build come from a cache saved by main's runs | ~4 min cold, less warm |
-| `parity / parity` | The Mac mini's runner (`ludovics-mac-mini`, label `horizon-game`) | The vanilla harnesses the change can affect (`tools/parity.py --changed <base>`) | seconds when nothing is affected; minutes per affected harness |
+| `parity / parity` | A runner with the label `horizon-game`: the Mac mini's two, and the desktop's while nobody uses it (below) | Only for a change to a harness, an oracle, a probe or the runner (or the `run-parity` label): the vanilla harnesses the change can affect (`tools/parity.py --changed <base>`). Other pull requests skip it: [parity-main](#parity-on-main) checks them on main | seconds when nothing is affected; minutes per affected harness |
 
 Pushes to main run `verify` only; the nightly audit covers main's harnesses.
 
@@ -28,10 +28,13 @@ The job is `.github/workflows/parity.yml`, a reusable workflow: `checks` calls i
 repository, `run-parity.yml` for a fork's pull request a maintainer labels `run-parity`.
 
 Horizon never downloads the game, so harnesses that compare with vanilla run only where the maintainer's own
-copy is: the Mac mini. Its runner runs as the maintainer's account and keeps its checkout between runs
-(`clean: false`), so the probes build incrementally into `.local/parity-target` and earlier passes stand.
+copy is: the Mac mini and his Linux desktop. Their runners run as the maintainer's account and keep their checkout
+between runs (`clean: false`), so the probes build incrementally into `.local/parity-target` and earlier passes
+stand.
 
-1. `tools/ci/runner-env.sh` puts the machine's Python 3.13 and the JDK `research-lock.json` pins on the PATH.
+1. `tools/ci/runner-env.sh` puts the machine's Python 3.13 and the JDK `research-lock.json` pins on the PATH
+   (Homebrew and `java_home` on the Mac; on NixOS what `linux-runner.sh` pinned, else nixpkgs), and sccache when
+   the machine has it.
 2. `tools/ci/vanilla-data.sh` links `.local/` to the runner's copy of the vanilla data, cloned once from
    `~/code/horizon-parity/shared-local` into `~/.actions-runners/horizon/_work/horizon/shared-local`, and
    prepares `.local/horizon-client` with the pull request's own `horizon-prepare` once per preparer version
@@ -39,10 +42,17 @@ copy is: the Mac mini. Its runner runs as the maintainer's account and keeps its
    depend only on the Minecraft version, are kept once in `shared-local/sounds/<version>/` (copied from a folder
    `horizon-prepare sounds` made from the maintainer's own game; the Mac mini has no official launcher of its own)
    and cloned into each preparation (not linked: vanilla's packs refuse symbolic links), for the audio harnesses.
+   `tools/prepare_output.py check` then compares what was prepared with `crates/horizon-prepare/output-versions.txt`:
+   launchers keep a player's prepared resources across releases whose preparer declares the same `OUTPUT_VERSION`
+   (`crates/horizon-prepare/src/lib.rs`), so a change to the prepared files fails here until it bumps the number
+   and appends the new digest (the error gives both lines).
 3. `tools/parity.py --changed <base sha>` picks the harnesses whose traced dependencies (their script, Python
    modules, Java oracles and every Rust source their probes compile) changed since the merge base, plus any
    harness nothing is recorded about yet, and runs those that have no pass for their current inputs. A change to
    `Cargo.lock` or `research-lock.json` affects every harness. Each harness has 25 minutes, the job 45.
+   The selection runs with main's `tools/parity.py` and `tools/parity_reach.py` (`--changed <base> --list`), so a
+   branch made before a better selection landed gets it too, and the head's own `parity.py` then runs the named
+   harnesses. A branch that changes either file selects with its own code.
 
 Failed harnesses' logs are uploaded as the `parity-logs` artifact.
 
@@ -64,6 +74,26 @@ release's macOS build back. Each keeps its own checkout, `target/` and Rust inst
 `_work/horizon/shared-local` links to the first's, so they share the vanilla data, the preparations (one at a
 time, under a lock) and the parity passes and slots.
 
+**The desktop's runner.** `ludodesktop-horizon` (labels `self-hosted`, `Linux`, `X64`, `ludodesktop`, and
+`horizon-game` once a full trial has passed there) runs on the maintainer's Linux desktop while nobody uses it: its
+screen locked, or untouched for 15 minutes (his rule, 2026-10-26). `tools/ci/linux-runner.sh install`, run there as
+him, registers it and installs two systemd user services: `horizon-runner` (the runner, in
+`~/.actions-runners/horizon`, nice 19, in `horizon-ci.slice` with CPU and I/O weight 20, half the threads (on all of
+them the CPU package reached 92–96 °C) and memory capped at two thirds of the RAM; `CARGO_BUILD_JOBS` and the harness slots at 8, after the machine froze under ~7 cold cargo
+builds on 2026-10-14; its own Rust install; the JDK, sccache and the build libraries from nixpkgs; its own
+`vscreen` so no game it starts reaches his screen) and `horizon-runner-pause` (`tools/ci/runner_pause.py`), the
+only thing that starts the runner. The watcher stops it at once on keyboard, mouse or gamepad input (read from
+`/dev/input`: only whether bytes came, never what), while an unlocked session has had input in the last 15 minutes,
+while the CPU package is at 90 °C or more, while a game runs (Steam, gamescope, Wine, Proton or Minecraft
+processes, fleet-load's own detection, or a process outside the CI slice using the GPU at 50 % or more), or while
+`~/.actions-runners/horizon/pause` exists, and starts it again 5 minutes after the last such sign. A job already
+under way is throttled to 2 threads at the lowest weight and the runner stops after it: freezing the job would make
+GitHub drop it as lost and the harnesses time out. Old pull requests' `runner-env.sh` know only the Mac: the
+runner's `.env` and `.path` give their jobs Python, the JDK and the vanilla data (`HORIZON_SHARED_SOURCE`) all the
+same. The nightly audit and parity-main stay on the Mac mini's runners: the audit compares with the previous night,
+so it stays on one platform, and a parity-main job slowed down on the desktop because he came back could time out,
+and its failures bisect and comment on merges.
+
 ## Merging
 
 Pull requests merge with a merge commit. The orchestrator sessions review a pull request, then turn on
@@ -80,10 +110,34 @@ gh api -X POST repos/ludovic111/horizon/branches/main/protection/required_status
 A skipped `parity` (a fork's pull request without the label) counts as passed, so requiring it never blocks a
 fork's pull request; the maintainer decides whether to run it.
 
+## Parity on main
+
+Most pull requests merge on `verify` alone and leave the vanilla harnesses to `.github/workflows/parity-main.yml`,
+which runs them on main a batch of merges at a time, on the Mac mini's runner:
+
+- It starts on every push to main, one run at a time (`concurrency: parity-main`). Merges that land while a run
+  goes on wait in one pending run: GitHub keeps only the newest and cancels the others, so the next run takes them
+  all.
+- `tools/parity_main.py base` gives the newest commit main contains whose parity-main passed (else the last
+  merge's parent), and the run is `tools/parity.py --changed <that commit>`: the union of the harnesses every merge
+  since then can affect, once, with every earlier pass reused.
+- On a failure, `tools/parity_main.py bisect` checks out the batch's first-parent merges by halves and runs only
+  the failing harnesses, names the first merge they fail on in the run's summary and comments on its pull request
+  (`🤖 Agent: parity-main found that this merge breaks ...`). Fix it with a pull request as usual; the next
+  run checks from the last green commit again.
+- Game releases ship only a commit both `checks` and `parity-main` passed on (`tools/release_train.py`, see
+  below), so a broken merge holds releases instead of reaching players. `release.yml` also starts when a
+  parity-main run finishes. A forced release (`force=true`) doesn't wait for parity-main.
+
+A pull request still runs its own parity job when it changes a harness script, an oracle
+(`mods/horizon/src/test/`), a probe (`crates/*/examples/`, `game/*_fixture.rs`, `game/*_harness.rs`), the runner
+(`tools/parity*.py`, `tools/lab.py`, `tools/parity_hosts.json`, `parity*.yml`), or carries the `run-parity` label
+(`run-parity.yml` runs it when the label is added).
+
 ## Game releases
 
-`.github/workflows/release.yml` releases the game by itself. It starts after every green `checks` run of a push
-to main, every 10 minutes (so a release waiting for merges to settle goes out without another merge), and by hand.
+`.github/workflows/release.yml` releases the game by itself. It starts after every green `checks` or `parity-main`
+run of a push to main (it releases a commit only once both passed on it), every 10 minutes (so a release waiting for merges to settle goes out without another merge), and by hand.
 
 ```mermaid
 flowchart LR

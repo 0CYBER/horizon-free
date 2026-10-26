@@ -90,7 +90,7 @@
               <article class="highlight">
                 <h3>Tell us what differs</h3>
                 <p>Something that doesn't play like vanilla is a bug. Say what you did, what happened and what vanilla does, with your Horizon version and system.</p>
-                <p class="hub-actions"><a class="button secondary small" href="{{DISCORD}}">Discord</a><a class="button secondary small" href="https://github.com/ludovic111/horizon/issues/new">GitHub issue</a></p>
+                <p class="hub-actions"><a class="button secondary small" href="#report">Report a bug</a><a class="button secondary small" href="#suggest">Suggest something</a></p>
               </article>
               <article class="highlight">
                 <h3>Take a task</h3>
@@ -109,6 +109,41 @@
               </article>
             </div>
           </section>
+          <section class="hub-block" id="report" aria-labelledby="h-report">
+            <h2 class="title" id="h-report">Report a bug</h2>
+            <p class="hub-intro">One bug per report: something that breaks, or doesn't play like vanilla. It becomes an issue on GitHub, public, and you get its link to follow it. Search the <a href="https://github.com/ludovic111/horizon/issues?q=is%3Aissue+label%3Abug">open bugs</a> first.</p>
+            <form class="hub-form" data-form="report" hidden>
+              <label class="hub-field"><span>Title: what is broken, in a few words</span><input name="title" required minlength="5" maxlength="120" autocomplete="off" placeholder="Water looks black on AMD graphics"></label>
+              <label class="hub-field"><span>What did you do? The steps, one per line</span><textarea name="did" required minlength="3" maxlength="2000" rows="4"></textarea></label>
+              <div class="hub-form-pair">
+                <label class="hub-field"><span>What happened?</span><textarea name="happened" required minlength="3" maxlength="2000" rows="3"></textarea></label>
+                <label class="hub-field"><span>What did you expect? What vanilla does</span><textarea name="expected" required minlength="3" maxlength="2000" rows="3"></textarea></label>
+              </div>
+              <div class="hub-form-pair">
+                <label class="hub-field"><span>Horizon version</span><input name="version" maxlength="60" value="{{HUB_VERSION}}" autocomplete="off"></label>
+                <label class="hub-field"><span>OS, CPU, GPU</span><input name="system" required minlength="3" maxlength="200" placeholder="Windows 11, Ryzen 5 5600, RX 6600"></label>
+              </div>
+              <label class="hub-field"><span>Your name, shown on the issue (optional)</span><input name="name" maxlength="64" autocomplete="nickname"></label>
+              <label class="hub-trap" aria-hidden="true">Leave this empty <input name="website" tabindex="-1" autocomplete="off"></label>
+              <p class="hub-form-foot"><button type="submit" class="button primary">Send the report</button><span class="meta" data-status role="status"></span></p>
+              <p class="meta">What you write is public on GitHub: no passwords or personal details. A screenshot or the log file helps: add it to the issue once it's open.</p>
+            </form>
+            <p class="hub-form-closed" data-closed>Report it on <a href="https://github.com/ludovic111/horizon/issues/new">GitHub</a> or in <a href="{{DISCORD}}">#horizon-bugs on Discord</a>, where Kira turns your post into an issue.</p>
+          </section>
+          <section class="hub-block" id="suggest" aria-labelledby="h-suggest">
+            <h2 class="title" id="h-suggest">Suggest something</h2>
+            <p class="hub-intro">An idea for Horizon, or about something on the roadmap. The maintainers read every one, and the good ones become roadmap items. Nothing you send here is published.</p>
+            <form class="hub-form" data-form="suggest" hidden>
+              <label class="hub-field"><span>Your idea</span><textarea name="text" required minlength="10" maxlength="1000" rows="4"></textarea></label>
+              <div class="hub-form-pair">
+                <label class="hub-field"><span>About</span><select name="item">{{HUB_SUGGEST_ITEMS}}</select></label>
+                <label class="hub-field"><span>Your name (optional)</span><input name="name" maxlength="64" autocomplete="nickname"></label>
+              </div>
+              <label class="hub-trap" aria-hidden="true">Leave this empty <input name="website" tabindex="-1" autocomplete="off"></label>
+              <p class="hub-form-foot"><button type="submit" class="button primary">Send the idea</button><span class="meta" data-status role="status"></span></p>
+            </form>
+            <p class="hub-form-closed" data-closed>Post it in <a href="{{DISCORD}}">#horizon-ideas on Discord</a>, or send it to Kira with <code>/suggest</code>.</p>
+          </section>
           <section class="hub-block" aria-labelledby="h-rules">
             <h2 class="title" id="h-rules">The rules</h2>
             <ol class="hub-rules">
@@ -118,6 +153,12 @@
               <li><strong>Never commit Mojang's files.</strong> No game jars, assets, decompiled code or prepared resources, and nothing taken from other mods' code.</li>
             </ol>
             <p class="hub-actions"><a class="button primary" href="/docs/contributing">The contributing guide</a><a class="button secondary" href="https://github.com/ludovic111/horizon/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a></p>
+          </section>
+          <section class="hub-block" id="contributors" aria-labelledby="h-contributors">
+            <h2 class="title" id="h-contributors">Contributors</h2>
+            <p class="hub-intro">Everyone with commits in Horizon. On Discord, <code>/link-github &lt;your login&gt; credit:True</code> adds your Discord name next to yours.</p>
+            <ul class="contributors-list hub-people">{{HUB_CREDIT}}</ul>
+            <p class="meta"><a href="https://github.com/ludovic111/horizon/graphs/contributors">All contributors on GitHub</a></p>
           </section>
         </div>
         <p class="disclaimer">Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft.</p>

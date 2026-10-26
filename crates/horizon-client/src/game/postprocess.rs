@@ -27,6 +27,11 @@ impl Game<'_> {
         if ready.is_empty() {
             return Ok(());
         }
+        // The ticks the marks schedule go to the chunks' containers, which a
+        // chunk that arrived since the last tick doesn't have yet
+        // (`LevelChunk.registerTickContainerInLevel` comes before
+        // `postProcessGeneration`).
+        self.sync_tick_chunks();
         for key in ready {
             let Some(chunk) = self.world.chunks.get_mut(&key) else {
                 continue;

@@ -155,6 +155,14 @@ pub(super) fn preflight(options: &mut Options) -> Result<bool> {
     for w in &props.warnings {
         log("WARN", w);
     }
+    // Horizon's own commands are the owner's choice, off as on vanilla.
+    if props
+        .raw
+        .get(horizon_client::command::vanilla::PREGEN_PROPERTY)
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"))
+    {
+        horizon_client::command::vanilla::set_horizon_commands(true);
+    }
     props.store(&settings)?;
     let eula_file = PathBuf::from("eula.txt");
     let agreed = match eula::agreed(&eula_file) {
@@ -667,7 +675,9 @@ impl Game<'_> {
             self.poll_server_control(&mut state);
             let players = self.lan.as_ref().map_or(0, |h| h.hub.guests.len());
             if pause_after > 0 {
-                if players == 0 {
+                // A `/pregen` task keeps the server busy as a player would:
+                // paused, nothing would post-process its chunks.
+                if players == 0 && self.pregen_level().is_none() {
                     state.empty_ticks += 1;
                 } else {
                     state.empty_ticks = 0;
