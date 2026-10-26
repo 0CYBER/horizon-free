@@ -1,9 +1,10 @@
-//! A registry checkout holding the sample index's mod and modpack builds the
-//! sample index (`tests/index/index-v1.json`) exactly.
+//! A registry checkout holding the sample index's mod, modpack and shader pack
+//! builds the sample index (`tests/index/index-v1.json`) exactly.
 use super::*;
 
 const HMOD: &str = "e1135345692f6dd8fd4c51920151944b82333e17049c9bb7d756f27b8deefc53";
 const HPACK: &str = "241ac840f9c5ea3f6252d849da10c90d36cb1da4d6cd8d1d268c2760a353cd65";
+const HSHADER: &str = "331cfe29a666a0de804e9a9ff3d19d246eebcfbfa70b4f49bba8482d30ad9f02";
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/index")
@@ -61,6 +62,23 @@ file = "cozy-1.0.0.hpack"
 sha256 = "241ac840f9c5ea3f6252d849da10c90d36cb1da4d6cd8d1d268c2760a353cd65"
 "#;
 
+const GLOW: &str = r#"id = "glow"
+kind = "shader"
+name = "Soft Glow"
+summary = "A post-processing pass over the world."
+authors = ["Horizon"]
+owners = ["ludovic111"]
+license = "MIT"
+source = "https://github.com/ludovic111/horizon-mods"
+
+[[versions]]
+version = "1.0.0"
+published = "2026-10-26"
+game = "26.3"
+file = "glow-1.0.0.hshader"
+sha256 = "331cfe29a666a0de804e9a9ff3d19d246eebcfbfa70b4f49bba8482d30ad9f02"
+"#;
+
 const REVOKED_TOML: &str = r#"[[revoked]]
 id = "bad_mod"
 sha256 = "1111111111111111111111111111111111111111111111111111111111111111"
@@ -82,9 +100,14 @@ impl Scratch {
         let s = Scratch(dir);
         s.write("mods/coords_hud.toml", &hud_entry());
         s.write("mods/cozy.toml", COZY);
+        s.write("mods/glow.toml", GLOW);
         s.write("revoked.toml", REVOKED_TOML);
         s.write("icons/coords_hud.png", "png");
-        for (name, hash) in [("coords_hud-0.1.0.hmod", HMOD), ("cozy-1.0.0.hpack", HPACK)] {
+        for (name, hash) in [
+            ("coords_hud-0.1.0.hmod", HMOD),
+            ("cozy-1.0.0.hpack", HPACK),
+            ("glow-1.0.0.hshader", HSHADER),
+        ] {
             std::fs::copy(fixtures().join(name), s.0.join("files").join(hash)).unwrap();
         }
         s
@@ -117,7 +140,7 @@ fn builds_the_sample_index() {
     let s = Scratch::new("sample");
     let built = s.build().unwrap();
     let sample = sample();
-    assert_eq!(built.projects, sample.projects[..2]);
+    assert_eq!(built.projects, sample.projects[..3]);
     assert_eq!(built.revoked, sample.revoked);
     assert_eq!(built.generated, sample.generated);
     // What it writes reads back.
@@ -154,7 +177,11 @@ fn lists_every_problem_of_a_registry() {
         "{errors:?}"
     );
     assert!(has("coords_hud 0.1.0: the project has a key"), "{errors:?}");
-    assert!(has("glow: shader packs open when"), "{errors:?}");
+    // A shader entry is taken now, and checked like the others.
+    assert!(
+        has("glow 1.0.0: the file isn't the one its sha256 names"),
+        "{errors:?}"
+    );
     assert!(
         has("other 0.1.0: the file's id is \"coords_hud\""),
         "{errors:?}"
@@ -219,7 +246,7 @@ fn a_review_protects_published_files() {
 #[test]
 fn only_open_kinds_are_taken() {
     assert!(open(&Kind::Mod).is_ok() && open(&Kind::ResourcePack).is_ok());
-    assert!(open(&Kind::Shader).unwrap_err().contains("Iris"));
+    assert!(open(&Kind::Shader).is_ok());
     assert!(open(&Kind::Other("world".into())).is_err());
     let mut submit: Entry = toml::from_str(COZY).unwrap();
     submit.id = "submit".into();

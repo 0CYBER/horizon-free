@@ -96,6 +96,7 @@ impl Mod for Guest {
             "input_held",
             "input_wheel",
             "zoom",
+            "minimap",
             "corner",
             "readings",
         ]
@@ -197,6 +198,24 @@ impl Mod for Guest {
                     smooth,
                     turn,
                 });
+            }
+            // `minimap off`, or `minimap SIZE BLOCKS-PER-PIXEL ROTATE ROUND`.
+            "minimap" => {
+                let words: Vec<&str> = args.split(' ').collect();
+                let number = |i: usize| {
+                    words
+                        .get(i)
+                        .and_then(|w| w.parse().ok())
+                        .unwrap_or(f32::NAN)
+                };
+                let map = (args != "off").then(|| render::Minimap {
+                    corner: render::Corner::BottomLeft,
+                    size: number(0),
+                    blocks_per_pixel: number(1),
+                    rotate: words.get(2) == Some(&"1"),
+                    round: words.get(3) == Some(&"1"),
+                });
+                render::set_minimap(map);
             }
             // Clamped to (1, 10); the two after it shake nothing.
             "render_shake" => {

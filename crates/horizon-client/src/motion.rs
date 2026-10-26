@@ -44,7 +44,7 @@ use std::{
 
 pub(crate) mod environment;
 mod fluids;
-pub use fluids::{FluidResources, LAVA, PlayerFluids, WATER};
+pub use fluids::{FluidResources, FluidTags, LAVA, PlayerFluids, WATER};
 
 pub struct MotionResources {
     pub attributes: Arc<Catalog>,
