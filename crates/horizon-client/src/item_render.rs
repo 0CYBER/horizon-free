@@ -248,10 +248,9 @@ fn submit_quads(
         let translucent = match last {
             Some((sprite, translucent)) if sprite == q.material.sprite => translucent,
             _ => {
-                let translucent = q.material.force_translucent
-                    || renderer
-                        .sprites
-                        .translucent(sprite_name(&q.material.sprite));
+                let translucent = renderer
+                    .sprites
+                    .translucent(sprite_name(&q.material.sprite));
                 last = Some((&q.material.sprite, translucent));
                 translucent
             }
@@ -263,7 +262,7 @@ fn submit_quads(
             color: argb(color),
             foil,
             light_emission: q.light_emission,
-            translucent,
+            translucent: translucent || q.material.force_translucent,
         });
     }
 }
@@ -729,7 +728,8 @@ impl ItemSink for WorldSink<'_> {
         let overlay = match (q.foil, q.translucent) {
             (Foil::None, true) => crate::gfx::TRANSLUCENT_ITEM_OVERLAY,
             (Foil::None, false) => 0,
-            _ => 7,
+            (_, true) => crate::gfx::TRANSLUCENT_GLINT_ITEM_OVERLAY,
+            (_, false) => 7,
         };
         for (p, uv) in q.pos.iter().zip(q.uv) {
             self.out.push(Vertex {

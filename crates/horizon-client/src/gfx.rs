@@ -38,7 +38,8 @@ mod entity_batch;
 mod weather;
 use entity_batch::EntityBatch;
 pub use entity_batch::{
-    SHADOW_OVERLAY, TRANSLUCENT_ITEM_OVERLAY, TRANSLUCENT_PARTICLE_OVERLAY, WATER_MASK_OVERLAY,
+    SHADOW_OVERLAY, TRANSLUCENT_GLINT_ITEM_OVERLAY, TRANSLUCENT_ITEM_OVERLAY,
+    TRANSLUCENT_PARTICLE_OVERLAY, WATER_MASK_OVERLAY,
 };
 
 /// Window.getAppropriateLineWidth, in framebuffer pixels.

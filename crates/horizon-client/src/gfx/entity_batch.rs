@@ -17,6 +17,8 @@ pub const TRANSLUCENT_PARTICLE_OVERLAY: u32 = 15;
 /// The overlay of item quads with translucent pixels (`Sheets.translucentItemSheet`,
 /// `RenderPipelines.ITEM_TRANSLUCENT`); past the creeper swell range (16 to 31).
 pub const TRANSLUCENT_ITEM_OVERLAY: u32 = 32;
+/// A translucent item with an enchantment glint.
+pub const TRANSLUCENT_GLINT_ITEM_OVERLAY: u32 = 33;
 
 #[derive(Default)]
 pub(super) struct EntityBatch {
@@ -49,7 +51,7 @@ impl EntityBatch {
                 WATER_MASK_OVERLAY => 3,
                 SHADOW_OVERLAY => 4,
                 TRANSLUCENT_PARTICLE_OVERLAY => 5,
-                TRANSLUCENT_ITEM_OVERLAY => 6,
+                TRANSLUCENT_ITEM_OVERLAY | TRANSLUCENT_GLINT_ITEM_OVERLAY => 6,
                 _ => 0,
             };
             self.buckets[material][counts[material]] = index;
