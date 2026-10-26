@@ -33,7 +33,7 @@ impl Game<'_> {
         // 3002 with an axis: a lightning rod; otherwise copper cleaned by lightning.
         match usize::try_from(data) {
             Ok(axis) if id == 3002 && axis < 3 => {
-                particles::along_axis(random, axis, p, |p, v| spawned.push((p, v)));
+                particles::along_axis(random, axis, p, (10, 19), |p, v| spawned.push((p, v)));
             }
             _ => particles::on_block_faces(random, p, |p, v| spawned.push((p, v))),
         }

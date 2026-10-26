@@ -54,7 +54,7 @@ pub fn main() -> Result<()> {
             match c["axis"].as_i64() {
                 Some(axis @ 0..=2) => {
                     let line = record("electric_spark");
-                    particles::along_axis(&mut random, axis as usize, p, |p, v| {
+                    particles::along_axis(&mut random, axis as usize, p, (10, 19), |p, v| {
                         lines.push(line(p, v))
                     });
                 }

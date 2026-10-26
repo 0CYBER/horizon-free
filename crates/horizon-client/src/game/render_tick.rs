@@ -271,6 +271,16 @@ impl Game<'_> {
                 && motion_blocking(world, facts, p[0], p[2], p[1] + 64) <= p[1]
                 && rains_at(world, biomes, p[0], p[1], p[2])
         };
+        let tables = &self.pack.context.tables;
+        let model_offset = |state, x, z| tables.offset(state, x, z);
+        let gateway_particles = |state, p| {
+            self.res
+                .block_entity_render()
+                .gateway_faces(world, state, p)
+                .len()
+        };
+        // Level.isThundering: a thunder level above 0.9 where the sky is open.
+        let thundering = self.dim == Dim::Overworld && world.weather.levels(1.0).1 > 0.9;
         let ctx = AnimateContext {
             world,
             facts,
@@ -279,6 +289,10 @@ impl Game<'_> {
             registry: self.pack.assets.registry,
             raining_at: &raining_at,
             marker: marker.map(|name| (name, &marker_options as &dyn Fn(_) -> _)),
+            model_offset: &model_offset,
+            gateway_particles: &gateway_particles,
+            thundering,
+            ultrawarm: self.dim == Dim::Nether,
         };
         if let Some(e) = eye {
             let block = [

@@ -782,15 +782,17 @@ pub fn on_block_faces(
     }
 }
 /// `ParticleUtils.spawnParticlesAlongAxis(axis, level, pos, 0.125, particle,
-/// UniformInt.of(10, 19))` (level event 3002 on a lightning rod): sparks along
-/// the rod, moving along it. `axis` is 0, 1, 2 for X, Y, Z.
+/// UniformInt.of(min, max))` (`count` is the range; level event 3002 on a
+/// lightning rod uses 10 to 19): sparks along the rod, moving along it.
+/// `axis` is 0, 1, 2 for X, Y, Z.
 pub fn along_axis(
     random: &mut impl RandomSource,
     axis: usize,
     pos: [i32; 3],
+    (min, max): (i32, i32),
     mut emit: impl FnMut([f64; 3], [f64; 3]),
 ) {
-    let count = random.next_int_bound(19 - 10 + 1).unwrap_or(0) + 10;
+    let count = random.next_int_bound(max - min + 1).unwrap_or(0) + min;
     for _ in 0..count {
         let p: [f64; 3] = std::array::from_fn(|i| {
             f64::from(pos[i])
