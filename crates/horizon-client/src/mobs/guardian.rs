@@ -61,7 +61,8 @@ pub fn register(m: &mut Mob) {
         NearestTarget::species(
             &[Species::Squid, Species::GlowSquid, Species::Axolotl],
             true,
-        ),
+        )
+        .beyond(9.0),
     );
 }
 /// `GuardianAttackGoal`.
@@ -120,9 +121,11 @@ impl Goal for GuardianAttack {
                 1.0,
             ));
         } else if self.attack_time >= attack_duration(m) {
-            // Indirect magic (1, +2 for the elder; NORMAL difficulty), then
+            // Indirect magic (1, +2 on Hard, +2 for the elder), then
             // doHurtTarget.
-            let magic = if is_elder(m) { 3.0 } else { 1.0 };
+            let magic = 1.0
+                + if cx.w.difficulty.hard { 2.0 } else { 0.0 }
+                + if is_elder(m) { 2.0 } else { 0.0 };
             let from = [m.position.x, m.position.y, m.position.z];
             match who {
                 Who::Player => cx.events.push(MobEvent::DamagePlayer {
@@ -241,9 +244,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     } else {
         a.v[SPIKES] += (1.0 - a.v[SPIKES]) * 0.06;
     }
-    if m.extra.flag && m.extra.counter2 < attack_duration(m) {
-        m.extra.counter2 += 1;
-    }
+    client_tick(m);
     if in_water {
         m.air = 300;
     } else if m.on_ground {
@@ -330,6 +331,13 @@ pub fn elder_server_ai_step(m: &mut Mob, cx: &mut Cx) {
             m.position.y.floor() as i32,
             m.position.z.floor() as i32,
         ]);
+    }
+}
+/// Guardian.aiStep's visual attack clock, also used by server clients.
+/// Does not run attack goals, movement, damage or random draws.
+pub fn client_tick(m: &mut Mob) {
+    if m.extra.flag && m.extra.counter2 < attack_duration(m) {
+        m.extra.counter2 += 1;
     }
 }
 /// The beam's clock for rendering: (attack time with the partial tick,

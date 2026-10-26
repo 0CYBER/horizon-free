@@ -951,21 +951,25 @@ fn draw_normals(
         return;
     }
     let normals = normals.part(p);
-    for poly in part.polygons.iter().filter(|_| !poses.skips(part)) {
-        let normal = poly.vertex_normal(normals);
-        for v in poly.vertices {
-            let pos = m.transform_point3(glam::Vec3::new(v[0], v[1], v[2]) / 16.0);
-            out.push(Vertex {
-                normal,
-                pos: pos.to_array(),
-                uv: [
-                    uv[0] + (uv[2] - uv[0]) * v[3],
-                    uv[1] + (uv[3] - uv[1]) * v[4],
-                ],
-                layer: overlay,
-                color,
-                light,
-            });
+    // `skips` is a name lookup: ask once per part, not once per polygon. A part
+    // hidden this way still draws its children, so only the polygons are gated.
+    if !poses.skips(part) {
+        for poly in &part.polygons {
+            let normal = poly.vertex_normal(normals);
+            for v in poly.vertices {
+                let pos = m.transform_point3(glam::Vec3::new(v[0], v[1], v[2]) / 16.0);
+                out.push(Vertex {
+                    normal,
+                    pos: pos.to_array(),
+                    uv: [
+                        uv[0] + (uv[2] - uv[0]) * v[3],
+                        uv[1] + (uv[3] - uv[1]) * v[4],
+                    ],
+                    layer: overlay,
+                    color,
+                    light,
+                });
+            }
         }
     }
     for c in &part.children {
@@ -1094,6 +1098,9 @@ fn render_visible(
             }
         }
     }
+    // One Poses refilled for every layer (armour draws up to seven): it keeps
+    // its maps' capacity.
+    let mut layer_poses = Poses::default();
     for layer in all_layers {
         let Some(part) = m.kind.layer(&layer.model).cloned() else {
             continue;
@@ -1101,8 +1108,8 @@ fn render_visible(
         let Some(uv) = atlas(&layer.texture) else {
             continue;
         };
-        let mut poses = Poses::new(&part);
-        anim::setup(m, &s, &mut poses, &data.animations);
+        layer_poses.reset(&part);
+        anim::setup(m, &s, &mut layer_poses, &data.animations);
         if matches!(m.species(), Species::Villager | Species::ZombieVillager)
             && let Some((folder, variant)) = layer
                 .texture
@@ -1113,7 +1120,7 @@ fn render_visible(
             data.villager_hats
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .apply(folder, variant, profession, &mut poses);
+                .apply(folder, variant, profession, &mut layer_poses);
         }
         let light = if layer.full_bright {
             240 | 240 << 8
@@ -1128,7 +1135,16 @@ fn render_visible(
             None => overlay,
         };
         let start = out.len();
-        draw(&part, base, &poses, uv, layer.color, light, overlay, out);
+        draw(
+            &part,
+            base,
+            &layer_poses,
+            uv,
+            layer.color,
+            light,
+            overlay,
+            out,
+        );
         if layer.full_bright && m.species() != Species::Warden {
             for vertex in &mut out[start..] {
                 vertex.normal = [0; 4];
