@@ -950,8 +950,6 @@ impl BlockEntityAnims {
         self.bells.retain(|p, _| is(p, |t| *t == Ticker::Bell));
         self.conduits
             .retain(|p, _| is(p, |t| *t == Ticker::Conduit));
-        self.conduit_servers
-            .retain(|p, _| is(p, |t| *t == Ticker::Conduit));
         self.skulls
             .retain(|p, _| is(p, |t| matches!(t, Ticker::Skull { .. })));
         self.pots.retain(|p, _| is(p, |t| *t == Ticker::Pot));

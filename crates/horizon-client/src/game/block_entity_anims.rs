@@ -223,9 +223,12 @@ impl Game<'_> {
     /// The client tickers of the loaded animated block entities, once per
     /// client tick (`ClientLevel.tickBlockEntities`).
     pub(super) fn tick_block_entity_anims(&mut self) {
+        // A server has no window, but its gateways and conduits still run
+        // their server tickers; a client of one only animates what it is sent.
+        if self.remote.is_none() {
+            self.tick_conduit_servers();
+        }
         let Some(r) = &self.renderer else {
-            // A server has no window, but its gateways still run their
-            // server ticker.
             if self.remote.is_none() {
                 self.tick_gateway_servers();
             }
@@ -342,11 +345,6 @@ impl Game<'_> {
                     }
                 }
                 Ticker::Conduit => {
-                    // A server runs the effects and the attack; a client of
-                    // one only animates what it is sent.
-                    if self.remote.is_none() {
-                        self.tick_conduit_server(pos);
-                    }
                     let target = self.conduit_target(pos);
                     let world = &self.world;
                     let facts = self.res.facts();
@@ -394,11 +392,63 @@ impl Game<'_> {
         }
         self.be_anims.present = positions;
     }
+    /// `ConduitBlockEntity.serverTick` of every conduit in the chunks that
+    /// tick blocks, with or without a renderer. The conduits are looked for
+    /// when the shape is checked, every 40 ticks (they have no block entity
+    /// of their own here).
+    fn tick_conduit_servers(&mut self) {
+        if self.world.game_time % 40 == 0 {
+            self.find_conduits();
+        }
+        let mut positions: Vec<[i32; 3]> = self.be_anims.conduit_servers.keys().copied().collect();
+        positions.sort_unstable();
+        for pos in positions {
+            self.tick_conduit_server(pos);
+        }
+    }
+    /// Sets `be_anims.conduit_servers` to the conduits in the
+    /// chunks that tick blocks, keeping the state of those already known.
+    fn find_conduits(&mut self) {
+        let levels = self.tickets.levels();
+        let kinds = &self.be_anims.kinds;
+        let is_conduit = |id: u32| matches!(kinds.get(id as usize), Some(Some(Ticker::Conduit)));
+        let mut found = Vec::new();
+        for (&(cx, cz), chunk) in &self.world.chunks {
+            if !levels.block_ticking_at(cx * 16, cz * 16) {
+                continue;
+            }
+            for (si, section) in chunk.sections.iter().enumerate() {
+                if !section.blocks.maybe_has(is_conduit) {
+                    continue;
+                }
+                for i in 0..4096 {
+                    if is_conduit(section.get(i)) {
+                        found.push([
+                            cx * 16 + (i & 15) as i32,
+                            horizon_client::chunk::MIN_Y + si as i32 * 16 + (i >> 8) as i32,
+                            cz * 16 + ((i >> 4) & 15) as i32,
+                        ]);
+                    }
+                }
+            }
+        }
+        let mut old = std::mem::take(&mut self.be_anims.conduit_servers);
+        for pos in found {
+            let known = old.remove(&pos).unwrap_or_default();
+            self.be_anims.conduit_servers.insert(pos, known);
+        }
+    }
     /// `ConduitBlockEntity.serverTick` of the conduit at `pos`, in a chunk
     /// that ticks blocks: the shape check every 40 ticks with its sounds, the
     /// power for players in range, the hurt for an enemy, then the ambient
     /// sounds.
     fn tick_conduit_server(&mut self, pos: [i32; 3]) {
+        let state = self.world.block(pos[0], pos[1], pos[2]).0;
+        if self.be_anims.ticker(state) != Some(Ticker::Conduit) {
+            // Broken since the chunks were searched.
+            self.be_anims.conduit_servers.remove(&pos);
+            return;
+        }
         if !self.tickets.levels().block_ticking_at(pos[0], pos[2])
             || !self.border.contains(f64::from(pos[0]), f64::from(pos[2]))
         {
