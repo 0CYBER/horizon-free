@@ -166,12 +166,23 @@ fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
     if d >= end { return 1.0; }
     return (d - start) / (end - start);
 }
+// CRUMBLING_UV_BEGIN
+fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>, dimensions: vec2<u32>) -> vec2<f32> {
+    let size = vec2<f32>(dimensions);
+    // Undo stage_light's 16-bit quantization before adding local texels. Otherwise
+    // different stages can fall on opposite sides of a nearest-sampling boundary.
+    let origin = round(packed_origin * size);
+    let extent = max(round(sprite_size * size), vec2(1.0));
+    let local = min(floor(fract(uv) * extent), extent - vec2(1.0));
+    return (origin + local + vec2(0.5)) / size;
+}
+// CRUMBLING_UV_END
 @fragment fn fs_entity(in: Out, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     var uv = in.uv;
     if in.overlay == 6u { uv.y = in.wrap.x + fract(in.uv.y) * in.wrap.y; }
     if in.overlay == 11u || in.overlay == 12u {
         // Each crack's stage sprite origin comes in its light bytes (breaking::stage_light).
-        uv = in.wrap + fract(in.uv) * globals.crumbling_sprite.zw;
+        uv = crumbling_uv(in.uv, in.wrap, globals.crumbling_sprite.zw, textureDimensions(atlas));
     }
     var color = textureSample(atlas, atlas_sampler, uv) * select(in.back_color, in.color, front);
     if in.overlay == 9u || in.overlay == 10u {
