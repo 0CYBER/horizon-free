@@ -67,6 +67,7 @@ mod end_sky;
 mod flat;
 pub mod lightning;
 mod lod;
+mod native_material;
 mod native_pack;
 mod native_post;
 mod native_sky;
@@ -429,6 +430,8 @@ pub struct Renderer {
     /// The mipmap levels sampled (the Mipmap Levels option), at most `mip_levels - 1`.
     mipmaps: u32,
     terrain_layout: wgpu::BindGroupLayout,
+    /// terrain.wgsl's `SPRITE_ARRAYS` and `SPRITE_SPLIT`, for a shader pack's terrain.
+    terrain_sprites: [f64; 2],
     sprite_sampler: wgpu::Sampler,
     lightmap_view: wgpu::TextureView,
     lightmap_sampler: wgpu::Sampler,
@@ -2370,6 +2373,7 @@ impl Renderer {
             mip_levels,
             mipmaps: mip_levels - 1,
             terrain_layout: bindings,
+            terrain_sprites: sprite_constants.map(|(_, v)| v),
             sprite_sampler,
             lightmap_view,
             lightmap_sampler,
@@ -2937,9 +2941,9 @@ impl Renderer {
         self.native = None;
         self.pack_atlas = None;
     }
-    /// Runs the sky and post stages of one of Horizon's own shader packs from now on (`None`:
-    /// no pack), with its options' values; replaces a `shaders/` pack. Returns the stages'
-    /// labels; on an error the pack that ran keeps running.
+    /// Runs the sky, material and post stages of one of Horizon's own shader packs from now
+    /// on (`None`: no pack), with its options' values; replaces a `shaders/` pack. Returns the
+    /// stages' labels; on an error the pack that ran keeps running.
     pub fn set_native_shader_pack(
         &mut self,
         pack: Option<(horizon_shader_api::Report, Vec<(String, f64)>)>,
@@ -2948,14 +2952,14 @@ impl Renderer {
             self.native = None;
             return Ok(Vec::new());
         };
-        let format = self.config.format.remove_srgb_suffix();
-        let (pack, labels) = native_pack::NativePack::new(
-            &self.device,
-            &self.terrain_layout,
-            report,
-            &constants,
-            format,
-        )?;
+        let terrain = native_material::TerrainShape {
+            globals: &self.terrain_layout,
+            flat: self.flat.as_ref().map(|f| &f.draw_layout),
+            sprites: self.terrain_sprites,
+            format: self.config.format.remove_srgb_suffix(),
+        };
+        let (pack, labels) =
+            native_pack::NativePack::new(&self.device, &terrain, report, &constants)?;
         self.native = pack.draws().then_some(pack);
         if self.native.is_some() {
             self.pack_post = None;
@@ -4179,6 +4183,21 @@ impl Renderer {
             pass.set_bind_group(0, &self.group, &[]);
             sky.draw(&mut pass, &native.frame);
         }
+        // One of Horizon's own packs with a material stage: terrain draws with its pipelines,
+        // which read the pack's frame at group 3.
+        let material = self
+            .native
+            .as_ref()
+            .filter(|_| !frame.title)
+            .and_then(|n| Some((n.material.as_ref()?, &n.frame.group)));
+        let solid_pipeline = material.map_or(&self.solid, |(m, _)| &m.solid);
+        let translucent_pipeline = material.map_or(&self.translucent, |(m, _)| &m.translucent);
+        let pack_flat = material.and_then(|(m, _)| m.flat.as_ref());
+        let pack_frame = |pass: &mut wgpu::RenderPass<'_>| {
+            if let Some((_, group)) = material {
+                pass.set_bind_group(horizon_shader_api::stages::GROUP, group, &[]);
+            }
+        };
         {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: world_view,
@@ -4212,6 +4231,7 @@ impl Renderer {
                 ..Default::default()
             });
             pass.set_bind_group(0, &self.group, &[]);
+            pack_frame(&mut pass);
             if frame.title || (sky_visible && (frame.skybox || frame.end_sky)) {
                 if !frame.title && frame.skybox && !pack_draws_sky && !native_sky_pass {
                     match self
@@ -4260,7 +4280,7 @@ impl Renderer {
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                 }
                 Some(flat) => {
-                    pass.set_pipeline(&flat.solid);
+                    pass.set_pipeline(pack_flat.map_or(&flat.solid, |p| &p.0));
                     let vertices = |p| self.arena.buffer(p);
                     match cull {
                         // As below: phase 1, the test, then phase 2's draws
@@ -4278,7 +4298,8 @@ impl Renderer {
                                 pack_reads_world,
                             );
                             pass.set_bind_group(0, &self.group, &[]);
-                            pass.set_pipeline(&flat.solid);
+                            pack_frame(&mut pass);
+                            pass.set_pipeline(pack_flat.map_or(&flat.solid, |p| &p.0));
                             flat.draw_phase2(&mut pass, vertices);
                         }
                         None => flat.draw(&mut pass, &flat.calls[..flat.solid_calls], vertices),
@@ -4287,7 +4308,7 @@ impl Renderer {
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                 }
                 None => {
-                    pass.set_pipeline(&self.solid);
+                    pass.set_pipeline(solid_pipeline);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.set_vertex_buffer(1, self.instances.slice(..));
                     match cull {
@@ -4307,7 +4328,8 @@ impl Renderer {
                                 pack_reads_world,
                             );
                             pass.set_bind_group(0, &self.group, &[]);
-                            pass.set_pipeline(&self.solid);
+                            pack_frame(&mut pass);
+                            pass.set_pipeline(solid_pipeline);
                             pass.set_index_buffer(
                                 self.indices.slice(..),
                                 wgpu::IndexFormat::Uint32,
@@ -4399,7 +4421,7 @@ impl Renderer {
                 // The pack draws translucent terrain after its deferred programs.
                 _ if pack_draws_water => {}
                 Some(flat) => {
-                    pass.set_pipeline(&flat.translucent);
+                    pass.set_pipeline(pack_flat.map_or(&flat.translucent, |p| &p.1));
                     flat.draw(&mut pass, flat.translucent_calls(), |p| {
                         self.arena.buffer(p)
                     });
@@ -4407,7 +4429,7 @@ impl Renderer {
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                 }
                 None => {
-                    pass.set_pipeline(&self.translucent);
+                    pass.set_pipeline(translucent_pipeline);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.set_vertex_buffer(1, self.instances.slice(..));
                     self.draw_sections(
