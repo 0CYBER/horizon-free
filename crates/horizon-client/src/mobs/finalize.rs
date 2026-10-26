@@ -829,6 +829,28 @@ pub fn set_item(m: &mut Mob, slot: usize, id: &str) {
     }
     gear::set(m, gear_slot(slot), Vec::new());
 }
+/// `EquipmentUser.equip` for one rolled stack: `setItemSlot` puts the item in
+/// `slot` with its own enchantments, then the slot's drop chance is stored
+/// when the table names one.
+pub fn equip_stack(
+    m: &mut Mob,
+    slot: usize,
+    stack: &horizon_world::loot::LootStack,
+    drop_chance: Option<f32>,
+) {
+    set_item(m, slot, &stack.item);
+    if slot <= HEAD {
+        let levels = stack
+            .enchantments
+            .iter()
+            .map(|(id, level)| (Arc::from(id.as_str()), (*level).max(0) as u32))
+            .collect();
+        gear::set(m, gear_slot(slot), levels);
+    }
+    if let Some(chance) = drop_chance {
+        set_drop_chance(m, slot, chance);
+    }
+}
 /// `Mob.setDropChance`.
 pub fn set_drop_chance(m: &mut Mob, slot: usize, chance: f32) {
     let c = m
