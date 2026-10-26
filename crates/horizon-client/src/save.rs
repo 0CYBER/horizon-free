@@ -572,6 +572,17 @@ fn merge_block_entity(original: &Tag, loaded: &Tag, current: &Tag) -> Tag {
     }
     merged
 }
+/// `BannerBlockEntity.loadAdditional` (and the `components` a block entity keeps).
+pub fn decode_banner(tag: &Tag) -> crate::containers::Banner {
+    crate::containers::Banner {
+        layers: crate::banner::layers_from_nbt(tag.get("patterns")),
+        name: text(tag.get("CustomName")),
+        components: match tag.get("components") {
+            Some(Tag::Compound(c)) => c.clone(),
+            _ => Compound::new(),
+        },
+    }
+}
 pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
     use crate::containers::BlockEntity;
     let int = |k: &str| number(tag.get(k)).map(|v| v as i32);
@@ -605,17 +616,7 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         return Some((pos, BlockEntity::Lectern(lectern)));
     }
     if id == "minecraft:banner" {
-        return Some((
-            pos,
-            BlockEntity::Banner(crate::containers::Banner {
-                layers: crate::banner::layers_from_nbt(tag.get("patterns")),
-                name: text(tag.get("CustomName")),
-                components: match tag.get("components") {
-                    Some(Tag::Compound(c)) => c.clone(),
-                    _ => Compound::new(),
-                },
-            }),
-        ));
+        return Some((pos, BlockEntity::Banner(decode_banner(tag))));
     }
     if id == "minecraft:beacon" {
         let beacon = crate::containers::Beacon {

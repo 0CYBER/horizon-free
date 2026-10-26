@@ -23,6 +23,15 @@ pub struct PackInputs {
     pub hide_gui: bool,
     /// The brightness option, 0..1.
     pub brightness: f32,
+    /// The biome at the camera (3.4): registry id, `CAT_*`, `PPT_*`, temperature, downfall.
+    pub biome: i32,
+    pub biome_category: i32,
+    pub biome_precipitation: i32,
+    pub temperature: f32,
+    pub rainfall: f32,
+    /// `heldItemId`, `heldItemId2` (item.properties, 5.3) and `heldBlockLightValue(2)`.
+    pub held_items: [i32; 2],
+    pub held_light: [i32; 2],
 }
 
 /// One uniform's value: up to 16 floats or 3 integers.
@@ -134,17 +143,29 @@ pub const NAMES: &[&str] = &[
     "heldBlockLightValue",
     "heldBlockLightValue2",
     "renderStage",
+    "biome",
+    "biome_category",
+    "biome_precipitation",
+    "temperature",
+    "rainfall",
     "gbufferModelView",
     "gbufferModelViewInverse",
     "gbufferProjection",
     "gbufferProjectionInverse",
     "gbufferPreviousModelView",
     "gbufferPreviousProjection",
+    "atlasSize",
+    "shadowModelView",
+    "shadowModelViewInverse",
+    "shadowProjection",
+    "shadowProjectionInverse",
 ];
 
 /// Values carried from frame to frame.
 pub struct FrameUniforms {
     pub values: Vec<Value>,
+    /// The block atlas's size (`atlasSize`), 0 without one.
+    pub atlas: [u32; 2],
     start: std::time::Instant,
     last: Option<std::time::Instant>,
     frame: u32,
@@ -157,6 +178,7 @@ impl Default for FrameUniforms {
     fn default() -> Self {
         Self {
             values: Vec::new(),
+            atlas: [0; 2],
             start: std::time::Instant::now(),
             last: None,
             frame: 0,
@@ -214,14 +236,28 @@ impl FrameUniforms {
         for (smoothed, target) in self.eye_smooth.iter_mut().zip(eye) {
             *smoothed = smooth(*smoothed, target, 10.0 / 20.0, dt);
         }
+        // Vanilla fades by the stronger of two linear fogs; a pack gets one: the pair (start
+        // and end together) of the one that is complete nearer (OQ-36). Mixing the nearer start
+        // of one with the nearer end of the other made fog begin at the camera on clear days.
         let (fog_color, fog_start, fog_end) = match &frame.fog {
-            Some(f) => (
-                [f.color[0], f.color[1], f.color[2]],
-                f.environmental_start.min(f.render_distance_start),
-                f.environmental_end.min(f.render_distance_end),
-            ),
+            Some(f) => {
+                let (start, end) = if f.environmental_end < f.render_distance_end {
+                    (f.environmental_start, f.environmental_end)
+                } else {
+                    (f.render_distance_start, f.render_distance_end)
+                };
+                ([f.color[0], f.color[1], f.color[2]], start, end)
+            }
             None => (frame.sky.fog_color, frame.distance * 0.9, frame.distance),
         };
+        // The shadow camera (OQ-6, impl-plan.md): orthographic, `shadowDistance` (160) blocks
+        // each side, 100 blocks from the player toward the shadow light, world +z up.
+        let light = view
+            .inverse()
+            .transform_vector3(if day { sun } else { moon })
+            .normalize();
+        let shadow_view = Mat4::look_at_rh(light * 100.0, Vec3::ZERO, Vec3::Z);
+        let shadow_projection = Mat4::orthographic_rh_gl(-160.0, 160.0, -160.0, 160.0, 0.05, 256.0);
         let day_time = inputs.day_time.rem_euclid(24000) as i32;
         let world_day = inputs.day_time.div_euclid(24000);
         let seconds = (now - self.start).as_secs_f32() % 3600.0;
@@ -243,6 +279,11 @@ impl FrameUniforms {
                 "worldDay" => Value::i(&[world_day as i32]),
                 "moonPhase" => Value::i(&[world_day.rem_euclid(8) as i32]),
                 "frameCounter" => Value::i(&[self.frame as i32]),
+                "shadowModelView" => m4(shadow_view),
+                "shadowModelViewInverse" => m4(shadow_view.inverse()),
+                "shadowProjection" => m4(shadow_projection),
+                "shadowProjectionInverse" => m4(shadow_projection.inverse()),
+                "atlasSize" => Value::i(&[self.atlas[0] as i32, self.atlas[1] as i32]),
                 "frameTime" => Value::f(&[dt]),
                 "frameTimeCounter" => Value::f(&[seconds]),
                 "viewWidth" => Value::f(&[size[0] as f32]),
@@ -269,6 +310,11 @@ impl FrameUniforms {
                 "screenBrightness" => Value::f(&[inputs.brightness]),
                 "hideGUI" => Value::i(&[inputs.hide_gui as i32]),
                 "eyeBrightness" => Value::i(&eye.map(|v| v as i32)),
+                "biome" => Value::i(&[inputs.biome]),
+                "biome_category" => Value::i(&[inputs.biome_category]),
+                "biome_precipitation" => Value::i(&[inputs.biome_precipitation]),
+                "temperature" => Value::f(&[inputs.temperature]),
+                "rainfall" => Value::f(&[inputs.rainfall]),
                 "eyeBrightnessSmooth" => Value::i(&self.eye_smooth.map(|v| v.round() as i32)),
                 "gbufferModelView" => m4(view),
                 "gbufferModelViewInverse" => m4(view.inverse()),
@@ -276,8 +322,11 @@ impl FrameUniforms {
                 "gbufferProjectionInverse" => m4(projection.inverse()),
                 "gbufferPreviousModelView" => m4(previous_view),
                 "gbufferPreviousProjection" => m4(previous_projection),
-                // Held items wait for `item.properties` (5.3: 0 without the file); renderStage
-                // is NONE outside gbuffers draws.
+                "heldItemId" => Value::i(&[inputs.held_items[0]]),
+                "heldItemId2" => Value::i(&[inputs.held_items[1]]),
+                "heldBlockLightValue" => Value::i(&[inputs.held_light[0]]),
+                "heldBlockLightValue2" => Value::i(&[inputs.held_light[1]]),
+                // renderStage is NONE outside gbuffers draws.
                 _ => Value::i(&[0]),
             }
         };
@@ -296,6 +345,47 @@ impl FrameUniforms {
             Vec4::new(color[0], color[1], color[2], 1.0),
             Vec4::new(1.0, start, end, 1.0 / (end - start).max(1e-3)),
         ]
+    }
+}
+
+impl FrameUniforms {
+    /// Evaluates the pack's custom uniforms with this frame's values and puts them after
+    /// `NAMES`' values, in `custom.uniforms()` order.
+    pub fn eval_custom(&mut self, custom: &mut horizon_shaders::Custom) {
+        self.values.truncate(NAMES.len());
+        let values = &self.values;
+        let builtin = |name: &str| {
+            let v = values.get(index(name)?)?;
+            let n = components(name);
+            Some(match *v {
+                Value::F(f) => horizon_shaders::Val::vector(&f.map(f64::from)[..n]),
+                Value::I(i) => horizon_shaders::Val::vector(&i.map(f64::from)[..n.min(3)]),
+            })
+        };
+        let dt = match index("frameTime").and_then(|i| values.get(i)) {
+            Some(Value::F(f)) => f64::from(f[0]),
+            _ => 0.0,
+        };
+        let out = custom.eval(dt, &builtin);
+        self.values
+            .extend(out.iter().map(|v| Value::f(&v.v.map(|x| x as f32)[..v.n])));
+    }
+}
+
+/// How many components the uniform `name` has (16 for a matrix).
+fn components(name: &str) -> usize {
+    match name {
+        "cameraPosition"
+        | "previousCameraPosition"
+        | "upPosition"
+        | "sunPosition"
+        | "moonPosition"
+        | "shadowLightPosition"
+        | "fogColor"
+        | "skyColor" => 3,
+        "eyeBrightness" | "eyeBrightnessSmooth" | "atlasSize" => 2,
+        n if n.starts_with("gbuffer") || n.starts_with("shadow") && n != "shadowAngle" => 16,
+        _ => 1,
     }
 }
 

@@ -164,7 +164,8 @@ def affected_here(changed):
                 (parity.SHARED / "dependencies" / f"{name}.json").exists() for name in found)
     if not known and not changed & parity.SHARED_INPUTS:
         return None
-    return harness_names(name for name in found if name in parity.affected_harnesses(found, records, changed))
+    affected = parity.affected_harnesses(found, records, changed)
+    return harness_names(name for name in found if name in affected)
 
 
 def short_list(names, limit=12):

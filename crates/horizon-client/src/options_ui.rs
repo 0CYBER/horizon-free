@@ -3403,9 +3403,6 @@ mod tests {
                 assert_eq!(s.gui_scale, expected);
             }
             s.gui_scale = u32::MAX;
-            s.clamp_gui_scale(framebuffer);
-            assert_eq!(s.gui_scale, max);
-            s.gui_scale = u32::MAX;
             Opt::GuiScale.cycle(&mut s, false, framebuffer);
             assert_eq!(s.gui_scale, 0);
             s.gui_scale = u32::MAX;

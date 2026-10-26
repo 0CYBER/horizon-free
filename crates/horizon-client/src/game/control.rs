@@ -294,6 +294,11 @@ impl Game<'_> {
                 if action == "tap" {
                     self.extras_key(physical, false, false);
                 }
+                // So do mods' keys (capability `input`).
+                self.mod_key(physical, action != "up", action == "repeat");
+                if action == "tap" {
+                    self.mod_key(physical, false, false);
+                }
                 // Text screens consume raw presses; releases follow key binds.
                 let typing = matches!(self.screen, Screen::Chat | Screen::Options);
                 let key = if typing && arg(2)? != "up" {

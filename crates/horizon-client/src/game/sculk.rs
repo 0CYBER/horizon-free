@@ -718,17 +718,24 @@ impl Game<'_> {
             })
         };
         // The ticking ones in the index's order, with whether the chunks
-        // around them tick too.
+        // around them tick too. Most sensors and catalysts wait for a
+        // vibration or a death: their tick would change nothing, so they
+        // are passed over here (a vibration scheduled during these ticks is
+        // chosen on the next tick at the earliest, as in vanilla).
+        let entities = &self.world.block_entities;
         let due: Vec<((i32, i32, i32), bool)> = self
             .sculk
             .index
             .iter()
             .filter_map(|&key| {
                 let (cx, cz) = (key.0 >> 4, key.2 >> 4);
-                ticks(cx, cz).then(|| {
-                    let adjacent = (-1..=1).all(|dx| (-1..=1).all(|dz| ticks(cx + dx, cz + dz)));
-                    (key, adjacent)
-                })
+                if !ticks(cx, cz)
+                    || matches!(entities.get(&key), Some(BlockEntity::Sculk(e)) if e.idle())
+                {
+                    return None;
+                }
+                let adjacent = (-1..=1).all(|dx| (-1..=1).all(|dz| ticks(cx + dx, cz + dz)));
+                Some((key, adjacent))
             })
             .collect();
         for (key, adjacent) in due {

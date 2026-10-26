@@ -78,6 +78,17 @@ impl Hub {
         );
     }
 
+    /// `ServerLevel.globalLevelEvent`: the packet with its global flag, for
+    /// every player on the server (`PlayerList.broadcastAll`).
+    pub fn global_level_event(&self, kind: i32, pos: [i32; 3], data: i32) {
+        self.broadcast(&C::LevelEvent(play::LevelEvent {
+            kind,
+            pos,
+            data,
+            global: true,
+        }));
+    }
+
     /// ClientboundBlockEventPacket (`PlayerList.broadcast` within 64 blocks).
     pub fn block_event(&self, pos: [i32; 3], b0: i32, b1: i32, state: u32) {
         let block = self
