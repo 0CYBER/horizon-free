@@ -36,9 +36,13 @@ pub struct Vertex {
     pub color: u32,
     /// Smooth light, 16x fixed point: sky in bits 0..8, block in bits 8..16.
     pub light: u32,
-    /// RGBA8_SNORM face normal; w = -127 for two-sided lighting, 0 to keep baked/unlit colour.
+    /// RGBA8_SNORM face normal; w = -127 for two-sided lighting, 0 to keep baked/unlit colour,
+    /// [`CULL_BACK`] to keep it and also drop back-facing pixels.
     pub normal: [i8; 4],
 }
+/// `Vertex::normal` of a baked-colour quad of an `entitySolid` model: the render type culls
+/// back faces, which the entity pipelines here do not, so `entity.wgsl` discards them.
+pub const CULL_BACK: [i8; 4] = [0, 0, 0, 1];
 /// A section vertex: vanilla's `DefaultVertexFormat.BLOCK` (position, colour,
 /// UV0, UV2) with the sprite's array layer beside the light, in 24 bytes
 /// rather than vanilla's 28: the UV is fixed point, which holds model UVs

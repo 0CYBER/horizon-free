@@ -44,6 +44,8 @@ struct Out {
     // entity.vsh's lightMapColor, multiplied in after the overlay.
     @location(9) light_color: vec4<f32>,
     @location(10) @interpolate(flat) weather_rect: vec4<f32>,
+    // 1 drops the quad's back-facing pixels (Vertex::normal w = 1), like a culling render type.
+    @location(11) @interpolate(flat) cull: u32,
 }
 // Shipped light.glsl; normals are already transformed and RGBA8_SNORM packed.
 fn entity_light(normal: vec3<f32>, nether: bool) -> f32 {
@@ -92,7 +94,10 @@ fn entity_vertex(position: vec3<f32>, uv: vec2<f32>,
     // minecraft_mix_light: the vertex colour times the cardinal light only.
     var c = color;
     var back = c;
-    if normal.w != 0.0 {
+    // Normal w: 0 keeps the baked colour, +-127 shades by the normal, and a small positive 1
+    // keeps the baked colour but culls back faces (entitySolid models such as the decorated pot).
+    out.cull = select(0u, 1u, normal.w > 0.0 && normal.w < 0.5);
+    if abs(normal.w) >= 0.5 {
         c = vec4(c.rgb * entity_light(normal.xyz, globals.time.y != 0.0), c.a);
         back = select(c, vec4(back.rgb * entity_light(-normal.xyz, globals.time.y != 0.0), back.a), normal.w < 0.0);
     }
@@ -198,7 +203,7 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
         // clouds.fsh: alpha fades out towards the cloud fog end.
         return vec4(color.rgb, color.a * (1.0 - linear_fog(in.spherical, 0.0, globals.fog_ends.y)));
     }
-    if color.a < 0.1 { discard; }
+    if color.a < 0.1 || (in.cull != 0u && !front) { discard; }
     // entity.fsh calculateFinalColor: the overlay (hurt red, TNT white) over the
     // lit texture, then the lightmap, then the glint and fog.
     color = vec4(mix(in.overlay_color.rgb, color.rgb, in.overlay_color.a), color.a);

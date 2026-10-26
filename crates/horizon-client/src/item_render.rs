@@ -12,7 +12,7 @@ mod special;
 use crate::{
     block_entity_render::{ModelPart, diffuse},
     hud::Rect,
-    mesher::Vertex,
+    mesher::{CULL_BACK, Vertex},
 };
 use glam::{Mat3, Mat4, Vec3};
 use horizon_assets::{
@@ -46,6 +46,8 @@ pub struct ItemQuad {
     pub foil: Foil,
     /// `MaterialInfo.lightEmission` (block light floor).
     pub light_emission: u8,
+    /// The render type culls back faces (`entitySolid`): world drawing discards them.
+    pub cull_back: bool,
 }
 /// Which glint render type a quad uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -246,6 +248,7 @@ fn submit_quads(
             color: argb(color),
             foil,
             light_emission: q.light_emission,
+            cull_back: false,
         });
     }
 }
@@ -696,7 +699,7 @@ impl ItemSink for WorldSink<'_> {
         let overlay = if q.foil == Foil::None { 0 } else { 7 };
         for (p, uv) in q.pos.iter().zip(q.uv) {
             self.out.push(Vertex {
-                normal: [0; 4],
+                normal: if q.cull_back { CULL_BACK } else { [0; 4] },
                 pos: p.to_array(),
                 uv,
                 layer: overlay,

@@ -5,7 +5,11 @@
 //! (`entity-models.json`); transforms, animation and textures follow each
 //! vanilla renderer. Faces are lit like the `entity` shader: the lightmap at
 //! the block plus `minecraft_mix_light` with the level's two diffuse lights.
-use crate::{hud::Rect, mesher::Vertex, world::World};
+use crate::{
+    hud::Rect,
+    mesher::{CULL_BACK, Vertex},
+    world::World,
+};
 use glam::{DVec3, Mat4, Quat, Vec3};
 use horizon_core::geometry::{
     Direction,
@@ -1385,6 +1389,7 @@ impl BlockEntityRenderer {
                         m *= around(Mat4::from_rotation_y(turn * decay), pivot);
                     }
                 }
+                let first = out.len();
                 if let Some(paint) =
                     paint("entity/decorated_pot/decorated_pot_base", 0xFFFFFF, packed)
                 {
@@ -1401,6 +1406,11 @@ impl BlockEntityRenderer {
                     {
                         draw_part(part, side, m, &none, paint, out);
                     }
+                }
+                // `DecoratedPotRenderer` submits every part with `entitySolid`, which culls
+                // back faces: the flat `top` and `bottom` planes show one side each.
+                for vertex in &mut out[first..] {
+                    vertex.normal = CULL_BACK;
                 }
             }
             Kind::EndPortal => {
