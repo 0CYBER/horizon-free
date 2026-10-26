@@ -1128,7 +1128,7 @@ impl Game<'_> {
                         self.particles.add(&options, at, velocity);
                     }
                 }
-                MobEvent::Experience { at, amount } => self.spawn_orbs(at, amount),
+                MobEvent::Experience { at, amount } => self.spawn_breeding_orb(at, amount),
                 MobEvent::AxolotlSupportPlayer => {
                     let previous = self
                         .potions
@@ -1272,6 +1272,13 @@ impl Game<'_> {
             m.extra.egg_time = life;
         }
     }
+    /// `Animal.finalizeSpawnChildFromBreeding`'s experience orb: only when the
+    /// `mob_drops` game rule is on.
+    fn spawn_breeding_orb(&mut self, at: [f64; 3], amount: u32) {
+        if self.ui.rules.bool("mob_drops") {
+            self.spawn_orbs(at, amount);
+        }
+    }
     /// Animal.spawnChildFromBreeding
     fn breed(
         &mut self,
@@ -1365,7 +1372,7 @@ impl Game<'_> {
                 }
                 self.world.random = r;
                 let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
-                self.spawn_orbs([p.position.x, p.position.y, p.position.z], xp);
+                self.spawn_breeding_orb([p.position.x, p.position.y, p.position.z], xp);
                 return;
             }
             if p.species() == Species::Cat {
@@ -1386,7 +1393,7 @@ impl Game<'_> {
                     };
                 }
                 let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
-                self.spawn_orbs([p.position.x, p.position.y, p.position.z], xp);
+                self.spawn_breeding_orb([p.position.x, p.position.y, p.position.z], xp);
                 return;
             }
             if p.species() == Species::Wolf {
@@ -1408,7 +1415,7 @@ impl Game<'_> {
                     };
                 }
                 let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
-                self.spawn_orbs([p.position.x, p.position.y, p.position.z], xp);
+                self.spawn_breeding_orb([p.position.x, p.position.y, p.position.z], xp);
                 return;
             }
             // Nautilus.getBreedOffspring: a tame parent's baby is tame too.
@@ -1424,7 +1431,7 @@ impl Game<'_> {
             }
         }
         let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
-        self.spawn_orbs([p.position.x, p.position.y, p.position.z], xp);
+        self.spawn_breeding_orb([p.position.x, p.position.y, p.position.z], xp);
     }
     /// `MobEffectUtil.addEffectToPlayersAround` for an elder guardian:
     /// mining fatigue III for five minutes unless a stronger or longer one
@@ -1520,15 +1527,19 @@ impl Game<'_> {
         if let Some(a) = attacker.or(owner) {
             self.note_attacker(damage_type, a);
         }
+        // DamageSource.scalesWithDifficulty: a mob (or its projectile's
+        // owner) caused the hit, not a player.
+        let living_cause = attacker.or(owner).is_some();
         let mut outcome = horizon_client::health::BlockOutcome::default();
         if let Some(player) = self.player.as_mut()
             && let Some(id) = self.motion.health.damage.id(damage_type)
-            && let Ok(o) = player.hurt_blocking(
+            && let Ok(o) = player.hurt_caused_by(
                 &self.motion.health,
                 self.world.health_rules,
                 id,
                 amount,
                 blocking,
+                living_cause,
             )
             && {
                 outcome = o;
@@ -1547,7 +1558,10 @@ impl Game<'_> {
                 }
             }
             self.hurt_armor(amount);
-            self.thorns(from);
+            // The thorns hurt the entity that caused the hit, if there is one.
+            if let Some(a) = attacker.or(owner) {
+                self.thorns(a);
+            }
         }
         if raised {
             self.after_block(outcome, amount, attacker, projectile);
@@ -3302,6 +3316,7 @@ fn to_loot(stack: &ItemStack) -> horizon_world::loot::LootStack {
         map: false,
         exploration: None,
         ominous_amplifier: None,
+        stew_effects: Vec::new(),
     }
 }
 /// A generated loot stack as a Horizon item stack.

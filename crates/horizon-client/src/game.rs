@@ -19,6 +19,7 @@ mod books;
 mod bossbars;
 mod breezes;
 mod campfire;
+mod campfire_douse;
 mod cartography;
 mod chat;
 mod client_ambient;
@@ -556,6 +557,11 @@ struct GameLevel<'w> {
     loot: Option<std::sync::Arc<horizon_world::loot::LootData>>,
     registry: &'static horizon_world::registry::BlockRegistry,
     rules: horizon_world::level::GameRules,
+    /// `Difficulty.getId()` (peaceful 0 .. hard 3).
+    difficulty: i32,
+    /// The feet of the players who keep fire spreading around them: the local
+    /// player and the LAN guests in this level, spectators aside.
+    fire_players: Vec<[f64; 3]>,
     /// Block loot random sequences (`ServerLevel.getRandomSequence`).
     rand_sequences: &'w mut horizon_client::random_sequences::RandomSequences,
     pending: &'w mut spill::Pending,
@@ -565,6 +571,9 @@ struct GameLevel<'w> {
     random_tick_sections: &'w mut horizon_client::random_tick_sections::RandomTickSections,
     /// Players with each chest open (a trapped chest's signal).
     lid_openers: &'w HashMap<(i32, i32, i32), i32>,
+    /// `Level.isClientSide`: a client's copy of the level (a guest of a LAN
+    /// world, a window on its server thread, a dedicated server's client).
+    client_side: bool,
 }
 struct PlayerCollision {
     y: f64,
@@ -654,6 +663,9 @@ impl GameLevel<'_> {
     }
 }
 impl LevelAccess for GameLevel<'_> {
+    fn is_client_side(&self) -> bool {
+        self.client_side
+    }
     fn world_surface(&self, x: i32, z: i32) -> i32 {
         self.world.world_surface(x, z, |s| self.facts.is_air(s))
     }
@@ -718,6 +730,34 @@ impl LevelAccess for GameLevel<'_> {
     }
     fn game_rules(&self) -> horizon_world::level::GameRules {
         self.rules
+    }
+    fn difficulty(&self) -> i32 {
+        self.difficulty
+    }
+    /// `ServerLevel.canSpreadFireAround`: a player (not a spectator) closer
+    /// than the `fire_spread_radius_around_player` rule to the block's corner
+    /// (`ChunkMap.anyPlayerCloseEnoughTo`); -1 spreads everywhere.
+    fn can_spread_fire_around(&self, pos: BlockPos) -> bool {
+        let radius = self.rules.fire_spread_radius_around_player;
+        radius == -1
+            || self.fire_players.iter().any(|p| {
+                let d = [
+                    p[0] - f64::from(pos.x),
+                    p[1] - f64::from(pos.y),
+                    p[2] - f64::from(pos.z),
+                ];
+                d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < f64::from(radius) * f64::from(radius)
+            })
+    }
+    fn increased_fire_burnout(&self, pos: BlockPos) -> bool {
+        self.world
+            .chunks
+            .get(&(pos.x >> 4, pos.z >> 4))
+            .is_some_and(|chunk| {
+                self.biomes
+                    .get(chunk.biome(pos.x, pos.y, pos.z))
+                    .increased_fire_burnout
+            })
     }
     fn block_state(&self, pos: BlockPos) -> BlockStateId {
         self.world.block(pos.x, pos.y, pos.z)
@@ -857,7 +897,16 @@ impl LevelAccess for GameLevel<'_> {
     fn emit(&mut self, event: LevelEvent) {
         match event {
             // Block.dropResources draws its loot and spots right away.
-            LevelEvent::DropResources { pos, state } => self.drop_resources_now(pos, state),
+            // `popResource` only drops server-side (`!level.isClientSide`):
+            // a client's moveBlocks (a piston's block event) skips it.
+            LevelEvent::DropResources { pos, state } if !self.client_side => {
+                self.drop_resources_now(pos, state)
+            }
+            LevelEvent::DropResources { .. } => {}
+            // `ClientLevel.playSeededSound` plays only when the excluded
+            // player is this client's own: the block's `playSound(null, ...)`
+            // (a piston's move, a note) reaches it from the server instead.
+            LevelEvent::Sound { .. } if self.client_side => {}
             // Block.popResource of the block's own item (tall flowers, flower beds).
             LevelEvent::BlockEvent {
                 pos,
@@ -2469,6 +2518,19 @@ impl Game<'_> {
             Dim::End => LevelDimension::End,
         };
         let rules = self.level_rules();
+        let fire_players: Vec<[f64; 3]> = self
+            .player
+            .iter()
+            .filter(|_| !spectator)
+            .map(|p| [p.position.x, p.position.y, p.position.z])
+            .chain(self.lan.iter().flat_map(|h| {
+                h.hub
+                    .guests
+                    .iter()
+                    .filter(|g| h.hub.here(g) && !g.spectator())
+                    .map(|g| g.position)
+            }))
+            .collect();
         let blockers = Blockers {
             mobs: &self.mobs,
             armor_stands: &self.armor_stands,
@@ -2499,12 +2561,15 @@ impl Game<'_> {
             loot: horizon_client::structure_blocks::loot_data(&self.options.resources),
             registry: self.pack.assets.registry,
             rules,
+            difficulty: i32::from(self.ui.difficulty),
+            fire_players,
             rand_sequences: &mut self.rand_sequences,
             pending: &mut self.pending,
             spill: &mut self.spill,
             tickets: self.tickets.levels(),
             random_tick_sections: &mut self.random_tick_sections,
             lid_openers: &self.lid_openers,
+            client_side: self.remote.is_some(),
         };
         let result = f(self.res.behaviours(), &mut level, &mut self.block_ticks);
         self.flush_spill();
@@ -2566,14 +2631,15 @@ impl Game<'_> {
                 (p.position.z.floor() as i32) >> 4,
             ));
         }
-        let sources = (self.options.dedicated.is_some() || !players.is_empty()).then(|| {
-            horizon_client::ticket_levels::Sources {
-                players,
-                forced: self.streaming.forced.iter().copied().collect(),
-                view_distance: self.settings.render_distance.clamp(2, 32),
-                simulation_distance: self.settings.simulation_distance.max(2),
-            }
-        });
+        let sources =
+            (!self.options.execution_role.is_client() || !players.is_empty()).then(|| {
+                horizon_client::ticket_levels::Sources {
+                    players,
+                    forced: self.streaming.forced.iter().copied().collect(),
+                    view_distance: self.settings.render_distance.clamp(2, 32),
+                    simulation_distance: self.settings.simulation_distance.max(2),
+                }
+            });
         self.tickets.update(sources);
     }
     /// `ServerLevel.startTickingChunk`: a loaded chunk's saved ticks are
@@ -3568,6 +3634,10 @@ impl Game<'_> {
                 self.swing_arm();
                 return Ok(true);
             }
+            if self.use_campfire_douse(hit.pos, held.as_ref())? {
+                self.swing_arm();
+                return Ok(true);
+            }
             match self.use_respawn_anchor(hit.pos, held.as_ref())? {
                 respawn_anchor::AnchorUse::Charged => {
                     self.swing_arm();
@@ -4264,8 +4334,9 @@ impl Game<'_> {
         if running {
             self.world.game_time += 1;
             if self.ui.rules.bool("advance_weather") {
-                self.world.weather.tick(&mut self.world.random);
+                self.world.weather.tick_timers(&mut self.world.random);
             }
+            self.world.weather.tick_levels();
             self.tick_weather_effects();
         }
         if self.ticks.is_multiple_of(6000) {
@@ -7548,6 +7619,69 @@ impl Game<'_> {
         self.audio
             .play("minecraft:entity.player.attack.sweep", from, 1.0, 1.0);
     }
+    /// The damage and knockback part of `Player.doSweepAttack` after a sweep
+    /// hit on the mob at `target`: every other living mob in its box grown by
+    /// (1, 0.25, 1) and closer than 3 blocks (`distanceToSqr < 9`, in creative
+    /// too), but the player's allies
+    /// (`isAlliedTo`), takes `1 + sweeping_damage_ratio * baseDamage` with the
+    /// weapon's enchantments, scaled by the attack strength, and is pushed 0.4
+    /// along the player's yaw.
+    pub(super) fn sweep_damage(&mut self, target: usize, scale: f32) {
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let from = [p.position.x, p.position.y, p.position.z];
+        // `baseDamage` of `Player.attack` before a critical hit (a sweep has
+        // none) and the enchantments: the attack damage attribute with the
+        // strength and weakness effects, scaled by the attack strength.
+        let hand_damage = 1.0 + self.attack_item_info().map_or(0.0, |i| i.attack_damage);
+        let base_damage = (hand_damage + self.effect_attack_bonus()) * (0.2 + scale * scale * 0.8);
+        // The enchantment's attribute modifier on the attribute's 0 to 1 range.
+        let ratio = self
+            .res
+            .stations()
+            .enchantments
+            .attribute_add(
+                self.inventory[self.selected].as_ref(),
+                "minecraft:sweeping_damage_ratio",
+            )
+            .clamp(0.0, 1.0) as f32;
+        let sweep_damage = 1.0 + ratio * base_damage;
+        let hit_box = self.mobs[target]
+            .bounds()
+            .inflate(horizon_core::geometry::Vec3::new(1.0, 0.25, 1.0));
+        let (uuid, allies) = (
+            self.level.player_uuid.or(Some([0, 0, 0, 1])),
+            self.player_allies(),
+        );
+        let nearby: Vec<usize> = self
+            .mobs
+            .iter()
+            .enumerate()
+            .filter(|(i, m)| {
+                *i != target
+                    && m.alive()
+                    && !m.removed
+                    && !allies.contains(&m.id)
+                    && !mace::ally_of_player(m, uuid)
+                    && m.bounds().intersects(hit_box)
+                    && m.position.distance_squared(p.position) < 9.0
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let (xd, zd) = self.extra_knockback_direction();
+        for i in nearby {
+            let kind = self.mobs[i].kind.id.clone();
+            let kind = format!("minecraft:{}", kind.trim_start_matches("minecraft:"));
+            let damage = (sweep_damage + self.enchant_damage_bonus(&kind)) * scale;
+            let source = self.attack_source(from);
+            if self.hurt_by_player(i, damage, source) {
+                self.mobs[i].knockback(0.4, xd, zd);
+                self.last_hurt_by_player
+                    .insert(self.mobs[i].id, self.lan_acting);
+            }
+        }
+    }
     /// `Player.attack`'s sounds when a vehicle takes the hit (it always does,
     /// and can't be hit critically): knockback when sprinting at full
     /// strength, then strong or weak. Before `swing_arm` resets the charge.
@@ -7721,6 +7855,7 @@ impl Game<'_> {
             // Player.playServerSideSound: at the player.
             if let Some(at) = sweep {
                 self.sweep_attack(at, from);
+                self.sweep_damage(index, scale);
             } else {
                 self.audio.play(sound, from, 1.0, 1.0);
             }
@@ -7740,15 +7875,18 @@ impl Game<'_> {
         }
     }
     /// ServerExplosion: rays from a 16^3 grid lose (resistance + 0.3) * 0.3 per step.
-    /// A mob explosion (`Level.ExplosionInteraction.MOB`: drop decay with the
-    /// default mobGriefing rule).
+    /// A mob explosion (`ServerLevel.explode` with `ExplosionInteraction.MOB`:
+    /// blocks are kept without mobGriefing, else the mob_explosion_drop_decay
+    /// rule picks decay).
     fn explode(&mut self, center: [f64; 3], radius: f32) -> Result<()> {
-        self.server_explode(
-            center,
-            radius,
-            explosion::BlockInteraction::DestroyWithDecay,
-            false,
-        )
+        let interaction = if !self.ui.rules.bool("mob_griefing") {
+            explosion::BlockInteraction::Keep
+        } else if self.ui.rules.bool("mob_explosion_drop_decay") {
+            explosion::BlockInteraction::DestroyWithDecay
+        } else {
+            explosion::BlockInteraction::Destroy
+        };
+        self.server_explode(center, radius, interaction, false)
     }
     /// Copies of a save batch carrying its live block entities and save data.
     fn with_entities<'a>(
@@ -9671,8 +9809,9 @@ impl Game<'_> {
         rain.extend(snow_vertices);
         rain
     }
-    /// Player.startSleepInBed: night or thunder, no monsters within 8 blocks;
-    /// the bed becomes the respawn point either way.
+    /// ServerPlayer.startSleepInBed: in reach, not obstructed, night or thunder,
+    /// and (outside creative) no monsters within 8 blocks; the bed becomes the
+    /// respawn point either way.
     fn try_sleep(&mut self, pos: [i32; 3]) {
         let Some(p) = self.player.as_ref() else {
             return;
@@ -9687,20 +9826,38 @@ impl Game<'_> {
             .state(state)
             .map(|s| s.properties.clone())
             .unwrap_or_default();
-        let head = if props.get("part").map(String::as_str) == Some("foot") {
-            let d = facing_offset(props.get("facing").map_or("north", String::as_str));
-            [pos[0] + d[0], pos[1], pos[2] + d[2]]
+        // The head and the foot: the block faces from the foot to the head.
+        let d = facing_offset(props.get("facing").map_or("north", String::as_str));
+        let (head, foot) = if props.get("part").map(String::as_str) == Some("foot") {
+            ([pos[0] + d[0], pos[1], pos[2] + d[2]], pos)
         } else {
-            pos
+            (pos, [pos[0] - d[0], pos[1], pos[2] - d[2]])
         };
-        let dist = ((p.position.x - f64::from(head[0]) - 0.5).powi(2)
-            + (p.position.z - f64::from(head[2]) - 0.5).powi(2))
-        .sqrt();
-        if dist > 3.0 {
+        // ServerPlayer.bedInRange / isReachableBedBlock: within 3 blocks
+        // sideways and 2 vertically of the head or the foot.
+        let reachable = |bed: [i32; 3]| {
+            (p.position.x - f64::from(bed[0]) - 0.5).abs() <= 3.0
+                && (p.position.y - f64::from(bed[1])).abs() <= 2.0
+                && (p.position.z - f64::from(bed[2]) - 0.5).abs() <= 3.0
+        };
+        if !reachable(head) && !reachable(foot) {
             self.message = Some((
                 "You may not rest now; the bed is too far away".into(),
                 Instant::now(),
             ));
+            return;
+        }
+        // ServerPlayer.bedBlocked: Player.freeAt (not suffocating) for the
+        // blocks above the head and the foot, as `in_wall` reads suffocating.
+        let blocked = [head, foot].iter().any(|bed| {
+            let f = self
+                .res
+                .facts()
+                .get(self.world.block(bed[0], bed[1] + 1, bed[2]));
+            f.full_collision && f.solid_render
+        });
+        if blocked {
+            self.message = Some(("This bed is obstructed".into(), Instant::now()));
             return;
         }
         // In reach (bedInRange), day or night: setRespawnPosition(
@@ -9732,13 +9889,15 @@ impl Game<'_> {
             ));
             return;
         }
-        let monsters = self.mobs.iter().any(|m| {
-            m.hostile()
-                && m.alive()
-                && (m.position.x - p.position.x).abs() < 8.0
-                && (m.position.y - p.position.y).abs() < 5.0
-                && (m.position.z - p.position.z).abs() < 8.0
-        });
+        // Creative players skip the monster check (`!this.isCreative()`).
+        let monsters = !self.creative
+            && self.mobs.iter().any(|m| {
+                m.hostile()
+                    && m.alive()
+                    && (m.position.x - p.position.x).abs() < 8.0
+                    && (m.position.y - p.position.y).abs() < 5.0
+                    && (m.position.z - p.position.z).abs() < 8.0
+            });
         if monsters {
             self.message = Some((
                 "You may not rest now; there are monsters nearby".into(),
@@ -9788,14 +9947,20 @@ impl Game<'_> {
             }
         }
         // ServerLevel.tick: once enough of the players have slept 100 ticks,
-        // skip to morning, clear the weather and wake everyone.
+        // skip to morning if `advance_time` is on, wake everyone, and
+        // resetWeatherCycle if `advance_weather` is on and it is raining.
         if self.enough_slept() {
-            let t = self.world.day_time;
-            self.world.day_time = t + 24000 - t.rem_euclid(24000);
-            self.world.weather.raining = false;
-            self.world.weather.thundering = false;
-            self.world.weather.rain_time = 0;
-            self.world.weather.thunder_time = 0;
+            if self.ui.rules.bool("advance_time") {
+                let t = self.world.day_time;
+                self.world.day_time = t + 24000 - t.rem_euclid(24000);
+            }
+            // Level.isRaining: the rain level is above 0.2.
+            if self.ui.rules.bool("advance_weather") && self.world.weather.levels(1.0).0 > 0.2 {
+                self.world.weather.raining = false;
+                self.world.weather.thundering = false;
+                self.world.weather.rain_time = 0;
+                self.world.weather.thunder_time = 0;
+            }
             if self.sleeping.is_some() {
                 self.wake_up();
             }
@@ -11604,16 +11769,17 @@ impl ApplicationHandler for Game<'_> {
                             }
                             self.extras_mouse(button, pressed);
                             self.mod_mouse_key(button, pressed);
-                            match self.settings.keys.translate_mouse(button) {
-                                Some(Err(b)) => self.play_mouse(b, pressed)?,
-                                Some(Ok(k)) if pressed => {
-                                    self.keys.insert(k);
-                                    self.key_pressed(k)?;
+                            for mapped in self.settings.keys.translate_mouse_all(button) {
+                                match mapped {
+                                    Err(b) => self.play_mouse(b, pressed)?,
+                                    Ok(k) if pressed => {
+                                        self.keys.insert(k);
+                                        self.key_pressed(k)?;
+                                    }
+                                    Ok(k) => {
+                                        self.keys.remove(&k);
+                                    }
                                 }
-                                Some(Ok(k)) => {
-                                    self.keys.remove(&k);
-                                }
-                                None => {}
                             }
                         }
                         Screen::Inventory | Screen::Creative
@@ -11861,18 +12027,24 @@ impl ApplicationHandler for Game<'_> {
                     {
                         self.smooth_camera = !self.smooth_camera;
                     }
-                    // Key binds: act as the default key of the bound mapping.
-                    let key = match self.settings.keys.translate(key) {
-                        Some(Ok(k)) => k,
-                        Some(Err(button)) => {
-                            if self.screen == Screen::Playing && !event.repeat {
-                                self.play_mouse(button, event.state == ElementState::Pressed)?;
+                    // Key binds: act as the default key of every mapping bound
+                    // to it (KeyMapping.set drives them all).
+                    for mapped in self.settings.keys.translate_all(key) {
+                        match mapped {
+                            Ok(k) => {
+                                self.mapped_key(
+                                    k,
+                                    event.state == ElementState::Pressed,
+                                    event.repeat,
+                                )?;
                             }
-                            return Ok(());
+                            Err(button) => {
+                                if self.screen == Screen::Playing && !event.repeat {
+                                    self.play_mouse(button, event.state == ElementState::Pressed)?;
+                                }
+                            }
                         }
-                        None => return Ok(()),
-                    };
-                    self.mapped_key(key, event.state == ElementState::Pressed, event.repeat)?;
+                    }
                 }
                 WindowEvent::RedrawRequested => {
                     self.observe_fullscreen();

@@ -1228,13 +1228,19 @@ pub fn campfire_particles<'a>(
         if r.next_float() < 0.11 {
             let count = next_int(r, 2) + 2;
             for _ in 0..count {
-                make_campfire_smoke(engine, pos, signal);
+                make_campfire_smoke(engine, pos, signal, false);
             }
         }
     }
 }
-/// `CampfireBlock.makeParticles` (always visible, overriding the limiter).
-pub fn make_campfire_smoke(engine: &mut ParticleEngine, pos: [i32; 3], signal: bool) {
+/// `CampfireBlock.makeParticles` (always visible, overriding the limiter);
+/// `smoking` adds the plain smoke puff at the logs.
+pub fn make_campfire_smoke(
+    engine: &mut ParticleEngine,
+    pos: [i32; 3],
+    signal: bool,
+    smoking: bool,
+) {
     let r = engine.random();
     let sign = |r: &mut LegacyRandom| if r.next_boolean() { 1.0 } else { -1.0 };
     let dx = r.next_double() / 3.0;
@@ -1248,6 +1254,17 @@ pub fn make_campfire_smoke(engine: &mut ParticleEngine, pos: [i32; 3], signal: b
         T::CampfireCosySmoke
     };
     engine.create(&ParticleOptions::simple(ty), [x, y, z], [0.0, 0.07, 0.0]);
+    if smoking {
+        let r = engine.random();
+        let dx = r.next_double() / 4.0 * sign(r);
+        let dz = r.next_double() / 4.0 * sign(r);
+        let at = [
+            f64::from(pos[0]) + 0.5 + dx,
+            f64::from(pos[1]) + 0.4,
+            f64::from(pos[2]) + 0.5 + dz,
+        ];
+        engine.create(&ParticleOptions::simple(T::Smoke), at, [0.0, 0.005, 0.0]);
+    }
 }
 
 #[cfg(test)]

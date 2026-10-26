@@ -31,6 +31,9 @@ pub struct LootStack {
     pub exploration: Option<Box<ExplorationMap>>,
     /// Set by set_ominous_bottle_amplifier.
     pub ominous_amplifier: Option<i32>,
+    /// Added by set_stew_effect (the `suspicious_stew_effects` component):
+    /// (effect id, duration in ticks).
+    pub stew_effects: Vec<(String, i32)>,
 }
 /// `ExplorationMapFunction`'s settings.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,6 +77,7 @@ impl LootStack {
             map: false,
             exploration: None,
             ominous_amplifier: None,
+            stew_effects: Vec::new(),
         }
     }
     pub fn is_empty(&self) -> bool {
@@ -678,6 +682,13 @@ impl LootData {
     }
 }
 
+/// `MobEffect.isInstantaneous`.
+fn is_instantaneous(effect: &str) -> bool {
+    matches!(
+        effect,
+        "minecraft:saturation" | "minecraft:instant_health" | "minecraft:instant_damage"
+    )
+}
 /// The level of one enchantment on a stack (its `enchantments` component).
 fn item_level(stack: &LootStack, enchantment: &str) -> i32 {
     stack
@@ -1134,7 +1145,14 @@ impl<R: RandomSource> Context<'_, R> {
                         .random
                         .next_int_bound(effects.len() as i32)
                         .unwrap_or(0) as usize;
-                    self.int(&effects[pick]["duration"]);
+                    let effect = effects[pick]["type"].as_str().unwrap_or("");
+                    let mut duration = self.int(&effects[pick]["duration"]);
+                    // Seconds, unless the effect is instantaneous.
+                    if !is_instantaneous(effect) {
+                        duration *= 20;
+                    }
+                    // SuspiciousStewEffects.withEffectAdded
+                    stack.stew_effects.push((effect.to_owned(), duration));
                 }
             }
             "minecraft:set_ominous_bottle_amplifier" => {
