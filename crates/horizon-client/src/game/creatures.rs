@@ -897,6 +897,15 @@ impl Game<'_> {
             match e {
                 MobEvent::SquidCycle { mob, at } => self.lan_entity_event(mob as i32, 19, at),
                 MobEvent::RabbitHop { mob, at } => self.lan_entity_event(mob as i32, 1, at),
+                MobEvent::Drown { mob, at } => {
+                    self.lan_entity_event(mob as i32, super::combat::DROWN_EVENT, at);
+                    let v = self
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == mob)
+                        .map_or([0.0; 3], |m| [m.velocity.x, m.velocity.y, m.velocity.z]);
+                    self.drown_particles(at, v);
+                }
                 MobEvent::Sound(name, at, volume, pitch)
                 | MobEvent::LocalSound(name, at, volume, pitch) => {
                     self.audio

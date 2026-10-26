@@ -2138,6 +2138,9 @@ impl Game<'_> {
                 if p.event == super::totem::TOTEM_EVENT {
                     self.remote_totem(p.id);
                 }
+                if p.event == super::combat::DROWN_EVENT {
+                    self.remote_drown(p.id);
+                }
             }
             C::Animate(p) => self.remote_animate(p.id, p.action),
             // ClientPacketListener.handleSwingAnimation: the entity swings

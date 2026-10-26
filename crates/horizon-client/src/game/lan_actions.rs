@@ -2312,6 +2312,15 @@ impl Game<'_> {
             match event {
                 MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, at),
                 MotionEvent::Fall(event) => self.landing_block_updates(&event),
+                // LivingEntity.baseTick's entity event 67, to every client
+                // around, the guest's own included; this window draws it too.
+                MotionEvent::Drown => {
+                    if let Some(g) = host.hub.guest(conn) {
+                        host.hub
+                            .entity_event(g.entity_id, super::combat::DROWN_EVENT, at);
+                    }
+                    self.drown_particles(at, [0.0; 3]);
+                }
                 _ => {}
             }
         }
