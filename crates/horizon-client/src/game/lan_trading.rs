@@ -144,15 +144,16 @@ impl Game<'_> {
             .offers
             .iter()
             .filter_map(|o| {
-                let cost =
-                    |st: &ItemStack, hub: &mut horizon_client::lan::hub::Hub| play::NetCost {
-                        item: hub.item_id(&st.item),
-                        count: st.count as i32,
-                    };
+                let cost = |st: &ItemStack, hub: &mut horizon_client::lan::hub::Hub| {
+                    hub.stack(&Some(st.clone())).map(play::NetCost::from)
+                };
                 Some(play::NetOffer {
-                    cost_a: cost(&o.base_cost_a.stack, &mut host.hub),
+                    cost_a: cost(&o.base_cost_a.stack, &mut host.hub)?,
                     result: host.hub.stack(&Some(o.result.clone()))?,
-                    cost_b: o.cost_b.as_ref().map(|b| cost(&b.stack, &mut host.hub)),
+                    cost_b: match &o.cost_b {
+                        Some(b) => Some(cost(&b.stack, &mut host.hub)?),
+                        None => None,
+                    },
                     out_of_stock: o.out_of_stock(),
                     uses: o.uses,
                     max_uses: o.max_uses,
