@@ -517,6 +517,57 @@ impl Game<'_> {
         }
         i
     }
+    /// The vehicle at the root of the rider chain (`Entity.getRootVehicle`):
+    /// the mob the ridden vehicle rides, when it rides one.
+    pub(super) fn root_vehicle(&self, id: u32) -> u32 {
+        let mut root = id;
+        for _ in 0..8 {
+            let Some(v) = self
+                .mobs
+                .iter()
+                .find(|m| m.id == root)
+                .and_then(|m| m.extra.mount)
+            else {
+                break;
+            };
+            root = v;
+        }
+        root
+    }
+    /// The UUID of the vehicle the player rides, for the player's file
+    /// (`ServerPlayer.saveParentVehicle`).
+    pub(super) fn root_vehicle_uuid(&mut self, id: Option<u32>) -> Option<[i32; 4]> {
+        let id = self.root_vehicle(id?);
+        Some(self.uuid_for(id))
+    }
+    /// The vehicle with this UUID, among the ones in the world.
+    pub(super) fn vehicle_by_uuid(&self, uuid: [i32; 4]) -> Option<u32> {
+        let id = *self
+            .persist
+            .uuids
+            .iter()
+            .find(|(_, u)| **u == uuid)
+            .map(|(id, _)| id)?;
+        let there = self.mobs.iter().any(|m| m.id == id && m.alive())
+            || self.boats.iter().any(|b| b.id == id)
+            || self.carts.iter().any(|c| c.id == id);
+        there.then_some(id)
+    }
+    /// `ServerPlayer.loadAndSpawnParentVehicle`: the ride the player's file
+    /// names, once the vehicle is in the world.
+    pub(super) fn restore_root_vehicle(&mut self) {
+        if self.riding.is_some() || self.player.is_none() {
+            return;
+        }
+        let Some(uuid) = self.pending_vehicle else {
+            return;
+        };
+        let Some(id) = self.vehicle_by_uuid(uuid) else {
+            return;
+        };
+        self.pending_vehicle = None;
+        self.riding = Some(id);
+    }
     /// A mob's entity tag with the mobs riding it under `Passengers`.
     pub(super) fn mob_tree_nbt(&mut self, i: usize) -> Tag {
         let id = self.mobs[i].id;

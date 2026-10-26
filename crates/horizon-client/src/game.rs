@@ -1548,6 +1548,9 @@ struct Game<'a> {
     cart_models: minecarts::CartModels,
     /// The boat the player rides.
     riding: Option<u32>,
+    /// The vehicle the player's file names, waiting for it to be in the world
+    /// (`ServerPlayer.loadAndSpawnParentVehicle`).
+    pending_vehicle: Option<[i32; 4]>,
     /// The ender inventory (27 slots) and the ender chest showing it.
     ender_items: Vec<Option<ItemStack>>,
     ender_open: Option<(i32, i32, i32)>,
@@ -4752,6 +4755,8 @@ impl Game<'_> {
             horizon_client::spans::time("touch_arrows", || self.touch_arrows());
         }
         horizon_client::spans::time("spawn_loaded_entities", || self.spawn_loaded_entities());
+        // The ride the player's file names, once the vehicle is in the world.
+        self.restore_root_vehicle();
         if running {
             horizon_client::spans::time("tick_mobs", || self.tick_mobs())?;
             horizon_client::spans::time("recheck_golem_openers", || self.recheck_golem_openers());
@@ -8202,6 +8207,8 @@ impl Game<'_> {
         self.world = world;
         self.inventory = inventory;
         self.save = save;
+        // The ride the player's file names, once the vehicle is in the world.
+        self.pending_vehicle = level.root_vehicle;
         self.level = level;
         // ServerRecipeBook.loadUntrusted: recipes the manager does not have are dropped.
         let index = &self.res.stations().recipe_index;
@@ -10455,6 +10462,8 @@ impl Game<'_> {
         self.level.game_rules = self.ui.rules.by_name();
         self.level.selected_slot = self.selected as i32;
         let mode = self.mode_id();
+        // The vehicle the player rides (`ServerPlayer.saveParentVehicle`).
+        let vehicle = self.root_vehicle_uuid(self.riding);
         let level = &mut self.level;
         level.creative = self.creative;
         level.game_mode = mode;
@@ -10467,6 +10476,7 @@ impl Game<'_> {
         level.xp_level = self.experience.level;
         level.xp_progress = self.experience.progress;
         level.xp_total = self.experience.total;
+        level.root_vehicle = vehicle;
         if let Some(p) = &self.player {
             level.position = Some([p.position.x, p.position.y, p.position.z]);
             level.health = p.health.health();
@@ -12786,6 +12796,7 @@ impl<'a> Game<'a> {
             trim_slots: Vec::new(),
             cart_models: prepared.cart_models,
             riding: None,
+            pending_vehicle: None,
             ender_items: vec![None; 27],
             ender_open: None,
             pending: Default::default(),
