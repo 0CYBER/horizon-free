@@ -846,8 +846,13 @@ fn can_sit_on(w: &MobWorld, p: [i32; 3]) -> bool {
     match f.name.as_ref() {
         // The lit state is the only light source a furnace has.
         "minecraft:furnace" => f.emission > 0,
-        // `ChestBlockEntity.getOpenCount(level, pos) < 1`.
-        "minecraft:chest" => !w.lid_openers.contains_key(&(p[0], p[1], p[2])),
+        // `ChestBlockEntity.getOpenCount(level, pos) < 1`: players' openers
+        // and the copper golems' own count.
+        "minecraft:chest" => {
+            let key = (p[0], p[1], p[2]);
+            !w.lid_openers.contains_key(&key)
+                && w.world.chest_openers.get(&key).is_none_or(|o| o.0 < 1)
+        }
         // A bed's foot only (`BedBlock.PART != HEAD`).
         _ => w.prop(p[0], p[1], p[2], "part") != Some("head"),
     }
