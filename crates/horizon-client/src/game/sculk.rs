@@ -1530,6 +1530,9 @@ impl Game<'_> {
         });
         if let Some((at, on_ground, health, flying)) = player {
             let crouch = self.keys.contains(&KeyCode::ShiftLeft);
+            if on_ground && !self.spectator() {
+                self.step_on_redstone_ore(at, crouch);
+            }
             let in_water = self.in_water_at(at);
             self.entity_motion_events(
                 Who::Player,
@@ -1545,6 +1548,26 @@ impl Game<'_> {
                 self.post_entity_event("minecraft:entity_damage", Who::Player);
             }
             self.sculk.last_health = Some(health);
+        }
+    }
+
+    /// `RedStoneOreBlock.stepOn`: standing on the ore lights it, unless the
+    /// entity is stepping carefully (`attack_block` only lights an unlit ore).
+    fn step_on_redstone_ore(&mut self, at: [f64; 3], carefully: bool) {
+        if carefully {
+            return;
+        }
+        // getOnPosLegacy: 0.2 below the feet.
+        let pos = [
+            at[0].floor() as i32,
+            (at[1] - 0.2).floor() as i32,
+            at[2].floor() as i32,
+        ];
+        if matches!(
+            &*self.block_name(pos),
+            "minecraft:redstone_ore" | "minecraft:deepslate_redstone_ore"
+        ) {
+            let _ = self.attack_block(pos);
         }
     }
 
@@ -1565,6 +1588,9 @@ impl Game<'_> {
             })
             .collect();
         for (id, at, on_ground, in_water, species, damaged) in snapshot {
+            if on_ground {
+                self.step_on_redstone_ore(at, false);
+            }
             let emits = !matches!(species, Species::Shulker);
             if emits {
                 self.entity_motion_events(Who::Mob(id), at, on_ground, in_water, false, false);
