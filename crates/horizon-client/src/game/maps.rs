@@ -774,9 +774,8 @@ impl Game<'_> {
                         (d * 2.0 + 0.5) as i8
                     }
                 };
-                let y = f64::from(yaw);
-                let adjusted = if y < 0.0 { y - 8.0 } else { y + 8.0 };
-                let rot = ((adjusted * 16.0 / 360.0) as i32 & 15) as u8;
+                // calculateRotation: the arrow spins in the Nether.
+                let rot = decoration_rotation(nether, game_time, f64::from(yaw));
                 let sprite = if inside {
                     Some("map/decorations/player")
                 } else if dx.abs() < 320.0 && dz.abs() < 320.0 {
