@@ -2148,8 +2148,13 @@ mod cover_tests {
     }
 
     /// Every question streaming asks gets the same answer with the grid.
+    ///
+    /// A debug build checks every fourth cell of each row, shifted by row and case so the cases still cover every
+    /// cell's position relative to the areas: the full check took 20 of the ~30 s of the crate's tests.
+    /// `cargo test --release -p horizon-client --lib the_grid_answers_as_the_scan` checks every cell.
     #[test]
     fn the_grid_answers_as_the_scan() {
+        let stride = if cfg!(debug_assertions) { 4 } else { 1 };
         let mut seed = 0x9E37_79B9_7F4A_7C15u64;
         let forced: HashSet<(i32, i32)> = [(40, -40)].into();
         for case in 0..60 {
@@ -2165,7 +2170,8 @@ mod cover_tests {
             let (scan, grid) = (ranges(None), ranges(Some(&cover)));
             let span = [4, 30, 120][case % 3] + 40;
             for z in -span..=span {
-                for x in -span..=span {
+                let first = -span + (z + case as i32).rem_euclid(stride);
+                for x in (first..=span).step_by(stride as usize) {
                     for m in 0..=ExtraCover::REACH + 2 {
                         assert_eq!(
                             scan.in_extra(x, z, m),

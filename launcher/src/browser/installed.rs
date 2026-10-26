@@ -170,6 +170,9 @@ pub fn install(
     home: &Path,
     progress: &dyn Fn(&str, f32),
 ) -> Result<Vec<Entry>, String> {
+    if project.source == SourceId::Horizon {
+        return super::horizon::install(project, home, progress);
+    }
     if project.kind == Kind::Mod {
         return super::java::install(source, project, everything, home, progress);
     }
@@ -248,7 +251,7 @@ pub fn remove(home: &Path, name: &str) -> Result<Entry, String> {
         .lookup(name)
         .cloned()
         .ok_or_else(|| format!("{name} wasn't installed by the browser."))?;
-    if entry.kind == Kind::Mod {
+    if entry.kind == Kind::Mod && entry.source != SourceId::Horizon {
         super::java::remove(home, &entry)?;
     } else {
         match fs::remove_file(home.join(&entry.file)) {
@@ -256,6 +259,9 @@ pub fn remove(home: &Path, name: &str) -> Result<Entry, String> {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(format!("{}: {e}", entry.file)),
         }
+    }
+    if let Some(id) = super::horizon::mod_id(&entry).filter(|_| entry.source == SourceId::Horizon) {
+        super::java::set_enabled(home, id, false)?;
     }
     installed
         .entries

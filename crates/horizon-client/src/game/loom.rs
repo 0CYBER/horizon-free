@@ -218,7 +218,7 @@ impl Game<'_> {
         oy: f32,
         draws: &[ScreenDraw],
         background: bool,
-    ) -> Option<Vec<(String, u32)>> {
+    ) -> Option<Vec<(horizon_client::text::Text, u32)>> {
         let atlas = &self.gui.atlas;
         let mut tooltip = None;
         let mut sheet: Option<String> = None;
@@ -261,7 +261,10 @@ impl Game<'_> {
                     ..
                 } => self.draw_banner_result(batch, ox + *x0 as f32, oy + *y0 as f32, base, layers),
                 ScreenDraw::Tooltip { key } => {
-                    tooltip = Some(vec![(self.translate(key, key), u32::MAX)]);
+                    tooltip = Some(vec![(
+                        horizon_client::text::Text::literal(self.translate(key, key)),
+                        u32::MAX,
+                    )]);
                 }
                 ScreenDraw::SpriteOf { id } => sheet = Some(id.clone()),
                 ScreenDraw::Fill {
@@ -314,7 +317,7 @@ impl Game<'_> {
         ox: f32,
         oy: f32,
         local: (f32, f32),
-    ) -> Option<Vec<(String, u32)>> {
+    ) -> Option<Vec<(horizon_client::text::Text, u32)>> {
         let s = self.station.as_ref()?;
         let l = &s.loom;
         let dye = s.inputs[1]

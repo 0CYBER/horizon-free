@@ -12,11 +12,11 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 
 | Part | Where | State |
 |---|---|---|
-| The contract (WIT) | `crates/horizon-mod-sdk/wit/horizon.wit` | 0.1: log, game-read, chat, hud, storage; tick, frame, chat and command hooks |
+| The contract (WIT) | `crates/horizon-mod-sdk/wit/horizon.wit` | 0.1: log, game-read, chat, hud, storage, command, ui; tick, frame, chat and command hooks |
 | SDK for mod authors | `crates/horizon-mod-sdk` | 0.1 |
-| Example mod | `crates/horizon-mod-sdk/examples/coords-hud` | coordinates, facing and time HUD, `/where`, `/coords` |
+| Example mods | `crates/horizon-mod-sdk/examples/coords-hud`, `examples/predator-missile` | coordinates, facing and time HUD, `/where`, `/coords`; `/missile`, a guided missile from vanilla commands |
 | Runtime | `crates/horizon-mods` | wasmtime 36 LTS, component model |
-| Authoring tool | `crates/cargo-horizon-mod` | `cargo horizon-mod new / build / run / check`, and the registry's CI (`registry build / review / list`) |
+| Authoring tool | `crates/cargo-horizon-mod` | `cargo horizon-mod new [--template code\|content] / build / run / check`, and the registry's CI (`registry build / review / list`) |
 | In the game | `crates/horizon-client/src/game/mods.rs`, Options > Mods | client mods |
 | Launcher mod browser (Modrinth, CurseForge with a key) | [mod-browser.md](mod-browser.md) | resource packs, modpacks |
 | Registry index (`index.json`, `.hpack`), signatures | `horizon_mods::index`, [api/mod-index.md](api/mod-index.md) | schema 1; launcher and website next |
@@ -86,6 +86,8 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | `chat` | `chat` | `show(text)`: a line only the local player sees, after the mod's name (8 per call) |
 | `hud` | `hud` | `set-panel(corner, lines)`, `clear()`: up to 16 lines of 256 characters |
 | `storage` | `storage` | `get(key)`, `set(key, value)`, `delete(key)`: a per-mod folder of up to 64 files, 4 MiB total, at most 1 MiB written per call |
+| `command` | `command` | `run(line)`: a vanilla command run as the player, with the player's permissions, after the hook returns (8 per call); mods' own commands are not run |
+| `ui` | `ui` | `open-screen`, `close-screen`, `set-settings`: a screen the mod owns and a page in Options > Mods, of text, item and list widgets the game lays out and draws with its own menus' code. **Experimental:** the manifest needs `experimental = ["ui"]` |
 
 | Hook (export) | When |
 |---|---|
@@ -112,7 +114,6 @@ loading. Ordered by what the first native ports need:
 | `target` | the crosshair's block or entity, with its state and NBT summary | Jade/WTHIT-style tooltips |
 | `inventory-read` | the player's inventory, held item, open container | AppleSkin, recipe viewers |
 | `recipes` | the recipe registry and lookups | JEI/EMI-style viewers |
-| `ui` | widgets: text, item icons, lists, a screen the mod owns, a settings page in Options > Mods | built from vanilla's widgets (`ui`) so it matches the menus |
 | `world-read` | blocks and biomes around the player, within the render distance | minimaps, schematics |
 | `render` | world-space lines, boxes and ghost blocks in a per-frame budget | Litematica-style placement, waypoints |
 | `registries` | new blocks, items, entities and recipes, mostly data: JSON models, textures, loot and recipes in the `.hmod`'s `assets/` and `data/` | server side; see [Multiplayer](#multiplayer) |
@@ -215,6 +216,7 @@ Benchmarks (`--benchmark`) never load mods.
 rustup target add wasm32-unknown-unknown
 cargo install --git https://github.com/ludovic111/horizon cargo-horizon-mod
 cargo horizon-mod new my-mod        # Cargo.toml, horizon-mod.toml, src/lib.rs
+                                    # (--template content: a content mod, no code)
 cd my-mod
 cargo horizon-mod run               # build, then start the game with it
 cargo horizon-mod build             # again after an edit: the running game reloads it
@@ -284,15 +286,21 @@ authors = ["..."]
 api = "0.1"                  # the API the SDK targets
 side = "client"              # client | server | both
 capabilities = ["game-read", "hud", "chat"]
+experimental = []            # experimental capabilities it uses, e.g. ["ui"]
 ```
 
 Unknown keys are refused, so a typo is an error, not a silently ignored
-permission.
+permission. An experimental capability (today `ui`) may change in any release
+([stability](api/stability.md)): a mod uses it only by naming it in
+`experimental` as well, so nobody depends on it by accident.
 
 ### Content mods (API 0.2)
 
 A mod with `api = "0.2"` and capability `registries` may carry `assets/` and
-`data/` in the `.hmod`, and needs no `mod.wasm` if it has no code. It adds
+`data/` in the `.hmod`, and needs no `mod.wasm` if it has no code
+(`cargo horizon-mod new --template content` starts one; `build` in a folder
+with no `Cargo.toml` packs the manifest, `assets/` and `data/`, and `check`
+reads it without a trial run). It adds
 blocks and items by declaring them in `data/<id>/horizon/block/*.json` and
 `data/<id>/horizon/item/*.json`, each copying a vanilla template
 ([modpacks.md](modpacks.md#registries-02-data-driven-blocks-and-items)):
@@ -378,6 +386,29 @@ none.
     "top": "carve", "bottom": "none", "rigid_junctions": true, "inflate": true } }
 ```
 
+## Publish your mod
+
+Horizon's registry lists mods, modpacks (`.hpack`) and resource packs made for Horizon, each reviewed before it is
+published. Players find them at [playhorizon.dev/mods](https://playhorizon.dev/mods) and in the launcher (Mods, then
+**Horizon** beside Modrinth), which checks every file before it installs it.
+
+1. Run `cargo horizon-mod check` on the file (above): the registry runs the same checks.
+2. Put the source somewhere public, under a licence that lets players run it: reviewers read it, and the file must be
+   built from it.
+3. Open [playhorizon.dev/mods/submit](https://playhorizon.dev/mods/submit), sign in with GitHub (it reads only your
+   public profile) and fill in the page: the file, its name and summary, licence, source address, and optionally a
+   minisign public key with the file's `.minisig`.
+4. The form checks the file again and opens a pull request in
+   [ludovic111/horizon-mods](https://github.com/ludovic111/horizon-mods) that adds `mods/<id>.toml`, with you as its
+   owner. That repository's checks run the file in the sandbox and post their report on the pull request; answer the
+   reviewers there.
+5. A reviewer merges it: within minutes the file is a release of horizon-mods, and the project is on the site and in
+   the launcher.
+
+An update is the same form with a new version; only the project's `owners` can publish one, signed with its key if it
+has one. A published file never changes. Without the form, open the pull request by hand (the repository's README
+says how). The formats: [api/mod-index.md](api/mod-index.md).
+
 ## Versions and compatibility
 
 - The API is the WIT package `horizon:mods@0.1.0`. New functions and
@@ -420,12 +451,10 @@ none.
   format: a `.hmod.minisig` beside it); the index pins each project's public
   key, so an update signed by another key is refused. Unsigned local files
   stay allowed, with an "unsigned" mark on the Mods page.
-- **Where mods come from.** Modrinth is where players already look and it
-  stores files with hashes, but its loader list is Modrinth's to extend: we ask
-  Modrinth to add a `horizon` loader. Until then (and as a fallback), the
-  launcher reads a small index of approved mods: a JSON file in a public Git
-  repository (id, versions, file URLs as GitHub release assets, SHA-256,
-  signing key). No server of our own is needed.
+- **Where mods come from.** Horizon's registry ([Publish your mod](#publish-your-mod)): reviewed pull requests in
+  [ludovic111/horizon-mods](https://github.com/ludovic111/horizon-mods), files as its release assets, and an
+  `index.json` on GitHub Pages that the launcher and the website read. A file the registry takes down
+  (`revoked.toml`) is refused by the launcher and turned off where installed.
 - **The launcher.** A Mods tab per installation: browse and search the index,
   install, update, turn on and off (it writes the same `horizon-mods.txt`),
   see capabilities before installing. The launcher's CLI and MCP tools gain
