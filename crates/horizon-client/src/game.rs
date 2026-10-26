@@ -4342,6 +4342,7 @@ impl Game<'_> {
         };
         self.eye += (camera_eye.unwrap_or(eye_height) - self.eye) * 0.5;
         let crouching = player.pose == horizon_client::pose::Pose::Crouching;
+        self.tick_soul_speed();
         self.tick_avatar(before, riding);
         self.end_spin_attack(spin_hit);
         self.record_combat(&events);

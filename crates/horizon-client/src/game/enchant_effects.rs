@@ -3,10 +3,15 @@
 //! unbreaking (`minecraft:item_damage`), sharpness/smite/bane and power
 //! (`minecraft:damage`), knockback, fire aspect, infinity (`minecraft:ammo_use`),
 //! thorns (`minecraft:post_attack`), mending (`minecraft:repair_with_xp`) and
-//! the armor attribute effects (respiration, depth strider, ...).
+//! the armor attribute effects (respiration, depth strider, ...) and Soul
+//! Speed's `location_changed` and `tick` effects.
 use super::Game;
-use horizon_client::{enchant::EffectContext, items::ItemStack};
-use horizon_core::random::RandomSource;
+use horizon_client::{
+    enchant::{EffectContext, Enchantments, level_value},
+    items::ItemStack,
+    particles::{ParticleOptions, ParticleType},
+};
+use horizon_core::{position::BlockPos, random::RandomSource};
 
 /// Where Mending found a damaged item (`EnchantedItemInUse.inSlot`).
 #[derive(Clone, Copy)]
@@ -460,6 +465,127 @@ impl Game<'_> {
         }
         ignite
     }
+    /// Soul Speed (`data/minecraft/enchantment/soul_speed.json`), the parts of
+    /// `Enchantment.runLocationChangedEffects` and `tick` that file uses. The
+    /// `location_changed` effects run when the player enters a new block, lands,
+    /// or its boots change:
+    /// - the speed and movement efficiency modifiers turn on over a soul speed
+    ///   block (not flying, not riding) and stay on while airborne, then off
+    ///   (`enchantment_active_check`);
+    /// - the boots lose 1 durability with a 4% chance when on such a block.
+    ///
+    /// Every fifth tick the player walking on one also gets soul particles and
+    /// sometimes a sound. A remote server applies and syncs all of this itself.
+    pub(super) fn tick_soul_speed(&mut self) {
+        const ID: &str = "minecraft:soul_speed";
+        let Some(player) = self.player.as_mut() else {
+            return;
+        };
+        if player.client_side {
+            return;
+        }
+        let level = self.armor[3]
+            .as_ref()
+            .map_or(0, |s| s.enchantment_level(ID));
+        let position = player.position;
+        let (on_ground, flying) = (player.ground.on_ground, player.flying);
+        let moved = position.subtract(player.old_position);
+        let (tick, width) = (player.health.tick_count, player.dimensions.width);
+        let fx = &mut player.location_effects;
+        let on_soul = fx.on_soul_speed_block;
+        let block = BlockPos::containing(position);
+        let changed_block = fx.block.replace(block) != Some(block);
+        let landed = std::mem::take(&mut fx.landed);
+        // Changed boots: `stopLocationBasedEffects`, then the effects run again.
+        let equipped = std::mem::replace(&mut fx.boots_level, level) != level;
+        let was_active = fx.applied_level;
+        let mut active = was_active > 0 && !equipped;
+        let mut wear = false;
+        if level > 0 && (changed_block || landed || equipped) {
+            let riding = self.riding.is_some();
+            let wanted = !riding && !flying && (on_soul || (active && !on_ground));
+            active = wanted;
+            wear = on_ground && on_soul && self.world.random.next_float() < 0.04;
+        }
+        fx.applied_level = if active { level } else { 0 };
+        // `Entity.getKnownMovement` horizontal speed of at least 1.0E-5.
+        let walking = moved.x * moved.x + moved.z * moved.z >= 1.0e-10;
+        let tick_effects = level > 0 && !flying && on_ground && walking && on_soul && tick % 5 == 0;
+        // The attribute effects were applied to the player before: swap them.
+        if was_active > 0 && (!active || equipped) {
+            for (attribute, id, _, op) in
+                soul_speed_modifiers(&self.res.stations().enchantments, was_active)
+            {
+                let _ = player.set_modifier(&attribute, &id, 0.0, &op, false);
+            }
+        }
+        if active && (was_active == 0 || equipped) {
+            for (attribute, id, amount, op) in
+                soul_speed_modifiers(&self.res.stations().enchantments, level)
+            {
+                let _ = player.set_modifier(&attribute, &id, amount, &op, true);
+            }
+        }
+        if wear && !self.creative {
+            self.wear_boots(1);
+        }
+        if tick_effects {
+            // `spawn_particles`: in the bounding box, 0.1 above the feet, thrown
+            // back against the movement (-0.2) and up (0.1).
+            let r = &mut self.world.random;
+            let x = position.x + (r.next_double() - 0.5) * f64::from(width);
+            let z = position.z + (r.next_double() - 0.5) * f64::from(width);
+            self.particles.send_particles(
+                &ParticleOptions::simple(ParticleType::Soul),
+                [x, position.y + 0.1, z],
+                [moved.x * -0.2, 0.1, moved.z * -0.2],
+                1.0,
+                0,
+            );
+            // `play_sound`: 35% chance, volume 0.6, pitch 0.6 to 1.0.
+            if r.next_float() < 0.35 {
+                let pitch = r.next_float() * 0.4 + 0.6;
+                self.audio.play(
+                    "minecraft:particle.soul_escape",
+                    Some([position.x, position.y, position.z]),
+                    0.6,
+                    pitch,
+                );
+            }
+        }
+    }
+    /// `ItemStack.hurtAndBreak` on the worn boots (`change_item_damage`):
+    /// Unbreaking applies, and they break when worn out.
+    fn wear_boots(&mut self, amount: u32) {
+        let Some(stack) = self.armor[3].clone() else {
+            return;
+        };
+        let loss = self.durability_loss(&stack, amount);
+        let max = self
+            .res
+            .items()
+            .get(&stack.item)
+            .map_or(0, |info| info.max_damage);
+        if max == 0 {
+            return;
+        }
+        let Some(boots) = self.armor[3].as_mut() else {
+            return;
+        };
+        boots.damage += loss;
+        if boots.damage >= max {
+            self.armor[3] = None;
+            if let Some(eye) = self.eye_position() {
+                self.audio.play(
+                    "minecraft:entity.item.break",
+                    Some(eye),
+                    0.8,
+                    0.8 + self.world.random.next_float() * 0.4,
+                );
+            }
+            self.apply_equipment();
+        }
+    }
     /// Enchantment attribute modifiers of worn armor (respiration, depth strider...).
     /// Each piece's modifier id ends with its slot (`EnchantmentAttributeEffect.idForSlot`),
     /// so the same enchantment on two pieces stacks instead of replacing itself.
@@ -482,4 +608,29 @@ impl Game<'_> {
         }
         self.potions.enchant_modifiers = wanted;
     }
+}
+
+/// Soul Speed's `attribute` effects at `level` (attribute, id, amount, operation),
+/// the id taking the boots slot like `EnchantmentAttributeEffect.idForSlot`.
+fn soul_speed_modifiers(
+    enchantments: &Enchantments,
+    level: u32,
+) -> Vec<(String, String, f64, String)> {
+    let Some(e) = enchantments.get("minecraft:soul_speed") else {
+        return Vec::new();
+    };
+    e.effects["minecraft:location_changed"][0]["effect"]["effects"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|a| a["type"] == "minecraft:attribute")
+        .map(|a| {
+            (
+                a["attribute"].as_str().unwrap_or("").to_owned(),
+                format!("{}/feet", a["id"].as_str().unwrap_or("")),
+                f64::from(level_value(&a["amount"], level)),
+                a["operation"].as_str().unwrap_or("add_value").to_owned(),
+            )
+        })
+        .collect()
 }
