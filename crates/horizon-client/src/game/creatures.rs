@@ -841,6 +841,7 @@ impl Game<'_> {
     pub(super) fn handle_mob_events(&mut self, events: Vec<MobEvent>) -> Result<()> {
         for e in events {
             match e {
+                MobEvent::SquidCycle { mob, at } => self.lan_entity_event(mob as i32, 19, at),
                 MobEvent::RabbitHop { mob, at } => self.lan_entity_event(mob as i32, 1, at),
                 MobEvent::Sound(name, at, volume, pitch)
                 | MobEvent::LocalSound(name, at, volume, pitch) => {
@@ -1546,7 +1547,10 @@ impl Game<'_> {
                 }
             }
             self.hurt_armor(amount);
-            self.thorns(from);
+            // The thorns hurt the entity that caused the hit, if there is one.
+            if let Some(a) = attacker.or(owner) {
+                self.thorns(a);
+            }
         }
         if raised {
             self.after_block(outcome, amount, attacker, projectile);
