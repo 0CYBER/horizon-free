@@ -2300,11 +2300,13 @@ impl Game<'_> {
         // Player.drop: the drop statistics.
         self.stats.add("dropped", &thrown.item, thrown.count as i32);
         self.stats.custom("drop", 1);
-        self.throw_from_eyes(thrown, eye);
+        self.throw_from_eyes(thrown, eye, true);
     }
     /// `Player.createItemStackToDrop`: an item entity thrown from the eyes
-    /// along the view direction.
-    fn throw_from_eyes(&mut self, thrown: ItemStack, eye: [f64; 3]) {
+    /// along the view direction. `thrown_from_hand` (`drop(stack, true)`, the
+    /// drop key) names the player as the thrower; `drop(stack, false)`, for
+    /// what no longer fits in the inventory, does not.
+    fn throw_from_eyes(&mut self, thrown: ItemStack, eye: [f64; 3], thrown_from_hand: bool) {
         let (yaw, pitch) = (
             f64::from(self.yaw).to_radians(),
             f64::from(self.pitch).to_radians(),
@@ -2318,7 +2320,7 @@ impl Game<'_> {
             yaw.cos() * pitch.cos() * 0.3 + spread.sin() * strength,
         ];
         self.spawn_item(thrown, [eye[0], eye[1] - 0.3, eye[2]], v, 40);
-        if self.lan_acting.is_none() {
+        if thrown_from_hand && self.lan_acting.is_none() {
             let uuid = self.level.ensure_player_uuid();
             self.dropped.last_mut().unwrap().thrower = Some(uuid);
         }
@@ -4681,7 +4683,7 @@ impl Game<'_> {
                 && let Some(stack) = self.carried.take()
                 && let Some(eye) = self.eye_position()
             {
-                self.throw_from_eyes(stack, eye);
+                self.throw_from_eyes(stack, eye, false);
             }
         }
         self.tick_world(running)
@@ -5789,7 +5791,8 @@ impl Game<'_> {
             if let Some(rest) = self.give(stack)
                 && let Some(eye) = self.eye_position()
             {
-                self.spawn_item(rest, [eye[0], eye[1] - 0.3, eye[2]], [0.0, 0.1, 0.0], 40);
+                // AbstractContainerMenu.dropOrPlaceInInventory: `drop(stack, false)`.
+                self.throw_from_eyes(rest, eye, false);
             }
         }
         self.craft_size = 2;
@@ -8705,7 +8708,8 @@ impl Game<'_> {
             }
             fn drop_stack(&mut self, stack: ItemStack) {
                 if let Some(eye) = self.0.eye_position() {
-                    self.0.spawn_item(stack, eye, [0.0, 0.1, 0.0], 40);
+                    // ItemUtils.createFilledResult: `player.drop(stack, false)`.
+                    self.0.throw_from_eyes(stack, eye, false);
                 }
             }
         }
@@ -9048,7 +9052,8 @@ impl Game<'_> {
                 } else if let Some(rest) = self.give(filled)
                     && let Some(eye) = self.eye_position()
                 {
-                    self.spawn_item(rest, eye, [0.0, 0.1, 0.0], 40);
+                    // ItemUtils.createFilledResult: `player.drop(stack, false)`.
+                    self.throw_from_eyes(rest, eye, false);
                 }
             }
             return Ok(UseResult::Success { swing: true });

@@ -276,7 +276,8 @@ impl Game<'_> {
         } else if let Some(rest) = self.give(filled)
             && let Some(eye) = self.eye_position()
         {
-            self.spawn_item(rest, eye, [0.0, 0.1, 0.0], 40);
+            // `player.drop(stack, false)`.
+            self.throw_from_eyes(rest, eye, false);
         }
     }
     /// Drinking a potion while right-click is held; true when handled.
