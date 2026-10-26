@@ -1694,8 +1694,14 @@ impl Mob {
     /// the last-hurt-by bookkeeping goals read.
     /// The `armor` and `armor_toughness` modifiers of worn humanoid armour.
     pub fn worn_armor(&self) -> (f32, f32) {
+        // An equine keeps its horse armor in `extra.head`: the item's `armor`
+        // and `armor_toughness` modifiers of the body slot.
         if equine::is_equine(self.species()) {
-            return (0.0, 0.0);
+            return self
+                .extra
+                .head
+                .as_deref()
+                .map_or((0.0, 0.0), spawning::horse_armor_stats);
         }
         [
             &self.extra.head,
