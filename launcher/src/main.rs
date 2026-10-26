@@ -2721,7 +2721,9 @@ impl Launcher {
                     }
                     _ if paste => {
                         if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                            this.proxy_input.push_str(text.trim());
+                            // A copied line, not a copied page: the field takes one address.
+                            let line = text.lines().next().unwrap_or(&text);
+                            this.proxy_input.push_str(line.trim());
                         }
                     }
                     _ if !k.modifiers.control && !k.modifiers.platform => {
@@ -2731,7 +2733,10 @@ impl Launcher {
                     }
                     _ => return,
                 }
-                this.proxy_input.truncate(256);
+                // `truncate` counts bytes, and a cut inside a character panics: count characters.
+                if this.proxy_input.chars().count() > 256 {
+                    this.proxy_input = this.proxy_input.chars().take(256).collect();
+                }
                 this.save_proxy();
                 cx.stop_propagation();
                 cx.notify();
@@ -2756,7 +2761,7 @@ impl Launcher {
         let value = self.proxy_input.trim().to_owned();
         self.settings.proxy = (!value.is_empty()).then_some(value);
         self.settings.save();
-        horizon_launcher::proxy::announce();
+        horizon_launcher::proxy::announce(self.settings.proxy.clone());
     }
 
     /// Settings' Microsoft accounts: who is signed in and plays, the sign-in with its code. The
@@ -3672,7 +3677,7 @@ fn main() {
     backend::exe_path();
     // What the launcher downloads goes through the player's proxy, if they set one: the parts
     // that build their own agents (`horizon-port-pack`) are told before anything starts.
-    horizon_launcher::proxy::announce();
+    horizon_launcher::proxy::announce(horizon_launcher::backend::Settings::load().proxy);
     if let Some(code) = cli::run() {
         std::process::exit(code);
     }

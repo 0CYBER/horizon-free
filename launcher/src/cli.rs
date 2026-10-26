@@ -731,7 +731,7 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 let value = value.ok_or("settings KEY VALUE: the value is missing")?;
                 set_setting(&mut settings, &key, &value)?;
                 settings.save();
-                horizon_launcher::proxy::announce();
+                horizon_launcher::proxy::announce(settings.proxy.clone());
             }
             let all = settings_json(&settings);
             if as_json {
