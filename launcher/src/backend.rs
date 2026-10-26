@@ -719,7 +719,7 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
         if entry.file_type()?.is_dir() {
             copy_dir(&entry.path(), &target)?;
         } else {
-            fs::copy(entry.path(), target)?;
+            horizon_prepare::clone_or_copy(&entry.path(), &target)?;
         }
     }
     Ok(())

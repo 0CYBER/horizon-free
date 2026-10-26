@@ -278,6 +278,11 @@ pub struct Streaming {
     cover: Option<ExtraCover>,
     /// Mesh the sections for drawing (false on a server thread).
     pub mesh: bool,
+    /// The pregeneration band (`set_band`).
+    band: Option<Band>,
+    /// The columns and the next row the band's decoration ranks were given
+    /// for (`set_band`).
+    band_ranked: Option<(i32, i32, i32)>,
 }
 /// Snapshot only after a scan found no missing candidates. Public range fields
 /// and `World::chunks` can change without going through Streaming, so compare
@@ -289,6 +294,7 @@ struct GenerationScan {
     radius: i32,
     extra: Vec<((i32, i32), i32)>,
     forced: HashSet<(i32, i32)>,
+    band: Option<Band>,
     chunk_revision: u64,
 }
 impl GenerationScan {
@@ -298,6 +304,7 @@ impl GenerationScan {
             && self.radius == ranges.radius
             && self.extra == ranges.extra
             && self.forced == *ranges.forced
+            && self.band.as_ref() == ranges.band
             && self.chunk_revision == world.chunks.membership_revision()
     }
     fn remember(&mut self, ranges: Ranges<'_>, world: &World) {
@@ -307,6 +314,7 @@ impl GenerationScan {
         self.extra.clear();
         self.extra.extend_from_slice(ranges.extra);
         self.forced.clone_from(ranges.forced);
+        self.band = ranges.band.copied();
         self.chunk_revision = world.chunks.membership_revision();
     }
 }
@@ -347,6 +355,10 @@ impl GenerationScan {
             {
                 let r = radius + margin.max(reach + 1);
                 runs.extend((center.1 - r..=center.1 + r).map(|z| (z, center.0 - r, center.0 + r)));
+            }
+            if let Some(band) = input.ranges.band {
+                let r = margin.max(reach + 1);
+                runs.extend((band.z0 - r..=band.z1 + r).map(|z| (z, band.x0 - r, band.x1 + r)));
             }
             runs.sort_unstable();
             let mut runs = runs.into_iter().peekable();
@@ -392,6 +404,7 @@ impl GenerationScan {
                     extra: input.ranges.extra,
                     forced: input.ranges.forced,
                     cover: input.ranges.cover,
+                    band: input.ranges.band,
                 };
                 self.remember(ranges, input.world);
             } else {
@@ -564,6 +577,8 @@ impl Streaming {
             extra: Vec::new(),
             cover: None,
             mesh: true,
+            band: None,
+            band_ranked: None,
         }
     }
     /// Shares generation resources, but gives distant work its own worker state.
@@ -916,6 +931,7 @@ impl Streaming {
                 p.is_some()
                     && i64::from(x - center.0).pow(2) + i64::from(z - center.1).pow(2) > r4 * r4
                     && !ranges.in_extra(x, z, 4)
+                    && !ranges.in_band(x, z, 4)
                     && !ranges
                         .forced
                         .iter()
@@ -985,6 +1001,7 @@ impl Streaming {
                 extra: &self.extra,
                 forced: &self.forced,
                 cover: ExtraCover::matching(&self.cover, &self.extra),
+                band: self.band.as_ref(),
             };
             let (protos, generating) = (&self.protos, &self.generating);
             self.decoration_order.retain(|x, z| {
@@ -1113,6 +1130,7 @@ impl Streaming {
                 extra: &self.extra,
                 forced: &self.forced,
                 cover: ExtraCover::matching(&self.cover, &self.extra),
+                band: self.band.as_ref(),
             };
             self.waiting.retain(|&(x, sy, z)| {
                 let back = ranges.in_view(x, z);
@@ -1189,6 +1207,7 @@ impl Streaming {
                 extra: &self.extra,
                 forced: &self.forced,
                 cover: ExtraCover::matching(&self.cover, &self.extra),
+                band: self.band.as_ref(),
             },
             world,
             generating: &self.generating,
@@ -1285,6 +1304,7 @@ impl Streaming {
             extra: &self.extra,
             forced: &self.forced,
             cover: ExtraCover::matching(&self.cover, &self.extra),
+            band: self.band.as_ref(),
         }
     }
     fn near_finished(&self, x: i32, z: i32, reach: i32) -> bool {
@@ -1354,6 +1374,66 @@ impl Streaming {
     fn in_range(&self, x: i32, z: i32, margin: i32) -> bool {
         self.ranges().in_range(x, z, margin)
     }
+    pub fn band(&self) -> Option<Band> {
+        self.band
+    }
+    /// Generate, light and keep the chunks of `band` (none: stop), and let
+    /// go of what earlier bands held as it falls out of range. The chunks a
+    /// band reaches are ranked for decoration row by row, as they first come
+    /// within reach, so that a task decorates in the same order however its
+    /// work is timed and shared among the workers.
+    pub fn set_band(&mut self, band: Option<Band>) {
+        if self.band == band {
+            return;
+        }
+        self.band = band;
+        self.generation_scan.exhausted = false;
+        let Some(band) = band else {
+            return;
+        };
+        // Decoration reaches two chunks past the band and generation three.
+        const REACH: i32 = 4;
+        let (x0, x1) = (band.x0 - REACH, band.x1 + REACH);
+        let first = match self.band_ranked {
+            Some((rx0, rx1, next)) if (rx0, rx1) == (x0, x1) => next,
+            _ => band.z0 - REACH,
+        };
+        let end = band.z1 + REACH;
+        for z in first..=end {
+            for x in x0..=x1 {
+                self.decoration_order.rank_or_append(x, z);
+            }
+        }
+        self.band_ranked = Some((x0, x1, end.max(first - 1) + 1));
+    }
+    /// What holds up the columns `keys`, for a task that stopped advancing:
+    /// how many are not loaded, loaded but unlit with a light job in flight,
+    /// and unlit with none (those whose neighbours are all loaded are queued
+    /// for light again).
+    pub fn unstick_light(&mut self, world: &mut World, keys: &[(i32, i32)]) -> [usize; 3] {
+        let mut counts = [0; 3];
+        for &key in keys {
+            if !world.chunks.contains_key(&key) {
+                counts[0] += 1;
+            } else if self.lit.contains(&key) {
+            } else if self.lighting.contains_key(&key) {
+                counts[1] += 1;
+            } else {
+                counts[2] += 1;
+                if Self::region(world, key.0, key.1).is_some() {
+                    world.dirty_light.insert(key);
+                }
+            }
+        }
+        counts
+    }
+    /// Wait up to `timeout` for a worker to finish a job; the next `update`
+    /// takes it. A server pumps generation with this between its ticks.
+    pub fn wait(&mut self, timeout: std::time::Duration) {
+        if let Ok(done) = self.results.recv_timeout(timeout) {
+            self.deferred.push(done);
+        }
+    }
 }
 /// `ChunkTrackingView.isInViewDistance`: whether the column (x, z) is drawn
 /// at this render distance around `center`, the camera's column
@@ -1373,6 +1453,53 @@ struct Ranges<'a> {
     /// `extra` as a grid, when one was made for it: `in_extra` without a
     /// scan of every area.
     cover: Option<&'a ExtraCover>,
+    band: Option<&'a Band>,
+}
+/// The chunks a pregeneration task (`/pregen`) wants lit now: rows `z0..=z1`
+/// of the columns `x0..=x1`, those within `circle` (a centre and a radius in
+/// chunks) when there is one. Like an extra area, it finishes its chunks and
+/// the ring around them, so that its own chunks can be lit, and generation
+/// reaches past that. A task moves it down a strip of columns a row at a
+/// time, so each chunk is generated once and only the rows in flight stay
+/// loaded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Band {
+    pub x0: i32,
+    pub x1: i32,
+    pub z0: i32,
+    pub z1: i32,
+    pub circle: Option<((i32, i32), i32)>,
+}
+impl Band {
+    /// Whether (x, z) lies within `margin` (Chebyshev) of one of the band's
+    /// chunks: the square of side `2 * margin + 1` around it meets the
+    /// rectangle at a point inside the circle.
+    pub fn within(&self, x: i32, z: i32, margin: i32) -> bool {
+        let (x0, x1) = (
+            x.saturating_sub(margin).max(self.x0),
+            x.saturating_add(margin).min(self.x1),
+        );
+        let (z0, z1) = (
+            z.saturating_sub(margin).max(self.z0),
+            z.saturating_add(margin).min(self.z1),
+        );
+        if x0 > x1 || z0 > z1 {
+            return false;
+        }
+        self.circle.is_none_or(|((cx, cz), r)| {
+            let dx = i64::from(cx.clamp(x0, x1)) - i64::from(cx);
+            let dz = i64::from(cz.clamp(z0, z1)) - i64::from(cz);
+            dx * dx + dz * dz <= i64::from(r) * i64::from(r)
+        })
+    }
+    /// The band's chunks go after the players' (lower runs first), row by
+    /// row, as the task wants them lit.
+    fn priority(&self, x: i32, z: i32) -> i64 {
+        const AFTER_PLAYERS: i64 = 1 << 40;
+        AFTER_PLAYERS
+            + (i64::from(z - self.z0 + 8).max(0) << 20)
+            + i64::from(x - self.x0 + 8).max(0)
+    }
 }
 /// For every column near the extra areas, how far it lies outside the
 /// nearest one's square (Chebyshev distance less its radius; 0 inside). A server has an area per player, and streaming asks of every
@@ -1468,10 +1595,14 @@ impl ExtraCover {
 impl Ranges<'_> {
     /// `distance`, or `rings` while the level loading screen is up.
     fn priority(&self, x: i32, z: i32, loading: bool) -> i64 {
-        if loading {
+        let own = if loading {
             self.rings(x, z)
         } else {
             self.distance(x, z)
+        };
+        match self.band {
+            Some(band) if band.within(x, z, 4) => own.min(band.priority(x, z)),
+            _ => own,
         }
     }
     /// Ring by ring: the Chebyshev distance to the nearest centre first, then
@@ -1532,10 +1663,18 @@ impl Ranges<'_> {
         let (dx, dz) = (gap(x - self.center.0), gap(z - self.center.1));
         let r = i64::from(self.radius + 1);
         // The extra areas are squares: their finished square grown by `reach`.
-        dx * dx + dz * dz <= r * r || self.in_extra(x, z, 1 + reach)
+        dx * dx + dz * dz <= r * r
+            || self.in_extra(x, z, 1 + reach)
+            || self.in_band(x, z, 1 + reach)
     }
     fn in_range(&self, x: i32, z: i32, margin: i32) -> bool {
-        self.in_main_range(x, z, margin) || self.in_extra(x, z, margin)
+        self.in_main_range(x, z, margin)
+            || self.in_extra(x, z, margin)
+            || self.in_band(x, z, margin)
+    }
+    /// Within `margin` of the pregeneration band.
+    fn in_band(&self, x: i32, z: i32, margin: i32) -> bool {
+        self.band.is_some_and(|b| b.within(x, z, margin))
     }
     /// Within `margin` of an extra area's square (Chebyshev distance, as
     /// vanilla's ticket levels spread).
@@ -1659,6 +1798,7 @@ mod tests {
                     extra: &self.extra,
                     forced: &self.forced,
                     cover: None,
+                    band: None,
                 },
                 world: &self.world,
                 generating: &self.generating,
@@ -1972,6 +2112,7 @@ mod tests {
                     extra: &[],
                     forced: &forced,
                     cover: None,
+                    band: None,
                 };
                 let square = |x: i32, z: i32, n: i32| {
                     (-n..=n).flat_map(move |dz| (-n..=n).map(move |dx| (x + dx, z + dz)))
@@ -2027,6 +2168,7 @@ mod tests {
             extra: &[],
             forced: &forced,
             cover: None,
+            band: None,
         };
         let at = |dx: i32, dz: i32| (2 + dx, -1 + dz);
         let key = |(x, z): (i32, i32), loading| r.priority(x, z, loading);
@@ -2053,6 +2195,7 @@ mod tests {
                     extra: &[((radius * 2 + 9, 3), 4)],
                     forced: &forced,
                     cover: None,
+                    band: None,
                 };
                 let span = radius * 3 + 20;
                 for x in -span..=span {
@@ -2093,6 +2236,7 @@ mod tests {
                 extra: &extra,
                 forced: &forced,
                 cover: None,
+                band: None,
             };
             let level = |x: i32, z: i32| 31 + ((x - 40).abs().max((z + 9).abs()) - view).max(0);
             for x in 40 - view - 8..=40 + view + 8 {
@@ -2148,8 +2292,13 @@ mod cover_tests {
     }
 
     /// Every question streaming asks gets the same answer with the grid.
+    ///
+    /// A debug build checks every fourth cell of each row, shifted by row and case so the cases still cover every
+    /// cell's position relative to the areas: the full check took 20 of the ~30 s of the crate's tests.
+    /// `cargo test --release -p horizon-client --lib the_grid_answers_as_the_scan` checks every cell.
     #[test]
     fn the_grid_answers_as_the_scan() {
+        let stride = if cfg!(debug_assertions) { 4 } else { 1 };
         let mut seed = 0x9E37_79B9_7F4A_7C15u64;
         let forced: HashSet<(i32, i32)> = [(40, -40)].into();
         for case in 0..60 {
@@ -2161,11 +2310,13 @@ mod cover_tests {
                 extra: &extra,
                 forced: &forced,
                 cover,
+                band: None,
             };
             let (scan, grid) = (ranges(None), ranges(Some(&cover)));
             let span = [4, 30, 120][case % 3] + 40;
             for z in -span..=span {
-                for x in -span..=span {
+                let first = -span + (z + case as i32).rem_euclid(stride);
+                for x in (first..=span).step_by(stride as usize) {
                     for m in 0..=ExtraCover::REACH + 2 {
                         assert_eq!(
                             scan.in_extra(x, z, m),
@@ -2218,6 +2369,7 @@ mod cover_tests {
                 extra: &extra,
                 forced: &forced,
                 cover,
+                band: None,
             };
             // The columns streaming asks about: everything kept, and the
             // generation scan's ring past it.

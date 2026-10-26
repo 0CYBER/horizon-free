@@ -52,9 +52,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - grindstone: a grindstone opens on the guest's screen; the enchanted sword the guest shift-clicks in
              shows the server's result, and the guest takes it with only its curse left and the
              experience orbs the server awards (#868);
-- anvil:     an anvil opens on the guest's screen; the guest repairs a sword with iron ingots and
-             renames it (ServerboundRenameItemPacket), takes it for the server's level cost, and the
-             server has the repaired, renamed sword (#868);
+- anvil:     each player repairs and renames a sword (ServerboundRenameItemPacket), takes it for
+             the server's level cost, and the server has the repaired, renamed sword (#868);
+             both players hear exactly one anvil sound for each result (#1907);
 - enchanting: an enchanting table opens on the guest's screen with the server's offers for the
              sword the guest puts in; the guest clicks the first offer and the server enchants the
              sword for a level and a lapis, and counts it in the guest's enchant_item stat (#868);
@@ -250,6 +250,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - falling:   an item and a falling block the host summons high up fall smoothly on the guest, a
              little further every tick between the server's updates (every 20 ticks), as their own
              client tick moves them (they used to hang, then jump down once a second, #1568).
+- instant_digging: an instant survival break leaves no repeated stone hit sounds or stale server dig (#1908).
+- replant:   flowers and crops replanted after a short harvest click stay planted for both players;
+             the server forgets the completed instant break (#1880).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -1620,6 +1623,12 @@ def check_grindstone(host, guest, out):
 
 
 def check_anvil(host, guest, out):
+    # AnvilMenu.onTake emits one level event to everyone, including the user.
+    # Exercise both the in-frame host and a remote user (both remote with --server-thread).
+    return {actor.name: check_anvil_user(actor, (host, guest), out) for actor in (guest, host)}
+
+
+def check_anvil_user(guest, listeners, out):
     guest('command', command='gamemode survival')
     guest('command', command='clear @s')
     guest('command', command='xp set @s 5 levels')
@@ -1638,8 +1647,12 @@ def check_anvil(host, guest, out):
     menu = guest.raw('menu')
     offered = (menu['info']['anvil_cost'], station_slots(guest).get(650))
     guest.shot(out, 'anvil-rename')
+    sounds = ('minecraft:block.anvil.use', 'minecraft:block.anvil.destroy')
+    before = {g.name: sum(heard(g, s) for s in sounds) for g in listeners}
     guest.raw('click-slot', 650, 'shift')
-    guest.wait(10)
+    guest.wait(20)
+    sound_counts = {g.name: sum(heard(g, s) for s in sounds) - before[g.name] for g in listeners}
+    assert sound_counts == {g.name: 1 for g in listeners}, f'anvil sounds: {sound_counts}'
     left = station_slots(guest)
     close_station(guest, at)
     sword = server_reply(guest, 'data get entity @s Inventory[{id:"minecraft:iron_sword"}].components',
@@ -1653,7 +1666,7 @@ def check_anvil(host, guest, out):
     want = {'offered': (4, ('minecraft:iron_sword', 1)), 'left': {}, 'name': True, 'damage': True,
             'levels': 1, 'ingots': 0}
     assert seen == want, f'the anvil on the guest: {seen} ({sword!r})'
-    return seen
+    return {**seen, 'heard': sound_counts}
 
 
 def check_smithing(host, guest, out):
@@ -3762,17 +3775,21 @@ def check_frames(host, guest, out):
         # Within a survival player's 3 blocks of reach: a frame on a wall, an armor stand beside it.
         player('command', command=f'fill {x - 2} {y} {z + 1} {x + 2} {y + 2} {z + 2} minecraft:air')
         player('command', command=f'fill {x - 2} {y} {z + 3} {x + 2} {y + 2} {z + 3} minecraft:stone')
-        player('command', command=f'summon minecraft:item_frame {x + 0.5} {y + 1.5} {z + 2.97} '
+        frame_kind = 'item_frame' if label == 'host' else 'glow_item_frame'
+        player('command', command=f'summon minecraft:{frame_kind} {x + 0.5} {y + 1.5} {z + 2.97} '
                f'{{block_pos:[I;{x},{y + 1},{z + 2}],Facing:2b}}')
         player('command', command=f'summon minecraft:armor_stand {x - 1.5} {y} {z + 1.5}')
         player('command', command='clear @s')
-        player('command', command='item replace entity @s weapon.mainhand with minecraft:diamond')
+        frame_name = f'{label} framed diamond'
+        player('command', command='item replace entity @s weapon.mainhand with '
+               f"minecraft:diamond[minecraft:custom_name='{frame_name}']")
         player.wait(30)
         try:
             frame = [o for o in player('status')['objects'] if o['kind'].endswith('item_frame')
                      and o['position'] == [x, y + 1, z + 2]]
             assert frame, f'the {label} sees no item frame at {[x, y + 1, z + 2]}'
             player.raw('look-at', f'{x + 0.5:.2f}', f'{y + 1.5:.2f}', f'{z + 2.95:.2f}')
+            assert frame_name not in (player('status').get('name_tags') or []), 'empty frame name visible'
             player.raw('mouse', 'right', 'click')
             player.wait(10)
             player.raw('mouse', 'right', 'click')
@@ -3780,6 +3797,15 @@ def check_frames(host, guest, out):
             frame = [o for o in player('status')['objects'] if o['id'] == frame[0]['id']][0]
             assert frame['item'] == 'minecraft:diamond', f'the {label}\'s frame holds {frame["item"]}'
             assert frame['rotation'] == 1, f'the {label}\'s frame turned to {frame["rotation"]}'
+            assert frame_name in (player('status').get('name_tags') or []), \
+                f"the {label}'s targeted frame has no item name"
+            player.shot(out, f'{label}-framed-item-name')
+            player.raw('key', 'f1', 'tap')
+            player.wait(2)
+            assert frame_name not in (player('status').get('name_tags') or []), 'F1 left the frame name visible'
+            player.raw('key', 'f1', 'tap')
+            player.raw('look-at', f'{x + 2:.2f}', f'{y + 1.5:.2f}', f'{z + 2.95:.2f}')
+            assert frame_name not in (player('status').get('name_tags') or []), 'untargeted frame name visible'
             theirs = [o for o in other('status')['objects'] if o['kind'].endswith('item_frame')
                       and o['position'] == [x, y + 1, z + 2]]
             assert theirs and theirs[0]['item'] == 'minecraft:diamond' and theirs[0]['rotation'] == 1, \
@@ -5396,6 +5422,42 @@ CHECKS += ['digging']
 CHECK_FNS.update(digging=check_digging)
 
 
+def check_instant_digging(host, guest, out):
+    """#1908: an instant survival START has no STOP. ServerPlayerGameMode.tick
+    forgets a dig once its block is air; it must neither hit air nor break a replacement.
+    Exercise the in-frame host and network guest (both are clients with --server-thread).
+    """
+    result = {}
+    for label, player in (('host', host), ('guest', guest)):
+        x, y, z = (int(v // 1) for v in pos_of(player))
+        cell = (x, y + 1, z + 2)
+        player('command', command='gamemode survival')
+        player('command', command='clear @s')
+        host('command', command=f'fill {x - 1} {y} {z + 1} {x + 1} {y + 3} {z + 4} minecraft:air')
+        host('command', command=f'setblock {x} {y} {z + 2} minecraft:sand')
+        host('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} minecraft:dead_bush')
+        player.wait(10)
+        before = heard(player, 'minecraft:block.stone.hit')
+        player.raw('look-at', x + 0.5, y + 1.4, z + 2.5)
+        player.raw('mouse', 'left', 'click')
+        player.wait(20)
+        broken = host.raw('block', *cell).get('block')
+        hits = heard(player, 'minecraft:block.stone.hit') - before
+        host('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} minecraft:dead_bush')
+        player.wait(20)
+        replacement = host.raw('block', *cell).get('block')
+        result[label] = {'broken': broken, 'stone_hits': hits, 'replacement': replacement}
+        assert broken == 'minecraft:air', f'{label}: the bush did not break: {result}'
+        assert hits == 0, f'{label}: hitting air after an instant break: {result}'
+        assert replacement == 'minecraft:dead_bush', f'{label}: the server kept digging: {result}'
+        host('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} minecraft:air')
+    return result
+
+
+CHECKS += ['instant_digging']
+CHECK_FNS.update(instant_digging=check_instant_digging)
+
+
 def check_vehicles(host, guest, out):
     """The host and the guest each (#1551):
     - in creative, break a block and have it put back: the server's dig ends with the break
@@ -6396,6 +6458,72 @@ def check_sprint_fov(host, guest, out):
 
 CHECKS += ['sprint-fov']
 CHECK_FNS['sprint-fov'] = check_sprint_fov
+
+
+def check_replant(host, guest, out):
+    """Instant breaks leave no server dig that can destroy a replacement (#1880).
+
+    ServerPlayerGameMode.handleBlockBreakAction's insta-mine branch finishes on
+    START; MultiPlayerGameMode sends no STOP or ABORT when attack is released.
+    Exercise actual flower placement and seed planting after a short click.
+    """
+    spots = apart(host, guest)
+    seen = {}
+    host('command', command='gamerule random_tick_speed 0')
+    try:
+        for label, player in (('host', host), ('guest', guest)):
+            x, y, z = spots[label]
+            cell = (x, y, z + 2)
+
+            def observe(block):
+                # The integrated host is itself a client: wait for both views.
+                for _ in range(40):
+                    blocks = [g.raw('block', *cell).get('block') for g in (host, guest)]
+                    if blocks == [f'minecraft:{block}'] * 2:
+                        return blocks
+                    host.wait(2)
+                raise AssertionError(f'{label} expected {block} on both clients: {blocks}')
+
+            for mode, block, item, soil in (
+                ('survival', 'dandelion', 'dandelion', 'dirt'),
+                ('survival', 'wheat', 'wheat_seeds', 'farmland[moisture=7]'),
+                ('survival', 'carrots', 'carrot', 'farmland[moisture=7]'),
+                ('creative', 'dandelion', 'dandelion', 'dirt'),
+            ):
+                player('command', command=f'gamemode {mode}')
+                player('command', command='clear @s')
+                player('command', command=f'item replace entity @s weapon.mainhand with minecraft:{item} 8')
+                player('command', command=f'setblock {x} {y - 1} {z + 2} minecraft:{soil}')
+                player('command', command=f'setblock {x} {y} {z + 2} minecraft:{block}')
+                player.wait(5)
+                observe(block)
+                # Flowers' narrow outlines have a position-dependent offset.
+                for dx in (0.0, -0.2, 0.2):
+                    player.raw('look-at', x + 0.5 + dx, y + (0.3 if block == 'dandelion' else 0.1), z + 2.5)
+                    target = player('looking_at').get('block') or {}
+                    if target.get('pos') == list(cell):
+                        break
+                assert target.get('pos') == list(cell), f'{label} does not aim at {block}: {target}'
+                player.raw('mouse', 'left', 'click')
+                player.wait(5)
+                observe('air')
+                # Keep aiming at the supporting soil and use the held flower/seeds.
+                player.raw('mouse', 'right', 'click')
+                player.wait(3)
+                observe(block)
+                player.wait(20)  # past the stale dig's five-tick destroy delay
+                key = f'{label} {mode} {block}'
+                seen[key] = [g.raw('block', *cell).get('block') for g in (host, guest)]
+                player.shot(out, f'replant-{mode}-{block}')
+                assert seen[key] == [f'minecraft:{block}'] * 2, f'{key}: {seen}'
+                player('command', command=f'setblock {x} {y} {z + 2} minecraft:air')
+    finally:
+        host('command', command='gamerule random_tick_speed 3')
+    return seen
+
+
+CHECKS += ['replant']
+CHECK_FNS['replant'] = check_replant
 
 
 if __name__ == '__main__':
