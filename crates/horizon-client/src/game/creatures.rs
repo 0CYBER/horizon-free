@@ -659,6 +659,7 @@ impl Game<'_> {
         self.sync_riders();
         self.tick_skeleton_traps();
         self.tick_apparition();
+        self.guardian_bubbles();
         self.villager_reputation_tick();
         self.merchant_tick();
         self.villager_pickups();
@@ -3252,6 +3253,60 @@ impl Game<'_> {
                         + f64::from(m.height()) * 0.5,
                     m.previous.z + (m.position.z - m.previous.z) * alpha,
                 ))
+            }
+        }
+    }
+    /// `Guardian.aiStep` on a client: two bubbles a tick trailing a guardian
+    /// that swims along, and bubbles up the beam to its target. The server
+    /// never draws them, so the mob's own random stays untouched.
+    pub(super) fn guardian_bubbles(&mut self) {
+        use horizon_client::mobs::guardian;
+        use horizon_client::particles::{ParticleOptions, ParticleType};
+        let mut swimming = Vec::new();
+        let mut beams = Vec::new();
+        for m in &self.mobs {
+            if !m.alive() || !matches!(m.species(), Species::Guardian | Species::ElderGuardian) {
+                continue;
+            }
+            let at = [m.position.x, m.position.y, m.position.z];
+            if m.extra.flag2 && m.fluids.in_water {
+                let (width, height, _) = m.dims();
+                swimming.push((at, width, height, m.view_vector()));
+            }
+            if let Some((_, scale)) = guardian::beam(m, 0.0)
+                && let Some(t) = self.beam_target(m.ai.target, 1.0)
+            {
+                beams.push(([at[0], m.eye_y(), at[2]], [t.x, t.y, t.z], f64::from(scale)));
+            }
+        }
+        let bubble = ParticleOptions::simple(ParticleType::Bubble);
+        for (at, width, height, view) in swimming {
+            for _ in 0..2 {
+                let (x, y, z) = {
+                    let r = self.particles.random();
+                    (r.next_double(), r.next_double(), r.next_double())
+                };
+                let p = [
+                    at[0] + width * (2.0 * x - 1.0) * 0.5 - view[0] * 1.5,
+                    at[1] + height * y - view[1] * 1.5,
+                    at[2] + width * (2.0 * z - 1.0) * 0.5 - view[2] * 1.5,
+                ];
+                self.particles.add(&bubble, p, [0.0; 3]);
+            }
+        }
+        for (eye, target, scale) in beams {
+            let d = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
+            let length = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            if length <= 0.0 {
+                continue;
+            }
+            let mut dist = self.particles.random().next_double();
+            while dist < length {
+                let r = self.particles.random();
+                dist += 1.8 - scale + r.next_double() * (1.7 - scale);
+                let f = dist / length;
+                let p = [eye[0] + d[0] * f, eye[1] + d[1] * f, eye[2] + d[2] * f];
+                self.particles.add(&bubble, p, [0.0; 3]);
             }
         }
     }
