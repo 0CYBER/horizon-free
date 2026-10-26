@@ -41,7 +41,7 @@ mod ui_bindings {
     });
 }
 pub use bindings::horizon::mods::{
-    game::{Clock, Player},
+    game::{Clock, Hit, Player},
     hud::{Corner, Line},
 };
 use bindings::{
@@ -89,6 +89,8 @@ const FUEL_FRAME: u64 = 10_000_000;
 const FUEL_EVENT: u64 = 100_000_000;
 /// Chat lines a mod may show per call, HUD lines and their length.
 const CHAT_PER_CALL: usize = 8;
+/// How far `game.raycast` sees, in blocks.
+pub const RAYCAST_MAX: f32 = 1024.0;
 const HUD_LINES: usize = 16;
 const LINE_CHARS: usize = 256;
 /// Total bytes a mod's `storage` may hold on disk, across all its keys.
@@ -124,6 +126,10 @@ pub struct Snapshot {
     pub font_widths: Arc<[f32]>,
     /// The players on the server, for server mods.
     pub players: Vec<ServerPlayer>,
+    /// The first block along the player's view within [`RAYCAST_MAX`] and
+    /// its distance from the eye, for `game.raycast`; the game works it out
+    /// only while a mod calls it ([`Mods::wants_raycast`]).
+    pub view_hit: Option<(f32, Hit)>,
 }
 
 /// Which mods a game starts: the window's game the client mods, the game
@@ -227,6 +233,8 @@ struct Running {
     /// server mod.
     ui: Option<UiHost>,
     hooks: Hooks,
+    /// It imports `game.raycast`.
+    raycasts: bool,
 }
 
 /// A running mod's exports and the hooks its `init` asked for.
@@ -490,7 +498,12 @@ impl Mods {
             free
         });
         self.out.append(&mut store.data_mut().out);
-        Ok(Some(Running { store, ui, hooks }))
+        Ok(Some(Running {
+            store,
+            ui,
+            hooks,
+            raycasts: functions.iter().any(|f| f == "game.raycast"),
+        }))
     }
 
     /// True when at least one mod runs: the game skips its mod work otherwise.
@@ -742,6 +755,13 @@ impl Mods {
         self.entries
             .iter()
             .filter_map(|e| e.run.as_ref()?.store.data().corner.as_ref())
+    }
+    /// Some running mod calls `game.raycast`: the snapshot needs a
+    /// [`Snapshot::view_hit`].
+    pub fn wants_raycast(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|e| e.run.as_ref().is_some_and(|r| r.raycasts))
     }
     /// Some running mod has a `frame` hook: the game refreshes the snapshot
     /// every frame for it.
@@ -1092,6 +1112,11 @@ impl game::Host for State {
     }
     fn get_clock(&mut self) -> Option<Clock> {
         self.snapshot.clock
+    }
+    fn raycast(&mut self, distance: f32) -> Option<Hit> {
+        let (at, hit) = self.snapshot.view_hit.as_ref()?;
+        // NaN compares false: no hit.
+        (*at <= distance.min(RAYCAST_MAX) && !distance.is_nan()).then(|| hit.clone())
     }
 }
 impl State {
