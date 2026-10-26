@@ -136,12 +136,13 @@ pub fn register(m: &mut Mob) {
             }
             // The AbstractSkeleton constructor's reassessWeaponGoal, after
             // registerGoals; the weapon itself comes with finalizeSpawn.
-            let interval = if matches!(species, S::Bogged | S::Parched) {
-                70
+            // getHardAttackInterval / getAttackInterval.
+            let (hard, normal) = if matches!(species, S::Bogged | S::Parched) {
+                (50, 70)
             } else {
-                40
+                (20, 40)
             };
-            m.ai.goals.add(4, SkeletonWeapon::new(interval));
+            m.ai.goals.add(4, SkeletonWeapon::new(hard, normal));
         }
         _ => {}
     }
@@ -524,13 +525,20 @@ pub struct SkeletonWeapon {
     bow: BowAttack,
     melee: MeleeAttack,
     use_bow: bool,
+    /// The weapon the goal was last reassessed for.
+    assessed: Option<bool>,
+    hard_interval: i32,
+    normal_interval: i32,
 }
 impl SkeletonWeapon {
-    pub fn new(bow_interval: i32) -> Self {
+    pub fn new(hard_interval: i32, normal_interval: i32) -> Self {
         Self {
-            bow: BowAttack::new(1.0, bow_interval, 15.0),
+            bow: BowAttack::new(1.0, normal_interval, 15.0),
             melee: MeleeAttack::new(1.2, false),
             use_bow: false,
+            assessed: None,
+            hard_interval,
+            normal_interval,
         }
     }
 }
@@ -556,6 +564,18 @@ impl Goal for SkeletonWeapon {
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         // The goal registered for the weapon in hand.
         self.use_bow = holding_bow(m);
+        // reassessWeaponGoal: a bow gets the hard interval only on Hard; it
+        // is picked again when the weapon changes (the first check after
+        // spawning or loading stands for finalizeSpawn and
+        // readAdditionalSaveData).
+        if self.assessed != Some(self.use_bow) {
+            self.assessed = Some(self.use_bow);
+            self.bow.interval_min = if cx.w.difficulty.hard {
+                self.hard_interval
+            } else {
+                self.normal_interval
+            };
+        }
         if self.use_bow {
             self.bow.can_use(m, cx)
         } else {
