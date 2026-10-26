@@ -17,6 +17,8 @@ use horizon_core::{
     random::RandomSource,
 };
 
+pub(super) const FIREWORK_EXPLODE_EVENT: i8 = 17;
+
 pub(super) struct Rocket {
     /// The entity id a server tracks it by (0 until it is tracked).
     pub id: u32,
@@ -261,6 +263,14 @@ impl Game<'_> {
     /// `FireworkRocketEntity.explode` and `dealExplosionDamage`.
     fn explode_rocket(&mut self, r: &Rocket) {
         let at = [r.position.x, r.position.y, r.position.z];
+        // FireworkRocketEntity.explode broadcasts before discard. Send now:
+        // tick_lan removes missing tracked entities before flushing effects.
+        if r.id != 0
+            && let Some(host) = &self.lan
+        {
+            host.hub
+                .entity_event(r.id as i32, FIREWORK_EXPLODE_EVENT, at);
+        }
         if !r.explosions.is_empty() {
             let damage = 5.0 + r.explosions.len() as f32 * 2.0;
             let from = r.position;
@@ -321,6 +331,16 @@ impl Game<'_> {
         let v = [r.velocity.x, r.velocity.y, r.velocity.z];
         self.particles
             .fireworks(at, v, r.explosions.clone(), camera);
+    }
+    /// FireworkRocketEntity.handleEntityEvent: use the synchronized item data.
+    pub(super) fn remote_firework_explosion(&mut self, id: i32) {
+        let camera = self.eye_position();
+        if let Some(r) = self.rockets.iter().find(|r| r.id == id as u32) {
+            let at = [r.position.x, r.position.y, r.position.z];
+            let v = [r.velocity.x, r.velocity.y, r.velocity.z];
+            self.particles
+                .fireworks(at, v, r.explosions.clone(), camera.unwrap_or(at));
+        }
     }
     /// `dealExplosionDamage` on a player that is not the rocket's
     /// `attachedToEntity`: within 5 blocks, when the rocket sees its feet or

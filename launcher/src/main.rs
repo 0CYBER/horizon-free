@@ -18,6 +18,7 @@ mod mcp;
 mod modpacks_page;
 mod mods_page;
 mod mods_project;
+mod partner;
 mod perf;
 mod scrollbar;
 mod servers_page;
@@ -186,6 +187,10 @@ struct Launcher {
     args_input: String,
     args_focused: bool,
     args_focus: FocusHandle,
+    /// Settings' Proxy field, the same way (`proxy`).
+    proxy_input: String,
+    proxy_focused: bool,
+    proxy_focus: FocusHandle,
     /// Opt-in data collection: the player's answer and Settings' section (`collection`).
     collection: collection::Collection,
     /// Settings' "Connect an AI agent" (`agents_page`).
@@ -301,6 +306,9 @@ impl Launcher {
             args_input: settings.game_args.clone(),
             args_focused: false,
             args_focus: cx.focus_handle(),
+            proxy_input: settings.proxy.clone().unwrap_or_default(),
+            proxy_focused: false,
+            proxy_focus: cx.focus_handle(),
             settings,
             links: backend::Links::default(),
             preparing: false,
@@ -2123,7 +2131,8 @@ impl Launcher {
         if let Some(crash) = self.crash.clone() {
             page = page.child(self.crash_notice(crash, cx));
         }
-        page
+        // Below everything the player needs to start, so it never moves Play.
+        page.child(partner::banner("partner-home", 560., &t))
     }
 
     /// "Horizon crashed": the report and the logs, and where to report it.
@@ -2539,28 +2548,30 @@ impl Launcher {
                         Some(opening.into_any_element()),
                         &t,
                     ))
+                    .child(group("Network", "globe"))
+                    .child(self.proxy_row(n + 4, cx))
                     .child(group("Game", "gamepad"))
-                    .child(self.game_args_row(n + 4, cx))
+                    .child(self.game_args_row(n + 5, cx))
                     .child(group("AI", "terminal"))
-                    .child(self.no_ai_row(n + 4, cx))
+                    .child(self.no_ai_row(n + 6, cx))
                     .child(group("About", "info-box"))
-                    .child(index_row(n + 5, "Horizon", Some(plain(&horizon)), horizon_action, &t))
+                    .child(index_row(n + 7, "Horizon", Some(plain(&horizon)), horizon_action, &t))
                     .child(index_row(
-                        n + 6,
+                        n + 8,
                         "Launcher",
                         Some(plain(&launcher)),
                         launcher_action,
                         &t,
                     ))
                     .child(index_row(
-                        n + 7,
+                        n + 9,
                         "Data folder",
                         Some(mono(short(&backend::data_dir()))),
                         None,
                         &t,
                     ))
                     .child(index_row(
-                        n + 8,
+                        n + 10,
                         "Logs",
                         Some(mono(format!(
                             "{}  ·  crash reports beside it",
@@ -2579,7 +2590,7 @@ impl Launcher {
                     ))
                     .when(cfg!(target_os = "linux"), |d| {
                         d.child(index_row(
-                            n + 9,
+                            n + 11,
                             "Applications menu",
                             Some(plain(if self.settings.desktop_entry() {
                                 "Horizon and its icon are in your desktop's menu."
@@ -2666,6 +2677,93 @@ impl Launcher {
             Some(field.into_any_element()),
             &t,
         )
+    }
+
+    /// Settings' Proxy row: the HTTP proxy every download and sign-in goes through, kept in
+    /// `settings.json` and read back by `proxy.rs` on each request.
+    fn proxy_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let focused = self.proxy_focused;
+        let field = div()
+            .id("proxy")
+            .track_focus(&self.proxy_focus)
+            .flex()
+            .items_center()
+            .w(px(300.))
+            .h(px(30.))
+            .px(px(12.))
+            .overflow_hidden()
+            .border_2()
+            .border_color(if focused { t.accent } else { t.outline })
+            .bg(t.well)
+            .font_family(theme::MONO)
+            .text_size(px(12.))
+            .cursor_text()
+            .child(if self.proxy_input.is_empty() && !focused {
+                div()
+                    .text_color(t.muted)
+                    .child("For example http://127.0.0.1:7890")
+            } else {
+                // The end of a long line stays in view while typing.
+                let chars: Vec<char> = self.proxy_input.chars().collect();
+                let shown: String = chars[chars.len().saturating_sub(44)..].iter().collect();
+                div().text_color(t.ink).child(shown)
+            })
+            .when(focused, |d| d.child(div().w(px(1.)).h(px(14.)).bg(t.ink)))
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                window.focus(&this.proxy_focus);
+                cx.notify();
+            }))
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
+                let k = &ev.keystroke;
+                let paste = k.key == "v" && (k.modifiers.control || k.modifiers.platform);
+                match k.key.as_str() {
+                    "backspace" => {
+                        this.proxy_input.pop();
+                    }
+                    _ if paste => {
+                        if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
+                            // A copied line, not a copied page: the field takes one address.
+                            let line = text.lines().next().unwrap_or(&text);
+                            this.proxy_input.push_str(line.trim());
+                        }
+                    }
+                    _ if !k.modifiers.control && !k.modifiers.platform => {
+                        if let Some(ch) = &k.key_char {
+                            this.proxy_input.push_str(ch);
+                        }
+                    }
+                    _ => return,
+                }
+                // `truncate` counts bytes, and a cut inside a character panics: count characters.
+                if this.proxy_input.chars().count() > 256 {
+                    this.proxy_input = this.proxy_input.chars().take(256).collect();
+                }
+                this.save_proxy();
+                cx.stop_propagation();
+                cx.notify();
+            }));
+        // A half-typed address is no reason to complain; one left behind is.
+        let detail = match (focused, horizon_launcher::proxy::refuse(&self.proxy_input)) {
+            (false, Some(why)) => div().text_color(t.danger).child(why).into_any_element(),
+            _ => div()
+                .child(
+                    "Downloads, sign-ins and updates go through this HTTP proxy \
+                     (http://host:port). Empty means none: HTTPS_PROXY is used instead when the \
+                     launcher was started with one.",
+                )
+                .into_any_element(),
+        };
+        index_row(n, "Proxy", Some(detail), Some(field.into_any_element()), &t)
+    }
+
+    /// Keeps the Proxy field in `settings.json`, and tells the parts that build their own agents
+    /// (`horizon-port-pack`) which proxy to use.
+    fn save_proxy(&mut self) {
+        let value = self.proxy_input.trim().to_owned();
+        self.settings.proxy = (!value.is_empty()).then_some(value);
+        self.settings.save();
+        horizon_launcher::proxy::announce(self.settings.proxy.clone());
     }
 
     /// Settings' Microsoft accounts: who is signed in and plays, the sign-in with its code. The
@@ -3317,6 +3415,7 @@ impl Render for Launcher {
         self.friend_focused = self.friend_focus.is_focused(window);
         self.mods.note_focus(window);
         self.args_focused = self.args_focus.is_focused(window);
+        self.proxy_focused = self.proxy_focus.is_focused(window);
         let size = window.viewport_size();
         let banner_width = f32::from(size.width) - theme::SIDEBAR - scrollbar::GUTTER;
         let content = match self.page {
@@ -3578,6 +3677,9 @@ fn main() {
     }
     perf::process_started();
     backend::exe_path();
+    // What the launcher downloads goes through the player's proxy, if they set one: the parts
+    // that build their own agents (`horizon-port-pack`) are told before anything starts.
+    horizon_launcher::proxy::announce(horizon_launcher::backend::Settings::load().proxy);
     if let Some(code) = cli::run() {
         std::process::exit(code);
     }

@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class RemoteMiningTests(unittest.TestCase):
     def test_break_timing_and_packets(self):
         source = (ROOT / "crates/horizon-client/src/game/remote.rs").read_text()
-        start = source.index("    fn remote_mining(")
+        start = source.index("    pub(super) fn stop_remote_mining(")
         end = source.index("    /// MultiPlayerGameMode.destroyBlock", start)
         fixture = r'''
 #![allow(dead_code)]
@@ -33,8 +33,11 @@ struct Player { ground: Ground }
 struct Sounds { hit: String, volume: f32, pitch: f32 }
 #[derive(Clone)]
 struct Facts { hardness: f32, name: String, requires_tool: bool, sounds: Sounds }
-struct Resources { facts: Facts, speed: f32 }
+struct Resources { facts: Facts, speed: f32, tool_allows_creative: bool }
 impl Resources {
+    fn can_destroy_block(&self, _: Option<&()>, creative: bool) -> bool {
+        !creative || self.tool_allows_creative
+    }
     fn facts(&self) -> &Self { self }
     fn items(&self) -> &Self { self }
     fn get(&self, _: u32) -> &Facts { &self.facts }
@@ -72,7 +75,7 @@ impl Game {
             remote: Some(Remote::default()), mining: None, creative,
             world: World::default(),
             res: Resources { facts: Facts { hardness, name: "block".into(),
-                requires_tool: false, sounds: Sounds { hit: "hit".into(), volume: 1.0, pitch: 1.0 } }, speed },
+                requires_tool: false, sounds: Sounds { hit: "hit".into(), volume: 1.0, pitch: 1.0 } }, speed, tool_allows_creative: true },
             player: Some(Player { ground: Ground { on_ground: true } }), audio: Audio,
             hit: Hit { pos: [0, 64, 0], face: 1 }, sequence: 0, packets: vec![],
         }
@@ -138,8 +141,25 @@ fn main() {
     game.remote_mining(false);
     assert_eq!(game.world.broken.len(), 2);
     assert_eq!(game.remote.as_ref().unwrap().destroy_delay, 5);
+    // A restricted tool must neither predict a break nor send START in Creative.
+    let mut game = Game::new(1.0, 1.0, true);
+    game.res.tool_allows_creative = false;
+    game.remote_mining(true);
+    game.remote_mining(false);
+    assert!(game.world.broken.is_empty());
+    assert!(game.packets.is_empty());
+    // Survival still mines with the same tool. Switching to Creative aborts the crack.
+    game.creative = false;
+    game.remote_mining(true);
+    assert_eq!(game.packets[0].action, 0);
+    game.creative = true;
+    game.remote_mining(false);
+    assert_eq!(game.packets.iter().map(|p| p.action).collect::<Vec<_>>(), [0, 2]);
+    assert!(game.remote.as_ref().unwrap().destroying.is_none());
+    assert!(game.mining.is_none());
+    assert!(game.world.broken.is_empty());
 }
-'''.replace("METHOD", source[start:end])
+'''.replace("METHOD", source[start:end].replace("pub(super) fn", "fn"))
         with tempfile.TemporaryDirectory(prefix="remote-mining-") as directory:
             path = Path(directory)
             (path / "main.rs").write_text(fixture)

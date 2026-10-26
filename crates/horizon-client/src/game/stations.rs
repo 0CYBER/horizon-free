@@ -135,8 +135,10 @@ pub(super) struct Station {
     pub(super) offers: EnchantOffers,
     bookcases: i32,
     pub(super) anvil: AnvilResult,
-    /// Anvil rename box text.
+    /// Anvil rename box text (`AnvilMenu.itemName`).
     pub(super) name: String,
+    /// The box itself (`AnvilScreen`'s `EditBox` of 50, unbordered).
+    pub(super) rename: horizon_client::ui::EditBox,
     /// Stonecutter: the menu's recipe list (horizon_client::menu), its
     /// `selectedRecipeIndex` and the screen's first shown index.
     pub(super) stone: horizon_client::menu::Stonecutter,
@@ -146,8 +148,6 @@ pub(super) struct Station {
     anvil_last: Option<ItemStack>,
     /// Anvil on a server: the name last sent (the client menu's `itemName`).
     pub(super) anvil_sent: Option<String>,
-    /// When the screen opened: the rename box has the focus from then.
-    opened: std::time::Instant,
     pub(super) last_sound: u64,
     /// Villager trading state.
     pub(super) merchant: Option<Box<super::trading::MerchantState>>,
@@ -169,12 +169,12 @@ impl Station {
             bookcases: 0,
             anvil: AnvilResult::default(),
             name: String::new(),
+            rename: anvil_box(),
             stone: Default::default(),
             selected: None,
             start: 0,
             anvil_last: None,
             anvil_sent: None,
-            opened: std::time::Instant::now(),
             last_sound: 0,
             merchant: None,
             beacon: [None; 2],
@@ -868,6 +868,9 @@ impl Game<'_> {
             if kind == Kind::Stonecutter && self.stonecutter_click(local) {
                 return true;
             }
+            if kind == Kind::Anvil && !right && self.anvil_name_click(ox, oy) {
+                return true;
+            }
         }
         let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
             return true;
@@ -894,6 +897,8 @@ impl Game<'_> {
                 .as_ref()
                 .map(|i| stations::hover_name(&|id| self.pack.names.display_item(id), i))
                 .unwrap_or_default();
+            let name = s.name.clone();
+            s.rename.set_value(&name);
         }
         self.station_changed();
     }
@@ -960,20 +965,28 @@ impl Game<'_> {
         let Some(s) = self.station.as_mut() else {
             return;
         };
-        let cleared = self.text_selection.take(ANVIL_NAME, &mut s.name);
         if backspace {
-            if !cleared {
-                s.name.pop();
-            }
+            s.rename.delete_chars(-1);
         } else if let Some(t) = text {
-            for c in t.chars().filter(|c| !c.is_control()) {
-                if s.name.chars().count() < ANVIL_NAME_CHARS {
-                    s.name.push(c);
-                }
-            }
+            s.rename.insert_text(t);
         }
+        s.name.clone_from(&s.rename.value);
         self.station_changed();
         self.remote_anvil_rename();
+    }
+    /// `AnvilScreen.keyPressed`: the rename box handles the key.
+    pub(super) fn station_key(&mut self, key: winit::keyboard::KeyCode) -> bool {
+        let (ctrl, shift) = (self.has_control_down(), self.has_shift_down());
+        let Some(s) = self.station.as_mut() else {
+            return false;
+        };
+        if !s.rename.key(key, ctrl, shift) {
+            return false;
+        }
+        s.name.clone_from(&s.rename.value);
+        self.station_changed();
+        self.remote_anvil_rename();
+        true
     }
     /// Ctrl+A/C/V/X in the anvil's rename box (an `EditBox` of 50) or the
     /// recipe book's search box.
@@ -985,17 +998,51 @@ impl Game<'_> {
         let Some(s) = self.station.as_mut() else {
             return;
         };
-        if Self::append_shortcut(
-            &mut self.text_selection,
-            &mut self.clipboard,
-            ANVIL_NAME,
-            &mut s.name,
-            shortcut,
-            ANVIL_NAME_CHARS,
-        ) {
+        if s.rename.shortcut(shortcut, &mut self.clipboard) {
+            s.name.clone_from(&s.rename.value);
             self.station_changed();
             self.remote_anvil_rename();
         }
+    }
+    /// A click in the anvil's name box (`EditBox.onClick`).
+    fn anvil_name_click(&mut self, ox: f32, oy: f32) -> bool {
+        let open = self
+            .station
+            .as_ref()
+            .is_some_and(|s| s.kind == Kind::Anvil && s.inputs[0].is_some());
+        if !open {
+            return false;
+        }
+        let (x, y, w, h) = (ox + 62.0, oy + 24.0, 103.0, 12.0);
+        let (mx, my) = self.cursor;
+        if mx < x || my < y || mx >= x + w || my >= y + h {
+            return false;
+        }
+        let shift = self.has_shift_down();
+        let Some(s) = self.station.as_mut() else {
+            return false;
+        };
+        s.rename.x = x;
+        s.rename.y = y;
+        s.rename.width = w;
+        s.rename.click(&self.gui.atlas, mx, shift, false);
+        true
+    }
+    /// AnvilScreen's name box, drawn after the station picture.
+    fn draw_anvil_name(&mut self, batch: &mut HudBatch, ox: f32, oy: f32) {
+        let Some(s) = self.station.as_mut() else {
+            return;
+        };
+        let edit = &mut s.rename;
+        edit.x = ox + 62.0;
+        edit.y = oy + 24.0;
+        edit.width = 103.0;
+        edit.height = 12.0;
+        edit.bordered = false;
+        edit.focused = true;
+        edit.text_color = u32::MAX;
+        edit.max_length = ANVIL_NAME_CHARS;
+        edit.draw(batch, &self.gui.atlas, None);
     }
 
     // ---------------------------------------------------------------- drawing
@@ -1094,6 +1141,10 @@ impl Game<'_> {
         let (ox, oy) = self.inventory_origin(batch);
         let local = (self.cursor.0 - ox, self.cursor.1 - oy);
         let mut tooltip: Option<Vec<(horizon_client::text::Text, u32)>> = None;
+        let mut anvil_name = false;
+        // Keep item tooltips as stacks until drawing: text alone loses the
+        // bundle contents component (including in the player's inventory).
+        let mut tooltip_stack: Option<ItemStack> = None;
         {
             let atlas = &self.gui.atlas;
             batch.fill(
@@ -1428,18 +1479,8 @@ impl Game<'_> {
                         );
                     }
                     if s.inputs[0].is_some() {
-                        // AnvilScreen's name box: white, 103 wide, no inverted highlight.
-                        horizon_client::ui::append_field(
-                            batch,
-                            atlas,
-                            &s.name,
-                            (ox + 62.0, oy + 24.0, 103.0),
-                            (u32::MAX, true),
-                            ANVIL_NAME_CHARS,
-                            self.text_selection.covers(ANVIL_NAME, &s.name),
-                            false,
-                            s.opened.elapsed().as_millis(),
-                        );
+                        // Drawn once this borrow of the station ends.
+                        anvil_name = true;
                     }
                     let cost = s.anvil.cost;
                     if cost > 0 {
@@ -1579,12 +1620,15 @@ impl Game<'_> {
                             );
                             self.draw_item(batch, &result, ox + x, oy + y);
                             if hover {
-                                tooltip = Some(self.stack_tooltip(&result));
+                                tooltip_stack = Some(result);
                             }
                         }
                     }
                 }
             }
+        }
+        if anvil_name {
+            self.draw_anvil_name(batch, ox, oy);
         }
         let drag = self.drag_view();
         for i in self.station_slots().unwrap_or_default() {
@@ -1606,13 +1650,16 @@ impl Game<'_> {
             );
             if self.carried.is_none()
                 && tooltip.is_none()
+                && tooltip_stack.is_none()
                 && let Some(stack) = self.slot_mut(slot).clone()
             {
-                tooltip = Some(self.stack_tooltip(&stack));
+                tooltip_stack = Some(stack);
             }
         }
         if self.carried.is_some() {
             self.draw_carried(batch);
+        } else if let Some(stack) = tooltip_stack {
+            self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
         } else if let Some(lines) = tooltip {
             self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
         }
@@ -1656,6 +1703,8 @@ impl Game<'_> {
         };
         let name = if let Some(n) = stack.custom_name() {
             n.to_owned()
+        } else if let Some(n) = stack.item_name() {
+            n
         } else if stack.data().is_some_and(|d| d.ominous_banner) {
             self.translate("block.minecraft.ominous_banner", "Ominous Banner")
         } else if stack.data().and_then(|d| d.potion.as_ref()).is_some()
@@ -1682,7 +1731,9 @@ impl Game<'_> {
         // ItemContainerContents.addToTooltip.
         let hover_name = |s: &ItemStack| {
             s.custom_name()
-                .map_or_else(|| self.pack.names.display_item(&s.item), str::to_owned)
+                .map(str::to_owned)
+                .or_else(|| s.item_name())
+                .unwrap_or_else(|| self.pack.names.display_item(&s.item))
         };
         if display.shows("minecraft:container") {
             for text in
@@ -1907,32 +1958,65 @@ impl Game<'_> {
         if lines.is_empty() {
             return;
         }
-        let lines: Vec<_> = lines
+        let lines = Self::resolved(lines);
+        let atlas = &self.gui.atlas;
+        let (x, y, w, h) =
+            Self::tooltip_geometry(atlas, &lines, (x, y), (batch.width, batch.height), 0.0);
+        Self::tooltip_box(batch, atlas, x, y, w, h);
+        Self::tooltip_text(batch, atlas, &lines, x, y);
+    }
+    /// A tooltip's lines with their legacy codes resolved and their colours.
+    fn resolved<T: Clone + Into<horizon_client::text::Text>>(
+        lines: &[(T, u32)],
+    ) -> Vec<(horizon_client::text::Text, u32)> {
+        lines
             .iter()
             .map(|(text, color)| {
                 let text: horizon_client::text::Text = text.clone().into();
                 (text.resolve_legacy(), *color)
             })
-            .collect();
-        let atlas = &self.gui.atlas;
+            .collect()
+    }
+    /// The tooltip's text's top-left corner and the box's size: beside the
+    /// cursor, kept on screen, `extra` pixels taller than the text.
+    fn tooltip_geometry(
+        atlas: &horizon_client::hud::HudAtlas,
+        lines: &[(horizon_client::text::Text, u32)],
+        (x, y): (f32, f32),
+        (width, height): (f32, f32),
+        extra: f32,
+    ) -> (f32, f32, f32, f32) {
         let w = lines
             .iter()
             .map(|(t, _)| atlas.font.width_text(t))
-            .fold(0.0, f32::max);
-        let h = if lines.len() == 1 {
+            .fold(0.0, f32::max)
+            .max(if extra > 0.0 { 96.0 } else { 0.0 });
+        let text_h = if lines.len() == 1 {
             8.0
         } else {
             8.0 + 2.0 + (lines.len() - 1) as f32 * 10.0
         };
+        let h = text_h + extra;
         let mut x = x + 12.0;
         let mut y = y - 12.0;
-        if x + w > batch.width - 4.0 {
+        if x + w > width - 4.0 {
             x = (x - 28.0 - w).max(4.0);
         }
-        if y + h + 3.0 > batch.height {
-            y = batch.height - h - 3.0;
+        if y + h + 3.0 > height {
+            y = height - h - 3.0;
         }
         y = y.max(4.0);
+        (x, y, w, h)
+    }
+    /// The box and its frame sprites.
+    fn tooltip_box(
+        batch: &mut HudBatch,
+        atlas: &horizon_client::hud::HudAtlas,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    ) {
         batch.fill(atlas, x - 3.0, y - 4.0, w + 6.0, 1.0, rgba(16, 0, 16, 240));
         batch.fill(
             atlas,
@@ -1968,10 +2052,135 @@ impl Game<'_> {
             h + 4.0,
             rgba(60, 0, 190, 80),
         );
+    }
+    fn tooltip_text(
+        batch: &mut HudBatch,
+        atlas: &horizon_client::hud::HudAtlas,
+        lines: &[(horizon_client::text::Text, u32)],
+        x: f32,
+        y: f32,
+    ) {
         let mut ty = y;
         for (i, (text, color)) in lines.iter().enumerate() {
             batch.text_styled(atlas, text, x, ty, *color, true);
             ty += if i == 0 { 12.0 } else { 10.0 };
+        }
+    }
+    /// A stack's tooltip: its lines, and under them a bundle's contents
+    /// (`ClientBundleTooltip`: the 4 wide grid, the `+N` of what it leaves
+    /// out, and the weight bar).
+    pub(super) fn draw_stack_tooltip(
+        &mut self,
+        batch: &mut HudBatch,
+        stack: &ItemStack,
+        x: f32,
+        y: f32,
+    ) {
+        let lines = Self::resolved(&self.stack_tooltip(stack));
+        if lines.is_empty() {
+            return;
+        }
+        // The component's height does not depend on where it is drawn, so a
+        // probe at the origin gives the box its extra height.
+        let probe = horizon_client::bundle::tooltip_layout(self.res.items(), stack, 0.0, 0.0, 96.0);
+        let extra = probe.as_ref().map_or(0.0, |l| l.height + 2.0);
+        let atlas = &self.gui.atlas;
+        let (x, y, w, h) =
+            Self::tooltip_geometry(atlas, &lines, (x, y), (batch.width, batch.height), extra);
+        Self::tooltip_box(batch, atlas, x, y, w, h);
+        let text_h = h - extra;
+        Self::tooltip_text(batch, atlas, &lines, x, y);
+        let Some(layout) =
+            horizon_client::bundle::tooltip_layout(self.res.items(), stack, x, y + text_h + 2.0, w)
+        else {
+            return;
+        };
+        self.draw_bundle_tooltip(batch, &layout);
+    }
+    /// `ClientBundleTooltip.extractImage`: the slots, the count past them and
+    /// the progress bar.
+    fn draw_bundle_tooltip(
+        &mut self,
+        batch: &mut HudBatch,
+        layout: &horizon_client::bundle::TooltipLayout,
+    ) {
+        for (at, stack) in &layout.slots {
+            // Each draw takes the atlas on its own: the item's needs `&mut self`.
+            horizon_client::ui::nine_slice(
+                batch,
+                &self.gui.atlas,
+                "gui/sprites/container/bundle/slot_background",
+                at[0],
+                at[1],
+                24.0,
+                24.0,
+                u32::MAX,
+            );
+            let stack = stack.clone();
+            let [x, y] = *at;
+            self.draw_item(batch, &stack, x + 4.0, y + 4.0);
+        }
+        let atlas = &self.gui.atlas;
+        if let Some((at, hidden)) = layout.overflow {
+            let label = horizon_client::text::Text::literal(format!("+{hidden}"));
+            let w = atlas.font.width_text(&label);
+            batch.text_styled(
+                atlas,
+                &label,
+                at[0] + 12.0 - (w / 2.0).floor(),
+                at[1] + 10.0,
+                u32::MAX,
+                true,
+            );
+        }
+        if let Some((at, description)) = layout
+            .empty_description
+            .zip(Some("item.minecraft.bundle.empty.description"))
+        {
+            let text = horizon_client::text::Text::translate(description, &[]);
+            let mut ty = at[1];
+            for line in atlas.font.split_lines(&text, layout.width) {
+                batch.text_styled(atlas, &line.0, at[0], ty, 0xFFAA_AAAA, false);
+                ty += 9.0;
+            }
+        }
+        let [bx, by] = layout.bar;
+        let fill_sprite = if layout.full {
+            "gui/sprites/container/bundle/bundle_progressbar_full"
+        } else {
+            "gui/sprites/container/bundle/bundle_progressbar_fill"
+        };
+        horizon_client::ui::nine_slice(
+            batch,
+            atlas,
+            fill_sprite,
+            bx + 1.0,
+            by,
+            layout.fill,
+            13.0,
+            u32::MAX,
+        );
+        horizon_client::ui::nine_slice(
+            batch,
+            atlas,
+            "gui/sprites/container/bundle/bundle_progressbar_border",
+            bx,
+            by,
+            96.0,
+            13.0,
+            u32::MAX,
+        );
+        if let Some(key) = layout.label {
+            let label = horizon_client::text::Text::translate(key, &[]);
+            let w = atlas.font.width_text(&label);
+            batch.text_styled(
+                atlas,
+                &label,
+                bx + 48.0 - (w / 2.0).floor(),
+                by + 3.0,
+                u32::MAX,
+                true,
+            );
         }
     }
     /// Hovered-slot tooltip on the plain inventory, crafting and container screens.
@@ -1984,8 +2193,7 @@ impl Game<'_> {
         };
         let stack = self.slot_view(slot);
         if let Some(stack) = stack {
-            let lines = self.stack_tooltip(&stack);
-            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
+            self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
         } else if let Some(text) = self.crafter_tooltip(slot) {
             self.draw_tooltip_lines(
                 batch,
@@ -2041,5 +2249,13 @@ impl Game<'_> {
 }
 
 /// The anvil's rename box (`AnvilScreen`: `setMaxLength(50)`).
-const ANVIL_NAME: horizon_client::clipboard::FieldId = ("anvil.name", 0);
 const ANVIL_NAME_CHARS: usize = 50;
+
+fn anvil_box() -> horizon_client::ui::EditBox {
+    let mut edit = horizon_client::ui::EditBox::new(0.0, 0.0, 103.0, 12.0);
+    edit.bordered = false;
+    edit.max_length = ANVIL_NAME_CHARS;
+    edit.text_color = u32::MAX;
+    edit.focused = true;
+    edit
+}

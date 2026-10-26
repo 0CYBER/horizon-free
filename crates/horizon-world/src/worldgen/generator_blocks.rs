@@ -108,15 +108,26 @@ impl BlockBehavior {
         let json = |name: &str| -> Result<Value, GeneratorError> {
             Ok(serde_json::from_str(&fs::read_to_string(dir.join(name))?)?)
         };
-        let collisions =
-            CachedCollisionRegistry::from_table(read("cached-collision.nbt")?.table("collision")?)?;
-        let properties = BlockPropertiesRegistry::from_table(
-            read("block-properties.nbt")?.table("block property")?,
-            &collisions,
-        )?;
-        let support = Arc::new(BlockSupportRegistry::from_table(
-            read("cached-support.nbt")?.table("support")?,
-        )?);
+        // The support table reads on its own thread while the collision and
+        // property tables (which need the collisions) read on this one.
+        let (collisions, properties, support) = std::thread::scope(|scope| {
+            let support = scope.spawn(|| -> Result<_, GeneratorError> {
+                Ok(BlockSupportRegistry::from_table(
+                    read("cached-support.nbt")?.table("support")?,
+                )?)
+            });
+            let collisions = CachedCollisionRegistry::from_table(
+                read("cached-collision.nbt")?.table("collision")?,
+            )?;
+            let properties = BlockPropertiesRegistry::from_table(
+                read("block-properties.nbt")?.table("block property")?,
+                &collisions,
+            )?;
+            let support = support
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic))?;
+            Ok::<_, GeneratorError>((collisions, properties, Arc::new(support)))
+        })?;
         let collision = Arc::new(BlockCollisionRegistry::new(Arc::new(collisions))?);
         let rules = json("survival-rules.json")?
             .as_object()

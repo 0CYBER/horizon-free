@@ -71,6 +71,8 @@ pub(super) struct BodyPotions {
 pub(super) struct PotionState {
     pub(super) effects: PlayerEffects,
     thrown: Vec<ThrownPotion>,
+    /// The area effect clouds a server tracks (game/remote_projectiles.rs).
+    pub(super) clouds: Vec<super::remote_projectiles::RemoteCloud>,
     applied: Vec<(&'static str, &'static str, f64, &'static str)>,
     /// Armor the protection table was computed for.
     protection_for: Option<Vec<Option<ItemStack>>>,
@@ -141,14 +143,22 @@ impl PotionState {
             t.stack = stack;
         }
     }
-    /// One tick of a server's client: `step` moves each toward where the
-    /// server put it.
-    pub(super) fn step_remote_thrown(&mut self, mut step: impl FnMut(u32, Vec3) -> Vec3) {
-        for t in &mut self.thrown {
-            t.previous = t.position;
-            t.age += 1;
-            t.position = step(t.id, t.position);
-        }
+    /// A server's move: thrown potions have no interpolation handler, so
+    /// `moveOrInterpolateTo` puts them there at once. False when `id` isn't one.
+    pub(super) fn move_remote_thrown(&mut self, id: u32, at: Vec3) -> bool {
+        let Some(t) = self.thrown.iter_mut().find(|t| t.id == id) else {
+            return false;
+        };
+        t.position = at;
+        true
+    }
+    /// `handleSetEntityMotion` for a thrown potion. False when `id` isn't one.
+    pub(super) fn remote_thrown_motion(&mut self, id: u32, velocity: Vec3) -> bool {
+        let Some(t) = self.thrown.iter_mut().find(|t| t.id == id) else {
+            return false;
+        };
+        t.velocity = velocity;
+        true
     }
     pub(super) fn remove_remote_thrown(&mut self, id: u32) {
         self.thrown.retain(|t| t.id != id);
@@ -484,6 +494,7 @@ impl Game<'_> {
         thrown.retain_mut(|t| {
             t.age += 1;
             t.previous = t.position;
+            self.thrown_potion_motion(t);
             let next = Vec3::new(
                 t.position.x + t.velocity.x,
                 t.position.y + t.velocity.y,
@@ -520,24 +531,66 @@ impl Game<'_> {
                 return false;
             }
             t.position = next;
-            // ThrowableItemProjectile: drag 0.99 then gravity 0.05.
-            // ThrownExperienceBottle.getDefaultGravity is 0.07.
-            let gravity = if &*t.stack.item == "minecraft:experience_bottle" {
-                0.07
-            } else {
-                0.05
-            };
-            t.velocity = Vec3::new(
-                t.velocity.x * 0.99,
-                t.velocity.y * 0.99 - gravity,
-                t.velocity.z * 0.99,
-            );
             t.age < 1200 && t.position.y > -128.0
         });
         self.potions.thrown = thrown;
         for (stack, at) in landed {
             self.splash(&stack, at);
         }
+    }
+    /// `ThrowableProjectile.tick`'s `applyGravity` and `applyInertia`, which
+    /// come before the move: gravity 0.05 (0.07 for an experience bottle),
+    /// then drag 0.99 (0.8 in water).
+    fn thrown_potion_motion(&self, t: &mut ThrownPotion) {
+        let gravity = if &*t.stack.item == "minecraft:experience_bottle" {
+            0.07
+        } else {
+            0.05
+        };
+        let at = t.position;
+        let water = self
+            .res
+            .facts()
+            .get(self.world.block(
+                at.x.floor() as i32,
+                at.y.floor() as i32,
+                at.z.floor() as i32,
+            ))
+            .fluid
+            == horizon_client::blocks::Fluid::Water;
+        let inertia = if water { 0.8 } else { 0.99 };
+        t.velocity = Vec3::new(
+            t.velocity.x * inertia,
+            (t.velocity.y - gravity) * inertia,
+            t.velocity.z * inertia,
+        );
+    }
+    /// `ThrowableProjectile.tick` on a server's client: it falls and moves
+    /// by itself between the server's updates and stops at a block; only
+    /// the server breaks it.
+    pub(super) fn step_remote_thrown(&mut self) {
+        let mut thrown = std::mem::take(&mut self.potions.thrown);
+        for t in &mut thrown {
+            t.previous = t.position;
+            t.age += 1;
+            self.thrown_potion_motion(t);
+            let next = Vec3::new(
+                t.position.x + t.velocity.x,
+                t.position.y + t.velocity.y,
+                t.position.z + t.velocity.z,
+            );
+            let state = self.world.block(
+                next.x.floor() as i32,
+                next.y.floor() as i32,
+                next.z.floor() as i32,
+            );
+            if self.res.facts().get(state).full_collision {
+                t.velocity = Vec3::ZERO;
+            } else {
+                t.position = next;
+            }
+        }
+        self.potions.thrown = thrown;
     }
     /// `ThrownItemRenderer` for thrown splash and lingering potions and
     /// experience bottles: the item (GROUND) facing the camera at scale 1,
