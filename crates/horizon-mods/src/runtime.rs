@@ -40,6 +40,19 @@ pub use ui_bindings::horizon::mods::ui::{
     ItemWidget, ListWidget, Screen as UiScreen, TextWidget, Widget as UiWidget,
 };
 use ui_bindings::{UiHost, horizon::mods::ui};
+/// Capability `render`'s imports (docs/mods.md): the game draws the shapes.
+mod render_bindings {
+    wasmtime::component::bindgen!({
+        path: "../horizon-mod-sdk/wit",
+        world: "render-host",
+    });
+}
+/// What capability `render` asks the game to draw (WIT `interface render`).
+pub use render_bindings::horizon::mods::render::{
+    FillShape, ItemShape, Point as RenderPoint, QuadShape, Rect as RenderRect, Shape, SpriteShape,
+    TextShape,
+};
+use render_bindings::{RenderHost, horizon::mods::render};
 
 /// A mod's linear memory cap.
 const MEMORY: usize = 64 << 20;
@@ -70,6 +83,8 @@ const STORAGE_WRITE_BUDGET: u64 = 1 << 20;
 pub struct Snapshot {
     pub player: Option<Player>,
     pub clock: Option<Clock>,
+    /// The screen in GUI pixels (capability `render`'s `gui-size`).
+    pub gui_size: (f32, f32),
 }
 
 /// What mods asked the game to show since the last [`Mods::drain`].
@@ -89,6 +104,8 @@ pub enum Output {
     OpenScreen { owner: usize },
     /// `ui.close-screen`: the mod closed its own screen (no `closed` back).
     CloseScreen { owner: usize },
+    /// `render.shake`: strength 0 to 1, fading out over `seconds` (≤ 10).
+    Shake { strength: f32, seconds: f32 },
 }
 
 /// A mod's text panel, drawn every frame until it changes.
@@ -156,6 +173,8 @@ struct State {
     out: Vec<Output>,
     panel: Option<Panel>,
     ui: UiState,
+    /// Capability `render`'s HUD shapes, drawn until replaced.
+    shapes: Vec<Shape>,
     /// Capability `storage`'s folder; made on first `set`.
     data_dir: PathBuf,
     /// Bytes `storage::set` may still write before this hook call ends
@@ -234,6 +253,8 @@ impl Mods {
                 .map_err(|e| e.to_string())?;
             UiHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
+            RenderHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
+                .map_err(|e| e.to_string())?;
             self.engine = Some((engine, linker));
         }
         Ok(self.engine.as_ref().expect("made above"))
@@ -293,6 +314,7 @@ impl Mods {
             out: Vec::new(),
             panel: None,
             ui: UiState::default(),
+            shapes: Vec::new(),
             data_dir,
             storage_budget: STORAGE_WRITE_BUDGET,
             limits: StoreLimitsBuilder::new()
@@ -484,6 +506,14 @@ impl Mods {
             .iter()
             .filter_map(|e| e.run.as_ref()?.store.data().panel.as_ref())
     }
+    /// The running mods' HUD shapes (capability `render`), each mod's in
+    /// its own order, mods in load order.
+    pub fn hud_shapes(&self) -> impl Iterator<Item = &Shape> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref())
+            .flat_map(|r| &r.store.data().shapes)
+    }
     /// The screen mod `i` last pushed with `ui.open-screen`, while it is up.
     pub fn screen(&self, i: usize) -> Option<&UiScreen> {
         self.entries
@@ -671,6 +701,57 @@ impl chat::Host for State {
         }
     }
 }
+/// HUD shapes one mod may keep (capability `render`).
+const SHAPES: usize = 1024;
+/// The longest jolt `render.shake` makes, in seconds.
+const SHAKE_SECONDS: f32 = 10.0;
+
+impl render::Host for State {
+    fn set_hud(&mut self, shapes: Vec<Shape>) {
+        self.shapes = shapes
+            .into_iter()
+            .take(SHAPES)
+            .map(|shape| match shape {
+                Shape::Sprite(mut s) => {
+                    s.sprite = clip(s.sprite);
+                    Shape::Sprite(s)
+                }
+                Shape::Item(mut i) => {
+                    i.item = clip(i.item);
+                    i.scale = if i.scale.is_finite() {
+                        i.scale.clamp(0.0, 16.0)
+                    } else {
+                        1.0
+                    };
+                    Shape::Item(i)
+                }
+                Shape::Text(mut t) => {
+                    t.text = clip(t.text);
+                    t.color &= 0xFF_FFFF;
+                    Shape::Text(t)
+                }
+                other => other,
+            })
+            .collect();
+    }
+    fn gui_size(&mut self) -> (f32, f32) {
+        self.snapshot.gui_size
+    }
+    fn shake(&mut self, strength: f32, seconds: f32) {
+        let ok = |v: f32, max: f32| {
+            if v.is_finite() {
+                v.clamp(0.0, max)
+            } else {
+                0.0
+            }
+        };
+        let (strength, seconds) = (ok(strength, 1.0), ok(seconds, SHAKE_SECONDS));
+        if strength > 0.0 && seconds > 0.0 {
+            self.out.push(Output::Shake { strength, seconds });
+        }
+    }
+}
+
 impl command::Host for State {
     fn run(&mut self, line: String) {
         let queued = self

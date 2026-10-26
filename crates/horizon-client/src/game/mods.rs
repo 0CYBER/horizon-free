@@ -33,7 +33,10 @@ use {
 #[derive(Default)]
 pub(super) struct ModsState {
     #[cfg(feature = "mods")]
-    mods: Mods,
+    pub(super) mods: Mods,
+    /// Capability `render`'s camera shakes.
+    #[cfg(feature = "mods")]
+    pub(super) shake: super::mod_render::Shake,
     /// `--dev-mod PATH`: always on, reloaded when rebuilt.
     pub(super) dev: Vec<PathBuf>,
     /// When dev mods were last checked for a rebuild.
@@ -338,7 +341,11 @@ impl Game<'_> {
             game_time: self.world.game_time.max(0) as u64,
             day_time: self.world.day_time.max(0) as u64,
         });
-        Snapshot { player, clock }
+        Snapshot {
+            player,
+            clock,
+            gui_size: self.gui_size(),
+        }
     }
     /// A game tick.
     pub(super) fn tick_mods(&mut self) {
@@ -428,6 +435,10 @@ impl Game<'_> {
                 }
                 Output::OpenScreen { owner } => {
                     self.open_mod_screen(owner, false);
+                    continue;
+                }
+                Output::Shake { strength, seconds } => {
+                    self.mods.shake.add(strength, seconds);
                     continue;
                 }
                 Output::CloseScreen { owner } => {

@@ -208,6 +208,8 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
                 game_time: t,
                 day_time: 1000 + t,
             }),
+            // The GUI of a 1280 x 720 window at scale 3.
+            gui_size: (427.0, 240.0),
         });
         mods.tick(t);
         for _ in 0..FRAMES_PER_TICK {
@@ -228,7 +230,14 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
             Output::Stopped { reason, .. } => return Err(format!("it stopped: {reason}")),
             Output::OpenScreen { .. } => "opened a screen".to_string(),
             Output::CloseScreen { .. } => "closed its screen".to_string(),
+            Output::Shake { strength, seconds } => {
+                format!("shook the camera: {strength:.2} for {seconds:.1} s")
+            }
         });
+    }
+    let shapes = mods.hud_shapes().count();
+    if shapes > 0 {
+        report.output.push(format!("drew {shapes} HUD shape(s)"));
     }
     match failed(&mods) {
         Some(reason) => Err(format!("it stopped: {reason}")),
