@@ -3751,6 +3751,15 @@ impl Game<'_> {
 
     /// MultiPlayerGameMode.startDestroyBlock / continueDestroyBlock.
     fn remote_mining(&mut self, start: bool) {
+        if !self
+            .res
+            .items()
+            .can_destroy_block(self.held(), self.creative)
+        {
+            self.stop_remote_mining();
+            self.mining = None;
+            return;
+        }
         let Some(r) = self.remote.as_mut() else {
             return;
         };

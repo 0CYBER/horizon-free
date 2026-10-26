@@ -7103,6 +7103,44 @@ CHECKS += ['sonic']
 CHECK_FNS['sonic'] = check_sonic
 
 
+def check_creative_tools(host, guest, out):
+    """#2035: switching Survival -> Creative cannot mine with a restricted tool.
+    Verify both the player's prediction and the host's authoritative block;
+    an ordinary tool must still break the same block.
+    """
+    seen = {}
+    for label, player in (('host', host), ('guest', guest)):
+        x, y, z = (int(v // 1) for v in pos_of(player))
+        cell = (x, y + 1, z + 2)
+        host('command', command=f'fill {x - 1} {y} {z + 1} {x + 1} {y + 3} {z + 3} minecraft:air')
+        player('command', command='gamemode survival')
+        player('command', command='item replace entity @s weapon.mainhand with minecraft:netherite_sword')
+        player('command', command='gamemode creative')
+        host('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} minecraft:stone')
+        player.wait(10)
+        player.raw('look-at', x + 0.5, y + 1.5, z + 2.5)
+        player.raw('mouse', 'left', 'down')
+        try:
+            player.wait(15)
+        finally:
+            player.raw('mouse', 'left', 'up')
+        seen[label] = {'client': player.raw('block', *cell).get('block'),
+                       'server': host.raw('block', *cell).get('block')}
+        player.shot(out, 'creative-sword')
+        assert seen[label]['client'] == seen[label]['server'] == 'minecraft:stone', seen
+        player('command', command='item replace entity @s weapon.mainhand with minecraft:diamond_pickaxe')
+        player.wait(6)
+        player.raw('mouse', 'left', 'click')
+        player.wait(10)
+        seen[label]['ordinary_tool'] = host.raw('block', *cell).get('block')
+        assert seen[label]['ordinary_tool'] == 'minecraft:air', seen
+    return seen
+
+
+CHECKS += ['creative_tools']
+CHECK_FNS['creative_tools'] = check_creative_tools
+
+
 def check_cushions(host, guest, out):
     """#1935: place a colored cushion, consume it, track it, sit, dismount and break it."""
     seen = {}
