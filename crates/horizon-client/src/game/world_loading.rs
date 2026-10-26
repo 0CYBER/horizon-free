@@ -261,6 +261,7 @@ pub(super) fn make_streaming(
             res.threads(),
         )
     };
+    streaming.forced = save.load_forced_chunks();
     streaming.radius = settings.render_distance;
     streaming.biome_blend = settings.biome_blend;
     streaming.smooth_lighting = settings.smooth_lighting;

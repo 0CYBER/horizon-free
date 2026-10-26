@@ -36,7 +36,7 @@ use horizon_world::{
     worldgen::terrain::TerrainBlockStates,
 };
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -1613,6 +1613,9 @@ pub struct SaveDir {
     /// False in dimensions without skylight (no SkyLight layers are written).
     pub sky_light: bool,
 }
+fn is_forced_ticket(ticket: &Tag) -> bool {
+    matches!(ticket.get("type"), Some(Tag::String(t)) if *t == JavaString::from("minecraft:forced"))
+}
 impl SaveDir {
     pub fn new(root: PathBuf) -> Self {
         let sky_light = !root.ends_with("the_nether") && !root.ends_with("DIM-1");
@@ -1627,6 +1630,50 @@ impl SaveDir {
             tables: OnceLock::new(),
             sky_light,
         }
+    }
+    /// 26.3's TicketStorage: persistent tickets live in each dimension's
+    /// data/minecraft/chunk_tickets.dat, with ChunkPos.CODEC's [x, z] int array.
+    pub fn load_forced_chunks(&self) -> HashSet<(i32, i32)> {
+        let Some(data) = read_saved_data(&self.root, "chunk_tickets") else {
+            return HashSet::new();
+        };
+        let Some(Tag::List(tickets)) = data.get("tickets") else {
+            return HashSet::new();
+        };
+        tickets
+            .iter()
+            .filter(|t| is_forced_ticket(t))
+            .filter_map(|t| match t.get("chunk_pos")? {
+                Tag::IntArray(pos) if pos.len() == 2 => Some((pos[0], pos[1])),
+                _ => None,
+            })
+            .collect()
+    }
+    pub fn save_forced_chunks(&self, forced: &HashSet<(i32, i32)>) -> Result<()> {
+        if forced.is_empty() && !saved_data_path(&self.root, "chunk_tickets").exists() {
+            return Ok(());
+        }
+        let mut data = compound_or_empty(read_saved_data(&self.root, "chunk_tickets"));
+        // Preserve persistent tickets Horizon does not simulate.
+        let mut tickets = match data.get("tickets") {
+            Some(Tag::List(tickets)) => tickets
+                .iter()
+                .filter(|t| !is_forced_ticket(t))
+                .cloned()
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        };
+        let mut chunks: Vec<_> = forced.iter().copied().collect();
+        chunks.sort_unstable();
+        tickets.extend(chunks.into_iter().map(|(x, z)| {
+            Tag::compound([
+                ("type", Tag::String("minecraft:forced".into())),
+                ("level", Tag::Int(31)), // ChunkMap.FORCED_TICKET_LEVEL: ENTITY_TICKING.
+                ("chunk_pos", Tag::IntArray(vec![x, z])),
+            ])
+        }));
+        put(&mut data, "tickets", Tag::List(tickets));
+        write_saved_data(&self.root, "chunk_tickets", data)
     }
     fn region_path(&self, folder: &str, rx: i32, rz: i32) -> PathBuf {
         region_path(&self.root, folder, rx, rz)
@@ -3436,6 +3483,62 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn forced_chunks_survive_dimension_restarts_and_removals() {
+        let root = std::env::temp_dir().join(format!("horizon-forced-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let dimensions = [
+            "minecraft:overworld",
+            "minecraft:the_nether",
+            "minecraft:the_end",
+        ];
+        for (i, dim) in dimensions.iter().enumerate() {
+            let save = SaveDir::new(dimension_dir(&root, dim));
+            assert!(save.load_forced_chunks().is_empty());
+            let forced = HashSet::from([(i as i32, -17), (-23, i as i32), (-1, -1)]);
+            save.save_forced_chunks(&forced).unwrap();
+        }
+        for (i, dim) in dimensions.iter().enumerate() {
+            let path = dimension_dir(&root, dim);
+            let save = SaveDir::new(path.clone());
+            let mut forced = save.load_forced_chunks();
+            assert_eq!(
+                forced,
+                HashSet::from([(i as i32, -17), (-23, i as i32), (-1, -1)])
+            );
+            let mut data = read_saved_data(&path, "chunk_tickets").unwrap();
+            let other = Tag::compound([
+                ("type", Tag::String("minecraft:portal".into())),
+                ("level", Tag::Int(30)),
+                ("chunk_pos", Tag::IntArray(vec![7, -8])),
+                ("ticks_left", Tag::Long(42)),
+            ]);
+            if let Some(Tag::List(tickets)) = data.get_mut("tickets") {
+                assert!(
+                    tickets
+                        .iter()
+                        .all(|t| t.get("level") == Some(&Tag::Int(31)))
+                );
+                tickets.push(other.clone());
+            }
+            write_saved_data(&path, "chunk_tickets", data).unwrap();
+            forced.remove(&(-1, -1));
+            save.save_forced_chunks(&forced).unwrap();
+            drop(save);
+            let reopened = SaveDir::new(path.clone());
+            assert_eq!(reopened.load_forced_chunks(), forced);
+            reopened.save_forced_chunks(&HashSet::new()).unwrap();
+            assert!(SaveDir::new(path.clone()).load_forced_chunks().is_empty());
+            assert_eq!(
+                read_saved_data(&path, "chunk_tickets")
+                    .unwrap()
+                    .get("tickets"),
+                Some(&Tag::List(vec![other]))
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn saved_far_surface_reads_builds_and_water_without_gameplay_chunks() {
         let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
