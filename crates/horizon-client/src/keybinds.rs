@@ -275,6 +275,20 @@ impl Default for KeyBinds {
         }
     }
 }
+/// Each default key once, in order: two mappings that share a default key
+/// (Advancements and the debug profiler both on L) are one press of it, not
+/// two (the second would close the screen the first opened). Vanilla clicks
+/// both mappings, but the profiler one only acts with F3 held.
+fn distinct<T: PartialEq>(keys: Vec<T>) -> Vec<T> {
+    let mut out = Vec::with_capacity(keys.len());
+    for k in keys {
+        if !out.contains(&k) {
+            out.push(k);
+        }
+    }
+    out
+}
+
 impl KeyBinds {
     pub fn get(&self, name: &str) -> &str {
         self.keys
@@ -356,7 +370,7 @@ impl KeyBinds {
             })
             .collect();
         if !bound.is_empty() {
-            return bound;
+            return distinct(bound);
         }
         // An unbound key whose default meaning was moved elsewhere is inert.
         if MAPPINGS
@@ -385,7 +399,7 @@ impl KeyBinds {
             })
             .collect();
         if !bound.is_empty() {
-            return bound;
+            return distinct(bound);
         }
         if MAPPINGS
             .iter()
