@@ -4063,6 +4063,15 @@ impl Game<'_> {
             }
             if reacts {
                 self.predict_use(&changes, seq);
+            } else if held.as_ref().is_some_and(|s| &*s.item == "minecraft:brush") {
+                // BrushItem.useOn: brushing starts here (CONSUME, no swing); the
+                // server brushes and the dust is this client's own.
+                self.with_hand(hand, |g| {
+                    if g.using.is_none() {
+                        g.using = Some((g.held_slot(), 0));
+                    }
+                });
+                return true;
             } else if let Some(stack) = held.as_ref()
                 && self.predict_item_on_block(stack, &hit)
             {
@@ -4383,6 +4392,30 @@ impl Game<'_> {
         // Another hotbar slot picked: LivingEntity.updatingUsingItem sees a
         // different stack in the hand. The off hand keeps its item.
         let in_hand = slot == self.selected || slot == super::shield::OFFHAND_SLOT;
+        // BrushItem.onUseTick: with no block aimed the use ends (the server
+        // ends it too); a stroke shows its dust. Its sounds are the server's.
+        if stack
+            .as_ref()
+            .is_some_and(|s| &*s.item == "minecraft:brush")
+        {
+            let elapsed = ticks + 1;
+            let hit = self.pick().filter(|_| in_hand);
+            if let Some(hit) = &hit
+                && elapsed % 10 == 5
+            {
+                self.brush_dust(hit, slot == super::shield::OFFHAND_SLOT);
+            }
+            if hit.is_none() && in_hand {
+                self.send(S::PlayerAction(play::PlayerAction {
+                    action: 6,
+                    pos: [0; 3],
+                    direction: 0,
+                    sequence: 0,
+                }));
+            }
+            self.using = hit.and(Some((slot, elapsed))).filter(|_| elapsed < 200);
+            return;
+        }
         // A drawn bow, a charging crossbow, a raised shield...: held until
         // the button lets go.
         if stack.as_ref().is_some_and(|s| self.held_until_released(s)) {

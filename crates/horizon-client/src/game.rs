@@ -18,6 +18,7 @@ mod boats;
 mod books;
 mod bossbars;
 mod breezes;
+mod brush;
 mod campfire;
 mod campfire_douse;
 mod cartography;
@@ -1653,6 +1654,8 @@ struct Game<'a> {
     boss_overlay: horizon_client::boss_overlay::BossOverlay,
     exec: commands::execute::ExecState,
     rand_sequences: horizon_client::random_sequences::RandomSequences,
+    /// `BrushableBlockEntity`'s brush counts of the blocks being brushed.
+    brushing: brush::Brushing,
     border: horizon_client::worldborder::WorldBorder,
     /// `WorldBorderRenderer` and its render state.
     border_renderer: horizon_client::border_render::BorderRenderer,
@@ -2796,6 +2799,11 @@ impl Game<'_> {
                     data,
                 } => self.sculk_charge_event(pos, data),
                 LevelEvent::LevelEvent { id: 3007, pos, .. } => self.shriek_event(pos),
+                LevelEvent::LevelEvent {
+                    id: 3008,
+                    pos,
+                    data,
+                } => self.brush_complete_event([pos.x, pos.y, pos.z], data),
                 LevelEvent::LevelEvent { id: 2004, pos, .. } => {
                     self.spawner_burst([pos.x, pos.y, pos.z])
                 }
@@ -2972,6 +2980,11 @@ impl Game<'_> {
                     kind: "command_block",
                     ..
                 } => self.command_block_tick(pos),
+                LevelEvent::BlockEvent {
+                    pos,
+                    kind: "brushable",
+                    ..
+                } => self.brushable_tick([pos.x, pos.y, pos.z]),
                 LevelEvent::BlockEvent {
                     pos, kind: "hatch", ..
                 } => {
@@ -3674,6 +3687,13 @@ impl Game<'_> {
         {
             return Ok(true);
         }
+        // BrushItem.useOn: brushing starts on the block aimed at (CONSUME).
+        if block_hit.is_some() && &*stack.item == "minecraft:brush" {
+            if self.using.is_none() {
+                self.using = Some((self.held_slot(), 0));
+            }
+            return Ok(true);
+        }
         if !on_block
             && (self.raise_shield(self.held_slot())
                 || self.use_fishing_rod(&stack)
@@ -3960,6 +3980,10 @@ impl Game<'_> {
             } else {
                 self.using = Some((slot, ticks + 1));
             }
+            return;
+        }
+        if &*stack.item == "minecraft:brush" {
+            self.tick_brush(slot, ticks);
             return;
         }
         let Some(consumable) = info.consumable.as_ref() else {
@@ -12540,6 +12564,7 @@ impl<'a> Game<'a> {
             boss_overlay: Default::default(),
             exec: Default::default(),
             rand_sequences: Default::default(),
+            brushing: Default::default(),
             border: Default::default(),
             border_renderer: Default::default(),
             border_state: Default::default(),
