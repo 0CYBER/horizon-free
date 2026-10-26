@@ -113,6 +113,9 @@ pub struct ItemInfo {
     pub swappable: bool,
     /// `equippable.dispensable` (dispensers may put it on an entity).
     pub equip_dispensable: bool,
+    /// `equippable.damage_on_hurt`: the item wears when its wearer is hurt
+    /// (false for the elytra).
+    pub equip_damage_on_hurt: bool,
     /// `equippable.allowed_entities` resolved to entity type ids; None allows all.
     pub equip_allowed: Option<HashSet<String>>,
     pub equip_sound: Option<String>,
@@ -400,6 +403,36 @@ impl Items {
         self.get(&stack.item).is_some_and(|i| i.fire_resistant)
     }
 
+    /// `ItemStack.canBeHurtBy` for the cactus damage type: a `damage_resistant`
+    /// component naming `minecraft:cactus`, or a damage type tag that holds it.
+    /// (`#minecraft:is_fire`, as on netherite gear, does not.)
+    pub fn resists_cactus(&self, stack: &ItemStack) -> bool {
+        const CACTUS_TAGS: [&str; 5] = [
+            "#minecraft:bypasses_shield",
+            "#minecraft:no_knockback",
+            "#minecraft:panic_environmental_causes",
+            "#minecraft:panic_causes",
+            "#minecraft:sulfur_cube_with_block_immune_to",
+        ];
+        let Some((_, v)) = stack.data().and_then(|data| {
+            data.other
+                .iter()
+                .find(|(key, _)| key == "minecraft:damage_resistant")
+        }) else {
+            return false;
+        };
+        match v.get("types") {
+            Some(horizon_world::nbt::Tag::String(id)) => id
+                .to_string()
+                .is_ok_and(|id| id == "minecraft:cactus" || CACTUS_TAGS.contains(&id.as_str())),
+            Some(horizon_world::nbt::Tag::List(ids)) => ids.iter().any(|t| {
+                matches!(t, horizon_world::nbt::Tag::String(id)
+                    if id.to_string().is_ok_and(|id| id == "minecraft:cactus"))
+            }),
+            _ => false,
+        }
+    }
+
     pub fn load(root: &Path, registry: &BlockRegistry, facts: &BlockFacts) -> Result<Self> {
         let mut block_for_item: HashMap<&str, BlockStateId> = HashMap::new();
         for (i, s) in facts.states.iter().enumerate() {
@@ -594,6 +627,9 @@ impl Items {
                         .as_bool()
                         .unwrap_or(true),
                     equip_dispensable: c["minecraft:equippable"]["dispensable"]
+                        .as_bool()
+                        .unwrap_or(true),
+                    equip_damage_on_hurt: c["minecraft:equippable"]["damage_on_hurt"]
                         .as_bool()
                         .unwrap_or(true),
                     equip_allowed: match &c["minecraft:equippable"]["allowed_entities"] {
@@ -834,6 +870,7 @@ impl Items {
             held: None,
             killed_by_player: false,
             explosion_radius: None,
+            this_entity: false,
         };
         ctx.evaluate(table, random)
     }
@@ -898,10 +935,26 @@ impl Items {
         random: &mut impl RandomSource,
         sequences: Option<(&mut crate::random_sequences::RandomSequences, i64)>,
     ) -> Vec<ItemStack> {
-        self.block_drops_exploded(registry, state, held, dynamic, random, sequences, None)
+        self.block_drops_exploded(
+            registry, state, held, dynamic, random, sequences, None, false,
+        )
+    }
+    /// `block_drops_with` for a block a player breaks (`Block.playerDestroy`):
+    /// the player is the loot context's `this` entity, so snow and chorus
+    /// flower tables see an entity.
+    pub fn block_drops_by_player(
+        &self,
+        registry: &BlockRegistry,
+        state: BlockStateId,
+        held: Option<&ItemStack>,
+        dynamic: &[ItemStack],
+        random: &mut impl RandomSource,
+    ) -> Vec<ItemStack> {
+        self.block_drops_exploded(registry, state, held, dynamic, random, None, None, true)
     }
     /// `block_drops_full` for a block an explosion destroys: `explosion`
-    /// is its radius when the explosion decays drops (`DESTROY_WITH_DECAY`).
+    /// is its radius when the explosion decays drops (`DESTROY_WITH_DECAY`);
+    /// `breaker` is whether an entity (the player) broke the block.
     #[allow(clippy::too_many_arguments)]
     pub fn block_drops_exploded(
         &self,
@@ -912,8 +965,10 @@ impl Items {
         random: &mut impl RandomSource,
         sequences: Option<(&mut crate::random_sequences::RandomSequences, i64)>,
         explosion: Option<f32>,
+        breaker: bool,
     ) -> Vec<ItemStack> {
-        let drops = self.block_drops_raw(registry, state, held, random, sequences, explosion);
+        let drops =
+            self.block_drops_raw(registry, state, held, random, sequences, explosion, breaker);
         if !drops.iter().any(|d| d.item.starts_with(DYNAMIC)) {
             return drops;
         }
@@ -928,6 +983,7 @@ impl Items {
             })
             .collect()
     }
+    #[allow(clippy::too_many_arguments)]
     fn block_drops_raw(
         &self,
         registry: &BlockRegistry,
@@ -936,6 +992,7 @@ impl Items {
         random: &mut impl RandomSource,
         sequences: Option<(&mut crate::random_sequences::RandomSequences, i64)>,
         explosion_radius: Option<f32>,
+        breaker: bool,
     ) -> Vec<ItemStack> {
         let Some(block) = registry.state(state) else {
             return vec![];
@@ -969,6 +1026,7 @@ impl Items {
                 held,
                 killed_by_player: false,
                 explosion_radius,
+                this_entity: breaker,
             };
             return ctx.evaluate(table, random);
         }
@@ -979,6 +1037,7 @@ impl Items {
             held,
             killed_by_player: false,
             explosion_radius,
+            this_entity: breaker,
         };
         ctx.evaluate(table, random)
     }
@@ -1002,6 +1061,7 @@ impl Items {
             held,
             killed_by_player,
             explosion_radius: None,
+            this_entity: false,
         };
         ctx.evaluate(table, random)
     }
@@ -1034,6 +1094,7 @@ impl Items {
             held: None,
             killed_by_player: false,
             explosion_radius: None,
+            this_entity: false,
         };
         match table.get("random_sequence").and_then(Value::as_str) {
             Some(sequence) => ctx.evaluate(table, sequences.get(sequence, seed)),
@@ -1059,6 +1120,7 @@ impl Items {
             held,
             killed_by_player,
             explosion_radius: None,
+            this_entity: false,
         };
         ctx.evaluate(table, random)
     }
@@ -1081,6 +1143,7 @@ impl Items {
             held,
             killed_by_player,
             explosion_radius: None,
+            this_entity: false,
         };
         ctx.evaluate(table, random)
     }
@@ -1122,6 +1185,8 @@ struct LootContext<'a> {
     killed_by_player: bool,
     /// `LootContextParams.EXPLOSION_RADIUS`: an explosion that decays drops.
     explosion_radius: Option<f32>,
+    /// `LootContextParams.THIS_ENTITY` is set (a player broke the block).
+    this_entity: bool,
 }
 impl LootContext<'_> {
     /// Level of an enchantment on the tool / killer's weapon.
@@ -1281,6 +1346,15 @@ impl LootContext<'_> {
                     c["unenchanted_chance"].as_f64().unwrap_or(0.0) as f32
                 };
                 random.next_float() < chance
+            }
+            // `this` with no checks (snow, chorus flower) holds when an entity
+            // broke the block (LootItemEntityPropertyCondition needs the entity).
+            "minecraft:entity_properties"
+                if self.this_entity
+                    && c["entity"].as_str() == Some("this")
+                    && c["predicate"].as_object().is_none_or(|p| p.is_empty()) =>
+            {
+                true
             }
             // Entity flags, equipment and damage-source predicates: none hold
             // for an unenchanted player kill without fire or lightning.
@@ -1667,6 +1741,7 @@ mod tests {
             held,
             killed_by_player: block.is_empty(),
             explosion_radius: None,
+            this_entity: false,
         }
     }
 

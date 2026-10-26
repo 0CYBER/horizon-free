@@ -2183,6 +2183,7 @@ impl Game<'_> {
         let in_wall = !g.sleeping && self.in_wall(g.position, g.eye_height());
         let at = g.position;
         let sneaking = g.sneaking;
+        let mut soul = None;
         let events = self.as_guest(host, conn, |game| {
             let (rules, motion) = (game.world.health_rules, game.motion);
             let health = &motion.health;
@@ -2252,6 +2253,7 @@ impl Game<'_> {
             w.player.shift_key_down = sneaking;
             w.player.freeze_immune = freeze_immune;
             let _ = w.server_block_damage(start);
+            let _ = w.update_soul_speed_block();
             let _ = w.tick_environment_damage();
             let _ = w.apply_fire_contact();
             let _ = w.server_hazards_tick(in_wall);
@@ -2279,6 +2281,9 @@ impl Game<'_> {
             // LivingEntity.baseTick: outside the world border, then tickEffects.
             game.border_damage();
             game.tick_mob_effects();
+            // Soul Speed's effects (LivingEntity.baseTick's location_changed
+            // and tick effects); its particle goes to the players around.
+            soul = game.tick_soul_speed();
             let Some(player) = game.player.as_mut() else {
                 return (Vec::new(), None);
             };
@@ -2301,11 +2306,15 @@ impl Game<'_> {
             let marked = std::mem::take(&mut player.health.sync_velocity);
             let velocity = marked.then_some(player.velocity);
             game.record_combat(&events);
+            game.wear_armor(&events);
             (events, velocity)
         });
         let Some((events, marked)) = events else {
             return;
         };
+        if let Some((at, velocity)) = soul {
+            super::lan_particles::send_soul_particle(host, at, velocity);
+        }
         self.as_guest(host, conn, |game| game.tick_player_sculk_events());
         for event in events {
             match event {
@@ -2394,9 +2403,13 @@ impl Game<'_> {
             }
             if (next / 10) % 2 == 0
                 && !creative
-                && let Some(elytra) = game.armor[1].as_mut()
+                && let Some(stack) = game.armor[1].clone()
             {
-                elytra.damage += 1;
+                // `ItemStack.hurtAndBreak`: Unbreaking can save the wear.
+                let loss = game.durability_loss(&stack, 1);
+                if let Some(elytra) = game.armor[1].as_mut() {
+                    elytra.damage += loss;
+                }
             }
             let ctx = game.player_context(None);
             game.post_game_event("minecraft:elytra_glide", at, ctx);
@@ -2659,7 +2672,13 @@ impl Game<'_> {
             .random
             .next_int_bound(touching.len() as i32)
             .unwrap_or(0) as usize;
-        let orb = self.orbs.remove(touching[pick]);
+        // A merged orb gives its value once per count and goes at zero.
+        let orb = self.orbs[touching[pick]].clone();
+        if orb.count <= 1 {
+            self.orbs.remove(touching[pick]);
+        } else {
+            self.orbs[touching[pick]].count -= 1;
+        }
         play.xp_delay = 2;
         host.hub.take_item(orb.id as i32, id, 1, at);
         // ClientPacketListener.handleTakeItemEntity's sound, at the orb.

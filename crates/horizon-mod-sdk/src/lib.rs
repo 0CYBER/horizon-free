@@ -39,7 +39,9 @@ wit_bindgen::generate!({
 
 pub use exports::horizon::mods::events::{Guest as __Guest, Registration};
 pub use exports::horizon::mods::ui_events::Guest as __UiEventsGuest;
-pub use horizon::mods::{chat, command, game, hud, input, log, render, storage, ui};
+pub use horizon::mods::{
+    browser, chat, command, game, hud, input, log, recipes, render, storage, ui,
+};
 
 /// The game's calls into a mod. Only the hooks [`Registration`] asks for
 /// are called; the others may stay as their defaults.
@@ -194,6 +196,7 @@ pub mod server {
 
     pub use exports::horizon::mods::server_events::{BlockPos, Guest as __Guest, Registration};
     pub use horizon::mods::players::{self, GameMode, Player};
+    pub use horizon::mods::world::{self, BlockChange};
 
     /// The server's calls into a mod. Only the hooks [`Registration`] asks
     /// for are called; the others may stay as their defaults.

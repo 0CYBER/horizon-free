@@ -969,8 +969,8 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, a: &Animations) -> bool {
             s,
             &Turtle {
                 on_land: !m.fluids.in_water && m.on_ground,
-                laying_egg: false,
-                has_egg: false,
+                laying_egg: m.extra.flag2,
+                has_egg: m.extra.flag,
             },
         ),
         Species::Strider => strider(p, s, m.rider.is_some()),
