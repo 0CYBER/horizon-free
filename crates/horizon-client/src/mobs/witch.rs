@@ -193,6 +193,11 @@ fn witch_attack(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
         }
         Who::Player => false,
     };
+    // `target.hasEffect`: a target that already has the effect gets the next one.
+    let has = |effect: &str| match who {
+        Who::Player => cx.w.player.as_ref().is_some_and(|p| p.has_effect(effect)),
+        Who::Mob(id) => cx.w.seen(id).is_some_and(|s| s.has_effect(effect)),
+    };
     let (effect, ticks, amplifier) = if heals {
         m.ai.target = None;
         if health <= 4.0 {
@@ -200,11 +205,11 @@ fn witch_attack(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
         } else {
             ("minecraft:regeneration", 900, 0)
         }
-    } else if dist >= 8.0 {
+    } else if dist >= 8.0 && !has("slowness") {
         ("minecraft:slowness", 1800, 0)
-    } else if health >= 8.0 {
+    } else if health >= 8.0 && !has("poison") {
         ("minecraft:poison", 900, 0)
-    } else if dist <= 3.0 && m.random.next_float() < 0.25 {
+    } else if dist <= 3.0 && !has("weakness") && m.random.next_float() < 0.25 {
         ("minecraft:weakness", 1800, 0)
     } else {
         ("minecraft:instant_damage", 1, 0)
@@ -235,6 +240,15 @@ fn witch_attack(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
         1.0,
         pitch,
     ));
+}
+/// The movement speed of a witch with `SPEED_MODIFIER_DRINKING` (-0.25,
+/// `ADD_VALUE`) while it drinks: it stands still for the 32 ticks.
+pub fn speed(m: &Mob, base: f64) -> f64 {
+    if m.species() == Species::Witch && m.extra.flag {
+        (base - 0.25).max(0.0)
+    } else {
+        base
+    }
 }
 /// Witch.aiStep before `super.aiStep()`: the healing cooldown, then drink
 /// water breathing, fire resistance, healing or swiftness.
