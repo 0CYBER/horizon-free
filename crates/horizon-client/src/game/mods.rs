@@ -55,6 +55,9 @@ pub(super) struct ModsState {
     /// The HUD font's advances for `render.text-width`, made once.
     #[cfg(feature = "mods")]
     font_widths: std::sync::Arc<[f32]>,
+    /// Extras that are official mods now, being installed.
+    #[cfg(feature = "mods")]
+    pub(super) moved: super::moved_extras::MovedState,
 }
 
 /// The mappings `input.mapping` answers for, with the default key their

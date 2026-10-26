@@ -1,8 +1,7 @@
 # Horizon extras
 
-Optional conveniences built into the client: fullbright, dynamic lights, zoom, a minimap, an FPS counter, a
-keystroke overlay, auto-reconnect, Mouse Tweaks-style inventory controls and
-inventory sorting. **Every one is off by default**: a fresh
+Optional conveniences built into the client: fullbright, dynamic lights, zoom, a minimap, auto-reconnect,
+Mouse Tweaks-style inventory controls and inventory sorting. **Every one is off by default**: a fresh
 install looks and behaves exactly like vanilla 26.3, and turning an extra off
 again restores vanilla's behaviour completely.
 
@@ -11,9 +10,9 @@ again restores vanilla's behaviour completely.
 | Part | Code |
 |---|---|
 | Settings, parsing and saving | `crates/horizon-client/src/extras.rs` |
-| Zoom curve, FPS and click counters | `extras.rs` (pure logic, unit tested) |
+| Zoom curve; FPS and click counters (for mods) | `extras.rs` (pure logic, unit tested) |
 | Dynamic lights: item glow, nearest sources | `crates/horizon-client/src/dynamic_light.rs` (unit tested), `game/dynamic_lights.rs`, `terrain.wgsl` and `entity.wgsl` (`dynamic_block_light`) |
-| HUD drawing (FPS, keystrokes, minimap frame) | `crates/horizon-client/src/extras_hud.rs` |
+| HUD drawing (minimap frame, corner stacking) | `crates/horizon-client/src/extras_hud.rs` |
 | Minimap colours, tiles and image | `crates/horizon-client/src/minimap.rs` |
 | Reconnect policy and backoff | `crates/horizon-client/src/reconnect.rs` |
 | Game glue (input hooks, per-frame update) | `crates/horizon-client/src/game/extras.rs` |
@@ -83,15 +82,15 @@ Horizon category in Controls, and adding one would put a non-vanilla mapping int
 - With zoom off (or the key up) the FOV target and mouse are vanilla's, bit for
   bit; the FOV harness covers this.
 
-### FPS counter (`fps`, default off)
-- A small "N fps" line in a corner (default top left), optionally followed by
-  the minimum and the 1% low over the last 5 seconds.
-- Separate from the Advanced graphics "Overlay" (the frame-time graph).
+### Moved to the mod browser
 
-### Keystrokes (`keystrokes`, default off)
-- W A S D, Space, LMB and RMB keys that light up while held, with clicks per
-  second under the mouse buttons (clicks in the last second). The letters follow
-  the bound keys.
+The **FPS counter** and **Keystrokes** are official mods now (`mods/official/`, [mods.md](mods.md#horizons-official-mods)),
+with the same look and options. On the first start after the update, a player who had one on gets the mod installed
+from Horizon's registry and turned on, with their corner and options carried over, and reads one line in the chat
+("FPS counter moved to the mod browser: installed for you"). The install is checked like the launcher's (size,
+SHA-256, signature, manifest); if it fails (offline), the next start tries again. `horizon-extras.txt` keeps the old
+keys and lists what was done in `movedToMods`. Code: `crates/horizon-client/src/moved_extras.rs`,
+`game/moved_extras.rs`.
 
 ### Minimap (`minimap`, default off)
 - A corner map (top right by default), square or round, small/medium/large,
@@ -162,11 +161,11 @@ and the container screen tests are unchanged).
   the world, like vanilla's HUD. Extras in the top left corner give way to the
   debug screen (F3), which shows the FPS anyway.
 - Corners stack: extras placed in the same corner stack downward (top corners)
-  or upward (bottom corners) in the order minimap, FPS, keystrokes. The top
+  or upward (bottom corners) in the order minimap, then mods' panels. The top
   right corner starts below the status effect icons.
 
 ## Perf budget
 
 Off: a flag check per frame per extra (no allocations, no world access).
-On: FPS and keystrokes are a few quads; the minimap stays under 0.3 ms of CPU
+On: the minimap stays under 0.3 ms of CPU
 per frame (tile budget) plus a 64 KiB texture upload when its image changes.
