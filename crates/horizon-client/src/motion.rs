@@ -1742,7 +1742,8 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         let input = EdgeBackoffInput {
             movement,
             bounds: self.player.bounds(),
-            flying: false,
+            // Player.maybeBackOffFromEdge: not while flying.
+            flying: self.player.flying,
             self_or_player: matches!(mover, MoverType::SelfMovement | MoverType::Player),
             fall_distance: self.player.fall_distance,
             query_budget: 1_000_000,
