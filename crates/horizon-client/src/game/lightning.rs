@@ -162,11 +162,9 @@ impl Game<'_> {
             converted: Vec::new(),
         });
     }
-    /// `spawnFire`: fire at the strike point and `extra` random neighbours.
+    /// `spawnFire`: fire at the strike point and `extra` random neighbours,
+    /// wherever `BaseFireBlock.getState` fire can survive.
     fn bolt_fire(&mut self, at: [f64; 3], extra: i32) {
-        if self.ui.difficulty < 2 {
-            return;
-        }
         let base = [
             at[0].floor() as i32,
             at[1].floor() as i32,
@@ -183,18 +181,13 @@ impl Game<'_> {
             if !self.res.facts().is_air(state) {
                 continue;
             }
-            // BaseFireBlock.getState: soul fire on soul soil and sand.
-            let below = self.res.facts().get(self.world.block(p[0], p[1] - 1, p[2]));
-            let name = if matches!(&*below.name, "minecraft:soul_soil" | "minecraft:soul_sand") {
-                "minecraft:soul_fire"
-            } else {
-                "minecraft:fire"
-            };
-            // FireBlock.canSurvive: a sturdy floor (flammable neighbours aside).
-            if below.sturdy_full >> 1 & 1 == 0 {
-                continue;
-            }
-            if let Some(fire) = self.pack.assets.registry.default_state(name) {
+            // BaseFireBlock.getState and FireBlock/SoulFireBlock.canSurvive.
+            let at = BlockPos::new(p[0], p[1], p[2]);
+            let fire = self.with_level(|b, level, ticks| {
+                let fire = b.fire_state_for(level, ticks, at);
+                b.can_survive(level, ticks, at, fire).then_some(fire)
+            });
+            if let Some(fire) = fire {
                 let _ = self.level_set(p, fire);
             }
         }
@@ -219,7 +212,10 @@ impl Game<'_> {
                     pitch,
                 );
                 if !b.visual_only {
-                    self.bolt_fire(b.at, 4);
+                    // Only Normal and Hard start fires with the strike itself.
+                    if self.ui.difficulty >= 2 {
+                        self.bolt_fire(b.at, 4);
+                    }
                     self.strike_rod(b.at);
                 }
             }
