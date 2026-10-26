@@ -423,8 +423,6 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         InteractionResult::Success
     }
 
-    /// `ComposterBlock.addLayer` once its `compostable` provider gave
-    /// `layers`: the new state (the old one when no layer is added).
     /// `ComposterBlock.extractProduce`: the bone meal pops out, the composter
     /// empties and its sound plays.
     fn composter_extract_produce(&mut self, pos: BlockPos, state: BlockStateId) {
@@ -444,6 +442,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         });
     }
 
+    /// `ComposterBlock.addLayer` once its `compostable` provider gave
+    /// `layers`: the new state (the old one when no layer is added).
     fn composter_add_layer(&mut self, pos: BlockPos, layers: i32) -> BlockStateId {
         let b = self.b;
         let state = self.state(pos);
