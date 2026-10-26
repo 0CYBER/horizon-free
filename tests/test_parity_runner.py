@@ -401,3 +401,44 @@ class KnownFlakyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorkspaceManifestTests(unittest.TestCase):
+    """A crate split's Cargo.toml and Cargo.lock changes don't select every harness; a dependency change still does."""
+    CLIENT = '[package]\nname = "horizon-client"\n\n[dependencies]\nserde = "1"\nwgpu = { version = "27", features = ["x"] }\n'
+    LOCK = ('version = 4\n\n[[package]]\nname = "horizon-client"\nversion = "0.1.0"\ndependencies = [\n "serde",\n]\n\n'
+            '[[package]]\nname = "serde"\nversion = "1.0.1"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n')
+
+    def verdict(self, base, head):
+        """base, head: {path: text or None}; the manifests workspace_only_manifests leaves out."""
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.object(parity, "ROOT", Path(temp)), \
+                mock.patch.object(parity, "git_show", lambda _base, path: base.get(path)):
+            for path, text in head.items():
+                if text is not None:
+                    Path(temp, path).parent.mkdir(parents=True, exist_ok=True)
+                    Path(temp, path).write_text(text)
+            return parity.workspace_only_manifests(set(head) | set(base), "base")
+
+    def test_a_crate_split_is_left_out(self):
+        command = '[package]\nname = "horizon-command"\n\n[dependencies]\nserde = "1"\nhorizon-core = { path = "../horizon-core" }\n'
+        client = self.CLIENT + 'horizon-command = { path = "../horizon-command" }\n'
+        lock = self.LOCK.replace('[[package]]\nname = "serde"', '[[package]]\nname = "horizon-command"\nversion = "0.1.0"\n\n'
+                                 '[[package]]\nname = "serde"')
+        base = {"Cargo.toml": '[workspace]\nmembers = ["crates/horizon-client"]\nresolver = "2"\n',
+                "crates/horizon-client/Cargo.toml": self.CLIENT, "Cargo.lock": self.LOCK}
+        head = {"Cargo.toml": '[workspace]\nmembers = ["crates/horizon-client", "crates/horizon-command"]\nresolver = "2"\n',
+                "crates/horizon-client/Cargo.toml": client, "crates/horizon-command/Cargo.toml": command, "Cargo.lock": lock}
+        self.assertEqual(self.verdict(base, head), set(head))
+
+    def test_a_dependency_change_still_counts(self):
+        base = {"crates/horizon-client/Cargo.toml": self.CLIENT, "Cargo.lock": self.LOCK}
+        bumped = {"crates/horizon-client/Cargo.toml": self.CLIENT, "Cargo.lock": self.LOCK.replace("1.0.1", "1.0.2")}
+        self.assertEqual(self.verdict(base, bumped), set())
+        feature = {"crates/horizon-client/Cargo.toml": self.CLIENT.replace('["x"]', '["x", "y"]')}
+        self.assertEqual(self.verdict({"crates/horizon-client/Cargo.toml": self.CLIENT}, feature), set())
+        resolver = {"Cargo.toml": '[workspace]\nmembers = ["a"]\nresolver = "3"\n'}
+        self.assertEqual(self.verdict({"Cargo.toml": '[workspace]\nmembers = ["a"]\nresolver = "2"\n'}, resolver), set())
+
+    def test_without_a_base_everything_counts(self):
+        self.assertEqual(parity.workspace_only_manifests({"Cargo.lock"}, None), set())

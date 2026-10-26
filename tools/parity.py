@@ -1246,6 +1246,58 @@ def trace_main(output, script, arguments):
 
 # Files every harness's result depends on (part of environment_key): a change to one affects them all.
 SHARED_INPUTS = {"research-lock.json", "Cargo.lock"}
+# Manifest sections that say what a crate is and where its targets are, not what it builds with.
+MANIFEST_SECTION_KEPT = re.compile(r"\[\[?(?:package|lib|bin|example|test|bench|lints|badges)\b[^\]]*\]\]?$")
+# A workspace crate named as a dependency (by path, or from the workspace's own table), or listed as a member.
+WORKSPACE_LINE = re.compile(r'(?:horizon[\w-]*|cargo-horizon-mod|xtask)\s*=\s*(?:\{[^}]*\b(?:path|workspace)\s*=[^}]*\}|true)'
+                            r'|(?:horizon[\w-]*|cargo-horizon-mod|xtask)\.workspace\s*=\s*true|"crates/[^"]+",?')
+
+
+def git_show(base, path):
+    """path's content at commit base, or None where it didn't exist."""
+    result = subprocess.run(["git", "show", f"{base}:{path}"], cwd=ROOT, capture_output=True, text=True)
+    return result.stdout if result.returncode == 0 else None
+
+
+def manifest_lines(text):
+    """A Cargo.toml's lines that decide what is built: (section, line) pairs, without its package's identity and
+    targets, comments, or workspace crates (whose code counts through its own sources)."""
+    lines, section = set(), ""
+    for raw in (text or "").splitlines():
+        line = re.sub(r"\s+", " ", raw.split("#", 1)[0]).strip()
+        if not line:
+            continue
+        if line.startswith("["):
+            section = line
+            continue
+        if MANIFEST_SECTION_KEPT.match(section) or WORKSPACE_LINE.fullmatch(line) or \
+                section == "[workspace]" and (line.startswith("members =") or line.startswith('"') or line == "]"):
+            continue
+        lines.add((section, line))
+    return lines
+
+
+def lock_packages(text):
+    """Cargo.lock's packages from a registry or git (with their versions and checksums); workspace crates' entries
+    only list what their manifests say."""
+    return {block.strip() for block in (text or "").split("[[package]]") if "\nsource = " in block}
+
+
+def workspace_only_manifests(changed, base):
+    """The changed Cargo.lock and Cargo.toml files whose changes only add, remove or move workspace crates (a crate
+    split): no external package, version, feature, or build setting changed across them. Their crates' code counts
+    through its own sources, so these files don't make every harness linking the crates rerun."""
+    manifests = sorted(path for path in changed if path == "Cargo.lock" or path.endswith("Cargo.toml"))
+    if not manifests or base is None:
+        return set()
+    if "Cargo.lock" in manifests and \
+            lock_packages(git_show(base, "Cargo.lock")) != lock_packages((ROOT / "Cargo.lock").read_text(encoding="utf-8")):
+        return set()
+    tomls = [path for path in manifests if path != "Cargo.lock"]
+    before = set().union(*(manifest_lines(git_show(base, path)) for path in tomls)) if tomls else set()
+    after = set().union(*(manifest_lines((ROOT / path).read_text(encoding="utf-8") if (ROOT / path).exists() else None)
+                          for path in tomls)) if tomls else set()
+    return set(manifests) if before == after else set()
 
 
 def changed_files(ref):
@@ -1449,7 +1501,11 @@ def main():
         if args.changed:
             merge_base = subprocess.run(["git", "merge-base", "HEAD", args.changed], cwd=ROOT, capture_output=True, text=True)
             base = merge_base.stdout.strip() or None
-        affected = affected_harnesses(found, records, changed, reach=not args.by_crate, base=base)
+        moved = workspace_only_manifests(changed, base) if not args.by_crate else set()
+        if moved:
+            print(f"{', '.join(sorted(moved))}: only workspace crates added, removed or moved; their sources count "
+                  "instead", flush=True)
+        affected = affected_harnesses(found, records, changed - moved, reach=not args.by_crate, base=base)
         chosen = [name for name in found if name in affected and stale(name, state, hasher, environment)]
         print(f"{len(changed)} files changed{since}: {len(affected)} harnesses "
               f"depend on them, {len(chosen)} without a pass for their current inputs.", flush=True)
