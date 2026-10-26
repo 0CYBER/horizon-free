@@ -164,6 +164,8 @@ fn snapshot(out: &mut impl Write, player: &PlayerMotion) -> Result<()> {
         .iter()
         .filter_map(|e| match e {
             MotionEvent::Fall(e) => Some(e.trace()),
+            // The oracle's player wears no armor; the game applies this one.
+            MotionEvent::Health(horizon_client::health::HealthEvent::ArmorHurt { .. }) => None,
             MotionEvent::Health(e) => Some(e.trace()),
             MotionEvent::Snowflake { position, velocity } => Some(format!(
                 "snowflake {:016x},{:016x},{:016x} {:016x},{:016x},{:016x}",

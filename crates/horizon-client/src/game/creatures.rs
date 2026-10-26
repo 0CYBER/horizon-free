@@ -1535,7 +1535,6 @@ impl Game<'_> {
                     r.knockback = Some([p.velocity.x, p.velocity.y, p.velocity.z]);
                 }
             }
-            self.hurt_armor(amount);
             self.thorns(from);
         }
         if raised {
