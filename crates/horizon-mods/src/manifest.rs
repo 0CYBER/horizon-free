@@ -97,9 +97,12 @@ pub enum Capability {
     Input,
     /// The players on the server and messages to them (server mods).
     Players,
+    /// The recipes and items the game knows, for recipe viewers
+    /// (interface `recipes`).
+    Recipes,
 }
 impl Capability {
-    pub const ALL: [Capability; 10] = [
+    pub const ALL: [Capability; 11] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
@@ -110,6 +113,7 @@ impl Capability {
         Capability::Render,
         Capability::Input,
         Capability::Players,
+        Capability::Recipes,
     ];
     /// Whether a server mod may have it: the others act on a local player.
     pub fn on_server(self) -> bool {
@@ -128,6 +132,7 @@ impl Capability {
             Capability::Render => "render",
             Capability::Input => "input",
             Capability::Players => "players",
+            Capability::Recipes => "recipes",
         }
     }
     /// May change in any release: a mod uses it only with
@@ -135,7 +140,7 @@ impl Capability {
     pub fn is_experimental(self) -> bool {
         matches!(
             self,
-            Capability::Ui | Capability::Render | Capability::Input
+            Capability::Ui | Capability::Render | Capability::Input | Capability::Recipes
         )
     }
     /// What the player reads before turning the mod on: "May <this>".
@@ -153,6 +158,7 @@ impl Capability {
                 "see the keys you hold and your clicks, take over the use button on its own items and the mouse wheel, and add keys"
             }
             Capability::Players => "see who is on the server and message them",
+            Capability::Recipes => "read the game's recipes and items, and which recipes you know",
         }
     }
     /// The capability a component import needs, `Ok(None)` for one every
@@ -188,6 +194,7 @@ impl fmt::Display for Capability {
             Capability::Render => "render",
             Capability::Input => "input",
             Capability::Players => "players",
+            Capability::Recipes => "recipes",
         };
         f.write_str(name)
     }

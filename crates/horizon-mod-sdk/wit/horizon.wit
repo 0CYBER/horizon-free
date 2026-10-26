@@ -439,6 +439,76 @@ interface events {
     chat: func(text: string);
 }
 
+/// Capability `recipes` (experimental): the recipes and items the game
+/// knows, for recipe viewers. In single player and on Horizon's servers
+/// they are the world's; on any other server they are vanilla 26.3's (a
+/// client is sent no others), while `known` follows that server's book.
+interface recipes {
+    /// An item of `items`, by its index there, with a count and the
+    /// components it has beyond the item's own, in vanilla's item syntax
+    /// (`[potion_contents={potion:"minecraft:swiftness"}]`), or "".
+    record stack {
+        item: u32,
+        count: u32,
+        components: string,
+    }
+    /// The station a recipe is made at.
+    enum kind {
+        crafting-shaped,
+        crafting-shapeless,
+        smelting,
+        blasting,
+        smoking,
+        campfire,
+        stonecutting,
+        smithing,
+        brewing,
+    }
+    record recipe {
+        /// `minecraft:oak_planks`.
+        id: string,
+        kind: kind,
+        /// The recipe book's tab (`crafting_building_blocks`,
+        /// `furnace_food`), or "".
+        category: string,
+        /// Recipes the book shows on one button share a group, or "".
+        group: string,
+        /// A shaped recipe's grid: `slots` holds its cells row by row.
+        /// 0 for the other kinds.
+        width: u32,
+        height: u32,
+        /// Each slot's stacks, any one of which fits; an empty list is an
+        /// empty cell. Cooking and stonecutting: the input. Smithing: the
+        /// template, the base, the addition. Brewing: the bottle, the
+        /// reagent.
+        slots: list<list<stack>>,
+        /// What it makes; several when that varies (a trim on any armour).
+        results: list<stack>,
+        /// Cooking: game ticks and experience; 0 for the other kinds.
+        cooking-time: u32,
+        experience: f32,
+        /// The recipe book's id for it (one per way the book shows it), as
+        /// `known` lists them; -1 for the kinds the book doesn't show
+        /// (campfire, stonecutting, smithing, brewing).
+        book-id: s32,
+    }
+    record item {
+        /// `minecraft:diamond`, `<mod>:<path>`.
+        id: string,
+        /// In the player's language.
+        name: string,
+        /// Its item tags, without the `#`.
+        tags: list<string>,
+    }
+    /// Every item, in the registry's order: `stack.item` indexes this list.
+    items: func() -> list<item>;
+    /// Every recipe: the book's in its order, then campfire, stonecutting,
+    /// smithing and brewing. They don't change while a world is open.
+    all: func() -> list<recipe>;
+    /// The `book-id`s of the recipes the player's recipe book holds now.
+    known: func() -> list<s32>;
+}
+
 /// Capability `players`, server mods only (manifest `api = "0.3"`,
 /// experimental): the players on the server, and messages to them.
 interface players {
@@ -545,6 +615,7 @@ world horizon-ui-mod {
     import ui;
     import render;
     import input;
+    import recipes;
     export ui-events;
 }
 
@@ -558,4 +629,9 @@ world ui-host {
 world render-host {
     import render;
     import input;
+}
+
+/// The game's side of capability `recipes` (imports only).
+world recipes-host {
+    import recipes;
 }
