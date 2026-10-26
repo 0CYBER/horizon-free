@@ -2778,7 +2778,7 @@ impl Game<'_> {
                 resolved.push((uuid, skin));
             }
         }
-        resolved.retain(|(_, skin)| !skin.starts_with("skins/") || self.show_skin(skin));
+        resolved.retain(|(_, skin)| !skin.starts_with("skins/") || self.again_skin(skin));
         let Some((level, skins, own)) = self.remote.as_mut().map(|r| {
             r.skins = resolved.into_iter().collect();
             (
@@ -2817,11 +2817,9 @@ impl Game<'_> {
             .iter()
             .filter(|m| &*m.kind.id == "minecraft:mannequin" && m.profile.is_some())
             .map(|m| {
-                let t = m
-                    .profile
-                    .as_ref()
-                    .and_then(|p| p.properties.iter().find(|p| p.name == "textures"));
-                let textures = t.map_or_else(Default::default, |t| {
+                let profile = m.profile.as_ref();
+                let t = profile.and_then(|p| p.properties.iter().find(|p| p.name == "textures"));
+                let textures = if let Some(t) = t {
                     let signature = if t.signature.is_some() {
                         horizon_client::skins::Signature::Signed
                     } else {
@@ -2832,7 +2830,30 @@ impl Game<'_> {
                         signature,
                         &horizon_client::skins::TEXTURE_URIS,
                     )
-                });
+                } else {
+                    // `ResolvableProfile.resolveProfile`: no `textures` and
+                    // only a name or an id resolves through the services.
+                    let key = profile.and_then(|p| match (&p.name, p.uuid) {
+                        (Some(name), None) => {
+                            Some(horizon_client::skins::NameOrId::Name(name.clone()))
+                        }
+                        (None, Some(id)) => Some(horizon_client::skins::NameOrId::Id(id)),
+                        _ => None,
+                    });
+                    key.and_then(|key| match self.skin_profiles.borrow_mut().state(&key) {
+                        horizon_client::skins::Resolve::Done(Some(profile)) => {
+                            profile.textures().map(|(value, signature)| {
+                                horizon_client::skins::unpack(
+                                    &value,
+                                    signature,
+                                    &horizon_client::skins::TEXTURE_URIS,
+                                )
+                            })
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_default()
+                };
                 (m.id, textures)
             })
             .collect();
@@ -2847,7 +2868,7 @@ impl Game<'_> {
             resolved.push((id, skin));
         }
         for (id, skin) in resolved {
-            let skin = skin.filter(|s| !s.starts_with("skins/") || self.show_skin(s));
+            let skin = skin.filter(|s| !s.starts_with("skins/") || self.again_skin(s));
             if let Some(mob) = self
                 .mobs
                 .iter_mut()
@@ -2896,6 +2917,10 @@ impl Game<'_> {
         let e = self.skin_slots.remove(i);
         self.skin_slots.push(e);
         true
+    }
+    /// `show_skin`, or — its slot evicted — the image queued for upload again.
+    fn again_skin(&mut self, location: &str) -> bool {
+        self.show_skin(location) || self.skin_downloads.borrow_mut().again(location)
     }
     /// ChatType decoration: `chat.translation_key` with sender/content parameters.
     /// ChatType.Bound.decorate: the chat type's translation, with the
