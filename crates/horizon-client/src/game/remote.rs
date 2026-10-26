@@ -2050,6 +2050,7 @@ impl Game<'_> {
                 }
             }
             C::EntityEvent(p) => {
+                self.remote_fangs_event(p.id as u32, p.event);
                 // LocalPlayer.setPermissions also refreshes an open World Options screen.
                 if (24..=28).contains(&p.event)
                     && self.remote.as_ref().is_some_and(|r| r.entity_id == p.id)
