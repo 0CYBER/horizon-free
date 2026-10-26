@@ -85,16 +85,16 @@ fn format_double(v: f64) -> String {
 
 impl Game<'_> {
     /// Commands.performCommand for a line without its slash.
-    pub(super) fn run_command(&mut self, command: &str) {
+    pub(super) fn run_command(&mut self, command: &str) -> bool {
         if self.mod_command(command) {
-            return;
+            return true;
         }
         let d = vanilla::game_dispatcher();
         let parse = d.parse(command, &self.ui.registries);
         let result = match parse.executable() {
             Err(e) => {
                 self.syntax_failure(&e, command);
-                return;
+                return false;
             }
             Ok((ctx, _)) => {
                 let ctx = ctx.clone();
@@ -103,6 +103,7 @@ impl Game<'_> {
                 self.run_chain(&root, &ctx)
             }
         };
+        let ok = result.is_ok();
         if let Err(e) = result {
             if e.input.is_some() {
                 self.syntax_failure(&e, command);
@@ -114,6 +115,20 @@ impl Game<'_> {
         if self.player.is_some() {
             self.check_inventory_trigger();
         }
+        ok
+    }
+    /// `run_command` with its output suppressed
+    /// (`CommandSourceStack.withSuppressedOutput`): the player's own source,
+    /// rights and checks, no feedback and no failure in the chat.
+    pub(super) fn run_command_quietly(&mut self, command: &str) -> bool {
+        let quiet = execute::Source {
+            silent: true,
+            ..self.player_source()
+        };
+        let outer = self.command_source.replace(quiet);
+        let ok = self.run_command(command);
+        self.command_source = outer;
+        ok
     }
     fn syntax_failure(&mut self, e: &CommandError, command: &str) {
         self.command_failure(e.message.clone());
@@ -2578,38 +2593,7 @@ impl Game<'_> {
     /// `PoiTypes`: the point of interest type of a block state.
     fn poi_type(&self, state: horizon_world::registry::BlockStateId) -> Option<&'static str> {
         let s = self.pack.assets.registry.state(state)?;
-        let name = s.name.strip_prefix("minecraft:")?;
-        Some(match name {
-            "blast_furnace" => "minecraft:armorer",
-            "smoker" => "minecraft:butcher",
-            "cartography_table" => "minecraft:cartographer",
-            "brewing_stand" => "minecraft:cleric",
-            "composter" => "minecraft:farmer",
-            "barrel" => "minecraft:fisherman",
-            "fletching_table" => "minecraft:fletcher",
-            "cauldron" | "lava_cauldron" | "water_cauldron" | "powder_snow_cauldron" => {
-                "minecraft:leatherworker"
-            }
-            "lectern" => "minecraft:librarian",
-            "stonecutter" => "minecraft:mason",
-            "loom" => "minecraft:shepherd",
-            "smithing_table" => "minecraft:toolsmith",
-            "grindstone" => "minecraft:weaponsmith",
-            "bell" => "minecraft:meeting",
-            "beehive" => "minecraft:beehive",
-            "bee_nest" => "minecraft:bee_nest",
-            "nether_portal" => "minecraft:nether_portal",
-            "lodestone" => "minecraft:lodestone",
-            "test_instance_block" => "minecraft:test_instance",
-            n if n.ends_with("_bed") => {
-                if s.properties.get("part").map(String::as_str) != Some("head") {
-                    return None;
-                }
-                "minecraft:home"
-            }
-            n if n.ends_with("lightning_rod") => "minecraft:lightning_rod",
-            _ => return None,
-        })
+        horizon_client::save::poi_type(s).map(|(kind, _)| kind)
     }
     /// `LocateCommand.locatePoi`: `PoiManager.findClosestWithType` within
     /// 256 blocks of the source, over the loaded chunks.

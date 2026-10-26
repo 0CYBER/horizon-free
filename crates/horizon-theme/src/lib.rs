@@ -1,6 +1,6 @@
 //! Horizon's design tokens, the one source of truth for the launcher (`launcher/src/theme.rs`),
-//! the game's on-screen keyboard (`horizon-client`'s `ui_theme`) and the website (`website/src/tokens.css`,
-//! generated from [`css`] by `cargo run -p xtask -- tokens`). Change a value here and all three
+//! the game's on-screen keyboard (`horizon-client`'s `ui_theme`) and the website (`tokens.css` in this crate,
+//! generated from [`css`] by `cargo run -p xtask -- tokens`, which the site's build reads from main). Change a value here and all three
 //! follow. The system is described in `docs/design-system.md`.
 //!
 //! Cool neutrals in two appearances and one violet accent; Geist and Geist Mono only, bundled
@@ -67,6 +67,8 @@ pub mod icons {
         "search",
         "server",
         "sliders",
+        // Not Pixelarticons': drawn for Horizon's ratings, in the same 2-unit grid.
+        "star",
         "terminal",
         "trash",
         "user",
@@ -526,7 +528,7 @@ pub fn contrast(a: u32, b: u32) -> f32 {
     (x.max(y) + 0.05) / (x.min(y) + 0.05)
 }
 
-/// `website/src/tokens.css`: every token as a CSS custom property, the light palette by
+/// `tokens.css`: every token as a CSS custom property, the light palette by
 /// default, the dark one when the system asks for it or the page sets `data-theme="dark"`.
 pub fn css() -> String {
     let mut s = String::new();
@@ -769,15 +771,15 @@ mod tests {
         assert!((bezier([0., 0., 1., 1.], 0.3) - 0.3).abs() < 1e-3);
     }
 
-    /// `website/src/tokens.css` is what [`css`] writes; regenerate it with
-    /// `cargo run -p xtask -- tokens`.
+    /// `tokens.css` (beside Cargo.toml, read by the website's build) is what [`css`] writes;
+    /// regenerate it with `cargo run -p xtask -- tokens`.
     #[test]
-    fn website_tokens_are_up_to_date() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../website/src/tokens.css");
+    fn tokens_css_is_up_to_date() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tokens.css");
         let written = std::fs::read_to_string(path).unwrap_or_default();
         assert!(
             written == css(),
-            "website/src/tokens.css is out of date: run `cargo run -p xtask -- tokens`"
+            "crates/horizon-theme/tokens.css is out of date: run `cargo run -p xtask -- tokens`"
         );
     }
 }

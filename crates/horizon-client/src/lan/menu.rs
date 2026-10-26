@@ -37,6 +37,10 @@ pub struct Menu {
     pub sent_data: Vec<i16>,
 }
 
+/// The y of the key a chest minecart's or chest boat's items are kept under
+/// while a menu shows them.
+pub const VEHICLE_KEY_Y: i32 = -100_000;
+
 /// Where the slots of a container menu live.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Slots {
@@ -72,10 +76,12 @@ impl Slots {
             Slots::Ender => at.into_iter().collect(),
             _ => self.halves(),
         };
+        // A vehicle's container is kept under a key, not a block: the game
+        // checks its reach to the vehicle (`isChestVehicleStillValid`).
         self.valid(world)
             && blocks
                 .iter()
-                .all(|k| guest.within_block_range([k.0, k.1, k.2], 4.0))
+                .all(|k| k.1 == VEHICLE_KEY_Y || guest.within_block_range([k.0, k.1, k.2], 4.0))
     }
     /// Container slot `n`.
     pub fn get(self, world: &World, guest: &Guest, mut n: usize) -> Option<ItemStack> {

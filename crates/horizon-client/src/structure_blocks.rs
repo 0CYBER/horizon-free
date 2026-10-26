@@ -108,9 +108,10 @@ pub fn has_pending_map(item: &ItemStack) -> bool {
     })
 }
 
+static LOOT: OnceLock<Option<Arc<LootData>>> = OnceLock::new();
+
 /// Loot data of the resource root, loaded once per process.
 pub fn loot_data(root: &Path) -> Option<Arc<LootData>> {
-    static LOOT: OnceLock<Option<Arc<LootData>>> = OnceLock::new();
     LOOT.get_or_init(|| match LootData::load(root) {
         Ok(data) => Some(Arc::new(data)),
         Err(e) => {
@@ -119,6 +120,54 @@ pub fn loot_data(root: &Path) -> Option<Arc<LootData>> {
         }
     })
     .clone()
+}
+
+/// The loot data `loot_data` loaded, if it ran.
+pub fn loaded_loot_data() -> Option<Arc<LootData>> {
+    LOOT.get().cloned().flatten()
+}
+
+/// `RandomizableContainer.unpackLootTable` of a container at `pos`: `table`
+/// rolled into `slots`. A missing or zero seed is the level's random in
+/// vanilla; Horizon derives one from the position. Without loot data the
+/// container stays empty and still saves its table.
+pub fn roll_container(
+    slots: &mut [Option<ItemStack>],
+    loot: Option<&LootData>,
+    table: String,
+    saved_seed: Option<i64>,
+    pos: (i32, i32, i32),
+    biome: &str,
+) -> crate::save::RolledLoot {
+    let seed = saved_seed.filter(|s| *s != 0).unwrap_or_else(|| {
+        horizon_core::random::position_seed(horizon_core::position::BlockPos::new(
+            pos.0, pos.1, pos.2,
+        ))
+    });
+    if let Some(loot) = loot {
+        // LootTable.fill spreads the items over the container's own size.
+        let rolled = loot.fill(&table, seed, slots.len(), Some(biome));
+        for (slot, stack) in slots.iter_mut().zip(rolled) {
+            // With what the rolls put on them: enchantments
+            // (enchant_with_levels in End city chests), potions and an
+            // ominous bottle's level.
+            *slot = stack.map(|s| loot_item_with_components(&s));
+        }
+    }
+    crate::save::RolledLoot {
+        pos,
+        table,
+        seed: saved_seed,
+        items: crate::save::encode_items(slots),
+    }
+}
+
+/// A saved `LootTableSeed`, if any.
+pub fn loot_seed(nbt: &Tag) -> Option<i64> {
+    match nbt.get("LootTableSeed") {
+        Some(Tag::Long(seed)) => Some(*seed),
+        _ => None,
+    }
 }
 
 fn text(nbt: &Compound, key: &str) -> Option<String> {
@@ -149,81 +198,37 @@ fn generated_block_entity(block: &str, nbt: &Compound) -> Option<BlockEntity> {
     Some(entity)
 }
 
-/// Client block entities for the generated block entities of a chunk.
+/// Client block entities for the generated block entities of a chunk, and the
+/// loot rolled into its containers.
 pub fn block_entities(
     chunk: &ProtoChunk,
     loot: Option<&LootData>,
-) -> Vec<((i32, i32, i32), BlockEntity)> {
+) -> (
+    Vec<((i32, i32, i32), BlockEntity)>,
+    Vec<crate::save::RolledLoot>,
+) {
     let mut out = Vec::new();
+    let mut rolled = Vec::new();
     for (pos, nbt) in &chunk.block_entities {
         let [x, y, z] = *pos;
         let block = chunk.block_name(x, y, z);
         let Some(mut entity) = generated_block_entity(block, nbt) else {
             continue;
         };
-        if let (BlockEntity::Chest(slots), Some(table), Some(loot)) =
-            (&mut entity, text(nbt, "LootTable"), loot)
-        {
-            let seed = match nbt.get(&JavaString::from("LootTableSeed")) {
-                Some(Tag::Long(seed)) => *seed,
-                // Seed 0 means "the level's random": derive one from the position.
-                _ => horizon_core::random::position_seed(horizon_core::position::BlockPos::new(
-                    x, y, z,
-                )),
-            };
-            let biome = chunk.biome_at(x, y, z);
-            for (slot, stack) in slots
-                .iter_mut()
-                .zip(loot.fill(&table, seed, 27, Some(biome)))
-            {
-                // With what the rolls put on them: enchantments
-                // (enchant_with_levels in End city chests), potions and an
-                // ominous bottle's level.
-                *slot = stack.map(|s| loot_item_with_components(&s));
-            }
+        if let (BlockEntity::Chest(slots), Some(table)) = (&mut entity, text(nbt, "LootTable")) {
+            let seed = loot_seed(&Tag::Compound(nbt.clone()));
+            rolled.push(roll_container(
+                slots,
+                loot,
+                table,
+                seed,
+                (x, y, z),
+                chunk.biome_at(x, y, z),
+            ));
         }
         out.push(((x, y, z), entity));
     }
-    out
-}
-
-/// Chest minecarts placed with a loot table (mineshafts): the table rolled
-/// into `Items` as `unpackLootTable` would on first open.
-pub fn unpack_entity_loot(
-    chunk: &ProtoChunk,
-    mut nbt: horizon_world::nbt::Compound,
-    loot: Option<&LootData>,
-) -> horizon_world::nbt::Compound {
-    let (Some(table), Some(loot)) = (
-        match nbt.get(&JavaString::from("LootTable")) {
-            Some(Tag::String(s)) => Some(s.to_string_lossy()),
-            _ => None,
-        },
-        loot,
-    ) else {
-        return nbt;
-    };
-    let seed = match nbt.get(&JavaString::from("LootTableSeed")) {
-        Some(Tag::Long(seed)) => *seed,
-        _ => 0,
-    };
-    let pos = match nbt.get(&JavaString::from("Pos")) {
-        Some(Tag::List(p)) => std::array::from_fn(|i| match p.get(i) {
-            Some(Tag::Double(b)) => f64::from_bits(*b).floor() as i32,
-            _ => 0,
-        }),
-        _ => [0; 3],
-    };
-    let biome = chunk.biome_at(pos[0], pos[1], pos[2]);
-    let slots: Vec<Option<ItemStack>> = loot
-        .fill(&table, seed, 27, Some(biome))
-        .into_iter()
-        .map(|s| s.map(|s| loot_item_with_components(&s)))
-        .collect();
-    nbt.remove(&JavaString::from("LootTable"));
-    nbt.remove(&JavaString::from("LootTableSeed"));
-    nbt.insert("Items".into(), crate::save::encode_items(&slots));
-    nbt
+    (out, rolled)
 }
 
 #[cfg(test)]
@@ -268,6 +273,24 @@ mod tests {
             Some("minecraft:slowness"),
         ));
         assert_eq!(arrow.potion(), Some("minecraft:slowness"));
+    }
+
+    #[test]
+    fn a_container_rolled_without_loot_data_saves_its_table() {
+        let mut slots = vec![None; 27];
+        let rolled = roll_container(
+            &mut slots,
+            None,
+            "minecraft:chests/simple_dungeon".into(),
+            Some(7),
+            (1, 2, 3),
+            "minecraft:plains",
+        );
+        let mut saved = horizon_world::nbt::Compound::new();
+        saved.insert("Items".into(), crate::save::encode_items(&slots));
+        assert!(rolled.restore(&mut saved));
+        assert!(!saved.contains_key(&"Items".into()));
+        assert_eq!(saved.get(&"LootTableSeed".into()), Some(&Tag::Long(7)));
     }
 
     #[test]
