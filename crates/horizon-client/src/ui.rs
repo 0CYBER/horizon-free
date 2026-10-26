@@ -279,9 +279,17 @@ pub fn centered_text(
     w: f32,
     color: u32,
 ) {
-    let width = atlas.font.width_text(text);
+    let text = text.resolved();
+    let width = atlas.font.width_text(&text);
     if width <= w {
-        batch.text_styled(atlas, text, x + ((w - width) / 2.0).floor(), y, color, true);
+        batch.text_styled(
+            atlas,
+            &text,
+            x + ((w - width) / 2.0).floor(),
+            y,
+            color,
+            true,
+        );
     } else {
         // Clip by characters (vanilla scrolls; we show the part that fits).
         let mut shown = Text::empty();
@@ -821,6 +829,40 @@ fn byte_index(s: &str, chars: usize) -> usize {
 pub fn char_len(s: &str) -> usize {
     s.chars().count()
 }
+/// `EditBox.getWordPosition(dir, from)`: the character index `dir` words away
+/// from `from`. Forward, past the rest of the word and its spaces; backward,
+/// over any spaces to the start of the word.
+pub fn word_position(value: &str, dir: isize, from: usize) -> usize {
+    let chars: Vec<char> = value.chars().collect();
+    let mut pos = from.min(chars.len());
+    if dir < 0 {
+        while pos > 0 && chars[pos - 1] == ' ' {
+            pos -= 1;
+        }
+        while pos > 0 && chars[pos - 1] != ' ' {
+            pos -= 1;
+        }
+    } else {
+        while pos < chars.len() && chars[pos] != ' ' {
+            pos += 1;
+        }
+        while pos < chars.len() && chars[pos] == ' ' {
+            pos += 1;
+        }
+    }
+    pos
+}
+/// `EditBox.deleteWords(dir)` for an append-only field, whose caret is at the
+/// end: removes the word in that direction. True when the value changed.
+pub fn delete_words(value: &mut String, dir: isize) -> bool {
+    let len = char_len(value);
+    let to = word_position(value, dir, len);
+    if to == len {
+        return false;
+    }
+    value.truncate(byte_index(value, to));
+    true
+}
 impl crate::clipboard::Editable for EditBox {
     fn select_all(&mut self) {
         self.move_cursor_to_end(false);
@@ -919,25 +961,7 @@ impl EditBox {
     }
     /// EditBox.getWordPosition(dir, from).
     fn word_position_from(&self, dir: isize, from: usize) -> usize {
-        let chars: Vec<char> = self.value.chars().collect();
-        let mut pos = from.min(chars.len());
-        if dir < 0 {
-            while pos > 0 && chars[pos - 1] == ' ' {
-                pos -= 1;
-            }
-            while pos > 0 && chars[pos - 1] != ' ' {
-                pos -= 1;
-            }
-        } else {
-            let len = chars.len();
-            while pos < len && chars[pos] != ' ' {
-                pos += 1;
-            }
-            while pos < len && chars[pos] == ' ' {
-                pos += 1;
-            }
-        }
-        pos
+        word_position(&self.value, dir, from)
     }
     pub fn set_cursor(&mut self, pos: usize, select: bool) {
         self.cursor = pos.min(char_len(&self.value));
@@ -1450,5 +1474,37 @@ mod tests {
         e.insert_text("é§x");
         assert_eq!(e.value, "éx worl");
         assert_eq!(e.cursor, 2);
+    }
+    #[test]
+    fn word_position_steps_over_a_word_and_its_spaces() {
+        assert_eq!(word_position("hello world", -1, 11), 6);
+        assert_eq!(word_position("hello world", -1, 6), 0);
+        assert_eq!(word_position("hello   world", -1, 13), 8);
+        assert_eq!(word_position("hello   world", 1, 5), 8);
+        // From inside a word: back to its start, forward past it and its spaces.
+        assert_eq!(word_position("hello world", -1, 8), 6);
+        assert_eq!(word_position("hello world", 1, 2), 6);
+        // The ends, and a position past the end.
+        assert_eq!(word_position("hello", -1, 0), 0);
+        assert_eq!(word_position("hello", 1, 5), 5);
+        assert_eq!(word_position("hi", -1, 99), 0);
+        assert_eq!(word_position("hi", 1, 99), 2);
+    }
+    #[test]
+    fn delete_words_removes_the_word_before_the_end() {
+        let mut v = "stone bricks".to_string();
+        assert!(delete_words(&mut v, -1));
+        assert_eq!(v, "stone ");
+        assert!(delete_words(&mut v, -1));
+        assert_eq!(v, "");
+        assert!(!delete_words(&mut v, -1));
+        // Characters, not bytes.
+        let mut v = "a é§x".to_string();
+        assert!(delete_words(&mut v, -1));
+        assert_eq!(v, "a ");
+        // Nothing after the end to delete.
+        let mut v = "stone".to_string();
+        assert!(!delete_words(&mut v, 1));
+        assert_eq!(v, "stone");
     }
 }
