@@ -99,5 +99,7 @@ What real mods need next, in the order modpacks and servers need it:
 
 ## Changelog
 
+- Experimental `render` (`experimental = ["render"]`): HUD shapes (fill, quad, sprite, item, text), `gui-size`, camera
+  `shake`, drawn by the game's own renderer.
 - API 0.2 (content): data-driven blocks and items, tags, `horizon:add_to`, terrain adaptation.
 - API 0.1.0: `log`, `game`, `chat`, `hud`, `storage`; `init`, `tick`, `frame`, `command`, `chat`.

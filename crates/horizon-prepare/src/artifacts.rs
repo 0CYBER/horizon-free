@@ -143,31 +143,17 @@ pub(crate) fn import_copy(
     algorithm: &str,
     hint: &str,
 ) -> Result<PathBuf, String> {
-    fs::create_dir_all(destination.parent().unwrap()).map_err(|e| e.to_string())?;
-    if destination.exists() && digest(destination, algorithm)? == checksum {
-        return Ok(destination.to_path_buf());
-    }
-    if !source.is_file() {
-        return Err(format!("Missing {}. {hint}", source.display())
-            .trim()
-            .to_string());
-    }
-    let actual = digest(source, algorithm)?;
-    if actual != checksum {
-        return Err(format!(
-            "{} is not the pinned file: expected {algorithm} {checksum}, got {actual}",
-            source.display()
-        ));
-    }
-    let temporary = destination.with_file_name(format!(
-        ".{}.partial-{}",
-        destination.file_name().unwrap().to_string_lossy(),
-        std::process::id()
-    ));
-    let copied = fs::copy(source, &temporary).and_then(|_| fs::rename(&temporary, destination));
-    let _ = fs::remove_file(&temporary);
-    copied.map_err(|e| format!("{}: {e}", destination.display()))?;
-    Ok(destination.to_path_buf())
+    crate::files::Import::stage(source, destination, checksum, algorithm, false)
+        .map_err(|error| {
+            if !source.is_file() {
+                format!("Missing {}. {hint}", source.display())
+                    .trim()
+                    .to_string()
+            } else {
+                error
+            }
+        })?
+        .commit()
 }
 
 /// The pinned version JSON from the launcher's versions/ directory. The launcher's copy wins
@@ -653,9 +639,17 @@ pub struct Artifacts {
 
 /// Reuses checked imports from this root or another installed version beside it.
 pub fn reuse_imported(root: &Path, log: Log) -> Result<bool, String> {
+    Ok(reuse_verified(root, log)?.is_some())
+}
+
+/// Keep this preparation's verified artifacts and client libraries for the exporters.
+pub(crate) fn reuse_verified(
+    root: &Path,
+    log: Log,
+) -> Result<Option<(Artifacts, Vec<PathBuf>)>, String> {
     let root = fs::canonicalize(root).map_err(|e| format!("{}: {e}", root.display()))?;
     let lock = Lock::read(&root)?;
-    let checked = |directory: PathBuf| -> Result<Vec<PathBuf>, String> {
+    let checked = |directory: PathBuf| -> Result<(Artifacts, Vec<PathBuf>), String> {
         let candidate = Lock {
             json: lock.json.clone(),
             version: lock.version.clone(),
@@ -664,17 +658,9 @@ pub fn reuse_imported(root: &Path, log: Log) -> Result<bool, String> {
         };
         let found = verify(&candidate)?;
         let client = client_libraries(&candidate, &found.manifest)?;
-        let mut files = vec![
-            candidate.directory.join("manifest.json"),
-            candidate.directory.join("jars/client.jar"),
-            candidate.directory.join("jars/server.jar"),
-            found.jars["server"].clone(),
-        ];
-        files.extend(found.libraries);
-        files.extend(client);
-        Ok(files)
+        Ok((found, client))
     };
-    if checked(lock.directory.clone()).is_ok() {
+    if let Ok((found, client_libraries)) = checked(lock.directory.clone()) {
         if [
             "prepared.json",
             "reports/client-inventory.json",
@@ -683,8 +669,6 @@ pub fn reuse_imported(root: &Path, log: Log) -> Result<bool, String> {
         .iter()
         .any(|path| !lock.directory.join(path).is_file())
         {
-            let found = verify(&lock)?;
-            let client_libraries = client_libraries(&lock, &found.manifest)?;
             write_import_metadata(
                 &root,
                 &lock,
@@ -696,10 +680,10 @@ pub fn reuse_imported(root: &Path, log: Log) -> Result<bool, String> {
             )?;
         }
         log(&format!("Using imported Minecraft {}", lock.version));
-        return Ok(true);
+        return Ok(Some((found, client_libraries)));
     }
     let Some(versions) = root.parent() else {
-        return Ok(false);
+        return Ok(None);
     };
     // Sibling discovery is intended for the launcher's versions/ folder.
     let mut siblings: Vec<_> = fs::read_dir(versions)
@@ -711,9 +695,17 @@ pub fn reuse_imported(root: &Path, log: Log) -> Result<bool, String> {
     siblings.sort();
     for sibling in siblings {
         let source = sibling.join(".local/minecraft").join(&lock.version);
-        let Ok(files) = checked(source.clone()) else {
+        let Ok((found, client)) = checked(source.clone()) else {
             continue;
         };
+        let mut files = vec![
+            source.join("manifest.json"),
+            source.join("jars/client.jar"),
+            source.join("jars/server.jar"),
+            found.jars["server"].clone(),
+        ];
+        files.extend(found.libraries);
+        files.extend(client);
         for file in files {
             let relative = file.strip_prefix(&source).map_err(|e| e.to_string())?;
             import_copy(
@@ -740,9 +732,9 @@ pub fn reuse_imported(root: &Path, log: Log) -> Result<bool, String> {
             lock.version,
             sibling.display()
         ));
-        return Ok(true);
+        return Ok(Some((found, client_libraries)));
     }
-    Ok(false)
+    Ok(None)
 }
 
 pub fn verify(lock: &Lock) -> Result<Artifacts, String> {

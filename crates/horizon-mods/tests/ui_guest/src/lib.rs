@@ -1,10 +1,60 @@
 //! A mod for the runtime's `ui` tests: `/ui_screen` opens a screen with one
 //! of each widget, `/ui_settings` sets a settings page, `/ui_close` closes
 //! the screen; the `ui-events` calls answer in chat so the host sees them.
+//! `/render_hud`, `/render_clear` and `/render_shake` test `render`.
 use horizon_mod_sdk::{
     Mod, Registration, chat,
+    render::{self, FillShape, ItemShape, Point, QuadShape, Rect, Shape, SpriteShape, TextShape},
     ui::{self, ItemWidget, ListWidget, Screen, TextWidget, Widget},
 };
+
+/// One of each shape, the text too long by 44 characters.
+fn shapes() -> Vec<Shape> {
+    let (w, h) = render::gui_size();
+    let p = |x, y| Point { x, y };
+    vec![
+        Shape::Fill(FillShape {
+            rect: Rect {
+                x: 4.0,
+                y: 4.0,
+                w: 60.0,
+                h: 20.0,
+            },
+            color: 0x80FF0000,
+        }),
+        Shape::Quad(QuadShape {
+            corners: (
+                p(w / 2.0, 10.0),
+                p(w / 2.0 + 20.0, 30.0),
+                p(w / 2.0, 50.0),
+                p(w / 2.0 - 20.0, 30.0),
+            ),
+            color: 0xC000FF00,
+        }),
+        Shape::Sprite(SpriteShape {
+            sprite: "hud/heart/full".into(),
+            rect: Rect {
+                x: 70.0,
+                y: 4.0,
+                w: 18.0,
+                h: 18.0,
+            },
+            color: 0xFFFFFFFF,
+        }),
+        Shape::Item(ItemShape {
+            item: "minecraft:diamond".into(),
+            at: p(92.0, 4.0),
+            scale: 2.0,
+        }),
+        Shape::Text(TextShape {
+            text: format!("gui {w}x{h} {}", "x".repeat(300)),
+            at: p(w / 2.0, h / 2.0 - 30.0),
+            color: 0xFFFF55,
+            centered: true,
+            shadow: true,
+        }),
+    ]
+}
 
 struct Guest;
 
@@ -30,9 +80,16 @@ fn widgets() -> Vec<Widget> {
 
 impl Mod for Guest {
     fn init() -> Result<(Self, Registration), String> {
-        let hooks = ["ui_screen", "ui_settings", "ui_close"]
-            .into_iter()
-            .fold(Registration::new(), Registration::command);
+        let hooks = [
+            "ui_screen",
+            "ui_settings",
+            "ui_close",
+            "render_hud",
+            "render_clear",
+            "render_shake",
+        ]
+        .into_iter()
+        .fold(Registration::new(), Registration::command);
         Ok((Guest, hooks))
     }
     fn command(&mut self, name: &str, _args: &str) -> Result<Option<String>, String> {
@@ -43,6 +100,14 @@ impl Mod for Guest {
             }),
             "ui_settings" => ui::set_settings(&widgets()),
             "ui_close" => ui::close_screen(),
+            "render_hud" => render::set_hud(&shapes()),
+            "render_clear" => render::set_hud(&[]),
+            // Clamped to (1, 10); the two after it shake nothing.
+            "render_shake" => {
+                render::shake(2.0, 99.0);
+                render::shake(0.0, 1.0);
+                render::shake(f32::NAN, 1.0);
+            }
             _ => {}
         }
         Ok(None)
