@@ -1182,6 +1182,62 @@ fn browser_lists_items_and_hears_the_player() {
     assert_ne!(mods.browser_items().unwrap().1, version);
     assert_eq!(said(&mut mods, "browser"), ["panel of 0"]);
     assert!(mods.browser_items().is_none());
+    // Recipes in the panel's place: the guest shows those making planks.
+    use horizon_mods::{BrowserLayout, Recipe, RecipeItem, RecipeKind, RecipeStack, Recipes};
+    let item = |id: &str| RecipeItem {
+        id: id.into(),
+        name: id.into(),
+        tags: Vec::new(),
+    };
+    let stack = |item| RecipeStack {
+        item,
+        count: 1,
+        components: String::new(),
+    };
+    mods.set_snapshot(Snapshot {
+        recipes: Some(std::sync::Arc::new(Recipes {
+            items: vec![item("minecraft:oak_log"), item("minecraft:oak_planks")],
+            recipes: vec![Recipe {
+                id: "minecraft:oak_planks".into(),
+                kind: RecipeKind::CraftingShapeless,
+                category: "building".into(),
+                group: "planks".into(),
+                width: 0,
+                height: 0,
+                slots: vec![vec![stack(0)]],
+                results: vec![RecipeStack {
+                    count: 4,
+                    ..stack(1)
+                }],
+                cooking_time: 0,
+                experience: 0.0,
+                book_id: 1,
+            }],
+        })),
+        ..Snapshot::default()
+    });
+    said(&mut mods, "browser minecraft:dirt");
+    assert_eq!(
+        said(&mut mods, "browser_recipes minecraft:oak_planks"),
+        ["recipes shown: 1"]
+    );
+    let page = mods.browser_recipes(owner).unwrap();
+    assert_eq!(page.title, "Recipes for minecraft:oak_planks");
+    assert_eq!(
+        (page.tabs[0].item.as_str(), page.tab),
+        ("minecraft:crafting_table", 0)
+    );
+    let r = &page.recipes[0];
+    assert_eq!(
+        (r.layout, r.width, r.height, r.action),
+        (BrowserLayout::Grid, 1, 1, Some(false))
+    );
+    assert_eq!(
+        (r.slots[0][0].item.as_str(), r.results[0].count),
+        ("minecraft:oak_log", 4)
+    );
+    assert_eq!(said(&mut mods, "browser_recipes"), ["recipes shown: 0"]);
+    assert!(mods.browser_recipes(owner).is_none());
     // At most 256 events wait for a poll: the oldest go.
     for _ in 0..300 {
         mods.browser_event(owner, BrowserEvent::Page(1));

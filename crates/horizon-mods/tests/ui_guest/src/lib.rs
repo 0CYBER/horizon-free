@@ -10,7 +10,9 @@
 //! counts what `recipes` reads; `/recipes ID` describes that recipe.
 //! `/browser ID...` fills `browser`'s panel (`/browser N`: the first N
 //! items, `/browser` alone empties it) and registers the keys `recipe` (R)
-//! and `uses` (U); `/browser_poll` says what the player did on it.
+//! and `uses` (U); `/browser_poll` says what the player did on it;
+//! `/browser_recipes ID` shows the recipes making ID (`/browser_recipes`
+//! alone: the items again).
 use horizon_mod_sdk::{
     Mod, Registration, browser, chat, command, game,
     input::{self, Event},
@@ -110,6 +112,7 @@ impl Mod for Guest {
             "recipes",
             "browser",
             "browser_poll",
+            "browser_recipes",
             "corner",
             "readings",
         ]
@@ -310,6 +313,78 @@ impl Mod for Guest {
                 input::register_key("uses", "Show uses", "key.keyboard.u")?;
                 chat::show(&format!("panel of {}", items.len()));
             }
+            "browser_recipes" => {
+                let items = recipes::items();
+                let id = |i: u32| {
+                    items
+                        .get(i as usize)
+                        .map_or(String::new(), |x| x.id.clone())
+                };
+                let stack = |s: &recipes::Stack| browser::Stack {
+                    item: id(s.item),
+                    count: s.count,
+                    components: s.components.clone(),
+                };
+                let views: Vec<browser::RecipeView> = recipes::all()
+                    .iter()
+                    .filter(|r| !args.is_empty() && r.results.iter().any(|s| id(s.item) == args))
+                    .map(|r| {
+                        use recipes::Kind;
+                        let crafting =
+                            matches!(r.kind, Kind::CraftingShaped | Kind::CraftingShapeless);
+                        let shapeless = (r.slots.len() as u32).clamp(1, 3);
+                        browser::RecipeView {
+                            layout: match r.kind {
+                                Kind::CraftingShaped | Kind::CraftingShapeless => {
+                                    browser::Layout::Grid
+                                }
+                                Kind::Stonecutting => browser::Layout::Single,
+                                Kind::Smithing => browser::Layout::Smithing,
+                                Kind::Brewing => browser::Layout::Brewing,
+                                _ => browser::Layout::Cooking,
+                            },
+                            width: if r.width == 0 { shapeless } else { r.width },
+                            height: if r.height == 0 {
+                                (r.slots.len() as u32).div_ceil(3).max(1)
+                            } else {
+                                r.height
+                            },
+                            slots: r
+                                .slots
+                                .iter()
+                                .map(|s| s.iter().map(stack).collect())
+                                .collect(),
+                            results: r.results.iter().map(stack).collect(),
+                            note: if r.cooking_time > 0 {
+                                format!("{} ticks", r.cooking_time)
+                            } else {
+                                String::new()
+                            },
+                            action: crafting.then_some(r.kind == Kind::CraftingShaped),
+                        }
+                    })
+                    .collect();
+                // A tab per layout shown, the first selected.
+                let mut tabs: Vec<browser::Stack> = Vec::new();
+                for v in &views {
+                    let icon = match v.layout {
+                        browser::Layout::Grid => "minecraft:crafting_table",
+                        browser::Layout::Cooking => "minecraft:furnace",
+                        browser::Layout::Single => "minecraft:stonecutter",
+                        browser::Layout::Smithing => "minecraft:smithing_table",
+                        browser::Layout::Brewing => "minecraft:brewing_stand",
+                    };
+                    if !tabs.iter().any(|t| t.item == icon) {
+                        tabs.push(browser::Stack {
+                            item: icon.into(),
+                            count: 1,
+                            components: String::new(),
+                        });
+                    }
+                }
+                browser::set_recipes(&format!("Recipes for {args}"), &tabs, 0, &views);
+                chat::show(&format!("recipes shown: {}", views.len()));
+            }
             "browser_poll" => {
                 let stack = |s: &browser::Stack| format!("{} x{}{}", s.item, s.count, s.components);
                 // A hook shows at most 8 chat lines: the count, then the first 7.
@@ -332,6 +407,7 @@ impl Mod for Guest {
                         browser::Event::Action(i) => format!("action {i}"),
                         browser::Event::Page(first) => format!("page {first}"),
                         browser::Event::Back => "back".into(),
+                        browser::Event::Tab(i) => format!("tab {i}"),
                     });
                 }
             }
