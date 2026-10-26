@@ -170,7 +170,7 @@ impl Game<'_> {
     /// The player moves to `target`'s level (opened if nobody was there)
     /// and is told it is there, at the approximate exit, while it loads. The
     /// level whose tick is running is put back in place afterwards.
-    fn start_server_trip(
+    pub(super) fn start_server_trip(
         &mut self,
         host: &mut LanHost,
         conn: u32,

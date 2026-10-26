@@ -752,7 +752,8 @@ impl Game<'_> {
                     && !id.ends_with("get")
                     && let Ok(t) = self.entities(ctx, "target", false)
                 {
-                    self.cmds.waypoint_dirty.push(t[0]);
+                    let target = self.waypoint_target(t[0]);
+                    self.cmds.waypoint_dirty.push(target);
                 }
                 result
             }
@@ -1096,6 +1097,12 @@ impl Game<'_> {
             Target::Player => {
                 // ServerPlayer.teleport: removeVehicle before placing the player.
                 self.stop_riding();
+                // A server's player teleported within their level is placed
+                // there at once: the arrival they were waiting for elsewhere
+                // in it (whose chunks lose their tickets) is abandoned.
+                if let Some(conn) = self.lan_acting {
+                    self.server_trips.retain(|trip| !trip.is(conn));
+                }
                 if let Some(p) = self.player.as_mut() {
                     p.position = v;
                     p.velocity = Vec3::new(0.0, 0.0, 0.0);
@@ -2841,9 +2848,14 @@ impl Game<'_> {
             capture.push(line.clone());
         }
         let focused = self.screen == Screen::Chat;
-        self.ui
-            .chat
-            .add(&self.gui.atlas, line, None, self.ticks, focused);
+        self.ui.chat.add(
+            &self.gui.atlas,
+            line,
+            None,
+            horizon_client::chat::ChatSource::Player,
+            self.ticks,
+            focused,
+        );
         Ok(1)
     }
     /// MessageArgument: `@p`-style selectors in a message become names.
