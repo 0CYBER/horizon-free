@@ -63,6 +63,12 @@ pub fn loot_item_with_components(s: &horizon_world::loot::LootStack) -> ItemStac
     if let Some(level) = s.ominous_amplifier.filter(|l| *l > 0) {
         item.data_mut().ominous_amplifier = Some(level.clamp(0, 4) as u8);
     }
+    // set_stew_effect's `suspicious_stew_effects`.
+    for (effect, duration) in &s.stew_effects {
+        item.data_mut()
+            .stew_effects
+            .push((Arc::from(effect.as_str()), *duration));
+    }
     item
 }
 
@@ -248,6 +254,7 @@ mod tests {
                 map: false,
                 exploration: None,
                 ominous_amplifier: None,
+                stew_effects: Vec::new(),
             };
         // An End city chest's enchant_with_levels roll.
         let boots = loot_item_with_components(&stack(
@@ -309,6 +316,7 @@ mod tests {
                 "zoom": 1
             })))),
             ominous_amplifier: None,
+            stew_effects: Vec::new(),
         };
         let mut item = loot_item(&stack);
         assert!(has_pending_map(&item));

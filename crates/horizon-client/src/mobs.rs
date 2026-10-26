@@ -1251,6 +1251,10 @@ pub struct Seen {
     /// `MAX_HEALTH`, `JUMP_STRENGTH` and `MOVEMENT_SPEED` base values (a
     /// horse's breeding stock).
     pub stats: [f64; 3],
+    /// `Wolf.isInSittingPose`.
+    pub sitting: bool,
+    /// `Entity.isVehicle` or `isPassenger`.
+    pub ridden: bool,
 }
 impl Mob {
     pub fn burning_time(&self) -> f64 {
@@ -1323,6 +1327,8 @@ impl Mob {
                 m.extra.vector[0],
                 m.attrs.speed,
             ],
+            sitting: m.extra.sitting,
+            ridden: m.rider.is_some() || m.extra.rider.is_some() || m.extra.mount.is_some(),
         }
     }
     /// `EntityType.getCategory`'s name.
@@ -1759,6 +1765,10 @@ impl Mob {
             self.invulnerable = 20;
             self.health -= amount;
             self.hurt_time = 10;
+        }
+        // Animal.actuallyHurt: damage taken ends love mode (`resetLove`).
+        if drops::is_animal(self.species()) {
+            self.extra.in_love = 0;
         }
         self.last_damage = Some((source, i64::from(self.age)));
         if let Some(who) = source.attacker {
