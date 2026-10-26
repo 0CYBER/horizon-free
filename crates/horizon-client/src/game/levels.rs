@@ -225,6 +225,7 @@ impl Game<'_> {
         swap(&mut a.pots, &mut b.pots);
         swap(&mut a.gateways, &mut b.gateways);
         swap(&mut a.gateway_servers, &mut b.gateway_servers);
+        swap(&mut a.conduit_servers, &mut b.conduit_servers);
         self.raiding.swap_level(&mut p.raiding);
         self.sculk.swap_level(&mut p.sculk);
         self.creaking.swap_level(&mut p.creaking);
