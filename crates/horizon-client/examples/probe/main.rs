@@ -83,6 +83,7 @@ mod sound_engine_fixture;
 mod sound_event_fixture;
 mod spawn_rules_fixture;
 mod sprint_probe;
+mod squid_client_probe;
 mod subtitle_fixture;
 mod tab_list_fixture;
 mod team_rules_fixture;
@@ -107,6 +108,7 @@ probes! {
     block_transform_fixture,
     breaking_fixture,
     camera_probe,
+    squid_client_probe,
     cauldron_fixture,
     chat_screen_fixture,
     cloud_fixture,

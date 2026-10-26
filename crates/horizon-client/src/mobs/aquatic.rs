@@ -234,12 +234,40 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
 }
 /// Squid.aiStep: tentacle cycle, propulsion and body rotation.
 fn squid_ai_step(m: &mut Mob) {
+    squid_step(m, false);
+}
+
+/// Squid.aiStep also runs on remote entities: animate from packet velocity,
+/// without running goals or replacing that velocity with the server's movement vector.
+pub fn squid_client_step(m: &mut Mob) {
+    if matches!(m.species(), Species::Squid | Species::GlowSquid) {
+        m.anim.vo = m.anim.v;
+        squid_step(m, true);
+    }
+}
+
+/// Squid.handleEntityEvent(19): begin the next server-synchronised tentacle cycle.
+pub fn squid_cycle_event(m: &mut Mob) {
+    if matches!(m.species(), Species::Squid | Species::GlowSquid) {
+        m.anim.v[TENTACLE_MOVEMENT] = 0.0;
+    }
+}
+
+fn squid_step(m: &mut Mob, client: bool) {
     let v = &mut m.anim.v;
     v[TENTACLE_MOVEMENT] += v[TENTACLE_SPEED];
-    if v[TENTACLE_MOVEMENT] > PI * 2.0 {
-        v[TENTACLE_MOVEMENT] -= PI * 2.0;
-        if m.random.next_int_bound(10).unwrap_or(1) == 0 {
-            m.anim.v[TENTACLE_SPEED] = 1.0 / (m.random.next_float() + 1.0) * 0.2;
+    if f64::from(v[TENTACLE_MOVEMENT]) > std::f64::consts::TAU {
+        if client {
+            v[TENTACLE_MOVEMENT] = PI * 2.0;
+        } else {
+            v[TENTACLE_MOVEMENT] -= PI * 2.0;
+            if m.random.next_int_bound(10).unwrap_or(1) == 0 {
+                m.anim.v[TENTACLE_SPEED] = 1.0 / (m.random.next_float() + 1.0) * 0.2;
+            }
+            m.outbox.push(MobEvent::SquidCycle {
+                mob: m.id,
+                at: [m.position.x, m.position.y, m.position.z],
+            });
         }
     }
     let v = &mut m.anim.v;
@@ -248,28 +276,39 @@ fn squid_ai_step(m: &mut Mob) {
             let scale = v[TENTACLE_MOVEMENT] / PI;
             v[TENTACLE_ANGLE] = (scale * scale * PI).msin() * PI * 0.25;
             if scale > 0.75 {
-                let mv = m.extra.vector;
-                m.velocity = Vec3::new(mv[0], mv[1], mv[2]);
+                if !client {
+                    let mv = m.extra.vector;
+                    m.velocity = Vec3::new(mv[0], mv[1], mv[2]);
+                }
                 m.anim.v[ROTATE_SPEED] = 1.0;
             } else {
                 m.anim.v[ROTATE_SPEED] *= 0.8;
             }
         } else {
             v[TENTACLE_ANGLE] = 0.0;
-            m.velocity = Vec3::new(m.velocity.x * 0.9, m.velocity.y * 0.9, m.velocity.z * 0.9);
+            if !client {
+                m.velocity = Vec3::new(m.velocity.x * 0.9, m.velocity.y * 0.9, m.velocity.z * 0.9);
+            }
             m.anim.v[ROTATE_SPEED] *= 0.99;
         }
         let mv = m.velocity;
         let horizontal = (mv.x * mv.x + mv.z * mv.z).sqrt();
-        m.body_yaw += (-(mv.x.atan2(mv.z) as f32).to_degrees() - m.body_yaw) * 0.1;
+        m.body_yaw += (-(horizon_core::geometry::trig::atan2(mv.x, mv.z) as f32) * 57.295776
+            - m.body_yaw)
+            * 0.1;
         m.yaw = m.body_yaw;
         let v = &mut m.anim.v;
         v[Z_BODY_ROT] += PI * v[ROTATE_SPEED] * 1.5;
-        v[X_BODY_ROT] += (-(horizontal.atan2(mv.y) as f32).to_degrees() - v[X_BODY_ROT]) * 0.1;
+        v[X_BODY_ROT] += (-(horizon_core::geometry::trig::atan2(horizontal, mv.y) as f32)
+            * 57.295776
+            - v[X_BODY_ROT])
+            * 0.1;
     } else {
         v[TENTACLE_ANGLE] = v[TENTACLE_MOVEMENT].msin().abs() * PI * 0.25;
-        let yd = m.velocity.y - m.kind.gravity;
-        m.velocity = Vec3::new(0.0, yd * 0.98, 0.0);
+        if !client {
+            let yd = m.velocity.y - m.kind.gravity;
+            m.velocity = Vec3::new(0.0, yd * 0.98, 0.0);
+        }
         let v = &mut m.anim.v;
         v[X_BODY_ROT] += (-90.0 - v[X_BODY_ROT]) * 0.02;
     }
