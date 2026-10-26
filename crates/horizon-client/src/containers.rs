@@ -98,6 +98,9 @@ pub enum BlockEntity {
     Campfire(Box<Campfire>),
     /// `SkullBlockEntity` of every skull and head block.
     Skull(Skull),
+    /// `DaylightDetectorBlockEntity`: no data, only the ticker
+    /// (`DaylightDetectorBlock.tickEntity`).
+    DaylightDetector,
 }
 /// `CampfireBlockEntity`: four cooking slots, each with its
 /// `cookingProgress` and `cookingTime` (the recipe's).
@@ -363,6 +366,9 @@ impl BlockEntity {
         if is_skull(name) {
             return Some(Self::Skull(Skull::default()));
         }
+        if name == "minecraft:daylight_detector" {
+            return Some(Self::DaylightDetector);
+        }
         if name == "minecraft:beacon" {
             return Some(Self::Beacon(Box::new(Beacon {
                 last_check_y: i32::MIN / 2,
@@ -412,6 +418,7 @@ impl BlockEntity {
             Self::Beehive(_) => "minecraft:beehive",
             Self::CommandBlock(_) => "minecraft:command_block",
             Self::Skull(_) => "minecraft:skull",
+            Self::DaylightDetector => "minecraft:daylight_detector",
             Self::Campfire(_) => "minecraft:campfire",
         }
     }
@@ -429,7 +436,8 @@ impl BlockEntity {
             | Self::Vault(_)
             | Self::Beehive(_)
             | Self::CommandBlock(_)
-            | Self::Skull(_) => Vec::new(),
+            | Self::Skull(_)
+            | Self::DaylightDetector => Vec::new(),
             Self::Lectern(l) => l.book.iter().cloned().collect(),
             Self::Sculk(_) => Vec::new(),
             Self::Banner(_) => Vec::new(),
@@ -448,7 +456,8 @@ impl BlockEntity {
             | Self::Lectern(_)
             | Self::Sculk(_)
             | Self::Banner(_)
-            | Self::Skull(_) => &[],
+            | Self::Skull(_)
+            | Self::DaylightDetector => &[],
             Self::Crafter(c) => &c.items,
             Self::CreakingHeart(_)
             | Self::Spawner(_)
@@ -471,7 +480,8 @@ impl BlockEntity {
             | Self::Lectern(_)
             | Self::Sculk(_)
             | Self::Banner(_)
-            | Self::Skull(_) => &mut [],
+            | Self::Skull(_)
+            | Self::DaylightDetector => &mut [],
             Self::Crafter(c) => &mut c.items,
             Self::CreakingHeart(_)
             | Self::Spawner(_)

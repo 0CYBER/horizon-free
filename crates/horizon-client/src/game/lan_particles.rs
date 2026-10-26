@@ -24,6 +24,35 @@ fn rgb(c: [f32; 4]) -> [f32; 3] {
     [c[0], c[1], c[2]]
 }
 
+/// `ServerLevel.sendParticles` of one soul particle moving by `velocity`
+/// (Soul Speed's `spawn_particles`): sent to the players within 32 blocks.
+pub(super) fn send_soul_particle(host: &super::lan::LanHost, at: [f64; 3], velocity: [f64; 3]) {
+    let Some(id) = host
+        .hub
+        .registry_id("minecraft:particle_type", "minecraft:soul")
+    else {
+        return;
+    };
+    let packet = C::LevelParticles(play::LevelParticles {
+        particle: Particle { id, data: None },
+        override_limiter: false,
+        always_show: false,
+        pos: at,
+        dist: velocity.map(|v| v as f32),
+        max_speed: [1.0; 3],
+        count: 0,
+        randomization: 0,
+    });
+    for g in host.hub.guests.iter().filter(|g| host.hub.here(g)) {
+        let distance: f64 = (0..3)
+            .map(|k| (g.position[k].floor() + 0.5 - at[k]).powi(2))
+            .sum();
+        if distance < 32.0 * 32.0 {
+            g.send(&packet);
+        }
+    }
+}
+
 impl Game<'_> {
     /// `SonicBoom.tick` uses `ServerLevel.sendParticles` for each ray point.
     /// Keep the local event's rendering; connected players receive one at rest.

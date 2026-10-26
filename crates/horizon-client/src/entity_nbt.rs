@@ -265,6 +265,19 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 Tag::Byte(i8::from(m.extra.flag2)),
             );
             map.insert("TimeInOverworld".into(), Tag::Int(m.extra.counter2));
+            if id == "minecraft:piglin" {
+                // InventoryCarrier.writeInventoryToTag.
+                map.insert(
+                    "Inventory".into(),
+                    Tag::List(
+                        m.extra
+                            .inventory
+                            .iter()
+                            .map(crate::save::item_to_nbt)
+                            .collect(),
+                    ),
+                );
+            }
         }
         "minecraft:horse"
         | "minecraft:donkey"
@@ -356,6 +369,12 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         }
         "minecraft:bat" => {
             map.insert("BatFlags".into(), Tag::Byte(i8::from(m.extra.flag)));
+        }
+        "minecraft:turtle" => {
+            map.insert("has_egg".into(), Tag::Byte(i8::from(m.extra.flag)));
+            if let Some(home) = m.extra.home {
+                map.insert("home_pos".into(), Tag::IntArray(home.to_vec()));
+            }
         }
         "minecraft:creaking" => {
             // home_pos: the heart it is bound to.
@@ -482,7 +501,6 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         "minecraft:zombie" => {
             map.insert("IsBaby".into(), Tag::Byte(i8::from(m.is_baby())));
             for (key, value) in [
-                ("CanBreakDoors", Tag::Byte(0)),
                 ("DrownedConversionTime", Tag::Int(-1)),
                 ("InWaterTime", Tag::Int(-1)),
             ] {
@@ -506,6 +524,13 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             );
         }
         _ => {}
+    }
+    // Zombie.addAdditionalSaveData: CanBreakDoors.
+    if crate::mobs::doors::is_zombie(m.species()) {
+        map.insert(
+            "CanBreakDoors".into(),
+            Tag::Byte(i8::from(m.extra.can_break_doors)),
+        );
     }
     crate::mobs::raider::write_nbt(m, map);
     crate::mobs::riders::write_nbt(m, map);
@@ -706,6 +731,16 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     ) {
         m.extra.flag2 = flag(tag, "IsImmuneToZombification");
         m.extra.counter2 = number(tag.get("TimeInOverworld")).unwrap_or(0) as i32;
+        if m.species() == crate::mobs::Species::Piglin
+            && let Some(Tag::List(items)) = tag.get("Inventory")
+        {
+            // InventoryCarrier.readInventoryFromTag (eight slots).
+            m.extra.inventory = items
+                .iter()
+                .filter_map(crate::save::item_from_nbt)
+                .take(8)
+                .collect();
+        }
     }
     if matches!(
         m.species(),
@@ -847,6 +882,18 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     {
         crate::mobs::creaking::set_transient(&mut m, [home[0], home[1], home[2]]);
     }
+    if m.species() == crate::mobs::Species::Turtle {
+        // Turtle.readAdditionalSaveData: `home_pos` (else where it stands) and `has_egg`.
+        m.extra.flag = flag(tag, "has_egg");
+        m.extra.home = Some(match tag.get("home_pos") {
+            Some(Tag::IntArray(home)) if home.len() == 3 => [home[0], home[1], home[2]],
+            _ => [
+                m.position.x.floor() as i32,
+                m.position.y.floor() as i32,
+                m.position.z.floor() as i32,
+            ],
+        });
+    }
     if m.species() == crate::mobs::Species::Wither {
         m.extra.counter = number(tag.get("Invul")).unwrap_or(0) as i32;
     }
@@ -924,6 +971,10 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     // zombies of trial spawners).
     if !crate::mobs::finalize::ageable(m.species()) && flag(tag, "IsBaby") {
         crate::mobs::finalize::set_baby(&mut m, true);
+    }
+    // Zombie.readAdditionalSaveData: setCanBreakDoors.
+    if crate::mobs::doors::is_zombie(m.species()) {
+        crate::mobs::doors::set_can_break_doors(&mut m, flag(tag, "CanBreakDoors"));
     }
     crate::mobs::raider::read_nbt(&mut m, tag);
     crate::mobs::riders::read_nbt(&mut m, tag);
@@ -1043,18 +1094,18 @@ pub fn orb_to_nbt(o: &ExperienceOrb, uuid: [i32; 4]) -> Tag {
         ("Health", Tag::Short(5)),
         ("Age", Tag::Short(o.age.min(i16::MAX as u32) as i16)),
         ("Value", Tag::Short(o.value.min(i16::MAX as u32) as i16)),
-        ("Count", Tag::Int(1)),
+        ("Count", Tag::Int(o.count.min(i32::MAX as u32) as i32)),
     ] {
         put(&mut tag, key, value);
     }
     tag
 }
-/// One Horizon orb per counted orb (vanilla merges orbs of equal value).
+/// One orb with its merged `Count`.
 pub fn orbs_from_nbt(tag: &Tag) -> Vec<ExperienceOrb> {
     let Some(position) = position(tag) else {
         return Vec::new();
     };
-    let count = number(tag.get("Count")).unwrap_or(1).clamp(1, 64) as usize;
+    let count = number(tag.get("Count")).unwrap_or(1).max(1) as u32;
     let orb = ExperienceOrb {
         id: 0,
         position,
@@ -1063,8 +1114,10 @@ pub fn orbs_from_nbt(tag: &Tag) -> Vec<ExperienceOrb> {
         value: number(tag.get("Value")).unwrap_or(1).max(1) as u32,
         age: number(tag.get("Age")).unwrap_or(0).max(0) as u32,
         on_ground: flag(tag, "OnGround"),
+        count,
+        ticks: 0,
     };
-    vec![orb; count]
+    vec![orb]
 }
 
 /// `Projectile` + `AbstractArrow.addAdditionalSaveData` of a live arrow;
@@ -1913,7 +1966,7 @@ mod tests {
         assert_eq!(number(tag.get("Health")), Some(5));
     }
     #[test]
-    fn orbs_expand_their_count() {
+    fn orbs_keep_their_count() {
         let o = ExperienceOrb {
             id: 0,
             position: Vec3::new(1.0, 2.0, 3.0),
@@ -1922,12 +1975,14 @@ mod tests {
             value: 7,
             age: 3,
             on_ground: false,
+            count: 3,
+            ticks: 0,
         };
-        let mut tag = orb_to_nbt(&o, [0; 4]);
-        put(&mut tag, "Count", Tag::Int(3));
+        let tag = orb_to_nbt(&o, [0; 4]);
         let back = orbs_from_nbt(&tag);
-        assert_eq!(back.len(), 3);
+        assert_eq!(back.len(), 1);
         assert_eq!(back[0].value, 7);
+        assert_eq!(back[0].count, 3);
     }
 }
 
@@ -1992,12 +2047,39 @@ fn restore_axolotl_memories(m: &mut Mob, tag: &Tag) {
     }
 }
 const AXOLOTL_VARIANTS: [&str; 5] = ["lucy", "wild", "gold", "cyan", "blue"];
+/// `Salmon.Variant` names, by id.
+const SALMON_SIZES: [&str; 3] = ["small", "medium", "large"];
+/// `TropicalFish.Pattern` names in enum order: the six small patterns, then
+/// the six large ones (the order of `extra.variant`).
+const TROPICAL_PATTERNS: [&str; 12] = [
+    "kob",
+    "sunstreak",
+    "snooper",
+    "dasher",
+    "brinely",
+    "spotty",
+    "flopper",
+    "stripey",
+    "glitter",
+    "blockfish",
+    "betty",
+    "clayfish",
+];
+/// `Bucketable.saveDefaultDataToBucketTag`, with the age an axolotl and a
+/// tadpole add (`saveToBucketTag`).
 pub fn bucket_data(m: &Mob) -> Tag {
-    let mut data = Tag::compound([
-        ("Age", Tag::Int(m.extra.age)),
-        ("AgeLocked", Tag::Byte(i8::from(m.extra.age_locked))),
-        ("Health", Tag::Float(m.health.to_bits())),
-    ]);
+    let mut data = Tag::compound([("Health", Tag::Float(m.health.to_bits()))]);
+    if matches!(
+        m.species(),
+        crate::mobs::Species::Axolotl | crate::mobs::Species::Tadpole
+    ) {
+        put(&mut data, "Age", Tag::Int(m.extra.age));
+        put(
+            &mut data,
+            "AgeLocked",
+            Tag::Byte(i8::from(m.extra.age_locked)),
+        );
+    }
     for (key, on) in [
         ("NoAI", m.no_ai),
         ("Silent", m.silent),
@@ -2026,6 +2108,29 @@ pub fn bucket_components(m: &Mob) -> crate::item_data::StackData {
             .get(usize::from(m.extra.variant))
             .unwrap_or(&"lucy");
         data.set_other("minecraft:axolotl/variant", Some(string(variant)));
+    }
+    // Salmon.saveToBucketTag: the size.
+    if m.species() == crate::mobs::Species::Salmon {
+        let size = SALMON_SIZES
+            .get(usize::from(m.extra.variant))
+            .unwrap_or(&"medium");
+        data.set_other("minecraft:salmon/size", Some(string(size)));
+    }
+    // TropicalFish.saveToBucketTag: the pattern and both colours.
+    if m.species() == crate::mobs::Species::TropicalFish {
+        let dye = |i: u8| crate::mobs::render::DYE_NAMES[usize::from(i) & 15];
+        let pattern = TROPICAL_PATTERNS
+            .get(usize::from(m.extra.variant))
+            .unwrap_or(&"kob");
+        data.set_other("minecraft:tropical_fish/pattern", Some(string(pattern)));
+        data.set_other(
+            "minecraft:tropical_fish/base_color",
+            Some(string(dye(m.extra.variant2))),
+        );
+        data.set_other(
+            "minecraft:tropical_fish/pattern_color",
+            Some(string(dye(m.extra.variant3))),
+        );
     }
     data
 }
@@ -2076,6 +2181,39 @@ pub fn load_bucket_data(m: &mut Mob, stack: &crate::items::ItemStack) {
             .position(|&v| v == name.trim_start_matches("minecraft:"))
     {
         m.extra.variant = id as u8;
+    }
+    // Salmon.applyImplicitComponents: the size.
+    if m.species() == crate::mobs::Species::Salmon
+        && let Some(name) = text(components.other("minecraft:salmon/size"))
+        && let Some(id) = SALMON_SIZES
+            .iter()
+            .position(|&v| v == name.trim_start_matches("minecraft:"))
+    {
+        m.extra.variant = id as u8;
+    }
+    // TropicalFish.applyImplicitComponent: the pattern and both colours.
+    if m.species() == crate::mobs::Species::TropicalFish {
+        let name = |key| text(components.other(key));
+        let dye = |key| {
+            name(key).and_then(|n| {
+                crate::mobs::render::DYE_NAMES
+                    .iter()
+                    .position(|&v| v == n.trim_start_matches("minecraft:"))
+            })
+        };
+        if let Some(id) = name("minecraft:tropical_fish/pattern").and_then(|n| {
+            TROPICAL_PATTERNS
+                .iter()
+                .position(|&v| v == n.trim_start_matches("minecraft:"))
+        }) {
+            m.extra.variant = id as u8;
+        }
+        if let Some(id) = dye("minecraft:tropical_fish/base_color") {
+            m.extra.variant2 = id as u8;
+        }
+        if let Some(id) = dye("minecraft:tropical_fish/pattern_color") {
+            m.extra.variant3 = id as u8;
+        }
     }
 }
 

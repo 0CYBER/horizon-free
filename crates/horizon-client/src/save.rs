@@ -648,6 +648,7 @@ pub fn encode_block_entity(
         BlockEntity::Vault(v) => entries.extend(v.save()),
         BlockEntity::Beehive(h) => entries.extend(h.to_nbt()),
         BlockEntity::CommandBlock(c) => entries.extend(c.save()),
+        BlockEntity::DaylightDetector => {}
     }
     Tag::compound(entries)
 }
@@ -845,7 +846,8 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         | BlockEntity::Lectern(_)
         | BlockEntity::Banner(_)
         | BlockEntity::CreakingHeart(_)
-        | BlockEntity::Skull(_) => {}
+        | BlockEntity::Skull(_)
+        | BlockEntity::DaylightDetector => {}
         BlockEntity::Spawner(s) => **s = crate::mobs::spawner::Spawner::load(tag),
         BlockEntity::TrialSpawner(s) => **s = crate::mobs::trial_spawner::TrialSpawner::load(tag),
         BlockEntity::Vault(v) => **v = crate::vault::Vault::load(tag),

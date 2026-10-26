@@ -14,6 +14,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              closes on both when the guest closes it; the host keeps playing with its mouse look (#687);
 - crafting:  the guest crafts planks in the inventory's 2x2 grid and opens a crafting table, which
              leaves the host's screen and mouse look alone;
+- spawned:   the host and a guest new to the world join on different spots (PlayerSpawnFinder), and the
+             guest opens a crafting table, a chest, a furnace and a stonecutter where it joined;
 - sign:      a sign the guest places doesn't open a sign editor on the host;
 - damage:    a guest in survival takes fall damage;
 - mobs:      with the host in creative, a zombie and a skeleton go for the guest and hurt them;
@@ -292,7 +294,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # Match normal single player; --in-frame is the comparison path.
 SERVER_THREAD = True
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'spawned', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
           'arrows', 'kills', 'leave', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles',
           'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing',
           'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push',
@@ -339,8 +341,9 @@ class Game:
     def wait(self, ticks):
         self.d('wait', ticks=ticks)
 
-    def script(self, lines):
-        """Keep tick-sensitive input in one ctl process, through the normal control commands."""
+    def script(self, lines, every=False):
+        """Keep tick-sensitive input in one ctl process, through the normal control commands. Returns the last
+        reply, or with every=True all of them in order."""
         result = subprocess.run(self.d.base + ['script'], input='\n'.join(lines) + '\n',
                                 cwd=self.work, env=self.d.env, capture_output=True, text=True,
                                 timeout=600)
@@ -348,7 +351,7 @@ class Game:
         ticks = [r['ticks'] for r in replies if 'ticks' in r]
         print(f'[{self.name}] script {lines} -> {replies[-1] if replies else result.stderr[:400]}; ticks={ticks}')
         assert result.returncode == 0 and replies and not any('error' in r for r in replies), result.stdout
-        return replies[-1]
+        return replies if every else replies[-1]
 
     def until(self, observe, predicate, ticks=100):
         """Wait for an observable answer, within the existing tick budget."""
@@ -552,6 +555,39 @@ def check_crafting(host, guest, out):
     counts = guest('inventory')['counts']
     assert counts.get('minecraft:stick') == 4 and counts.get('minecraft:oak_planks') == 2, f'after the table: {counts}'
     return {'planks': planks, 'table': counts}
+
+
+def check_spawned(host, guest, out):
+    """Players new to a world don't share one spot: ServerPlayer.adjustSpawnLocation spreads them over the
+    respawn radius (PlayerSpawnFinder). Two players standing in each other target each other, so a guest
+    left in the host could open nothing it clicked. At its own spot, the guest opens a crafting table, a
+    chest, a furnace and a stonecutter."""
+    joined = {'host': [round(v, 2) for v in host.joined_at], 'guest': [round(v, 2) for v in guest.joined_at]}
+    apart = abs(joined['host'][0] - joined['guest'][0]) + abs(joined['host'][2] - joined['guest'][2]) >= 0.6
+    guest('command', command='gamemode survival')
+    for game in (host, guest):
+        x, y, z = game.joined_at
+        game('command', command=f'tp @s {x} {y} {z}')
+    guest.wait(20)
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    at = (x, y, z + 2)
+    grab(host)
+    opened = {}
+    for block in ('crafting_table', 'chest', 'furnace', 'stonecutter'):
+        guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:{block}')
+        guest.wait(10)
+        guest.raw('interact', *at)
+        guest.wait(10)
+        opened[block] = guest('state').get('screen')
+        guest.shot(out, f'spawned-{block}')
+        back_to_game(guest)
+        guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:air')
+    host_unaffected(host, "the guest's stations")
+    face_each_other(host, guest)
+    assert apart, f'the host and the guest joined on one spot: {joined}'
+    want = {'crafting_table': 'inventory', 'chest': 'container', 'furnace': 'container', 'stonecutter': 'station'}
+    assert opened == want, f'where it joined, the guest opened {opened}'
+    return {'joined': joined, 'opened': opened}
 
 
 def check_sign(host, guest, out):
@@ -4698,6 +4734,7 @@ def check_worn(host, guest, out):
 
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'nametags': check_nametags, 'chest': check_chest, 'crafting': check_crafting,
+             'spawned': check_spawned,
              'sign': check_sign, 'damage': check_damage, 'mobs': check_mobs,
              'hazards': check_hazards, 'pvp': check_pvp, 'respawn': check_respawn,
              'containers': check_containers, 'feedback': check_feedback, 'titles': check_titles,
@@ -4756,6 +4793,8 @@ def run(ctl, out, resources, checks):
         guest.raw('connect', f'127.0.0.1:{port}', GUEST_NAME)
         guest.raw('wait-for', 'loaded', '--timeout', 300)
         guest.wait(40)
+        # Where each joined, before anything moves them (check_spawned).
+        host.joined_at, guest.joined_at = pos_of(host), pos_of(guest)
         face_each_other(host, guest)
         host.shot(out, 'joined')
         guest.shot(out, 'joined')

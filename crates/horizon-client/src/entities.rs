@@ -95,6 +95,15 @@ impl ItemEntity {
                 self.health -= fire_damage as i32;
             }
         }
+        // CactusBlock.entityInside: `entity.hurt(cactus, 1.0)`. An item has no
+        // hurt cooldown, so it loses 1 health every tick it touches a cactus
+        // (5 health: gone in 5 ticks). Fire resistance does not help;
+        // `ItemStack.canBeHurtBy` only skips it for a damage_resistant stack.
+        if crate::motion::environment::cactus_contact(world, registry, self.bounds())
+            && !items.resists_cactus(&self.stack)
+        {
+            self.health -= 1;
+        }
         ItemEnvironmentTick {
             alive: self.health > 0,
             lava_hurt,
@@ -385,8 +394,29 @@ pub struct ExperienceOrb {
     pub value: u32,
     pub age: u32,
     pub on_ground: bool,
+    /// `ExperienceOrb.count`: orbs merged into this one; each pickup gives
+    /// `value` once and takes one off.
+    pub count: u32,
+    /// `Entity.tickCount`, which paces `ExperienceOrb.scanForMerges`.
+    pub ticks: u32,
 }
 impl ExperienceOrb {
+    pub fn bounds(&self) -> Aabb {
+        let h = 0.25;
+        Aabb::new(
+            Vec3::new(self.position.x - h, self.position.y, self.position.z - h),
+            Vec3::new(
+                self.position.x + h,
+                self.position.y + 0.5,
+                self.position.z + h,
+            ),
+        )
+    }
+    /// `ExperienceOrb.canMerge(orb, id, value)` for an orb that is not removed:
+    /// the same value and ids a multiple of 40 apart.
+    pub fn can_merge(&self, id: u32, value: u32) -> bool {
+        self.value == value && (self.id as i32).wrapping_sub(id as i32) % 40 == 0
+    }
     /// ExperienceOrb.getExperienceValue: the largest orb size not above `value`.
     pub fn split(value: u32) -> u32 {
         [2477, 1237, 617, 307, 149, 73, 37, 17, 7, 3, 1]
@@ -416,7 +446,9 @@ impl ExperienceOrb {
         facts: &BlockFacts,
         collision: &BlockCollisionRegistry<'_>,
         player: Option<[f64; 3]>,
+        next_float: &mut dyn FnMut() -> f32,
     ) -> bool {
+        self.ticks += 1;
         self.previous = self.position;
         let block = world.block(
             self.position.x.floor() as i32,
@@ -431,6 +463,14 @@ impl ExperienceOrb {
             );
         } else {
             self.velocity.y -= 0.03;
+        }
+        if facts.get(block).fluid == Fluid::Lava {
+            // ExperienceOrb.tick: lava throws the orb back out.
+            self.velocity = Vec3::new(
+                f64::from((next_float() - next_float()) * 0.2),
+                f64::from(0.2f32),
+                f64::from((next_float() - next_float()) * 0.2),
+            );
         }
         if let Some(p) = player {
             let d = [
@@ -449,15 +489,7 @@ impl ExperienceOrb {
                 );
             }
         }
-        let h = 0.25;
-        let bounds = Aabb::new(
-            Vec3::new(self.position.x - h, self.position.y, self.position.z - h),
-            Vec3::new(
-                self.position.x + h,
-                self.position.y + 0.5,
-                self.position.z + h,
-            ),
-        );
+        let bounds = self.bounds();
         let mut scene = SceneCollisions {
             world,
             binding: collision,
@@ -493,6 +525,31 @@ impl ExperienceOrb {
         self.age += 1;
         self.age < 6000
     }
+}
+/// `ExperienceOrb.scanForMerges`, run by each orb on `tickCount % 20 == 1`:
+/// it absorbs the orbs that `canMerge` within 0.5 blocks of its box,
+/// adding their counts and keeping the smaller age.
+pub fn merge_orbs(orbs: &mut Vec<ExperienceOrb>) {
+    let mut removed = vec![false; orbs.len()];
+    for i in 0..orbs.len() {
+        if removed[i] || orbs[i].ticks % 20 != 1 {
+            continue;
+        }
+        let area = orbs[i].bounds().inflate(Vec3::new(0.5, 0.5, 0.5));
+        for j in 0..orbs.len() {
+            if j != i
+                && !removed[j]
+                && orbs[j].can_merge(orbs[i].id, orbs[i].value)
+                && orbs[j].bounds().intersects(area)
+            {
+                orbs[i].count += orbs[j].count;
+                orbs[i].age = orbs[i].age.min(orbs[j].age);
+                removed[j] = true;
+            }
+        }
+    }
+    let mut removed = removed.into_iter();
+    orbs.retain(|_| !removed.next().unwrap_or(false));
 }
 /// Player experience (Player.giveExperiencePoints / getXpNeededForNextLevel).
 #[derive(Clone, Copy, Debug, Default)]

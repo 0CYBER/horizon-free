@@ -126,6 +126,38 @@ fn idle() -> bool {
     false
 }
 
+/// Give back to the OS the memory the allocator holds free, after something
+/// large was dropped: glibc keeps freed pages in the arena of the thread that
+/// allocated them, and macOS in its zones until memory runs short. Nothing
+/// elsewhere.
+pub fn release_free_memory() {
+    release();
+}
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn release() {
+    // SAFETY: returns free heap pages of every arena to the OS; no live
+    // allocation moves.
+    unsafe {
+        libc::malloc_trim(0);
+    }
+}
+
+#[cfg(target_vendor = "apple")]
+fn release() {
+    unsafe extern "C" {
+        fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
+    }
+    // SAFETY: a null zone means every zone and a goal of 0 as much as it can;
+    // it frees only pages no allocation uses.
+    unsafe {
+        malloc_zone_pressure_relief(std::ptr::null_mut(), 0);
+    }
+}
+
+#[cfg(not(any(all(target_os = "linux", target_env = "gnu"), target_vendor = "apple")))]
+fn release() {}
+
 #[cfg(test)]
 mod tests {
     /// The hint holds on the platforms that take it.
