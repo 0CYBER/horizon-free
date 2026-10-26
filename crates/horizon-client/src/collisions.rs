@@ -92,6 +92,13 @@ impl<W: BlockCollisionWorld> BlockCollisionWorld for EntityCollisions<'_, W> {
     ) -> std::result::Result<bool, Self::Error> {
         self.blocks.is_suffocating(chunk, block, p)
     }
+    fn may_reach_out(
+        &mut self,
+        chunk: Self::Chunk,
+        section_y: i32,
+    ) -> std::result::Result<bool, Self::Error> {
+        self.blocks.may_reach_out(chunk, section_y)
+    }
     fn context_shape(
         &mut self,
         block: CollisionBlock,
@@ -261,6 +268,17 @@ impl<'w> BlockCollisionWorld for SceneCollisions<'w, '_> {
     }
     fn collision_block(&mut self, chunk: Self::Chunk, p: BlockPos) -> io::Result<CollisionBlock> {
         self.binding.collision_block(chunk.block(p.x, p.y, p.z))
+    }
+    /// From the section's palette, without reading its blocks; a palette
+    /// of the whole registry reads every cell.
+    fn may_reach_out(&mut self, chunk: Self::Chunk, section_y: i32) -> io::Result<bool> {
+        let blocks = usize::try_from(section_y - (crate::chunk::MIN_Y >> 4))
+            .ok()
+            .and_then(|s| chunk.sections.get(s))
+            .map(|section| &section.blocks);
+        Ok(blocks.is_none_or(|blocks| {
+            blocks.is_global() || blocks.maybe_has(|v| self.binding.reaches_out(BlockStateId(v)))
+        }))
     }
     fn is_suffocating(
         &mut self,
