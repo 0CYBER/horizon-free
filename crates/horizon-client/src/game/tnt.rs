@@ -33,7 +33,7 @@ impl PrimedTnt {
             ),
         )
     }
-    fn tick(
+    pub(super) fn tick(
         &mut self,
         world: &horizon_client::world::World,
         collision: &horizon_world::block_collision::BlockCollisionRegistry<'_>,

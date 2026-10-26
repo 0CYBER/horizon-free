@@ -86,6 +86,10 @@ impl Game<'_> {
             .iter()
             .filter_map(|m| Some((m, m.custom_name.clone()?, false)));
         let players = players.into_iter().map(|(m, name)| (m, name, true));
+        // Who is riding whom: asked once per tag below, and rescanning every mob
+        // for each tag made this quadratic in the number of loaded mobs.
+        let ridden: std::collections::HashSet<u32> =
+            self.mobs.iter().filter_map(|o| o.extra.mount).collect();
         for (m, name, player) in named.chain(players) {
             if !m.alive() {
                 continue;
@@ -134,7 +138,7 @@ impl Game<'_> {
                 invisible_to_viewer: invisible,
                 hud_hidden: self.ui.hide_gui,
                 is_camera: false,
-                is_vehicle: self.mobs.iter().any(|o| o.extra.mount == Some(m.id)),
+                is_vehicle: ridden.contains(&m.id),
             };
             // MobRenderer.shouldShowName: a visible name, or the mob under the
             // crosshair; players (LivingEntityRenderer) need neither.
@@ -240,6 +244,42 @@ impl Game<'_> {
                 discrete: false,
             });
         }
+        // ItemFrameRenderer.shouldShowName/getNameTag: only the targeted
+        // frame's custom-named item, with the HUD visible (also glow frames).
+        if !self.ui.hide_gui
+            && let Some((i, distance)) = self.frame_hit()
+            && self.before_block(distance)
+            && self.mob_hit().is_none_or(|(_, d)| d > distance)
+            && let Some(name) = self.item_frames[i]
+                .item
+                .as_ref()
+                .and_then(|item| item.custom_name())
+        {
+            let frame = &self.item_frames[i];
+            let (lo, hi) = frame.bounds();
+            let center = glam::DVec3::from_array(std::array::from_fn(|a| (lo[a] + hi[a]) / 2.0));
+            if center.distance_squared(camera) < 64.0 * 64.0 {
+                // NAME_TAG is at the entity height (0.5), then the name
+                // submitter lifts it 0.5. ItemFrameRenderer offsets rendering
+                // 0.3 toward its facing and -0.25 vertically.
+                let step = frame.step();
+                tags.push(NameTag {
+                    at: center
+                        + glam::DVec3::new(
+                            f64::from(step[0] as f32 * 0.3),
+                            0.75,
+                            f64::from(step[2] as f32 * 0.3),
+                        ),
+                    lines: vec![(Text::literal(name).resolve_legacy(), 0.0)],
+                    light: self.world.light(
+                        center.x.floor() as i32,
+                        center.y.floor() as i32,
+                        center.z.floor() as i32,
+                    ),
+                    discrete: false,
+                });
+            }
+        }
         tags
     }
     /// `SubmitNodeCollection.submitNameTag`: a discrete name is drawn once,
@@ -257,12 +297,16 @@ impl Game<'_> {
         const FADED: u32 = 0x7F;
         for tag in self.name_tags(camera, alpha) {
             let o = tag.at - camera;
+            // `gbuffers_entities` draws name tag text (2.3); a sneaking player's faded tag, on its
+            // background, blends.
             if tag.discrete {
+                self.mark_translucent_entity(out.len(), "minecraft:name_tag");
                 self.name_tag_quads(o, &tag.lines, FADED, true, 0, vertex_light(tag.light), out);
                 continue;
             }
             // LightCoordsUtil.lightCoordsWithEmission(lightCoords, 2).
             let lit = (tag.light >> 4).max(2) << 4 | (tag.light & 15).max(2);
+            self.mark_entity(out.len(), "minecraft:name_tag");
             self.name_tag_quads(o, &tag.lines, 0xFF, false, 0, vertex_light(lit), out);
             // RenderPipelines.TEXT_SEE_THROUGH: no depth test, no lightmap.
             self.name_tag_quads(o, &tag.lines, FADED, true, 2, 0, see_through);
@@ -270,7 +314,7 @@ impl Game<'_> {
     }
     /// The lines of one name tag, `o` from the camera: the text at
     /// `text_alpha` in its layer, on the translucent black background
-    /// (unlit, a hair behind) when `background`.
+    /// (in `text_layer` like the glyphs, a hair behind) when `background`.
     #[allow(clippy::too_many_arguments)]
     fn name_tag_quads(
         &self,
@@ -342,7 +386,7 @@ impl Game<'_> {
                     [white.u0, white.v0, white.u1, white.v1],
                     BACKGROUND,
                     true,
-                    2,
+                    text_layer,
                 );
             }
             let mut x = x0;

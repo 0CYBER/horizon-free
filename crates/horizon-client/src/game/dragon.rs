@@ -12,6 +12,7 @@ use horizon_client::{
     hud_layout, hud_overlays,
     mesher::Vertex,
     particles::{ParticleOptions, ParticleType},
+    text::Text,
 };
 use horizon_core::{
     geometry::{Aabb, Vec3},
@@ -1870,7 +1871,7 @@ impl Game<'_> {
                                 pl.velocity.z += zd / dd * 4.0;
                             }
                             if !sitting {
-                                g.hurt_player_by("minecraft:mob_attack", 5.0);
+                                g.dragon_hurts_player("minecraft:mob_attack", 5.0);
                             }
                         });
                     }
@@ -1879,7 +1880,7 @@ impl Game<'_> {
                 for h in heads {
                     if h.inflate(Vec3::new(1.0, 1.0, 1.0)).intersects(p.bounds) {
                         self.as_fight_player(p.who, |g| {
-                            g.hurt_player_by("minecraft:mob_attack", 10.0);
+                            g.dragon_hurts_player("minecraft:mob_attack", 10.0);
                         });
                     }
                 }
@@ -1971,9 +1972,10 @@ impl Game<'_> {
             self.spawn_orbs([p.x, p.y, p.z], (xp as f32 * 0.08) as u32);
         }
         if t == 1 {
-            // Level event 1028: the death roar, heard everywhere.
-            self.audio
-                .play("minecraft:entity.ender_dragon.death", None, 5.0, 1.0);
+            // EnderDragon.tickDeath: global level event 1028, the death
+            // roar, heard everywhere.
+            let at = [p.x, p.y, p.z].map(|v| v.floor() as i32);
+            self.global_level_event(1028, at, 0);
         }
         if let Some(d) = self.dragon.as_mut() {
             d.position.y += 0.1;
@@ -2160,9 +2162,19 @@ impl Game<'_> {
         self.breath_clouds.append(&mut clouds);
         for (who, amount) in harmed {
             self.as_fight_player(who, |g| {
-                g.hurt_player_by("minecraft:indirect_magic", amount);
+                g.dragon_hurts_player("minecraft:indirect_magic", amount);
             });
         }
+    }
+    /// Damage from the dragon, which is its causing entity
+    /// (`DamageSources.mobAttack(dragon)`, `indirectMagic(cloud, dragon)`): the
+    /// death message names it.
+    fn dragon_hurts_player(&mut self, damage_type: &str, amount: f32) {
+        if let Some(id) = self.dragon.as_ref().map(|d| d.id) {
+            let name = Text::translate("entity.minecraft.ender_dragon", &[]);
+            self.note_named_attacker(damage_type, id, name);
+        }
+        self.hurt_player_by(damage_type, amount);
     }
     /// `BossHealthOverlay.extractRenderState`: whatever `publish_boss_bars`
     /// (or a server's packets) put on this client's overlay.

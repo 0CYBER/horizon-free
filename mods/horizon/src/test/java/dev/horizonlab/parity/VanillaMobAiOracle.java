@@ -60,6 +60,7 @@ import net.minecraft.util.debugchart.SampleLogger;
 import net.minecraft.world.clock.WorldClocks;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySpawnReason;
+import net.minecraft.world.entity.EntitySpawnRequest;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.monster.creaking.Creaking;
@@ -159,6 +160,7 @@ public final class VanillaMobAiOracle {
     static final class Scenario {
         String name;
         int ticks;
+        int difficulty = 2;
         long time = 6000;
         boolean rain, thunder;
         int originX, originZ;
@@ -204,6 +206,7 @@ public final class VanillaMobAiOracle {
                         switch (kv[0]) {
                             case "ticks" -> s.ticks = Integer.parseInt(kv[1]);
                             case "time" -> s.time = Long.parseLong(kv[1]);
+                            case "difficulty" -> s.difficulty = Integer.parseInt(kv[1]);
                             case "rain" -> s.rain = true;
                             case "thunder" -> s.thunder = true;
                             case "levelseed" -> s.levelSeed = Long.parseLong(kv[1]);
@@ -494,6 +497,7 @@ public final class VanillaMobAiOracle {
         }
 
         void run(Scenario s, ServerLevel level) throws Exception {
+            this.setDifficulty(net.minecraft.world.Difficulty.byId(s.difficulty), true);
             out.println("== " + s.name);
             var clock = level.registryAccess().lookupOrThrow(Registries.WORLD_CLOCK).getOrThrow(WorldClocks.OVERWORLD);
             this.clockManager().setTotalTicks(clock, s.time);
@@ -537,7 +541,9 @@ public final class VanillaMobAiOracle {
             int id = 100000;
             for (MobSpec spec : s.mobs) {
                 EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.getValue(net.minecraft.resources.Identifier.parse(spec.type));
-                Mob mob = (Mob) type.create(level, EntitySpawnReason.COMMAND);
+                // Ignore canSpawn: a Peaceful scenario's hostile mob is one that was already
+                // in the world when the difficulty changed (create returns null at Peaceful).
+                Mob mob = (Mob) type.create(level, new EntitySpawnRequest(EntitySpawnReason.COMMAND, true));
                 if (tracing(s)) field(Entity.class, "random").set(mob, new TracingRandom(0L, TRACE, ENTS.size()));
                 mob.setId(id++);
                 mob.snapTo(spec.x, spec.y, spec.z, spec.yaw, 0.0F);
@@ -553,6 +559,10 @@ public final class VanillaMobAiOracle {
                     String v = kv.length > 1 ? kv[1] : "";
                     switch (kv[0]) {
                         case "persistent" -> mob.setPersistenceRequired();
+                        case "named" -> {
+                            mob.setCustomName(net.minecraft.network.chat.Component.literal("Peaceful regression"));
+                            mob.setPersistenceRequired();
+                        }
                         case "ridden" -> mob.setItemSlot(net.minecraft.world.entity.EquipmentSlot.BODY,
                             new net.minecraft.world.item.ItemStack(BuiltInRegistries.ITEM.getValue(
                                 net.minecraft.resources.Identifier.parse("minecraft:red_harness"))));
@@ -604,6 +614,7 @@ public final class VanillaMobAiOracle {
                         case "tame" -> { if (mob instanceof net.minecraft.world.entity.animal.equine.AbstractHorse horse) horse.setTamed(true); }
                         case "strength" -> method(net.minecraft.world.entity.animal.equine.Llama.class, "setStrength", int.class)
                             .invoke(mob, Integer.parseInt(v));
+                        case "dead" -> mob.setHealth(0.0F);
                         case "leashed", "leashto" -> {
                             // Leashed once every mob exists (below).
                         }
@@ -807,6 +818,12 @@ public final class VanillaMobAiOracle {
                 for (BlockPos h : heartPositions) printHeart(t, level, h);
                 for (String[] b : s.blocks) if (b[0].equals("chest")) printChest(t, s, level, b);
                 for (String[] b : s.blocks) if (isHive(b)) printHive(t, level, b);
+                if (s.name.startsWith("leash_death_")) {
+                    int leads = level.getEntitiesOfClass(ItemEntity.class, ENTS.get(0).getBoundingBox().inflate(32.0),
+                        item -> item.getItem().is(net.minecraft.world.item.Items.LEAD))
+                        .stream().mapToInt(item -> item.getItem().getCount()).sum();
+                    out.println(t + " leads " + leads);
+                }
                 for (String sound : SOUNDS) out.println(t + " sound " + sound);
                 for (var w : watched.entrySet()) {
                     BlockState now = level.getBlockState(w.getKey());
@@ -1008,6 +1025,7 @@ public final class VanillaMobAiOracle {
                 return;
             }
             Mob m = (Mob) e;
+            sb.append("\tleashed ").append(((net.minecraft.world.entity.Leashable) m).isLeashed() ? 1 : 0);
             sb.append("\tp ").append(d(m.getX())).append(',').append(d(m.getY())).append(',').append(d(m.getZ()));
             Vec3 v = m.getDeltaMovement();
             sb.append("\tv ").append(d(v.x)).append(',').append(d(v.y)).append(',').append(d(v.z));

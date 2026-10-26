@@ -50,11 +50,13 @@ import urllib.parse
 try:
     from . import lab, oracle_harness as oh, test_rust_parity as base
     from .test_dedicated_server_parity import Server, free_port
+    from .integration_env import run_game
 except ImportError:
     import lab
     import oracle_harness as oh
     import test_rust_parity as base
     from test_dedicated_server_parity import Server, free_port
+    from integration_env import run_game
 
 NAME = 'online-mode-parity'
 PLAYER = 'Tester'
@@ -185,7 +187,7 @@ def run_client(binary, build, port, label, token, discovery):
     if token:
         command += ['--session-file', session_file(directory, token)]
     with (build / f'client-{label}.log').open('w') as log:
-        subprocess.run([str(c) for c in command], cwd=directory, env=env, stdout=log, stderr=subprocess.STDOUT,
+        run_game([str(c) for c in command], cwd=directory, env=env, stdout=log, stderr=subprocess.STDOUT,
                        timeout=300, check=True)
     got = json.loads(report.read_text())
     got['session file left'] = (directory / 'session.json').exists()

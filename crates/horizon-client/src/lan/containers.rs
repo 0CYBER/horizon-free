@@ -78,6 +78,17 @@ impl Hub {
         );
     }
 
+    /// `ServerLevel.globalLevelEvent`: the packet with its global flag, for
+    /// every player on the server (`PlayerList.broadcastAll`).
+    pub fn global_level_event(&self, kind: i32, pos: [i32; 3], data: i32) {
+        self.broadcast(&C::LevelEvent(play::LevelEvent {
+            kind,
+            pos,
+            data,
+            global: true,
+        }));
+    }
+
     /// ClientboundBlockEventPacket (`PlayerList.broadcast` within 64 blocks).
     pub fn block_event(&self, pos: [i32; 3], b0: i32, b1: i32, state: u32) {
         let block = self
@@ -107,6 +118,21 @@ impl Hub {
             &C::EntityEvent(play::EntityEvent { id, event }),
             None,
         );
+    }
+
+    /// `ServerPlayer.crit`: send the victim's animation to the players tracking
+    /// the attacker and the attacker themselves (`sendToTrackingPlayersAndSelf`).
+    pub fn critical_hit(&self, attacker: i32, target: i32) {
+        let body = C::Animate(play::Animate {
+            id: target,
+            action: 1,
+        })
+        .encode();
+        for g in self.guests.iter().filter(|g| {
+            self.here(g) && (g.entity_id == attacker || g.tracker.is_tracking(attacker))
+        }) {
+            g.sender.send(body.clone());
+        }
     }
 
     /// `ServerLevel.broadcastDamageEvent`: the clients around show the hurt

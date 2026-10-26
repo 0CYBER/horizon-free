@@ -167,20 +167,42 @@ fn real_packs_read() {
                 declarations: "layout(location = 0) in vec3 hz_v_pos;".into(),
                 body: "    hz_Vertex = vec4(hz_v_pos, 1.0);\n    hz_Color = vec4(1.0);\n".into(),
                 attributes: vec![("mc_Entity".into(), "vec4(-1.0)".into())],
+                ..Default::default()
             };
-            let post = load_post(
-                &pack,
-                &folder,
-                &shaders,
-                &Macros::standard(),
-                Some(&terrain),
-            );
+            let inputs = horizon_shaders::GameInputs {
+                terrain: Some(terrain.clone()),
+                sky: Some(terrain.clone()),
+                celestial: Some(terrain.clone()),
+                entities: Some(terrain.clone()),
+                clouds: Some(terrain.clone()),
+                weather: Some(terrain.clone()),
+                hand: Some(terrain),
+            };
+            let post = load_post(&pack, &folder, &shaders, &Macros::standard(), &inputs);
             println!(
-                "  dimension {id} (folder `{folder}`): {} post programs, terrain {:?}, {} notes, {:.0} ms",
+                "  dimension {id} (folder `{folder}`): {} post programs, shadow pass {} ({:?}, {:?}, {:?}, {:?}, {} shadowcomp), terrain {:?}, water {:?}, sky {:?} {:?}, entities {:?} {:?}, {} notes, {:.0} ms",
                 post.programs.len(),
+                post.shadow_pass,
+                post.shadow.as_ref().map(|t| &t.name),
+                post.shadow_water.as_ref().map(|t| &t.name),
+                post.shadow_entities.as_ref().map(|t| &t.name),
+                post.shadow_block.as_ref().map(|t| &t.name),
+                post.shadow_comp.len(),
                 post.terrain.as_ref().map(|t| &t.name),
+                post.water.as_ref().map(|t| &t.name),
+                post.sky.as_ref().map(|t| &t.name),
+                post.sky_textured.as_ref().map(|t| &t.name),
+                post.entities.as_ref().map(|t| &t.name),
+                post.block.as_ref().map(|t| &t.name),
                 post.notes.len() + post.config.notes.len(),
                 start.elapsed().as_secs_f64() * 1000.0
+            );
+            let mut custom = post.custom;
+            custom.eval(0.016, &|_| None);
+            println!(
+                "    {} custom uniforms; notes: {:?}",
+                custom.uniforms().count(),
+                custom.notes.iter().take(4).collect::<Vec<_>>()
             );
             for n in post.notes.iter().chain(&post.config.notes).take(12) {
                 println!("    {n}");

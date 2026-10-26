@@ -84,6 +84,33 @@ impl Displayer {
     }
 }
 
+/// Horizon's own lines: the shader pack's GPU time, then its costliest passes (`passes`: each
+/// pass's median milliseconds, in the order they run).
+pub fn shader_pass_lines(passes: &[(String, f32)]) -> Vec<String> {
+    const SHOWN: usize = 8;
+    if passes.is_empty() {
+        return Vec::new();
+    }
+    let total: f32 = passes.iter().map(|p| p.1).sum();
+    let mut lines = vec![format!(
+        "Shader pack GPU: {total:.2} ms in {} passes",
+        passes.len()
+    )];
+    let mut costliest: Vec<&(String, f32)> = passes.iter().collect();
+    costliest.sort_by(|a, b| b.1.total_cmp(&a.1));
+    lines.extend(
+        costliest
+            .iter()
+            .take(SHOWN)
+            .map(|(name, ms)| format!("{name}: {ms:.2} ms")),
+    );
+    if costliest.len() > SHOWN {
+        let rest: f32 = costliest[SHOWN..].iter().map(|p| p.1).sum();
+        lines.push(format!("{} more: {rest:.2} ms", costliest.len() - SHOWN));
+    }
+    lines
+}
+
 /// `Mth.wrapDegrees`.
 fn wrap_degrees(angle: f32) -> f32 {
     let wrapped = angle % 360.0;
@@ -194,18 +221,17 @@ pub fn scale(
 pub fn draw(font: &Font, columns: [&[String]; 2], scale: f32, width: i32) -> Vec<GuiDraw> {
     let mut out = vec![GuiDraw::Push(vec![PoseOp::Scale(scale, scale)])];
     for (lines, align_left) in [(columns[0], true), (columns[1], false)] {
-        let placed: Vec<(&String, i32, i32)> = lines
+        let placed: Vec<(&String, i32, i32, i32)> = lines
             .iter()
             .enumerate()
             .filter(|(_, l)| !l.is_empty())
             .map(|(i, l)| {
                 let w = font.width(l) as i32;
                 let left = if align_left { 2 } else { width - 2 - w };
-                (l, left, 2 + LINE_HEIGHT * i as i32)
+                (l, left, 2 + LINE_HEIGHT * i as i32, w)
             })
             .collect();
-        for (line, left, top) in &placed {
-            let w = font.width(line) as i32;
+        for (_, left, top, w) in &placed {
             out.push(fill(
                 left - 1,
                 top - 1,
@@ -214,7 +240,7 @@ pub fn draw(font: &Font, columns: [&[String]; 2], scale: f32, width: i32) -> Vec
                 BACKGROUND,
             ));
         }
-        for (line, left, top) in placed {
+        for (line, left, top, _) in placed {
             out.push(GuiDraw::Text {
                 text: Text::literal(line.clone()),
                 x: left,
@@ -336,5 +362,16 @@ mod tests {
             scale([1920, 1080], 3, -1, false, [640, 360]),
             (1.0, [640, 360])
         );
+    }
+
+    #[test]
+    fn shader_pass_lines_list_the_costliest_passes_first() {
+        assert!(shader_pass_lines(&[]).is_empty());
+        let passes: Vec<(String, f32)> = (0..10).map(|i| (format!("p{i}"), i as f32)).collect();
+        let lines = shader_pass_lines(&passes);
+        assert_eq!(lines[0], "Shader pack GPU: 45.00 ms in 10 passes");
+        assert_eq!(lines[1], "p9: 9.00 ms");
+        assert_eq!(lines[8], "p2: 2.00 ms");
+        assert_eq!(lines[9], "2 more: 1.00 ms");
     }
 }

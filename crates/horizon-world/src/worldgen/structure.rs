@@ -21,7 +21,6 @@ pub mod start_checks;
 pub mod stronghold;
 pub mod template;
 pub mod temple;
-pub mod yung;
 
 use crate::{
     nbt::{self, Limits},

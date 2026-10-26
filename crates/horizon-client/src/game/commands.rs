@@ -10,6 +10,7 @@ mod items;
 mod misc;
 mod place;
 mod players;
+pub(super) mod pregen;
 mod raid;
 mod terrain_cmds;
 mod text_commands;
@@ -751,13 +752,15 @@ impl Game<'_> {
                     && !id.ends_with("get")
                     && let Ok(t) = self.entities(ctx, "target", false)
                 {
-                    self.cmds.waypoint_dirty.push(t[0]);
+                    let target = self.waypoint_target(t[0]);
+                    self.cmds.waypoint_dirty.push(target);
                 }
                 result
             }
             "ride.mount" | "ride.dismount" => self.cmd_ride(id, ctx),
             "spreadplayers" => self.cmd_spreadplayers(ctx),
             id if id.starts_with("forceload.") => self.cmd_forceload(id, ctx),
+            id if id.starts_with("pregen.") => self.cmd_pregen(id, ctx),
             "fillbiome" => self.cmd_fillbiome(ctx),
             id if id.starts_with("worldborder.") => self.cmd_worldborder(id, ctx),
             id if id.starts_with("loot.") => self.cmd_loot(id, ctx),
@@ -1094,6 +1097,12 @@ impl Game<'_> {
             Target::Player => {
                 // ServerPlayer.teleport: removeVehicle before placing the player.
                 self.stop_riding();
+                // A server's player teleported within their level is placed
+                // there at once: the arrival they were waiting for elsewhere
+                // in it (whose chunks lose their tickets) is abandoned.
+                if let Some(conn) = self.lan_acting {
+                    self.server_trips.retain(|trip| !trip.is(conn));
+                }
                 if let Some(p) = self.player.as_mut() {
                     p.position = v;
                     p.velocity = Vec3::new(0.0, 0.0, 0.0);
@@ -2499,12 +2508,14 @@ impl Game<'_> {
         };
         let max = Self::int(ctx, "maxCount").unwrap_or(-1);
         let counting = max == 0;
-        // Inventory.clearOrCountMatchingItems: main, armor, crafting grid, carried.
+        // Inventory slots 0..40: main, armor feet to head, off hand;
+        // then clearOrCountMatchingItems visits the crafting grid and carried stack.
         let mut removed = 0i32;
         let mut budget = if max < 0 { i32::MAX } else { max };
         let all = |g: &Self| -> Vec<Option<ItemStack>> {
             let mut v: Vec<Option<ItemStack>> = g.inventory.clone();
-            v.extend(g.armor.iter().cloned());
+            v.extend(g.armor.iter().rev().cloned());
+            v.push(g.offhand.clone());
             v.extend(g.craft_grid.iter().cloned());
             v.push(g.carried.clone());
             v
@@ -2518,7 +2529,8 @@ impl Game<'_> {
             .collect();
         let mut slots: Vec<&mut Option<ItemStack>> = Vec::new();
         slots.extend(self.inventory.iter_mut());
-        slots.extend(self.armor.iter_mut());
+        slots.extend(self.armor.iter_mut().rev());
+        slots.push(&mut self.offhand);
         slots.extend(self.craft_grid.iter_mut());
         slots.push(&mut self.carried);
         for (slot, matches) in slots.into_iter().zip(matching) {
@@ -2836,9 +2848,14 @@ impl Game<'_> {
             capture.push(line.clone());
         }
         let focused = self.screen == Screen::Chat;
-        self.ui
-            .chat
-            .add(&self.gui.atlas, line, None, self.ticks, focused);
+        self.ui.chat.add(
+            &self.gui.atlas,
+            line,
+            None,
+            horizon_client::chat::ChatSource::Player,
+            self.ticks,
+            focused,
+        );
         Ok(1)
     }
     /// MessageArgument: `@p`-style selectors in a message become names.
