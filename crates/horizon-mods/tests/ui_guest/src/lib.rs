@@ -2,7 +2,9 @@
 //! of each widget, `/ui_settings` sets a settings page, `/ui_close` closes
 //! the screen; the `ui-events` calls answer in chat so the host sees them.
 //! `/render_hud`, `/render_clear` and `/render_shake` test `render`;
-//! `/input_claim`, `/input_poll` and `/input_held` test `input`.
+//! `/input_claim`, `/input_poll`, `/input_held` and `/input_wheel` test
+//! `input`; `/zoom FACTOR SMOOTH TURN` tests `render.set-zoom`;
+//! `/corner` and `/readings` the calls the official extras mods use.
 use horizon_mod_sdk::{
     Mod, Registration, chat,
     input::{self, Event},
@@ -92,12 +94,17 @@ impl Mod for Guest {
             "input_claim",
             "input_poll",
             "input_held",
+            "input_wheel",
+            "zoom",
+            "minimap",
+            "corner",
+            "readings",
         ]
         .into_iter()
         .fold(Registration::new(), Registration::command);
         Ok((Guest, hooks))
     }
-    fn command(&mut self, name: &str, _args: &str) -> Result<Option<String>, String> {
+    fn command(&mut self, name: &str, args: &str) -> Result<Option<String>, String> {
         match name {
             "ui_screen" => ui::open_screen(&Screen {
                 title: "Guest's screen".into(),
@@ -107,6 +114,49 @@ impl Mod for Guest {
             "ui_close" => ui::close_screen(),
             "render_hud" => render::set_hud(&shapes()),
             "render_clear" => render::set_hud(&[]),
+            // An FPS-counter-like box: as wide as its text plus 4.
+            "corner" => {
+                let text = "60 fps";
+                let w = render::text_width(text) + 4.0;
+                render::set_corner(
+                    render::Corner::TopRight,
+                    w,
+                    12.0,
+                    &[
+                        Shape::Fill(FillShape {
+                            rect: Rect {
+                                x: 0.0,
+                                y: 0.0,
+                                w,
+                                h: 12.0,
+                            },
+                            color: 0x78000000,
+                        }),
+                        Shape::Text(TextShape {
+                            text: text.into(),
+                            at: Point { x: 2.0, y: 2.0 },
+                            color: 0xFFFFFF,
+                            centered: false,
+                            shadow: true,
+                        }),
+                    ],
+                );
+                ui::set_settings(&[Widget::Button(ui::ButtonWidget {
+                    id: 3,
+                    label: "Corner: Top Right".into(),
+                })]);
+            }
+            "readings" => {
+                let f = render::frame_stats();
+                let fwd = input::mapping("key.forward")
+                    .map_or("none".into(), |m| format!("{} {}", m.label, m.down));
+                let (l, r) = input::clicks_per_second();
+                let none = input::mapping("key.inventory").is_none();
+                chat::show(&format!(
+                    "{} {} {}; forward {fwd}; cps {l} {r}; other {none}",
+                    f.fps, f.min, f.low
+                ));
+            }
             "input_claim" => {
                 input::claim_items(&["minecraft:stick".into()]);
                 input::register_key("wheel", "Open the wheel", "key.keyboard.r")?;
@@ -121,6 +171,7 @@ impl Mod for Guest {
                         Event::UseStop(u) => format!("use-stop {} {}", u.item.id, u.ticks),
                         Event::KeyDown(k) => format!("key-down {k}"),
                         Event::KeyUp(k) => format!("key-up {k}"),
+                        Event::Wheel(steps) => format!("wheel {steps}"),
                     });
                 }
             }
@@ -129,6 +180,42 @@ impl Mod for Guest {
                     format!("{} x{} in {}", h.id, h.count, h.slot)
                 });
                 chat::show(&format!("holding {held}"));
+            }
+            "input_wheel" => input::claim_wheel(args != "off"),
+            "zoom" => {
+                let mut words = args.split(' ');
+                let mut number = || {
+                    words
+                        .next()
+                        .and_then(|w| w.parse().ok())
+                        .unwrap_or(f32::NAN)
+                };
+                let factor = number();
+                let smooth = number() == 1.0;
+                let turn = number();
+                render::set_zoom(render::Zoom {
+                    factor,
+                    smooth,
+                    turn,
+                });
+            }
+            // `minimap off`, or `minimap SIZE BLOCKS-PER-PIXEL ROTATE ROUND`.
+            "minimap" => {
+                let words: Vec<&str> = args.split(' ').collect();
+                let number = |i: usize| {
+                    words
+                        .get(i)
+                        .and_then(|w| w.parse().ok())
+                        .unwrap_or(f32::NAN)
+                };
+                let map = (args != "off").then(|| render::Minimap {
+                    corner: render::Corner::BottomLeft,
+                    size: number(0),
+                    blocks_per_pixel: number(1),
+                    rotate: words.get(2) == Some(&"1"),
+                    round: words.get(3) == Some(&"1"),
+                });
+                render::set_minimap(map);
             }
             // Clamped to (1, 10); the two after it shake nothing.
             "render_shake" => {
@@ -147,11 +234,17 @@ impl Mod for Guest {
         chat::show("closed");
     }
     fn ui_settings_opened(&mut self) {
-        ui::set_settings(&[Widget::Text(TextWidget {
-            id: 1,
-            text: "fresh".into(),
-            color: 0x33CC33,
-        })]);
+        ui::set_settings(&[
+            Widget::Text(TextWidget {
+                id: 1,
+                text: "fresh".into(),
+                color: 0x33CC33,
+            }),
+            Widget::Button(ui::ButtonWidget {
+                id: 3,
+                label: "Corner: Top Right".into(),
+            }),
+        ]);
         chat::show("settings opened");
     }
 }

@@ -1,6 +1,8 @@
-//! Shader packs, for development until the Shader Packs page exists: `HORIZON_SHADER_PACK=<name>`
-//! runs `shaderpacks/<name>` (a folder or a zip beside `options.txt`) over the world. The
-//! programs of the current dimension's folder are loaded when the dimension changes (spec 1.2).
+//! Shader packs: the one picked on Options > Horizon Settings > Shader Packs, or
+//! `HORIZON_SHADER_PACK=<name>` (development; it wins over the pick), runs `shaderpacks/<name>`
+//! (a folder or a zip beside `options.txt`) over the world; Horizon's own packs go to
+//! `game/native_shaders.rs`. The programs of the current dimension's folder are loaded when the
+//! dimension changes (spec 1.2).
 
 use horizon_client::camera::CameraFluid;
 use horizon_client::gfx::pack_uniforms::PackInputs;
@@ -33,23 +35,35 @@ impl Game<'_> {
     /// Loads the pack for the current dimension when it changed, and returns this frame's
     /// inputs to the pack's uniforms.
     pub(super) fn shader_pack_inputs(&mut self, camera: glam::DVec3, partial: f32) -> PackInputs {
-        let Some(name) = std::env::var_os("HORIZON_SHADER_PACK") else {
+        static DEV_PACK: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        let dev = DEV_PACK.get_or_init(|| std::env::var("HORIZON_SHADER_PACK").ok());
+        let picked = dev.as_deref().unwrap_or(&self.settings.horizon.shader_pack);
+        if self.native_shaders.picked != picked {
+            // Another pack, or none: drop what ran.
+            self.native_shaders = super::native_shaders::NativeShaders::picking(picked);
+            self.pack_ids = None;
+            if let Some(renderer) = &mut self.renderer {
+                renderer.drop_shader_packs();
+            }
+        }
+        if picked.is_empty() {
             return PackInputs::default();
-        };
+        }
+        let name = picked.to_owned();
         let dimension = match self.dim {
             Dim::Overworld => 0,
             Dim::Nether => -1,
             Dim::End => 1,
         };
-        if let Some(renderer) = &mut self.renderer
+        let path = Self::shader_packs_dir().join(&name);
+        if horizon_shader_api::package::is_pack(&path) {
+            // One of Horizon's own packs (game/native_shaders.rs).
+            self.tick_native_shader_pack(&path);
+        } else if let Some(renderer) = &mut self.renderer
             && renderer.shader_pack_dimension() != Some(dimension)
         {
-            let name = name.to_string_lossy();
+            let name = name.as_str();
             let started = std::time::Instant::now();
-            let path = std::env::current_dir()
-                .unwrap_or_default()
-                .join("shaderpacks")
-                .join(&*name);
             match Pack::open(&path) {
                 Ok(pack) => {
                     let macros = Macros::standard();
@@ -232,6 +246,32 @@ impl Game<'_> {
                     .unwrap_or(ids.missing_block)
             });
         self.push_span(start, "BLOCK_ENTITIES", id);
+        let emission = self
+            .res
+            .facts()
+            .get(horizon_world::registry::BlockStateId(state))
+            .emission;
+        if let Some(last) = self.entity_spans.borrow_mut().last_mut() {
+            last.emissive = emission > 0;
+        }
+    }
+
+    /// Starts the span of the local player's model; `hidden` in first person, where only a
+    /// pack's shadow pass draws it.
+    pub(super) fn mark_player(&self, start: usize, hidden: bool) {
+        self.mark_entity(start, "minecraft:player");
+        if self.pack_ids.is_some()
+            && let Some(last) = self.entity_spans.borrow_mut().last_mut()
+        {
+            last.player = true;
+            last.hidden = hidden;
+        }
+    }
+
+    /// Marks vertices `start..end` (one entity) as hidden from the camera, for an entity
+    /// Horizon's culling would drop but a pack's shadow pass still draws (`EntitySpan::hide`).
+    pub(super) fn hide_spans_from(&self, start: usize, end: usize) -> bool {
+        EntitySpan::hide(&mut self.entity_spans.borrow_mut(), start, end)
     }
 
     /// Starts a span of geometry that is not an entity (`PARTICLES`, `DESTROY`...).
@@ -247,7 +287,7 @@ impl Game<'_> {
             start: start as u32,
             stage: horizon_shaders::render_stage(stage),
             id,
-            translucent: false,
+            ..Default::default()
         };
         // A span that drew nothing gives way to the next.
         match spans.last_mut() {

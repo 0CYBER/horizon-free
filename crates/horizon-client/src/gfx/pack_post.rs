@@ -37,6 +37,10 @@ enum Source {
     /// The block atlas (pack_atlas.rs), in gbuffers programs.
     Atlas,
     Lightmap,
+    /// `shadowtex0`/`shadowtex1` (6.3), with depth comparison (`sampler2DShadow`) or not.
+    ShadowDepth(usize, bool),
+    /// `shadowcolor0/1` read outside the shadow programs (in them they are `Color`).
+    ShadowColor(usize),
 }
 
 #[derive(Clone)]
@@ -63,13 +67,17 @@ enum SamplerKind {
 impl SamplerKind {
     fn of(source: Source, filtering: bool) -> Self {
         match source {
-            Source::Color(_) | Source::Dummy if !filtering => Self::Nearest,
-            Source::Depth | Source::Depth1 => Self::Nearest,
+            Source::Color(_) | Source::ShadowColor(_) | Source::Dummy if !filtering => {
+                Self::Nearest
+            }
+            Source::Depth | Source::Depth1 | Source::ShadowDepth(_, false) => Self::Nearest,
             Source::Noise => Self::Repeat,
-            Source::Shadow => Self::Comparison,
+            Source::Shadow | Source::ShadowDepth(_, true) => Self::Comparison,
             // Blocks look as the game draws them: nearest texels.
             Source::Atlas => Self::NearestRepeat,
-            Source::Color(_) | Source::Dummy | Source::Lightmap => Self::Linear,
+            Source::Color(_) | Source::ShadowColor(_) | Source::Dummy | Source::Lightmap => {
+                Self::Linear
+            }
         }
     }
 
@@ -139,6 +147,17 @@ struct Entities {
     geometry: PackEntities,
     passes: [Option<Pass>; PROGRAMS],
     late: [bool; PROGRAMS],
+    /// What draws entities and block entities into the shadow map (2.4).
+    shadow: [Option<Pass>; 2],
+    /// Only the player, only block entities that emit light (3.2).
+    only: (bool, bool),
+}
+
+impl Entities {
+    /// Whether a gbuffers program draws some of them (else only the shadow pass does).
+    fn drawn(&self) -> bool {
+        self.passes.iter().any(Option::is_some)
+    }
 }
 
 #[derive(Clone)]
@@ -158,6 +177,8 @@ struct Pass {
     flip: u16,
     /// Buffers sampled, for the bind group cache key.
     reads: u16,
+    /// shadowcolor buffers sampled by a program of the other buffers.
+    shadow_reads: u16,
     /// Buffers written.
     written: u16,
     /// Buffers whose mip chain is regenerated right before it (6.1.7).
@@ -168,9 +189,9 @@ struct Pass {
     atlas: Option<wgpu::TextureView>,
     /// Reads `mc_Entity`'s table (`PackPost::block_ids`).
     ids: bool,
-    /// Bind groups by the sides read (low 16 bits) and the buffers whose mip chain is current
-    /// (high 16 bits).
-    groups: HashMap<u32, wgpu::BindGroup>,
+    /// Bind groups by the sides read (bits 0–15), the buffers whose mip chain is current (bits
+    /// 16–31) and the shadowcolor sides read (bits 32–33).
+    groups: HashMap<u64, wgpu::BindGroup>,
 }
 
 /// One side of a buffer with mipmaps.
@@ -258,6 +279,12 @@ pub struct PackPost {
     hand: Option<(Pass, super::pack_hand::PackHand)>,
     /// A program after translucent terrain reads `depthtex1`: it is copied before water.
     depth1: bool,
+    /// The shadow buffers, when the shadow pass runs (2.5), and the `shadowcomp` programs.
+    shadow_targets: Option<super::pack_shadow::ShadowTargets>,
+    /// What draws terrain from the light (`shadow`), and translucent terrain (`shadow_water`).
+    shadow_terrain: Option<Pass>,
+    shadow_water: Option<Pass>,
+    shadow_comp: Vec<Pass>,
     /// Buffers with mipmaps (filterable ones a program asks them for).
     mipped: u16,
     /// Buffers whose mip chain matches their first level, this frame.
@@ -270,8 +297,8 @@ pub struct PackPost {
     /// with the page buffer it was made for.
     block_ids: Option<(wgpu::BindGroupLayout, wgpu::Buffer)>,
     page_groups: HashMap<u32, (wgpu::Buffer, wgpu::BindGroup)>,
-    /// `HORIZON_SHADER_PACK_TIMING`: GPU time of each pass, in the log.
-    timing: Option<super::pack_timing::PassTiming>,
+    /// GPU time of each pass, while the renderer asks for it (`pack_timing.rs`).
+    pub timing: Option<super::pack_timing::PassTiming>,
     /// `shaders.properties`' custom uniforms, after the frame's in `uniforms.values`.
     custom: horizon_shaders::Custom,
     atlas: Option<wgpu::TextureView>,
@@ -342,7 +369,37 @@ fn texture_format(f: Format, features: wgpu::Features) -> wgpu::TextureFormat {
     }
 }
 
-fn source(name: &str) -> Source {
+/// The texture behind sampler `name` in a program of the shadow buffers (`shadow_space`: buffer
+/// n is shadowcolor n) or of the others, when the shadow pass runs (`shadow_pass`). `shadow` is
+/// `shadowtex1` when the program also declares `watershadow` (6.3).
+fn source(name: &str, shadow_space: bool, shadow_pass: bool, watershadow: bool) -> Source {
+    let shadow_color = match name {
+        "shadowcolor" | "shadowcolor0" => Some(0),
+        "shadowcolor1" => Some(1),
+        _ => None,
+    };
+    let shadow_depth = match name {
+        "shadowtex0" | "watershadow" | "shadowtex0HW" => Some(0),
+        "shadowtex1" | "shadowtex1HW" => Some(1),
+        "shadow" => Some(usize::from(watershadow)),
+        _ => None,
+    };
+    if shadow_pass {
+        if let Some(n) = shadow_depth {
+            return Source::ShadowDepth(n, name.ends_with("HW"));
+        }
+        if let Some(n) = shadow_color {
+            return if shadow_space {
+                Source::Color(n)
+            } else {
+                Source::ShadowColor(n)
+            };
+        }
+    }
+    if shadow_space && horizon_shaders::buffer_index(name).is_some() {
+        // colortex buffers are not this pass's.
+        return Source::Dummy;
+    }
     match name {
         "depthtex0" | "gdepthtex" => Source::Depth,
         // The hand is drawn after the pack, so `depthtex2` (without it) is `depthtex1`.
@@ -555,10 +612,35 @@ fn attach(
     })
 }
 
-/// Draws the game's terrain (`true`: translucent) into a pass; calls its third argument with
-/// each arena page before drawing from it.
+/// Which of the frame's terrain draws: the camera's solid or translucent ones, or the shadow
+/// camera's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TerrainList {
+    Solid,
+    Translucent,
+    ShadowSolid,
+    ShadowTranslucent,
+}
+
+impl TerrainList {
+    fn translucent(self) -> bool {
+        matches!(self, Self::Translucent | Self::ShadowTranslucent)
+    }
+}
+
+/// Draws the game's terrain of one list into a pass; calls its third argument with each arena
+/// page before drawing from it.
 pub(super) type TerrainDraw<'a> =
-    dyn FnMut(&mut wgpu::RenderPass<'_>, bool, &dyn Fn(&mut wgpu::RenderPass<'_>, u32)) + 'a;
+    dyn FnMut(&mut wgpu::RenderPass<'_>, TerrainList, &dyn Fn(&mut wgpu::RenderPass<'_>, u32)) + 'a;
+
+/// What the shadow camera sees of the terrain, for the game's draw lists: its view and
+/// projection in wgpu's clip space, the direction toward the light, and how far from the camera
+/// terrain is drawn (`shadowDistanceRenderMul`).
+pub(super) struct ShadowView {
+    pub cull: glam::Mat4,
+    pub light: glam::Vec3,
+    pub distance: Option<f32>,
+}
 
 /// Set 3 of flat terrain, read by the vertex stage: `mc_Entity`'s table (-1 pairs when empty)
 /// and, per arena page, the page's vertices (a vertex reads its quad's corners for its normal).
@@ -606,11 +688,15 @@ pub(super) struct Geometry<'a> {
 }
 
 /// The pass of program `p`: a quad, or `geometry` drawn by the game. `None` (with a note) when
-/// wgpu refuses it or it writes nothing.
+/// wgpu refuses it or it writes nothing. `formats` are its buffers' (for a program of the shadow
+/// buffers, buffer n is shadowcolor n); `shadow` the shadowcolor formats when the shadow pass
+/// runs.
+#[allow(clippy::too_many_arguments)]
 fn build_pass(
     device: &wgpu::Device,
     p: horizon_shaders::PostProgram,
     formats: &[wgpu::TextureFormat; BUFFERS],
+    shadow: Option<&[wgpu::TextureFormat; 2]>,
     screen: wgpu::TextureFormat,
     notes: &mut Vec<String>,
     geometry: Option<&Geometry<'_>>,
@@ -639,6 +725,8 @@ fn build_pass(
     let mut samplers = Vec::new();
     let (mut kinds, mut slots) = (HashMap::new(), HashMap::new());
     let mut reads = 0u16;
+    let mut shadow_reads = 0u16;
+    let watershadow = interface.samplers.iter().any(|s| s.name == "watershadow");
     // A gbuffers pass draws into its buffers and the depth buffer: reading them as well would
     // be a feedback loop (undefined in GL, refused by wgpu), so those read a blank texture.
     let in_place = match geometry {
@@ -646,8 +734,10 @@ fn build_pass(
         None => 0,
     };
     for s in &interface.samplers {
-        let mut src = source(&s.name);
+        let mut src = source(&s.name, p.group.shadow(), shadow.is_some(), watershadow);
         let blank = match src {
+            // The shadow pass writes the shadow map.
+            Source::ShadowDepth(..) => p.group == Group::Shadow,
             Source::Atlas => geometry.is_none(),
             Source::Depth => geometry.is_some(),
             // Translucent terrain reads the copy; opaque terrain would read itself.
@@ -660,14 +750,23 @@ fn build_pass(
             Source::Color(n) => formats[n]
                 .sample_type(None, Some(features))
                 .unwrap_or(float),
-            Source::Depth | Source::Depth1 => wgpu::TextureSampleType::Float { filterable: false },
+            Source::ShadowColor(n) => shadow
+                .and_then(|f| f[n].sample_type(None, Some(features)))
+                .unwrap_or(float),
+            Source::Depth | Source::Depth1 | Source::ShadowDepth(..) => {
+                wgpu::TextureSampleType::Float { filterable: false }
+            }
             // Unfilterable on WebGPU-level devices; the lightmap is sampled at texel centres.
             Source::Lightmap => float,
             _ => float,
         };
         let int = !matches!(sample_type, wgpu::TextureSampleType::Float { .. });
         if s.ty == "sampler2DShadow" {
-            (src, sample_type) = (Source::Shadow, wgpu::TextureSampleType::Depth);
+            src = match src {
+                Source::ShadowDepth(n, _) => Source::ShadowDepth(n, true),
+                _ => Source::Shadow,
+            };
+            sample_type = wgpu::TextureSampleType::Depth;
         }
         let wanted = match s.ty.as_str() {
             "sampler2DShadow" => true,
@@ -683,7 +782,9 @@ fn build_pass(
             ));
             (src, sample_type) = (Source::Dummy, float);
         }
-        if blank {
+        if blank && sample_type == wgpu::TextureSampleType::Depth {
+            src = Source::Shadow;
+        } else if blank {
             // The blank texture is float: an integer sampler then fails the pipeline (a note).
             src = Source::Dummy;
             if int {
@@ -691,8 +792,10 @@ fn build_pass(
             }
         }
         let filtering = sample_type == float;
-        if let Source::Color(n) = src {
-            reads |= 1 << n;
+        match src {
+            Source::Color(n) => reads |= 1 << n,
+            Source::ShadowColor(n) => shadow_reads |= 1 << n,
+            _ => {}
         }
         entries.push(texture_entry(s.binding, sample_type));
         let kind = SamplerKind::of(src, filtering);
@@ -849,6 +952,7 @@ fn build_pass(
         writes,
         flip,
         reads,
+        shadow_reads,
         written,
         mipmaps: p.mipmaps,
         draw,
@@ -879,6 +983,7 @@ impl PackPost {
         });
         let mut notes = post.notes;
         notes.extend(post.config.notes);
+        let shadow_config = post.config.shadow.clone();
         let mut custom = post.custom;
         let custom_names: Vec<String> = custom.uniforms().map(|u| u.0.to_owned()).collect();
         // A first run finds the names neither the frame nor the pack defines.
@@ -891,18 +996,32 @@ impl PackPost {
             |flips: &[(u32, bool)]| flips.iter().filter(|f| f.1).fold(0u16, |m, f| m | 1 << f.0);
         let mut used = 1u16;
         let draws = DrawUniforms::new(device);
+        // The shadow buffers' formats when the shadow pass runs; their programs see them as
+        // buffers 0 and 1.
+        let shadow_formats: Option<[wgpu::TextureFormat; 2]> = post.shadow_pass.then(|| {
+            std::array::from_fn(|n| texture_format(shadow_config.colors[n].format, features))
+        });
+        let shadow_space: [wgpu::TextureFormat; BUFFERS] = std::array::from_fn(|i| {
+            shadow_formats
+                .filter(|_| i < 2)
+                .map_or(formats[i], |f| f[i])
+        });
         let mut build = |p: horizon_shaders::PostProgram, geometry: Option<&Geometry<'_>>| {
+            let in_shadow = p.group.shadow();
             let pass = build_pass(
                 device,
                 p,
-                &formats,
+                if in_shadow { &shadow_space } else { &formats },
+                shadow_formats.as_ref(),
                 screen,
                 &mut notes,
                 geometry,
                 &custom_names,
                 &draws.layout,
             )?;
-            used |= pass.reads | pass.written | pass.flip;
+            if !in_shadow {
+                used |= pass.reads | pass.written | pass.flip;
+            }
             Some(pass)
         };
         // Flat terrain reads `mc_Entity` from a table of the sprite layers.
@@ -925,6 +1044,14 @@ impl PackPost {
             .and_then(|(p, g)| build(p, Some(g)));
         let water = post
             .water
+            .zip(terrain_geometry.as_ref())
+            .and_then(|(p, g)| build(p, Some(g)));
+        let shadow_terrain = post
+            .shadow
+            .zip(terrain_geometry.as_ref())
+            .and_then(|(p, g)| build(p, Some(g)));
+        let shadow_water = post
+            .shadow_water
             .zip(terrain_geometry.as_ref())
             .and_then(|(p, g)| build(p, Some(g)));
         let sky = (post.sky.is_some() || post.sky_textured.is_some()).then(|| {
@@ -961,8 +1088,9 @@ impl PackPost {
             post.particles,
         ];
         let late = [false, false, post.translucent_late, post.particles_late];
-        let entity_vertices = programs
-            .iter()
+        let shadow_only = (post.shadow_only_player, post.shadow_only_lit_blocks);
+        let shadow_programs = [post.shadow_entities, post.shadow_block];
+        let entity_vertices = (programs.iter().chain(&shadow_programs))
             .any(Option::is_some)
             .then(|| PackEntities::new(device, &draws.layout));
         let entity_buffers = super::pack_entities::buffers();
@@ -978,12 +1106,18 @@ impl PackPost {
             p.zip(entity_geometry.as_ref())
                 .and_then(|(p, g)| build(p, Some(g)))
         });
+        let shadow_entities = shadow_programs.map(|p| {
+            p.zip(entity_geometry.as_ref())
+                .and_then(|(p, g)| build(p, Some(g)))
+        });
         let entities = entity_vertices
-            .filter(|_| entity_passes.iter().any(Option::is_some))
+            .filter(|_| (entity_passes.iter().chain(&shadow_entities)).any(Option::is_some))
             .map(|geometry| Entities {
                 geometry,
                 passes: entity_passes,
                 late,
+                shadow: shadow_entities,
+                only: shadow_only,
             });
         let cloud_geometry = world.clouds.map(|layout| Geometry {
             buffers: &entity_buffers,
@@ -1035,11 +1169,30 @@ impl PackPost {
             .filter(|p| !skip.split(',').any(|s| s == p.name))
             .filter_map(|p| build(p, None))
             .collect();
+        let shadow_comp: Vec<Pass> = post
+            .shadow_comp
+            .into_iter()
+            .filter(|p| !skip.split(',').any(|s| s == p.name))
+            .filter_map(|p| build(p, None))
+            .collect();
         if let Some(t) = &terrain {
             notes.push(format!("terrain draws with {}", t.name));
         }
+        for (part, pass) in [
+            ("terrain", &shadow_terrain),
+            ("translucent terrain", &shadow_water),
+        ] {
+            if let Some(p) = pass {
+                notes.push(format!("{part} casts shadows with {}", p.name));
+            }
+        }
         if let Some(w) = &water {
             notes.push(format!("translucent terrain draws with {}", w.name));
+        }
+        // Timed (and labelled) apart from the solid shadow pass that runs the same program.
+        let mut shadow_water = shadow_water;
+        if let Some(p) = &mut shadow_water {
+            p.name.push_str(" (translucent)");
         }
         for (part, pass) in sky
             .iter()
@@ -1069,6 +1222,22 @@ impl PackPost {
                 notes.push(format!("{part} draw with {}", p.name));
             }
         }
+        // Timed (and labelled) apart from the terrain's shadow pass, which may run the same
+        // program.
+        let mut entities = entities;
+        for e in entities.iter_mut() {
+            let only = [
+                (e.only.0, " (only the player)"),
+                (e.only.1, " (only those that emit light)"),
+            ];
+            for ((part, pass), (only, which)) in parts.iter().zip(&mut e.shadow).zip(only) {
+                if let Some(p) = pass {
+                    let which = if only { which } else { "" };
+                    notes.push(format!("{part}{which} cast shadows with {}", p.name));
+                    p.name.push_str(&format!(" ({part})"));
+                }
+            }
+        }
         let depth1 = water.is_some()
             && passes
                 .iter()
@@ -1076,6 +1245,43 @@ impl PackPost {
                 .chain(&water)
                 .chain(weather.iter().take(1).flatten())
                 .any(|p| p.samplers.iter().any(|s| s.source == Source::Depth1));
+        let every_pass = || {
+            (passes
+                .iter()
+                .chain(&shadow_comp)
+                .chain(&terrain)
+                .chain(&water))
+            .chain(shadow_terrain.iter().chain(&shadow_water))
+            .chain(sky.iter().flat_map(|s| s.basic.iter().chain(&s.textured)))
+            .chain(entities.iter().flat_map(|e| e.passes.iter().flatten()))
+            .chain(entities.iter().flat_map(|e| e.shadow.iter().flatten()))
+            .chain(&clouds)
+            .chain(weather.iter().flatten())
+            .chain(hand.iter().map(|h| &h.0))
+        };
+        let shadow_targets = shadow_formats.map(|f| {
+            let colors = every_pass().fold(0u16, |m, p| {
+                let own = if p.group.shadow() {
+                    p.reads | p.written | p.flip
+                } else {
+                    0
+                };
+                m | own | p.shadow_reads
+            });
+            let depth1 = every_pass()
+                .flat_map(|p| &p.samplers)
+                .any(|s| matches!(s.source, Source::ShadowDepth(1, _)));
+            let t =
+                super::pack_shadow::ShadowTargets::new(device, &shadow_config, f, colors, depth1);
+            notes.push(format!(
+                "shadow map {0}x{0} over {2} blocks, sunPathRotation {3}, shadowcolor buffers {colors:#b}{1}",
+                t.size,
+                if depth1 { ", shadowtex1" } else { "" },
+                shadow_config.distance,
+                shadow_config.sun_path_rotation,
+            ));
+            t
+        });
         // A clear only matters when a program reads the buffer before one writes all of it
         // (composite passes cover their whole target, terrain does not); the others are skipped.
         let mut cleared = Vec::new();
@@ -1106,7 +1312,7 @@ impl PackPost {
         let blit_depth = terrain.is_some()
             || water.is_some()
             || sky.is_some()
-            || entities.is_some()
+            || entities.as_ref().is_some_and(Entities::drawn)
             || clouds.is_some()
             || weather.is_some()
             || hand.is_some()
@@ -1214,13 +1420,17 @@ impl PackPost {
             weather_generation: 0,
             hand,
             depth1,
+            shadow_targets,
+            shadow_terrain,
+            shadow_water,
+            shadow_comp,
             mipped,
             mips_valid: 0,
             down,
             draws,
             block_ids,
             page_groups: HashMap::new(),
-            timing: super::pack_timing::PassTiming::new(device, queue),
+            timing: None,
             custom,
             atlas: world.atlas.as_ref().map(|a| a.0.clone()),
             lightmap: world.lightmap,
@@ -1279,6 +1489,7 @@ impl PackPost {
             uniforms: {
                 let mut u = FrameUniforms::default();
                 u.atlas = world.atlas.map_or([0; 2], |a| a.1);
+                u.shadow = shadow_config;
                 u
             },
         }
@@ -1317,17 +1528,43 @@ impl PackPost {
             queue.write_buffer(&pass.ubo, 0, &pass.block);
         }
         let targets = self.targets.as_ref().expect("resized");
+        let shadow = self.shadow_targets.as_ref();
+        let shadow_main = shadow.map_or(0, |s| s.main);
+        let shadow_space = pass.group.shadow();
         // A chain is sampled only while it is current: a buffer written since its last chain
-        // reads its first level, never stale levels (6.1.7).
-        let current = self.mips_valid & self.mipped & pass.reads;
-        let key = u32::from(self.main & pass.reads) | u32::from(current) << 16;
+        // reads its first level, never stale levels (6.1.7). The shadow buffers have none.
+        let (main, current) = if shadow_space {
+            (shadow_main, 0)
+        } else {
+            (self.main, self.mips_valid & self.mipped & pass.reads)
+        };
+        let key = u64::from(main & pass.reads)
+            | u64::from(current) << 16
+            | u64::from(shadow_main & pass.shadow_reads) << 32;
         let group = pass.groups.entry(key).or_insert_with(|| {
             let mut entries = vec![wgpu::BindGroupEntry {
                 binding: 0,
                 resource: pass.ubo.as_entire_binding(),
             }];
             for s in &pass.samplers {
+                let shadow_color = |i: usize, side: usize| {
+                    shadow.and_then(|t| t.color[i].as_ref()).map(|c| &c[side])
+                };
                 let texture = match s.source {
+                    Source::Color(i) if shadow_space => {
+                        shadow_color(i, usize::from(key & 1 << i != 0)).unwrap_or(&self.dummy)
+                    }
+                    Source::ShadowColor(i) => {
+                        shadow_color(i, usize::from(key & 1 << (32 + i) != 0))
+                            .unwrap_or(&self.dummy)
+                    }
+                    Source::ShadowDepth(i, _) => match shadow {
+                        Some(t) => match (i, &t.depth1) {
+                            (1, Some(d)) => &d.1,
+                            _ => &t.depth.1,
+                        },
+                        None => &self.shadow.0,
+                    },
                     Source::Color(i) => {
                         let side = usize::from(key & 1 << i != 0);
                         match (&targets.mips[i], &targets.color[i]) {
@@ -1364,7 +1601,7 @@ impl PackPost {
                     SamplerKind::Nearest => &self.nearest,
                     SamplerKind::Repeat => &self.repeat,
                     SamplerKind::NearestRepeat => &self.nearest_repeat,
-                    SamplerKind::Comparison => &self.shadow.1,
+                    SamplerKind::Comparison => shadow.map_or(&self.shadow.1, |t| &t.comparison),
                 };
                 entries.push(wgpu::BindGroupEntry {
                     binding: s.binding,
@@ -1397,15 +1634,27 @@ impl PackPost {
             load: wgpu::LoadOp::Load,
             store: wgpu::StoreOp::Store,
         };
+        // The shadow pass draws into the shadow buffers and the shadow map, the frame's first
+        // one clearing them.
+        let (depth_ops, shadow_ops) = match &mut self.shadow_targets {
+            Some(s) if pass.group.shadow() => s.clear_ops(pass.writes.iter().map(|w| w.1)),
+            _ => (super::pack_shadow::load(), [load; 2]),
+        };
+        let shadow = self.shadow_targets.as_ref().filter(|_| pass.group.shadow());
         let mut attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = Vec::new();
         for &(location, buffer) in &pass.writes {
             let l = location as usize;
             if attachments.len() <= l {
                 attachments.resize(l + 1, None);
             }
-            attachments[l] = targets.color[buffer]
-                .as_ref()
-                .and_then(|t| attach(&t[usize::from(self.main & 1 << buffer != 0)], load));
+            attachments[l] = match shadow {
+                Some(s) => s
+                    .color(buffer, false)
+                    .and_then(|v| attach(v, shadow_ops.get(buffer).copied().unwrap_or(load))),
+                None => targets.color[buffer]
+                    .as_ref()
+                    .and_then(|t| attach(&t[usize::from(self.main & 1 << buffer != 0)], load)),
+            };
         }
         let timestamp_writes = self.timing.as_mut().and_then(|t| t.writes(&pass.name));
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1413,11 +1662,8 @@ impl PackPost {
             color_attachments: &attachments,
             timestamp_writes,
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &targets.depth,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                }),
+                view: shadow.map_or(&targets.depth, |s| &s.depth.1),
+                depth_ops: Some(depth_ops),
                 stencil_ops: None,
             }),
             ..Default::default()
@@ -1432,18 +1678,20 @@ impl PackPost {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         size: [u32; 2],
-        translucent: bool,
+        list: TerrainList,
         draw: &mut TerrainDraw<'_>,
     ) {
-        let slot = if translucent {
-            &mut self.water
-        } else {
-            &mut self.terrain
+        let slot = match list {
+            TerrainList::Solid => &mut self.terrain,
+            TerrainList::Translucent => &mut self.water,
+            TerrainList::ShadowSolid => &mut self.shadow_terrain,
+            TerrainList::ShadowTranslucent => &mut self.shadow_water,
         };
         let Some(mut pass) = slot.take() else {
             return;
         };
-        if translucent
+        let translucent = list.translucent();
+        if list == TerrainList::Translucent
             && let Some(t) = &self.targets
             && let Some((copy, _)) = &t.depth1
         {
@@ -1472,14 +1720,17 @@ impl PackPost {
                     rp.set_bind_group(3, group, &[]);
                 }
             };
-            draw(&mut rp, translucent, &page);
+            draw(&mut rp, list, &page);
         }
-        self.mips_valid &= !pass.written;
-        if translucent {
-            self.water = Some(pass);
-        } else {
-            self.terrain = Some(pass);
+        if !pass.group.shadow() {
+            self.mips_valid &= !pass.written;
         }
+        *match list {
+            TerrainList::Solid => &mut self.terrain,
+            TerrainList::Translucent => &mut self.water,
+            TerrainList::ShadowSolid => &mut self.shadow_terrain,
+            TerrainList::ShadowTranslucent => &mut self.shadow_water,
+        } = Some(pass);
     }
 
     /// The sky's parts in vanilla's order, each with the program that draws it; one render pass
@@ -1495,7 +1746,9 @@ impl PackPost {
         let Some(mut sky) = self.sky.take() else {
             return;
         };
-        let parts = sky.geometry.prepare(queue, frame);
+        let parts = sky
+            .geometry
+            .prepare(queue, frame, self.uniforms.shadow.sun_path_rotation);
         let mut groups = [None, None];
         for (i, pass) in [&mut sky.basic, &mut sky.textured].into_iter().enumerate() {
             if let Some(pass) = pass {
@@ -1557,7 +1810,7 @@ impl PackPost {
             let mut draws = geometry
                 .draws
                 .iter()
-                .filter(|d| d.program == program)
+                .filter(|d| d.pack && d.program == program)
                 .peekable();
             if draws.peek().is_none() {
                 continue;
@@ -1582,6 +1835,46 @@ impl PackPost {
         self.entities = Some(entities);
     }
 
+    /// Entities and block entities into the shadow map, each run with the per-draw uniforms
+    /// of its gbuffers draw (2.4): opaque, so before the `shadowtex1` copy.
+    fn draw_shadow_entities(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        size: [u32; 2],
+    ) {
+        let Some(mut entities) = self.entities.take() else {
+            return;
+        };
+        let geometry = &entities.geometry;
+        for (program, pass) in entities.shadow.iter_mut().enumerate() {
+            let Some(pass) = pass else {
+                continue;
+            };
+            let mut draws = (geometry.draws.iter())
+                .filter(|d| d.shadow && d.program == program)
+                .peekable();
+            if draws.peek().is_none() {
+                continue;
+            }
+            let group = self.bind(device, queue, pass, size);
+            let mut rp = self.begin(encoder, pass);
+            rp.set_pipeline(&pass.pipeline);
+            rp.set_bind_group(0, &group, &[]);
+            rp.set_bind_group(1, &geometry.table_group, &[]);
+            rp.set_vertex_buffer(0, geometry.vertices());
+            rp.set_index_buffer(geometry.indices.slice(..), wgpu::IndexFormat::Uint32);
+            for d in draws {
+                if pass.draw {
+                    rp.set_bind_group(2, &geometry.group, &[geometry.offset(d.slot)]);
+                }
+                rp.draw_indexed(0..d.quads * 6, d.base as i32, 0..1);
+            }
+        }
+        self.entities = Some(entities);
+    }
+
     /// Splits `entities` (`Frame::entities`) between the pack and Horizon by its runs
     /// (`spans`): the pack's part is uploaded for this frame's draw, Horizon's goes to `rest`.
     pub fn prepare_entities(
@@ -1592,6 +1885,7 @@ impl PackPost {
         spans: &[super::pack_draw::EntitySpan],
         rest: &mut Vec<super::Vertex>,
     ) {
+        let shadow = self.shadow_casters();
         let Some(e) = &mut self.entities else {
             rest.clear();
             rest.extend_from_slice(entities);
@@ -1605,8 +1899,26 @@ impl PackPost {
             entities,
             spans,
             drawn,
+            shadow,
             rest,
         );
+    }
+
+    /// Which entity runs the shadow pass draws: none without it.
+    pub fn shadow_casters(&self) -> super::pack_entities::Casters {
+        let Some(e) = self
+            .entities
+            .as_ref()
+            .filter(|_| self.shadow_targets.is_some())
+        else {
+            return Default::default();
+        };
+        super::pack_entities::Casters {
+            entities: e.shadow[0].is_some(),
+            only_player: e.only.0,
+            blocks: e.shadow[1].is_some(),
+            only_lit: e.only.1,
+        }
     }
 
     /// Whether the pack draws entities or block entities itself.
@@ -1627,7 +1939,7 @@ impl PackPost {
         if super::sky_visible(frame) {
             self.draw_sky(device, queue, encoder, size, frame);
         }
-        self.draw_terrain(device, queue, encoder, size, false, terrain);
+        self.draw_terrain(device, queue, encoder, size, TerrainList::Solid, terrain);
         self.draw_entities(device, queue, encoder, size, false);
         self.draw_clouds(device, queue, encoder, size);
         self.draw_hand(device, queue, encoder, size, frame);
@@ -1723,7 +2035,14 @@ impl PackPost {
         size: [u32; 2],
         terrain: &mut TerrainDraw<'_>,
     ) {
-        self.draw_terrain(device, queue, encoder, size, true, terrain);
+        self.draw_terrain(
+            device,
+            queue,
+            encoder,
+            size,
+            TerrainList::Translucent,
+            terrain,
+        );
         self.draw_entities(device, queue, encoder, size, true);
         self.draw_weather(device, queue, encoder, size);
     }
@@ -1802,6 +2121,20 @@ impl PackPost {
             rp.set_bind_group(0, group, &[]);
             rp.draw(0..3, 0..1);
         }
+    }
+
+    /// What the shadow camera draws of the terrain this frame, when the pack draws it.
+    pub fn shadow_view(&self, frame: &super::Frame) -> Option<ShadowView> {
+        self.shadow_targets.as_ref()?;
+        if self.shadow_terrain.is_none() && self.shadow_water.is_none() {
+            return None;
+        }
+        let shadow = &self.uniforms.shadow;
+        Some(ShadowView {
+            cull: pack_uniforms::shadow_culling(frame, shadow),
+            light: pack_uniforms::shadow_light(frame, shadow),
+            distance: (shadow.render_mul > 0.0).then_some(shadow.distance * shadow.render_mul),
+        })
     }
 
     /// Whether the pack draws terrain itself.
@@ -1926,6 +2259,75 @@ impl PackPost {
         }
     }
 
+    /// The shadow pass (2.1, passes 2 and 3): the shadow buffers cleared, then the `shadowcomp`
+    /// programs, each drawing into the "alt" side of what it writes and flipping it after.
+    fn run_shadow(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        terrain: &mut TerrainDraw<'_>,
+    ) {
+        let Some(t) = &mut self.shadow_targets else {
+            return;
+        };
+        t.begin_frame();
+        let size = [t.size; 2];
+        self.draw_terrain(
+            device,
+            queue,
+            encoder,
+            size,
+            TerrainList::ShadowSolid,
+            terrain,
+        );
+        self.draw_shadow_entities(device, queue, encoder, size);
+        let t = self.shadow_targets.as_mut().expect("shadow pass");
+        t.clear_rest(encoder);
+        t.copy_depth1(encoder);
+        self.draw_terrain(
+            device,
+            queue,
+            encoder,
+            size,
+            TerrainList::ShadowTranslucent,
+            terrain,
+        );
+        let mut comp = std::mem::take(&mut self.shadow_comp);
+        for pass in &mut comp {
+            let group = self.bind(device, queue, pass, size);
+            let t = self.shadow_targets.as_ref().expect("shadow pass");
+            let mut attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = Vec::new();
+            for &(location, buffer) in &pass.writes {
+                let l = location as usize;
+                if attachments.len() <= l {
+                    attachments.resize(l + 1, None);
+                }
+                // Overwritten whole.
+                let ops = wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                };
+                attachments[l] = t.color(buffer, true).and_then(|v| attach(v, ops));
+            }
+            {
+                let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some(&pass.name),
+                    color_attachments: &attachments,
+                    timestamp_writes: self.timing.as_mut().and_then(|t| t.writes(&pass.name)),
+                    ..Default::default()
+                });
+                rp.set_pipeline(&pass.pipeline);
+                rp.set_bind_group(0, &group, &[]);
+                rp.draw(0..6, 0..1);
+            }
+            if let Some(t) = &mut self.shadow_targets {
+                t.main ^= pass.flip;
+            }
+        }
+        self.shadow_comp = comp;
+    }
+
     /// Runs the pack over the world drawn into `world` (colour) and `world_depth`, then draws
     /// the result onto `screen`.
     #[allow(clippy::too_many_arguments)]
@@ -1974,6 +2376,10 @@ impl PackPost {
         }
         self.uniforms.update(frame, inputs, size);
         self.uniforms.eval_custom(&mut self.custom);
+        if self.targets.is_none() {
+            return;
+        }
+        self.run_shadow(device, queue, encoder, terrain);
         let Some(targets) = &self.targets else { return };
         let main = |m: u16, i: usize| usize::from(m & 1 << i != 0);
         let view = |m: u16, i: usize, alt: bool| {
@@ -2084,7 +2490,7 @@ impl PackPost {
         let mut shown = false;
         let mut terrain_drawn = self.terrain.is_none()
             && self.sky.is_none()
-            && self.entities.is_none()
+            && !self.entities.as_ref().is_some_and(Entities::drawn)
             && self.clouds.is_none()
             && self.hand.is_none();
         let late_entities = self.entities.as_ref().is_some_and(|e| {
@@ -2245,10 +2651,22 @@ mod tests {
 
     #[test]
     fn sampler_names() {
-        assert!(source("gaux1") == Source::Color(4));
-        assert!(source("gdepthtex") == Source::Depth);
-        assert!(source("depthtex2") == Source::Depth1);
-        assert!(source("noisetex") == Source::Noise);
-        assert!(source("shadowcolor0") == Source::Dummy);
+        let main = |n| source(n, false, false, false);
+        assert!(main("gaux1") == Source::Color(4));
+        assert!(main("gdepthtex") == Source::Depth);
+        assert!(main("depthtex2") == Source::Depth1);
+        assert!(main("noisetex") == Source::Noise);
+        // Without the shadow pass, the shadow buffers are stand-ins.
+        assert!(main("shadowcolor0") == Source::Dummy);
+        assert!(main("shadowtex0") == Source::Dummy);
+        // With it: shadowcolor n is buffer n of the shadow programs, `shadow` is shadowtex1
+        // beside `watershadow` (6.3), and colortex is not theirs.
+        assert!(source("shadowcolor", false, true, false) == Source::ShadowColor(0));
+        assert!(source("shadowcolor1", true, true, false) == Source::Color(1));
+        assert!(source("colortex1", true, true, false) == Source::Dummy);
+        assert!(source("shadow", false, true, false) == Source::ShadowDepth(0, false));
+        assert!(source("shadow", false, true, true) == Source::ShadowDepth(1, false));
+        assert!(source("watershadow", false, true, true) == Source::ShadowDepth(0, false));
+        assert!(source("shadowtex1HW", false, true, false) == Source::ShadowDepth(1, true));
     }
 }

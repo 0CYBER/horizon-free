@@ -119,7 +119,17 @@ impl Game<'_> {
 
     /// Runs `f` as each guest in play here, for what strikes every player in
     /// an area (`Level.getEntities`), not only the window's own.
-    pub(super) fn each_guest_hit(&mut self, mut f: impl FnMut(&mut Self)) {
+    pub(super) fn each_guest_hit(&mut self, f: impl FnMut(&mut Self)) {
+        self.each_guest_hit_except(None, f);
+    }
+
+    /// [`Self::each_guest_hit`] leaving out the guest `except` (the one a
+    /// firework rocket is attached to, which it hurts on its own).
+    pub(super) fn each_guest_hit_except(
+        &mut self,
+        except: Option<u32>,
+        mut f: impl FnMut(&mut Self),
+    ) {
         let Some(mut host) = self.lan.take() else {
             return;
         };
@@ -127,7 +137,7 @@ impl Game<'_> {
             .hub
             .guests
             .iter()
-            .filter(|g| host.hub.here(g) && g.loaded && !g.dead)
+            .filter(|g| host.hub.here(g) && g.loaded && !g.dead && Some(g.conn) != except)
             .map(|g| g.conn)
             .collect();
         for conn in conns {
@@ -169,6 +179,19 @@ impl Game<'_> {
                 let height = if g.sneaking { 1.5 } else { 1.8 };
                 ([x - 0.3, y, z - 0.3], [x + 0.3, y + height, z + 0.3])
             })
+            .collect()
+    }
+    /// The same guests' feet and whether they stand on the ground, for the
+    /// blocks that also ask that (`BigDripleafBlock.canEntityTilt`).
+    pub(super) fn lan_guest_feet(&self) -> Vec<([f64; 3], bool)> {
+        let Some(host) = self.lan.as_ref() else {
+            return Vec::new();
+        };
+        host.hub
+            .guests
+            .iter()
+            .filter(|g| host.hub.here(g) && g.loaded && !g.dead && !g.spectator())
+            .map(|g| (g.position, g.on_ground))
             .collect()
     }
 
