@@ -10,7 +10,7 @@ use super::{
     },
 };
 use horizon_core::geometry::{Vec3, trig::Mth};
-use horizon_core::random::RandomSource;
+use horizon_core::random::{LegacyRandom, RandomSource};
 use std::f32::consts::PI;
 
 /// `PiglinAi.ADMIRE_DURATION`.
@@ -351,11 +351,18 @@ pub fn celebrate(m: &mut Mob, w: &MobWorld) {
             m.extra.home = None;
         }
     }
-    if m.ai.last_hurt_by.is_some() && m.ai.last_hurt_by_time != m.extra.scratch[2] {
+    if let Some(by) = m.ai.last_hurt_by
+        && m.ai.last_hurt_by_time != m.extra.scratch[2]
+    {
         m.extra.scratch[2] = m.ai.last_hurt_by_time;
-        m.extra.scratch[0] = 0;
-        m.extra.scratch[1] = 0;
-        m.extra.home = None;
+        // PiglinAi.wasHurtBy: another piglin's hit ends nothing.
+        let piglin =
+            matches!(by, Who::Mob(id) if w.seen(id).is_some_and(|s| s.species == Species::Piglin));
+        if !piglin {
+            m.extra.scratch[0] = 0;
+            m.extra.scratch[1] = 0;
+            m.extra.home = None;
+        }
     }
     if m.extra.scratch[1] > 0 {
         return;
@@ -366,7 +373,9 @@ pub fn celebrate(m: &mut Mob, w: &MobWorld) {
     };
     let hoglin =
         matches!(target, Who::Mob(id) if w.seen(id).is_some_and(|s| s.species == Species::Hoglin));
-    if hoglin && m.random.next_float() < 0.1 {
+    // PiglinAi.wantsToDance: a fresh random seeded with the game time, not
+    // the piglin's own.
+    if hoglin && LegacyRandom::new(w.game_time).next_float() < 0.1 {
         m.extra.scratch[0] = 1;
     }
     m.extra.scratch[1] = CELEBRATION;
