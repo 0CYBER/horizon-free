@@ -2320,9 +2320,16 @@ impl Game<'_> {
             yaw.cos() * pitch.cos() * 0.3 + spread.sin() * strength,
         ];
         self.spawn_item(thrown, [eye[0], eye[1] - 0.3, eye[2]], v, 40);
-        if thrown_from_hand && self.lan_acting.is_none() {
-            let uuid = self.level.ensure_player_uuid();
+        if thrown_from_hand {
+            let uuid = self.acting_player_uuid();
             self.dropped.last_mut().unwrap().thrower = Some(uuid);
+        }
+    }
+    /// The UUID of the player acting: the guest whose turn it is, else the host.
+    pub(super) fn acting_player_uuid(&mut self) -> [i32; 4] {
+        match self.lan_acting_uuid {
+            Some(guest) => horizon_client::lan::playerdata::uuid_ints(guest),
+            None => self.level.ensure_player_uuid(),
         }
     }
     fn tick_items(&mut self) {
