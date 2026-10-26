@@ -28,6 +28,9 @@ pub struct BiomeInfo {
     pub spawn_costs: HashMap<String, crate::mobs::spawn_selection::SpawnCost>,
     /// The `gameplay/creature_world_gen_spawn_probability` attribute.
     pub creature_probability: f32,
+    /// The `gameplay/increased_fire_burnout` attribute (jungles, swamps, peaks,
+    /// mushroom fields).
+    pub increased_fire_burnout: bool,
     pub name: String,
     pub temperature: f32,
     pub downfall: f32,
@@ -128,6 +131,9 @@ impl Biomes {
                     attributes["minecraft:gameplay/creature_world_gen_spawn_probability"]
                         .as_f64()
                         .unwrap_or(0.1) as f32,
+                increased_fire_burnout: attributes["minecraft:gameplay/increased_fire_burnout"]
+                    .as_bool()
+                    .unwrap_or(false),
                 temperature,
                 downfall,
                 precipitation: v["has_precipitation"].as_bool().unwrap_or(true),

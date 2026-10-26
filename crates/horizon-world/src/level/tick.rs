@@ -565,9 +565,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 return;
             }
         }
-        // FireBlock.tick reads the INCREASED_FIRE_BURNOUT environment attribute
-        // (jungles, swamps, peaks, mushroom fields); Horizon doesn't yet.
-        let burnout = false;
+        // FireBlock.tick: the INCREASED_FIRE_BURNOUT environment attribute.
+        let burnout = self.level.increased_fire_burnout(pos);
         let extra = if burnout { -50 } else { 0 };
         for (direction, chance) in [
             (Direction::East, 300),
