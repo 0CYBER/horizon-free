@@ -2453,6 +2453,56 @@ def check_piston_push(host, guest, out):
     after = next(p['pos'][0] for p in pigs if p['id'] == pig['id'])
     results['pig'] = after - before
     assert results['pig'] > 0.3, f'piston did not push pig: {before} -> {after}'
+    results.update(piston_push_at_border(host, guest))
+    return results
+
+
+def piston_push_at_border(host, guest):
+    """A piston next to the world border: the border's wall stops the pushed
+    body, as it stops ordinary movement (`Entity.collectCollidersIgnoringWorldBorder`)."""
+    hx, _, hz = pos_of(host)
+    x, y, z = (int(hx // 16) * 16 + 8, 100, int(hz // 16) * 16 + 8)
+    host('command', command=f'fill {x-4} {y-1} {z-4} {x+7} {y-1} {z+4} minecraft:stone')
+    host('command', command=f'fill {x-4} {y} {z-4} {x+7} {y+5} {z+4} minecraft:air')
+    host('command', command=f'setblock {x} {y} {z} minecraft:piston[facing=east]')
+    # The border's east wall stands at `x + 2`, the east face of the block the
+    # head extends into: a body pushed east stops there instead of being
+    # pushed out through the border. `worldborder center` centres integers on
+    # the block, so the centre is `x - 8.5` and the wall lands on `x + 2`.
+    wall = x + 2
+    center = [x - 8.5, z + 0.5]
+    results = {}
+    try:
+        host('command', command=f'worldborder center {x - 9} {z}')
+        host('command', command='worldborder set 20.5')
+        seen = None
+        for _ in range(10):
+            host.wait(2)
+            seen = [g('status').get('border') for g in (host, guest)]
+            if all(b and b['size'] == 20.5 and b['center'] == center for b in seen):
+                break
+        results['border'] = seen
+        for player, name in ((host, host.player), (guest, GUEST_NAME)):
+            host('command', command=f'setblock {x-1} {y} {z} minecraft:air')
+            host.wait(10)
+            host('command', command=f'tp @s {x+5.5} {y} {z+2.5}')
+            host('command', command=f'tp {GUEST_NAME} {x+5.5} {y} {z-1.5}')
+            host('command', command=f'tp {"@s" if player is host else GUEST_NAME} {x+1.65} {y} {z+0.5}')
+            player.wait(15)
+            before = pos_of(player)
+            assert abs(before[0] - (x + 1.65)) < 0.1, f'{name} did not reach the piston: {before}'
+            host('command', command=f'setblock {x-1} {y} {z} minecraft:redstone_block')
+            player.wait(30)
+            after = pos_of(player)
+            # The wall's inner face is at `wall`: the body's box stops there.
+            results[name] = round(after[0] - before[0], 3)
+            assert after[0] > before[0], f'the piston did not push {name}: {before} -> {after}'
+            assert after[0] <= wall - 0.3 + 0.01, f'the border did not stop {name}: {before} -> {after}'
+        host('command', command=f'setblock {x-1} {y} {z} minecraft:air')
+        host.wait(10)
+    finally:
+        host('command', command='worldborder center 0 0')
+        host('command', command='worldborder set 59999968')
     return results
 
 

@@ -8,10 +8,13 @@
 //! wall instead of passing through it.
 //!
 use super::Game;
-use horizon_client::collisions::{SceneCollisions, with_piston_noclip};
-use horizon_core::geometry::{Aabb, Direction, Vec3};
+use horizon_client::collisions::{EntityCollisions, SceneCollisions, with_piston_noclip};
+use horizon_core::geometry::{Aabb, Direction, Vec3, border::BorderGeometry};
 use horizon_core::position::BlockPos;
-use horizon_world::{level::pistons::MovingPiston, piston_movement::PistonMovement, piston_push};
+use horizon_world::{
+    block_collision_scan::BlockCollisionWorld, level::pistons::MovingPiston,
+    piston_movement::PistonMovement, piston_push, world_movement::EntityMovementWorld,
+};
 
 /// What one piston asks for this tick: where it is, its state, and the progress
 /// `moveCollidedEntities` runs at (before the tick stores it).
@@ -137,6 +140,7 @@ impl Game<'_> {
                 self.move_pushed(
                     target,
                     before,
+                    [body.position.x, body.position.z],
                     body.step_height,
                     body.on_ground,
                     step.scale(amount),
@@ -159,6 +163,7 @@ impl Game<'_> {
                     self.move_pushed(
                         target,
                         after.bounds,
+                        [after.position.x, after.position.z],
                         after.step_height,
                         after.on_ground,
                         back.scale(fix),
@@ -186,6 +191,7 @@ impl Game<'_> {
                     self.move_pushed(
                         target,
                         body.bounds,
+                        [body.position.x, body.position.z],
                         body.step_height,
                         body.on_ground,
                         piston_push::step_vector(movement).scale(delta_progress),
@@ -342,11 +348,12 @@ impl Game<'_> {
     }
 
     /// `Entity.move(MoverType.PISTON, movement)` for one pushed entity: the
-    /// per-tick piston limit, then the block collision scan.
+    /// per-tick piston limit, then the block and world border collision scan.
     fn move_pushed(
         &mut self,
         target: Target,
         before: Aabb,
+        at: [f64; 2],
         step_height: f32,
         on_ground: bool,
         movement: Vec3,
@@ -361,12 +368,19 @@ impl Game<'_> {
             return;
         }
         let resolved = with_piston_noclip(piston_direction, || {
-            SceneCollisions {
-                world: &self.world,
-                binding: self.collision,
-                subject: None,
-            }
-            .resolve(before, limited, step_height, on_ground)
+            pushed_movement(
+                SceneCollisions {
+                    world: &self.world,
+                    binding: self.collision,
+                    subject: None,
+                },
+                self.border.geometry(),
+                at,
+                before,
+                limited,
+                step_height,
+                on_ground,
+            )
             .unwrap_or(Vec3::ZERO)
         });
         if resolved.length_squared() <= 1.0e-7
@@ -475,5 +489,85 @@ impl Game<'_> {
                     piston_push::bounce_velocity(movement, self.armor_stands[i].velocity)
             }
         }
+    }
+}
+
+/// `Entity.move(MoverType.PISTON, movement)` for a pushed body: the movement
+/// it makes. The world's blocks stop it, and so does the world border:
+/// `Entity.collectCollidersIgnoringWorldBorder` adds the border's walls when
+/// the body is inside close to the border, as ordinary movement does.
+fn pushed_movement<W>(
+    blocks: W,
+    border: &BorderGeometry,
+    at: [f64; 2],
+    before: Aabb,
+    movement: Vec3,
+    step_height: f32,
+    on_ground: bool,
+) -> horizon_client::Result<Vec3>
+where
+    W: BlockCollisionWorld<Error = std::io::Error> + EntityMovementWorld<Error = std::io::Error>,
+{
+    EntityCollisions::with_border(blocks, border, at).resolve(
+        before,
+        movement,
+        step_height,
+        on_ground,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_client::collisions::EmptyCollisions;
+
+    /// A border 10 wide around the origin: its wall's inner face is at x = 5.
+    fn border() -> BorderGeometry {
+        BorderGeometry::new([0.0, 0.0], 10.0, 29_999_984).expect("a border")
+    }
+
+    /// `Entity.collectCollidersIgnoringWorldBorder`: the border's walls stop a
+    /// pushed body that is inside close to the border.
+    #[test]
+    fn a_pushed_body_stops_at_the_world_border() {
+        // A body 0.6 wide, 0.4 blocks short of the wall, pushed east into it.
+        let before = Aabb::new(Vec3::new(4.0, 0.0, 0.0), Vec3::new(4.6, 1.8, 0.6));
+        let border = border();
+        let moved = pushed_movement(
+            EmptyCollisions,
+            &border,
+            [4.3, 0.3],
+            before,
+            Vec3::new(0.51, 0.0, 0.0),
+            0.0,
+            false,
+        )
+        .expect("the push resolves");
+        // The wall stops the body 0.4 blocks short of the whole push.
+        assert!(
+            (moved.x - 0.4).abs() < 1.0e-9,
+            "the body was not stopped by the border: {moved:?}"
+        );
+    }
+
+    /// Away from the border, the same push moves the whole way.
+    #[test]
+    fn a_pushed_body_moves_whole_away_from_the_border() {
+        let before = Aabb::new(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.6, 1.8, 0.6));
+        let border = border();
+        let moved = pushed_movement(
+            EmptyCollisions,
+            &border,
+            [0.3, 0.3],
+            before,
+            Vec3::new(0.51, 0.0, 0.0),
+            0.0,
+            false,
+        )
+        .expect("the push resolves");
+        assert!(
+            (moved.x - 0.51).abs() < 1.0e-9,
+            "the body did not move the whole push: {moved:?}"
+        );
     }
 }

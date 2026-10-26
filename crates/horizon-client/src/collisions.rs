@@ -161,8 +161,21 @@ impl<W: EntityMovementWorld<Error = io::Error>> EntityMovementWorld for EntityCo
         border.collision_shape().map(Some).map_err(io::Error::other)
     }
 }
-impl EntityCollisions<'_, SceneCollisions<'_, '_>> {
-    /// `SceneCollisions::resolve` that also stops at the entity boxes.
+impl<'a, W> EntityCollisions<'a, W>
+where
+    W: BlockCollisionWorld<Error = io::Error> + EntityMovementWorld<Error = io::Error>,
+{
+    /// `EntityCollisions` for a body the world border also stops: the border
+    /// and the body's own x and z (`WorldBorder.isInsideCloseToBorder`).
+    pub fn with_border(blocks: W, border: &'a BorderGeometry, at: [f64; 2]) -> Self {
+        Self {
+            blocks,
+            entities: &[],
+            border: Some((border, at)),
+        }
+    }
+    /// `SceneCollisions::resolve` that also stops at the entity boxes and,
+    /// with a border, at the world border's walls.
     pub fn resolve(
         &mut self,
         bounds: Aabb,
@@ -170,12 +183,11 @@ impl EntityCollisions<'_, SceneCollisions<'_, '_>> {
         max_step: f32,
         on_ground: bool,
     ) -> Result<Vec3> {
-        let context = self.blocks.context(bounds);
         Ok(resolve_world_movement(
             self,
             MovementRequest {
                 entity: EntityIdentity(0),
-                context,
+                context: CollisionContext::position(bounds.min_position().y),
                 bounds,
                 movement,
                 max_step,
@@ -409,6 +421,42 @@ impl PowderSnowWorld for SceneCollisions<'_, '_> {
     }
 }
 
+/// A collision world without blocks: no chunk is resident, so only the
+/// world border stops a body.
+pub struct EmptyCollisions;
+
+impl BlockCollisionWorld for EmptyCollisions {
+    type Error = io::Error;
+    type Chunk = ChunkPos;
+    fn collision_chunk(&mut self, _: ChunkPos) -> io::Result<Option<ChunkPos>> {
+        Ok(None)
+    }
+    fn collision_block(&mut self, _: ChunkPos, _: BlockPos) -> io::Result<CollisionBlock> {
+        Err(io::Error::other("no chunk is resident"))
+    }
+    fn is_suffocating(&mut self, _: ChunkPos, _: CollisionBlock, _: BlockPos) -> io::Result<bool> {
+        Ok(false)
+    }
+    fn context_shape(
+        &mut self,
+        _: CollisionBlock,
+        _: BlockPos,
+        _: &CollisionContext<'_>,
+    ) -> io::Result<VoxelShape> {
+        Ok(VoxelShape::empty())
+    }
+}
+
+impl EntityMovementWorld for EmptyCollisions {
+    type Error = io::Error;
+    fn entity_collisions(&mut self, _: EntityIdentity, _: Aabb) -> io::Result<Vec<VoxelShape>> {
+        Ok(Vec::new())
+    }
+    fn movement_border(&mut self, _: EntityIdentity, _: Aabb) -> io::Result<Option<VoxelShape>> {
+        Ok(None)
+    }
+}
+
 /// Collision queries over any block lookup (test worlds without chunks):
 /// every chunk is present, nothing is suffocating, no entities collide.
 pub struct LookupCollisions<'w, 'r> {
@@ -518,5 +566,48 @@ mod piston_noclip_tests {
             );
         });
         assert_eq!(PISTON_NOCLIP.with(|value| value.get()), None);
+    }
+}
+
+#[cfg(test)]
+mod border_movement_tests {
+    use super::*;
+
+    /// A border 10 wide around the origin: its wall's inner face is at x = 5.
+    fn border() -> BorderGeometry {
+        BorderGeometry::new([0.0, 0.0], 10.0, 29_999_984).expect("a border")
+    }
+
+    /// `WorldBorder.isInsideCloseToBorder` and `WorldBorder.getCollisionShape`:
+    /// a body inside close to the border collides with the border's walls.
+    #[test]
+    fn a_body_next_to_the_border_stops_at_its_wall() {
+        // A body 0.6 wide, 0.4 blocks short of the wall, moved east into it.
+        let bounds = Aabb::new(Vec3::new(4.0, 0.0, 0.0), Vec3::new(4.6, 1.8, 0.6));
+        let border = border();
+        let mut collisions = EntityCollisions::with_border(EmptyCollisions, &border, [4.3, 0.3]);
+        let moved = collisions
+            .resolve(bounds, Vec3::new(0.51, 0.0, 0.0), 0.0, false)
+            .expect("the movement resolves");
+        // The wall stops the body 0.4 blocks short of the whole move.
+        assert!(
+            (moved.x - 0.4).abs() < 1.0e-9,
+            "the body was not stopped by the border: {moved:?}"
+        );
+    }
+
+    /// Away from the border, the same body moves the whole way.
+    #[test]
+    fn a_body_away_from_the_border_moves_whole() {
+        let bounds = Aabb::new(Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.6, 1.8, 0.6));
+        let border = border();
+        let mut collisions = EntityCollisions::with_border(EmptyCollisions, &border, [0.3, 0.3]);
+        let moved = collisions
+            .resolve(bounds, Vec3::new(0.51, 0.0, 0.0), 0.0, false)
+            .expect("the movement resolves");
+        assert!(
+            (moved.x - 0.51).abs() < 1.0e-9,
+            "the body did not move the whole way: {moved:?}"
+        );
     }
 }
