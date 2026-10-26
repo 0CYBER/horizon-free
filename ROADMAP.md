@@ -134,7 +134,7 @@ Better tools for mod makers: a test runner that needs no game window, templates 
 
 `cargo horizon-mod test` runs a mod's test scripts against a fake game snapshot ([#1816](https://github.com/ludovic111/horizon/issues/1816)) and, for server mods, scripted server events ([#1837](https://github.com/ludovic111/horizon/issues/1837)); the content template and the guides are merged ([#1859](https://github.com/ludovic111/horizon/issues/1859), [#1810](https://github.com/ludovic111/horizon/issues/1810), [docs/api/stability.md](docs/api/stability.md)). Left: templates for hud, server and machine mods, typed wrappers in the SDK, a frozen 0.1 compatibility mod that every runtime must load, a CI check that fails when a stable reference entry is removed without a new major version, and the SDK on crates.io once the API is stable.
 
-More: [website/docs/test-a-mod.md](website/docs/test-a-mod.md)
+More: [https://playhorizon.dev/docs/test-a-mod](https://playhorizon.dev/docs/test-a-mod)
 
 </details>
 
@@ -310,7 +310,7 @@ Horizon should run well on small machines: integrated graphics, the Steam Deck, 
 
 Partly done: an opt-in 60 FPS cap with fewer workers on battery, Far Detail Reduced for integrated GPUs and animated textures on the GPU (both shipped). Left: measured targets and fixes per class of machine (memory use, worker counts, startup) on a Steam Deck, old Intel and Apple Silicon Macs and 8 GB computers, reported on the Benchmarks page.
 
-More: [docs/benchmark.md](docs/benchmark.md) · [website/docs/performance.md](website/docs/performance.md)
+More: [docs/benchmark.md](docs/benchmark.md) · [https://playhorizon.dev/docs/performance](https://playhorizon.dev/docs/performance)
 
 </details>
 
@@ -600,7 +600,9 @@ You can port a mod to Horizon with your own AI agent on your own computer. Horiz
 
 <details><summary>Technical</summary>
 
-A player runs their own agent locally with `horizon-ctl` and the MCP servers ([docs/agent-control.md](docs/agent-control.md)), `cargo horizon-mod`, `horizon-port-pack` and the parity harnesses as the check. Horizon writes the guide ([website/docs/agents.md](website/docs/agents.md), [docs/modpacks.md](docs/modpacks.md)) and runs no agents, accounts or keys for players. The No AI switch turns all of it off.
+A player runs their own agent locally with `horizon-ctl` and the MCP servers ([docs/agent-control.md](docs/agent-control.md)), `cargo horizon-mod`, `horizon-port-pack` and the parity harnesses as the check. Horizon writes the guide (playhorizon.dev/docs/agents, [docs/modpacks.md](docs/modpacks.md)) and runs no agents, accounts or keys for players. The No AI switch turns all of it off.
+
+More: [https://playhorizon.dev/docs/agents](https://playhorizon.dev/docs/agents)
 
 </details>
 
@@ -936,7 +938,9 @@ Run Horizon's built-in benchmark and share the report: every new computer makes 
 
 <details><summary>Technical</summary>
 
-`horizon-launcher play --arg=--benchmark --arg=standard` writes a JSON report; `horizon-launcher data benchmark <report>` shows what would be sent and uploads it ([website/docs/performance.md](website/docs/performance.md)). Results from three installs with the same hardware appear on the Benchmarks page. Example: [#1711](https://github.com/ludovic111/horizon/issues/1711).
+`horizon-launcher play --arg=--benchmark --arg=standard` writes a JSON report; `horizon-launcher data benchmark <report>` shows what would be sent and uploads it (playhorizon.dev/docs/performance). Results from three installs with the same hardware appear on the Benchmarks page. Example: [#1711](https://github.com/ludovic111/horizon/issues/1711).
+
+More: [https://playhorizon.dev/docs/performance](https://playhorizon.dev/docs/performance)
 
 </details>
 

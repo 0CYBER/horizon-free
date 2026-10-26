@@ -3346,6 +3346,13 @@ impl Game<'_> {
         self.with_player_actor(|game| game.break_block_as_player(pos))
     }
     fn break_block_as_player(&mut self, pos: [i32; 3]) -> Result<()> {
+        if !self
+            .res
+            .items()
+            .can_destroy_block(self.held(), self.creative)
+        {
+            return Ok(());
+        }
         self.pad_rumble(horizon_client::gamepad::Rumble::BlockBroken);
         // ServerPlayerGameMode.destroyBlock.
         let state = self.world.block(pos[0], pos[1], pos[2]);
@@ -3971,7 +3978,12 @@ impl Game<'_> {
             return Ok(());
         };
         // GameType.isBlockPlacingRestricted: adventure and spectator.
-        if !self.may_build() {
+        if !self.may_build()
+            || !self
+                .res
+                .items()
+                .can_destroy_block(self.held(), self.creative)
+        {
             self.mining = None;
             return Ok(());
         }

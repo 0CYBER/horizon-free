@@ -158,6 +158,12 @@ impl VanillaTerrain {
             chunk.terrain.min_y().max(MIN_Y),
             (chunk.terrain.min_y() + chunk.terrain.height()).min(MIN_Y + HEIGHT),
         );
+        out.structure_refs = chunk
+            .structures()
+            .into_iter()
+            .map(|(id, start, _, _)| (Arc::from(id), (start.x, start.z)))
+            .collect();
+        out.structure_starts = chunk.own_starts();
         let mut values = Box::new([0u32; 4096]);
         for si in 0..SECTIONS as i32 {
             let base = MIN_Y + si * 16;
@@ -577,11 +583,6 @@ impl ChunkGenerator for VanillaTerrain {
             extras.rolled_loot = rolled_loot;
             out.saved = Some(Arc::new(extras));
         }
-        out.structure_refs = chunk
-            .structures()
-            .into_iter()
-            .map(|(id, start, _, _)| (Arc::from(id), (start.x, start.z)))
-            .collect();
         let entities = std::mem::take(&mut chunk.entities);
         // Chest minecarts keep their loot table; the game rolls it on load.
         out.entities = entities
