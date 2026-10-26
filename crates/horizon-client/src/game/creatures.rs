@@ -2427,24 +2427,30 @@ impl Game<'_> {
                     if d2 < 16.0 && !self.creative {
                         let scale = 1.0 - d2.sqrt() / 4.0;
                         let t = (f64::from(*ticks) * scale + 0.5) as i32;
-                        // indirectMagic(potion, owner): the thrower, or the
-                        // potion itself when it has none.
-                        let owner = self
-                            .combat
-                            .projectile_owner
-                            .filter(|id| self.mob_display_name(*id).is_some());
-                        match owner {
-                            Some(owner) => self.note_attacker("minecraft:indirect_magic", owner),
-                            None => self.note_direct_entity(
-                                "minecraft:indirect_magic",
-                                Text::translate("entity.minecraft.splash_potion", &[]),
-                            ),
-                        }
                         match *effect {
-                            "minecraft:instant_damage" => self.hurt_player_by(
-                                "minecraft:indirect_magic",
-                                6.0 * (1 << *amplifier) as f32 * scale as f32,
-                            ),
+                            "minecraft:instant_damage" => {
+                                // indirectMagic(potion, owner), built where the
+                                // hurt happens: the thrower, or the potion
+                                // itself when it has none. A status effect
+                                // deals no damage, so it records no source.
+                                let owner = self
+                                    .combat
+                                    .projectile_owner
+                                    .filter(|id| self.mob_display_name(*id).is_some());
+                                match owner {
+                                    Some(owner) => {
+                                        self.note_attacker("minecraft:indirect_magic", owner)
+                                    }
+                                    None => self.note_direct_entity(
+                                        "minecraft:indirect_magic",
+                                        Text::translate("entity.minecraft.splash_potion", &[]),
+                                    ),
+                                }
+                                self.hurt_player_by(
+                                    "minecraft:indirect_magic",
+                                    6.0 * (1 << *amplifier) as f32 * scale as f32,
+                                )
+                            }
                             e if t > 20 => self.give_player_effect(e, t, *amplifier),
                             _ => {}
                         }
