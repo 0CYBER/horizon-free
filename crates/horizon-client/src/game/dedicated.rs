@@ -950,6 +950,10 @@ impl Game<'_> {
                 self.console_reply(Text::translate(key, &[lit(&user.name)]));
                 let lists = state.lists.clone();
                 self.sync_ops(&lists);
+                // DeOpCommands.deopPlayers.
+                if command == "deop" && changed {
+                    self.kick_unlisted_players(&lists);
+                }
             }
             "whitelist" => self.console_whitelist(state, &rest),
             "ban" if !rest.is_empty() => {
@@ -1161,6 +1165,7 @@ impl Game<'_> {
             ["on"] | ["off"] => {
                 let on = rest[0] == "on";
                 let mut l = state.lists.lock().unwrap();
+                let turned_on = on && !l.use_whitelist;
                 let key = match (on, l.use_whitelist) {
                     (true, true) => "commands.whitelist.alreadyOn",
                     (true, false) => "commands.whitelist.enabled",
@@ -1171,6 +1176,10 @@ impl Game<'_> {
                 drop(l);
                 self.store_property("white-list", on.to_string());
                 self.console_reply(Text::translate(key, &[]));
+                if turned_on {
+                    let lists = state.lists.clone();
+                    self.kick_unlisted_players(&lists);
+                }
             }
             ["list"] => {
                 let names: Vec<String> = state
@@ -1194,6 +1203,8 @@ impl Game<'_> {
             ["reload"] => {
                 let _ = state.lists.lock().unwrap().white.load();
                 self.console_reply(Text::translate("commands.whitelist.reloaded", &[]));
+                let lists = state.lists.clone();
+                self.kick_unlisted_players(&lists);
             }
             ["add", name] | ["remove", name] => {
                 let Some(user) = self.resolve(name) else {
@@ -1219,6 +1230,10 @@ impl Game<'_> {
                     Vec::new()
                 };
                 self.console_reply(Text::translate(key, &args));
+                if ok && rest[0] == "remove" {
+                    let lists = state.lists.clone();
+                    self.kick_unlisted_players(&lists);
+                }
             }
             _ => self.console_reply(Text::translate("command.unknown.argument", &[])),
         }
@@ -1231,6 +1246,38 @@ impl Game<'_> {
             && let Ok(p) = p.update(key, value)
         {
             let _ = p.store(&path);
+        }
+    }
+
+    /// MinecraftServer.kickUnlistedPlayers: with `enforce-whitelist` and the
+    /// whitelist on, whoever is online and not on the whitelist file is
+    /// disconnected (operators are not spared here).
+    fn kick_unlisted_players(&mut self, lists: &Arc<Mutex<Lists>>) {
+        let unlisted: Vec<u128> = {
+            let l = lists.lock().unwrap();
+            let Some(host) = self.lan.as_ref() else {
+                return;
+            };
+            if !(l.enforce_whitelist && l.use_whitelist) {
+                return;
+            }
+            host.hub
+                .guests
+                .iter()
+                .filter(|g| {
+                    !l.white.contains(&NameAndId {
+                        id: g.uuid,
+                        name: g.name.clone(),
+                    })
+                })
+                .map(|g| g.uuid)
+                .collect()
+        };
+        for uuid in unlisted {
+            self.kick_uuid(
+                uuid,
+                translatable("multiplayer.disconnect.not_whitelisted", &[]),
+            );
         }
     }
 
