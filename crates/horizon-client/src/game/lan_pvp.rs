@@ -32,6 +32,8 @@ pub(super) enum Victim {
 
 /// The attacker's side of the hit.
 pub(super) struct Strike {
+    /// The attacking guest, kept after their turn through `as_guest` ends.
+    attacker: Option<u32>,
     amount: f32,
     scale: f32,
     crit: bool,
@@ -119,6 +121,7 @@ impl Game<'_> {
         }
         self.swing_arm();
         Some(Strike {
+            attacker: self.lan_acting,
             amount,
             scale,
             crit,
@@ -242,14 +245,46 @@ impl Game<'_> {
             if hurt && strength > 0.0 {
                 g.knock_back_player(f64::from(strength), xd, zd);
             }
-            hurt
+            // The victim's thorns, dealt to the attacker below.
+            let thorns = if hurt { g.thorns_damage() } else { Vec::new() };
+            (hurt, thorns)
         };
-        let hurt = self.ui.rules.bool("pvp")
-            && harm
-            && match victim {
+        let (hurt, thorns) = if self.ui.rules.bool("pvp") && harm {
+            match victim {
                 Victim::Host => land(self),
-                Victim::Guest(conn) => self.guest_struck_by(host, conn, land).unwrap_or(false),
+                Victim::Guest(conn) => self.guest_struck_by(host, conn, land).unwrap_or_default(),
+            }
+        } else {
+            Default::default()
+        };
+        if hurt && s.crit {
+            let target = match victim {
+                Victim::Host => self.player.as_ref().map(|p| (host.host_entity, p)),
+                Victim::Guest(conn) => host
+                    .hub
+                    .guest(conn)
+                    .and_then(|g| g.motion.as_deref().map(|p| (g.entity_id, p))),
             };
+            if let Some((id, p)) = target {
+                let d = p.dimensions;
+                self.critical_hit(
+                    s.attacker,
+                    id,
+                    [p.position.x, p.position.y, p.position.z],
+                    f64::from(d.width),
+                    f64::from(d.height),
+                );
+            }
+        }
+        // `Enchantment.doPostAttack`: thorns hurt the attacking player.
+        for damage in thorns {
+            match s.attacker {
+                None => self.hurt_player_by("minecraft:thorns", damage),
+                Some(conn) => {
+                    self.guest_hit_by(host, conn, |g| g.hurt_player_by("minecraft:thorns", damage));
+                }
+            }
+        }
         let sound = match (hurt, s.crit, s.scale > 0.9) {
             (false, ..) => "minecraft:entity.player.attack.nodamage",
             (true, true, _) => "minecraft:entity.player.attack.crit",

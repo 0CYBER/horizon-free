@@ -151,6 +151,7 @@ impl FoodWorld for TickWorld<'_> {
                 .damage
                 .source::<()>(id, None, None, None)
                 .expect("validated starvation source"),
+            living_cause: false,
             events: self.events,
             dead: self.dead,
             sync_velocity: self.sync_velocity,

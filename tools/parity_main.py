@@ -78,34 +78,35 @@ def bisect(since, timeout, comment):
         failed = json.loads(LAST_RUN.read_text(encoding="utf-8")).get("failed") or []
     if not failed:
         print("No failed harness recorded: nothing to bisect.")
-        return 0
+        return 1
     head = git("rev-parse", "HEAD").stdout.strip()
     commits = git("rev-list", "--first-parent", "--reverse", f"{since}..{head}").stdout.split()
     if not commits:
         print("No merge since the base.")
-        return 0
+        return 1
 
     def fails(commit):
         print(f"--- {commit[:9]} {git('log', '-1', '--format=%s', commit).stdout.strip()}", flush=True)
         git("checkout", "-q", "--detach", commit)
         return run_harnesses(failed, timeout)
 
-    def blame_nobody(why):
+    def blame_nobody(why, code):
         line = f"parity-main: {', '.join(failed)} {why}: no merge is named."
         print(line)
         if os.environ.get("GITHUB_STEP_SUMMARY"):
             with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
                 summary.write(f"### {line}\n")
-        return 0
+        return code
 
     # A merge is named only when the harnesses fail again at HEAD and pass at the base: otherwise the search would
     # end on the newest merge (a flake, or a runner missing files, passes everywhere now) or the oldest one (the
-    # runner fails at every commit) and blame it for nothing.
+    # runner fails at every commit) and blame it for nothing. The exit code is the run's verdict: 0 only when every
+    # failed harness passes when run again at HEAD (the commit is good, so releases may follow it), 1 otherwise.
     try:
         if not fails(head):
-            return blame_nobody(f"pass when run again at {head[:9]}: a flake or the runner")
+            return blame_nobody(f"pass when run again at {head[:9]}: a flake, counted as a pass", 0)
         if fails(since):
-            return blame_nobody(f"fail at the base {since[:9]} too: the runner or a flake")
+            return blame_nobody(f"fail at the base {since[:9]} too: the runner or a flake", 1)
         culprit = first_bad(commits, fails) if len(commits) > 1 else commits[0]
     finally:
         git("checkout", "-q", "--detach", head)
@@ -122,7 +123,7 @@ def bisect(since, timeout, comment):
         body = (f"🤖 Agent: parity-main found that this merge breaks {', '.join(f'`{name}`' for name in failed)} on main "
                 f"(bisected over {len(commits)} merges: {url}). Releases wait until parity-main passes again.")
         subprocess.run(["gh", "pr", "comment", number.group(1), "--repo", REPO, "--body", body])
-    return 0
+    return 1
 
 
 def main():
