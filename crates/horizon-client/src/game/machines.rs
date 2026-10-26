@@ -777,7 +777,15 @@ impl Game<'_> {
                 [hi.x + 0.25, hi.y, hi.z + 0.25],
             );
         }
-        if !open && let Some(BlockEntity::Chest(items)) = self.world.block_entities.remove(&key) {
+        // The cart's own items stay the one source of truth: a menu copy that
+        // is still around (open, or left by a guest's close) gets the pulled
+        // items back into `cart.items`, so reopening never restores a stale copy.
+        let slots = if open {
+            self.world.block_entities.get(&key).cloned()
+        } else {
+            self.world.block_entities.remove(&key)
+        };
+        if let Some(BlockEntity::Chest(items)) = slots {
             cart.items = items;
         }
     }
