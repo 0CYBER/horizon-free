@@ -11208,11 +11208,28 @@ impl Game<'_> {
         }
         Ok(())
     }
-    /// LOD Distance as far terrain uses it (`Graphics::lod_distance_on`).
+    /// LOD Distance and Far Detail Reduced as chosen: the player's LOD
+    /// Distance when it is on, else a mod's far terrain
+    /// (`render.set-far-terrain`).
+    fn far_terrain_choice(&self) -> (u32, bool) {
+        let g = &self.settings.horizon;
+        let reduced = g.far_detail == horizon_client::graphics::FarDetail::Reduced;
+        if g.lod_distance > 0 {
+            return (g.lod_distance, reduced);
+        }
+        match self.mod_far_terrain() {
+            Some(f) => (f.distance, reduced || f.reduced),
+            None => (0, reduced),
+        }
+    }
+    /// LOD Distance as far terrain uses it (`graphics::lod_distance_capped`).
     fn lod_distance(&self) -> u32 {
+        let (distance, _) = self.far_terrain_choice();
         match &self.renderer {
-            Some(renderer) => self.settings.horizon.lod_distance_on(&renderer.info),
-            None => self.settings.horizon.lod_distance.min(1024),
+            Some(renderer) => {
+                horizon_client::graphics::lod_distance_capped(distance, &renderer.info)
+            }
+            None => distance.min(1024),
         }
     }
     /// Only enabled LOD worlds extend the renderer's range, never simulation.
@@ -11233,7 +11250,7 @@ impl Game<'_> {
         }
     }
     fn prepare_lod(&mut self) {
-        let enabled = self.settings.horizon.lod_distance > 0
+        let enabled = self.far_terrain_choice().0 > 0
             && self.renderer.is_some()
             && self.player.is_some()
             && self.title.is_none()
@@ -11330,6 +11347,7 @@ impl Game<'_> {
         {
             log::warn!("Horizon: failed to save unloaded chunks: {e}");
         }
+        let (far_distance, far_reduced) = self.far_terrain_choice();
         if let Some(renderer) = self.renderer.as_mut() {
             let g = &self.settings.horizon;
             let budgeted = g.chunk_updates > 0 || g.upload_budget_kib > 0;
@@ -11383,12 +11401,10 @@ impl Game<'_> {
             }
             renderer.remove_columns(unloaded.iter().map(|c| (c.x, c.z)));
             if let (Some(lod), Some(player)) = (&mut self.lod, &self.player) {
-                let lod_distance = self.settings.horizon.lod_distance_on(&renderer.info);
+                let lod_distance =
+                    horizon_client::graphics::lod_distance_capped(far_distance, &renderer.info);
                 lod.set_near_loading(self.streaming.busy());
-                lod.set_reduced_detail(
-                    self.settings.horizon.far_detail
-                        == horizon_client::graphics::FarDetail::Reduced,
-                );
+                lod.set_reduced_detail(far_reduced);
                 // The covered columns change only with the complete ones and
                 // the render area: rebuilt then, not every frame.
                 let at = (

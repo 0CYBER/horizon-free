@@ -252,7 +252,7 @@ experimental = ["ui", "render", "input"]
         needed(imports(&wasm).unwrap().iter().map(String::as_str)).0
     };
     assert_eq!(level("coords_hud.hmod"), 0);
-    // The UI guest shows a minimap (`render.set-minimap`).
+    // The UI guest draws far terrain (`render.set-far-terrain`).
     assert_eq!(level("horizon_mods_test_ui_guest.hmod"), LEVEL);
 }
 
@@ -720,6 +720,21 @@ fn render_minimap_is_clamped_and_hidden() {
         Some((corner, 16.0, 4.0, false, false))
     );
     assert_eq!(map(&mut mods, "off"), None);
+}
+
+#[test]
+fn render_far_terrain_is_clamped_and_ended() {
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    let far = |mods: &mut Mods, args: &str| {
+        assert!(mods.command(&format!("far_terrain {args}")));
+        mods.far_terrain().map(|f| (f.distance, f.reduced))
+    };
+    assert!(mods.far_terrain().is_none());
+    assert_eq!(far(&mut mods, "256 1"), Some((256, true)));
+    // The distance is clamped to LOD Distance's 64 to 1024 chunks.
+    assert_eq!(far(&mut mods, "8 0"), Some((64, false)));
+    assert_eq!(far(&mut mods, "99999 0"), Some((1024, false)));
+    assert_eq!(far(&mut mods, "off"), None);
 }
 
 /// `game.raycast`: the view's hit the game worked out, up to the distance
