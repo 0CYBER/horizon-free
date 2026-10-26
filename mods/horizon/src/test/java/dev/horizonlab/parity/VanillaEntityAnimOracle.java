@@ -282,6 +282,19 @@ public final class VanillaEntityAnimOracle {
                 state.getClass();
                 for (var entry : kase.entrySet())
                     if (!entry.getKey().startsWith("@")) set(state, entry.getKey(), entry.getValue());
+                if (kase.has("@walkTicks")) {
+                    var walk = new net.minecraft.world.entity.WalkAnimationState();
+                    for (var speed : kase.getAsJsonArray("@walkTicks"))
+                        walk.update(speed.getAsFloat(), 0.4F, 1.0F);
+                    // LivingEntity.calculateEntityAnimation stops passengers/dead entities;
+                    // LivingEntityRenderer.extractRenderState also zeros both fields.
+                    if (kase.get("isPassenger").getAsBoolean() || !kase.get("@alive").getAsBoolean())
+                        walk.stop();
+                    float partial = kase.get("@partial").getAsFloat();
+                    set(state, "walkAnimationPos", gson.toJsonTree(walk.position(partial)));
+                    set(state, "walkAnimationSpeed", gson.toJsonTree(walk.speed(partial)));
+                    result.add("walk", gson.toJsonTree(new float[]{walk.position(partial), walk.speed(partial)}));
+                }
                 hooks(state, kase);
                 if (state instanceof net.minecraft.client.renderer.entity.state.ArmedEntityRenderState armed && armed.swingAnimation > 0)
                     armed.currentSwing = new net.minecraft.world.entity.LivingEntity.SwingDescription(net.minecraft.world.InteractionHand.MAIN_HAND, net.minecraft.world.item.component.SwingAnimation.DEFAULT, 6);

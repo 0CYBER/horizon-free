@@ -189,14 +189,15 @@ pub fn state(m: &Mob, alpha: f32) -> State {
         swing += 1.0;
     }
     let swing = m.anim.attack_anim_o + swing * alpha;
-    let alive = m.alive();
+    // LivingEntityRenderer.extractRenderState: riding motion is not walking.
+    let walking = m.alive() && !m.extra.passenger;
     State {
-        pos: if alive {
+        pos: if walking {
             m.limb_position - m.limb_speed * (1.0 - alpha)
         } else {
             0.0
         },
-        speed: if alive {
+        speed: if walking {
             (m.previous_limb_speed + (m.limb_speed - m.previous_limb_speed) * alpha).min(1.0)
         } else {
             0.0
