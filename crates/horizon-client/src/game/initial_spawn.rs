@@ -20,7 +20,8 @@ use horizon_core::{
 };
 use horizon_world::{
     block_collision::BlockCollisionRegistry, collision_context::CollisionContext,
-    heightmap::HeightmapType, worldgen::terrain::TerrainBlockStates,
+    heightmap::HeightmapType, level::flags::UPDATE_CLIENTS, registry::BlockStateId,
+    worldgen::terrain::TerrainBlockStates,
 };
 
 /// The loaded world as the spawn searches query it.
@@ -138,8 +139,8 @@ impl Game<'_> {
         if !self.streaming.is_lit(cx, cz) {
             return Ok(());
         }
-        let mut random = entity_random();
-        // Util.toShuffledList of the chunk's x and z.
+        // `level.getRandom()`. Util.toShuffledList of the chunk's x and z.
+        let random = &mut self.world.random;
         let mut shuffled = |min: i32| -> [i32; 16] {
             let mut values: [i32; 16] = std::array::from_fn(|i| min + i as i32);
             for end in (2..=16usize).rev() {
@@ -157,8 +158,8 @@ impl Game<'_> {
                 if self.world.block(x, y, z) != self.world.air && !self.collision_empty([x, y, z]) {
                     continue;
                 }
-                self.level_set([x, y, z], chest)?;
-                let seed = random.next_long();
+                self.set_block_clients([x, y, z], chest)?;
+                let seed = self.world.random.next_long();
                 self.world
                     .block_entities
                     .insert((x, y, z), BlockEntity::Chest(Vec::new()));
@@ -174,13 +175,26 @@ impl Game<'_> {
                         b.can_survive(level, ticks, BlockPos::new(at[0], at[1], at[2]), torch)
                     });
                     if survives {
-                        self.level_set(at, torch)?;
+                        self.set_block_clients(at, torch)?;
                     }
                 }
                 return Ok(());
             }
         }
         Ok(())
+    }
+    /// `Level.setBlock(pos, state, UPDATE_CLIENTS)`: no neighbour updates.
+    fn set_block_clients(&mut self, pos: [i32; 3], state: BlockStateId) -> Result<()> {
+        self.with_level(|b, level, ticks| {
+            b.set_block(
+                level,
+                ticks,
+                BlockPos::new(pos[0], pos[1], pos[2]),
+                state,
+                UPDATE_CLIENTS,
+            );
+        });
+        self.process_level_events()
     }
     /// The block at `pos` has no collision shape.
     fn collision_empty(&self, pos: [i32; 3]) -> bool {
