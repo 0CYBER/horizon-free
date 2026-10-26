@@ -304,7 +304,9 @@ mod tests {
             assert_eq!(cost.test(&payment), authoritative.test(&payment));
         }
         assert!(cost.test(&ItemStack::new("minecraft:potion", 1).with_potion("minecraft:water")));
-        assert!(!cost.test(&ItemStack::new("minecraft:potion", 1).with_potion("minecraft:swiftness")));
+        assert!(
+            !cost.test(&ItemStack::new("minecraft:potion", 1).with_potion("minecraft:swiftness"))
+        );
         let emerald = crate::merchant::ItemCost {
             stack: from_network(
                 &decoded[0].cost_b.clone().unwrap().into(),
