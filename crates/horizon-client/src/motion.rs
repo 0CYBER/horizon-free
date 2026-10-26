@@ -51,6 +51,10 @@ pub struct MotionResources {
     pub blocks: BoundMovementProperties,
     pub climbable: BTreeSet<String>,
     pub fall_reset: BTreeSet<String>,
+    /// `BlockTags.INSIDE_STEP_SOUND_BLOCKS`.
+    pub inside_step_sound: BTreeSet<String>,
+    /// `BlockTags.COMBINATION_STEP_SOUND_BLOCKS`.
+    pub combination_step_sound: BTreeSet<String>,
     pub landing: BlockLandingRegistry,
     pub health: crate::health::HealthResources,
     pub fluids: FluidResources,
@@ -109,6 +113,8 @@ impl MotionResources {
             })?,
             climbable: tag("minecraft:climbable")?,
             fall_reset: tag("minecraft:fall_damage_resetting")?,
+            inside_step_sound: tag("minecraft:inside_step_sound_blocks")?,
+            combination_step_sound: tag("minecraft:combination_step_sound_blocks")?,
         })
     }
 }
@@ -136,11 +142,12 @@ pub enum MotionEvent {
         position: BlockPos,
     },
     /// `Entity.walkingStepSound` on this block: `Player.playStepSound`
-    /// muffles it under a swim sound when `in_water`.
+    /// mutes it (`playMuffledStepSound`) under a swim sound in water or
+    /// under a combination block's own step.
     Emission {
         position: BlockPos,
         state: BlockStateId,
-        in_water: bool,
+        muffled: bool,
     },
     /// `Entity.waterSwimSound`: `entity.player.swim`.
     Swim {
@@ -1973,16 +1980,48 @@ impl MovementEmissionWorld for MotionWorld<'_, '_, '_> {
     fn in_water(&mut self) -> Result<bool> {
         Ok(self.player.fluids.was_touching_water)
     }
-    /// `Player.playStepSound`: in water a swim sound, then the step muffled.
+    /// `Player.playStepSound`: in water a swim sound, then the step muffled;
+    /// on land the step of an inside-sound block above the floor, or of a
+    /// combination block above it with the floor's step muffled.
     fn walking_step_sound(&mut self, position: BlockPos, state: BlockStateId) -> Result<()> {
-        let in_water = self.player.fluids.was_touching_water;
-        if in_water {
+        let muffled = self.player.fluids.was_touching_water;
+        if muffled {
             self.water_swim_sound()?;
+        } else {
+            // Entity.getPrimaryStepSoundBlockPos.
+            let above = BlockPos {
+                y: position.y + 1,
+                ..position
+            };
+            let above_state = self.block(above);
+            let name = &self
+                .assets
+                .registry
+                .state(above_state)
+                .ok_or("missing scene state")?
+                .name;
+            let combination = self.resources.combination_step_sound.contains(name);
+            if combination || self.resources.inside_step_sound.contains(name) {
+                self.player.events.push(MotionEvent::Emission {
+                    position: above,
+                    state: above_state,
+                    muffled: false,
+                });
+                if combination {
+                    // Entity.playCombinationStepSounds.
+                    self.player.events.push(MotionEvent::Emission {
+                        position,
+                        state,
+                        muffled: true,
+                    });
+                }
+                return Ok(());
+            }
         }
         self.player.events.push(MotionEvent::Emission {
             position,
             state,
-            in_water,
+            muffled,
         });
         Ok(())
     }
