@@ -606,6 +606,68 @@ impl Game<'_> {
                     .collect(),
                 _ => Vec::new(),
             },
+            // Leashable.getLeashHolder: a fence knot is not an entity here.
+            Some("leasher") => match entity {
+                Target::Mob(id) => self
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)
+                    .and_then(|m| m.extra.leash)
+                    .and_then(|holder| match holder {
+                        horizon_client::mobs::leash::Holder::Player => Some(Target::Player),
+                        horizon_client::mobs::leash::Holder::Mob(i) => Some(Target::Mob(i)),
+                        horizon_client::mobs::leash::Holder::Knot(_) => None,
+                    })
+                    .into_iter()
+                    .collect(),
+                _ => Vec::new(),
+            },
+            // TraceableEntity.getOwner: who shot a projectile, who threw an
+            // item, who summoned a vex.
+            Some("origin") => match entity {
+                Target::Projectile(i) => self
+                    .creatures
+                    .projectiles
+                    .get(i)
+                    .and_then(|p| match (p.owner?, p.guest) {
+                        // A guest's shot: `Who::Player` is them.
+                        (horizon_client::mobs::Who::Player, Some(conn))
+                            if self.lan_acting == Some(conn) =>
+                        {
+                            Some(Target::Player)
+                        }
+                        (horizon_client::mobs::Who::Player, Some(conn)) => {
+                            Some(Target::Guest(conn))
+                        }
+                        (horizon_client::mobs::Who::Player, None) => Some(Target::Player),
+                        (horizon_client::mobs::Who::Mob(id), _) => Some(Target::Mob(id)),
+                    })
+                    .into_iter()
+                    .collect(),
+                Target::Item(id) => self
+                    .dropped
+                    .iter()
+                    .find(|d| d.id == id)
+                    .and_then(|d| d.thrower)
+                    .and_then(|words| {
+                        let uuid = words
+                            .iter()
+                            .fold(0u128, |all, w| all << 32 | u128::from(*w as u32));
+                        self.target_by_uuid(uuid)
+                    })
+                    .into_iter()
+                    .collect(),
+                Target::Mob(id) => self
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && m.kind.id == "minecraft:vex")
+                    .map(|m| m.extra.counter2 as u32)
+                    .filter(|owner| *owner != 0)
+                    .map(Target::Mob)
+                    .into_iter()
+                    .collect(),
+                _ => Vec::new(),
+            },
             Some("vehicle") => self.ride_vehicle(entity).into_iter().collect(),
             Some("controller") | Some("passengers") => match entity {
                 Target::Mob(id) if self.mobs.iter().any(|m| m.id == id && m.rider.is_some()) => {
