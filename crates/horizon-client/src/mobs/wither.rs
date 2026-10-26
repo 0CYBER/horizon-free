@@ -221,6 +221,7 @@ pub fn custom_server_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEven
             events.push(MobEvent::Explode(
                 [m.position.x, m.eye_y(), m.position.z],
                 7.0,
+                m.species(),
             ));
             // Global level event 1023.
             if !m.silent {
