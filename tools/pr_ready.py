@@ -8,7 +8,7 @@
 
 From the files the branch changes since its merge base with --base (committed or not) it decides what to run:
 rustfmt, clippy with warnings denied and the tests of the touched crates; the launcher (its own workspace) the
-same way when it, horizon-prepare or horizon-theme changed; website/src/tokens.css against horizon-theme;
+same way when it, horizon-prepare or horizon-theme changed; crates/horizon-theme/tokens.css against horizon-theme;
 Cargo.lock changing only with a Cargo.toml; the Python tests and the public-tree check; and the vanilla
 harnesses the changes can affect, picked as CI's parity job picks them (tools/parity.py --changed). Harnesses run
 where the vanilla data is (a prepared .local/ here, or the Mac mini); elsewhere they are listed for CI.
@@ -68,7 +68,6 @@ mkdir -p "$state/parity-runner" "$state/parity-target"
 ln -sfn "$state/parity-runner" .local/parity-runner && ln -sfn "$state/parity-target" .local/parity-target""",
 }
 ROOT_RUST = {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rustfmt.toml", "clippy.toml"}
-TOKENS = "website/src/tokens.css"
 LAUNCHER_FEATURES = """export features=""
 if [ "$(uname)" = Darwin ] && ! xcrun metal --version > /dev/null 2>&1; then features="--features gpui/runtime_shaders"; fi
 in_shell() { if [ "$(uname)" = Linux ] && ! pkg-config --exists xkbcommon 2>/dev/null && command -v nix-shell > /dev/null; then
@@ -96,8 +95,6 @@ def touched_crates(paths, packages):
         return None
     crates = set()
     for path in paths:
-        if path == TOKENS:
-            path = packages.get("horizon-theme", "crates/horizon-theme") + "/"
         if is_doc(path):
             continue
         owners = [name for name, directory in packages.items() if path.startswith(directory.rstrip("/") + "/")]
@@ -113,12 +110,10 @@ def area(path):
         return None
     if path.startswith(("launcher/", "crates/horizon-prepare/")):
         return "launcher"
-    if path.startswith("website/"):
-        return "website"
     if path.startswith((".github/", "tools/ci/")):
         return "CI"
     if path.startswith("crates/horizon-theme/"):
-        return None  # the design system feeds the game, the launcher and the website alike
+        return None  # the design system feeds the game, the launcher and the website (its tokens.css) alike
     return "game"
 
 
@@ -292,7 +287,7 @@ def plan(args, base, changed, crates_of, libraries, dependencies):
     # The Python tests also hold ROADMAP.md to roadmap/roadmap.toml (tests/test_roadmap.py).
     python = any(path.endswith(".py") or path.startswith(("tests/", "tools/", "roadmap/")) or path == "ROADMAP.md"
                  for path in changed)
-    crates = touched_crates(changed, crates_of) if rust or TOKENS in changed else []
+    crates = touched_crates(changed, crates_of) if rust else []
     # An unrecognised Rust path must not silently skip validation.
     if rust and crates == []:
         crates = None
@@ -317,8 +312,8 @@ def plan(args, base, changed, crates_of, libraries, dependencies):
              skip=test_skip, summary=tests_passed),
         Step("doc tests", f"cargo test --locked {doc_selection} --doc",
              skip=test_skip or (None if doc_crates else "no library touched"), summary=tests_passed),
-        Step("tokens.css up to date", "cargo test --locked -p horizon-theme --lib website_tokens_are_up_to_date",
-             skip=None if any(p.startswith(("crates/horizon-theme/", "xtask/")) or p == TOKENS for p in changed)
+        Step("tokens.css up to date", "cargo test --locked -p horizon-theme --lib tokens_css_is_up_to_date",
+             skip=None if any(p.startswith(("crates/horizon-theme/", "xtask/")) for p in changed)
              else "theme untouched"),
     ]
     launcher_skip = None if launcher else "launcher untouched"
@@ -500,8 +495,7 @@ def main():
         parser.error(f"no merge base with {args.base} (git fetch?)")
     merge_base = git("merge-base", "HEAD", args.base).strip()
     counts = line_counts(merge_base, changed)
-    crates_of, libraries, dependencies = packages() if any(workspace_rust(p) for p in changed) or TOKENS in changed \
-        else ({}, set(), {})
+    crates_of, libraries, dependencies = packages() if any(workspace_rust(p) for p in changed) else ({}, set(), {})
     steps = plan(args, args.base, changed, crates_of, libraries, dependencies)
     print(f"pr_ready: {len(changed)} files changed since {args.base}; checks on {args.host}", file=sys.stderr, flush=True)
 
