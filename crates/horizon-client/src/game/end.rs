@@ -253,9 +253,10 @@ impl Game<'_> {
         out
     }
 
-    /// LightmapRenderStateExtractor: End flashes add to the sky light factor.
+    /// LightmapRenderStateExtractor: End flashes add to the sky light factor
+    /// unless Hide Lightning Flashes is on (the sky sprite is not gated).
     pub(super) fn end_flash_sky(&self, sky: &mut horizon_client::environment::Sky, partial: f64) {
-        if self.dim == Dim::End {
+        if self.dim == Dim::End && !self.settings.file.bool("hideLightningFlashes") {
             sky.sky_light_factor += self.end.flash.intensity(partial as f32);
         }
     }
