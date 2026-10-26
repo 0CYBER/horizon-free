@@ -10496,7 +10496,10 @@ impl Game<'_> {
             menu_blur: self.menu_blur(),
         };
         let result = match self.renderer.as_mut() {
-            Some(renderer) => horizon_client::spans::time("renderer", || renderer.render(&frame)),
+            Some(renderer) => {
+                renderer.set_pass_timing(self.debug);
+                horizon_client::spans::time("renderer", || renderer.render(&frame))
+            }
             None => Err("renderer".into()),
         };
         // Restore storage even when rendering fails (for example, a lost surface).
