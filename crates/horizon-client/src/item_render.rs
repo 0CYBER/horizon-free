@@ -60,18 +60,29 @@ pub struct Glint {
     /// `Util.getMillis()`.
     pub millis: f32,
     /// The transform's scale: `GLINT_TEXTURING`'s 8.0 for GUI items,
-    /// `ENTITY_GLINT_TEXTURING`'s 0.5 for items in the world.
+    /// `ENTITY_GLINT_TEXTURING`'s 0.5 for items in the world and
+    /// `ARMOR_ENTITY_GLINT_TEXTURING`'s 0.16 for armour (entity.wgsl).
     pub scale: f32,
 }
 impl Glint {
+    /// `Util.getMillis() * glintSpeed * 8.0` as vanilla's long.
+    fn ticks(millis: f32, speed: f32) -> i64 {
+        (f64::from(millis) * f64::from(speed) * 8.0) as i64
+    }
+    /// The scroll clock modulo the common period of both offsets (110000 and
+    /// 30000 divide 330000), for `globals.time.w`: the entity shader derives
+    /// `ARMOR_ENTITY_GLINT_TEXTURING` from it.
+    pub fn scroll_ticks(millis: f32, speed: f32) -> f32 {
+        (Self::ticks(millis, speed) % 330_000) as f32
+    }
     /// `TextureTransform.setupGlintTexturing(scale)` applied to the model UV:
     /// translation(-o0, o1) * rotateZ(PI/18) * scale. The result repeats:
     /// the shader samples the dedicated glint texture with vanilla's
     /// repeating `GlintSampler`, so the UVs stay unwrapped.
     pub fn uv(&self, model: [f32; 2]) -> [f32; 2] {
-        let millis = (f64::from(self.millis) * f64::from(self.speed) * 8.0) as i64;
-        let offset0 = (millis % 110000) as f32 / 110000.0;
-        let offset1 = (millis % 30000) as f32 / 30000.0;
+        let ticks = Self::ticks(self.millis, self.speed);
+        let offset0 = (ticks % 110_000) as f32 / 110_000.0;
+        let offset1 = (ticks % 30_000) as f32 / 30_000.0;
         let angle = std::f32::consts::PI / 18.0;
         let (sin, cos) = angle.sin_cos();
         [

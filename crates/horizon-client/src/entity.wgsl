@@ -14,7 +14,8 @@ struct Globals {
     // Atlas rects (u0, v0, width, height) of end_sky.png and end_portal.png.
     end_portal_sprites: array<vec4<f32>, 2>,
     // x: vanilla's GameTime ((game time % 24000 + partial tick) / 24000)
-    // y: Nether cardinal lighting, z: how many dynamic_lights are set.
+    // y: Nether cardinal lighting, z: how many dynamic_lights are set,
+    // w: the glint scroll clock (`Glint::scroll_ticks`).
     time: vec4<f32>,
     crumbling_sprite: vec4<f32>,
     // Selection outline parameters (read by terrain.wgsl).
@@ -30,6 +31,9 @@ struct Globals {
 // enchanted_glint_item on its own repeating texture (vanilla's GlintSampler).
 @group(0) @binding(5) var glint_tex: texture_2d<f32>;
 @group(0) @binding(6) var glint_sampler: sampler;
+// The armour layers' GlintSampler: vanilla samples enchanted_glint_armor with
+// the same repeating, linearly filtered sampler as the item glint.
+@group(0) @binding(7) var glint_armor_tex: texture_2d<f32>;
 struct Out {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -47,7 +51,8 @@ struct Out {
     // entity.vsh's lightMapColor, multiplied in after the overlay.
     @location(9) light_color: vec4<f32>,
     @location(10) @interpolate(flat) weather_rect: vec4<f32>,
-    // The `GLINT_TEXTURING` sample for overlay 7 (item foil).
+    // The `GLINT_TEXTURING` sample for overlay 7 (item foil), or the model UV
+    // `ARMOR_ENTITY_GLINT_TEXTURING` scrolls for overlay 13 (armour).
     @location(11) glint_uv: vec2<f32>,
 }
 // Shipped light.glsl; normals are already transformed and RGBA8_SNORM packed.
@@ -176,6 +181,27 @@ fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
     if d >= end { return 1.0; }
     return (d - start) / (end - start);
 }
+// TextureTransform.setupGlintTexturing(0.16), ARMOR_ENTITY_GLINT_TEXTURING.
+// globals.time.w is (Util.getMillis() * glintSpeed * 8) modulo 330000, the
+// common period of both offsets.
+fn armor_glint_uv(model: vec2<f32>) -> vec2<f32> {
+    let ticks = globals.time.w;
+    let offset0 = (ticks % 110000.0) / 110000.0;
+    let offset1 = (ticks % 30000.0) / 30000.0;
+    let angle = 0.17453292;
+    let c = cos(angle);
+    let s = sin(angle);
+    let scaled = model * 0.16;
+    return vec2(scaled.x * c - scaled.y * s - offset0,
+                scaled.x * s + scaled.y * c + offset1);
+}
+// RenderPipelines.GLINT: the source colour is scaled by itself, so `GlintAlpha`
+// is squared along with the sample.
+fn glint_over(color: vec4<f32>, glint: vec4<f32>) -> vec4<f32> {
+    let alpha = globals.fog_ends.w;
+    let g = alpha * glint;
+    return vec4(color.rgb + g.rgb * g.rgb, max(color.a, alpha));
+}
 // CRUMBLING_UV_BEGIN
 fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>, dimensions: vec2<u32>) -> vec2<f32> {
     let size = vec2<f32>(dimensions);
@@ -216,9 +242,13 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
     if in.overlay == 7u || in.overlay == 8u {
         // Enchantment glint: item.fsh's GLINT path, sampled from
         // enchanted_glint_item at the `GLINT_TEXTURING` UV.
-        let alpha = globals.fog_ends.w;
-        let glint = alpha * textureSample(glint_tex, glint_sampler, in.glint_uv);
-        color = vec4(color.rgb + glint.rgb * glint.rgb, max(color.a, alpha));
+        color = glint_over(color, textureSample(glint_tex, glint_sampler, in.glint_uv));
+    } else if in.overlay == 13u {
+        // Enchanted armour: enchanted_glint_armor at the scrolling model UV.
+        color = glint_over(
+            color,
+            textureSample(glint_armor_tex, glint_sampler, armor_glint_uv(in.glint_uv)),
+        );
     }
     let f = max(linear_fog(in.spherical, globals.fog.x, globals.fog.y),
                 linear_fog(in.cylindrical, globals.fog.z, globals.fog.w));

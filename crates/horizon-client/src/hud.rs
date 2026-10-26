@@ -70,6 +70,8 @@ pub struct HudAtlas {
     /// `misc/enchanted_glint_item` as its own image: vanilla's `GlintSampler`
     /// repeats it per pixel, which one sprite inside this atlas cannot.
     pub glint: (Vec<u8>, u32, u32),
+    /// `misc/enchanted_glint_armor`, the armour layers' `GlintSampler`.
+    pub glint_armor: (Vec<u8>, u32, u32),
     white: Rect,
 }
 /// Atlas rows reserved for glyphs rasterized at run time.
@@ -529,7 +531,8 @@ impl HudAtlas {
             }
         }
         let white = sprites["horizon/white"];
-        let glint = Self::glint_texture(root, defaults);
+        let glint = Self::glint_texture(root, defaults, "enchanted_glint_item");
+        let glint_armor = Self::glint_texture(root, defaults, "enchanted_glint_armor");
         let font = crate::font::Font::load(
             root,
             &sprites,
@@ -547,16 +550,18 @@ impl HudAtlas {
             flags,
             fire_animations,
             glint,
+            glint_armor,
             font,
             white,
         })
     }
-    /// `misc/enchanted_glint_item.png` on its own, or a transparent texel if
-    /// the resource pack lacks it.
-    fn glint_texture(root: &Path, defaults: &Path) -> (Vec<u8>, u32, u32) {
-        let mut path = root.join("assets/minecraft/textures/misc/enchanted_glint_item.png");
+    /// `misc/<name>.png` on its own, or a transparent texel if the resource
+    /// pack lacks it.
+    fn glint_texture(root: &Path, defaults: &Path, name: &str) -> (Vec<u8>, u32, u32) {
+        let relative = format!("assets/minecraft/textures/misc/{name}.png");
+        let mut path = root.join(&relative);
         if !path.exists() && defaults != root {
-            path = defaults.join("assets/minecraft/textures/misc/enchanted_glint_item.png");
+            path = defaults.join(&relative);
         }
         decode(&path).map_or((vec![0; 4], 1, 1), |(w, h, pixels)| (pixels, w, h))
     }

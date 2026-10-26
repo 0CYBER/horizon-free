@@ -178,7 +178,7 @@ struct Globals {
     /// Atlas rects (u0, v0, width, height) of end_sky.png and end_portal.png.
     end_portal_sprites: [[f32; 4]; 2],
     /// x: vanilla's `GameTime` uniform; y: nether cardinal lighting; z: how many
-    /// `dynamic_lights` are set; w unused.
+    /// `dynamic_lights` are set; w: the glint scroll clock (`Glint::scroll_ticks`).
     time: [f32; 4],
     /// Atlas rect of a destroy stage (entity.wgsl takes only its size: every stage's is the same,
     /// and each crack carries its own stage's origin).
@@ -260,6 +260,9 @@ pub struct Frame<'a> {
     /// `GlintAlpha` (accessibility Glint Strength); the entity shader uses it
     /// for held/world items, independent of what the HUD batch last drew.
     pub glint_alpha: f32,
+    /// The glint scroll clock (`Glint::scroll_ticks`): entity.wgsl's
+    /// `ARMOR_ENTITY_GLINT_TEXTURING` phase.
+    pub glint_ticks: f32,
     /// CardinalLighting.Type.NETHER, otherwise DEFAULT.
     pub nether_lighting: bool,
     /// Camera-relative entity geometry textured from the shared atlas.
@@ -1024,6 +1027,7 @@ impl Renderer {
         animations: &[SpriteAnimation],
         hud_atlas: (&[u8], u32, u32),
         glint: (&[u8], u32, u32),
+        glint_armor: (&[u8], u32, u32),
         forcefield: (&[u8], u32),
         panorama_faces: &panorama::Faces,
         prepared: Option<PreparedTextures>,
@@ -1609,6 +1613,29 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        // ARMOR_ENTITY_GLINT_TEXTURING's sampler is vanilla's GlintSampler: the
+        // same repeat and linear filtering as the item glint.
+        let (glint_armor_pixels, glint_armor_width, glint_armor_height) = glint_armor;
+        let glint_armor_texture = device.create_texture_with_data(
+            &queue,
+            &wgpu::TextureDescriptor {
+                label: Some("Enchanted armor glint"),
+                size: wgpu::Extent3d {
+                    width: glint_armor_width,
+                    height: glint_armor_height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            glint_armor_pixels,
+        );
+        let glint_armor_view = glint_armor_texture.create_view(&Default::default());
         let mut hud = HudRenderer::new(
             &device,
             config.format.remove_srgb_suffix(),
@@ -1675,6 +1702,15 @@ impl Renderer {
                     vf,
                     wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 ),
+                entry(
+                    7,
+                    vf,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
             ],
         });
         let weather = weather::Weather::new(
@@ -1719,6 +1755,10 @@ impl Renderer {
                     binding: 6,
                     resource: wgpu::BindingResource::Sampler(&glint_sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&glint_armor_view),
+                },
             ],
         });
         let hand_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1752,6 +1792,10 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 6,
                     resource: wgpu::BindingResource::Sampler(&glint_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&glint_armor_view),
                 },
             ],
         });
@@ -3557,7 +3601,7 @@ impl Renderer {
                 frame.shader_game_time,
                 f32::from(frame.nether_lighting),
                 frame.dynamic_lights.len().min(crate::dynamic_light::MAX) as f32,
-                0.0,
+                frame.glint_ticks,
             ],
             outline_params: outline_params(self.config.width, self.config.height),
             dynamic_lights: {

@@ -314,6 +314,14 @@ impl Game<'_> {
                 scale: 0.5,
             })
     }
+    /// The glint scroll phase shared by world items and armour
+    /// (`item_render::Glint::scroll_ticks`).
+    pub(super) fn glint_ticks(&self) -> f32 {
+        item_render::Glint::scroll_ticks(
+            self.started.elapsed().as_secs_f32() * 1000.0,
+            self.settings.file.double("glintSpeed") as f32,
+        )
+    }
     /// Submit a resolved item under `pose` (camera-relative) at `light`
     /// (packed lightmap coordinates).
     pub(super) fn submit_item_world(

@@ -10806,6 +10806,7 @@ impl Game<'_> {
             debug_crosshair: &debug_crosshair,
             hud: &hud,
             glint_alpha: self.settings.file.double("glintStrength") as f32,
+            glint_ticks: self.glint_ticks(),
             clouds: (!title
                 && self.dim == Dim::Overworld
                 && horizon_client::clouds::visible(&self.settings.clouds, sky.cloud_color[3]))
@@ -13386,6 +13387,11 @@ fn build_renderer(
         &assets.animations,
         (&atlas.pixels, atlas.width, atlas.height),
         (&atlas.glint.0, atlas.glint.1, atlas.glint.2),
+        (
+            &atlas.glint_armor.0,
+            atlas.glint_armor.1,
+            atlas.glint_armor.2,
+        ),
         (&pack.forcefield.2, pack.forcefield.0),
         &gui.panorama,
         prepared,
@@ -13444,6 +13450,7 @@ fn loading_renderer(
         &[],
         (pixels, width, height),
         (glint_pixels, glint_width, glint_height),
+        (glint_pixels, glint_width, glint_height),
         (&FORCEFIELD[..], 1),
         panorama,
         None,
@@ -13491,6 +13498,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         debug_crosshair: &[],
         hud,
         glint_alpha: 0.75,
+        glint_ticks: 0.0,
         nether_lighting: false,
         entities: &[],
         entity_spans: &[],
