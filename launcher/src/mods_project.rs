@@ -491,6 +491,21 @@ impl Launcher {
             .gap(px(24.))
             .child(div().flex().child(back))
             .child(head);
+        // Registry projects are rated on the site, signed in with GitHub (one rating per account).
+        if p.source == SourceId::Horizon {
+            let url = browser::horizon::rate_url(&p.id);
+            page = page.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(16.))
+                    .children(super::mods_page::stars(&p.id, &t).map(|s| text(theme::UI).child(s)))
+                    .child(
+                        button("mods-rate", "Sign in with GitHub to rate", Kind::Ghost, &t)
+                            .on_click(move |_, _, cx| cx.open_url(&url)),
+                    ),
+            );
+        }
         if let Some(why) = support.reason() {
             page = page.child(
                 text(theme::UI)
