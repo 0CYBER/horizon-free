@@ -11,7 +11,10 @@ use super::{
 };
 use crate::registry::BlockStateId;
 use horizon_core::{
-    geometry::Direction, position::BlockPos, random::RandomSource, ticks::TickPriority,
+    geometry::{Direction, trig},
+    position::BlockPos,
+    random::RandomSource,
+    ticks::TickPriority,
 };
 
 const SIGNAL_ORDER: [Direction; 6] = [
@@ -891,6 +894,31 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.sound(pos, &set.button_off, 1.0, 1.0);
         }
         self.game_event(pos, "minecraft:block_deactivate");
+    }
+    /// `DaylightDetectorBlock.updateSignalStrength`: the effective sky light
+    /// at the detector, shaped by the sun's angle (or inverted), as its
+    /// power.
+    pub(crate) fn daylight_detector_update_signal(&mut self, pos: BlockPos, state: BlockStateId) {
+        let b = self.b;
+        let mut target = (self.level.sky_light(pos) - self.level.sky_darken()).max(0);
+        if b.table.bool(state, b.props.inverted) {
+            target = 15 - target;
+        } else if target > 0 {
+            let mut sun_angle = self.level.sun_angle(pos) * trig::DEG_TO_RAD;
+            let offset = if sun_angle < std::f32::consts::PI {
+                0.0
+            } else {
+                std::f32::consts::TAU
+            };
+            sun_angle += (offset - sun_angle) * 0.2;
+            // Math.round(float).
+            let scaled = target as f32 * trig::cos(f64::from(sun_angle));
+            target = (f64::from(scaled) + 0.5).floor() as i32;
+        }
+        let target = target.clamp(0, 15);
+        if b.table.int(state, b.props.power) != target {
+            self.set_block_and_update(pos, b.table.set_int(state, b.props.power, target));
+        }
     }
     /// `LeverBlock.pull`.
     pub(crate) fn lever_pull(&mut self, pos: BlockPos, state: BlockStateId) {

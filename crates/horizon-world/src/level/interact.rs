@@ -195,6 +195,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     let next = table.cycle(state, p.inverted);
                     self.set_block(pos, next, 2);
                     self.game_event(pos, "minecraft:block_change");
+                    self.daylight_detector_update_signal(pos, next);
                     Success
                 }
                 Class::Cake => {

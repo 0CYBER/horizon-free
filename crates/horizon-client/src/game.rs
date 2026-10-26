@@ -532,6 +532,8 @@ struct GameLevel<'w> {
     events: &'w mut Vec<LevelEvent>,
     dimension: LevelDimension,
     darken: i32,
+    /// The environment of the level's dimension (`SUN_ANGLE`).
+    environment: &'w Environment,
     raining: bool,
     thundering: bool,
     player_box: Option<([f64; 3], [f64; 3])>,
@@ -758,6 +760,11 @@ impl LevelAccess for GameLevel<'_> {
     }
     fn sky_darken(&self) -> i32 {
         self.darken
+    }
+    fn sun_angle(&self, _pos: BlockPos) -> f32 {
+        self.environment
+            .sample(self.world.day_time, None, None)
+            .sun_angle
     }
     fn is_raining(&self) -> bool {
         self.raining
@@ -2469,6 +2476,11 @@ impl Game<'_> {
             events: &mut self.level_events,
             dimension,
             darken,
+            environment: match dimension {
+                LevelDimension::Overworld => self.res.environment(),
+                LevelDimension::Nether => self.res.nether_environment(),
+                LevelDimension::End => self.res.end_environment(),
+            },
             raining: rain > 0.2,
             thundering: thunder > 0.9,
             player_box,
@@ -5278,7 +5290,8 @@ impl Game<'_> {
                 | BlockEntity::Vault(_)
                 | BlockEntity::Beehive(_)
                 | BlockEntity::CommandBlock(_)
-                | BlockEntity::Skull(_),
+                | BlockEntity::Skull(_)
+                | BlockEntity::DaylightDetector,
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -5548,7 +5561,8 @@ impl Game<'_> {
                     | BlockEntity::Vault(_)
                     | BlockEntity::Beehive(_)
                     | BlockEntity::CommandBlock(_)
-                    | BlockEntity::Skull(_),
+                    | BlockEntity::Skull(_)
+                    | BlockEntity::DaylightDetector,
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
