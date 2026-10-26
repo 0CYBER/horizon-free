@@ -2,6 +2,9 @@
 //!
 //! chunk_dump <client resource dir> <seed> <dimension> <x0,z0,x1,z1>...
 //! With HORIZON_SCAN set, one rectangle lists the structure starts in it.
+//! HORIZON_SAVED_STARTS names a JSON file of saved starts (`[{"id", "chunk":
+//! [x, z], "pieces": [...]}]`, jigsaw pieces as a save lists them) that take
+//! the place of the starts generation builds in their chunks.
 //!
 //! Chunks are generated through biomes, terrain and carvers, then decorated in
 //! row-major order over the target rectangle grown by one chunk (or in the
@@ -166,10 +169,23 @@ pub fn main() -> Result<(), Error> {
         }
         return Ok(());
     }
+    let saved: Vec<Value> = match std::env::var_os("HORIZON_SAVED_STARTS") {
+        Some(path) => serde_json::from_str(&fs::read_to_string(path)?)?,
+        None => Vec::new(),
+    };
     for [x0, z0, x1, z1] in rects {
         // Each rectangle starts from scratch, like the oracle's fresh chunks:
         // structure pieces keep placement state (a shipwreck's adjusted height).
         worker.forget_structure_starts();
+        for start in &saved {
+            let chunk = ChunkPos::new(
+                start["chunk"][0].as_i64().ok_or("saved start chunk")? as i32,
+                start["chunk"][1].as_i64().ok_or("saved start chunk")? as i32,
+            );
+            let pieces = start["pieces"].as_array().ok_or("saved start pieces")?;
+            let id = start["id"].as_str().ok_or("saved start id")?;
+            worker.use_saved_start(chunk, id, pieces)?;
+        }
         let mut chunks: HashMap<(i32, i32), ProtoChunk> = HashMap::new();
         for z in z0 - 2..=z1 + 2 {
             for x in x0 - 2..=x1 + 2 {

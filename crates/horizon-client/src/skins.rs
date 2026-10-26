@@ -130,6 +130,47 @@ pub fn profile_skin_url(profile: &serde_json::Value) -> Option<String> {
     unpack(value, Signature::Unsigned, &TEXTURE_URIS).skin
 }
 
+/// `profile_skin_url` on a block entity's `profile` NBT (`SkullBlockEntity`):
+/// the same `properties` list, held as a compound. A name-only profile (a
+/// string tag) has no properties and no skin URL.
+pub fn profile_skin_url_nbt(profile: &horizon_world::nbt::Tag) -> Option<String> {
+    let properties = match profile.get("properties")? {
+        horizon_world::nbt::Tag::List(list) => list,
+        _ => return None,
+    };
+    let value = properties.iter().find_map(|p| {
+        let name = nbt_text(p.get("name"))?;
+        (name == "textures")
+            .then(|| nbt_text(p.get("value")))
+            .flatten()
+    })?;
+    unpack(&value, Signature::Unsigned, &TEXTURE_URIS).skin
+}
+
+/// The profile's uuid as u128: `id` as an int array (block entity NBT) or a
+/// uuid string (older and component forms). Used for `DefaultPlayerSkin.get`
+/// when a head's skin is not downloaded yet.
+pub fn profile_uuid_nbt(profile: &horizon_world::nbt::Tag) -> Option<u128> {
+    match profile.get("id")? {
+        horizon_world::nbt::Tag::IntArray(v) if v.len() == 4 => Some(
+            v.iter()
+                .fold(0u128, |a, &w| (a << 32) | u128::from(w as u32)),
+        ),
+        horizon_world::nbt::Tag::String(s) => {
+            let digits: String = s.to_string_lossy().chars().filter(|c| *c != '-').collect();
+            u128::from_str_radix(&digits, 16).ok()
+        }
+        _ => None,
+    }
+}
+
+fn nbt_text(tag: Option<&horizon_world::nbt::Tag>) -> Option<String> {
+    match tag {
+        Some(horizon_world::nbt::Tag::String(s)) => Some(s.to_string_lossy()),
+        _ => None,
+    }
+}
+
 /// `MinecraftProfileTexture.getHash`: the base name of the URL's path.
 pub fn texture_hash(url: &str) -> Option<String> {
     let rest = url.split_once("://")?.1;
@@ -456,6 +497,42 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn skull_block_entity_profiles_supply_head_skins() {
+        let value = "eyJ0ZXh0dXJlcyI6IHsiU0tJTiI6IHsidXJsIjogImh0dHBzOi8vdGV4dHVyZXMubWluZWNyYWZ0Lm5ldC90ZXh0dXJlL2FiYzEyMyJ9fX0=";
+        let profile = horizon_world::nbt::parse_snbt(&format!(
+            r#"{{name:"T",id:[I;-158327916,1572358581,-2125825222,-487948715],properties:[{{name:"textures",value:"{value}"}}]}}"#
+        ))
+        .unwrap()
+        .0;
+        assert_eq!(
+            super::profile_skin_url_nbt(&profile).as_deref(),
+            Some("https://textures.minecraft.net/texture/abc123")
+        );
+        assert_eq!(
+            super::profile_uuid_nbt(&profile),
+            Some(
+                [-158327916, 1572358581, -2125825222, -487948715]
+                    .iter()
+                    .fold(0u128, |a, &w: &i32| (a << 32) | u128::from(w as u32))
+            )
+        );
+        // A name-only profile (a string tag) has no properties: no url, no id.
+        let named = horizon_world::nbt::Tag::String("MHF_Blaze".into());
+        assert_eq!(super::profile_skin_url_nbt(&named), None);
+        assert_eq!(super::profile_uuid_nbt(&named), None);
+        // A uuid in string form decodes too.
+        let text_id = horizon_world::nbt::parse_snbt(
+            r#"{name:"T",id:"e843a1f4-0000-0001-0000-000200000003"}"#,
+        )
+        .unwrap()
+        .0;
+        assert_eq!(
+            super::profile_uuid_nbt(&text_id),
+            Some(u128::from_str_radix("e843a1f4000000010000000200000003", 16).unwrap())
+        );
+    }
 
     #[test]
     fn sha1_and_base64() {

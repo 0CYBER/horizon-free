@@ -80,6 +80,34 @@ An agent working an area merges the integration branch first, uses `tools/parity
 
 On ludodesktop, source `~/code/horizon-parity/env.sh` first: it sets the ALSA build path and the Cargo job cap. Debug builds carry line tables only (`[profile.dev]` in `Cargo.toml`), which keeps backtraces readable while keeping each worktree's build small; a fresh worktree builds `horizon-client` and its tests in under a minute.
 
+## Server execution in game fixtures
+
+`HORIZON_COMMAND_SCRIPT` runs on the integrated server's `Server thread`, with the
+headless client joined through the normal memory connection. Commands use the connected
+owner's body and dimension. The script owns the clock: each `tick` calls `tick_server`,
+while login and portal arrival pump connection-only passes. The client acknowledges
+terrain and teleports without predicting movement, matching the command oracle's stationary
+player. Script and save errors return through server shutdown; output keeps the existing
+styled messages and `CommandResultCallback` schema. `--in-frame` is not needed.
+
+`HORIZON_DISPENSE_FIXTURE` and `HORIZON_SCULK_FIXTURE` are component probes. They construct
+a server `Game` on a server thread and retain the oracles' synthetic levels, seeded random
+streams and explicit entity/block phases. A synthetic sculk player controls warning levels,
+not client input; dispenser probes call one activation without running unrelated world ticks.
+Keep those controls when extending the fixtures. Player interactions belong in connected-client
+coverage alongside the components:
+
+```sh
+python3 tools/test_command_exec_parity.py
+python3 tools/test_dispenser_parity.py
+python3 tools/test_sculk_parity.py
+python3 tools/lan_e2e.py --server-thread --check machines --check fireball --check sculk_container
+```
+
+The LAN checks open and fill machines through the guest's inventory packets, observe a
+powered dispenser's projectile on both clients, and open a chest to activate a sculk sensor
+and shrieker. They supplement the deterministic component comparisons.
+
 ## Reading vanilla
 
 Besides the Vineflower sources in `.local/minecraft/<version>/sources/`, `tools/rea_vanilla.py` queries the shipped bytecode through REA (callers through lambdas, overloads, a second decompiler); see [decompilation status](decompilation-status.md#querying-the-shipped-bytecode-with-rea).

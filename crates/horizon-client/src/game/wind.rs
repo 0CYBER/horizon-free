@@ -52,10 +52,6 @@ fn triggers(name: &str) -> bool {
 impl Game<'_> {
     /// `WindChargeItem.use`.
     pub(super) fn throw_wind_charge(&mut self) -> Result<bool> {
-        if self.creatures.wind_cooldown > 0 {
-            return Ok(true);
-        }
-        self.creatures.wind_cooldown = 10;
         let (Some(eye), Some(p)) = (self.eye_position(), self.player.as_ref()) else {
             return Ok(false);
         };

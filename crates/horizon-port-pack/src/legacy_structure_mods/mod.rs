@@ -15,7 +15,6 @@
 //! conversion.
 pub(crate) mod ctov;
 pub(crate) mod lithostitched;
-pub(crate) mod yung;
 
 #[cfg(test)]
 fn data() -> crate::processors::ProcessorData {

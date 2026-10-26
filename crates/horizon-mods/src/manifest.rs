@@ -137,9 +137,9 @@ impl Capability {
             Capability::Command => "run commands as you, with your permissions",
             Capability::Registries => "add blocks and items to your worlds",
             Capability::Ui => "show its own screens and a settings page",
-            Capability::Render => "draw on your screen and shake the camera",
+            Capability::Render => "draw on your screen, shake and zoom the camera",
             Capability::Input => {
-                "see the keys you hold and your clicks, take over the use button on its own items, and add keys"
+                "see the keys you hold and your clicks, take over the use button on its own items and the mouse wheel, and add keys"
             }
         }
     }

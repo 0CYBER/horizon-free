@@ -66,6 +66,9 @@ pub(super) struct ModsState {
     /// Extras that are official mods now, being installed.
     #[cfg(feature = "mods")]
     pub(super) moved: super::moved_extras::MovedState,
+    /// Playing at the last frame, for `mod_input_frame`.
+    #[cfg(feature = "mods")]
+    pub(super) playing: bool,
 }
 
 /// The mappings `input.mapping` answers for, with the default key their
@@ -437,6 +440,7 @@ impl Game<'_> {
         if !self.mods.mods.is_running() {
             return;
         }
+        self.mod_input_frame();
         if self.mods.mods.wants_frames() {
             let snapshot = self.mod_snapshot();
             self.mods.mods.set_snapshot(snapshot);
@@ -510,10 +514,16 @@ impl Game<'_> {
                 }
             };
             // Not through system_message: a mod must not hear its own lines.
+            // Written by this client, so the Chat option doesn't hide it.
             let focused = self.screen == Screen::Chat;
-            self.ui
-                .chat
-                .add(&self.gui.atlas, line, None, self.ticks, focused);
+            self.ui.chat.add(
+                &self.gui.atlas,
+                line,
+                None,
+                horizon_client::chat::ChatSource::Client,
+                self.ticks,
+                focused,
+            );
         }
         // A mod may set or clear its settings page in any call, not only
         // while loading: its row's Settings button follows.

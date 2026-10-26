@@ -543,6 +543,56 @@ fn input_claims_keys_and_events() {
     });
     assert!(mods.command("input_held"));
     assert_eq!(chat(&mut mods), ["holding minecraft:stick x3 in 2"]);
+    // A screen opening lets held keys up, once; the release that follows
+    // is not sent again.
+    mods.key("key.keyboard.r", true);
+    mods.release_keys();
+    mods.release_keys();
+    mods.key("key.keyboard.r", false);
+    assert!(mods.command("input_poll"));
+    assert_eq!(chat(&mut mods), ["key-down wheel", "key-up wheel"]);
+}
+
+#[test]
+fn input_wheel_is_the_mods_while_claimed() {
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    let chat = |mods: &mut Mods| -> Vec<String> {
+        mods.drain()
+            .into_iter()
+            .filter_map(|o| match o {
+                Output::Chat { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect()
+    };
+    // Unclaimed, the hotbar keeps the wheel and the mod hears nothing.
+    assert!(!mods.wheel_claimed() && !mods.wheel(1.0));
+    assert!(mods.command("input_wheel"));
+    assert!(mods.wheel_claimed());
+    assert!(mods.wheel(1.0) && mods.wheel(-2.0));
+    assert!(mods.command("input_poll"));
+    assert_eq!(chat(&mut mods), ["wheel 1", "wheel -2"]);
+    assert!(mods.command("input_wheel off"));
+    assert!(!mods.wheel(1.0));
+}
+
+#[test]
+fn render_zoom_is_clamped_and_the_strongest_counts() {
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    let zoom = |mods: &mut Mods, args: &str| {
+        assert!(mods.command(&format!("zoom {args}")));
+        mods.zoom().map(|z| (z.factor, z.smooth, z.turn))
+    };
+    assert!(mods.zoom().is_none());
+    assert_eq!(zoom(&mut mods, "4 1 0.25"), Some((4.0, true, 0.25)));
+    // Over 10 and a turn under 0.05 are clamped.
+    assert_eq!(zoom(&mut mods, "50 0 0"), Some((10.0, false, 0.05)));
+    // A NaN turn keeps the player's sensitivity.
+    assert_eq!(zoom(&mut mods, "2 0 x"), Some((2.0, false, 1.0)));
+    // 1, under 1 and NaN end the zoom.
+    assert_eq!(zoom(&mut mods, "1 0 1"), None);
+    assert_eq!(zoom(&mut mods, "0.5 0 1"), None);
+    assert_eq!(zoom(&mut mods, "x 0 1"), None);
 }
 
 #[test]
