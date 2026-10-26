@@ -320,8 +320,9 @@ def scenarios():
                 'player 6.5 -60 0.5',
                 f'mob minecraft:zombie 0.5 -60 0.5 0 1 {flags}',
             ], f'difficulty={difficulty} time=18000')
-    for species in ('skeleton', 'creeper', 'slime', 'warden', 'wither',
-                    'piglin', 'shulker', 'bee', 'wolf', 'iron_golem', 'cow'):
+    # Not slime, piglin or bee: a slime made without finalizeSpawn keeps 20 health, the probe
+    # doesn't model a piglin's brain, and a NoAI bee's flower cooldown differs (none of it Peaceful).
+    for species in ('skeleton', 'creeper', 'warden', 'wither', 'shulker', 'wolf', 'iron_golem', 'cow'):
         add(f'peaceful_type_{species}', 1, [
             'player 6.5 -60 0.5',
             f'mob minecraft:{species} 0.5 -60 0.5 0 1 persistent noai',
