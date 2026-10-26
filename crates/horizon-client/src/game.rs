@@ -4492,12 +4492,6 @@ impl Game<'_> {
         let events = std::mem::take(&mut player.events);
         let spin_hit = player.spin_hit.take();
         let glider_wear = std::mem::take(&mut player.glider_wear);
-        if glider_wear > 0
-            && !self.creative
-            && let Some(elytra) = self.armor[1].as_mut()
-        {
-            elytra.damage += glider_wear;
-        }
         let feet = [player.position.x, player.position.y, player.position.z];
         let player_velocity = [player.velocity.x, player.velocity.y, player.velocity.z];
         self.previous_eye = self.eye;
@@ -4508,6 +4502,16 @@ impl Game<'_> {
         };
         self.eye += (camera_eye.unwrap_or(eye_height) - self.eye) * 0.5;
         let crouching = player.pose == horizon_client::pose::Pose::Crouching;
+        // `ItemStack.hurtAndBreak` for the glide: Unbreaking can save the wear.
+        if glider_wear > 0
+            && !self.creative
+            && let Some(stack) = self.armor[1].clone()
+        {
+            let loss = self.durability_loss(&stack, glider_wear);
+            if let Some(elytra) = self.armor[1].as_mut() {
+                elytra.damage += loss;
+            }
+        }
         self.tick_avatar(before, riding);
         self.end_spin_attack(spin_hit);
         self.record_combat(&events);
