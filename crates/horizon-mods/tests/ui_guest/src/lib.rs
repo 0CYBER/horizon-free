@@ -1,9 +1,11 @@
 //! A mod for the runtime's `ui` tests: `/ui_screen` opens a screen with one
 //! of each widget, `/ui_settings` sets a settings page, `/ui_close` closes
 //! the screen; the `ui-events` calls answer in chat so the host sees them.
-//! `/render_hud`, `/render_clear` and `/render_shake` test `render`.
+//! `/render_hud`, `/render_clear` and `/render_shake` test `render`;
+//! `/input_claim`, `/input_poll` and `/input_held` test `input`.
 use horizon_mod_sdk::{
     Mod, Registration, chat,
+    input::{self, Event},
     render::{self, FillShape, ItemShape, Point, QuadShape, Rect, Shape, SpriteShape, TextShape},
     ui::{self, ItemWidget, ListWidget, Screen, TextWidget, Widget},
 };
@@ -87,6 +89,9 @@ impl Mod for Guest {
             "render_hud",
             "render_clear",
             "render_shake",
+            "input_claim",
+            "input_poll",
+            "input_held",
         ]
         .into_iter()
         .fold(Registration::new(), Registration::command);
@@ -102,6 +107,29 @@ impl Mod for Guest {
             "ui_close" => ui::close_screen(),
             "render_hud" => render::set_hud(&shapes()),
             "render_clear" => render::set_hud(&[]),
+            "input_claim" => {
+                input::claim_items(&["minecraft:stick".into()]);
+                input::register_key("wheel", "Open the wheel", "key.keyboard.r")?;
+                // Not a key: refused.
+                let bad = input::register_key("bad", "Bad", "R").unwrap_err();
+                chat::show(&format!("claimed; {bad}"));
+            }
+            "input_poll" => {
+                for event in input::poll() {
+                    chat::show(&match event {
+                        Event::UseStart(u) => format!("use-start {} {}", u.item.id, u.ticks),
+                        Event::UseStop(u) => format!("use-stop {} {}", u.item.id, u.ticks),
+                        Event::KeyDown(k) => format!("key-down {k}"),
+                        Event::KeyUp(k) => format!("key-up {k}"),
+                    });
+                }
+            }
+            "input_held" => {
+                let held = input::held().map_or("nothing".into(), |h| {
+                    format!("{} x{} in {}", h.id, h.count, h.slot)
+                });
+                chat::show(&format!("holding {held}"));
+            }
             // Clamped to (1, 10); the two after it shake nothing.
             "render_shake" => {
                 render::shake(2.0, 99.0);

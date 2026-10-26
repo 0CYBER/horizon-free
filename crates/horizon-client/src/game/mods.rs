@@ -34,6 +34,9 @@ use {
 pub(super) struct ModsState {
     #[cfg(feature = "mods")]
     pub(super) mods: Mods,
+    /// Capability `input`: a claimed item's use while the button is down.
+    #[cfg(feature = "mods")]
+    pub(super) using: Option<super::mod_input::ModUse>,
     /// Capability `render`'s camera shakes.
     #[cfg(feature = "mods")]
     pub(super) shake: super::mod_render::Shake,
@@ -345,6 +348,7 @@ impl Game<'_> {
             player,
             clock,
             gui_size: self.gui_size(),
+            held: self.mod_held(),
         }
     }
     /// A game tick.
@@ -357,6 +361,7 @@ impl Game<'_> {
         if !self.mods.mods.is_running() {
             return;
         }
+        self.tick_mod_use();
         let snapshot = self.mod_snapshot();
         self.mods.mods.set_snapshot(snapshot);
         self.mods.mods.tick(self.ticks);
