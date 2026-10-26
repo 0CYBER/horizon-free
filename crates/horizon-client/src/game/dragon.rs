@@ -1687,10 +1687,12 @@ impl Game<'_> {
                     .play("minecraft:entity.ender_dragon.growl", Some(at), 2.5, pitch);
             }
         }
-        // checkCrystals: heal 1 every 10 ticks from the nearest crystal within 32.
+        // checkCrystals: heal 1 every 10 ticks from the nearest crystal, found
+        // among those touching the dragon's box grown by 32.
         let d = self.dragon.as_mut().expect("dragon");
         if d.nearest_crystal.is_some() && d.ticks % 10 == 0 && d.health < MAX_HEALTH {
-            d.health += 1.0;
+            // LivingEntity.setHealth clamps to the maximum.
+            d.health = (d.health + 1.0).min(MAX_HEALTH);
         }
         if d.random.next_int_bound(10).unwrap_or(1) == 0 {
             let p = d.position;
@@ -3173,16 +3175,24 @@ impl Game<'_> {
         let _ = self.activate_exit_portal();
         self.fight.dirty = true;
     }
-    /// `EnderDragon.checkCrystals`' search: the nearest crystal within 32
-    /// blocks on each axis.
+    /// `EnderDragon.checkCrystals`' search: the nearest crystal whose box
+    /// meets the dragon's box grown by 32.
     fn nearest_crystal_to(&self, p: Vec3) -> Option<usize> {
+        // The dragon's 16 by 8 box.
+        let reach = Aabb::new(
+            Vec3::new(p.x - 8.0, p.y, p.z - 8.0),
+            Vec3::new(p.x + 8.0, p.y + 8.0, p.z + 8.0),
+        )
+        .inflate(Vec3::new(32.0, 32.0, 32.0));
         self.crystals
             .iter()
             .enumerate()
             .filter(|(_, c)| {
-                (c.position.x - p.x).abs() <= 32.0
-                    && (c.position.y - p.y).abs() <= 32.0
-                    && (c.position.z - p.z).abs() <= 32.0
+                // An end crystal's 2 by 2 box.
+                reach.intersects(Aabb::new(
+                    Vec3::new(c.position.x - 1.0, c.position.y, c.position.z - 1.0),
+                    Vec3::new(c.position.x + 1.0, c.position.y + 2.0, c.position.z + 1.0),
+                ))
             })
             .min_by(|a, b| {
                 let da = (a.1.position.x - p.x).powi(2)
