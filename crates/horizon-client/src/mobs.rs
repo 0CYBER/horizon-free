@@ -1968,8 +1968,18 @@ impl Mob {
     }
     /// LivingEntity.getVoicePitch.
     pub fn voice_pitch(&mut self) -> f32 {
+        // HappyGhast.getVoicePitch: always 1.0, babies and all.
+        if self.species() == Species::HappyGhast {
+            return 1.0;
+        }
+        // ZombieVillager.getVoicePitch: babies are 2.0, not 1.5.
+        let baby = if self.species() == Species::ZombieVillager {
+            2.0
+        } else {
+            1.5
+        };
         let pitch = (self.random.next_float() - self.random.next_float()) * 0.2
-            + if self.is_baby() { 1.5 } else { 1.0 };
+            + if self.is_baby() { baby } else { 1.0 };
         // Bat.getVoicePitch: a little lower.
         if self.species() == Species::Bat {
             pitch * 0.95
