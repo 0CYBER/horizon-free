@@ -1128,8 +1128,17 @@ impl Game<'_> {
             g.game_mode = default_mode;
         }
         if !known {
-            g.position = spawn;
-            g.previous_position = spawn;
+            // ServerPlayer.adjustSpawnLocation: a player new to the world
+            // stands where PlayerSpawnFinder puts them, not all on one spot
+            // (it reads the loaded level, which holds the spawn when it is
+            // the overworld).
+            let feet = if self.dim == super::Dim::Overworld {
+                self.server_player_spawn(spawn)
+            } else {
+                spawn
+            };
+            g.position = feet;
+            g.previous_position = feet;
             g.health = 20.0;
             g.food = 20;
             g.dimension = super::Dim::Overworld.id().to_owned();

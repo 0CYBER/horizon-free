@@ -126,28 +126,7 @@ impl Game<'_> {
     pub(super) fn find_player_spawn(&mut self, suggestion: [i32; 3]) -> Result<Option<Vec3>> {
         let mut finder = match self.player_spawn {
             Some(finder) => finder,
-            None if self.level.game_mode == 2 => {
-                // Adventure mode: the suggestion itself.
-                let mut finder = PlayerSpawnFinder::new(suggestion, 0, |_| 0);
-                finder.next_candidate();
-                finder
-            }
-            None => {
-                let mut radius = self.ui.rules.int("respawn_radius").max(0);
-                let to_border = self
-                    .border
-                    .distance(f64::from(suggestion[0]), f64::from(suggestion[2]))
-                    .floor() as i32;
-                if to_border < radius {
-                    radius = to_border;
-                }
-                if to_border <= 1 {
-                    radius = 1;
-                }
-                PlayerSpawnFinder::new(suggestion, radius, |n| {
-                    entity_random().next_int_bound(n).unwrap_or(0)
-                })
-            }
+            None => self.spawn_finder(suggestion),
         };
         let found = loop {
             let Some(candidate) = finder.next_candidate() else {
@@ -175,6 +154,58 @@ impl Game<'_> {
         };
         self.player_spawn = found.is_none().then_some(finder);
         Ok(found)
+    }
+    /// A new PlayerSpawnFinder around `suggestion`: the respawn radius, cut
+    /// by the world border; the suggestion itself in adventure mode.
+    fn spawn_finder(&self, suggestion: [i32; 3]) -> PlayerSpawnFinder {
+        if self.level.game_mode == 2 {
+            let mut finder = PlayerSpawnFinder::new(suggestion, 0, |_| 0);
+            finder.next_candidate();
+            return finder;
+        }
+        let mut radius = self.ui.rules.int("respawn_radius").max(0);
+        let to_border = self
+            .border
+            .distance(f64::from(suggestion[0]), f64::from(suggestion[2]))
+            .floor() as i32;
+        if to_border < radius {
+            radius = to_border;
+        }
+        if to_border <= 1 {
+            radius = 1;
+        }
+        PlayerSpawnFinder::new(suggestion, radius, |n| {
+            entity_random().next_int_bound(n).unwrap_or(0)
+        })
+    }
+    /// ServerPlayer.adjustSpawnLocation for a server's new player: where
+    /// PlayerSpawnFinder.findSpawn puts their feet around the world spawn
+    /// (`spawn`, the feet there), so that players new to a world don't all
+    /// stand in one spot. Vanilla waits for each candidate's chunk; a server
+    /// tick can't, so a candidate in a chunk not loaded yet is passed over,
+    /// and `spawn` stays when the search never reaches a loaded column.
+    pub(super) fn server_player_spawn(&self, spawn: [f64; 3]) -> [f64; 3] {
+        let suggestion = spawn.map(|v| v.floor() as i32);
+        let mut finder = self.spawn_finder(suggestion);
+        while let Some(candidate) = finder.next_candidate() {
+            let (x, z) = match candidate {
+                SpawnCandidate::Column(x, z) => (x, z),
+                SpawnCandidate::Suggestion => (suggestion[0], suggestion[2]),
+            };
+            if !self.streaming.is_lit(x >> 4, z >> 4) {
+                continue;
+            }
+            let feet = match candidate {
+                SpawnCandidate::Column(x, z) => level_respawn_pos(&self.spawn_columns(), x, z)
+                    .filter(|&pos| self.player_fits(pos))
+                    .map(bottom_center),
+                SpawnCandidate::Suggestion => Some(self.fixup_spawn_height(suggestion)),
+            };
+            if let Some(feet) = feet {
+                return [feet.x, feet.y, feet.z];
+            }
+        }
+        spawn
     }
     /// PlayerSpawnFinder.noCollisionNoLiquid: a player's box standing at the
     /// block's bottom centre touches no block or liquid.
