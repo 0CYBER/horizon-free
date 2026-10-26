@@ -188,6 +188,26 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             map.remove(&horizon_world::nbt::JavaString::from(key));
         }
     }
+    // LivingEntity.addAdditionalSaveData: `active_effects` only when there are
+    // any (MobEffectInstance.CODEC; ambient and show_particles are at their
+    // defaults for a mob's effects).
+    if m.extra.effects.is_empty() {
+        map.remove(&horizon_world::nbt::JavaString::from("active_effects"));
+    } else {
+        let effects = m
+            .extra
+            .effects
+            .iter()
+            .map(|&(effect, duration, amplifier)| {
+                Tag::compound([
+                    ("id", string(crate::brewing::namespaced(effect))),
+                    ("amplifier", Tag::Byte(amplifier.clamp(0, 255) as u8 as i8)),
+                    ("duration", Tag::Int(duration)),
+                    ("show_icon", Tag::Byte(1)),
+                ])
+            });
+        map.insert("active_effects".into(), Tag::List(effects.collect()));
+    }
     if m.ticks_frozen > 0 {
         map.insert("TicksFrozen".into(), Tag::Int(m.ticks_frozen));
     } else {
@@ -712,6 +732,20 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.no_gravity = flag(tag, "NoGravity");
     m.glowing = flag(tag, "Glowing");
     m.ticks_frozen = number(tag.get("TicksFrozen")).unwrap_or(0) as i32;
+    // LivingEntity.readAdditionalSaveData: the saved `active_effects`, the last
+    // entry of an effect winning.
+    if let Some(Tag::List(effects)) = tag.get("active_effects") {
+        for e in effects {
+            let Some(def) = text(e.get("id")).and_then(|id| crate::brewing::effect(&id)) else {
+                continue;
+            };
+            let effect = crate::brewing::namespaced(def.id);
+            let duration = number(e.get("duration")).unwrap_or(0) as i32;
+            let amplifier = number(e.get("amplifier")).unwrap_or(0) as i32;
+            m.extra.effects.retain(|x| x.0 != effect);
+            m.extra.effects.push((effect, duration, amplifier));
+        }
+    }
     m.silent = flag(tag, "Silent");
     m.invulnerable_flag = flag(tag, "Invulnerable");
     if m.species() == crate::mobs::Species::Bat {
