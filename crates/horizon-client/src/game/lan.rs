@@ -337,6 +337,14 @@ fn mob_meta(
             }
             defaults.push((17, serializer::BOOLEAN, Value::Bool(false)));
         }
+        // PolarBear.DATA_STANDING_ID (after AgeableMob's two): the bear
+        // rears up; the client animates it.
+        "minecraft:polar_bear" => {
+            if e.flag {
+                meta.push((18, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((18, serializer::BOOLEAN, Value::Bool(false)));
+        }
         // SpellcasterIllager.DATA_SPELL_CASTING_ID: the casting pose.
         "minecraft:evoker" | "minecraft:illusioner" => {
             if e.variant2 != 0 {

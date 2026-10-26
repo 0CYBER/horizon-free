@@ -59,6 +59,8 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
                     Who::Mob(*target as u32)
                 });
             }
+            // PolarBear.DATA_STANDING_ID: the client animates the rearing.
+            (Species::PolarBear, 18, Value::Bool(standing)) => m.extra.flag = *standing,
             // Bat.DATA_ID_FLAGS: resting in bit 0.
             (Species::Bat, 16, Value::Byte(flags)) => bat::set_resting(m, flags & 1 != 0),
             // Sheep.DATA_WOOL_ID: the colour in the low nibble, 16 sheared.

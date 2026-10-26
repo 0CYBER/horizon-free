@@ -50,6 +50,7 @@ pub mod nether;
 pub mod path;
 pub mod phantom;
 pub mod piglin;
+pub mod polar_bear;
 pub mod rabbit;
 pub mod raider;
 pub mod ravager;

@@ -959,7 +959,7 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, a: &Animations) -> bool {
     let st = &m.anim.states;
     match m.species() {
         Species::Goat => goat(p, s, &Goat::from_mob(m)),
-        Species::PolarBear => polar_bear(p, s, 0.0),
+        Species::PolarBear => polar_bear(p, s, super::polar_bear::standing_scale(m, s.partial)),
         Species::Panda => panda(p, s, &Panda::default()),
         Species::Llama | Species::TraderLlama => {
             llama(p, s, m.extra.chested && !s.baby);

@@ -1017,6 +1017,8 @@ pub struct MeleeAttack {
     pub speed: f64,
     pub follow_unseen: bool,
     pub zombie: bool,
+    /// `PolarBear.PolarBearMeleeAttackGoal`: rears up before each strike.
+    pub polar_bear: bool,
     path_target: [f64; 3],
     recalc: i32,
     pub until_attack: i32,
@@ -1031,6 +1033,7 @@ impl MeleeAttack {
             speed,
             follow_unseen,
             zombie: false,
+            polar_bear: false,
             path_target: [0.0; 3],
             recalc: 0,
             until_attack: 0,
@@ -1041,6 +1044,10 @@ impl MeleeAttack {
     }
     pub fn zombie(mut self) -> Self {
         self.zombie = true;
+        self
+    }
+    pub fn polar_bear(mut self) -> Self {
+        self.polar_bear = true;
         self
     }
     pub fn interval(mut self, ticks: i32) -> Self {
@@ -1098,6 +1105,9 @@ impl Goal for MeleeAttack {
         }
         m.ai.aggressive = false;
         m.nav_stop();
+        if self.polar_bear {
+            super::polar_bear::set_standing(m, false);
+        }
     }
     fn every_tick(&self) -> bool {
         true
@@ -1131,7 +1141,17 @@ impl Goal for MeleeAttack {
             self.recalc = adjusted(true, self.recalc);
         }
         self.until_attack = (self.until_attack - 1).max(0);
-        if self.until_attack <= 0 && m.within_melee_range(&t) && m.sees(cx.w, who) {
+        if self.polar_bear {
+            let cooldown = adjusted(true, self.interval);
+            super::polar_bear::check_and_perform_attack(
+                &mut self.until_attack,
+                cooldown,
+                m,
+                who,
+                &t,
+                cx,
+            );
+        } else if self.until_attack <= 0 && m.within_melee_range(&t) && m.sees(cx.w, who) {
             self.until_attack = adjusted(true, self.interval);
             m.swing();
             super::ai::do_hurt_target(m, who, cx);
@@ -1422,6 +1442,9 @@ pub struct HurtByTarget {
     /// `Bee.BeeHurtByOtherGoal`: kept only while angry, and alerting others
     /// only when the attacker is in sight.
     pub bee: bool,
+    /// `PolarBear.PolarBearHurtByTargetGoal`: a hurt cub only calls the
+    /// adult bears and drops the target itself.
+    pub polar_bear: bool,
     timestamp: i32,
     st: TargetState,
 }
@@ -1432,6 +1455,7 @@ impl HurtByTarget {
             alert_except: vec![],
             ignore: vec![],
             bee: false,
+            polar_bear: false,
             timestamp: 0,
             st: TargetState {
                 unseen_memory: 300,
@@ -1451,6 +1475,10 @@ impl HurtByTarget {
         self.bee = true;
         self
     }
+    pub fn polar_bear(mut self) -> Self {
+        self.polar_bear = true;
+        self
+    }
 }
 impl Default for HurtByTarget {
     fn default() -> Self {
@@ -1462,6 +1490,8 @@ impl Goal for HurtByTarget {
     fn name(&self) -> &'static str {
         if self.bee {
             "BeeHurtByOtherGoal"
+        } else if self.polar_bear {
+            "PolarBearHurtByTargetGoal"
         } else {
             "HurtByTarget"
         }
@@ -1500,7 +1530,9 @@ impl Goal for HurtByTarget {
         self.timestamp = m.ai.last_hurt_by_time;
         self.st.unseen_memory = 300;
         self.st.unseen = 0;
-        if self.alert
+        // PolarBearHurtByTargetGoal.start: a cub alerts the adults itself.
+        let cub = self.polar_bear && m.is_baby();
+        if (self.alert || cub)
             && let Some(by) = m.ai.target
         {
             let range = m.attrs.follow_range;
@@ -1520,6 +1552,8 @@ impl Goal for HurtByTarget {
                             && (s.position.z - pos.z).abs() <= range + 1.0
                     })
                     .filter(|s| !self.alert_except.contains(&s.species))
+                    // PolarBearHurtByTargetGoal.alertOther: adults only.
+                    .filter(|s| !(self.polar_bear && s.baby))
                     .filter(|s| Who::Mob(s.id) != by)
                     .map(|s| s.id)
                     .collect();
@@ -1533,6 +1567,9 @@ impl Goal for HurtByTarget {
                     target: by,
                 });
             }
+        }
+        if cub {
+            m.ai.target = None;
         }
     }
     fn stop(&mut self, m: &mut Mob, _: &mut Cx) {

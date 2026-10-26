@@ -3517,6 +3517,10 @@ impl Game<'_> {
             ) {
                 horizon_client::mobs::guardian::client_tick(m);
             }
+            // PolarBear.tick: the stand animation follows the synched flag.
+            if m.species() == horizon_client::mobs::Species::PolarBear {
+                horizon_client::mobs::polar_bear::client_tick(m);
+            }
             if m.hurt_time > 0 {
                 m.hurt_time -= 1;
             }
