@@ -135,12 +135,16 @@ pub fn set_tame(m: &mut Mob, tame: bool) {
         m.attrs.max_health = 8.0;
     }
 }
-/// The owner (the local player) when tame.
+/// The owner (the local player) when tame. A parrot's owner is the player
+/// its saved UUID names (`TamableAnimal.getOwner`), not whoever is nearest.
 fn owner(m: &Mob, w: &MobWorld) -> Option<(Vec3, f64, bool)> {
     if !m.extra.tame {
         return None;
     }
     let p = w.player.as_ref()?;
+    if m.species() == Species::Parrot && m.extra.owner != Some(p.uuid) {
+        return None;
+    }
     Some((p.position, p.eye[1], p.spectator))
 }
 /// `TamableAnimal.unableToMoveToOwner`.
