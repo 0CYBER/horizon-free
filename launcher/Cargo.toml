@@ -31,6 +31,8 @@ horizon-friends = { path = "../crates/horizon-friends" }
 horizon-bench = { path = "../crates/horizon-bench" }
 # Import modpack: the porting pipeline, run on the player's own files (docs/modpacks.md).
 horizon-port-pack = { path = "../crates/horizon-port-pack" }
+# Horizon's mod registry: its index and the checks a download passes before install.
+horizon-mods = { path = "../crates/horizon-mods", features = ["index"] }
 # Signed updates: archives are checked against the release's signed checksums (docs/security.md).
 horizon-release-sign = { path = "../crates/horizon-release-sign" }
 # Opt-in data collection: the consent, the outbox and its upload (docs/telemetry.md).
@@ -48,6 +50,10 @@ oo7 = { version = "0.5", default-features = false, features = ["async-std", "nat
 futures-lite = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
+# Painting the window's title bar dark or light (titlebar::apply_appearance): crates already in
+# the lockfile through gpui and wgpu.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSAppearance", "NSView", "NSWindow"] }
+raw-window-handle = "0.6"
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
 
