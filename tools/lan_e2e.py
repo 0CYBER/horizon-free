@@ -6591,5 +6591,56 @@ CHECKS += ['replant']
 CHECK_FNS['replant'] = check_replant
 
 
+def check_sonic(host, guest, out):
+    """A real warden's ray reaches connected clients once, with normal damage.
+
+    Run with and without --server-thread to cover the window's local renderer too.
+    The creative observer sees the same ray nearby and none outside sendParticles' range.
+    """
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    result = {}
+    guest('command', command='gamemode creative')
+    host('command', command='difficulty normal')
+    host('command', command='gamerule natural_health_regeneration false')
+    try:
+        host('command', command=f'fill {x - 3} {y - 1} {z - 3} {x + 85} {y - 1} {z + 14} minecraft:stone')
+        host('command', command=f'fill {x - 3} {y} {z - 3} {x + 15} {y + 4} {z + 14} minecraft:air')
+        host('command', command=f'fill {x - 2} {y} {z + 4} {x + 2} {y + 3} {z + 4} minecraft:stone')
+        for near in (True, False):
+            guest('command', command=f'tp @s {x + (3 if near else 80) + 0.5} {y} {z + 0.5}')
+            host('command', command=f'tp @s {x + 0.5} {y} {z + 0.5} 0 0')
+            host('command', command='gamemode survival')
+            host('command', command='effect give @s minecraft:instant_health 1 5')
+            host.wait(4)
+            host('command', command=f'summon minecraft:warden {x + 0.5} {y} {z + 9.5} {{NoAI:1b,Tags:["sonic_test"]}}')
+            host('command', command='attribute @e[tag=sonic_test,limit=1] minecraft:knockback_resistance base set 1')
+            before = {side: made(g, 'sonic_boom') for side, g in (('host', host), ('guest', guest))}
+            health = host('status')['player']['health']
+            host('command', command='data merge entity @e[tag=sonic_test,limit=1] {NoAI:0b}')
+            host('command', command='attribute @e[tag=sonic_test,limit=1] minecraft:movement_speed base set 0')
+            host('command', command='damage @e[tag=sonic_test,limit=1] 1 minecraft:player_attack by @s')
+            for _ in range(400):
+                host.wait(2)
+                if host('status')['player']['health'] < health:
+                    break
+            host.wait(2)  # let the observer process the same packet batch
+            seen = {side: made(g, 'sonic_boom') - before[side] for side, g in (('host', host), ('guest', guest))}
+            after = host('status')['player']['health']
+            result['near' if near else 'far'] = {'particles': seen, 'health': [health, after]}
+            host.shot(out, f'sonic-{"near" if near else "far"}')
+            host('command', command='kill @e[tag=sonic_test]')
+            assert after == health - 10, result
+            assert seen['host'] == 15, result
+            assert seen['guest'] == (15 if near else 0), result
+    finally:
+        host('command', command='kill @e[tag=sonic_test]')
+        host('command', command='gamerule natural_health_regeneration true')
+    return result
+
+
+CHECKS += ['sonic']
+CHECK_FNS['sonic'] = check_sonic
+
+
 if __name__ == '__main__':
     main()
