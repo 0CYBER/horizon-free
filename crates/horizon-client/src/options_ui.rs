@@ -2541,6 +2541,10 @@ impl OptionsUi {
                                     if s.high_contrast {
                                         s.resource_packs.push("high_contrast".into());
                                     }
+                                    // PackSelectionScreen reads the repository each time it
+                                    // opens: the next one starts from this selection.
+                                    self.pack_selection = s.resource_packs.clone();
+                                    self.pack_screen = None;
                                     events.push(Event::Packs(s.resource_packs.clone()));
                                 }
                             }
@@ -2712,6 +2716,7 @@ impl OptionsUi {
                 {
                     let ids = p.commit();
                     s.resource_packs = ids.clone();
+                    self.pack_selection = ids.clone();
                     events.push(Event::Packs(ids));
                 }
             }
