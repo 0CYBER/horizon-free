@@ -5,7 +5,7 @@
 use super::{Dim, Game};
 use horizon_client::{
     Result,
-    containers::BlockEntity,
+    containers::{BlockEntity, EndGateway},
     environment::Environment,
     items::ItemStack,
     mesher::Vertex,
@@ -67,6 +67,17 @@ impl GatewayJob {
 /// (false without one).
 fn exact_teleport(entity: Option<&BlockEntity>) -> bool {
     matches!(entity, Some(BlockEntity::EndGateway(g)) if g.exact_teleport)
+}
+
+/// Moves an exit that only the side file knew into the gateway's block entity, unless the block
+/// entity has its own; true when it took the saved one.
+fn adopt_saved_exit(entity: &mut EndGateway, (exit, exact): ([i32; 3], bool)) -> bool {
+    if entity.exit_portal.is_some() {
+        return false;
+    }
+    entity.exit_portal = Some(exit);
+    entity.exact_teleport = exact;
+    true
 }
 
 /// The end of `getPortalPosition`: the exit itself when the teleport is exact,
@@ -820,23 +831,7 @@ impl Game<'_> {
         self.end.exits.as_mut().expect("loaded exits")
     }
 
-    fn set_gateway_exit(&mut self, gateway: [i32; 3], exit: [i32; 3], exact: bool) -> Result<()> {
-        // TheEndGatewayBlockEntity.setExitPosition (also EndGatewayFeature.knownExit).
-        let key = (gateway[0], gateway[1], gateway[2]);
-        let chunk = (gateway[0] >> 4, gateway[2] >> 4);
-        // The gateway's chunk can be unloaded by now (travel waits for the destination): the
-        // side map below still records the exit.
-        if self.world.chunks.contains_key(&chunk)
-            && let BlockEntity::EndGateway(g) = self
-                .world
-                .block_entities
-                .get_or_insert_with(key, || BlockEntity::EndGateway(Default::default()))
-        {
-            g.exit_portal = Some(exit);
-            g.exact_teleport = exact;
-            self.world.modified.insert(chunk);
-        }
-        self.gateway_exits().insert(gateway, (exit, exact));
+    fn save_gateway_exits(&mut self) -> Result<()> {
         let list: Vec<_> = self
             .gateway_exits()
             .iter()
@@ -846,6 +841,35 @@ impl Game<'_> {
         std::fs::create_dir_all(&dir)?;
         std::fs::write(dir.join(GATEWAY_FILE), serde_json::to_vec(&list)?)?;
         Ok(())
+    }
+
+    /// Drops a gateway's entry from the side file: its block entity is the source of truth.
+    fn forget_gateway_exit(&mut self, gateway: [i32; 3]) -> Result<()> {
+        if self.gateway_exits().remove(&gateway).is_some() {
+            self.save_gateway_exits()?;
+        }
+        Ok(())
+    }
+
+    fn set_gateway_exit(&mut self, gateway: [i32; 3], exit: [i32; 3], exact: bool) -> Result<()> {
+        // TheEndGatewayBlockEntity.setExitPosition (also EndGatewayFeature.knownExit).
+        let key = (gateway[0], gateway[1], gateway[2]);
+        let chunk = (gateway[0] >> 4, gateway[2] >> 4);
+        // The gateway's chunk can be unloaded by now (travel waits for the destination): the
+        // exit then waits in the side file until the gateway is used again (`gateway_job`).
+        if self.world.chunks.contains_key(&chunk)
+            && let BlockEntity::EndGateway(g) = self
+                .world
+                .block_entities
+                .get_or_insert_with(key, || BlockEntity::EndGateway(Default::default()))
+        {
+            g.exit_portal = Some(exit);
+            g.exact_teleport = exact;
+            self.world.modified.insert(chunk);
+            return self.forget_gateway_exit(gateway);
+        }
+        self.gateway_exits().insert(gateway, (exit, exact));
+        self.save_gateway_exits()
     }
 
     /// EndGatewayBlock.entityInside and TheEndGatewayBlockEntity.getPortalPosition:
@@ -867,7 +891,25 @@ impl Game<'_> {
     /// its exit, or the search for one, and the spot to load before either
     /// is resolved ([`Game::resolve_gateway`]).
     pub(super) fn gateway_job(&mut self, gateway: [i32; 3]) -> (GatewayJob, Vec3) {
-        let known = self.gateway_exits().get(&gateway).copied();
+        let mut known = self.gateway_exits().get(&gateway).copied();
+        // Once the gateway's chunk is loaded its block entity is the source of truth: an exit the
+        // side file kept for it moves there, and the entry is dropped, so removing or replacing
+        // the exit (`/data remove block`) is not undone by an old entry.
+        let key = (gateway[0], gateway[1], gateway[2]);
+        let chunk = (gateway[0] >> 4, gateway[2] >> 4);
+        if let Some(saved) = known
+            && self.world.chunks.contains_key(&chunk)
+            && let BlockEntity::EndGateway(g) = self
+                .world
+                .block_entities
+                .get_or_insert_with(key, || BlockEntity::EndGateway(Default::default()))
+        {
+            if adopt_saved_exit(g, saved) {
+                self.world.modified.insert(chunk);
+            }
+            known = None;
+            let _ = self.forget_gateway_exit(gateway);
+        }
         let job = GatewayJob::for_gateway(
             gateway,
             self.world
@@ -1307,6 +1349,23 @@ impl Game<'_> {
 mod tests {
     use super::*;
     use horizon_client::containers::EndGateway;
+
+    #[test]
+    fn a_saved_exit_moves_into_a_gateway_without_one() {
+        let saved = ([8, 100, 0], true);
+        let mut bare = EndGateway::default();
+        assert!(adopt_saved_exit(&mut bare, saved));
+        assert_eq!(bare.exit_portal, Some([8, 100, 0]));
+        assert!(bare.exact_teleport);
+        // The block entity's own exit wins over a stale entry.
+        let mut own = EndGateway {
+            exit_portal: Some([1, 2, 3]),
+            ..Default::default()
+        };
+        assert!(!adopt_saved_exit(&mut own, saved));
+        assert_eq!(own.exit_portal, Some([1, 2, 3]));
+        assert!(!own.exact_teleport);
+    }
 
     #[test]
     fn a_new_exit_keeps_the_gateways_exact_teleport() {
