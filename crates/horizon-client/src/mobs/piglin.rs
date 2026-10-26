@@ -331,8 +331,18 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if m.species() == Species::Hoglin && m.alive() {
         hoglin_repellent(m, w);
     }
-    if m.species() == Species::Piglin && m.extra.ints[0] > 0 {
-        m.extra.ints[0] -= 1;
+    if m.species() == Species::Piglin {
+        if m.extra.ints[0] > 0 {
+            m.extra.ints[0] -= 1;
+        }
+        // `StopAttackingIfTargetInvalid`: a hoglin handed over by a hunt
+        // broadcast has no target goal of its own to drop it when it dies.
+        if let Some(who @ Who::Mob(_)) = m.ai.target
+            && w.target_info(who)
+                .is_none_or(|t| !t.alive || !t.can_be_seen_as_enemy)
+        {
+            m.ai.target = None;
+        }
     }
     if m.extra.anger > 0 {
         m.extra.anger -= 1;
