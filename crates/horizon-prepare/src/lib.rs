@@ -434,7 +434,7 @@ fn prepare_impl(options: &Options, log: Log, compile_only: bool) -> Result<PathB
     // Java first: nothing below can finish without it, and the player should hear it at once.
     let mut homes: Vec<PathBuf> = options.java_home.iter().cloned().collect();
     homes.extend(java::minecraft_runtimes(
-        &artifacts::minecraft_dir(options.minecraft_dir.as_deref()).join("runtime"),
+        &artifacts::game_files(options.minecraft_dir.as_deref(), &lock.version).runtimes,
     ));
     let jdk = java::find_runtime(lock.java_major, &homes)?;
     let reused = if options.import {
