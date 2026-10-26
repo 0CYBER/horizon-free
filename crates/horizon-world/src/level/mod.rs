@@ -646,6 +646,20 @@ impl Behaviours {
     ) -> bool {
         self.sim(level, ticks).player_destroy(pos, creative)
     }
+    /// `IceBlock.playerDestroy` after the drops: mined ice melts into water
+    /// unless the tool prevents ice melting (silk touch). `destroyed` is the
+    /// state that was broken.
+    pub fn ice_destroyed_by_player<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        destroyed: BlockStateId,
+        prevents_melting: bool,
+    ) {
+        self.sim(level, ticks)
+            .ice_destroyed_by_player(pos, destroyed, prevents_melting);
+    }
     /// `BaseFireBlock.getState(level, pos)`: soul fire on its base blocks,
     /// otherwise fire shaped by its neighbours.
     pub fn fire_state_for<L: LevelAccess + ?Sized>(
