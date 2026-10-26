@@ -98,19 +98,27 @@ impl PresentMode {
 /// macOS). Applies at the next start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum GraphicsApi {
-    /// Vulkan, and DirectX 12 when Vulkan has no adapter or device.
+    /// Vulkan, then DirectX 12 (Windows), then OpenGL when neither has a surface, adapter or device.
     #[default]
     Auto,
     Vulkan,
     Dx12,
+    /// OpenGL, for GPUs with no Vulkan or DirectX 12 driver (Windows and Linux).
+    OpenGl,
 }
 impl GraphicsApi {
-    pub const ALL: [GraphicsApi; 3] = [GraphicsApi::Auto, GraphicsApi::Vulkan, GraphicsApi::Dx12];
+    pub const ALL: [GraphicsApi; 4] = [
+        GraphicsApi::Auto,
+        GraphicsApi::Vulkan,
+        GraphicsApi::Dx12,
+        GraphicsApi::OpenGl,
+    ];
     pub fn name(self) -> &'static str {
         match self {
             GraphicsApi::Auto => "auto",
             GraphicsApi::Vulkan => "vulkan",
             GraphicsApi::Dx12 => "dx12",
+            GraphicsApi::OpenGl => "opengl",
         }
     }
     pub fn label(self) -> &'static str {
@@ -118,6 +126,7 @@ impl GraphicsApi {
             GraphicsApi::Auto => "Auto",
             GraphicsApi::Vulkan => "Vulkan",
             GraphicsApi::Dx12 => "DirectX 12",
+            GraphicsApi::OpenGl => "OpenGL",
         }
     }
     /// The API a name stands for, ignoring case; `None` for anything else.
@@ -126,7 +135,7 @@ impl GraphicsApi {
             .into_iter()
             .find(|api| api.name().eq_ignore_ascii_case(s.trim()))
     }
-    /// `HORIZON_GRAPHICS_API` (auto, vulkan or dx12) if set, else the setting.
+    /// `HORIZON_GRAPHICS_API` (auto, vulkan, dx12 or opengl) if set, else the setting.
     pub fn with_env(self) -> Self {
         std::env::var("HORIZON_GRAPHICS_API")
             .ok()
@@ -376,14 +385,18 @@ impl Graphics {
         if self.workers > 0 {
             return self.workers as usize;
         }
-        // The pool never takes every core. The render thread and the
-        // integrated server thread (single player runs on its own server
-        // thread by default) each need one, and a pool that fills every core
-        // starves them: the frame rate collapses to single digits while the
-        // workers saturate the CPU and its memory bandwidth.
+        // Vanilla's count (Util.maxAllowedExecutorThreads: every core but
+        // one). The pool never takes every core: a pool that fills them all
+        // starves the render and server threads, and the frame rate collapses
+        // while the workers saturate the CPU and its memory bandwidth. One
+        // core left is enough with the workers behind those two threads
+        // (horizon_threads: niced on Linux; on macOS and Windows the server
+        // and render threads are raised above four cores, where vanilla
+        // raises its server thread). Leaving two idled a core of a 4-thread
+        // laptop while a world loaded: a teleport there took ~15% longer.
         let auto = std::thread::available_parallelism()
             .map_or(2, |n| n.get())
-            .saturating_sub(2)
+            .saturating_sub(1)
             .max(1);
         if self.battery { auto.div_ceil(2) } else { auto }
     }
@@ -546,11 +559,11 @@ mod tests {
     }
 
     #[test]
-    fn automatic_workers_leave_cores_for_the_render_and_server_threads() {
+    fn automatic_workers_leave_a_core_as_vanilla_does() {
         let g = Graphics::default();
         assert_eq!(g.workers, 0);
         let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
-        assert_eq!(g.worker_threads(), cores.saturating_sub(2).max(1));
+        assert_eq!(g.worker_threads(), cores.saturating_sub(1).max(1));
         // A manual count is the player's own choice, kept as asked.
         let manual = Graphics { workers: 3, ..g };
         assert_eq!(manual.worker_threads(), 3);

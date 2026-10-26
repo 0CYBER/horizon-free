@@ -9,10 +9,12 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// Hosts images may come from.
-const HOSTS: [&str; 3] = [
+const HOSTS: [&str; 4] = [
     "https://cdn.modrinth.com/",
     "https://media.forgecdn.net/",
     "https://edge.forgecdn.net/",
+    // Horizon's registry's icons (its GitHub Pages).
+    "https://ludovic111.github.io/horizon-mods/",
 ];
 /// The most an image may weigh before decoding.
 pub const MAX_DOWNLOAD: u64 = 8 << 20;
