@@ -210,7 +210,7 @@ impl ItemStack {
     /// by `ominous_banner` instead.
     pub fn item_name(&self) -> Option<String> {
         let name = self.data()?.other("minecraft:item_name")?;
-        Some(crate::entity_nbt::name_text(name).plain())
+        Some(horizon_client_core::component::name_text(name).plain())
     }
     pub fn potion(&self) -> Option<&str> {
         self.data().and_then(|d| d.potion.as_deref())
