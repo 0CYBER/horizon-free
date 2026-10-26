@@ -14,7 +14,7 @@ use horizon_client::{
         hub::{HostEvent, HostState, Hub, HubConfig, TickCtx},
         playerdata,
     },
-    mobs::{Mob, leash::Holder},
+    mobs::{Mob, Who, leash::Holder},
     text::Text,
 };
 use horizon_core::geometry::Vec3;
@@ -147,6 +147,7 @@ pub(super) fn baby_index(kind: &str) -> Option<u8> {
 fn mob_meta(
     m: &Mob,
     hub: &Hub,
+    player_entity: Option<i32>,
     meta: &mut Vec<(u8, i32, Value)>,
     defaults: &mut Vec<(u8, i32, Value)>,
 ) {
@@ -196,6 +197,25 @@ fn mob_meta(
     let e = &m.extra;
     let id = |registry: &str, name: &str| hub.registry_id(registry, &format!("minecraft:{name}"));
     match kind {
+        "minecraft:guardian" | "minecraft:elder_guardian" => {
+            // Guardian.DATA_ID_MOVING and DATA_ID_ATTACK_TARGET.
+            if e.flag2 {
+                meta.push((16, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            let target = if e.flag {
+                m.ai.target.and_then(|who| match who {
+                    Who::Player => player_entity,
+                    Who::Mob(id) => Some(id as i32),
+                })
+            } else {
+                None
+            };
+            if let Some(target) = target {
+                meta.push((17, serializer::INT, Value::Int(target)));
+            }
+            defaults.push((16, serializer::BOOLEAN, Value::Bool(false)));
+            defaults.push((17, serializer::INT, Value::Int(0)));
+        }
         // Bat.DATA_ID_FLAGS: resting in bit 0, flying by default.
         "minecraft:bat" => {
             if e.flag {
@@ -831,12 +851,13 @@ impl Game<'_> {
         for m in self.mobs.iter().filter(|m| !m.removed) {
             // The lead's holder: the player the mob sees (a guest, else the
             // host) or another mob. A fence knot isn't an entity here.
+            let player_entity = mob_players
+                .get(&m.id)
+                .and_then(|conn| hub.guest(*conn))
+                .map(|g| g.entity_id)
+                .or(host_entity);
             let leash = m.extra.leash.and_then(|h| match h {
-                Holder::Player => mob_players
-                    .get(&m.id)
-                    .and_then(|conn| hub.guest(*conn))
-                    .map(|g| g.entity_id)
-                    .or(host_entity),
+                Holder::Player => player_entity,
                 Holder::Mob(id) => Some(id as i32),
                 Holder::Knot(_) => None,
             });
@@ -846,7 +867,7 @@ impl Game<'_> {
             e.on_ground = m.on_ground;
             e.velocity = [m.velocity.x, m.velocity.y, m.velocity.z];
             e.needs_sync = m.needs_sync;
-            mob_meta(m, hub, &mut e.meta, &mut e.defaults);
+            mob_meta(m, hub, player_entity, &mut e.meta, &mut e.defaults);
             mob_equipment(m, hub, &mut e.equipment);
             self.mob_attributes(m, &mut e.attributes);
             e.leash = leash;

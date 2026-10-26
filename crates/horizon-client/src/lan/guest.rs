@@ -237,6 +237,8 @@ pub struct Guest {
     pub drag: Option<(u8, Vec<usize>)>,
     /// The compound this player was loaded from, for fields Horizon does not model.
     pub saved: Option<horizon_world::nbt::Tag>,
+    /// `ServerPlayer.seenCredits`: the end poem has been shown.
+    pub seen_credits: bool,
     /// `ServerPlayer.recipeBook`.
     pub recipe_book: crate::recipe_book::Settings,
     /// `PlayerAdvancements`: the criteria obtained, whether they came from
@@ -358,6 +360,7 @@ impl Guest {
             next_window: 0,
             drag: None,
             saved: None,
+            seen_credits: false,
             recipe_book: Default::default(),
             advancements: Default::default(),
             advancements_loaded: false,
@@ -643,6 +646,13 @@ fn network_stack(
         stack.added.push((
             horizon_protocol::item::component::CUSTOM_NAME,
             horizon_protocol::item::Component::Text(horizon_protocol::text::literal(name)),
+        ));
+    }
+    // The component as loaded, so a translatable name stays one.
+    if let Some(name) = s.data().and_then(|d| d.other("minecraft:item_name")) {
+        stack.added.push((
+            horizon_protocol::item::component::ITEM_NAME,
+            horizon_protocol::item::Component::Text(name.clone()),
         ));
     }
     Some(stack)

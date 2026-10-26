@@ -109,6 +109,8 @@ enum Received {
 pub(super) struct Remote {
     pub session: Session,
     pub brand: String,
+    /// The server announced it runs mods' quiet commands.
+    pub quiet_commands: bool,
     pub(super) builtin: Arc<Builtin>,
     lang: Arc<Language>,
     pub(super) registries: Arc<Dynamic>,
@@ -419,6 +421,7 @@ impl Game<'_> {
         self.remote = Some(Remote {
             session,
             brand: "unknown".into(),
+            quiet_commands: false,
             builtin: Arc::new(builtin),
             lang,
             registries: Arc::new(Dynamic::default()),
@@ -837,6 +840,11 @@ impl Game<'_> {
                 Event::Brand(brand) => {
                     if let Some(remote) = &mut self.remote {
                         remote.brand = brand;
+                    }
+                }
+                Event::QuietCommands => {
+                    if let Some(remote) = &mut self.remote {
+                        remote.quiet_commands = true;
                     }
                 }
                 Event::Reconfigured(registries) => {
@@ -1396,6 +1404,14 @@ impl Game<'_> {
                     Vec3::new(position[0], position[1], position[2]),
                 ) || self.end.move_remote_eye(id as u32, position))
             {
+                return;
+            }
+            // A dragon fireball keeps Entity's NO_OP InterpolationHandler too:
+            // the server's position replaces its own at once.
+            if let Some(b) = self.dragon_fireballs.iter_mut().find(|b| b.id == id as u32) {
+                if path.is_some() {
+                    b.position = Vec3::new(position[0], position[1], position[2]);
+                }
                 return;
             }
             if let Some(p) = r.pending_items.get_mut(&id) {
@@ -2979,6 +2995,8 @@ impl Game<'_> {
             .find(|p| p.id == id as u32)
         {
             p.velocity = v;
+        } else if let Some(b) = self.dragon_fireballs.iter_mut().find(|b| b.id == id as u32) {
+            b.velocity = v;
         } else if let Some(p) = self
             .remote
             .as_mut()
@@ -3462,6 +3480,13 @@ impl Game<'_> {
             if m.species() == horizon_client::mobs::Species::Creeper {
                 horizon_client::mobs::hostile::creeper_client_tick(m);
             }
+            if matches!(
+                m.species(),
+                horizon_client::mobs::Species::Guardian
+                    | horizon_client::mobs::Species::ElderGuardian
+            ) {
+                horizon_client::mobs::guardian::client_tick(m);
+            }
             if m.hurt_time > 0 {
                 m.hurt_time -= 1;
             }
@@ -3734,6 +3759,15 @@ impl Game<'_> {
 
     /// MultiPlayerGameMode.startDestroyBlock / continueDestroyBlock.
     fn remote_mining(&mut self, start: bool) {
+        if !self
+            .res
+            .items()
+            .can_destroy_block(self.held(), self.creative)
+        {
+            self.stop_remote_mining();
+            self.mining = None;
+            return;
+        }
         let Some(r) = self.remote.as_mut() else {
             return;
         };
@@ -4868,16 +4902,20 @@ impl Game<'_> {
         if self.open_menu_name(p.container) != "minecraft:merchant" {
             return;
         }
-        let cost = |g: &Self, c: &play::NetCost| horizon_client::merchant::ItemCost {
-            stack: ItemStack::new(&g.item_name(c.item), c.count.max(0) as u32),
+        let cost = |g: &Self, c: &play::NetCost| {
+            g.to_stack(&Some(c.clone().into()))
+                .map(|stack| horizon_client::merchant::ItemCost { stack })
         };
         let offers: Vec<_> = p
             .offers
             .iter()
             .filter_map(|o| {
                 let mut offer = horizon_client::merchant::MerchantOffer {
-                    base_cost_a: cost(self, &o.cost_a),
-                    cost_b: o.cost_b.as_ref().map(|b| cost(self, b)),
+                    base_cost_a: cost(self, &o.cost_a)?,
+                    cost_b: match &o.cost_b {
+                        Some(b) => Some(cost(self, b)?),
+                        None => None,
+                    },
                     result: self.to_stack(&Some(o.result.clone()))?,
                     uses: o.uses,
                     max_uses: o.max_uses,

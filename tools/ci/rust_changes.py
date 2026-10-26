@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep verify's Rust steps for any change beyond website content or documentation.
+"""Keep verify's Rust steps for any change beyond documentation.
 
 --launcher: whether the change is built into the launcher, its own workspace (release_train.LAUNCHER_PATHS).
 """
@@ -20,10 +20,7 @@ LAUNCHER_CHECK = {".github/workflows/ci.yml", "tools/ci/rust_changes.py", "tools
 
 
 def needs_rust(paths):
-    # horizon-theme's Rust tests check that the generated website tokens match.
-    return any(path == "website/src/tokens.css" or not (
-        path.startswith(("website/", "docs/")) or path.endswith(".md")
-    ) for path in paths)
+    return any(not (path.startswith("docs/") or path.endswith(".md")) for path in paths)
 
 
 def needs_launcher(paths):

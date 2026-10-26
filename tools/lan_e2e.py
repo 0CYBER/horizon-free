@@ -687,6 +687,16 @@ def portals(host, guest, out, x, y, z, hx, hy, hz):
     guest('command', command=f'tp @s {arrived[0] + 0.5} {arrived[1]} {arrived[2] - 2.5}')
     guest.wait(30)
     guest('command', command=f'tp @s {arrived[0] + 0.5} {arrived[1]} {arrived[2] + 0.5}')
+    # ServerPlayer.showEndCredits: the host's first exit from the End rolls the poem and credits;
+    # closing them (WinScreen.onClose sends PERFORM_RESPAWN) takes it home.
+    credits = False
+    for _ in range(60):
+        host.wait(5)
+        if host('screen').get('screen') == 'win':
+            credits = True
+            host.raw('key', 'esc', 'tap')
+            break
+    assert credits, 'the host left the End without the credits'
     home = wait_dimension(host, 'minecraft:overworld', 600)
     back = wait_dimension(guest, 'minecraft:overworld', 600)
     guest.wait(40)
@@ -694,7 +704,7 @@ def portals(host, guest, out, x, y, z, hx, hy, hz):
     guest.shot(out, 'portals-back')
     assert home.get('dimension') == 'minecraft:overworld', f'the host stayed in {home.get("dimension")}'
     assert back.get('dimension') == 'minecraft:overworld', f'the guest stayed in {back.get("dimension")}'
-    return {'guest_nether': arrived, 'host_end': [ex, ey, ez], 'back': pos_of(guest)}
+    return {'guest_nether': arrived, 'host_end': [ex, ey, ez], 'credits': credits, 'back': pos_of(guest)}
 
 
 NETHER, END, OVERWORLD = 'minecraft:the_nether', 'minecraft:the_end', 'minecraft:overworld'
@@ -6961,6 +6971,87 @@ CHECKS += ['replant']
 CHECK_FNS['replant'] = check_replant
 
 
+def check_guardian_beams(host, guest, out):
+    """Guardian's synced target drives the same beam on each client (#1491).
+
+    Guardian.defineSynchedData/onSyncedDataUpdated/aiStep and
+    GuardianRenderer.extractRenderState: charge, hit, then target loss.
+    Run with both --server-thread and the in-frame host.
+    """
+    x, y, z = map(math.floor, pos_of(host))
+    host('command', command='difficulty normal')
+    host('command', command='gamerule natural_health_regeneration false')
+    host('command', command=f'fill {x - 10} {y - 2} {z - 10} {x + 10} {y + 4} {z + 10} minecraft:water')
+    seen = {}
+    try:
+        for kind in ('guardian', 'elder_guardian'):
+            for target, observer in ((host, guest), (guest, host)):
+                for game in (host, guest):
+                    game('command', command='gamemode creative')
+                    game('command', command='effect give @s minecraft:water_breathing infinite')
+                target('command', command=f'tp @s {x + 0.5} {y} {z + 0.5} 0 0')
+                observer('command', command=f'tp @s {x + 4.5} {y} {z + 0.5} 0 0')
+                target('command', command='effect give @s minecraft:instant_health 1 10')
+                target('command', command='gamemode survival')
+                host('command', command=f'summon minecraft:{kind} {x + 0.5} {y} {z + 6.5}')
+
+                def mob(game):
+                    return next(m for m in game.raw('mobs', 32)['near'] if m['kind'] == f'minecraft:{kind}')
+
+                def charging():
+                    for _ in range(60):
+                        target.wait(2)
+                        states = [mob(g) for g in (target, observer)]
+                        if all(m['guardian_beam'] is not None for m in states):
+                            return states
+                    raise Failed(f'{kind} never charged on both clients')
+
+                states = charging()
+                assert states[0]['target'] == 'Player', states
+                # The host reads the level that ticks the guardian (its own in-frame, the
+                # server's on the server thread), where a targeted player is `Player`.
+                if observer is host:
+                    assert states[1]['target'] == 'Player', states
+                else:
+                    assert states[1]['target'].startswith('Mob('), states
+                first = states[0]['guardian_beam'][0]
+                target.wait(4)
+                assert mob(target)['guardian_beam'][0] > first, 'client charge clock did not advance'
+                for game in (target, observer):
+                    game.raw('look-at', x + 0.5, y + 0.5, z + 6.5)
+                    game.shot(out, f'{kind}-{target.name}-charge')
+                # The beam must end after the first hit (before another charge).
+                before = target('status')['player']['health']
+                for _ in range(70):
+                    target.wait(2)
+                    if all(mob(g)['guardian_beam'] is None for g in (target, observer)):
+                        break
+                else:
+                    raise Failed(f'{kind} beam did not end after its attack')
+                after = target('status')['player']['health']
+                assert after < before, f'{kind} beam ended without damage: {before} -> {after}'
+                charging()
+                target('command', command='gamemode creative')
+                target.wait(10)
+                assert all(mob(g)['guardian_beam'] is None for g in (target, observer)), 'beam survived target loss'
+                seen[f'{kind}-{target.name}'] = {
+                    'charge': [{'target': m['target'], 'beam': m['guardian_beam']} for m in states],
+                    'health': [before, after]}
+                host('command', command=f'kill @e[type=minecraft:{kind}]')
+                host.wait(10)
+    finally:
+        for kind in ('guardian', 'elder_guardian'):
+            host('command', command=f'kill @e[type=minecraft:{kind}]')
+        for game in (host, guest):
+            game('command', command='gamemode creative')
+            game('command', command='effect clear @s')
+    return seen
+
+
+CHECKS += ['guardian-beams']
+CHECK_FNS['guardian-beams'] = check_guardian_beams
+
+
 def check_sonic(host, guest, out):
     """A real warden's ray reaches connected clients once, with normal damage.
 
@@ -7010,6 +7101,44 @@ def check_sonic(host, guest, out):
 
 CHECKS += ['sonic']
 CHECK_FNS['sonic'] = check_sonic
+
+
+def check_creative_tools(host, guest, out):
+    """#2035: switching Survival -> Creative cannot mine with a restricted tool.
+    Verify both the player's prediction and the host's authoritative block;
+    an ordinary tool must still break the same block.
+    """
+    seen = {}
+    for label, player in (('host', host), ('guest', guest)):
+        x, y, z = (int(v // 1) for v in pos_of(player))
+        cell = (x, y + 1, z + 2)
+        host('command', command=f'fill {x - 1} {y} {z + 1} {x + 1} {y + 3} {z + 3} minecraft:air')
+        player('command', command='gamemode survival')
+        player('command', command='item replace entity @s weapon.mainhand with minecraft:netherite_sword')
+        player('command', command='gamemode creative')
+        host('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} minecraft:stone')
+        player.wait(10)
+        player.raw('look-at', x + 0.5, y + 1.5, z + 2.5)
+        player.raw('mouse', 'left', 'down')
+        try:
+            player.wait(15)
+        finally:
+            player.raw('mouse', 'left', 'up')
+        seen[label] = {'client': player.raw('block', *cell).get('block'),
+                       'server': host.raw('block', *cell).get('block')}
+        player.shot(out, 'creative-sword')
+        assert seen[label]['client'] == seen[label]['server'] == 'minecraft:stone', seen
+        player('command', command='item replace entity @s weapon.mainhand with minecraft:diamond_pickaxe')
+        player.wait(6)
+        player.raw('mouse', 'left', 'click')
+        player.wait(10)
+        seen[label]['ordinary_tool'] = host.raw('block', *cell).get('block')
+        assert seen[label]['ordinary_tool'] == 'minecraft:air', seen
+    return seen
+
+
+CHECKS += ['creative_tools']
+CHECK_FNS['creative_tools'] = check_creative_tools
 
 
 def check_cushions(host, guest, out):

@@ -373,6 +373,7 @@ impl Game<'_> {
                 // Drawn seated (Entity.isPassenger); set apart because the
                 // json! above is at the macro recursion limit.
                 state["passenger"] = m.extra.passenger.into();
+                state["guardian_beam"] = serde_json::json!(horizon_client::mobs::guardian::beam(m, 0.0));
                 state
             })
             .collect();
@@ -1065,7 +1066,10 @@ impl Game<'_> {
                 }
                 MobEvent::BreakBlock { pos, drop } => {
                     let old = self.world.block(pos[0], pos[1], pos[2]);
-                    self.destroy_particles(pos, old);
+                    // Block.spawnDestroyParticles: fire breaks leave nothing.
+                    if !self.res.facts().get(old).has_class("BaseFireBlock") {
+                        self.destroy_particles(pos, old);
+                    }
                     if drop {
                         let drops = self.res.items().block_drops_in(
                             self.pack.assets.registry,
