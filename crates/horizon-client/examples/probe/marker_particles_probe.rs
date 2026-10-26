@@ -49,7 +49,7 @@ pub fn main() -> Result<()> {
             }
         }
     }
-    let mut engine = ParticleEngine::new(root, &HashMap::new());
+    let mut engine = ParticleEngine::new(root, &HashMap::new(), &Default::default());
     let mut out = BufWriter::new(File::create(&args[2])?);
     for line in BufReader::new(File::open(&args[1])?).lines() {
         let case: Value = serde_json::from_str(&line?)?;

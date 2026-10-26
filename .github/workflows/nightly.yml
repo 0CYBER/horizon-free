@@ -29,7 +29,8 @@ env:
 
 jobs:
   audit:
-    runs-on: [self-hosted, horizon-game]
+    # The Mac mini's runners only: the audit compares with the previous one, so it stays on one platform.
+    runs-on: [self-hosted, horizon-game, macOS]
     timeout-minutes: 150
     steps:
       - name: 03:00 in Paris

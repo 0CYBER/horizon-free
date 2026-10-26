@@ -19,10 +19,13 @@ the player before the mod is turned on, and checked against the component's real
 | Capabilities | 5: `game-read`, `chat`, `hud`, `storage`, `registries` |
 | Manifest `api` lines served | 2: `0.1` (code), `0.2` (content) |
 | SDK | the `Mod` trait (5 methods), `Registration` (4 builders), `export_mod!`, log helpers |
-| `cargo horizon-mod` | `new`, `build`, `run` |
+| `cargo horizon-mod` | `new` (templates `code` and `content`), `build`, `run`, `check` |
 | Example mods | `coords-hud` (code), `ruby-content` (content) |
 
 ## Guide
+
+The step-by-step guide, from installing the tools to publishing on the registry, is
+[Make a mod](https://playhorizon.dev/docs/make-a-mod) on the website. In short:
 
 1. `rustup target add wasm32-unknown-unknown`, `cargo install --git https://github.com/ludovic111/horizon
    cargo-horizon-mod`, then `cargo horizon-mod new my-mod` ([Making a mod](../mods.md#making-a-mod)).
@@ -55,6 +58,7 @@ scripting runtime in the game.
 | Way in | For | Status | Template and example |
 | --- | --- | --- | --- |
 | Rust | most mods; the fastest | first-class: the SDK, `cargo horizon-mod` | `cargo horizon-mod new`, `coords-hud` |
+| Data only | blocks and items with no code | first-class: content mods (API 0.2) | `cargo horizon-mod new --template content`, `ruby-content` |
 | Lua scripts | people who don't want a compiler | planned: a script mod whose code is a `.lua` file, run by Horizon's own interpreter mod | planned, with the same example as Rust |
 | C, C++, Zig | authors of those languages | to evaluate: bindings generated from the WIT, built without WASI | one each if it passes |
 | Go (TinyGo), AssemblyScript, JavaScript / TypeScript | authors of those languages | to evaluate: each needs its toolchain to emit a component without WASI imports, or an interpreter mod as for Lua | one each if it passes |

@@ -78,6 +78,8 @@ pub enum Capability {
     Chat,
     Hud,
     Storage,
+    /// Runs vanilla commands as the player, with the player's permissions.
+    Command,
     /// New blocks and items from the mod's `data/` (API 0.2): no WIT
     /// interface, the game reads them before the world loads.
     Registries,
@@ -92,11 +94,12 @@ pub enum Capability {
     Input,
 }
 impl Capability {
-    pub const ALL: [Capability; 8] = [
+    pub const ALL: [Capability; 9] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
         Capability::Storage,
+        Capability::Command,
         Capability::Registries,
         Capability::Ui,
         Capability::Render,
@@ -109,6 +112,7 @@ impl Capability {
             Capability::Chat => "chat",
             Capability::Hud => "hud",
             Capability::Storage => "storage",
+            Capability::Command => "command",
             Capability::Registries => "registries",
             Capability::Ui => "ui",
             Capability::Render => "render",
@@ -130,6 +134,7 @@ impl Capability {
             Capability::Chat => "show you chat messages",
             Capability::Hud => "draw text on your screen",
             Capability::Storage => "save its own settings to disk",
+            Capability::Command => "run commands as you, with your permissions",
             Capability::Registries => "add blocks and items to your worlds",
             Capability::Ui => "show its own screens and a settings page",
             Capability::Render => "draw on your screen and shake the camera",
@@ -163,6 +168,7 @@ impl fmt::Display for Capability {
             Capability::Chat => "chat",
             Capability::Hud => "hud",
             Capability::Storage => "storage",
+            Capability::Command => "command",
             Capability::Registries => "registries",
             Capability::Ui => "ui",
             Capability::Render => "render",
@@ -413,6 +419,10 @@ capabilities = ["game-read", "hud"]
         assert_eq!(
             storage,
             Err("uses capability storage, missing from horizon-mod.toml".into())
+        );
+        assert_eq!(
+            m.check_imports(["horizon:mods/command@0.1.0"]),
+            Err("uses capability command, missing from horizon-mod.toml".into())
         );
         let with_storage = EXAMPLE.replace("\"hud\"", "\"hud\", \"storage\"");
         let m = Manifest::parse(&with_storage).unwrap();

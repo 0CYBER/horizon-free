@@ -134,6 +134,7 @@ export function submitHtml() {
   return `<p class="kicker"><span>Mods</span>Submit</p>
         <h1 class="display page-title">Submit to the registry</h1>
         <p class="lede">A mod, a modpack of registry mods, or a resource pack made for Horizon. The form checks the file and opens a pull request; a reviewer reads it, its source and the checks' report, and merging publishes it to this site and the launcher.</p>
+        <p class="meta">First time? <a href="/docs/publish-a-mod">Publish a mod</a> walks through building, checking and signing the file, and <a href="/docs/make-a-mod">Make a mod</a> starts from the beginning.</p>
         <div class="mod-auth" id="submit-auth" aria-live="polite">
           <p class="meta no-script">The form needs JavaScript. You can also <a href="${REGISTRY}">open a pull request by hand</a>.</p>
         </div>

@@ -279,6 +279,65 @@ fn run<T: Send + 'static>(
 }
 
 #[test]
+fn sprint_commands_survive_keyboard_input_changes() {
+    let Some(resources) = resources() else {
+        return;
+    };
+    let mut s = server(&resources);
+    let port = s.hub.lan.port;
+    let _bot = run(&mut s, move || connect(port, "Sprinter", true));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while s.hub.guests.is_empty() {
+        s.tick(&[]);
+        assert!(Instant::now() < deadline, "guest did not join");
+        thread::yield_now();
+    }
+    let id = s.hub.guests[0].entity_id;
+    s.hub.guests[0].loaded = true;
+    s.hub.guests[0]
+        .inbox
+        .push_back(S::PlayerCommand(play::PlayerCommand {
+            id,
+            action: 1,
+            data: 0,
+        }));
+    s.tick(&[]);
+    assert!(s.hub.guests[0].sprinting);
+    // LocalPlayer keeps sprinting after Ctrl is released while W remains
+    // down. Double-tap sprint also sends forward without the sprint key.
+    for flags in [65, 1, 0, 33] {
+        s.hub.guests[0]
+            .inbox
+            .push_back(S::PlayerInput(play::PlayerInput { flags }));
+        s.tick(&[]);
+        let g = &s.hub.guests[0];
+        assert!(
+            g.sprinting,
+            "keyboard input {flags} cleared the sprint flag"
+        );
+        assert_eq!(g.input, flags);
+        assert_eq!(g.sneaking, flags & 32 != 0);
+    }
+    s.hub.guests[0]
+        .inbox
+        .push_back(S::PlayerCommand(play::PlayerCommand {
+            id,
+            action: 2,
+            data: 0,
+        }));
+    s.tick(&[]);
+    assert!(!s.hub.guests[0].sprinting);
+    s.hub.guests[0]
+        .inbox
+        .push_back(S::PlayerInput(play::PlayerInput { flags: 65 }));
+    s.tick(&[]);
+    assert!(
+        !s.hub.guests[0].sprinting,
+        "keyboard input started a sprint"
+    );
+}
+
+#[test]
 fn status_and_join() {
     let Some(resources) = resources() else {
         return;

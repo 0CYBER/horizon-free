@@ -1,5 +1,5 @@
-// A small Markdown renderer for release notes and the README: headings, paragraphs,
-// lists (nested by indentation), fenced code, quotes, rules, and inline code, bold,
+// A small Markdown renderer for release notes, the README and the docs: headings, paragraphs,
+// lists (nested by indentation), fenced code, quotes, rules, tables, and inline code, bold,
 // italic and links. Everything is escaped first, so its output never carries raw HTML.
 // Shared by build.mjs (Node) and main.js (browser).
 
@@ -38,10 +38,39 @@ export function inline(text, site = false) {
   out = out.replace(/\u0001(\d+)\u0001/g, (_, i) => {
     const [label, url] = links[i];
     const target = href(url, site);
-    const body = inline(label, site);
+    // The label's code spans are already placeholders: put them back for its own pass.
+    const body = inline(label.replace(/\u0000(\d+)\u0000/g, (_, c) => `\`${codes[c]}\``), site);
     return target ? `<a href="${escape(target)}">${body}</a>` : body;
   });
   return out.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${escape(codes[i])}</code>`);
+}
+
+// A table: a row of cells, a rule row (`| --- | :-: |`), then body rows, until a line that isn't a row.
+const ROW = /^\s*\|.*\|\s*$/;
+const RULE = /^\s*\|(\s*:?-+:?\s*\|)+\s*$/;
+
+/** A row's cells: split on `|` outside code spans; `\|` is a literal bar. */
+function cells(row) {
+  const s = row.trim().slice(1, -1);
+  const out = [""];
+  let code = false;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === "\\" && s[i + 1] === "|") out[out.length - 1] += s[++i];
+    else if (s[i] === "|" && !code) out.push("");
+    else {
+      if (s[i] === "`") code = !code;
+      out[out.length - 1] += s[i];
+    }
+  }
+  return out.map((c) => c.trim());
+}
+
+function table(lines, start, site) {
+  const row = (line, tag) => `<tr>${cells(line).map((c) => `<${tag}>${inline(c, site)}</${tag}>`).join("")}</tr>`;
+  let i = start + 2;
+  const body = [];
+  while (i < lines.length && ROW.test(lines[i])) body.push(row(lines[i++], "td"));
+  return [`<div class="table-wrap"><table class="md-table"><thead>${row(lines[start], "th")}</thead><tbody>${body.join("")}</tbody></table></div>`, i];
 }
 
 const indentOf = (line) => line.match(/^ */)[0].length;
@@ -131,6 +160,10 @@ export function markdown(source, { shift = 0, site = false, headings = null } = 
     } else if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
       out.push("<hr>");
       i++;
+    } else if (ROW.test(line) && RULE.test(lines[i + 1] || "")) {
+      const [html, end] = table(lines, i, site);
+      out.push(html);
+      i = end;
     } else if (ITEM.test(line)) {
       const [html, end] = list(lines, i, site);
       out.push(html);
