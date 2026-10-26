@@ -32,13 +32,13 @@ pub(super) enum Victim {
 
 /// The attacker's side of the hit.
 pub(super) struct Strike {
+    /// The attacking guest, kept after their turn through `as_guest` ends.
+    attacker: Option<u32>,
     amount: f32,
     scale: f32,
     crit: bool,
     from: [f64; 3],
     sweep: Option<[f64; 3]>,
-    /// The attacking player: a guest's connection, or the host.
-    attacker: Option<u32>,
     /// `causeExtraKnockback`: its strength and direction (the attacker's
     /// yaw), and whether the hit is a sprinting knockback attack.
     knockback: (f32, f64, f64),
@@ -121,12 +121,12 @@ impl Game<'_> {
         }
         self.swing_arm();
         Some(Strike {
+            attacker: self.lan_acting,
             amount,
             scale,
             crit,
             from,
             sweep,
-            attacker: self.lan_acting,
             knockback: (strength, xd, zd),
             knockback_attack,
             team: self.player_team().cloned(),
@@ -257,6 +257,25 @@ impl Game<'_> {
         } else {
             Default::default()
         };
+        if hurt && s.crit {
+            let target = match victim {
+                Victim::Host => self.player.as_ref().map(|p| (host.host_entity, p)),
+                Victim::Guest(conn) => host
+                    .hub
+                    .guest(conn)
+                    .and_then(|g| g.motion.as_deref().map(|p| (g.entity_id, p))),
+            };
+            if let Some((id, p)) = target {
+                let d = p.dimensions;
+                self.critical_hit(
+                    s.attacker,
+                    id,
+                    [p.position.x, p.position.y, p.position.z],
+                    f64::from(d.width),
+                    f64::from(d.height),
+                );
+            }
+        }
         // `Enchantment.doPostAttack`: thorns hurt the attacking player.
         for damage in thorns {
             match s.attacker {

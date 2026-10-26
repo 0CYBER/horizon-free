@@ -339,7 +339,9 @@ pub fn shared_data(
     if let Some((_, data)) = cache.iter().find(|(path, _)| path == dir) {
         return Ok(data.clone());
     }
+    let started = std::time::Instant::now();
     let data = GeneratorData::load(dir, registry)?;
+    log::info!("Horizon: worldgen data loaded in {:?}", started.elapsed());
     cache.push((dir.to_owned(), data.clone()));
     Ok(data)
 }
