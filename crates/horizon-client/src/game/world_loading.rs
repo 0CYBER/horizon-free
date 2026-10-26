@@ -246,6 +246,9 @@ pub(super) fn make_streaming(
         let inner = Arc::new(VanillaTerrain::for_world(&options.resources.join("worldgen"), pack.assets.registry, res.biomes(), seed, dim.id(), structures).map_err(|e| {
                 format!("{e}\nPrepare the worldgen bundle with the launcher, or: horizon-prepare --prepare")
             })?);
+        if dim == Dim::Overworld && structures {
+            inner.search_rings_behind();
+        }
         locator = Some(inner.clone());
         Streaming::new(
             Arc::new(Persistent {

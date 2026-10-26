@@ -1025,7 +1025,6 @@ mod tests {
             legacy: false,
             projection: Projection::Rigid,
             waterlogging: None,
-            yung: None,
             enhanced_terrain: None,
             ground_level: 1,
         });
