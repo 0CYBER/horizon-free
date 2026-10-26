@@ -529,12 +529,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     let v = &mut m.anim.v;
     v[INTEREST] += (goal - v[INTEREST]) * 0.4;
     // isWet (extra.flag2), isShaking (counter2 > 0).
-    let rain = w.raining
-        && w.can_see_sky(
-            m.position.x.floor() as i32,
-            (m.position.y + f64::from(m.height())).floor() as i32,
-            m.position.z.floor() as i32,
-        );
+    let rain = super::ai::in_rain(m, w);
     let shaking = m.extra.counter2 > 0;
     if m.fluids.in_water || rain {
         m.extra.flag2 = true;
