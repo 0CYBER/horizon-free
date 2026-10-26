@@ -275,11 +275,6 @@ mod tests {
             Release::Click(Input::QuickMove)
         );
     }
-}
-
-#[cfg(test)]
-mod stuck_tests {
-    use super::*;
 
     /// A press whose release never arrives (the pointer left the window, or
     /// the screen closed first) leaves `isQuickCrafting` set; the next screen

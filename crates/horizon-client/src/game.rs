@@ -4734,8 +4734,7 @@ impl Game<'_> {
         if capture {
             // The inventory's screens are behind us: no drag survives them.
             self.reset_inventory_clicks();
-        }
-        if !capture {
+        } else {
             self.stop_mining();
         }
         // The real pointer takes over from an agent's.
