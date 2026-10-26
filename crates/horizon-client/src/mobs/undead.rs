@@ -2,6 +2,7 @@
 //! stray, bogged, wither skeleton): goals, bow attacks, water conversion.
 use super::{
     Damage, Mob, MobEvent, Species, Who,
+    doors::BreakDoor,
     goals::{
         Avoid, AvoidEntity, Cx, FleeSun, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, MeleeAttack,
         NearestTarget, RandomLookAround, RestrictSun, Stroll, goal_clone,
@@ -25,6 +26,7 @@ pub fn register(m: &mut Mob) {
     match m.species() {
         S::Zombie | S::Husk | S::ZombieVillager => {
             let g = &mut m.ai.goals;
+            g.add(1, BreakDoor::zombie());
             g.add(4, AttackTurtleEgg::default());
             g.add(8, LookAtPlayer::new(8.0));
             g.add(8, RandomLookAround::default());
@@ -52,6 +54,7 @@ pub fn register(m: &mut Mob) {
         S::ZombifiedPiglin => {
             // ZombifiedPiglin.addBehaviourGoals: neutral until provoked.
             let g = &mut m.ai.goals;
+            g.add(1, BreakDoor::zombie());
             g.add(8, LookAtPlayer::new(8.0));
             g.add(8, RandomLookAround::default());
             g.add(2, MeleeAttack::new(1.0, false).zombie());
@@ -68,6 +71,7 @@ pub fn register(m: &mut Mob) {
         S::Drowned => {
             // Zombie.registerGoals, then Drowned.addBehaviourGoals.
             let g = &mut m.ai.goals;
+            g.add(1, BreakDoor::zombie());
             g.add(4, AttackTurtleEgg::default());
             g.add(8, LookAtPlayer::new(8.0));
             g.add(8, RandomLookAround::default());

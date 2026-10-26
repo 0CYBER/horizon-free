@@ -495,7 +495,6 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         "minecraft:zombie" => {
             map.insert("IsBaby".into(), Tag::Byte(i8::from(m.is_baby())));
             for (key, value) in [
-                ("CanBreakDoors", Tag::Byte(0)),
                 ("DrownedConversionTime", Tag::Int(-1)),
                 ("InWaterTime", Tag::Int(-1)),
             ] {
@@ -519,6 +518,13 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             );
         }
         _ => {}
+    }
+    // Zombie.addAdditionalSaveData: CanBreakDoors.
+    if crate::mobs::doors::is_zombie(m.species()) {
+        map.insert(
+            "CanBreakDoors".into(),
+            Tag::Byte(i8::from(m.extra.can_break_doors)),
+        );
     }
     crate::mobs::raider::write_nbt(m, map);
     crate::mobs::riders::write_nbt(m, map);
@@ -947,6 +953,10 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     // zombies of trial spawners).
     if !crate::mobs::finalize::ageable(m.species()) && flag(tag, "IsBaby") {
         crate::mobs::finalize::set_baby(&mut m, true);
+    }
+    // Zombie.readAdditionalSaveData: setCanBreakDoors.
+    if crate::mobs::doors::is_zombie(m.species()) {
+        crate::mobs::doors::set_can_break_doors(&mut m, flag(tag, "CanBreakDoors"));
     }
     crate::mobs::raider::read_nbt(&mut m, tag);
     crate::mobs::riders::read_nbt(&mut m, tag);

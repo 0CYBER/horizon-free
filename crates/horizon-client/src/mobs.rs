@@ -25,6 +25,7 @@ pub mod creaking;
 pub mod creaking_heart;
 pub mod cube;
 pub mod data;
+pub mod doors;
 pub mod drops;
 pub mod enderman;
 pub mod equine;
@@ -1018,6 +1019,24 @@ pub enum MobEvent {
     SetDoorOpen {
         pos: [i32; 3],
         open: bool,
+    },
+    /// `BreakDoorGoal.tick` at its end: the door is removed (`removeBlock`),
+    /// then level events 1021 and 2001 with the state that is left there.
+    BreakDoor {
+        pos: [i32; 3],
+    },
+    /// `Level.destroyBlockProgress` for a mob's crack on a block (`-1`
+    /// clears it).
+    DestroyProgress {
+        mob: u32,
+        pos: [i32; 3],
+        progress: i32,
+    },
+    /// `Level.levelEvent`: the game plays and sends the event.
+    LevelEvent {
+        id: i32,
+        pos: [i32; 3],
+        data: i32,
     },
     /// Destroy a block, dropping nothing (sheep eating grass becomes dirt via SetBlock).
     BreakBlock {

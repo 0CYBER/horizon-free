@@ -944,6 +944,7 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         | Species::Parched
         | Species::WitherSkeleton
         | Species::ZombifiedPiglin => undead::custom_server_ai_step(m, cx),
+        Species::Vindicator => super::illager::vindicator_server_ai_step(m),
         Species::Enderman => super::enderman::custom_server_ai_step(m, cx),
         Species::Blaze => super::nether::blaze_server_ai_step(m, cx),
         Species::ElderGuardian => super::guardian::elder_server_ai_step(m, cx),
