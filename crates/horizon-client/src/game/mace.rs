@@ -24,7 +24,7 @@ const KNOCKBACK_POWER: f32 = 0.7;
 /// `Entity.isAlliedTo` between the player (`player` its UUID) and a mob
 /// without teams: `TamableAnimal.considersEntityAsAlly` (a pet it tamed) and
 /// `Allay.considersEntityAsAlly` (an allay that likes it).
-fn ally_of_player(m: &Mob, player: Option<[i32; 4]>) -> bool {
+pub(super) fn ally_of_player(m: &Mob, player: Option<[i32; 4]>) -> bool {
     let tamable = matches!(
         m.species(),
         Species::Wolf
