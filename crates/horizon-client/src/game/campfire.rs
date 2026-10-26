@@ -78,10 +78,22 @@ impl Game<'_> {
         let Some(BlockEntity::Campfire(c)) = self.world.block_entities.get_mut(&pos) else {
             return Ok(());
         };
+        // BlockEntity.setChanged: a timer that moved is saved with the
+        // chunk (no update to the clients, who don't see the timers).
+        let changed = if lit {
+            c.items.iter().any(Option::is_some)
+        } else {
+            c.cooldown_tick()
+        };
+        if changed {
+            self.world.modified.insert((pos.0 >> 4, pos.2 >> 4));
+        }
         if !lit {
-            c.cooldown_tick();
             return Ok(());
         }
+        let Some(BlockEntity::Campfire(c)) = self.world.block_entities.get_mut(&pos) else {
+            return Ok(());
+        };
         let done = c.cook_tick();
         for (_, item) in done {
             let result = self
