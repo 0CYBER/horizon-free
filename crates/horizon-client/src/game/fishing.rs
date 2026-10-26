@@ -416,6 +416,8 @@ impl Game<'_> {
         let options = ParticleOptions::simple(kind);
         self.particles
             .send_particles(&options, at, spread, speed, count);
+        // The players a server serves are sent them too.
+        self.lan_send_particles(&options, at, spread, speed, count);
     }
     /// `FishingHook.tick`.
     pub(super) fn tick_fishing(&mut self) {
