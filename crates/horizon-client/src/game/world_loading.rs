@@ -46,6 +46,10 @@ impl WorldRequest {
         options: &Options,
         settings: &Settings,
     ) -> Result<PreparedWorld> {
+        // Before any chunk is read: a loaded container with a loot table is rolled as its chunk
+        // is decoded (`save::roll_loaded_loot`), and the spawn chunks are read while the world
+        // opens. Every world opens here: in-frame, on the server thread, on a dedicated server.
+        horizon_client::structure_blocks::loot_data(&options.resources);
         let Self {
             save_root,
             folder,
@@ -261,6 +265,7 @@ pub(super) fn make_streaming(
             res.threads(),
         )
     };
+    streaming.forced = save.load_forced_chunks();
     streaming.radius = settings.render_distance;
     streaming.biome_blend = settings.biome_blend;
     streaming.smooth_lighting = settings.smooth_lighting;

@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 pub const REPO: &str = "ludovic111/horizon";
 pub const README_URL: &str = "https://github.com/ludovic111/horizon/blob/main/launcher/README.md";
-/// The players' page on connecting an AI agent (website/docs/agents.md).
+/// The players' page on connecting an AI agent (the website's docs/agents.md).
 pub const AGENT_DOCS_URL: &str = "https://playhorizon.dev/docs/agents";
 /// This launcher's version: the release workflow sets `HORIZON_LAUNCHER_VERSION` from the
 /// tag it builds (no version-bump commits); other builds say Cargo.toml's.
@@ -80,14 +80,18 @@ const CLIENT: &str = if cfg!(windows) {
     "horizon-client"
 };
 
-fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .user_agent(&format!("horizon-launcher/{VERSION}"))
-        .build()
+/// The agent `url` is fetched with: the launcher's own user agent, through the player's proxy when
+/// one is set (`proxy`).
+fn agent(url: &str) -> ureq::Agent {
+    crate::proxy::agent(
+        ureq::AgentBuilder::new().user_agent(&format!("horizon-launcher/{VERSION}")),
+        url,
+    )
+    .build()
 }
 
 fn get(url: &str) -> Result<ureq::Response, String> {
-    let mut request = agent().get(url);
+    let mut request = agent(url).get(url);
     // CI runners share addresses and hit GitHub's anonymous rate limit; they pass their own token.
     if let Some(token) = std::env::var("HORIZON_GITHUB_TOKEN")
         .ok()
@@ -2530,6 +2534,10 @@ pub struct Settings {
     /// default. Appended after the launcher's own arguments, so they can add to or override them.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub game_args: String,
+    /// The HTTP proxy every download goes through (`proxy`), such as `http://127.0.0.1:7890`.
+    /// Unset means none: the environment's `HTTPS_PROXY` and `HTTP_PROXY` apply instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
     /// Dark, Light, or the system's: the launcher's look. Dark by default.
     #[serde(default)]
     pub appearance: Appearance,
