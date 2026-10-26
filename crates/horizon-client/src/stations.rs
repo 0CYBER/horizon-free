@@ -14,7 +14,8 @@ use std::{fs, path::Path, sync::Arc};
 
 /// Everything the workstation menus read, loaded once with the resources.
 pub struct StationData {
-    pub enchantments: Enchantments,
+    /// The same registry `Items` carries (`Items::enchantments`).
+    pub enchantments: std::sync::Arc<Enchantments>,
     pub recipes: StationRecipes,
     pub brewing: crate::brewing::Brewing,
     pub trades: crate::merchant::Trades,
@@ -25,7 +26,7 @@ pub struct StationData {
 impl StationData {
     pub fn load(root: &Path, items: &Items) -> Self {
         Self {
-            enchantments: Enchantments::load(root),
+            enchantments: std::sync::Arc::clone(&items.enchantments),
             recipes: StationRecipes::load(root, items),
             brewing: crate::brewing::Brewing::load(root, items),
             trades: crate::merchant::Trades::load(root),
