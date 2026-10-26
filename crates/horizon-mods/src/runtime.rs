@@ -37,8 +37,7 @@ use bindings::{
 /// The widget model a `ui` screen or settings page shows (WIT `interface
 /// ui`), for the game to draw with its menus' own widgets.
 pub use ui_bindings::horizon::mods::ui::{
-    ButtonWidget, ItemWidget, KeyWidget, ListWidget, Screen as UiScreen, TextWidget,
-    Widget as UiWidget,
+    ButtonWidget, ItemWidget, ListWidget, Screen as UiScreen, TextWidget, Widget as UiWidget,
 };
 use ui_bindings::{UiHost, horizon::mods::ui};
 /// Capability `render`'s imports (docs/mods.md): the game draws the shapes.
@@ -153,11 +152,13 @@ pub struct Entry {
 }
 impl Entry {
     /// The running mod has a settings page (capability `ui` set widgets
-    /// with `ui.set-settings`): its row in Options > Mods gains a button.
+    /// with `ui.set-settings`, or `input` registered keys the player may
+    /// bind there): its row in Options > Mods gains a button.
     pub fn has_ui_settings(&self) -> bool {
-        self.run
-            .as_ref()
-            .is_some_and(|r| !r.store.data().ui.settings.is_empty())
+        self.run.as_ref().is_some_and(|r| {
+            let d = r.store.data();
+            !d.ui.settings.is_empty() || !d.input.keys.is_empty()
+        })
     }
 }
 
@@ -855,10 +856,6 @@ fn clip_widgets(widgets: Vec<UiWidget>) -> Vec<UiWidget> {
                 l.rows = l.rows.into_iter().take(LIST_ROWS).map(clip).collect();
                 l.selected = l.selected.filter(|&s| (s as usize) < l.rows.len());
                 UiWidget::List(l)
-            }
-            UiWidget::Key(mut k) => {
-                k.key = clip(k.key);
-                UiWidget::Key(k)
             }
         })
         .collect()

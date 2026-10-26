@@ -197,15 +197,6 @@ A thing on a mod's screen or settings page. A button as the options pages have t
 | `id` | `u32` | The mod's own name for the widget. |
 | `label` | `string` | Up to 256 characters. |
 
-### record `key-widget`
-
-One of the mod's keys (`input.register-key`) as Controls shows a binding, "Zoom: Z". A click waits for the next key or mouse button, which becomes the key (Esc: none). The game keeps the player's choice across starts; the mod's `key-down` and `key-up` follow it.
-
-| Field | Type | |
-| --- | --- | --- |
-| `id` | `u32` | The mod's own name for the widget. |
-| `key` | `string` | The name the mod registered the key under. |
-
 ### variant `widget`
 
 | Case | Payload | |
@@ -214,7 +205,6 @@ One of the mod's keys (`input.register-key`) as Controls shows a binding, "Zoom:
 | `button` | `button-widget` | A button. |
 | `item` | `item-widget` | An item's icon and name. |
 | `list` | `list-widget` | Rows the player picks from. |
-| `key` | `key-widget` | A key the player binds. |
 
 ### record `screen`
 
@@ -288,7 +278,7 @@ A mapping as the player has bound it.
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `claim-items` | `func(ids: list<string>)` | The items whose use the mod handles instead of the game, by id (at most 64). Replaces the previous list. |
-| `register-key` | `func(name: string, label: string, key: string) -> result<_, string>` | A key of the mod's: `name` comes back in `key-down` and `key-up`, `label` says what it does, `key` is the key as options.txt writes it (`key.keyboard.r`), the default: a key the player chose for it (`ui`'s key widget) wins. At most 16; an unknown key is an error. |
+| `register-key` | `func(name: string, label: string, key: string) -> result<_, string>` | A key of the mod's: `name` comes back in `key-down` and `key-up`, `label` says what it does, `key` is the key as options.txt writes it (`key.keyboard.r`), the default: the player can bind another one on the mod's page in Options > Mods, and that one wins. At most 16; an unknown key is an error. |
 | `held` | `func() -> option<held-item>` | The main hand's stack, as of this tick; none when it is empty. |
 | `poll` | `func() -> list<event>` | The events since the last call, oldest first. |
 | `claim-wheel` | `func(on: bool)` | Takes the mouse wheel while playing (true) or gives it back: while taken, its steps are the mod's `wheel` events and the hotbar doesn't move. The game gives it back when the mod stops. |
