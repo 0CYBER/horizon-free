@@ -587,6 +587,7 @@ A click on a slot of a recipe the panel shows (`set-recipes`).
 | `action` | `u32` | The action button of the recipe at this index in `set-recipes`'s list. |
 | `page` | `u32` | The player turned the recipes' page (`set-recipes`): the index of the first recipe now shown. |
 | `back` |  | The back button of `set-recipes`. |
+| `tab` | `u32` | The player picked the tab at this index of `set-recipes`' tabs. |
 
 ### enum `layout`
 
@@ -617,7 +618,7 @@ A recipe to show. Each slot, and the result, cycles through its stacks, one a se
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `set-items` | `func(items: list<stack>)` | The panel's items, at most 8192 (an empty list hides the panel). |
-| `set-recipes` | `func(title: string, recipes: list<recipe-view>)` | Shows these recipes in the panel instead of its items, as many as fit a page, under `title` and a back button; an empty list shows the items again. At most 256 recipes. |
+| `set-recipes` | `func(title: string, tabs: list<stack>, tab: u32, recipes: list<recipe-view>)` | Shows these recipes in the panel instead of its items, as many as fit a page, under `title` and a back button, with a row of `tabs` (each an icon; `tab` is the selected one) between them; an empty list of recipes shows the items again. At most 256 recipes and 16 tabs. |
 | `poll` | `func() -> list<event>` | What the player did on the panel since the last poll, at most 256 kept. |
 
 ## `players`

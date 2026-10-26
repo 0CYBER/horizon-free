@@ -1196,9 +1196,13 @@ fn browser_lists_items_and_hears_the_player() {
         said(&mut mods, "browser_recipes minecraft:oak_planks"),
         ["recipes shown: 1"]
     );
-    let (title, recipes) = mods.browser_recipes(owner).unwrap();
-    assert_eq!(title, "Recipes for minecraft:oak_planks");
-    let r = &recipes[0];
+    let page = mods.browser_recipes(owner).unwrap();
+    assert_eq!(page.title, "Recipes for minecraft:oak_planks");
+    assert_eq!(
+        (page.tabs[0].item.as_str(), page.tab),
+        ("minecraft:crafting_table", 0)
+    );
+    let r = &page.recipes[0];
     assert_eq!(
         (r.layout, r.width, r.height, r.action),
         (BrowserLayout::Grid, 1, 1, Some(false))
