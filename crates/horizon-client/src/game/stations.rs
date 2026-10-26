@@ -1703,6 +1703,8 @@ impl Game<'_> {
         };
         let name = if let Some(n) = stack.custom_name() {
             n.to_owned()
+        } else if let Some(n) = stack.item_name() {
+            n
         } else if stack.data().is_some_and(|d| d.ominous_banner) {
             self.translate("block.minecraft.ominous_banner", "Ominous Banner")
         } else if stack.data().and_then(|d| d.potion.as_ref()).is_some()
@@ -1729,7 +1731,9 @@ impl Game<'_> {
         // ItemContainerContents.addToTooltip.
         let hover_name = |s: &ItemStack| {
             s.custom_name()
-                .map_or_else(|| self.pack.names.display_item(&s.item), str::to_owned)
+                .map(str::to_owned)
+                .or_else(|| s.item_name())
+                .unwrap_or_else(|| self.pack.names.display_item(&s.item))
         };
         if display.shows("minecraft:container") {
             for text in
