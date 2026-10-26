@@ -175,6 +175,17 @@ impl Game<'_> {
             return true;
         }
         // doPlayerRide
+        // Entity.canAddPassenger: ordinary horses have one seat. Camels
+        // override that capacity; equipment and feeding above are separate.
+        if !matches!(species, Species::Camel | Species::CamelHusk)
+            && self.mobs.iter().any(|passenger| {
+                passenger.extra.mount == Some(self.mobs[index].id)
+                    && !passenger.removed
+                    && passenger.alive()
+            })
+        {
+            return false;
+        }
         let m = &mut self.mobs[index];
         m.extra.flag = false;
         m.extra.counter = 0;
