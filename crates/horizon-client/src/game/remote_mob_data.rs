@@ -5,7 +5,8 @@
 use super::Game;
 use horizon_client::mobs::render::{PROFESSIONS, VILLAGER_TYPES};
 use horizon_client::mobs::{Mob, Species, Who, bat, tame};
-use horizon_protocol::entity_data::Value;
+use horizon_client::particles::{ParticleOptions, ParticleType};
+use horizon_protocol::entity_data::{Particle, ParticleData, Value};
 use horizon_protocol::registry::Builtin;
 
 /// The values `apply` takes from one SetEntityData packet, by vanilla's entry
@@ -34,6 +35,10 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             // LivingEntity.DATA_HEALTH_ID: the boss bars and the death
             // animation follow it.
             (9, Value::Float(health)) => m.health = *health,
+            // LivingEntity.DATA_EFFECT_PARTICLES and DATA_EFFECT_AMBIENCE_ID:
+            // the swirls of its effects (`tickEffects` draws them).
+            (10, Value::Particles(list)) => m.extra.effect_particles = swirls(list, builtin),
+            (11, Value::Bool(ambient)) => m.extra.effect_ambient = *ambient,
             // Mob.DATA_MOB_FLAGS_ID: no AI 1, left-handed 2, aggressive 4.
             // Mob.isAggressive draws the illagers' and skeletons' attack
             // poses and the vindicator's axe.
@@ -98,6 +103,30 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             _ => {}
         }
     }
+}
+
+/// The options of a synched particle list: an entity effect carries its ARGB
+/// colour, the omens none.
+fn swirls(list: &[Particle], builtin: &Builtin) -> Vec<ParticleOptions> {
+    let channel = |argb: i32, shift: u32| ((argb >> shift) & 255) as f32 / 255.0;
+    list.iter()
+        .filter_map(|p| {
+            let name = builtin.get("minecraft:particle_type")?.name(p.id)?;
+            let ty = ParticleType::from_name(name)?;
+            Some(match p.data {
+                Some(ParticleData::Color(argb)) => ParticleOptions::colored(
+                    ty,
+                    [
+                        channel(argb, 16),
+                        channel(argb, 8),
+                        channel(argb, 0),
+                        channel(argb, 24),
+                    ],
+                ),
+                _ => ParticleOptions::simple(ty),
+            })
+        })
+        .collect()
 }
 
 /// VillagerData as the network sends it: the type and the profession by
