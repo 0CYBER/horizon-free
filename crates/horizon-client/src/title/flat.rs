@@ -91,7 +91,9 @@ impl FlatSettings {
                 })
             })
             .collect();
-        if layers.is_empty() {
+        // `layers: []` is a valid void flat world; a list whose entries all
+        // fail to parse is not.
+        if layers.is_empty() && !list.is_empty() {
             return None;
         }
         let flag = |key: &str, default: bool| {
