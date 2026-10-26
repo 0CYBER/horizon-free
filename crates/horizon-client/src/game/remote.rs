@@ -1741,7 +1741,17 @@ impl Game<'_> {
                         f64::from(p.y) / 8.0,
                         f64::from(p.z) / 8.0,
                     ];
-                    self.audio.play(&name, Some(at), p.volume, p.pitch);
+                    // ClientPacketListener.handleSoundEvent plays with packet.getSource().
+                    match usize::try_from(p.source)
+                        .ok()
+                        .filter(|s| *s < horizon_client::settings::SOUND_SOURCES.len())
+                    {
+                        Some(source) => {
+                            self.audio
+                                .play_on(source, &name, Some(at), p.volume, p.pitch)
+                        }
+                        None => self.audio.play(&name, Some(at), p.volume, p.pitch),
+                    }
                 }
             }
             C::StopSound(p) => self
