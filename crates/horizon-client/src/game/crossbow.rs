@@ -6,6 +6,7 @@
 //! finds the ammo for bows and crossbows.
 use super::{Game, shield::OFFHAND_SLOT, view_vector};
 use horizon_client::{
+    enchant::EffectContext,
     items::ItemStack,
     mobs::Who,
     projectiles::{Projectile, ProjectileKind},
@@ -152,6 +153,20 @@ impl Game<'_> {
         };
         let charged = std::mem::take(&mut bow.data_mut().charged);
         bow.tidy();
+        let weapon = bow.clone();
+        // AbstractArrow's constructor: `getPiercingCount` of the weapon.
+        let pierce = self
+            .res
+            .stations()
+            .enchantments
+            .modify_value(
+                Some(&weapon),
+                "minecraft:projectile_piercing",
+                &EffectContext::default(),
+                &mut self.world.random,
+                0.0,
+            )
+            .clamp(0.0, 127.0) as u8;
         let count = charged.len();
         // getShootingPower: a rocket among them slows every shot.
         let power = if charged.iter().any(|s| &*s.item == FIREWORK_ROCKET) {
@@ -204,6 +219,7 @@ impl Game<'_> {
                 if let Some(a) = arrow.arrow.as_mut() {
                     a.set_item(ammo);
                     a.set_owner(Some(Who::Player));
+                    a.pierce = pierce;
                 }
                 arrow.shoot(&mut self.world.random, dir.to_array(), power, 1.0);
                 self.creatures.projectiles.push(arrow);

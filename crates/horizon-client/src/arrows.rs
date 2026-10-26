@@ -156,7 +156,11 @@ pub struct ArrowState {
     /// `pickupItemStack`: what picking the arrow up gives.
     pub pickup_item: crate::items::ItemStack,
     pub no_physics: bool,
+    /// `AbstractArrow.getPierceLevel`.
     pub pierce: u8,
+    /// `piercingIgnoreEntityIds`: the entities a piercing arrow has gone
+    /// through (cleared when it sticks in a block).
+    pub pierced: Vec<Who>,
     /// `Entity.remainingFireTicks`.
     pub fire_ticks: i32,
     pub fall_distance: f64,
@@ -199,6 +203,7 @@ impl ArrowState {
             pickup_item: crate::items::ItemStack::new("minecraft:arrow", 1),
             no_physics: false,
             pierce: 0,
+            pierced: Vec::new(),
             fire_ticks: 0,
             fall_distance: 0.0,
             fluids: EntityFluidInteraction::new([WATER, LAVA]),
@@ -431,10 +436,19 @@ pub fn finish_entity_hit(p: &mut Projectile, scene: &ArrowScene, outcome: Entity
     match outcome {
         EntityHit::Hurt => {
             ticker.hit_sound();
-            ticker.st.removed = true;
+            // A piercing arrow flies on (`getPierceLevel() <= 0` discards).
+            if ticker.st.pierce == 0 {
+                ticker.st.removed = true;
+            }
         }
         EntityHit::Refused => ticker.turn_back(),
-        EntityHit::Deflected => {}
+        EntityHit::Deflected => {
+            // The deflection comes before `onHitEntity` adds the entity to
+            // `piercingIgnoreEntityIds`.
+            if ticker.st.pierce > 0 {
+                ticker.st.pierced.pop();
+            }
+        }
     }
     ticker.finish();
     p.stuck = st.in_ground;
@@ -639,7 +653,8 @@ impl Ticker<'_, '_, '_, '_> {
         self.st.life = 0;
     }
     /// `AbstractArrow.stepMoveAndHit`: the nearest entity on the way, else the
-    /// block (piercing is not modelled).
+    /// block. A piercing arrow that hits an entity here goes on from it next
+    /// tick (`finish_entity_hit`); vanilla's loop goes on within the same tick.
     fn step_move_and_hit(&mut self, from: Vec3, to: Vec3, targets: &[(Who, Aabb)]) -> Hit {
         let block = self.scene.clip(from, to);
         let end = block.map_or(to, |b| b.0);
@@ -651,6 +666,10 @@ impl Ticker<'_, '_, '_, '_> {
         let mut best: Option<(Who, Vec3, f64)> = None;
         for (who, b) in targets {
             if Some(*who) == self.p.owner && !self.p.left_owner || !b.intersects(area) {
+                continue;
+            }
+            // canHitEntity: not an entity a piercing arrow has gone through.
+            if self.st.pierced.contains(who) {
                 continue;
             }
             if let Some(at) = self.entity_hit(b, from, end, margin) {
@@ -667,6 +686,15 @@ impl Ticker<'_, '_, '_, '_> {
         self.p.position = next;
         self.apply_effects_from_blocks(from, next);
         if let Some((who, at, _)) = best {
+            // AbstractArrow.onHitEntity: past pierce level + 1 entities the
+            // arrow is discarded before it hurts the next one.
+            if self.st.pierce > 0 {
+                if self.st.pierced.len() > usize::from(self.st.pierce) {
+                    self.st.removed = true;
+                    return Hit::None;
+                }
+                self.st.pierced.push(who);
+            }
             return Hit::Entity { who, at };
         }
         let Some((at, pos, face)) = block else {
@@ -752,6 +780,7 @@ impl Ticker<'_, '_, '_, '_> {
         self.st.shake = 7;
         self.p.set_critical(false);
         self.st.pierce = 0;
+        self.st.pierced.clear();
     }
     /// `Projectile.mayInteract`: a mob's arrows need `mob_griefing`.
     fn may_interact(&self) -> bool {

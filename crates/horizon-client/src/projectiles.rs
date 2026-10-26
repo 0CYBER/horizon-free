@@ -186,12 +186,13 @@ impl Projectile {
         self
     }
     /// The shooter's bow enchantments; Flame spawns the arrow burning for 100
-    /// seconds (`projectile_spawned` ignite).
+    /// seconds (`projectile_spawned` ignite), Piercing sets its pierce level.
     pub fn set_bonus(&mut self, bonus: crate::mobs::gear::ArrowBonus) {
-        if bonus.flame
-            && let Some(a) = self.arrow.as_mut()
-        {
-            a.ignite_for_seconds(100.0);
+        if let Some(a) = self.arrow.as_mut() {
+            if bonus.flame {
+                a.ignite_for_seconds(100.0);
+            }
+            a.pierce = bonus.pierce.min(127) as u8;
         }
         self.bonus = bonus;
     }
