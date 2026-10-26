@@ -134,6 +134,30 @@ impl Game<'_> {
         // Each guest plays it from the global packet.
         self.audio.play_unshared(sound, at, volume, 1.0);
     }
+    /// `ClientLevel.addBreakingBlockEffects`: the block's hit sound (only for
+    /// `play_sound`) and one crumb on the face being mined; nothing for air.
+    pub(super) fn breaking_block_effects(
+        &mut self,
+        pos: [i32; 3],
+        face: [i32; 3],
+        play_sound: bool,
+    ) {
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        if self.res.facts().is_air(state) {
+            return;
+        }
+        if play_sound {
+            let sounds = self.res.facts().get(state).sounds.clone();
+            // Each guest plays it from the level event itself.
+            self.audio.play_unshared(
+                &sounds.hit,
+                Some(pos.map(|v| f64::from(v) + 0.5)),
+                (sounds.volume + 1.0) / 8.0,
+                sounds.pitch * 0.5,
+            );
+        }
+        self.crack_particle(pos, face, state);
+    }
     /// Queue and play level event `id` at `pos` (`Level.levelEvent`).
     pub(super) fn level_event_at(&mut self, id: i32, pos: [i32; 3], data: i32) {
         self.level_events.push(LevelEvent::LevelEvent {

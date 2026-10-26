@@ -3866,6 +3866,9 @@ impl Game<'_> {
             if let Some(r) = self.remote.as_mut() {
                 r.destroying = Some((hit.pos, face, 0.0));
             }
+            // startDestroyBlock plays the first hit and crack itself; the
+            // server's level events 2019 and 2020 do the rest.
+            self.breaking_block_effects(hit.pos, hit.face, true);
             self.mining = Some(Mining {
                 pos: hit.pos,
                 progress: 0.0,
@@ -3878,20 +3881,6 @@ impl Game<'_> {
         };
         let done = done + progress;
         let ticks = self.mining.as_ref().map_or(0, |m| m.ticks) + 1;
-        if ticks % 4 == 1 {
-            let c = [
-                f64::from(pos[0]) + 0.5,
-                f64::from(pos[1]) + 0.5,
-                f64::from(pos[2]) + 0.5,
-            ];
-            self.audio.play(
-                &facts.sounds.hit,
-                Some(c),
-                (facts.sounds.volume + 1.0) / 8.0,
-                facts.sounds.pitch * 0.5,
-            );
-        }
-        self.crack_particle(pos, hit.face, state);
         if done >= 1.0 {
             let seq = self.next_sequence();
             self.predict_break(pos, state, seq);
