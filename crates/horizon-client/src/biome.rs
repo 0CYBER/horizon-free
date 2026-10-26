@@ -1,7 +1,8 @@
 //! Biome colours from the pinned biome definitions and colormaps
 //! (`Biome.getGrassColor`/`getFoliageColor`/..., `BlockTintSources`).
 use crate::Result;
-use horizon_core::{noise::SimplexNoise, random::LegacyRandom};
+use horizon_core::{noise::SimplexNoise, position::BlockPos, random::LegacyRandom};
+use horizon_world::worldgen::biome_temperature::{BiomeTemperatureSettings, TemperatureModifier};
 use serde_json::Value;
 use std::{collections::HashMap, fs, path::Path};
 
@@ -33,6 +34,8 @@ pub struct BiomeInfo {
     pub increased_fire_burnout: bool,
     pub name: String,
     pub temperature: f32,
+    /// `climateSettings.temperatureModifier` (frozen oceans).
+    pub temperature_modifier: TemperatureModifier,
     pub downfall: f32,
     pub precipitation: bool,
     pub grass: u32,
@@ -44,6 +47,22 @@ pub struct BiomeInfo {
     /// The biome's own fog colour attribute; otherwise the dimension's applies.
     pub fog: Option<u32>,
     pub water_fog: u32,
+}
+impl BiomeInfo {
+    /// `Biome.getPrecipitationAt` in the Overworld (sea level 63): None
+    /// without precipitation, else whether it falls as snow
+    /// (`getHeightAdjustedTemperature` below 0.15).
+    pub fn snows_at(&self, x: i32, y: i32, z: i32) -> Option<bool> {
+        let settings = BiomeTemperatureSettings {
+            base_temperature: self.temperature,
+            modifier: self.temperature_modifier,
+            has_precipitation: self.precipitation,
+            downfall: self.downfall,
+        };
+        settings
+            .has_precipitation
+            .then(|| settings.height_adjusted(BlockPos::new(x, y, z), 63) < 0.15)
+    }
 }
 pub struct Biomes {
     pub list: Vec<BiomeInfo>,
@@ -105,6 +124,10 @@ impl Biomes {
             let attributes = &v["attributes"];
             let temperature = v["temperature"].as_f64().unwrap_or(0.5) as f32;
             let downfall = v["downfall"].as_f64().unwrap_or(0.5) as f32;
+            let temperature_modifier = match v["temperature_modifier"].as_str() {
+                Some("frozen") => TemperatureModifier::Frozen,
+                _ => TemperatureModifier::None,
+            };
             let modifier = match effects["grass_color_modifier"].as_str() {
                 Some("dark_forest") => GrassModifier::DarkForest,
                 Some("swamp") => GrassModifier::Swamp,
@@ -135,6 +158,7 @@ impl Biomes {
                     .as_bool()
                     .unwrap_or(false),
                 temperature,
+                temperature_modifier,
                 downfall,
                 precipitation: v["has_precipitation"].as_bool().unwrap_or(true),
                 grass: color(&effects["grass_color"])

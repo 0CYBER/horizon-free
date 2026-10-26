@@ -33,16 +33,7 @@ fn rains_at(world: &World, biomes: &Biomes, x: i32, y: i32, z: i32) -> bool {
     let Some(chunk) = world.chunks.get(&(x >> 4, z >> 4)) else {
         return false;
     };
-    let b = biomes.get(chunk.biome(x, y, z));
-    if !b.precipitation {
-        return false;
-    }
-    let t = if y > 80 {
-        b.temperature - (y - 80) as f32 * 0.05 / 40.0
-    } else {
-        b.temperature
-    };
-    t >= 0.15
+    biomes.get(chunk.biome(x, y, z)).snows_at(x, y, z) == Some(false)
 }
 
 impl Game<'_> {
