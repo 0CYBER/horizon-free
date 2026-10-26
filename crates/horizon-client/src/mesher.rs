@@ -330,11 +330,11 @@ impl MeshTables {
         facts: &BlockFacts,
         visibility: FaceVisibility,
     ) -> crate::Result<Self> {
-        // Terrain vertices keep the sprite layer below `OPAQUE_LAYER`.
+        // Terrain vertices keep the sprite layer below their flag bits.
         let layers = render.sprite_layers.values().max().map_or(0, |l| l + 1);
-        if layers > u32::from(OPAQUE_LAYER) {
+        if layers > u32::from(EMISSIVE_LAYER) {
             return Err(
-                format!("{layers} block sprites, terrain vertices index {OPAQUE_LAYER}").into(),
+                format!("{layers} block sprites, terrain vertices index {EMISSIVE_LAYER}").into(),
             );
         }
         let layer = |name: &str| -> crate::Result<u16> {
@@ -566,6 +566,11 @@ impl Padded {
 }
 /// Set on a terrain vertex's sprite layer when its texture alpha must be ignored.
 pub const OPAQUE_LAYER: u16 = 1 << 15;
+/// Marks a face of a light-emitting block (lava included) in `TerrainVertex::layer`,
+/// for HDR output's highlights (`gfx/hdr.rs`): the sprite layer stays below it.
+pub const EMISSIVE_LAYER: u16 = 1 << 14;
+/// The flag bits of `TerrainVertex::layer`; the rest is the sprite layer.
+pub const LAYER_FLAGS: u16 = OPAQUE_LAYER | EMISSIVE_LAYER;
 const UNSET: u32 = u32::MAX;
 const NO_BIOME: u16 = u16::MAX;
 /// The `ColorResolver`s `ClientLevel` caches block tints for.
@@ -875,11 +880,17 @@ impl Mesher<'_> {
                 [p[0] + origin[0], p[1] + origin[1], p[2] + origin[2]],
                 q.uv[i],
                 // Opaque leaves (forceOpaque) draw in the solid layer: no alpha cutout.
-                if !self.cutout_leaves && state.leaves {
-                    face.layer as u16 | OPAQUE_LAYER
-                } else {
-                    face.layer as u16
-                },
+                face.layer as u16
+                    | if !self.cutout_leaves && state.leaves {
+                        OPAQUE_LAYER
+                    } else {
+                        0
+                    }
+                    | if state.emission > 0 || q.light_emission > 0 {
+                        EMISSIVE_LAYER
+                    } else {
+                        0
+                    },
                 pack_rgb(rgb),
                 pack_coords(lighting::with_emission(coords[i], q.light_emission)),
             ));

@@ -268,6 +268,11 @@ impl Game<'_> {
             r.animated_textures = s.horizon.animated_textures;
             r.set_mipmap_levels(s.mipmap_levels.max(0) as u32);
             r.set_world_post(s.horizon.resolution_scale as f32 / 100.0, s.horizon.fxaa);
+            r.set_hdr(
+                s.horizon.hdr,
+                s.horizon.hdr_paper_white as f32,
+                s.horizon.hdr_peak as f32,
+            );
         }
         // Window.updateFullscreenIfChanged: only a changed option asks the
         // window to change, so applying settings never undoes a fullscreen

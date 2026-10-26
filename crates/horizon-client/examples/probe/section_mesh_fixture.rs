@@ -7,7 +7,7 @@ use horizon_client::{
     biome::{BiomeInfo, Biomes, GrassModifier},
     blocks::BlockFacts,
     chunk::{Chunk, Light, MIN_Y, index},
-    mesher::{MeshTables, Mesher, OPAQUE_LAYER, TerrainVertex},
+    mesher::{LAYER_FLAGS, MeshTables, Mesher, TerrainVertex},
     models,
 };
 use horizon_core::biome::BiomeZoom;
@@ -149,7 +149,7 @@ fn scene(
         }
         for quad in vertices {
             let sprite = names
-                .get(&u32::from(quad[0].layer & !OPAQUE_LAYER))
+                .get(&u32::from(quad[0].layer & !LAYER_FLAGS))
                 .ok_or("unknown sprite layer")?;
             if quad
                 .iter()

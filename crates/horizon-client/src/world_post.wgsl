@@ -18,7 +18,8 @@ struct PostOut {
 }
 
 @fragment fn fs_copy(in: PostOut) -> @location(0) vec4<f32> {
-    return vec4(textureSampleLevel(world, world_sampler, in.uv, 0.0).rgb, 1.0);
+    // The alpha carries the emissive mark through to HDR output (hdr.wgsl).
+    return textureSampleLevel(world, world_sampler, in.uv, 0.0);
 }
 
 fn luma(c: vec3<f32>) -> f32 {
@@ -28,7 +29,8 @@ fn luma(c: vec3<f32>) -> f32 {
 // FXAA 3.11 (console quality): blend along the local edge direction.
 @fragment fn fs_fxaa(in: PostOut) -> @location(0) vec4<f32> {
     let texel = 1.0 / vec2<f32>(textureDimensions(world));
-    let rgb_m = textureSampleLevel(world, world_sampler, in.uv, 0.0).rgb;
+    let centre = textureSampleLevel(world, world_sampler, in.uv, 0.0);
+    let rgb_m = centre.rgb;
     let nw = luma(textureSampleLevel(world, world_sampler, in.uv + vec2(-0.5, -0.5) * texel, 0.0).rgb);
     let ne = luma(textureSampleLevel(world, world_sampler, in.uv + vec2(0.5, -0.5) * texel, 0.0).rgb);
     let sw = luma(textureSampleLevel(world, world_sampler, in.uv + vec2(-0.5, 0.5) * texel, 0.0).rgb);
@@ -37,7 +39,7 @@ fn luma(c: vec3<f32>) -> f32 {
     let lo = min(m, min(min(nw, ne), min(sw, se)));
     let hi = max(m, max(max(nw, ne), max(sw, se)));
     if hi - lo < max(0.0312, hi * 0.125) {
-        return vec4(rgb_m, 1.0);
+        return centre;
     }
     var dir = vec2(-((nw + ne) - (sw + se)), (nw + sw) - (ne + se));
     let reduce = max((nw + ne + sw + se) * 0.25 * 0.125, 1.0 / 128.0);
@@ -49,7 +51,7 @@ fn luma(c: vec3<f32>) -> f32 {
         + textureSampleLevel(world, world_sampler, in.uv + dir * 0.5, 0.0).rgb);
     let lb = luma(b);
     if lb < lo || lb > hi {
-        return vec4(a, 1.0);
+        return vec4(a, centre.a);
     }
-    return vec4(b, 1.0);
+    return vec4(b, centre.a);
 }

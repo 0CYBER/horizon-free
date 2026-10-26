@@ -297,7 +297,11 @@ pub(super) fn tesselate(
             Some(tables.water_overlay),
         )
     } else {
-        (tables.lava_still, tables.lava_flow, None)
+        (
+            tables.lava_still | crate::mesher::EMISSIVE_LAYER,
+            tables.lava_flow | crate::mesher::EMISSIVE_LAYER,
+            None,
+        )
     };
     let target = if water {
         &mut out.translucent

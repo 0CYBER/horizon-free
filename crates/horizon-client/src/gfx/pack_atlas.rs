@@ -169,9 +169,10 @@ impl PackAtlas {
         ];
         let columns = self.columns;
         // UVs past a sprite (models up to 2, distant tiles) cannot repeat in an atlas: clamped.
+        // The layer's two top bits are flags (`mesher::LAYER_FLAGS`), not part of the sprite.
         let body = format!(
             "    vec4 hz_origin = {origin};\n    \
-             uint hz_layer = hz_v_layer & 32767u;\n    \
+             uint hz_layer = hz_v_layer & 16383u;\n    \
              hz_cell = vec2(float(hz_layer % {columns}u), float(hz_layer / {columns}u));\n    \
              hz_scale = vec2({:?}, {:?});\n    \
              hz_Vertex = vec4(hz_v_pos + hz_origin.xyz, 1.0);\n    \
