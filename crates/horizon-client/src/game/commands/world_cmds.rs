@@ -606,10 +606,9 @@ impl Game<'_> {
         if !local {
         } else if count <= 0 {
             // handleParticleEvent, count 0: one particle, the speed times
-            // the delta as velocity (both sent as floats).
-            let speed = f64::from(speed);
+            // the delta as velocity (both sent as floats, multiplied as floats).
             self.particles
-                .create(&options, pos, delta.map(|d| speed * f64::from(d as f32)));
+                .create(&options, pos, delta.map(|d| f64::from(speed * d as f32)));
         } else {
             for _ in 0..count {
                 let r = self.particles.random();
