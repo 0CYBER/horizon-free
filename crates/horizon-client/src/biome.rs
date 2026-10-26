@@ -1,7 +1,7 @@
 //! Biome colours from the pinned biome definitions and colormaps
 //! (`Biome.getGrassColor`/`getFoliageColor`/..., `BlockTintSources`).
 use crate::Result;
-use horizon_core::{noise::SimplexNoise, random::LegacyRandom};
+use horizon_core::{noise::SimplexNoise, position::BlockPos, random::LegacyRandom};
 use serde_json::Value;
 use std::{collections::HashMap, fs, path::Path};
 
@@ -30,6 +30,8 @@ pub struct BiomeInfo {
     pub creature_probability: f32,
     pub name: String,
     pub temperature: f32,
+    /// `temperature_modifier: frozen` (the frozen oceans).
+    pub frozen: bool,
     pub downfall: f32,
     pub precipitation: bool,
     pub grass: u32,
@@ -41,6 +43,26 @@ pub struct BiomeInfo {
     /// The biome's own fog colour attribute; otherwise the dimension's applies.
     pub fog: Option<u32>,
     pub water_fog: u32,
+}
+impl BiomeInfo {
+    /// `Biome.getHeightAdjustedTemperature`: the frozen modifier, then cooler
+    /// with height above `sea_level + 17`.
+    pub fn temperature_at(&self, pos: BlockPos, sea_level: i32) -> f32 {
+        use horizon_world::worldgen::biome_temperature::{
+            BiomeTemperatureSettings, TemperatureModifier,
+        };
+        BiomeTemperatureSettings {
+            base_temperature: self.temperature,
+            modifier: if self.frozen {
+                TemperatureModifier::Frozen
+            } else {
+                TemperatureModifier::None
+            },
+            has_precipitation: self.precipitation,
+            downfall: self.downfall,
+        }
+        .height_adjusted(pos, sea_level)
+    }
 }
 pub struct Biomes {
     pub list: Vec<BiomeInfo>,
@@ -129,6 +151,7 @@ impl Biomes {
                         .as_f64()
                         .unwrap_or(0.1) as f32,
                 temperature,
+                frozen: v["temperature_modifier"].as_str() == Some("frozen"),
                 downfall,
                 precipitation: v["has_precipitation"].as_bool().unwrap_or(true),
                 grass: color(&effects["grass_color"])
