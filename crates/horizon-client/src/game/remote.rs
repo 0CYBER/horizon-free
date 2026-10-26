@@ -2108,6 +2108,11 @@ impl Game<'_> {
                 {
                     horizon_client::mobs::rabbit::hop_event(m);
                 }
+                if p.event == 19
+                    && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
+                {
+                    horizon_client::mobs::aquatic::squid_cycle_event(m);
+                }
                 // EntityEvent.DEATH: start the death animation.
                 if p.event == 3
                     && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
@@ -2982,7 +2987,10 @@ impl Game<'_> {
     fn remote_motion(&mut self, id: i32, velocity: [f64; 3]) {
         self.remote_dragon_motion(id, velocity);
         let v = Vec3::new(velocity[0], velocity[1], velocity[2]);
-        if let Some(d) = self.dropped.iter_mut().find(|d| d.id == id as u32) {
+        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id as u32) {
+            // Squid.aiStep derives its body pitch and roll from network motion.
+            m.velocity = v;
+        } else if let Some(d) = self.dropped.iter_mut().find(|d| d.id == id as u32) {
             d.velocity = v;
         } else if let Some(f) = self.falling.iter_mut().find(|f| f.id == id as u32) {
             f.velocity = v;
@@ -3546,6 +3554,8 @@ impl Game<'_> {
             } else if m.alive() {
                 m.body_rotation_tick();
             }
+            // Squid.aiStep follows LivingEntity's interpolation and head turn.
+            horizon_client::mobs::aquatic::squid_client_step(m);
             // WalkAnimationState.update from the horizontal distance moved.
             let (dx, dz) = (m.position.x - m.previous.x, m.position.z - m.previous.z);
             let target = (((dx * dx + dz * dz).sqrt() * 4.0) as f32).min(1.0);
