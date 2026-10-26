@@ -1242,6 +1242,20 @@ pub fn walk_target_value(m: &Mob, w: &MobWorld, p: [i32; 3]) -> f32 {
     if m.species() == Species::Strider {
         return super::strider::walk_target_value(m, w, p);
     }
+    // Hoglin.getWalkTargetValue: nowhere near a repellent, crimson nylium best.
+    if m.species() == Species::Hoglin {
+        let near = m.extra.repellent.is_some_and(|r| {
+            let d = |i: usize| i64::from(r[i] - p[i]);
+            d(0) * d(0) + d(1) * d(1) + d(2) * d(2) < 64
+        });
+        return if near {
+            -1.0
+        } else if w.block_name(p[0], p[1] - 1, p[2]) == "minecraft:crimson_nylium" {
+            10.0
+        } else {
+            0.0
+        };
+    }
     // Bee.getWalkTargetValue: any air block.
     if m.species() == Species::Bee {
         return if w.facts.is_air(w.world.block(p[0], p[1], p[2])) {
