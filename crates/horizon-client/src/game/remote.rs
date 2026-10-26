@@ -1406,6 +1406,14 @@ impl Game<'_> {
             {
                 return;
             }
+            // A dragon fireball keeps Entity's NO_OP InterpolationHandler too:
+            // the server's position replaces its own at once.
+            if let Some(b) = self.dragon_fireballs.iter_mut().find(|b| b.id == id as u32) {
+                if path.is_some() {
+                    b.position = Vec3::new(position[0], position[1], position[2]);
+                }
+                return;
+            }
             if let Some(p) = r.pending_items.get_mut(&id) {
                 p.0 = position;
             }
@@ -1689,19 +1697,30 @@ impl Game<'_> {
                 }
             }
             C::BlockChangedAck(p) => self.end_predictions(p.sequence),
-            // ClientLevel.blockEvent: BlockEntity.triggerEvent (chest lids,
-            // shulker boxes, bells) when the block is still the one it names.
+            // Level.blockEvent on the client level: the block's triggerEvent
+            // runs on the client's copy of whatever is at pos (a piston's
+            // moveBlocks builds the moving block entities it animates, a note
+            // block plays); what it doesn't handle reaches the client copy of
+            // the block entity (chest lids, shulker boxes).
             C::BlockEvent(p) => {
-                let state = self.world.block(p.pos[0], p.pos[1], p.pos[2]);
-                let block = &self.res.facts().get(state).name;
-                let named = self.remote.as_ref().and_then(|r| {
-                    r.builtin
-                        .get("minecraft:block")?
-                        .name(p.block)
-                        .map(str::to_owned)
+                let pos = horizon_core::position::BlockPos::new(p.pos[0], p.pos[1], p.pos[2]);
+                let triggered = self.with_level(|b, level, ticks| {
+                    b.client_block_event(level, ticks, pos, i32::from(p.b0), i32::from(p.b1))
                 });
-                if named.as_deref() == Some(&**block) {
-                    self.block_entity_event(p.pos, i32::from(p.b0), i32::from(p.b1));
+                self.sync_moving_pistons();
+                self.process_level_events()?;
+                if !triggered {
+                    let state = self.world.block(p.pos[0], p.pos[1], p.pos[2]);
+                    let block = &self.res.facts().get(state).name;
+                    let named = self.remote.as_ref().and_then(|r| {
+                        r.builtin
+                            .get("minecraft:block")?
+                            .name(p.block)
+                            .map(str::to_owned)
+                    });
+                    if named.as_deref() == Some(&**block) {
+                        self.block_entity_event(p.pos, i32::from(p.b0), i32::from(p.b1));
+                    }
                 }
             }
             // ClientLevel.levelEvent: LevelEventHandler, as this client's own
@@ -2099,6 +2118,11 @@ impl Game<'_> {
                     && m.species() == horizon_client::mobs::Species::Rabbit
                 {
                     horizon_client::mobs::rabbit::hop_event(m);
+                }
+                if p.event == 19
+                    && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
+                {
+                    horizon_client::mobs::aquatic::squid_cycle_event(m);
                 }
                 // EntityEvent.DEATH: start the death animation.
                 if p.event == 3
@@ -2974,7 +2998,10 @@ impl Game<'_> {
     fn remote_motion(&mut self, id: i32, velocity: [f64; 3]) {
         self.remote_dragon_motion(id, velocity);
         let v = Vec3::new(velocity[0], velocity[1], velocity[2]);
-        if let Some(d) = self.dropped.iter_mut().find(|d| d.id == id as u32) {
+        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id as u32) {
+            // Squid.aiStep derives its body pitch and roll from network motion.
+            m.velocity = v;
+        } else if let Some(d) = self.dropped.iter_mut().find(|d| d.id == id as u32) {
             d.velocity = v;
         } else if let Some(f) = self.falling.iter_mut().find(|f| f.id == id as u32) {
             f.velocity = v;
@@ -2987,6 +3014,8 @@ impl Game<'_> {
             .find(|p| p.id == id as u32)
         {
             p.velocity = v;
+        } else if let Some(b) = self.dragon_fireballs.iter_mut().find(|b| b.id == id as u32) {
+            b.velocity = v;
         } else if let Some(p) = self
             .remote
             .as_mut()
@@ -3144,8 +3173,14 @@ impl Game<'_> {
         self.border.tick();
         self.player_border();
         self.tick_remote_entities(running);
-        // ClientLevel.tickBlockEntities: chest lids, shulker boxes, bells.
+        // ClientLevel.tickBlockEntities: chest lids, shulker boxes, bells,
+        // and the moving pistons a block event's client-side moveBlocks made
+        // (their progress advances between the server's block updates).
         self.tick_block_entity_anims();
+        self.with_level(|b, level, ticks| {
+            b.client_tick_block_entities(level, ticks);
+        });
+        self.sync_moving_pistons();
         self.tick_hand();
         self.tick_particles();
         self.tick_client_ambient();
@@ -3536,6 +3571,8 @@ impl Game<'_> {
             } else if m.alive() {
                 m.body_rotation_tick();
             }
+            // Squid.aiStep follows LivingEntity's interpolation and head turn.
+            horizon_client::mobs::aquatic::squid_client_step(m);
             // WalkAnimationState.update from the horizontal distance moved.
             let (dx, dz) = (m.position.x - m.previous.x, m.position.z - m.previous.z);
             let target = (((dx * dx + dz * dz).sqrt() * 4.0) as f32).min(1.0);
@@ -3749,6 +3786,15 @@ impl Game<'_> {
 
     /// MultiPlayerGameMode.startDestroyBlock / continueDestroyBlock.
     fn remote_mining(&mut self, start: bool) {
+        if !self
+            .res
+            .items()
+            .can_destroy_block(self.held(), self.creative)
+        {
+            self.stop_remote_mining();
+            self.mining = None;
+            return;
+        }
         let Some(r) = self.remote.as_mut() else {
             return;
         };

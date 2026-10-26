@@ -1560,6 +1560,7 @@ impl Game<'_> {
                         y -= 1.0;
                     }
                     self.breath_clouds.push(Breath {
+                        id: 0,
                         at: [x, y.floor() + 1.0, z],
                         radius: 5.0,
                         age: 0,
@@ -1686,10 +1687,12 @@ impl Game<'_> {
                     .play("minecraft:entity.ender_dragon.growl", Some(at), 2.5, pitch);
             }
         }
-        // checkCrystals: heal 1 every 10 ticks from the nearest crystal within 32.
+        // checkCrystals: heal 1 every 10 ticks from the nearest crystal, found
+        // among those touching the dragon's box grown by 32.
         let d = self.dragon.as_mut().expect("dragon");
         if d.nearest_crystal.is_some() && d.ticks % 10 == 0 && d.health < MAX_HEALTH {
-            d.health += 1.0;
+            // LivingEntity.setHealth clamps to the maximum.
+            d.health = (d.health + 1.0).min(MAX_HEALTH);
         }
         if d.random.next_int_bound(10).unwrap_or(1) == 0 {
             let p = d.position;
@@ -2022,6 +2025,7 @@ impl Game<'_> {
         // assignDirectionalMovement: the direction times the acceleration power 0.1.
         let velocity = Vec3::new(v.x * 0.1, v.y * 0.1, v.z * 0.1);
         self.dragon_fireballs.push(DragonFireball {
+            id: 0,
             position: at,
             previous: at,
             velocity,
@@ -2068,6 +2072,7 @@ impl Game<'_> {
             });
             if hit_block || hit_player || b.age > 600 {
                 self.breath_clouds.push(Breath {
+                    id: 0,
                     at: [next.x, next.y, next.z],
                     radius: 3.0,
                     age: 0,
@@ -2197,15 +2202,58 @@ impl Game<'_> {
     }
 }
 pub(super) struct DragonFireball {
-    position: Vec3,
-    previous: Vec3,
-    velocity: Vec3,
+    /// Its entity id once a server's players track it (0 until then).
+    pub(super) id: u32,
+    pub(super) position: Vec3,
+    pub(super) previous: Vec3,
+    pub(super) velocity: Vec3,
     age: i32,
 }
+impl DragonFireball {
+    /// One a server sent (`handleAddEntity`).
+    pub(super) fn remote(id: u32, at: Vec3, velocity: Vec3) -> Self {
+        Self {
+            id,
+            position: at,
+            previous: at,
+            velocity,
+            age: 0,
+        }
+    }
+    /// `AbstractHurtingProjectile.tick` on a server's client: `applyInertia`
+    /// first (power 0.1, inertia 0.95 or 0.8 in water), then the move; only
+    /// the server decides what it hits.
+    pub(super) fn remote_step(&mut self, water: bool) {
+        self.previous = self.position;
+        self.age += 1;
+        let v = self.velocity;
+        // Vec3.normalize: a vector shorter than 1e-5 stays zero.
+        let l = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt();
+        let n = if l < 1.0e-5 {
+            Vec3::new(0.0, 0.0, 0.0)
+        } else {
+            Vec3::new(v.x / l, v.y / l, v.z / l)
+        };
+        let inertia = f64::from(if water { 0.8f32 } else { 0.95f32 });
+        let v = Vec3::new(
+            (v.x + n.x * 0.1) * inertia,
+            (v.y + n.y * 0.1) * inertia,
+            (v.z + n.z * 0.1) * inertia,
+        );
+        self.velocity = v;
+        self.position = Vec3::new(
+            self.position.x + v.x,
+            self.position.y + v.y,
+            self.position.z + v.z,
+        );
+    }
+}
 pub(super) struct Breath {
-    at: [f64; 3],
-    radius: f32,
-    age: i32,
+    /// Its entity id once a server's players track it (0 until then).
+    pub(super) id: u32,
+    pub(super) at: [f64; 3],
+    pub(super) radius: f32,
+    pub(super) age: i32,
     duration: i32,
     from_dragon: bool,
 }
@@ -3127,16 +3175,24 @@ impl Game<'_> {
         let _ = self.activate_exit_portal();
         self.fight.dirty = true;
     }
-    /// `EnderDragon.checkCrystals`' search: the nearest crystal within 32
-    /// blocks on each axis.
+    /// `EnderDragon.checkCrystals`' search: the nearest crystal whose box
+    /// meets the dragon's box grown by 32.
     fn nearest_crystal_to(&self, p: Vec3) -> Option<usize> {
+        // The dragon's 16 by 8 box.
+        let reach = Aabb::new(
+            Vec3::new(p.x - 8.0, p.y, p.z - 8.0),
+            Vec3::new(p.x + 8.0, p.y + 8.0, p.z + 8.0),
+        )
+        .inflate(Vec3::new(32.0, 32.0, 32.0));
         self.crystals
             .iter()
             .enumerate()
             .filter(|(_, c)| {
-                (c.position.x - p.x).abs() <= 32.0
-                    && (c.position.y - p.y).abs() <= 32.0
-                    && (c.position.z - p.z).abs() <= 32.0
+                // An end crystal's 2 by 2 box.
+                reach.intersects(Aabb::new(
+                    Vec3::new(c.position.x - 1.0, c.position.y, c.position.z - 1.0),
+                    Vec3::new(c.position.x + 1.0, c.position.y + 2.0, c.position.z + 1.0),
+                ))
             })
             .min_by(|a, b| {
                 let da = (a.1.position.x - p.x).powi(2)

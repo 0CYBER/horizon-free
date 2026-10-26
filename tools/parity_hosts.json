@@ -28,19 +28,12 @@
    "python": "python3.13",
    "jobs": 6,
    "nice": 10,
-   "note": "a partner's server (Ubuntu, 8 EPYC threads, 30 GB, Detroit; tailnet only), used by nothing else: 6 jobs, in the CI runner's environment, slice and Xvfb screen (tools/ci/linux-runner.sh); the light Linux checks that used to go to the ThinkPad go here"
-  },
-  "thinkpad": {
-   "ssh": "thinkpad",
-   "root": "code/horizon-parity",
-   "shell": "sh -c",
-   "jobs": 2,
-   "nice": 19,
-   "environment": {
-    "PARITY_BUILD_JOBS": "2"
+   "exclude": {
+    "mob_ai": "the vanilla oracle runs out of its 3 GB heap here (OutOfMemoryError in IO workers; passes on the desktop and the Mac) - 2026-10-26 trial",
+    "lan_integration": "two clients rendered on the CPU (lavapipe): different timing subtests fail on each run (elytra, consume-release, barter, critical-hits) - 2026-10-26 trial",
+    "world_reopen": "failed twice here (no Save and Quit button after reopening; the minecart-count flake), passes on the desktop - 2026-10-26 trial"
    },
-   "note": "hosts the Claude account pool: two harnesses at most, at the lowest priority",
-   "setup": "export PKG_CONFIG_PATH=$HOME/code/horizon-parity/alsa-dev/lib/pkgconfig"
+   "note": "a partner's server (Ubuntu, 8 EPYC threads, 30 GB, Detroit; tailnet only), used by nothing else: 6 jobs, in the CI runner's environment, slice and Xvfb screen (tools/ci/linux-runner.sh); the always-on Linux host since the ThinkPad stopped running harnesses (2026-10-26)"
   }
  },
  "local_only": {

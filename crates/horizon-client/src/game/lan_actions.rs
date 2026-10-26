@@ -77,6 +77,10 @@ pub(super) struct GuestPlay {
     last_inventory: u64,
     /// `Entity.portalProcess` and `portalCooldown` (game/server_travel.rs).
     pub(super) portal: horizon_client::nether_portal::PortalState,
+    /// `ServerPlayer.wonGame`: the End poem is showing, the player waits for
+    /// its client's PERFORM_RESPAWN (`respawn_requested`).
+    pub(super) won_game: bool,
+    pub(super) respawn_requested: bool,
     /// `Player.takeXpDelay`: ticks until the next orb can be taken.
     xp_delay: u32,
     /// What last killed the guest outright (`/kill`): the death message's key.
@@ -1347,6 +1351,13 @@ impl Game<'_> {
                 self.guest_suggestions(host, conn, &payload);
             }
             S::PlaceRecipe(p) => self.lan_place_recipe(host, conn, &p),
+            // handleClientCommand: PERFORM_RESPAWN after the poem leaves the End
+            // (the next server tick sends the player on).
+            S::ClientCommand(c)
+                if c.action == 0 && host.play.get(&conn).is_some_and(|p| p.won_game) =>
+            {
+                host.play.entry(conn).or_default().respawn_requested = true;
+            }
             S::ClientCommand(c) if c.action == 0 => self.guest_respawn(host, conn),
             // ServerStatsCounter.sendStats.
             S::ClientCommand(c) if c.action == 1 => {

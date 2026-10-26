@@ -71,6 +71,8 @@ pub struct ItemInfo {
     /// The `tool` component's `damage_per_block`, when the item has the
     /// component (a mace or trident has one without rules).
     pub tool_damage_per_block: Option<u32>,
+    /// `tool.can_destroy_blocks_in_creative` (defaults to true).
+    pub can_destroy_blocks_in_creative: bool,
     pub food: Option<(u32, f32)>,
     pub can_always_eat: bool,
     /// `consumable`: its timing, sound, particles and `on_consume_effects`.
@@ -558,6 +560,10 @@ impl Items {
                     tool_damage_per_block: c
                         .get("minecraft:tool")
                         .map(|t| t["damage_per_block"].as_u64().unwrap_or(1) as u32),
+                    can_destroy_blocks_in_creative:
+                        c["minecraft:tool"]["can_destroy_blocks_in_creative"]
+                            .as_bool()
+                            .unwrap_or(true),
                     food,
                     can_always_eat,
                     // Consumable.CODEC's defaults.
@@ -757,6 +763,26 @@ impl Items {
             Some(tag) => self.block_tags.get(tag).is_some_and(|s| s.contains(block)),
             None => spec == block,
         }
+    }
+    /// `Item.canDestroyBlock`: a tool may forbid block destruction with instabuild.
+    pub fn can_destroy_block(&self, held: Option<&ItemStack>, creative: bool) -> bool {
+        if !creative {
+            return true;
+        }
+        let Some(held) = held.filter(|s| s.count > 0 && &*s.item != "minecraft:air") else {
+            return true;
+        };
+        if let Some(tool) = held.data().and_then(|d| d.other("minecraft:tool")) {
+            return tool
+                .get("can_destroy_blocks_in_creative")
+                .and_then(|v| match v {
+                    horizon_world::nbt::Tag::Byte(v) => Some(*v),
+                    _ => None,
+                })
+                .is_none_or(|v| v != 0);
+        }
+        self.get(&held.item)
+            .is_none_or(|info| info.can_destroy_blocks_in_creative)
     }
     /// `Tool.getMiningSpeed` for the held item (1.0 without a tool component).
     pub fn mining_speed(&self, held: Option<&ItemStack>, block: &str) -> f32 {

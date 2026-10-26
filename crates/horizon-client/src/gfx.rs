@@ -32,6 +32,8 @@ fn entity_shader() -> String {
     crate::overlay::wgsl_constants() + include_str!("entity.wgsl")
 }
 
+#[cfg(test)]
+mod crumbling_tests;
 mod entity_batch;
 mod weather;
 use entity_batch::EntityBatch;
@@ -334,6 +336,10 @@ pub struct Renderer {
     adapter: wgpu::Adapter,
     /// The window's swapchain; `None` when rendering offscreen (`--offscreen`).
     surface: Option<wgpu::Surface<'static>>,
+    /// The surface `release_surface` set aside for the renderer that replaces
+    /// this one on the same device: reused, not created again, as a new
+    /// surface for the window can come back lost (Wayland on Mesa).
+    spare_surface: std::sync::Mutex<Option<wgpu::Surface<'static>>>,
     /// The offscreen colour target, sized like `config`.
     offscreen: Option<wgpu::Texture>,
     /// Offscreen submissions still on the GPU: at most two frames run ahead.
@@ -1044,7 +1050,15 @@ impl Renderer {
                     surface: if offscreen {
                         None
                     } else {
-                        Some(renderer.instance.create_surface(window.clone())?)
+                        let spare = renderer
+                            .spare_surface
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .take();
+                        Some(match spare {
+                            Some(surface) => surface,
+                            None => renderer.instance.create_surface(window.clone())?,
+                        })
                     },
                     instance: renderer.instance.clone(),
                     adapter: renderer.adapter.clone(),
@@ -2320,6 +2334,7 @@ impl Renderer {
             instance,
             adapter,
             surface,
+            spare_surface: std::sync::Mutex::new(None),
             offscreen,
             in_flight: std::collections::VecDeque::new(),
             first_frame: if previous.is_none() {
@@ -2499,18 +2514,32 @@ impl Renderer {
             view_formats: &config.view_formats,
         })
     }
-    /// Release the window surface before another renderer uses the same window.
+    /// Hand the window surface over to the renderer that replaces this one on
+    /// the same device (it takes `spare_surface`).
     pub fn release_surface(&mut self) {
-        self.surface = None;
+        *self
+            .spare_surface
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = self.surface.take();
     }
     /// Reattach a window after surface loss or a failed renderer replacement.
     pub fn recreate_surface(&mut self) -> Result<()> {
         if self.offscreen.is_some() {
             return Ok(());
         }
-        // Wayland allows only one tearing-control object per window surface.
-        self.release_surface();
-        let surface = self.instance.create_surface(self.window.clone())?;
+        // The surface set aside for a replacement that failed, else a new one
+        // (Wayland allows only one tearing-control object per window surface,
+        // so the old one goes first).
+        let spare = self
+            .spare_surface
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        self.surface = None;
+        let surface = match spare {
+            Some(surface) => surface,
+            None => self.instance.create_surface(self.window.clone())?,
+        };
         Self::configure(
             &self.device,
             &surface,

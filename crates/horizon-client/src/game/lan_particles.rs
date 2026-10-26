@@ -95,7 +95,11 @@ impl Game<'_> {
 
     /// The options a server's particle stands for (None for a type or data
     /// this client doesn't draw).
-    fn received_particle(&mut self, p: &Particle, at: [f64; 3]) -> Option<ParticleOptions> {
+    pub(super) fn received_particle(
+        &mut self,
+        p: &Particle,
+        at: [f64; 3],
+    ) -> Option<ParticleOptions> {
         let name = self
             .remote
             .as_ref()?

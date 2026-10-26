@@ -944,6 +944,13 @@ impl Game<'_> {
             for m in &mut self.mobs {
                 m.needs_sync = false;
             }
+            // `runBlockEvents`' broadcast precedes the tick's block changes
+            // (`ChunkHolder.broadcastChanges` in `tick_level` below): the
+            // guest re-runs a piston's `triggerEvent` while its level still
+            // has the blocks as they were before the move.
+            for (pos, b0, b1, state) in std::mem::take(&mut self.lan_block_events) {
+                host.hub.block_event(pos, b0, b1, state);
+            }
             let entities = states.as_slice();
             let spawn = self.spawn.map_or([0.5, 80.0, 0.5], |s| [s.x, s.y, s.z]);
             let events = {
@@ -1177,17 +1184,29 @@ impl Game<'_> {
             return;
         }
         for e in events {
-            if let horizon_world::level::LevelEvent::LevelEvent { id, pos, data } = e {
-                // The acting guest does not predict the egg's teleport
-                // particles, bone meal's growth, or anvil result sounds
-                // (these levelEvent calls name no excluded player).
-                let except = if matches!(*id, 2015 | 1505 | 1029 | 1030) {
-                    None
-                } else {
-                    self.lan_acting
-                };
-                self.lan_events
-                    .push((*id, [pos.x, pos.y, pos.z], *data, except));
+            match e {
+                horizon_world::level::LevelEvent::LevelEvent { id, pos, data } => {
+                    // The acting guest does not predict the egg's teleport
+                    // particles, bone meal's growth, or anvil result sounds
+                    // (these levelEvent calls name no excluded player).
+                    let except = if matches!(*id, 2015 | 1505 | 1029 | 1030) {
+                        None
+                    } else {
+                        self.lan_acting
+                    };
+                    self.lan_events
+                        .push((*id, [pos.x, pos.y, pos.z], *data, except));
+                }
+                // `ServerLevel.runBlockEvents` broadcasts a handled block
+                // event (`ClientboundBlockEventPacket`): the guest re-runs
+                // the block's `triggerEvent` — a piston's `moveBlocks` is
+                // what animates the move there. `state` is the block the
+                // event named, read before it ran (the packet's `block`).
+                horizon_world::level::LevelEvent::BlockEntityEvent { pos, state, a, b } => {
+                    self.lan_block_events
+                        .push(([pos.x, pos.y, pos.z], *a, *b, state.0));
+                }
+                _ => {}
             }
         }
     }
