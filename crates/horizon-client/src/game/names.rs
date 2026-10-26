@@ -86,6 +86,10 @@ impl Game<'_> {
             .iter()
             .filter_map(|m| Some((m, m.custom_name.clone()?, false)));
         let players = players.into_iter().map(|(m, name)| (m, name, true));
+        // Who is riding whom: asked once per tag below, and rescanning every mob
+        // for each tag made this quadratic in the number of loaded mobs.
+        let ridden: std::collections::HashSet<u32> =
+            self.mobs.iter().filter_map(|o| o.extra.mount).collect();
         for (m, name, player) in named.chain(players) {
             if !m.alive() {
                 continue;
@@ -134,7 +138,7 @@ impl Game<'_> {
                 invisible_to_viewer: invisible,
                 hud_hidden: self.ui.hide_gui,
                 is_camera: false,
-                is_vehicle: self.mobs.iter().any(|o| o.extra.mount == Some(m.id)),
+                is_vehicle: ridden.contains(&m.id),
             };
             // MobRenderer.shouldShowName: a visible name, or the mob under the
             // crosshair; players (LivingEntityRenderer) need neither.
