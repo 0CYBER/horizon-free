@@ -370,7 +370,7 @@ public final class VanillaPackScreenOracle {
         unsafeField.setAccessible(true);
         unsafe = unsafeField.get(null);
         allocate = unsafe.getClass().getMethod("allocateInstance", Class.class);
-        font = ParityFont.create(ParityFont.resources());
+        font = ParityFont.createDefault(ParityFont.resources(Path.of(args[2])));
         Minecraft mc = alloc(Minecraft.class);
         put(mc, Minecraft.class, "font", font);
         put(mc, Minecraft.class, "lastInputType", InputType.MOUSE);

@@ -4200,6 +4200,9 @@ impl Game<'_> {
         self.with_level(|b, level, ticks| b.notify_written(level, ticks, position, flags));
     }
     fn tick(&mut self) -> Result<()> {
+        if self.agent.hold_server {
+            return Ok(());
+        }
         self.tick_debug_keys()?;
         self.tick_debug_charts();
         if self.remote.is_some() {
