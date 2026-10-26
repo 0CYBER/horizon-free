@@ -67,6 +67,7 @@ mod end_sky;
 mod flat;
 pub mod lightning;
 mod lod;
+mod native_pack;
 mod native_post;
 mod occlusion;
 mod pack_atlas;
@@ -501,7 +502,7 @@ pub struct Renderer {
     /// The shader pack's post-processing, and the dimension (legacy id) it was loaded for.
     pack_post: Option<(i32, Option<pack_post::PackPost>)>,
     /// The post passes of one of Horizon's own shader packs; never beside `pack_post`'s.
-    native_post: Option<native_post::NativePost>,
+    native: Option<native_pack::NativePack>,
     /// Time the shader pack's passes on the GPU (F3, or `HORIZON_SHADER_PACK_TIMING`).
     pass_timing: bool,
     /// The entity vertices Horizon draws itself while a shader pack draws the others.
@@ -2414,7 +2415,7 @@ impl Renderer {
             occlusion: occlusion::Occlusion::new(crate::chunk::MIN_Y, crate::chunk::HEIGHT / 16),
             world_post,
             pack_post: None,
-            native_post: None,
+            native: None,
             pass_timing: pack_timing::PassTiming::logging(),
             pack_entity_rest: Vec::new(),
             cloud_bindings,
@@ -2924,41 +2925,35 @@ impl Renderer {
         });
         self.pack_post = Some((dimension, post));
         if self.pack_post.as_ref().is_some_and(|p| p.1.is_some()) {
-            self.native_post = None;
+            self.native = None;
         }
         report
     }
     /// Drops the running shader pack, of either kind.
     pub fn drop_shader_packs(&mut self) {
         self.pack_post = None;
-        self.native_post = None;
+        self.native = None;
         self.pack_atlas = None;
     }
-    /// Runs the post passes of one of Horizon's own shader packs over the world from now on
-    /// (`None`: no pack), with its options' values; replaces a `shaders/` pack. Returns the
-    /// passes' labels; on an error the passes that ran keep running.
+    /// Runs the post stage of one of Horizon's own shader packs from now on (`None`: no
+    /// pack), with its options' values; replaces a `shaders/` pack. Returns the passes'
+    /// labels; on an error the pack that ran keeps running.
     pub fn set_native_shader_pack(
         &mut self,
         pack: Option<(horizon_shader_api::Report, Vec<(String, f64)>)>,
     ) -> std::result::Result<Vec<String>, String> {
-        let stages = pack.map(|(report, constants)| {
-            let post: Vec<_> = report
-                .stages
-                .into_iter()
-                .filter(|s| s.kind == horizon_shader_api::StageKind::Post)
-                .collect();
-            (post, constants)
-        });
-        let Some((post, constants)) = stages.filter(|(post, _)| !post.is_empty()) else {
-            self.native_post = None;
+        let Some((report, constants)) = pack else {
+            self.native = None;
             return Ok(Vec::new());
         };
         let format = self.config.format.remove_srgb_suffix();
-        let post = native_post::NativePost::new(&self.device, post, &constants, format)?;
-        let labels = post.labels().into_iter().map(str::to_owned).collect();
-        self.pack_post = None;
-        self.pack_atlas = None;
-        self.native_post = Some(post);
+        let (pack, labels) =
+            native_pack::NativePack::new(&self.device, report, &constants, format)?;
+        self.native = pack.draws().then_some(pack);
+        if self.native.is_some() {
+            self.pack_post = None;
+            self.pack_atlas = None;
+        }
         Ok(labels)
     }
     /// What a shader pack's gbuffers programs read from Horizon's geometry: the sky's, and
@@ -3009,20 +3004,20 @@ impl Renderer {
     /// The running shader pack's timer, of either kind.
     fn pass_timer<'a>(
         pack: &'a mut Option<(i32, Option<pack_post::PackPost>)>,
-        native: &'a mut Option<native_post::NativePost>,
+        native: &'a mut Option<native_pack::NativePack>,
     ) -> Option<&'a mut Option<pack_timing::PassTiming>> {
         match (pack, native) {
             (Some((_, Some(post))), _) => Some(&mut post.timing),
-            (_, Some(post)) => Some(&mut post.timing),
+            (_, Some(native)) => Some(&mut native.timing),
             _ => None,
         }
     }
     /// Each pass of the running shader pack with its median GPU time in milliseconds, while
     /// they are timed (`set_pass_timing`).
     pub fn shader_pass_times(&self) -> Vec<(String, f32)> {
-        let timer = match (&self.pack_post, &self.native_post) {
+        let timer = match (&self.pack_post, &self.native) {
             (Some((_, Some(post))), _) => post.timing.as_ref(),
-            (_, Some(post)) => post.timing.as_ref(),
+            (_, Some(native)) => native.timing.as_ref(),
             _ => None,
         };
         timer
@@ -4052,8 +4047,8 @@ impl Renderer {
         // The world's targets: the screen, or the scaled target of `post`.
         let pack_post = !frame.title && self.pack_post.as_ref().is_some_and(|p| p.1.is_some());
         // One of Horizon's own packs reads the same world target.
-        let native_post = !frame.title && self.native_post.is_some();
-        if let Some(timer) = Self::pass_timer(&mut self.pack_post, &mut self.native_post)
+        let native_post = !frame.title && self.native.as_ref().is_some_and(|n| n.post.is_some());
+        if let Some(timer) = Self::pass_timer(&mut self.pack_post, &mut self.native)
             && timer.is_some() != self.pass_timing
         {
             *timer = self
@@ -4115,6 +4110,20 @@ impl Renderer {
             cull.bind_depth(&self.device, world_depth);
         }
         let cull = self.cull.as_ref().filter(|_| culling && solid_draws > 0);
+        // One of Horizon's own packs: this frame's inputs.
+        if !frame.title
+            && let Some(native) = &mut self.native
+        {
+            let size = self
+                .world_post
+                .size()
+                .filter(|_| scaled.is_some())
+                .unwrap_or([self.config.width, self.config.height]);
+            native.frame.write(&self.queue, frame, size);
+            if let Some(t) = &mut native.timing {
+                t.begin(&self.device, &self.queue);
+            }
+        }
         {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: world_view,
@@ -4511,17 +4520,17 @@ impl Renderer {
             self.pack_post = Some((dimension, Some(post)));
         } else if let Some((color, depth)) = &scaled
             && native_post
-            && let Some(post) = &mut self.native_post
+            && let Some(native) = &mut self.native
+            && let Some(post) = &mut native.post
         {
             let size = self.world_post.size().unwrap_or([1, 1]);
             post.run(
                 &self.device,
-                &self.queue,
                 &mut encoder,
                 (color, depth),
                 &view_target,
-                frame,
                 size,
+                native.timing.as_mut(),
             );
         } else if scaled.is_some() {
             self.world_post.finish(&mut encoder, &view_target);
@@ -4694,7 +4703,7 @@ impl Renderer {
             timer.submitted(&self.queue);
             timer.collect(&self.device, &mut self.gpu_times);
         }
-        if let Some(Some(timer)) = Self::pass_timer(&mut self.pack_post, &mut self.native_post) {
+        if let Some(Some(timer)) = Self::pass_timer(&mut self.pack_post, &mut self.native) {
             timer.submitted(&self.queue);
         }
         if let Some((path, buffer)) = readback {
