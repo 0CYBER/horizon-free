@@ -802,6 +802,27 @@ impl Game<'_> {
         }
     }
 
+    /// The pointer moved while a list's scrollbar is held: the game rules'
+    /// list follows it (AbstractSelectionList.mouseDragged).
+    pub(super) fn world_options_drag(&mut self) {
+        let h = self.gui_size().1;
+        if let Some(o) = self.world_options.as_mut()
+            && o.view == View::GameRules
+            && let Some(rules) = o.rules.as_mut()
+        {
+            rules.drag(self.cursor.1, h);
+        }
+    }
+
+    /// The button came up: a held scrollbar lets go (onRelease).
+    pub(super) fn world_options_release(&mut self) {
+        if let Some(o) = self.world_options.as_mut()
+            && let Some(rules) = o.rules.as_mut()
+        {
+            rules.release();
+        }
+    }
+
     pub(super) fn world_options_click(&mut self) {
         let Some(mut o) = self.world_options.take() else {
             return;
