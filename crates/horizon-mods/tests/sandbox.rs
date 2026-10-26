@@ -1084,8 +1084,9 @@ fn recipes_reads_the_tables() {
     recipes[1].kind = RecipeKind::Brewing;
     recipes[1].results[0].components =
         "[minecraft:potion_contents={potion:\"minecraft:swiftness\"}]".into();
+    let mods_recipes = Some(std::sync::Arc::new(Recipes { items, recipes }));
     mods.set_snapshot(Snapshot {
-        recipes: Some(std::sync::Arc::new(Recipes { items, recipes })),
+        recipes: mods_recipes.clone(),
         known_recipes: vec![1, 5, 9].into(),
         ..Snapshot::default()
     });
@@ -1115,6 +1116,46 @@ fn recipes_reads_the_tables() {
             .iter()
             .all(|e| e.status == horizon_mods::Status::Running),
         "it ran out of fuel"
+    );
+    // Actions: refused without a crafting screen, for an unknown recipe,
+    // and outside creative mode.
+    assert_eq!(
+        said(&mut mods, "recipe_place minecraft:recipe_5"),
+        ["place minecraft:recipe_5: no screen that takes recipes is open"]
+    );
+    let mut snap = Snapshot {
+        recipes: mods_recipes.clone(),
+        known_recipes: vec![1, 5, 9].into(),
+        placing: true,
+        ..Snapshot::default()
+    };
+    mods.set_snapshot(snap.clone());
+    assert_eq!(
+        said(&mut mods, "recipe_place minecraft:recipe_6"),
+        ["place minecraft:recipe_6: recipe 6 is not in the player's recipe book"]
+    );
+    assert!(mods.command("recipe_place minecraft:recipe_5 all"));
+    assert_eq!(
+        mods.drain()[0],
+        Output::PlaceRecipe {
+            book_id: 5,
+            all: true
+        }
+    );
+    assert_eq!(
+        said(&mut mods, "recipe_give minecraft:item_7 3"),
+        ["give minecraft:item_7: only in creative mode"]
+    );
+    snap.creative = true;
+    mods.set_snapshot(snap);
+    assert!(mods.command("recipe_give minecraft:item_7 3"));
+    assert_eq!(
+        mods.drain()[0],
+        Output::Give {
+            item: "minecraft:item_7".into(),
+            count: 3,
+            components: String::new()
+        }
     );
     // Without the game's tables (no mod read them yet): empty, not a trap.
     mods.set_snapshot(Snapshot::default());

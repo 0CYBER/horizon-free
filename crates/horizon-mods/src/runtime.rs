@@ -161,6 +161,10 @@ pub struct Snapshot {
     pub recipes: Option<Arc<Recipes>>,
     /// The `book-id`s of the recipes the player's book holds.
     pub known_recipes: Arc<[i32]>,
+    /// The open screen takes recipes (`recipes.place`).
+    pub placing: bool,
+    /// The player is in creative mode (`recipes.give`).
+    pub creative: bool,
 }
 
 /// Capability `recipes`'s tables: `items` in the registry's order, which
@@ -232,6 +236,15 @@ pub enum Output {
     CloseScreen { owner: usize },
     /// `render.shake`: strength 0 to 1, fading out over `seconds` (≤ 10).
     Shake { strength: f32, seconds: f32 },
+    /// `recipes.place`: the recipe book's click on this display id, all of
+    /// it when `all`.
+    PlaceRecipe { book_id: i32, all: bool },
+    /// `recipes.give`: a stack for a creative player.
+    Give {
+        item: String,
+        count: u32,
+        components: String,
+    },
 }
 
 /// The game's world as capability `world` reads it during a call: the
@@ -367,6 +380,8 @@ pub struct RecipePage {
 static BROWSER_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 /// Items a panel may hold, and events kept for `browser.poll`.
 const BROWSER_ITEMS: usize = 8192;
+/// `recipes.place` and `give` calls a hook call may make.
+const RECIPE_ACTIONS: usize = 36;
 /// Recipes `set-recipes` may show, slots in one, and stacks a slot cycles.
 const BROWSER_RECIPES: usize = 256;
 const RECIPE_SLOTS: usize = 9;
@@ -1383,6 +1398,54 @@ impl recipes::Host for State {
     }
     fn known(&mut self) -> Vec<i32> {
         self.snapshot.known_recipes.to_vec()
+    }
+    fn place(&mut self, book_id: i32, all: bool) -> Result<(), String> {
+        self.recipe_action()?;
+        if !self.snapshot.placing {
+            return Err("no screen that takes recipes is open".into());
+        }
+        if !self.snapshot.known_recipes.contains(&book_id) {
+            return Err(format!(
+                "recipe {book_id} is not in the player's recipe book"
+            ));
+        }
+        self.out.push(Output::PlaceRecipe { book_id, all });
+        Ok(())
+    }
+    fn give(&mut self, stack: RecipeStack) -> Result<(), String> {
+        self.recipe_action()?;
+        if !self.snapshot.creative {
+            return Err("only in creative mode".into());
+        }
+        let item = self
+            .snapshot
+            .recipes
+            .as_ref()
+            .and_then(|r| r.items.get(stack.item as usize))
+            .ok_or_else(|| format!("no item {}", stack.item))?
+            .id
+            .clone();
+        self.out.push(Output::Give {
+            item,
+            count: stack.count.clamp(1, 99),
+            components: clip_to(stack.components, 4096),
+        });
+        Ok(())
+    }
+}
+impl State {
+    /// `recipes.place` and `give` take at most [`RECIPE_ACTIONS`] a call.
+    fn recipe_action(&self) -> Result<(), String> {
+        let done = self
+            .out
+            .iter()
+            .filter(|o| matches!(o, Output::PlaceRecipe { .. } | Output::Give { .. }))
+            .count();
+        if done < RECIPE_ACTIONS {
+            Ok(())
+        } else {
+            Err(format!("at most {RECIPE_ACTIONS} places and gives a call"))
+        }
     }
 }
 impl State {
