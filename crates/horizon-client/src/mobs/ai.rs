@@ -1591,8 +1591,20 @@ pub fn step_sound(
         S::Husk => quiet("entity.husk.step"),
         S::Drowned => quiet("entity.drowned.step"),
         S::ZombieVillager => quiet("entity.zombie_villager.step"),
-        S::CamelHusk => Some(("entity.camel_husk.step", 0.4, 1.0)),
-        S::Camel => Some(("entity.camel.step", 1.0, 1.0)),
+        // Camel.playStepSound and CamelHusk.playStepSound: sand and concrete
+        // powder have their own step.
+        S::CamelHusk | S::Camel => {
+            let sand = w.has_tag(
+                "minecraft:camel_sand_step_sound_blocks",
+                &w.facts.get(state).name,
+            );
+            Some(match (m.species(), sand) {
+                (S::Camel, true) => ("entity.camel.step_sand", 1.0, 1.0),
+                (S::Camel, false) => ("entity.camel.step", 1.0, 1.0),
+                (_, true) => ("entity.camel_husk.step_sand", 0.4, 1.0),
+                (_, false) => ("entity.camel_husk.step", 0.4, 1.0),
+            })
+        }
         S::IronGolem => Some(("entity.iron_golem.step", 1.0, 1.0)),
         // CopperGolem.playStepSound: its oxidation level's step.
         S::CopperGolem => Some((super::copper_golem::sound(m, "step"), 1.0, 1.0)),
