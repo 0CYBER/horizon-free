@@ -52,8 +52,9 @@ use render_bindings::horizon::mods::input;
 pub use render_bindings::horizon::mods::input::{Event as InputEvent, HeldItem, ItemUse};
 /// What capability `render` asks the game to draw (WIT `interface render`).
 pub use render_bindings::horizon::mods::render::{
-    Corner as RenderCorner, FillShape, FrameRate, ItemShape, Point as RenderPoint, QuadShape,
-    Rect as RenderRect, Shape, SpriteShape, TextShape, Zoom as ModZoom,
+    Corner as RenderCorner, FillShape, FrameRate, ItemShape, Minimap as ModMinimap,
+    Point as RenderPoint, QuadShape, Rect as RenderRect, Shape, SpriteShape, TextShape,
+    Zoom as ModZoom,
 };
 use render_bindings::{RenderHost, horizon::mods::render};
 
@@ -196,6 +197,8 @@ struct State {
     corner: Option<CornerPanel>,
     /// Capability `render`'s zoom, when the mod zooms.
     zoom: Option<ModZoom>,
+    /// Capability `render`'s minimap, when the mod shows one.
+    minimap: Option<ModMinimap>,
     input: InputState,
     /// Capability `storage`'s folder; made on first `set`.
     data_dir: PathBuf,
@@ -339,6 +342,7 @@ impl Mods {
             shapes: Vec::new(),
             corner: None,
             zoom: None,
+            minimap: None,
             input: InputState::default(),
             data_dir,
             storage_budget: STORAGE_WRITE_BUDGET,
@@ -684,6 +688,12 @@ impl Mods {
             .filter_map(|e| e.run.as_ref()?.store.data().zoom)
             .max_by(|a, b| a.factor.total_cmp(&b.factor))
     }
+    /// The minimap the first running mod shows (capability `render`).
+    pub fn minimap(&self) -> Option<ModMinimap> {
+        self.entries
+            .iter()
+            .find_map(|e| e.run.as_ref()?.store.data().minimap)
+    }
     fn inputs(&self) -> impl Iterator<Item = &InputState> {
         self.entries
             .iter()
@@ -1013,6 +1023,9 @@ const SHAKE_SECONDS: f32 = 10.0;
 /// or more, and turning never stops.
 const ZOOM_MAX: f32 = 10.0;
 const TURN_MIN: f32 = 0.05;
+/// `set-minimap`'s side in GUI pixels and its blocks per map pixel.
+const MINIMAP_SIZE: (f32, f32) = (16.0, 256.0);
+const MINIMAP_SCALE: (f32, f32) = (0.5, 4.0);
 
 /// A mod's corner panel: shapes in a `width` × `height` box the game
 /// places in `corner`, stacked with the other overlays.
@@ -1092,6 +1105,14 @@ impl render::Host for State {
             } else {
                 1.0
             },
+        });
+    }
+    fn set_minimap(&mut self, minimap: Option<ModMinimap>) {
+        let finite = |v: f32, lo: f32, hi: f32| if v.is_finite() { v.clamp(lo, hi) } else { lo };
+        self.minimap = minimap.map(|m| ModMinimap {
+            size: finite(m.size, MINIMAP_SIZE.0, MINIMAP_SIZE.1),
+            blocks_per_pixel: finite(m.blocks_per_pixel, MINIMAP_SCALE.0, MINIMAP_SCALE.1),
+            ..m
         });
     }
     fn frame_stats(&mut self) -> FrameRate {

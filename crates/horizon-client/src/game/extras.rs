@@ -128,25 +128,44 @@ impl Game<'_> {
         }
         Ok(())
     }
-    /// The minimap's view of the player, if it shows.
-    fn minimap_view(&self) -> Option<View> {
-        let e = &self.settings.extras;
+    /// The minimap that shows, the extra's or else a mod's
+    /// (`render.set-minimap`): its corner, its side in GUI pixels and its
+    /// view of the player.
+    fn minimap_shown(&self) -> Option<(Corner, f32, View)> {
         let p = self.player.as_ref()?;
-        let shown = e.minimap && self.title.is_none() && !self.ui.hide_gui;
-        shown.then_some(View {
+        if self.title.is_some() || self.ui.hide_gui {
+            return None;
+        }
+        let e = &self.settings.extras;
+        let (corner, size, rotate, blocks_per_pixel, round) = if e.minimap {
+            let size = f32::from(e.minimap_size);
+            (
+                e.minimap_corner,
+                size,
+                e.minimap_rotate,
+                e.minimap_zoom,
+                e.minimap_round,
+            )
+        } else {
+            let m = self.mod_minimap()?;
+            (m.corner, m.size, m.rotate, m.blocks_per_pixel, m.round)
+        };
+        let view = View {
             x: p.position.x,
             z: p.position.z,
             yaw: self.yaw,
-            rotate: e.minimap_rotate,
-            blocks_per_pixel: e.minimap_zoom,
-            round: e.minimap_round,
-        })
+            rotate,
+            blocks_per_pixel,
+            round,
+        };
+        Some((corner, size, view))
     }
     /// Refresh the minimap's tiles within the frame budget, recompose its
     /// image when the view or a tile changed, and queue the upload.
     fn update_minimap(&mut self) {
-        let Some(view) = self.minimap_view() else {
-            if !self.settings.extras.minimap || self.player.is_none() {
+        let Some((_, _, view)) = self.minimap_shown() else {
+            let wanted = self.settings.extras.minimap || self.mod_minimap().is_some();
+            if !wanted || self.player.is_none() {
                 self.extras.minimap.clear();
                 self.extras.minimap_dim = None;
             }
@@ -222,16 +241,15 @@ impl Game<'_> {
     /// The minimap and mods' corner panels, in the HUD layer (hidden with F1
     /// by the caller). The top left corner gives way to the debug screen.
     pub(super) fn draw_extras(&mut self, batch: &mut HudBatch) {
-        let e = &self.settings.extras;
         let mod_panels = self.mods.has_panels();
-        if !e.minimap && !mod_panels {
+        let map = self.minimap_shown();
+        if map.is_none() && !mod_panels {
             return;
         }
-        let (map_corner, map_size) = (e.minimap_corner, f32::from(e.minimap_size));
         let visible = |corner| !(self.debug && corner == Corner::TopLeft);
         let mut corners = Corners::new(batch.width, batch.height, self.effect_rows_height());
         let atlas = &self.gui.atlas;
-        if let Some(view) = self.minimap_view()
+        if let Some((map_corner, map_size, view)) = map
             && visible(map_corner)
             && !self.extras.minimap.image.is_empty()
             && let Some(image) = atlas.sprites.get(MINIMAP_SPRITE).copied()

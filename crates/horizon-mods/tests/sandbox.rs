@@ -634,6 +634,32 @@ fn render_zoom_is_clamped_and_the_strongest_counts() {
 }
 
 #[test]
+fn render_minimap_is_clamped_and_hidden() {
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    let map = |mods: &mut Mods, args: &str| {
+        assert!(mods.command(&format!("minimap {args}")));
+        mods.minimap()
+            .map(|m| (m.corner, m.size, m.blocks_per_pixel, m.rotate, m.round))
+    };
+    assert!(mods.minimap().is_none());
+    let corner = horizon_mods::RenderCorner::BottomLeft;
+    assert_eq!(
+        map(&mut mods, "96 2 1 0"),
+        Some((corner, 96.0, 2.0, true, false))
+    );
+    // The side and the scale are clamped; NaN takes the smallest.
+    assert_eq!(
+        map(&mut mods, "999 0.1 0 1"),
+        Some((corner, 256.0, 0.5, false, true))
+    );
+    assert_eq!(
+        map(&mut mods, "x 9 0 0"),
+        Some((corner, 16.0, 4.0, false, false))
+    );
+    assert_eq!(map(&mut mods, "off"), None);
+}
+
+#[test]
 fn corner_panels_text_width_and_readings() {
     let mut mods = load("horizon_mods_test_ui_guest.hmod");
     // A font of 5-pixel glyphs, 3-pixel spaces.
