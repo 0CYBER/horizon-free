@@ -6876,12 +6876,11 @@ impl Game<'_> {
         self.fangs_geometry(camera, alpha, &mut out);
         let mut see_through = std::mem::take(&mut self.see_through_vertices);
         see_through.clear();
-        self.mark_entity(out.len(), "minecraft:name_tag");
         self.name_tag_geometry(camera, alpha, &mut out, &mut see_through);
         self.text_display_geometry(camera, alpha, &mut out, &mut see_through);
         self.see_through_vertices = see_through;
         // Entity shadows (EntityRenderer.extractShadow).
-        self.mark_entity(out.len(), "minecraft:entity_shadow");
+        self.mark_translucent_entity(out.len(), "minecraft:entity_shadow");
         if let Some(sprite) = self.gui.atlas.sprites.get("misc/shadow").copied() {
             let ambient = if self.dim == Dim::Nether { 0.1 } else { 0.0 };
             let darken = self.sky_darken();
@@ -7109,7 +7108,8 @@ impl Game<'_> {
         self.boat_geometry(camera, alpha, &mut out);
         self.mark_entity(out.len(), "minecraft:minecart");
         self.cart_geometry(camera, alpha, &mut out);
-        self.mark_stage(out.len(), "BLOCK_ENTITIES");
+        // Beams: `gbuffers_beaconbeam`, not a block entity's program (5.4 has no stage for them).
+        self.mark_stage(out.len(), "NONE");
         self.beacon_geometry(camera, alpha, &mut out);
         self.mark_entity(out.len(), "minecraft:fishing_bobber");
         self.fishing_geometry(camera, alpha, &mut out);
