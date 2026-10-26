@@ -1939,22 +1939,23 @@ impl Renderer {
             multisample: Default::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &entity_shader,
-                entry_point: Some("fs_celestial"),
+                entry_point: Some("fs_sky_celestial"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format.remove_srgb_suffix(),
-                    // RenderPipelines.CELESTIAL: additive (src alpha, one). The
-                    // alpha goes to 0: HDR output (hdr.wgsl) lets the sun and
-                    // moon shine; nothing else reads the frame's alpha.
+                    // RenderPipelines.CELESTIAL: additive (src alpha, one), with
+                    // the colour premultiplied in fs_sky_celestial. Its alpha is
+                    // how much a texel adds: HDR output (hdr.wgsl) lets the sun's
+                    // and moon's discs shine; nothing else reads the frame's alpha.
                     blend: Some(wgpu::BlendState {
                         color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::SrcAlpha,
+                            src_factor: wgpu::BlendFactor::One,
                             dst_factor: wgpu::BlendFactor::One,
                             operation: wgpu::BlendOperation::Add,
                         },
                         alpha: wgpu::BlendComponent {
                             src_factor: wgpu::BlendFactor::Zero,
-                            dst_factor: wgpu::BlendFactor::Zero,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
                             operation: wgpu::BlendOperation::Add,
                         },
                     }),
