@@ -194,7 +194,7 @@ pub struct AnimateTables {
     power_transmitter: Vec<bool>,
     /// `#triggers_ambient_dried_ghast_block_sounds` (soul sand, soul soil).
     dried_ghast_sounds: Vec<bool>,
-    /// `FireBlock.canBurn`: states of blocks with ignite odds above zero.
+    /// `FireBlock.canBurn`: states with ignite odds above zero (none waterlogged).
     burnable: Vec<bool>,
     /// Biome id -> ambient particles and probabilities (`minecraft:visual/ambient_particles`).
     ambient: Vec<Vec<(T, f32)>>,
@@ -231,12 +231,13 @@ impl AnimateTables {
         let ignite_odds = behaviour["fire"]["igniteOdds"].as_object();
         let burnable = (0..registry.len() as u32)
             .map(|id| {
+                // FireBlock.getIgniteOdds: a waterlogged state never burns.
                 registry.state(BlockStateId(id)).is_some_and(|s| {
-                    ignite_odds
-                        .and_then(|m| m.get(s.name.as_str()))
-                        .and_then(serde_json::Value::as_i64)
-                        .unwrap_or(0)
-                        > 0
+                    s.properties.get("waterlogged").map(String::as_str) != Some("true")
+                        && ignite_odds
+                            .and_then(|m| m.get(s.name.as_str()))
+                            .and_then(serde_json::Value::as_i64)
+                            .is_some_and(|odds| odds > 0)
                 })
             })
             .collect();
