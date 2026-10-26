@@ -7,6 +7,10 @@ use std::sync::{Arc, LazyLock};
 
 pub const URL: &str = "https://my.sculkhosting.com/ref/horizon";
 
+/// How long the sidebar's banner stays on screen, counted over every start, before a "Hide" shows
+/// beside its label: long enough to be seen, then the player may put it away for good.
+pub const SEEN_BEFORE_HIDE: u64 = 180;
+
 /// 1200×441: twice the widest it is shown at, for Retina screens. Its transparent edges let the
 /// characters stand out of the card.
 const WIDTH: f32 = 1200.;
