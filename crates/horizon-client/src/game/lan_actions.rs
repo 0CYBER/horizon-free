@@ -84,6 +84,7 @@ pub(super) struct GuestPlay {
     equipped: Option<Vec<Option<ItemStack>>>,
     /// The guest's cast fishing hook (`Player.fishing`).
     pub(super) hook: Option<super::fishing::Hook>,
+    sculk: super::sculk::PlayerEvents,
 }
 
 /// A guest's command waiting for the hub (`LanHost::commands`).
@@ -252,6 +253,7 @@ impl Game<'_> {
         if fresh {
             // A new body (joined, respawned, changed level): nothing on it yet.
             play.equipped = None;
+            play.sculk = Default::default();
         }
         let g = &mut host.hub.guests[i];
         // The guest's body.
@@ -259,6 +261,7 @@ impl Game<'_> {
             host.play.insert(conn, play);
             return None;
         };
+        self.sculk.swap_player(&mut play.sculk);
         // The guest's own CombatTracker: damage to them is not the host's.
         // A new body starts with no record of the last one.
         let guest_combat = if fresh {
@@ -492,6 +495,7 @@ impl Game<'_> {
             projectiles,
             modifiers,
         } = swap;
+        self.sculk.swap_player(&mut play.sculk);
         // The guest's damage record back into their slot, the host's in place.
         let guest_combat = std::mem::replace(&mut self.combat, combat);
         self.guest_combat.insert(conn, guest_combat);
@@ -2158,6 +2162,7 @@ impl Game<'_> {
         let Some((events, marked)) = events else {
             return;
         };
+        self.as_guest(host, conn, |game| game.tick_player_sculk_events());
         for event in events {
             match event {
                 MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, at),
