@@ -23,6 +23,12 @@ pub struct PackInputs {
     pub hide_gui: bool,
     /// The brightness option, 0..1.
     pub brightness: f32,
+    /// The biome at the camera (3.4): registry id, `CAT_*`, `PPT_*`, temperature, downfall.
+    pub biome: i32,
+    pub biome_category: i32,
+    pub biome_precipitation: i32,
+    pub temperature: f32,
+    pub rainfall: f32,
 }
 
 /// One uniform's value: up to 16 floats or 3 integers.
@@ -134,6 +140,11 @@ pub const NAMES: &[&str] = &[
     "heldBlockLightValue",
     "heldBlockLightValue2",
     "renderStage",
+    "biome",
+    "biome_category",
+    "biome_precipitation",
+    "temperature",
+    "rainfall",
     "gbufferModelView",
     "gbufferModelViewInverse",
     "gbufferProjection",
@@ -290,6 +301,11 @@ impl FrameUniforms {
                 "screenBrightness" => Value::f(&[inputs.brightness]),
                 "hideGUI" => Value::i(&[inputs.hide_gui as i32]),
                 "eyeBrightness" => Value::i(&eye.map(|v| v as i32)),
+                "biome" => Value::i(&[inputs.biome]),
+                "biome_category" => Value::i(&[inputs.biome_category]),
+                "biome_precipitation" => Value::i(&[inputs.biome_precipitation]),
+                "temperature" => Value::f(&[inputs.temperature]),
+                "rainfall" => Value::f(&[inputs.rainfall]),
                 "eyeBrightnessSmooth" => Value::i(&self.eye_smooth.map(|v| v.round() as i32)),
                 "gbufferModelView" => m4(view),
                 "gbufferModelViewInverse" => m4(view.inverse()),

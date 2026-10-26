@@ -87,6 +87,8 @@ pub struct Custom {
     smooth: HashMap<usize, f64>,
     seed: u64,
     unknown: HashSet<String>,
+    /// `BIOME_*`, `CAT_*` and `PPT_*` (crate::biomes).
+    constants: HashMap<String, f64>,
     /// Expressions that did not parse, and unknown names, as `key: message`.
     pub notes: Vec<String>,
     calls: usize,
@@ -97,6 +99,7 @@ impl Custom {
     pub fn parse(properties: &Properties) -> Self {
         let mut out = Custom {
             seed: 0x9e37_79b9_7f4a_7c15,
+            constants: crate::biomes::constants(&[]),
             ..Default::default()
         };
         for e in &properties.entries {
@@ -124,6 +127,11 @@ impl Custom {
             }
         }
         out
+    }
+
+    /// Names the game's biomes (registry identifiers, in id order) for `BIOME_*`.
+    pub fn set_biomes(&mut self, biomes: &[&str]) {
+        self.constants = crate::biomes::constants(biomes);
     }
 
     /// The uniforms' names and declared types, in file order.
@@ -189,8 +197,19 @@ impl Custom {
                     "pi" => Some(Val::scalar(std::f64::consts::PI)),
                     "true" => Some(Val::scalar(1.0)),
                     "false" => Some(Val::scalar(0.0)),
-                    n => vars.get(n).copied().or_else(|| builtin(n)),
+                    n => vars
+                        .get(n)
+                        .copied()
+                        .or_else(|| builtin(n))
+                        .or_else(|| self.constants.get(n).map(|&x| Val::scalar(x))),
                 };
+                if v.is_none() && name.starts_with("BIOME_") {
+                    if self.unknown.insert(name.clone()) {
+                        self.notes
+                            .push(format!("`{name}` names no biome; it reads -1"));
+                    }
+                    return Val::scalar(-1.0);
+                }
                 let Some(v) = v else {
                     if self.unknown.insert(name.clone()) {
                         self.notes.push(format!("`{name}` is unknown; it reads 0"));
@@ -523,16 +542,18 @@ mod tests {
              uniform.vec3.e = vec3(a, cameraPosition.y, 2) * 2\n\
              uniform.float.f = if(a < 0, 1, a < 7, 2, 3) + clamp(fmod(-1, 4), 0, 2.5) + min(4, 2, 3)\n\
              uniform.float.g = gbufferModelView.1.0 + frac(sunAngle - 0.25) + pi * 0\n\
-             uniform.float.h = unknownThing + in(biome, 3, BIOME_DESERT)\n",
+             uniform.float.h = unknownThing + in(biome, 3, BIOME_DESERT)\n\
+             uniform.int.i = biome == BIOME_PALE_GARDEN || biome == BIOME_OLD\n\
+             uniform.int.j = CAT_OCEAN + PPT_RAIN\n",
         );
+        c.set_biomes(&["minecraft:beach", "minecraft:desert"]);
         assert!(c.notes.is_empty(), "{:?}", c.notes);
         let names: Vec<_> = c.uniforms().map(|u| u.0).collect();
-        assert_eq!(names, ["b", "c", "d", "e", "f", "g", "h"]);
+        assert_eq!(names, ["b", "c", "d", "e", "f", "g", "h", "i", "j"]);
         let builtin = |n: &str| match n {
             "cameraPosition" => Some(Val::vector(&[1.0, 64.0, 2.0])),
             "sunAngle" => Some(Val::scalar(0.125)),
-            "biome" => Some(Val::scalar(5.0)),
-            "BIOME_DESERT" => Some(Val::scalar(5.0)),
+            "biome" => Some(Val::scalar(1.0)),
             "gbufferModelView" => {
                 let mut m = Val::scalar(0.0);
                 m.v[1] = 9.0; // column 0, row 1
@@ -543,9 +564,29 @@ mod tests {
         };
         let v = c.eval(0.016, &builtin);
         let x: Vec<f64> = v.iter().map(|v| v.v[0]).collect();
-        assert_eq!(x, [3.0, 1.0, -3.0, 12.0, 2.0 + 2.5 + 2.0, 9.0 + 0.875, 1.0]);
+        assert_eq!(
+            x,
+            [
+                3.0,
+                1.0,
+                -3.0,
+                12.0,
+                2.0 + 2.5 + 2.0,
+                9.0 + 0.875,
+                1.0,
+                0.0,
+                12.0
+            ]
+        );
         assert_eq!(&v[3].v[..3], &[12.0, 128.0, 4.0]);
-        assert_eq!(c.notes, ["`unknownThing` is unknown; it reads 0"]);
+        assert_eq!(
+            c.notes,
+            [
+                "`unknownThing` is unknown; it reads 0",
+                "`BIOME_PALE_GARDEN` names no biome; it reads -1",
+                "`BIOME_OLD` names no biome; it reads -1"
+            ]
+        );
     }
 
     #[test]

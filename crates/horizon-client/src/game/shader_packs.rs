@@ -43,7 +43,10 @@ impl Game<'_> {
                     }
                     let folder = dimension_folder(&pack, dimension);
                     let inputs = renderer.pack_inputs();
-                    let post = load_post(&pack, &folder, &properties, &macros, &inputs);
+                    let mut post = load_post(&pack, &folder, &properties, &macros, &inputs);
+                    let biomes = self.res.biomes();
+                    let names: Vec<&str> = biomes.list.iter().map(|b| b.name.as_str()).collect();
+                    post.custom.set_biomes(&names);
                     let text = pack.read_text("block.properties").unwrap_or_default();
                     let ids = BlockIds::parse(&Properties::parse(&text, &macros));
                     for note in &ids.notes {
@@ -80,6 +83,12 @@ impl Game<'_> {
         let lerp = |(old, new): (f32, f32)| old + (new - old) * partial;
         let at = camera.floor().as_ivec3();
         let light = self.world.light(at.x, at.y, at.z);
+        let biome = self
+            .world
+            .chunks
+            .get(&(at.x >> 4, at.z >> 4))
+            .map(|c| c.biome(at.x, at.y, at.z));
+        let info = biome.map(|b| self.res.biomes().get(b));
         PackInputs {
             day_time: self.world.day_time,
             rain: lerp(self.world.weather.rain_level),
@@ -94,6 +103,13 @@ impl Game<'_> {
             eye_light: [i32::from(light & 15), i32::from(light >> 4)],
             hide_gui: self.ui.hide_gui,
             brightness: self.settings.gamma,
+            biome: biome.map_or(-1, i32::from),
+            biome_category: info.map_or(0, |b| horizon_shaders::biome_category(&b.name)),
+            biome_precipitation: info.map_or(0, |b| {
+                horizon_shaders::biome_precipitation(b.precipitation, b.temperature)
+            }),
+            temperature: info.map_or(0.0, |b| b.temperature),
+            rainfall: info.map_or(0.0, |b| b.downfall),
         }
     }
 }
