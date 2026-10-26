@@ -1854,8 +1854,15 @@ impl Mob {
     }
     pub fn add_effect(&mut self, effect: &'static str, ticks: i32, amplifier: i32) {
         if let Some(e) = self.extra.effects.iter_mut().find(|e| e.0 == effect) {
-            e.1 = e.1.max(ticks);
-            e.2 = e.2.max(amplifier);
+            // MobEffectInstance.update: a stronger effect replaces with its
+            // own duration, an equal one only extends it; a weaker one is
+            // ignored (vanilla keeps it hidden behind the active one).
+            if amplifier > e.2 {
+                e.1 = ticks;
+                e.2 = amplifier;
+            } else if amplifier == e.2 && e.1 != -1 && (ticks == -1 || e.1 < ticks) {
+                e.1 = ticks;
+            }
         } else {
             self.extra.effects.push((effect, ticks, amplifier));
         }
