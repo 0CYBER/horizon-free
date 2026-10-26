@@ -74,6 +74,9 @@ pub fn main() -> Result<()> {
             biomes: &biomes,
             registry: assets.registry,
             raining_at: &|_| false,
+            height_no_leaves: &|_| 0,
+            firefly_bush_sounds: false,
+            sky_darken: 0,
             marker: target.map(|name| (name, &options as &dyn Fn(_) -> _)),
         };
         engine.seed_randoms(1057, 0, 0);
