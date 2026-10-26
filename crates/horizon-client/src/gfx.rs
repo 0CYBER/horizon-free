@@ -502,6 +502,8 @@ pub struct Renderer {
     pack_post: Option<(i32, Option<pack_post::PackPost>)>,
     /// The post passes of one of Horizon's own shader packs; never beside `pack_post`'s.
     native_post: Option<native_post::NativePost>,
+    /// Time the shader pack's passes on the GPU (F3, or `HORIZON_SHADER_PACK_TIMING`).
+    pass_timing: bool,
     /// The entity vertices Horizon draws itself while a shader pack draws the others.
     pack_entity_rest: Vec<Vertex>,
     /// Set 1 of the cloud pipeline, for a shader pack's `gbuffers_clouds`.
@@ -2413,6 +2415,7 @@ impl Renderer {
             world_post,
             pack_post: None,
             native_post: None,
+            pass_timing: pack_timing::PassTiming::logging(),
             pack_entity_rest: Vec::new(),
             cloud_bindings,
             pack_weather: None,
@@ -2991,6 +2994,34 @@ impl Renderer {
                 .as_ref()?
                 .terrain_inputs(self.pack_terrain_flat),
         )
+    }
+    /// Times the shader pack's passes on the GPU while `on` (the F3 overlay is open), or always
+    /// with `HORIZON_SHADER_PACK_TIMING`.
+    pub fn set_pass_timing(&mut self, on: bool) {
+        self.pass_timing = on || pack_timing::PassTiming::logging();
+    }
+    /// The running shader pack's timer, of either kind.
+    fn pass_timer<'a>(
+        pack: &'a mut Option<(i32, Option<pack_post::PackPost>)>,
+        native: &'a mut Option<native_post::NativePost>,
+    ) -> Option<&'a mut Option<pack_timing::PassTiming>> {
+        match (pack, native) {
+            (Some((_, Some(post))), _) => Some(&mut post.timing),
+            (_, Some(post)) => Some(&mut post.timing),
+            _ => None,
+        }
+    }
+    /// Each pass of the running shader pack with its median GPU time in milliseconds, while
+    /// they are timed (`set_pass_timing`).
+    pub fn shader_pass_times(&self) -> Vec<(String, f32)> {
+        let timer = match (&self.pack_post, &self.native_post) {
+            (Some((_, Some(post))), _) => post.timing.as_ref(),
+            (_, Some(post)) => post.timing.as_ref(),
+            _ => None,
+        };
+        timer
+            .map(pack_timing::PassTiming::medians)
+            .unwrap_or_default()
     }
     /// The dimension the shader pack was last set for.
     pub fn shader_pack_dimension(&self) -> Option<i32> {
@@ -4016,6 +4047,14 @@ impl Renderer {
         let pack_post = !frame.title && self.pack_post.as_ref().is_some_and(|p| p.1.is_some());
         // One of Horizon's own packs reads the same world target.
         let native_post = !frame.title && self.native_post.is_some();
+        if let Some(timer) = Self::pass_timer(&mut self.pack_post, &mut self.native_post)
+            && timer.is_some() != self.pass_timing
+        {
+            *timer = self
+                .pass_timing
+                .then(|| pack_timing::PassTiming::new(&self.device, &self.queue))
+                .flatten();
+        }
         let pack_reads_world = pack_post || native_post;
         // The pack's program reads the vertices this frame's draws bind.
         let pack_draws_terrain = pack_terrain && flat_frame == self.pack_terrain_flat;
@@ -4648,6 +4687,9 @@ impl Renderer {
         if let Some(timer) = &mut self.gpu_timer {
             timer.submitted(&self.queue);
             timer.collect(&self.device, &mut self.gpu_times);
+        }
+        if let Some(Some(timer)) = Self::pass_timer(&mut self.pack_post, &mut self.native_post) {
+            timer.submitted(&self.queue);
         }
         if let Some((path, buffer)) = readback {
             self.screenshot_result = Some(

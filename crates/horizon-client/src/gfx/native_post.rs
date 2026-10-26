@@ -27,6 +27,10 @@ pub struct NativePost {
     groups: Option<(WorldViews, Vec<wgpu::BindGroup>)>,
     start: std::time::Instant,
     frames: u32,
+    /// The screen's colour format, the world target's too.
+    format: wgpu::TextureFormat,
+    /// GPU time of each pass, while the renderer asks for it (`pack_timing.rs`).
+    pub timing: Option<super::pack_timing::PassTiming>,
 }
 
 fn texture_entry(binding: u32, sample_type: wgpu::TextureSampleType) -> wgpu::BindGroupLayoutEntry {
@@ -165,6 +169,8 @@ impl NativePost {
             groups: None,
             start: std::time::Instant::now(),
             frames: 0,
+            format,
+            timing: None,
         })
     }
 
@@ -287,6 +293,10 @@ impl NativePost {
     ) {
         self.prepare(device, world, size);
         queue.write_buffer(&self.frame, 0, bytemuck::bytes_of(inputs));
+        if let Some(t) = &mut self.timing {
+            t.begin(device, queue);
+            t.mark(device, encoder, (world.0, self.format));
+        }
         let Some((_, groups)) = &self.groups else {
             return;
         };
@@ -307,6 +317,7 @@ impl NativePost {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label),
                 color_attachments: &attachments,
+                timestamp_writes: self.timing.as_mut().and_then(|t| t.writes(label)),
                 ..Default::default()
             });
             pass.set_pipeline(pipeline);
