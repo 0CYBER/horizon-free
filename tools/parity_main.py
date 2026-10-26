@@ -8,7 +8,7 @@
 so a run tests every merge since the last green one (`tools/parity.py --changed <base>`), however many landed while
 the previous run went on. `bisect` reads the harnesses that failed (.local/parity-runner/last-run.json), checks out
 the first-parent merges between BASE and HEAD by halves and runs only those harnesses, then names the first merge they
-fail on (written to $GITHUB_STEP_SUMMARY and, with --comment, on its pull request). HEAD is checked out again at the end.
+fail on, once they fail again at HEAD and pass at BASE (written to $GITHUB_STEP_SUMMARY and, with --comment, on its pull request). HEAD is checked out again at the end.
 """
 
 import argparse
@@ -90,7 +90,22 @@ def bisect(since, timeout, comment):
         git("checkout", "-q", "--detach", commit)
         return run_harnesses(failed, timeout)
 
+    def blame_nobody(why):
+        line = f"parity-main: {', '.join(failed)} {why}: no merge is named."
+        print(line)
+        if os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+                summary.write(f"### {line}\n")
+        return 0
+
+    # A merge is named only when the harnesses fail again at HEAD and pass at the base: otherwise the search would
+    # end on the newest merge (a flake, or a runner missing files, passes everywhere now) or the oldest one (the
+    # runner fails at every commit) and blame it for nothing.
     try:
+        if not fails(head):
+            return blame_nobody(f"pass when run again at {head[:9]}: a flake or the runner")
+        if fails(since):
+            return blame_nobody(f"fail at the base {since[:9]} too: the runner or a flake")
         culprit = first_bad(commits, fails) if len(commits) > 1 else commits[0]
     finally:
         git("checkout", "-q", "--detach", head)

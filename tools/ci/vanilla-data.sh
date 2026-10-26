@@ -13,17 +13,15 @@ source="${HORIZON_SHARED_SOURCE:-$HOME/code/horizon-parity/shared-local}"
 version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' research-lock.json | head -1)
 if [ ! -f "$shared/minecraft/$version/prepared.json" ]; then
   [ -f "$source/minecraft/$version/prepared.json" ] || { echo "::error::no imported Minecraft $version in $source"; exit 1; }
-  mkdir -p "$shared"
-  if [ "$(uname)" = Darwin ]; then
-    for entry in "$source"/*; do
-      [ "$(basename "$entry")" = horizon-client ] || cp -cR "$entry" "$shared/"
-    done
-  else
-    for entry in "$source"/*; do
-      [ "$(basename "$entry")" = horizon-client ] || cp -R --reflink=auto "$entry" "$shared/"
-    done
-  fi
 fi
+# Whatever the source holds and this runner's copy doesn't yet: all of it the first time, and later additions (the
+# sounds came after the release runner's first clone, and its audio harnesses failed for want of them).
+mkdir -p "$shared"
+for entry in "$source"/*; do
+  name=$(basename "$entry")
+  [ "$name" = horizon-client ] || [ -e "$shared/$name" ] && continue
+  if [ "$(uname)" = Darwin ]; then cp -cR "$entry" "$shared/"; else cp -R --reflink=auto "$entry" "$shared/"; fi
+done
 mkdir -p .local "$shared/prepared"
 for entry in "$shared"/*; do
   name=$(basename "$entry")

@@ -3,7 +3,6 @@
 //! layer is copied into a grid, row by row from the top left, and an animated layer again
 //! whenever its frame changes.
 
-#[expect(dead_code, reason = "the gbuffers pass binds it (next slice)")]
 pub(super) struct PackAtlas {
     texture: wgpu::Texture,
     pub view: wgpu::TextureView,
@@ -64,10 +63,6 @@ impl PackAtlas {
     }
 
     /// The atlas's size in pixels (`atlasSize`).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the gbuffers pass reads it (next slice)")
-    )]
     pub fn size(&self) -> [u32; 2] {
         [self.texture.width(), self.texture.height()]
     }
@@ -114,6 +109,112 @@ impl PackAtlas {
                     },
                 );
             }
+        }
+    }
+}
+
+/// GLSL: the face normal and tangent of a flat-drawn vertex, from its quad's first three corners
+/// (quads are four consecutive vertices of the page; position words 0-2, UV word 3).
+const FACE: &str = "    uint hz_q = (uint(gl_VertexIndex) & ~3u) * 6u;\n    \
+    vec3 hz_p0 = uintBitsToFloat(uvec3(hz_vertices[hz_q], hz_vertices[hz_q + 1u], hz_vertices[hz_q + 2u]));\n    \
+    vec3 hz_p1 = uintBitsToFloat(uvec3(hz_vertices[hz_q + 6u], hz_vertices[hz_q + 7u], hz_vertices[hz_q + 8u]));\n    \
+    vec3 hz_p2 = uintBitsToFloat(uvec3(hz_vertices[hz_q + 12u], hz_vertices[hz_q + 13u], hz_vertices[hz_q + 14u]));\n    \
+    uvec3 hz_w = uvec3(hz_vertices[hz_q + 3u], hz_vertices[hz_q + 9u], hz_vertices[hz_q + 15u]);\n    \
+    vec2 hz_t0 = vec2(hz_w.x & 65535u, hz_w.x >> 16u);\n    \
+    vec2 hz_d1 = vec2(hz_w.y & 65535u, hz_w.y >> 16u) - hz_t0;\n    \
+    vec2 hz_d2 = vec2(hz_w.z & 65535u, hz_w.z >> 16u) - hz_t0;\n    \
+    vec3 hz_e1 = hz_p1 - hz_p0;\n    \
+    vec3 hz_e2 = hz_p2 - hz_p0;\n    \
+    vec3 hz_n = cross(hz_e1, hz_e2);\n    \
+    if (dot(hz_n, hz_n) > 1e-12) {\n        \
+        hz_Normal = normalize(hz_n);\n        \
+        float hz_r = hz_d1.x * hz_d2.y - hz_d2.x * hz_d1.y;\n        \
+        vec3 hz_t = (hz_e1 * hz_d2.y - hz_e2 * hz_d1.y) * sign(hz_r);\n        \
+        vec3 hz_b = (hz_e2 * hz_d1.x - hz_e1 * hz_d2.x) * sign(hz_r);\n        \
+        if (dot(hz_t, hz_t) > 1e-12) {\n            \
+            hz_t = normalize(hz_t - hz_Normal * dot(hz_Normal, hz_t));\n            \
+            hz_tangent = vec4(hz_t, dot(cross(hz_t, hz_Normal), hz_b) < 0.0 ? -1.0 : 1.0);\n        \
+        }\n    \
+    }\n";
+
+impl PackAtlas {
+    /// The vertex inputs of a gbuffers program drawing terrain (`TerrainVertex`, terrain.wgsl's
+    /// `vs_terrain` or, for `flat` draws, `vs_terrain_flat`), in atlas coordinates.
+    pub fn terrain_inputs(&self, flat: bool) -> horizon_shaders::GbuffersInputs {
+        let mut declarations = String::from(
+            "layout(location = 0) in vec3 hz_v_pos;\nlayout(location = 1) in uvec2 hz_v_uv;\n\
+             layout(location = 2) in uint hz_v_layer;\nlayout(location = 3) in vec4 hz_v_color;\n\
+             layout(location = 4) in uvec2 hz_v_light;\n",
+        );
+        let origin = if flat {
+            declarations.push_str(
+                "layout(set = 1, binding = 0) readonly buffer HzBlockSlots { uint hz_block_slots[]; };\n\
+                 layout(set = 1, binding = 1) readonly buffer HzSlotOrigins { vec4 hz_slot_origins[]; };\n",
+            );
+            // `mc_Entity` of each sprite layer: id, then 1 for fluids or -1 (the game's table),
+            // and the arena page's vertices (`TerrainVertex`, six words each).
+            declarations.push_str(
+                "layout(set = 3, binding = 0) readonly buffer HzBlockIds { int hz_block_ids[]; };\n\
+                 layout(set = 3, binding = 1) readonly buffer HzVertices { uint hz_vertices[]; };\n",
+            );
+            "hz_slot_origins[hz_block_slots[uint(gl_VertexIndex) >> 8u]]"
+        } else {
+            declarations.push_str("layout(location = 5) in vec4 hz_v_origin;\n");
+            "hz_v_origin"
+        };
+        let [width, height] = self.size();
+        let scale = [
+            self.sprite as f32 / width as f32,
+            self.sprite as f32 / height as f32,
+        ];
+        let columns = self.columns;
+        // UVs past a sprite (models up to 2, distant tiles) cannot repeat in an atlas: clamped.
+        let body = format!(
+            "    vec4 hz_origin = {origin};\n    \
+             uint hz_layer = hz_v_layer & 32767u;\n    \
+             hz_cell = vec2(float(hz_layer % {columns}u), float(hz_layer / {columns}u));\n    \
+             hz_scale = vec2({:?}, {:?});\n    \
+             hz_Vertex = vec4(hz_v_pos + hz_origin.xyz, 1.0);\n    \
+             hz_MultiTexCoord0 = vec4((hz_cell + clamp(vec2(hz_v_uv) * hz_origin.w, 0.0, 1.0)) * hz_scale, 0.0, 1.0);\n    \
+             hz_MultiTexCoord1 = vec4(float(hz_v_light.y), float(hz_v_light.x), 0.0, 1.0);\n    \
+             hz_MultiTexCoord2 = hz_MultiTexCoord1;\n    \
+             hz_Color = hz_v_color;\n    \
+             hz_Normal = vec3(0.0, 1.0, 0.0);\n    \
+             hz_tangent = vec4(1.0, 0.0, 0.0, 1.0);\n",
+            scale[0], scale[1],
+        );
+        let mut body = body;
+        if flat {
+            body.push_str(FACE);
+        }
+        declarations.push_str("vec2 hz_cell; vec2 hz_scale; vec4 hz_tangent;\n");
+        let entity = if flat {
+            "vec4(float(hz_block_ids[2u * hz_layer]), float(hz_block_ids[2u * hz_layer + 1u]), 0.0, 0.0)"
+        } else {
+            "vec4(-1.0, -1.0, 0.0, 0.0)"
+        };
+        let attributes = [
+            ("mc_Entity", entity),
+            (
+                "mc_midTexCoord",
+                "vec4((hz_cell + 0.5) * hz_scale, 0.0, 1.0)",
+            ),
+            ("at_tangent", "hz_tangent"),
+            ("vaPosition", "hz_Vertex.xyz"),
+            ("vaUV0", "hz_MultiTexCoord0.xy"),
+            ("vaUV2", "hz_MultiTexCoord1.xy"),
+            ("vaColor", "hz_Color"),
+            ("vaNormal", "hz_Normal"),
+        ];
+        horizon_shaders::GbuffersInputs {
+            declarations,
+            body,
+            attributes: attributes
+                .iter()
+                .map(|&(n, v)| (n.to_owned(), v.to_owned()))
+                .collect(),
+            after: String::new(),
+            alpha_test: None,
         }
     }
 }
