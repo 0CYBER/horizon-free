@@ -158,7 +158,9 @@ impl Capability {
                 "see the keys you hold and your clicks, take over the use button on its own items and the mouse wheel, and add keys"
             }
             Capability::Players => "see who is on the server and message them",
-            Capability::Recipes => "read the game's recipes and items, and which recipes you know",
+            Capability::Recipes => {
+                "read the game's recipes and items and which recipes you know, place recipes in your crafting grid and, in creative mode, give you items"
+            }
         }
     }
     /// The capability a component import needs, `Ok(None)` for one every

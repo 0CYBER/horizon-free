@@ -434,6 +434,8 @@ impl Game<'_> {
             view_hit: self.mod_view_hit(),
             recipes,
             known_recipes,
+            placing: self.mod_recipe_screen(),
+            creative: self.creative,
         }
     }
     /// The first block along the player's view within
@@ -644,6 +646,18 @@ impl Game<'_> {
                 }
                 Output::Shake { strength, seconds } => {
                     self.mods.shake.add(strength, seconds);
+                    continue;
+                }
+                Output::PlaceRecipe { book_id, all } => {
+                    self.mod_place_recipe(book_id, all);
+                    continue;
+                }
+                Output::Give {
+                    item,
+                    count,
+                    components,
+                } => {
+                    self.mod_give(&item, count, &components);
                     continue;
                 }
                 Output::CloseScreen { owner } => {

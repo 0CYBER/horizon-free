@@ -70,6 +70,24 @@ fn recipe(id: String, kind: RecipeKind) -> Recipe {
 }
 
 impl Game<'_> {
+    /// `recipes.give`: a creative player takes the stack as from the
+    /// creative inventory; a server hears it as `SetCreativeModeSlot`
+    /// through the inventory's sync, and refuses it unless creative.
+    pub(super) fn mod_give(&mut self, item: &str, count: u32, components: &str) {
+        if !self.creative || self.res.items().get(item).is_none() {
+            return;
+        }
+        let (damage, extra) = horizon_client::item_data::command_components(components)
+            .map_or((0, None), |tag| {
+                horizon_client::item_data::decode_components(Some(&tag))
+            });
+        let _ = self.give(ItemStack {
+            item: item.into(),
+            count,
+            damage,
+            extra,
+        });
+    }
     /// Capability `recipes`'s tables and known displays for this tick's
     /// snapshot; nothing while no running mod reads them.
     pub(super) fn mod_recipes(&mut self) -> (Option<Arc<Recipes>>, Arc<[i32]>) {

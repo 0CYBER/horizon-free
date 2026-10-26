@@ -507,6 +507,17 @@ interface recipes {
     all: func() -> list<recipe>;
     /// The `book-id`s of the recipes the player's recipe book holds now.
     known: func() -> list<s32>;
+    /// Places a recipe in the open screen's grid as a click in the recipe
+    /// book does (`ServerboundPlaceRecipePacket`): the inventory's grid or
+    /// a crafting table. `all` places as many as the items allow, as with
+    /// Shift. Refused while no such screen is open, for a recipe the
+    /// player's book doesn't hold and for one that can't be placed; one
+    /// missing items shows as a ghost in the grid, as in the book.
+    place: func(book-id: s32, all: bool) -> result<_, string>;
+    /// Creative mode only: gives the player the stack, as taking it from
+    /// the creative inventory does (`ServerboundSetCreativeModeSlot`): the
+    /// selected slot first, then the hotbar, then the inventory.
+    give: func(stack: stack) -> result<_, string>;
 }
 
 /// Capability `ui` (experimental): a recipe viewer's panel beside the
