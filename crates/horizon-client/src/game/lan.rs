@@ -24,11 +24,24 @@ use horizon_protocol::{
 };
 use std::{
     collections::HashMap,
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex},
 };
 
 /// The registries and tags are the same for every world: load them once.
-static SYNC: OnceLock<std::result::Result<Arc<SyncData>, String>> = OnceLock::new();
+static SYNC: Mutex<Option<std::result::Result<Arc<SyncData>, String>>> = Mutex::new(None);
+
+/// The registries and tags a server sends, loaded from `root` the first time.
+pub(super) fn sync_data(root: &std::path::Path) -> std::result::Result<Arc<SyncData>, String> {
+    let mut sync = SYNC.lock().unwrap_or_else(|e| e.into_inner());
+    sync.get_or_insert_with(|| SyncData::load(root).map(Arc::new))
+        .clone()
+}
+
+/// Let go of what `sync_data` loaded: for a preload no world used
+/// (game/world_loading.rs).
+pub(super) fn forget_sync_data() {
+    *SYNC.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
 
 /// The settings of the open world (WorldOptionsScreen's multiplayer section).
 #[derive(Clone, Copy, Debug)]
@@ -562,10 +575,7 @@ impl Game<'_> {
         config: HubConfig,
         host: Option<u128>,
     ) -> Result<()> {
-        let root = self.options.resources.clone();
-        let sync = SYNC
-            .get_or_init(|| SyncData::load(&root).map(Arc::new))
-            .clone()?;
+        let sync = sync_data(&self.options.resources)?;
         let biome_names: Vec<String> = self
             .res
             .biomes()

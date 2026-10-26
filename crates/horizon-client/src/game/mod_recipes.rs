@@ -35,7 +35,7 @@ impl Index {
 
 /// A stack's components beyond its item's, as vanilla's item syntax writes
 /// them (`[minecraft:potion_contents={potion:"minecraft:swiftness"}]`), or "".
-fn components(s: &ItemStack) -> String {
+pub(super) fn components(s: &ItemStack) -> String {
     use horizon_world::nbt::Tag;
     let Some(Tag::Compound(entries)) = horizon_client::item_data::encode_components(s) else {
         return String::new();
@@ -70,6 +70,28 @@ fn recipe(id: String, kind: RecipeKind) -> Recipe {
 }
 
 impl Game<'_> {
+    /// `recipes.give`: a creative player takes the stack as from the
+    /// creative inventory; a server hears it as `SetCreativeModeSlot`
+    /// through the inventory's sync, and refuses it unless creative.
+    pub(super) fn mod_give(&mut self, item: &str, count: u32, components: &str) {
+        let Some(max) = self.res.items().get(item).map(|i| i.max_stack) else {
+            return;
+        };
+        if !self.creative {
+            return;
+        }
+        let (damage, extra) = horizon_client::item_data::command_components(components)
+            .map_or((0, None), |tag| {
+                horizon_client::item_data::decode_components(Some(&tag))
+            });
+        let _ = self.give(ItemStack {
+            item: item.into(),
+            // One stack at most, as the creative inventory hands out.
+            count: count.min(max),
+            damage,
+            extra,
+        });
+    }
     /// Capability `recipes`'s tables and known displays for this tick's
     /// snapshot; nothing while no running mod reads them.
     pub(super) fn mod_recipes(&mut self) -> (Option<Arc<Recipes>>, Arc<[i32]>) {
