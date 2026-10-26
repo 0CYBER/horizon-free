@@ -167,6 +167,18 @@ impl Game<'_> {
                 e.meta.push((15, serializer::BYTE, Value::Byte(flags)));
             }
             e.meta.extend(stand_poses(a));
+            // A pose put back to its default (`/data`) is sent as that default.
+            e.defaults.push((15, serializer::BYTE, Value::Byte(0)));
+            for (i, default) in horizon_client::entities::ArmorStand::DEFAULT_POSE
+                .iter()
+                .enumerate()
+            {
+                e.defaults.push((
+                    16 + i as u8,
+                    serializer::ROTATIONS,
+                    Value::Floats(default.to_vec()),
+                ));
+            }
             // Stored main hand, off hand, feet, legs, chest, head: the wire's slots 0 to 5.
             for (slot, item) in a.equipment.iter().enumerate() {
                 if item.is_some() {
