@@ -1288,15 +1288,6 @@ impl Game<'_> {
                 MobEvent::Vibration { from, to, ticks } => {
                     self.mob_vibration_particle(from, to, ticks)
                 }
-                MobEvent::LevelEvent { id, pos, data } => {
-                    self.level_events
-                        .push(horizon_world::level::LevelEvent::LevelEvent {
-                            id,
-                            pos: horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]),
-                            data,
-                        });
-                    self.process_level_events()?;
-                }
                 MobEvent::DigParticles { at } => self.warden_dig_particles(at),
                 MobEvent::BlockBreakEffect { pos, block } => {
                     let state = self.world.block(block[0], block[1], block[2]);
