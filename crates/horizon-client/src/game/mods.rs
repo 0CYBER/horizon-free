@@ -63,6 +63,14 @@ pub(super) struct ModsState {
     /// What players did this tick, for server mods at its end.
     #[cfg(feature = "mods")]
     pub(super) events: Vec<ModEvent>,
+    /// A running server mod has capability `world`: its calls get the
+    /// levels' chunks to read.
+    #[cfg(feature = "mods")]
+    pub(super) world: bool,
+    /// Blocks server mods set, by dimension, made before that level's next
+    /// tick.
+    #[cfg(feature = "mods")]
+    pub(super) block_writes: Vec<(String, horizon_mods::BlockChange)>,
     /// `command.run` lines for this window's own world, run on the next tick:
     /// run at once, their chat lines would reach the mods while their output
     /// is still being shown, and a mod answering its own lines would recurse.
@@ -309,6 +317,7 @@ impl Game<'_> {
     /// The Mods page's rows, from what loaded.
     fn list_mods(&mut self) {
         self.mods.server = self.mods.mods.runs_server();
+        self.mods.world = self.mods.mods.wants_world();
         let dev = &self.mods.dev;
         self.settings.mods.installed = self
             .mods
@@ -673,8 +682,10 @@ impl Game<'_> {
                     }
                     Text::literal(line).with_color(text::RED)
                 }
-                server
-                @ (Output::Tell { .. } | Output::Broadcast { .. } | Output::Reply { .. }) => {
+                server @ (Output::Tell { .. }
+                | Output::Broadcast { .. }
+                | Output::Reply { .. }
+                | Output::SetBlocks { .. }) => {
                     self.route_server_output(host.as_deref_mut(), server);
                     continue;
                 }

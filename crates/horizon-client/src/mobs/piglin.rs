@@ -15,6 +15,9 @@ use std::f32::consts::PI;
 
 /// `PiglinAi.ADMIRE_DURATION`.
 pub const ADMIRE: i32 = 119;
+/// `PiglinAi.eat`: the `ATE_RECENTLY` memory lasts 200 ticks (kept in
+/// `extra.ints[0]` of a piglin).
+pub const ATE_RECENTLY: i32 = 200;
 /// `AbstractPiglin.CONVERSION_TIME` (and the hoglin's).
 const CONVERSION: i32 = 300;
 
@@ -45,6 +48,7 @@ pub fn register_piglin(m: &mut Mob) {
         g.add(3, super::illager::crossbow_goal(1.0, 8.0));
     }
     g.add(3, MeleeAttack::new(1.0, true));
+    g.add(4, PiglinAvoidRepellent);
     g.add(4, GoToWantedItem);
     g.add(5, Stroll::avoiding_water(0.6));
     g.add(6, LookAtPlayer::new(8.0));
@@ -176,6 +180,54 @@ impl Goal for BabyPanic {
         self.0.stop(m, cx)
     }
 }
+/// `PiglinAi.avoidRepellent`: `SetWalkTargetAwayFrom.pos(NEAREST_REPELLENT, 1.0, 8, false)`
+/// of the idle activity. Closer than 8 blocks to a repellent and not walking
+/// anywhere, walk away from it.
+#[derive(Clone, Debug)]
+struct PiglinAvoidRepellent;
+impl Goal for PiglinAvoidRepellent {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let Some(r) = m.extra.repellent else {
+            return false;
+        };
+        // The idle activity: not fighting or admiring, and no walk target yet.
+        if m.ai.target.is_some() || m.extra.using_item > 0 || !m.ai.nav.is_done() {
+            return false;
+        }
+        // Vec3.atBottomCenterOf.
+        let avoid = [
+            f64::from(r[0]) + 0.5,
+            f64::from(r[1]),
+            f64::from(r[2]) + 0.5,
+        ];
+        if m.distance_sqr(Vec3::new(avoid[0], avoid[1], avoid[2])) >= 64.0 {
+            return false;
+        }
+        for _ in 0..10 {
+            if let Some(p) = m.land_random_pos_away(cx.w, 16, 7, avoid) {
+                let at = [
+                    p[0].floor() as i32,
+                    p[1].floor() as i32,
+                    p[2].floor() as i32,
+                ];
+                m.ai.pending_path = m.create_path_to(cx.w, at, 0);
+                return m.ai.pending_path.is_some();
+            }
+        }
+        false
+    }
+    fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        !m.ai.nav.is_done()
+    }
+    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+        let path = m.ai.pending_path.take();
+        m.nav_move_to_path(path, 1.0);
+    }
+}
 /// Admiring a gold item held in the off hand: stand and look at it.
 #[derive(Clone, Debug)]
 struct Admire;
@@ -257,6 +309,9 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             m.ai.target = None;
         }
     }
+    if m.species() == Species::Piglin && m.extra.ints[0] > 0 {
+        m.extra.ints[0] -= 1;
+    }
     // Admiring disabled after being hit by a player.
     if m.extra.egg_time > 0 {
         m.extra.egg_time -= 1;
@@ -299,6 +354,26 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     } else {
         m.extra.counter2 = 0;
     }
+    // PiglinSpecificSensor (every 20 ticks): the nearest repelling block.
+    if m.species() == Species::Piglin && m.alive() && m.age.wrapping_add(m.id).is_multiple_of(20) {
+        m.extra.repellent = find_piglin_repellent(m, w);
+    }
+}
+/// `PiglinSpecificSensor.findNearestRepellent`: the nearest `#piglin_repellents`
+/// block within 8 blocks sideways and 4 up or down; a soul campfire only
+/// counts while lit.
+fn find_piglin_repellent(m: &Mob, w: &MobWorld) -> Option<[i32; 3]> {
+    let tag = w.block_tags.get("minecraft:piglin_repellents")?;
+    let at = [
+        m.position.x.floor() as i32,
+        m.position.y.floor() as i32,
+        m.position.z.floor() as i32,
+    ];
+    w.nearest_block(at, 8, 4, |p, name| {
+        tag.contains(name)
+            && (name != "minecraft:soul_campfire"
+                || w.prop(p[0], p[1], p[2], "lit") == Some("true"))
+    })
 }
 /// `HoglinBase.hurtAndThrowTarget`.
 pub fn hoglin_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {

@@ -2301,6 +2301,7 @@ impl Game<'_> {
             let marked = std::mem::take(&mut player.health.sync_velocity);
             let velocity = marked.then_some(player.velocity);
             game.record_combat(&events);
+            game.wear_armor(&events);
             (events, velocity)
         });
         let Some((events, marked)) = events else {
@@ -2394,9 +2395,13 @@ impl Game<'_> {
             }
             if (next / 10) % 2 == 0
                 && !creative
-                && let Some(elytra) = game.armor[1].as_mut()
+                && let Some(stack) = game.armor[1].clone()
             {
-                elytra.damage += 1;
+                // `ItemStack.hurtAndBreak`: Unbreaking can save the wear.
+                let loss = game.durability_loss(&stack, 1);
+                if let Some(elytra) = game.armor[1].as_mut() {
+                    elytra.damage += loss;
+                }
             }
             let ctx = game.player_context(None);
             game.post_game_event("minecraft:elytra_glide", at, ctx);
@@ -2659,7 +2664,13 @@ impl Game<'_> {
             .random
             .next_int_bound(touching.len() as i32)
             .unwrap_or(0) as usize;
-        let orb = self.orbs.remove(touching[pick]);
+        // A merged orb gives its value once per count and goes at zero.
+        let orb = self.orbs[touching[pick]].clone();
+        if orb.count <= 1 {
+            self.orbs.remove(touching[pick]);
+        } else {
+            self.orbs[touching[pick]].count -= 1;
+        }
         play.xp_delay = 2;
         host.hub.take_item(orb.id as i32, id, 1, at);
         // ClientPacketListener.handleTakeItemEntity's sound, at the orb.
