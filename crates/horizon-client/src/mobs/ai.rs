@@ -521,7 +521,7 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         }
 
         if m.kind.flags.water_sensitive
-            && (m.fluids.in_water || w.raining && w.can_see_sky(ex, ey, ez))
+            && (m.fluids.in_water || w.raining && !w.end && w.can_see_sky(ex, ey, ez))
         {
             m.damage(1.0, Damage::of(DamageKind::Drown));
         }
