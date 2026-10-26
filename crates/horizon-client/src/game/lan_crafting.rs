@@ -293,7 +293,7 @@ impl Game<'_> {
         }
         // Slot.setChanged on a changed container slot: BlockEntity.setChanged,
         // so the chunk is saved and comparators read the block again.
-        if (0..items.len()).any(|k| menu.slot(k) != items[k].as_ref()) {
+        if changed.iter().any(|&s| s < items.len()) {
             self.container_changed(pos);
         }
         host.play.entry(conn).or_default().crafting.machine = Some((p.container, menu));
