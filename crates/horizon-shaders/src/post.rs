@@ -10,6 +10,8 @@
 //! - A program that fails to translate is reported and treated as missing (2.5).
 //! - Terrain draws with the first program of its fallback chain that loads (2.3).
 
+use std::collections::BTreeSet;
+
 use crate::config::{self, Config};
 use crate::{GbuffersInputs, Macros, Pack, Preprocessed, Program, Properties, Target};
 use crate::{eval_condition, preprocess, translate_composite, translate_gbuffers};
@@ -99,6 +101,7 @@ pub fn load_post(
         folder,
         properties,
         macros,
+        switches: crate::switches_on(pack),
         post: &mut post,
     };
     for (group, base) in GROUPS {
@@ -135,6 +138,7 @@ struct Loader<'a> {
     folder: &'a str,
     properties: &'a Properties,
     macros: &'a Macros,
+    switches: BTreeSet<String>,
     post: &'a mut Post,
 }
 
@@ -156,7 +160,13 @@ impl Loader<'_> {
         if !self.pack.exists(&fsh) || !self.pack.exists(&vsh) {
             return None;
         }
-        if !enabled(self.properties, self.folder, &name, self.macros) {
+        if !enabled(
+            self.properties,
+            self.folder,
+            &name,
+            self.macros,
+            &self.switches,
+        ) {
             return None;
         }
         if self.pack.exists(&path("gsh")) {
@@ -215,8 +225,14 @@ fn diagnostics(pp: &Preprocessed) -> Vec<String> {
 }
 
 /// `program.<name>.enabled` (or `program.<folder>/<name>.enabled`): a boolean expression over
-/// switch options (3.3). An option is on when its macro is defined.
-fn enabled(properties: &Properties, folder: &str, name: &str, macros: &Macros) -> bool {
+/// switch options (3.3): those on by default (8.1) and the defined macros.
+fn enabled(
+    properties: &Properties,
+    folder: &str,
+    name: &str,
+    macros: &Macros,
+    switches: &BTreeSet<String>,
+) -> bool {
     let keys = [
         format!("program.{folder}/{name}.enabled"),
         format!("program.{name}.enabled"),
@@ -230,6 +246,7 @@ fn enabled(properties: &Properties, folder: &str, name: &str, macros: &Macros) -
         match token {
             "true" => condition.push('1'),
             "false" => condition.push('0'),
+            t if switches.contains(t) => condition.push('1'),
             t if t.starts_with(|c: char| c.is_alphabetic() || c == '_') => {
                 condition.push_str(&format!("defined({t})"));
             }

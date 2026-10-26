@@ -472,6 +472,21 @@ mod tests {
         assert_eq!(i.outputs, [0, 1]);
     }
 
+    /// naga drops non-constant global initializers: they run in our `main`, one per declarator,
+    /// converting as GLSL's initialization does.
+    #[test]
+    fn global_initializers_read_uniforms() {
+        let fsh = "#version 120\nuniform float rainStrength;\nuniform ivec2 atlasSize;\n\
+                   vec2 size = atlasSize;\nvec3 a = vec3(rainStrength), b = a * 2.0, c;\n\
+                   const float k = rainStrength > 0.5 ? 1.0 : 0.0;\nfloat w[] = float[](rainStrength, 1.0);\n\
+                   void main() { c = b; gl_FragColor = vec4(a + c, size.x * k + w[0]); }\n";
+        let p = program(
+            &[("composite.vsh", VSH_120), ("composite.fsh", fsh)],
+            Target::Window,
+        );
+        assert!(p.is_ok(), "{:?}", p.err());
+    }
+
     #[test]
     fn core_programs_translate() {
         let vsh = "#version 330 core\nin vec3 vaPosition;\nin vec2 vaUV0;\nuniform mat4 modelViewMatrix, projectionMatrix;\n\

@@ -17,6 +17,7 @@ mod config;
 mod discover;
 mod lang;
 mod macros;
+mod options;
 mod pack;
 mod post;
 mod preprocess;
@@ -28,6 +29,7 @@ pub use config::{BUFFERS, Buffer, Config, Format, Kind, buffer_index, draw_buffe
 pub use discover::{Found, discover};
 pub use lang::Lang;
 pub use macros::{MC_VERSION, Macros, RENDER_STAGES};
+pub use options::switches_on;
 pub use pack::{Pack, PackError};
 pub use post::{Group, Post, PostProgram, dimension_folder, load_post};
 pub use preprocess::{Diagnostic, Origin, Preprocessed, preprocess};
