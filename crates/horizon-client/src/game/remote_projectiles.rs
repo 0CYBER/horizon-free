@@ -3,8 +3,11 @@
 //! and `handleSetEntityData`): the server simulates them, the client draws
 //! them where it says and interpolates their moves.
 use super::{FallStep, FallingBlock, Game, fireworks::fireworks_of, view_vector};
-use horizon_client::particles::{ParticleOptions, ParticleType};
 use horizon_client::projectiles::{Hit, Projectile, ProjectileKind, ProjectileWorld};
+use horizon_client::{
+    collisions::SceneCollisions,
+    particles::{ParticleOptions, ParticleType},
+};
 use horizon_core::{geometry::Vec3, position::BlockPos, random::RandomSource};
 use horizon_protocol::entity_data::Value;
 use horizon_world::registry::BlockStateId;
@@ -361,9 +364,13 @@ impl Game<'_> {
             .remote
             .as_ref()
             .and_then(|r| u32::try_from(r.entity_id).ok());
-        for r in &mut self.rockets {
-            let id = r.id;
-            r.remote_step(|at| step(id, at));
+        let mut rockets = std::mem::take(&mut self.rockets);
+        for r in &mut rockets {
+            r.remote_step(&mut SceneCollisions {
+                world: &self.world,
+                binding: self.collision,
+                subject: None,
+            });
             if let Some(target) = r.attached_to {
                 if me == Some(target) {
                     if let Some(p) = self.player.as_mut() {
@@ -401,6 +408,7 @@ impl Game<'_> {
                 v,
             );
         }
+        self.rockets = rockets;
         for c in &mut self.crystals {
             c.time += 1;
             c.position = step(c.id, c.position);
