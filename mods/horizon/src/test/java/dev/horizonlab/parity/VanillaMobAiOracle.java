@@ -60,6 +60,7 @@ import net.minecraft.util.debugchart.SampleLogger;
 import net.minecraft.world.clock.WorldClocks;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySpawnReason;
+import net.minecraft.world.entity.EntitySpawnRequest;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.monster.creaking.Creaking;
@@ -540,7 +541,9 @@ public final class VanillaMobAiOracle {
             int id = 100000;
             for (MobSpec spec : s.mobs) {
                 EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.getValue(net.minecraft.resources.Identifier.parse(spec.type));
-                Mob mob = (Mob) type.create(level, EntitySpawnReason.COMMAND);
+                // Ignore canSpawn: a Peaceful scenario's hostile mob is one that was already
+                // in the world when the difficulty changed (create returns null at Peaceful).
+                Mob mob = (Mob) type.create(level, new EntitySpawnRequest(EntitySpawnReason.COMMAND, true));
                 if (tracing(s)) field(Entity.class, "random").set(mob, new TracingRandom(0L, TRACE, ENTS.size()));
                 mob.setId(id++);
                 mob.snapTo(spec.x, spec.y, spec.z, spec.yaw, 0.0F);
