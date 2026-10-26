@@ -208,6 +208,8 @@ pub(super) struct World<'a> {
     pub clouds: Option<&'a wgpu::BindGroupLayout>,
     /// The game can hand its rain and snow to the pack.
     pub weather: bool,
+    /// The game can hand its first-person hand to the pack.
+    pub hand: bool,
 }
 
 /// This frame's clouds, when the pack draws them: their vertices, uniform, quad indices and
@@ -251,6 +253,9 @@ pub struct PackPost {
     weather: Option<[Pass; 2]>,
     weather_draw: Option<Weather>,
     weather_generation: u64,
+    /// What draws the first-person hand (`gbuffers_hand` or its fallback), after the opaque
+    /// world, and its vertices.
+    hand: Option<(Pass, super::pack_hand::PackHand)>,
     /// A program after translucent terrain reads `depthtex1`: it is copied before water.
     depth1: bool,
     /// Buffers with mipmaps (filterable ones a program asks them for).
@@ -997,6 +1002,18 @@ impl PackPost {
             ids: None,
             cull: false,
         });
+        let hand_geometry = world.hand.then(|| super::pack_hand::PackHand::new(device));
+        let hand = post.hand.zip(hand_geometry).and_then(|(p, geometry)| {
+            let g = Geometry {
+                buffers: &entity_buffers,
+                table: Some(&geometry.layout),
+                depth_write: true,
+                atlas: world.celestial.clone(),
+                ids: None,
+                cull: false,
+            };
+            build(p, Some(&g)).map(|pass| (pass, geometry))
+        });
         let weather = post
             .weather
             .zip(weather_geometry.as_ref())
@@ -1041,6 +1058,9 @@ impl PackPost {
         if let Some(c) = &clouds {
             notes.push(format!("clouds draw with {}", c.name));
         }
+        if let Some((h, _)) = &hand {
+            notes.push(format!("the hand draws with {}", h.name));
+        }
         if let Some([w, _]) = &weather {
             notes.push(format!("rain and snow draw with {}", w.name));
         }
@@ -1071,6 +1091,7 @@ impl PackPost {
                 .chain(&clouds)
                 .chain(&water)
                 .chain(weather.iter().take(1).flatten())
+                .chain(hand.iter().map(|h| &h.0))
                 .find(touched)
                 .map(|_| true)
                 .or_else(|| {
@@ -1088,6 +1109,7 @@ impl PackPost {
             || entities.is_some()
             || clouds.is_some()
             || weather.is_some()
+            || hand.is_some()
             || passes.iter().any(|p| {
                 p.samplers
                     .iter()
@@ -1190,6 +1212,7 @@ impl PackPost {
             weather,
             weather_draw: None,
             weather_generation: 0,
+            hand,
             depth1,
             mipped,
             mips_valid: 0,
@@ -1607,6 +1630,50 @@ impl PackPost {
         self.draw_terrain(device, queue, encoder, size, false, terrain);
         self.draw_entities(device, queue, encoder, size, false);
         self.draw_clouds(device, queue, encoder, size);
+        self.draw_hand(device, queue, encoder, size, frame);
+    }
+
+    /// The first-person hand and held items, with `gbuffers_hand` at the hand's projection.
+    fn draw_hand(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        size: [u32; 2],
+        frame: &super::Frame,
+    ) {
+        let Some((mut pass, mut geometry)) = self.hand.take() else {
+            return;
+        };
+        let projection = super::pack_hand::projection(
+            frame.hand_fov_degrees,
+            size[0] as f32 / size[1].max(1) as f32,
+            frame.depth_far,
+            frame.bob,
+        );
+        geometry.prepare(device, queue, frame.hand, projection);
+        if geometry.quads > 0 {
+            let group = self.bind(device, queue, &mut pass, size);
+            {
+                let mut rp = self.begin(encoder, &pass);
+                rp.set_pipeline(&pass.pipeline);
+                rp.set_bind_group(0, &group, &[]);
+                rp.set_bind_group(1, &geometry.group, &[]);
+                if pass.draw {
+                    self.draws.bind(&mut rp, "HAND_SOLID");
+                }
+                rp.set_vertex_buffer(0, geometry.vertices());
+                rp.set_index_buffer(geometry.indices.slice(..), wgpu::IndexFormat::Uint32);
+                rp.draw_indexed(0..geometry.quads * 6, 0, 0..1);
+            }
+            self.mips_valid &= !pass.written;
+        }
+        self.hand = Some((pass, geometry));
+    }
+
+    /// Whether the pack draws the first-person hand itself.
+    pub fn has_hand(&self) -> bool {
+        self.hand.is_some()
     }
 
     /// The clouds `set_clouds` gave for this frame, with `gbuffers_clouds`.
@@ -2018,7 +2085,8 @@ impl PackPost {
         let mut terrain_drawn = self.terrain.is_none()
             && self.sky.is_none()
             && self.entities.is_none()
-            && self.clouds.is_none();
+            && self.clouds.is_none()
+            && self.hand.is_none();
         let late_entities = self.entities.as_ref().is_some_and(|e| {
             e.passes
                 .iter()

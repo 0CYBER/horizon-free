@@ -123,6 +123,14 @@ const BLOCK: [&str; 5] = [
 /// `gbuffers_clouds`: no fallback, the game draws its clouds otherwise (OQ-3).
 const CLOUDS: [&str; 1] = ["gbuffers_clouds"];
 
+/// `gbuffers_hand` and its fallbacks (2.3).
+const HAND: [&str; 4] = [
+    "gbuffers_hand",
+    "gbuffers_textured_lit",
+    "gbuffers_textured",
+    "gbuffers_basic",
+];
+
 /// `gbuffers_weather` and its fallbacks (2.3).
 const WEATHER: [&str; 4] = [
     "gbuffers_weather",
@@ -206,6 +214,8 @@ pub struct Post {
     pub clouds: Option<PostProgram>,
     /// What draws rain and snow, after deferred.
     pub weather: Option<PostProgram>,
+    /// What draws the first-person hand and held items.
+    pub hand: Option<PostProgram>,
     /// Translucent entities draw after deferred (`separateEntityDraws`, 3.2).
     pub translucent_late: bool,
     /// Particles draw after deferred (`particles.ordering`, `particles.before.deferred`, 3.2).
@@ -241,6 +251,8 @@ pub struct GameInputs {
     pub clouds: Option<GbuffersInputs>,
     /// Rain and snow.
     pub weather: Option<GbuffersInputs>,
+    /// The first-person hand and held items.
+    pub hand: Option<GbuffersInputs>,
 }
 
 /// Loads the post-processing programs of `folder` and, for the geometry `inputs` describes, the
@@ -267,6 +279,7 @@ pub fn load_post(
         particles: None,
         clouds: None,
         weather: None,
+        hand: None,
         translucent_late: false,
         particles_late: false,
         custom: Custom::parse(properties),
@@ -381,6 +394,15 @@ pub fn load_post(
         p.blend = blend(properties, &p.name).unwrap_or(Some(TRANSLUCENT_BLEND));
         p
     });
+    // The hand draws as entities do: no blending unless `blend.*` says otherwise (OQ-23).
+    let hand = inputs
+        .hand
+        .as_ref()
+        .and_then(|i| gbuffers(&HAND, Group::Gbuffers, i))
+        .map(|mut p| {
+            p.blend = blend(properties, &p.name).flatten();
+            p
+        });
     if let Some(inputs) = &inputs.terrain {
         let terrain = gbuffers(&TERRAIN, Group::Gbuffers, inputs);
         // gbuffers_water falls back to gbuffers_terrain's chain (2.3).
@@ -402,6 +424,7 @@ pub fn load_post(
     loader.post.particles = particles;
     loader.post.clouds = clouds;
     loader.post.weather = weather;
+    loader.post.hand = hand;
     let flag = |key: &str| properties.get(key).map(|v| v.trim() == "true");
     loader.post.translucent_late = flag("separateEntityDraws").unwrap_or(false);
     // `after` when the pack has a deferred program, else `mixed`; ours are all translucent, so
@@ -691,7 +714,8 @@ mod tests {
             celestial: Some(inputs.clone()),
             entities: Some(inputs.clone()),
             clouds: Some(inputs.clone()),
-            weather: Some(inputs),
+            weather: Some(inputs.clone()),
+            hand: Some(inputs),
         };
         let post = load_post(&pack, "", &Properties::default(), &macros, &inputs);
         let (terrain, water) = (post.terrain.unwrap(), post.water.unwrap());
@@ -741,6 +765,12 @@ mod tests {
         assert!(post.particles_late && !post.translucent_late);
         // gbuffers_clouds has no fallback (OQ-3): without it the game draws its clouds.
         assert!(post.clouds.is_none());
+        // The hand falls back to gbuffers_textured and does not blend.
+        let hand = post.hand.as_ref().unwrap();
+        assert_eq!(
+            (hand.name.as_str(), hand.group, hand.blend),
+            ("gbuffers_textured", Group::Gbuffers, None)
+        );
         // Weather falls back to gbuffers_textured, after deferred, blended.
         let weather = post.weather.as_ref().unwrap();
         assert_eq!(
