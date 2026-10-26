@@ -721,10 +721,7 @@ impl Game<'_> {
                 block_pos: None,
             };
             adv::conditions(&c["player"], &pctx, w)
-                && (c["potion"].is_null()
-                    || potion
-                        .as_deref()
-                        .is_some_and(|p| adv::id_matches(&c["potion"], "potion", p, w)))
+                && adv::potions(&c["potion"], potion.as_deref(), w)
         });
     }
     /// `EnterBlockTrigger`: the block, its state properties and the player.
