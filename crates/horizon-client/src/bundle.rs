@@ -166,6 +166,38 @@ impl Contents {
         Some(stack)
     }
 
+    /// The stacks inside, in display order (the first is the next out).
+    pub fn items(&self) -> &[ItemStack] {
+        &self.items
+    }
+
+    /// `getNumberOfItemsToShow`: a full grid shows 11 and a `+N`, so the last
+    /// row keeps its fourth cell for the count.
+    pub fn shown_count(&self) -> usize {
+        let count = self.items.len();
+        let available: usize = if count > 12 { 11 } else { 12 };
+        let on_last_row = count % 4;
+        let empty = if on_last_row == 0 { 0 } else { 4 - on_last_row };
+        count.min(available.saturating_sub(empty))
+    }
+
+    /// The items the tooltip shows, and how many sit beyond them.
+    pub fn shown(&self) -> (&[ItemStack], u32) {
+        let n = self.shown_count();
+        let hidden = self.items[n..].iter().map(|s| s.count).sum();
+        (&self.items[..n], hidden)
+    }
+
+    /// The `Fraction` weight as the float the progress bar reads.
+    pub fn weight_fraction(&self) -> f32 {
+        self.weight.n as f32 / self.weight.d as f32
+    }
+
+    /// `Fraction.ONE`: a full bundle draws the full bar and says so.
+    pub fn is_full(&self) -> bool {
+        self.weight.n >= self.weight.d
+    }
+
     /// `toImmutable`, written back into the bundle's component.
     pub fn store(self, bundle: &mut ItemStack) {
         bundle.data_mut().bundle_contents = self.items;
@@ -188,5 +220,176 @@ mod tests {
         // An over-full bundle (made by a command) has no room.
         let over = Weight::ONE.sub(Weight::new(5, 4));
         assert_eq!(over.how_many(Weight::new(1, 64)), 0);
+    }
+}
+
+// ------------------------------------------------------------- the tooltip
+
+/// `ClientBundleTooltip`'s geometry, relative to the tooltip box's top-left:
+/// the 96 pixel column of a 4 wide slot grid and the progress bar under it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TooltipLayout {
+    /// The component's own width (96) and height, the text's excluded.
+    pub width: f32,
+    pub height: f32,
+    /// Each slot's top-left and the stack in it, in reading order.
+    pub slots: Vec<([f32; 2], ItemStack)>,
+    /// The `+N` of the items past the grid: its top-left and the count.
+    pub overflow: Option<([f32; 2], u32)>,
+    /// The progress bar's top-left, its fill's width out of 94, and whether
+    /// the weight fills it (the full sprite).
+    pub bar: [f32; 2],
+    pub fill: f32,
+    pub full: bool,
+    /// `item.minecraft.bundle.empty` / `.full`, centred over the bar.
+    pub label: Option<&'static str>,
+    /// An empty bundle's description, wrapped at `width` from here.
+    pub empty_description: Option<[f32; 2]>,
+}
+
+/// The tooltip of a bundle's contents (`ClientBundleTooltip`), or None when
+/// the stack is not a bundle. `x`/`y` are the box's top-left, `box_width` the
+/// tooltip's width, which the component is centred in.
+pub fn tooltip_layout(
+    items: &Items,
+    stack: &ItemStack,
+    x: f32,
+    y: f32,
+    box_width: f32,
+) -> Option<TooltipLayout> {
+    let contents = Contents::of(items, stack)?;
+    let offset = ((box_width - 96.0) / 2.0).floor();
+    if contents.items().is_empty() {
+        // The description takes the top; the bar follows it.
+        let description_height = 9.0 * 2.0;
+        return Some(TooltipLayout {
+            width: 96.0,
+            height: description_height + 13.0 + 8.0,
+            slots: Vec::new(),
+            overflow: None,
+            bar: [x + offset, y + description_height + 4.0],
+            fill: 0.0,
+            full: false,
+            label: Some("item.minecraft.bundle.empty"),
+            empty_description: Some([x + offset, y]),
+        });
+    }
+    let (shown, hidden) = contents.shown();
+    // `gridSizeY` counts `slotCount()` (at most twelve), not the slots the
+    // overflow count leaves room for.
+    let rows = contents.items().len().min(12).div_ceil(4).max(1);
+    let grid_height = rows as f32 * 24.0;
+    let x_start = x + offset + 96.0;
+    let y_start = y + grid_height;
+    let mut slots = Vec::with_capacity(shown.len());
+    let mut overflow = None;
+    // Rows fill bottom-up and columns right-to-left, as vanilla draws them.
+    let mut slot = 0;
+    for row in 1..=rows {
+        for column in 1..=4 {
+            let at = [x_start - column as f32 * 24.0, y_start - row as f32 * 24.0];
+            if hidden > 0 && row == 1 && column == 1 {
+                overflow = Some((at, hidden));
+            } else if let Some(stack) = shown.get(slot) {
+                slots.push((at, stack.clone()));
+                slot += 1;
+            }
+        }
+    }
+    let weight = contents.weight_fraction();
+    Some(TooltipLayout {
+        width: 96.0,
+        height: grid_height + 13.0 + 8.0,
+        slots,
+        overflow,
+        bar: [x + offset, y + grid_height + 4.0],
+        // `Mth.mulAndTruncate(weight, 94)`, kept within the bar.
+        fill: (weight * 94.0).trunc().clamp(0.0, 94.0),
+        full: contents.is_full(),
+        label: if contents.is_full() {
+            Some("item.minecraft.bundle.full")
+        } else {
+            None
+        },
+        empty_description: None,
+    })
+}
+
+#[cfg(test)]
+mod tooltip_tests {
+    use super::*;
+
+    /// The prepared resources, when they are on this machine: the tooltip
+    /// asks the item registry whether a stack is a bundle.
+    fn items() -> Option<Items> {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("items.json").exists() {
+            return None;
+        }
+        let assets = crate::assets::Assets::load(&root).ok()?;
+        let facts = crate::blocks::BlockFacts::load(&root, assets.registry).ok()?;
+        Items::load(&root, assets.registry, &facts).ok()
+    }
+
+    fn bundle_with(counts: &[(&str, u32)]) -> ItemStack {
+        let mut bundle = ItemStack::new("minecraft:bundle", 1);
+        bundle.data_mut().bundle_contents = counts
+            .iter()
+            .map(|(item, n)| ItemStack::new(item, *n))
+            .collect();
+        bundle
+    }
+
+    #[test]
+    fn a_grid_shows_twelve_stacks_and_counts_the_rest() {
+        let Some(items) = items() else { return };
+        let twelve: Vec<(&str, u32)> = (0..12).map(|_| ("minecraft:stone", 1)).collect();
+        let layout = tooltip_layout(&items, &bundle_with(&twelve), 0.0, 0.0, 96.0).unwrap();
+        assert_eq!(layout.slots.len(), 12);
+        assert_eq!(layout.overflow, None);
+        assert_eq!(layout.height, 3.0 * 24.0 + 13.0 + 8.0);
+        // Rows fill bottom-up and columns right-to-left: the first item is in
+        // the bottom-right cell, the twelfth in the top-left.
+        assert_eq!(layout.slots[0].0, [96.0 - 24.0, 3.0 * 24.0 - 24.0]);
+        assert_eq!(&*layout.slots[0].1.item, "minecraft:stone");
+        assert_eq!(layout.slots[11].0, [0.0, 0.0]);
+        // A wider tooltip centres the 96 pixel column in it.
+        let centred = tooltip_layout(&items, &bundle_with(&twelve), 0.0, 0.0, 120.0).unwrap();
+        assert_eq!(centred.slots[0].0[0], 12.0 + 96.0 - 24.0);
+        // Thirteen stacks: `getNumberOfItemsToShow` leaves the last row room
+        // for the count, so 8 slots show and `+6` (four stones and two dirt)
+        // takes the first cell.
+        let mut counts = twelve;
+        counts.push(("minecraft:dirt", 2));
+        let layout = tooltip_layout(&items, &bundle_with(&counts), 0.0, 0.0, 96.0).unwrap();
+        assert_eq!(layout.slots.len(), 8);
+        assert_eq!(layout.overflow, Some(([96.0 - 24.0, 48.0], 6)));
+    }
+
+    #[test]
+    fn the_bar_fills_with_the_weight_and_an_empty_bundle_explains_itself() {
+        let Some(items) = items() else { return };
+        let layout = tooltip_layout(&items, &bundle_with(&[]), 4.0, 8.0, 96.0).unwrap();
+        assert!(layout.slots.is_empty());
+        assert_eq!(layout.fill, 0.0);
+        assert_eq!(layout.label, Some("item.minecraft.bundle.empty"));
+        assert_eq!(layout.empty_description, Some([4.0, 8.0]));
+        assert_eq!(layout.bar, [4.0, 8.0 + 18.0 + 4.0]);
+        // A bundle holding one 64 stack is full: the whole bar, the full label.
+        let layout = tooltip_layout(
+            &items,
+            &bundle_with(&[("minecraft:stone", 64)]),
+            0.0,
+            0.0,
+            96.0,
+        )
+        .unwrap();
+        assert!(layout.full);
+        assert_eq!(layout.fill, 94.0);
+        assert_eq!(layout.label, Some("item.minecraft.bundle.full"));
+        // Something that is not a bundle has no component.
+        let dirt = ItemStack::new("minecraft:dirt", 1);
+        assert!(tooltip_layout(&items, &dirt, 0.0, 0.0, 96.0).is_none());
     }
 }

@@ -803,8 +803,7 @@ impl Game<'_> {
                 text.split('\n').map(|l| (l.to_owned(), u32::MAX)).collect();
             self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
         } else if let Some(stack) = tooltip {
-            let lines = self.stack_tooltip(&stack);
-            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
+            self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
         }
         true
     }

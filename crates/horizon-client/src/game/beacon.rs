@@ -515,8 +515,7 @@ impl Game<'_> {
         if self.carried.is_some() {
             self.draw_carried(batch);
         } else if let Some(stack) = stack_tip {
-            let lines = self.stack_tooltip(&stack);
-            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
+            self.draw_stack_tooltip(batch, &stack, self.cursor.0, self.cursor.1);
         } else if let Some(key) = tooltip {
             let text = self.translate(&key, &key);
             self.draw_tooltip_lines(
