@@ -3085,6 +3085,31 @@ impl Game<'_> {
                 LevelEvent::BlockEntityEvent { pos, a, b, .. } => {
                     self.block_entity_event([pos.x, pos.y, pos.z], a, b)
                 }
+                // NoteBlock.triggerEvent: a NOTE particle above, coloured by
+                // the note (`note / 24.0` in the x speed).
+                LevelEvent::BlockEvent {
+                    pos,
+                    state,
+                    kind: "note_particle",
+                } => {
+                    use horizon_client::particles::{ParticleOptions, ParticleType};
+                    let note = self
+                        .pack
+                        .assets
+                        .registry
+                        .state(state)
+                        .and_then(|s| s.properties.get("note")?.parse::<f64>().ok())
+                        .unwrap_or(0.0);
+                    self.particles.add(
+                        &ParticleOptions::simple(ParticleType::Note),
+                        [
+                            f64::from(pos.x) + 0.5,
+                            f64::from(pos.y) + 1.2,
+                            f64::from(pos.z) + 0.5,
+                        ],
+                        [note / 24.0, 0.0, 0.0],
+                    );
+                }
                 LevelEvent::GrowTree { .. }
                 | LevelEvent::PlaceFeature { .. }
                 | LevelEvent::BlockEvent { .. } => {}
