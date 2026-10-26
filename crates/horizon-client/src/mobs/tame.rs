@@ -388,7 +388,12 @@ impl Goal for OwnerHurtBy {
         if !m.extra.tame || m.extra.sitting {
             return false;
         }
-        let Some((who, at)) = cx.w.player.as_ref().and_then(|p| p.hurt_by) else {
+        let Some((who, at)) =
+            cx.w.player
+                .as_ref()
+                .filter(|p| m.extra.owner == Some(p.uuid))
+                .and_then(|p| p.hurt_by)
+        else {
             return false;
         };
         at != self.timestamp && wants_to_attack(m, cx.w, who)
@@ -399,7 +404,12 @@ impl Goal for OwnerHurtBy {
             .is_some_and(|t| t.alive)
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        if let Some((who, at)) = cx.w.player.as_ref().and_then(|p| p.hurt_by) {
+        if let Some((who, at)) =
+            cx.w.player
+                .as_ref()
+                .filter(|p| m.extra.owner == Some(p.uuid))
+                .and_then(|p| p.hurt_by)
+        {
             m.ai.target = Some(who);
             self.timestamp = at;
         }
@@ -422,7 +432,12 @@ impl Goal for OwnerHurt {
         if !m.extra.tame || m.extra.sitting {
             return false;
         }
-        let Some((who, at)) = cx.w.player.as_ref().and_then(|p| p.last_hurt) else {
+        let Some((who, at)) =
+            cx.w.player
+                .as_ref()
+                .filter(|p| m.extra.owner == Some(p.uuid))
+                .and_then(|p| p.last_hurt)
+        else {
             return false;
         };
         at != self.timestamp && wants_to_attack(m, cx.w, who)
@@ -433,7 +448,12 @@ impl Goal for OwnerHurt {
             .is_some_and(|t| t.alive)
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        if let Some((who, at)) = cx.w.player.as_ref().and_then(|p| p.last_hurt) {
+        if let Some((who, at)) =
+            cx.w.player
+                .as_ref()
+                .filter(|p| m.extra.owner == Some(p.uuid))
+                .and_then(|p| p.last_hurt)
+        {
             m.ai.target = Some(who);
             self.timestamp = at;
         }
