@@ -32,7 +32,7 @@ pub use bindings::horizon::mods::{
 use bindings::{
     HorizonMod,
     exports::horizon::mods::events::Registration,
-    horizon::mods::{chat, game, hud, log as mod_log, storage},
+    horizon::mods::{chat, command, game, hud, log as mod_log, storage},
 };
 /// The widget model a `ui` screen or settings page shows (WIT `interface
 /// ui`), for the game to draw with its menus' own widgets.
@@ -79,6 +79,9 @@ pub enum Output {
     Chat { name: String, text: String },
     /// A mod command's feedback, red when `error`.
     Feedback { text: String, error: bool },
+    /// `command.run`: a vanilla command line, without its slash, to run as
+    /// the player.
+    Command { line: String },
     /// The mod was turned off: it trapped, overran or failed to start.
     Stopped { name: String, reason: String },
     /// `ui.open-screen`: the mod's entry in `entries()`; what it shows is
@@ -665,6 +668,18 @@ impl chat::Host for State {
                 name,
                 text: clip(text),
             });
+        }
+    }
+}
+impl command::Host for State {
+    fn run(&mut self, line: String) {
+        let queued = self
+            .out
+            .iter()
+            .filter(|o| matches!(o, Output::Command { .. }))
+            .count();
+        if queued < CHAT_PER_CALL {
+            self.out.push(Output::Command { line: clip(line) });
         }
     }
 }

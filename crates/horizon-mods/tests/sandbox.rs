@@ -1,4 +1,5 @@
-//! Loads real mods built with the SDK: the coords-hud example and a guest
+//! Loads real mods built with the SDK: the coords-hud and predator-missile
+//! examples and a guest
 //! that misbehaves on command. Needs `rustup target add wasm32-unknown-unknown`.
 use horizon_mods::{
     Clock, Corner, Mods, Output, Package, Player, Snapshot, Status, manifest::componentize,
@@ -26,7 +27,7 @@ capabilities = ["chat", "ui"]
 experimental = ["ui"]
 "#;
 
-/// Builds both mods once and writes their `.hmod` files; returns the folder.
+/// Builds the mods once and writes their `.hmod` files; returns the folder.
 fn mods_dir() -> &'static Path {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
@@ -38,6 +39,8 @@ fn mods_dir() -> &'static Path {
             .args([
                 "-p",
                 "coords-hud",
+                "-p",
+                "predator-missile",
                 "-p",
                 "horizon-mods-test-guest",
                 "-p",
@@ -54,9 +57,13 @@ fn mods_dir() -> &'static Path {
         let built = target.join("wasm32-unknown-unknown/release");
         let dir = target.join("mods");
         std::fs::create_dir_all(&dir).unwrap();
-        let example = root.join("crates/horizon-mod-sdk/examples/coords-hud/horizon-mod.toml");
+        let example = |name: &str| {
+            let path = format!("crates/horizon-mod-sdk/examples/{name}/horizon-mod.toml");
+            std::fs::read_to_string(root.join(path)).unwrap()
+        };
         let mods = [
-            ("coords_hud", std::fs::read_to_string(example).unwrap()),
+            ("coords_hud", example("coords-hud")),
+            ("predator_missile", example("predator-missile")),
             ("horizon_mods_test_guest", GUEST_MANIFEST.to_string()),
             ("horizon_mods_test_ui_guest", UI_MANIFEST.to_string()),
         ];
@@ -90,6 +97,36 @@ fn player() -> Snapshot {
             day_time: 24000 + 6000,
         }),
     }
+}
+
+/// Capability `command`: `/missile` queues vanilla commands, and the chat
+/// line its impact check prints sets off the warhead.
+#[test]
+fn predator_missile_runs_commands() {
+    let mut mods = load("predator_missile.hmod");
+    assert_eq!(mods.entries()[0].status, Status::Running);
+    mods.set_snapshot(player());
+    let commands = |mods: &mut Mods| -> Vec<String> {
+        mods.drain()
+            .into_iter()
+            .filter_map(|o| match o {
+                Output::Command { line } => Some(line),
+                _ => None,
+            })
+            .collect()
+    };
+    assert!(mods.command("missile"));
+    let launch = commands(&mut mods);
+    assert_eq!(launch.len(), 6);
+    assert!(launch.contains(&"gamemode spectator".to_string()));
+    mods.tick(1);
+    mods.tick(2);
+    let flight = commands(&mut mods);
+    assert!(flight.iter().any(|l| l.ends_with("run tp @s ^ ^ ^1.5")));
+    mods.chat("Predator: impact");
+    let blast = commands(&mut mods);
+    assert_eq!(blast.len(), 4);
+    assert!(blast.iter().all(|l| l.contains("summon tnt")));
 }
 
 #[test]

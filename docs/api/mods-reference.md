@@ -11,19 +11,20 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `chat` | [`chat`](#chat) | show you chat messages |
 | `hud` | [`hud`](#hud) | draw text on your screen |
 | `storage` | [`storage`](#storage) | save its own settings to disk |
+| `command` | [`command`](#command) | run commands as you, with your permissions |
 | `registries` | data files (`assets/`, `data/`), no interface | add blocks and items to your worlds |
 | `ui` | [`ui`](#ui) | show its own screens and a settings page |
 
 ## World `horizon-mod`
 
-- Imports (what the game offers): `log`, `game`, `chat`, `hud`, `storage`
+- Imports (what the game offers): `log`, `game`, `chat`, `hud`, `storage`, `command`
 - Exports (what the mod provides): `events`
 
 ## World `horizon-ui-mod`
 
 A mod with widgets (capability `ui`): the SDK builds every mod against this world. Mods built for `horizon-mod` alone (no `ui-events` export) still load and simply hear nothing of their widgets.
 
-- Imports (what the game offers): `ui`, `log`, `game`, `chat`, `hud`, `storage`
+- Imports (what the game offers): `ui`, `log`, `game`, `chat`, `hud`, `storage`, `command`
 - Exports (what the mod provides): `ui-events`, `events`
 
 ## World `ui-host`
@@ -131,6 +132,16 @@ Capability `storage`: a per-mod folder of small key/value files, quota'd (docs/m
 | `get` | `func(key: string) -> option<list<u8>>` | None if `key` has never been `set`, or the key is not well-formed. |
 | `set` | `func(key: string, value: list<u8>) -> result<_, string>` | Errs on a malformed key or over quota (bytes for the whole mod). |
 | `delete` | `func(key: string)` | No error if `key` was already absent. |
+
+## `command`
+
+Access: capability `command`.
+
+Capability `command`: vanilla commands run as the player, with the player's permissions, after the hook call returns (8 per call). A mod's own commands are not run this way.
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `run` | `func(line: string)` | `line` without its slash; its feedback goes to the chat as if typed. |
 
 ## `ui`
 
