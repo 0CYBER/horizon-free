@@ -132,6 +132,10 @@ pub fn tick(m: &mut Mob) {
     } else {
         m.velocity.y *= 0.6;
     }
+    setup_animation_states(m);
+}
+/// `Bat.setupAnimationStates`: client visuals, without changing server motion.
+pub fn setup_animation_states(m: &mut Mob) {
     let age = m.age as f32;
     if resting(m) {
         m.anim.states[0].stop();

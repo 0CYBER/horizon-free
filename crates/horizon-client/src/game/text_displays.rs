@@ -210,6 +210,7 @@ impl Game<'_> {
             if bg != 0 {
                 batch.fill(
                     atlas,
+                    // submitTextBackground(-1, -1, width, height): corners, not a size.
                     -1.0,
                     -1.0,
                     width + 1.0,
