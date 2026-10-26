@@ -7,6 +7,7 @@
 //! behaviour, models, animations and sounds.
 pub mod ai;
 pub mod allay;
+pub mod ambient;
 pub mod anim;
 pub mod animal_brain;
 pub mod aquatic;
@@ -1645,6 +1646,11 @@ impl Mob {
     }
     pub fn species(&self) -> Species {
         self.kind.species
+    }
+    /// `Mob.getMainArm`: the left arm when the mob is left-handed, a player's
+    /// `mainHand` option for a player mob.
+    pub fn main_arm_left(&self) -> bool {
+        self.extra.main_hand_left || self.extra.left_handed
     }
     /// The player hit this mob (melee): LivingEntity.hurt with knockback.
     pub fn hurt(

@@ -16,6 +16,7 @@
   <a href="#download"><b>Download</b></a> ·
   <a href="https://playhorizon.dev/docs/"><b>Documentation</b></a> ·
   <a href="https://github.com/ludovic111/horizon/releases"><b>Release notes</b></a> ·
+  <a href="ROADMAP.md"><b>Roadmap</b></a> ·
   <a href="#project-status"><b>Project status</b></a> ·
   <a href="#contributing"><b>Contributing</b></a>
 </p>
@@ -108,6 +109,10 @@ cargo run --release -p horizon-client
 Everything prepared lands in the gitignored `.local/`. It is derived from the game: never commit it or share it.
 
 The client starts on the title screen. Command-line options (`--world`, `--seed`, `--creative`, `--render-distance`, `--dedicated`), controls, scripting through `horizon-ctl` and the architecture are described in [the native client guide](docs/native-client.md). The rest of the developer documentation is indexed in [docs/README.md](docs/README.md), including [the parity workflow](docs/parity-workflow.md).
+
+## Roadmap
+
+What is being done now, what comes next and where you can help, in plain words and in technical detail: [ROADMAP.md](ROADMAP.md). [playhorizon.dev/hub](https://playhorizon.dev/hub) shows it with the work board, the journal of what shipped and how to help.
 
 ## Contributing
 
