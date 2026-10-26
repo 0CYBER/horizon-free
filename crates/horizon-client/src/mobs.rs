@@ -1131,6 +1131,12 @@ pub enum MobEvent {
         table: &'static str,
         at: [f64; 3],
     },
+    /// `Armadillo.customServerAiStep`: the armadillo sheds a scute.
+    ShedScute {
+        mob: u32,
+        at: [f64; 3],
+        pitch: f32,
+    },
     /// A lead snaps or loses its holder: the lead item drops when asked.
     LeashBreak {
         mob: u32,
