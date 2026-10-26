@@ -3817,7 +3817,7 @@ impl Game<'_> {
         // sound), which BaseFireBlock skips: the server's extinguish sound
         // is all a player hears.
         let facts = self.res.facts().get(state);
-        if !self.res.items().block_in_tag("minecraft:fire", &facts.name) {
+        if !facts.has_class("BaseFireBlock") {
             let s = facts.sounds.clone();
             let at = [
                 f64::from(pos[0]) + 0.5,
