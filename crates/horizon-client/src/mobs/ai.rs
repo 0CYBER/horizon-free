@@ -183,6 +183,18 @@ pub fn register(m: &mut Mob) {
             if m.species() == Species::Rabbit {
                 super::rabbit::register(m);
             }
+            if m.species() == Species::Frog {
+                // `Frog()`: SmoothSwimmingMoveControl(85, 10, 0.02, 0.1, true).
+                // The speed attribute is 1.0, so the controller's scaling is
+                // what keeps a frog at a walking pace on land.
+                m.ai.mov.kind = super::control::MoveKind::SmoothSwimming {
+                    max_turn_x: 85.0,
+                    max_turn_y: 10.0,
+                    in_water: 0.02,
+                    outside: 0.1,
+                    gravity: true,
+                };
+            }
         }
         Family::Inert => {}
         Family::Witch => super::witch::register(m),
