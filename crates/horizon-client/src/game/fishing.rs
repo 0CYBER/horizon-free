@@ -219,7 +219,7 @@ impl Game<'_> {
                     item,
                     [hook.position.x, hook.position.y, hook.position.z],
                     v,
-                    10,
+                    0,
                 );
                 let xp = self.world.random.next_int_bound(6).unwrap_or(0) as u32 + 1;
                 self.spawn_orbs([owner.x, owner.y + 0.5, owner.z + 0.5], xp);
