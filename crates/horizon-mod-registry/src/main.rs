@@ -1,5 +1,5 @@
 //! `horizon-mod-registry`: serves on `PORT` (default 8080). Configured by the
-//! environment (see `Config::from_env`); keeps no data.
+//! environment (see `Config::from_env`); keeps the ratings in `REGISTRY_DB`.
 use std::net::SocketAddr;
 
 use horizon_mod_registry::{App, Config, router};
@@ -16,7 +16,8 @@ async fn main() {
         .await
         .unwrap_or_else(|e| panic!("port {port}: {e}"));
     eprintln!("horizon-mod-registry: listening on {port}, submitting to {repo}");
-    axum::serve(listener, router(App::new(config)))
+    let app = App::new(config).unwrap_or_else(|e| panic!("horizon-mod-registry: {e}"));
+    axum::serve(listener, router(app))
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })
