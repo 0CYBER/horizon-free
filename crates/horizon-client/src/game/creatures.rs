@@ -1941,6 +1941,21 @@ impl Game<'_> {
                 if shooter.is_some() {
                     p.owner = Some(Who::Player);
                 }
+                // ThrownEnderpearl.onAboveBubbleColumn / onInsideBubbleColumn.
+                if keep && hit == Hit::None && matches!(p.kind, ProjectileKind::EnderPearl) {
+                    let (at, h) = (p.position, 0.125);
+                    horizon_client::motion::bubble_column_push(
+                        w.world,
+                        w.registry,
+                        w.facts,
+                        w.collision,
+                        Aabb::new(
+                            Vec3::new(at.x - h, at.y, at.z - h),
+                            Vec3::new(at.x + h, at.y + 2.0 * h, at.z + h),
+                        ),
+                        &mut p.velocity,
+                    );
+                }
                 if let Some(a) = p.arrow.as_mut() {
                     arrow_events.extend(a.events.drain(..).map(|e| (p.position, e)));
                 }
