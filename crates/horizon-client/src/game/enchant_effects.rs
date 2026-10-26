@@ -384,7 +384,9 @@ impl Game<'_> {
         }
     }
     /// Bow enchantments at release: (extra base damage, infinity keeps the arrow).
-    pub(super) fn bow_enchantments(&mut self) -> (f64, bool) {
+    /// `ammo` is the item being fired: `Enchantment.itemContext` hands it to the
+    /// `ammo_use` conditions as the tool, so Infinity only frees plain arrows.
+    pub(super) fn bow_enchantments(&mut self, ammo: &str) -> (f64, bool) {
         let Some(bow) = self.inventory[self.selected].clone() else {
             return (0.0, false);
         };
@@ -403,7 +405,7 @@ impl Game<'_> {
             0.0,
         );
         let ammo_ctx = EffectContext {
-            tool: Some("minecraft:arrow"),
+            tool: Some(ammo),
             items: Some(self.res.items()),
             ..Default::default()
         };
