@@ -231,6 +231,7 @@ pub fn project(entry: &Entry, src: &Sources) -> Result<Project, Vec<String>> {
         icon,
         key: entry.key.as_ref().map(|k| k.trim().to_owned()),
         versions,
+        downloads: 0,
     })
 }
 

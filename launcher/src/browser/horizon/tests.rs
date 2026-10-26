@@ -49,6 +49,18 @@ fn searches_by_kind_and_words() {
     assert_eq!(found("", Kind::Modpack), ["cozy"]);
     assert!(found("skyblock", Kind::ResourcePack).is_empty());
     assert_eq!(found("", Kind::Shader), ["glow"]);
+    // The index's download counts, most downloaded first.
+    let mut counted = index.clone();
+    counted.projects.push(index::Project {
+        id: "zoom".into(),
+        name: "Zoom".into(),
+        downloads: 12_345,
+        ..index.project("coords_hud").unwrap().clone()
+    });
+    counted.projects[0].downloads = 80;
+    let first = search(&counted, &Query::new("", Kind::Mod));
+    let order: Vec<(&str, u64)> = first.iter().map(|p| (p.id.as_str(), p.downloads)).collect();
+    assert_eq!(order, [("zoom", 12_345), ("coords_hud", 80)]);
     let p = hud(&index);
     assert_eq!(p.support(), super::super::Support::Works);
     assert_eq!(p.page, "https://playhorizon.dev/mods/coords_hud");
