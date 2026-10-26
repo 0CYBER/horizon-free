@@ -32,6 +32,12 @@ copy is: the Mac mini, his Linux desktop and playhorizon (below). Their runners 
 between runs (`clean: false`), so the probes build incrementally into `.local/parity-target` and earlier passes
 stand.
 
+The job tests the pull request's head merged into main's current tip, which is what merging it would land: harness
+and game fixes that reached main after the branch was made apply to it too, and an old branch runs main's runner
+scripts and selection unless it changes them. The base for the selection is that main commit, so only the pull
+request's own changes count. The job summary names the main commit. A head that conflicts with main is tested
+alone, with a warning. The check is still reported on the head.
+
 1. `tools/ci/runner-env.sh` puts the machine's Python 3.13 and the JDK `research-lock.json` pins on the PATH
    (Homebrew and `java_home` on the Mac; on Linux what `linux-runner.sh` pinned, else nixpkgs), and sccache when
    the machine has it.
@@ -50,9 +56,6 @@ stand.
    modules, Java oracles and every Rust source their probes compile) changed since the merge base, plus any
    harness nothing is recorded about yet, and runs those that have no pass for their current inputs. A change to
    `Cargo.lock` or `research-lock.json` affects every harness. Each harness has 25 minutes, the job 45.
-   The selection runs with main's `tools/parity.py` and `tools/parity_reach.py` (`--changed <base> --list`), so a
-   branch made before a better selection landed gets it too, and the head's own `parity.py` then runs the named
-   harnesses. A branch that changes either file selects with its own code.
 
 Failed harnesses' logs are uploaded as the `parity-logs` artifact.
 
