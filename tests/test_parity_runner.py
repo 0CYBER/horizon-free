@@ -290,9 +290,6 @@ class OracleReuseTests(unittest.TestCase):
         self.assertEqual(self.output.read_text(), "b")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class LargeOutputTests(unittest.TestCase):
     def test_a_pass_clears_only_its_own_directory(self):
@@ -323,3 +320,84 @@ class LargeOutputTests(unittest.TestCase):
                 listing.write_text(f"{own / 'server.txt'}\n{own / 'client.txt'}\n")
                 parity.clear_large_outputs("state_provider#2", trace)
             self.assertEqual(sorted(path.name for path in own.iterdir()), ["report.json", "server.txt"])
+
+
+class FakeExecutor:
+    """Runs nothing: each start of a harness takes the next status from its script, a list."""
+    name, dead, max_peak = "fake", False, None
+
+    def __init__(self):
+        self.started, self.finished = [], []
+
+    def free(self):
+        return 1
+
+    def accepts(self, name):
+        return True
+
+    def fits(self, expected, only_here=True):
+        return True
+
+    def start(self, label, script, reuse, expected, shard=None):
+        self.started.append((label, reuse))
+        self.finished.append((label, {"status": script.pop(0), "seconds": 1.0, "dependencies": []}))
+        return True
+
+    def poll(self):
+        finished, self.finished = self.finished, []
+        return finished
+
+
+class KnownFlakyTests(unittest.TestCase):
+    def run_harnesses(self, scripts, flaky, rounds=None):
+        executor = FakeExecutor()
+        state = {"harnesses": {name: {"status": "pass", "oracle_reuse": True} for name in scripts}}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.multiple(parity, STATE_DIR=Path(tmp), SHARED=Path(tmp)), \
+                mock.patch.object(parity, "save_state"), mock.patch.object(parity, "time") as clock:
+            clock.monotonic.return_value = 0.0
+            results, _ = parity.run(scripts, state, None, "env", [executor], True, rounds, flaky)
+        return results, executor.started
+
+    def test_a_known_flaky_failure_runs_once_more_from_scratch_and_says_so(self):
+        results, started = self.run_harnesses({"dedicated_server": ["fail", "pass"]}, {"dedicated_server": "timer"})
+        self.assertEqual(results["dedicated_server"]["status"], "pass")
+        self.assertEqual(results["dedicated_server"]["retried"], "known flaky")
+        # The first run reused oracle results; a known flaky harness doesn't lose that by flaking.
+        self.assertTrue(results["dedicated_server"]["oracle_reuse"])
+        self.assertEqual(started, [("dedicated_server", True), ("dedicated_server", False)])
+
+    def test_only_once(self):
+        results, started = self.run_harnesses({"dedicated_server": ["fail", "fail"]}, {"dedicated_server": "timer"})
+        self.assertEqual(results["dedicated_server"]["status"], "fail")
+        self.assertEqual(len(started), 2)
+
+    def test_other_harnesses_keep_only_the_reused_oracle_retry(self):
+        results, started = self.run_harnesses({"food": ["fail", "pass"]}, {"dedicated_server": "timer"})
+        self.assertEqual((results["food"]["status"], results["food"]["retried"]), ("pass", "reused oracle results"))
+        self.assertEqual(started, [("food", True), ("food", False)])
+        self.assertFalse(results["food"]["oracle_reuse"])
+
+    def test_repeated_runs_get_no_retry(self):
+        results, started = self.run_harnesses({"dedicated_server": ["pass", "fail"]}, {"dedicated_server": "timer"},
+                                              rounds={"dedicated_server": 2})
+        self.assertEqual((results["dedicated_server"]["status"], len(started)), ("fail", 2))
+
+    def test_retries_reach_the_job_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = Path(tmp) / "summary.md"
+            with mock.patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": str(summary)}), \
+                    mock.patch("builtins.print"):
+                parity.report_retries({"dedicated_server": {"status": "pass", "retried": "known flaky"},
+                                       "food": {"status": "pass"}}, {"dedicated_server": "timer"})
+            text = summary.read_text()
+        self.assertIn("RETRIED dedicated_server: failed, then passed on its one retry (known flaky: timer", text)
+        self.assertNotIn("food", text)
+
+    def test_the_known_flaky_list_has_a_reason_per_harness(self):
+        flaky = parity.known_flaky(parity.host_config())
+        self.assertTrue(all(isinstance(reason, str) and len(reason) > 20 for reason in flaky.values()))
+        self.assertTrue(set(flaky) <= {parity.base_name(name) for name in parity.harnesses()})
+
+
+if __name__ == "__main__":
+    unittest.main()
