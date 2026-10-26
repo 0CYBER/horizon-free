@@ -123,8 +123,9 @@ impl SkullSkin {
             let location = crate::skins::skin_location(&crate::skins::texture_hash(&url)?);
             Some((url, location))
         });
+        // DefaultPlayerSkin.get(id), or getDefaultSkin (slim steve) without an id.
         let fallback = crate::skins::profile_uuid_nbt(profile)
-            .map_or("entity/player/wide/steve", crate::tab_list::default_skin);
+            .map_or("entity/player/slim/steve", crate::tab_list::default_skin);
         Self { download, fallback }
     }
 }

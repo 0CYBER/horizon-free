@@ -732,7 +732,7 @@ pub struct Scene<'a> {
     pub banner: &'a dyn Fn([i32; 3]) -> Vec<(String, u32)>,
     /// The skin sprite a `player_head` shows at a position (`SkullBlockRenderer`
     /// profile → skin): a downloaded `skins/<sha1>` slot or the profile's
-    /// `DefaultPlayerSkin` fallback; None keeps `SKIN_BY_TYPE` (steve).
+    /// `DefaultPlayerSkin` fallback; None keeps `SKIN_BY_TYPE` (`DefaultPlayerSkin.getDefaultTexture`, slim steve).
     pub skull: &'a dyn Fn([i32; 3]) -> Option<&'a str>,
     /// Font glyph cell (none for blank glyphs such as the space) and advance.
     pub glyph: &'a dyn Fn(char) -> (Option<Rect>, f32),
@@ -1281,7 +1281,7 @@ impl BlockEntityRenderer {
                     SkullType::Creeper => ("creeper_head", "entity/creeper/creeper"),
                     SkullType::Dragon => ("dragon_skull", "entity/enderdragon/dragon"),
                     SkullType::Piglin => ("piglin_head", "entity/piglin/piglin"),
-                    SkullType::Player => ("player_head", "entity/player/wide/steve"),
+                    SkullType::Player => ("player_head", "entity/player/slim/steve"),
                 };
                 // SkullBlockRenderer.getRenderType: the profile's skin when it
                 // resolves, `SKIN_BY_TYPE` (steve) otherwise.
