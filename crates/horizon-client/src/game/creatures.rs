@@ -401,6 +401,7 @@ impl Game<'_> {
             world: &self.world,
             registry: self.pack.assets.registry,
             facts: self.res.facts(),
+            fluid_tables: &self.motion.fluids,
             movement: &self.motion.blocks,
             collision: self.collision,
             data: self.res.mob_data(),
