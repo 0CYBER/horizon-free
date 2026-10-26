@@ -14,7 +14,7 @@ use crate::projectiles::{Projectile, ProjectileWorld, STEPS};
 use horizon_core::geometry::trig::Mth;
 use horizon_core::{
     geometry::{Aabb, Vec3},
-    random::RandomSource,
+    random::{LegacyRandom, RandomSource},
 };
 use std::f32::consts::PI;
 
@@ -173,20 +173,30 @@ pub fn hit_by_bullet(m: &mut Mob) {
     }
 }
 /// The deferred teleport of `after_hurt` and `hitByShulkerBullet`.
-pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+pub fn ai_step(
+    m: &mut Mob,
+    w: &MobWorld,
+    level_random: &mut LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) {
     if m.extra.flag {
         m.extra.flag = false;
         teleport(m, w, events);
     }
     if m.extra.flag2 {
         m.extra.flag2 = false;
-        hit_by_shulker_bullet(m, w, events);
+        hit_by_shulker_bullet(m, w, level_random, events);
     }
 }
 /// `Shulker.hitByShulkerBullet`: an open shulker teleports, and leaves a
 /// new one of its colour behind unless shulkers crowd the place (one in
 /// five fewer chances for every other shulker within 8 blocks).
-fn hit_by_shulker_bullet(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+fn hit_by_shulker_bullet(
+    m: &mut Mob,
+    w: &MobWorld,
+    level_random: &mut LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) {
     let old_position = m.position;
     let old_box = m.bounds();
     if m.extra.counter == 0 || !teleport(m, w, events) {
@@ -201,7 +211,8 @@ fn hit_by_shulker_bullet(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) 
         })
         .count();
     let failure_chance = others as f32 / 5.0;
-    if m.random.next_float() < failure_chance {
+    // The level's random, not the shulker's.
+    if level_random.next_float() < failure_chance {
         return;
     }
     let mut baby = Mob::new(0, m.kind.clone(), old_position, 0.0);

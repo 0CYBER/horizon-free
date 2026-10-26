@@ -746,7 +746,7 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
     if m.kind.flags.burns_in_day && m.alive() && sun_burn_tick(m, w) && m.extra.head.is_none() {
         m.ignite_for_ticks(160);
     }
-    species_ai_step(m, w, events);
+    species_ai_step(m, w, level_random, events);
 }
 impl Mob {
     /// LivingEntity.isPushable (and the push it takes from `Entity.push(Entity)`):
@@ -955,7 +955,12 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         _ => {}
     }
 }
-fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+fn species_ai_step(
+    m: &mut Mob,
+    w: &MobWorld,
+    level_random: &mut LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) {
     if family(m.species()) == Family::Aquatic {
         aquatic::ai_step(m, w, events);
     }
@@ -988,7 +993,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         }
         Species::Shulker => {
             super::shulker::tick(m, w, events);
-            super::shulker::ai_step(m, w, events);
+            super::shulker::ai_step(m, w, level_random, events);
         }
         Species::SnowGolem => super::golem::snow_ai_step(m, w, events),
         Species::CopperGolem => super::copper_golem::ai_step(m, w, events),
