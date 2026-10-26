@@ -73,6 +73,42 @@ jobs:
         run: |
           cargo +stable test --workspace --lib --bins --tests --features horizon-client/mods,horizon-mods/pack
           cargo +stable test --workspace --doc --features horizon-client/mods,horizon-mods/pack
+  # The launcher is its own workspace (launcher/Cargo.toml), so verify's cargo runs never build it. A pull request that
+  # changes it or a crate it builds is checked here, and so is every push to main: two pull requests can each pass
+  # alone and break it together (#2059 and the registry ratings did, 2026-10-26).
+  launcher:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Does this pull request change the launcher or a crate it builds?
+        if: github.event_name == 'pull_request'
+        id: launcher
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 tools/ci/rust_changes.py --launcher "$BASE_SHA" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
+      - name: Install Rust and the headers GPUI links against
+        if: steps.launcher.outputs.required != 'false'
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-x11-dev libwayland-dev \
+            libx11-xcb-dev libfontconfig-dev libvulkan-dev libasound2-dev libudev-dev
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - uses: Swatinem/rust-cache@v2
+        if: steps.launcher.outputs.required != 'false'
+        with:
+          workspaces: launcher
+          shared-key: launcher
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Check the launcher's formatting, lint and tests
+        if: steps.launcher.outputs.required != 'false'
+        working-directory: launcher
+        run: |
+          cargo +stable fmt --check
+          cargo +stable clippy --all-targets --locked -- -D warnings
+          cargo +stable test --locked --lib
   # Most pull requests leave the harnesses to parity-main, which runs them on main a batch of merges at a time
   # (.github/workflows/parity-main.yml; releases wait for it). A pull request still runs them itself when it changes
   # a harness, an oracle, a probe or the runner, or carries the run-parity label (run-parity.yml, when it is added).
