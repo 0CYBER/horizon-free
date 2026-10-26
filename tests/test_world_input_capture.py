@@ -101,6 +101,7 @@ impl Default for Game {
 }
 impl Game {
     fn stop_mining(&mut self) { self.mining = false; }
+    fn reset_inventory_clicks(&mut self) {}
 METHODS
 }
 fn main() {
