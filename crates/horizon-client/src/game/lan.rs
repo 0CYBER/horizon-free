@@ -152,8 +152,11 @@ fn mob_meta(
     defaults: &mut Vec<(u8, i32, Value)>,
 ) {
     let kind = m.kind.id.as_str();
-    if m.fire_ticks > 0 {
-        meta.push((0, serializer::BYTE, Value::Byte(1)));
+    // Entity.DATA_SHARED_FLAGS_ID: on fire 0x01, glowing 0x40
+    // (LivingEntity.updateGlowingStatus).
+    let shared = i8::from(m.fire_ticks > 0) | i8::from(m.is_currently_glowing()) << 6;
+    if shared != 0 {
+        meta.push((0, serializer::BYTE, Value::Byte(shared)));
     }
     if let Some(name) = &m.custom_name {
         meta.push((
@@ -878,6 +881,10 @@ impl Game<'_> {
             e.position = [d.position.x, d.position.y, d.position.z];
             e.on_ground = d.on_ground;
             e.velocity = [d.velocity.x, d.velocity.y, d.velocity.z];
+            // Entity.DATA_SHARED_FLAGS_ID: glowing 0x40 (the Glowing tag).
+            if self.entity_glowing(d.id) {
+                e.meta.push((0, serializer::BYTE, Value::Byte(0x40)));
+            }
             e.meta.push((8, serializer::ITEM_STACK, Value::Item(stack)));
         }
         for o in &self.orbs {
@@ -1470,7 +1477,12 @@ impl Game<'_> {
                 out,
             );
             self.held_item_geometry(m, camera, alpha, packed, true, out);
-            if !m.glowing {
+            // LivingEntity.isCurrentlyGlowing: the guest's Glowing effect.
+            let guest = host.hub.guest(*conn);
+            if m.glowing || guest.is_some_and(|g| g.effects.get("glowing").is_some()) {
+                let team = guest.and_then(|g| self.score.board.players_team(&g.name));
+                self.mark_outline(&out[entity_start..], super::glowing::team_color(team));
+            } else {
                 self.cull_entity_vertices(out, entity_start);
             }
         }

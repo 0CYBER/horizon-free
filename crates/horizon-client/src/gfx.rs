@@ -35,6 +35,7 @@ fn entity_shader() -> String {
 #[cfg(test)]
 mod crumbling_tests;
 mod entity_batch;
+mod entity_outline;
 mod weather;
 use entity_batch::EntityBatch;
 pub use entity_batch::{SHADOW_OVERLAY, TRANSLUCENT_PARTICLE_OVERLAY, WATER_MASK_OVERLAY};
@@ -260,6 +261,9 @@ pub struct Frame<'a> {
     pub nether_lighting: bool,
     /// Camera-relative entity geometry textured from the shared atlas.
     pub entities: &'a [Vertex],
+    /// The glowing entities' silhouettes in their team colours (`OutlineBufferSource`),
+    /// outlined through walls after the hand.
+    pub glowing: &'a [Vertex],
     /// Runs of `entities` by entity, while a shader pack draws them (`pack_draw::EntitySpan`).
     pub entity_spans: &'a [pack_draw::EntitySpan],
     pub weather: &'a [crate::weather::Vertex],
@@ -407,6 +411,8 @@ pub struct Renderer {
     celestial_buffer: wgpu::Buffer,
     end_sky: end_sky::EndSky,
     stars: stars::Stars,
+    /// The glowing entities' outline (`LevelRenderer.entityOutlineTarget`).
+    entity_outline: entity_outline::EntityOutline,
     panorama: panorama::Panorama,
     /// `RenderPipelines.WORLD_BORDER` and its buffers.
     border_pipeline: wgpu::RenderPipeline,
@@ -2316,6 +2322,11 @@ impl Renderer {
         let uploads = upload::Uploads::new(&device);
         let section_uploads = upload::Uploads::with_chunk(&device, SECTION_UPLOAD_CHUNK);
         let stars = stars::Stars::new(&device, config.format.remove_srgb_suffix());
+        let entity_outline = entity_outline::EntityOutline::new(
+            &device,
+            (&entity_shader, &entity_layout, &entity_vertex),
+            config.format.remove_srgb_suffix(),
+        );
         let panorama = panorama::Panorama::new(
             &device,
             &queue,
@@ -2386,6 +2397,7 @@ impl Renderer {
             celestial_buffer,
             end_sky: end_sky::EndSky::default(),
             stars,
+            entity_outline,
             panorama,
             border_pipeline,
             border_group,
@@ -4051,6 +4063,13 @@ impl Renderer {
                 bytemuck::cast_slice(all_entities),
             );
         }
+        self.entity_outline.prepare(
+            &self.device,
+            &mut self.uploads,
+            &mut encoder,
+            frame.glowing,
+            [self.config.width, self.config.height],
+        );
         if let Some((rotation, brightness)) = frame.stars {
             self.stars.prepare(
                 &mut self.uploads,
@@ -4078,7 +4097,8 @@ impl Renderer {
             } else {
                 lightning::QUADS
             })
-            .max(weather_quads);
+            .max(weather_quads)
+            .max(frame.glowing.len() as u32 / 4);
         if max_quads > self.index_quads {
             self.index_quads = max_quads.next_power_of_two();
             self.indices = Self::quad_indices(&self.device, self.index_quads);
@@ -4808,6 +4828,13 @@ impl Renderer {
                 0..1,
             );
         }
+        // GameRenderer.render: LevelRenderer.blitEntityOutline after the level and the hand.
+        self.entity_outline.draw(
+            &mut encoder,
+            &view_target,
+            &self.entity_group,
+            &self.indices,
+        );
         if !frame.screen.is_empty() {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: &view_target,

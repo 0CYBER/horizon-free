@@ -219,6 +219,13 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
     return vec4(mix(color.rgb, globals.fog_color.rgb, f * globals.fog_color.a), color.a);
 }
 
+// rendertype_outline.fsh: the vertex colour (the team colour; outline vertices carry no
+// normal, so no cardinal light) wherever the texture is not fully clear.
+@fragment fn fs_outline(in: Out) -> @location(0) vec4<f32> {
+    if textureSample(atlas, atlas_sampler, in.uv).a == 0.0 { discard; }
+    return vec4(in.color.rgb, 1.0);
+}
+
 @fragment fn fs_celestial(in: Out) -> @location(0) vec4<f32> {
     let color = textureSample(atlas, atlas_sampler, in.uv) * in.color * in.light_color;
     return color;
