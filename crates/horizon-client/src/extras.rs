@@ -1,4 +1,4 @@
-//! Horizon's optional extras (zoom, FPS counter, keystroke overlay): their
+//! Horizon's optional extras (minimap, lighting, inventory tools): their
 //! settings, kept in `horizon-extras.txt` next to `options.txt` so that file
 //! stays exactly vanilla's, and the logic behind them. Every extra is off by
 //! default; see `docs/extras.md`. Horizon's own switches outside the Extras page
@@ -6,17 +6,8 @@
 use std::{collections::VecDeque, fs, path::Path};
 
 pub const FILE: &str = "horizon-extras.txt";
-/// The name the options screen uses while the zoom key waits for a key.
-pub const ZOOM_KEY: &str = "horizon.zoom";
-/// The same for the sort key.
+/// The name the options screen uses while the sort key waits for a key.
 pub const SORT_KEY: &str = "horizon.sort";
-/// Zoom levels the default cycles through, and the wheel's limits.
-pub const ZOOM_LEVELS: [u8; 6] = [2, 3, 4, 6, 8, 10];
-pub const ZOOM_MIN: f32 = 1.25;
-/// `Camera.tickFov` keeps the field-of-view modifier at 0.1 or more.
-pub const ZOOM_MAX: f32 = 10.0;
-/// Each wheel step multiplies the zoom by this.
-const ZOOM_STEP: f32 = 1.25;
 
 /// The minimap's sizes in GUI pixels, and its zooms in blocks per pixel.
 pub const MINIMAP_SIZES: [(u8, &str); 3] = [(64, "Small"), (96, "Medium"), (128, "Large")];
@@ -184,7 +175,7 @@ impl Extras {
                 "zoomKey" if value.starts_with("key.") => e.zoom_key = value.to_owned(),
                 "zoomLevel" => {
                     if let Ok(v) = value.parse::<u8>() {
-                        e.zoom_level = v.clamp(2, ZOOM_MAX as u8);
+                        e.zoom_level = v.clamp(2, 10);
                     }
                 }
                 "zoomSmooth" => e.zoom_smooth = flag(e.zoom_smooth),
@@ -270,11 +261,10 @@ impl Extras {
             bool_text(self.discord_presence),
         )
     }
-    /// Binds the extra key `name` (`ZOOM_KEY`, `SORT_KEY`); false for
+    /// Binds the extra key `name` (`SORT_KEY`); false for
     /// another name (a vanilla mapping).
     pub fn set_key(&mut self, name: &str, value: String) -> bool {
         match name {
-            ZOOM_KEY => self.zoom_key = value,
             SORT_KEY => self.sort_key = value,
             _ => return false,
         }
@@ -291,87 +281,12 @@ impl Extras {
     }
 }
 
-/// The zoom key's state: held or not, and the zoom the wheel has set.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Zoom {
-    held: bool,
-    factor: f32,
-}
-impl Default for Zoom {
-    fn default() -> Self {
-        Self {
-            held: false,
-            factor: 1.0,
-        }
-    }
-}
-impl Zoom {
-    /// The key went down: start at the default level.
-    pub fn press(&mut self, level: u8) {
-        self.held = true;
-        self.factor = f32::from(level).clamp(ZOOM_MIN, ZOOM_MAX);
-    }
-    pub fn release(&mut self) {
-        self.held = false;
-    }
-    /// A press or release of the zoom key. Only a press while `playing` (no
-    /// screen or text field open) zooms; anywhere else the key belongs to
-    /// the screen, and the zoom lets go.
-    pub fn key(&mut self, pressed: bool, repeat: bool, playing: bool, level: u8) {
-        if !pressed || !playing {
-            self.release();
-        } else if !repeat {
-            self.press(level);
-        }
-    }
-    pub fn held(&self) -> bool {
-        self.held
-    }
-    /// Wheel steps while held (positive zooms in); false when not zooming.
-    pub fn scroll(&mut self, steps: f32) -> bool {
-        if !self.held {
-            return false;
-        }
-        self.factor = (self.factor * ZOOM_STEP.powf(steps)).clamp(ZOOM_MIN, ZOOM_MAX);
-        true
-    }
-    /// The zoom in effect: 1 when the key is up or the spyglass is in use
-    /// (scoping keeps vanilla's spyglass view).
-    pub fn factor(&self, scoping: bool) -> f32 {
-        if self.held && !scoping {
-            self.factor
-        } else {
-            1.0
-        }
-    }
-}
-/// Vanilla key mappings bound to the zoom key. The key still reaches them
-/// (a key bound twice triggers both, as vanilla's do), so the Extras page
-/// says so.
-pub fn zoom_key_conflicts(e: &Extras, keys: &crate::keybinds::KeyBinds) -> Vec<&'static str> {
-    if e.zoom_key == "key.keyboard.unknown" {
-        return Vec::new();
-    }
-    crate::keybinds::MAPPINGS
-        .iter()
-        .map(|m| m.0)
-        .filter(|name| keys.get(name) == e.zoom_key)
-        .collect()
-}
 /// The field-of-view modifier target `Camera.tickFov` eases toward: vanilla's
-/// (`getFieldOfViewModifier`) divided by the zoom. A zoom of 1 leaves it as is.
+/// (`getFieldOfViewModifier`) divided by a mod's zoom (`render.set-zoom`). A
+/// zoom of 1 leaves it as is.
 pub fn fov_target(vanilla: f32, zoom: f32) -> f32 {
     if zoom == 1.0 { vanilla } else { vanilla / zoom }
 }
-/// The mouse turning scale while zoomed.
-pub fn turn_scale(zoom: f32, lower_sensitivity: bool) -> f64 {
-    if lower_sensitivity && zoom > 1.0 {
-        1.0 / f64::from(zoom)
-    } else {
-        1.0
-    }
-}
-
 /// Frame times over the last few seconds: frames per second, the minimum
 /// and the 1% low, recomputed twice a second.
 pub struct FpsCounter {
@@ -463,17 +378,6 @@ impl Cps {
 pub enum Item {
     Fullbright,
     DynamicLights,
-    Zoom,
-    ZoomKey,
-    ZoomLevel,
-    ZoomSmooth,
-    ZoomSensitivity,
-    Minimap,
-    MinimapCorner,
-    MinimapSize,
-    MinimapShape,
-    MinimapZoom,
-    MinimapRotate,
     AutoReconnect,
     MouseTweaks,
     MouseTweaksWheel,
@@ -492,19 +396,6 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
         Err("Lighting"),
         Ok(Fullbright),
         Ok(DynamicLights),
-        Err("Zoom"),
-        Ok(Zoom),
-        Ok(ZoomKey),
-        Ok(ZoomLevel),
-        Ok(ZoomSmooth),
-        Ok(ZoomSensitivity),
-        Err("Minimap"),
-        Ok(Minimap),
-        Ok(MinimapCorner),
-        Ok(MinimapSize),
-        Ok(MinimapShape),
-        Ok(MinimapZoom),
-        Ok(MinimapRotate),
         Err("Inventory"),
         Ok(MouseTweaks),
         Ok(MouseTweaksWheel),
@@ -514,37 +405,11 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
         Ok(AutoReconnect),
     ]
 }
-/// "1 block", "2 blocks", "½ block".
-fn block_count(n: f32) -> String {
-    if n < 1.0 {
-        "½ block".into()
-    } else if n == 1.0 {
-        "1 block".into()
-    } else {
-        format!("{n} blocks")
-    }
-}
-fn next<T: Copy + PartialEq>(all: &[T], current: T, back: bool) -> T {
-    let i = all.iter().position(|v| *v == current).unwrap_or(0);
-    let n = all.len();
-    all[if back { (i + n - 1) % n } else { (i + 1) % n }]
-}
 impl Item {
     pub fn caption(self) -> &'static str {
         match self {
             Item::Fullbright => "Fullbright",
             Item::DynamicLights => "Dynamic lights",
-            Item::Zoom => "Zoom",
-            Item::ZoomKey => "Zoom key",
-            Item::ZoomLevel => "Starting zoom",
-            Item::ZoomSmooth => "Smooth zoom",
-            Item::ZoomSensitivity => "Slower turning",
-            Item::MinimapCorner => "Corner",
-            Item::Minimap => "Minimap",
-            Item::MinimapSize => "Size",
-            Item::MinimapShape => "Shape",
-            Item::MinimapZoom => "Zoom",
-            Item::MinimapRotate => "Turn with the player",
             Item::AutoReconnect => "Auto-reconnect",
             Item::MouseTweaks => "Mouse Tweaks controls",
             Item::MouseTweaksWheel => "Scroll wheel moves items",
@@ -559,12 +424,10 @@ impl Item {
     pub fn parent(self) -> Option<Item> {
         use Item::*;
         Some(match self {
-            ZoomKey | ZoomLevel | ZoomSmooth | ZoomSensitivity => Zoom,
-            MinimapCorner | MinimapSize | MinimapShape | MinimapZoom | MinimapRotate => Minimap,
             MouseTweaksWheel => MouseTweaks,
             SortKey => Sort,
-            Fullbright | DynamicLights | Zoom | Minimap | MouseTweaks | Sort | AutoReconnect
-            | NoAi | AgentControl | DiscordPresence => {
+            Fullbright | DynamicLights | MouseTweaks | Sort | AutoReconnect | NoAi
+            | AgentControl | DiscordPresence => {
                 return None;
             }
         })
@@ -576,17 +439,6 @@ impl Item {
             Item::DynamicLights => {
                 "Torches and other light sources held, dropped or on fire light the blocks around them."
             }
-            Item::Zoom => "Hold the zoom key to zoom; the wheel changes it while held.",
-            Item::ZoomKey => "Click, then press a key. Escape unbinds it.",
-            Item::ZoomLevel => "The zoom the key starts at.",
-            Item::ZoomSmooth => "Eases in and out like the spyglass.",
-            Item::ZoomSensitivity => "Turns slower the more you zoom in.",
-            Item::MinimapCorner => "Overlays in one corner stack.",
-            Item::Minimap => "A map of the loaded terrain around you, in map colours.",
-            Item::MinimapSize => "How big the map is on screen.",
-            Item::MinimapShape => "Square or round.",
-            Item::MinimapZoom => "Blocks per pixel: smaller shows more detail, larger more land.",
-            Item::MinimapRotate => "Forward is up; off keeps north up.",
             Item::AutoReconnect => {
                 "Rejoins a server after a lost connection or a restart, never after a kick or ban."
             }
@@ -617,8 +469,8 @@ impl Item {
     pub fn cost(self) -> Option<crate::graphics_style::Cost> {
         use crate::graphics_style::Cost;
         match self {
-            Item::Fullbright | Item::Zoom => Some(Cost::None),
-            Item::Minimap | Item::DynamicLights => Some(Cost::Low),
+            Item::Fullbright => Some(Cost::None),
+            Item::DynamicLights => Some(Cost::Low),
             Item::AutoReconnect | Item::MouseTweaks | Item::Sort => Some(Cost::None),
             _ => None,
         }
@@ -628,11 +480,6 @@ impl Item {
         Some(match self {
             Item::Fullbright => e.fullbright,
             Item::DynamicLights => e.dynamic_lights,
-            Item::Zoom => e.zoom,
-            Item::ZoomSmooth => e.zoom_smooth,
-            Item::ZoomSensitivity => e.zoom_sensitivity,
-            Item::Minimap => e.minimap,
-            Item::MinimapRotate => e.minimap_rotate,
             Item::AutoReconnect => e.auto_reconnect,
             Item::MouseTweaks => e.mouse_tweaks,
             Item::MouseTweaksWheel => e.mouse_tweaks_wheel,
@@ -646,55 +493,32 @@ impl Item {
     /// The value of the other items, as their button shows it.
     pub fn value(self, e: &Extras) -> String {
         match self {
-            Item::ZoomKey => crate::keybinds::display_name(&e.zoom_key).plain(),
             Item::SortKey => crate::keybinds::display_name(&e.sort_key).plain(),
-            Item::ZoomLevel => format!("{}x", e.zoom_level),
-            Item::MinimapCorner => e.minimap_corner.label().into(),
-            Item::MinimapSize => MINIMAP_SIZES
-                .iter()
-                .find(|s| s.0 == e.minimap_size)
-                .map_or("Medium", |s| s.1)
-                .into(),
-            Item::MinimapShape => if e.minimap_round { "Round" } else { "Square" }.into(),
-            Item::MinimapZoom => format!("{} per pixel", block_count(e.minimap_zoom)),
             other => match other.switch(e) {
                 Some(true) => "On".into(),
                 _ => "Off".into(),
             },
         }
     }
-    /// A click (`back` for the right button). The zoom key binds instead.
-    pub fn cycle(self, e: &mut Extras, back: bool) {
+    /// A click (`_back` for the right button: every item left is a switch,
+    /// so both flip it). The sort key binds instead.
+    pub fn cycle(self, e: &mut Extras, _back: bool) {
         match self {
             Item::Fullbright => e.fullbright = !e.fullbright,
             Item::DynamicLights => e.dynamic_lights = !e.dynamic_lights,
-            Item::Zoom => e.zoom = !e.zoom,
-            Item::ZoomSmooth => e.zoom_smooth = !e.zoom_smooth,
-            Item::ZoomSensitivity => e.zoom_sensitivity = !e.zoom_sensitivity,
-            Item::ZoomLevel => e.zoom_level = next(&ZOOM_LEVELS, e.zoom_level, back),
-            Item::Minimap => e.minimap = !e.minimap,
-            Item::MinimapRotate => e.minimap_rotate = !e.minimap_rotate,
             Item::AutoReconnect => e.auto_reconnect = !e.auto_reconnect,
             Item::MouseTweaks => e.mouse_tweaks = !e.mouse_tweaks,
             Item::MouseTweaksWheel => e.mouse_tweaks_wheel = !e.mouse_tweaks_wheel,
             Item::Sort => e.sort = !e.sort,
-            Item::MinimapCorner => e.minimap_corner = next(&Corner::ALL, e.minimap_corner, back),
-            Item::MinimapSize => {
-                let sizes: Vec<u8> = MINIMAP_SIZES.iter().map(|s| s.0).collect();
-                e.minimap_size = next(&sizes, e.minimap_size, back);
-            }
-            Item::MinimapShape => e.minimap_round = !e.minimap_round,
-            Item::MinimapZoom => e.minimap_zoom = next(&MINIMAP_ZOOMS, e.minimap_zoom, back),
             Item::NoAi => e.no_ai = !e.no_ai,
             Item::AgentControl => e.agent_control = !e.agent_control,
             Item::DiscordPresence => e.discord_presence = !e.discord_presence,
-            Item::ZoomKey | Item::SortKey => {}
+            Item::SortKey => {}
         }
     }
     /// The key name the options screen waits on for a key item.
     pub fn key_name(self) -> Option<&'static str> {
         match self {
-            Item::ZoomKey => Some(ZOOM_KEY),
             Item::SortKey => Some(SORT_KEY),
             _ => None,
         }
@@ -752,43 +576,7 @@ mod tests {
     }
 
     #[test]
-    fn default_zoom_key_is_free_in_vanilla() {
-        let key = Extras::default().zoom_key;
-        assert!(crate::keybinds::key_code(&key).is_some());
-        assert!(
-            crate::keybinds::MAPPINGS.iter().all(|m| m.1 != key),
-            "{key} is a vanilla binding"
-        );
-    }
-
-    #[test]
-    fn zoom_is_vanilla_unless_held_and_not_scoping() {
-        let mut z = Zoom::default();
-        assert_eq!(z.factor(false), 1.0);
-        assert_eq!(fov_target(1.1, z.factor(false)), 1.1);
-        assert!(!z.scroll(1.0), "the wheel is the hotbar's when not zooming");
-        z.press(4);
-        assert_eq!(z.factor(false), 4.0);
-        assert_eq!(z.factor(true), 1.0, "the spyglass wins");
-        assert!((fov_target(1.0, 4.0) - 0.25).abs() < 1e-6);
-        assert!(z.scroll(1.0));
-        assert!((z.factor(false) - 5.0).abs() < 1e-5);
-        for _ in 0..40 {
-            z.scroll(1.0);
-        }
-        assert_eq!(z.factor(false), ZOOM_MAX);
-        for _ in 0..80 {
-            z.scroll(-1.0);
-        }
-        assert_eq!(z.factor(false), ZOOM_MIN);
-        z.release();
-        assert_eq!(z.factor(false), 1.0);
-        z.press(2);
-        assert_eq!(z.factor(false), 2.0, "each press starts at the default");
-    }
-
-    #[test]
-    fn zoom_target_eases_like_the_spyglass() {
+    fn a_mods_zoom_eases_like_the_spyglass() {
         // Camera.tickFov halves the distance to the target each tick.
         let mut camera = crate::camera::Camera::default();
         camera.tick(None, 1.0);
@@ -810,55 +598,6 @@ mod tests {
         }
         let floor = camera.calculate_fov(1.0, 70, 1.0, None, Default::default(), false);
         assert!((floor - 7.0).abs() < 1e-3, "{floor}");
-    }
-
-    #[test]
-    fn the_zoom_key_only_zooms_while_playing() {
-        let mut z = Zoom::default();
-        // In chat, a sign, a text field or any screen: no zoom.
-        z.key(true, false, false, 4);
-        assert!(!z.held());
-        z.key(true, false, true, 4);
-        assert!(z.held());
-        // A screen opening while held lets go (its key presses are the screen's).
-        z.key(true, true, false, 4);
-        assert!(!z.held());
-        // Key repeats do not restart a zoom the wheel changed.
-        z.key(true, false, true, 4);
-        z.scroll(1.0);
-        z.key(true, true, true, 4);
-        assert!((z.factor(false) - 5.0).abs() < 1e-5);
-        z.key(false, false, true, 4);
-        assert!(!z.held());
-    }
-
-    #[test]
-    fn zoom_key_conflicts_name_the_vanilla_mappings() {
-        let mut e = Extras::default();
-        let mut keys = crate::keybinds::KeyBinds::default();
-        assert!(zoom_key_conflicts(&e, &keys).is_empty());
-        e.zoom_key = "key.keyboard.c".into();
-        assert_eq!(
-            zoom_key_conflicts(&e, &keys),
-            [
-                "key.saveToolbarActivator",
-                "key.debug.crash",
-                "key.debug.copyLocation"
-            ]
-        );
-        keys.set("key.drop", "key.keyboard.z");
-        e.zoom_key = "key.keyboard.z".into();
-        assert_eq!(zoom_key_conflicts(&e, &keys), ["key.drop"]);
-        e.zoom_key = "key.keyboard.unknown".into();
-        keys.set("key.smoothCamera", "key.keyboard.unknown");
-        assert!(zoom_key_conflicts(&e, &keys).is_empty());
-    }
-
-    #[test]
-    fn sensitivity_scales_with_zoom() {
-        assert_eq!(turn_scale(1.0, true), 1.0);
-        assert_eq!(turn_scale(4.0, false), 1.0);
-        assert_eq!(turn_scale(4.0, true), 0.25);
     }
 
     #[test]
@@ -914,20 +653,9 @@ mod tests {
     #[test]
     fn items_cycle_through_their_values() {
         let mut e = Extras::default();
-        Item::ZoomLevel.cycle(&mut e, false);
-        assert_eq!(e.zoom_level, 6);
-        Item::ZoomLevel.cycle(&mut e, true);
-        Item::ZoomLevel.cycle(&mut e, true);
-        assert_eq!(e.zoom_level, 3);
-        Item::MinimapCorner.cycle(&mut e, true);
-        assert_eq!(e.minimap_corner, Corner::TopLeft);
-        Item::Zoom.cycle(&mut e, false);
-        assert_eq!(Item::Zoom.switch(&e), Some(true));
-        assert_eq!(Item::ZoomKey.value(&e), "Z");
-        Item::MinimapZoom.cycle(&mut e, true);
-        assert_eq!(Item::MinimapZoom.value(&e), "½ block per pixel");
-        Item::MinimapSize.cycle(&mut e, false);
-        assert_eq!(Item::MinimapSize.value(&e), "Large");
+        Item::Sort.cycle(&mut e, true);
+        assert_eq!(Item::Sort.value(&e), "On");
+        // The minimap's old keys still parse, for the move to its mod.
         assert_eq!(
             Extras::parse("minimapSize:7\nminimapZoom:3").minimap_zoom,
             1.0

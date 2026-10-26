@@ -6,12 +6,15 @@
 //!   `assets/` and `data/`; a folder without `Cargo.toml` is content only.
 //! - `run [--game <horizon-client>] [-- <game args>]`: build, then play with
 //!   the mod; run `build` again and the game reloads it.
+//! - `test [--debug] [--hmod <file>] [<name>]`: build, then run the mod's
+//!   `tests/*.toml` scripts in the sandbox, with no game.
 //! - `check <file> [--json]`: what the registry checks of a submission
 //!   (`.hmod`, `.hpack`, resource pack `.zip`), with a trial run for a mod.
 //! - `registry build|review|check|list`: the registry repository's CI.
 use horizon_mods::{
     Capability, Content, Manifest, Package,
     manifest::{MANIFEST, component_imports, componentize},
+    testing::{Script, TestGame},
 };
 mod check;
 mod registry;
@@ -36,9 +39,10 @@ fn main() -> ExitCode {
             println!("Built {}", p.display());
         }),
         Some("run") => run(&args[1..]),
+        Some("test") => test(&args[1..]),
         Some("check") => check(&args[1..]),
         Some("registry") => registry::main(&args[1..]),
-        _ => Err("usage: cargo horizon-mod new <path> [--template code|content] | build [--debug] | run [--game <horizon-client>] [-- <game args>] | check <file> [--kind <kind>] [--key <public key> --signature <file.minisig>] [--json] | registry build|review|check|list".into()),
+        _ => Err("usage: cargo horizon-mod new <path> [--template code|content] | build [--debug] | run [--game <horizon-client>] [-- <game args>] | test [--debug] [--hmod <file>] [<name>] | check <file> [--kind <kind>] [--key <public key> --signature <file.minisig>] [--json] | registry build|review|check|list".into()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -97,6 +101,10 @@ fn new(args: &[String]) -> Result<(), String> {
         (MANIFEST, include_str!("../template/horizon-mod.toml")),
         ("src/lib.rs", include_str!("../template/src/lib.rs")),
         (".gitignore", include_str!("../template/gitignore")),
+        (
+            "tests/hello.toml",
+            include_str!("../template/tests/hello.toml"),
+        ),
     ];
     // A block copying a vanilla one, with its model, name, loot, recipe and tag.
     let content = [
@@ -270,6 +278,63 @@ fn check(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// `test`: every `tests/*.toml` script (those whose name holds `<name>`)
+/// against the built mod, or the `.hmod` given with `--hmod`.
+fn test(args: &[String]) -> Result<(), String> {
+    let hmod = match flag(args, "--hmod") {
+        Some(p) => PathBuf::from(p),
+        None => build(!args.iter().any(|a| a == "--debug"))?,
+    };
+    let filter = args
+        .iter()
+        .enumerate()
+        .find(|(i, a)| !a.starts_with("--") && (*i == 0 || args[i - 1] != "--hmod"))
+        .map(|(_, a)| a.as_str());
+    let mut scripts: Vec<PathBuf> = std::fs::read_dir("tests")
+        .map_err(|e| {
+            format!(
+                "tests/: {e} (a mod's tests are tests/<name>.toml: docs/mods.md, \"Testing a mod\")"
+            )
+        })?
+        .filter_map(|e| Some(e.ok()?.path()))
+        .filter(|p| p.extension().is_some_and(|e| e == "toml"))
+        .filter(|p| filter.is_none_or(|f| p.to_string_lossy().contains(f)))
+        .collect();
+    scripts.sort();
+    if scripts.is_empty() {
+        return Err("no tests/*.toml to run".into());
+    }
+    println!(
+        "running {} scripts against {}",
+        scripts.len(),
+        hmod.display()
+    );
+    let mut failed = 0;
+    for path in &scripts {
+        let result = std::fs::read_to_string(path)
+            .map_err(|e| e.to_string())
+            .and_then(|text| Script::parse(&text))
+            .and_then(|script| {
+                let mut game = TestGame::load(&hmod)?;
+                script.run(&mut game)?;
+                Ok(script.steps.len())
+            });
+        match result {
+            Ok(steps) => println!("test {} ... ok ({steps} steps)", path.display()),
+            Err(e) => {
+                failed += 1;
+                println!("test {} ... FAILED\n  {e}", path.display());
+            }
+        }
+    }
+    let passed = scripts.len() - failed;
+    if failed > 0 {
+        return Err(format!("{failed} failed, {passed} passed"));
+    }
+    println!("test result: ok. {passed} passed");
+    Ok(())
+}
+
 fn run(args: &[String]) -> Result<(), String> {
     let path = build(true)?;
     let game = flag(args, "--game")
@@ -312,6 +377,8 @@ mod tests {
         );
         let cargo = std::fs::read_to_string(path.join("Cargo.toml")).unwrap();
         assert!(cargo.contains("name = \"my-mod\"") && cargo.contains(SDK_GIT));
+        let script = std::fs::read_to_string(path.join("tests/hello.toml")).unwrap();
+        assert_eq!(Script::parse(&script).unwrap().steps.len(), 3);
         assert!(
             new(&[path.display().to_string()]).is_err(),
             "never overwrites"

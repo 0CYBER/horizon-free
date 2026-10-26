@@ -210,6 +210,8 @@ enum KindArg {
     Mod,
     Resource,
     Modpack,
+    /// Horizon's own shader packs (Horizon's registry only)
+    Shader,
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -1120,6 +1122,7 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                 KindArg::Resource => Kind::ResourcePack,
                 KindArg::Modpack => Kind::Modpack,
                 KindArg::Mod => Kind::Mod,
+                KindArg::Shader => Kind::Shader,
             };
             let query = Query {
                 everything,
