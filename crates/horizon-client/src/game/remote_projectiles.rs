@@ -2,7 +2,7 @@
 //! end crystals on a server's client (`ClientPacketListener.handleAddEntity`
 //! and `handleSetEntityData`): the server simulates them, the client draws
 //! them where it says and interpolates their moves.
-use super::{FallStep, FallingBlock, Game};
+use super::{FallStep, FallingBlock, Game, fireworks::fireworks_of, view_vector};
 use horizon_client::projectiles::{Projectile, ProjectileKind};
 use horizon_core::{geometry::Vec3, position::BlockPos};
 use horizon_protocol::entity_data::Value;
@@ -125,6 +125,37 @@ impl Game<'_> {
     pub(super) fn remote_projectile_data(&mut self, id: i32, values: &[(u8, i32, Value)]) {
         let id = id as u32;
         self.remote_hook_data(id, values);
+        if self.rockets.iter().any(|r| r.id == id) {
+            for (index, _, value) in values {
+                match (index, value) {
+                    // FireworkRocketEntity.DATA_ID_FIREWORKS_ITEM: its
+                    // explosions for `createFireworks`.
+                    (8, Value::Item(stack)) => {
+                        if let Some(stack) = self.to_stack(stack)
+                            && let Some(r) = self.rockets.iter_mut().find(|r| r.id == id)
+                        {
+                            let (_, explosions) = fireworks_of(&stack);
+                            r.explosions = explosions;
+                            r.item = stack;
+                        }
+                    }
+                    // DATA_ATTACHED_TO_TARGET (OptionalInt: the id plus 1).
+                    (9, Value::Id(v)) => {
+                        let v = (*v > 0).then(|| (*v - 1) as u32);
+                        if let Some(r) = self.rockets.iter_mut().find(|r| r.id == id) {
+                            r.attached_to = v;
+                        }
+                    }
+                    // DATA_SHOT_AT_ANGLE.
+                    (10, Value::Bool(a)) => {
+                        if let Some(r) = self.rockets.iter_mut().find(|r| r.id == id) {
+                            r.angled = *a;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
         if self.potions.has_thrown(id) {
             // ThrowableItemProjectile.DATA_ITEM_STACK: the potion it is.
             for (index, _, value) in values {
@@ -213,9 +244,30 @@ impl Game<'_> {
             let id = t.id;
             t.remote_step(|at| step(id, at));
         }
+        // FireworkRocketEntity.tick: a rocket attached to the gliding local
+        // player boosts it client-side too (attachedToEntity.isFallFlying).
+        let me = self
+            .remote
+            .as_ref()
+            .and_then(|r| u32::try_from(r.entity_id).ok());
         for r in &mut self.rockets {
             let id = r.id;
             r.remote_step(|at| step(id, at));
+            if me.is_some()
+                && r.attached_to == me
+                && let Some(p) = self.player.as_mut()
+                && p.fall_flying
+            {
+                let look = view_vector(self.yaw, self.pitch);
+                let m = p.velocity;
+                p.velocity = Vec3::new(
+                    m.x + look[0] * 0.1 + (look[0] * 1.5 - m.x) * 0.5,
+                    m.y + look[1] * 0.1 + (look[1] * 1.5 - m.y) * 0.5,
+                    m.z + look[2] * 0.1 + (look[2] * 1.5 - m.z) * 0.5,
+                );
+                r.position = p.position;
+                r.velocity = p.velocity;
+            }
         }
         for c in &mut self.crystals {
             c.time += 1;

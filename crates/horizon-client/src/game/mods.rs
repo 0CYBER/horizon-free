@@ -45,6 +45,14 @@ pub(super) struct ModsState {
     /// The chat's command tree while a running mod owns commands.
     #[cfg(feature = "mods")]
     tree: Option<Dispatcher>,
+    /// `command.run` lines for this window's own world, run on the next tick:
+    /// run at once, their chat lines would reach the mods while their output
+    /// is still being shown, and a mod answering its own lines would recurse.
+    #[cfg(feature = "mods")]
+    commands: Vec<String>,
+    /// The server's command tree with the running mods' commands added.
+    #[cfg(feature = "mods")]
+    remote_tree: Option<Dispatcher>,
     /// A `ui` mod's screen or settings page while it is up.
     #[cfg(feature = "mods")]
     screen: Option<ModScreen>,
@@ -71,6 +79,14 @@ impl ModsState {
             return tree;
         }
         vanilla::game_dispatcher()
+    }
+    /// The server's tree plus the mods' commands, when a mod owns any.
+    pub(super) fn remote_dispatcher(&self) -> Option<&Dispatcher> {
+        #[cfg(feature = "mods")]
+        if let Some(tree) = &self.remote_tree {
+            return Some(tree);
+        }
+        None
     }
     /// Whether a mod runs: the chat keeps its lines for them.
     pub(super) fn running(&self) -> bool {
@@ -181,6 +197,7 @@ impl Game<'_> {
             );
         }
     }
+    pub(super) fn merge_remote_tree(&mut self) {}
     pub(super) fn sync_mods(&mut self) {}
     pub(super) fn tick_mods(&mut self) {}
     pub(super) fn mods_frame(&mut self, _elapsed: Duration) {}
@@ -270,7 +287,20 @@ impl Game<'_> {
             .peek()
             .is_some()
             .then(|| vanilla::game_dispatcher().with_mod_commands(names));
+        self.merge_remote_tree();
     }
+
+    /// The server's command tree with the mods' commands, for the chat.
+    pub(super) fn merge_remote_tree(&mut self) {
+        let names: Vec<String> = self.mods.mods.commands().map(str::to_owned).collect();
+        self.mods.remote_tree = self
+            .remote
+            .as_ref()
+            .and_then(|r| r.commands.as_ref())
+            .filter(|_| !names.is_empty())
+            .map(|t| t.with_mod_commands(names.iter().map(String::as_str)));
+    }
+
     /// After the options changed: restart the mods if the list of the ones
     /// turned on did.
     pub(super) fn sync_mods(&mut self) {
@@ -319,6 +349,11 @@ impl Game<'_> {
     }
     /// A game tick.
     pub(super) fn tick_mods(&mut self) {
+        // Here, at the player's level: shown inside a console call (a control
+        // socket command set the hook off), they would run as the console.
+        for line in std::mem::take(&mut self.mods.commands) {
+            self.run_command(&line);
+        }
         if !self.mods.mods.is_running() {
             return;
         }
@@ -378,6 +413,19 @@ impl Game<'_> {
                 }
                 Output::Feedback { text, error: false } => Text::literal(text),
                 Output::Feedback { text, error: true } => Text::literal(text).with_color(text::RED),
+                // Vanilla's commands only: a mod running a mod command could loop.
+                Output::Command { line } => {
+                    let name = line.split(' ').next().unwrap_or_default();
+                    if !vanilla_command(name) {
+                        // Dropped.
+                    } else if self.remote.is_some() {
+                        // The server checks the player's permissions.
+                        self.send_chat(&format!("/{line}"));
+                    } else {
+                        self.mods.commands.push(line);
+                    }
+                    continue;
+                }
                 Output::Stopped { name, reason } => {
                     // Its screen goes with it: the entry's run is gone, so
                     // `mod_ui_view` finds no widgets and the screen closes.
