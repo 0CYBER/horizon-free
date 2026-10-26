@@ -1089,8 +1089,8 @@ fn render_visible(
             }
         }
     }
-    // One Poses for every layer: a humanoid with armour redraws five to seven
-    // models, and each used to allocate its own maps.
+    // One Poses refilled for every layer (armour draws up to seven): it keeps
+    // its maps' capacity.
     let mut layer_poses = Poses::default();
     for layer in all_layers {
         let Some(part) = m.kind.layer(&layer.model).cloned() else {

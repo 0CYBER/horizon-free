@@ -127,6 +127,7 @@ impl Poses {
             }
         }
         self.map.clear();
+        self.dummy = [0.0; 9];
         self.skipped.clear();
         self.hidden.clear();
         walk(model, &mut self.map);
