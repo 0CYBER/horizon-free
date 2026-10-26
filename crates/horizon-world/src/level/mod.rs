@@ -181,6 +181,8 @@ pub struct GameRules {
     pub max_snow_accumulation_height: i32,
     pub spawn_mobs: bool,
     pub spawn_monsters: bool,
+    /// `fire_spread_radius_around_player`: -1 spreads everywhere.
+    pub fire_spread_radius_around_player: i32,
 }
 impl Default for GameRules {
     fn default() -> Self {
@@ -193,6 +195,7 @@ impl Default for GameRules {
             max_snow_accumulation_height: 1,
             spawn_mobs: true,
             spawn_monsters: true,
+            fire_spread_radius_around_player: 128,
         }
     }
 }
@@ -347,6 +350,11 @@ pub trait LevelAccess {
     /// `ServerLevel.canSpreadFireAround` (fire-spread radius around players).
     fn can_spread_fire_around(&self, _pos: BlockPos) -> bool {
         true
+    }
+    /// The `INCREASED_FIRE_BURNOUT` environment attribute at `pos` (a biome
+    /// attribute).
+    fn increased_fire_burnout(&self, _pos: BlockPos) -> bool {
+        false
     }
     /// `Level.isUnobstructed(state, pos, context)`: whether the state's
     /// collision shape at `pos` would intersect an entity.
