@@ -145,23 +145,19 @@ impl Game<'_> {
                 .iter()
                 .find(|m| m.id == id)
                 .map_or(0.0, |m| m.eye_y() - m.position.y),
-            // An armor stand's dimensions are halved when small and empty
-            // when a marker (ArmorStand.getDefaultDimensions).
-            Target::Stand(id) => {
-                let stand = self.armor_stands.iter().find(|a| a.id == id);
-                let scale = match stand {
-                    Some(a) if a.marker => 0.0,
-                    Some(a) if a.small => 0.5,
-                    _ => 1.0,
-                };
-                scale * self.type_eye_height(&self.target_type(t))
-            }
+            // ArmorStand.getDefaultDimensions: a marker's are empty, a small
+            // stand's are BABY_DIMENSIONS, whose eye height is 0.9875F.
+            Target::Stand(id) => match self.armor_stands.iter().find(|a| a.id == id) {
+                Some(a) if a.marker => 0.0,
+                Some(a) if a.small => f64::from(0.9875f32),
+                _ => self.type_eye_height(&self.target_type(t)),
+            },
             // Entity.getEyeHeight: the type's dimensions.
             _ => self.type_eye_height(&self.target_type(t)),
         }
     }
     /// `EntityType.getDimensions().eyeHeight()` from `entity-types.json`,
-    /// read once.
+    /// read once: a float, widened as `Entity.getEyeY` does.
     fn type_eye_height(&self, ty: &str) -> f64 {
         static EYE_HEIGHTS: std::sync::OnceLock<std::collections::HashMap<String, f64>> =
             std::sync::OnceLock::new();
@@ -173,7 +169,9 @@ impl Game<'_> {
                     .and_then(|v| {
                         v.as_object().map(|o| {
                             o.iter()
-                                .filter_map(|(k, t)| Some((k.clone(), t["eye_height"].as_f64()?)))
+                                .filter_map(|(k, t)| {
+                                    Some((k.clone(), f64::from(t["eye_height"].as_f64()? as f32)))
+                                })
                                 .collect()
                         })
                     })
