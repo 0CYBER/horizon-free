@@ -10451,6 +10451,9 @@ impl Game<'_> {
             }
             return Ok(());
         }
+        if self.screen == Screen::Mod && self.mod_screen_key(key) {
+            return Ok(());
+        }
         if self.sort_key_press(key) {
             return Ok(());
         }
@@ -11363,9 +11366,7 @@ impl ApplicationHandler for Game<'_> {
                                 .map_or([1, 1], |r| [r.config.width, r.config.height]);
                             self.stats_click(size);
                         }
-                        Screen::Mod if pressed && button == MouseButton::Left => {
-                            self.mod_screen_click()
-                        }
+                        Screen::Mod if pressed => self.mod_screen_click(button),
                         _ => {}
                     }
                 }

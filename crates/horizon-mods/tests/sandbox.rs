@@ -449,7 +449,7 @@ fn ui_screens_settings_and_events() {
     assert_eq!(mods.settings_widgets(0).len(), 3);
     assert!(mods.entries()[0].has_ui_settings());
     mods.ui_settings_opened(0);
-    assert_eq!(mods.settings_widgets(0).len(), 2);
+    assert_eq!(mods.settings_widgets(0).len(), 3);
     // `/ui_close` closes the mod's own screen.
     assert!(mods.command("ui_close"));
     assert!(mods.drain().contains(&Output::CloseScreen { owner: 0 }));
@@ -551,6 +551,45 @@ fn input_claims_keys_and_events() {
     mods.key("key.keyboard.r", false);
     assert!(mods.command("input_poll"));
     assert_eq!(chat(&mut mods), ["key-down wheel", "key-up wheel"]);
+}
+
+#[test]
+fn the_players_key_choice_wins() {
+    let chat = |mods: &mut Mods| -> Vec<String> {
+        mods.drain()
+            .into_iter()
+            .filter_map(|o| match o {
+                Output::Chat { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    assert!(mods.command("input_claim"));
+    assert!(matches!(
+        &mods.settings_widgets(0)[0],
+        horizon_mods::UiWidget::Key(k) if k.id == 9 && k.key == "wheel"
+    ));
+    // Rebinding while held lets the old key go.
+    mods.key("key.keyboard.r", true);
+    assert!(mods.rebind(0, "wheel", "key.mouse.4"));
+    assert_eq!(mods.keys_of(0)[0].key, "key.mouse.4");
+    mods.key("key.keyboard.r", false);
+    mods.key("key.mouse.4", true);
+    assert!(!mods.rebind(0, "wheel", "R") && !mods.rebind(0, "nope", "key.keyboard.g"));
+    chat(&mut mods);
+    assert!(mods.command("input_poll"));
+    assert_eq!(
+        chat(&mut mods),
+        ["key-down wheel", "key-up wheel", "key-down wheel"]
+    );
+    // A choice saved earlier replaces the default, registered before or after.
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    mods.set_bindings(|_| vec![("wheel", "key.keyboard.g"), ("bad", "G")]);
+    assert!(mods.command("input_claim"));
+    assert_eq!(mods.keys_of(0)[0].key, "key.keyboard.g");
+    mods.set_bindings(|_| vec![("wheel", "key.keyboard.h")]);
+    assert_eq!(mods.keys_of(0)[0].key, "key.keyboard.h");
 }
 
 #[test]

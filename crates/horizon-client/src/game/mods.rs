@@ -29,6 +29,7 @@ use {
     },
     horizon_mods::{Clock, Mods, Output, Player, Snapshot, Status, UiScreen, UiWidget},
     std::time::Instant,
+    winit::{event::MouseButton, keyboard::KeyCode},
 };
 
 #[derive(Default)]
@@ -101,6 +102,8 @@ struct ModScreen {
     under: Screen,
     /// One scroll per `list` widget, in widget order.
     scrolls: Vec<ui::Scroll>,
+    /// A key widget waiting for the key to bind: the mod key's name.
+    binding: Option<String>,
 }
 impl ModsState {
     /// The chat's command tree: vanilla's, plus the running mods' commands.
@@ -240,7 +243,10 @@ impl Game<'_> {
     pub(super) fn open_mod_screen(&mut self, _owner: usize, _settings: bool) {}
     pub(super) fn close_mod_screen(&mut self, _tell: bool) {}
     pub(super) fn draw_mod_screen(&mut self, _batch: &mut HudBatch) {}
-    pub(super) fn mod_screen_click(&mut self) {}
+    pub(super) fn mod_screen_click(&mut self, _button: winit::event::MouseButton) {}
+    pub(super) fn mod_screen_key(&mut self, _key: winit::keyboard::KeyCode) -> bool {
+        false
+    }
     pub(super) fn mod_screen_scroll(&mut self, _delta: f32) {}
 }
 
@@ -263,6 +269,8 @@ impl Game<'_> {
         let on = |id: &str| enabled.contains(id) || dev_ids.iter().any(|d| d == id);
         let mods = Mods::load(&paths, on, vanilla_command);
         self.mods.mods = mods;
+        let chosen = &self.settings.mods;
+        self.mods.mods.set_bindings(|id| chosen.keys_of(id));
         // Entries were replaced wholesale: a screen's owner index is stale.
         self.mods.screen = None;
         self.list_mods();
@@ -429,6 +437,8 @@ impl Game<'_> {
         {
             self.mods.checked = Some(Instant::now());
             if self.mods.mods.reload_changed(vanilla_command) {
+                let chosen = &self.settings.mods;
+                self.mods.mods.set_bindings(|id| chosen.keys_of(id));
                 self.list_mods();
                 self.sync_mod_commands();
                 self.system_message(Text::literal("Mods reloaded").with_color(text::GRAY));
@@ -579,6 +589,72 @@ impl Game<'_> {
             Some((s.title.as_str(), s.widgets.as_slice()))
         }
     }
+    /// A key widget's label as Key Binds shows one, "Zoom: Z", marked
+    /// "> Zoom: Z <" in yellow while it waits for the new key.
+    fn mod_key_label(mods: &Mods, owner: usize, name: &str, waiting: bool) -> Text {
+        let (label, key) = mods
+            .keys_of(owner)
+            .iter()
+            .find(|k| k.name == name)
+            .map_or((name, "key.keyboard.unknown"), |k| {
+                (k.label.as_str(), k.key.as_str())
+            });
+        let value = format!("{label}: {}", keybinds::display_name(key).plain());
+        if waiting {
+            Text::literal(format!("> {value} <")).with_color(text::YELLOW)
+        } else {
+            Text::literal(value)
+        }
+    }
+    /// The player bound the key widget that waited to `key`: the mod's key
+    /// follows it now and at the next start (`horizon-mods.txt`).
+    fn bind_mod_key(&mut self, key: String) {
+        let Some(ms) = self.mods.screen.as_mut() else {
+            return;
+        };
+        let Some(name) = ms.binding.take() else {
+            return;
+        };
+        let owner = ms.owner;
+        if !self.mods.mods.rebind(owner, &name, &key) {
+            return;
+        }
+        let Some(id) = self
+            .mods
+            .mods
+            .entries()
+            .get(owner)
+            .and_then(|e| e.manifest.as_ref())
+            .map(|m| m.id.clone())
+        else {
+            return;
+        };
+        self.settings
+            .mods
+            .keys
+            .entry(id)
+            .or_default()
+            .insert(name, key);
+        self.settings.save(&Self::options_path());
+    }
+    /// A key while a mod screen is up: true when a key widget waited for
+    /// it (Key Binds: Escape binds none).
+    pub(super) fn mod_screen_key(&mut self, key: KeyCode) -> bool {
+        if self
+            .mods
+            .screen
+            .as_ref()
+            .is_none_or(|ms| ms.binding.is_none())
+        {
+            return false;
+        }
+        let value = match key {
+            KeyCode::Escape => None,
+            k => keybinds::key_name(k),
+        };
+        self.bind_mod_key(value.unwrap_or("key.keyboard.unknown").to_owned());
+        true
+    }
     /// The layout the mod screen's widgets get at `h`: (widget, top,
     /// height), the column being `COLUMN` wide down the middle.
     fn mod_ui_layout(h: f32, widgets: &[UiWidget]) -> Vec<(f32, f32)> {
@@ -587,7 +663,7 @@ impl Game<'_> {
         for w in widgets {
             let wh = match w {
                 UiWidget::Text(_) => 12.0,
-                UiWidget::Item(_) | UiWidget::Button(_) => 20.0,
+                UiWidget::Item(_) | UiWidget::Button(_) | UiWidget::Key(_) => 20.0,
                 UiWidget::List(l) => (l.rows.len().min(6) as f32 * 12.0) + 8.0,
             };
             // Nothing may cover Done; a crowded mod loses what won't fit.
@@ -617,6 +693,7 @@ impl Game<'_> {
             settings,
             under: self.screen,
             scrolls: Vec::new(),
+            binding: None,
         });
         self.screen = Screen::Mod;
         if self.player.is_some() {
@@ -685,6 +762,22 @@ impl Game<'_> {
                 UiWidget::Button(b) => {
                     let hover = ui::hovered(self.cursor, x, wy, MOD_UI_COLUMN, 20.0);
                     let label = Text::literal(b.label.clone());
+                    ui::button(
+                        batch,
+                        atlas,
+                        x,
+                        wy,
+                        MOD_UI_COLUMN,
+                        20.0,
+                        &label,
+                        true,
+                        hover,
+                    );
+                }
+                UiWidget::Key(k) => {
+                    let hover = ui::hovered(self.cursor, x, wy, MOD_UI_COLUMN, 20.0);
+                    let waiting = ms.binding.as_deref() == Some(k.key.as_str());
+                    let label = Self::mod_key_label(&self.mods.mods, ms.owner, &k.key, waiting);
                     ui::button(
                         batch,
                         atlas,
@@ -798,7 +891,20 @@ impl Game<'_> {
     }
     /// A click on the mod screen: Done leaves it, a `list` row is the mod's
     /// `ui-events::select`.
-    pub(super) fn mod_screen_click(&mut self) {
+    pub(super) fn mod_screen_click(&mut self, button: MouseButton) {
+        // Key Binds: a mouse button pressed while waiting binds it.
+        if self
+            .mods
+            .screen
+            .as_ref()
+            .is_some_and(|ms| ms.binding.is_some())
+        {
+            self.bind_mod_key(keybinds::mouse_name(button));
+            return;
+        }
+        if button != MouseButton::Left {
+            return;
+        }
         let (w, h) = self.gui_size();
         let cursor = self.cursor;
         if ui::hovered(cursor, (w / 2.0).floor() - 100.0, h - 27.0, 200.0, 20.0) {
@@ -827,6 +933,17 @@ impl Game<'_> {
                 let owner = self.mods.screen.as_ref().map_or(0, |ms| ms.owner);
                 self.mods.mods.ui_select(owner, b.id, 0);
                 self.show_mod_output();
+                return;
+            }
+            // A key widget waits for the key to bind.
+            if let UiWidget::Key(k) = w
+                && ui::hovered(cursor, x, wy, MOD_UI_COLUMN, 20.0)
+            {
+                self.audio.play_button_click();
+                let name = k.key.clone();
+                if let Some(ms) = self.mods.screen.as_mut() {
+                    ms.binding = Some(name);
+                }
                 return;
             }
             let UiWidget::List(l) = w else { continue };
