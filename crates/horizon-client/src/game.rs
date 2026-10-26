@@ -9346,6 +9346,9 @@ impl Game<'_> {
         )
     }
     fn apply_settings(&mut self) {
+        // LocalPlayer.refreshChatAbilities: the chat shows what the Chat option allows.
+        let abilities = self.chat_abilities();
+        self.ui.chat.set_abilities(&self.gui.atlas.font, abilities);
         self.streaming.radius = self.settings.render_distance;
         // Options.biomeBlendRadius, ambientOcclusion and cutoutLeaves:
         // LevelExtractor.allChanged when they change.

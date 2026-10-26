@@ -2,7 +2,10 @@
 //! (game rules, the world clock, difficulty), bound to the game.
 use super::{Game, Screen};
 use horizon_client::{
-    chat::{Chat, ChatAction, ChatScreen, Commands, SYSTEM_INDICATOR},
+    chat::{
+        Chat, ChatAbilities, ChatAction, ChatScreen, ChatSource, ChatVisibility, Commands,
+        SYSTEM_INDICATOR,
+    },
     command::Registries,
     gamerules::GameRules,
     hud::HudBatch,
@@ -425,6 +428,7 @@ impl Game<'_> {
             self.ui.chat.recent.len(),
             b.width as i32,
             b.height as i32,
+            self.chat_abilities(),
         );
         screen.auto_suggestions = self.settings.auto_suggestions;
         self.ui.chat_screen = Some(screen);
@@ -443,6 +447,10 @@ impl Game<'_> {
             self.capture(true);
         }
     }
+    /// `Minecraft.computeChatAbilities` from the Chat option.
+    pub(super) fn chat_abilities(&self) -> ChatAbilities {
+        ChatAbilities::new(ChatVisibility::from_option(self.settings.chat_visibility))
+    }
     /// A chat message from the game (ChatComponent.addServerSystemMessage).
     pub(super) fn system_message(&mut self, text: Text) {
         if let Some(capture) = self.chat_capture.as_mut() {
@@ -452,7 +460,11 @@ impl Game<'_> {
         // Connected to a server (single player's own included), the chat on
         // screen is the connection's: the game's own messages join it.
         if self.remote.is_some() {
-            self.chat_line(text);
+            self.chat_line(text, ChatSource::Server);
+            return;
+        }
+        // The Chat option's Hidden level takes the server's messages too.
+        if !self.ui.chat.shows(ChatSource::Server) {
             return;
         }
         let focused = self.screen == Screen::Chat;
@@ -461,6 +473,7 @@ impl Game<'_> {
             &self.gui.atlas,
             text,
             Some(SYSTEM_INDICATOR),
+            ChatSource::Server,
             self.ticks,
             focused,
         );
@@ -570,7 +583,12 @@ impl Game<'_> {
         }
     }
     /// ChatScreen.handleChatInput: history, then a command or a chat line.
+    /// The Chat option's restrictions stop the message here too, so a
+    /// control-socket `chat` cannot send what the player's setting hides.
     pub(super) fn handle_chat_input(&mut self, message: &str) {
+        if !self.chat_abilities().allows(message) {
+            return;
+        }
         self.ui.chat.add_recent(message);
         // On a server (single player's own included) the server runs it,
         // unless a client mod owns the command.
@@ -592,9 +610,14 @@ impl Game<'_> {
             );
             let focused = self.screen == Screen::Chat;
             let heard = self.mods.running().then(|| line.plain());
-            self.ui
-                .chat
-                .add(&self.gui.atlas, line, None, self.ticks, focused);
+            self.ui.chat.add(
+                &self.gui.atlas,
+                line,
+                None,
+                ChatSource::Player,
+                self.ticks,
+                focused,
+            );
             if let Some(line) = heard {
                 self.mods_chat(&line);
             }
@@ -898,9 +921,14 @@ impl Game<'_> {
             Err(e) => Text::translate("screenshot.failure", &[Text::literal(e.clone())]),
         };
         let focused = self.screen == Screen::Chat;
-        self.ui
-            .chat
-            .add(&self.gui.atlas, message, None, self.ticks, focused);
+        self.ui.chat.add(
+            &self.gui.atlas,
+            message,
+            None,
+            ChatSource::Client,
+            self.ticks,
+            focused,
+        );
     }
 }
 /// `yyyy-MM-dd_HH.mm.ss[_n].png` (Util.getFilenameFormattedDateTime, local time
