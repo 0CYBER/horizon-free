@@ -422,6 +422,7 @@ impl Game<'_> {
             sea_level: if self.dim == Dim::Nether { 32 } else { 63 },
             teams: std::sync::Arc::new(self.mob_teams()),
             items: Some(self.res.items()),
+            lid_openers: &self.lid_openers,
             difficulty: self.local_difficulty(
                 self.player
                     .as_ref()

@@ -1529,6 +1529,8 @@ pub struct MobWorld<'a> {
     pub teams: std::sync::Arc<Teams<'a>>,
     /// Item data (max stack sizes), when the host has it.
     pub items: Option<&'a crate::items::Items>,
+    /// `ChestBlockEntity.getOpenCount`: the players with each chest open.
+    pub lid_openers: &'a HashMap<(i32, i32, i32), i32>,
 }
 /// `Entity.getTeam` of the player and of the mobs on a team.
 #[derive(Clone, Debug, Default)]
