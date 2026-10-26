@@ -837,30 +837,54 @@ pub fn char_len(s: &str) -> usize {
 pub fn word_position(value: &str, dir: isize, from: usize) -> usize {
     let chars: Vec<char> = value.chars().collect();
     let mut pos = from.min(chars.len());
-    // A line break is a word of its own, so Ctrl+Backspace in a book page
-    // stops at the end of the previous line.
     if dir < 0 {
         while pos > 0 && chars[pos - 1] == ' ' {
             pos -= 1;
         }
-        if pos > 0 && chars[pos - 1] == '\n' {
-            return pos - 1;
-        }
-        while pos > 0 && !matches!(chars[pos - 1], ' ' | '\n') {
+        while pos > 0 && chars[pos - 1] != ' ' {
             pos -= 1;
         }
     } else {
-        while pos < chars.len() && !matches!(chars[pos], ' ' | '\n') {
+        while pos < chars.len() && chars[pos] != ' ' {
             pos += 1;
-        }
-        if pos < chars.len() && chars[pos] == '\n' {
-            return pos + 1;
         }
         while pos < chars.len() && chars[pos] == ' ' {
             pos += 1;
         }
     }
     pos
+}
+/// `MultilineTextField.getPreviousWord` / `getNextWord`'s `beginIndex` (a book page): any
+/// whitespace, line breaks included, separates words, and the search starts from the cursor
+/// clamped to the last character, as vanilla's does.
+pub fn multiline_word_position(value: &str, dir: isize, from: usize) -> usize {
+    let chars: Vec<char> = value.chars().collect();
+    if chars.is_empty() {
+        return 0;
+    }
+    let mut pos = from.min(chars.len() - 1);
+    if dir < 0 {
+        while pos > 0 && java_whitespace(chars[pos - 1]) {
+            pos -= 1;
+        }
+        while pos > 0 && !java_whitespace(chars[pos - 1]) {
+            pos -= 1;
+        }
+    } else {
+        while pos < chars.len() && !java_whitespace(chars[pos]) {
+            pos += 1;
+        }
+        while pos < chars.len() && java_whitespace(chars[pos]) {
+            pos += 1;
+        }
+    }
+    pos
+}
+/// `Character.isWhitespace`: Unicode spaces and line breaks but not the no-break spaces, plus
+/// the ASCII separators U+001C to U+001F.
+fn java_whitespace(c: char) -> bool {
+    (c.is_whitespace() && !matches!(c, '\u{85}' | '\u{a0}' | '\u{2007}' | '\u{202f}'))
+        || ('\u{1c}'..='\u{1f}').contains(&c)
 }
 /// `EditBox.deleteWords(dir)` for an append-only field, whose caret is at the
 /// end: removes the word in that direction. True when the value changed.
@@ -974,9 +998,13 @@ impl EditBox {
     pub fn word_position(&self, dir: isize) -> usize {
         self.word_position_from(dir, self.cursor)
     }
-    /// EditBox.getWordPosition(dir, from).
+    /// EditBox.getWordPosition(dir, from), or MultilineTextField's word for a book page.
     fn word_position_from(&self, dir: isize, from: usize) -> usize {
-        word_position(&self.value, dir, from)
+        if self.multiline {
+            multiline_word_position(&self.value, dir, from)
+        } else {
+            word_position(&self.value, dir, from)
+        }
     }
     pub fn set_cursor(&mut self, pos: usize, select: bool) {
         self.cursor = pos.min(char_len(&self.value));
@@ -1506,10 +1534,15 @@ mod tests {
         assert_eq!(word_position("hi", 1, 99), 2);
     }
     #[test]
-    fn word_position_stops_at_line_breaks() {
-        assert_eq!(word_position("one\ntwo", -1, 7), 4);
-        assert_eq!(word_position("one\n", -1, 4), 3);
-        assert_eq!(word_position("one\ntwo", 1, 0), 4);
+    fn multiline_words_split_at_any_whitespace() {
+        // Ctrl+Backspace at the end of `one\ntwo` deletes `two` only.
+        assert_eq!(multiline_word_position("one\ntwo", -1, 7), 4);
+        // From the end the search starts at the last character, as vanilla's does.
+        assert_eq!(multiline_word_position("one\n", -1, 4), 0);
+        assert_eq!(multiline_word_position("a b", -1, 3), 0);
+        assert_eq!(multiline_word_position("one\n\ntwo", 1, 0), 5);
+        assert_eq!(multiline_word_position("one\u{a0}two", 1, 0), 7);
+        assert_eq!(multiline_word_position("", -1, 0), 0);
     }
     #[test]
     fn delete_words_removes_the_word_before_the_end() {
