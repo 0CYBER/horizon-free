@@ -9,8 +9,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import release_train  # noqa: E402
+# The repository root, appended so a script run finds `tools` without shadowing anything already importable.
+sys.path.append(str(Path(__file__).resolve().parents[2]))
+from tools import release_train  # noqa: E402
 
 # The root workspace's manifest and toolchain files: the launcher's path crates inherit from them.
 ROOT_RUST = {"Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rustfmt.toml", "clippy.toml"}
