@@ -1648,6 +1648,22 @@ pub(super) struct WorkerState {
     heights: HashMap<(i32, i32, u8), i32>,
     /// Decorate with structure pieces only (for structure parity checks).
     pub(super) structures_only: bool,
+    pub(super) structure_mobs: Option<Arc<dyn StructureMobs>>,
+}
+/// `Mob.finalizeSpawn(level, difficulty, STRUCTURE, null)` of the entities a
+/// structure places with finalizeEntities, run by the game, which owns mobs.
+pub trait StructureMobs: Send + Sync {
+    /// Finalizes the entity in `nbt` if it is a mob, drawing from the
+    /// region's random. `biome` is the biome at its block, `structures` the
+    /// structures with a piece there. False when it could not: the entity
+    /// keeps its `horizon:finalize` for the game to finish on load.
+    fn finalize(
+        &self,
+        nbt: &mut crate::nbt::Compound,
+        biome: &str,
+        structures: &[String],
+        random: &mut dyn super::structure::legacy::PieceRandom,
+    ) -> bool;
 }
 
 trait SeededPipeline: Send + Sync {
@@ -2464,6 +2480,7 @@ impl OverworldGenerator {
                 carver_biomes: HashMap::new(),
                 timings: StageTimings::default(),
                 structures_only: false,
+                structure_mobs: None,
                 heights: HashMap::new(),
             },
         }
@@ -2589,6 +2606,9 @@ impl GeneratorWorker {
     /// (for structure placement parity checks).
     pub fn set_structures_only(&mut self, only: bool) {
         self.state.structures_only = only;
+    }
+    pub fn set_structure_mobs(&mut self, mobs: Arc<dyn StructureMobs>) {
+        self.state.structure_mobs = Some(mobs);
     }
 }
 

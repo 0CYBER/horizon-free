@@ -24,7 +24,9 @@ use horizon_world::{
 };
 use std::{path::Path, sync::Arc};
 mod lod;
+mod structure_mobs;
 use lod::VanillaLodSampler;
+use structure_mobs::StructureMobFinalizer;
 
 pub struct VanillaTerrain {
     generator: OverworldGenerator,
@@ -32,6 +34,7 @@ pub struct VanillaTerrain {
     biome_map: Vec<u16>,
     /// Loot tables for generated containers.
     loot: Option<Arc<horizon_world::loot::LootData>>,
+    structure_mobs: Arc<StructureMobFinalizer>,
     /// A worker for structure queries from the game thread.
     query: std::sync::Mutex<Option<GeneratorWorker>>,
     /// Block state id -> block index, the game's block tick type: worldgen
@@ -138,6 +141,10 @@ impl VanillaTerrain {
             generator,
             biome_map,
             loot,
+            structure_mobs: Arc::new(StructureMobFinalizer::new(
+                dir.parent().unwrap_or(dir).to_owned(),
+                dimension,
+            )),
             query: std::sync::Mutex::new(None),
             tick_blocks,
             tick_states,
@@ -146,6 +153,11 @@ impl VanillaTerrain {
             last_proto: std::sync::atomic::AtomicU64::new(0),
             created: std::time::Instant::now(),
         })
+    }
+    /// The difficulty (0 peaceful to 3 hard) and overworld clock structure
+    /// mobs are finalized with.
+    pub fn set_spawn_conditions(&self, difficulty: u8, day_time: i64) {
+        self.structure_mobs.set_conditions(difficulty, day_time);
     }
     /// A proto chunk's blocks, biomes, scheduled ticks and post-processing
     /// marks as a column.
@@ -354,7 +366,9 @@ pub fn shared_data(
 impl ChunkGenerator for VanillaTerrain {
     type Worker = GeneratorWorker;
     fn worker(&self) -> GeneratorWorker {
-        self.generator.worker()
+        let mut worker = self.generator.worker();
+        worker.set_structure_mobs(self.structure_mobs.clone());
+        worker
     }
     fn lod_sampler(self: Arc<Self>) -> Box<dyn LodSampler> {
         Box::new(VanillaLodSampler::new(self))
