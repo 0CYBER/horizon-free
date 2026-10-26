@@ -6628,7 +6628,9 @@ def check_guardian_beams(host, guest, out):
 
                 states = charging()
                 assert states[0]['target'] == 'Player', states
-                if observer is host and not SERVER_THREAD:
+                # The host reads the level that ticks the guardian (its own in-frame, the
+                # server's on the server thread), where a targeted player is `Player`.
+                if observer is host:
                     assert states[1]['target'] == 'Player', states
                 else:
                     assert states[1]['target'].startswith('Mob('), states
