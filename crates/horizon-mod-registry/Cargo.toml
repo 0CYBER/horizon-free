@@ -23,6 +23,8 @@ hmac = "0.12"
 sha2 = "0.10"
 base64 = "0.22"
 getrandom = "0.3"
+# Ratings: one SQLite file on a small volume, as the telemetry server keeps its data.
+rusqlite = { version = "0.37", features = ["bundled"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

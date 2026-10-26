@@ -89,6 +89,9 @@ const FUEL_FRAME: u64 = 10_000_000;
 const FUEL_EVENT: u64 = 100_000_000;
 /// Chat lines a mod may show per call, HUD lines and their length.
 const CHAT_PER_CALL: usize = 8;
+/// `command.run-quiet` lines one call of a mod may queue (a quiet payload's
+/// cap, `horizon_protocol::quiet::MAX_LINES`).
+const QUIET_PER_CALL: usize = 256;
 /// How far `game.raycast` sees, in blocks.
 pub const RAYCAST_MAX: f32 = 1024.0;
 const HUD_LINES: usize = 16;
@@ -160,6 +163,9 @@ pub enum Output {
     /// `command.run`: a vanilla command line, without its slash, to run as
     /// the player.
     Command { line: String },
+    /// `command.run-quiet`: vanilla command lines to run as the player with
+    /// nothing in the chat (`horizon_protocol::quiet` on a server).
+    QuietCommands { mod_id: String, lines: Vec<String> },
     /// The mod was turned off: it trapped, overran or failed to start.
     Stopped { name: String, reason: String },
     /// `players.tell`: a line after the mod's name, to the player with this id.
@@ -1406,6 +1412,23 @@ impl command::Host for State {
             .count();
         if queued < CHAT_PER_CALL {
             self.out.push(Output::Command { line: clip(line) });
+        }
+    }
+    fn run_quiet(&mut self, lines: Vec<String>) {
+        let queued: usize = self
+            .out
+            .iter()
+            .map(|o| match o {
+                Output::QuietCommands { lines, .. } => lines.len(),
+                _ => 0,
+            })
+            .sum();
+        let room = QUIET_PER_CALL.saturating_sub(queued);
+        if room > 0 && !lines.is_empty() {
+            self.out.push(Output::QuietCommands {
+                mod_id: self.id.clone(),
+                lines: lines.into_iter().take(room).map(clip).collect(),
+            });
         }
     }
 }

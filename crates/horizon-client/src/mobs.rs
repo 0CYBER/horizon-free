@@ -710,6 +710,9 @@ pub struct Extra {
     /// A copper golem's `openedChestPos`.
     pub opened_chest: Option<[i32; 3]>,
     pub point: Option<[f64; 3]>,
+    /// `NEAREST_REPELLENT`: the nearest repelling block a hoglin or piglin
+    /// sensed, looked up every 20 ticks.
+    pub repellent: Option<[i32; 3]>,
     pub vector: [f64; 3],
     /// Active status effects: (effect id, ticks left, amplifier).
     pub effects: Vec<(&'static str, i32, i32)>,
@@ -869,6 +872,11 @@ pub struct Mob {
 /// Events a mob tick asks the game to act on.
 #[derive(Clone, Debug)]
 pub enum MobEvent {
+    /// Squid.handleEntityEvent(19), resetting the remote tentacle cycle.
+    SquidCycle {
+        mob: u32,
+        at: [f64; 3],
+    },
     /// Rabbit entity event 1, sent only when a ground jump actually happens.
     RabbitHop {
         mob: u32,
@@ -1117,6 +1125,13 @@ pub enum MobEvent {
         partner: u32,
         child: Option<([i32; 3], Option<u8>)>,
     },
+    /// `WorkAtComposter.useWorkstation`: a farmer at its composter makes
+    /// bread and composts seeds (the game applies it to the villager's
+    /// inventory and the block).
+    WorkAtComposter {
+        mob: u32,
+        pos: [i32; 3],
+    },
     /// A villager asks whether enough neighbours want an iron golem.
     GolemCheck {
         mob: u32,
@@ -1169,6 +1184,12 @@ pub enum MobEvent {
     /// The crumbs of the block under a digging or emerging warden.
     DigParticles {
         at: [f64; 3],
+    },
+    /// `Zombie.hurtServer`: a zombie hurt with a target in sight (its own,
+    /// else the attacker) may call a reinforcement against it on Hard.
+    Reinforcements {
+        mob: u32,
+        target: Who,
     },
     /// `Warden.applyDarknessAround`: darkness for survival players nearby.
     Darkness {
@@ -1262,6 +1283,10 @@ pub struct Seen {
     /// `MAX_HEALTH`, `JUMP_STRENGTH` and `MOVEMENT_SPEED` base values (a
     /// horse's breeding stock).
     pub stats: [f64; 3],
+    /// `Wolf.isInSittingPose`.
+    pub sitting: bool,
+    /// `Entity.isVehicle` or `isPassenger`.
+    pub ridden: bool,
 }
 impl Mob {
     pub fn burning_time(&self) -> f64 {
@@ -1334,6 +1359,8 @@ impl Mob {
                 m.extra.vector[0],
                 m.attrs.speed,
             ],
+            sitting: m.extra.sitting,
+            ridden: m.rider.is_some() || m.extra.rider.is_some() || m.extra.mount.is_some(),
         }
     }
     /// `EntityType.getCategory`'s name.
@@ -1770,6 +1797,10 @@ impl Mob {
             self.invulnerable = 20;
             self.health -= amount;
             self.hurt_time = 10;
+        }
+        // Animal.actuallyHurt: damage taken ends love mode (`resetLove`).
+        if drops::is_animal(self.species()) {
+            self.extra.in_love = 0;
         }
         self.last_damage = Some((source, i64::from(self.age)));
         if let Some(who) = source.attacker {

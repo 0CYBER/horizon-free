@@ -1771,11 +1771,16 @@ impl Goal for Breed {
         }
         let llama = super::llama::is_llama(species);
         let equine = matches!(species, Species::Horse | Species::Donkey) || llama;
-        if equine && !m.extra.tame {
-            return false;
-        }
-        // Llama.canParent: not ridden, and at full health.
-        if llama && (m.rider.is_some() || m.health < m.attrs.max_health) {
+        // AbstractHorse.canParent: tame, an adult, not a vehicle or passenger
+        // and at full health.
+        if equine
+            && (!m.extra.tame
+                || m.is_baby()
+                || m.rider.is_some()
+                || m.extra.rider.is_some()
+                || m.extra.mount.is_some()
+                || m.health < m.attrs.max_health)
+        {
             return false;
         }
         self.partner =
@@ -1788,7 +1793,10 @@ impl Goal for Breed {
                     && s.in_love
                     && !s.baby
                     && (!tamable || s.tame)
-                    && (!equine || s.tame)
+                    // Wolf.canMate: a sitting wolf is no partner.
+                    && !(species == Species::Wolf && s.sitting)
+                    // AbstractHorse.canParent of the partner.
+                    && (!equine || s.tame && !s.ridden && s.health >= s.stats[0] as f32)
                     && (!sniffer || super::sniffer::can_mate_state(s.variant))
             })
             .map(|s| s.id)
