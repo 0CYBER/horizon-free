@@ -241,9 +241,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     } else {
         a.v[SPIKES] += (1.0 - a.v[SPIKES]) * 0.06;
     }
-    if m.extra.flag && m.extra.counter2 < attack_duration(m) {
-        m.extra.counter2 += 1;
-    }
+    client_tick(m);
     if in_water {
         m.air = 300;
     } else if m.on_ground {
@@ -330,6 +328,13 @@ pub fn elder_server_ai_step(m: &mut Mob, cx: &mut Cx) {
             m.position.y.floor() as i32,
             m.position.z.floor() as i32,
         ]);
+    }
+}
+/// Guardian.aiStep's visual attack clock, also used by server clients.
+/// Does not run attack goals, movement, damage or random draws.
+pub fn client_tick(m: &mut Mob) {
+    if m.extra.flag && m.extra.counter2 < attack_duration(m) {
+        m.extra.counter2 += 1;
     }
 }
 /// The beam's clock for rendering: (attack time with the partial tick,
