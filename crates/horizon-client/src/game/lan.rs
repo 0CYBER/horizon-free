@@ -264,6 +264,14 @@ fn mob_meta(
                 meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
             }
         }
+        // HappyGhast.STAYS_STILL (after AgeableMob's two and IS_LEASH_HOLDER),
+        // set while `serverStillTimeout > 0` (`syncStayStillFlag`).
+        "minecraft:happy_ghast" => {
+            if horizon_client::mobs::happy_ghast::on_still_timeout(m) {
+                meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((19, serializer::BOOLEAN, Value::Bool(false)));
+        }
         // Villager.DATA_VILLAGER_DATA and ZombieVillager's (after Zombie's three).
         "minecraft:villager" | "minecraft:zombie_villager" => {
             use horizon_client::mobs::render::{PROFESSIONS, VILLAGER_TYPES};
@@ -836,6 +844,9 @@ impl Game<'_> {
             e.velocity = [m.velocity.x, m.velocity.y, m.velocity.z];
             e.needs_sync = m.needs_sync;
             mob_meta(m, hub, &mut e.meta, &mut e.defaults);
+            // HappyGhast.aiStep: requiresPrecisePosition while on a still timeout.
+            e.precise = m.species() == horizon_client::mobs::Species::HappyGhast
+                && horizon_client::mobs::happy_ghast::on_still_timeout(m);
             mob_equipment(m, hub, &mut e.equipment);
             self.mob_attributes(m, &mut e.attributes);
             e.leash = leash;
