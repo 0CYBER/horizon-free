@@ -1992,12 +1992,39 @@ fn restore_axolotl_memories(m: &mut Mob, tag: &Tag) {
     }
 }
 const AXOLOTL_VARIANTS: [&str; 5] = ["lucy", "wild", "gold", "cyan", "blue"];
+/// `Salmon.Variant` names, by id.
+const SALMON_SIZES: [&str; 3] = ["small", "medium", "large"];
+/// `TropicalFish.Pattern` names in enum order: the six small patterns, then
+/// the six large ones (the order of `extra.variant`).
+const TROPICAL_PATTERNS: [&str; 12] = [
+    "kob",
+    "sunstreak",
+    "snooper",
+    "dasher",
+    "brinely",
+    "spotty",
+    "flopper",
+    "stripey",
+    "glitter",
+    "blockfish",
+    "betty",
+    "clayfish",
+];
+/// `Bucketable.saveDefaultDataToBucketTag`, with the age an axolotl and a
+/// tadpole add (`saveToBucketTag`).
 pub fn bucket_data(m: &Mob) -> Tag {
-    let mut data = Tag::compound([
-        ("Age", Tag::Int(m.extra.age)),
-        ("AgeLocked", Tag::Byte(i8::from(m.extra.age_locked))),
-        ("Health", Tag::Float(m.health.to_bits())),
-    ]);
+    let mut data = Tag::compound([("Health", Tag::Float(m.health.to_bits()))]);
+    if matches!(
+        m.species(),
+        crate::mobs::Species::Axolotl | crate::mobs::Species::Tadpole
+    ) {
+        put(&mut data, "Age", Tag::Int(m.extra.age));
+        put(
+            &mut data,
+            "AgeLocked",
+            Tag::Byte(i8::from(m.extra.age_locked)),
+        );
+    }
     for (key, on) in [
         ("NoAI", m.no_ai),
         ("Silent", m.silent),
@@ -2026,6 +2053,29 @@ pub fn bucket_components(m: &Mob) -> crate::item_data::StackData {
             .get(usize::from(m.extra.variant))
             .unwrap_or(&"lucy");
         data.set_other("minecraft:axolotl/variant", Some(string(variant)));
+    }
+    // Salmon.saveToBucketTag: the size.
+    if m.species() == crate::mobs::Species::Salmon {
+        let size = SALMON_SIZES
+            .get(usize::from(m.extra.variant))
+            .unwrap_or(&"medium");
+        data.set_other("minecraft:salmon/size", Some(string(size)));
+    }
+    // TropicalFish.saveToBucketTag: the pattern and both colours.
+    if m.species() == crate::mobs::Species::TropicalFish {
+        let dye = |i: u8| crate::mobs::render::DYE_NAMES[usize::from(i) & 15];
+        let pattern = TROPICAL_PATTERNS
+            .get(usize::from(m.extra.variant))
+            .unwrap_or(&"kob");
+        data.set_other("minecraft:tropical_fish/pattern", Some(string(pattern)));
+        data.set_other(
+            "minecraft:tropical_fish/base_color",
+            Some(string(dye(m.extra.variant2))),
+        );
+        data.set_other(
+            "minecraft:tropical_fish/pattern_color",
+            Some(string(dye(m.extra.variant3))),
+        );
     }
     data
 }
@@ -2076,6 +2126,39 @@ pub fn load_bucket_data(m: &mut Mob, stack: &crate::items::ItemStack) {
             .position(|&v| v == name.trim_start_matches("minecraft:"))
     {
         m.extra.variant = id as u8;
+    }
+    // Salmon.applyImplicitComponents: the size.
+    if m.species() == crate::mobs::Species::Salmon
+        && let Some(name) = text(components.other("minecraft:salmon/size"))
+        && let Some(id) = SALMON_SIZES
+            .iter()
+            .position(|&v| v == name.trim_start_matches("minecraft:"))
+    {
+        m.extra.variant = id as u8;
+    }
+    // TropicalFish.applyImplicitComponent: the pattern and both colours.
+    if m.species() == crate::mobs::Species::TropicalFish {
+        let name = |key| text(components.other(key));
+        let dye = |key| {
+            name(key).and_then(|n| {
+                crate::mobs::render::DYE_NAMES
+                    .iter()
+                    .position(|&v| v == n.trim_start_matches("minecraft:"))
+            })
+        };
+        if let Some(id) = name("minecraft:tropical_fish/pattern").and_then(|n| {
+            TROPICAL_PATTERNS
+                .iter()
+                .position(|&v| v == n.trim_start_matches("minecraft:"))
+        }) {
+            m.extra.variant = id as u8;
+        }
+        if let Some(id) = dye("minecraft:tropical_fish/base_color") {
+            m.extra.variant2 = id as u8;
+        }
+        if let Some(id) = dye("minecraft:tropical_fish/pattern_color") {
+            m.extra.variant3 = id as u8;
+        }
     }
 }
 

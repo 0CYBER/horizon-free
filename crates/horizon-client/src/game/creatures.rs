@@ -2527,21 +2527,22 @@ impl Game<'_> {
             .as_ref()
             .map(|h| h.item.to_string())
             .unwrap_or_default();
+        // Bucketable.bucketMobPickup: a water bucket scoops up a fish, a
+        // tadpole or an axolotl, with the data its bucket carries.
         if item == "minecraft:water_bucket"
-            && self.mobs[index].species() == Species::Axolotl
             && self.mobs[index].alive()
+            && let Some((bucket, sound)) = bucketable(self.mobs[index].species())
         {
-            let mut filled = ItemStack::new("minecraft:axolotl_bucket", 1);
+            let mut filled = ItemStack::new(bucket, 1);
             filled.extra = Some(Box::new(horizon_client::entity_nbt::bucket_components(
                 &self.mobs[index],
             )));
-            self.audio.play(
-                "minecraft:item.bucket.fill_axolotl",
-                Some(self.mobs[index].center()),
-                1.0,
-                1.0,
-            );
+            self.audio
+                .play(sound, Some(self.mobs[index].center()), 1.0, 1.0);
             self.trigger_item("minecraft:filled_bucket", &filled);
+            // Leashable.dropLeash, then discard.
+            let id = self.mobs[index].id;
+            self.break_leash(id, true, false);
             self.mobs[index].removed = true;
             if self.creative {
                 if let Some(rest) = self.give(filled) {
@@ -3344,6 +3345,26 @@ impl Game<'_> {
             }
         }
     }
+}
+/// `Bucketable.getBucketItemStack` and `getPickupSound` of a mob that a water
+/// bucket picks up.
+fn bucketable(species: Species) -> Option<(&'static str, &'static str)> {
+    let fish = "minecraft:item.bucket.fill_fish";
+    Some(match species {
+        Species::Cod => ("minecraft:cod_bucket", fish),
+        Species::Salmon => ("minecraft:salmon_bucket", fish),
+        Species::Pufferfish => ("minecraft:pufferfish_bucket", fish),
+        Species::TropicalFish => ("minecraft:tropical_fish_bucket", fish),
+        Species::Tadpole => (
+            "minecraft:tadpole_bucket",
+            "minecraft:item.bucket.fill_tadpole",
+        ),
+        Species::Axolotl => (
+            "minecraft:axolotl_bucket",
+            "minecraft:item.bucket.fill_axolotl",
+        ),
+        _ => return None,
+    })
 }
 /// Mob.getBaseExperienceReward
 /// The damage type id of a Horizon damage kind.
