@@ -89,6 +89,8 @@ impl horizon_client::cushion::World for PlacementWorld<'_, '_> {
             {
                 false
             }
+            // ShulkerBoxBlock: suffocating while closed; a box seen open
+            // here is rare enough to count as closed.
             _ if name.ends_with("shulker_box") => true,
             _ => {
                 facts.full_collision
@@ -234,11 +236,22 @@ impl Game<'_> {
         self.world
             .modified
             .insert((attached[0] >> 4, attached[2] >> 4));
+        // `destroyIfInFire`: placed into fire, it breaks at once.
+        let placed = self.cushions.len() - 1;
+        if self.cushion_in_fire(&self.cushions[placed]) {
+            self.break_cushion(placed, false);
+        }
         self.audio.play(
             "minecraft:entity.cushion.place",
             Some([position.x, position.y, position.z]),
             0.75,
             0.8,
+        );
+        let ctx = self.who_context(Some(horizon_client::mobs::Who::Player), None);
+        self.post_game_event(
+            "minecraft:entity_place",
+            [position.x, position.y, position.z],
+            ctx,
         );
         if !self.creative {
             self.consume_held();
@@ -264,10 +277,9 @@ impl Game<'_> {
                 .lan
                 .as_ref()
                 .is_some_and(|h| h.hub.guests.iter().any(|g| g.vehicle == Some(id)));
-        // `Cushion.interact`: a vehicle it cannot seat returns CONSUME.
+        // `Cushion.interact`: an occupied cushion (`isVehicle`) passes.
         if occupied {
-            self.swing_arm();
-            return true;
+            return false;
         }
         // `Player.startRiding` gives up the vehicle it already has; the
         // client never sends that click, so pass instead.
