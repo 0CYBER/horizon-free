@@ -27,11 +27,19 @@ struct Remote { pending_items: HashMap<i32, ((), Vec3)> }
 #[derive(Default)]
 struct Creatures { projectiles: Vec<Entity> }
 #[derive(Default)]
+struct Potions;
+impl Potions { fn remote_thrown_motion(&mut self, _id: u32, _v: Vec3) -> bool { false } }
+#[derive(Default)]
+struct End;
+impl End { fn remote_eye_motion(&mut self, _id: u32, _v: [f64; 3]) {} }
+#[derive(Default)]
 struct Game {
     mobs: Vec<Entity>, dropped: Vec<Entity>, falling: Vec<Entity>, tnts: Vec<Entity>,
-    creatures: Creatures, remote: Option<Remote>,
+    creatures: Creatures, dragon_fireballs: Vec<Entity>, remote: Option<Remote>,
+    potions: Potions, end: End,
 }
 impl Game {
+fn remote_dragon_motion(&mut self, _id: i32, _velocity: [f64; 3]) {}
 METHOD
 }
 fn main() {
