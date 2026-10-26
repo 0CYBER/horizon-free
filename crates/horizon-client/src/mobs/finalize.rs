@@ -890,6 +890,14 @@ pub fn set_item(m: &mut Mob, slot: usize, id: &str) {
     }
     gear::set(m, gear_slot(slot), Vec::new());
 }
+/// The enchantments on what `m` has in `slot`.
+pub fn slot_enchantments(m: &Mob, slot: usize) -> gear::Levels {
+    gear::gear(m).map_or_else(Vec::new, |g| g.slots[gear_slot(slot)].clone())
+}
+/// Replace the enchantments of what `m` has in `slot` (after `set_item`).
+pub fn set_slot_enchantments(m: &mut Mob, slot: usize, levels: gear::Levels) {
+    gear::set(m, gear_slot(slot), levels);
+}
 /// `Mob.setDropChance`.
 pub fn set_drop_chance(m: &mut Mob, slot: usize, chance: f32) {
     let c = m

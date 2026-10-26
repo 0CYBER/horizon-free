@@ -665,6 +665,8 @@ pub struct Extra {
     pub chested: bool,
     /// The chest contents of a donkey or mule (15 slots).
     pub items: Vec<Option<crate::items::ItemStack>>,
+    /// `Piglin.inventory` (`SimpleContainer(8)`): what it picked up and kept.
+    pub inventory: Vec<crate::items::ItemStack>,
     pub tame: bool,
     pub sitting: bool,
     /// The owner's UUID (tamed animals).

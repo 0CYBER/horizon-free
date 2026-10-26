@@ -15,6 +15,9 @@ use std::f32::consts::PI;
 
 /// `PiglinAi.ADMIRE_DURATION`.
 pub const ADMIRE: i32 = 119;
+/// `PiglinAi.eat`: the `ATE_RECENTLY` memory lasts 200 ticks (kept in
+/// `extra.ints[0]` of a piglin).
+pub const ATE_RECENTLY: i32 = 200;
 /// `AbstractPiglin.CONVERSION_TIME` (and the hoglin's).
 const CONVERSION: i32 = 300;
 
@@ -305,6 +308,9 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         if m.extra.anger == 0 && m.ai.target == Some(Who::Player) && !hostile_to_player(m, w) {
             m.ai.target = None;
         }
+    }
+    if m.species() == Species::Piglin && m.extra.ints[0] > 0 {
+        m.extra.ints[0] -= 1;
     }
     // Admiring disabled after being hit by a player.
     if m.extra.egg_time > 0 {

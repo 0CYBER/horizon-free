@@ -459,6 +459,14 @@ pub fn die(m: &mut Mob, d: &Death, sequences: &mut RandomSequences) -> (Vec<Drop
             out.push(Drop::Item(loot_stack("minecraft:nether_star", 1)));
         }
     }
+    // Piglin.dropCustomDeathLoot: everything in its inventory.
+    if s == Species::Piglin {
+        for stack in m.extra.inventory.drain(..) {
+            let mut item = loot_stack(&stack.item, stack.count as i32);
+            item.damage = stack.damage as i32;
+            out.push(Drop::Item(item));
+        }
+    }
     // dropEquipment: AbstractHorse's inventory, then a chested horse's chest.
     if equine::is_equine(s) {
         for stack in m.extra.items.iter().flatten() {
