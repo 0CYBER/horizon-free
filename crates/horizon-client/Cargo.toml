@@ -18,6 +18,8 @@ horizon-protocol = { path = "../horizon-protocol" }
 horizon-server-files = { path = "../horizon-server-files" }
 # Shader packs: reading them and turning their GLSL into naga modules.
 horizon-shaders = { path = "../horizon-shaders" }
+# Horizon's own shader packs: the format, the stages and the check (docs/shaders.md).
+horizon-shader-api = { path = "../horizon-shader-api" }
 horizon-friends = { path = "../horizon-friends" }
 # Horizon mods: sandboxed WebAssembly components, off unless installed and turned on (docs/mods.md).
 # Their runtime is the `mods` feature.

@@ -152,11 +152,13 @@ pub struct Entry {
 }
 impl Entry {
     /// The running mod has a settings page (capability `ui` set widgets
-    /// with `ui.set-settings`): its row in Options > Mods gains a button.
+    /// with `ui.set-settings`, or `input` registered keys the player may
+    /// bind there): its row in Options > Mods gains a button.
     pub fn has_ui_settings(&self) -> bool {
-        self.run
-            .as_ref()
-            .is_some_and(|r| !r.store.data().ui.settings.is_empty())
+        self.run.as_ref().is_some_and(|r| {
+            let d = r.store.data();
+            !d.ui.settings.is_empty() || !d.input.keys.is_empty()
+        })
     }
 }
 
@@ -564,6 +566,48 @@ impl Mods {
                 d.input.keys.iter().map(move |k| (d.name.as_str(), k))
             })
     }
+    /// Mod `i`'s keys, as it registered them (with the player's choices).
+    pub fn keys_of(&self, i: usize) -> &[ModKey] {
+        self.entries
+            .get(i)
+            .and_then(|e| e.run.as_ref())
+            .map_or(&[], |r| r.store.data().input.keys.as_slice())
+    }
+    /// The keys the player chose (`ui`'s key widget), by mod id: each
+    /// running mod's `name → key`. They replace the defaults registered
+    /// so far and later ones. Keys that aren't keys are skipped.
+    pub fn set_bindings<'a>(&mut self, chosen: impl Fn(&str) -> Vec<(&'a str, &'a str)>) {
+        for e in &mut self.entries {
+            let (Some(m), Some(run)) = (&e.manifest, e.run.as_mut()) else {
+                continue;
+            };
+            let input = &mut run.store.data_mut().input;
+            input.bindings = chosen(&m.id)
+                .into_iter()
+                .filter(|(_, key)| key_ok(key))
+                .map(|(n, k)| (n.to_owned(), k.to_owned()))
+                .collect();
+            for (name, key) in input.bindings.clone() {
+                input.rebind(&name, key);
+            }
+        }
+    }
+    /// The player binds mod `i`'s key `name` to `key` (`key.keyboard.x`,
+    /// `key.mouse.4`, `key.keyboard.unknown` for none). False when the mod
+    /// has no such key or `key` isn't one.
+    pub fn rebind(&mut self, i: usize, name: &str, key: &str) -> bool {
+        let Some(run) = self.entries.get_mut(i).and_then(|e| e.run.as_mut()) else {
+            return false;
+        };
+        let input = &mut run.store.data_mut().input;
+        if !key_ok(key) || !input.keys.iter().any(|k| k.name == name) {
+            return false;
+        }
+        input.bindings.retain(|(n, _)| n != name);
+        input.bindings.push((name.to_owned(), key.to_owned()));
+        input.rebind(name, key.to_owned());
+        true
+    }
     /// The use button went down with `item`: `use-start` to each mod that
     /// claimed it.
     pub fn use_start(&mut self, item: &HeldItem) {
@@ -873,6 +917,9 @@ struct InputState {
     down: Vec<String>,
     /// It holds the mouse wheel.
     wheel: bool,
+    /// The keys the player chose, `name → key`: they win over
+    /// `register-key`'s.
+    bindings: Vec<(String, String)>,
 }
 /// Events kept for `poll`, items claimed and keys, per mod.
 const INPUT_EVENTS: usize = 256;
@@ -893,6 +940,17 @@ fn key_ok(key: &str) -> bool {
 }
 
 impl InputState {
+    /// Key `name` is `key` now; held, it lets go first.
+    fn rebind(&mut self, name: &str, key: String) {
+        let Some(k) = self.keys.iter_mut().find(|k| k.name == name) else {
+            return;
+        };
+        k.key = key;
+        if let Some(i) = self.down.iter().position(|n| n == name) {
+            let name = self.down.swap_remove(i);
+            self.push(InputEvent::KeyUp(name));
+        }
+    }
     fn push(&mut self, event: InputEvent) {
         if self.events.len() == INPUT_EVENTS {
             self.events.pop_front();
@@ -912,6 +970,10 @@ impl input::Host for State {
             ));
         }
         let (name, label) = (clip(name), clip(label));
+        let key = match self.input.bindings.iter().find(|(n, _)| *n == name) {
+            Some((_, chosen)) => chosen.clone(),
+            None => key,
+        };
         if let Some(k) = self.input.keys.iter_mut().find(|k| k.name == name) {
             (k.label, k.key) = (label, key);
             return Ok(());

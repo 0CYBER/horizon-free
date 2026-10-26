@@ -538,6 +538,21 @@ impl Settings {
         }
         f
     }
+    /// These settings with one `options.txt` value changed (`horizon-ctl
+    /// options-set`, as `OptionsFile::set_text` reads it). Horizon's own
+    /// files (graphics, controller, extras, the mod list) aren't in
+    /// `options.txt`, so they stay as they are.
+    pub fn with_option(&self, key: &str, value: &str) -> Result<Self, String> {
+        let mut file = self.to_file();
+        file.set_text(key, value)?;
+        Ok(Self {
+            horizon: self.horizon.clone(),
+            controller: self.controller.clone(),
+            extras: self.extras.clone(),
+            mods: self.mods.clone(),
+            ..Self::from_file(file)
+        })
+    }
     /// The `options.txt` text (Options.save).
     pub fn serialize(&self) -> String {
         self.to_file().serialize()
@@ -591,6 +606,21 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_option_set_keeps_horizon_files() {
+        let mut s = Settings::parse("fov:70\n");
+        s.mods.enabled.insert("zoom".into());
+        s.extras.minimap = true;
+        s.horizon.fog = !s.horizon.fog;
+        s.controller.vibration = !s.controller.vibration;
+        let set = s.with_option("fov", "90").unwrap();
+        assert_eq!(set.fov, 90.0);
+        assert_eq!(set.mods, s.mods);
+        assert_eq!(set.extras, s.extras);
+        assert_eq!(set.horizon, s.horizon);
+        assert_eq!(set.controller, s.controller);
+        assert!(s.with_option("fov", "200").is_err());
+    }
     #[test]
     fn gui_scale_survives_temporary_small_framebuffer() {
         for requested in [0, 1, 2, 6] {

@@ -26,12 +26,13 @@ promise, how something is deprecated and removed, and the tests that keep old mo
 ## What counts as a breaking change
 
 Breaking: removing or renaming anything; changing a type, a default, a unit or a meaning; making something optional
-required; refusing input that was accepted; a new case in a WIT `enum` or `variant` the game sends to mods (an older
-component cannot decode it); a JSON field that changes type.
+required; refusing input that was accepted; any change to a WIT type a function uses, a new `enum` or `variant` case
+included, in either direction (the runtime links a component only when each imported function's types match exactly:
+a mod built before the change no longer loads); a JSON field that changes type.
 
 Not breaking: a new function, interface, capability, command, endpoint, tool or `server.toml` key; a new optional
-argument or JSON field (readers must ignore fields they don't know); a new WIT case the mod *sends* (the game decodes
-every case it ever served); faster, or fixing behaviour to what the reference already says.
+argument or JSON field (readers must ignore fields they don't know); a new WIT function or type (mods built earlier
+don't import it); faster, or fixing behaviour to what the reference already says.
 
 ## Stability levels
 

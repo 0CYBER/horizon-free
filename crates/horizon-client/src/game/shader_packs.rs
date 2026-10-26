@@ -1,5 +1,6 @@
 //! Shader packs, for development until the Shader Packs page exists: `HORIZON_SHADER_PACK=<name>`
-//! runs `shaderpacks/<name>` (a folder or a zip beside `options.txt`) over the world. The
+//! runs `shaderpacks/<name>` (a folder or a zip beside `options.txt`) over the world; Horizon's
+//! own packs go to `game/native_shaders.rs`. The
 //! programs of the current dimension's folder are loaded when the dimension changes (spec 1.2).
 
 use horizon_client::camera::CameraFluid;
@@ -41,15 +42,18 @@ impl Game<'_> {
             Dim::Nether => -1,
             Dim::End => 1,
         };
-        if let Some(renderer) = &mut self.renderer
+        let path = std::env::current_dir()
+            .unwrap_or_default()
+            .join("shaderpacks")
+            .join(&name);
+        if horizon_shader_api::package::is_pack(&path) {
+            // One of Horizon's own packs (game/native_shaders.rs).
+            self.tick_native_shader_pack(&path);
+        } else if let Some(renderer) = &mut self.renderer
             && renderer.shader_pack_dimension() != Some(dimension)
         {
             let name = name.to_string_lossy();
             let started = std::time::Instant::now();
-            let path = std::env::current_dir()
-                .unwrap_or_default()
-                .join("shaderpacks")
-                .join(&*name);
             match Pack::open(&path) {
                 Ok(pack) => {
                     let macros = Macros::standard();

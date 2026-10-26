@@ -46,6 +46,13 @@ pub fn plain_path(path: &str) -> bool {
         })
 }
 
+/// Whether `path` is a pack of this format: a folder holding
+/// `horizon-shaders.toml`, or a `.hshader` file.
+pub fn is_pack(path: &Path) -> bool {
+    path.join(MANIFEST).is_file()
+        || (path.is_file() && path.extension().is_some_and(|e| e == EXTENSION))
+}
+
 impl Pack {
     /// Reads `path`: a `.hshader` file, or a folder (its hidden files and
     /// folders, such as `.git`, are skipped).
