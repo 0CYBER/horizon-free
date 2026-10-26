@@ -634,6 +634,7 @@ impl Game<'_> {
         self.world.light_log = None;
         self.audio.capture = None;
         self.lan_events.clear();
+        self.lan_critical_hits.clear();
         self.streaming.extra.clear();
         if announce {
             self.system_message(Text::translate(
@@ -1162,8 +1163,30 @@ impl Game<'_> {
             self.lan_entity_events.push((id, event, at));
         }
     }
+    /// `ServerPlayer.crit`: this window's emitter, and an animation for the
+    /// attacker's client and observers once the hub is back in place.
+    pub(super) fn critical_hit(
+        &mut self,
+        attacker: Option<u32>,
+        id: i32,
+        feet: [f64; 3],
+        width: f64,
+        height: f64,
+    ) {
+        use horizon_client::particles::{ParticleOptions, ParticleType};
+        self.particles.tracking_emitter(
+            ParticleOptions::simple(ParticleType::Crit),
+            feet,
+            width,
+            height,
+        );
+        if self.audio.capture.is_some() {
+            self.lan_critical_hits.push((attacker, id));
+        }
+    }
     /// Send the tick's level events, sounds and mob animations.
     fn lan_flush_effects(&mut self, host: &mut LanHost) {
+        let critical_hits = std::mem::take(&mut self.lan_critical_hits);
         for (kind, pos, data, acting) in std::mem::take(&mut self.lan_events) {
             if kind == 2001 {
                 host.broken
@@ -1236,6 +1259,14 @@ impl Game<'_> {
             seen.insert(m.id, (m.hurt_time, dead, swing));
         }
         host.mob_state.insert(self.dim, seen);
+        for (attacker, target) in critical_hits {
+            let Some(attacker) = attacker.map_or(Some(host.host_entity), |conn| {
+                host.hub.guest(conn).map(|g| g.entity_id)
+            }) else {
+                continue;
+            };
+            host.hub.critical_hit(attacker, target);
+        }
     }
 
     /// Keep the chunks around every guest loaded.
