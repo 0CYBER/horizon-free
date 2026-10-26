@@ -381,19 +381,22 @@ pub fn pieces(
                 } else {
                     vec!["minecraft:structure_block".into(), "minecraft:air".into()]
                 };
-                EndCityPiece(TemplatePiece::new(
-                    "minecraft:ecp",
-                    &format!("minecraft:end_city/{}", d.name),
-                    d.template,
-                    d.position,
-                    d.rotation,
-                    Mirror::None,
-                    [0; 3],
-                    Arc::new(ProcessorList::default()),
-                    true,
-                    ignore,
-                    TemplateHandler::Plain,
-                ))
+                EndCityPiece(
+                    TemplatePiece::new(
+                        "minecraft:ecp",
+                        &format!("minecraft:end_city/{}", d.name),
+                        d.template,
+                        d.position,
+                        d.rotation,
+                        Mirror::None,
+                        [0; 3],
+                        Arc::new(ProcessorList::default()),
+                        true,
+                        ignore,
+                        TemplateHandler::Plain,
+                    ),
+                    d.depth,
+                )
             })
             .collect(),
     )
@@ -401,10 +404,20 @@ pub fn pieces(
 
 /// EndCityPieces.EndCityPiece.
 #[derive(Debug)]
-pub struct EndCityPiece(TemplatePiece);
+/// The template piece and its genDepth (the collision tag of its batch).
+pub struct EndCityPiece(TemplatePiece, i32);
 impl LegacyPiece for EndCityPiece {
     fn bounding_box(&self) -> BoundingBox {
         self.0.bounding_box
+    }
+    /// `EndCityPiece`: the template piece's tag, `OW` for the pieces that
+    /// overwrite air (only structure blocks ignored).
+    fn save(&self) -> Option<crate::nbt::Compound> {
+        let mut tag = self.0.saved();
+        tag.insert("GD".into(), crate::nbt::Tag::Int(self.1));
+        let overwrite = self.0.ignore.len() == 1;
+        tag.insert("OW".into(), crate::nbt::Tag::Byte(i8::from(overwrite)));
+        Some(tag)
     }
     fn type_name(&self) -> &'static str {
         "minecraft:ecp"

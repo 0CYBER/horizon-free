@@ -183,6 +183,9 @@ pub fn register(m: &mut Mob) {
             if m.species() == Species::Rabbit {
                 super::rabbit::register(m);
             }
+            if m.species() == Species::Turtle {
+                super::turtle::register(m);
+            }
         }
         Family::Inert => {}
         Family::Witch => super::witch::register(m),
@@ -712,6 +715,14 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
             // setAge at the age boundary: refreshDimensions.
             if m.extra.age >= 0 {
                 m.fudge_position_after_size_change(w, bw, bh);
+                // Turtle.ageBoundaryReached: a grown turtle drops a scute.
+                if m.species() == Species::Turtle {
+                    events.push(MobEvent::GiftLoot {
+                        mob: m.id,
+                        table: "minecraft:gameplay/turtle_grow",
+                        at: [m.position.x, m.position.y, m.position.z],
+                    });
+                }
             }
         } else if m.extra.age > 0 {
             m.extra.age -= 1;
@@ -746,7 +757,7 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
     if m.kind.flags.burns_in_day && m.alive() && sun_burn_tick(m, w) && m.extra.head.is_none() {
         m.ignite_for_ticks(160);
     }
-    species_ai_step(m, w, events);
+    species_ai_step(m, w, level_random, events);
 }
 impl Mob {
     /// LivingEntity.isPushable (and the push it takes from `Entity.push(Entity)`):
@@ -944,6 +955,7 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         | Species::Parched
         | Species::WitherSkeleton
         | Species::ZombifiedPiglin => undead::custom_server_ai_step(m, cx),
+        Species::Vindicator => super::illager::vindicator_server_ai_step(m),
         Species::Enderman => super::enderman::custom_server_ai_step(m, cx),
         Species::Blaze => super::nether::blaze_server_ai_step(m, cx),
         Species::ElderGuardian => super::guardian::elder_server_ai_step(m, cx),
@@ -955,7 +967,12 @@ fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         _ => {}
     }
 }
-fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
+fn species_ai_step(
+    m: &mut Mob,
+    w: &MobWorld,
+    level_random: &mut LegacyRandom,
+    events: &mut Vec<MobEvent>,
+) {
     if family(m.species()) == Family::Aquatic {
         aquatic::ai_step(m, w, events);
     }
@@ -988,7 +1005,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         }
         Species::Shulker => {
             super::shulker::tick(m, w, events);
-            super::shulker::ai_step(m, w, events);
+            super::shulker::ai_step(m, w, level_random, events);
         }
         Species::SnowGolem => super::golem::snow_ai_step(m, w, events),
         Species::CopperGolem => super::copper_golem::ai_step(m, w, events),
@@ -999,6 +1016,7 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         }
         Species::Nautilus | Species::ZombieNautilus => super::nautilus::ai_step(m, w, events),
         Species::Chicken => farm::chicken_ai_step(m, w, events),
+        Species::Turtle => super::turtle::ai_step(m, w, events),
         Species::Sheep if m.extra.anim_ticks > 0 => {
             m.extra.anim_ticks -= 1;
         }
@@ -1242,6 +1260,20 @@ pub fn walk_target_value(m: &Mob, w: &MobWorld, p: [i32; 3]) -> f32 {
     if m.species() == Species::Strider {
         return super::strider::walk_target_value(m, w, p);
     }
+    // Hoglin.getWalkTargetValue: nowhere near a repellent, crimson nylium best.
+    if m.species() == Species::Hoglin {
+        let near = m.extra.repellent.is_some_and(|r| {
+            let d = |i: usize| i64::from(r[i] - p[i]);
+            d(0) * d(0) + d(1) * d(1) + d(2) * d(2) < 64
+        });
+        return if near {
+            -1.0
+        } else if w.block_name(p[0], p[1] - 1, p[2]) == "minecraft:crimson_nylium" {
+            10.0
+        } else {
+            0.0
+        };
+    }
     // Bee.getWalkTargetValue: any air block.
     if m.species() == Species::Bee {
         return if w.facts.is_air(w.world.block(p[0], p[1], p[2])) {
@@ -1310,6 +1342,11 @@ pub fn after_hurt(m: &mut Mob, source: &Damage) {
         Species::Warden => super::warden::hurt(m, source),
         Species::Wolf => super::tame::after_hurt(m, source),
         Species::Nautilus | Species::ZombieNautilus => super::nautilus::after_hurt(m, source),
+        Species::Zombie
+        | Species::Husk
+        | Species::Drowned
+        | Species::ZombieVillager
+        | Species::ZombifiedPiglin => super::undead::after_hurt(m, source),
         // NeutralMob: an iron golem hit by the player stays angry a while.
         // PiglinAi.wasHurtBy: drop what is being admired, no admiring for
         // a while after a player's hit, and anger.

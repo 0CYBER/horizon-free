@@ -109,6 +109,8 @@ enum Received {
 pub(super) struct Remote {
     pub session: Session,
     pub brand: String,
+    /// The server announced it runs mods' quiet commands.
+    pub quiet_commands: bool,
     pub(super) builtin: Arc<Builtin>,
     lang: Arc<Language>,
     pub(super) registries: Arc<Dynamic>,
@@ -419,6 +421,7 @@ impl Game<'_> {
         self.remote = Some(Remote {
             session,
             brand: "unknown".into(),
+            quiet_commands: false,
             builtin: Arc::new(builtin),
             lang,
             registries: Arc::new(Dynamic::default()),
@@ -837,6 +840,11 @@ impl Game<'_> {
                 Event::Brand(brand) => {
                     if let Some(remote) = &mut self.remote {
                         remote.brand = brand;
+                    }
+                }
+                Event::QuietCommands => {
+                    if let Some(remote) = &mut self.remote {
+                        remote.quiet_commands = true;
                     }
                 }
                 Event::Reconfigured(registries) => {
@@ -1275,6 +1283,8 @@ impl Game<'_> {
                 value: 1,
                 age: 0,
                 on_ground: false,
+                count: 1,
+                ticks: 0,
             });
         }
         if let Some(t) = mob_type {
@@ -1396,6 +1406,14 @@ impl Game<'_> {
                     Vec3::new(position[0], position[1], position[2]),
                 ) || self.end.move_remote_eye(id as u32, position))
             {
+                return;
+            }
+            // A dragon fireball keeps Entity's NO_OP InterpolationHandler too:
+            // the server's position replaces its own at once.
+            if let Some(b) = self.dragon_fireballs.iter_mut().find(|b| b.id == id as u32) {
+                if path.is_some() {
+                    b.position = Vec3::new(position[0], position[1], position[2]);
+                }
                 return;
             }
             if let Some(p) = r.pending_items.get_mut(&id) {
@@ -1681,19 +1699,30 @@ impl Game<'_> {
                 }
             }
             C::BlockChangedAck(p) => self.end_predictions(p.sequence),
-            // ClientLevel.blockEvent: BlockEntity.triggerEvent (chest lids,
-            // shulker boxes, bells) when the block is still the one it names.
+            // Level.blockEvent on the client level: the block's triggerEvent
+            // runs on the client's copy of whatever is at pos (a piston's
+            // moveBlocks builds the moving block entities it animates, a note
+            // block plays); what it doesn't handle reaches the client copy of
+            // the block entity (chest lids, shulker boxes).
             C::BlockEvent(p) => {
-                let state = self.world.block(p.pos[0], p.pos[1], p.pos[2]);
-                let block = &self.res.facts().get(state).name;
-                let named = self.remote.as_ref().and_then(|r| {
-                    r.builtin
-                        .get("minecraft:block")?
-                        .name(p.block)
-                        .map(str::to_owned)
+                let pos = horizon_core::position::BlockPos::new(p.pos[0], p.pos[1], p.pos[2]);
+                let triggered = self.with_level(|b, level, ticks| {
+                    b.client_block_event(level, ticks, pos, i32::from(p.b0), i32::from(p.b1))
                 });
-                if named.as_deref() == Some(&**block) {
-                    self.block_entity_event(p.pos, i32::from(p.b0), i32::from(p.b1));
+                self.sync_moving_pistons();
+                self.process_level_events()?;
+                if !triggered {
+                    let state = self.world.block(p.pos[0], p.pos[1], p.pos[2]);
+                    let block = &self.res.facts().get(state).name;
+                    let named = self.remote.as_ref().and_then(|r| {
+                        r.builtin
+                            .get("minecraft:block")?
+                            .name(p.block)
+                            .map(str::to_owned)
+                    });
+                    if named.as_deref() == Some(&**block) {
+                        self.block_entity_event(p.pos, i32::from(p.b0), i32::from(p.b1));
+                    }
                 }
             }
             // ClientLevel.levelEvent: LevelEventHandler, as this client's own
@@ -2037,7 +2066,10 @@ impl Game<'_> {
                 {
                     self.add_pickup(super::pickups::Taken::Orb(Box::new(orb)), collector);
                 }
-                self.remove_entity(p.item);
+                // An orb stays: the server may still hold merged ones in it.
+                if !orb {
+                    self.remove_entity(p.item);
+                }
             }
             // ClientPacketListener.handleSetEntityMotion: knockback on this player.
             C::SetEntityMotion(p) if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) => {
@@ -2092,6 +2124,11 @@ impl Game<'_> {
                     && m.species() == horizon_client::mobs::Species::Rabbit
                 {
                     horizon_client::mobs::rabbit::hop_event(m);
+                }
+                if p.event == 19
+                    && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
+                {
+                    horizon_client::mobs::aquatic::squid_cycle_event(m);
                 }
                 // EntityEvent.DEATH: start the death animation.
                 if p.event == 3
@@ -2967,7 +3004,10 @@ impl Game<'_> {
     fn remote_motion(&mut self, id: i32, velocity: [f64; 3]) {
         self.remote_dragon_motion(id, velocity);
         let v = Vec3::new(velocity[0], velocity[1], velocity[2]);
-        if let Some(d) = self.dropped.iter_mut().find(|d| d.id == id as u32) {
+        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id as u32) {
+            // Squid.aiStep derives its body pitch and roll from network motion.
+            m.velocity = v;
+        } else if let Some(d) = self.dropped.iter_mut().find(|d| d.id == id as u32) {
             d.velocity = v;
         } else if let Some(f) = self.falling.iter_mut().find(|f| f.id == id as u32) {
             f.velocity = v;
@@ -2980,6 +3020,8 @@ impl Game<'_> {
             .find(|p| p.id == id as u32)
         {
             p.velocity = v;
+        } else if let Some(b) = self.dragon_fireballs.iter_mut().find(|b| b.id == id as u32) {
+            b.velocity = v;
         } else if let Some(p) = self
             .remote
             .as_mut()
@@ -3137,8 +3179,14 @@ impl Game<'_> {
         self.border.tick();
         self.player_border();
         self.tick_remote_entities(running);
-        // ClientLevel.tickBlockEntities: chest lids, shulker boxes, bells.
+        // ClientLevel.tickBlockEntities: chest lids, shulker boxes, bells,
+        // and the moving pistons a block event's client-side moveBlocks made
+        // (their progress advances between the server's block updates).
         self.tick_block_entity_anims();
+        self.with_level(|b, level, ticks| {
+            b.client_tick_block_entities(level, ticks);
+        });
+        self.sync_moving_pistons();
         self.tick_hand();
         self.tick_particles();
         self.tick_client_ambient();
@@ -3463,6 +3511,13 @@ impl Game<'_> {
             if m.species() == horizon_client::mobs::Species::Creeper {
                 horizon_client::mobs::hostile::creeper_client_tick(m);
             }
+            if matches!(
+                m.species(),
+                horizon_client::mobs::Species::Guardian
+                    | horizon_client::mobs::Species::ElderGuardian
+            ) {
+                horizon_client::mobs::guardian::client_tick(m);
+            }
             if m.hurt_time > 0 {
                 m.hurt_time -= 1;
             }
@@ -3522,6 +3577,8 @@ impl Game<'_> {
             } else if m.alive() {
                 m.body_rotation_tick();
             }
+            // Squid.aiStep follows LivingEntity's interpolation and head turn.
+            horizon_client::mobs::aquatic::squid_client_step(m);
             // WalkAnimationState.update from the horizontal distance moved.
             let (dx, dz) = (m.position.x - m.previous.x, m.position.z - m.previous.z);
             let target = (((dx * dx + dz * dz).sqrt() * 4.0) as f32).min(1.0);
@@ -3735,6 +3792,15 @@ impl Game<'_> {
 
     /// MultiPlayerGameMode.startDestroyBlock / continueDestroyBlock.
     fn remote_mining(&mut self, start: bool) {
+        if !self
+            .res
+            .items()
+            .can_destroy_block(self.held(), self.creative)
+        {
+            self.stop_remote_mining();
+            self.mining = None;
+            return;
+        }
         let Some(r) = self.remote.as_mut() else {
             return;
         };
@@ -3991,15 +4057,11 @@ impl Game<'_> {
                 world_border: false,
                 sequence: seq,
             }));
-            let target = [
-                hit.pos[0] + hit.face[0],
-                hit.pos[1] + hit.face[1],
-                hit.pos[2] + hit.face[2],
-            ];
-            let ticks = self.ticks;
+            // Only a predicted placement (predict_place) marks a cell whose
+            // resend plays a place sound: an empty hand or a non-block item
+            // places nothing (BlockItem.place is where the sound comes from).
             if let Some(r) = self.remote.as_mut() {
                 r.use_target = Some(hit.pos);
-                r.placing = Some((target, ticks));
             }
             if reacts {
                 self.predict_use(&changes, seq);
@@ -4869,16 +4931,20 @@ impl Game<'_> {
         if self.open_menu_name(p.container) != "minecraft:merchant" {
             return;
         }
-        let cost = |g: &Self, c: &play::NetCost| horizon_client::merchant::ItemCost {
-            stack: ItemStack::new(&g.item_name(c.item), c.count.max(0) as u32),
+        let cost = |g: &Self, c: &play::NetCost| {
+            g.to_stack(&Some(c.clone().into()))
+                .map(|stack| horizon_client::merchant::ItemCost { stack })
         };
         let offers: Vec<_> = p
             .offers
             .iter()
             .filter_map(|o| {
                 let mut offer = horizon_client::merchant::MerchantOffer {
-                    base_cost_a: cost(self, &o.cost_a),
-                    cost_b: o.cost_b.as_ref().map(|b| cost(self, b)),
+                    base_cost_a: cost(self, &o.cost_a)?,
+                    cost_b: match &o.cost_b {
+                        Some(b) => Some(cost(self, b)?),
+                        None => None,
+                    },
                     result: self.to_stack(&Some(o.result.clone()))?,
                     uses: o.uses,
                     max_uses: o.max_uses,

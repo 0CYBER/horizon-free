@@ -111,6 +111,12 @@ pub enum HealthEvent {
         amount: f32,
     },
     Phase(&'static str),
+    /// `Player.hurtArmor`: a hit that doesn't bypass armor wears the worn
+    /// pieces (`LivingEntity.getDamageAfterArmorAbsorb`); the game applies it.
+    ArmorHurt {
+        source: DamageTypeId,
+        amount: f32,
+    },
     /// `ServerLevel.broadcastDamageEvent`: the client's
     /// `LivingEntity.handleDamageEvent` plays the source's hurt sound.
     DamageBroadcast {
@@ -139,6 +145,7 @@ impl HealthEvent {
                 format!("record-damage {:08x}", amount.to_bits())
             }
             Self::Phase(name) => name.into(),
+            Self::ArmorHurt { amount, .. } => format!("hurt-armor {:08x}", amount.to_bits()),
             Self::DamageBroadcast { .. } => "broadcast-damage".into(),
             Self::Criterion { .. } => "hurt-criterion".into(),
         }
@@ -296,6 +303,20 @@ impl PlayerMotion {
         amount: f32,
         blocking: Option<Blocking>,
     ) -> Result<BlockOutcome> {
+        self.hurt_caused_by(resources, rules, source, amount, blocking, false)
+    }
+    /// `hurt_blocking` from a source whose causing entity is a living
+    /// non-player (`living_cause`), which the `when_caused_by_living_non_player`
+    /// damage types scale with the difficulty.
+    pub fn hurt_caused_by(
+        &mut self,
+        resources: &HealthResources,
+        rules: HealthRules,
+        source: DamageTypeId,
+        amount: f32,
+        blocking: Option<Blocking>,
+        living_cause: bool,
+    ) -> Result<BlockOutcome> {
         if self.client_side {
             return Ok(BlockOutcome::default());
         }
@@ -315,6 +336,7 @@ impl PlayerMotion {
             invulnerable,
             rules,
             source,
+            living_cause,
             events: &mut self.events,
             dead: &mut h.dead,
             sync_velocity: &mut h.sync_velocity,
@@ -390,6 +412,8 @@ pub(crate) struct Environment<'a> {
     pub(crate) invulnerable: bool,
     pub(crate) rules: HealthRules,
     pub(crate) source: DamageSource<'a, ()>,
+    /// The causing entity is a living non-player (a mob, or its projectile's owner).
+    pub(crate) living_cause: bool,
     pub(crate) events: &'a mut Vec<MotionEvent>,
     pub(crate) dead: &'a mut bool,
     pub(crate) sync_velocity: &'a mut bool,
@@ -517,9 +541,14 @@ impl ServerDamageEnvironment<Attributes> for Environment<'_> {
     fn bypasses(&mut self, kind: Bypass) -> io::Result<bool> {
         Ok(self.source.bypasses(kind))
     }
-    fn hurt_armor(&mut self, _: &mut Attributes, _: f32) -> io::Result<()> {
+    fn hurt_armor(&mut self, _: &mut Attributes, damage: f32) -> io::Result<()> {
+        // The worn armor lives in the game, which wears it from this event.
+        self.event(HealthEvent::ArmorHurt {
+            source: self.source.type_id(),
+            amount: damage,
+        });
         Ok(())
-    } // empty equipment
+    }
     fn has_resistance(&mut self) -> io::Result<bool> {
         Ok(self.status.resistance.is_some())
     }
@@ -773,8 +802,13 @@ impl PlayerHurtWorld for Environment<'_> {
         Ok(())
     }
     fn scales_with_difficulty(&mut self, _: &mut State) -> io::Result<bool> {
-        Ok(self.source.definition().scaling == Scaling::Always)
-    } // no causing entity
+        // DamageSource.scalesWithDifficulty.
+        Ok(match self.source.definition().scaling {
+            Scaling::Never => false,
+            Scaling::Always => true,
+            Scaling::LivingNonPlayer => self.living_cause,
+        })
+    }
     fn difficulty(&mut self, _: &mut State) -> io::Result<Difficulty> {
         Ok(self.rules.difficulty)
     }
