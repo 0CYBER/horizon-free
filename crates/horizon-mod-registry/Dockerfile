@@ -12,5 +12,7 @@ RUN cargo build --release --locked --manifest-path crates/horizon-mod-registry/C
 FROM debian:stable-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/crates/horizon-mod-registry/target/release/horizon-mod-registry /usr/local/bin/
-USER nobody
-CMD ["horizon-mod-registry"]
+ENV REGISTRY_DB=/data/registry.sqlite3
+# Railway mounts the ratings' volume at /data owned by root: hand it to nobody, then run as nobody (setpriv is
+# util-linux's, in every Debian image).
+CMD ["sh", "-c", "mkdir -p /data && chown nobody:nogroup /data && exec setpriv --reuid=nobody --regid=nogroup --clear-groups horizon-mod-registry"]

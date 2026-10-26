@@ -31,6 +31,10 @@ pub(super) struct CombatTracker {
     /// The mob exploding now (`ServerExplosion.source`): its team's friendly
     /// fire decides whom the blast may hurt.
     pub(super) explosion_source: Option<u32>,
+    /// Charged creepers whose blast just went off and that have not dropped
+    /// a head yet (`Creeper.droppedSkulls`): they are gone from the mob list,
+    /// but the mobs they killed still ask for their loot.
+    pub(super) charged_exploders: Vec<u32>,
     /// The player's fall distance before this tick's movement (as of the
     /// end of the last one).
     fall_before: f64,

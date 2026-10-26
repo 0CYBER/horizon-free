@@ -81,16 +81,28 @@ impl Game<'_> {
         };
         bite(self);
         self.each_guest_hit(bite);
+        // `AbstractIllager.considersEntityAsAlly`: with no teams, the illager
+        // tag is allied; `Evoker.considersEntityAsAlly` adds a vex whose
+        // owner is allied (itself or another illager). Teams are not modelled.
+        let illager = |s: Species| {
+            matches!(
+                s,
+                Species::Evoker | Species::Illusioner | Species::Pillager | Species::Vindicator
+            )
+        };
+        let illagers: Vec<u32> = self
+            .mobs
+            .iter()
+            .filter(|m| illager(m.species()))
+            .map(|m| m.id)
+            .collect();
+        // A missing owner hurts everyone (`currentOwner == null`).
+        let owner_known = illagers.contains(&f.owner);
         for m in &mut self.mobs {
-            let ally = matches!(
-                m.species(),
-                Species::Evoker
-                    | Species::Illusioner
-                    | Species::Vex
-                    | Species::Pillager
-                    | Species::Vindicator
-                    | Species::Witch
-            );
+            let ally = owner_known
+                && (illager(m.species())
+                    || m.species() == Species::Vex
+                        && illagers.contains(&(m.extra.counter2 as u32)));
             if m.id != f.owner && !ally && m.alive() && m.bounds().intersects(b) {
                 m.damage(
                     6.0,

@@ -590,6 +590,14 @@ pub fn has_modifier(m: &Mob, a: Attr, id: &str) -> bool {
         .as_ref()
         .is_some_and(|s| s.modifiers.iter().any(|x| x.attr == a && x.id == id))
 }
+/// The amount of a permanent modifier, if the mob has it.
+pub fn modifier_amount(m: &Mob, a: Attr, id: &str) -> Option<f64> {
+    m.extra
+        .attributes
+        .as_ref()
+        .and_then(|s| s.modifiers.iter().find(|x| x.attr == a && x.id == id))
+        .map(|x| x.amount)
+}
 /// `addOrReplacePermanentModifier`.
 pub fn add_modifier(m: &mut Mob, a: Attr, id: &'static str, amount: f64, op: Op) {
     let s = m.extra.attributes.get_or_insert_with(Box::default);
@@ -604,6 +612,59 @@ pub fn add_modifier(m: &mut Mob, a: Attr, id: &'static str, amount: f64, op: Op)
         None => s.modifiers.push(new),
     }
     refresh(m, a);
+}
+/// `Zombie.handleAttributes`, from the zombie's own random.
+pub fn zombie_attributes(m: &mut Mob, special: f32, reason: Reason) {
+    let r = &mut m.random;
+    let reinforcements = if m.kind.species == Species::ZombifiedPiglin {
+        0.0
+    } else {
+        r.next_double() * f64::from(0.1f32)
+    };
+    let knockback = r.next_double() * f64::from(0.05f32);
+    let follow = r.next_double() * 1.5 * f64::from(special);
+    let leader = r.next_float() < special * 0.05;
+    let leader_rolls = leader.then(|| (r.next_double() * 0.25 + 0.5, r.next_double() * 3.0 + 1.0));
+    set_base(m, Attr::SpawnReinforcements, reinforcements);
+    add_modifier(
+        m,
+        Attr::KnockbackResistance,
+        "minecraft:random_spawn_bonus",
+        knockback,
+        Op::AddValue,
+    );
+    if follow > 1.0 {
+        add_modifier(
+            m,
+            Attr::FollowRange,
+            "minecraft:zombie_random_spawn_bonus",
+            follow,
+            Op::AddMultipliedTotal,
+        );
+    }
+    if let Some((reinforce, health)) = leader_rolls {
+        add_modifier(
+            m,
+            Attr::SpawnReinforcements,
+            "minecraft:leader_zombie_bonus",
+            reinforce,
+            Op::AddValue,
+        );
+        add_modifier(
+            m,
+            Attr::MaxHealth,
+            "minecraft:leader_zombie_bonus",
+            health,
+            Op::AddMultipliedTotal,
+        );
+        if !matches!(
+            reason,
+            Reason::Conversion | Reason::Load | Reason::DimensionTravel
+        ) {
+            m.health = max_health(m);
+        }
+        m.extra.can_break_doors = true;
+    }
 }
 pub fn max_health(m: &Mob) -> f32 {
     value(m, Attr::MaxHealth) as f32
@@ -828,6 +889,14 @@ pub fn set_item(m: &mut Mob, slot: usize, id: &str) {
         _ => return,
     }
     gear::set(m, gear_slot(slot), Vec::new());
+}
+/// The enchantments on what `m` has in `slot`.
+pub fn slot_enchantments(m: &Mob, slot: usize) -> gear::Levels {
+    gear::gear(m).map_or_else(Vec::new, |g| g.slots[gear_slot(slot)].clone())
+}
+/// Replace the enchantments of what `m` has in `slot` (after `set_item`).
+pub fn set_slot_enchantments(m: &mut Mob, slot: usize, levels: gear::Levels) {
+    gear::set(m, gear_slot(slot), levels);
 }
 /// `Mob.setDropChance`.
 pub fn set_drop_chance(m: &mut Mob, slot: usize, chance: f32) {
@@ -1151,62 +1220,8 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
             }
         }
         self.halloween(m);
-        self.zombie_attributes(m, special, reason);
+        zombie_attributes(m, special, reason);
         g
-    }
-    /// `Zombie.handleAttributes`, from the zombie's own random.
-    fn zombie_attributes(&mut self, m: &mut Mob, special: f32, reason: Reason) {
-        let r = &mut m.random;
-        let reinforcements = if m.kind.species == Species::ZombifiedPiglin {
-            0.0
-        } else {
-            r.next_double() * f64::from(0.1f32)
-        };
-        let knockback = r.next_double() * f64::from(0.05f32);
-        let follow = r.next_double() * 1.5 * f64::from(special);
-        let leader = r.next_float() < special * 0.05;
-        let leader_rolls =
-            leader.then(|| (r.next_double() * 0.25 + 0.5, r.next_double() * 3.0 + 1.0));
-        set_base(m, Attr::SpawnReinforcements, reinforcements);
-        add_modifier(
-            m,
-            Attr::KnockbackResistance,
-            "minecraft:random_spawn_bonus",
-            knockback,
-            Op::AddValue,
-        );
-        if follow > 1.0 {
-            add_modifier(
-                m,
-                Attr::FollowRange,
-                "minecraft:zombie_random_spawn_bonus",
-                follow,
-                Op::AddMultipliedTotal,
-            );
-        }
-        if let Some((reinforce, health)) = leader_rolls {
-            add_modifier(
-                m,
-                Attr::SpawnReinforcements,
-                "minecraft:leader_zombie_bonus",
-                reinforce,
-                Op::AddValue,
-            );
-            add_modifier(
-                m,
-                Attr::MaxHealth,
-                "minecraft:leader_zombie_bonus",
-                health,
-                Op::AddMultipliedTotal,
-            );
-            if !matches!(
-                reason,
-                Reason::Conversion | Reason::Load | Reason::DimensionTravel
-            ) {
-                m.health = max_health(m);
-            }
-            m.extra.can_break_doors = true;
-        }
     }
     fn husk(&mut self, m: &mut Mob, g: Option<Group>, reason: Reason) -> Option<Group> {
         let mut g = self.zombie(m, g, reason);

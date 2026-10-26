@@ -1111,8 +1111,9 @@ impl SubtitleOverlay {
                 s.purge_old_instances(3000.0 * frame.multiplier, now);
             }
             if s.audible_from(position) && !s.played.is_empty() {
-                width = width.max(width_of(&Text::translate(&s.key, &[])));
-                audible.push(i);
+                let text_width = width_of(&Text::translate(&s.key, &[]));
+                width = width.max(text_width);
+                audible.push((i, text_width));
             }
         }
         if audible.is_empty() {
@@ -1121,7 +1122,7 @@ impl SubtitleOverlay {
         let w = |s: &str| font.width(s) as i32;
         width += w("<") + w(" ") + w(">") + w(" ");
         let mut row = 0;
-        for i in audible {
+        for (i, text_width) in audible {
             let s = &self.subtitles[i];
             let text_value = Text::translate(&s.key, &[]);
             let Some(closest) = s.best_candidate(position) else {
@@ -1145,7 +1146,6 @@ impl SubtitleOverlay {
             let half_width = width / 2;
             let height = 9;
             let half_height = height / 2;
-            let text_width = width_of(&text_value);
             let brightness = s.brightness(closest, frame.multiplier, now);
             out.push(GuiDraw::Push(vec![
                 PoseOp::Translate(

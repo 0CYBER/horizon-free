@@ -259,23 +259,26 @@ impl Game<'_> {
             let _ = self.wind_burst(feet, radius, knockback, false, false);
         }
     }
-    /// Thorns on worn armor when a mob at `from` hits the player.
-    pub(super) fn thorns(&mut self, from: [f64; 3]) {
-        let attacker = self
-            .mobs
-            .iter()
-            .enumerate()
-            .filter(|(_, m)| m.alive())
-            .min_by(|a, b| {
-                let d = |m: &horizon_client::mobs::Mob| {
-                    (m.position.x - from[0]).powi(2)
-                        + (m.position.y - from[1]).powi(2)
-                        + (m.position.z - from[2]).powi(2)
-                };
-                d(a.1).total_cmp(&d(b.1))
-            })
-            .map(|(i, _)| i);
-        let Some(attacker) = attacker else { return };
+    /// Thorns on worn armor when the mob `attacker` hits the player: the
+    /// `affected: attacker` effect of `Enchantment.doPostAttack` hurts the
+    /// entity that caused the hit.
+    pub(super) fn thorns(&mut self, attacker: u32) {
+        let Some(index) = self.mobs.iter().position(|m| m.id == attacker && m.alive()) else {
+            return;
+        };
+        for damage in self.thorns_damage() {
+            let m = &mut self.mobs[index];
+            m.hurt(damage, None, &mut self.world.random);
+            let center = [m.position.x, m.position.y, m.position.z];
+            self.audio
+                .play("minecraft:enchant.thorns.hit", Some(center), 1.0, 1.0);
+        }
+    }
+    /// The victim's side of thorns: for each worn piece whose chance comes up,
+    /// the damage to deal the attacker (`DamageEntity` min 1, max 5) and the
+    /// piece's wear (`ChangeItemDamage` 2).
+    pub(super) fn thorns_damage(&mut self) -> Vec<f32> {
+        let mut hits = Vec::new();
         for slot in 0..4 {
             let Some(stack) = self.armor[slot].clone() else {
                 continue;
@@ -303,15 +306,7 @@ impl Game<'_> {
             if !ok {
                 continue;
             }
-            // DamageEntity(min 1, max 5) and ChangeItemDamage(2).
-            let damage = 1.0 + self.world.random.next_float() * 4.0;
-            let center = {
-                let m = &mut self.mobs[attacker];
-                m.hurt(damage, None, &mut self.world.random);
-                [m.position.x, m.position.y, m.position.z]
-            };
-            self.audio
-                .play("minecraft:enchant.thorns.hit", Some(center), 1.0, 1.0);
+            hits.push(1.0 + self.world.random.next_float() * 4.0);
             if let Some(s) = self.armor[slot].as_mut() {
                 s.damage += 2;
                 if self
@@ -324,6 +319,7 @@ impl Game<'_> {
                 }
             }
         }
+        hits
     }
     /// `ExperienceOrb.repairPlayerItems`: returns the experience left over.
     pub(super) fn mending(&mut self, amount: u32) -> u32 {
@@ -392,7 +388,9 @@ impl Game<'_> {
         }
     }
     /// Bow enchantments at release: (extra base damage, infinity keeps the arrow).
-    pub(super) fn bow_enchantments(&mut self) -> (f64, bool) {
+    /// `ammo` is the item being fired: `Enchantment.itemContext` hands it to the
+    /// `ammo_use` conditions as the tool, so Infinity only frees plain arrows.
+    pub(super) fn bow_enchantments(&mut self, ammo: &str) -> (f64, bool) {
         let Some(bow) = self.inventory[self.selected].clone() else {
             return (0.0, false);
         };
@@ -411,7 +409,7 @@ impl Game<'_> {
             0.0,
         );
         let ammo_ctx = EffectContext {
-            tool: Some("minecraft:arrow"),
+            tool: Some(ammo),
             items: Some(self.res.items()),
             ..Default::default()
         };

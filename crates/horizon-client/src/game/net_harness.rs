@@ -3,7 +3,10 @@
 //! window, waits until it stands in the world with the chunks around it,
 //! sends a chat message and `/list`, collects the chat it is shown, leaves
 //! and writes a JSON report (position, chunks, chat lines, whether the
-//! server kept it connected throughout).
+//! server kept it connected throughout). With `HORIZON_NET_QUIET` (lines
+//! split by `;`) it then sends them as one batch of a mod's quiet commands
+//! (`horizon_protocol::quiet`, `tools/quiet_commands_e2e.py`) and waits two
+//! seconds for any chat they bring.
 use super::Game;
 use horizon_client::Result;
 use serde_json::json;
@@ -23,6 +26,9 @@ impl Game<'_> {
         let mut step_at = Instant::now();
         let mut chat_at = 0;
         let mut position = None;
+        let quiet: Vec<String> = std::env::var("HORIZON_NET_QUIET")
+            .map(|v| v.split(';').map(str::to_owned).collect())
+            .unwrap_or_default();
         let mut chunks = 0;
         let mut error = None;
         while Instant::now() < deadline {
@@ -70,6 +76,22 @@ impl Game<'_> {
                     step = 2;
                     step_at = now;
                     chat_at = shown;
+                }
+                2 if answered && !quiet.is_empty() => {
+                    for data in horizon_protocol::quiet::encode("net_harness", &quiet) {
+                        self.send(horizon_protocol::packets::play::Serverbound::CustomPayload(
+                            horizon_protocol::packets::configuration::CustomPayload {
+                                channel: horizon_protocol::quiet::CHANNEL.into(),
+                                data,
+                            },
+                        ));
+                    }
+                    step = 4;
+                    step_at = now;
+                }
+                4 if now - step_at > Duration::from_secs(2) => {
+                    step = 3;
+                    break;
                 }
                 2 if answered => {
                     step = 3;

@@ -159,8 +159,10 @@ impl Containers<'_> {
             });
         }
         let entity = self.world.block_entities.get(&pos)?;
-        // A beehive keeps bees, not items: it is no `Container`.
-        if matches!(entity, BlockEntity::Beehive(_)) {
+        // A beehive keeps bees, not items, and a campfire cooks its own: neither
+        // is a `Container` (HopperBlockEntity.getContainerAt), so a dropper drops
+        // in front of them and a hopper leaves them alone.
+        if matches!(entity, BlockEntity::Beehive(_) | BlockEntity::Campfire(_)) {
             return None;
         }
         let kind = match (entity, name) {

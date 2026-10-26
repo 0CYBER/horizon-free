@@ -10,7 +10,9 @@ from tools import test_rust_parity as parity
 class ParityRunnerTests(unittest.TestCase):
     def test_report_rejects_sources_changed_during_a_run(self):
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
+            # Resolved, as source_hashes resolves the sources: macOS's temp folder is a symlink
+            # (/var -> /private/var).
+            root = Path(temp).resolve()
             source = root / "source.rs"
             source.write_text("before")
             with mock.patch.object(parity.lab, "ROOT", root):

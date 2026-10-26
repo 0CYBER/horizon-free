@@ -264,6 +264,18 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
         S::Slime | S::MagmaCube => super::cube::finalize(m),
         _ => {}
     }
+    // Zombie.finalizeSpawn ends with handleAttributes: the reinforcement
+    // chance (and a leader's bonus) that `Zombie.hurtServer` reads.
+    if matches!(
+        m.species(),
+        S::Zombie | S::Husk | S::Drowned | S::ZombieVillager | S::ZombifiedPiglin
+    ) {
+        super::finalize::zombie_attributes(
+            m,
+            difficulty.special(),
+            super::finalize::Reason::Natural,
+        );
+    }
 }
 /// VillagerType.byBiome
 pub fn villager_type(b: &BiomeFacts) -> u8 {
