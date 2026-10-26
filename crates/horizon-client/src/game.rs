@@ -7212,7 +7212,12 @@ impl Game<'_> {
         self.see_through_vertices = see_through;
         // Entity shadows (EntityRenderer.extractShadow).
         self.mark_translucent_entity(out.len(), "minecraft:entity_shadow");
-        if let Some(sprite) = self.gui.atlas.sprites.get("misc/shadow").copied() {
+        let shadow_sprite = self
+            .settings
+            .entity_shadows
+            .then(|| self.gui.atlas.sprites.get("misc/shadow").copied())
+            .flatten();
+        if let Some(sprite) = shadow_sprite {
             let ambient = if self.dim == Dim::Nether { 0.1 } else { 0.0 };
             let darken = self.sky_darken();
             let a = alpha;
