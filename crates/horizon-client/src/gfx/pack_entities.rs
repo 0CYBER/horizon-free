@@ -161,8 +161,12 @@ pub(super) struct Draw {
     /// The first vertex.
     pub base: u32,
     pub quads: u32,
-    /// The program that draws it (`ENTITY`, `BLOCK`, `TRANSLUCENT`, `PARTICLE`).
+    /// The kind of program that draws it (`ENTITY`, `BLOCK`, `TRANSLUCENT`, `PARTICLE`).
     pub program: usize,
+    /// The pack's gbuffers program draws it (else Horizon does).
+    pub pack: bool,
+    /// The pack's shadow program draws it into the shadow map too.
+    pub shadow: bool,
     pub slot: u32,
 }
 
@@ -280,7 +284,8 @@ impl PackEntities {
 
     /// Splits `entities` between the pack, which draws the runs of `spans` its programs cover
     /// (`drawn`: whether it has `gbuffers_entities`, `gbuffers_block` or their fallbacks), and
-    /// Horizon, which draws the rest (`rest`). Uploads the pack's part.
+    /// Horizon, which draws the rest (`rest`). Uploads the pack's part, and the runs its shadow
+    /// programs draw (`shadow`: entities, block entities).
     #[allow(clippy::too_many_arguments)]
     pub fn prepare(
         &mut self,
@@ -290,6 +295,7 @@ impl PackEntities {
         entities: &[Vertex],
         spans: &[EntitySpan],
         drawn: [bool; PROGRAMS],
+        shadow: [bool; 2],
         rest: &mut Vec<Vertex>,
     ) {
         self.draws.clear();
@@ -300,13 +306,15 @@ impl PackEntities {
         rest.extend_from_slice(&entities[..first.min(entities.len())]);
         for (span, range) in runs(entities.len(), spans) {
             let run = &entities[range];
-            let Some(program) = drawn_by_pack(&span, drawn).filter(|_| plain(run)) else {
+            let program = program_of(&span).filter(|_| plain(run));
+            let pack = program.is_some_and(|p| drawn[p]);
+            let casts = program.is_some_and(|p| shadow.get(p).copied().unwrap_or(false));
+            if !pack {
                 rest.extend_from_slice(run);
+            }
+            let Some(program) = program.filter(|_| (pack || casts) && !run.is_empty()) else {
                 continue;
             };
-            if run.is_empty() {
-                continue;
-            }
             let start = self.scratch.len() as u32;
             self.scratch.extend_from_slice(run);
             let (entity_id, block_id) = match program {
@@ -327,6 +335,8 @@ impl PackEntities {
                 base: start,
                 quads: run.len() as u32 / 4,
                 program,
+                pack,
+                shadow: casts,
                 slot: self.draws.len() as u32,
             });
         }
@@ -388,8 +398,14 @@ pub const PROGRAMS: usize = 4;
 
 /// Which program draws `span`'s run, given which of them (or their fallbacks) the pack has;
 /// `None`: Horizon draws it.
-pub fn drawn_by_pack(span: &EntitySpan, drawn: [bool; PROGRAMS]) -> Option<usize> {
-    let program = if span.stage == render_stage("ENTITIES") {
+#[cfg(test)]
+fn drawn_by_pack(span: &EntitySpan, drawn: [bool; PROGRAMS]) -> Option<usize> {
+    program_of(span).filter(|&p| drawn[p])
+}
+
+/// The kind of program that draws `span`'s run, when a pack may.
+pub fn program_of(span: &EntitySpan) -> Option<usize> {
+    Some(if span.stage == render_stage("ENTITIES") {
         if span.translucent {
             TRANSLUCENT
         } else {
@@ -401,8 +417,7 @@ pub fn drawn_by_pack(span: &EntitySpan, drawn: [bool; PROGRAMS]) -> Option<usize
         PARTICLE
     } else {
         return None;
-    };
-    drawn[program].then_some(program)
+    })
 }
 
 /// Each span with its vertex range: from its start to the next span's (or the end).

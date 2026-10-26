@@ -147,6 +147,15 @@ struct Entities {
     geometry: PackEntities,
     passes: [Option<Pass>; PROGRAMS],
     late: [bool; PROGRAMS],
+    /// What draws entities and block entities into the shadow map (2.4).
+    shadow: [Option<Pass>; 2],
+}
+
+impl Entities {
+    /// Whether a gbuffers program draws some of them (else only the shadow pass does).
+    fn drawn(&self) -> bool {
+        self.passes.iter().any(Option::is_some)
+    }
 }
 
 #[derive(Clone)]
@@ -1077,8 +1086,8 @@ impl PackPost {
             post.particles,
         ];
         let late = [false, false, post.translucent_late, post.particles_late];
-        let entity_vertices = programs
-            .iter()
+        let shadow_programs = [post.shadow_entities, post.shadow_block];
+        let entity_vertices = (programs.iter().chain(&shadow_programs))
             .any(Option::is_some)
             .then(|| PackEntities::new(device, &draws.layout));
         let entity_buffers = super::pack_entities::buffers();
@@ -1094,12 +1103,17 @@ impl PackPost {
             p.zip(entity_geometry.as_ref())
                 .and_then(|(p, g)| build(p, Some(g)))
         });
+        let shadow_entities = shadow_programs.map(|p| {
+            p.zip(entity_geometry.as_ref())
+                .and_then(|(p, g)| build(p, Some(g)))
+        });
         let entities = entity_vertices
-            .filter(|_| entity_passes.iter().any(Option::is_some))
+            .filter(|_| (entity_passes.iter().chain(&shadow_entities)).any(Option::is_some))
             .map(|geometry| Entities {
                 geometry,
                 passes: entity_passes,
                 late,
+                shadow: shadow_entities,
             });
         let cloud_geometry = world.clouds.map(|layout| Geometry {
             buffers: &entity_buffers,
@@ -1204,6 +1218,15 @@ impl PackPost {
                 notes.push(format!("{part} draw with {}", p.name));
             }
         }
+        // Timed (and labelled) apart from the terrain's shadow pass, which may run the same
+        // program.
+        let mut entities = entities;
+        for (part, pass) in (entities.iter_mut()).flat_map(|e| parts.iter().zip(&mut e.shadow)) {
+            if let Some(p) = pass {
+                notes.push(format!("{part} cast shadows with {}", p.name));
+                p.name.push_str(&format!(" ({part})"));
+            }
+        }
         let depth1 = water.is_some()
             && passes
                 .iter()
@@ -1220,6 +1243,7 @@ impl PackPost {
             .chain(shadow_terrain.iter().chain(&shadow_water))
             .chain(sky.iter().flat_map(|s| s.basic.iter().chain(&s.textured)))
             .chain(entities.iter().flat_map(|e| e.passes.iter().flatten()))
+            .chain(entities.iter().flat_map(|e| e.shadow.iter().flatten()))
             .chain(&clouds)
             .chain(weather.iter().flatten())
             .chain(hand.iter().map(|h| &h.0))
@@ -1277,7 +1301,7 @@ impl PackPost {
         let blit_depth = terrain.is_some()
             || water.is_some()
             || sky.is_some()
-            || entities.is_some()
+            || entities.as_ref().is_some_and(Entities::drawn)
             || clouds.is_some()
             || weather.is_some()
             || hand.is_some()
@@ -1775,7 +1799,7 @@ impl PackPost {
             let mut draws = geometry
                 .draws
                 .iter()
-                .filter(|d| d.program == program)
+                .filter(|d| d.pack && d.program == program)
                 .peekable();
             if draws.peek().is_none() {
                 continue;
@@ -1800,6 +1824,46 @@ impl PackPost {
         self.entities = Some(entities);
     }
 
+    /// Entities and block entities into the shadow map, each run with the per-draw uniforms
+    /// of its gbuffers draw (2.4): opaque, so before the `shadowtex1` copy.
+    fn draw_shadow_entities(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        size: [u32; 2],
+    ) {
+        let Some(mut entities) = self.entities.take() else {
+            return;
+        };
+        let geometry = &entities.geometry;
+        for (program, pass) in entities.shadow.iter_mut().enumerate() {
+            let Some(pass) = pass else {
+                continue;
+            };
+            let mut draws = (geometry.draws.iter())
+                .filter(|d| d.shadow && d.program == program)
+                .peekable();
+            if draws.peek().is_none() {
+                continue;
+            }
+            let group = self.bind(device, queue, pass, size);
+            let mut rp = self.begin(encoder, pass);
+            rp.set_pipeline(&pass.pipeline);
+            rp.set_bind_group(0, &group, &[]);
+            rp.set_bind_group(1, &geometry.table_group, &[]);
+            rp.set_vertex_buffer(0, geometry.vertices());
+            rp.set_index_buffer(geometry.indices.slice(..), wgpu::IndexFormat::Uint32);
+            for d in draws {
+                if pass.draw {
+                    rp.set_bind_group(2, &geometry.group, &[geometry.offset(d.slot)]);
+                }
+                rp.draw_indexed(0..d.quads * 6, d.base as i32, 0..1);
+            }
+        }
+        self.entities = Some(entities);
+    }
+
     /// Splits `entities` (`Frame::entities`) between the pack and Horizon by its runs
     /// (`spans`): the pack's part is uploaded for this frame's draw, Horizon's goes to `rest`.
     pub fn prepare_entities(
@@ -1816,6 +1880,11 @@ impl PackPost {
             return;
         };
         let drawn = e.passes.each_ref().map(Option::is_some);
+        // Only while the shadow pass draws this frame.
+        let shadow = e
+            .shadow
+            .each_ref()
+            .map(|p| p.is_some() && self.shadow_targets.is_some());
         e.geometry.prepare(
             device,
             queue,
@@ -1823,6 +1892,7 @@ impl PackPost {
             entities,
             spans,
             drawn,
+            shadow,
             rest,
         );
     }
@@ -2029,7 +2099,6 @@ impl PackPost {
         }
     }
 
-    /// Whether the pack draws terrain itself.
     /// What the shadow camera draws of the terrain this frame, when the pack draws it.
     pub fn shadow_view(&self, frame: &super::Frame) -> Option<ShadowView> {
         self.shadow_targets.as_ref()?;
@@ -2044,6 +2113,7 @@ impl PackPost {
         })
     }
 
+    /// Whether the pack draws terrain itself.
     pub fn has_terrain(&self) -> bool {
         self.terrain.is_some()
     }
@@ -2187,6 +2257,7 @@ impl PackPost {
             TerrainList::ShadowSolid,
             terrain,
         );
+        self.draw_shadow_entities(device, queue, encoder, size);
         let t = self.shadow_targets.as_mut().expect("shadow pass");
         t.clear_rest(encoder);
         t.copy_depth1(encoder);
@@ -2395,7 +2466,7 @@ impl PackPost {
         let mut shown = false;
         let mut terrain_drawn = self.terrain.is_none()
             && self.sky.is_none()
-            && self.entities.is_none()
+            && !self.entities.as_ref().is_some_and(Entities::drawn)
             && self.clouds.is_none()
             && self.hand.is_none();
         let late_entities = self.entities.as_ref().is_some_and(|e| {
