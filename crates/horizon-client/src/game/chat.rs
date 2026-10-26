@@ -782,6 +782,7 @@ impl Game<'_> {
             max_snow_accumulation_height: r.int("max_snow_accumulation_height"),
             spawn_mobs: r.bool("spawn_mobs"),
             spawn_monsters: r.bool("spawn_monsters"),
+            fire_spread_radius_around_player: r.int("fire_spread_radius_around_player"),
         }
     }
     /// Apply rules mirrored in other state (natural regeneration, difficulty).

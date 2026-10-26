@@ -32,6 +32,8 @@ fn entity_shader() -> String {
     crate::overlay::wgsl_constants() + include_str!("entity.wgsl")
 }
 
+#[cfg(test)]
+mod crumbling_tests;
 mod entity_batch;
 mod weather;
 use entity_batch::EntityBatch;

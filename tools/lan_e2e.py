@@ -7274,5 +7274,58 @@ CHECKS += ['cushions']
 CHECK_FNS['cushions'] = check_cushions
 
 
+def check_forced_levels(host, guest, out):
+    """#1525: forced block/entity ticks outlive the last player and the 300-tick idle timeout.
+
+    Also keep a resident, unforced furnace outside the forced ticket's neighbour ring: scheduling
+    a playerless integrated-server level must not enable the fixtures' tick-everywhere fallback.
+    """
+    if not SERVER_THREAD:
+        return 'skipped (needs --server-thread)'
+    start = pos_of(guest)
+    results = {}
+    guest('command', command='gamemode creative')
+    try:
+        for dimension in (NETHER, END):
+            into_level(guest, dimension, 8, 100, 8)
+            host('command', command='tick freeze')
+            furnace = ('minecraft:furnace{Items:[{Slot:0b,id:"minecraft:raw_iron",count:1},'
+                       '{Slot:1b,id:"minecraft:coal",count:1}],cooking_total_time:200,'
+                       'cooking_time_spent:0}')
+            for x in (8, 56):
+                guest('command', command=f'setblock {x} 100 8 {furnace}')
+                server_reply(guest, f'execute if data block {x} 100 8 '
+                             'Items[{Slot:0b,id:"minecraft:raw_iron"}] '
+                             'run say forced-input-ready', 'forced-input-ready')
+            guest('command', command='forceload add 8 8')
+            guest('command', command='summon minecraft:armor_stand 8.5 104 8.5 {Tags:["forced_tick"]}')
+            guest('command', command=f'execute in {OVERWORLD} run tp @s {start[0]} {start[1]} {start[2]}')
+            wait_dimension(guest, OVERWORLD, 400)
+            host('command', command='tick step 450')
+            host.wait(500)
+            prefix = f'execute in {dimension} '
+            results[dimension] = server_reply(
+                host, prefix + 'if data block 8 100 8 Items[{Slot:2b,id:"minecraft:iron_ingot"}] '
+                'if data block 56 100 8 {cooking_time_spent:0} '
+                'if data block 56 100 8 Items[{Slot:0b,id:"minecraft:raw_iron"}] '
+                'if data entity @e[tag=forced_tick,limit=1] {Pos:[8.5d,101.0d,8.5d]} run say forced-level-pass',
+                'forced-level-pass')
+            assert dims(host, guest) == (OVERWORLD, OVERWORLD), dims(host, guest)
+            host('command', command=prefix + 'run forceload remove 8 8')
+            host('command', command=prefix + 'run kill @e[tag=forced_tick]')
+            host('command', command='tick unfreeze')
+    finally:
+        host('command', command='tick unfreeze')
+        for dimension in (NETHER, END):
+            host('command', command=f'execute in {dimension} run forceload remove 8 8')
+        guest('command', command=f'execute in {OVERWORLD} run tp @s {start[0]} {start[1]} {start[2]}')
+        guest('command', command='gamemode survival')
+    return results
+
+
+CHECKS += ['forced-levels']
+CHECK_FNS['forced-levels'] = check_forced_levels
+
+
 if __name__ == '__main__':
     main()
