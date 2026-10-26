@@ -57,14 +57,7 @@ impl Game<'_> {
                     .map(str::trim)
                     .filter(|v| !v.is_empty())
                     .ok_or("options-set KEY VALUE: missing the value")?;
-                let mut file = self.settings.to_file();
-                file.set_text(key, value)?;
-                let mut settings = horizon_client::settings::Settings::from_file(file);
-                // Horizon's own files are not in options.txt.
-                std::mem::swap(&mut settings.horizon, &mut self.settings.horizon);
-                std::mem::swap(&mut settings.controller, &mut self.settings.controller);
-                std::mem::swap(&mut settings.extras, &mut self.settings.extras);
-                self.settings = settings;
+                self.settings = self.settings.with_option(key, value)?;
                 // As the options screen applies a change.
                 self.handle_option_events(vec![Event::Changed])?;
                 match *key {
