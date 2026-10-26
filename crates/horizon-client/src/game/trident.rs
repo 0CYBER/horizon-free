@@ -1,7 +1,8 @@
 //! Tridents: `TridentItem.releaseUsing` (throw after 10 ticks, or Riptide in
 //! water or rain) and `ThrownTrident` (arrow flight with 0.99 water inertia,
 //! 8 damage plus Impaling, the reversed bounce off a hit, sticking, Loyalty's
-//! return to the owner, pickup) with `ThrownTridentRenderer`.
+//! return to the owner, pickup) with `ThrownTridentRenderer`, and Channeling's
+//! lightning on a hit (`channeling.json`).
 use super::{Game, view_vector};
 use horizon_client::{
     collisions::SceneCollisions,
@@ -10,7 +11,8 @@ use horizon_client::{
     mobs::{Damage, DamageKind, Who, anim::Poses},
 };
 use horizon_core::{
-    geometry::{Aabb, Vec3},
+    geometry::{Aabb, Vec3, traverse_blocks},
+    position::BlockPos,
     random::RandomSource,
 };
 
@@ -153,6 +155,69 @@ impl Game<'_> {
         {
             p.auto_spin_attack_dmg = 0.0;
         }
+    }
+    /// The `summon_entity` and `play_sound` effects of `channeling.json`: in a
+    /// thunderstorm (`weather_check`) a spot that sees the sky (`can_see_sky`)
+    /// gets a lightning bolt and the thunder sound.
+    fn channel_lightning(&mut self, at: [f64; 3]) {
+        // Level.isThundering: the thunder level, in dimensions with weather.
+        if self.dim != super::Dim::Overworld || self.world.weather.levels(1.0).1 <= 0.9 {
+            return;
+        }
+        // BlockAndLightGetter.canSeeSky: full sky light.
+        let (x, y, z) = (
+            at[0].floor() as i32,
+            at[1].floor() as i32,
+            at[2].floor() as i32,
+        );
+        if self.world.light(x, y, z) >> 4 != 15 {
+            return;
+        }
+        self.spawn_bolt(at, false);
+        self.audio
+            .play("minecraft:item.trident.thunder", Some(at), 5.0, 1.0);
+    }
+    /// `minecraft:hit_block` of Channeling (`AbstractArrow.hitBlockEnchantmentEffects`):
+    /// the block the trident's path first hits, if it is a lightning rod, with
+    /// the hit location clamped into the block (`BlockPos.clampLocationWithin`).
+    fn channel_rod_hit(&mut self, from: Vec3, velocity: Vec3) {
+        let to = Vec3::new(
+            from.x + velocity.x,
+            from.y + velocity.y,
+            from.z + velocity.z,
+        );
+        let mut scene = SceneCollisions {
+            world: &self.world,
+            binding: self.collision,
+            subject: None,
+        };
+        // ClipContext.Block.COLLIDER with Fluid.NONE.
+        let hit = traverse_blocks(from, to, 1024, |p: BlockPos| {
+            let state = self.world.block(p.x, p.y, p.z);
+            if self.res.facts().is_air(state) {
+                return None;
+            }
+            let shape = self
+                .collision
+                .collision_shape(&mut scene, state, [p.x, p.y, p.z])
+                .ok()?;
+            shape.clip(from, to, p)
+        });
+        let Some(hit) = hit.ok().flatten() else {
+            return;
+        };
+        let state = self.world.block(hit.block.x, hit.block.y, hit.block.z);
+        if !self.res.facts().get(state).name.ends_with("lightning_rod") {
+            return;
+        }
+        let edge = f64::from(1.0e-5f32);
+        let clamp =
+            |v: f64, origin: i32| v.clamp(f64::from(origin) + edge, f64::from(origin) + 1.0 - edge);
+        self.channel_lightning([
+            clamp(hit.location.x, hit.block.x),
+            clamp(hit.location.y, hit.block.y),
+            clamp(hit.location.z, hit.block.z),
+        ]);
     }
     /// `TridentItem.releaseUsing`.
     pub(super) fn release_trident(&mut self, ticks: u32) {
@@ -311,9 +376,10 @@ impl Game<'_> {
                     });
                     let damage = 8.0 + if aquatic { 2.5 * impaling } else { 0.0 };
                     t.dealt_damage = true;
+                    let mut hurt_at = None;
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
                         let from = Some([t.position.x, t.position.y, t.position.z]);
-                        m.damage(
+                        let hurt = m.damage(
                             damage,
                             Damage {
                                 kind: DamageKind::Arrow,
@@ -321,6 +387,15 @@ impl Game<'_> {
                                 from,
                             },
                         );
+                        if hurt {
+                            hurt_at = Some([m.position.x, m.position.y, m.position.z]);
+                        }
+                    }
+                    // `minecraft:post_attack` of Channeling, on the victim.
+                    if let Some(at) = hurt_at
+                        && t.stack.enchantment_level("minecraft:channeling") > 0
+                    {
+                        self.channel_lightning(at);
                     }
                     self.audio.play(
                         "minecraft:item.trident.hit",
@@ -341,6 +416,7 @@ impl Game<'_> {
                         subject: None,
                     };
                     if let Ok(moved) = scene.resolve(bounds(t.position), t.velocity, 0.0, false) {
+                        let (from, flight) = (t.position, t.velocity);
                         let blocked = (moved.x - t.velocity.x).abs() > 1e-7
                             || (moved.y - t.velocity.y).abs() > 1e-7
                             || (moved.z - t.velocity.z).abs() > 1e-7;
@@ -350,6 +426,9 @@ impl Game<'_> {
                             t.position.z + moved.z,
                         );
                         if blocked {
+                            if t.stack.enchantment_level("minecraft:channeling") > 0 {
+                                self.channel_rod_hit(from, flight);
+                            }
                             t.in_ground = true;
                             t.velocity = Vec3::ZERO;
                             self.audio.play(
