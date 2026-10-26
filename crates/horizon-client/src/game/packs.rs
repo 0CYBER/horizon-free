@@ -221,6 +221,8 @@ impl Game<'_> {
             self.apply_ui_settings();
         }
         self.ui.chat.rescale(&self.gui.atlas);
+        // The creative screen survives the reload; item names may not.
+        self.creative_screen.forget_items();
         Ok(())
     }
 }
