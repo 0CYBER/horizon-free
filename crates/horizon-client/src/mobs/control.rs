@@ -389,6 +389,13 @@ impl Mob {
     }
     /// BodyRotationControl.clientTick (Mob.tickHeadTurn).
     pub fn body_rotation_tick(&mut self) {
+        // Shulker.ShulkerBodyRotationControl.clientTick is empty: the body
+        // stays at 0 (recreateFromPacket), only the head turns.
+        if self.species() == super::Species::Shulker {
+            self.body_yaw = 0.0;
+            self.previous_body_yaw = 0.0;
+            return;
+        }
         let dx = self.position.x - self.previous.x;
         let dz = self.position.z - self.previous.z;
         let max = self.kind.max_head_y_rot;
