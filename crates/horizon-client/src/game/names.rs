@@ -151,10 +151,13 @@ impl Game<'_> {
                     .clone()
                     .unwrap_or_else(|| Text::literal(&name))
             };
+            // StringDecomposer.iterateFormatted: `§` codes a server leaves
+            // inside the team prefix or the name itself apply at draw time.
             let shown = match team {
                 Some(t) => t.formatted_name(member),
                 None => member,
-            };
+            }
+            .resolve_legacy();
             let mut lines = Vec::new();
             // EntityRenderer.extractNameTags: the score shows within the
             // below-name distance (10), under the name.
@@ -162,7 +165,7 @@ impl Game<'_> {
             if distance_sqr < 10.0 * 10.0
                 && let Some(score) = holder.and_then(|h| self.below_name_text(&h))
             {
-                lines.push((score, 0.0));
+                lines.push((score.resolve_legacy(), 0.0));
                 lift = f64::from(9.0f32 * 1.15 * 0.025);
             }
             lines.push((shown, lift));
@@ -213,14 +216,15 @@ impl Game<'_> {
             let shown = match team {
                 Some(t) => t.formatted_name(name.clone()),
                 None => name.clone(),
-            };
+            }
+            .resolve_legacy();
             let mut lines = Vec::new();
             let mut lift = 0.0;
             let holder = self.persist.uuids.get(&a.id).map(|u| uuid_text(*u));
             if distance_sqr < 10.0 * 10.0
                 && let Some(score) = holder.and_then(|h| self.below_name_text(&h))
             {
-                lines.push((score, 0.0));
+                lines.push((score.resolve_legacy(), 0.0));
                 lift = f64::from(9.0f32 * 1.15 * 0.025);
             }
             lines.push((shown, lift));
