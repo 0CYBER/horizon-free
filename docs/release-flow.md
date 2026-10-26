@@ -27,6 +27,12 @@ quick steps and finishes in seconds.
 The job is `.github/workflows/parity.yml`, a reusable workflow: `checks` calls it for pull requests from this
 repository, `run-parity.yml` for a fork's pull request a maintainer labels `run-parity`.
 
+A pull request every harness reaches (a crate split moves files every probe links: #2160 ran all 352 harnesses, 71
+minutes on a Mac mini runner, while five other pull requests' jobs queued behind it) carries the `full-parity` label:
+its job runs on the desktop's runner only (8 harnesses at a time), and waits for it while the desktop is in use
+instead of taking a Mac mini runner. Labels don't start `checks`: add it when opening the pull request
+(`gh pr create --label full-parity`), or before the next push.
+
 Horizon never downloads the game, so harnesses that compare with vanilla run only where the maintainer's own
 copy is: the Mac mini, his Linux desktop and playhorizon (below). Their runners run as the maintainer's account and keep their checkout
 between runs (`clean: false`), so the probes build incrementally into `.local/parity-target` and earlier passes
@@ -212,6 +218,7 @@ How releases are numbered, and how installs from before 0.2 reach it: [versionin
 | `release-now` | Releases as soon as main's checks pass, without waiting for merges to settle |
 | `skip-release` | Doesn't trigger a release and isn't listed in the notes |
 | `run-parity` | Runs the parity job once on a fork's pull request |
+| `full-parity` | Runs the pull request's parity job on the desktop's runner only (a change every harness reaches) |
 | `parity-regression` | Opened by the nightly audit for a harness that fails on main |
 | `release-blocker` | On an issue: no game release is published while it is open ([One channel](#one-channel)) |
 
