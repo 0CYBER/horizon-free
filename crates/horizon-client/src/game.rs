@@ -99,6 +99,7 @@ mod maps;
 mod minecarts;
 mod mob_blocks;
 mod mob_gear;
+mod mod_browser;
 mod mod_input;
 #[cfg(feature = "mods")]
 mod mod_recipes;
@@ -5217,6 +5218,7 @@ impl Game<'_> {
             Screen::CommandBlock => self.draw_command_block(&mut batch),
             Screen::Inventory => {
                 self.draw_inventory(&mut batch);
+                self.draw_mod_browser(&mut batch);
             }
             Screen::Creative => {
                 self.draw_creative(&mut batch);
@@ -5595,6 +5597,7 @@ impl Game<'_> {
         }
     }
     pub(super) fn close_container(&mut self) {
+        self.mod_browser_closed();
         self.close_station();
         self.mount_closed();
         self.recipe_ui.reset_screen();
@@ -6319,6 +6322,9 @@ impl Game<'_> {
     fn inventory_press(&mut self, right: bool) {
         use horizon_client::container_screen::Target;
         use horizon_client::menu::Input;
+        if self.mod_browser_press(right) {
+            return;
+        }
         if !right && self.sort_press() {
             return;
         }
@@ -6495,24 +6501,8 @@ impl Game<'_> {
     }
     /// `hasClickedOutside` of the open screen at the cursor.
     fn clicked_outside(&self, batch: &HudBatch) -> bool {
-        use horizon_client::container_screen::{Book, Image, clicked_outside};
-        let (ox, oy) = self.inventory_origin(batch);
-        let (shift, width, height) = if self.screen == Screen::Creative {
-            (0.0, Creative::WIDTH as i32, Creative::HEIGHT as i32)
-        } else {
-            let (shift, width) = match self.station.as_ref().map(|s| s.kind) {
-                Some(stations::Kind::Merchant) => (-50.0, 276),
-                Some(stations::Kind::Beacon) => (beacon::SHIFT, 230),
-                _ => (0.0, 176),
-            };
-            (shift, width, self.screen_height() as i32)
-        };
-        let image = Image {
-            left: (ox + shift) as i32,
-            top: oy as i32,
-            width,
-            height,
-        };
+        use horizon_client::container_screen::{Book, clicked_outside};
+        let image = self.container_image(batch);
         let book = self
             .recipe_book_area(batch)
             .map(|(visible, tab_hovered)| Book {
@@ -6525,6 +6515,26 @@ impl Game<'_> {
             image,
             book,
         )
+    }
+    /// The open container screen's window: its place and size.
+    fn container_image(&self, batch: &HudBatch) -> horizon_client::container_screen::Image {
+        let (ox, oy) = self.inventory_origin(batch);
+        let (shift, width, height) = if self.screen == Screen::Creative {
+            (0.0, Creative::WIDTH as i32, Creative::HEIGHT as i32)
+        } else {
+            let (shift, width) = match self.station.as_ref().map(|s| s.kind) {
+                Some(stations::Kind::Merchant) => (-50.0, 276),
+                Some(stations::Kind::Beacon) => (beacon::SHIFT, 230),
+                _ => (0.0, 176),
+            };
+            (shift, width, self.screen_height() as i32)
+        };
+        horizon_client::container_screen::Image {
+            left: (ox + shift) as i32,
+            top: oy as i32,
+            width,
+            height,
+        }
     }
     /// A click outside the window (slot id -999): `THROW` does nothing; a
     /// `PICKUP` drops the carried stack (left) or one of it (right), thrown
@@ -6686,7 +6696,7 @@ impl Game<'_> {
         }
     }
     fn click_inventory(&mut self, right: bool) {
-        if self.mount_click(right) {
+        if self.mod_browser_press(right) || self.mount_click(right) {
             return;
         }
         if self.recipe_book_click(right) {
@@ -11644,6 +11654,14 @@ impl ApplicationHandler for Game<'_> {
                 {
                     // The recipe book's search box takes every key but Escape.
                     self.recipe_key(&event);
+                }
+                WindowEvent::KeyboardInput { event, .. }
+                    if self.mod_browser_typing()
+                        && event.state == ElementState::Pressed
+                        && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
+                {
+                    // A mod's item panel's search box, as the recipe book's.
+                    self.mod_browser_key(&event);
                 }
                 WindowEvent::KeyboardInput { event, .. }
                     if self.station_typing()

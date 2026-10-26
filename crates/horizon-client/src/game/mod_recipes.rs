@@ -35,7 +35,7 @@ impl Index {
 
 /// A stack's components beyond its item's, as vanilla's item syntax writes
 /// them (`[minecraft:potion_contents={potion:"minecraft:swiftness"}]`), or "".
-fn components(s: &ItemStack) -> String {
+pub(super) fn components(s: &ItemStack) -> String {
     use horizon_world::nbt::Tag;
     let Some(Tag::Compound(entries)) = horizon_client::item_data::encode_components(s) else {
         return String::new();
