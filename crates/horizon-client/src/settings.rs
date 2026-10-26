@@ -182,6 +182,9 @@ pub struct Settings {
     pub extras: crate::extras::Extras,
     /// The Horizon mods turned on (`horizon-mods.txt`), all off by default.
     pub mods: crate::mod_list::ModList,
+    /// The packs in `shaderpacks/`, listed when the Shader Packs page opens; the pick is
+    /// `horizon.shader_pack`.
+    pub shader_packs: Vec<crate::shader_pack_list::Entry>,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -255,6 +258,7 @@ impl Default for Settings {
             controller: Default::default(),
             extras: Default::default(),
             mods: Default::default(),
+            shader_packs: Vec::new(),
         }
     }
 }
@@ -415,6 +419,7 @@ impl Settings {
             controller: Default::default(),
             extras: Default::default(),
             mods: Default::default(),
+            shader_packs: Vec::new(),
             auto_jump: f.bool("autoJump"),
             language: f.string("lang"),
             force_unicode: f.bool("forceUnicodeFont"),

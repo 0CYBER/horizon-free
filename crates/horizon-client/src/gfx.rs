@@ -2928,6 +2928,12 @@ impl Renderer {
         }
         report
     }
+    /// Drops the running shader pack, of either kind.
+    pub fn drop_shader_packs(&mut self) {
+        self.pack_post = None;
+        self.native_post = None;
+        self.pack_atlas = None;
+    }
     /// Runs the post passes of one of Horizon's own shader packs over the world from now on
     /// (`None`: no pack), with its options' values; replaces a `shaders/` pack. Returns the
     /// passes' labels; on an error the passes that ran keep running.
