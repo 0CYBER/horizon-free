@@ -145,8 +145,43 @@ impl Game<'_> {
                 .iter()
                 .find(|m| m.id == id)
                 .map_or(0.0, |m| m.eye_y() - m.position.y),
-            _ => 0.0,
+            // An armor stand's dimensions are halved when small and empty
+            // when a marker (ArmorStand.getDefaultDimensions).
+            Target::Stand(id) => {
+                let stand = self.armor_stands.iter().find(|a| a.id == id);
+                let scale = match stand {
+                    Some(a) if a.marker => 0.0,
+                    Some(a) if a.small => 0.5,
+                    _ => 1.0,
+                };
+                scale * self.type_eye_height(&self.target_type(t))
+            }
+            // Entity.getEyeHeight: the type's dimensions.
+            _ => self.type_eye_height(&self.target_type(t)),
         }
+    }
+    /// `EntityType.getDimensions().eyeHeight()` from `entity-types.json`,
+    /// read once.
+    fn type_eye_height(&self, ty: &str) -> f64 {
+        static EYE_HEIGHTS: std::sync::OnceLock<std::collections::HashMap<String, f64>> =
+            std::sync::OnceLock::new();
+        EYE_HEIGHTS
+            .get_or_init(|| {
+                std::fs::read(self.options.resources.join("entity-types.json"))
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                    .and_then(|v| {
+                        v.as_object().map(|o| {
+                            o.iter()
+                                .filter_map(|(k, t)| Some((k.clone(), t["eye_height"].as_f64()?)))
+                                .collect()
+                        })
+                    })
+                    .unwrap_or_default()
+            })
+            .get(ty)
+            .copied()
+            .unwrap_or(0.0)
     }
     /// EntityAnchorArgument.Anchor.apply.
     pub(super) fn anchor_position(&self, s: &Source) -> [f64; 3] {
@@ -467,9 +502,10 @@ impl Game<'_> {
             "positioned" if c.has("as") => targets(self)?
                 .into_iter()
                 .filter_map(|t| {
+                    // withPosition keeps the anchor (only `positioned <pos>`
+                    // resets it to the feet).
                     Some(Source {
                         pos: self.target_position(t)?,
-                        eyes: false,
                         ..s
                     })
                 })
