@@ -30,15 +30,13 @@ impl Game<'_> {
     /// The `SLOT_NAMES` index `getEquipmentSlotForItem` picks: armour goes
     /// to its slot, anything else to the main hand.
     fn piglin_slot(&self, item: &str) -> usize {
-        let slot = match self
+        let slot = self
             .res
             .items()
             .get(item)
             .and_then(|i| i.equip_slot.as_deref())
-        {
-            Some(s @ ("head" | "chest" | "legs" | "feet")) => s,
-            _ => "mainhand",
-        };
+            .filter(|s| matches!(*s, "head" | "chest" | "legs" | "feet"))
+            .unwrap_or("mainhand");
         SLOT_NAMES.iter().position(|n| *n == slot).unwrap_or(0)
     }
     /// `Piglin.canReplaceCurrentItem`: an empty slot takes anything, a wanted
