@@ -1,8 +1,9 @@
 //! Horizon's official zoom, formerly the built-in extra: hold the key (Z
 //! by default) to zoom in, and turn the mouse wheel while holding it to zoom
-//! further in or out. Its settings page has the extra's four options. The
-//! key is bound on the page and kept by the game (`horizon-mods.txt`); the
-//! rest is kept in the mod's storage (`level`, `smooth`, `sensitivity`),
+//! further in or out. Its settings page has the extra's four options: the
+//! game lists the key there first and keeps the player's choice
+//! (`horizon-mods.txt`); the rest is kept in the mod's storage (`level`,
+//! `smooth`, `sensitivity`),
 //! where the game writes a player's old extra settings when it installs the
 //! mod for them.
 use horizon_mod_sdk::{
@@ -10,10 +11,10 @@ use horizon_mod_sdk::{
     input::{self, Event},
     render::{self, Zoom as ZoomView},
     storage,
-    ui::{self, ButtonWidget, KeyWidget, Widget},
+    ui::{self, ButtonWidget, Widget},
 };
 
-/// The key's name for `register-key` and the settings page.
+/// The key's name for `register-key`.
 const KEY: &str = "zoom";
 /// The zooms the starting zoom cycles through, and the wheel's limits.
 const LEVELS: [u8; 6] = [2, 3, 4, 6, 8, 10];
@@ -21,8 +22,7 @@ const MIN: f32 = 1.25;
 const MAX: f32 = 10.0;
 /// Each wheel step multiplies the zoom by this.
 const STEP: f32 = 1.25;
-/// Settings page widgets.
-const KEY_WIDGET: u32 = 1;
+/// Settings page buttons, under the key's row.
 const LEVEL_BUTTON: u32 = 2;
 const SMOOTH_BUTTON: u32 = 3;
 const SENSITIVITY_BUTTON: u32 = 4;
@@ -51,10 +51,6 @@ impl Zoom {
     fn page(&self) {
         let on = |b: bool| if b { "ON" } else { "OFF" };
         ui::set_settings(&[
-            Widget::Key(KeyWidget {
-                id: KEY_WIDGET,
-                key: KEY.into(),
-            }),
             Widget::Button(ButtonWidget {
                 id: LEVEL_BUTTON,
                 label: format!("Starting zoom: {}x", self.level),
@@ -83,7 +79,7 @@ fn stored(key: &str) -> Option<String> {
 
 impl Mod for Zoom {
     fn init() -> Result<(Self, Registration), String> {
-        input::register_key(KEY, "Zoom", "key.keyboard.z")?;
+        input::register_key(KEY, "Zoom key", "key.keyboard.z")?;
         // The extra's defaults: 4x, smooth, slower turning.
         let level = stored("level")
             .and_then(|v| v.trim().parse::<u8>().ok())
