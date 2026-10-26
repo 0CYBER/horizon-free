@@ -248,6 +248,32 @@ impl Launcher {
             }
         })
         .detach();
+        // Counts the time the sidebar's partner banner is on screen, until it may be hidden.
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_secs(10))
+                .await;
+            let counting = this.update(cx, |this, cx| {
+                let s = &mut this.settings;
+                if s.partner_hidden || s.partner_seen_secs >= partner::SEEN_BEFORE_HIDE {
+                    return false;
+                }
+                if this.page != Page::Servers {
+                    s.partner_seen_secs += 10;
+                    if s.partner_seen_secs % 60 == 0
+                        || s.partner_seen_secs >= partner::SEEN_BEFORE_HIDE
+                    {
+                        s.save();
+                        cx.notify();
+                    }
+                }
+                true
+            });
+            if !matches!(counting, Ok(true)) {
+                break;
+            }
+        })
+        .detach();
         let mut settings = Settings::load();
         if settings.minecraft_dir.is_none() {
             settings.minecraft_dir = backend::default_minecraft_dir();
@@ -1749,6 +1775,36 @@ impl Launcher {
             }
             _ => {}
         }
+        // Sculk's banner, small, above the links: seen without scrolling, on every page but Servers, which
+        // shows it large. After a while on screen a "Hide" beside its label puts it away for good.
+        if self.page != Page::Servers && !self.settings.partner_hidden {
+            let mut side = div().relative().mb(px(8.)).child(partner::banner(
+                "partner-side",
+                theme::SIDEBAR - 20.,
+                &t,
+            ));
+            if self.settings.partner_seen_secs >= partner::SEEN_BEFORE_HIDE {
+                let hide = div()
+                    .id("partner-hide")
+                    .absolute()
+                    .top(px(0.))
+                    .right(px(0.))
+                    .cursor_pointer()
+                    .child(
+                        text(theme::MICRO)
+                            .text_color(t.muted)
+                            .hover(move |s| s.text_color(t.ink))
+                            .child("HIDE"),
+                    )
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.settings.partner_hidden = true;
+                        this.settings.save();
+                        cx.notify();
+                    }));
+                side = side.child(keyboard(hide, &t));
+            }
+            foot = foot.child(side);
+        }
         if !self.links.discord.is_empty() {
             foot = foot.child(link(
                 "discord",
@@ -2131,8 +2187,7 @@ impl Launcher {
         if let Some(crash) = self.crash.clone() {
             page = page.child(self.crash_notice(crash, cx));
         }
-        // Below everything the player needs to start, so it never moves Play.
-        page.child(partner::banner("partner-home", 560., &t))
+        page
     }
 
     /// "Horizon crashed": the report and the logs, and where to report it.
