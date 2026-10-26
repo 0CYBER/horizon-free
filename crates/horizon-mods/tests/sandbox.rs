@@ -2,8 +2,8 @@
 //! examples and a guest
 //! that misbehaves on command. Needs `rustup target add wasm32-unknown-unknown`.
 use horizon_mods::{
-    BlockPos, Clock, Corner, GameMode, HeldItem, Mods, Output, Package, Player, Runs, ServerPlayer,
-    Shape, Snapshot, Status,
+    BlockPos, Clock, Corner, GameMode, HeldItem, Hit, Mods, Output, Package, Player, Runs,
+    ServerPlayer, Shape, Snapshot, Status,
     manifest::componentize,
     testing::{Script, TestGame},
 };
@@ -26,7 +26,7 @@ id = "test_ui_guest"
 name = "Test UI Guest"
 version = "0.1.0"
 api = "0.1"
-capabilities = ["chat", "ui", "render", "input"]
+capabilities = ["game-read", "chat", "ui", "render", "input"]
 experimental = ["ui", "render", "input"]
 "#;
 
@@ -720,6 +720,47 @@ fn render_minimap_is_clamped_and_hidden() {
         Some((corner, 16.0, 4.0, false, false))
     );
     assert_eq!(map(&mut mods, "off"), None);
+}
+
+/// `game.raycast`: the view's hit the game worked out, up to the distance
+/// asked for; the game works it out only while a mod imports the call.
+#[test]
+fn game_raycast_sees_the_view_hit_within_its_distance() {
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    assert!(mods.wants_raycast());
+    assert!(!load("coords_hud.hmod").wants_raycast());
+    let said = |mods: &mut Mods, args: &str| -> Vec<String> {
+        assert!(mods.command(&format!("raycast {args}")));
+        mods.drain()
+            .into_iter()
+            .filter_map(|o| match o {
+                Output::Chat { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(said(&mut mods, "100"), ["no hit"]);
+    mods.set_snapshot(Snapshot {
+        view_hit: Some((
+            40.5,
+            Hit {
+                block_x: 12,
+                block_y: 63,
+                block_z: -44,
+                x: 12.5,
+                y: 64.0,
+                z: -43.75,
+                block: "minecraft:grass_block".into(),
+            },
+        )),
+        ..player()
+    });
+    let hit = "hit minecraft:grass_block at 12 63 -44 (12.5 64.0 -43.8)";
+    assert_eq!(said(&mut mods, "100"), [hit]);
+    assert_eq!(said(&mut mods, "40"), ["no hit"]);
+    // NaN asks for nothing; past 1024 is 1024.
+    assert_eq!(said(&mut mods, "x"), ["no hit"]);
+    assert_eq!(said(&mut mods, "1e9"), [hit]);
 }
 
 #[test]

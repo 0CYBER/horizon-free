@@ -2103,6 +2103,53 @@ def check_recipes(host, guest, out):
         guest.raw('key', 'esc', 'tap')
         guest.wait(5)
     assert any('oak_log' in str(item) for item in grid.values()), f'nothing placed in the grid: {grid}'
+    # #2019: the alternatives popup belongs to one screen. Check both the
+    # in-frame host (or --server-thread host) and the remote guest, with both
+    # inventory-close keys and a different recipe-book type on reopening.
+    for game in (host, guest):
+        game('command', command='recipe give @s minecraft:oak_planks')
+        game('command', command='recipe give @s minecraft:birch_planks')
+        game.wait(10)
+        for close_key, reopen in (('e', 'inventory'), ('esc', 'furnace')):
+            game.raw('key', 'e', 'tap')
+            game.wait(5)
+            book = game('screen')['recipe_book']
+            if len(book['targets']) == 1:
+                game.raw('click-at', *centre(book['targets'][0]))
+                game.wait(5)
+                book = game('screen')['recipe_book']
+            for rect in book['targets']:
+                if rect[2:] != [25.0, 25.0]:
+                    continue
+                game.raw('click-at', *centre(rect), 'right')
+                game.wait(2)
+                targets = game('screen')['recipe_book']['targets']
+                if targets and all(r[2:] == [24.0, 24.0] for r in targets):
+                    break
+            else:
+                raise AssertionError(f'{game.name}: no alternatives popup opened: {book}')
+            game.shot(out, f'recipe-overlay-{close_key}-before')
+            game.raw('key', close_key, 'tap')
+            game.wait(5)
+            if reopen == 'inventory':
+                game.raw('key', 'e', 'tap')
+            else:
+                x, y, z = (int(v // 1) for v in pos_of(game))
+                game('command', command=f'setblock {x} {y} {z - 2} minecraft:furnace')
+                game.wait(5)
+                game.raw('interact', x, y, z - 2)
+            game.wait(5)
+            targets = game('screen')['recipe_book']['targets']
+            if reopen == 'furnace' and len(targets) == 1 and targets[0][2:] == [20.0, 18.0]:
+                game.raw('click-at', *centre(targets[0]))
+                game.wait(5)
+                targets = game('screen')['recipe_book']['targets']
+            game.shot(out, f'recipe-overlay-{close_key}-after')
+            assert any(r[2:] == [20.0, 18.0] for r in targets), f'{game.name}: stale popup: {targets}'
+            if reopen == 'inventory':
+                assert len(targets) > 1, f'{game.name}: the book forgot its open setting'
+            game.raw('key', 'esc', 'tap')
+            game.wait(5)
     return {'known': known, 'grid': grid}
 
 
@@ -6664,6 +6711,94 @@ CHECKS += ['sprint-fov']
 CHECK_FNS['sprint-fov'] = check_sprint_fov
 
 
+def check_critical_hits(host, guest, out):
+    """#1898: a real falling melee hit emits crits on the attacker and observer.
+    Grounded hits and refused falling hits emit none, against mobs and players.
+    """
+    x, y, z = map(math.floor, pos_of(host))
+    target = [x + 2.5, y, z + 0.5]
+    tag = 'critical_hit_particles'
+    seen = {}
+    host('command', command=f'fill {x - 3} {y - 1} {z - 3} {x + 6} {y - 1} {z + 6} minecraft:stone')
+    host('command', command=f'fill {x - 3} {y} {z - 3} {x + 6} {y + 5} {z + 6} minecraft:air')
+    host('command', command='time set midnight')
+    host('command', command='gamerule natural_health_regeneration false')
+    try:
+        for label, player, other in (('host', host, guest), ('guest', guest, host)):
+            for kind in ('zombie', 'player'):
+                for hit in ('grounded', 'critical', 'refused'):
+                    case = f'{label}-{kind}-{hit}'
+                    for game in (player, other):
+                        game('command', command='gamemode survival')
+                        game('command', command='clear @s')
+                        game('command', command='effect clear @s')
+                        game('command', command='effect give @s minecraft:instant_health 1 5 true')
+                    player('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+                    other_at = target if kind == 'player' else [x + 0.5, y, z + 4.5]
+                    other('command', command=f'tp @s {other_at[0]} {other_at[1]} {other_at[2]}')
+                    host('command', command=f'gamerule pvp {str(hit != "refused").lower()}')
+                    mob_id = None
+                    if kind == 'zombie':
+                        host('command', command=f'summon minecraft:zombie {target[0]} {y} {target[2]} '
+                             f'{{NoAI:1b,PersistenceRequired:1b,Invulnerable:{int(hit == "refused")}b,Tags:["{tag}"]}}')
+                    player.wait(20)  # full attack charge and paired entities
+                    if kind == 'zombie':
+                        mob = next(m for m in player.raw('mobs', 16)['near']
+                                   if m['kind'] == 'minecraft:zombie' and math.dist(m['pos'], target) < 0.1)
+                        mob_id = mob['id']
+                        assert mob_seen(other, mob_id), f'{case}: observer has not paired the zombie'
+                    health_before = mob_seen(player, mob_id)['health'] if mob_id is not None else hearts(other)[1]
+                    sound = 'minecraft:entity.player.attack.crit'
+                    sounds_before = {side: heard(g, sound) for side, g in (('own', player), ('other', other))}
+
+                    def strike():
+                        if hit != 'grounded':
+                            player.raw('key', 'space', 'down')
+                            player.wait(1)
+                            player.raw('key', 'space', 'up')
+                            body = None
+                            for _ in range(15):
+                                body = player('state')['player']
+                                # Let the server record the fall before the attack packet.
+                                if not body['on_ground'] and body['velocity'][1] < -0.2:
+                                    break
+                                player.wait(1)
+                            assert body and not body['on_ground'] and body['velocity'][1] < -0.2, \
+                                f'{case}: jump never reached its falling phase: {body}'
+                        player.raw('look-at', target[0], y + 1, target[2])
+                        player.raw('mouse', 'left', 'click')
+
+                    particles = sparked(player, other, ['crit'], strike)
+                    player.shot(out, f'critical-hits-{kind}-{hit}-{label}')
+                    player.wait(10)  # finish the three-tick emitter and health replication
+                    health_after = mob_seen(player, mob_id)['health'] if mob_id is not None else hearts(other)[1]
+                    sounds = {side: heard(g, sound) - sounds_before[side]
+                              for side, g in (('own', player), ('other', other))}
+                    seen[case] = {'particles': particles, 'crit_sounds': sounds,
+                                  'health': [health_before, health_after]}
+                    host('command', command=f'kill @e[tag={tag}]')
+                    assert (health_after == health_before) if hit == 'refused' else (health_after < health_before), \
+                        f'{case}: unexpected damage: {seen[case]}'
+                    assert all(n == int(hit == 'critical') for n in sounds.values()), \
+                        f'{case}: the server did not recognize the expected crit: {seen[case]}'
+        wrong = {case: result for case, result in seen.items()
+                 if any((n <= 0 if case.endswith('-critical') else n != 0)
+                        for n in result['particles'].values())}
+        assert not wrong, f'critical-hit particles: {wrong}'
+        return seen
+    finally:
+        host('command', command=f'kill @e[tag={tag}]')
+        host('command', command='gamerule pvp true')
+        host('command', command='gamerule natural_health_regeneration true')
+        host('command', command='time set day')
+        for game in (host, guest):
+            game.raw('key', 'space', 'up')
+
+
+CHECKS += ['critical-hits']
+CHECK_FNS['critical-hits'] = check_critical_hits
+
+
 def check_sculk_container(host, guest, out):
     """A real guest's container interaction emits a server game event. Both
     clients see the sensor and the non-summoning shrieker activate and reset.
@@ -6767,6 +6902,57 @@ def check_replant(host, guest, out):
 
 CHECKS += ['replant']
 CHECK_FNS['replant'] = check_replant
+
+
+def check_sonic(host, guest, out):
+    """A real warden's ray reaches connected clients once, with normal damage.
+
+    Run with and without --server-thread to cover the window's local renderer too.
+    The creative observer sees the same ray nearby and none outside sendParticles' range.
+    """
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    result = {}
+    guest('command', command='gamemode creative')
+    host('command', command='difficulty normal')
+    host('command', command='gamerule natural_health_regeneration false')
+    try:
+        host('command', command=f'fill {x - 3} {y - 1} {z - 3} {x + 85} {y - 1} {z + 14} minecraft:stone')
+        host('command', command=f'fill {x - 3} {y} {z - 3} {x + 15} {y + 4} {z + 14} minecraft:air')
+        host('command', command=f'fill {x - 2} {y} {z + 4} {x + 2} {y + 3} {z + 4} minecraft:stone')
+        for near in (True, False):
+            guest('command', command=f'tp @s {x + (3 if near else 80) + 0.5} {y} {z + 0.5}')
+            host('command', command=f'tp @s {x + 0.5} {y} {z + 0.5} 0 0')
+            host('command', command='gamemode survival')
+            host('command', command='effect give @s minecraft:instant_health 1 5')
+            host.wait(4)
+            host('command', command=f'summon minecraft:warden {x + 0.5} {y} {z + 9.5} {{NoAI:1b,Tags:["sonic_test"]}}')
+            host('command', command='attribute @e[tag=sonic_test,limit=1] minecraft:knockback_resistance base set 1')
+            before = {side: made(g, 'sonic_boom') for side, g in (('host', host), ('guest', guest))}
+            health = host('status')['player']['health']
+            host('command', command='data merge entity @e[tag=sonic_test,limit=1] {NoAI:0b}')
+            host('command', command='attribute @e[tag=sonic_test,limit=1] minecraft:movement_speed base set 0')
+            host('command', command='damage @e[tag=sonic_test,limit=1] 1 minecraft:player_attack by @s')
+            for _ in range(400):
+                host.wait(2)
+                if host('status')['player']['health'] < health:
+                    break
+            host.wait(2)  # let the observer process the same packet batch
+            seen = {side: made(g, 'sonic_boom') - before[side] for side, g in (('host', host), ('guest', guest))}
+            after = host('status')['player']['health']
+            result['near' if near else 'far'] = {'particles': seen, 'health': [health, after]}
+            host.shot(out, f'sonic-{"near" if near else "far"}')
+            host('command', command='kill @e[tag=sonic_test]')
+            assert after == health - 10, result
+            assert seen['host'] == 15, result
+            assert seen['guest'] == (15 if near else 0), result
+    finally:
+        host('command', command='kill @e[tag=sonic_test]')
+        host('command', command='gamerule natural_health_regeneration true')
+    return result
+
+
+CHECKS += ['sonic']
+CHECK_FNS['sonic'] = check_sonic
 
 
 if __name__ == '__main__':

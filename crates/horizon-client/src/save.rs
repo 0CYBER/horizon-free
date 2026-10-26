@@ -604,8 +604,10 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
                         Tag::Int(n) => *n,
                         _ => continue,
                     };
-                    f.recipes_used
-                        .insert(id.to_string_lossy(), count.max(0) as u32);
+                    // Saves from before the key was namespaced hold both forms of an id.
+                    *f.recipes_used
+                        .entry(crate::containers::recipe_used_key(&id.to_string_lossy()))
+                        .or_insert(0) += count.max(0) as u32;
                 }
             }
         }
@@ -4312,5 +4314,29 @@ mod tests {
         assert_eq!(read.game_rules, rules.by_name());
         assert_eq!(read.game_rule("advance_time"), 0);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A save written before the key was namespaced holds an id twice, once bare: vanilla
+    /// refuses such a furnace, so a load merges them under the full id.
+    #[test]
+    fn a_furnaces_recipes_used_merges_bare_and_full_ids() {
+        use crate::containers::BlockEntity;
+        let Some(BlockEntity::Furnace(mut f)) = BlockEntity::for_block("minecraft:furnace") else {
+            panic!("a furnace");
+        };
+        f.recipes_used
+            .insert("iron_ingot_from_smelting_iron_ore".to_owned(), 2);
+        f.recipes_used
+            .insert("minecraft:iron_ingot_from_smelting_iron_ore".to_owned(), 3);
+        let tag = encode_block_entity((1, 64, 2), &BlockEntity::Furnace(f), "minecraft:furnace");
+        let Some((_, BlockEntity::Furnace(back))) = decode_block_entity(&tag) else {
+            panic!("a furnace back");
+        };
+        assert_eq!(back.recipes_used.len(), 1);
+        assert_eq!(
+            back.recipes_used
+                .get("minecraft:iron_ingot_from_smelting_iron_ore"),
+            Some(&5)
+        );
     }
 }

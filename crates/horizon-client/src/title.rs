@@ -192,7 +192,7 @@ pub fn list_worlds(saves: &Path) -> Vec<WorldEntry> {
                 commands: matches!(data.get("allowCommands"), Some(horizon_world::nbt::Tag::Byte(v)) if *v != 0),
                 version: data.get("Version").and_then(|v| v.get("Name"))
                     .and_then(|v| match v { horizon_world::nbt::Tag::String(s) => Some(s.to_string_lossy()), _ => None })
-                    .unwrap_or_else(|| "Unknown".into()),
+                    .unwrap_or_else(|| lang::get_or("selectWorld.versionUnknown", "Unknown")),
             })
         })
         .collect();
@@ -272,7 +272,7 @@ impl Title {
     }
     pub(crate) fn new_world() -> Mode {
         Mode::Create {
-            name: "New World".into(),
+            name: lang::get_or("selectWorld.newWorld", "New World"),
             seed: String::new(),
             creative: false,
             focus: 0,
@@ -867,7 +867,13 @@ impl Title {
             }
             Mode::Select { worlds, selected } => {
                 crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
-                centered(atlas, batch, "Select World", 8.0, u32::MAX);
+                centered(
+                    atlas,
+                    batch,
+                    &lang::get_or("selectWorld.title", "Select World"),
+                    8.0,
+                    u32::MAX,
+                );
                 self.caret.borrow_mut().draw(
                     batch,
                     atlas,
