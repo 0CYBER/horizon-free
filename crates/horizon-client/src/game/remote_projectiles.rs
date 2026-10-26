@@ -358,6 +358,8 @@ impl Game<'_> {
         self.tridents.clear();
         self.rockets.clear();
         self.crystals.clear();
+        // The dragon a server sent goes with its crystals.
+        self.dragon = None;
         self.potions.clear_thrown();
         self.end.clear_remote_eyes();
         self.clear_remote_hooks();

@@ -1261,6 +1261,9 @@ impl Game<'_> {
         } else {
             self.res.mob_types().get(kind).cloned()
         };
+        if kind == "minecraft:ender_dragon" {
+            self.spawn_remote_dragon(id, position, yaw);
+        }
         if kind == "minecraft:experience_orb" {
             // Its value (ExperienceOrb.DATA_VALUE) follows in SetEntityData.
             self.orbs.retain(|o| o.id != id as u32);
@@ -1441,6 +1444,8 @@ impl Game<'_> {
         self.mobs.retain(|m| m.id != id as u32);
         self.orbs.retain(|o| o.id != id as u32);
         self.dropped.retain(|d| d.id != id as u32);
+        // Before the crystals go: the dragon's beam index follows them.
+        self.remove_remote_dragon(id);
         self.remove_remote_object(id as u32);
         self.remove_remote_projectile(id as u32);
         if let Some(r) = self.remote.as_mut() {
@@ -1973,6 +1978,7 @@ impl Game<'_> {
                 }
                 self.remote_object_data(p.id, &p.values);
                 self.remote_projectile_data(p.id, &p.values);
+                self.remote_dragon_data(p.id, &p.values);
             }
             // ClientPacketListener.handleSetEquipment: what a mob or another
             // player holds and wears (EquipmentSlot ordinals).
@@ -2054,6 +2060,8 @@ impl Game<'_> {
                 } else if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
                     m.limb_speed = 1.5;
                     m.hurt_time = 10;
+                } else {
+                    self.remote_dragon_hurt(p.id);
                 }
             }
             C::HurtAnimation(p) => {
@@ -2063,6 +2071,8 @@ impl Game<'_> {
                     }
                 } else if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
                     m.hurt_time = 10;
+                } else {
+                    self.remote_dragon_hurt(p.id);
                 }
             }
             C::EntityEvent(p) => {
@@ -2951,6 +2961,7 @@ impl Game<'_> {
     /// entities whose own tick moves them on a client: dropped items, falling
     /// blocks and primed TNT.
     fn remote_motion(&mut self, id: i32, velocity: [f64; 3]) {
+        self.remote_dragon_motion(id, velocity);
         let v = Vec3::new(velocity[0], velocity[1], velocity[2]);
         if let Some(d) = self.dropped.iter_mut().find(|d| d.id == id as u32) {
             d.velocity = v;
@@ -3546,6 +3557,18 @@ impl Game<'_> {
             self.remote_player_eating(&item, ticks, at, eye, pitch, yaw);
         }
         if running {
+            // The dragon: LivingEntity's interpolation, inside its aiStep.
+            let dragon_lerp = self
+                .dragon
+                .as_ref()
+                .and_then(|d| lerps.get_mut(&(d.id as i32)))
+                .filter(|l| l.steps > 0)
+                .map(|l| {
+                    let steps = l.steps;
+                    l.steps -= 1;
+                    (l.target, l.rotation.map(|r| r.0), steps)
+                });
+            self.tick_remote_dragon(dragon_lerp);
             // Boats, minecarts, armor stands, projectiles and the rest
             // interpolate like mobs.
             let mut step = |id: u32, at: Vec3| match lerps.get_mut(&(id as i32)) {
