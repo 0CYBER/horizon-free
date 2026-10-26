@@ -680,6 +680,7 @@ impl Opt {
                 | Opt::CutoutLeaves
                 | Opt::ImprovedTransparency
                 | Opt::MenuBlur
+                | Opt::ChunkBuilder
         )
     }
     /// Advance a cycle button (CycleButton.cycleValue).
