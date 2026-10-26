@@ -15,7 +15,7 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `registries` | data files (`assets/`, `data/`), no interface | add blocks and items to your worlds |
 | `ui` | [`ui`](#ui) | show its own screens and a settings page |
 | `render` | [`render`](#render) | draw on your screen and shake the camera |
-| `input` | [`input`](#input) | take over the use button on its own items, and add keys |
+| `input` | [`input`](#input) | see the keys you hold and your clicks, take over the use button on its own items, and add keys |
 
 ## World `horizon-mod`
 
@@ -188,13 +188,21 @@ Rows the player picks one of, as an options page lists choices: a pick is `ui-ev
 | `rows` | `list<string>` | The rows' texts, at most 512, each up to 256 characters. |
 | `selected` | `option<u32>` | The row to mark as the current choice, if any. |
 
-### variant `widget`
+### record `button-widget`
 
-A thing on a mod's screen or settings page.
+A thing on a mod's screen or settings page. A button as the options pages have them (200 × 20): a click is `ui-events::select(id, 0)`. Mods cycle its label for a choice ("Corner: Top Left").
+
+| Field | Type | |
+| --- | --- | --- |
+| `id` | `u32` | The mod's own name for the widget. |
+| `label` | `string` | Up to 256 characters. |
+
+### variant `widget`
 
 | Case | Payload | |
 | --- | --- | --- |
 | `text` | `text-widget` | Text the player reads. |
+| `button` | `button-widget` | A button. |
 | `item` | `item-widget` | An item's icon and name. |
 | `list` | `list-widget` | Rows the player picks from. |
 
@@ -257,18 +265,40 @@ The main hand's stack.
 | `key-down` | `string` | A key `register-key` named went down or up while playing (no screen open). The game's own mapping on that key still runs. |
 | `key-up` | `string` |  |
 
+### record `mapping-state`
+
+A mapping as the player has bound it.
+
+| Field | Type | |
+| --- | --- | --- |
+| `label` | `string` | The bound key's name as Controls shows it: `W`, `Space`, `LMB`. |
+| `down` | `bool` | Held down now (as of this frame for a mod with a `frame` hook, else this tick). |
+
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `claim-items` | `func(ids: list<string>)` | The items whose use the mod handles instead of the game, by id (at most 64). Replaces the previous list. |
 | `register-key` | `func(name: string, label: string, key: string) -> result<_, string>` | A key of the mod's: `name` comes back in `key-down` and `key-up`, `label` says what it does, `key` is the key as options.txt writes it (`key.keyboard.r`). At most 16; an unknown key is an error. |
 | `held` | `func() -> option<held-item>` | The main hand's stack, as of this tick; none when it is empty. |
 | `poll` | `func() -> list<event>` | The events since the last call, oldest first. |
+| `mapping` | `func(name: string) -> option<mapping-state>` | A movement or click mapping as the player has bound it: `key.forward`, `key.left`, `key.back`, `key.right`, `key.jump`, `key.sneak`, `key.sprint`, `key.attack` or `key.use`. None for another name. |
+| `clicks-per-second` | `func() -> tuple<u32, u32>` | Clicks of the attack and use buttons in the last second. |
 
 ## `render`
 
 Access: capability `render`.
 
 Capability `render` (experimental: the manifest needs `experimental = ["render"]`): shapes the game draws for the mod with its own renderer, kept until the mod replaces them (no call per frame). A mod never supplies shader code.
+
+### enum `corner`
+
+A corner of the screen, as `hud`'s panels use them.
+
+| Case | |
+| --- | --- |
+| `top-left` |  |
+| `top-right` |  |
+| `bottom-left` |  |
+| `bottom-right` |  |
 
 ### record `rect`
 
@@ -342,11 +372,23 @@ Any four-cornered shape (a wheel's segment, an arrow): the corners in order roun
 | `item` | `item-shape` |  |
 | `text` | `text-shape` |  |
 
+### record `frame-rate`
+
+| Field | Type | |
+| --- | --- | --- |
+| `fps` | `u32` | Frames drawn in the last second. |
+| `min` | `u32` | The slowest frame's rate, and the 1% low (the 99th percentile frame time's rate), over the last 5 seconds. |
+| `low` | `u32` |  |
+
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `set-hud` | `func(shapes: list<shape>)` | Replaces the mod's HUD shapes: up to 1024, drawn every frame in order over the HUD (after the hotbar, under chat and screens), hidden with the HUD (F1). An empty list removes them. |
 | `gui-size` | `func() -> tuple<f32, f32>` | The screen's size in GUI pixels (width, height), as of this tick. |
 | `shake` | `func(strength: f32, seconds: f32)` | Shakes the camera: a jolt of `strength` (0 to 1, 1 the hardest) that fades out over `seconds` (at most 10). Jolts add up to 1. The view turns, the player doesn't, and the player's Distortion Effects option scales it (0 turns it off). |
+| `set-corner` | `func(corner: corner, width: f32, height: f32, shapes: list<shape>)` | Replaces the mod's corner panel: shapes in GUI pixels from the top left of a `width` × `height` box that the game places in `corner`, stacked with the game's overlays and the other mods' panels (under the status effects at the top right), as `hud`'s panels are. |
+| `clear-corner` | `func()` | Removes the mod's corner panel. |
+| `text-width` | `func(text: string) -> f32` | The width of one line of text in GUI pixels, in the HUD's font: exact for Latin letters (U+0000 to U+024F), 6 per other character. |
+| `frame-stats` | `func() -> frame-rate` | The game's frame counter, recomputed twice a second. |
 
 ## `events`
 

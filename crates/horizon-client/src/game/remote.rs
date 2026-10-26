@@ -58,6 +58,12 @@ fn remote_text(tag: &Tag) -> horizon_client::text::Text {
     comp_text(&tag_to_json(tag))
 }
 
+/// `ClientboundOpenScreenPacket.title` as a container screen draws it: the
+/// component's styles, and the `§` codes a literal holds (`StringDecomposer`).
+fn menu_title(tag: &Tag) -> horizon_client::text::Text {
+    remote_text(tag).resolve_legacy()
+}
+
 /// A section's sky and block light layers from the wire.
 type LightLayers = (Option<Vec<u8>>, Option<Vec<u8>>);
 
@@ -123,6 +129,9 @@ pub(super) struct Remote {
     loaded_sent: bool,
     /// The view distance last sent in ClientInformation.
     sent_view: i8,
+    /// The Chat option's visibility last sent in ClientInformation
+    /// (`Options.broadcastOptions` sends it again when it changes).
+    sent_chat_visibility: i32,
     /// BlockStatePredictionHandler: blocks changed ahead of the server (a predicted break),
     /// with the sequence of the last action that changed them and the state the server
     /// last said they have. Until the server acknowledges that sequence its block updates
@@ -130,8 +139,8 @@ pub(super) struct Remote {
     predictions: HashMap<[i32; 3], (i32, i32)>,
     /// Open container: (window id, menu name).
     pub(super) menu: Option<(i32, String)>,
-    /// The open menu's title as the server named it.
-    pub(super) menu_title: Option<String>,
+    /// The open menu's title as the server named it, with its styles.
+    pub(super) menu_title: Option<horizon_client::text::Text>,
     state_id: i32,
     use_target: Option<[i32; 3]>,
     entities: HashMap<i32, Tracked>,
@@ -422,6 +431,7 @@ impl Game<'_> {
             abilities: None,
             loaded_sent: false,
             sent_view: view,
+            sent_chat_visibility: self.settings.chat_visibility as i32,
             predictions: HashMap::new(),
             menu: None,
             menu_title: None,
@@ -489,6 +499,7 @@ impl Game<'_> {
             r.session.disconnect();
         }
         self.server_packs_disconnect();
+        self.close_dialogs();
         // Single player's server thread saves the world before the title shows.
         let single_player = match self.integrated.take() {
             Some(server) => {
@@ -630,14 +641,23 @@ impl Game<'_> {
         )
     }
     /// A line in the connection's chat, with its styles, click and hover
-    /// events (ChatComponent.addMessage).
-    pub(super) fn chat_line(&mut self, content: horizon_client::text::Text) {
+    /// events (ChatComponent.addMessage). The lines the Chat option hides
+    /// are dropped there (its `visibleMessageFilter`).
+    pub(super) fn chat_line(
+        &mut self,
+        content: horizon_client::text::Text,
+        source: horizon_client::chat::ChatSource,
+    ) {
+        if !self.ui.chat.shows(source) {
+            return;
+        }
         let text = content.plain();
         log::info!("[chat] {text}");
         self.ui.chat.add(
             &self.gui.atlas,
             content,
             None,
+            source,
             self.ticks,
             self.screen == Screen::Chat,
         );
@@ -736,6 +756,8 @@ impl Game<'_> {
                 } => {
                     self.set_registries(registries);
                     self.extras_joined();
+                    // handleLogin: the level loading screen replaces any dialog.
+                    self.close_dialogs();
                     if let Some(r) = self.remote.as_mut() {
                         r.joined = true;
                         r.profile = uuid;
@@ -764,6 +786,8 @@ impl Game<'_> {
                 }
                 Event::PackPush(p) => self.handle_pack_push(p),
                 Event::PackPop(id) => self.handle_pack_pop(id),
+                Event::ShowDialog(dialog) => self.show_dialog(&dialog),
+                Event::ClearDialog => self.clear_dialog(),
                 Event::DecodeError(e) => {
                     if let Some(r) = self.remote.as_mut() {
                         r.decode_errors += 1;
@@ -1402,13 +1426,29 @@ impl Game<'_> {
                 m.on_ground = on_ground;
                 return;
             }
+            if let Some(p) = self.creatures.projectiles.iter_mut().find(|p| {
+                p.id == id as u32
+                    && matches!(
+                        p.kind,
+                        horizon_client::projectiles::ProjectileKind::LargeFireball { .. }
+                    )
+            }) {
+                if path.is_some() {
+                    p.position = Vec3::new(position[0], position[1], position[2]);
+                }
+                if let Some((yaw, pitch)) = rotation {
+                    p.yaw = yaw;
+                    p.pitch = pitch;
+                }
+                return;
+            }
             if let Some(p) = r.pending_items.get_mut(&id) {
                 p.0 = position;
             }
-            // ItemEntity and FallingBlockEntity keep Entity's NO_OP
-            // InterpolationHandler: moveOrInterpolateTo puts them there at
-            // once, and their own tick moves them on between the server's
-            // updates (`tick_remote_entities`).
+            // ItemEntity, FallingBlockEntity and PrimedTnt keep Entity's
+            // NO_OP InterpolationHandler: moveOrInterpolateTo puts them there
+            // at once, and their own tick moves them on between the server's
+            // updates (`tick_remote_entities`, `tick_remote_projectiles`).
             let at = Vec3::new(position[0], position[1], position[2]);
             if let Some(d) = self.dropped.iter_mut().find(|d| d.id == id as u32) {
                 d.position = at;
@@ -1417,6 +1457,11 @@ impl Game<'_> {
             }
             if let Some(f) = self.falling.iter_mut().find(|f| f.id == id as u32) {
                 f.position = at;
+                return;
+            }
+            if let Some(t) = self.tnts.iter_mut().find(|t| t.id == id as u32) {
+                t.position = at;
+                t.on_ground = on_ground;
                 return;
             }
             // AbstractInterpolationHandler.interpolateTo: without a rotation,
@@ -1612,9 +1657,10 @@ impl Game<'_> {
                 if let Some(r) = self.remote.as_mut() {
                     r.sent_view = view;
                 }
-                self.send(S::ClientInformation(
-                    horizon_protocol::packets::configuration::ClientInformation::new(view),
-                ));
+                let mut info =
+                    horizon_protocol::packets::configuration::ClientInformation::new(view);
+                info.chat_visibility = self.settings.chat_visibility as i32;
+                self.send(S::ClientInformation(info));
             }
             C::Respawn(p) => {
                 // A new player, without effects: the server sends them again.
@@ -2377,6 +2423,16 @@ impl Game<'_> {
                 }
                 self.merge_remote_tree();
             }
+            C::Cooldown(p) => {
+                // ClientPacketListener.handleItemCooldown: the server starts
+                // (or confirms) a group's cooldown; 0 ends it.
+                let group: Arc<str> = Arc::from(p.group.as_str());
+                if p.duration == 0 {
+                    self.cooldowns.remove(&group);
+                } else {
+                    self.cooldowns.add(group, p.duration);
+                }
+            }
             C::SystemChat(p) => {
                 // The component as sent, translated in the client's own
                 // language. ChatListener.handleOverlay for the action bar.
@@ -2384,7 +2440,7 @@ impl Game<'_> {
                 if p.overlay {
                     self.titles.set_overlay(text, false);
                 } else {
-                    self.chat_line(text);
+                    self.chat_line(text, horizon_client::chat::ChatSource::Server);
                 }
             }
             C::PlayerChat(p) => {
@@ -2394,12 +2450,12 @@ impl Game<'_> {
                     .as_ref()
                     .map_or_else(|| serde_json::Value::from(p.content.as_str()), tag_to_json);
                 let line = self.format_chat(&p.chat_type, content);
-                self.chat_line(line);
+                self.chat_line(line, horizon_client::chat::ChatSource::Player);
             }
             C::DisguisedChat(p) => {
                 let content = horizon_client::scoreboard::tag_to_json(&p.message);
                 let line = self.format_chat(&p.chat_type, content);
-                self.chat_line(line);
+                self.chat_line(line, horizon_client::chat::ChatSource::Player);
             }
             C::PlayerInfoUpdate(p) => {
                 if let Some(r) = self.remote.as_mut() {
@@ -2614,6 +2670,9 @@ impl Game<'_> {
             C::SetTitleText(p) => self.titles.set_title(remote_text(&p.text)),
             C::SetSubtitleText(p) => self.titles.set_subtitle(remote_text(&p.text)),
             C::SetTitlesAnimation(p) => self.titles.set_times(p.fade_in, p.stay, p.fade_out),
+            // ClientCommonPacketListenerImpl.handleShowDialog / handleClearDialog.
+            C::ShowDialog(p) => self.show_play_dialog(&p.dialog),
+            C::ClearDialog(_) => self.clear_dialog(),
             C::ClearTitles(p) => {
                 self.titles.clear();
                 if p.value {
@@ -2912,14 +2971,23 @@ impl Game<'_> {
         });
     }
     /// `Entity.lerpMotion` (and `recreateFromPacket`'s motion) for the
-    /// entities whose own tick moves them on a client: dropped items and
-    /// falling blocks.
+    /// entities whose own tick moves them on a client: dropped items, falling
+    /// blocks and primed TNT.
     fn remote_motion(&mut self, id: i32, velocity: [f64; 3]) {
         let v = Vec3::new(velocity[0], velocity[1], velocity[2]);
         if let Some(d) = self.dropped.iter_mut().find(|d| d.id == id as u32) {
             d.velocity = v;
         } else if let Some(f) = self.falling.iter_mut().find(|f| f.id == id as u32) {
             f.velocity = v;
+        } else if let Some(t) = self.tnts.iter_mut().find(|t| t.id == id as u32) {
+            t.velocity = v;
+        } else if let Some(p) = self
+            .creatures
+            .projectiles
+            .iter_mut()
+            .find(|p| p.id == id as u32)
+        {
+            p.velocity = v;
         } else if let Some(p) = self
             .remote
             .as_mut()
@@ -3032,16 +3100,19 @@ impl Game<'_> {
     fn tick_remote_level(&mut self) -> Result<()> {
         self.ticks += 1;
         self.track_experience_display();
-        // Options.broadcastOptions: a changed render distance is sent again.
+        // Options.broadcastOptions: a changed render distance or Chat option
+        // is sent again.
         let view = client_view_distance(self.settings.render_distance);
+        let visibility = self.settings.chat_visibility as i32;
         if let Some(r) = self.remote.as_mut()
             && r.joined
-            && r.sent_view != view
+            && (r.sent_view != view || r.sent_chat_visibility != visibility)
         {
             r.sent_view = view;
-            self.send(S::ClientInformation(
-                horizon_protocol::packets::configuration::ClientInformation::new(view),
-            ));
+            r.sent_chat_visibility = visibility;
+            let mut info = horizon_protocol::packets::configuration::ClientInformation::new(view);
+            info.chat_visibility = visibility;
+            self.send(S::ClientInformation(info));
         }
         // Minecraft.tick: TickRateManager.tick; ClientLevel.tickTime advances
         // the time only while the level runs normally.
@@ -3403,6 +3474,10 @@ impl Game<'_> {
             {
                 m.head_yaw += wrap_degrees(*yaw - m.head_yaw) / *steps as f32;
                 *steps -= 1;
+            }
+            // Chicken.aiStep: the wings follow the server's on-ground flag.
+            if m.species() == horizon_client::mobs::Species::Chicken {
+                horizon_client::mobs::farm::chicken_flap(m);
             }
             // LivingEntity.updatingUsingItem: the ticks the item has been
             // used before this one. Another player's use particles; a mob's
@@ -4123,8 +4198,12 @@ impl Game<'_> {
         let Some(info) = self.res.items().get(&held.item).cloned() else {
             return false;
         };
-        // MultiPlayerGameMode.useItem runs the use here too: food starts
-        // being eaten (Consumable.startConsuming), a book and quill opens.
+        // MultiPlayerGameMode.useItem runs the use here too (inside
+        // startPrediction): the `use_cooldown` component starts its entry, and
+        // the server's ClientboundCooldownPacket confirms it.
+        self.apply_use_cooldown(&held);
+        // Food starts being eaten (Consumable.startConsuming), a book and
+        // quill opens.
         self.with_hand(hand, |g| g.start_eating(&info));
         if self.with_hand(hand, |g| g.remote_use_book(&held)) {
             return true;
@@ -4463,10 +4542,12 @@ impl Game<'_> {
             _ => Ok(false),
         }
     }
-    /// ClientPacketListener.sendChat / sendCommand (unsigned).
+    /// ClientPacketListener.sendChat / sendCommand (unsigned). The Chat
+    /// option's Hidden and System levels keep chat out and Hidden keeps the
+    /// commands out (ChatAbilities).
     pub(super) fn send_chat(&mut self, message: &str) {
         let message = message.trim();
-        if message.is_empty() {
+        if message.is_empty() || !self.chat_abilities().allows(message) {
             return;
         }
         if let Some(command) = message.strip_prefix('/') {
@@ -4781,14 +4862,7 @@ impl Game<'_> {
             return;
         }
         if let Some(kind) = Self::remote_station_kind(&menu) {
-            let title = plain(
-                &p.title,
-                &self
-                    .remote
-                    .as_ref()
-                    .map(|r| r.lang.clone())
-                    .unwrap_or_default(),
-            );
+            let title = menu_title(&p.title);
             let pos = target.map_or([0, 0, 0], |t| [t.0, t.1, t.2]);
             self.remote_open_station(p.container, menu, kind, title, pos);
             return;
@@ -4847,20 +4921,16 @@ impl Game<'_> {
                 self.send(S::ContainerClose(play::ContainerClose {
                     container: p.container,
                 }));
-                self.chat_line(horizon_client::text::Text::literal(format!(
-                    "(Horizon cannot show {menu} screens yet)"
-                )));
+                self.chat_line(
+                    horizon_client::text::Text::literal(format!(
+                        "(Horizon cannot show {menu} screens yet)"
+                    )),
+                    horizon_client::chat::ChatSource::Client,
+                );
                 return;
             }
         };
-        let title = plain(
-            &p.title,
-            &self
-                .remote
-                .as_ref()
-                .map(|r| r.lang.clone())
-                .unwrap_or_default(),
-        );
+        let title = menu_title(&p.title);
         if let Some(r) = self.remote.as_mut() {
             r.menu = Some((p.container, menu.clone()));
             r.menu_title = Some(title);
@@ -4904,7 +4974,7 @@ impl Game<'_> {
         Some(self.remote.as_ref()?.menu.as_ref()?.1.as_str())
     }
     /// The title the server gave the menu it opened.
-    pub(super) fn remote_menu_title(&self) -> Option<String> {
+    pub(super) fn remote_menu_title(&self) -> Option<horizon_client::text::Text> {
         self.remote.as_ref()?.menu_title.clone()
     }
     /// A language change reaches the server-sent components too: their titles
@@ -4917,7 +4987,7 @@ impl Game<'_> {
         }
     }
     /// A server's chest-like menu (`MenuType.GENERIC_9xN`): its rows and title.
-    pub(super) fn remote_chest_menu(&self) -> Option<(usize, String)> {
+    pub(super) fn remote_chest_menu(&self) -> Option<(usize, horizon_client::text::Text)> {
         let r = self.remote.as_ref()?;
         let rows = r
             .menu
@@ -4926,7 +4996,12 @@ impl Game<'_> {
             .strip_prefix("minecraft:generic_9x")?
             .parse()
             .ok()?;
-        Some((rows, r.menu_title.clone().unwrap_or_default()))
+        Some((
+            rows,
+            r.menu_title
+                .clone()
+                .unwrap_or_else(horizon_client::text::Text::empty),
+        ))
     }
     /// ServerboundPlayerCommandPacket STOP_SLEEPING.
     pub(super) fn remote_stop_sleeping(&mut self) {

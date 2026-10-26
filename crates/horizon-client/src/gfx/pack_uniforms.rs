@@ -209,7 +209,7 @@ pub fn tilt_matrix(tilt: f32) -> Mat4 {
 }
 
 /// The world direction of the shadow light (7.1): the sun by day, the moon by night.
-fn shadow_light(frame: &Frame, shadow: &Shadow) -> Vec3 {
+pub fn shadow_light(frame: &Frame, shadow: &Shadow) -> Vec3 {
     let sun_angle = (frame.sky.sun_angle / 360.0 + 0.25).rem_euclid(1.0);
     let angle = if sun_angle < 0.5 {
         frame.sky.sun_angle
@@ -217,6 +217,19 @@ fn shadow_light(frame: &Frame, shadow: &Shadow) -> Vec3 {
         frame.sky.moon_angle
     };
     body(angle, shadow.sun_path_rotation).normalize()
+}
+
+/// `shadow_camera`'s view and projection in wgpu's clip space (depth 0..1), for culling.
+pub fn shadow_culling(frame: &Frame, shadow: &Shadow) -> Mat4 {
+    let (view, gl) = shadow_camera(shadow_light(frame, shadow), frame.camera, shadow);
+    // GL's depth -w..w to wgpu's 0..w.
+    let depth = Mat4::from_cols(
+        Vec4::X,
+        Vec4::Y,
+        Vec4::new(0.0, 0.0, 0.5, 0.0),
+        Vec4::new(0.0, 0.0, 0.5, 1.0),
+    );
+    depth * gl * view
 }
 
 /// Distance from the snapped point to the shadow camera, toward the light: the middle of the

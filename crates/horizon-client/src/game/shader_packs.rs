@@ -232,6 +232,32 @@ impl Game<'_> {
                     .unwrap_or(ids.missing_block)
             });
         self.push_span(start, "BLOCK_ENTITIES", id);
+        let emission = self
+            .res
+            .facts()
+            .get(horizon_world::registry::BlockStateId(state))
+            .emission;
+        if let Some(last) = self.entity_spans.borrow_mut().last_mut() {
+            last.emissive = emission > 0;
+        }
+    }
+
+    /// Starts the span of the local player's model; `hidden` in first person, where only a
+    /// pack's shadow pass draws it.
+    pub(super) fn mark_player(&self, start: usize, hidden: bool) {
+        self.mark_entity(start, "minecraft:player");
+        if self.pack_ids.is_some()
+            && let Some(last) = self.entity_spans.borrow_mut().last_mut()
+        {
+            last.player = true;
+            last.hidden = hidden;
+        }
+    }
+
+    /// Marks vertices `start..end` (one entity) as hidden from the camera, for an entity
+    /// Horizon's culling would drop but a pack's shadow pass still draws (`EntitySpan::hide`).
+    pub(super) fn hide_spans_from(&self, start: usize, end: usize) -> bool {
+        EntitySpan::hide(&mut self.entity_spans.borrow_mut(), start, end)
     }
 
     /// Starts a span of geometry that is not an entity (`PARTICLES`, `DESTROY`...).
@@ -247,7 +273,7 @@ impl Game<'_> {
             start: start as u32,
             stage: horizon_shaders::render_stage(stage),
             id,
-            translucent: false,
+            ..Default::default()
         };
         // A span that drew nothing gives way to the next.
         match spans.last_mut() {

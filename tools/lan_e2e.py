@@ -247,9 +247,10 @@ address. The script then checks, from both sides, what a guest's game used to ge
              sends each target its packet).
 - hero-trading: the host and the guest each trade 20 wheat for an emerald, paying 14 with Hero I
               and 12 with Hero III; clearing the effect restores the ordinary price (#1365).
-- falling:   an item and a falling block the host summons high up fall smoothly on the guest, a
-             little further every tick between the server's updates (every 20 ticks), as their own
-             client tick moves them (they used to hang, then jump down once a second, #1568).
+- falling:   an item, a falling block and primed TNT the host summons high up fall smoothly on the
+             guest, a little further every tick between the server's updates (every 20 ticks, 10 for
+             TNT), as their own client tick moves them (they used to hang, then jump down once a
+             second, #1568), and the TNT's fuse burns down on the guest too.
 - instant_digging: an instant survival break leaves no repeated stone hit sounds or stale server dig (#1908).
 - replant:   flowers and crops replanted after a short harvest click stay planted for both players;
              the server forgets the completed instant break (#1880).
@@ -6186,10 +6187,11 @@ CHECK_FNS.update(large_chest=check_large_chest)
 
 
 def check_falling(host, guest, out):
-    """ItemEntity and FallingBlockEntity tick on a client too (gravity, collisions, drag), and their
-    position packets snap them (Entity's NO_OP InterpolationHandler). The server sends an item's
-    and a falling block's position every 20 ticks, so between two updates the guest's own tick is
-    what moves them: sampled every 2 ticks over the first 16, both are lower nearly every time."""
+    """ItemEntity, FallingBlockEntity and PrimedTnt tick on a client too (gravity, collisions, drag),
+    and their position packets snap them (Entity's NO_OP InterpolationHandler). The server sends an
+    item's and a falling block's position every 20 ticks and TNT's every 10, so between two updates
+    the guest's own tick is what moves them: sampled every 2 ticks over the first 16, all three are
+    lower nearly every time. The TNT's fuse (sent once, at spawn) counts down on the guest too."""
     x, y, z = (int(v // 1) for v in pos_of(guest))
     top = y + 30
     tag = 'falling_e2e'
@@ -6198,7 +6200,10 @@ def check_falling(host, guest, out):
                             f'{{Tags:["{tag}"],Item:{{id:"minecraft:diamond",count:1}},PickupDelay:32767}}')
     host('command', command=f'summon minecraft:falling_block {x + 2.5} {top} {z - 0.5} '
                             f'{{Tags:["{tag}"],BlockState:{{Name:"minecraft:sand"}},DropItem:0b}}')
-    heights = {'item': [], 'falling block': []}
+    # Horizon's selectors don't see primed TNT yet: its fuse ends it in the air, 19 blocks down.
+    host('command', command=f'summon minecraft:tnt {x + 4.5} {top} {z + 0.5} {{fuse:34s}}')
+    heights = {'item': [], 'falling block': [], 'primed tnt': []}
+    fuses = []
     try:
         for _ in range(8):
             items = [e['pos'][1] for e in guest.raw('entities', 48, 'minecraft:item')['entities']
@@ -6206,8 +6211,12 @@ def check_falling(host, guest, out):
             blocks = [o['position'][1] for o in guest('status')['projectiles']
                       if o.get('kind') == 'minecraft:falling_block'
                       and abs(o['position'][0] - x - 2.5) < 0.5 and abs(o['position'][2] - z + 0.5) < 0.5]
+            tnts = [o for o in guest('status')['projectiles'] if o.get('kind') == 'minecraft:tnt'
+                    and abs(o['position'][0] - x - 4.5) < 0.5 and abs(o['position'][2] - z - 0.5) < 0.5]
             heights['item'].append(items[0] if items else None)
             heights['falling block'].append(blocks[0] if blocks else None)
+            heights['primed tnt'].append(tnts[0]['position'][1] if tnts else None)
+            fuses.append(tnts[0]['fuse'] if tnts else None)
             guest.wait(2)
         guest.shot(out, 'falling')
     finally:
@@ -6219,7 +6228,24 @@ def check_falling(host, guest, out):
         drops = sum(b < a for a, b in zip(seen, seen[1:]))
         # A tick or two can pass between two samples with no move; never most of them.
         assert drops >= len(seen) - 2, f'the {name} fell in {drops} of {len(seen) - 1} samples: {heights}'
-    return heights
+    # The server sends the TNT's fuse with each move, so each sample says how many ticks it has
+    # fallen from rest: snapped to the server's place and ticking on, the guest has it exactly
+    # there (it used to trail two ticks behind, interpolating towards each update).
+    fell = [(h, 34 - f) for h, f in zip(heights['primed tnt'], fuses) if f is not None]
+    assert fell and fell[-1][1] > fell[0][1], f'the TNT\'s fuse on the guest: {fuses}'
+    off = max(abs(h - tnt_fall(top, n)) for h, n in fell)
+    assert off < 0.01, f'the guest\'s TNT is {off:.3f} off its fall (height, ticks): {fell}'
+    return {**heights, 'fuse': fuses}
+
+
+def tnt_fall(top, ticks):
+    """PrimedTnt.tick in open air from rest: its height after `ticks` ticks."""
+    y, v = top, 0.0
+    for _ in range(ticks):
+        v -= 0.04
+        y += v
+        v *= 0.98
+    return y
 
 
 CHECKS += ['falling']
