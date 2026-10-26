@@ -1682,6 +1682,8 @@ impl Game<'_> {
                         value: 0,
                         age: 0,
                         on_ground: false,
+                        count: 1,
+                        ticks: 0,
                     });
                     name = Text::translate("entity.minecraft.experience_orb", &[]);
                 }

@@ -1269,6 +1269,8 @@ impl Game<'_> {
                 value: 1,
                 age: 0,
                 on_ground: false,
+                count: 1,
+                ticks: 0,
             });
         }
         if let Some(t) = mob_type {
