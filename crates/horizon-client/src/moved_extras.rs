@@ -25,7 +25,7 @@ pub struct Moved {
     pub name: &'static str,
 }
 
-pub const MOVED: [Moved; 2] = [
+pub const MOVED: [Moved; 4] = [
     Moved {
         id: "fps_overlay",
         name: "FPS counter",
@@ -34,13 +34,23 @@ pub const MOVED: [Moved; 2] = [
         id: "keystrokes",
         name: "Keystrokes",
     },
+    Moved {
+        id: "zoom",
+        name: "Zoom",
+    },
+    Moved {
+        id: "minimap",
+        name: "Minimap",
+    },
 ];
 
 impl Moved {
     fn was_on(&self, e: &Extras) -> bool {
         match self.id {
             "fps_overlay" => e.fps,
-            _ => e.keystrokes,
+            "keystrokes" => e.keystrokes,
+            "zoom" => e.zoom,
+            _ => e.minimap,
         }
     }
     /// The extra's settings as the mod keeps them (its storage keys).
@@ -51,10 +61,33 @@ impl Moved {
                 ("corner", e.fps_corner.name().into()),
                 ("lows", flag(e.fps_lows)),
             ],
-            _ => vec![
+            "keystrokes" => vec![
                 ("corner", e.keystrokes_corner.name().into()),
                 ("cps", flag(e.keystrokes_cps)),
             ],
+            "zoom" => vec![
+                ("level", e.zoom_level.to_string()),
+                ("smooth", flag(e.zoom_smooth)),
+                ("sensitivity", flag(e.zoom_sensitivity)),
+            ],
+            _ => vec![
+                ("corner", e.minimap_corner.name().into()),
+                ("size", e.minimap_size.to_string()),
+                (
+                    "shape",
+                    if e.minimap_round { "round" } else { "square" }.into(),
+                ),
+                ("zoom", e.minimap_zoom.to_string()),
+                ("rotate", flag(e.minimap_rotate)),
+            ],
+        }
+    }
+    /// The extra's key as the mod's key (`horizon-mods.txt`), when the
+    /// player had changed it from the mod's default.
+    pub fn keys(&self, e: &Extras) -> Vec<(&'static str, String)> {
+        match self.id {
+            "zoom" if e.zoom_key != "key.keyboard.z" => vec![("zoom", e.zoom_key.clone())],
+            _ => Vec::new(),
         }
     }
     /// The line the player reads once it is installed.
@@ -131,21 +164,21 @@ pub fn fetch_index() -> Result<Index, String> {
 
 /// Installs `m` into the game folder `dir` (where `options.txt` is), for a
 /// player whose extras were `e`: its newest version for this game that
-/// wasn't taken down, checked against the index (size, SHA-256, signature,
-/// manifest), as `horizon-mods/<id>.hmod`, turned on, with the extra's
-/// settings in its storage unless the mod has its own already.
+/// wasn't taken down and that this Horizon's mod API level runs, checked
+/// against the index (size, SHA-256, signature, manifest), as
+/// `horizon-mods/<id>.hmod`, turned on, with the extra's settings in its
+/// storage unless the mod has its own already.
 pub fn install(index: &Index, m: &Moved, e: &Extras, dir: &Path) -> Result<(), String> {
     let project = index
         .project(m.id)
         .ok_or_else(|| format!("{} isn't in Horizon's registry yet", m.id))?;
-    let version = project
-        .versions
-        .iter()
-        .find(|v| {
-            v.game == horizon_core::version::VERSION_ID
-                && index.revoked(&project.id, &v.file.sha256).is_none()
-        })
-        .ok_or_else(|| format!("{} has no version for this game", m.id))?;
+    let version = index
+        .installable(
+            project,
+            horizon_core::version::VERSION_ID,
+            horizon_mods::api_level::LEVEL,
+        )
+        .ok_or_else(|| format!("{} has no version this Horizon can run", m.id))?;
     let mods = dir.join(crate::mod_list::DIR);
     fs::create_dir_all(&mods).map_err(|e| format!("{}: {e}", mods.display()))?;
     let target = mods.join(format!("{}.hmod", m.id));
@@ -171,6 +204,12 @@ pub fn install(index: &Index, m: &Moved, e: &Extras, dir: &Path) -> Result<(), S
     }
     let mut list = ModList::load(dir);
     list.enabled.insert(m.id.to_owned());
+    // A key the player already chose for the mod stays.
+    let keys = list.keys.entry(m.id.to_owned()).or_default();
+    for (name, key) in m.keys(e) {
+        keys.entry(name.to_owned()).or_insert(key);
+    }
+    list.keys.retain(|_, k| !k.is_empty());
     list.save(dir);
     Ok(())
 }
@@ -184,7 +223,7 @@ mod tests {
     fn only_extras_that_were_on_are_installed_and_each_once() {
         let mut e = Extras::default();
         assert!(pending(&e).is_empty());
-        assert_eq!(nothing_to_do(&e).len(), 2);
+        assert_eq!(nothing_to_do(&e).len(), 4);
         e.fps = true;
         e.fps_corner = Corner::BottomRight;
         e.fps_lows = true;
@@ -199,7 +238,40 @@ mod tests {
         );
         e.moved.push("fps_overlay".into());
         assert!(pending(&e).is_empty());
-        assert_eq!(nothing_to_do(&e), [&MOVED[1]]);
+        assert_eq!(nothing_to_do(&e), [&MOVED[1], &MOVED[2], &MOVED[3]]);
+        // Zoom: its settings, and its key only when the player changed it.
+        e.zoom = true;
+        e.zoom_level = 8;
+        e.zoom_smooth = false;
+        assert_eq!(pending(&e), [&MOVED[2]]);
+        assert_eq!(
+            MOVED[2].settings(&e),
+            [
+                ("level", "8".into()),
+                ("smooth", "false".into()),
+                ("sensitivity", "true".into())
+            ]
+        );
+        assert!(MOVED[2].keys(&e).is_empty());
+        e.zoom_key = "key.mouse.4".into();
+        assert_eq!(MOVED[2].keys(&e), [("zoom", "key.mouse.4".into())]);
+        // The minimap: its five settings, in the extra's values.
+        e.minimap = true;
+        e.minimap_corner = Corner::BottomLeft;
+        e.minimap_size = 128;
+        e.minimap_round = true;
+        e.minimap_zoom = 0.5;
+        assert_eq!(pending(&e), [&MOVED[2], &MOVED[3]]);
+        assert_eq!(
+            MOVED[3].settings(&e),
+            [
+                ("corner", "bottom_left".into()),
+                ("size", "128".into()),
+                ("shape", "round".into()),
+                ("zoom", "0.5".into()),
+                ("rotate", "false".into())
+            ]
+        );
         assert_eq!(
             MOVED[0].notice(),
             "FPS counter moved to the mod browser: installed for you"

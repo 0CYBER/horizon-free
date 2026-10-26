@@ -297,8 +297,8 @@ pub struct PackPost {
     /// with the page buffer it was made for.
     block_ids: Option<(wgpu::BindGroupLayout, wgpu::Buffer)>,
     page_groups: HashMap<u32, (wgpu::Buffer, wgpu::BindGroup)>,
-    /// `HORIZON_SHADER_PACK_TIMING`: GPU time of each pass, in the log.
-    timing: Option<super::pack_timing::PassTiming>,
+    /// GPU time of each pass, while the renderer asks for it (`pack_timing.rs`).
+    pub timing: Option<super::pack_timing::PassTiming>,
     /// `shaders.properties`' custom uniforms, after the frame's in `uniforms.values`.
     custom: horizon_shaders::Custom,
     atlas: Option<wgpu::TextureView>,
@@ -1430,7 +1430,7 @@ impl PackPost {
             draws,
             block_ids,
             page_groups: HashMap::new(),
-            timing: super::pack_timing::PassTiming::new(device, queue),
+            timing: None,
             custom,
             atlas: world.atlas.as_ref().map(|a| a.0.clone()),
             lightmap: world.lightmap,

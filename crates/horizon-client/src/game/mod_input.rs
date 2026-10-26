@@ -28,6 +28,9 @@ impl Game<'_> {
     pub(super) fn mod_zoom(&self) -> Option<ModZoom> {
         None
     }
+    pub(super) fn mod_minimap(&self) -> Option<ModMinimap> {
+        None
+    }
 }
 
 /// A mod's zoom (`render.set-zoom`), clamped by the runtime.
@@ -36,6 +39,16 @@ pub(super) struct ModZoom {
     pub(super) factor: f32,
     pub(super) smooth: bool,
     pub(super) turn: f32,
+}
+
+/// A mod's minimap (`render.set-minimap`), clamped by the runtime.
+#[derive(Clone, Copy)]
+pub(super) struct ModMinimap {
+    pub(super) corner: horizon_client::extras::Corner,
+    pub(super) size: f32,
+    pub(super) blocks_per_pixel: f32,
+    pub(super) rotate: bool,
+    pub(super) round: bool,
 }
 
 #[cfg(feature = "mods")]
@@ -145,6 +158,24 @@ impl Game<'_> {
             factor: z.factor,
             smooth: z.smooth,
             turn: z.turn,
+        })
+    }
+    /// The minimap the first mod showing one asks for.
+    pub(super) fn mod_minimap(&self) -> Option<ModMinimap> {
+        use horizon_client::extras::Corner;
+        use horizon_mods::RenderCorner;
+        let m = self.mods.mods.minimap()?;
+        Some(ModMinimap {
+            corner: match m.corner {
+                RenderCorner::TopLeft => Corner::TopLeft,
+                RenderCorner::TopRight => Corner::TopRight,
+                RenderCorner::BottomLeft => Corner::BottomLeft,
+                RenderCorner::BottomRight => Corner::BottomRight,
+            },
+            size: m.size,
+            blocks_per_pixel: m.blocks_per_pixel,
+            rotate: m.rotate,
+            round: m.round,
         })
     }
 }

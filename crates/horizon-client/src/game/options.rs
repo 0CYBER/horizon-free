@@ -78,6 +78,10 @@ impl Game<'_> {
             .unwrap_or_default()
             .join("options.txt")
     }
+    /// `shaderpacks/` beside `options.txt`.
+    pub(super) fn shader_packs_dir() -> std::path::PathBuf {
+        Self::options_path().with_file_name(horizon_client::shader_pack_list::DIR)
+    }
     pub(super) fn gui_size(&self) -> (f32, f32) {
         let size = self
             .renderer
@@ -230,6 +234,17 @@ impl Game<'_> {
                     let _ = std::fs::create_dir_all(&dir);
                     super::packs::open_folder(&dir);
                 }
+                Event::ListShaderPacks => {
+                    self.settings.shader_packs =
+                        horizon_client::shader_pack_list::scan(&Self::shader_packs_dir());
+                }
+                // Saved; the next frame's `shader_pack_inputs` loads the pick.
+                Event::ShaderPack => self.settings.save(&Self::options_path()),
+                Event::OpenShaderPackFolder => {
+                    let dir = Self::shader_packs_dir();
+                    let _ = std::fs::create_dir_all(&dir);
+                    super::packs::open_folder(&dir);
+                }
                 Event::ModSettings(i) => self.open_mod_screen(i, true),
                 Event::Credits => self.open_win_screen(false, super::win::Finish::Options),
             }
@@ -253,6 +268,11 @@ impl Game<'_> {
             r.animated_textures = s.horizon.animated_textures;
             r.set_mipmap_levels(s.mipmap_levels.max(0) as u32);
             r.set_world_post(s.horizon.resolution_scale as f32 / 100.0, s.horizon.fxaa);
+            r.set_hdr(
+                s.horizon.hdr,
+                s.horizon.hdr_paper_white as f32,
+                s.horizon.hdr_peak as f32,
+            );
         }
         // Window.updateFullscreenIfChanged: only a changed option asks the
         // window to change, so applying settings never undoes a fullscreen

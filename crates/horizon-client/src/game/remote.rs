@@ -6,11 +6,12 @@
 //! clicks). The player still moves with the local physics, as the vanilla
 //! client predicts its own movement; the server stays authoritative for
 //! everything else.
+use super::remote_chunks::{ChunkDecoder, ChunkFormat, Next};
 use super::{Dim, Game, Mining, Screen};
 use horizon_client::first_person::{Hand, SwingAnimation};
 use horizon_client::{
     Result,
-    chunk::{BIOME_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section, block_strategy},
+    chunk::Chunk,
     containers::{BlockEntity, Furnace, FurnaceKind},
     entities::{Experience, ExperienceOrb, ItemEntity},
     hud::{HudBatch, rgba},
@@ -25,11 +26,7 @@ use horizon_client::{
     tab_list::SPECTATOR,
     world::World,
 };
-use horizon_core::{
-    geometry::Vec3,
-    paletted::{PalettedContainer, Strategy},
-    random::RandomSource,
-};
+use horizon_core::{geometry::Vec3, random::RandomSource};
 use horizon_protocol::{
     entity_data::{ITEM_ENTITY_ITEM, Value},
     item::{Hashed, Stack},
@@ -63,9 +60,6 @@ fn remote_text(tag: &Tag) -> horizon_client::text::Text {
 fn menu_title(tag: &Tag) -> horizon_client::text::Text {
     remote_text(tag).resolve_legacy()
 }
-
-/// A section's sky and block light layers from the wire.
-type LightLayers = (Option<Vec<u8>>, Option<Vec<u8>>);
 
 /// Streaming needs a generator; a server world never generates.
 struct NoTerrain;
@@ -104,6 +98,14 @@ fn place_interpolated(m: &mut Mob, at: PosRot) {
     m.head_pitch = (at.pitch % 360.0).clamp(-90.0, 90.0);
 }
 
+/// What the network thread delivered, in order: an event, or a chunk packet
+/// handed to the decoder (with the format it decodes with), whose column
+/// comes back from `ChunkDecoder::next`.
+enum Received {
+    Event(Event),
+    Chunk(Arc<ChunkFormat>),
+}
+
 pub(super) struct Remote {
     pub session: Session,
     pub brand: String,
@@ -114,8 +116,11 @@ pub(super) struct Remote {
     status: String,
     pub(super) entity_id: i32,
     dimension: DimensionType,
-    biome_map: Vec<u16>,
-    biome_bits: u8,
+    /// What chunk packets decode with (the dimension's height and sky, the
+    /// biome registry); replaced whenever one of them changes.
+    pub(super) chunk_format: Arc<ChunkFormat>,
+    /// Decodes chunk packets as they arrive, off the frame.
+    decoder: ChunkDecoder,
     view_distance: i32,
     sequence: i32,
     position_sender: horizon_client::player_sync::PositionSender,
@@ -200,7 +205,7 @@ pub(super) struct Remote {
     chunk_center: (i32, i32),
     /// Received events a frame left for the next one, in order, and when
     /// the oldest of them first waited (`poll_remote`).
-    backlog: VecDeque<Event>,
+    backlog: VecDeque<Received>,
     backlog_since: Option<Instant>,
     /// `ClientboundTransferPacket`'s target: when the connection ends the
     /// game connects here, the stored cookies carried over (`TransferState`).
@@ -210,11 +215,12 @@ pub(super) struct Remote {
 /// The time a frame spends on chunk packets before it leaves the rest of
 /// the received events for the next frame. A batch of 25 to 60 columns
 /// (0.1 ms each on an M4 Pro) all in one frame was a 3 to 8 ms frame every
-/// time the player crossed a chunk border at 32 chunks.
+/// time the player crossed a chunk border at 32 chunks; they decode on the
+/// chunk decoder's thread now, and the frame only inserts them.
 const CHUNK_PACKETS_PER_FRAME: Duration = Duration::from_millis(1);
 /// Events that have waited this long are all handled in the next frame,
-/// whatever their cost: the packets after a slow machine's chunks never
-/// wait more than a tick.
+/// whatever inserting their columns costs, up to a column still decoding:
+/// the packets after a slow machine's chunks don't wait on its frames.
 const BACKLOG_LIMIT: Duration = Duration::from_millis(50);
 /// The open menu name of a server's horse inventory, then its chest's
 /// columns (the packet names no `MenuType`).
@@ -420,8 +426,12 @@ impl Game<'_> {
             status: "Connecting to the server...".into(),
             entity_id: 0,
             dimension: DimensionType::vanilla("minecraft:overworld"),
-            biome_map: Vec::new(),
-            biome_bits: 7,
+            chunk_format: Arc::new(ChunkFormat::new(
+                &DimensionType::vanilla("minecraft:overworld"),
+                Vec::new(),
+                7,
+            )),
+            decoder: ChunkDecoder::new(),
             view_distance: self.settings.render_distance,
             sequence: 0,
             position_sender: Default::default(),
@@ -741,25 +751,63 @@ impl Game<'_> {
     /// client's packet processor), in order. Chunk packets get
     /// `CHUNK_PACKETS_PER_FRAME`: once a frame has spent it, the events from
     /// the next chunk packet on wait for the next frame, unless they have
-    /// already waited `BACKLOG_LIMIT`.
+    /// already waited `BACKLOG_LIMIT`. A chunk packet still decoding holds
+    /// back what follows it.
     pub(super) fn poll_remote(&mut self) -> Result<()> {
         let Some(r) = self.remote.as_mut() else {
             return Ok(());
         };
         let mut events = std::mem::take(&mut r.backlog);
-        events.extend(r.session.poll());
+        // Chunk packets start decoding now; the frame that reaches one in
+        // order inserts its column.
+        for event in r.session.poll() {
+            events.push_back(match event {
+                Event::Packet(p) if matches!(*p, C::LevelChunkWithLight(_)) => {
+                    match r.decoder.submit(r.chunk_format.clone(), p) {
+                        None => Received::Chunk(r.chunk_format.clone()),
+                        Some(p) => Received::Event(Event::Packet(p)),
+                    }
+                }
+                event => Received::Event(event),
+            });
+        }
         let overdue = r
             .backlog_since
             .is_some_and(|since| since.elapsed() >= BACKLOG_LIMIT);
         let mut chunks = Duration::ZERO;
-        while let Some(event) = events.pop_front() {
-            let chunk =
-                matches!(&event, Event::Packet(p) if matches!(**p, C::LevelChunkWithLight(_)));
+        while let Some(item) = events.pop_front() {
+            let chunk = matches!(item, Received::Chunk(_));
             if chunk && !overdue && chunks >= CHUNK_PACKETS_PER_FRAME {
-                events.push_front(event);
+                events.push_front(item);
                 break;
             }
             let started = chunk.then(Instant::now);
+            let event = match item {
+                Received::Event(event) => event,
+                Received::Chunk(format) => {
+                    // A column still decoding waits for the next frame, with
+                    // what came after it, overdue or not.
+                    let Some(next) = self.remote.as_ref().map(|r| r.decoder.next()) else {
+                        break;
+                    };
+                    let (packet, column) = match next {
+                        Next::Ready(decoded) => decoded,
+                        Next::Decoding => {
+                            events.push_front(Received::Chunk(format));
+                            break;
+                        }
+                        Next::Lost => {
+                            log::warn!("Horizon: the chunk decoder stopped; a column is missing");
+                            continue;
+                        }
+                    };
+                    if let C::LevelChunkWithLight(p) = *packet {
+                        self.remote_chunk(&p, Some((&format, column)));
+                    }
+                    chunks += started.map_or(Duration::ZERO, |t| t.elapsed());
+                    continue;
+                }
+            };
             match event {
                 Event::Status(s) => {
                     if let Some(r) = self.remote.as_mut() {
@@ -791,7 +839,10 @@ impl Game<'_> {
                         remote.brand = brand;
                     }
                 }
-                Event::Reconfigured(registries) => self.set_registries(registries),
+                Event::Reconfigured(registries) => {
+                    self.boss_overlay.reset();
+                    self.set_registries(registries);
+                }
                 // handleTransfer: "Cannot transfer to server from
                 // singleplayer" (no ServerData), so the world just closes.
                 Event::Transfer { host, port } => {
@@ -915,8 +966,8 @@ impl Game<'_> {
             })
             .unwrap_or_default();
         if let Some(r) = self.remote.as_mut() {
-            r.biome_bits = ceil_log2(biomes.len());
-            r.biome_map = biomes;
+            let bits = ceil_log2(biomes.len());
+            r.chunk_format = Arc::new(ChunkFormat::new(&r.dimension, biomes, bits));
             r.registries = registries;
         }
     }
@@ -927,6 +978,7 @@ impl Game<'_> {
         };
         let dimension = r.registries.dimension(spawn.dimension_type);
         let same = r.dimension.name == dimension.name && keep_world;
+        r.chunk_format = Arc::new(r.chunk_format.with_dimension(&dimension));
         r.dimension = dimension;
         r.game_mode = spawn.game_type;
         r.loaded_sent = false;
@@ -949,6 +1001,9 @@ impl Game<'_> {
                 self.world.day_time,
                 self.world.weather,
             );
+            let old = std::mem::take(&mut self.world.chunks);
+            let count = old.len();
+            horizon_client::chunk::free_columns(old, count);
             self.world = World::new(self.res.facts().air, spawn.seed);
             self.world.game_time = time;
             self.world.day_time = day;
@@ -989,145 +1044,10 @@ impl Game<'_> {
         self.apply_settings();
     }
 
-    /// LevelChunkSection data into the client's fixed -64..320 column.
-    fn remote_chunk(&self, p: &play::LevelChunkWithLight) -> std::result::Result<Chunk, String> {
-        let r = self.remote.as_ref().ok_or("no connection")?;
-        let sections = p
-            .chunk
-            .sections(r.dimension.sections(), 16, r.biome_bits)
-            .map_err(|e| e.to_string())?;
-        let mut chunk = Chunk::empty(p.x, p.z);
-        let offset = (r.dimension.min_y - MIN_Y).div_euclid(16);
-        // Biome table index per quart cell of the dimension's own sections.
-        let mut biome_cells: Vec<[u32; 64]> = Vec::with_capacity(sections.len());
-        for (i, s) in sections.iter().enumerate() {
-            let target = offset + i as i32;
-            let mut cells = [0u32; 64];
-            for (j, cell) in cells.iter_mut().enumerate() {
-                *cell = u32::from(
-                    r.biome_map
-                        .get(s.biomes.get(j) as usize)
-                        .copied()
-                        .unwrap_or(0),
-                );
-            }
-            biome_cells.push(cells);
-            if !(0..SECTIONS as i32).contains(&target) {
-                continue;
-            }
-            // A global section is as wide as the server's registry: 16 bits
-            // from a vanilla server, wider from a Horizon host with the same
-            // content mods. Read it at that width, then widen it to ours.
-            let ours = block_strategy();
-            let strategy = if ours.wire_has_palette(s.states.bits) {
-                ours
-            } else {
-                Strategy::blocks(s.states.bits)
-            };
-            let palette = s.states.palette.iter().map(|&p| p as u32).collect();
-            let words = s.states.data.iter().map(|&w| w as u64).collect();
-            let mut blocks = PalettedContainer::from_wire(strategy, s.states.bits, palette, words)
-                .map_err(|e| e.to_string())?;
-            if strategy.global_bits != ours.global_bits {
-                let mut values = [0u32; 4096];
-                blocks.unpack(&mut values);
-                // Ids past our registry (a host with mods we lack) read as air.
-                let limit = 1u64 << ours.global_bits;
-                for v in &mut values {
-                    if u64::from(*v) >= limit {
-                        *v = 0;
-                    }
-                }
-                blocks = PalettedContainer::from_values(ours, &values);
-            }
-            let mut section = Section {
-                blocks,
-                biomes: PalettedContainer::from_values(BIOME_STRATEGY, &cells),
-                light: Light::Uniform(0xF0),
-            };
-            section.compact();
-            chunk.sections[target as usize] = Arc::new(section);
-        }
-        // Sections outside the dimension's range take its nearest biomes
-        // (the column's top or bottom cell layer repeated).
-        if !biome_cells.is_empty() {
-            let last = biome_cells.len() - 1;
-            for si in 0..SECTIONS as i32 {
-                let i = si - offset;
-                if (0..sections.len() as i32).contains(&i) {
-                    continue;
-                }
-                let (edge, layer) = if i < 0 { (0, 0) } else { (last, 3) };
-                let mut cells = [0u32; 64];
-                for (j, cell) in cells.iter_mut().enumerate() {
-                    *cell = biome_cells[edge][layer * 16 + j % 16];
-                }
-                Arc::make_mut(&mut chunk.sections[si as usize]).biomes =
-                    PalettedContainer::from_values(BIOME_STRATEGY, &cells);
-            }
-        }
-        // ClientPacketListener.applyLightData: the column keeps the light
-        // the server sent; nothing is relit.
-        let (layers, above) = self.wire_light(&p.light);
-        let sky = r.dimension.has_skylight;
-        horizon_client::light::light_from_layers(&mut chunk, &layers, above, sky);
-        Ok(chunk)
-    }
-    /// `ClientPacketListener.readSectionList`: the sky and block layers of a
-    /// light packet, by section of the client's column, and the sky light
-    /// above the column's top section (from the light section just above
-    /// it, else open sky).
-    fn wire_light(
-        &self,
-        light: &horizon_protocol::chunk::LightData,
-    ) -> (Vec<LightLayers>, [u8; 256]) {
-        let mut layers: Vec<LightLayers> = vec![(None, None); SECTIONS];
-        let Some(r) = self.remote.as_ref() else {
-            return (layers, [0; 256]);
-        };
-        let sky = r.dimension.has_skylight;
-        let mut above = [if sky { 15 } else { 0 }; 256];
-        // Light section b is the dimension's section b - 1.
-        let first = (r.dimension.min_y - MIN_Y).div_euclid(16) - 1;
-        for (b, layer) in light
-            .layers(r.dimension.sections() + 2)
-            .into_iter()
-            .enumerate()
-        {
-            let si = first + b as i32;
-            if (0..SECTIONS as i32).contains(&si) {
-                layers[si as usize] = layer;
-            } else if si == SECTIONS as i32
-                && sky
-                && let Some(l) = &layer.0
-            {
-                for (i, a) in above.iter_mut().enumerate() {
-                    *a = (l[i >> 1] >> ((i & 1) * 4)) & 15;
-                }
-            }
-        }
-        (layers, above)
-    }
-    /// `handleLightUpdatePacket`: the sections it names take its light.
-    fn remote_light_update(&mut self, p: &play::LightUpdate) {
-        let Some(sky) = self.remote.as_ref().map(|r| r.dimension.has_skylight) else {
-            return;
-        };
-        if !self.world.chunks.contains_key(&(p.x, p.z)) {
-            return;
-        }
-        let (layers, _) = self.wire_light(&p.light);
-        let Some(chunk) = self.world.chunks.get_mut(&(p.x, p.z)) else {
-            return;
-        };
-        let changed =
-            horizon_client::light::update_light_layers(Arc::make_mut(chunk), &layers, sky);
-        Streaming::light_updated(&mut self.world, p.x, p.z, &changed);
-    }
     /// `ClientChunkCache.Storage.inRange`: within the storage around the
     /// view centre, `calculateStorageRange` (the server's radius, at least
     /// two, plus three) chunks each way.
-    fn remote_chunk_in_range(&self, x: i32, z: i32) -> bool {
+    pub(super) fn remote_chunk_in_range(&self, x: i32, z: i32) -> bool {
         self.remote.as_ref().is_none_or(|r| {
             let range = r.view_distance.max(2) + 3;
             (x - r.chunk_center.0).abs() <= range && (z - r.chunk_center.1).abs() <= range
@@ -1135,29 +1055,33 @@ impl Game<'_> {
     }
     /// The columns a moved or resized storage no longer holds.
     fn drop_remote_chunks_out_of_range(&mut self) {
-        let gone: Vec<(i32, i32)> = self
+        let gone: horizon_client::fast_hash::FxHashSet<(i32, i32)> = self
             .world
             .chunks
             .keys()
             .copied()
             .filter(|&(x, z)| !self.remote_chunk_in_range(x, z))
             .collect();
-        for (x, z) in gone {
-            self.streaming.forget(&mut self.world, x, z);
-            self.world
-                .block_entities
-                .retain(|k, _| (k.0 >> 4, k.2 >> 4) != (x, z));
-            if let Some(renderer) = self.renderer.as_mut() {
-                for sy in 0..SECTIONS as i32 {
-                    renderer.remove((x, sy, z));
-                }
-            }
+        if gone.is_empty() {
+            return;
         }
+        let mut freed = Vec::with_capacity(gone.len());
+        for &(x, z) in &gone {
+            freed.extend(self.streaming.forget(&mut self.world, x, z));
+        }
+        if let Some(renderer) = self.renderer.as_mut() {
+            renderer.remove_columns(gone.iter().copied());
+        }
+        horizon_client::chunk::free_columns(freed, gone.len());
+        // One pass for all of them.
+        self.world
+            .block_entities
+            .retain(|k, _| !gone.contains(&(k.0 >> 4, k.2 >> 4)));
     }
     /// `handleBlockEntityData`: the block entity at `pos`, when it is of the
     /// packet's type, loads the tag (`loadWithComponents`); an empty tag
     /// changes nothing.
-    fn remote_block_entity_data(&mut self, pos: [i32; 3], kind: i32, tag: &Tag) {
+    pub(super) fn remote_block_entity_data(&mut self, pos: [i32; 3], kind: i32, tag: &Tag) {
         let key = (pos[0], pos[1], pos[2]);
         let Some(name) = self
             .remote
@@ -1248,7 +1172,7 @@ impl Game<'_> {
         }
     }
     /// Keep the renderable block entities (chests, furnaces) in step with blocks.
-    fn sync_block_entity(&mut self, pos: (i32, i32, i32), state: BlockStateId) {
+    pub(super) fn sync_block_entity(&mut self, pos: (i32, i32, i32), state: BlockStateId) {
         let name = self.res.facts().get(state).name.clone();
         match BlockEntity::for_block(&name) {
             Some(entity) => {
@@ -1337,6 +1261,9 @@ impl Game<'_> {
         } else {
             self.res.mob_types().get(kind).cloned()
         };
+        if kind == "minecraft:ender_dragon" {
+            self.spawn_remote_dragon(id, position, yaw);
+        }
         if kind == "minecraft:experience_orb" {
             // Its value (ExperienceOrb.DATA_VALUE) follows in SetEntityData.
             self.orbs.retain(|o| o.id != id as u32);
@@ -1443,19 +1370,39 @@ impl Game<'_> {
                 m.on_ground = on_ground;
                 return;
             }
-            if let Some(p) = self.creatures.projectiles.iter_mut().find(|p| {
-                p.id == id as u32
-                    && matches!(
-                        p.kind,
-                        horizon_client::projectiles::ProjectileKind::LargeFireball { .. }
-                    )
-            }) {
+            // Projectiles keep Entity's NO_OP InterpolationHandler too: the
+            // server's position replaces theirs at once and their own tick
+            // flies them on (`tick_remote_projectiles`). Eased towards it
+            // instead, they only moved when an update came, every 10 to 20
+            // ticks.
+            if let Some(p) = self
+                .creatures
+                .projectiles
+                .iter_mut()
+                .find(|p| p.id == id as u32)
+            {
                 if path.is_some() {
                     p.position = Vec3::new(position[0], position[1], position[2]);
                 }
                 if let Some((yaw, pitch)) = rotation {
                     p.yaw = yaw;
                     p.pitch = pitch;
+                }
+                return;
+            }
+            if path.is_some()
+                && (self.potions.move_remote_thrown(
+                    id as u32,
+                    Vec3::new(position[0], position[1], position[2]),
+                ) || self.end.move_remote_eye(id as u32, position))
+            {
+                return;
+            }
+            // A dragon fireball keeps Entity's NO_OP InterpolationHandler too:
+            // the server's position replaces its own at once.
+            if let Some(b) = self.dragon_fireballs.iter_mut().find(|b| b.id == id as u32) {
+                if path.is_some() {
+                    b.position = Vec3::new(position[0], position[1], position[2]);
                 }
                 return;
             }
@@ -1505,6 +1452,8 @@ impl Game<'_> {
         self.mobs.retain(|m| m.id != id as u32);
         self.orbs.retain(|o| o.id != id as u32);
         self.dropped.retain(|d| d.id != id as u32);
+        // Before the crystals go: the dragon's beam index follows them.
+        self.remove_remote_dragon(id);
         self.remove_remote_object(id as u32);
         self.remove_remote_projectile(id as u32);
         if let Some(r) = self.remote.as_mut() {
@@ -1704,36 +1653,7 @@ impl Game<'_> {
                 })
                 .clamp(-90.0, 90.0);
             }
-            // ClientChunkCache.replaceWithPacketData: a column outside the
-            // storage around the view centre is ignored.
-            C::LevelChunkWithLight(p) if !self.remote_chunk_in_range(p.x, p.z) => {
-                log::warn!(
-                    "Ignoring chunk since it's not in the view range: {}, {}",
-                    p.x,
-                    p.z
-                );
-            }
-            C::LevelChunkWithLight(p) => match self.remote_chunk(&p) {
-                Ok(chunk) => {
-                    let (x, z) = (p.x, p.z);
-                    self.streaming.insert_remote(&mut self.world, chunk);
-                    self.world
-                        .block_entities
-                        .retain(|k, _| (k.0 >> 4, k.2 >> 4) != (x, z));
-                    for info in &p.chunk.block_entities {
-                        let pos = (
-                            x * 16 + i32::from(info.packed_xz as u8 >> 4),
-                            i32::from(info.y),
-                            z * 16 + i32::from(info.packed_xz as u8 & 15),
-                        );
-                        let state = self.world.block(pos.0, pos.1, pos.2);
-                        self.sync_block_entity(pos, state);
-                        // LevelChunk.replaceWithPacketData: the block entity loads its update tag.
-                        self.remote_block_entity_data([pos.0, pos.1, pos.2], info.kind, &info.tag);
-                    }
-                }
-                Err(e) => log::warn!("Horizon: chunk {} {}: {e}", p.x, p.z),
-            },
+            C::LevelChunkWithLight(p) => self.remote_chunk(&p, None),
             C::LightUpdate(p) => self.remote_light_update(&p),
             C::ForgetLevelChunk(p) => {
                 let [x, z] = p.pos;
@@ -1742,9 +1662,7 @@ impl Game<'_> {
                     .block_entities
                     .retain(|k, _| (k.0 >> 4, k.2 >> 4) != (x, z));
                 if let Some(renderer) = self.renderer.as_mut() {
-                    for sy in 0..SECTIONS as i32 {
-                        renderer.remove((x, sy, z));
-                    }
+                    renderer.remove_columns([(x, z)]);
                 }
             }
             C::ChunkBatchFinished(_) => {
@@ -2068,6 +1986,7 @@ impl Game<'_> {
                 }
                 self.remote_object_data(p.id, &p.values);
                 self.remote_projectile_data(p.id, &p.values);
+                self.remote_dragon_data(p.id, &p.values);
             }
             // ClientPacketListener.handleSetEquipment: what a mob or another
             // player holds and wears (EquipmentSlot ordinals).
@@ -2149,6 +2068,8 @@ impl Game<'_> {
                 } else if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
                     m.limb_speed = 1.5;
                     m.hurt_time = 10;
+                } else {
+                    self.remote_dragon_hurt(p.id);
                 }
             }
             C::HurtAnimation(p) => {
@@ -2158,9 +2079,14 @@ impl Game<'_> {
                     }
                 } else if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
                     m.hurt_time = 10;
+                } else {
+                    self.remote_dragon_hurt(p.id);
                 }
             }
             C::EntityEvent(p) => {
+                if p.event == super::fireworks::FIREWORK_EXPLODE_EVENT {
+                    self.remote_firework_explosion(p.id);
+                }
                 // LocalPlayer.setPermissions also refreshes an open World Options screen.
                 if (24..=28).contains(&p.event)
                     && self.remote.as_ref().is_some_and(|r| r.entity_id == p.id)
@@ -2234,6 +2160,7 @@ impl Game<'_> {
                 self.apply_remote_health();
                 if p.health <= 0.0 && self.screen != Screen::Dead && self.player.is_some() {
                     self.screen = Screen::Dead;
+                    self.ui.death_time = 0;
                     self.capture(false);
                 }
             }
@@ -2250,6 +2177,7 @@ impl Game<'_> {
                 // screen, whatever health was last sent.
                 if me && self.screen != Screen::Dead && self.player.is_some() {
                     self.screen = Screen::Dead;
+                    self.ui.death_time = 0;
                     self.capture(false);
                 }
             }
@@ -3044,6 +2972,7 @@ impl Game<'_> {
     /// entities whose own tick moves them on a client: dropped items, falling
     /// blocks and primed TNT.
     fn remote_motion(&mut self, id: i32, velocity: [f64; 3]) {
+        self.remote_dragon_motion(id, velocity);
         let v = Vec3::new(velocity[0], velocity[1], velocity[2]);
         if let Some(d) = self.dropped.iter_mut().find(|d| d.id == id as u32) {
             d.velocity = v;
@@ -3058,12 +2987,16 @@ impl Game<'_> {
             .find(|p| p.id == id as u32)
         {
             p.velocity = v;
+        } else if let Some(b) = self.dragon_fireballs.iter_mut().find(|b| b.id == id as u32) {
+            b.velocity = v;
         } else if let Some(p) = self
             .remote
             .as_mut()
             .and_then(|r| r.pending_items.get_mut(&id))
         {
             p.1 = v;
+        } else if !self.potions.remote_thrown_motion(id as u32, v) {
+            self.end.remote_eye_motion(id as u32, velocity);
         }
     }
     fn apply_remote_health(&mut self) {
@@ -3170,6 +3103,12 @@ impl Game<'_> {
     fn tick_remote_level(&mut self) -> Result<()> {
         self.ticks += 1;
         self.track_experience_display();
+        // Player.tick's ItemCooldowns.tick: this path replaces `tick_world`'s
+        // for a server's client (multiplayer and the default single player),
+        // so the entries advance here or the slot stays shaded until the
+        // server says the entry ended. `onCooldownEnded` is the plain
+        // ItemCooldowns' no-op on a client.
+        self.cooldowns.tick();
         // Options.broadcastOptions: a changed render distance or Chat option
         // is sent again.
         let view = client_view_distance(self.settings.render_distance);
@@ -3288,6 +3227,11 @@ impl Game<'_> {
         );
         let was_flying = player.flying;
         self.sync_player_body();
+        // LivingEntity.tickDeath: the local player counts its deathTime once
+        // per client tick while dead (the camera's death roll and zoom).
+        if self.screen == Screen::Dead {
+            self.ui.death_time = self.ui.death_time.saturating_add(1);
+        }
         let Some(player) = self.player.as_mut() else {
             return Ok(());
         };
@@ -3342,6 +3286,12 @@ impl Game<'_> {
                 horizon_client::motion::MotionEvent::Swim { volume, pitch } => {
                     self.audio
                         .play("minecraft:entity.player.swim", Some(feet), volume, pitch);
+                }
+                // NetherPortalBlock.entityInside on the client's own level:
+                // the portal overlay and its trigger sound (the server moves
+                // the player).
+                horizon_client::motion::MotionEvent::InsidePortal { .. } => {
+                    self.client_inside_nether_portal();
                 }
                 _ => {}
             }
@@ -3522,6 +3472,13 @@ impl Game<'_> {
             if m.species() == horizon_client::mobs::Species::Creeper {
                 horizon_client::mobs::hostile::creeper_client_tick(m);
             }
+            if matches!(
+                m.species(),
+                horizon_client::mobs::Species::Guardian
+                    | horizon_client::mobs::Species::ElderGuardian
+            ) {
+                horizon_client::mobs::guardian::client_tick(m);
+            }
             if m.hurt_time > 0 {
                 m.hurt_time -= 1;
             }
@@ -3589,6 +3546,9 @@ impl Game<'_> {
             if m.species() == horizon_client::mobs::Species::Rabbit {
                 horizon_client::mobs::rabbit::post_tick(m);
             }
+            if m.species() == horizon_client::mobs::Species::Bat {
+                horizon_client::mobs::bat::setup_animation_states(m);
+            }
         }
         for o in self.orbs.iter_mut().filter(|_| running) {
             o.previous = o.position;
@@ -3610,13 +3570,25 @@ impl Game<'_> {
         // ticks), and only the server removes it.
         let (world, facts, collision) = (&self.world, self.res.facts(), self.collision);
         for d in self.dropped.iter_mut().filter(|_| running) {
-            d.tick(world, facts, collision, false);
+            d.tick(world, facts, collision, false, &self.res.motion().fluids);
         }
         head_lerps.retain(|_, (_, steps)| *steps > 0);
         for (item, ticks, at, eye, pitch, yaw) in using {
             self.remote_player_eating(&item, ticks, at, eye, pitch, yaw);
         }
         if running {
+            // The dragon: LivingEntity's interpolation, inside its aiStep.
+            let dragon_lerp = self
+                .dragon
+                .as_ref()
+                .and_then(|d| lerps.get_mut(&(d.id as i32)))
+                .filter(|l| l.steps > 0)
+                .map(|l| {
+                    let steps = l.steps;
+                    l.steps -= 1;
+                    (l.target, l.rotation.map(|r| r.0), steps)
+                });
+            self.tick_remote_dragon(dragon_lerp);
             // Boats, minecarts, armor stands, projectiles and the rest
             // interpolate like mobs.
             let mut step = |id: u32, at: Vec3| match lerps.get_mut(&(id as i32)) {
@@ -3918,19 +3890,25 @@ impl Game<'_> {
                 .and_modify(|p| p.0 = sequence)
                 .or_insert((sequence, state.0 as i32));
         }
-        let s = self.res.facts().get(state).sounds.clone();
-        let at = [
-            f64::from(pos[0]) + 0.5,
-            f64::from(pos[1]) + 0.5,
-            f64::from(pos[2]) + 0.5,
-        ];
-        self.audio.play(
-            &s.break_sound,
-            Some(at),
-            (s.volume + 1.0) / 2.0,
-            s.pitch * 0.8,
-        );
-        self.destroy_particles(pos, state);
+        // Block.playerWillDestroy's destroy event (particles and the break
+        // sound), which BaseFireBlock skips: the server's extinguish sound
+        // is all a player hears.
+        let facts = self.res.facts().get(state);
+        if !facts.has_class("BaseFireBlock") {
+            let s = facts.sounds.clone();
+            let at = [
+                f64::from(pos[0]) + 0.5,
+                f64::from(pos[1]) + 0.5,
+                f64::from(pos[2]) + 0.5,
+            ];
+            self.audio.play(
+                &s.break_sound,
+                Some(at),
+                (s.volume + 1.0) / 2.0,
+                s.pitch * 0.8,
+            );
+            self.destroy_particles(pos, state);
+        }
         // The server's block update follows (waterlogged blocks leave water).
         let air = self.world.air;
         if self.world.set(pos[0], pos[1], pos[2], air).is_ok() {
@@ -4060,6 +4038,10 @@ impl Game<'_> {
                 if let Some(placed) = &placed {
                     self.predict_place(placed, seq);
                     self.with_hand(hand, Game::consume_held);
+                } else if let Some(r) = self.remote.as_mut() {
+                    // BlockItem.place plays its sound only once the block is set: the
+                    // server's resend of the target it refused is no placement.
+                    r.placing = None;
                 }
                 if reacts || placed.is_some() {
                     self.with_hand(hand, Game::swing_arm);
@@ -4600,6 +4582,7 @@ impl Game<'_> {
             }
             KeyCode::KeyE => {
                 // The inventory opens without telling the server.
+                self.recipe_ui.reset_screen();
                 self.screen = if self.creative {
                     Screen::Creative
                 } else {
@@ -4828,6 +4811,34 @@ impl Game<'_> {
             carried,
         }));
     }
+    /// `CreativeModeInventoryScreen.slotClicked` outside the window: the server knows nothing of
+    /// a stack picked from the creative screen, so the carried stack (an item tab's right click:
+    /// one of it) is dropped through `handleCreativeModeItemDrop`, a SetCreativeModeSlot to slot
+    /// -1, and the hand swings as `Player.drop` predicts.
+    pub(super) fn remote_creative_drop(&mut self, right: bool) {
+        let one = right && !self.creative_inventory_open();
+        let Some(carried) = self.carried.as_mut() else {
+            return;
+        };
+        let thrown = if one && carried.count > 1 {
+            carried.count -= 1;
+            ItemStack {
+                count: 1,
+                ..carried.clone()
+            }
+        } else {
+            self.carried.take().expect("carried")
+        };
+        if !self.creative {
+            return;
+        }
+        self.swing_arm();
+        let item = self.to_network(&Some(thrown));
+        self.send(S::SetCreativeModeSlot(play::SetCreativeModeSlot {
+            slot: -1,
+            item,
+        }));
+    }
     pub(super) fn remote_close_container(&mut self) {
         let id = self
             .remote
@@ -4838,6 +4849,7 @@ impl Game<'_> {
         self.remote_close_local();
     }
     fn remote_close_local(&mut self) {
+        self.recipe_ui.reset_screen();
         if let Some(r) = self.remote.as_mut() {
             r.menu = None;
             r.menu_title = None;
@@ -4873,16 +4885,20 @@ impl Game<'_> {
         if self.open_menu_name(p.container) != "minecraft:merchant" {
             return;
         }
-        let cost = |g: &Self, c: &play::NetCost| horizon_client::merchant::ItemCost {
-            stack: ItemStack::new(&g.item_name(c.item), c.count.max(0) as u32),
+        let cost = |g: &Self, c: &play::NetCost| {
+            g.to_stack(&Some(c.clone().into()))
+                .map(|stack| horizon_client::merchant::ItemCost { stack })
         };
         let offers: Vec<_> = p
             .offers
             .iter()
             .filter_map(|o| {
                 let mut offer = horizon_client::merchant::MerchantOffer {
-                    base_cost_a: cost(self, &o.cost_a),
-                    cost_b: o.cost_b.as_ref().map(|b| cost(self, b)),
+                    base_cost_a: cost(self, &o.cost_a)?,
+                    cost_b: match &o.cost_b {
+                        Some(b) => Some(cost(self, b)?),
+                        None => None,
+                    },
                     result: self.to_stack(&Some(o.result.clone()))?,
                     uses: o.uses,
                     max_uses: o.max_uses,
@@ -4908,6 +4924,9 @@ impl Game<'_> {
     }
     /// ClientboundOpenScreenPacket for the menus Horizon draws.
     fn remote_open_screen(&mut self, p: play::OpenScreen) {
+        // A new RecipeBookComponent owns fresh ghost slots and an overlay,
+        // even when the server replaces a menu without a close packet.
+        self.recipe_ui.reset_screen();
         let menu = self
             .remote
             .as_ref()

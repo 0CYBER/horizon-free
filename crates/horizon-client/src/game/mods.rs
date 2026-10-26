@@ -17,6 +17,7 @@ use std::{path::PathBuf, time::Duration};
 #[cfg(feature = "mods")]
 use {
     super::Screen,
+    super::{execution_role::ExecutionRole, lan::LanHost, server_mods::ModEvent},
     horizon_client::{
         extras::Corner,
         extras_hud,
@@ -27,7 +28,10 @@ use {
         text::{self, Text},
         ui,
     },
-    horizon_mods::{Clock, ModKey, Mods, Output, Player, Snapshot, Status, UiScreen, UiWidget},
+    horizon_mods::{
+        Clock, ModKey, Mods, Output, Player, Runs, ServerPlayer, Snapshot, Status, UiScreen,
+        UiWidget,
+    },
     std::time::Instant,
     winit::{event::MouseButton, keyboard::KeyCode},
 };
@@ -50,6 +54,15 @@ pub(super) struct ModsState {
     /// The chat's command tree while a running mod owns commands.
     #[cfg(feature = "mods")]
     tree: Option<Dispatcher>,
+    /// A server mod runs here: what players do is queued for it.
+    #[cfg(feature = "mods")]
+    pub(super) server: bool,
+    /// The players server mods saw last tick, for joins and leaves.
+    #[cfg(feature = "mods")]
+    pub(super) players: Vec<ServerPlayer>,
+    /// What players did this tick, for server mods at its end.
+    #[cfg(feature = "mods")]
+    pub(super) events: Vec<ModEvent>,
     /// `command.run` lines for this window's own world, run on the next tick:
     /// run at once, their chat lines would reach the mods while their output
     /// is still being shown, and a mod answering its own lines would recurse.
@@ -270,7 +283,7 @@ impl Game<'_> {
             .collect();
         let enabled = &self.settings.mods.enabled;
         let on = |id: &str| enabled.contains(id) || dev_ids.iter().any(|d| d == id);
-        let mods = Mods::load(&paths, on, vanilla_command);
+        let mods = Mods::load_for(self.mod_runs(), &paths, on, vanilla_command);
         self.mods.mods = mods;
         let chosen = &self.settings.mods;
         self.mods.mods.set_bindings(|id| chosen.keys_of(id));
@@ -280,8 +293,18 @@ impl Game<'_> {
         self.sync_mod_commands();
         self.show_mod_output();
     }
+    /// Which mods this game runs: a server the server mods, the window
+    /// client mods, and both when it simulates the world itself (in-frame).
+    fn mod_runs(&self) -> Runs {
+        match self.options.execution_role {
+            ExecutionRole::IntegratedServer | ExecutionRole::DedicatedServer => Runs::Server,
+            ExecutionRole::Client if self.options.server_thread => Runs::Client,
+            ExecutionRole::Client => Runs::Both,
+        }
+    }
     /// The Mods page's rows, from what loaded.
     fn list_mods(&mut self) {
+        self.mods.server = self.mods.mods.runs_server();
         let dev = &self.mods.dev;
         self.settings.mods.installed = self
             .mods
@@ -367,8 +390,18 @@ impl Game<'_> {
             self.start_mods();
         }
     }
-    /// What mods read this tick (or frame, for mods with a `frame` hook).
+    /// What mods read this tick (or frame, for mods with a `frame` hook): the
+    /// server's players as they were at the last tick's end.
     fn mod_snapshot(&mut self) -> Snapshot {
+        let players = if self.mods.server {
+            self.mods.players.clone()
+        } else {
+            Vec::new()
+        };
+        self.mod_snapshot_with(players)
+    }
+    /// What mods read, with these players on the server.
+    pub(super) fn mod_snapshot_with(&mut self, players: Vec<ServerPlayer>) -> Snapshot {
         let player = self.player.as_ref().map(|p| Player {
             x: p.position.x,
             y: p.position.y,
@@ -412,7 +445,65 @@ impl Game<'_> {
             mappings,
             cps,
             font_widths: self.mods.font_widths.clone(),
+            players,
+            view_hit: self.mod_view_hit(),
         }
+    }
+    /// The first block along the player's view within
+    /// [`horizon_mods::RAYCAST_MAX`] and its distance from the eye
+    /// (`game.raycast`): through the loaded chunks as the crosshair's ray
+    /// goes (fluids pass), then across the distant terrain's ground heights,
+    /// a block at a time.
+    fn mod_view_hit(&self) -> Option<(f32, horizon_mods::Hit)> {
+        if !self.mods.mods.wants_raycast() {
+            return None;
+        }
+        let eye = self.eye_position()?;
+        let dir = super::view_vector(self.yaw, self.pitch);
+        let reach = f64::from(horizon_mods::RAYCAST_MAX);
+        let (pos, point, state) = match self.clip_ray(eye, dir, reach) {
+            Some(hit) => (
+                hit.pos,
+                hit.point,
+                self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]),
+            ),
+            None => self.lod_ray(eye, dir, reach)?,
+        };
+        let distance = (0..3).map(|i| (point[i] - eye[i]).powi(2)).sum::<f64>();
+        let hit = horizon_mods::Hit {
+            block_x: pos[0],
+            block_y: pos[1],
+            block_z: pos[2],
+            x: point[0],
+            y: point[1],
+            z: point[2],
+            block: self.res.facts().get(state).name.to_string(),
+        };
+        Some((distance.sqrt() as f32, hit))
+    }
+    /// Past the resident chunks: the view walked across the distant
+    /// terrain's ground heights (`Lod::ground`), a block at a time. Columns in
+    /// loaded chunks are left to `clip_ray`, which has already missed them.
+    fn lod_ray(
+        &self,
+        eye: [f64; 3],
+        dir: [f64; 3],
+        reach: f64,
+    ) -> Option<([i32; 3], [f64; 3], horizon_world::registry::BlockStateId)> {
+        let lod = self.lod.as_ref()?;
+        let mut t = 0.0;
+        while t <= reach {
+            let p = [0, 1, 2].map(|i| eye[i] + dir[i] * t);
+            let (x, z) = (p[0].floor() as i32, p[2].floor() as i32);
+            if !self.world.loaded(x, z)
+                && let Some((height, state)) = lod.ground(x, z)
+                && p[1] <= f64::from(height)
+            {
+                return Some(([x, height - 1, z], [p[0], f64::from(height), p[2]], state));
+            }
+            t += 1.0;
+        }
+        None
     }
     /// A game tick.
     pub(super) fn tick_mods(&mut self) {
@@ -430,23 +521,32 @@ impl Game<'_> {
         self.mods.mods.tick(self.ticks);
         self.show_mod_output();
     }
-    /// Once per frame: the frame hook, and dev mods' rebuilds.
-    pub(super) fn mods_frame(&mut self, elapsed: Duration) {
-        if !self.mods.dev.is_empty()
-            && self
+    /// Restarts the dev mods rebuilt since the last check, once a second.
+    pub(super) fn reload_dev_mods(&mut self) {
+        if self.mods.dev.is_empty()
+            || self
                 .mods
                 .checked
-                .is_none_or(|t| t.elapsed() >= RELOAD_CHECK)
+                .is_some_and(|t| t.elapsed() < RELOAD_CHECK)
         {
-            self.mods.checked = Some(Instant::now());
-            if self.mods.mods.reload_changed(vanilla_command) {
-                let chosen = &self.settings.mods;
-                self.mods.mods.set_bindings(|id| chosen.keys_of(id));
-                self.list_mods();
-                self.sync_mod_commands();
+            return;
+        }
+        self.mods.checked = Some(Instant::now());
+        if self.mods.mods.reload_changed(vanilla_command) {
+            let chosen = &self.settings.mods;
+            self.mods.mods.set_bindings(|id| chosen.keys_of(id));
+            self.list_mods();
+            self.sync_mod_commands();
+            if self.options.execution_role.is_client() {
                 self.system_message(Text::literal("Mods reloaded").with_color(text::GRAY));
+            } else {
+                log::info!("Horizon: mods reloaded");
             }
         }
+    }
+    /// Once per frame: the frame hook, and dev mods' rebuilds.
+    pub(super) fn mods_frame(&mut self, elapsed: Duration) {
+        self.reload_dev_mods();
         if !self.mods.mods.is_running() {
             return;
         }
@@ -477,8 +577,13 @@ impl Game<'_> {
         self.mods.mods.chat(line);
         self.show_mod_output();
     }
-    /// Chat lines, command feedback and stopped mods, into the chat.
-    fn show_mod_output(&mut self) {
+    /// What mods showed: client mods' lines into the chat, server mods'
+    /// to their players.
+    pub(super) fn show_mod_output(&mut self) {
+        self.route_mod_output(None);
+    }
+    /// [`Game::show_mod_output`], with the hub when it is out of `self.lan`.
+    pub(super) fn route_mod_output(&mut self, mut host: Option<&mut LanHost>) {
         for output in self.mods.mods.drain() {
             let line = match output {
                 Output::Chat { name, text } => {
@@ -506,7 +611,16 @@ impl Game<'_> {
                     // `mod_ui_view` finds no widgets and the screen closes.
                     self.list_mods();
                     self.sync_mod_commands();
-                    Text::literal(format!("Mod {name} stopped: {reason}")).with_color(text::RED)
+                    let line = format!("Mod {name} stopped: {reason}");
+                    if self.options.dedicated.is_some() {
+                        super::dedicated::log("WARN", &line);
+                    }
+                    Text::literal(line).with_color(text::RED)
+                }
+                server
+                @ (Output::Tell { .. } | Output::Broadcast { .. } | Output::Reply { .. }) => {
+                    self.route_server_output(host.as_deref_mut(), server);
+                    continue;
                 }
                 Output::OpenScreen { owner } => {
                     self.open_mod_screen(owner, false);
@@ -523,17 +637,7 @@ impl Game<'_> {
                     continue;
                 }
             };
-            // Not through system_message: a mod must not hear its own lines.
-            // Written by this client, so the Chat option doesn't hide it.
-            let focused = self.screen == Screen::Chat;
-            self.ui.chat.add(
-                &self.gui.atlas,
-                line,
-                None,
-                horizon_client::chat::ChatSource::Client,
-                self.ticks,
-                focused,
-            );
+            self.add_mod_chat_line(line);
         }
         // A mod may set or clear its settings page in any call, not only
         // while loading: its row's Settings button follows.
@@ -541,6 +645,20 @@ impl Game<'_> {
         for (row, e) in rows.zip(self.mods.mods.entries()) {
             row.has_settings = e.has_ui_settings();
         }
+    }
+    /// A mod's line in the window's chat; not through system_message: a mod
+    /// must not hear its own lines.
+    /// Written by this client, so the Chat option doesn't hide it.
+    pub(super) fn add_mod_chat_line(&mut self, line: Text) {
+        let focused = self.screen == Screen::Chat;
+        self.ui.chat.add(
+            &self.gui.atlas,
+            line,
+            None,
+            horizon_client::chat::ChatSource::Client,
+            self.ticks,
+            focused,
+        );
     }
     /// The mods' HUD panels, stacked with the extras in their corners.
     pub(super) fn draw_mod_panels(&self, batch: &mut HudBatch, corners: &mut Corners) {

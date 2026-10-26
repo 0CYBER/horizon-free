@@ -58,7 +58,10 @@ enum Animate {
     BubbleColumn {
         drag: bool,
     },
-    Fire,
+    /// `BaseFireBlock` (`SoulFireBlock.canBurn` is always true).
+    Fire {
+        soul: bool,
+    },
     /// An active sculk sensor.
     SculkSensor,
     /// Potent sulfur that is not dry.
@@ -140,7 +143,8 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Animate {
         "bubble_column" => Animate::BubbleColumn {
             drag: prop("drag").as_deref() == Some("true"),
         },
-        "fire" | "soul_fire" => Animate::Fire,
+        "fire" => Animate::Fire { soul: false },
+        "soul_fire" => Animate::Fire { soul: true },
         "dried_ghast" => Animate::DriedGhast {
             waterlogged: prop("waterlogged").as_deref() == Some("true"),
         },
@@ -190,6 +194,8 @@ pub struct AnimateTables {
     power_transmitter: Vec<bool>,
     /// `#triggers_ambient_dried_ghast_block_sounds` (soul sand, soul soil).
     dried_ghast_sounds: Vec<bool>,
+    /// `FireBlock.canBurn`: states with ignite odds above zero (none waterlogged).
+    burnable: Vec<bool>,
     /// Biome id -> ambient particles and probabilities (`minecraft:visual/ambient_particles`).
     ambient: Vec<Vec<(T, f32)>>,
 }
@@ -220,6 +226,21 @@ impl AnimateTables {
                 })
                 .collect()
         };
+        let behaviour: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.join("block-behaviours.json"))?)?;
+        let ignite_odds = behaviour["fire"]["igniteOdds"].as_object();
+        let burnable = (0..registry.len() as u32)
+            .map(|id| {
+                // FireBlock.getIgniteOdds: a waterlogged state never burns.
+                registry.state(BlockStateId(id)).is_some_and(|s| {
+                    s.properties.get("waterlogged").map(String::as_str) != Some("true")
+                        && ignite_odds
+                            .and_then(|m| m.get(s.name.as_str()))
+                            .and_then(serde_json::Value::as_i64)
+                            .is_some_and(|odds| odds > 0)
+                })
+            })
+            .collect();
         let mut ambient = vec![Vec::new(); biomes.list.len()];
         for (name, &id) in &biomes.index {
             let path = root.join(format!(
@@ -248,6 +269,7 @@ impl AnimateTables {
             power_provider: by_state("minecraft:enchantment_power_provider"),
             power_transmitter: by_state("minecraft:enchantment_power_transmitter"),
             dried_ghast_sounds: by_state("minecraft:triggers_ambient_dried_ghast_block_sounds"),
+            burnable,
             ambient,
         })
     }
@@ -1103,7 +1125,7 @@ fn block_animate_tick(
                 }
             }
         }
-        Animate::Fire => {
+        Animate::Fire { soul } => {
             let r = engine.random();
             if next_int(r, 24) == 0 {
                 let (volume, pitch) = (1.0 + r.next_float(), r.next_float() * 0.7 + 0.3);
@@ -1114,6 +1136,55 @@ fn block_animate_tick(
                     volume,
                     pitch,
                 );
+            }
+            // BaseFireBlock.animateTick: three large smoke above the fire, or
+            // two at each burnable neighbour's face when nothing burnable or
+            // sturdy supports it (SoulFireBlock.canBurn is always true).
+            let can_burn = |p: [i32; 3]| {
+                soul || tables
+                    .burnable
+                    .get(ctx.state(p).0 as usize)
+                    .copied()
+                    .unwrap_or(false)
+            };
+            let below = [pos[0], pos[1] - 1, pos[2]];
+            let sturdy = ctx.facts.get(ctx.state(below)).sturdy_full & (1 << 1) != 0;
+            if !can_burn(below) && !sturdy {
+                // (neighbour, coordinate axis, face at the axis' high end): the
+                // west, east, north, south and above faces, in vanilla order.
+                for (at, axis, high) in [
+                    ([pos[0] - 1, pos[1], pos[2]], 0usize, false),
+                    ([pos[0] + 1, pos[1], pos[2]], 0, true),
+                    ([pos[0], pos[1], pos[2] - 1], 2, false),
+                    ([pos[0], pos[1], pos[2] + 1], 2, true),
+                    ([pos[0], pos[1] + 1, pos[2]], 1, true),
+                ] {
+                    if !can_burn(at) {
+                        continue;
+                    }
+                    for _ in 0..2 {
+                        let r = engine.random();
+                        let d = [r.next_double(), r.next_double(), r.next_double()];
+                        let mut p = [fx + d[0], fy + d[1], fz + d[2]];
+                        // The face coordinate hugs the edge: `* 0.1F` (float).
+                        p[axis] = if high {
+                            f64::from(pos[axis]) + 1.0 - d[axis] * f64::from(0.1f32)
+                        } else {
+                            f64::from(pos[axis]) + d[axis] * f64::from(0.1f32)
+                        };
+                        add(engine, T::LargeSmoke, p, [0.0; 3]);
+                    }
+                }
+            } else {
+                for _ in 0..3 {
+                    let r = engine.random();
+                    let p = [
+                        fx + r.next_double(),
+                        fy + r.next_double() * 0.5 + 0.5,
+                        fz + r.next_double(),
+                    ];
+                    add(engine, T::LargeSmoke, p, [0.0; 3]);
+                }
             }
         }
     }

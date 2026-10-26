@@ -101,6 +101,16 @@ class ReachTests(unittest.TestCase):
         (self.root / "crates/a/src/unused.rs").unlink()
         self.assertIn("crates/a/src/unused.rs", self.narrowed())
 
+    def test_a_search_told_to_stop_still_keeps_the_file_it_stopped_at(self):
+        graph = parity_reach.SourceGraph(self.root, parity.rust_code)
+        kept = parity_reach.narrow(self.dependencies, PROBE, graph, {"crates/a/src/used.rs"}, {"crates/a/src/used.rs"})
+        self.assertEqual(kept["crates/a/src/used.rs"], (True, set()))
+        self.assertFalse(graph.results, "a partial search is not remembered")
+        # A stop file outside the harness's sources doesn't end its search.
+        full = parity_reach.narrow(self.dependencies, PROBE, graph, (), {"crates/b/src/lib.rs"})
+        self.assertIn("crates/a/src/display.rs", full)
+        self.assertTrue(graph.results)
+
     def test_unknown_probes_keep_everything(self):
         self.assertEqual(set(self.narrowed(artifacts=[])), set(self.dependencies))
         self.assertEqual(set(self.narrowed(artifacts=[["example", "missing", "release", ["-p", "a"], True]])),

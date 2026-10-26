@@ -10,13 +10,13 @@
 //! - Repurposed Structures' mineshaft sky view becomes the game's
 //!   `horizon:mineshaft_sky_view`.
 //!
-//! The processors of YUNG's mods, Lithostitched and Choice Theorem's Overhauled
-//! Village are carried by `legacy_structure_mods`, called from [`carry`].
+//! Lithostitched's processors and Choice Theorem's Overhauled Village's
+//! compat hook are carried by `crate::lithostitched`, called from [`carry`].
 //!
 //! What is not here is taken out of its list later and counted
 //! (`worldgen::upgrade`). The entity NBT is written in 26.3's shape (an
 //! `equipment` map, not 1.21.1's `HandItems` and `ArmorItems`).
-use crate::legacy_structure_mods::{ctov, lithostitched};
+use crate::lithostitched;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -42,7 +42,7 @@ pub struct ProcessorData {
 impl ProcessorData {
     /// Notes which mods its compat processors name are `loaded`.
     pub fn mark_loaded(&mut self, loaded: &dyn Fn(&str) -> bool) {
-        ctov::mark_loaded(self, loaded);
+        lithostitched::mark_loaded(self, loaded);
     }
 
     pub fn read<R: Read + Seek>(zip: &mut zip::ZipArchive<R>) -> Self {
@@ -177,8 +177,7 @@ fn carry_at(
     let mut out = Vec::with_capacity(expanded.len());
     for p in expanded {
         let kind = p["processor_type"].as_str().unwrap_or_default().to_owned();
-        // Lithostitched's processors are carried apart from this code
-        // (`legacy_structure_mods`).
+        // Lithostitched's processors stay theirs, with what they hold carried.
         let replacement = lithostitched::processor(&kind, &p, data, carried).or_else(|| {
             match pillar_type(&kind) {
                 Some(to) => Some(vec![pillar(&p, to, data, carried, depth)]),
