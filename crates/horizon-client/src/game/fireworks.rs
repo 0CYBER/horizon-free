@@ -21,7 +21,7 @@ pub(super) struct Rocket {
     /// The entity id a server tracks it by (0 until it is tracked).
     pub id: u32,
     pub(super) position: Vec3,
-    previous: Vec3,
+    pub(super) previous: Vec3,
     pub(super) velocity: Vec3,
     life: i32,
     lifetime: i32,
@@ -369,7 +369,12 @@ impl Game<'_> {
     /// lit at the rocket's light probe.
     pub(super) fn rocket_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
         let orientation = glam::Mat4::from_quat(self.camera_orientation());
-        for r in self.rockets.iter().filter(|r| !r.attached) {
+        // shouldRender: not while attached to an entity (`isAttachedToEntity`).
+        for r in self
+            .rockets
+            .iter()
+            .filter(|r| !r.attached && r.attached_to.is_none())
+        {
             // FireworkRocketEntity.shouldRenderAtSqrDistance: within 64 blocks;
             // EntityRenderer.shouldRender: its 0.25 box in the view.
             if !self.standing_entity_in_view(
