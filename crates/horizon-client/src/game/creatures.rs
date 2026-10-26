@@ -2123,10 +2123,24 @@ impl Game<'_> {
                         hurt
                     }
                 };
-                // doKnockback: Punch pushes along the flight.
+                // doKnockback: Punch pushes along the flight, less the target's
+                // knockback resistance.
                 let flight = (p.velocity.x * p.velocity.x + p.velocity.z * p.velocity.z).sqrt();
-                if hurt && p.bonus.punch > 0 && flight > 1e-6 {
-                    let k = f64::from(p.bonus.punch) * 0.6 / flight;
+                let resistance = match who {
+                    Who::Player => self
+                        .player
+                        .as_mut()
+                        .and_then(|pl| pl.attribute("minecraft:knockback_resistance").ok())
+                        .unwrap_or(0.0),
+                    Who::Mob(id) => self
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == id)
+                        .map_or(0.0, |m| m.attrs.knockback_resistance),
+                };
+                let push = f64::from(p.bonus.punch) * 0.6 * (1.0 - resistance).max(0.0);
+                if hurt && push > 0.0 && flight > 1e-6 {
+                    let k = push / flight;
                     self.handle_mob_events(vec![MobEvent::Push {
                         target: who,
                         velocity: [p.velocity.x * k, 0.1, p.velocity.z * k],
