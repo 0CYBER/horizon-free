@@ -3077,16 +3077,7 @@ impl Game<'_> {
                 None
             };
             if let Some(sound) = sound {
-                self.audio.play(
-                    sound,
-                    Some([
-                        f64::from(key.0) + 0.5,
-                        f64::from(key.1) + 0.5,
-                        f64::from(key.2) + 0.5,
-                    ]),
-                    0.5,
-                    1.0,
-                );
+                self.container_sound(sound, key, &name);
             }
         } else if self.open_station(pos, &name) {
             // Workstation menus: game/stations.rs.
@@ -5654,16 +5645,7 @@ impl Game<'_> {
                 None
             };
             if let Some(sound) = sound {
-                self.audio.play(
-                    sound,
-                    Some([
-                        f64::from(key.0) + 0.5,
-                        f64::from(key.1) + 0.5,
-                        f64::from(key.2) + 0.5,
-                    ]),
-                    0.5,
-                    1.0,
-                );
+                self.container_sound(sound, key, &name);
             }
             self.world.modified.insert((key.0 >> 4, key.2 >> 4));
         }
