@@ -1016,6 +1016,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fps-overlay"
+version = "1.0.0"
+dependencies = [
+ "horizon-mod-sdk",
+]
+
+[[package]]
 name = "futures"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1908,6 +1915,13 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "keystrokes"
+version = "1.0.0"
+dependencies = [
+ "horizon-mod-sdk",
 ]
 
 [[package]]
