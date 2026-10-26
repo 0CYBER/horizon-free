@@ -448,6 +448,24 @@ impl Ext {
         }
         (stack.count > 0).then_some(stack)
     }
+    /// `SimpleContainer.removeItemType`: take up to `count` of the item from
+    /// the first stacks that hold it.
+    pub fn remove_item(&mut self, item: &str, mut count: u32) {
+        let mut slot = 0;
+        while slot < self.inventory.len() && count > 0 {
+            let s = &mut self.inventory[slot];
+            if &*s.item == item {
+                let n = s.count.min(count);
+                s.count -= n;
+                count -= n;
+                if s.count == 0 {
+                    self.inventory.remove(slot);
+                    continue;
+                }
+            }
+            slot += 1;
+        }
+    }
     pub fn count_item(&self, item: &str) -> u32 {
         self.inventory
             .iter()

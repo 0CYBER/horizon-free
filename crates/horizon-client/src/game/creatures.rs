@@ -1206,6 +1206,7 @@ impl Game<'_> {
                     partner,
                     child,
                 } => self.villager_birth(parent, partner, child),
+                MobEvent::WorkAtComposter { mob, pos } => self.villager_work_at_composter(mob, pos),
                 MobEvent::GolemCheck { mob, needed } => self.villager_golem_check(mob, needed),
                 MobEvent::Firework { at, color, flight } => {
                     self.villager_firework(at, color, flight)

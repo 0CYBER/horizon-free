@@ -227,19 +227,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                     if table.int(state, p.level) != 8 {
                         return Pass;
                     }
-                    self.player_effect(
-                        pos,
-                        state,
-                        PlayerEffect::DropItem("minecraft:bone_meal".into()),
-                    );
-                    self.set_block_and_update(pos, table.set_int(state, p.level, 0));
-                    self.game_event(pos, "minecraft:block_change");
-                    self.emit(LevelEvent::Sound {
-                        pos,
-                        sound: "minecraft:block.composter.empty".into(),
-                        volume: 1.0,
-                        pitch: 1.0,
-                    });
+                    self.composter_extract_produce(pos, state);
                     Success
                 }
                 Class::CaveVines | Class::CaveVinesPlant => {
@@ -435,6 +423,25 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         InteractionResult::Success
     }
 
+    /// `ComposterBlock.extractProduce`: the bone meal pops out, the composter
+    /// empties and its sound plays.
+    fn composter_extract_produce(&mut self, pos: BlockPos, state: BlockStateId) {
+        let b = self.b;
+        self.player_effect(
+            pos,
+            state,
+            PlayerEffect::DropItem("minecraft:bone_meal".into()),
+        );
+        self.set_block_and_update(pos, b.table.set_int(state, b.props.level, 0));
+        self.game_event(pos, "minecraft:block_change");
+        self.emit(LevelEvent::Sound {
+            pos,
+            sound: "minecraft:block.composter.empty".into(),
+            volume: 1.0,
+            pitch: 1.0,
+        });
+    }
+
     /// `ComposterBlock.addLayer` once its `compostable` provider gave
     /// `layers`: the new state (the old one when no layer is added).
     fn composter_add_layer(&mut self, pos: BlockPos, layers: i32) -> BlockStateId {
@@ -497,6 +504,44 @@ impl Behaviours {
         let next = sim.composter_add_layer(pos, layers);
         sim.level_event(1500, pos, i32::from(next != state));
         next
+    }
+
+    /// `ComposterBlock.addLayer` without level event 1500, for a villager
+    /// that composts several items and sends the event once at the end
+    /// (`WorkAtComposter.compostItems`). The new state.
+    pub fn composter_layer<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        layers: i32,
+    ) -> BlockStateId {
+        self.sim(level, ticks).composter_add_layer(pos, layers)
+    }
+
+    /// `ComposterBlock.extractProduce` by a villager (`WorkAtComposter`).
+    pub fn composter_extract<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) {
+        let mut sim = self.sim(level, ticks);
+        let state = sim.state(pos);
+        sim.composter_extract_produce(pos, state);
+    }
+
+    /// Level event 1500 (`WorkAtComposter.spawnComposterFillEffects`): data 1
+    /// when the composter's state changed.
+    pub fn composter_fill_effects<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        changed: bool,
+    ) {
+        self.sim(level, ticks)
+            .level_event(1500, pos, i32::from(changed));
     }
 
     /// `ComposterBlock.empty`: the hopper output container took the bone meal.

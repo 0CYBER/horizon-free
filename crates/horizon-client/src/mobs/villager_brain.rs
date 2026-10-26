@@ -1242,6 +1242,8 @@ enum B {
     WorkAtPoi {
         t: Timed,
         last_check: i64,
+        /// `WorkAtComposter` (a farmer's package) rather than `WorkAtPoi`.
+        composter: bool,
     },
     StrollAroundPoi {
         running: bool,
@@ -1635,7 +1637,11 @@ impl B {
                 *birth = now + 275 + i64::from(m.random.next_int_bound(50).unwrap_or(0));
                 true
             }
-            B::WorkAtPoi { t, last_check } => {
+            B::WorkAtPoi {
+                t,
+                last_check,
+                composter,
+            } => {
                 let mm = mem(m);
                 let Some(site) = mm.job_site.value() else {
                     return false;
@@ -1656,6 +1662,13 @@ impl B {
                 mm.last_worked_at_poi.set(now);
                 mm.look_target.set(Tracker::Block(site));
                 play_work_sound(m, cx);
+                // WorkAtComposter.useWorkstation, before the restock.
+                if *composter {
+                    cx.events.push(MobEvent::WorkAtComposter {
+                        mob: m.id,
+                        pos: site,
+                    });
+                }
                 restock_if_due(m, cx.w);
                 true
             }
@@ -3775,6 +3788,7 @@ fn packages(baby: bool, seed: i64, farmer: bool) -> Vec<Entry> {
                         B::WorkAtPoi {
                             t: timed(60, 60),
                             last_check: 0,
+                            composter: farmer,
                         },
                         7,
                     ),
