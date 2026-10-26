@@ -10487,6 +10487,9 @@ impl Game<'_> {
         let level = &mut self.level;
         level.creative = self.creative;
         level.game_mode = mode;
+        // PrimaryLevelData.setDifficulty: /difficulty and the options button change it.
+        level.difficulty =
+            horizon_client::title::DIFFICULTIES[usize::from(self.ui.difficulty) & 3].into();
         level.time = self.world.game_time;
         level.weather = self.world.weather;
         level.day_time = self.world.day_time;
