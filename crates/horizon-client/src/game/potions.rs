@@ -755,7 +755,7 @@ impl Game<'_> {
             image_width,
             &self.potions.effects.list,
             self.clock.rate(),
-            &|key| self.pack.names.get(key).map(str::to_owned),
+            &|key| self.pack.names.display_get(key),
             &|text| self.gui.atlas.font.width(text).ceil() as i32,
         );
         if let Some(lines) = inventory_effects::paint(
