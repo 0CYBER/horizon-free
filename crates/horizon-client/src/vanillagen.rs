@@ -547,7 +547,9 @@ impl ChunkGenerator for VanillaTerrain {
             VanillaProto::Failed(x, z) => return Chunk::empty(x, z),
         };
         let mut out = self.column(&chunk);
-        out.block_entities = crate::structure_blocks::block_entities(&chunk, self.loot.as_deref());
+        let (block_entities, rolled_loot) =
+            crate::structure_blocks::block_entities(&chunk, self.loot.as_deref());
+        out.block_entities = block_entities;
         // The block entities Horizon does not model (decorated pots with their
         // sherds and loot table, brushable blocks) stay as placed, like a
         // loaded chunk's.
@@ -571,21 +573,20 @@ impl ChunkGenerator for VanillaTerrain {
                 Some(Tag::Compound(nbt))
             })
             .collect();
-        if !unmodelled.is_empty() {
+        if !unmodelled.is_empty() || !rolled_loot.is_empty() {
             let mut extras = out
                 .saved
                 .take()
                 .map(Arc::unwrap_or_clone)
                 .unwrap_or_default();
             extras.block_entities = unmodelled;
+            extras.rolled_loot = rolled_loot;
             out.saved = Some(Arc::new(extras));
         }
         let entities = std::mem::take(&mut chunk.entities);
+        // Chest minecarts keep their loot table; the game rolls it on load.
         out.entities = entities
             .into_iter()
-            .map(|nbt| {
-                crate::structure_blocks::unpack_entity_loot(&chunk, nbt, self.loot.as_deref())
-            })
             .map(horizon_world::nbt::Tag::Compound)
             .collect();
         for s in &mut out.sections {

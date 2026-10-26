@@ -231,7 +231,7 @@ impl Game<'_> {
         }
         damage
     }
-    fn biome_name_at(&self, p: Vec3) -> Option<String> {
+    pub(super) fn biome_name_at(&self, p: Vec3) -> Option<String> {
         let (x, y, z) = (p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
         let c = self.world.chunks.get(&(x >> 4, z >> 4))?;
         Some(
