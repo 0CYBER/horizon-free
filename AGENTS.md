@@ -82,7 +82,7 @@ python3 tools/agent_control_e2e.py         # horizon-ctl / MCP end to end
   ~25, a file of the client lib ~103, of `horizon-world` ~103–109, of `horizon-core` ~119. Plan for it.
 - Rust integration tests: `crates/horizon-client/tests/` (`lan_bot.rs`, `generation_saves.rs`, `streaming_meshes.rs`).
 - **macOS:** `cargo build/test --workspace` may fail to link the two wasm guest cdylibs (undefined
-  `horizon:mods/events` symbols) until #1446 lands: add `--exclude coords-hud --exclude horizon-mods-test-guest --exclude horizon-mods-test-ui-guest`.
+  `horizon:mods/events` symbols) until #1446 lands: add `--exclude coords-hud --exclude predator-missile --exclude horizon-mods-test-guest --exclude horizon-mods-test-ui-guest`.
   Their real check is `cargo test -p horizon-mods` (builds them for `wasm32-unknown-unknown`).
 - Linux needs `libasound2-dev libudev-dev`; `--no-default-features` drops audio and controllers (the server build).
 - Run and drive the game (starts the `horizon-client` beside `horizon-ctl`; other arguments go to the game):
