@@ -148,6 +148,14 @@ pub fn finalize(m: &mut Mob, biome: &BiomeFacts, difficulty: &LocalDifficulty) {
         S::Pig | S::Cow | S::Chicken => m.extra.variant = climate_index,
         S::Sheep => m.extra.color = super::farm::sheep_color(biome.climate, &mut m.random),
         S::Mooshroom => m.extra.variant = 0,
+        // Turtle.finalizeSpawn: home is where it spawned.
+        S::Turtle => {
+            m.extra.home = Some([
+                m.position.x.floor() as i32,
+                m.position.y.floor() as i32,
+                m.position.z.floor() as i32,
+            ])
+        }
         S::Frog => m.extra.variant = biome.frog,
         S::Wolf => m.extra.variant = biome.wolf,
         S::Cat => m.extra.variant = super::tame::cat_variant(m, biome.full_moon),

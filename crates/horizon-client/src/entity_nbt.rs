@@ -856,10 +856,14 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     if m.species() == crate::mobs::Species::Turtle {
         // Turtle.readAdditionalSaveData: `home_pos` (else where it stands) and `has_egg`.
         m.extra.flag = flag(tag, "has_egg");
-        m.extra.home = match tag.get("home_pos") {
-            Some(Tag::IntArray(home)) if home.len() == 3 => Some([home[0], home[1], home[2]]),
-            _ => None,
-        };
+        m.extra.home = Some(match tag.get("home_pos") {
+            Some(Tag::IntArray(home)) if home.len() == 3 => [home[0], home[1], home[2]],
+            _ => [
+                m.position.x.floor() as i32,
+                m.position.y.floor() as i32,
+                m.position.z.floor() as i32,
+            ],
+        });
     }
     if m.species() == crate::mobs::Species::Wither {
         m.extra.counter = number(tag.get("Invul")).unwrap_or(0) as i32;

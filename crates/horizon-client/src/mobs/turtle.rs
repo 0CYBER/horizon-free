@@ -23,8 +23,8 @@ fn set_laying_egg(m: &mut Mob, on: bool) {
     m.extra.counter = i32::from(on);
     m.extra.flag2 = on;
 }
-/// `homePos.closerToCenterThan(position, distance)`; a turtle that never
-/// had a home is at home where it stands.
+/// `homePos.closerToCenterThan(position, distance)`. Spawning, hatching and
+/// loading all set a home; one made any other way is at home where it stands.
 fn close_to_home(m: &Mob, distance: f64) -> bool {
     let home = m.extra.home.unwrap_or([
         m.position.x.floor() as i32,

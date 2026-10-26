@@ -1360,9 +1360,13 @@ impl Game<'_> {
         // TurtleBreedGoal.breed: the goal gave the mother her egg; only the
         // experience is left, and only with mob loot on.
         if p.species() == Species::Turtle {
-            if self.ui.rules.bool("mob_drops") {
-                let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
-                self.spawn_orbs([p.position.x, p.position.y, p.position.z], xp);
+            // One `new ExperienceOrb` of 1 to 7 from the mother's random (not
+            // split up as `ExperienceOrb.award` does).
+            if self.ui.rules.bool("mob_drops")
+                && let Some(m) = self.mobs.iter_mut().find(|m| m.id == parent)
+            {
+                let xp = 1 + m.random.next_int_bound(7).unwrap_or(0) as u32;
+                self.add_orb([p.position.x, p.position.y, p.position.z], xp);
             }
             return;
         }
