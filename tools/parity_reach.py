@@ -25,8 +25,9 @@ assets, fonts) that only unreached sources name; a dependency that no longer exi
 a change adds take part.
 """
 
+import functools
 import hashlib
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import re
 import subprocess
 
@@ -478,9 +479,10 @@ class SourceGraph:
                            seeds=seeds, node_sets={})
         return self.tables
 
-    def reachable(self, entries, universe, reasons=None):
+    def reachable(self, entries, universe, reasons=None, stop=frozenset()):
         """The files of universe (workspace Rust sources) holding an item reachable from entries (by the rules in
-        this module's doc), and the entries. reasons, a dict, gets why each file was reached (for debugging)."""
+        this module's doc), and the entries. reasons, a dict, gets why each file was reached (for debugging). The
+        search ends early, with only part of the answer, once it reaches a file of stop."""
         # Searching every source of the crates involved (not only those Cargo listed) only adds reach, and lets
         # harnesses with the same entries (the game binary's) share one search.
         crates = frozenset(crate_of(path) for path in universe)
@@ -488,11 +490,12 @@ class SourceGraph:
         if reasons is None and key in self.results:
             return self.results[key] & set(universe)
         everything = {path for path in self.files if crate_of(path) in crates} | set(universe)
-        files = self.search(entries, everything, reasons)
-        self.results[key] = files
+        files, complete = self.search(entries, everything, reasons, stop)
+        if complete:
+            self.results[key] = files
         return files & set(universe)
 
-    def search(self, entries, universe, reasons):
+    def search(self, entries, universe, reasons, stop=frozenset()):
         targets = {self.target(path) for path in entries}
         universe = {path for path in universe if (self.is_library(path) or self.target(path) in targets)
                     and path not in self.test_only}
@@ -600,71 +603,80 @@ class SourceGraph:
                 files.add(path)
                 if reasons is not None:
                     reasons[path] = why
+                if path in stop:
+                    raise Stop
 
-        for path in universe:
-            if path.endswith("/src/lib.rs") or path in entries or path not in self.parent:
-                open_module(path, "crate root or entry")
-        for node in seeds:
-            reach(node, "entry" if node[0] in entries else "always counted")
-        for path in entries & universe:
-            files.add(path)
-            if reasons is not None:
-                reasons.setdefault(path, "entry")
-        while queue:
-            node = queue.pop()
-            path, index, member = node
-            item = item_of(node)
-            crate = crate_of(path)
-            label = (item.get("names") or [item["kind"]])[0] if member is None else item["members"][member]["name"]
-            source = sets_of(node, item)
-            why = f"{path} ({label})"
-            # Plain mentions reach items of this file and of the modules above it.
-            ancestor, new = path, source["mentions"]
-            while ancestor is not None and new:
-                known = local.setdefault(ancestor, set())
-                new = new - known
-                known |= new
+        try:
+            for path in universe:
+                if path.endswith("/src/lib.rs") or path in entries or path not in self.parent:
+                    open_module(path, "crate root or entry")
+            for node in seeds:
+                reach(node, "entry" if node[0] in entries else "always counted")
+            for path in entries & universe:
+                files.add(path)
+                if reasons is not None:
+                    reasons.setdefault(path, "entry")
+            while queue:
+                node = queue.pop()
+                path, index, member = node
+                item = item_of(node)
+                crate = crate_of(path)
+                label = (item.get("names") or [item["kind"]])[0] if member is None else item["members"][member]["name"]
+                source = sets_of(node, item)
+                why = f"{path} ({label})"
+                # Plain mentions reach items of this file and of the modules above it.
+                ancestor, new = path, source["mentions"]
+                while ancestor is not None and new:
+                    known = local.setdefault(ancestor, set())
+                    new = new - known
+                    known |= new
+                    for name in new:
+                        wake(by_file_name.get((ancestor, name), ()), f"{why} mentions {name}")
+                    ancestor = self.parent.get(ancestor)
+                if item["kind"] == "use" and item["glob"]:
+                    for name in item["names"]:
+                        for target in sees.get(crate, {crate}):
+                            for module in list(by_module.get((target, name), ())) + \
+                                    ([f"crates/{idents[name]}/src/lib.rs"] if name in idents else []):
+                                if module not in globbed and module in universe:
+                                    globbed.add(module)
+                                    wake([(module, index, None) for index in range(len(self.parse(module)["items"]))]
+                                         if self.parse(module) else [], f"{why} glob-imports {name}")
+                visible_to = sees.get(crate, {crate})
+                new = source["paths"] - done["paths"].setdefault(crate, set())
+                done["paths"][crate] |= new
                 for name in new:
-                    wake(by_file_name.get((ancestor, name), ()), f"{why} mentions {name}")
-                ancestor = self.parent.get(ancestor)
-            if item["kind"] == "use" and item["glob"]:
-                for name in item["names"]:
-                    for target in sees.get(crate, {crate}):
-                        for module in list(by_module.get((target, name), ())) + \
-                                ([f"crates/{idents[name]}/src/lib.rs"] if name in idents else []):
-                            if module not in globbed and module in universe:
-                                globbed.add(module)
-                                wake([(module, index, None) for index in range(len(self.parse(module)["items"]))]
-                                     if self.parse(module) else [], f"{why} glob-imports {name}")
-            visible_to = sees.get(crate, {crate})
-            new = source["paths"] - done["paths"].setdefault(crate, set())
-            done["paths"][crate] |= new
-            for name in new:
-                for target in visible_to:
-                    path_names.setdefault(target, set()).add(name)
-                    for module in by_module.get((target, name), ()):
-                        if module in universe and self.parent[module] in opened:
-                            open_module(module, f"{why} names {name}")
-            for key, table, wanted in (("qualified", qualified, lambda other: True),
-                                       ("invokes", invoked, lambda other: item_of(other)["kind"] == "macro"),
-                                       ("mentions", mentioned, lambda other: other[2] is not None or other[0] in globbed)):
-                new = source[key] - done[key].setdefault(crate, set())
-                done[key][crate] |= new
-                for name in new:
-                    table.setdefault(name, set()).add(crate)
-                    wake([other for other in by_name.get(name, ()) if crate_of(other[0]) in visible_to and wanted(other)],
-                         f"{why} {key} {name}")
-            if item["kind"] in TYPE_KINDS and member is None:
-                own = types.setdefault(crate, set())
-                local_types.setdefault(path, set()).update(names(node))
-                if not names(node) <= own:
-                    own |= names(node)
-                    visible_cache.clear()
-                seeing = seen_by.get(crate, {crate})
-                for name in names(node):  # also when the crate has one by that name already: impls of this one
-                    wake([other for other in by_type.get(name, ()) if crate_of(other[0]) in seeing],
-                         f"implements for {name}, defined in {path}")
-        return files
+                    for target in visible_to:
+                        path_names.setdefault(target, set()).add(name)
+                        for module in by_module.get((target, name), ()):
+                            if module in universe and self.parent[module] in opened:
+                                open_module(module, f"{why} names {name}")
+                for key, table, wanted in (("qualified", qualified, lambda other: True),
+                                           ("invokes", invoked, lambda other: item_of(other)["kind"] == "macro"),
+                                           ("mentions", mentioned, lambda other: other[2] is not None or other[0] in globbed)):
+                    new = source[key] - done[key].setdefault(crate, set())
+                    done[key][crate] |= new
+                    for name in new:
+                        table.setdefault(name, set()).add(crate)
+                        wake([other for other in by_name.get(name, ()) if crate_of(other[0]) in visible_to and wanted(other)],
+                             f"{why} {key} {name}")
+                if item["kind"] in TYPE_KINDS and member is None:
+                    own = types.setdefault(crate, set())
+                    local_types.setdefault(path, set()).update(names(node))
+                    if not names(node) <= own:
+                        own |= names(node)
+                        visible_cache.clear()
+                    seeing = seen_by.get(crate, {crate})
+                    for name in names(node):  # also when the crate has one by that name already: impls of this one
+                        wake([other for other in by_type.get(name, ()) if crate_of(other[0]) in seeing],
+                             f"implements for {name}, defined in {path}")
+        except Stop:
+            return files, False
+        return files, True
+
+
+class Stop(Exception):
+    """A search reached a file it was told to stop at."""
 
 
 def impl_subject(header):
@@ -682,13 +694,19 @@ def impl_subject(header):
     return parameters, re.split(r"\bwhere\b", header)[0]
 
 
+_CRATES = {}
+
+
 def crate_of(path):
-    return path.split("/", 2)[1]
+    """The crate folder of a crates/<crate>/... path (called millions of times by a search: cached)."""
+    crate = _CRATES.get(path)
+    if crate is None:
+        crate = _CRATES[path] = path.split("/", 2)[1]
+    return crate
 
 
 def is_workspace_rust(path):
-    parts = PurePosixPath(path).parts
-    return len(parts) > 2 and parts[0] == "crates" and path.endswith(".rs")
+    return path.startswith("crates/") and path.endswith(".rs") and path.count("/") >= 2
 
 
 DECLARATION_LINE = re.compile(rf"\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+({IDENT})\s*;")
@@ -718,6 +736,11 @@ def declarations_changed(root, path, children, base, whole):
     missing."""
     if base is None:
         return True
+    return _declarations_changed(str(root), path, frozenset(children), base, whole)
+
+
+@functools.lru_cache(maxsize=None)
+def _declarations_changed(root, path, children, base, whole):
     try:
         head = (Path(root) / path).read_text(encoding="utf-8", errors="replace")
         before = subprocess.run(["git", "show", f"{base}:{path}"], cwd=root, capture_output=True, text=True, check=True).stdout
@@ -726,36 +749,37 @@ def declarations_changed(root, path, children, base, whole):
     return declarations(head, children, whole) != declarations(before, children, whole)
 
 
-def narrow(dependencies, artifacts, graph, changed=()):
+def narrow(dependencies, artifacts, graph, changed=(), stop=frozenset()):
     """A harness's dependencies narrowed to what its entry points can reach: {dependency: (whole, children)}, where
     whole says the file counts for its own content (else only through its `mod` declarations of children, as a
     module ancestor of a reached file) and children are its reached child modules. Without known entry points (a
-    probe or binary the harness built that isn't found here), every dependency is kept whole."""
+    probe or binary the harness built that isn't found here), every dependency is kept whole. The search may end
+    as soon as it reaches a file of stop (changed files that count once reached): then only part is returned."""
     plain = [dependency.split("#keep:")[0] for dependency in dependencies]
-    crates = {PurePosixPath(path).parts[1] for path in plain if path.startswith("crates/")}
+    crates = {crate_of(path) for path in plain if path.startswith("crates/") and path.count("/") >= 2}
     rust = {path for path in plain if is_workspace_rust(path)}
-    added = {path for path in changed if is_workspace_rust(path) and PurePosixPath(path).parts[1] in crates
+    added = {path for path in changed if is_workspace_rust(path) and crate_of(path) in crates
              and path not in rust and (graph.root / path).is_file()}
     entries = graph.entries(artifacts, rust)
     if entries is None:
         return {dependency: (True, None) for dependency in dependencies}
     missing = {path for path in rust if graph.parse(path) is None}
-    reached = graph.reachable(entries, rust | added | entries) | missing
+    reached = graph.reachable(entries, rust | added | entries, stop=frozenset(stop) & (rust | added)) | missing
     named, named_in_crate = set(), {}
     for path in rust | added:
         parsed = graph.parse(path)
         file_names = set(parsed["file_names"]) if parsed else set()
         if path in reached:
             named |= file_names
-        named_in_crate.setdefault(PurePosixPath(path).parts[1], set()).update(file_names)
+        named_in_crate.setdefault(crate_of(path), set()).update(file_names)
     kept = {}
     for dependency, path in zip(dependencies, plain):
         if is_workspace_rust(path):
             if path in reached:
                 kept[dependency] = (True, set())
         elif not path.startswith("crates/") or path.endswith(("Cargo.toml", "build.rs")) \
-                or PurePosixPath(path).name in named \
-                or PurePosixPath(path).name not in named_in_crate.get(PurePosixPath(path).parts[1], ()):
+                or path.rsplit("/", 1)[-1] in named \
+                or path.rsplit("/", 1)[-1] not in named_in_crate.get(crate_of(path), ()):
             kept[dependency] = (True, None)
     for path in sorted(added & reached):
         kept[path] = (True, set())
