@@ -849,7 +849,17 @@ mod tests {
         let first = lock(&dir).unwrap();
         assert!(lock(&dir).unwrap_err().contains("already running"));
         drop(first);
-        lock(&dir).unwrap();
+        // A process another test spawns holds a copy of the lock's descriptor between its fork and exec:
+        // the lock comes back once that child has exec'd.
+        let mut again = lock(&dir);
+        for _ in 0..50 {
+            if again.is_ok() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            again = lock(&dir);
+        }
+        again.unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

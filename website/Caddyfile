@@ -20,7 +20,7 @@
 		Referrer-Policy strict-origin-when-cross-origin
 		X-Frame-Options DENY
 		Permissions-Policy "interest-cohort=(), browsing-topics=(), camera=(), microphone=(), geolocation=()"
-		Content-Security-Policy "default-src 'self'; script-src 'self' {$CSP_SCRIPT}; style-src 'self' {$CSP_STYLE}; img-src 'self' data: https://avatars.githubusercontent.com; font-src 'self'; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://telemetry.playhorizon.dev; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		Content-Security-Policy "default-src 'self'; script-src 'self' {$CSP_SCRIPT}; style-src 'self' {$CSP_STYLE}; img-src 'self' data: https://avatars.githubusercontent.com https://ludovic111.github.io; font-src 'self'; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://telemetry.playhorizon.dev https://ludovic111.github.io; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 		-Server
 	}
 	@assets path /assets/*
@@ -33,10 +33,33 @@
 	rewrite /privacy /privacy.html
 	rewrite /releases /releases.html
 	rewrite /benchmarks /benchmarks.html
+	rewrite /hub /hub.html
+	# The roadmap is the hub's Roadmap tab.
+	redir /roadmap /hub#roadmap permanent
 	@doc path_regexp doc ^/docs/([a-z-]+)$
 	rewrite @doc /docs/{re.doc.1}.html
-	@pages path / /index.html /404.html /privacy.html /releases /releases.html /benchmarks /benchmarks.html /benchmarks.json /docs /docs/* /sitemap.xml
+	# The API portal: /docs/api is its index, /docs/api/<page> its pages.
+	redir /docs/api/ /docs/api permanent
+	@apidoc path_regexp apidoc ^/docs/api/([a-z-]+)$
+	rewrite @apidoc /docs/api/{re.apidoc.1}.html
+	# The registry's submission service (crates/horizon-mod-registry), over Railway's private network. Unset, the
+	# form says it isn't open.
+	handle /api/mods/* {
+		reverse_proxy {$REGISTRY_UPSTREAM:127.0.0.1:9}
+	}
+	# The registry: /mods, /mods/submit and /mods/<id> baked at build time, else the list page, whose script shows a project
+	# published since.
+	rewrite /mods /mods.html
+	@mod {
+		path_regexp ^/mods/[a-z0-9_]+$
+		file {path}.html /mods.html
+	}
+	rewrite @mod {file_match.relative}
+	@pages path / /index.html /404.html /privacy.html /releases /releases.html /benchmarks /benchmarks.html /benchmarks.json /hub /hub.html /data/* /docs /docs/* /mods /mods.html /mods/* /sitemap.xml
 	header @pages Cache-Control "no-cache"
+	# The hub's data for Kira and anyone else: readable from any origin.
+	@data path /data/*
+	header @data Access-Control-Allow-Origin "*"
 	@legal path /LEGAL.md /fonts/*.txt
 	header @legal Content-Type "text/plain; charset=utf-8"
 
