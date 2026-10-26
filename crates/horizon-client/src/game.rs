@@ -9203,8 +9203,29 @@ impl Game<'_> {
         while value > 0 {
             let v = ExperienceOrb::split(value);
             value -= v;
-            let _merge_id = self.world.random.next_int_bound(40);
-            self.add_orb(at, v);
+            let merge_id = self.world.random.next_int_bound(40).unwrap_or(0);
+            self.award_orb(at, v, merge_id);
+        }
+    }
+    /// `ExperienceOrb.tryMergeToExisting`: an orb of the same value within a
+    /// 1 block box of `at`, whose id is a multiple of 40 from `merge_id`, takes
+    /// the new one as one more in its count (and restarts its age); otherwise
+    /// a fresh orb spawns.
+    fn award_orb(&mut self, at: [f64; 3], value: u32, merge_id: i32) {
+        let centre = Vec3::new(at[0], at[1], at[2]);
+        let half = Vec3::new(0.5, 0.5, 0.5);
+        let area = Aabb::new(centre.subtract(half), centre.add_vector(half));
+        // A server's orbs are its own; a LAN or server guest only shows them.
+        let target = self.remote.is_none().then(|| {
+            self.orbs
+                .iter_mut()
+                .find(|o| o.can_merge(merge_id as u32, value) && o.bounds().intersects(area))
+        });
+        if let Some(Some(orb)) = target {
+            orb.count += 1;
+            orb.age = 0;
+        } else {
+            self.add_orb(at, value);
         }
     }
     /// `new ExperienceOrb(level, pos, Vec3.ZERO, value)`: yaw and motion from
@@ -9226,6 +9247,8 @@ impl Game<'_> {
             value,
             age: 0,
             on_ground: false,
+            count: 1,
+            ticks: 0,
         });
     }
     fn can_place_used_fire(&mut self, target: [i32; 3]) -> bool {
@@ -9302,18 +9325,31 @@ impl Game<'_> {
                     }),
             );
         }
+        // Player.aiStep: the pickup area is the box inflated by (1, 0.5, 1).
         let bounds = player.map(|p| {
             let w = f64::from(p.dimensions.width) / 2.0;
             (
-                [p.position.x - w, p.position.y, p.position.z - w],
                 [
-                    p.position.x + w,
-                    p.position.y + f64::from(p.dimensions.height),
-                    p.position.z + w,
+                    p.position.x - w - 1.0,
+                    p.position.y - 0.5,
+                    p.position.z - w - 1.0,
+                ],
+                [
+                    p.position.x + w + 1.0,
+                    p.position.y + f64::from(p.dimensions.height) + 0.5,
+                    p.position.z + w + 1.0,
                 ],
             )
         });
         let mut orbs = std::mem::take(&mut self.orbs);
+        // An orb has no random of its own here: lava draws from one made on
+        // first use, apart from the level stream.
+        let mut lava_random = None;
+        let mut next_float = || {
+            lava_random
+                .get_or_insert_with(dispenser::entity_random)
+                .next_float()
+        };
         orbs.retain_mut(|o| {
             let distance = |feet: &[f64; 3]| -> f64 {
                 (feet[0] - o.position.x).powi(2)
@@ -9325,12 +9361,22 @@ impl Game<'_> {
                 .filter(|(feet, _)| distance(feet) < 64.0)
                 .min_by(|a, b| distance(&a.0).total_cmp(&distance(&b.0)))
                 .map(|(_, target)| *target);
-            o.tick(&self.world, self.res.facts(), self.collision, target)
+            o.tick(
+                &self.world,
+                self.res.facts(),
+                self.collision,
+                target,
+                &mut next_float,
+            )
         });
+        // ExperienceOrb.scanForMerges runs on the server only.
+        if self.remote.is_none() {
+            horizon_client::entities::merge_orbs(&mut orbs);
+        }
         let mut gained = 0;
         let mut taken = Vec::new();
         if let Some((min, max)) = bounds {
-            orbs.retain(|o| {
+            orbs.retain_mut(|o| {
                 let touching = o.position.x + 0.25 > min[0]
                     && o.position.x - 0.25 < max[0]
                     && o.position.y + 0.5 > min[1]
@@ -9338,11 +9384,13 @@ impl Game<'_> {
                     && o.position.z + 0.25 > min[2]
                     && o.position.z - 0.25 < max[2];
                 if touching && self.xp_delay == 0 {
-                    // ExperienceOrb.playerTouch: one orb every 2 ticks.
+                    // ExperienceOrb.playerTouch: one orb every 2 ticks; a
+                    // merged orb gives its value once per count.
                     self.xp_delay = 2;
                     gained += o.value;
                     taken.push(o.clone());
-                    return false;
+                    o.count -= 1;
+                    return o.count > 0;
                 }
                 true
             });

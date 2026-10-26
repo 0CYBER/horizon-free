@@ -1043,18 +1043,18 @@ pub fn orb_to_nbt(o: &ExperienceOrb, uuid: [i32; 4]) -> Tag {
         ("Health", Tag::Short(5)),
         ("Age", Tag::Short(o.age.min(i16::MAX as u32) as i16)),
         ("Value", Tag::Short(o.value.min(i16::MAX as u32) as i16)),
-        ("Count", Tag::Int(1)),
+        ("Count", Tag::Int(o.count.min(i32::MAX as u32) as i32)),
     ] {
         put(&mut tag, key, value);
     }
     tag
 }
-/// One Horizon orb per counted orb (vanilla merges orbs of equal value).
+/// One orb with its merged `Count`.
 pub fn orbs_from_nbt(tag: &Tag) -> Vec<ExperienceOrb> {
     let Some(position) = position(tag) else {
         return Vec::new();
     };
-    let count = number(tag.get("Count")).unwrap_or(1).clamp(1, 64) as usize;
+    let count = number(tag.get("Count")).unwrap_or(1).max(1) as u32;
     let orb = ExperienceOrb {
         id: 0,
         position,
@@ -1063,8 +1063,10 @@ pub fn orbs_from_nbt(tag: &Tag) -> Vec<ExperienceOrb> {
         value: number(tag.get("Value")).unwrap_or(1).max(1) as u32,
         age: number(tag.get("Age")).unwrap_or(0).max(0) as u32,
         on_ground: flag(tag, "OnGround"),
+        count,
+        ticks: 0,
     };
-    vec![orb; count]
+    vec![orb]
 }
 
 /// `Projectile` + `AbstractArrow.addAdditionalSaveData` of a live arrow;
@@ -1913,7 +1915,7 @@ mod tests {
         assert_eq!(number(tag.get("Health")), Some(5));
     }
     #[test]
-    fn orbs_expand_their_count() {
+    fn orbs_keep_their_count() {
         let o = ExperienceOrb {
             id: 0,
             position: Vec3::new(1.0, 2.0, 3.0),
@@ -1922,12 +1924,14 @@ mod tests {
             value: 7,
             age: 3,
             on_ground: false,
+            count: 3,
+            ticks: 0,
         };
-        let mut tag = orb_to_nbt(&o, [0; 4]);
-        put(&mut tag, "Count", Tag::Int(3));
+        let tag = orb_to_nbt(&o, [0; 4]);
         let back = orbs_from_nbt(&tag);
-        assert_eq!(back.len(), 3);
+        assert_eq!(back.len(), 1);
         assert_eq!(back[0].value, 7);
+        assert_eq!(back[0].count, 3);
     }
 }
 

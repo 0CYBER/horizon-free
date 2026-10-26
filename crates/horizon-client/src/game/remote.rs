@@ -1283,6 +1283,8 @@ impl Game<'_> {
                 value: 1,
                 age: 0,
                 on_ground: false,
+                count: 1,
+                ticks: 0,
             });
         }
         if let Some(t) = mob_type {
@@ -2064,7 +2066,10 @@ impl Game<'_> {
                 {
                     self.add_pickup(super::pickups::Taken::Orb(Box::new(orb)), collector);
                 }
-                self.remove_entity(p.item);
+                // An orb stays: the server may still hold merged ones in it.
+                if !orb {
+                    self.remove_entity(p.item);
+                }
             }
             // ClientPacketListener.handleSetEntityMotion: knockback on this player.
             C::SetEntityMotion(p) if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) => {
