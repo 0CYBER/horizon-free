@@ -649,8 +649,7 @@ impl Downloader {
                 Some(rgba) => {
                     if key.0 == Kind::Skin {
                         let location = skin_location(&key.1);
-                        self.remember(location.clone(), rgba.clone());
-                        self.ready.push((location, rgba));
+                        self.queue(location, rgba);
                     }
                     Download::Ready
                 }
@@ -701,6 +700,13 @@ impl Downloader {
         }
         self.images.insert(location, rgba);
     }
+    /// An image off to the atlas: remembered for `again` and marked queued
+    /// so nothing uploads the same location twice.
+    fn queue(&mut self, location: String, rgba: Vec<u8>) {
+        self.remember(location.clone(), rgba.clone());
+        self.queued.insert(location.clone());
+        self.ready.push((location, rgba));
+    }
     /// A ready skin whose atlas slot was evicted (`show_skin` answered no):
     /// its image for upload again, from memory or the disk cache.
     pub fn again(&mut self, location: &str) -> bool {
@@ -721,9 +727,7 @@ impl Downloader {
         let Some(image) = image else {
             return false;
         };
-        self.remember(location.to_owned(), image.clone());
-        self.queued.insert(location.to_owned());
-        self.ready.push((location.to_owned(), image));
+        self.queue(location.to_owned(), image);
         true
     }
     /// Skins that finished since the last call: texture id and 64x64 RGBA.
@@ -932,6 +936,11 @@ mod tests {
         assert!(d.take_ready().is_empty());
         assert!(d.again("skins/abc"));
         assert_eq!(d.take_ready().len(), 1);
+        // The first upload marks the location queued too: an `again` before
+        // `take_ready` does not put the same skin in the atlas twice.
+        d.queue("skins/def".into(), vec![4]);
+        assert!(d.again("skins/def"));
+        assert_eq!(d.take_ready(), vec![("skins/def".to_owned(), vec![4])]);
     }
 
     #[test]
