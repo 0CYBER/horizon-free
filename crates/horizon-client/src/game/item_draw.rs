@@ -196,13 +196,31 @@ impl Game<'_> {
             skins: &self.skin_downloads,
         }
     }
-    /// The client level as item models read it.
+    /// The client level as item models read it: worked out once a frame (a
+    /// screen of items read the same level, its sky sampled once).
     pub(super) fn item_level(&self) -> LevelState {
         let dimension = match self.dim {
             Dim::Overworld => "minecraft:overworld",
             Dim::Nether => "minecraft:the_nether",
             Dim::End => "minecraft:the_end",
         };
+        let key = (
+            self.frames,
+            self.world.game_time,
+            self.world.day_time,
+            dimension,
+        );
+        let mut cached = self.item_level_cache.borrow_mut();
+        if let Some((at, level)) = cached.as_ref()
+            && *at == key
+        {
+            return level.clone();
+        }
+        let level = self.level_state_now(dimension);
+        *cached = Some((key, level.clone()));
+        level
+    }
+    fn level_state_now(&self, dimension: &'static str) -> LevelState {
         let sky = self
             .dim_environment()
             .sample(self.world.day_time, None, None);

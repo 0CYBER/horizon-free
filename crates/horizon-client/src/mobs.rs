@@ -25,6 +25,7 @@ pub mod creaking;
 pub mod creaking_heart;
 pub mod cube;
 pub mod data;
+pub mod doors;
 pub mod drops;
 pub mod enderman;
 pub mod equine;
@@ -666,6 +667,8 @@ pub struct Extra {
     pub chested: bool,
     /// The chest contents of a donkey or mule (15 slots).
     pub items: Vec<Option<crate::items::ItemStack>>,
+    /// `Piglin.inventory` (`SimpleContainer(8)`): what it picked up and kept.
+    pub inventory: Vec<crate::items::ItemStack>,
     pub tame: bool,
     pub sitting: bool,
     /// The owner's UUID (tamed animals).
@@ -710,6 +713,9 @@ pub struct Extra {
     /// A copper golem's `openedChestPos`.
     pub opened_chest: Option<[i32; 3]>,
     pub point: Option<[f64; 3]>,
+    /// `NEAREST_REPELLENT`: the nearest repelling block a hoglin or piglin
+    /// sensed, looked up every 20 ticks.
+    pub repellent: Option<[i32; 3]>,
     pub vector: [f64; 3],
     /// Active status effects: (effect id, ticks left, amplifier).
     pub effects: Vec<(&'static str, i32, i32)>,
@@ -869,6 +875,11 @@ pub struct Mob {
 /// Events a mob tick asks the game to act on.
 #[derive(Clone, Debug)]
 pub enum MobEvent {
+    /// Squid.handleEntityEvent(19), resetting the remote tentacle cycle.
+    SquidCycle {
+        mob: u32,
+        at: [f64; 3],
+    },
     /// Rabbit entity event 1, sent only when a ground jump actually happens.
     RabbitHop {
         mob: u32,
@@ -966,6 +977,14 @@ pub enum MobEvent {
         owner: u32,
     },
     Shoot([f64; 3], [f64; 3]),
+    /// The mob the `Explode` right after this comes from
+    /// (`ServerExplosion.source`), and whether it is a charged creeper: the
+    /// exploding creeper is already out of the mob list when the game applies
+    /// the blast, so its victims' loot cannot look it up.
+    ExplosionSource {
+        mob: u32,
+        charged: bool,
+    },
     Explode([f64; 3], f32),
     /// Melee or ranged damage to another mob.
     AttackMob {
@@ -1001,6 +1020,24 @@ pub enum MobEvent {
     SetDoorOpen {
         pos: [i32; 3],
         open: bool,
+    },
+    /// `BreakDoorGoal.tick` at its end: the door is removed (`removeBlock`),
+    /// then level events 1021 and 2001 with the state that is left there.
+    BreakDoor {
+        pos: [i32; 3],
+    },
+    /// `Level.destroyBlockProgress` for a mob's crack on a block (`-1`
+    /// clears it).
+    DestroyProgress {
+        mob: u32,
+        pos: [i32; 3],
+        progress: i32,
+    },
+    /// `Level.levelEvent`: the game plays and sends the event.
+    LevelEvent {
+        id: i32,
+        pos: [i32; 3],
+        data: i32,
     },
     /// Destroy a block, dropping nothing (sheep eating grass becomes dirt via SetBlock).
     BreakBlock {
@@ -1099,6 +1136,13 @@ pub enum MobEvent {
         partner: u32,
         child: Option<([i32; 3], Option<u8>)>,
     },
+    /// `WorkAtComposter.useWorkstation`: a farmer at its composter makes
+    /// bread and composts seeds (the game applies it to the villager's
+    /// inventory and the block).
+    WorkAtComposter {
+        mob: u32,
+        pos: [i32; 3],
+    },
     /// A villager asks whether enough neighbours want an iron golem.
     GolemCheck {
         mob: u32,
@@ -1127,8 +1171,10 @@ pub enum MobEvent {
         target: Who,
         aggressive: bool,
     },
-    /// Drop the loot of a gift table (chicken eggs, armadillo scutes).
+    /// Drop the loot of a gift table (chicken eggs, sniffer seeds) with the
+    /// mob as `this` (`LivingEntity.dropFromGiftLootTable`).
     GiftLoot {
+        mob: u32,
         table: &'static str,
         at: [f64; 3],
     },
@@ -1151,6 +1197,12 @@ pub enum MobEvent {
     /// The crumbs of the block under a digging or emerging warden.
     DigParticles {
         at: [f64; 3],
+    },
+    /// `Zombie.hurtServer`: a zombie hurt with a target in sight (its own,
+    /// else the attacker) may call a reinforcement against it on Hard.
+    Reinforcements {
+        mob: u32,
+        target: Who,
     },
     /// `LevelEvent.PARTICLES_DESTROY_BLOCK` (2001) at `pos` for the block at
     /// `block`: a turtle's digging.
@@ -1250,6 +1302,18 @@ pub struct Seen {
     /// `MAX_HEALTH`, `JUMP_STRENGTH` and `MOVEMENT_SPEED` base values (a
     /// horse's breeding stock).
     pub stats: [f64; 3],
+    /// `Wolf.isInSittingPose`.
+    pub sitting: bool,
+    /// `Entity.isVehicle` or `isPassenger`.
+    pub ridden: bool,
+    /// The active effects, without namespace (`slowness`, `poison`...).
+    pub effects: Vec<&'static str>,
+}
+impl Seen {
+    /// `LivingEntity.hasEffect`, by id without namespace.
+    pub fn has_effect(&self, effect: &str) -> bool {
+        self.effects.contains(&effect)
+    }
 }
 impl Mob {
     pub fn burning_time(&self) -> f64 {
@@ -1322,6 +1386,14 @@ impl Mob {
                 m.extra.vector[0],
                 m.attrs.speed,
             ],
+            sitting: m.extra.sitting,
+            ridden: m.rider.is_some() || m.extra.rider.is_some() || m.extra.mount.is_some(),
+            effects: m
+                .extra
+                .effects
+                .iter()
+                .map(|e| e.0.trim_start_matches("minecraft:"))
+                .collect(),
         }
     }
     /// `EntityType.getCategory`'s name.
@@ -1466,6 +1538,8 @@ pub struct PlayerView {
     pub yaw: f32,
     /// The Hero of the Village effect.
     pub hero: bool,
+    /// The active effects, without namespace (`slowness`, `poison`...).
+    pub effects: Vec<&'static str>,
     /// The player's UUID (villagers' gossip is keyed by it).
     pub uuid: [i32; 4],
     /// The mobs on the player's team (`isAlliedTo`): combat targeting
@@ -1474,6 +1548,12 @@ pub struct PlayerView {
     /// A LAN guest: its own client moves it, and touching mobs push it there
     /// (`EntitySelector.pushableBy` on the client).
     pub remote: bool,
+}
+impl PlayerView {
+    /// `LivingEntity.hasEffect`, by id without namespace.
+    pub fn has_effect(&self, effect: &str) -> bool {
+        self.effects.contains(&effect)
+    }
 }
 #[derive(Clone)]
 pub struct MobWorld<'a> {
@@ -1759,6 +1839,10 @@ impl Mob {
             self.health -= amount;
             self.hurt_time = 10;
         }
+        // Animal.actuallyHurt: damage taken ends love mode (`resetLove`).
+        if drops::is_animal(self.species()) {
+            self.extra.in_love = 0;
+        }
         self.last_damage = Some((source, i64::from(self.age)));
         if let Some(who) = source.attacker {
             self.ai.last_hurt_by = Some(who);
@@ -1846,7 +1930,8 @@ impl Mob {
     /// Movement speed attribute bonus (baby zombies, sprinting modifiers).
     /// MOVEMENT_SPEED including effects (speed +20%/level, slowness -15%/level).
     pub fn movement_speed(&self) -> f64 {
-        let mut v = strider::movement_speed(self, self.attrs.speed) * self.speed_bonus();
+        let mut v = strider::movement_speed(self, witch::speed(self, self.attrs.speed))
+            * self.speed_bonus();
         for (e, _, amp) in &self.extra.effects {
             match *e {
                 "minecraft:speed" => v *= 1.0 + 0.2 * f64::from(amp + 1),

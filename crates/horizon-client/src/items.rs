@@ -71,6 +71,8 @@ pub struct ItemInfo {
     /// The `tool` component's `damage_per_block`, when the item has the
     /// component (a mace or trident has one without rules).
     pub tool_damage_per_block: Option<u32>,
+    /// `tool.can_destroy_blocks_in_creative` (defaults to true).
+    pub can_destroy_blocks_in_creative: bool,
     pub food: Option<(u32, f32)>,
     pub can_always_eat: bool,
     /// `consumable`: its timing, sound, particles and `on_consume_effects`.
@@ -111,6 +113,9 @@ pub struct ItemInfo {
     pub swappable: bool,
     /// `equippable.dispensable` (dispensers may put it on an entity).
     pub equip_dispensable: bool,
+    /// `equippable.damage_on_hurt`: the item wears when its wearer is hurt
+    /// (false for the elytra).
+    pub equip_damage_on_hurt: bool,
     /// `equippable.allowed_entities` resolved to entity type ids; None allows all.
     pub equip_allowed: Option<HashSet<String>>,
     pub equip_sound: Option<String>,
@@ -120,6 +125,8 @@ pub struct ItemInfo {
     pub crafting_remainder: Option<String>,
     /// `dye`: the dye colour name (dyes, and anything else with the component).
     pub dye: Option<String>,
+    /// `cushion/color`: the DyeColor name of a cushion item.
+    pub cushion_color: Option<String>,
     /// `block_transformer`: the registry entry an axe, hoe or shovel uses on blocks.
     pub block_transformer: Option<String>,
     /// Has a default `bundle_contents` (the bundles, `BundleItem`).
@@ -251,6 +258,10 @@ pub struct Items {
     loot: HashMap<String, Value>,
     /// The `jukebox_song` registry.
     pub songs: HashMap<String, Song>,
+    /// The enchantment registry: loot functions enchant the items they roll
+    /// (`EnchantWithLevelsFunction`, `EnchantRandomlyFunction`), and the
+    /// station menus share this copy.
+    pub enchantments: Arc<crate::enchant::Enchantments>,
 }
 /// A `JukeboxSong`.
 #[derive(Clone, Debug)]
@@ -390,6 +401,36 @@ impl Items {
             };
         }
         self.get(&stack.item).is_some_and(|i| i.fire_resistant)
+    }
+
+    /// `ItemStack.canBeHurtBy` for the cactus damage type: a `damage_resistant`
+    /// component naming `minecraft:cactus`, or a damage type tag that holds it.
+    /// (`#minecraft:is_fire`, as on netherite gear, does not.)
+    pub fn resists_cactus(&self, stack: &ItemStack) -> bool {
+        const CACTUS_TAGS: [&str; 5] = [
+            "#minecraft:bypasses_shield",
+            "#minecraft:no_knockback",
+            "#minecraft:panic_environmental_causes",
+            "#minecraft:panic_causes",
+            "#minecraft:sulfur_cube_with_block_immune_to",
+        ];
+        let Some((_, v)) = stack.data().and_then(|data| {
+            data.other
+                .iter()
+                .find(|(key, _)| key == "minecraft:damage_resistant")
+        }) else {
+            return false;
+        };
+        match v.get("types") {
+            Some(horizon_world::nbt::Tag::String(id)) => id
+                .to_string()
+                .is_ok_and(|id| id == "minecraft:cactus" || CACTUS_TAGS.contains(&id.as_str())),
+            Some(horizon_world::nbt::Tag::List(ids)) => ids.iter().any(|t| {
+                matches!(t, horizon_world::nbt::Tag::String(id)
+                    if id.to_string().is_ok_and(|id| id == "minecraft:cactus"))
+            }),
+            _ => false,
+        }
     }
 
     pub fn load(root: &Path, registry: &BlockRegistry, facts: &BlockFacts) -> Result<Self> {
@@ -552,6 +593,10 @@ impl Items {
                     tool_damage_per_block: c
                         .get("minecraft:tool")
                         .map(|t| t["damage_per_block"].as_u64().unwrap_or(1) as u32),
+                    can_destroy_blocks_in_creative:
+                        c["minecraft:tool"]["can_destroy_blocks_in_creative"]
+                            .as_bool()
+                            .unwrap_or(true),
                     food,
                     can_always_eat,
                     // Consumable.CODEC's defaults.
@@ -584,6 +629,9 @@ impl Items {
                     equip_dispensable: c["minecraft:equippable"]["dispensable"]
                         .as_bool()
                         .unwrap_or(true),
+                    equip_damage_on_hurt: c["minecraft:equippable"]["damage_on_hurt"]
+                        .as_bool()
+                        .unwrap_or(true),
                     equip_allowed: match &c["minecraft:equippable"]["allowed_entities"] {
                         Value::String(spec) => Some(entity_spec(&entity_tags, spec)),
                         Value::Array(list) => Some(
@@ -599,6 +647,7 @@ impl Items {
                         .map(str::to_owned),
                     jukebox_song: c["minecraft:jukebox_playable"].as_str().map(str::to_owned),
                     dye: c["minecraft:dye"].as_str().map(str::to_owned),
+                    cushion_color: c["minecraft:cushion/color"].as_str().map(str::to_owned),
                     block_transformer: c["minecraft:block_transformer"].as_str().map(str::to_owned),
                     bundle: c.get("minecraft:bundle_contents").is_some(),
                     crafting_remainder: CRAFT_REMAINDERS
@@ -701,12 +750,15 @@ impl Items {
             item_tag_order: load_tag_lists(root, "item")?,
             loot,
             songs: load_songs(root),
+            enchantments: Arc::new(crate::enchant::Enchantments::load(root)),
         })
     }
     pub fn get(&self, id: &str) -> Option<&ItemInfo> {
         self.items.get(id)
     }
-    /// Only the block and item tags, for tools that need tag membership.
+    /// Only the block and item tags (and the enchantment registry, which the
+    /// station rules and loot functions are built from), for tools that need
+    /// tag membership.
     pub fn tags_only(root: &Path) -> Result<Self> {
         Ok(Self {
             items: HashMap::new(),
@@ -717,6 +769,7 @@ impl Items {
             item_tag_order: load_tag_lists(root, "item")?,
             loot: HashMap::new(),
             songs: HashMap::new(),
+            enchantments: Arc::new(crate::enchant::Enchantments::load(root)),
         })
     }
     /// An item table with only tags, for unit tests of item rules.
@@ -734,6 +787,7 @@ impl Items {
             item_tags,
             loot: HashMap::new(),
             songs: HashMap::new(),
+            enchantments: Arc::new(crate::enchant::Enchantments::default()),
         }
     }
     /// Whether `block` is in the block tag `tag` (`minecraft:fire`, no `#`).
@@ -745,6 +799,26 @@ impl Items {
             Some(tag) => self.block_tags.get(tag).is_some_and(|s| s.contains(block)),
             None => spec == block,
         }
+    }
+    /// `Item.canDestroyBlock`: a tool may forbid block destruction with instabuild.
+    pub fn can_destroy_block(&self, held: Option<&ItemStack>, creative: bool) -> bool {
+        if !creative {
+            return true;
+        }
+        let Some(held) = held.filter(|s| s.count > 0 && &*s.item != "minecraft:air") else {
+            return true;
+        };
+        if let Some(tool) = held.data().and_then(|d| d.other("minecraft:tool")) {
+            return tool
+                .get("can_destroy_blocks_in_creative")
+                .and_then(|v| match v {
+                    horizon_world::nbt::Tag::Byte(v) => Some(*v),
+                    _ => None,
+                })
+                .is_none_or(|v| v != 0);
+        }
+        self.get(&held.item)
+            .is_none_or(|info| info.can_destroy_blocks_in_creative)
     }
     /// `Tool.getMiningSpeed` for the held item (1.0 without a tool component).
     pub fn mining_speed(&self, held: Option<&ItemStack>, block: &str) -> f32 {
@@ -796,6 +870,7 @@ impl Items {
             held: None,
             killed_by_player: false,
             explosion_radius: None,
+            this_entity: false,
         };
         ctx.evaluate(table, random)
     }
@@ -860,10 +935,26 @@ impl Items {
         random: &mut impl RandomSource,
         sequences: Option<(&mut crate::random_sequences::RandomSequences, i64)>,
     ) -> Vec<ItemStack> {
-        self.block_drops_exploded(registry, state, held, dynamic, random, sequences, None)
+        self.block_drops_exploded(
+            registry, state, held, dynamic, random, sequences, None, false,
+        )
+    }
+    /// `block_drops_with` for a block a player breaks (`Block.playerDestroy`):
+    /// the player is the loot context's `this` entity, so snow and chorus
+    /// flower tables see an entity.
+    pub fn block_drops_by_player(
+        &self,
+        registry: &BlockRegistry,
+        state: BlockStateId,
+        held: Option<&ItemStack>,
+        dynamic: &[ItemStack],
+        random: &mut impl RandomSource,
+    ) -> Vec<ItemStack> {
+        self.block_drops_exploded(registry, state, held, dynamic, random, None, None, true)
     }
     /// `block_drops_full` for a block an explosion destroys: `explosion`
-    /// is its radius when the explosion decays drops (`DESTROY_WITH_DECAY`).
+    /// is its radius when the explosion decays drops (`DESTROY_WITH_DECAY`);
+    /// `breaker` is whether an entity (the player) broke the block.
     #[allow(clippy::too_many_arguments)]
     pub fn block_drops_exploded(
         &self,
@@ -874,8 +965,10 @@ impl Items {
         random: &mut impl RandomSource,
         sequences: Option<(&mut crate::random_sequences::RandomSequences, i64)>,
         explosion: Option<f32>,
+        breaker: bool,
     ) -> Vec<ItemStack> {
-        let drops = self.block_drops_raw(registry, state, held, random, sequences, explosion);
+        let drops =
+            self.block_drops_raw(registry, state, held, random, sequences, explosion, breaker);
         if !drops.iter().any(|d| d.item.starts_with(DYNAMIC)) {
             return drops;
         }
@@ -890,6 +983,7 @@ impl Items {
             })
             .collect()
     }
+    #[allow(clippy::too_many_arguments)]
     fn block_drops_raw(
         &self,
         registry: &BlockRegistry,
@@ -898,6 +992,7 @@ impl Items {
         random: &mut impl RandomSource,
         sequences: Option<(&mut crate::random_sequences::RandomSequences, i64)>,
         explosion_radius: Option<f32>,
+        breaker: bool,
     ) -> Vec<ItemStack> {
         let Some(block) = registry.state(state) else {
             return vec![];
@@ -931,6 +1026,7 @@ impl Items {
                 held,
                 killed_by_player: false,
                 explosion_radius,
+                this_entity: breaker,
             };
             return ctx.evaluate(table, random);
         }
@@ -941,6 +1037,7 @@ impl Items {
             held,
             killed_by_player: false,
             explosion_radius,
+            this_entity: breaker,
         };
         ctx.evaluate(table, random)
     }
@@ -964,6 +1061,7 @@ impl Items {
             held,
             killed_by_player,
             explosion_radius: None,
+            this_entity: false,
         };
         ctx.evaluate(table, random)
     }
@@ -996,6 +1094,7 @@ impl Items {
             held: None,
             killed_by_player: false,
             explosion_radius: None,
+            this_entity: false,
         };
         match table.get("random_sequence").and_then(Value::as_str) {
             Some(sequence) => ctx.evaluate(table, sequences.get(sequence, seed)),
@@ -1021,6 +1120,7 @@ impl Items {
             held,
             killed_by_player,
             explosion_radius: None,
+            this_entity: false,
         };
         ctx.evaluate(table, random)
     }
@@ -1043,6 +1143,7 @@ impl Items {
             held,
             killed_by_player,
             explosion_radius: None,
+            this_entity: false,
         };
         ctx.evaluate(table, random)
     }
@@ -1084,6 +1185,8 @@ struct LootContext<'a> {
     killed_by_player: bool,
     /// `LootContextParams.EXPLOSION_RADIUS`: an explosion that decays drops.
     explosion_radius: Option<f32>,
+    /// `LootContextParams.THIS_ENTITY` is set (a player broke the block).
+    this_entity: bool,
 }
 impl LootContext<'_> {
     /// Level of an enchantment on the tool / killer's weapon.
@@ -1244,6 +1347,15 @@ impl LootContext<'_> {
                 };
                 random.next_float() < chance
             }
+            // `this` with no checks (snow, chorus flower) holds when an entity
+            // broke the block (LootItemEntityPropertyCondition needs the entity).
+            "minecraft:entity_properties"
+                if self.this_entity
+                    && c["entity"].as_str() == Some("this")
+                    && c["predicate"].as_object().is_none_or(|p| p.is_empty()) =>
+            {
+                true
+            }
             // Entity flags, equipment and damage-source predicates: none hold
             // for an unenchanted player kill without fire or lightning.
             "minecraft:entity_properties" | "minecraft:damage_source_properties" => false,
@@ -1371,6 +1483,16 @@ impl LootContext<'_> {
         self.modifiers(&modifiers, &mut stack, random);
         produced.push(stack);
     }
+    /// An enchantment function's `options` (`HolderSet`): a tag, a list or
+    /// one id; every enchantment when absent (`registryAccess().listElements`).
+    fn enchant_pool(e: &crate::enchant::Enchantments, options: &Value) -> Vec<Arc<str>> {
+        match options {
+            Value::String(s) if s.starts_with('#') => e.tag(s).to_vec(),
+            Value::String(s) => vec![Arc::from(s.as_str())],
+            Value::Array(a) => a.iter().filter_map(|x| x.as_str().map(Arc::from)).collect(),
+            _ => e.list.iter().map(|x| Arc::clone(&x.id)).collect(),
+        }
+    }
     fn modifiers<R: RandomSource>(&self, m: &Value, stack: &mut ItemStack, random: &mut R) {
         let list: Vec<&Value> = match m {
             Value::Array(a) => a.iter().collect(),
@@ -1448,6 +1570,54 @@ impl LootContext<'_> {
                         *stack = std::mem::replace(stack, ItemStack::new("minecraft:air", 0))
                             .with_potion(id);
                     }
+                }
+                // EnchantWithLevelsFunction: EnchantmentHelper.enchantItem on
+                // the context's random (the End cities' gear).
+                "minecraft:enchant_with_levels" => {
+                    let cost = Self::int_number(&f["levels"], random);
+                    let e = &self.items.enchantments;
+                    let pool = Self::enchant_pool(e, &f["options"]);
+                    let chosen = e.select(self.items, random, &stack.item, cost, &pool);
+                    // EnchantmentHelper.enchantItem: a book becomes one
+                    // enchanted book (the fresh stack's count).
+                    if &*stack.item == "minecraft:book" {
+                        *stack = ItemStack::new("minecraft:enchanted_book", 1);
+                    }
+                    for (id, level) in chosen {
+                        stack.enchant(&id, level);
+                    }
+                }
+                // EnchantRandomlyFunction: one enchantment the item accepts,
+                // at a level between its min and max.
+                "minecraft:enchant_randomly" => {
+                    let e = &self.items.enchantments;
+                    let book = &*stack.item == "minecraft:book";
+                    let only_compatible = f["only_compatible"].as_bool().unwrap_or(true);
+                    let options: Vec<Arc<str>> = Self::enchant_pool(e, &f["options"])
+                        .into_iter()
+                        .filter(|id| {
+                            book || !only_compatible || e.can_enchant(self.items, id, &stack.item)
+                        })
+                        .collect();
+                    if options.is_empty() {
+                        continue;
+                    }
+                    let id = options
+                        [random.next_int_bound(options.len() as i32).unwrap_or(0) as usize]
+                        .clone();
+                    let max = e.get(&id).map_or(1, |d| d.max_level).max(1);
+                    // `Mth.nextInt(random, 1, max)`: a single-level
+                    // enchantment (Mending) returns 1 without drawing, so the
+                    // rolls after this one keep vanilla's sequence.
+                    let level = if max <= 1 {
+                        1
+                    } else {
+                        1 + random.next_int_bound(max as i32).unwrap_or(0) as u32
+                    };
+                    if book {
+                        *stack = ItemStack::new("minecraft:enchanted_book", 1);
+                    }
+                    stack.enchant(&id, level);
                 }
                 "minecraft:limit_count" => {
                     let limit = &f["limit"];
@@ -1571,6 +1741,7 @@ mod tests {
             held,
             killed_by_player: block.is_empty(),
             explosion_radius: None,
+            this_entity: false,
         }
     }
 
@@ -1656,6 +1827,102 @@ mod tests {
         assert_eq!(drops.len(), 1);
         assert_eq!(&*drops[0].item, "minecraft:splash_potion");
         assert_eq!(drops[0].potion(), Some("minecraft:fire_resistance"));
+    }
+
+    /// `/loot give` and every other table this dispatcher rolls: the two
+    /// enchantment functions (`EnchantWithLevelsFunction`,
+    /// `EnchantRandomlyFunction`) put their enchantments on the stack.
+    #[test]
+    fn loot_enchant_functions_enchant_the_rolled_item() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
+        let items = Items::load(&root, assets.registry, &facts).unwrap();
+        let props = BTreeMap::new();
+        let mut random = LegacyRandom::new(11);
+        // A sword at levels 20..39 comes out enchanted, as in an End city.
+        let levels = json!({"pools":[{"rolls":1,"entries":[{"type":"minecraft:item",
+            "name":"minecraft:diamond_sword","modifier":[
+            {"type":"minecraft:enchant_with_levels","levels":{"type":"minecraft:uniform","min":20.0,"max":39.0}}]}]}]});
+        let mut enchanted = 0;
+        for _ in 0..40 {
+            let drops = ctx(&items, None, &props, "").evaluate(&levels, &mut random);
+            if drops[0].enchantments().is_empty() {
+                continue;
+            }
+            enchanted += 1;
+            assert_eq!(&*drops[0].item, "minecraft:diamond_sword");
+            // Levels stay within the enchantment's range.
+            for (id, level) in drops[0].enchantments() {
+                let max = items
+                    .enchantments
+                    .get(id)
+                    .expect("a known enchantment")
+                    .max_level;
+                assert!((1..=max).contains(level), "{id} at {level}");
+            }
+        }
+        assert!(
+            enchanted > 30,
+            "only {enchanted} of 40 rolls were enchanted"
+        );
+        // `enchant_randomly` on a book makes one enchanted book, its levels
+        // stored; the pool is the enchantment tag it names.
+        let book = json!({"pools":[{"rolls":1,"entries":[{"type":"minecraft:item",
+            "name":"minecraft:book","modifier":[
+            {"type":"minecraft:enchant_randomly","options":"#minecraft:on_random_loot"}]}]}]});
+        let drops = ctx(&items, None, &props, "").evaluate(&book, &mut random);
+        assert_eq!(&*drops[0].item, "minecraft:enchanted_book");
+        assert_eq!(drops[0].count, 1);
+        assert!(drops[0].enchantments().is_empty());
+        let stored = drops[0].stored_enchantments();
+        assert_eq!(stored.len(), 1, "{stored:?}");
+        assert!(
+            items
+                .enchantments
+                .in_tag("minecraft:on_random_loot", &stored[0].0)
+        );
+        // An item no enchantment accepts keeps none of them.
+        let dirt = json!({"pools":[{"rolls":1,"entries":[{"type":"minecraft:item",
+            "name":"minecraft:dirt","modifier":[
+            {"type":"minecraft:enchant_with_levels","levels":{"type":"minecraft:constant","value":30.0}}]}]}]});
+        let drops = ctx(&items, None, &props, "").evaluate(&dirt, &mut random);
+        assert!(drops[0].enchantments().is_empty());
+    }
+
+    /// `Mth.nextInt(random, 1, max)` returns `1` without drawing when the
+    /// enchantment has one level (`EnchantRandomlyFunction.enchantItem`), so
+    /// the rolls after it must not shift. Vanilla with `LegacyRandom(11)`: a
+    /// Mending book, then `set_count` uniform 1..64, is 46.
+    #[test]
+    fn a_single_level_enchantment_draws_no_level() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
+        let items = Items::load(&root, assets.registry, &facts).unwrap();
+        let props = BTreeMap::new();
+        let table = json!({"pools":[{"rolls":1,"entries":[{"type":"minecraft:item",
+            "name":"minecraft:book","modifier":[
+            {"type":"minecraft:enchant_randomly","options":"minecraft:mending"},
+            {"type":"minecraft:set_count","count":{"type":"minecraft:uniform","min":1.0,"max":64.0}}]}]}]});
+        let drops = ctx(&items, None, &props, "").evaluate(&table, &mut LegacyRandom::new(11));
+        assert_eq!(drops.len(), 1);
+        assert_eq!(&*drops[0].item, "minecraft:enchanted_book");
+        assert_eq!(
+            drops[0].stored_enchantments(),
+            [("minecraft:mending".to_owned().into(), 1)],
+            "the book keeps its single-level enchantment"
+        );
+        // 46 is vanilla's count for this seed; an extra level draw gives 28.
+        assert_eq!(drops[0].count, 46);
     }
 
     #[test]

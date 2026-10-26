@@ -3,8 +3,8 @@
 //! The game's tick code reads one level: the one in place, held in `Game`'s
 //! own fields (the world, its streaming and save, block ticks, entities).
 //! A server (the dedicated server and single player's server thread) keeps
-//! the other dimensions' levels here and ticks each one that has players by
-//! swapping it into place (`enter_level`), the way `as_guest` swaps a player
+//! the other dimensions' levels here and ticks each one with players or forced
+//! chunks by swapping it into place (`enter_level`), the way `as_guest` swaps a player
 //! in, so the tick code runs unchanged, one level at a time. The in-frame
 //! game holds one level, which follows its player (`enter_dimension`).
 //!
@@ -50,6 +50,7 @@ pub(super) struct Parked {
     paintings: Vec<horizon_client::entities::Painting>,
     item_frames: Vec<horizon_client::entities::ItemFrame>,
     armor_stands: Vec<horizon_client::entities::ArmorStand>,
+    cushions: Vec<horizon_client::entities::Cushion>,
     others: Vec<commands::OtherEntity>,
     boats: Vec<boats::Boat>,
     carts: Vec<minecarts::Minecart>,
@@ -136,6 +137,7 @@ impl Game<'_> {
             paintings: Vec::new(),
             item_frames: Vec::new(),
             armor_stands: Vec::new(),
+            cushions: Vec::new(),
             others: Vec::new(),
             boats: Vec::new(),
             carts: Vec::new(),
@@ -187,6 +189,7 @@ impl Game<'_> {
         swap(&mut self.paintings, &mut p.paintings);
         swap(&mut self.item_frames, &mut p.item_frames);
         swap(&mut self.armor_stands, &mut p.armor_stands);
+        swap(&mut self.cushions, &mut p.cushions);
         swap(&mut self.others, &mut p.others);
         swap(&mut self.boats, &mut p.boats);
         swap(&mut self.carts, &mut p.carts);
@@ -222,6 +225,7 @@ impl Game<'_> {
         swap(&mut a.pots, &mut b.pots);
         swap(&mut a.gateways, &mut b.gateways);
         swap(&mut a.gateway_servers, &mut b.gateway_servers);
+        swap(&mut a.conduit_servers, &mut b.conduit_servers);
         self.raiding.swap_level(&mut p.raiding);
         self.sculk.swap_level(&mut p.sculk);
         self.creaking.swap_level(&mut p.creaking);
@@ -290,8 +294,8 @@ impl Game<'_> {
     }
 
     /// One server tick (`MinecraftServer.tickServer`): each level with
-    /// players in turn (`tickChildren`), its chunks streamed and loaded and
-    /// its world ticked. The first pass reads the network and runs the
+    /// players or forced chunks in turn (`tickChildren`), its chunks streamed
+    /// and loaded and its world ticked. The first pass reads the network and runs the
     /// tick's shared parts (the clock, the weather, functions, the autosave);
     /// the next ones only their level. While `paused`, only the connections
     /// run.
@@ -393,7 +397,7 @@ impl Game<'_> {
 
     /// The levels this server tick runs, in `MinecraftServer.levels` order
     /// (the Overworld, the Nether, the End): every level with a player in
-    /// it or a `/pregen` task, or the Overworld while nobody is online.
+    /// it, forced chunks or a `/pregen` task, or the Overworld while idle.
     pub(super) fn levels_to_tick(&self) -> Vec<Dim> {
         let guests = self
             .lan
@@ -402,7 +406,17 @@ impl Game<'_> {
         let mut dims: Vec<Dim> = [Dim::Overworld, Dim::Nether, Dim::End]
             .into_iter()
             .filter(|d| {
-                guests.iter().any(|g| g.dimension == d.id()) || self.pregen_level() == Some(*d)
+                let forced = if *d == self.dim {
+                    !self.streaming.forced.is_empty()
+                } else {
+                    self.levels
+                        .parked
+                        .get(d)
+                        .is_some_and(|p| !p.streaming.forced.is_empty())
+                };
+                guests.iter().any(|g| g.dimension == d.id())
+                    || forced
+                    || self.pregen_level() == Some(*d)
             })
             .collect();
         if dims.is_empty() {
