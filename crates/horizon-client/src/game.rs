@@ -37,6 +37,7 @@ mod debug_keys;
 mod decorated_pot;
 mod dedicated;
 mod deflect;
+mod dialogs;
 mod discord;
 mod dispense_fixture;
 mod dispenser;
@@ -1145,6 +1146,7 @@ struct Game<'a> {
     pending_pack_reload: bool,
     /// A server's resource packs (game/server_packs.rs).
     server_packs: server_packs::ServerPackState,
+    dialogs: dialogs::DialogState,
     world_renderer_ready: bool,
     collision: &'a BlockCollisionRegistry<'a>,
     motion: &'a MotionResources,
@@ -4841,11 +4843,14 @@ impl Game<'_> {
     fn hud(&mut self, size: [u32; 2]) -> HudBatch {
         // The pack prompt replaces the connecting screen (setScreen), but
         // in game it opens over the world.
-        let mut batch = if self.server_packs.prompt.is_some() && self.player.is_none() {
+        let mut batch = if (self.server_packs.prompt.is_some() || self.dialog_open())
+            && self.player.is_none()
+        {
             HudBatch::new(size)
         } else {
             self.hud_layers(size)
         };
+        self.draw_dialog(&mut batch);
         self.draw_pack_prompt(&mut batch);
         // Gui.extractRenderState: the debug overlay comes after the screen
         // and the toasts, so it is over everything, menus included.
@@ -10435,6 +10440,7 @@ impl Game<'_> {
             || (self.title.is_none()
                 && self.player.is_some()
                 && (self.screen.blurs_background(self.pause_menu)
+                    || self.dialog_open()
                     || (self.screen == Screen::Win && self.win_screen_pauses())));
         let radius = self.settings.menu_blur as f32;
         (blurred && radius >= 1.0).then_some(radius)
@@ -11137,7 +11143,9 @@ impl ApplicationHandler for Game<'_> {
                         }) * wheel_sensitivity
                     };
                     let d = scaled(raw_y) as f32;
-                    if let Some(title) = &mut self.title
+                    if self.dialog_open() {
+                        self.dialog_scroll(d);
+                    } else if let Some(title) = &mut self.title
                         && self.screen != Screen::Win
                     {
                         let size = self
@@ -11205,6 +11213,11 @@ impl ApplicationHandler for Game<'_> {
                 {
                     if state == ElementState::Pressed && button == MouseButton::Left {
                         self.pack_prompt_click()?;
+                    }
+                }
+                WindowEvent::MouseInput { state, button, .. } if self.dialog_open() => {
+                    if state == ElementState::Pressed && button == MouseButton::Left {
+                        self.dialog_click()?;
                     }
                 }
                 WindowEvent::MouseInput { .. } if self.screen == Screen::Win => {}
@@ -11419,6 +11432,13 @@ impl ApplicationHandler for Game<'_> {
                         && event.physical_key == PhysicalKey::Code(KeyCode::Escape)
                     {
                         self.answer_pack_prompt(false)?;
+                    }
+                }
+                WindowEvent::KeyboardInput { event, .. } if self.dialog_open() => {
+                    if event.state == ElementState::Pressed
+                        && let PhysicalKey::Code(key) = event.physical_key
+                    {
+                        self.dialog_key(key)?
                     }
                 }
                 WindowEvent::KeyboardInput { event, .. }
@@ -11902,6 +11922,7 @@ impl<'a> Game<'a> {
             world_loader: None,
             pending_pack_reload: false,
             server_packs: Default::default(),
+            dialogs: Default::default(),
             world_renderer_ready: false,
             collision: res.collision(),
             motion: res.motion(),

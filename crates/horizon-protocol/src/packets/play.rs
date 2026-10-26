@@ -13,9 +13,9 @@ use crate::{
     packets::{
         Empty,
         configuration::{
-            ClientInformation, CookieRequest, CookieResponse, CustomPayload, Disconnect, KeepAlive,
-            Ping, ResourcePackPop, ResourcePackPush, ResourcePackResponse, StoreCookie, Transfer,
-            UpdateTags,
+            ClientInformation, CookieRequest, CookieResponse, CustomClickAction, CustomPayload,
+            Disconnect, KeepAlive, Ping, ResourcePackPop, ResourcePackPush, ResourcePackResponse,
+            StoreCookie, Transfer, UpdateTags,
         },
         login::Property,
     },
@@ -190,6 +190,35 @@ impl Codec<i32> for HolderId {
         w.varint(v + 1)
     }
 }
+/// `Holder<Dialog>` as Dialog.STREAM_CODEC sends it: an entry of the
+/// `minecraft:dialog` registry the server sent in configuration, or the
+/// dialog itself.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DialogHolder {
+    Registry(i32),
+    Direct(Tag),
+}
+impl Codec<DialogHolder> for DialogHolder {
+    fn read(r: &mut Reader) -> Result<Self> {
+        Ok(match r.varint()? {
+            0 => Self::Direct(r.nbt()?),
+            id => Self::Registry(id - 1),
+        })
+    }
+    fn write(v: &Self, w: &mut Writer) {
+        match v {
+            Self::Registry(id) => w.varint(id + 1),
+            Self::Direct(tag) => {
+                w.varint(0);
+                w.nbt(tag);
+            }
+        }
+    }
+}
+packet!(
+    /// ClientboundShowDialogPacket.
+    ShowDialog { dialog: DialogHolder => DialogHolder }
+);
 packet!(
     /// ChatType.Bound.
     ChatTypeBound { chat_type: i32 => HolderId, name: Tag => Nbt, target: Option<Tag> => Opt<Nbt> }
@@ -1854,6 +1883,8 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     UpdateMobEffect(UpdateMobEffect) = UPDATE_MOB_EFFECT,
     UpdateTags(UpdateTags) = UPDATE_TAGS,
     TrackedWaypoint(TrackedWaypoint) = WAYPOINT,
+    ClearDialog(Empty) = CLEAR_DIALOG,
+    ShowDialog(ShowDialog) = SHOW_DIALOG,
 });
 packet!(
     /// ClientboundClearTitlesPacket: whether to also reset the timings.
@@ -2229,6 +2260,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     ContainerClose(ContainerClose) = CONTAINER_CLOSE,
     CookieResponse(CookieResponse) = COOKIE_RESPONSE,
     CustomPayload(CustomPayload) = CUSTOM_PAYLOAD,
+    CustomClickAction(CustomClickAction) = CUSTOM_CLICK_ACTION,
     EditBook(EditBook) = EDIT_BOOK,
     Interact(Interact) = INTERACT,
     KeepAlive(KeepAlive) = KEEP_ALIVE,
@@ -3024,6 +3056,7 @@ mod tests {
         w.varint(101);
         assert!(BookPages::read(&mut Reader::new(&w.data)).is_err());
     }
+
     #[test]
     fn boss_event_round_trips() {
         let add = Clientbound::BossEvent(BossEvent {
@@ -3059,6 +3092,30 @@ mod tests {
             }),
             Clientbound::encode,
             Clientbound::decode,
+        );
+    }
+
+    /// A registry entry is its id + 1, the dialog itself a 0 then its NBT.
+    #[test]
+    fn dialogs_round_trip() {
+        let notice = Tag::compound([("type", Tag::String("minecraft:notice".into()))]);
+        for dialog in [DialogHolder::Registry(3), DialogHolder::Direct(notice)] {
+            crate::packets::round_trip(
+                Clientbound::ShowDialog(ShowDialog { dialog }),
+                Clientbound::encode,
+                Clientbound::decode,
+            );
+        }
+        let mut w = Writer::new();
+        DialogHolder::write(&DialogHolder::Registry(3), &mut w);
+        assert_eq!(w.data, [4]);
+        crate::packets::round_trip(
+            Serverbound::CustomClickAction(CustomClickAction {
+                id: "minecraft:custom".into(),
+                payload: None,
+            }),
+            Serverbound::encode,
+            Serverbound::decode,
         );
     }
 }
