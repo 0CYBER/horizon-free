@@ -3251,8 +3251,8 @@ mod tests {
             eprintln!("skipping: no worldgen bundle at {}", root.display());
             return;
         }
-        let data =
-            GeneratorData::load(&root.join("worldgen"), &*TEST_REGISTRY).expect("worldgen data");
+        let data = GeneratorData::load(&root.join("worldgen"), &TEST_REGISTRY)
+            .expect("worldgen data");
         let surface = |preset: &str| {
             let generator = OverworldGenerator::for_world(
                 data.clone(),
