@@ -71,6 +71,8 @@ pub(super) struct LanHost {
     /// Guests' commands waiting for the hub to be back in `self.lan`, where
     /// a command can reach every player (game/lan_actions.rs).
     pub commands: Vec<super::lan_actions::GuestCommand>,
+    /// Mods' quiet commands waiting to run a few a tick (game/lan_quiet.rs).
+    pub quiet: std::collections::VecDeque<super::lan_quiet::QuietBatch>,
     /// The entities the guests track, described again every tick
     /// (`lan_entities`) over last tick's states.
     states: lan::entity::States,
@@ -603,6 +605,7 @@ impl Game<'_> {
             waypoint_dead: Default::default(),
             border_sent: None,
             commands: Vec::new(),
+            quiet: std::collections::VecDeque::new(),
             states: Default::default(),
         });
         self.audio.capture = Some(Vec::new());
@@ -1036,6 +1039,14 @@ impl Game<'_> {
                 }
             }
             host.states = states;
+        }
+        if !host.quiet.is_empty() {
+            self.lan = Some(host);
+            self.run_quiet_commands();
+            host = self
+                .lan
+                .take()
+                .expect("the hub is back after the quiet commands");
         }
         self.lan_flush_effects(&mut host);
         if !paused {
