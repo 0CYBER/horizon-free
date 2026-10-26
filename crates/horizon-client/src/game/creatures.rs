@@ -3297,6 +3297,7 @@ fn to_loot(stack: &ItemStack) -> horizon_world::loot::LootStack {
         map: false,
         exploration: None,
         ominous_amplifier: None,
+        stew_effects: Vec::new(),
     }
 }
 /// A generated loot stack as a Horizon item stack.
