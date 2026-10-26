@@ -172,7 +172,10 @@ impl Game<'_> {
         if let Some(id) = owner {
             self.note_attacker("minecraft:explosion", id);
         }
-        self.explode(at, 1.0)
+        self.combat.explosion_owner = owner;
+        let result = self.explode(at, 1.0);
+        self.combat.explosion_owner = None;
+        result
     }
 }
 /// Wither skulls drawn as the skull model, blue when dangerous.

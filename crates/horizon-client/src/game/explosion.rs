@@ -393,7 +393,11 @@ impl Game<'_> {
             );
             let source = horizon_client::mobs::Damage {
                 kind: horizon_client::mobs::DamageKind::Explosion,
-                attacker: None,
+                attacker: self
+                    .combat
+                    .explosion_owner
+                    .filter(|&o| o != m.id)
+                    .map(horizon_client::mobs::Who::Mob),
                 from: Some(center),
             };
             if hurtable && !m.damage(damage(dist, exposure), source) {

@@ -2283,7 +2283,10 @@ impl Game<'_> {
                 if let Some(owner) = self.combat.projectile_owner {
                     self.note_attacker("minecraft:explosion", owner);
                 }
-                self.explode(atp, *power as f32)?;
+                self.combat.explosion_owner = self.combat.projectile_owner;
+                let result = self.explode(atp, *power as f32);
+                self.combat.explosion_owner = None;
+                result?;
             }
             (
                 ProjectileKind::Potion {
