@@ -81,6 +81,9 @@ pub struct Extras {
     pub zoom_smooth: bool,
     /// Divide mouse turning by the zoom.
     pub zoom_sensitivity: bool,
+    /// The FPS counter and keystrokes extras are official mods now
+    /// (`moved_extras`): their old settings stay here until the game has
+    /// installed the mod for a player who had one on.
     pub fps: bool,
     pub fps_corner: Corner,
     /// Also show the minimum and 1% low.
@@ -89,6 +92,9 @@ pub struct Extras {
     pub keystrokes_corner: Corner,
     /// Clicks per second under the mouse buttons.
     pub keystrokes_cps: bool,
+    /// The official mods installed for the extras they replace, by mod id
+    /// (`movedToMods`): each is done once.
+    pub moved: Vec<String>,
     pub minimap: bool,
     pub minimap_corner: Corner,
     /// Side in GUI pixels (`MINIMAP_SIZES`).
@@ -132,6 +138,7 @@ impl Default for Extras {
             keystrokes: false,
             keystrokes_corner: Corner::TopLeft,
             keystrokes_cps: true,
+            moved: Vec::new(),
             minimap: false,
             minimap_corner: Corner::TopRight,
             minimap_size: 96,
@@ -190,6 +197,14 @@ impl Extras {
                     e.keystrokes_corner = Corner::parse(value, e.keystrokes_corner)
                 }
                 "keystrokesCps" => e.keystrokes_cps = flag(e.keystrokes_cps),
+                "movedToMods" => {
+                    e.moved = value
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|id| !id.is_empty())
+                        .map(str::to_owned)
+                        .collect()
+                }
                 "minimap" => e.minimap = flag(e.minimap),
                 "minimapCorner" => e.minimap_corner = Corner::parse(value, e.minimap_corner),
                 "minimapSize" => {
@@ -219,7 +234,7 @@ impl Extras {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "fullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\n{}:{}\nagentControl:{}\ndiscordPresence:{}\n",
+            "fullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nmovedToMods:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\n{}:{}\nagentControl:{}\ndiscordPresence:{}\n",
             bool_text(self.fullbright),
             bool_text(self.dynamic_lights),
             bool_text(self.zoom),
@@ -233,6 +248,7 @@ impl Extras {
             bool_text(self.keystrokes),
             self.keystrokes_corner.name(),
             bool_text(self.keystrokes_cps),
+            self.moved.join(","),
             bool_text(self.minimap),
             self.minimap_corner.name(),
             self.minimap_size,
@@ -452,12 +468,6 @@ pub enum Item {
     ZoomLevel,
     ZoomSmooth,
     ZoomSensitivity,
-    Fps,
-    FpsCorner,
-    FpsLows,
-    Keystrokes,
-    KeystrokesCorner,
-    KeystrokesCps,
     Minimap,
     MinimapCorner,
     MinimapSize,
@@ -495,14 +505,6 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
         Ok(MinimapShape),
         Ok(MinimapZoom),
         Ok(MinimapRotate),
-        Err("FPS counter"),
-        Ok(Fps),
-        Ok(FpsCorner),
-        Ok(FpsLows),
-        Err("Keystrokes"),
-        Ok(Keystrokes),
-        Ok(KeystrokesCorner),
-        Ok(KeystrokesCps),
         Err("Inventory"),
         Ok(MouseTweaks),
         Ok(MouseTweaksWheel),
@@ -537,8 +539,7 @@ impl Item {
             Item::ZoomLevel => "Starting zoom",
             Item::ZoomSmooth => "Smooth zoom",
             Item::ZoomSensitivity => "Slower turning",
-            Item::Fps => "FPS counter",
-            Item::FpsCorner | Item::KeystrokesCorner | Item::MinimapCorner => "Corner",
+            Item::MinimapCorner => "Corner",
             Item::Minimap => "Minimap",
             Item::MinimapSize => "Size",
             Item::MinimapShape => "Shape",
@@ -549,9 +550,6 @@ impl Item {
             Item::MouseTweaksWheel => "Scroll wheel moves items",
             Item::Sort => "Sort buttons",
             Item::SortKey => "Sort key",
-            Item::FpsLows => "Minimum and 1% low",
-            Item::Keystrokes => "Keystrokes",
-            Item::KeystrokesCps => "Clicks per second",
             Item::NoAi => "No AI",
             Item::AgentControl => "Agent Control",
             Item::DiscordPresence => "Discord Rich Presence",
@@ -563,12 +561,10 @@ impl Item {
         Some(match self {
             ZoomKey | ZoomLevel | ZoomSmooth | ZoomSensitivity => Zoom,
             MinimapCorner | MinimapSize | MinimapShape | MinimapZoom | MinimapRotate => Minimap,
-            FpsCorner | FpsLows => Fps,
-            KeystrokesCorner | KeystrokesCps => Keystrokes,
             MouseTweaksWheel => MouseTweaks,
             SortKey => Sort,
-            Fullbright | DynamicLights | Zoom | Minimap | Fps | Keystrokes | MouseTweaks | Sort
-            | AutoReconnect | NoAi | AgentControl | DiscordPresence => {
+            Fullbright | DynamicLights | Zoom | Minimap | MouseTweaks | Sort | AutoReconnect
+            | NoAi | AgentControl | DiscordPresence => {
                 return None;
             }
         })
@@ -585,10 +581,7 @@ impl Item {
             Item::ZoomLevel => "The zoom the key starts at.",
             Item::ZoomSmooth => "Eases in and out like the spyglass.",
             Item::ZoomSensitivity => "Turns slower the more you zoom in.",
-            Item::Fps => "Frames per second in a corner of the screen.",
-            Item::FpsCorner | Item::KeystrokesCorner | Item::MinimapCorner => {
-                "Overlays in one corner stack."
-            }
+            Item::MinimapCorner => "Overlays in one corner stack.",
             Item::Minimap => "A map of the loaded terrain around you, in map colours.",
             Item::MinimapSize => "How big the map is on screen.",
             Item::MinimapShape => "Square or round.",
@@ -597,7 +590,6 @@ impl Item {
             Item::AutoReconnect => {
                 "Rejoins a server after a lost connection or a restart, never after a kick or ban."
             }
-            Item::FpsLows => "The slowest frame and the 1% low of the last 5 seconds.",
             Item::MouseTweaks => {
                 "Right-drag places one per slot, left-drag gathers the held item, Shift + left-drag moves every slot."
             }
@@ -610,8 +602,6 @@ impl Item {
             Item::SortKey => {
                 "Sorts the part under the cursor. Click, then press a key; Escape unbinds it."
             }
-            Item::Keystrokes => "Movement keys, jump and mouse buttons as you press them.",
-            Item::KeystrokesCps => "Clicks in the last second under each mouse button.",
             Item::NoAi => {
                 "Hides and turns off every AI feature: agent control, horizon-ctl and the MCP servers. The launcher's switch too."
             }
@@ -627,7 +617,7 @@ impl Item {
     pub fn cost(self) -> Option<crate::graphics_style::Cost> {
         use crate::graphics_style::Cost;
         match self {
-            Item::Fullbright | Item::Zoom | Item::Fps | Item::Keystrokes => Some(Cost::None),
+            Item::Fullbright | Item::Zoom => Some(Cost::None),
             Item::Minimap | Item::DynamicLights => Some(Cost::Low),
             Item::AutoReconnect | Item::MouseTweaks | Item::Sort => Some(Cost::None),
             _ => None,
@@ -641,10 +631,6 @@ impl Item {
             Item::Zoom => e.zoom,
             Item::ZoomSmooth => e.zoom_smooth,
             Item::ZoomSensitivity => e.zoom_sensitivity,
-            Item::Fps => e.fps,
-            Item::FpsLows => e.fps_lows,
-            Item::Keystrokes => e.keystrokes,
-            Item::KeystrokesCps => e.keystrokes_cps,
             Item::Minimap => e.minimap,
             Item::MinimapRotate => e.minimap_rotate,
             Item::AutoReconnect => e.auto_reconnect,
@@ -663,8 +649,6 @@ impl Item {
             Item::ZoomKey => crate::keybinds::display_name(&e.zoom_key).plain(),
             Item::SortKey => crate::keybinds::display_name(&e.sort_key).plain(),
             Item::ZoomLevel => format!("{}x", e.zoom_level),
-            Item::FpsCorner => e.fps_corner.label().into(),
-            Item::KeystrokesCorner => e.keystrokes_corner.label().into(),
             Item::MinimapCorner => e.minimap_corner.label().into(),
             Item::MinimapSize => MINIMAP_SIZES
                 .iter()
@@ -687,15 +671,7 @@ impl Item {
             Item::Zoom => e.zoom = !e.zoom,
             Item::ZoomSmooth => e.zoom_smooth = !e.zoom_smooth,
             Item::ZoomSensitivity => e.zoom_sensitivity = !e.zoom_sensitivity,
-            Item::Fps => e.fps = !e.fps,
-            Item::FpsLows => e.fps_lows = !e.fps_lows,
-            Item::Keystrokes => e.keystrokes = !e.keystrokes,
-            Item::KeystrokesCps => e.keystrokes_cps = !e.keystrokes_cps,
             Item::ZoomLevel => e.zoom_level = next(&ZOOM_LEVELS, e.zoom_level, back),
-            Item::FpsCorner => e.fps_corner = next(&Corner::ALL, e.fps_corner, back),
-            Item::KeystrokesCorner => {
-                e.keystrokes_corner = next(&Corner::ALL, e.keystrokes_corner, back)
-            }
             Item::Minimap => e.minimap = !e.minimap,
             Item::MinimapRotate => e.minimap_rotate = !e.minimap_rotate,
             Item::AutoReconnect => e.auto_reconnect = !e.auto_reconnect,
@@ -750,6 +726,7 @@ mod tests {
         e.fps_corner = Corner::BottomRight;
         e.keystrokes = true;
         e.keystrokes_cps = false;
+        e.moved = vec!["fps_overlay".into(), "keystrokes".into()];
         e.minimap = true;
         e.minimap_size = 128;
         e.minimap_round = true;
@@ -942,8 +919,8 @@ mod tests {
         Item::ZoomLevel.cycle(&mut e, true);
         Item::ZoomLevel.cycle(&mut e, true);
         assert_eq!(e.zoom_level, 3);
-        Item::FpsCorner.cycle(&mut e, true);
-        assert_eq!(e.fps_corner, Corner::BottomRight);
+        Item::MinimapCorner.cycle(&mut e, true);
+        assert_eq!(e.minimap_corner, Corner::TopLeft);
         Item::Zoom.cycle(&mut e, false);
         assert_eq!(Item::Zoom.switch(&e), Some(true));
         assert_eq!(Item::ZoomKey.value(&e), "Z");

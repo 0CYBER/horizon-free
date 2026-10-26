@@ -103,6 +103,7 @@ mod mod_render;
 mod mods;
 mod mount_menu;
 mod mounts;
+mod moved_extras;
 mod moving_pistons;
 mod music;
 mod names;
@@ -11799,6 +11800,7 @@ impl ApplicationHandler for Game<'_> {
                     }
                     self.extras_frame(elapsed);
                     self.mods_frame(elapsed);
+                    self.poll_moved_extras();
                     self.extras_retry()?;
                     self.apply_mouse_look();
                     self.pad_look(elapsed.as_secs_f32());
@@ -13149,6 +13151,7 @@ fn start_game<'a>(
     // Benchmarks measure the game alone.
     if game.options.benchmark.is_none() {
         game.mods.dev = game.options.dev_mods.clone();
+        game.start_moved_extras();
         game.start_mods();
     }
     game.start_agent_control()?;

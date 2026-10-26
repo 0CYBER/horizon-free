@@ -1,11 +1,11 @@
 //! Horizon's extras in the game (`docs/extras.md`): the zoom key and wheel,
-//! clicks for the keystroke overlay, frame times for the FPS counter, the
-//! minimap's tiles and image, and their HUD. Each hook does nothing while its
-//! extra is off.
+//! the minimap's tiles and image, and their HUD; clicks and frame times for
+//! mods (`input.clicks-per-second`, `render.frame-stats`). Each hook does
+//! nothing while its extra is off and no mod runs.
 use super::{Dim, Game, Screen};
 use horizon_client::{
     extras::{Corner, Cps, FpsCounter, Zoom, fov_target, turn_scale},
-    extras_hud::{self, Corners, Keystrokes},
+    extras_hud::{self, Corners},
     hud::{HudBatch, MINIMAP_SPRITE},
     keybinds,
     minimap::{self, Layer, Minimap, View},
@@ -70,8 +70,8 @@ impl Game<'_> {
             _ => return,
         };
         self.extras.mouse[i] = pressed;
-        // Mods read the clicks too (`input.clicks-per-second`).
-        if pressed && (self.settings.extras.keystrokes || self.mods.running()) {
+        // For mods (`input.clicks-per-second`).
+        if pressed && self.mods.running() {
             let now = self.extras_now();
             self.extras.cps[i].click(now);
         }
@@ -88,8 +88,8 @@ impl Game<'_> {
             self.extras.mouse = [false; 2];
         }
         self.update_minimap();
-        // Mods read the counter too (`render.frame-stats`).
-        if self.settings.extras.fps || self.mods.running() {
+        // For mods (`render.frame-stats`).
+        if self.mods.running() {
             let now = self.extras_now();
             self.extras.fps.record(now, elapsed.as_secs_f32() * 1000.0);
         } else {
@@ -262,16 +262,14 @@ impl Game<'_> {
     pub(super) fn zoom_turn_scale(&self) -> f64 {
         self.zoom_now().2
     }
-    /// The FPS counter and keystrokes, in the HUD layer (hidden with F1 by
-    /// the caller). The top left corner gives way to the debug screen.
+    /// The minimap and mods' corner panels, in the HUD layer (hidden with F1
+    /// by the caller). The top left corner gives way to the debug screen.
     pub(super) fn draw_extras(&mut self, batch: &mut HudBatch) {
         let e = &self.settings.extras;
         let mod_panels = self.mods.has_panels();
-        if !e.fps && !e.keystrokes && !e.minimap && !mod_panels {
+        if !e.minimap && !mod_panels {
             return;
         }
-        let (fps_on, fps_corner, lows) = (e.fps, e.fps_corner, e.fps_lows);
-        let (keys_on, keys_corner, cps_on) = (e.keystrokes, e.keystrokes_corner, e.keystrokes_cps);
         let (map_corner, map_size) = (e.minimap_corner, f32::from(e.minimap_size));
         let visible = |corner| !(self.debug && corner == Corner::TopLeft);
         let mut corners = Corners::new(batch.width, batch.height, self.effect_rows_height());
@@ -294,32 +292,6 @@ impl Game<'_> {
                 north,
             };
             extras_hud::draw_minimap(batch, atlas, &mut corners, &look);
-        }
-        if fps_on && visible(fps_corner) {
-            let reading = self.extras.fps.reading();
-            extras_hud::draw_fps(batch, atlas, &mut corners, fps_corner, reading, lows);
-        }
-        if keys_on && visible(keys_corner) {
-            let now = self.extras_now();
-            let cps = cps_on.then(|| {
-                let [l, r] = &mut self.extras.cps;
-                (l.per_second(now), r.per_second(now))
-            });
-            let held = |k| self.keys.contains(&k);
-            let label = |name| keybinds::display_name(self.settings.keys.get(name)).plain();
-            let k = Keystrokes {
-                moves: [
-                    (held(KeyCode::KeyW), label("key.forward")),
-                    (held(KeyCode::KeyA), label("key.left")),
-                    (held(KeyCode::KeyS), label("key.back")),
-                    (held(KeyCode::KeyD), label("key.right")),
-                ],
-                jump: held(KeyCode::Space),
-                attack: self.extras.mouse[0],
-                use_: self.extras.mouse[1],
-                cps,
-            };
-            extras_hud::draw_keystrokes(batch, &self.gui.atlas, &mut corners, keys_corner, &k);
         }
         if mod_panels {
             self.draw_mod_panels(batch, &mut corners);
