@@ -7380,6 +7380,8 @@ impl Game<'_> {
                         layer: 0,
                         color,
                         light: packed,
+
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             }
@@ -7999,6 +8001,8 @@ impl Game<'_> {
                     layer: 2,
                     color,
                     light: 0,
+
+                    glint_uv: [0.0, 0.0],
                 });
             }
         };
@@ -10801,6 +10805,7 @@ impl Game<'_> {
             debug_lines_on_top: &debug_lines_on_top,
             debug_crosshair: &debug_crosshair,
             hud: &hud,
+            glint_alpha: self.settings.file.double("glintStrength") as f32,
             clouds: (!title
                 && self.dim == Dim::Overworld
                 && horizon_client::clouds::visible(&self.settings.clouds, sky.cloud_color[3]))
@@ -13478,6 +13483,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         debug_lines_on_top: &[],
         debug_crosshair: &[],
         hud,
+        glint_alpha: 0.75,
         nether_lighting: false,
         entities: &[],
         entity_spans: &[],

@@ -44,6 +44,8 @@ struct Out {
     // entity.vsh's lightMapColor, multiplied in after the overlay.
     @location(9) light_color: vec4<f32>,
     @location(10) @interpolate(flat) weather_rect: vec4<f32>,
+    // The `GLINT_TEXTURING` sample for overlay 7 (item foil).
+    @location(11) glint_uv: vec2<f32>,
 }
 // Shipped light.glsl; normals are already transformed and RGBA8_SNORM packed.
 fn entity_light(normal: vec3<f32>, nether: bool) -> f32 {
@@ -103,12 +105,16 @@ fn entity_vertex(position: vec3<f32>, uv: vec2<f32>,
     out.spherical = select(length(position), 0.0, overlay >= 2u && overlay <= 4u);
     out.cylindrical = select(max(length(position.xz), abs(position.y)), 0.0, overlay >= 2u && overlay <= 4u);
     out.overlay = overlay;
+    out.glint_uv = vec2(0.0);
     if overlay == 4u { out.spherical = length(position); }
     return out;
 }
 @vertex fn vs_entity(@location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
-    @location(2) overlay: u32, @location(3) color: vec4<f32>, @location(4) light: vec4<u32>, @location(5) normal: vec4<f32>) -> Out {
-    return entity_vertex(position, uv, overlay, color, light, normal);
+    @location(2) overlay: u32, @location(3) color: vec4<f32>, @location(4) light: vec4<u32>,
+    @location(5) normal: vec4<f32>, @location(6) glint_uv: vec2<f32>) -> Out {
+    var out = entity_vertex(position, uv, overlay, color, light, normal);
+    out.glint_uv = glint_uv;
+    return out;
 }
 // Retained bolt-local geometry, translated using the same f64 camera
 // subtraction as the former CPU path before adding each local f32 position.
@@ -204,15 +210,11 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
     color = vec4(mix(in.overlay_color.rgb, color.rgb, in.overlay_color.a), color.a);
     color *= in.light_color;
     if in.overlay == 7u || in.overlay == 8u {
-        // Enchantment glint (overlay 7, 8 with the hurt tint): the purple
-        // enchanted_glint sheen drifting diagonally over the item's shape.
-        let px = in.uv * vec2<f32>(textureDimensions(atlas));
-        let t = globals.misc.y * 0.05;
-        let band = sin((px.x + px.y) * 0.9 - t * 6.0) * 0.5 + 0.5;
-        let band2 = sin((px.x - px.y) * 0.6 + t * 4.0) * 0.5 + 0.5;
-        let shimmer = pow(band * 0.6 + band2 * 0.4, 2.0);
-        let glint = vec3(0.50, 0.25, 0.80) * (0.25 + 0.75 * shimmer);
-        color = vec4(min(color.rgb + glint * 0.6, vec3(1.0)), color.a);
+        // Enchantment glint: item.fsh's GLINT path, sampled from
+        // enchanted_glint_item at the `GLINT_TEXTURING` UV.
+        let alpha = globals.fog_ends.w;
+        let glint = alpha * textureSample(atlas, atlas_sampler, in.glint_uv);
+        color = vec4(color.rgb + glint.rgb * glint.rgb, max(color.a, alpha));
     }
     let f = max(linear_fog(in.spherical, globals.fog.x, globals.fog.y),
                 linear_fog(in.cylindrical, globals.fog.z, globals.fog.w));

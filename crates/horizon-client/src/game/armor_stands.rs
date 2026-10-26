@@ -872,6 +872,7 @@ impl Game<'_> {
                 lights: Some(horizon_client::block_entity_render::diffuse_lights(
                     self.dim == super::Dim::Nether,
                 )),
+                glint: self.glint(),
             };
             let profile = stack
                 .extra

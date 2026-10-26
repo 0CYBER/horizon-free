@@ -60,6 +60,8 @@ fn reference(seed: i64, at: [f64; 3], camera: DVec3, uv: [f32; 2]) -> Vec<Vertex
                                 layer: 2,
                                 color,
                                 light: 240 | 240 << 8,
+
+                                glint_uv: [0.0, 0.0],
                             });
                         }
                     }

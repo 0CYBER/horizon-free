@@ -554,6 +554,8 @@ pub struct HudVertex {
     pub uv: [f32; 2],
     pub color: u32,
     pub depth: f32,
+    /// The glint sprite UV (`GLINT_TEXTURING`), unused unless `uv.x >= 2`.
+    pub glint_uv: [f32; 2],
 }
 /// The GUI Scale option (0 = auto).
 pub static GUI_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -569,6 +571,8 @@ pub struct HudBatch {
     pub blends: Vec<(std::ops::Range<u32>, Blend)>,
     /// The textures and time of the `Blend::EndPortal` runs.
     pub end_portal: EndPortalFill,
+    /// `options.glintStrength` for the glint pass (`GlintAlpha`).
+    pub glint_alpha: f32,
     /// Screen's first vertex: the preceding HUD is part of its blurred background.
     pub blur_at: u32,
 }
@@ -620,6 +624,7 @@ impl HudBatch {
             patches: Vec::new(),
             blends: Vec::new(),
             end_portal: EndPortalFill::default(),
+            glint_alpha: 0.75,
             blur_at: 0,
         }
     }
@@ -695,6 +700,26 @@ impl HudBatch {
                 uv: uv[i],
                 color,
                 depth: 0.0,
+                glint_uv: [0.0, 0.0],
+            });
+        }
+    }
+    /// A quad whose texture is the `GLINT_TEXTURING` sample at `glint_uv`;
+    /// `uv` is the item's atlas UV, which the shader masks by.
+    pub fn quad_glint(
+        &mut self,
+        p: [[f32; 2]; 4],
+        uv: [[f32; 2]; 4],
+        glint_uv: [[f32; 2]; 4],
+        color: u32,
+    ) {
+        for i in [0, 1, 2, 0, 2, 3] {
+            self.vertices.push(HudVertex {
+                pos: p[i],
+                uv: uv[i],
+                color,
+                depth: 0.0,
+                glint_uv: glint_uv[i],
             });
         }
     }
@@ -705,6 +730,7 @@ impl HudBatch {
                 uv: uv[i],
                 color,
                 depth: p[i][2],
+                glint_uv: [0.0, 0.0],
             });
         }
     }
@@ -875,6 +901,7 @@ impl HudBatch {
                 uv,
                 color: c[i],
                 depth: 0.0,
+                glint_uv: [0.0, 0.0],
             });
         }
     }
@@ -1122,7 +1149,8 @@ impl HudRenderer {
             bind_group_layouts: &[Some(&layout)],
             ..Default::default()
         });
-        let attributes = wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Unorm8x4,3=>Float32];
+        let attributes =
+            wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Unorm8x4,3=>Float32,4=>Float32x2];
         let create = |label, blend, fragment_entry, depth: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
@@ -1337,7 +1365,12 @@ impl HudRenderer {
             &self.uniform,
             0,
             bytemuck::bytes_of(&HudUniform::new(
-                [size[0] as f32, size[1] as f32, batch.scale, 0.0],
+                [
+                    size[0] as f32,
+                    size[1] as f32,
+                    batch.scale,
+                    batch.glint_alpha,
+                ],
                 batch.end_portal,
             )),
         );
@@ -1787,6 +1820,7 @@ mod tests {
                 patches: Vec::new(),
                 blends: Vec::new(),
                 end_portal: EndPortalFill::default(),
+                glint_alpha: 0.75,
                 blur_at: 0,
             };
             for (image_width, image_height) in [(195, 136), (176, 166), (176, 222)] {

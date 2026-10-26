@@ -145,6 +145,8 @@ fn flame_geometry(
                 layer: 0,
                 color: 0xFFFF_FFFF,
                 light: packed,
+
+                glint_uv: [0.0, 0.0],
             });
         }
         h -= 0.45;
@@ -3316,6 +3318,8 @@ impl Game<'_> {
                     layer: 0,
                     color: 0xFFFF_FFFF,
                     light: packed,
+
+                    glint_uv: [0.0, 0.0],
                 });
             }
         }

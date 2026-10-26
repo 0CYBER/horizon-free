@@ -203,6 +203,8 @@ impl Game<'_> {
                     layer: overlay,
                     color,
                     light,
+
+                    glint_uv: [0.0, 0.0],
                 });
             }
         }

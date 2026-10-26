@@ -172,7 +172,8 @@ struct Globals {
     inverse_view: [[f32; 4]; 4],
     sunrise: [f32; 4],
     sun: [f32; 4],
-    /// x: sky fog end, y: cloud fog end, z: dark disc (camera below the horizon), w: unused.
+    /// x: sky fog end, y: cloud fog end, z: dark disc (camera below the horizon),
+    /// w: the glint strength (`GlintAlpha`).
     fog_ends: [f32; 4],
     /// Atlas rects (u0, v0, width, height) of end_sky.png and end_portal.png.
     end_portal_sprites: [[f32; 4]; 2],
@@ -256,6 +257,9 @@ pub struct Frame<'a> {
     /// drawn after the hand at its projection, without the bob or fog.
     pub debug_crosshair: &'a [[f32; 8]],
     pub hud: &'a HudBatch,
+    /// `GlintAlpha` (accessibility Glint Strength); the entity shader uses it
+    /// for held/world items, independent of what the HUD batch last drew.
+    pub glint_alpha: f32,
     /// CardinalLighting.Type.NETHER, otherwise DEFAULT.
     pub nether_lighting: bool,
     /// Camera-relative entity geometry textured from the shared atlas.
@@ -1724,7 +1728,7 @@ impl Renderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let entity_attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint32,3=>Unorm8x4,4=>Uint8x4,5=>Snorm8x4];
+        let entity_attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint32,3=>Unorm8x4,4=>Uint8x4,5=>Snorm8x4,6=>Float32x2];
         let entity_vertex = [Some(wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -3475,7 +3479,7 @@ impl Renderer {
                 frame.fog.map_or(frame.distance.min(512.0), |f| f.sky_end),
                 frame.fog.map_or(2048.0, |f| f.cloud_end),
                 if frame.dark_disc { 1.0 } else { 0.0 },
-                0.0,
+                frame.glint_alpha,
             ],
             end_portal_sprites: frame.end_portal_sprites,
             crumbling_sprite: frame.crumbling_sprite,
@@ -5222,6 +5226,7 @@ mod tests {
                 color: 0xffff_ffff,
                 light: id,
                 normal: [0; 4],
+                glint_uv: [0.0, 0.0],
             }; 4]
         };
         let entities: Vec<_> = [

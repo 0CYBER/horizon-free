@@ -41,11 +41,47 @@ use std::{
 pub struct ItemQuad {
     pub pos: [Vec3; 4],
     pub uv: [[f32; 2]; 4],
+    /// The model UVs `GLINT_TEXTURING` scrolls for the glint (vanilla's UV0,
+    /// or UV3 for a special model).
+    pub foil_uv: [[f32; 2]; 4],
     pub normal: Vec3,
     pub color: u32,
     pub foil: Foil,
     /// `MaterialInfo.lightEmission` (block light floor).
     pub light_emission: u8,
+}
+/// `TextureTransform.setupGlintTexturing`'s inputs and the glint sprite.
+#[derive(Clone, Copy, Debug)]
+pub struct Glint {
+    pub rect: crate::hud::Rect,
+    /// `options.glintSpeed` (vanilla default 0.5).
+    pub speed: f32,
+    /// `options.glintStrength` / shader `GlintAlpha` (vanilla default 0.75).
+    pub alpha: f32,
+    /// `Util.getMillis()`.
+    pub millis: f32,
+    /// The transform's scale: `GLINT_TEXTURING`'s 8.0 for GUI items,
+    /// `ENTITY_GLINT_TEXTURING`'s 0.5 for items in the world.
+    pub scale: f32,
+}
+impl Glint {
+    /// `TextureTransform.setupGlintTexturing(scale)`: translation(-o0, o1) *
+    /// rotateZ(PI/18) * scale, wrapped and mapped into the glint sprite.
+    pub fn atlas_uv(&self, model: [f32; 2]) -> [f32; 2] {
+        let millis = (f64::from(self.millis) * f64::from(self.speed) * 8.0) as i64;
+        let offset0 = (millis % 110000) as f32 / 110000.0;
+        let offset1 = (millis % 30000) as f32 / 30000.0;
+        let angle = std::f32::consts::PI / 18.0;
+        let (sin, cos) = angle.sin_cos();
+        let x = model[0] * self.scale * cos - model[1] * self.scale * sin - offset0;
+        let y = model[0] * self.scale * sin + model[1] * self.scale * cos + offset1;
+        let u = (x - x.floor()).clamp(0.5 / self.rect.w as f32, 1.0 - 0.5 / self.rect.w as f32);
+        let v = (y - y.floor()).clamp(0.5 / self.rect.h as f32, 1.0 - 0.5 / self.rect.h as f32);
+        [
+            self.rect.u0 + u * (self.rect.u1 - self.rect.u0),
+            self.rect.v0 + v * (self.rect.v1 - self.rect.v0),
+        ]
+    }
 }
 /// Which glint render type a quad uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -242,6 +278,7 @@ fn submit_quads(
         sink.quad(ItemQuad {
             pos,
             uv,
+            foil_uv: q.uv,
             normal: transform_normal(m, direction_vector(q.facing)),
             color: argb(color),
             foil,
@@ -679,6 +716,8 @@ pub struct WorldSink<'a> {
     pub light: u32,
     /// The level's diffuse lights; `None` leaves the colour unshaded.
     pub lights: Option<(Vec3, Vec3)>,
+    /// The `GLINT_TEXTURING` sample for foil quads (`None` leaves them unglinted).
+    pub glint: Option<Glint>,
 }
 impl ItemSink for WorldSink<'_> {
     fn quad(&mut self, q: ItemQuad) {
@@ -693,8 +732,14 @@ impl ItemSink for WorldSink<'_> {
         } else {
             self.light
         };
-        let overlay = if q.foil == Foil::None { 0 } else { 7 };
-        for (p, uv) in q.pos.iter().zip(q.uv) {
+        let glint = if q.foil == Foil::None {
+            None
+        } else {
+            self.glint
+        };
+        let overlay = if glint.is_some() { 7 } else { 0 };
+        for (i, (p, uv)) in q.pos.iter().zip(q.uv).enumerate() {
+            let glint_uv = glint.map_or([0.0, 0.0], |glint| glint.atlas_uv(q.foil_uv[i]));
             self.out.push(Vertex {
                 normal: [0; 4],
                 pos: p.to_array(),
@@ -702,6 +747,7 @@ impl ItemSink for WorldSink<'_> {
                 layer: overlay,
                 color,
                 light,
+                glint_uv,
             });
         }
     }
