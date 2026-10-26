@@ -20,6 +20,9 @@ pub(super) struct SignEditor {
     pub line: usize,
     /// The line being edited (`AbstractSignEditScreen`'s text field).
     edit: EditBox,
+    /// `AbstractSignEditScreen.messages`: the lines when it opened, sent if
+    /// the sign is gone by the time the editor closes.
+    lines: [String; 4],
 }
 
 fn sign_box() -> EditBox {
@@ -33,11 +36,19 @@ fn sign_box() -> EditBox {
 impl Game<'_> {
     /// `SignBlock.openTextEdit` for the front side after placement.
     pub(super) fn open_sign_editor(&mut self, pos: (i32, i32, i32), front: bool) {
+        // Minecraft.setScreen: the editor already open is removed first.
+        self.close_sign_editor();
+        let lines = match self.world.block_entities.get(&pos) {
+            Some(BlockEntity::Sign(sign)) if front => sign.front.lines.clone(),
+            Some(BlockEntity::Sign(sign)) => sign.back.lines.clone(),
+            _ => Default::default(),
+        };
         self.sign_edit = Some(SignEditor {
             pos,
             front,
             line: 0,
             edit: sign_box(),
+            lines,
         });
         self.sign_load();
         self.keys.clear();
@@ -50,14 +61,16 @@ impl Game<'_> {
     pub(super) fn close_sign_editor(&mut self) {
         if let Some(edit) = self.sign_edit.take() {
             if self.remote.is_some() {
-                if let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get(&edit.pos) {
-                    let side = if edit.front { &sign.front } else { &sign.back };
-                    self.send(S::SignUpdate(play::SignUpdate {
-                        pos: [edit.pos.0, edit.pos.1, edit.pos.2],
-                        lines: side.lines.clone(),
-                        front: edit.front,
-                    }));
-                }
+                let lines = match self.world.block_entities.get(&edit.pos) {
+                    Some(BlockEntity::Sign(sign)) if edit.front => sign.front.lines.clone(),
+                    Some(BlockEntity::Sign(sign)) => sign.back.lines.clone(),
+                    _ => edit.lines,
+                };
+                self.send(S::SignUpdate(play::SignUpdate {
+                    pos: [edit.pos.0, edit.pos.1, edit.pos.2],
+                    lines,
+                    front: edit.front,
+                }));
             } else {
                 self.mark_block_entity_updated(edit.pos);
             }
