@@ -454,11 +454,24 @@ impl Game<'_> {
         for m in &self.mobs {
             self.portals.before.insert(m.id, m.position);
         }
+        for b in &self.boats {
+            self.portals.before.insert(b.id, b.position);
+        }
+        for c in &self.carts {
+            self.portals.before.insert(c.id, c.position);
+        }
         let ids: Vec<(u32, bool)> = self
             .dropped
             .iter()
             .map(|e| (e.id, true))
             .chain(self.mobs.iter().map(|m| (m.id, self.mob_can_use_portal(m))))
+            .chain(
+                self.boats
+                    .iter()
+                    .map(|b| b.id)
+                    .chain(self.carts.iter().map(|c| c.id))
+                    .map(|id| (id, !self.vehicle_occupied(id))),
+            )
             .collect();
         let present: std::collections::HashSet<u32> = ids.iter().map(|(id, _)| *id).collect();
         self.portals.entities.retain(|id, _| present.contains(id));
@@ -501,8 +514,15 @@ impl Game<'_> {
             && self.riding != Some(m.id)
             && m.species() != Species::Wither
     }
-    /// `NetherPortalBlock.entityInside` for the items and mobs that moved this
-    /// tick: the portal blocks their box swept through.
+    /// Whether the player, a server player or a mob rides vehicle `id`.
+    fn vehicle_occupied(&self, id: u32) -> bool {
+        self.riding == Some(id)
+            || self.ridden_by_guest(id)
+            || self.mobs.iter().any(|m| m.extra.mount == Some(id))
+    }
+    /// `NetherPortalBlock.entityInside` for the items, mobs and empty boats
+    /// and minecarts that moved this tick: the portal blocks their box swept
+    /// through.
     pub(super) fn find_entity_portals(&mut self) {
         if self.remote.is_some() {
             return;
@@ -519,8 +539,23 @@ impl Game<'_> {
             .filter(|m| self.mob_can_use_portal(m))
             .map(|m| (m.id, m.position, m.width(), m.height()))
             .collect();
+        let vehicles: Vec<(u32, Vec3, f32, f32)> = self
+            .boats
+            .iter()
+            .map(|b| (b.id, b.position, super::boats::WIDTH, super::boats::HEIGHT))
+            .chain(self.carts.iter().map(|c| {
+                (
+                    c.id,
+                    c.position,
+                    super::minecarts::WIDTH,
+                    super::minecarts::HEIGHT,
+                )
+            }))
+            .filter(|(id, ..)| !self.vehicle_occupied(*id))
+            .map(|(id, at, w, h)| (id, at, w as f32, h as f32))
+            .collect();
         let mut portal_sections = std::mem::take(&mut self.portals.sections);
-        for (id, to, width, height) in items.into_iter().chain(mobs) {
+        for (id, to, width, height) in items.into_iter().chain(mobs).chain(vehicles) {
             let from = self.portals.before.get(&id).copied().unwrap_or(to);
             if let Some(pos) = self.swept_portal(from, to, width, height, &mut portal_sections) {
                 inside.push((id, pos));
@@ -676,6 +711,44 @@ impl Game<'_> {
             for g in gone {
                 self.forget_entity(g);
             }
+            self.portals.arrivals.push(Arrival { plan, tag });
+            self.portals.dirty = true;
+        } else if let Some(i) = self.boats.iter().position(|b| b.id == id) {
+            let b = &self.boats[i];
+            let (width, height) = (super::boats::WIDTH as f32, super::boats::HEIGHT as f32);
+            let plan = self.portal_plan(entry, b.position, width, height, false);
+            if !self.may_enter(plan.dim) {
+                return;
+            }
+            let uuid = self.uuid_for(id);
+            let b = &self.boats[i];
+            let tag = horizon_client::entity_nbt::boat_to_nbt(
+                &b.entity_type(),
+                b.position,
+                b.velocity,
+                b.yaw,
+                uuid,
+                self.persist_raw(id),
+                b.chest.then_some(&b.items[..]),
+            );
+            self.boats.remove(i);
+            self.forget_entity(id);
+            self.portals.arrivals.push(Arrival { plan, tag });
+            self.portals.dirty = true;
+        } else if let Some(i) = self.carts.iter().position(|c| c.id == id) {
+            let c = &self.carts[i];
+            let (width, height) = (
+                super::minecarts::WIDTH as f32,
+                super::minecarts::HEIGHT as f32,
+            );
+            let plan = self.portal_plan(entry, c.position, width, height, false);
+            if !self.may_enter(plan.dim) {
+                return;
+            }
+            let uuid = self.uuid_for(id);
+            let tag = self.carts[i].to_nbt(uuid, self.persist_raw(id));
+            self.carts.remove(i);
+            self.forget_entity(id);
             self.portals.arrivals.push(Arrival { plan, tag });
             self.portals.dirty = true;
         }

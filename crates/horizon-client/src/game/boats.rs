@@ -55,7 +55,7 @@ pub(super) struct Boat {
 /// `ChestBoat.CONTAINER_SIZE`.
 pub(super) const CHEST_SLOTS: usize = 27;
 pub(super) const WIDTH: f64 = 1.375;
-const HEIGHT: f64 = 0.5625;
+pub(super) const HEIGHT: f64 = 0.5625;
 impl Boat {
     pub fn new(id: u32, wood: Arc<str>, position: Vec3, yaw: f32) -> Self {
         Self {
