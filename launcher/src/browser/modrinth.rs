@@ -139,6 +139,7 @@ pub(super) fn parse_version(v: &Value) -> Option<Version> {
                 name: f["filename"].as_str()?.to_owned(),
                 size: f["size"].as_u64().unwrap_or(0),
                 sha512: f["hashes"]["sha512"].as_str().map(str::to_ascii_lowercase),
+                sha256: None,
                 sha1: f["hashes"]["sha1"].as_str().map(str::to_ascii_lowercase),
                 primary: f["primary"].as_bool().unwrap_or(false),
             })

@@ -97,15 +97,25 @@ impl Game<'_> {
             self.creative_screen.scroll = 0.0;
         }
     }
-    /// Typing or a backspace in the creative search box.
-    pub(super) fn creative_search_edit(&mut self, typed: Option<&str>, backspace: bool) {
+    /// A backspace in the creative search box: with Ctrl, the whole word
+    /// before the caret (`EditBox.deleteWords(-1)`), otherwise one character.
+    /// A Select All selection is what it deletes, as in `EditBox.keyPressed`.
+    pub(super) fn creative_search_backspace(&mut self, ctrl: bool) {
         let search = &mut self.creative_screen.search;
-        let cleared = self.text_selection.take(CREATIVE_SEARCH, search);
-        if backspace {
-            if !cleared {
+        if !self.text_selection.take(CREATIVE_SEARCH, search) {
+            if ctrl {
+                horizon_client::ui::delete_words(search, -1);
+            } else {
                 search.pop();
             }
-        } else if let Some(text) = typed {
+        }
+        self.creative_screen.scroll = 0.0;
+    }
+    /// Typing in the creative search box.
+    pub(super) fn creative_search_edit(&mut self, typed: Option<&str>) {
+        let search = &mut self.creative_screen.search;
+        self.text_selection.take(CREATIVE_SEARCH, search);
+        if let Some(text) = typed {
             clipboard::append_limited(search, text, CREATIVE_SEARCH_CHARS);
         }
         self.creative_screen.scroll = 0.0;
