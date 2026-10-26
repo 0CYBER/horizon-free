@@ -519,7 +519,12 @@ impl Game<'_> {
             self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
         } else if let Some(key) = tooltip {
             let text = self.translate(&key, &key);
-            self.draw_tooltip_lines(batch, &[(text, u32::MAX)], self.cursor.0, self.cursor.1);
+            self.draw_tooltip_lines(
+                batch,
+                &[(horizon_client::text::Text::literal(text), u32::MAX)],
+                self.cursor.0,
+                self.cursor.1,
+            );
         }
     }
     /// `BeaconRenderer`: each section's rotating solid beam and its glow.

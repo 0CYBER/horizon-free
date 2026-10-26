@@ -13,7 +13,7 @@ reopened; labels never start it):
 | Job | Runs on | What | Time |
 | --- | --- | --- | --- |
 | `verify` | GitHub `ubuntu-latest` | Public-tree check, Python tests, rustfmt, clippy with warnings denied, Rust tests. Dependencies and the workspace build come from a cache saved by main's runs | ~4 min cold, less warm |
-| `parity / parity` | The Mac mini's runner (`ludovics-mac-mini`, label `horizon-game`) | The vanilla harnesses the change can affect (`tools/parity.py --changed <base>`) | seconds when nothing is affected; minutes per affected harness |
+| `parity / parity` | The Mac mini's runner (`ludovics-mac-mini`, label `horizon-game`) | Only for a change to a harness, an oracle, a probe or the runner (or the `run-parity` label): the vanilla harnesses the change can affect (`tools/parity.py --changed <base>`). Other pull requests skip it: [parity-main](#parity-on-main) checks them on main | seconds when nothing is affected; minutes per affected harness |
 
 Pushes to main run `verify` only; the nightly audit covers main's harnesses.
 
@@ -39,10 +39,17 @@ copy is: the Mac mini. Its runner runs as the maintainer's account and keeps its
    depend only on the Minecraft version, are kept once in `shared-local/sounds/<version>/` (copied from a folder
    `horizon-prepare sounds` made from the maintainer's own game; the Mac mini has no official launcher of its own)
    and cloned into each preparation (not linked: vanilla's packs refuse symbolic links), for the audio harnesses.
+   `tools/prepare_output.py check` then compares what was prepared with `crates/horizon-prepare/output-versions.txt`:
+   launchers keep a player's prepared resources across releases whose preparer declares the same `OUTPUT_VERSION`
+   (`crates/horizon-prepare/src/lib.rs`), so a change to the prepared files fails here until it bumps the number
+   and appends the new digest (the error gives both lines).
 3. `tools/parity.py --changed <base sha>` picks the harnesses whose traced dependencies (their script, Python
    modules, Java oracles and every Rust source their probes compile) changed since the merge base, plus any
    harness nothing is recorded about yet, and runs those that have no pass for their current inputs. A change to
    `Cargo.lock` or `research-lock.json` affects every harness. Each harness has 25 minutes, the job 45.
+   The selection runs with main's `tools/parity.py` and `tools/parity_reach.py` (`--changed <base> --list`), so a
+   branch made before a better selection landed gets it too, and the head's own `parity.py` then runs the named
+   harnesses. A branch that changes either file selects with its own code.
 
 Failed harnesses' logs are uploaded as the `parity-logs` artifact.
 
@@ -80,10 +87,34 @@ gh api -X POST repos/ludovic111/horizon/branches/main/protection/required_status
 A skipped `parity` (a fork's pull request without the label) counts as passed, so requiring it never blocks a
 fork's pull request; the maintainer decides whether to run it.
 
+## Parity on main
+
+Most pull requests merge on `verify` alone and leave the vanilla harnesses to `.github/workflows/parity-main.yml`,
+which runs them on main a batch of merges at a time, on the Mac mini's runner:
+
+- It starts on every push to main, one run at a time (`concurrency: parity-main`). Merges that land while a run
+  goes on wait in one pending run: GitHub keeps only the newest and cancels the others, so the next run takes them
+  all.
+- `tools/parity_main.py base` gives the newest commit main contains whose parity-main passed (else the last
+  merge's parent), and the run is `tools/parity.py --changed <that commit>`: the union of the harnesses every merge
+  since then can affect, once, with every earlier pass reused.
+- On a failure, `tools/parity_main.py bisect` checks out the batch's first-parent merges by halves and runs only
+  the failing harnesses, names the first merge they fail on in the run's summary and comments on its pull request
+  (`🤖 Agent: parity-main found that this merge breaks ...`). Fix it with a pull request as usual; the next
+  run checks from the last green commit again.
+- Game releases ship only a commit both `checks` and `parity-main` passed on (`tools/release_train.py`, see
+  below), so a broken merge holds releases instead of reaching players. `release.yml` also starts when a
+  parity-main run finishes. A forced release (`force=true`) doesn't wait for parity-main.
+
+A pull request still runs its own parity job when it changes a harness script, an oracle
+(`mods/horizon/src/test/`), a probe (`crates/*/examples/`, `game/*_fixture.rs`, `game/*_harness.rs`), the runner
+(`tools/parity*.py`, `tools/lab.py`, `tools/parity_hosts.json`, `parity*.yml`), or carries the `run-parity` label
+(`run-parity.yml` runs it when the label is added).
+
 ## Game releases
 
-`.github/workflows/release.yml` releases the game by itself. It starts after every green `checks` run of a push
-to main, every 10 minutes (so a release waiting for merges to settle goes out without another merge), and by hand.
+`.github/workflows/release.yml` releases the game by itself. It starts after every green `checks` or `parity-main`
+run of a push to main (it releases a commit only once both passed on it), every 10 minutes (so a release waiting for merges to settle goes out without another merge), and by hand.
 
 ```mermaid
 flowchart LR

@@ -63,6 +63,10 @@ enum Animate {
     SculkSensor,
     /// Potent sulfur that is not dry.
     PotentSulfur,
+    DriedGhast {
+        waterlogged: bool,
+    },
+    EndPortal,
 }
 fn step(facing: &str) -> [i32; 3] {
     match facing {
@@ -137,6 +141,10 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Animate {
             drag: prop("drag").as_deref() == Some("true"),
         },
         "fire" | "soul_fire" => Animate::Fire,
+        "dried_ghast" => Animate::DriedGhast {
+            waterlogged: prop("waterlogged").as_deref() == Some("true"),
+        },
+        "end_portal" => Animate::EndPortal,
         "sculk_sensor" | "calibrated_sculk_sensor"
             if prop("sculk_sensor_phase").as_deref() == Some("active") =>
         {
@@ -180,6 +188,8 @@ pub struct AnimateTables {
     impermeable: Vec<bool>,
     power_provider: Vec<bool>,
     power_transmitter: Vec<bool>,
+    /// `#triggers_ambient_dried_ghast_block_sounds` (soul sand, soul soil).
+    dried_ghast_sounds: Vec<bool>,
     /// Biome id -> ambient particles and probabilities (`minecraft:visual/ambient_particles`).
     ambient: Vec<Vec<(T, f32)>>,
 }
@@ -237,6 +247,7 @@ impl AnimateTables {
             impermeable: by_state("minecraft:impermeable"),
             power_provider: by_state("minecraft:enchantment_power_provider"),
             power_transmitter: by_state("minecraft:enchantment_power_transmitter"),
+            dried_ghast_sounds: by_state("minecraft:triggers_ambient_dried_ghast_block_sounds"),
             ambient,
         })
     }
@@ -867,6 +878,45 @@ fn block_animate_tick(
                 fy + 0.7 + f64::from(r.next_float() * 0.3),
                 fz + 0.4 + f64::from(r.next_float() * 0.2),
             ];
+            add(engine, T::Smoke, p, [0.0; 3]);
+        }
+        Animate::DriedGhast { waterlogged } => {
+            // DriedGhastBlock.animateTick.
+            let c = [fx + 0.5, fy + 0.5, fz + 0.5];
+            if waterlogged {
+                if next_int(engine.random(), 40) == 0 {
+                    let name = "minecraft:block.dried_ghast.ambient_water";
+                    sound(engine, name, c, 1.0, 1.0);
+                }
+                let r = engine.random();
+                if next_int(r, 6) == 0 {
+                    let x = c[0] + f64::from((r.next_float() * 2.0 - 1.0) / 3.0);
+                    let y = c[1] + 0.4;
+                    let z = c[2] + f64::from((r.next_float() * 2.0 - 1.0) / 3.0);
+                    let v = [0.0, f64::from(r.next_float()), 0.0];
+                    add(engine, T::HappyVillager, [x, y, z], v);
+                }
+            } else {
+                let below = ctx.state([pos[0], pos[1] - 1, pos[2]]);
+                let triggers = || {
+                    tables
+                        .dried_ghast_sounds
+                        .get(below.0 as usize)
+                        .copied()
+                        .unwrap_or(false)
+                };
+                if next_int(engine.random(), 40) == 0 && triggers() {
+                    sound(engine, "minecraft:block.dried_ghast.ambient", c, 1.0, 1.0);
+                }
+                if next_int(engine.random(), 6) == 0 {
+                    add(engine, T::WhiteSmoke, c, [0.0, 0.02, 0.0]);
+                }
+            }
+        }
+        Animate::EndPortal => {
+            // EndPortalBlock.animateTick: one smoke particle above the surface.
+            let r = engine.random();
+            let p = [fx + r.next_double(), fy + 0.8, fz + r.next_double()];
             add(engine, T::Smoke, p, [0.0; 3]);
         }
         Animate::EnderChest => {

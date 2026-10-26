@@ -40,5 +40,8 @@ REGISTRY_PUBLIC_URL=http://localhost:4173 REGISTRY_SESSION_KEY=... GITHUB_CLIENT
 | `REGISTRY_REPO` | Default `ludovic111/horizon-mods` |
 | `PORT` | Default 8080 |
 
-On Railway it is its own service (`railway.json`, built with the `Dockerfile` from the repository root); the website's
-Caddy sends `/api/mods/*` to it over Railway's private network.
+On Railway it is the service `horizon-mod-registry` of the project `horizon-site`, next to the website: built from
+`main` with this `Dockerfile` from the repository root, health check `/healthz`, no public domain and no volume. The
+website's Caddy sends `/api/mods/*` to it over Railway's private network (`REGISTRY_UPSTREAM` on the website service:
+`http://horizon-mod-registry.railway.internal:8080`). `railway.json` lists the same settings; Railway reads them from
+the service, not from the file.

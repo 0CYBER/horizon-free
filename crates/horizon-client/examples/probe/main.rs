@@ -49,6 +49,7 @@ mod input_probe;
 mod interaction_input_fixture;
 mod lan_probe;
 mod light_parity;
+mod lore_tooltip_fixture;
 mod marker_particles_probe;
 mod menu_fixture;
 mod mipmap_probe;
@@ -133,6 +134,7 @@ probes! {
     interaction_input_fixture,
     lan_probe,
     light_parity,
+    lore_tooltip_fixture,
     marker_particles_probe,
     menu_fixture,
     mipmap_probe,
