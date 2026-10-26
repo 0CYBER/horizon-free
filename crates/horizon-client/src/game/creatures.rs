@@ -2465,12 +2465,14 @@ impl Game<'_> {
             // ShulkerBullet.onHitEntity: 4 damage, then levitation for 10 s.
             (ProjectileKind::ShulkerBullet { .. }, Hit::Entity { who, .. }) => match who {
                 Who::Player => {
-                    if !self.creative {
-                        self.mob_hits_player(
+                    // Only a hit that hurt (`wasHurt`) brings the levitation.
+                    if !self.creative
+                        && self.mob_hits_player(
                             4.0,
                             [p.previous.x, p.previous.y, p.previous.z],
                             "minecraft:mob_projectile",
-                        );
+                        )
+                    {
                         self.give_player_effect("minecraft:levitation", 200, 0);
                     }
                 }
@@ -2479,6 +2481,8 @@ impl Game<'_> {
                         && m.damage(4.0, source)
                     {
                         m.extra.levitation = 200;
+                        // Shulker.hurtServer: a shulker hit by a bullet.
+                        horizon_client::mobs::shulker::hit_by_bullet(m);
                     }
                 }
             },
