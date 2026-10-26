@@ -339,8 +339,9 @@ class Game:
     def wait(self, ticks):
         self.d('wait', ticks=ticks)
 
-    def script(self, lines):
-        """Keep tick-sensitive input in one ctl process, through the normal control commands."""
+    def script(self, lines, every=False):
+        """Keep tick-sensitive input in one ctl process, through the normal control commands. Returns the last
+        reply, or with every=True all of them in order."""
         result = subprocess.run(self.d.base + ['script'], input='\n'.join(lines) + '\n',
                                 cwd=self.work, env=self.d.env, capture_output=True, text=True,
                                 timeout=600)
@@ -348,7 +349,7 @@ class Game:
         ticks = [r['ticks'] for r in replies if 'ticks' in r]
         print(f'[{self.name}] script {lines} -> {replies[-1] if replies else result.stderr[:400]}; ticks={ticks}')
         assert result.returncode == 0 and replies and not any('error' in r for r in replies), result.stdout
-        return replies[-1]
+        return replies if every else replies[-1]
 
     def until(self, observe, predicate, ticks=100):
         """Wait for an observable answer, within the existing tick budget."""
