@@ -95,7 +95,7 @@ fn fetch_index() -> Result<(Index, String), String> {
     use std::io::Read;
     let at = location();
     let text = if at.starts_with("https://") {
-        let response = download::agent().get(&at).call().map_err(|e| match e {
+        let response = download::agent(&at).get(&at).call().map_err(|e| match e {
             ureq::Error::Status(code, _) => format!("The mod registry answered {code}."),
             ureq::Error::Transport(t) => format!("The mod registry can't be reached: {t}"),
         })?;
