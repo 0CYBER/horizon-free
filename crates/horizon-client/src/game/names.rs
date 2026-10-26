@@ -314,7 +314,7 @@ impl Game<'_> {
     }
     /// The lines of one name tag, `o` from the camera: the text at
     /// `text_alpha` in its layer, on the translucent black background
-    /// (unlit, a hair behind) when `background`.
+    /// (in `text_layer` like the glyphs, a hair behind) when `background`.
     #[allow(clippy::too_many_arguments)]
     fn name_tag_quads(
         &self,
@@ -386,7 +386,7 @@ impl Game<'_> {
                     [white.u0, white.v0, white.u1, white.v1],
                     BACKGROUND,
                     true,
-                    2,
+                    text_layer,
                 );
             }
             let mut x = x0;
