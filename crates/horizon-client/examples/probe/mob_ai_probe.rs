@@ -598,6 +598,7 @@ fn print(out: &mut String, t: i32, i: usize, m: &Mob, player_down: bool, now: i6
         let _ = writeln!(out, " removed {reason}");
         return;
     }
+    let _ = write!(out, "\tleashed {}", u8::from(m.extra.leash.is_some()));
     let p = m.position;
     let v = m.velocity;
     let _ = write!(
@@ -977,6 +978,7 @@ pub fn main() -> horizon_client::Result<()> {
                     }
                     // Set once the brain exists (below).
                     x if x.starts_with("cooldown=") => {}
+                    "dead" => m.health = 0.0,
                     "leashed" => m.extra.leash = Some(horizon_client::mobs::leash::Holder::Player),
                     x if x.starts_with("leashto=") => {
                         let n: u32 = x[8..].parse().unwrap();
@@ -1097,6 +1099,7 @@ pub fn main() -> horizon_client::Result<()> {
                 }
             };
         }
+        let mut dropped_leads = 0;
         for t in 1..=s.ticks {
             world.game_time += 1;
             if s.daycycle {
@@ -1207,6 +1210,16 @@ pub fn main() -> horizon_client::Result<()> {
                 horizon_client::mobs::take_mob_pushes(&mut events, from, &mut pushes);
                 if !alive {
                     m.removed = true;
+                }
+                // Apply the same detach/drop event as Game::break_leash.
+                for event in &events[from..] {
+                    if let MobEvent::LeashBreak { mob, drop, .. } = event
+                        && let Some(m) = mobs.iter_mut().find(|m| m.id == *mob)
+                        && horizon_client::mobs::leash::remove(m).is_some()
+                        && *drop
+                    {
+                        dropped_leads += 1;
+                    }
                 }
                 horizon_client::mobs::apply_brain_events(&mut mobs, &mut events, from);
                 villager_events(
@@ -1426,6 +1439,9 @@ pub fn main() -> horizon_client::Result<()> {
                     s.creative || player_killed,
                     world.game_time,
                 );
+            }
+            if s.name.starts_with("leash_death_") {
+                let _ = writeln!(out, "{t} leads {dropped_leads}");
             }
             for e in &events {
                 if let MobEvent::Sound(name, _, volume, pitch) = e {
