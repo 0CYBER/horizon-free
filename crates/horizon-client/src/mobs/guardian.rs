@@ -61,7 +61,8 @@ pub fn register(m: &mut Mob) {
         NearestTarget::species(
             &[Species::Squid, Species::GlowSquid, Species::Axolotl],
             true,
-        ),
+        )
+        .beyond(9.0),
     );
 }
 /// `GuardianAttackGoal`.
@@ -120,9 +121,11 @@ impl Goal for GuardianAttack {
                 1.0,
             ));
         } else if self.attack_time >= attack_duration(m) {
-            // Indirect magic (1, +2 for the elder; NORMAL difficulty), then
+            // Indirect magic (1, +2 on Hard, +2 for the elder), then
             // doHurtTarget.
-            let magic = if is_elder(m) { 3.0 } else { 1.0 };
+            let magic = 1.0
+                + if cx.w.difficulty.hard { 2.0 } else { 0.0 }
+                + if is_elder(m) { 2.0 } else { 0.0 };
             let from = [m.position.x, m.position.y, m.position.z];
             match who {
                 Who::Player => cx.events.push(MobEvent::DamagePlayer {
