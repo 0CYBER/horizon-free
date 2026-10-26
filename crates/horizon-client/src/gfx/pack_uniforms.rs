@@ -29,6 +29,9 @@ pub struct PackInputs {
     pub biome_precipitation: i32,
     pub temperature: f32,
     pub rainfall: f32,
+    /// `heldItemId`, `heldItemId2` (item.properties, 5.3) and `heldBlockLightValue(2)`.
+    pub held_items: [i32; 2],
+    pub held_light: [i32; 2],
 }
 
 /// One uniform's value: up to 16 floats or 3 integers.
@@ -319,8 +322,11 @@ impl FrameUniforms {
                 "gbufferProjectionInverse" => m4(projection.inverse()),
                 "gbufferPreviousModelView" => m4(previous_view),
                 "gbufferPreviousProjection" => m4(previous_projection),
-                // Held items wait for `item.properties` (5.3: 0 without the file); renderStage
-                // is NONE outside gbuffers draws.
+                "heldItemId" => Value::i(&[inputs.held_items[0]]),
+                "heldItemId2" => Value::i(&[inputs.held_items[1]]),
+                "heldBlockLightValue" => Value::i(&[inputs.held_light[0]]),
+                "heldBlockLightValue2" => Value::i(&[inputs.held_light[1]]),
+                // renderStage is NONE outside gbuffers draws.
                 _ => Value::i(&[0]),
             }
         };

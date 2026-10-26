@@ -21,6 +21,12 @@ pub(super) struct PackIds {
     /// The id of a name the file lacks: 65535, or 0 without the file.
     missing_entity: i32,
     missing_block: i32,
+    /// `item.properties` (4.1) and the id of a held item the file lacks, or of an empty hand:
+    /// −1, or 0 without the file (5.3).
+    items: HashMap<String, i32>,
+    missing_item: i32,
+    /// `oldHandLight` (3.2): the first held item and light are those of the brighter hand.
+    old_hand_light: bool,
 }
 
 impl Game<'_> {
@@ -72,7 +78,18 @@ impl Game<'_> {
                         &Properties::parse(text.as_deref().unwrap_or_default(), &macros),
                         "entity",
                     );
+                    let text = pack.read_text("item.properties");
+                    let items = BlockIds::parse_kind(
+                        &Properties::parse(text.as_deref().unwrap_or_default(), &macros),
+                        "item",
+                    );
                     self.pack_ids = Some(PackIds {
+                        items: items.plain(),
+                        missing_item: if text.is_some() { -1 } else { 0 },
+                        // OQ-21: on unless the pack turns it off.
+                        old_hand_light: properties
+                            .get("oldHandLight")
+                            .is_none_or(|v| v.trim() != "false"),
                         entities: entities.plain(),
                         missing_entity: if text.is_some() { 65535 } else { 0 },
                         missing_block: if ids.is_empty() { 0 } else { 65535 },
@@ -116,6 +133,7 @@ impl Game<'_> {
             .chunks
             .get(&(at.x >> 4, at.z >> 4))
             .map(|c| c.biome(at.x, at.y, at.z));
+        let (held_items, held_light) = self.held_for_pack();
         let info = biome.map(|b| self.res.biomes().get(b));
         PackInputs {
             day_time: self.world.day_time,
@@ -138,7 +156,39 @@ impl Game<'_> {
             }),
             temperature: info.map_or(0.0, |b| b.temperature),
             rainfall: info.map_or(0.0, |b| b.downfall),
+            held_items,
+            held_light,
         }
+    }
+
+    /// `heldItemId(2)` and `heldBlockLightValue(2)`: main hand, then off hand (5.2, 5.3).
+    fn held_for_pack(&mut self) -> ([i32; 2], [i32; 2]) {
+        if self.pack_ids.is_none() {
+            return ([0; 2], [0; 2]);
+        }
+        if self.luminance.is_none() {
+            self.luminance = Some(horizon_client::dynamic_light::Luminance::new(
+                self.res.facts(),
+                self.pack.assets.registry,
+            ));
+        }
+        let (Some(ids), Some(lum)) = (&self.pack_ids, &self.luminance) else {
+            return ([0; 2], [0; 2]);
+        };
+        let hands = [self.selected, super::shield::OFFHAND_SLOT].map(|slot| {
+            let item = self.stack_in(slot).map(|s| &*s.item);
+            let id = item.and_then(|i| ids.items.get(i).copied());
+            (
+                id.unwrap_or(ids.missing_item),
+                item.map_or(0, |i| i32::from(lum.of(i))),
+            )
+        });
+        let first = if ids.old_hand_light && hands[1].1 > hands[0].1 {
+            hands[1]
+        } else {
+            hands[0]
+        };
+        ([first.0, hands[1].0], [first.1, hands[1].1])
     }
 }
 
