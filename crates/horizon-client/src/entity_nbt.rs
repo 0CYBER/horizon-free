@@ -265,6 +265,19 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 Tag::Byte(i8::from(m.extra.flag2)),
             );
             map.insert("TimeInOverworld".into(), Tag::Int(m.extra.counter2));
+            if id == "minecraft:piglin" {
+                // InventoryCarrier.writeInventoryToTag.
+                map.insert(
+                    "Inventory".into(),
+                    Tag::List(
+                        m.extra
+                            .inventory
+                            .iter()
+                            .map(crate::save::item_to_nbt)
+                            .collect(),
+                    ),
+                );
+            }
         }
         "minecraft:horse"
         | "minecraft:donkey"
@@ -706,6 +719,16 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     ) {
         m.extra.flag2 = flag(tag, "IsImmuneToZombification");
         m.extra.counter2 = number(tag.get("TimeInOverworld")).unwrap_or(0) as i32;
+        if m.species() == crate::mobs::Species::Piglin
+            && let Some(Tag::List(items)) = tag.get("Inventory")
+        {
+            // InventoryCarrier.readInventoryFromTag (eight slots).
+            m.extra.inventory = items
+                .iter()
+                .filter_map(crate::save::item_from_nbt)
+                .take(8)
+                .collect();
+        }
     }
     if matches!(
         m.species(),
