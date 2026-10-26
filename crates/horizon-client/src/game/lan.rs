@@ -180,7 +180,13 @@ fn mob_meta(
     defaults.push((9, serializer::FLOAT, Value::Float(1.0)));
     // LivingEntity.DATA_EFFECT_PARTICLES and DATA_EFFECT_AMBIENCE_ID: the
     // swirls of its effects (the ones a mob has are visible, not ambient).
-    meta.extend(hub.effect_meta(m.extra.effects.iter().map(|e| (e.0, false))));
+    meta.extend(
+        hub.effect_meta(
+            (m.extra.effects.iter())
+                .filter(|e| !m.extra.hidden_effects.contains(&e.0))
+                .map(|e| (e.0, false)),
+        ),
+    );
     defaults.push((10, serializer::PARTICLES, Value::Particles(Vec::new())));
     defaults.push((11, serializer::BOOLEAN, Value::Bool(false)));
     // Mob.DATA_MOB_FLAGS_ID: no AI 1, left-handed 2, aggressive 4 (what

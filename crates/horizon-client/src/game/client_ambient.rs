@@ -81,6 +81,7 @@ impl Game<'_> {
                     .extra
                     .effects
                     .iter()
+                    .filter(|e| !m.extra.hidden_effects.contains(&e.0))
                     .filter_map(|e| effect_particle(e.0, false))
                     .collect();
                 swirl(
