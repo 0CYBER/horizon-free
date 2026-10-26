@@ -1,5 +1,6 @@
 import copy
 import datetime
+import json
 import tomllib
 import unittest
 from unittest import mock
@@ -77,9 +78,15 @@ class RepositoryRoadmap(unittest.TestCase):
     def test_the_roadmap_keeps_its_rules(self):
         self.assertEqual(roadmap.validate(roadmap.load()), [])
 
-    def test_roadmap_md_is_generated_from_the_toml(self):
-        self.assertEqual(roadmap.OUTPUT.read_text(), roadmap.render(roadmap.load()),
-                         "ROADMAP.md is out of date: run `python3 tools/roadmap.py build`")
+    def test_generated_files_match_the_toml(self):
+        for path, text in roadmap.outputs(roadmap.load()).items():
+            self.assertEqual(path.read_text(), text, f"{path.name} is out of date: run `python3 tools/roadmap.py build`")
+
+    def test_site_data_has_every_item_in_one_line_text(self):
+        data = json.loads(roadmap.site_data(tomllib.loads(SAMPLE)))
+        self.assertEqual([item["id"] for item in data["items"]], ["fast", "faster", "fastest", "old"])
+        self.assertEqual(data["items"][0]["dev"], "Multiply, not divide (#10).")
+        self.assertEqual(data["areas"], [{"id": "performance", "name": "Performance"}])
 
 
 class Rules(unittest.TestCase):
@@ -113,6 +120,10 @@ class Rules(unittest.TestCase):
         self.assertEqual(self.problems(links=["#4", "https://playhorizon.dev", "docs/benchmark.md"]), [])
         self.assertTrue(any("link" in p for p in self.problems(links=["docs/nothing-here.md"])))
         self.assertTrue(any("link" in p for p in self.problems(links=["http://example.com"])))
+
+    def test_ids_are_free_anchors_of_the_hub(self):
+        for taken in ("roadmap", "now", "h-next", "tab-board"):
+            self.assertTrue(any("taken by the hub page" in p for p in self.problems(id=taken)), taken)
 
     def test_flags_are_true_or_false(self):
         self.assertEqual(self.problems(announce=True), [])
@@ -158,6 +169,23 @@ class GitHubState(unittest.TestCase):
     def test_missing_numbers_are_reported(self):
         problems, _ = roadmap.online_problems(tomllib.loads(SAMPLE), {}, self.now)
         self.assertTrue(any("#10 is neither" in p for p in problems))
+
+
+class Journal(unittest.TestCase):
+    def test_weekly_summaries_newest_first_with_their_monday(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            (folder / "2026-43.md").write_text("# A week\n\nPlain\nwords.\n\n## Technical\n\nDev (#1).\n")
+            (folder / "2026-42.md").write_text("# Older\n\nPlain.\n\n## Technical\n\nDev.\n")
+            (folder / "week-44.md").write_text("# Bad name\n")
+            (folder / "2026-45.md").write_text("# No technical part\n\nPlain.\n")
+            entries, problems = roadmap.weeks(folder)
+        self.assertEqual([e["week"] for e in entries], ["2026-43", "2026-42"])
+        self.assertEqual(entries[0], {"week": "2026-43", "date": "2026-10-19", "title": "A week",
+                                      "plain": "Plain words.", "dev": "Dev (#1)."})
+        self.assertEqual(len(problems), 2)
 
 
 class Labels(unittest.TestCase):

@@ -1,4 +1,4 @@
-# Horizon's APIs
+# APIs at a glance
 
 Horizon is built to be built on. Mods, shaders, agents, server panels, launchers' scripts and tools all get a documented API with a version, a stability level and a reference generated from the code, so it never says something the game doesn't do.
 
@@ -13,7 +13,7 @@ Horizon is built to be built on. Mods, shaders, agents, server panels, launchers
 | **Launcher** | your agent, pack makers | `horizon-launcher`'s 46 commands and its MCP server | preview |
 | **Data formats** | tools that read Horizon's files | benchmark reports, telemetry, settings, release checksums; worlds are vanilla's format | per format |
 
-The full pages, one per surface, are in the repository: [docs/api](https://github.com/ludovic111/horizon/tree/main/docs/api). Mods for players: [Mods](/docs/mods). Agents: [Control Horizon with your AI agent](/docs/agents). Hosting: [Host a server](/docs/hosting).
+The full pages, one per surface, with their references: [the API portal](/docs/api), starting with [the Mod API](/docs/api/mods). Mods for players: [Mods](/docs/mods). Agents: [Control Horizon with your AI agent](/docs/agents). Hosting: [Host a server](/docs/hosting).
 
 ## What the levels mean
 

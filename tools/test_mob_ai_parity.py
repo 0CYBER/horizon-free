@@ -191,6 +191,16 @@ def scenarios():
                                'mob minecraft:wandering_trader 0.5 -60 0.5 0 104 persistent',
                                'mob minecraft:trader_llama 3.5 -60 1.5 0 105 persistent leashto=0 strength=2',
                                'mob minecraft:trader_llama 3.5 -60 -1.5 0 106 persistent leashto=0 strength=4'])
+    # Death must detach immediately and drop exactly one lead throughout the corpse animation.
+    add('leash_death_trader_llama', 10, [
+        'player 14.5 -60 0.5',
+        'mob minecraft:wandering_trader 0.5 -60 0.5 0 104 persistent',
+        'mob minecraft:trader_llama 3.5 -60 1.5 0 105 persistent leashto=0 strength=2 dead',
+    ])
+    add('leash_death_player_llama', 10, [
+        'player 0.5 -60 0.5',
+        'mob minecraft:llama 3.5 -60 0.5 0 101 persistent leashed strength=3 dead',
+    ])
     # Copper golems sorting chests (TransportItemsBetweenContainers): from a copper chest to a chest,
     # skipping a chest without the carried item, queueing at a chest another golem has open, a double
     # chest, a blocked copper chest, a part-full chest, and idling with nothing to carry.
@@ -358,6 +368,9 @@ def parse(path):
         if parts[1] == 'hive':
             cur.setdefault('hives', {}).setdefault(t, []).append(parts[2])
             continue
+        if parts[1] == 'leads':
+            cur.setdefault('leads', {}).setdefault(t, []).append(parts[2])
+            continue
         if parts[1] == 'chest':
             cur.setdefault('chests', {}).setdefault(t, []).append(parts[2])
             continue
@@ -455,7 +468,7 @@ def compare(vanilla, rust, fields=None):
                 clean = False
                 break
         # Sounds, watched block changes, chest contents and hives: first differing tick.
-        for kind in ('sounds', 'blocks', 'chests', 'hives'):
+        for kind in ('sounds', 'blocks', 'chests', 'hives', 'leads'):
             va, ra = v.get(kind, {}), r.get(kind, {})
             for t in sorted(set(va) | set(ra)):
                 if va.get(t, []) != ra.get(t, []):

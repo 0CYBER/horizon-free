@@ -3,7 +3,7 @@ name = "horizon-mods"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-rust-version = "1.86"
+rust-version = "1.95"
 description = "Horizon's mod runtime: sandboxed WebAssembly components (docs/mods.md)"
 
 [dependencies]
@@ -12,11 +12,11 @@ serde_json = "1"
 toml = "1.1.6"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 log = "0.4"
-# The 36 LTS line: security fixes until August 2027, and it builds on the client's Rust.
-wasmtime = { version = "36.0.18", default-features = false, features = ["runtime", "cranelift", "component-model", "std"], optional = true }
+# The 48 LTS line: security fixes until August 2028, on the same wasm-tools (0.254) as wit-component and the SDK's wit-bindgen.
+wasmtime = { version = "48.0.7", default-features = false, features = ["runtime", "cranelift", "component-model", "std"], optional = true }
 # Turns a mod's core module into a component (cargo horizon-mod build, the tests).
-wit-component = { version = "0.239", optional = true }
-wit-parser = { version = "0.239", optional = true }
+wit-component = { version = "0.254", optional = true }
+wit-parser = { version = "0.254", optional = true }
 # The registry index's checks (feature `index`): SHA-256, and minisign signatures (no dependencies of its own).
 sha2 = { version = "0.10", optional = true }
 minisign-verify = { version = "0.3", optional = true }

@@ -2681,8 +2681,10 @@ dependencies = [
  "horizon-theme",
  "image",
  "keyring",
+ "objc2-app-kit",
  "oo7",
  "pulldown-cmark",
+ "raw-window-handle",
  "self-replace",
  "serde",
  "serde_json",
@@ -2724,6 +2726,8 @@ dependencies = [
 name = "horizon-prepare"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
+ "libc",
  "regex",
  "sha1",
  "sha2 0.10.9",

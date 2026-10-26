@@ -106,14 +106,16 @@ enum Palette {
     List(Vec<u32>),
     Global,
 }
-/// `n / per_word` for `n < 4096` by multiplication: `MAGIC[bits] = ceil(2^20 /
-/// (64 / bits))` is exact while `n * (64 / bits) < 2^20`.
-const MAGIC: [u32; 33] = {
-    let mut table = [0; 33];
+/// `n / per_word` for `n < 4096` by multiplication: `MAGIC[bits].0 = ceil(2^20 /
+/// (64 / bits))` is exact while `n * (64 / bits) < 2^20`. `.1` is the bits a
+/// word's entries fill (`64 / bits * bits`): looked up, not divided for, as a
+/// division by a run-time value costs tens of cycles on x86.
+const MAGIC: [(u32, u32); 33] = {
+    let mut table = [(0, 0); 33];
     let mut bits = 1;
     while bits <= 32 {
         let per = 64 / bits as u32;
-        table[bits] = (1u32 << 20).div_ceil(per);
+        table[bits] = ((1u32 << 20).div_ceil(per), per * bits as u32);
         bits += 1;
     }
     table
@@ -134,9 +136,9 @@ fn locate(bits: u8, i: usize) -> (usize, u32) {
         let word = i >> (6 - log);
         (word, ((i & ((64 >> log) - 1)) as u32) << log)
     } else {
-        let per = 64 / u32::from(bits);
-        let word = (i as u32 * MAGIC[usize::from(bits)]) >> 20;
-        (word as usize, (i as u32 - word * per) * u32::from(bits))
+        let (magic, filled) = MAGIC[usize::from(bits)];
+        let word = (i as u32 * magic) >> 20;
+        (word as usize, i as u32 * u32::from(bits) - word * filled)
     }
 }
 #[inline]
@@ -720,6 +722,17 @@ mod tests {
     use super::*;
     const BLOCKS: Strategy = Strategy::blocks(16);
     const BIOMES: Strategy = Strategy::biomes(7);
+
+    #[test]
+    fn locate_matches_division_for_every_width() {
+        for bits in 1..=32u8 {
+            let per = 64 / usize::from(bits);
+            for i in 0..4096 {
+                let expected = (i / per, ((i % per) * usize::from(bits)) as u32);
+                assert_eq!(locate(bits, i), expected, "{bits} bits, entry {i}");
+            }
+        }
+    }
     fn rng(state: &mut u64) -> u64 {
         *state ^= *state << 13;
         *state ^= *state >> 7;
