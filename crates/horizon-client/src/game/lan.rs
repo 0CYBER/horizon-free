@@ -379,13 +379,16 @@ fn mob_equipment(
     out: &mut Vec<(u8, Option<horizon_protocol::item::Stack>)>,
 ) {
     let e = &m.extra;
+    // A horse's armour, a llama's carpet, a harness: Horizon keeps the body
+    // slot's item (6) in `head`.
+    let body = horizon_client::mobs::drops::head_is_body(m.species());
     let slots = [
         (0u8, &e.main_hand),
         (1, &e.off_hand),
         (2, &e.feet),
         (3, &e.legs),
         (4, &e.chest),
-        (5, &e.head),
+        (if body { 6 } else { 5 }, &e.head),
     ];
     for (slot, item) in slots {
         if let Some(item) = item {
