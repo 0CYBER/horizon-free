@@ -179,7 +179,7 @@ struct Launcher {
     starting_client: Option<String>,
     /// Join a friend: the code typed on the Play page, and the one the game
     /// starting now joins.
-    friend_code: String,
+    friend_code: line_edit::LineEdit,
     friend_focused: bool,
     friend_focus: FocusHandle,
     joining: Option<String>,
@@ -320,7 +320,7 @@ impl Launcher {
             sign_in_state: None,
             keychain: true,
             starting_client: None,
-            friend_code: String::new(),
+            friend_code: line_edit::LineEdit::new(String::new(), 256, 32),
             friend_focused: false,
             friend_focus: cx.focus_handle(),
             joining: None,
@@ -2842,46 +2842,30 @@ impl Launcher {
             .font_family(theme::MONO)
             .text_size(px(12.))
             .cursor_text()
-            .child(if self.friend_code.is_empty() && !focused {
-                div().text_color(t.muted).child("Paste an invite code")
-            } else {
-                // The end of a long code stays in view while typing.
-                let shown: String = {
-                    let chars: Vec<char> = self.friend_code.chars().collect();
-                    chars[chars.len().saturating_sub(30)..].iter().collect()
-                };
-                div().text_color(t.ink).child(shown)
-            })
-            .when(focused, |d| d.child(div().w(px(1.)).h(px(14.)).bg(t.ink)))
+            .child(line_edit::content(
+                &self.friend_code,
+                &t,
+                focused,
+                false,
+                false,
+                "Paste an invite code",
+            ))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 window.focus(&this.friend_focus);
                 cx.notify();
             }))
-            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
-                let k = &ev.keystroke;
-                let paste = k.key == "v" && (k.modifiers.control || k.modifiers.platform);
-                match k.key.as_str() {
-                    "enter" => this.join_friend(),
-                    "backspace" => {
-                        this.friend_code.pop();
-                    }
-                    _ if paste => {
-                        if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                            this.friend_code.push_str(text.trim());
-                        }
-                    }
-                    _ if !k.modifiers.control && !k.modifiers.platform => {
-                        if let Some(ch) = &k.key_char {
-                            this.friend_code.push_str(ch);
-                        }
-                    }
-                    _ => return,
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                match line_edit::handle(&mut this.friend_code, ev, cx) {
+                    line_edit::Key::Pass => return,
+                    line_edit::Key::Enter => this.join_friend(),
+                    line_edit::Key::Escape => window.blur(),
+                    _ => {}
                 }
-                this.friend_code.truncate(256);
                 cx.stop_propagation();
                 cx.notify();
             }));
-        let valid = horizon_friends::invite::parse(&self.friend_code).is_some();
+        let field = line_edit::mouse(field, cx, |this| &mut this.friend_code);
+        let valid = horizon_friends::invite::parse(self.friend_code.text()).is_some();
         let mut join = button("join-friend", "Join", Kind::Secondary, &t);
         if can_play && valid {
             join = join.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -2913,10 +2897,10 @@ impl Launcher {
     }
 
     fn join_friend(&mut self) {
-        if horizon_friends::invite::parse(&self.friend_code).is_none() {
+        if horizon_friends::invite::parse(self.friend_code.text()).is_none() {
             return;
         }
-        self.joining = Some(self.friend_code.clone());
+        self.joining = Some(self.friend_code.text().to_string());
         self.play();
         if self.starting_client.is_none() {
             self.joining = None;
