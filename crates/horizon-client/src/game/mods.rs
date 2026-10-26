@@ -95,6 +95,9 @@ pub(super) struct ModsState {
     /// The recipe book's known displays, and the book's version they are of.
     #[cfg(feature = "mods")]
     pub(super) known_recipes: (Option<u64>, std::sync::Arc<[i32]>),
+    /// Capability `ui`'s item panel beside container screens.
+    #[cfg(feature = "mods")]
+    pub(super) browser: super::mod_browser::Browser,
     /// Extras that are official mods now, being installed.
     #[cfg(feature = "mods")]
     pub(super) moved: super::moved_extras::MovedState,
