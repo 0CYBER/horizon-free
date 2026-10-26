@@ -169,6 +169,8 @@ impl Game<'_> {
                 self.consume_held();
             }
         }
+        // ServerPlayerGameMode.useItemOn: the action was consumed.
+        self.trigger_block("minecraft:item_used_on_block", pos, &stack);
         Ok(true)
     }
     fn vault_events(&mut self, key: Pos, events: Vec<VaultEvent>) -> Result<()> {
