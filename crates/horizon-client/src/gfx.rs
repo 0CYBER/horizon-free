@@ -1869,7 +1869,8 @@ impl Renderer {
             alpha_blend,
             false,
         );
-        let lightning_attributes = wgpu::vertex_attr_array![6=>Float32x3];
+        // Attribute 7: 6 is the entity vertex buffer's glint UV.
+        let lightning_attributes = wgpu::vertex_attr_array![7=>Float32x3];
         let lightning_vertex = [
             entity_vertex[0].clone(),
             Some(wgpu::VertexBufferLayout {

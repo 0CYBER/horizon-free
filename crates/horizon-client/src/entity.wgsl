@@ -118,9 +118,10 @@ fn entity_vertex(position: vec3<f32>, uv: vec2<f32>,
 }
 // Retained bolt-local geometry, translated using the same f64 camera
 // subtraction as the former CPU path before adding each local f32 position.
+// The bolt offset is instance attribute 7: 6 is the entity vertex's glint UV.
 @vertex fn vs_lightning(@location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
     @location(2) overlay: u32, @location(3) color: vec4<f32>, @location(4) light: vec4<u32>, @location(5) normal: vec4<f32>,
-    @location(6) offset: vec3<f32>) -> Out {
+    @location(7) offset: vec3<f32>) -> Out {
     return entity_vertex(offset + position, uv, overlay, color, light, normal);
 }
 struct CloudInfo {
