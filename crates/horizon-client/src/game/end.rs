@@ -611,14 +611,13 @@ impl Game<'_> {
         }
         let won = self.fight.previously_killed;
         let gateway = self.first_gateway();
-        let bedrock_top = (0..256)
-            .rev()
-            .find(|&y| &*self.block_name([0, y, 0]) == "minecraft:bedrock");
-        if bedrock_top.is_some() || self.exit_portal().is_some() {
-            if let Some(top) = bedrock_top {
-                // findExitPortal remembers the location of a podium that is already there.
-                self.set_exit_portal([0, top - 3, 0]);
+        if self.exit_portal().is_none() {
+            // findExitPortal remembers the location of a podium that is already there.
+            if let Some(level) = self.podium_level() {
+                self.set_exit_portal([0, level, 0]);
             }
+        }
+        if self.exit_portal().is_some() {
             // The gateway may have been out of range when it was placed.
             if won
                 && self.world.loaded(gateway[0], gateway[2])
@@ -650,17 +649,40 @@ impl Game<'_> {
         }
         Ok(())
     }
+    /// The portal level of the podium around the centre column, read from the
+    /// bedrock that EndPodiumFeature places (rim at the portal level, disc
+    /// below it, the torch column) so a broken column does not hide it.
+    fn podium_level(&self) -> Option<i32> {
+        let mut offsets: Vec<[i32; 3]> = (0..4).map(|dy| [0, dy, 0]).collect();
+        for z in -4..=4i32 {
+            for x in -4..=4i32 {
+                let flat = f64::from(x * x + z * z);
+                if (6.25..12.25).contains(&flat) {
+                    offsets.push([x, 0, z]);
+                } else if flat + 1.0 < 6.25 {
+                    offsets.push([x, -1, z]);
+                }
+            }
+        }
+        (1..253)
+            .map(|y| {
+                let score = offsets
+                    .iter()
+                    .filter(|o| &*self.block_name([o[0], y + o[1], o[2]]) == "minecraft:bedrock")
+                    .count();
+                (score, y)
+            })
+            .filter(|&(score, _)| score >= 3)
+            .max()
+            .map(|(_, y)| y)
+    }
     /// `spawnExitPortal(true)` after the dragon dies.
     pub(super) fn activate_exit_portal(&mut self) -> Result<()> {
         let origin = match self.exit_portal() {
             Some(o) => o,
             None => {
-                // The rim's level: the top of the bedrock column minus three.
-                let top = (0..256)
-                    .rev()
-                    .find(|&y| &*self.block_name([0, y, 0]) == "minecraft:bedrock")
-                    .unwrap_or(64);
-                [0, top - 3, 0]
+                // The rim's level, found without assuming the centre column is intact.
+                [0, self.podium_level().unwrap_or(61), 0]
             }
         };
         self.place_podium(origin, true)
