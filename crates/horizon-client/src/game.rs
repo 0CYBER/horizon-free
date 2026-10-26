@@ -4544,6 +4544,32 @@ impl Game<'_> {
                 MotionEvent::Fall(event) => self.landing_block_updates(&event),
                 MotionEvent::Snowflake { position, velocity } => self.snowflake(position, velocity),
                 MotionEvent::EnterBlock { state } => self.trigger_enter_block(state),
+                MotionEvent::HoneySlide {
+                    pos,
+                    sound,
+                    particles,
+                } => {
+                    if sound {
+                        self.audio
+                            .play("minecraft:block.honey_block.slide", Some(feet), 1.0, 1.0);
+                    }
+                    // HoneyBlock.showSlideParticles: five block particles.
+                    if particles
+                        && let Some((sprite, tint)) = self.particle_sprite(
+                            self.world.block(pos.x, pos.y, pos.z),
+                            [pos.x, pos.y, pos.z],
+                        )
+                    {
+                        use horizon_client::particles::{ParticleOptions, ParticleType};
+                        for _ in 0..5 {
+                            self.particles.add(
+                                &ParticleOptions::block(ParticleType::Block, sprite.clone(), tint),
+                                feet,
+                                [0.0; 3],
+                            );
+                        }
+                    }
+                }
                 MotionEvent::InsidePortal { pos } => self.player_inside_nether_portal(pos),
                 MotionEvent::CauldronExtinguish { pos } => self.cauldron_extinguish(pos),
                 MotionEvent::InsideWitherRose => self.wither_rose_contact(),
