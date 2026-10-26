@@ -160,7 +160,7 @@ fn refresh_ratings() {
     }
     let at = given.unwrap_or_else(|| RATINGS_URL.to_owned());
     let text = if at.starts_with("https://") {
-        download::agent().get(&at).call().ok().and_then(|r| {
+        download::agent(&at).get(&at).call().ok().and_then(|r| {
             use std::io::Read;
             let mut text = String::new();
             r.into_reader()
