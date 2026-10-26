@@ -255,8 +255,8 @@ experimental = ["ui", "render", "input"]
         needed(imports(&wasm).unwrap().iter().map(String::as_str)).0
     };
     assert_eq!(level("coords_hud.hmod"), 0);
-    // The UI guest shows a minimap (`render.set-minimap`).
-    assert_eq!(level("horizon_mods_test_ui_guest.hmod"), LEVEL);
+    // The UI guest runs quiet commands (`command.run-quiet`, level 3).
+    assert_eq!(level("horizon_mods_test_ui_guest.hmod"), 3);
 }
 
 #[test]
