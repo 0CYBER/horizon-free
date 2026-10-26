@@ -64,7 +64,10 @@ pub struct HudAtlas {
     /// Sprites whose `.png.mcmeta` sets `blur` or `clamp`; the others
     /// sample as vanilla's defaults (nearest, repeat).
     pub flags: HashMap<String, TextureFlags>,
-    pub fire_animations: Vec<(Rect, crate::sprites::SpriteAnimation)>,
+    /// Every animated block or item sprite the atlas packs: its atlas rect
+    /// and the mcmeta-driven frame list, re-uploaded into the rect as the
+    /// frames turn (vanilla's stitched atlas animates all of these).
+    pub sprite_animations: Vec<(Rect, crate::sprites::SpriteAnimation)>,
     /// The default font (bitmap sheets in this atlas, unifont rasterized on demand).
     pub font: crate::font::Font,
     white: Rect,
@@ -373,7 +376,7 @@ impl HudAtlas {
             let s = p.to_string_lossy();
             !s.contains("title/background") && !s.contains("realms") && !s.contains("presets")
         });
-        type Decoded = (PackedImage, Option<TextureFlags>, Option<(u32, u32)>);
+        type Decoded = (PackedImage, Option<TextureFlags>, Option<(u32, u32)>, bool);
         let decode_one = |path: &PathBuf| -> Option<Decoded> {
             let name = path
                 .strip_prefix(&textures)
@@ -396,14 +399,20 @@ impl HudAtlas {
                 .and_then(|d| png_size(&d.join(format!("{name}.png"))))
                 .map(|(dw, dh)| (dw, if frames { dh.min(dw) } else { dh }))
                 .filter(|&size| size != (w, h));
-            let flags = fs::read_to_string(path.with_extension("png.mcmeta"))
-                .ok()
-                .and_then(|json| TextureFlags::from_mcmeta(&json));
+            let mcmeta = fs::read_to_string(path.with_extension("png.mcmeta")).ok();
+            let flags = mcmeta.as_deref().and_then(TextureFlags::from_mcmeta);
+            let animated = frames
+                && mcmeta.as_deref().is_some_and(|json| {
+                    serde_json::from_str::<serde_json::Value>(json)
+                        .ok()
+                        .is_some_and(|meta| meta.get("animation").is_some())
+                });
             let (gw, gh) = gui_size.unwrap_or((w, h));
             (gw <= 1024 && (gh <= 512 || name.starts_with("font/"))).then_some((
                 (name, w, h, pixels),
                 flags,
                 gui_size,
+                animated,
             ))
         };
         let threads = std::thread::available_parallelism().map_or(2, |n| n.get());
@@ -422,13 +431,17 @@ impl HudAtlas {
         });
         let mut flags = HashMap::new();
         let mut gui_sizes = HashMap::new();
+        let mut animated: Vec<String> = Vec::new();
         let mut images: Vec<PackedImage> = Vec::with_capacity(decoded.len());
-        for (image, image_flags, gui_size) in decoded {
+        for (image, image_flags, gui_size, is_animated) in decoded {
             if let Some(f) = image_flags {
                 flags.insert(image.0.clone(), f);
             }
             if let Some(size) = gui_size {
                 gui_sizes.insert(image.0.clone(), size);
+            }
+            if is_animated {
+                animated.push(image.0.clone());
             }
             images.push(image);
         }
@@ -495,35 +508,32 @@ impl HudAtlas {
                 },
             );
         }
-        let mut fire_sprites = crate::sprites::Sprites::default();
-        let mut fire_animations = Vec::new();
-        for name in [
-            "block/fire_0",
-            "block/fire_1",
-            "block/soul_fire_0",
-            "block/soul_fire_1",
-        ] {
-            if let Some(rect) = sprites.get(name).copied() {
-                let layer = fire_sprites.insert(root, &format!("minecraft:{name}"))?;
-                if let Some(animation) = fire_sprites
-                    .animations
-                    .iter()
-                    .find(|a| a.layer == layer)
-                    .cloned()
-                {
-                    let (tw, th) = rect.texels((width, height));
-                    let image = animation.resized_pixels(animation.frame(0), tw, th);
-                    let x = (rect.u0 * width as f32).round() as usize;
-                    let y = (rect.v0 * height as f32).round() as usize;
-                    let row_bytes = tw as usize * 4;
-                    for row in 0..th as usize {
-                        let dst = ((y + row) * width as usize + x) * 4;
-                        let src = row * row_bytes;
-                        pixels[dst..dst + row_bytes].copy_from_slice(&image[src..src + row_bytes]);
-                    }
-                    fire_animations.push((rect, animation));
-                }
+        // Every animated sprite animates: the packed strip is the raw first
+        // frame, while the mcmeta's frame list may start anywhere, so each
+        // animation's frame(0) overwrites its atlas rect before drawing.
+        let mut loaded = crate::sprites::Sprites::default();
+        let mut sprite_animations = Vec::new();
+        animated.sort();
+        for name in animated {
+            let Some(rect) = sprites.get(&name).copied() else {
+                continue;
+            };
+            let layer = loaded.insert(root, &format!("minecraft:{name}"))?;
+            let Some(animation) = loaded.animations.iter().find(|a| a.layer == layer).cloned()
+            else {
+                continue;
+            };
+            let (tw, th) = rect.texels((width, height));
+            let image = animation.resized_pixels(animation.frame(0), tw, th);
+            let x = (rect.u0 * width as f32).round() as usize;
+            let y = (rect.v0 * height as f32).round() as usize;
+            let row_bytes = tw as usize * 4;
+            for row in 0..th as usize {
+                let dst = ((y + row) * width as usize + x) * 4;
+                let src = row * row_bytes;
+                pixels[dst..dst + row_bytes].copy_from_slice(&image[src..src + row_bytes]);
             }
+            sprite_animations.push((rect, animation));
         }
         let white = sprites["horizon/white"];
         let font = crate::font::Font::load(
@@ -541,7 +551,7 @@ impl HudAtlas {
             sprites,
             translucent,
             flags,
-            fire_animations,
+            sprite_animations,
             font,
             white,
         })
@@ -1033,7 +1043,7 @@ impl HudUniform {
     }
 }
 pub struct HudRenderer {
-    pub fire_animations: Vec<(Rect, crate::sprites::SpriteAnimation, usize)>,
+    pub sprite_animations: Vec<(Rect, crate::sprites::SpriteAnimation, (usize, usize, u32))>,
     /// The shared atlas texture, for run-time glyph uploads.
     pub atlas_texture: Option<wgpu::Texture>,
     pipeline: wgpu::RenderPipeline,
@@ -1235,7 +1245,7 @@ impl HudRenderer {
         });
         Ok(Self {
             atlas_texture: None,
-            fire_animations: Vec::new(),
+            sprite_animations: Vec::new(),
             pipeline,
             invert_pipeline,
             additive_pipeline,
@@ -1248,7 +1258,7 @@ impl HudRenderer {
             capacity,
         })
     }
-    pub fn animate_fire(
+    pub fn animate_sprites(
         &mut self,
         uploads: &mut crate::gfx::upload::Uploads,
         encoder: &mut wgpu::CommandEncoder,
@@ -1257,13 +1267,31 @@ impl HudRenderer {
         let Some(texture) = &self.atlas_texture else {
             return;
         };
-        for (rect, animation, previous) in &mut self.fire_animations {
-            let frame = animation.frame(tick);
-            if frame == *previous {
+        for (rect, animation, previous) in &mut self.sprite_animations {
+            // `SpriteContents.AnimationState`: the frame from the mcmeta's
+            // list, blended into the next one by the sub-frame's thousandths
+            // when the sprite interpolates.
+            let blend = animation.blend(tick);
+            let state = (blend.frame, blend.next, blend.millis);
+            if state == *previous {
                 continue;
             }
             let (w, h) = rect.texels((texture.width(), texture.height()));
-            let pixels = animation.resized_pixels(frame, w, h);
+            let pixels = if blend.millis == 0 {
+                animation.resized_pixels(blend.frame, w, h)
+            } else {
+                let current = animation.resized_pixels(blend.frame, w, h);
+                let next = animation.resized_pixels(blend.next, w, h);
+                let millis = blend.millis;
+                current
+                    .iter()
+                    .zip(next)
+                    .map(|(&a, b)| {
+                        ((u32::from(a) * (1000 - millis) + u32::from(b) * millis + 500) / 1000)
+                            as u8
+                    })
+                    .collect()
+            };
             uploads.texture(
                 encoder,
                 wgpu::TexelCopyTextureInfo {
@@ -1280,7 +1308,7 @@ impl HudRenderer {
                 h,
                 &pixels,
             );
-            *previous = frame;
+            *previous = state;
         }
     }
     /// Stage the batch's atlas patches, vertices and uniform: before the
