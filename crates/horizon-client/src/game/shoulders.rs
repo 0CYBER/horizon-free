@@ -27,6 +27,10 @@ impl Game<'_> {
         let Some(p) = self.player.as_ref() else {
             return;
         };
+        // The acting player must be the saved owner (`getOwner`).
+        if !horizon_client::mobs::tame::owned_by(self.mobs[i].extra.owner, self.acting_uuid()) {
+            return;
+        }
         if self.riding.is_some()
             || !p.ground.on_ground
             || p.fluids.was_touching_water
