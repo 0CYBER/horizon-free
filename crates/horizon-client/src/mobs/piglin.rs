@@ -270,13 +270,13 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     }
     // PiglinSpecificSensor (every 20 ticks): the nearest repelling block.
     if m.species() == Species::Piglin && m.alive() && m.age.wrapping_add(m.id).is_multiple_of(20) {
-        m.extra.repellent = find_repellent(m, w);
+        m.extra.repellent = find_piglin_repellent(m, w);
     }
 }
 /// `PiglinSpecificSensor.findNearestRepellent`: the nearest `#piglin_repellents`
 /// block within 8 blocks sideways and 4 up or down; a soul campfire only
 /// counts while lit.
-fn find_repellent(m: &Mob, w: &MobWorld) -> Option<[i32; 3]> {
+fn find_piglin_repellent(m: &Mob, w: &MobWorld) -> Option<[i32; 3]> {
     let tag = w.block_tags.get("minecraft:piglin_repellents")?;
     let at = [
         m.position.x.floor() as i32,
