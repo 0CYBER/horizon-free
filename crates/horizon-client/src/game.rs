@@ -4334,8 +4334,9 @@ impl Game<'_> {
         if running {
             self.world.game_time += 1;
             if self.ui.rules.bool("advance_weather") {
-                self.world.weather.tick(&mut self.world.random);
+                self.world.weather.tick_timers(&mut self.world.random);
             }
+            self.world.weather.tick_levels();
             self.tick_weather_effects();
         }
         if self.ticks.is_multiple_of(6000) {
