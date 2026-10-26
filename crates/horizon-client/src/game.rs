@@ -18,6 +18,7 @@ mod boats;
 mod books;
 mod bossbars;
 mod breezes;
+mod campfire_douse;
 mod cartography;
 mod chat;
 mod client_ambient;
@@ -3535,6 +3536,10 @@ impl Game<'_> {
                 return Ok(true);
             }
             if self.use_pumpkin(hit.pos, hit.face, held.as_ref())? {
+                self.swing_arm();
+                return Ok(true);
+            }
+            if self.use_campfire_douse(hit.pos, held.as_ref())? {
                 self.swing_arm();
                 return Ok(true);
             }
