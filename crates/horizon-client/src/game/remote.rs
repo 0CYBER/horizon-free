@@ -109,6 +109,8 @@ enum Received {
 pub(super) struct Remote {
     pub session: Session,
     pub brand: String,
+    /// The server announced it runs mods' quiet commands.
+    pub quiet_commands: bool,
     pub(super) builtin: Arc<Builtin>,
     lang: Arc<Language>,
     pub(super) registries: Arc<Dynamic>,
@@ -419,6 +421,7 @@ impl Game<'_> {
         self.remote = Some(Remote {
             session,
             brand: "unknown".into(),
+            quiet_commands: false,
             builtin: Arc::new(builtin),
             lang,
             registries: Arc::new(Dynamic::default()),
@@ -837,6 +840,11 @@ impl Game<'_> {
                 Event::Brand(brand) => {
                     if let Some(remote) = &mut self.remote {
                         remote.brand = brand;
+                    }
+                }
+                Event::QuietCommands => {
+                    if let Some(remote) = &mut self.remote {
+                        remote.quiet_commands = true;
                     }
                 }
                 Event::Reconfigured(registries) => {
