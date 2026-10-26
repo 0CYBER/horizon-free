@@ -9,7 +9,7 @@ use horizon_client::mesher::Vertex;
 use horizon_client::mobs::{
     Mob, MobData, MobTypes, Part, Species, allay,
     anim::{self, Poses, State},
-    aquatic, body_anim as b_anim, equine, guardian,
+    aquatic, bat, body_anim as b_anim, equine, guardian,
     keyframes::AnimationState,
     render, shulker, sniffer, species, tame,
 };
@@ -108,6 +108,22 @@ fn entity_state(mob: &mut Mob, species: Species, case: &Value) {
     let flag = |k: &str| case[k].as_bool().unwrap_or(false);
     let num = |k: &str| case[k].as_f64().unwrap_or(0.0) as f32;
     match species {
+        Species::Bat => {
+            mob.extra.flag = flag("isResting");
+            mob.anim.states[0].started = case["flyAnimationState"].as_f64().map(|v| v as f32);
+            mob.anim.states[1].started = case["restAnimationState"].as_f64().map(|v| v as f32);
+            if let Some(ticks) = case["@batTicks"].as_array() {
+                for (i, flags) in ticks.iter().enumerate() {
+                    mob.age = i as u32 + 1;
+                    bat::set_resting(mob, flags.as_i64().unwrap_or(0) & 1 != 0);
+                    if flag("@batInFrame") {
+                        bat::tick(mob);
+                    } else {
+                        bat::setup_animation_states(mob);
+                    }
+                }
+            }
+        }
         Species::Sheep => mob.extra.anim_ticks = num("eatTick") as i32,
         Species::Guardian | Species::ElderGuardian => {
             mob.anim.v[guardian::TAIL] = num("tailAnimation");
@@ -455,14 +471,6 @@ pub fn main() -> horizon_client::Result<()> {
                     angry: flag("isAngry"),
                     roll_amount: num("rollAmount"),
                 },
-            ),
-            Species::Bat => b_anim::bat(
-                p,
-                s,
-                flag("isResting"),
-                &started("flyAnimationState"),
-                &started("restAnimationState"),
-                &animations,
             ),
             Species::Armadillo => b_anim::armadillo(
                 p,

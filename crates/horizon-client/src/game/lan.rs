@@ -194,6 +194,13 @@ fn mob_meta(
     let e = &m.extra;
     let id = |registry: &str, name: &str| hub.registry_id(registry, &format!("minecraft:{name}"));
     match kind {
+        // Bat.DATA_ID_FLAGS: resting in bit 0, flying by default.
+        "minecraft:bat" => {
+            if e.flag {
+                meta.push((16, serializer::BYTE, Value::Byte(1)));
+            }
+            defaults.push((16, serializer::BYTE, Value::Byte(0)));
+        }
         // Sheep.DATA_WOOL_ID: the colour in the low nibble, 16 when sheared.
         "minecraft:sheep" => {
             let value = (e.color & 15) | if e.sheared { 16 } else { 0 };

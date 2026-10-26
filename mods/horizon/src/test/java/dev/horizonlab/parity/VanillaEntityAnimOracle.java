@@ -223,7 +223,9 @@ public final class VanillaEntityAnimOracle {
     }
 
     /** Render-state values vanilla derives from entity state; the case gives the entity-side input. */
-    private static void hooks(EntityRenderState state, JsonObject kase) {
+    private static void hooks(EntityRenderState state, JsonObject kase) throws Exception {
+        if (state instanceof net.minecraft.client.renderer.entity.state.BatRenderState bat && kase.has("@batTicks"))
+            batHistory(bat, kase.getAsJsonArray("@batTicks"));
         if (state instanceof net.minecraft.client.renderer.entity.state.SheepRenderState sheep && kase.has("eatTick")) {
             // Sheep.getHeadEatPositionScale / getHeadEatAngleScale at partial tick 0.
             int t = kase.get("eatTick").getAsInt();
@@ -240,6 +242,34 @@ public final class VanillaEntityAnimOracle {
             wolf.headRollAngle = kase.get("interest").getAsFloat() * 0.15F * (float) Math.PI;
         if (state instanceof net.minecraft.client.renderer.entity.state.PhantomRenderState phantom && kase.has("flapOffset"))
             phantom.flapTime = kase.get("flapOffset").getAsFloat() + phantom.ageInTicks;
+    }
+
+    /** Only the server's flags are supplied; the shipped Bat starts/stops its own clocks. */
+    private static final class AnimationBat extends net.minecraft.world.entity.ambient.Bat {
+        int flags;
+        AnimationBat() { super(null, null); }
+        @Override public boolean isResting() { return (flags & 1) != 0; }
+    }
+
+    private static void batHistory(net.minecraft.client.renderer.entity.state.BatRenderState state, JsonArray ticks) throws Exception {
+        // Allocate without a world, as the other controlled entity oracles do.
+        var allocator = Class.forName("sun.misc.Unsafe");
+        var field = allocator.getDeclaredField("theUnsafe");
+        field.setAccessible(true);
+        var bat = (AnimationBat) allocator.getMethod("allocateInstance", Class.class).invoke(field.get(null), AnimationBat.class);
+        var type = net.minecraft.world.entity.ambient.Bat.class;
+        type.getField("flyAnimationState").set(bat, new net.minecraft.world.entity.AnimationState());
+        type.getField("restAnimationState").set(bat, new net.minecraft.world.entity.AnimationState());
+        var setup = type.getDeclaredMethod("setupAnimationStates");
+        setup.setAccessible(true);
+        for (var flags : ticks) {
+            bat.tickCount++;
+            bat.flags = flags.getAsInt();
+            setup.invoke(bat);
+        }
+        state.isResting = bat.isResting();
+        state.flyAnimationState.copyFrom(bat.flyAnimationState);
+        state.restAnimationState.copyFrom(bat.restAnimationState);
     }
 
     public static void main(String[] args) throws Exception {
