@@ -100,6 +100,8 @@ mod minecarts;
 mod mob_blocks;
 mod mob_gear;
 mod mod_browser;
+#[cfg(feature = "mods")]
+mod mod_browser_recipes;
 mod mod_input;
 #[cfg(feature = "mods")]
 mod mod_recipes;

@@ -53,27 +53,29 @@ pub(super) struct Browser {
     search: Option<EditBox>,
     /// The search text the mod last heard.
     sent: String,
+    /// `set-recipes`' recipes, shown instead of the items.
+    pub(super) recipes: Option<super::mod_browser_recipes::Pages>,
 }
 
 /// Where the panel's parts are this frame.
 #[cfg(feature = "mods")]
-struct Layout {
+pub(super) struct Layout {
     /// The panel's whole area, for clicks that hit none of its parts.
-    area: [f32; 4],
+    pub(super) area: [f32; 4],
     /// The grid's top left corner, its columns and rows.
-    grid: (f32, f32),
-    columns: usize,
-    rows: usize,
+    pub(super) grid: (f32, f32),
+    pub(super) columns: usize,
+    pub(super) rows: usize,
     /// The page arrows' row.
-    arrows_y: f32,
-    search: [f32; 4],
+    pub(super) arrows_y: f32,
+    pub(super) search: [f32; 4],
 }
 #[cfg(feature = "mods")]
 impl Layout {
     fn per_page(&self) -> usize {
         self.columns * self.rows
     }
-    fn width(&self) -> f32 {
+    pub(super) fn width(&self) -> f32 {
         self.columns as f32 * SLOT
     }
     fn slot(&self, n: usize) -> (f32, f32) {
@@ -83,7 +85,7 @@ impl Layout {
         )
     }
     /// The page arrows: backward, then forward.
-    fn arrows(&self) -> [(f32, f32); 2] {
+    pub(super) fn arrows(&self) -> [(f32, f32); 2] {
         [
             (self.grid.0, self.arrows_y),
             (self.grid.0 + self.width() - 12.0, self.arrows_y),
@@ -92,7 +94,7 @@ impl Layout {
 }
 
 #[cfg(feature = "mods")]
-fn inside(p: (f32, f32), [x, y, w, h]: [f32; 4]) -> bool {
+pub(super) fn inside(p: (f32, f32), [x, y, w, h]: [f32; 4]) -> bool {
     p.0 >= x && p.1 >= y && p.0 < x + w && p.1 < y + h
 }
 
@@ -123,6 +125,12 @@ impl Game<'_> {
                     list.iter().map(|s| browser_stack(items, s)).collect()
                 });
             self.mods.browser.stacks = stacks;
+            // The same title again (the mod updating its buttons) keeps the page.
+            let old = self.mods.browser.recipes.take();
+            self.mods.browser.recipes =
+                self.mods.mods.browser_recipes(owner).map(|(title, list)| {
+                    super::mod_browser_recipes::Pages::new(items, title, list, old)
+                });
             self.mods.browser.of = Some((owner, version));
         }
         Some(owner)
@@ -159,8 +167,22 @@ impl Game<'_> {
             .div_ceil(layout.per_page())
             .max(1)
     }
+    /// The stack under the pointer on the panel, an item's or a recipe's,
+    /// as the mod sent it and as a stack.
+    fn browser_pointed_stack(&self, layout: &Layout) -> Option<(BrowserStack, ItemStack)> {
+        if self.mods.browser.recipes.is_some() {
+            let (_, _, sent, stack) = self.recipe_slot_hovered(layout)?;
+            return Some((sent, stack));
+        }
+        let (index, stack) = self.browser_hovered(layout)?;
+        let (_, _, items) = self.mods.mods.browser_items()?;
+        Some((items.get(index)?.clone(), stack))
+    }
     /// The panel's item under the pointer: its index and stack.
     fn browser_hovered(&self, layout: &Layout) -> Option<(usize, ItemStack)> {
+        if self.mods.browser.recipes.is_some() {
+            return None;
+        }
         let first = self.mods.browser.page * layout.per_page();
         (0..layout.per_page()).find_map(|n| {
             let (x, y) = layout.slot(n);
@@ -182,16 +204,9 @@ impl Game<'_> {
         search
     }
 
-    /// Draws the panel over the open container screen, then the carried
-    /// stack or the tooltip again so they stay on top of it.
-    pub(super) fn draw_mod_browser(&mut self, batch: &mut HudBatch) {
-        if self.browser_sync().is_none() {
-            return;
-        }
-        let Some(layout) = self.browser_layout(batch) else {
-            return;
-        };
-        let pages = self.browser_pages(&layout);
+    /// The items' page arrows and grid.
+    fn draw_browser_items(&mut self, batch: &mut HudBatch, layout: &Layout) {
+        let pages = self.browser_pages(layout);
         self.mods.browser.page = self.mods.browser.page.min(pages - 1);
         let page = self.mods.browser.page;
         let cursor = self.cursor;
@@ -255,6 +270,22 @@ impl Game<'_> {
                 horizon_client::widgets::Kind::Button,
             );
         }
+    }
+    /// Draws the panel over the open container screen, then the carried
+    /// stack or the tooltip again so they stay on top of it.
+    pub(super) fn draw_mod_browser(&mut self, batch: &mut HudBatch) {
+        if self.browser_sync().is_none() {
+            return;
+        }
+        let Some(layout) = self.browser_layout(batch) else {
+            return;
+        };
+        let cursor = self.cursor;
+        if self.mods.browser.recipes.is_some() {
+            self.draw_browser_recipes(batch, &layout);
+        } else {
+            self.draw_browser_items(batch, &layout);
+        }
         let hint = self.translate("gui.recipebook.search_hint", "Search...");
         let search = self.browser_search(&layout);
         // The hint shows in an empty box without focus, as the recipe book's.
@@ -264,8 +295,8 @@ impl Game<'_> {
         self.mods.browser.search = Some(search);
         if self.carried.is_some() {
             self.draw_carried(batch);
-        } else if let Some((_, stack)) = self.browser_hovered(&layout) {
-            let lines = self.stack_tooltip(&stack);
+        } else if let Some(stack) = self.browser_pointed_stack(&layout) {
+            let lines = self.stack_tooltip(&stack.1);
             self.draw_tooltip_lines(batch, &lines, cursor.0, cursor.1);
         } else {
             self.draw_slot_tooltip(batch);
@@ -301,6 +332,10 @@ impl Game<'_> {
             return true;
         }
         search.focused = false;
+        if self.mods.browser.recipes.is_some() {
+            return self.browser_recipes_press(&layout, owner, right)
+                || inside(cursor, layout.area);
+        }
         let pages = self.browser_pages(&layout);
         let page = self.mods.browser.page;
         let [back, forward] = layout.arrows();
@@ -405,7 +440,10 @@ impl Game<'_> {
             .browser_sync()
             .and_then(|_| self.browser_layout(&batch))
         {
-            Some(layout) if inside(self.cursor, layout.area) => self.browser_hovered(&layout)?.1,
+            // The panel's stacks as the mod sent them.
+            Some(layout) if inside(self.cursor, layout.area) => {
+                return Some(self.browser_pointed_stack(&layout)?.0);
+            }
             _ => {
                 let slot = self.slot_at(&batch, self.cursor.0, self.cursor.1)?;
                 self.slot_view(slot)?
@@ -422,7 +460,10 @@ impl Game<'_> {
 /// A mod's item as a stack: an item the game has, its components read as
 /// `/give` reads them (ones it can't read are left out).
 #[cfg(feature = "mods")]
-fn browser_stack(items: &horizon_client::items::Items, s: &BrowserStack) -> Option<ItemStack> {
+pub(super) fn browser_stack(
+    items: &horizon_client::items::Items,
+    s: &BrowserStack,
+) -> Option<ItemStack> {
     items.get(&s.item)?;
     let (damage, extra) = if s.components.is_empty() {
         (0, None)
