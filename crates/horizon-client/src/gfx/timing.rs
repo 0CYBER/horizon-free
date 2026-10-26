@@ -60,7 +60,7 @@ struct Markers {
 
 /// The start's one thread; the end's triangle over the whole target (the
 /// pass's scissor keeps one pixel), shading nothing it writes.
-const MARKER: &str =
+pub(super) const MARKER: &str =
     "@vertex fn cover(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
     return vec4<f32>(f32(i & 1u) * 4.0 - 1.0, f32(i >> 1u) * 4.0 - 1.0, 0.0, 1.0);
 }
@@ -254,7 +254,7 @@ impl GpuTimer {
 }
 
 /// The end marker's pipeline for a `format` target, every write masked.
-fn end_pipeline(
+pub(super) fn end_pipeline(
     device: &wgpu::Device,
     module: &wgpu::ShaderModule,
     format: wgpu::TextureFormat,

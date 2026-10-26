@@ -161,9 +161,37 @@ pub(super) struct Draw {
     /// The first vertex.
     pub base: u32,
     pub quads: u32,
-    /// The program that draws it (`ENTITY`, `BLOCK`, `TRANSLUCENT`, `PARTICLE`).
+    /// The kind of program that draws it (`ENTITY`, `BLOCK`, `TRANSLUCENT`, `PARTICLE`).
     pub program: usize,
+    /// The pack's gbuffers program draws it (else Horizon does).
+    pub pack: bool,
+    /// The pack's shadow program draws it into the shadow map too.
+    pub shadow: bool,
     pub slot: u32,
+}
+
+/// Which entity runs a pack's shadow pass draws (2.4, 3.2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Casters {
+    /// `shadow_entities` (or `shadow`) draws entities...
+    pub entities: bool,
+    /// ...only the local player (`shadowPlayer` without `shadowEntities`).
+    pub only_player: bool,
+    /// `shadow_block` (or `shadow`) draws block entities...
+    pub blocks: bool,
+    /// ...only those whose block emits light (`shadowLightBlockEntities`).
+    pub only_lit: bool,
+}
+
+impl Casters {
+    /// Whether the shadow pass draws `span`'s run, of kind `program`.
+    pub fn cast(&self, span: &EntitySpan, program: usize) -> bool {
+        match program {
+            ENTITY => self.entities && (!self.only_player || span.player),
+            BLOCK => self.blocks && (!self.only_lit || span.emissive),
+            _ => false,
+        }
+    }
 }
 
 /// The vertices and per-draw uniforms of the runs a pack draws, rebuilt each frame.
@@ -280,7 +308,8 @@ impl PackEntities {
 
     /// Splits `entities` between the pack, which draws the runs of `spans` its programs cover
     /// (`drawn`: whether it has `gbuffers_entities`, `gbuffers_block` or their fallbacks), and
-    /// Horizon, which draws the rest (`rest`). Uploads the pack's part.
+    /// Horizon, which draws the rest (`rest`). Uploads the pack's part, and the runs its shadow
+    /// programs draw (`shadow`). Runs hidden from the camera only ever cast shadows.
     #[allow(clippy::too_many_arguments)]
     pub fn prepare(
         &mut self,
@@ -290,6 +319,7 @@ impl PackEntities {
         entities: &[Vertex],
         spans: &[EntitySpan],
         drawn: [bool; PROGRAMS],
+        shadow: Casters,
         rest: &mut Vec<Vertex>,
     ) {
         self.draws.clear();
@@ -300,13 +330,15 @@ impl PackEntities {
         rest.extend_from_slice(&entities[..first.min(entities.len())]);
         for (span, range) in runs(entities.len(), spans) {
             let run = &entities[range];
-            let Some(program) = drawn_by_pack(&span, drawn).filter(|_| plain(run)) else {
+            let program = program_of(&span).filter(|_| plain(run));
+            let pack = program.is_some_and(|p| drawn[p]) && !span.hidden;
+            let casts = program.is_some_and(|p| shadow.cast(&span, p));
+            if !pack && !span.hidden {
                 rest.extend_from_slice(run);
+            }
+            let Some(program) = program.filter(|_| (pack || casts) && !run.is_empty()) else {
                 continue;
             };
-            if run.is_empty() {
-                continue;
-            }
             let start = self.scratch.len() as u32;
             self.scratch.extend_from_slice(run);
             let (entity_id, block_id) = match program {
@@ -327,6 +359,8 @@ impl PackEntities {
                 base: start,
                 quads: run.len() as u32 / 4,
                 program,
+                pack,
+                shadow: casts,
                 slot: self.draws.len() as u32,
             });
         }
@@ -388,8 +422,14 @@ pub const PROGRAMS: usize = 4;
 
 /// Which program draws `span`'s run, given which of them (or their fallbacks) the pack has;
 /// `None`: Horizon draws it.
-pub fn drawn_by_pack(span: &EntitySpan, drawn: [bool; PROGRAMS]) -> Option<usize> {
-    let program = if span.stage == render_stage("ENTITIES") {
+#[cfg(test)]
+fn drawn_by_pack(span: &EntitySpan, drawn: [bool; PROGRAMS]) -> Option<usize> {
+    program_of(span).filter(|&p| drawn[p])
+}
+
+/// The kind of program that draws `span`'s run, when a pack may.
+pub fn program_of(span: &EntitySpan) -> Option<usize> {
+    Some(if span.stage == render_stage("ENTITIES") {
         if span.translucent {
             TRANSLUCENT
         } else {
@@ -401,8 +441,7 @@ pub fn drawn_by_pack(span: &EntitySpan, drawn: [bool; PROGRAMS]) -> Option<usize
         PARTICLE
     } else {
         return None;
-    };
-    drawn[program].then_some(program)
+    })
 }
 
 /// Each span with its vertex range: from its start to the next span's (or the end).
@@ -431,7 +470,7 @@ mod tests {
             start,
             stage: render_stage(stage),
             id,
-            translucent: false,
+            ..Default::default()
         };
         let spans = [
             span(2, "ENTITIES", 7),
@@ -458,5 +497,28 @@ mod tests {
         assert_eq!(entity_color(1)[0], 1.0);
         assert!((entity_color(1)[3] - (1.0 - 178.0 / 255.0)).abs() < 1e-6);
         assert_eq!(entity_color(0), [0.0; 4]);
+        // The shadow pass: entities, the player alone, block entities, those that emit light.
+        let all = Casters {
+            entities: true,
+            blocks: true,
+            ..Default::default()
+        };
+        let player = EntitySpan {
+            player: true,
+            ..spans[0]
+        };
+        let lit = EntitySpan {
+            emissive: true,
+            ..spans[2]
+        };
+        assert!(all.cast(&spans[0], ENTITY) && all.cast(&spans[2], BLOCK));
+        assert!(!all.cast(&spans[1], PARTICLE));
+        let some = Casters {
+            only_player: true,
+            only_lit: true,
+            ..all
+        };
+        assert!(!some.cast(&spans[0], ENTITY) && some.cast(&player, ENTITY));
+        assert!(!some.cast(&spans[2], BLOCK) && some.cast(&lit, BLOCK));
     }
 }
