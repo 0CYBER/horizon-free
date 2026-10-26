@@ -852,6 +852,18 @@ impl Game<'_> {
             }
         }
     }
+    /// `InfestedMobEffect.onMobHurt` for a mob: silverfish from half its height up.
+    pub(super) fn mob_infested(&mut self, mob: u32) {
+        if let Some(m) = self.mobs.iter().find(|m| m.id == mob) {
+            let at = [
+                m.position.x,
+                m.position.y + f64::from(m.height()) / 2.0,
+                m.position.z,
+            ];
+            let look = m.view_vector();
+            self.infested_hurt(at, look);
+        }
+    }
     pub(super) fn handle_mob_events(&mut self, events: Vec<MobEvent>) -> Result<()> {
         for e in events {
             match e {
@@ -941,6 +953,7 @@ impl Game<'_> {
                 } => {
                     let mut killed = false;
                     let mut hurt = false;
+                    let mut infested = false;
                     if let Some(t) = self.mobs.iter_mut().find(|m| m.id == target) {
                         let hit = t.damage(amount, source);
                         hurt = hit;
@@ -949,16 +962,23 @@ impl Game<'_> {
                             // The hurt or death sound the mob raised.
                             let center = t.center();
                             for event in std::mem::take(&mut t.outbox) {
-                                if let MobEvent::Sound(s, _, volume, pitch) = event {
-                                    self.audio.play(
-                                        &format!("minecraft:{s}"),
-                                        Some(center),
-                                        volume,
-                                        pitch,
-                                    );
+                                match event {
+                                    MobEvent::Sound(s, _, volume, pitch) => {
+                                        self.audio.play(
+                                            &format!("minecraft:{s}"),
+                                            Some(center),
+                                            volume,
+                                            pitch,
+                                        );
+                                    }
+                                    MobEvent::Infested { .. } => infested = true,
+                                    _ => {}
                                 }
                             }
                         }
+                    }
+                    if infested {
+                        self.mob_infested(target);
                     }
                     if hurt
                         && let Some(Who::Mob(attacker)) = source.attacker
@@ -1005,17 +1025,7 @@ impl Game<'_> {
                 }
                 MobEvent::BecomeStatue { mob } => self.golem_become_statue(mob),
                 MobEvent::EnterHive { mob, hive } => self.bee_enter_hive(mob, hive),
-                MobEvent::Infested { mob } => {
-                    if let Some(m) = self.mobs.iter().find(|m| m.id == mob) {
-                        let at = [
-                            m.position.x,
-                            m.position.y + f64::from(m.height()) / 2.0,
-                            m.position.z,
-                        ];
-                        let look = m.view_vector();
-                        self.infested_hurt(at, look);
-                    }
-                }
+                MobEvent::Infested { mob } => self.mob_infested(mob),
                 MobEvent::Gift { target, item } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == target)
                         && m.saddle_item().is_none()
