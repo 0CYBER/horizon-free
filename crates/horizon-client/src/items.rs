@@ -400,6 +400,36 @@ impl Items {
         self.get(&stack.item).is_some_and(|i| i.fire_resistant)
     }
 
+    /// `ItemStack.canBeHurtBy` for the cactus damage type: a `damage_resistant`
+    /// component naming `minecraft:cactus`, or a damage type tag that holds it.
+    /// (`#minecraft:is_fire`, as on netherite gear, does not.)
+    pub fn resists_cactus(&self, stack: &ItemStack) -> bool {
+        const CACTUS_TAGS: [&str; 5] = [
+            "#minecraft:bypasses_shield",
+            "#minecraft:no_knockback",
+            "#minecraft:panic_environmental_causes",
+            "#minecraft:panic_causes",
+            "#minecraft:sulfur_cube_with_block_immune_to",
+        ];
+        let Some((_, v)) = stack.data().and_then(|data| {
+            data.other
+                .iter()
+                .find(|(key, _)| key == "minecraft:damage_resistant")
+        }) else {
+            return false;
+        };
+        match v.get("types") {
+            Some(horizon_world::nbt::Tag::String(id)) => id
+                .to_string()
+                .is_ok_and(|id| id == "minecraft:cactus" || CACTUS_TAGS.contains(&id.as_str())),
+            Some(horizon_world::nbt::Tag::List(ids)) => ids.iter().any(|t| {
+                matches!(t, horizon_world::nbt::Tag::String(id)
+                    if id.to_string().is_ok_and(|id| id == "minecraft:cactus"))
+            }),
+            _ => false,
+        }
+    }
+
     pub fn load(root: &Path, registry: &BlockRegistry, facts: &BlockFacts) -> Result<Self> {
         let mut block_for_item: HashMap<&str, BlockStateId> = HashMap::new();
         for (i, s) in facts.states.iter().enumerate() {
