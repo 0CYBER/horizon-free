@@ -56,10 +56,9 @@ impl<'a> TooltipDisplay<'a> {
         else {
             return true;
         };
-        let component = horizon_world::nbt::JavaString::from(component);
-        !hidden
-            .iter()
-            .any(|tag| matches!(tag, Tag::String(id) if id == &component))
+        !hidden.iter().any(|tag| {
+            matches!(tag, Tag::String(id) if id.0.iter().copied().eq(component.encode_utf16()))
+        })
     }
 }
 

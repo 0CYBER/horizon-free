@@ -491,7 +491,7 @@ impl Screen {
                     w / 2.0 - 100.0,
                     h / 4.0 + 96.0 + 18.0,
                     200.0,
-                    "Done",
+                    &crate::lang::get_or("gui.done", "Done"),
                     servers::parse_address(address).is_some(),
                     50,
                 ),
@@ -499,7 +499,7 @@ impl Screen {
                     w / 2.0 - 100.0,
                     h / 4.0 + 120.0 + 18.0,
                     200.0,
-                    "Cancel",
+                    &crate::lang::get_or("gui.cancel", "Cancel"),
                     true,
                     51,
                 ),
@@ -532,7 +532,7 @@ impl Screen {
                     w / 2.0 - 100.0,
                     h / 4.0 + 96.0 + 12.0,
                     200.0,
-                    "Join Server",
+                    &crate::lang::get_or("selectServer.select", "Join Server"),
                     servers::parse_address(address).is_some(),
                     52,
                 ),
@@ -540,7 +540,7 @@ impl Screen {
                     w / 2.0 - 100.0,
                     h / 4.0 + 120.0 + 12.0,
                     200.0,
-                    "Cancel",
+                    &crate::lang::get_or("gui.cancel", "Cancel"),
                     true,
                     53,
                 ),
@@ -558,7 +558,7 @@ impl Screen {
                     w / 2.0 - 100.0,
                     h / 4.0 + 120.0 + 18.0,
                     200.0,
-                    "Cancel",
+                    &crate::lang::get_or("gui.cancel", "Cancel"),
                     true,
                     57,
                 ),
@@ -568,7 +568,7 @@ impl Screen {
                     w / 2.0 - 100.0,
                     h / 2.0 + 30.0,
                     200.0,
-                    "Back to Server List",
+                    &crate::lang::get_or("gui.toMenu", "Back to Server List"),
                     true,
                     54,
                 )];
@@ -876,10 +876,10 @@ impl Screen {
             } => {
                 centered(
                     batch,
-                    if index.is_some() {
-                        "Edit Server Info"
+                    &if index.is_some() {
+                        crate::lang::get_or("manageServer.edit.title", "Edit Server Info")
                     } else {
-                        "Add Server"
+                        crate::lang::get_or("manageServer.add.title", "Add Server")
                     },
                     17.0,
                     u32::MAX,
@@ -888,7 +888,7 @@ impl Screen {
                 Self::field(
                     atlas,
                     batch,
-                    "Server Name",
+                    &crate::lang::get_or("manageServer.enterName", "Server Name"),
                     name,
                     (53.0, 66.0),
                     *focus == 0,
@@ -897,7 +897,7 @@ impl Screen {
                 Self::field(
                     atlas,
                     batch,
-                    "Server Address",
+                    &crate::lang::get_or("manageServer.enterIp", "Server Address"),
                     address,
                     (94.0, 106.0),
                     *focus == 1,
@@ -916,7 +916,7 @@ impl Screen {
                 Self::field(
                     atlas,
                     batch,
-                    &crate::lang::get_or("addServer.enterIp", "Server Address"),
+                    &crate::lang::get_or("manageServer.enterIp", "Server Address"),
                     address,
                     (100.0, 116.0),
                     true,
@@ -973,7 +973,7 @@ impl Screen {
             Self::Disconnected { reason, retry } => {
                 centered(
                     batch,
-                    "Connection Lost",
+                    &crate::lang::get_or("disconnect.lost", "Connection Lost"),
                     h / 2.0 - 40.0,
                     rgba(170, 170, 170, 255),
                 );
@@ -1019,7 +1019,7 @@ impl Screen {
             (Self::List { .. }, Some(42)) => {
                 *self = Self::Edit {
                     index: None,
-                    name: "Minecraft Server".into(),
+                    name: crate::lang::get_or("selectServer.defaultName", "Minecraft Server"),
                     address: String::new(),
                     focus: 1,
                     packs: None,

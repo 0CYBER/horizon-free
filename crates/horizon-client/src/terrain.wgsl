@@ -227,8 +227,9 @@ fn sunrise_weight(d: vec3<f32>) -> f32 {
     }
     return best;
 }
-@fragment fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
-    let d = view_ray(in.ndc);
+// The sky's colour along the view ray `d` (a shader pack's sky stage gets it as its input:
+// gfx/native_sky.rs builds that stage from this section).
+fn sky_along_ray(d: vec3<f32>) -> vec3<f32> {
     var color = globals.fog_color.rgb;
     let dist = disc_distance(d, 16.0);
     if dist.x >= 0.0 {
@@ -238,7 +239,10 @@ fn sunrise_weight(d: vec3<f32>) -> f32 {
     if w > 0.0 {
         color = mix(color, globals.sunrise.rgb, w * globals.sunrise.a);
     }
-    return vec4(color, 1.0);
+    return color;
+}
+@fragment fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
+    return vec4(sky_along_ray(view_ray(in.ndc)), 1.0);
 }
 @fragment fn fs_dark_disc(in: SkyOut) -> @location(0) vec4<f32> {
     let d = view_ray(in.ndc);

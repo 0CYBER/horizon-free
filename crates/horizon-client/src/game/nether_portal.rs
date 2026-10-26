@@ -270,6 +270,18 @@ impl Game<'_> {
         self.portals.player.set_inside(pos, PLAYER_DELAY);
         self.portals.client_inside = true;
     }
+    /// The same on a server's client: `Entity.canUsePortal` (alive, not a
+    /// passenger), then only the client's `setAsInsidePortal`, which drives
+    /// the confusion effect (`client_portal_effect`).
+    pub(super) fn client_inside_nether_portal(&mut self) {
+        let alive = self
+            .player
+            .as_ref()
+            .is_some_and(|p| !p.health.dead_or_dying());
+        if alive && self.riding.is_none() {
+            self.portals.client_inside = true;
+        }
+    }
     /// `ServerPlayer.handlePortal` (not while changing dimension: there is no
     /// player then). Players wait `players_nether_portal_default_delay`
     /// ticks, or the creative delay with invulnerable abilities.

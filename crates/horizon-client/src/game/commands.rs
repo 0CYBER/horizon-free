@@ -85,16 +85,16 @@ fn format_double(v: f64) -> String {
 
 impl Game<'_> {
     /// Commands.performCommand for a line without its slash.
-    pub(super) fn run_command(&mut self, command: &str) {
+    pub(super) fn run_command(&mut self, command: &str) -> bool {
         if self.mod_command(command) {
-            return;
+            return true;
         }
         let d = vanilla::game_dispatcher();
         let parse = d.parse(command, &self.ui.registries);
         let result = match parse.executable() {
             Err(e) => {
                 self.syntax_failure(&e, command);
-                return;
+                return false;
             }
             Ok((ctx, _)) => {
                 let ctx = ctx.clone();
@@ -103,6 +103,7 @@ impl Game<'_> {
                 self.run_chain(&root, &ctx)
             }
         };
+        let ok = result.is_ok();
         if let Err(e) = result {
             if e.input.is_some() {
                 self.syntax_failure(&e, command);
@@ -114,6 +115,20 @@ impl Game<'_> {
         if self.player.is_some() {
             self.check_inventory_trigger();
         }
+        ok
+    }
+    /// `run_command` with its output suppressed
+    /// (`CommandSourceStack.withSuppressedOutput`): the player's own source,
+    /// rights and checks, no feedback and no failure in the chat.
+    pub(super) fn run_command_quietly(&mut self, command: &str) -> bool {
+        let quiet = execute::Source {
+            silent: true,
+            ..self.player_source()
+        };
+        let outer = self.command_source.replace(quiet);
+        let ok = self.run_command(command);
+        self.command_source = outer;
+        ok
     }
     fn syntax_failure(&mut self, e: &CommandError, command: &str) {
         self.command_failure(e.message.clone());
@@ -1097,6 +1112,12 @@ impl Game<'_> {
             Target::Player => {
                 // ServerPlayer.teleport: removeVehicle before placing the player.
                 self.stop_riding();
+                // A server's player teleported within their level is placed
+                // there at once: the arrival they were waiting for elsewhere
+                // in it (whose chunks lose their tickets) is abandoned.
+                if let Some(conn) = self.lan_acting {
+                    self.server_trips.retain(|trip| !trip.is(conn));
+                }
                 if let Some(p) = self.player.as_mut() {
                     p.position = v;
                     p.velocity = Vec3::new(0.0, 0.0, 0.0);

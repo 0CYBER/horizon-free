@@ -80,6 +80,7 @@ mod lan_mobs;
 mod lan_mount_menu;
 mod lan_particles;
 mod lan_pvp;
+mod lan_quiet;
 mod lan_screen;
 mod lan_stations;
 mod lan_trading;
@@ -103,6 +104,7 @@ mod mod_render;
 mod mods;
 mod mount_menu;
 mod mounts;
+mod moved_extras;
 mod moving_pistons;
 mod music;
 mod names;
@@ -130,6 +132,7 @@ mod pumpkin;
 mod raids;
 mod recipe_book;
 mod remote;
+mod remote_chunks;
 mod remote_mob_data;
 mod remote_mob_use;
 mod remote_objects;
@@ -145,6 +148,7 @@ mod scoreboard;
 mod screens;
 mod sculk;
 mod sculk_fixture;
+mod server_mods;
 mod server_packs;
 mod server_travel;
 mod shader_packs;
@@ -557,6 +561,8 @@ struct GameLevel<'w> {
     /// Where the chunk tickets let blocks tick.
     tickets: horizon_client::ticket_levels::Levels,
     random_tick_sections: &'w mut horizon_client::random_tick_sections::RandomTickSections,
+    /// Players with each chest open (a trapped chest's signal).
+    lid_openers: &'w HashMap<(i32, i32, i32), i32>,
 }
 struct PlayerCollision {
     y: f64,
@@ -692,6 +698,10 @@ impl LevelAccess for GameLevel<'_> {
         _state: BlockStateId,
         _direction: Direction,
     ) -> i32 {
+        // TrappedChestBlock.getSignal: the players with it open, at most 15.
+        if let Some(count) = self.lid_openers.get(&(pos.x, pos.y, pos.z)) {
+            return (*count).clamp(0, 15);
+        }
         jukebox::jukebox_signals(self.world, self.items, pos).map_or(0, |(signal, _)| signal)
     }
     fn biome_name(&self, pos: BlockPos) -> Option<&str> {
@@ -1504,7 +1514,7 @@ struct Game<'a> {
     pending_bench: Option<(Instant, std::sync::mpsc::Sender<String>)>,
     /// Recent frame times for the performance overlay.
     frame_graph: horizon_client::perf_overlay::FrameGraph,
-    /// Horizon's extras (zoom, FPS counter, keystrokes): `game/extras.rs`.
+    /// Horizon's extras (minimap, auto-reconnect; mods' counters): `game/extras.rs`.
     extras: extras::ExtrasState,
     /// Horizon mods (`game/mods.rs`), none running unless turned on.
     mods: mods::ModsState,
@@ -1572,6 +1582,8 @@ struct Game<'a> {
     /// position) for the guests.
     lan_block_events: Vec<([i32; 3], i32, i32, u32)>,
     lan_entity_events: Vec<(i32, i8, [f64; 3])>,
+    /// Successful crits (attacking guest, hit entity), queued while the hub is taken.
+    lan_critical_hits: Vec<(Option<u32>, i32)>,
     /// Global level events for every guest (`ServerLevel.globalLevelEvent`).
     lan_global_events: Vec<(i32, [i32; 3], i32)>,
     /// `ContainerOpenersCounter`: how many players (the host and the guests)
@@ -2202,7 +2214,7 @@ impl Game<'_> {
         self.player_drop(thrown);
     }
     /// `Player.drop`: the statistics and a thrown item entity in front of the player.
-    fn player_drop(&mut self, thrown: ItemStack) {
+    pub(super) fn player_drop(&mut self, thrown: ItemStack) {
         let Some(eye) = self.eye_position() else {
             return;
         };
@@ -2264,7 +2276,13 @@ impl Game<'_> {
                 let speed = self.world.random.next_float() * 0.2 + 0.1;
                 item.move_towards_closest_space(&self.world, self.res.facts(), speed);
             }
-            let alive = item.tick(&self.world, self.res.facts(), self.collision, no_physics);
+            let alive = item.tick(
+                &self.world,
+                self.res.facts(),
+                self.collision,
+                no_physics,
+                &self.res.motion().fluids,
+            );
             cells.moved(i, item.previous, item.position);
             // ItemEntity.tick: merge every 2 ticks while moving between
             // blocks, every 40 otherwise, before the lifetime check.
@@ -2473,6 +2491,7 @@ impl Game<'_> {
             spill: &mut self.spill,
             tickets: self.tickets.levels(),
             random_tick_sections: &mut self.random_tick_sections,
+            lid_openers: &self.lid_openers,
         };
         let result = f(self.res.behaviours(), &mut level, &mut self.block_ticks);
         self.flush_spill();
@@ -3328,6 +3347,7 @@ impl Game<'_> {
         self.pad_rumble(horizon_client::gamepad::Rumble::BlockBroken);
         // ServerPlayerGameMode.destroyBlock.
         let state = self.world.block(pos[0], pos[1], pos[2]);
+        let broken = state;
         let facts = self.res.facts().get(state).clone();
         let state = self.crack_mined_pot(pos, state);
         // Block.playerWillDestroy: mining their gold angers all nearby piglins.
@@ -3359,6 +3379,9 @@ impl Game<'_> {
                 creative,
             )
         });
+        if removed {
+            self.mod_block_event(pos, broken, false);
+        }
         if removed && !creative {
             let held = self.held().cloned();
             self.mine_block_with_held(&facts.name, facts.hardness);
@@ -3701,6 +3724,7 @@ impl Game<'_> {
             return Ok(true);
         };
         let target = [pos.x, pos.y, pos.z];
+        self.mod_block_event(target, state, true);
         if let Some(entity) = BlockEntity::for_block(&self.res.facts().get(state).name) {
             let key = (target[0], target[1], target[2]);
             self.world.block_entities.insert(key, entity);
@@ -4197,6 +4221,9 @@ impl Game<'_> {
         self.with_level(|b, level, ticks| b.notify_written(level, ticks, position, flags));
     }
     fn tick(&mut self) -> Result<()> {
+        if self.agent.hold_server {
+            return Ok(());
+        }
         self.tick_debug_keys()?;
         self.tick_debug_charts();
         if self.remote.is_some() {
@@ -4236,6 +4263,7 @@ impl Game<'_> {
         self.update_totem_ready();
         self.tick_command_extras();
         self.tick_mods();
+        self.tick_server_mods();
         let camera_eye = self.camera_eye_height();
         let stick = self.pad_move();
         if self.riding.is_some() && self.player.is_some() {
@@ -4746,7 +4774,10 @@ impl Game<'_> {
         if capture && !self.focused {
             return;
         }
-        if !capture {
+        if capture {
+            // The inventory's screens are behind us: no drag survives them.
+            self.reset_inventory_clicks();
+        } else {
             self.stop_mining();
         }
         // The real pointer takes over from an agent's.
@@ -5585,7 +5616,18 @@ impl Game<'_> {
             self.draw_inventory_effects(batch, (ox, oy), 176);
         }
     }
+    /// `AbstractContainerScreen` keeps `isQuickCrafting` and the drag it
+    /// belongs to on the screen; Horizon keeps them on the game, so they are
+    /// dropped when a screen closes. A press whose release never reaches the
+    /// screen (the pointer left the window, or the screen closed first) would
+    /// otherwise leave every later press on every later screen swallowed.
+    pub(super) fn reset_inventory_clicks(&mut self) {
+        self.inv_clicks = Default::default();
+        self.inv_drag = None;
+        self.last_inv_click = None;
+    }
     pub(super) fn close_container(&mut self) {
+        self.reset_inventory_clicks();
         self.close_station();
         self.mount_closed();
         self.recipe_ui.reset_screen();
@@ -5604,6 +5646,8 @@ impl Game<'_> {
         self.craft_size = 2;
         self.craft_table = None;
         if let Some(key) = self.container.take() {
+            // A cart's or chest boat's items go back to it.
+            self.close_cart_container(key);
             self.container_opener_event(key, false);
             self.post_block_game_event(
                 "minecraft:container_close",
@@ -5643,7 +5687,6 @@ impl Game<'_> {
             self.world.modified.insert((key.0 >> 4, key.2 >> 4));
         }
         self.close_ender_chest();
-        self.close_cart_container();
     }
     /// `quickMoveStack` of the open plain menu for a shift-click.
     fn inventory_quick_move(&mut self, slot: usize) -> bool {
@@ -6523,7 +6566,11 @@ impl Game<'_> {
         use horizon_client::menu::Input;
         let button = i32::from(right);
         if self.remote.is_some() {
-            self.remote_throw(right, input);
+            if self.screen == Screen::Creative {
+                self.remote_creative_drop(right);
+            } else {
+                self.remote_throw(right, input);
+            }
             return;
         }
         let before = self.carried.clone();
@@ -6884,6 +6931,9 @@ impl Game<'_> {
         self.prepare_entity_culling(camera);
         self.prepare_trims();
         self.mark_entity(out.len(), "minecraft:entity_flame");
+        // One scan for both passes that draw them (block entities below and the
+        // overlay near the end of this function).
+        let cracks = self.cracks(camera);
         let fire_yaw = if self.camera_type == perspective::CameraType::ThirdPersonFront {
             self.yaw + 180.0
         } else {
@@ -7109,7 +7159,7 @@ impl Game<'_> {
                     .render(&scene, visible, &mut out);
             }
             self.mark_stage(out.len(), "DESTROY");
-            for (pos, stage) in self.cracks(camera) {
+            for &(pos, stage) in &cracks {
                 let state = self.world.block(pos[0], pos[1], pos[2]);
                 self.res
                     .block_entity_render()
@@ -7252,7 +7302,7 @@ impl Game<'_> {
         );
         // Breaking progress overlays (destroy_stage_0..9): ours and the other players'.
         self.mark_stage(out.len(), "DESTROY");
-        for (pos, stage) in self.cracks(camera) {
+        for &(pos, stage) in &cracks {
             let o = (glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]))
                 - camera)
                 .as_vec3();
@@ -7300,6 +7350,20 @@ impl Game<'_> {
     /// other players' (`renderBlockDestroyAnimation`: within 32 blocks of the camera, the
     /// furthest progress on each block).
     fn cracks(&self, camera: glam::DVec3) -> Vec<([i32; 3], [f32; 2])> {
+        // `destroy_stage_0` .. `destroy_stage_9`: the sprite name by stage, so the
+        // lookup does not format a string per crack.
+        const DESTROY_STAGES: [&str; 10] = [
+            "block/destroy_stage_0",
+            "block/destroy_stage_1",
+            "block/destroy_stage_2",
+            "block/destroy_stage_3",
+            "block/destroy_stage_4",
+            "block/destroy_stage_5",
+            "block/destroy_stage_6",
+            "block/destroy_stage_7",
+            "block/destroy_stage_8",
+            "block/destroy_stage_9",
+        ];
         let mut stages: Vec<([i32; 3], u32)> = Vec::new();
         let mut add = |pos: [i32; 3], stage: u32| match stages.iter_mut().find(|c| c.0 == pos) {
             Some(c) => c.1 = c.1.max(stage),
@@ -7325,11 +7389,8 @@ impl Game<'_> {
                 d.length_squared() <= 1024.0
             })
             .filter_map(|(pos, stage)| {
-                let r = self
-                    .gui
-                    .atlas
-                    .sprites
-                    .get(&format!("block/destroy_stage_{stage}"))?;
+                let name = DESTROY_STAGES.get(stage as usize)?;
+                let r = self.gui.atlas.sprites.get(*name)?;
                 Some((pos, [r.u0, r.v0]))
             })
             .collect()
@@ -7594,10 +7655,9 @@ impl Game<'_> {
             self.stats
                 .custom("damage_dealt", (actual * 10.0).round() as i32);
             if crit {
-                self.particles.tracking_emitter(
-                    horizon_client::particles::ParticleOptions::simple(
-                        horizon_client::particles::ParticleType::Crit,
-                    ),
+                self.critical_hit(
+                    self.lan_acting,
+                    self.mobs[index].id as i32,
                     feet,
                     width,
                     height,
@@ -9908,8 +9968,7 @@ impl Game<'_> {
         } else if self.carried.is_none()
             && let Some(item) = hovered
         {
-            let lines = self.stack_tooltip(&item);
-            self.draw_tooltip_lines(batch, &lines, self.cursor.0, self.cursor.1);
+            self.draw_stack_tooltip(batch, &item, self.cursor.0, self.cursor.1);
         }
         self.draw_inventory_effects(batch, (ox, oy), Creative::WIDTH as i32);
     }
@@ -10292,8 +10351,6 @@ impl Game<'_> {
             Vec::new()
         };
         let mut hud = horizon_client::spans::time("hud", || self.hud(size));
-        // Map textures changed since the last drawn frame (game/maps.rs).
-        hud.patches.append(&mut self.map_patches);
         // LevelLoadingScreen (Reason.OTHER) draws the title's panorama.
         let title = self.title.is_some()
             || self.loading_reason() == Some(horizon_client::level_loading::Reason::Other);
@@ -10395,6 +10452,10 @@ impl Game<'_> {
         } else {
             self.shader_pack_inputs(camera, alpha as f32)
         };
+        // Map textures and font glyphs changed while building this frame's
+        // geometry (game/maps.rs, world text) upload with this batch; draining
+        // map_patches any earlier leaves them a frame behind.
+        hud.patches.append(&mut self.map_patches);
         let entity_spans = std::mem::take(self.entity_spans.get_mut());
         let frame = Frame {
             weather: &weather,
@@ -10507,7 +10568,10 @@ impl Game<'_> {
             menu_blur: self.menu_blur(),
         };
         let result = match self.renderer.as_mut() {
-            Some(renderer) => horizon_client::spans::time("renderer", || renderer.render(&frame)),
+            Some(renderer) => {
+                renderer.set_pass_timing(self.debug);
+                horizon_client::spans::time("renderer", || renderer.render(&frame))
+            }
             None => Err("renderer".into()),
         };
         // Restore storage even when rendering fails (for example, a lost surface).
@@ -11007,11 +11071,7 @@ impl Game<'_> {
                     bytes += size;
                 }
             }
-            for c in unloaded {
-                for sy in 0..(HEIGHT / 16) {
-                    renderer.remove((c.x, sy, c.z));
-                }
-            }
+            renderer.remove_columns(unloaded.iter().map(|c| (c.x, c.z)));
             if let (Some(lod), Some(player)) = (&mut self.lod, &self.player) {
                 let lod_distance = self.settings.horizon.lod_distance_on(&renderer.info);
                 lod.set_near_loading(self.streaming.busy());
@@ -11307,7 +11367,6 @@ impl ApplicationHandler for Game<'_> {
                         && self.sleeping.is_none()
                         && self.player.is_some()
                         && !self.mod_wheel(d)
-                        && !self.extras_scroll(d)
                         && let Some((wheel, (_, vertical_steps))) =
                             self.mouse
                                 .on_scroll(raw_x, raw_y, discrete, wheel_sensitivity)
@@ -11718,7 +11777,6 @@ impl ApplicationHandler for Game<'_> {
                     let PhysicalKey::Code(key) = event.physical_key else {
                         return Ok(());
                     };
-                    self.extras_key(key, event.state == ElementState::Pressed, event.repeat);
                     self.mod_key(key, event.state == ElementState::Pressed, event.repeat);
                     // key.smoothCamera toggles the cinematic camera.
                     if self.screen == Screen::Playing
@@ -11811,6 +11869,7 @@ impl ApplicationHandler for Game<'_> {
                     }
                     self.extras_frame(elapsed);
                     self.mods_frame(elapsed);
+                    self.poll_moved_extras();
                     self.extras_retry()?;
                     self.apply_mouse_look();
                     self.pad_look(elapsed.as_secs_f32());
@@ -12352,6 +12411,7 @@ impl<'a> Game<'a> {
             lan_events: Vec::new(),
             lan_block_events: Vec::new(),
             lan_entity_events: Vec::new(),
+            lan_critical_hits: Vec::new(),
             lan_global_events: Vec::new(),
             lid_openers: HashMap::new(),
             lan_acting: None,
@@ -12982,6 +13042,14 @@ fn build_renderer(
 ) -> Result<Renderer> {
     let assets = &pack.render;
     let atlas = &gui.atlas;
+    // The new renderer's atlas texture starts from `HudAtlas.pixels`, which
+    // holds the textures but never a glyph rasterized at run time. The font's
+    // cache still answers with the rects it drew into the previous renderer's
+    // texture, so forget them: the glyphs that are drawn again are placed into
+    // this texture (as `ui_theme` does when its atlas changes). Without this,
+    // Chinese and Japanese menu labels go blank when the loading screen hands
+    // over to the game.
+    atlas.font.reset_cache();
     let mut renderer = pollster::block_on(Renderer::new(
         window,
         offscreen,
@@ -13028,6 +13096,12 @@ fn loading_renderer(
         Some(atlas) => (atlas.pixels.as_slice(), atlas.width, atlas.height),
         None => (EMPTY_HUD.as_slice(), 1, 1),
     };
+    // A glyph rasterized into an earlier texture is not in these pixels; the
+    // new texture gets it again when the character is drawn (see
+    // `build_renderer`).
+    if let Some(atlas) = atlas {
+        atlas.font.reset_cache();
+    }
     let mut renderer = pollster::block_on(Renderer::new(
         window,
         offscreen,
@@ -13161,6 +13235,7 @@ fn start_game<'a>(
     // Benchmarks measure the game alone.
     if game.options.benchmark.is_none() {
         game.mods.dev = game.options.dev_mods.clone();
+        game.start_moved_extras();
         game.start_mods();
     }
     game.start_agent_control()?;

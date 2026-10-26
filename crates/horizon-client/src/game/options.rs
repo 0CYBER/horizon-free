@@ -78,6 +78,10 @@ impl Game<'_> {
             .unwrap_or_default()
             .join("options.txt")
     }
+    /// `shaderpacks/` beside `options.txt`.
+    pub(super) fn shader_packs_dir() -> std::path::PathBuf {
+        Self::options_path().with_file_name(horizon_client::shader_pack_list::DIR)
+    }
     pub(super) fn gui_size(&self) -> (f32, f32) {
         let size = self
             .renderer
@@ -227,6 +231,17 @@ impl Game<'_> {
                 }
                 Event::OpenModFolder => {
                     let dir = Self::options_path().with_file_name(horizon_client::mod_list::DIR);
+                    let _ = std::fs::create_dir_all(&dir);
+                    super::packs::open_folder(&dir);
+                }
+                Event::ListShaderPacks => {
+                    self.settings.shader_packs =
+                        horizon_client::shader_pack_list::scan(&Self::shader_packs_dir());
+                }
+                // Saved; the next frame's `shader_pack_inputs` loads the pick.
+                Event::ShaderPack => self.settings.save(&Self::options_path()),
+                Event::OpenShaderPackFolder => {
+                    let dir = Self::shader_packs_dir();
                     let _ = std::fs::create_dir_all(&dir);
                     super::packs::open_folder(&dir);
                 }

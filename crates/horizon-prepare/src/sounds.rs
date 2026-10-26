@@ -1,5 +1,5 @@
 //! The pinned version's sounds, title panorama, Unifont glyphs and built-in resource packs
-//! from the player's own official launcher install, each object checked against the asset index's SHA-1, copied into
+//! from the player's own launcher install, each object checked against the asset index's SHA-1, copied into
 //! `.local/horizon-client/<version>/assets` where the game reads them (tools/fetch_sounds.py and
 //! the tools/lab.py functions it called). Nothing is downloaded.
 
@@ -18,11 +18,11 @@ use std::path::{Path, PathBuf};
 fn launcher_assets(
     lock: &Lock,
     manifest: &Value,
-    minecraft: &Path,
+    files: &artifacts::GameFiles,
     cached_index: &Path,
     log: Log,
 ) -> Result<(PathBuf, PathBuf, Vec<u8>), String> {
-    let assets = minecraft.join("assets");
+    let assets = files.folder.join("assets");
     let info = manifest
         .get("assetIndex")
         .ok_or("The version JSON has no assetIndex")?;
@@ -44,7 +44,7 @@ fn launcher_assets(
         return Err(format!(
             "Missing {}. {}",
             index.display(),
-            artifacts::launcher_hint(version)
+            files.hint(version)
         ));
     }
     let bytes = fs::read(&index).map_err(|e| format!("{}: {e}", index.display()))?;
@@ -240,13 +240,13 @@ pub(crate) struct Assets {
 impl Assets {
     pub(crate) fn load(root: &Path, minecraft: Option<&Path>, log: Log) -> Result<Self, String> {
         let lock = Lock::read(root)?;
-        let minecraft = artifacts::minecraft_dir(minecraft);
-        let manifest = artifacts::import_manifest(&lock, &minecraft)?;
+        let files = artifacts::game_files(minecraft, &lock.version);
+        let manifest = artifacts::import_manifest(&lock, &files)?;
         let target = root.join(".local/horizon-client").join(&lock.version);
         let (store, index, bytes) = launcher_assets(
             &lock,
             &manifest,
-            &minecraft,
+            &files,
             &target.join("asset-index.json"),
             log,
         )?;
@@ -677,7 +677,11 @@ mod tests {
         for missing in ["store", "install", "last-object"] {
             let f = Fixture::new(&format!("optional-panorama-{missing}"));
             // The JARs and manifest were imported earlier; the launcher need not remain.
-            artifacts::import_manifest(&Lock::read(&f.root).unwrap(), &f.minecraft).unwrap();
+            artifacts::import_manifest(
+                &Lock::read(&f.root).unwrap(),
+                &artifacts::game_files(Some(&f.minecraft), "9.9"),
+            )
+            .unwrap();
             let target = f.root.join(".local/horizon-client/9.9/assets");
             for name in PANORAMA {
                 let path = target.join(name);
