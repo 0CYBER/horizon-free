@@ -471,13 +471,7 @@ pub fn die(m: &mut Mob, d: &Death, sequences: &mut RandomSequences) -> (Vec<Drop
         }
     }
     // dropExperience.
-    let drops_experience = match s {
-        Species::Tadpole => false,
-        Species::Hoglin => true,
-        s if is_monster(s) => true,
-        _ => !m.is_baby(),
-    };
-    if killed_by_player && drops_experience && d.mob_drops {
+    if killed_by_player && drops_experience(m) && d.mob_drops {
         let mut amount = base_experience(m);
         while amount > 0 {
             let value = orb_value(amount);
@@ -499,6 +493,16 @@ fn roll(
             d.loot.roll_entity(table, random, params)
         }
         None => Vec::new(),
+    }
+}
+/// `LivingEntity.shouldDropExperience`: babies drop none, except monsters and
+/// hoglins; tadpoles never do.
+pub fn drops_experience(m: &Mob) -> bool {
+    match m.species() {
+        Species::Tadpole => false,
+        Species::Hoglin => true,
+        s if is_monster(s) => true,
+        _ => !m.is_baby(),
     }
 }
 /// `getBaseExperienceReward` (no vanilla enchantment changes mob experience).

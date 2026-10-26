@@ -685,11 +685,12 @@ impl Game<'_> {
         let by_player = killer.is_some() || m.ai.last_hurt_by_player > 0;
         let mut dying = m.clone();
         // LivingEntity.die: the death is heard, and a sculk catalyst nearby
-        // takes the experience (before the loot is dropped).
+        // takes the experience (before the loot is dropped). It takes what
+        // would drop, whoever killed the mob.
         self.sculk_mob_died(m);
         let consumed =
             self.catalyst_takes_experience([m.position.x, m.position.y, m.position.z], |_| {
-                if by_player {
+                if horizon_client::mobs::drops::drops_experience(&dying) {
                     horizon_client::mobs::drops::base_experience(&mut dying).max(0) as u32
                 } else {
                     0
