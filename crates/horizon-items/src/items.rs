@@ -1619,6 +1619,22 @@ mod bucket_use_tests {
     }
 }
 
+/// The items of the prepared resources, when they are on this machine, for
+/// tests: the block registry and facts as the client's `Assets::load` reads them.
+#[cfg(test)]
+pub(crate) fn prepared_items() -> Option<Items> {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../.local/horizon-client/26.3");
+    if !root.join("items.json").exists() {
+        return None;
+    }
+    let (registry, _) =
+        BlockRegistry::from_facts_json_with_flags(fs::File::open(root.join("facts.json")).ok()?)
+            .ok()?;
+    let facts = BlockFacts::load(&root, &registry).ok()?;
+    Items::load(&root, &registry, &facts).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1639,22 +1655,6 @@ mod tests {
             killed_by_player: block.is_empty(),
             explosion_radius: None,
         }
-    }
-
-    /// The items of the prepared resources, when they are on this machine
-    /// (the block registry and facts as the client's `Assets::load` reads them).
-    fn prepared_items() -> Option<Items> {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.local/horizon-client/26.3");
-        if !root.join("items.json").exists() {
-            return None;
-        }
-        let (registry, _) = BlockRegistry::from_facts_json_with_flags(
-            std::fs::File::open(root.join("facts.json")).ok()?,
-        )
-        .ok()?;
-        let facts = BlockFacts::load(&root, &registry).ok()?;
-        Items::load(&root, &registry, &facts).ok()
     }
 
     #[test]
@@ -1746,7 +1746,7 @@ mod tests {
     /// `EnchantRandomlyFunction`) put their enchantments on the stack.
     #[test]
     fn loot_enchant_functions_enchant_the_rolled_item() {
-        let Some(items) = prepared_items() else {
+        let Some(items) = super::prepared_items() else {
             return;
         };
         let props = BTreeMap::new();
@@ -1807,7 +1807,7 @@ mod tests {
     /// Mending book, then `set_count` uniform 1..64, is 46.
     #[test]
     fn a_single_level_enchantment_draws_no_level() {
-        let Some(items) = prepared_items() else {
+        let Some(items) = super::prepared_items() else {
             return;
         };
         let props = BTreeMap::new();
