@@ -158,7 +158,7 @@ fn project_of(p: &index::Project) -> Option<Project> {
         title: p.name.clone(),
         summary: p.summary.clone(),
         author: p.authors.join(", "),
-        downloads: 0,
+        downloads: p.downloads,
         page: format!("{SITE}/{}", p.id),
         icon: p.icon.clone(),
         license: p.license.clone(),
@@ -218,14 +218,19 @@ fn matches(p: &index::Project, text: &str) -> bool {
         .all(|word| hay.contains(&word.to_lowercase()))
 }
 
-/// The projects of the query's kind whose words match, for this game unless `everything`.
+/// The projects of the query's kind whose words match, for this game unless `everything`: the
+/// most downloaded first.
 fn search(index: &Index, query: &Query) -> Vec<Project> {
-    index
+    let mut found: Vec<Project> = index
         .projects
         .iter()
         .filter(|p| kind_of(&p.kind) == Some(query.kind) && matches(p, &query.text))
         .filter(|p| query.everything || p.versions.iter().any(|v| v.game == GAME))
         .filter_map(project_of)
+        .collect();
+    found.sort_by_key(|p| std::cmp::Reverse(p.downloads));
+    found
+        .into_iter()
         .skip(query.offset)
         .take(query.limit)
         .collect()

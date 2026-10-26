@@ -968,9 +968,7 @@ impl Launcher {
             if !p.author.is_empty() {
                 by.push(format!("by {}", p.author));
             }
-            if p.source != SourceId::Horizon {
-                by.push(format!("{} downloads", count(p.downloads)));
-            }
+            by.push(format!("{} downloads", count(p.downloads)));
             by.push(format!("from {}", p.source.label()));
             if !p.license.is_empty() {
                 by.push(p.license.clone());
