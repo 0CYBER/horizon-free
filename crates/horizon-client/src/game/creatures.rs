@@ -2560,6 +2560,7 @@ impl Game<'_> {
             .items()
             .get(&item)
             .is_some_and(|i| i.max_damage > 0);
+        let player_at = self.eye_position();
         let m = &mut self.mobs[index];
         if !m.alive() {
             return Ok(false);
@@ -2815,6 +2816,24 @@ impl Game<'_> {
                 } else {
                     consume = true;
                 }
+            }
+            // Parrot.mobInteract: #parrot_poisonous_food (a cookie) poisons the
+            // parrot for 45 s and then hurts it with a player attack of
+            // Float.MAX_VALUE, which an invulnerable one shrugs off.
+            Species::Parrot
+                if self
+                    .res
+                    .items()
+                    .item_tags
+                    .get("minecraft:parrot_poisonous_food")
+                    .is_some_and(|t| t.contains(&*item)) =>
+            {
+                consume = true;
+                m.add_effect("minecraft:poison", 900, 0);
+                m.damage(
+                    f32::MAX,
+                    horizon_client::mobs::Damage::player(player_at.unwrap_or(center)),
+                );
             }
             // Parrot.mobInteract: parrot food may tame a wild one (one time in
             // ten); a parrot never takes it as Animal food (isFood is false).
