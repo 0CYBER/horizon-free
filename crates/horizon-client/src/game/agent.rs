@@ -390,6 +390,9 @@ impl Game<'_> {
         Ok(())
     }
     pub(super) fn screen_label(&self) -> &'static str {
+        if self.dialog_open() {
+            return "dialog";
+        }
         if self.title.is_some() {
             return "title";
         }
@@ -416,6 +419,7 @@ impl Game<'_> {
             Screen::Friends => "friends",
             Screen::CommandBlock => "command-block",
             Screen::Win => "win",
+            Screen::Mod => "mod",
         }
     }
     pub(super) fn inventory_counts(&self) -> BTreeMap<String, i64> {
@@ -484,6 +488,7 @@ impl Game<'_> {
             })
         });
         json!({
+            "dialog": self.dialog_status(),
             "screen": self.screen_label(),
             "menu": self.title.as_ref().map(|_| self.title_value()),
             "world": (self.title.is_none()).then(|| match &self.integrated {

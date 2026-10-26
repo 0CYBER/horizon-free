@@ -144,6 +144,8 @@ pub(super) struct GuestSwap {
     adv_loaded: bool,
     last_inventory: u64,
     death_cause: Option<String>,
+    /// The guest's own damage record, in place while they act.
+    combat: super::combat::CombatTracker,
     /// The guest whose turn this one nests in, if any.
     acting: (Option<u32>, Option<String>, Option<u128>),
     /// The packets queued for that guest.
@@ -257,6 +259,14 @@ impl Game<'_> {
             host.play.insert(conn, play);
             return None;
         };
+        // The guest's own CombatTracker: damage to them is not the host's.
+        // A new body starts with no record of the last one.
+        let guest_combat = if fresh {
+            Default::default()
+        } else {
+            self.guest_combat.remove(&conn).unwrap_or_default()
+        };
+        let host_combat = std::mem::replace(&mut self.combat, guest_combat);
         self.potions.swap_player(&mut g.effects, &mut play.potions);
         motion.position = Vec3::new(g.position[0], g.position[1], g.position[2]);
         motion.ground.on_ground = g.on_ground;
@@ -265,6 +275,8 @@ impl Game<'_> {
         motion.sprinting = g.sprinting;
         motion.may_fly = g.creative() || g.game_mode == SPECTATOR;
         motion.flying = g.flying;
+        // FireworkRocketItem.use boosts only a gliding player.
+        motion.fall_flying = g.fall_flying;
         motion.invulnerable = motion.may_fly;
         let _ = motion.set_health(g.health, false);
         motion.health.food.food = g.food;
@@ -421,6 +433,7 @@ impl Game<'_> {
             swings,
             projectiles,
             modifiers,
+            combat: host_combat,
         })
     }
 
@@ -472,12 +485,16 @@ impl Game<'_> {
             adv_loaded,
             last_inventory,
             death_cause,
+            combat,
             acting,
             packets,
             swings,
             projectiles,
             modifiers,
         } = swap;
+        // The guest's damage record back into their slot, the host's in place.
+        let guest_combat = std::mem::replace(&mut self.combat, combat);
+        self.guest_combat.insert(conn, guest_combat);
         play.modifiers = std::mem::replace(&mut self.applied_modifiers, modifiers);
         // What the guest shot is theirs (Projectile.setOwner).
         for p in self.creatures.projectiles.iter_mut().skip(projectiles) {
@@ -1261,28 +1278,9 @@ impl Game<'_> {
         host: &LanHost,
         stack: &Option<horizon_protocol::item::Stack>,
     ) -> Option<ItemStack> {
-        use horizon_protocol::item::{Component, component};
         let s = stack.as_ref()?;
-        let name = host
-            .hub
-            .item_name(s.item)
-            .unwrap_or_else(|| "minecraft:air".into());
-        let mut out = ItemStack::new(&name, s.count.max(1) as u32);
-        out.damage = s.damage().max(0) as u32;
-        if let Some(Component::Enchantments(list)) = s.component(component::ENCHANTMENTS) {
-            for (id, level) in list {
-                if let Some(e) = host.hub.enchantment_name(*id) {
-                    out.enchant(&e, *level as u32);
-                }
-            }
-        }
-        if let Some(Component::Potion {
-            potion: Some(id), ..
-        }) = s.component(component::POTION_CONTENTS)
-            && let Some(potion) = host.hub.registry_name("minecraft:potion", *id)
-        {
-            out = out.with_potion(potion);
-        }
+        let mut out = host.hub.stack_from_network(s);
+        out.count = out.count.max(1);
         Some(out)
     }
 
@@ -1810,14 +1808,13 @@ impl Game<'_> {
                         g.use_delay -= 1;
                     }
                 });
-                // ServerPlayerGameMode.handleBlockBreakAction: a creative
-                // player's START breaks the block once (destroyAndAck) and
-                // leaves nothing being destroyed; its client sends no STOP.
-                // Kept, the dig broke whatever was put there next, every
-                // destroy delay, for as long as the player broke nothing else.
+                // ServerPlayerGameMode.handleBlockBreakAction: creative and
+                // instant survival STARTs finish without a STOP from the client.
+                // tick_mining clears mining on completion; forget the START too,
+                // so a flower or crop planted here later is not broken again.
                 if digging.is_some()
-                    && host.hub.guests[gi].creative()
                     && let Some(play) = host.play.get_mut(&conn)
+                    && (host.hub.guests[gi].creative() || play.mining.is_none())
                 {
                     play.digging = None;
                 }
@@ -1876,31 +1873,34 @@ impl Game<'_> {
                 let drops = (g.game_mode != SPECTATOR)
                     .then(|| [at[0], at[1] + g.eye_height() - 0.3, at[2]]);
                 let cause = host.play.get_mut(&conn).and_then(|p| p.death_cause.take());
-                let message = match cause {
-                    // ServerPlayer.die: the death message, to everyone unless
-                    // the player's team hides it.
-                    Some(key) if self.ui.rules.bool("show_death_messages") => {
-                        let text = horizon_client::text::Text::translate(
-                            &key,
-                            &[self.player_text(&name, uuid)],
-                        );
-                        let message = horizon_client::lan::data::component_nbt(&text.component());
-                        let team = self.score.board.players_team(&name);
-                        if horizon_client::scoreboard::own_death_message_shown(team) {
-                            host.hub.system_message(message.clone());
-                            if self.options.dedicated.is_some() {
-                                super::dedicated::log(
-                                    "INFO",
-                                    &format!("System chat: {}", text.plain()),
-                                );
-                            } else if self.player.is_some() {
-                                self.system_message(text);
-                            }
+                // ServerPlayer.die: with showDeathMessages, the message goes to
+                // the dying player's death screen and to everyone the team lets
+                // see it; without it, the death screen gets an empty one.
+                let message = if self.ui.rules.bool("show_death_messages") {
+                    let me = self.player_text(&name, uuid);
+                    let text = match cause {
+                        Some(key) => horizon_client::text::Text::translate(&key, &[me]),
+                        None if at[1] < f64::from(horizon_client::chunk::MIN_Y - 64) => {
+                            horizon_client::text::Text::translate("death.attack.outOfWorld", &[me])
                         }
-                        message
+                        None => self.guest_death_message(conn, me),
+                    };
+                    let message = horizon_client::lan::data::component_nbt(&text.component());
+                    let team = self.score.board.players_team(&name);
+                    if horizon_client::scoreboard::own_death_message_shown(team) {
+                        host.hub.system_message(message.clone());
+                        if self.options.dedicated.is_some() {
+                            super::dedicated::log(
+                                "INFO",
+                                &format!("System chat: {}", text.plain()),
+                            );
+                        } else if self.player.is_some() {
+                            self.system_message(text);
+                        }
                     }
-                    Some(_) => literal(""),
-                    None => literal(&format!("{name} died")),
+                    message
+                } else {
+                    literal("")
                 };
                 host.hub.send_to(
                     conn,
@@ -1914,6 +1914,21 @@ impl Game<'_> {
                 self.spawn_orbs(at, reward);
             }
         }
+    }
+
+    /// `ServerPlayer.die`'s message from a guest's own `CombatTracker`, which
+    /// sits in `guest_combat` between turns.
+    fn guest_death_message(
+        &mut self,
+        conn: u32,
+        me: horizon_client::text::Text,
+    ) -> horizon_client::text::Text {
+        let mut tracker = self.guest_combat.remove(&conn).unwrap_or_default();
+        std::mem::swap(&mut self.combat, &mut tracker);
+        let text = self.combat_death_message_for(me);
+        std::mem::swap(&mut self.combat, &mut tracker);
+        self.guest_combat.insert(conn, tracker);
+        text
     }
 
     /// `Player.tick`'s sleep counter, and `LivingEntity.tick`'s wake-up of a
@@ -2096,6 +2111,12 @@ impl Game<'_> {
             let _ = w.apply_fire_contact();
             let _ = w.server_hazards_tick(in_wall);
             let mut events = std::mem::take(&mut w.player.events);
+            // WitherRoseBlock.entityInside along those moves.
+            for event in &events {
+                if matches!(event, MotionEvent::InsideWitherRose) {
+                    game.wither_rose_contact();
+                }
+            }
             // ServerGamePacketListenerImpl.handleMovePlayer:
             // Player.checkMovementStatistics for each move.
             for d in travelled {
@@ -2119,10 +2140,14 @@ impl Game<'_> {
                 resources: game.motion,
             }
             .server_travel();
+            // Landing damage from this travel reaches the tracker too.
+            events.append(&mut player.events);
             // A hurt since the last tick marked the velocity (Entity.markHurt):
             // ServerEntity.sendChanges sends it as it is after this travel.
             let marked = std::mem::take(&mut player.health.sync_velocity);
-            (events, marked.then_some(player.velocity))
+            let velocity = marked.then_some(player.velocity);
+            game.record_combat(&events);
+            (events, velocity)
         });
         let Some((events, marked)) = events else {
             return;

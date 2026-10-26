@@ -222,14 +222,38 @@ fn package(binary: &Path, out: &Path) -> Result<(), String> {
     let repo = new_folder(out)?;
     copy_into(binary, out)?;
     copy_beside(binary, &TOOLS, out)?;
+    copy_exporters(&repo.join("exporters"), &out.join("exporters"))?;
     let play = repo.join("packaging/PLAY.txt");
     copy(&play, &out.join("PLAY.txt"))
 }
 
 fn package_server(engine: &Path, out: &Path) -> Result<(), String> {
-    new_folder(out)?;
+    let repo = new_folder(out)?;
+    copy_exporters(&repo.join("exporters"), &out.join("exporters"))?;
     copy(engine, &out.join(program_name(engine, "horizon-engine")))?;
     copy_beside(engine, &SERVER_TOOLS, out)
+}
+
+/// Release builds supply only our compiled classes and their integrity manifest.
+fn copy_exporters(from: &Path, to: &Path) -> Result<(), String> {
+    if !from.join("manifest.json").is_file() {
+        return Err("Missing exporters/manifest.json; run horizon-prepare compile-exporters and copy its bundle to exporters/".into());
+    }
+    copy_exporter_tree(from, to)
+}
+
+fn copy_exporter_tree(from: &Path, to: &Path) -> Result<(), String> {
+    fs::create_dir_all(to).map_err(|e| e.to_string())?;
+    for entry in fs::read_dir(from).map_err(|e| e.to_string())? {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        let target = to.join(path.file_name().unwrap());
+        if path.is_dir() {
+            copy_exporter_tree(&path, &target)?;
+        } else {
+            copy(&path, &target)?;
+        }
+    }
+    Ok(())
 }
 
 /// `OUT`, emptied, with the sources the release folders take (`ARCHIVED`); the repository's path.

@@ -1562,6 +1562,16 @@ impl Game<'_> {
                 id, ticks, amplifier,
             ));
     }
+    /// `WitherRoseBlock.entityInside` for the player: on a server level that
+    /// isn't peaceful, `getBeeInteractionEffect` (Wither, 40 ticks) unless the
+    /// player is invulnerable to wither damage (creative, spectator). A
+    /// server's player gets it from the server.
+    pub(super) fn wither_rose_contact(&mut self) {
+        if self.remote.is_some() || self.ui.difficulty == 0 {
+            return;
+        }
+        self.give_player_effect("minecraft:wither", 40, 0);
+    }
     /// Burning applied to the player by mobs.
     fn tick_player_effects(&mut self) {
         self.creatures.wind_cooldown = self.creatures.wind_cooldown.saturating_sub(1);
@@ -3021,6 +3031,7 @@ impl Game<'_> {
                     continue;
                 }
             }
+            self.mark_entity(entity_start, &mob.kind.id);
             let light = self.world.light(
                 mob.position.x.floor() as i32,
                 (mob.position.y + mob.eye_height()).floor() as i32,

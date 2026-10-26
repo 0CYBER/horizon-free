@@ -18,7 +18,8 @@ impl Screen {
             | Self::Stats
             | Self::Advancements
             | Self::WorldOptions
-            | Self::Friends => true,
+            | Self::Friends
+            | Self::Mod => true,
             Self::Playing
             | Self::GameModeSwitcher
             | Self::Chat

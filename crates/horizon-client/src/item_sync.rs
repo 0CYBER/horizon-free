@@ -1,0 +1,355 @@
+//! Item stacks on the wire (`ItemStack.OPTIONAL_STREAM_CODEC`): the component
+//! patch read back as vanilla's `components` compound, so the decoder the saved
+//! and command item NBT use fills every field. Both sides use it: a client for
+//! what its server sends, a server for a creative client's
+//! `SetCreativeModeSlot`. The other direction is `lan::guest::stack_to_network`.
+use crate::items::ItemStack;
+use horizon_protocol::item::{Component, Profile, Stack, component};
+use horizon_protocol::registry::{Builtin, Dynamic};
+use horizon_world::nbt::Tag;
+use std::sync::Arc;
+
+/// A stack from the wire: its item by the built-in registry's id, its
+/// components by the synced registries' (enchantments, trims).
+pub fn from_network(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> ItemStack {
+    let mut out = ItemStack {
+        item: item_name(builtin, s.item),
+        count: s.count.max(0) as u32,
+        damage: 0,
+        extra: None,
+    };
+    let components = components_tag(s, builtin, synced);
+    let (damage, data) = crate::item_data::decode_components(components.as_ref());
+    out.damage = damage;
+    if let Some(data) = data {
+        *out.data_mut() = *data;
+    }
+    out.tidy();
+    out
+}
+
+fn item_name(builtin: &Builtin, id: i32) -> Arc<str> {
+    Arc::from(
+        builtin
+            .get("minecraft:item")
+            .and_then(|i| i.name(id))
+            .unwrap_or("minecraft:air"),
+    )
+}
+
+/// The item's patched components as vanilla's `components` compound.
+fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag> {
+    let name = |id: i32| builtin.get("minecraft:data_component_type")?.name(id);
+    let mut entries: Vec<(&str, Tag)> = Vec::new();
+    for (kind, c) in &s.added {
+        let Some(key) = name(*kind) else {
+            continue;
+        };
+        let value = match c {
+            // Read past, not decoded: the item keeps its prototype's value.
+            Component::Raw(_) => continue,
+            // Trim materials and patterns are synced registries, as enchantments are.
+            Component::Trim { material, pattern } => {
+                let (Some(material), Some(pattern)) = (
+                    synced.name("minecraft:trim_material", *material),
+                    synced.name("minecraft:trim_pattern", *pattern),
+                ) else {
+                    continue;
+                };
+                Tag::compound([
+                    ("material", Tag::String(material.into())),
+                    ("pattern", Tag::String(pattern.into())),
+                ])
+            }
+            Component::Int(v) if *kind == component::RARITY => {
+                let rarity = ["common", "uncommon", "rare", "epic"];
+                Tag::String(rarity.get(*v as usize).copied().unwrap_or("common").into())
+            }
+            Component::Int(v) => Tag::Int(*v),
+            Component::Unit => Tag::Compound(Default::default()),
+            Component::Bool(v) => Tag::Byte(i8::from(*v)),
+            Component::Text(t) | Component::Nbt(t) => t.clone(),
+            Component::Ident(v) => Tag::String(v.as_str().into()),
+            Component::Lore(lines) => Tag::List(lines.clone()),
+            Component::WritableBook(pages) => Tag::compound([(
+                "pages",
+                Tag::List(
+                    pages
+                        .iter()
+                        .map(|p| Tag::String(p.as_str().into()))
+                        .collect(),
+                ),
+            )]),
+            Component::WrittenBook(b) => Tag::compound([
+                ("title", Tag::String(b.title.as_str().into())),
+                ("author", Tag::String(b.author.as_str().into())),
+                ("generation", Tag::Int(b.generation)),
+                ("pages", Tag::List(b.pages.clone())),
+                ("resolved", Tag::Byte(i8::from(b.resolved))),
+            ]),
+            Component::Fireworks { flight, explosions } => Tag::compound([
+                ("flight_duration", Tag::Byte(*flight as i8)),
+                (
+                    "explosions",
+                    Tag::List(explosions.iter().map(fireworks_tag).collect()),
+                ),
+            ]),
+            Component::FireworkExplosion(e) => fireworks_tag(e),
+            Component::Enchantments(list) => {
+                // Enchantments are a synced (data-driven) registry: the
+                // ids index the server's RegistryData, not the builtin
+                // report, so a datapack enchantment names correctly.
+                let levels = list.iter().filter_map(|(id, level)| {
+                    let name = synced.name("minecraft:enchantment", *id)?;
+                    Some((name, Tag::Int(*level)))
+                });
+                Tag::compound(levels)
+            }
+            Component::AttackRange(v) => Tag::compound([
+                ("min_reach", Tag::Float(v[0].to_bits())),
+                ("max_reach", Tag::Float(v[1].to_bits())),
+                ("min_attack_momentum", Tag::Float(v[2].to_bits())),
+                ("max_attack_momentum", Tag::Float(v[3].to_bits())),
+                ("hitbox_margin", Tag::Float(v[4].to_bits())),
+                ("mob_factor", Tag::Float(v[5].to_bits())),
+            ]),
+            Component::Profile(p) => profile_tag(p),
+            // PotionContents' NBT: the potion by name and the custom colour.
+            Component::Potion { potion, color, .. } => {
+                let potion = potion.and_then(|id| builtin.get("minecraft:potion")?.name(id));
+                Tag::compound(
+                    potion
+                        .map(|name| ("potion", Tag::String(name.into())))
+                        .into_iter()
+                        .chain(color.map(|c| ("custom_color", Tag::Int(c)))),
+                )
+            }
+            // ItemStackTemplate.CODEC: id, count and components.
+            Component::Stacks(stacks) => Tag::List(
+                stacks
+                    .iter()
+                    .map(|t| {
+                        let mut entries = vec![
+                            (
+                                "id",
+                                Tag::String(item_name(builtin, t.item).as_ref().into()),
+                            ),
+                            ("count", Tag::Int(t.count)),
+                        ];
+                        if let Some(c) = components_tag(t, builtin, synced) {
+                            entries.push(("components", c));
+                        }
+                        Tag::compound(entries)
+                    })
+                    .collect(),
+            ),
+            Component::CustomModelData {
+                floats,
+                flags,
+                strings,
+                colors,
+            } => Tag::compound([
+                (
+                    "floats",
+                    Tag::List(floats.iter().map(|f| Tag::Float(f.to_bits())).collect()),
+                ),
+                (
+                    "flags",
+                    Tag::List(flags.iter().map(|b| Tag::Byte(i8::from(*b))).collect()),
+                ),
+                (
+                    "strings",
+                    Tag::List(
+                        strings
+                            .iter()
+                            .map(|s| Tag::String(s.as_str().into()))
+                            .collect(),
+                    ),
+                ),
+                (
+                    "colors",
+                    Tag::List(colors.iter().map(|c| Tag::Int(*c)).collect()),
+                ),
+            ]),
+            Component::TooltipDisplay { hide, hidden } => {
+                let hidden = hidden
+                    .iter()
+                    .filter_map(|id| Some(Tag::String(name(*id)?.into())));
+                Tag::compound([
+                    ("hide_tooltip", Tag::Byte(i8::from(*hide))),
+                    ("hidden_components", Tag::List(hidden.collect())),
+                ])
+            }
+        };
+        entries.push((key, value));
+    }
+    Some(Tag::compound(entries))
+}
+
+/// A wire `FireworkExplosion` as vanilla's NBT codec writes it
+/// (`FireworkExplosion.Shape`'s BY_ID order).
+fn fireworks_tag(e: &horizon_protocol::item::FireworkExplosion) -> Tag {
+    const SHAPES: [&str; 5] = ["small_ball", "large_ball", "star", "creeper", "burst"];
+    let ints = |c: &[i32]| Tag::List(c.iter().map(|c| Tag::Int(*c)).collect());
+    Tag::compound([
+        (
+            "shape",
+            Tag::String(
+                SHAPES
+                    .get(e.shape.max(0) as usize)
+                    .copied()
+                    .unwrap_or("small_ball")
+                    .into(),
+            ),
+        ),
+        ("colors", ints(&e.colors)),
+        ("fade_colors", ints(&e.fade)),
+        ("has_trail", Tag::Byte(i8::from(e.trail))),
+        ("has_twinkle", Tag::Byte(i8::from(e.twinkle))),
+    ])
+}
+
+/// A `minecraft:profile` component as the item data JSON the model reads.
+fn profile_tag(p: &Profile) -> Tag {
+    let properties = p
+        .properties
+        .iter()
+        .map(|(name, value, signature)| {
+            let mut entries: Vec<(&'static str, Tag)> = vec![
+                ("name", Tag::String(name.as_str().into())),
+                ("value", Tag::String(value.as_str().into())),
+            ];
+            if let Some(signature) = signature {
+                entries.push(("signature", Tag::String(signature.as_str().into())));
+            }
+            Tag::compound(entries)
+        })
+        .collect::<Vec<_>>();
+    let mut entries: Vec<(&'static str, Tag)> = Vec::new();
+    if let Some(name) = &p.name {
+        entries.push(("name", Tag::String(name.as_str().into())));
+    }
+    entries.push(("properties", Tag::List(properties)));
+    Tag::compound(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_protocol::registry::Ids;
+
+    /// What a creative client sends (`stack_to_network`) comes back whole on
+    /// the server: damage, both enchantment lists, repair cost, name, trim.
+    #[test]
+    fn a_creative_stack_keeps_its_components_across_the_wire() {
+        let mut components = vec![String::new(); 60];
+        for (id, name) in [
+            (component::DAMAGE, "minecraft:damage"),
+            (component::CUSTOM_NAME, "minecraft:custom_name"),
+            (component::ENCHANTMENTS, "minecraft:enchantments"),
+            (component::POTION_CONTENTS, "minecraft:potion_contents"),
+            (component::REPAIR_COST, "minecraft:repair_cost"),
+            (
+                component::STORED_ENCHANTMENTS,
+                "minecraft:stored_enchantments",
+            ),
+            (component::TRIM, "minecraft:trim"),
+        ] {
+            components[id as usize] = name.to_owned();
+        }
+        let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let builtin = Builtin {
+            registries: [
+                (
+                    "minecraft:item".to_owned(),
+                    Ids::from_names(names(&[
+                        "minecraft:air",
+                        "minecraft:diamond_chestplate",
+                        "minecraft:splash_potion",
+                    ])),
+                ),
+                (
+                    "minecraft:data_component_type".to_owned(),
+                    Ids::from_names(components),
+                ),
+                (
+                    "minecraft:potion".to_owned(),
+                    Ids::from_names(names(&["minecraft:water", "minecraft:swiftness"])),
+                ),
+            ]
+            .into(),
+        };
+        let synced = |n: &[&str]| n.iter().map(|s| (s.to_string(), None)).collect::<Vec<_>>();
+        let dynamic = Dynamic {
+            registries: [
+                (
+                    "minecraft:enchantment".to_owned(),
+                    synced(&["minecraft:protection", "minecraft:sharpness"]),
+                ),
+                (
+                    "minecraft:trim_material".to_owned(),
+                    synced(&["minecraft:gold"]),
+                ),
+                (
+                    "minecraft:trim_pattern".to_owned(),
+                    synced(&["minecraft:sentry"]),
+                ),
+            ]
+            .into(),
+        };
+        let mut stack = ItemStack::new("minecraft:diamond_chestplate", 1);
+        stack.damage = 5;
+        stack.enchant("minecraft:protection", 4);
+        let d = stack.data_mut();
+        d.stored_enchantments
+            .push((Arc::from("minecraft:sharpness"), 2));
+        d.repair_cost = 9;
+        d.custom_name = Some("Keeper".to_owned());
+        d.trim = Some((Arc::from("minecraft:gold"), Arc::from("minecraft:sentry")));
+        let id = |registry: &str, name: &str| {
+            builtin
+                .get(registry)
+                .and_then(|ids| ids.id(name))
+                .or_else(|| dynamic.id(registry, name))
+        };
+        let wire = crate::lan::guest::stack_to_network(
+            |name| {
+                builtin
+                    .get("minecraft:item")
+                    .and_then(|i| i.id(name))
+                    .unwrap_or(0)
+            },
+            id,
+            &Some(stack.clone()),
+        )
+        .unwrap();
+        let back = from_network(&wire, &builtin, &dynamic);
+        assert_eq!(back.item, stack.item);
+        assert_eq!(back.damage, 5);
+        let d = back.data().expect("components");
+        assert_eq!(d.enchantments, vec![(Arc::from("minecraft:protection"), 4)]);
+        assert_eq!(
+            d.stored_enchantments,
+            vec![(Arc::from("minecraft:sharpness"), 2)]
+        );
+        assert_eq!(d.repair_cost, 9);
+        assert_eq!(d.custom_name.as_deref(), Some("Keeper"));
+        assert_eq!(
+            d.trim,
+            Some((Arc::from("minecraft:gold"), Arc::from("minecraft:sentry")))
+        );
+        // PotionContents: the potion is a built-in registry, as a hub's
+        // `SyncData::id` treats it, so the id has to come from there.
+        let potion = ItemStack::new("minecraft:splash_potion", 1).with_potion("swiftness");
+        let wire = crate::lan::guest::stack_to_network(
+            |name| id("minecraft:item", name).unwrap_or(0),
+            id,
+            &Some(potion),
+        )
+        .unwrap();
+        assert_eq!(
+            from_network(&wire, &builtin, &dynamic).potion(),
+            Some("minecraft:swiftness")
+        );
+    }
+}
