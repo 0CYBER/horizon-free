@@ -2559,12 +2559,18 @@ impl Game<'_> {
             .items()
             .get(&item)
             .is_some_and(|i| i.max_damage > 0);
+        let me = self.level.player_uuid.or(Some([0, 0, 0, 1]));
+        let sneaking = self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)
+            || self.keys.contains(&winit::keyboard::KeyCode::ShiftRight);
+        let held_damage = held.as_ref().map_or(0, |h| h.damage as i32);
         let m = &mut self.mobs[index];
         if !m.alive() {
             return Ok(false);
         }
         let species = m.species();
         let center = m.center();
+        // Wolf armor the owner takes off with shears or leaves a dropped stack of.
+        let mut armor_drop: Option<ItemStack> = None;
         let mut consume = false;
         let mut give: Option<&str> = None;
         let mut sound: Option<&str> = None;
@@ -2637,6 +2643,22 @@ impl Game<'_> {
                     handled = false;
                 }
             }
+            // Entity.interact: shears take a tamed wolf's armor off for its owner.
+            Species::Wolf
+                if item == "minecraft:shears"
+                    && m.extra.tame
+                    && m.extra.owner == me
+                    && m.extra.head.is_some()
+                    && !sneaking =>
+            {
+                let mut stack = ItemStack::new("minecraft:wolf_armor", 1);
+                stack.damage = m.extra.body_damage.max(0) as u32;
+                armor_drop = Some(stack);
+                m.extra.head = None;
+                m.extra.body_damage = 0;
+                eat = Some(("item.armor.unequip_wolf", 1.0, 1.0));
+                self.damage_held_tool();
+            }
             // Wolf.mobInteract: heal, dye the collar or sit/stand when tame;
             // a bone tames a wild one a third of the time.
             Species::Wolf if m.extra.tame && is_food && m.health < m.attrs.max_health => {
@@ -2649,6 +2671,35 @@ impl Game<'_> {
                 // TamableAnimal.feed: playEatingSound, which wolves leave empty.
                 m.health = (m.health + heal).min(m.attrs.max_health);
                 consume = true;
+            }
+            // Wolf.mobInteract: the owner puts wolf armor on a tamed adult.
+            Species::Wolf
+                if item == "minecraft:wolf_armor"
+                    && m.extra.tame
+                    && m.extra.owner == me
+                    && m.extra.head.is_none()
+                    && !m.is_baby() =>
+            {
+                m.extra.head = Some(item.as_str().into());
+                m.extra.body_damage = held_damage;
+                consume = true;
+                eat = Some(("item.armor.equip_wolf", 1.0, 1.0));
+            }
+            // Wolf.mobInteract: an armadillo scute repairs a sitting wolf's
+            // armor by an eighth of its durability.
+            Species::Wolf
+                if item == "minecraft:armadillo_scute"
+                    && m.extra.tame
+                    && m.extra.owner == me
+                    && m.extra.sitting
+                    && m.extra.head.is_some()
+                    && m.extra.body_damage > 0 =>
+            {
+                m.extra.body_damage = (m.extra.body_damage
+                    - (horizon_client::mobs::WOLF_ARMOR_DURABILITY as f32 * 0.125) as i32)
+                    .max(0);
+                consume = true;
+                eat = Some(("item.wolf_armor.repair", 1.0, 1.0));
             }
             Species::Wolf
                 if m.extra.tame
@@ -2896,6 +2947,9 @@ impl Game<'_> {
                 let at = self.eye_position().unwrap_or(center);
                 self.spawn_item(rest, at, [0.0, 0.0, 0.0], 40);
             }
+        }
+        if let Some(stack) = armor_drop {
+            self.spawn_item(stack, [center[0], center[1] + 0.5, center[2]], [0.0; 3], 10);
         }
         for (item, count) in drops {
             for _ in 0..count {

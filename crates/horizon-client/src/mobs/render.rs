@@ -352,13 +352,37 @@ pub fn layers(m: &Mob) -> Vec<Layer> {
         })
     };
     match m.species() {
-        // WolfCollarLayer.
+        // WolfArmorLayer, then WolfCollarLayer.
         S::Wolf if m.extra.tame => {
             let (model, texture) = if m.is_baby() {
                 ("wolf_baby#main", "entity/wolf/wolf_collar_baby")
             } else {
                 ("wolf#main", "entity/wolf/wolf_collar")
             };
+            // The armor, then the cracks of its damage (`Crackiness.WOLF_ARMOR`).
+            if !m.is_baby() && m.extra.head.as_deref() == Some("minecraft:wolf_armor") {
+                let left = (super::WOLF_ARMOR_DURABILITY - m.extra.body_damage) as f32
+                    / super::WOLF_ARMOR_DURABILITY as f32;
+                push(
+                    &mut v,
+                    "wolf_armor#main",
+                    "entity/equipment/wolf_body/armadillo_scute",
+                    white,
+                    false,
+                );
+                let crack = [(0.32, "high"), (0.69, "medium"), (0.95, "low")]
+                    .iter()
+                    .find(|(t, _)| left < *t);
+                if let Some((_, level)) = crack {
+                    push(
+                        &mut v,
+                        "wolf_armor#main",
+                        &format!("entity/wolf/wolf_armor_crackiness_{level}"),
+                        white,
+                        false,
+                    );
+                }
+            }
             push(
                 &mut v,
                 model,

@@ -1690,10 +1690,15 @@ impl Def {
     }
 }
 /// Mobs whose `body` equipment slot Horizon keeps in `Extra::head` (a
-/// happy ghast's harness, nautilus armour, a sulfur cube's swallowed block).
+/// happy ghast's harness, nautilus armour, a sulfur cube's swallowed block,
+/// a wolf's armor).
 pub fn body_slot(s: Species) -> bool {
     matches!(
         s,
-        Species::HappyGhast | Species::Nautilus | Species::ZombieNautilus | Species::SulfurCube
+        Species::HappyGhast
+            | Species::Nautilus
+            | Species::ZombieNautilus
+            | Species::SulfurCube
+            | Species::Wolf
     )
 }

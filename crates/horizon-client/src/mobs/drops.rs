@@ -245,6 +245,9 @@ pub fn slot_item(m: &Mob, slot: &str) -> Option<LootStack> {
         _ => (None, None),
     };
     let mut stack = loot_stack(item?, 1);
+    if slot == "body" && m.species() == Species::Wolf {
+        stack.damage = m.extra.body_damage;
+    }
     if let (Some(index), Some(g)) = (index, gear::gear(m)) {
         for (e, l) in &g.slots[index] {
             stack.enchantments.push((e.to_string(), *l as i32));
@@ -282,6 +285,7 @@ pub fn clear_slot(m: &mut Mob, slot: &str) {
         }
         "body" if body => {
             m.extra.head = None;
+            m.extra.body_damage = 0;
             return;
         }
         "saddle" => {

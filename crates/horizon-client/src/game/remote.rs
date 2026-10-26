@@ -2011,13 +2011,19 @@ impl Game<'_> {
             // player holds and wears (EquipmentSlot ordinals).
             C::SetEquipment(p) => {
                 self.remote_object_equipment(p.id, &p.slots);
-                let items: Vec<(u8, Option<Arc<str>>)> = p
+                let items: Vec<(u8, Option<Arc<str>>, i32)> = p
                     .slots
                     .iter()
-                    .map(|(slot, stack)| (*slot, stack.as_ref().map(|s| self.item_name(s.item))))
+                    .map(|(slot, stack)| {
+                        (
+                            *slot,
+                            stack.as_ref().map(|s| self.item_name(s.item)),
+                            self.to_stack(stack).map_or(0, |s| s.damage as i32),
+                        )
+                    })
                     .collect();
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
-                    for (slot, item) in items {
+                    for (slot, item, damage) in items {
                         let e = &mut m.extra;
                         match slot {
                             0 => e.main_hand = item,
@@ -2025,7 +2031,10 @@ impl Game<'_> {
                             2 => e.feet = item,
                             3 => e.legs = item,
                             4 => e.chest = item,
-                            5 => e.head = item,
+                            5 => {
+                                e.head = item;
+                                e.body_damage = damage;
+                            }
                             _ => {}
                         }
                     }
