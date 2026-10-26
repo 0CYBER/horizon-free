@@ -985,6 +985,13 @@ pub enum MobEvent {
         mob: u32,
         target: Who,
     },
+    /// `StartHuntingHoglin` for a nearby adult piglin: it takes the hoglin as
+    /// its anger target (when it has none) and starts its `HUNTED_RECENTLY` wait.
+    HuntHoglin {
+        mob: u32,
+        target: u32,
+        ticks: i32,
+    },
     Projectile(crate::projectiles::Projectile),
     /// Spawn a new mob (breeding, slime splitting, chicken eggs...).
     Spawn(Box<Mob>),
@@ -1251,6 +1258,8 @@ pub struct Seen {
     /// `MAX_HEALTH`, `JUMP_STRENGTH` and `MOVEMENT_SPEED` base values (a
     /// horse's breeding stock).
     pub stats: [f64; 3],
+    /// A piglin's `HUNTED_RECENTLY` memory.
+    pub hunted_recently: bool,
 }
 impl Mob {
     pub fn burning_time(&self) -> f64 {
@@ -1323,6 +1332,7 @@ impl Mob {
                 m.extra.vector[0],
                 m.attrs.speed,
             ],
+            hunted_recently: m.species() == Species::Piglin && m.extra.ints[0] > 0,
         }
     }
     /// `EntityType.getCategory`'s name.
