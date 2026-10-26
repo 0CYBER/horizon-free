@@ -1367,13 +1367,17 @@ impl Game<'_> {
                 m.on_ground = on_ground;
                 return;
             }
-            if let Some(p) = self.creatures.projectiles.iter_mut().find(|p| {
-                p.id == id as u32
-                    && matches!(
-                        p.kind,
-                        horizon_client::projectiles::ProjectileKind::LargeFireball { .. }
-                    )
-            }) {
+            // Projectiles keep Entity's NO_OP InterpolationHandler too: the
+            // server's position replaces theirs at once and their own tick
+            // flies them on (`tick_remote_projectiles`). Eased towards it
+            // instead, they only moved when an update came, every 10 to 20
+            // ticks.
+            if let Some(p) = self
+                .creatures
+                .projectiles
+                .iter_mut()
+                .find(|p| p.id == id as u32)
+            {
                 if path.is_some() {
                     p.position = Vec3::new(position[0], position[1], position[2]);
                 }
@@ -1381,6 +1385,14 @@ impl Game<'_> {
                     p.yaw = yaw;
                     p.pitch = pitch;
                 }
+                return;
+            }
+            if path.is_some()
+                && (self.potions.move_remote_thrown(
+                    id as u32,
+                    Vec3::new(position[0], position[1], position[2]),
+                ) || self.end.move_remote_eye(id as u32, position))
+            {
                 return;
             }
             if let Some(p) = r.pending_items.get_mut(&id) {
@@ -2959,6 +2971,8 @@ impl Game<'_> {
             .and_then(|r| r.pending_items.get_mut(&id))
         {
             p.1 = v;
+        } else if !self.potions.remote_thrown_motion(id as u32, v) {
+            self.end.remote_eye_motion(id as u32, velocity);
         }
     }
     fn apply_remote_health(&mut self) {
