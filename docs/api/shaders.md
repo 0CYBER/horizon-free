@@ -96,6 +96,7 @@ stages with options and hot reload, then the overlay, lighting, sky and shadow s
 
 ## Changelog
 
+- 2026-10-26: the post stage in the game (`HORIZON_SHADER_PACK`, hot reload with the last good pack kept).
 - 2026-10-25: `horizon-shader` (`new`, `check`, `pack`), three templates, the example pack and the guide.
 - 2026-10-25: the check (naga validation, signatures, options, budgets, SPIR-V/Metal/HLSL translation).
 - 2026-10-25: the stages of API 0.1 (sky, material, post), their inputs and the generated reference.
