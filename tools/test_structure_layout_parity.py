@@ -51,6 +51,12 @@ except ImportError:
 
 ORACLE = Path(os.environ.get('HORIZON_STRUCTURE_ORACLE', lab.LOCAL / 'structure-oracle'))
 JARS = Path(os.environ.get('HORIZON_STRUCTURE_JARS', ORACLE / 'jars'))
+# Jars of a modpack's mods the oracle cache does not hold (Lithostitched, CTOV): a pack's jar folder.
+PACK_JARS = Path(os.environ.get('HORIZON_STRUCTURE_PACK_JARS', ORACLE / 'pack-jars'))
+
+
+def jar_path(jar):
+    return JARS / jar if (JARS / jar).exists() else PACK_JARS / jar
 # Per profile: which saved pieces are expected, the mods in the pack (id: jar), those carried, and the
 # structures compared (a regex; None: every start that has the pieces).
 PROFILES = {
@@ -125,7 +131,7 @@ def carry(profile, mods, carried, packs=None):
     work = lab.LOCAL / 'structure-layout' / profile / 'work'
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
-    mods = {key: str(JARS / jar) for key, jar in mods.items()}
+    mods = {key: str(jar_path(jar)) for key, jar in mods.items()}
     mods.update({key: str(pack_jar(work, key, name)) for key, name in (packs or {}).items()})
     records = [{'key': key, 'name': key, 'version': '', 'path': jar, 'tier': 'data', 'confidence': 'known',
                 'class': 'content' if key in carried else 'library', 'source': 'file', 'license': '',
@@ -151,6 +157,7 @@ def overlay(profile, data_dirs):
     (root / 'facts.json').symlink_to(lab.RESOURCES / 'facts.json')
     source = lab.RESOURCES / 'worldgen'
     merged = {name: json.loads((source / f'{name}.json').read_text()) for name in [*BUNDLES.values(), 'biome_tags']}
+    additions = []
     for entry in source.iterdir():
         if entry.name != 'structure' and entry.stem not in merged:
             (worldgen / entry.name).symlink_to(entry)
@@ -167,13 +174,27 @@ def overlay(profile, data_dirs):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.symlink_to(path)
             elif path.suffix == '.json' and kind == 'worldgen' and parts[2] in BUNDLES:
-                merged[BUNDLES[parts[2]]][f'{namespace}:' + '/'.join(parts[3:])[:-5]] = path.read_text()
+                text = path.read_text()
+                if 'horizon:add_to' in text:
+                    additions.append((BUNDLES[parts[2]], json.loads(text)))
+                else:
+                    merged[BUNDLES[parts[2]]][f'{namespace}:' + '/'.join(parts[3:])[:-5]] = text
             elif path.suffix == '.json' and parts[1:4] == ('tags', 'worldgen', 'biome'):
                 tag = f'{namespace}:' + '/'.join(parts[4:])[:-5]
                 value = json.loads(path.read_text())
                 if tag in merged['biome_tags'] and not value.get('replace'):
                     value['values'] = json.loads(merged['biome_tags'][tag])['values'] + value['values']
                 merged['biome_tags'][tag] = json.dumps(value)
+    # A carried file with `horizon:add_to` adds its entries to other sets or pools, as the game's
+    # mod_content.rs merges them.
+    for bundle, addition in additions:
+        targets = addition['horizon:add_to']
+        key = 'structures' if bundle == 'structure_sets' else 'elements'
+        for target in [targets] if isinstance(targets, str) else targets:
+            if target in merged[bundle]:
+                value = json.loads(merged[bundle][target])
+                value[key] = value.get(key, []) + addition.get(key, [])
+                merged[bundle][target] = json.dumps(value)
     for name, bundle in merged.items():
         (worldgen / f'{name}.json').write_text(json.dumps(bundle))
     return root
@@ -235,7 +256,7 @@ def main():
         print(f'SKIP: no oracle results in {ORACLE / args.profile} (see this file\'s docstring)')
         return 0
     profile = PROFILES[args.profile]
-    missing = [str(JARS / jar) for jar in profile['mods'].values() if not (JARS / jar).exists()]
+    missing = [jar for jar in profile['mods'].values() if not jar_path(jar).exists()]
     missing += [str(ORACLE / 'profiles' / f'{name}.json') for name in profile.get('packs', {}).values()
                 if not (ORACLE / 'profiles' / f'{name}.json').exists()]
     if missing:
