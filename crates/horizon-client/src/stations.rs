@@ -174,6 +174,7 @@ pub fn increased_repair_cost(cost: u32) -> u32 {
 pub fn hover_name(names: &dyn Fn(&str) -> String, stack: &ItemStack) -> String {
     stack
         .custom_name()
+        .or_else(|| stack.item_name())
         .map_or_else(|| names(&stack.item), str::to_owned)
 }
 /// `AnvilMenu.createResult`. `name` is the rename box text (None = untouched).

@@ -18,6 +18,8 @@ pub struct StackData {
     pub repair_cost: u32,
     /// `minecraft:custom_name` as plain text.
     pub custom_name: Option<String>,
+    /// `minecraft:item_name` as plain text.
+    pub item_name: Option<String>,
     /// `minecraft:potion_contents.potion`.
     pub potion: Option<Arc<str>>,
     /// `minecraft:trim`: (material, pattern).
@@ -73,6 +75,7 @@ const MODELLED: &[&str] = &[
     "minecraft:enchantments",
     "minecraft:firework_explosion",
     "minecraft:fireworks",
+    "minecraft:item_name",
     "minecraft:map_id",
     "minecraft:map_post_processing",
     "minecraft:ominous_bottle_amplifier",
@@ -203,6 +206,9 @@ impl ItemStack {
     }
     pub fn custom_name(&self) -> Option<&str> {
         self.data().and_then(|d| d.custom_name.as_deref())
+    }
+    pub fn item_name(&self) -> Option<&str> {
+        self.data().and_then(|d| d.item_name.as_deref())
     }
     pub fn potion(&self) -> Option<&str> {
         self.data().and_then(|d| d.potion.as_deref())
@@ -473,6 +479,11 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
         if let Some(name) = &d.custom_name {
             entries.push(("minecraft:custom_name", Tag::String(name.as_str().into())));
         }
+        if let Some(name) = &d.item_name
+            && !d.ominous_banner
+        {
+            entries.push(("minecraft:item_name", Tag::String(name.as_str().into())));
+        }
         if let Some(potion) = &d.potion {
             entries.push((
                 "minecraft:potion_contents",
@@ -675,6 +686,7 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
             .unwrap_or(0)
             .max(0) as u32,
         custom_name: c.get("minecraft:custom_name").and_then(read_text),
+        item_name: c.get("minecraft:item_name").and_then(read_text),
         potion,
         map_id: c.get("minecraft:map_id").and_then(int).map(|v| v as i32),
         banner_patterns: crate::banner::layers_from_nbt(c.get("minecraft:banner_patterns")),

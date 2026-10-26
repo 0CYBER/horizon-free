@@ -633,6 +633,12 @@ fn network_stack(
             horizon_protocol::item::Component::Text(horizon_protocol::text::literal(name)),
         ));
     }
+    if let Some(name) = s.item_name() {
+        stack.added.push((
+            horizon_protocol::item::component::ITEM_NAME,
+            horizon_protocol::item::Component::Text(horizon_protocol::text::literal(name)),
+        ));
+    }
     Some(stack)
 }
 

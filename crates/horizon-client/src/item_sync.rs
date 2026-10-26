@@ -246,6 +246,7 @@ mod tests {
         for (id, name) in [
             (component::DAMAGE, "minecraft:damage"),
             (component::CUSTOM_NAME, "minecraft:custom_name"),
+            (component::ITEM_NAME, "minecraft:item_name"),
             (component::ENCHANTMENTS, "minecraft:enchantments"),
             (component::POTION_CONTENTS, "minecraft:potion_contents"),
             (component::REPAIR_COST, "minecraft:repair_cost"),
@@ -305,6 +306,7 @@ mod tests {
             .push((Arc::from("minecraft:sharpness"), 2));
         d.repair_cost = 9;
         d.custom_name = Some("Keeper".to_owned());
+        d.item_name = Some("Fine Diamond Chestplate".to_owned());
         d.trim = Some((Arc::from("minecraft:gold"), Arc::from("minecraft:sentry")));
         let id = |registry: &str, name: &str| {
             builtin
@@ -334,6 +336,7 @@ mod tests {
         );
         assert_eq!(d.repair_cost, 9);
         assert_eq!(d.custom_name.as_deref(), Some("Keeper"));
+        assert_eq!(d.item_name.as_deref(), Some("Fine Diamond Chestplate"));
         assert_eq!(
             d.trim,
             Some((Arc::from("minecraft:gold"), Arc::from("minecraft:sentry")))
