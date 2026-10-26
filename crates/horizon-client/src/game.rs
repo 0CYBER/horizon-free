@@ -2582,14 +2582,15 @@ impl Game<'_> {
                 (p.position.z.floor() as i32) >> 4,
             ));
         }
-        let sources = (self.options.dedicated.is_some() || !players.is_empty()).then(|| {
-            horizon_client::ticket_levels::Sources {
-                players,
-                forced: self.streaming.forced.iter().copied().collect(),
-                view_distance: self.settings.render_distance.clamp(2, 32),
-                simulation_distance: self.settings.simulation_distance.max(2),
-            }
-        });
+        let sources =
+            (!self.options.execution_role.is_client() || !players.is_empty()).then(|| {
+                horizon_client::ticket_levels::Sources {
+                    players,
+                    forced: self.streaming.forced.iter().copied().collect(),
+                    view_distance: self.settings.render_distance.clamp(2, 32),
+                    simulation_distance: self.settings.simulation_distance.max(2),
+                }
+            });
         self.tickets.update(sources);
     }
     /// `ServerLevel.startTickingChunk`: a loaded chunk's saved ticks are
