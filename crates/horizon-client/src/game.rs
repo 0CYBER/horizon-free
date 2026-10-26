@@ -563,6 +563,9 @@ struct GameLevel<'w> {
     random_tick_sections: &'w mut horizon_client::random_tick_sections::RandomTickSections,
     /// Players with each chest open (a trapped chest's signal).
     lid_openers: &'w HashMap<(i32, i32, i32), i32>,
+    /// `Level.isClientSide`: a client's copy of the level (a guest of a LAN
+    /// world, a window on its server thread, a dedicated server's client).
+    client_side: bool,
 }
 struct PlayerCollision {
     y: f64,
@@ -652,6 +655,9 @@ impl GameLevel<'_> {
     }
 }
 impl LevelAccess for GameLevel<'_> {
+    fn is_client_side(&self) -> bool {
+        self.client_side
+    }
     fn world_surface(&self, x: i32, z: i32) -> i32 {
         self.world.world_surface(x, z, |s| self.facts.is_air(s))
     }
@@ -855,7 +861,12 @@ impl LevelAccess for GameLevel<'_> {
     fn emit(&mut self, event: LevelEvent) {
         match event {
             // Block.dropResources draws its loot and spots right away.
-            LevelEvent::DropResources { pos, state } => self.drop_resources_now(pos, state),
+            // `popResource` only drops server-side (`!level.isClientSide`):
+            // a client's moveBlocks (a piston's block event) skips it.
+            LevelEvent::DropResources { pos, state } if !self.client_side => {
+                self.drop_resources_now(pos, state)
+            }
+            LevelEvent::DropResources { .. } => {}
             // Block.popResource of the block's own item (tall flowers, flower beds).
             LevelEvent::BlockEvent {
                 pos,
@@ -2492,6 +2503,7 @@ impl Game<'_> {
             tickets: self.tickets.levels(),
             random_tick_sections: &mut self.random_tick_sections,
             lid_openers: &self.lid_openers,
+            client_side: self.remote.is_some(),
         };
         let result = f(self.res.behaviours(), &mut level, &mut self.block_ticks);
         self.flush_spill();
