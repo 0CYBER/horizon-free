@@ -11,6 +11,7 @@ use horizon_client::{
     motion::PlayerMotion,
     particles::{ParticleOptions, ParticleType},
     vanillagen::VanillaTerrain,
+    world_spawn::PlayerSpawnFinder,
 };
 use horizon_core::{
     geometry::Vec3,
@@ -521,7 +522,15 @@ impl Game<'_> {
         let position = if let Some(job) = self.end.job.take() {
             self.resolve_gateway(job, target)?
         } else {
-            let (position, yaw) = self.end_arrival(target)?;
+            let mut finder = self.player_spawn.take();
+            let arrival = self.end_arrival(target, &mut finder);
+            self.player_spawn = finder;
+            let Some((position, yaw)) = arrival? else {
+                // A spawn candidate's chunk is loading: try again next tick.
+                self.travelling = Some((player, target));
+                self.end_travel = true;
+                return Ok(());
+            };
             if let Some(yaw) = yaw {
                 self.yaw = yaw;
                 player.yaw = yaw;
@@ -546,7 +555,13 @@ impl Game<'_> {
     /// Where an End portal's traveller lands once `target` has loaded, and
     /// the yaw it faces there: the platform below the End's spawn point,
     /// facing west, or the top of the Overworld's spawn column.
-    pub(super) fn end_arrival(&mut self, target: Vec3) -> Result<(Vec3, Option<f32>)> {
+    /// None while a candidate of the world spawn's search loads (`finder`
+    /// keeps it, see `search_spawn`).
+    pub(super) fn end_arrival(
+        &mut self,
+        target: Vec3,
+        finder: &mut Option<PlayerSpawnFinder>,
+    ) -> Result<Option<(Vec3, Option<f32>)>> {
         if self.dim == Dim::End {
             // EndPlatformFeature.createEndPlatform below the spawn point.
             let origin = [END_SPAWN[0], END_SPAWN[1] - 1, END_SPAWN[2]];
@@ -566,14 +581,14 @@ impl Game<'_> {
                 }
             }
             // Direction.WEST.toYRot().
-            return Ok((target, Some(90.0)));
+            return Ok(Some((target, Some(90.0))));
         }
         // ServerPlayer.findRespawnPositionAndUseSpawnBlock: where the bed or
         // anchor puts the player, facing it; else onto the spawn column.
         let mut target = target;
         if let Some(c) = self.respawn_config.filter(|c| c.dim == self.dim) {
             if let Some((at, yaw)) = self.find_respawn_and_use(c, false)? {
-                return Ok((at, Some(yaw)));
+                return Ok(Some((at, Some(yaw))));
             }
             let s = self.level.spawn.unwrap_or([0.0, 64.0, 0.0]);
             target = Vec3::new(s[0].floor() + 0.5, s[1], s[2].floor() + 0.5);
@@ -582,10 +597,16 @@ impl Game<'_> {
         // TeleportTransition.missingRespawnBlock: PlayerSpawnFinder around
         // the world spawn.
         if let Some(world) = self.level.world_spawn.filter(|w| w[0] == x && w[2] == z) {
-            return Ok((self.respawn_spawn(world), None));
+            return Ok(match self.search_spawn(world, finder) {
+                Ok(at) => Some((at, None)),
+                Err(chunk) => {
+                    self.spawn_wait.push(chunk);
+                    None
+                }
+            });
         }
         let y = self.land_column(x, z).map_or(target.y, f64::from);
-        Ok((Vec3::new(target.x, y, target.z), None))
+        Ok(Some((Vec3::new(target.x, y, target.z), None)))
     }
 
     /// Dying away from the Overworld respawns at the world spawn there.

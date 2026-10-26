@@ -11,7 +11,7 @@ use super::end::GatewayJob;
 use super::nether_portal::{PLAYER_DELAY, Plan};
 use super::respawn_anchor::RespawnConfig;
 use super::{Dim, Game, lan::LanHost};
-use horizon_client::{lan::hub::TickCtx, text::Text};
+use horizon_client::{lan::hub::TickCtx, text::Text, world_spawn::PlayerSpawnFinder};
 use horizon_core::{geometry::Vec3, position::BlockPos};
 use horizon_protocol::packets::play::{self, Clientbound as C};
 
@@ -34,6 +34,8 @@ pub(super) struct Trip {
     /// A respawn at the world spawn, moved onto a free column within the
     /// respawn radius once the chunks around it have loaded.
     world_spawn: bool,
+    /// The search for that column while a candidate's chunk loads.
+    finder: Option<PlayerSpawnFinder>,
     /// Sent by a command: the player is already where it goes.
     placed: bool,
 }
@@ -258,6 +260,7 @@ impl Game<'_> {
             gateway: None,
             respawn: None,
             world_spawn: false,
+            finder: None,
             placed: false,
         });
         if let Err(e) = self.enter_level(Some(host), source) {
@@ -278,6 +281,7 @@ impl Game<'_> {
             gateway: None,
             respawn: Some(config),
             world_spawn: false,
+            finder: None,
             placed: false,
         });
     }
@@ -327,6 +331,7 @@ impl Game<'_> {
             gateway: None,
             respawn: None,
             world_spawn: true,
+            finder: None,
             placed: false,
         });
     }
@@ -372,6 +377,7 @@ impl Game<'_> {
             gateway: Some(job),
             respawn: None,
             world_spawn: false,
+            finder: None,
             placed: false,
         });
     }
@@ -398,7 +404,7 @@ impl Game<'_> {
                 k += 1;
                 continue;
             }
-            let trip = self.server_trips.remove(k);
+            let mut trip = self.server_trips.remove(k);
             if trip.placed {
                 continue;
             }
@@ -416,7 +422,15 @@ impl Game<'_> {
                 // PlayerSpawnFinder.findSpawn around the world spawn.
                 let suggestion =
                     [trip.target.x, trip.target.y, trip.target.z].map(|v| v.floor() as i32);
-                (self.respawn_spawn(suggestion), yaw)
+                match self.search_spawn(suggestion, &mut trip.finder) {
+                    Ok(at) => (at, yaw),
+                    Err(chunk) => {
+                        self.spawn_wait.push(chunk);
+                        self.server_trips.insert(k, trip);
+                        k += 1;
+                        continue;
+                    }
+                }
             } else if let Some(job) = trip.gateway {
                 match self.resolve_gateway(job, trip.target) {
                     Ok(at) => (at, yaw),
@@ -426,12 +440,19 @@ impl Game<'_> {
                     }
                 }
             } else if trip.end {
-                let arrival = match self.as_guest(host, trip.conn, |g| g.end_arrival(trip.target)) {
+                let arrival = match self.as_guest(host, trip.conn, |g| {
+                    g.end_arrival(trip.target, &mut trip.finder)
+                }) {
                     Some(arrival) => arrival,
-                    None => self.end_arrival(trip.target),
+                    None => self.end_arrival(trip.target, &mut trip.finder),
                 };
                 match arrival {
-                    Ok((at, turned)) => (at, turned.unwrap_or(yaw)),
+                    Ok(Some((at, turned))) => (at, turned.unwrap_or(yaw)),
+                    Ok(None) => {
+                        self.server_trips.insert(k, trip);
+                        k += 1;
+                        continue;
+                    }
                     Err(e) => {
                         log::error!("End arrival: {e}");
                         (trip.target, yaw)
@@ -493,6 +514,7 @@ impl Game<'_> {
                 gateway: None,
                 respawn: None,
                 world_spawn: false,
+                finder: None,
                 placed: true,
             });
             if let Err(e) = self.enter_level(Some(host), source) {
