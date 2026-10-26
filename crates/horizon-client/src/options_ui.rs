@@ -2533,6 +2533,17 @@ impl OptionsUi {
                             if opt == Opt::Preset {
                                 apply_preset(s);
                             }
+                            if opt == Opt::HighContrast {
+                                // Options.highContrast: the built-in pack follows the option.
+                                let on = s.resource_packs.iter().any(|id| id == "high_contrast");
+                                if on != s.high_contrast {
+                                    s.resource_packs.retain(|id| id != "high_contrast");
+                                    if s.high_contrast {
+                                        s.resource_packs.push("high_contrast".into());
+                                    }
+                                    events.push(Event::Packs(s.resource_packs.clone()));
+                                }
+                            }
                             events.push(Event::Changed);
                         }
                         Act::Extra(item) => {
