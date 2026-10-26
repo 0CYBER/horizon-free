@@ -1808,14 +1808,13 @@ impl Game<'_> {
                         g.use_delay -= 1;
                     }
                 });
-                // ServerPlayerGameMode.handleBlockBreakAction: a creative
-                // player's START breaks the block once (destroyAndAck) and
-                // leaves nothing being destroyed; its client sends no STOP.
-                // Kept, the dig broke whatever was put there next, every
-                // destroy delay, for as long as the player broke nothing else.
+                // ServerPlayerGameMode.handleBlockBreakAction: creative and
+                // instant survival STARTs finish without a STOP from the client.
+                // tick_mining clears mining on completion; forget the START too,
+                // so a flower or crop planted here later is not broken again.
                 if digging.is_some()
-                    && host.hub.guests[gi].creative()
                     && let Some(play) = host.play.get_mut(&conn)
+                    && (host.hub.guests[gi].creative() || play.mining.is_none())
                 {
                     play.digging = None;
                 }
