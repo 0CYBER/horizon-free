@@ -133,6 +133,13 @@ when named and in the nightly audit (`--all`). LAN writes `results.json`
 with the host mode and each result beside its screenshots and logs. A skipped
 case is recorded explicitly and does not count as passing coverage.
 
+`known_flaky` in `tools/parity_hosts.json` lists harnesses that fail now and then for a
+cause not fixed yet, each with its reason. One that fails runs once more from
+scratch, and a pass then counts. `parity.py` prints a `RETRIED` line for it
+in its summary and in the CI job's summary (PR parity and parity-main), so the
+flake stays visible. No other harness gets this retry. Fix the cause, then take
+the harness off the list.
+
 The game-binary fixture audit keeps these complementary direct rule tests:
 
 - `command_harness.rs`: command feedback, styled spans and result callbacks,
