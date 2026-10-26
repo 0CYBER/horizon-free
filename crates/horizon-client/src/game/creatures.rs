@@ -1128,7 +1128,7 @@ impl Game<'_> {
                         self.particles.add(&options, at, velocity);
                     }
                 }
-                MobEvent::Experience { at, amount } => self.spawn_orbs(at, amount),
+                MobEvent::Experience { at, amount } => self.spawn_breeding_orb(at, amount),
                 MobEvent::AxolotlSupportPlayer => {
                     let previous = self
                         .potions
@@ -1272,6 +1272,13 @@ impl Game<'_> {
             m.extra.egg_time = life;
         }
     }
+    /// `Animal.finalizeSpawnChildFromBreeding`'s experience orb: only when the
+    /// `mob_drops` game rule is on.
+    fn spawn_breeding_orb(&mut self, at: [f64; 3], amount: u32) {
+        if self.ui.rules.bool("mob_drops") {
+            self.spawn_orbs(at, amount);
+        }
+    }
     /// Animal.spawnChildFromBreeding
     fn breed(
         &mut self,
@@ -1365,7 +1372,7 @@ impl Game<'_> {
                 }
                 self.world.random = r;
                 let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
-                self.spawn_orbs([p.position.x, p.position.y, p.position.z], xp);
+                self.spawn_breeding_orb([p.position.x, p.position.y, p.position.z], xp);
                 return;
             }
             if p.species() == Species::Cat {
@@ -1386,7 +1393,7 @@ impl Game<'_> {
                     };
                 }
                 let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
-                self.spawn_orbs([p.position.x, p.position.y, p.position.z], xp);
+                self.spawn_breeding_orb([p.position.x, p.position.y, p.position.z], xp);
                 return;
             }
             if p.species() == Species::Wolf {
@@ -1408,7 +1415,7 @@ impl Game<'_> {
                     };
                 }
                 let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
-                self.spawn_orbs([p.position.x, p.position.y, p.position.z], xp);
+                self.spawn_breeding_orb([p.position.x, p.position.y, p.position.z], xp);
                 return;
             }
             // Nautilus.getBreedOffspring: a tame parent's baby is tame too.
@@ -1424,7 +1431,7 @@ impl Game<'_> {
             }
         }
         let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
-        self.spawn_orbs([p.position.x, p.position.y, p.position.z], xp);
+        self.spawn_breeding_orb([p.position.x, p.position.y, p.position.z], xp);
     }
     /// `MobEffectUtil.addEffectToPlayersAround` for an elder guardian:
     /// mining fatigue III for five minutes unless a stronger or longer one
