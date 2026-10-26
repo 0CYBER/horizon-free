@@ -4353,7 +4353,7 @@ impl Game<'_> {
     /// `InstrumentItem.use` on this client: unless the horn is on cooldown,
     /// it is held up, plays its sound at the player and starts its cooldown.
     fn remote_use_instrument(&mut self, held: &ItemStack) {
-        let Some(instrument) = self.res.items().instrument(held).cloned() else {
+        let Some(instrument) = self.res.items().instrument(held) else {
             return;
         };
         let group = horizon_client::cooldowns::group(held, None);

@@ -3902,7 +3902,7 @@ impl Game<'_> {
     /// posted, the used statistic counts and the horn is on cooldown as long.
     /// A horn whose instrument is unknown fails, which still ends the click.
     fn use_instrument(&mut self, stack: &ItemStack) {
-        let Some(instrument) = self.res.items().instrument(stack).cloned() else {
+        let Some(instrument) = self.res.items().instrument(stack) else {
             return;
         };
         if self.using.is_none() {

@@ -293,13 +293,39 @@ impl Instrument {
 }
 /// The id of a goat horn's instrument (`InstrumentItem.getInstrument`): the
 /// stack's own `instrument` component, else the item's `ponder_goat_horn`.
+/// None for an inline instrument (see `inline_instrument`).
 pub fn instrument_id(stack: &ItemStack) -> Option<String> {
     if &*stack.item != "minecraft:goat_horn" {
         return None;
     }
     match stack.data().and_then(|d| d.other("minecraft:instrument")) {
         Some(horizon_world::nbt::Tag::String(id)) => Some(id.to_string_lossy()),
+        Some(horizon_world::nbt::Tag::Compound(_)) => None,
         _ => Some("minecraft:ponder_goat_horn".to_owned()),
+    }
+}
+/// A goat horn's inline `instrument` component (`Instrument.CODEC` also
+/// takes the instrument itself instead of a registry id).
+pub fn inline_instrument(stack: &ItemStack) -> Option<&horizon_world::nbt::Tag> {
+    if &*stack.item != "minecraft:goat_horn" {
+        return None;
+    }
+    match stack.data().and_then(|d| d.other("minecraft:instrument")) {
+        Some(tag @ horizon_world::nbt::Tag::Compound(_)) => Some(tag),
+        _ => None,
+    }
+}
+/// `Instrument.DIRECT_CODEC`: a `sound_event` that is an id or `{sound_id}`,
+/// `use_duration` and `range`.
+fn parse_instrument(v: &Value) -> Instrument {
+    let sound = match &v["sound_event"] {
+        Value::String(s) => s.clone(),
+        other => other["sound_id"].as_str().unwrap_or("").to_owned(),
+    };
+    Instrument {
+        sound,
+        use_duration: v["use_duration"].as_f64().unwrap_or(0.0) as f32,
+        range: v["range"].as_f64().unwrap_or(0.0) as f32,
     }
 }
 fn load_instruments(root: &Path) -> HashMap<String, Instrument> {
@@ -316,18 +342,7 @@ fn load_instruments(root: &Path) -> HashMap<String, Instrument> {
         let Ok(v) = serde_json::from_slice::<Value>(&bytes) else {
             continue;
         };
-        let sound = match &v["sound_event"] {
-            Value::String(s) => s.clone(),
-            other => other["sound_id"].as_str().unwrap_or("").to_owned(),
-        };
-        instruments.insert(
-            format!("minecraft:{stem}"),
-            Instrument {
-                sound,
-                use_duration: v["use_duration"].as_f64().unwrap_or(0.0) as f32,
-                range: v["range"].as_f64().unwrap_or(0.0) as f32,
-            },
-        );
+        instruments.insert(format!("minecraft:{stem}"), parse_instrument(&v));
     }
     instruments
 }
@@ -778,9 +793,13 @@ impl Items {
     pub fn get(&self, id: &str) -> Option<&ItemInfo> {
         self.items.get(id)
     }
-    /// The instrument a goat horn plays, if its `instrument` names one.
-    pub fn instrument(&self, stack: &ItemStack) -> Option<&Instrument> {
-        self.instruments.get(&instrument_id(stack)?)
+    /// The instrument a goat horn plays: its `instrument` component's
+    /// registry entry or inline instrument.
+    pub fn instrument(&self, stack: &ItemStack) -> Option<Instrument> {
+        if let Some(tag) = inline_instrument(stack) {
+            return Some(parse_instrument(&crate::scoreboard::tag_to_json(tag)));
+        }
+        self.instruments.get(&instrument_id(stack)?).cloned()
     }
     /// Only the block and item tags (and the enchantment registry, which the
     /// station rules and loot functions are built from), for tools that need
