@@ -7,6 +7,11 @@ welcome on [Discord](https://discord.gg/HcTeMZxe5E).
 This repository holds the game, the launcher and the website, plus the tools, tests and docs that build, check and
 release them. Anything else (videos, Discord and other community material) lives elsewhere.
 
+**Where to start: [playhorizon.dev/hub](https://playhorizon.dev/hub).** It shows what is being done now and next
+([ROADMAP.md](ROADMAP.md) in the repository), the work board, good first tasks, and the forms to report a bug or
+suggest something. A pull request for a roadmap item carries its `roadmap:<id>` label; ideas go to the suggestion
+queue (the hub, or `/suggest` on Discord) rather than to issues, which are for bugs.
+
 ## Build it
 
 You need Rust (stable), Python 3.10+, JDK 25, and on Linux the ALSA and udev headers (`libasound2-dev libudev-dev`).

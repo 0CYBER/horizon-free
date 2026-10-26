@@ -3,12 +3,13 @@
 // docs/nav.json), plus public/ and fingerprinted CSS and JS. No dependencies.
 //
 // Railway builds only website/, so the README and links.json come from the repo when they
-// are next to it (a local checkout) and from main on GitHub otherwise. The documentation lives in website/. The latest releases and
+// are next to it (a local checkout) and from main on GitHub otherwise. The documentation lives in website/, except the
+// API portal (docs/api/), read the same way as the README. The latest releases and
 // the contributors are baked in when GitHub answers, so the page reads well before (or without) JavaScript.
 import { readFile, writeFile, mkdir, rm, cp } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join, dirname } from "node:path";
+import { join, dirname, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { markdown, inline, section, escape } from "./src/markdown.js";
 import { recentHtml, releasesPageHtml } from "./src/releases.js";
@@ -16,6 +17,8 @@ import { machinesHtml, playersHtml } from "./src/bench.js";
 import { CPUS, GPUS, singleThread } from "./src/hardware.js";
 import { isGame, isLauncher, launcherVersion, newestFirst } from "./src/versions.js";
 import { contributorsFrom, contributorsHtml } from "./src/contributors.js";
+import { areaFilterHtml, boardFilterHtml, boardFrom, boardHtml, creditFrom, creditHtml, helpWantedHtml, journalFrom, journalHtml, journalJson, overviewHtml, roadmapHtml, slimIssue, suggestItemsHtml } from "./src/hub.js";
+import { INDEX_URL, KINDS, SUBMIT, listHtml, projectHtml, readIndex, submitHtml } from "./src/mods.js";
 
 const site = dirname(fileURLToPath(import.meta.url));
 const dist = join(site, "dist");
@@ -39,6 +42,21 @@ try {
   for (const key of Object.keys(links)) if (typeof parsed[key] === "string") links[key] = parsed[key].trim();
 } catch (e) {
   console.warn(`links.json: ${e.message}; using the built-in links`);
+}
+
+// Horizon's registry (/mods): the index its repository publishes, or HORIZON_MOD_INDEX (a file or an address) to
+// try a test registry. Without an answer the pages are built empty and load the index themselves.
+let modProjects = [];
+let modIndex = null;
+try {
+  const from = process.env.HORIZON_MOD_INDEX || INDEX_URL;
+  const text = from.startsWith("https://")
+    ? await fetch(from, { signal: AbortSignal.timeout(15000) }).then((r) => (r.ok ? r.text() : Promise.reject(new Error(`${r.status}`))))
+    : await readFile(from, "utf8");
+  modIndex = JSON.parse(text);
+  modProjects = readIndex(modIndex) ?? (console.warn("mod index: a schema this site doesn't read"), []);
+} catch (e) {
+  console.warn(`mod index: ${e.message}; the pages will load it themselves`);
 }
 
 // An optional token (a Railway variable, or `gh auth token` locally) lifts the rate limit.
@@ -75,6 +93,59 @@ try {
   else console.warn(`contributors: ${res.status} from GitHub; the page will load them itself`);
 } catch (e) {
   console.warn(`contributors: ${e.message}; the page will load them itself`);
+}
+
+// The hub's roadmap (data/roadmap.json, generated from roadmap/roadmap.toml by tools/roadmap.py) and the live state
+// of the issues and pull requests its items link: the open ones and those closed lately, then (with a token) the
+// older ones in one GraphQL request. Without GitHub the hub shows the links without their state.
+const roadmap = JSON.parse(await readFile(join(site, "data", "roadmap.json"), "utf8"));
+const linked = new Set(roadmap.items.flatMap((i) => (i.links || []).map((l) => Number((l.match(/^#(\d+)$/) || [])[1])).filter(Boolean)));
+let hubLive = [];
+try {
+  const urls = [1, 2, 3].map((p) => `https://api.github.com/repos/${REPO}/issues?state=open&per_page=100&page=${p}`);
+  urls.push(`https://api.github.com/repos/${REPO}/issues?state=closed&sort=updated&direction=desc&per_page=100`);
+  for (const url of urls) {
+    const res = await fetch(url, { headers: githubHeaders, signal: AbortSignal.timeout(15000) });
+    if (!res.ok) throw new Error(`${res.status} from GitHub`);
+    hubLive.push(...(await res.json()).map(slimIssue));
+  }
+  const missing = [...linked].filter((n) => !hubLive.some((i) => i.n === n));
+  if (missing.length && process.env.GITHUB_TOKEN) {
+    const fields = missing.map((n) => `n${n}: issueOrPullRequest(number: ${n}) { ... on Issue { number title state stateReason url } ... on PullRequest { number title state isDraft mergedAt url } }`).join(" ");
+    const res = await fetch("https://api.github.com/graphql", {
+      method: "POST",
+      headers: githubHeaders,
+      body: JSON.stringify({ query: `query { repository(owner: "ludovic111", name: "horizon") { ${fields} } }` }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const nodes = Object.values((await res.json()).data?.repository || {}).filter(Boolean);
+    hubLive.push(
+      ...nodes.map((x) =>
+        slimIssue({
+          number: x.number, title: x.title, html_url: x.url, draft: x.isDraft,
+          state: x.state === "OPEN" ? "open" : "closed", state_reason: x.stateReason === "NOT_PLANNED" ? "not_planned" : null,
+          pull_request: "isDraft" in x ? { merged_at: x.mergedAt } : undefined,
+        }),
+      ),
+    );
+  }
+} catch (e) {
+  console.warn(`hub: ${e.message}; the page will load the states itself`);
+}
+const hubLinked = new Map(hubLive.filter((i) => linked.has(i.n)).map((i) => [i.n, i]));
+const board = boardFrom(hubLive, roadmap);
+const journal = journalFrom(releases, hubLive, roadmap);
+
+// The hub's server (crates/horizon-telemetry-server: votes, bug reports, suggestions), and Kira's list of the
+// contributors who linked their Discord account and agreed to be credited (kira's /contributors.json).
+const hubApi = process.env.HUB_API_URL || "https://telemetry.playhorizon.dev";
+let kiraCredit = {};
+try {
+  const res = await fetch(process.env.KIRA_CONTRIBUTORS_URL || "https://kira-production-500e.up.railway.app/contributors.json", { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) throw new Error(`${res.status} from Kira`);
+  kiraCredit = await res.json();
+} catch (e) {
+  console.warn(`hub: contributors' Discord names: ${e.message}`);
 }
 
 // --- The parity table ------------------------------------------------------------------
@@ -170,7 +241,7 @@ await writeFile(join(dist, "favicon.ico"), Buffer.concat([ico, png32]));
 const names = {};
 const rewrite = (code) => code.replace(/"\.\/(\w+\.js)"/g, (all, file) => (names[file] ? `"./${names[file]}"` : all));
 // Dependencies before what imports them.
-const modules = ["markdown.js", "versions.js", "chrome.js", "hardware.js", "estimate.js", "releases.js", "contributors.js", "bench.js", "main.js", "releases-page.js", "benchmarks-page.js", "docs-page.js"];
+const modules = ["markdown.js", "versions.js", "chrome.js", "hardware.js", "estimate.js", "releases.js", "contributors.js", "bench.js", "hub.js", "main.js", "releases-page.js", "benchmarks-page.js", "docs-page.js", "hub-page.js", "mods.js", "mods-page.js", "mods-submit.js"];
 for (const file of modules) {
   const code = rewrite(await readFile(join(site, "src", file), "utf8"));
   names[file] = `${file.replace(".js", "")}.${fingerprint(code)}.js`;
@@ -203,7 +274,7 @@ const unavailable = `<p class="lede">The release notes could not be loaded here.
 
 // One top bar and phone menu for Home, Releases, Benchmarks and every Docs page.
 const navSections = [["/#about", "About"], ["/#screenshots", "In game"], ["/#parity", "Parity"], ["/#launcher", "Launcher"], ["/#recent", "New", "Recently added"], ["/#community", "Community"]];
-const navPages = [["/releases", "Releases"], ["/benchmarks", "Benchmarks"], ["/docs/", "Docs", "Documentation"]];
+const navPages = [["/hub", "Hub"], ["/mods", "Mods"], ["/releases", "Releases"], ["/benchmarks", "Benchmarks"], ["/docs/", "Docs", "Documentation"]];
 const navLink = ([href, label, menuLabel], current, menu = false) =>
   `<a href="${href}"${href === current ? ' aria-current="page"' : ""}${href === "/#contributors" ? ` data-contributors${contributors.length ? "" : " hidden"}` : ""}>${menu && menuLabel ? menuLabel : label}</a>`;
 const siteNav = (current) => `    <header class="nav" id="top">
@@ -233,7 +304,7 @@ const siteFooter = `    <footer class="footer">
       <div class="container">
         <div class="footer-bar">
           <span class="footer-mark">Made in the open, in Rust.</span>
-          <nav class="footer-links" aria-label="Elsewhere"><a href="/">Home</a><a href="/releases">Releases</a><a href="/benchmarks">Benchmarks</a><a href="/docs/">Docs</a><a href="/docs/how-horizon-is-built">How it's built</a><a href="https://github.com/${REPO}">GitHub</a><a href="/privacy">Privacy</a><a href="/LEGAL.md">Assets</a></nav>
+          <nav class="footer-links" aria-label="Elsewhere"><a href="/">Home</a><a href="/hub">Hub</a><a href="/mods">Mods</a><a href="/releases">Releases</a><a href="/benchmarks">Benchmarks</a><a href="/docs/">Docs</a><a href="/docs/how-horizon-is-built">How it's built</a><a href="https://github.com/${REPO}">GitHub</a><a href="/privacy">Privacy</a><a href="/LEGAL.md">Assets</a></nav>
         </div>
       </div>
       <p class="footer-word" aria-hidden="true">horizon</p>
@@ -282,21 +353,52 @@ const values = {
   CONTRIBUTORS: contributorsHtml(contributors),
   CONTRIBUTORS_HIDDEN: contributors.length ? "" : " hidden",
   BAKED: JSON.stringify(baked).replace(/</g, "\\u003c"),
+  HUB_JS: `/assets/${names["hub-page.js"]}`,
+  HUB_OVERVIEW: overviewHtml(roadmap, hubLinked),
+  HUB_ROADMAP: roadmapHtml(roadmap, hubLinked),
+  HUB_AREAS: areaFilterHtml(roadmap),
+  HUB_HELP_WANTED: helpWantedHtml(roadmap),
+  HUB_BOARD: hubLive.length ? boardHtml(board, roadmap) : `<p class="lede">The board could not be loaded here.</p>`,
+  HUB_BOARD_FILTER: boardFilterHtml(board, roadmap),
+  HUB_JOURNAL: journalHtml(journal, roadmap) || unavailable,
+  HUB_DATA: JSON.stringify({ roadmap, live: [...hubLinked.values()], api: hubApi }).replace(/</g, "\\u003c"),
+  HUB_SUGGEST_ITEMS: suggestItemsHtml(roadmap),
+  HUB_VERSION: escape(game[0]?.tag_name || ""),
+  HUB_CREDIT: creditHtml(creditFrom(contributors, kiraCredit)),
   YEAR: String(new Date().getUTCFullYear()),
 };
 
 // --- The documentation ---------------------------------------------------------------------
 // website/docs/<slug>.md: "# Title", a one-paragraph lede, then the body. docs/nav.json orders them in groups.
+// The API portal is the repository's docs/api/ (the pages and their generated references): nav.json lists it as
+// `api` (its README, /docs/api) and `api/<page>` (/docs/api/<page>). Its links are written for GitHub, so links
+// between its pages become the site's and every other relative link goes to the file on GitHub.
 
 const docsNav = JSON.parse(await readFile(join(site, "docs", "nav.json"), "utf8"));
+const docSlugs = new Set(docsNav.flatMap((g) => g.pages));
+const apiSource = (slug) => `docs/api/${slug === "api" ? "README" : slug.slice(4)}.md`;
+function apiLinks(text, from) {
+  return text.replace(/\]\(([^)\s]+)\)/g, (all, url) => {
+    if (url.startsWith("https://playhorizon.dev/")) return `](${url.slice(23)})`;
+    if (/^([a-z]+:|#|\/)/i.test(url)) return all;
+    const [file, id] = url.split("#");
+    const path = posix.normalize(posix.join(posix.dirname(from), file));
+    const page = path.match(/^docs\/api\/([\w-]+)\.md$/)?.[1];
+    const slug = page === "README" ? "api" : page && `api/${page}`;
+    const to = docSlugs.has(slug) ? `/docs/${slug}` : `https://github.com/${REPO}/blob/main/${path}`;
+    return `](${to}${id ? `#${id}` : ""})`;
+  });
+}
 const docs = [];
 for (const { group, pages: slugs } of docsNav) {
   for (const slug of slugs) {
-    const file = `${slug}.md`;
-    const text = (await readFile(join(site, "docs", file), "utf8")).replace(/\r\n?/g, "\n");
+    const api = slug === "api" || slug.startsWith("api/");
+    const file = api ? apiSource(slug) : `website/docs/${slug}.md`;
+    let text = (api ? (await repoFile(file))[0] : await readFile(join(site, "docs", `${slug}.md`), "utf8")).replace(/\r\n?/g, "\n");
+    if (api) text = apiLinks(text.replace(/^<!--[\s\S]*?-->\n/, ""), file);
     const m = text.match(/^# (.+)\n\n((?:[^\n]+\n)+)\n/);
-    if (!m) throw new Error(`docs/${file}: needs "# Title", a blank line, a lede paragraph and a blank line`);
-    docs.push({ slug, file, group, title: m[1].trim(), lede: m[2].trim().replace(/\n/g, " "), body: text.slice(m[0].length), path: slug === "index" ? "/docs/" : `/docs/${slug}` });
+    if (!m) throw new Error(`${file}: needs "# Title", a blank line, a lede paragraph and a blank line`);
+    docs.push({ slug, file, group, title: m[1].replace(/`/g, "").trim(), lede: m[2].trim().replace(/\n/g, " "), body: text.slice(m[0].length), path: slug === "index" ? "/docs/" : `/docs/${slug}` });
   }
 }
 const plain = (md) => md.replace(/`/g, "").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/\*\*/g, "");
@@ -336,7 +438,7 @@ const docNav = (current) =>
     .join("\n");
 const pagerLink = (d, rel) => (d ? `<a class="docs-pager-${rel}" href="${d.path}"><span>${rel === "next" ? "Next" : "Previous"}</span>${escape(d.title)}</a>` : "");
 
-await mkdir(join(dist, "docs"), { recursive: true });
+await mkdir(join(dist, "docs", "api"), { recursive: true });
 const docPageFiles = [];
 const docPages = renderedDocs.map((d, i) => {
   const toc = d.headings.filter((h) => h.level === 2);
@@ -358,8 +460,8 @@ const docPages = renderedDocs.map((d, i) => {
   };
 });
 
-const pages = ["index.html", "404.html", "privacy.html", "releases.html", "benchmarks.html"];
-const currentPath = { "releases.html": "/releases", "benchmarks.html": "/benchmarks" };
+const pages = ["index.html", "404.html", "privacy.html", "releases.html", "benchmarks.html", "hub.html"];
+const currentPath = { "releases.html": "/releases", "benchmarks.html": "/benchmarks", "hub.html": "/hub" };
 for (const page of pages) {
   let html = await readFile(join(site, "src", page), "utf8");
   const own = { ...values, SITE_NAV: siteNav(currentPath[page]) };
@@ -370,6 +472,50 @@ for (const page of pages) {
   html = html.replace(/href="\/(favicon\.svg|favicon-32\.png|apple-touch-icon\.png)"/g, (all, icon) => `href="/${icon}?v=${iconVersions[icon]}"`);
   await writeFile(join(dist, page), html);
 }
+// The registry: /mods (the list) and /mods/<id> (a page per project), one template.
+const modsTemplate = await readFile(join(site, "src", "mods.html"), "utf8");
+const modsList = `        <p class="kicker"><span>Mods</span>Made for Horizon, reviewed</p>
+        <h1 class="display page-title">Horizon mods</h1>
+        <p class="lede">Mods, modpacks and resource packs made for Horizon. Each one was reviewed before it was listed, and the launcher checks every file before it installs it. Mods run in a sandbox and can only do what their page says.</p>
+        <p class="mod-actions"><a class="button primary" href="${SUBMIT}">Submit yours</a> <a class="button secondary" href="/docs/make-a-mod">Make a mod</a></p>
+        <div class="mod-tools">
+          <input class="mod-search" id="mod-search" type="search" placeholder="Search" aria-label="Search the registry" autocomplete="off">
+          <div class="release-filter" role="group" aria-label="Show">
+            <button type="button" class="button secondary small" data-kind-filter="all" aria-pressed="true">All</button>
+${KINDS.map(([k, label]) => `            <button type="button" class="button secondary small" data-kind-filter="${k}" aria-pressed="false">${label}</button>`).join("\n")}
+          </div>
+        </div>
+        <p class="meta release-count" data-mod-count>${modProjects.length} of ${modProjects.length}</p>
+        <div class="mod-list" id="mod-list" aria-live="polite">
+${listHtml(modProjects)}
+        </div>`;
+const modPages = [
+  { file: "mods.html", path: "/mods", title: "Mods", description: "Mods, modpacks and resource packs made for Horizon, reviewed, each with what it may do and how to install it.", main: modsList },
+  { file: "mods/submit.html", path: "/mods/submit", title: "Submit to the registry", description: "Submit a mod, a modpack or a resource pack made for Horizon: it is checked, reviewed, then listed here and in the launcher.", main: submitHtml(), js: "mods-submit.js" },
+  ...modProjects.filter((p) => p.id !== "submit").map((p) => ({ file: `mods/${p.id}.html`, path: `/mods/${p.id}`, title: p.name, description: p.summary || p.name, main: projectHtml(p) })),
+];
+await mkdir(join(dist, "mods"), { recursive: true });
+const modsData = JSON.stringify(modIndex && modProjects.length ? { schema: modIndex.schema, projects: modProjects } : null).replace(/</g, "\\u003c");
+for (const page of modPages) {
+  const own = {
+    ...values,
+    SITE_NAV: siteNav("/mods"),
+    MODS_TITLE: escape(page.title),
+    MODS_DESCRIPTION: escape(page.description),
+    MODS_PATH: page.path,
+    MODS_JS: `/assets/${names[page.js || "mods-page.js"]}`,
+    MODS_MAIN: page.main,
+    MODS_DATA: modsData,
+    MODS_BAKED_AT: escape(modIndex?.generated || ""),
+  };
+  let html = modsTemplate.replace(/\{\{(\w+)\}\}/g, (all, key) => {
+    if (!(key in own)) throw new Error(`mods.html: unknown placeholder ${all}`);
+    return own[key];
+  });
+  html = html.replace(/href="\/(favicon\.svg|favicon-32\.png|apple-touch-icon\.png)"/g, (all, icon) => `href="/${icon}?v=${iconVersions[icon]}"`);
+  await writeFile(join(dist, page.file), html);
+}
+
 const docTemplate = await readFile(join(site, "src", "docs.html"), "utf8");
 for (const { file, values: own } of docPages) {
   let html = docTemplate.replace(/\{\{(\w+)\}\}/g, (all, key) => {
@@ -382,14 +528,20 @@ for (const { file, values: own } of docPages) {
   docPageFiles.push(file);
 }
 
+// The roadmap for other readers (Kira, scripts): /data/roadmap.json, as tools/roadmap.py wrote it.
+await mkdir(join(dist, "data"), { recursive: true });
+await cp(join(site, "data", "roadmap.json"), join(dist, "data", "roadmap.json"));
+// The journal for Kira's #updates and its X posts: /data/journal.json, rebuilt with every deploy.
+await writeFile(join(dist, "data", "journal.json"), JSON.stringify(journalJson(releases, hubLive, roadmap), null, 1) + "\n");
+
 // The pages' inline scripts (they mark the page as scripted and apply the saved theme before CSS
 // applies) and the inlined stylesheet: the Content-Security-Policy in the Caddyfile allows them by hash.
-const allHtml = (await Promise.all([...pages, ...docPageFiles].map((page) => readFile(join(dist, page), "utf8")))).join("\n");
+const allHtml = (await Promise.all([...pages, ...docPageFiles, ...modPages.map((p) => p.file)].map((page) => readFile(join(dist, page), "utf8")))).join("\n");
 const hashes = (re) => [...new Set([...allHtml.matchAll(re)].map((m) => `'sha256-${createHash("sha256").update(m[1]).digest("base64")}'`))].join(" ");
 await writeFile(join(dist, ".csp-script"), hashes(/<script>([\s\S]*?)<\/script>/g));
 await writeFile(join(dist, ".csp-style"), hashes(/<style>([\s\S]*?)<\/style>/g));
 
-const urls = ["/", "/releases", "/benchmarks", ...docs.map((d) => d.path), "/privacy"];
+const urls = ["/", "/hub", "/mods", ...modPages.slice(1).map((p) => p.path), "/releases", "/benchmarks", ...docs.map((d) => d.path), "/privacy"];
 await writeFile(
   join(dist, "sitemap.xml"),
   `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map((u) => `  <url><loc>https://playhorizon.dev${u}</loc></url>`).join("\n")}\n</urlset>\n`,
@@ -397,5 +549,5 @@ await writeFile(
 
 console.log(
   `built dist/ from ${readmeFrom}: ${body.length} subsystems, ${percent}, ${harnesses} harnesses, ` +
-    `${ours.length} releases (${game.length} game)${launcher ? `, launcher ${launcher.tag_name}` : ""}, ${benchSummary.groups.length} benchmark rows, ${contributors.length} contributors, ${docs.length} docs pages`,
+    `${ours.length} releases (${game.length} game)${launcher ? `, launcher ${launcher.tag_name}` : ""}, ${benchSummary.groups.length} benchmark rows, ${contributors.length} contributors, ${docs.length} docs pages, ${modProjects.length} registry projects, ${roadmap.items.length} roadmap items (${hubLinked.size}/${linked.size} links live), ${Object.values(board).flat().length} board cards, ${journal.length} journal entries`,
 );

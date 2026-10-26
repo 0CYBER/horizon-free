@@ -617,9 +617,23 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.head_pitch = pitch;
     m.on_ground = flag(tag, "OnGround");
     m.fall_distance = float(tag.get("fall_distance")).unwrap_or(0.0);
-    if let Some(h) = float(tag.get("Health")) {
-        m.health = h as f32;
+    // LivingEntity.readAdditionalSaveData: the saved attribute bases, then
+    // the health, the max health when there is none.
+    if let Some(Tag::List(attrs)) = tag.get("attributes") {
+        for a in attrs {
+            let (Some(id), Some(Tag::Double(bits))) = (text(a.get("id")), a.get("base")) else {
+                continue;
+            };
+            let v = f64::from_bits(*bits);
+            match id.as_str() {
+                "minecraft:max_health" => m.attrs.max_health = v as f32,
+                "minecraft:movement_speed" => m.attrs.speed = v,
+                "minecraft:attack_damage" => m.attrs.attack_damage = v as f32,
+                _ => {}
+            }
+        }
     }
+    m.health = float(tag.get("Health")).map_or(m.attrs.max_health, |h| h as f32);
     m.hurt_time = number(tag.get("HurtTime")).unwrap_or(0) as i32;
     // What it holds (equipment.mainhand / offhand), when saved.
     if let Some(eq) = tag.get("equipment") {
@@ -735,12 +749,8 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
                 let (Some(id), Some(Tag::Double(bits))) = (text(a.get("id")), a.get("base")) else {
                     continue;
                 };
-                let v = f64::from_bits(*bits);
-                match id.as_str() {
-                    "minecraft:max_health" => m.attrs.max_health = v as f32,
-                    "minecraft:movement_speed" => m.attrs.speed = v,
-                    "minecraft:jump_strength" => m.extra.vector[0] = v,
-                    _ => {}
+                if id == "minecraft:jump_strength" {
+                    m.extra.vector[0] = f64::from_bits(*bits);
                 }
             }
         }
