@@ -407,6 +407,12 @@ impl LineEdit {
     }
 }
 
+/// What a paste puts in a one-line field: the clipboard's first line, spaces at its ends kept
+/// (` --world Test` after an argument is a new argument).
+fn pasted(clipboard: &str) -> &str {
+    clipboard.lines().next().unwrap_or_default()
+}
+
 /// The keyboard in a field: moves the caret, edits, copies and pastes. Never returns Paste, Copy
 /// or Cut (they are done); Enter, Escape and Pass are the page's.
 pub(super) fn handle(edit: &mut LineEdit, ev: &KeyDownEvent, cx: &mut App) -> Key {
@@ -415,7 +421,7 @@ pub(super) fn handle(edit: &mut LineEdit, ev: &KeyDownEvent, cx: &mut App) -> Ke
     match edit.key(&k.key, k.key_char.as_deref(), command, k.modifiers.shift) {
         Key::Paste => {
             if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                edit.insert(text.lines().next().unwrap_or_default().trim());
+                edit.insert(pasted(&text));
             }
             Key::Edited
         }
