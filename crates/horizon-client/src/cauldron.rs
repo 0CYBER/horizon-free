@@ -40,6 +40,8 @@ pub struct Interaction {
     /// The cauldron's new state.
     pub block: Option<BlockState>,
     pub sound: Option<&'static str>,
+    /// The custom statistic the player earns (`use_cauldron`, ...).
+    pub stat: Option<&'static str>,
 }
 
 fn state(name: &str, level: Option<u8>) -> BlockState {
@@ -57,6 +59,7 @@ fn pass() -> Interaction {
         outcome: Outcome::Pass,
         block: None,
         sound: None,
+        stat: None,
     }
 }
 
@@ -117,11 +120,12 @@ fn lowered(cauldron: &BlockState) -> BlockState {
     }
 }
 
-fn changed(block: BlockState, sound: Option<&'static str>) -> Interaction {
+fn changed(block: BlockState, sound: Option<&'static str>, stat: &'static str) -> Interaction {
     Interaction {
         outcome: Outcome::Success,
         block: Some(block),
         sound,
+        stat: Some(stat),
     }
 }
 
@@ -179,18 +183,22 @@ pub fn interact(
             stack.data_mut().dyed_color = None;
             stack.tidy();
         }
-        return changed(lowered(cauldron), None);
+        return changed(lowered(cauldron), None, "clean_armor");
     }
     let fill_bucket = |player: &mut dyn Player, new: &str, can_fill: bool, sound| {
         if !can_fill {
             return pass();
         }
         filled(player, ItemStack::new(new, 1), true);
-        changed(state("minecraft:cauldron", None), Some(sound))
+        changed(
+            state("minecraft:cauldron", None),
+            Some(sound),
+            "use_cauldron",
+        )
     };
     let empty_bucket = |player: &mut dyn Player, block: BlockState, sound| {
         filled(player, ItemStack::new("minecraft:bucket", 1), true);
-        changed(block, Some(sound))
+        changed(block, Some(sound), "fill_cauldron")
     };
     match item {
         "minecraft:lava_bucket" => {
@@ -199,6 +207,7 @@ pub fn interact(
                     outcome: Outcome::Consume,
                     block: None,
                     sound: None,
+                    stat: None,
                 }
             } else {
                 empty_bucket(
@@ -221,6 +230,7 @@ pub fn interact(
                     outcome: Outcome::Consume,
                     block: None,
                     sound: None,
+                    stat: None,
                 }
             } else {
                 empty_bucket(
@@ -241,6 +251,7 @@ pub fn interact(
             changed(
                 state("minecraft:water_cauldron", Some(1)),
                 Some("minecraft:item.bottle.empty"),
+                "use_cauldron",
             )
         }
         ("water", "minecraft:bucket") => fill_bucket(
@@ -255,7 +266,11 @@ pub fn interact(
                 ItemStack::new("minecraft:potion", 1).with_potion("minecraft:water"),
                 true,
             );
-            changed(lowered(cauldron), Some("minecraft:item.bottle.fill"))
+            changed(
+                lowered(cauldron),
+                Some("minecraft:item.bottle.fill"),
+                "use_cauldron",
+            )
         }
         ("water", "minecraft:potion") => {
             if level == 3 || !water_potion {
@@ -266,7 +281,7 @@ pub fn interact(
             // BlockState.cycle on a 1..=3 property
             next.properties
                 .insert("level".into(), (level % 3 + 1).to_string());
-            changed(next, Some("minecraft:item.bottle.empty"))
+            changed(next, Some("minecraft:item.bottle.empty"), "use_cauldron")
         }
         ("water", name)
             if name
@@ -283,7 +298,7 @@ pub fn interact(
             cleaned.data_mut().banner_patterns.pop();
             cleaned.tidy();
             filled(player, cleaned, false);
-            changed(lowered(cauldron), None)
+            changed(lowered(cauldron), None, "clean_banner")
         }
         ("water", name)
             if name
@@ -292,7 +307,7 @@ pub fn interact(
                 .is_some_and(|c| COLORS.contains(&c)) =>
         {
             filled(player, held.transmute("minecraft:shulker_box", 1), false);
-            changed(lowered(cauldron), None)
+            changed(lowered(cauldron), None, "clean_shulker_box")
         }
         ("lava", "minecraft:bucket") => fill_bucket(
             player,
