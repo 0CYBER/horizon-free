@@ -91,8 +91,7 @@ impl Game<'_> {
                 distant_terrain: self.lod.is_some(),
                 cloud_range_chunks: self.settings.cloud_range,
                 camera_y: camera.y,
-                // level.getMinY(): the Nether and the End start at y 0.
-                min_y: if self.dim == Dim::Overworld { MIN_Y } else { 0 },
+                min_y: self.level_min_y(),
                 flat: self.level_flat(),
                 forward: forward.map(|c| c as f32),
                 rain,
@@ -107,11 +106,18 @@ impl Game<'_> {
             },
         )
     }
-    /// `ClientLevelData.isFlat`: on the server thread, as its spawn info said.
+    /// `ClientLevelData.isFlat`: on the server thread, the world-wide flag.
     fn level_flat(&self) -> bool {
         match self.remote.as_ref() {
             Some(r) => r.flat,
-            None => self.dim == Dim::Overworld && self.overworld_flat,
+            None => self.world_flat,
+        }
+    }
+    /// `Level.getMinY`: the current dimension type's minimum y.
+    fn level_min_y(&self) -> i32 {
+        match self.remote.as_ref() {
+            Some(r) => r.dimension.min_y,
+            None => self.dim.min_y(),
         }
     }
     /// `SkyRenderer.shouldRenderDarkDisc`: eye below the horizon and not under
@@ -119,7 +125,7 @@ impl Game<'_> {
     /// otherwise y 63.
     pub(super) fn dark_disc(&self, camera: glam::DVec3) -> bool {
         let horizon = if self.level_flat() {
-            f64::from(MIN_Y)
+            f64::from(self.level_min_y())
         } else {
             63.0
         };

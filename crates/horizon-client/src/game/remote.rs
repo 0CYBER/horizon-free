@@ -115,7 +115,7 @@ pub(super) struct Remote {
     joined: bool,
     status: String,
     pub(super) entity_id: i32,
-    dimension: DimensionType,
+    pub(super) dimension: DimensionType,
     /// What chunk packets decode with (the dimension's height and sky, the
     /// biome registry); replaced whenever one of them changes.
     pub(super) chunk_format: Arc<ChunkFormat>,
