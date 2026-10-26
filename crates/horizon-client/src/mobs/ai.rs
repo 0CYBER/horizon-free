@@ -433,14 +433,20 @@ pub fn tick(
 /// that hurt or hold a mob: the cactus (`CactusBlock.entityInside`, 1) and the
 /// sweet berry bush (`SweetBerryBushBlock.entityInside`: stuck at 0.8, 0.75,
 /// 0.8, and a grown bush pricks for 1 when the mob moved at least 0.003 on X
-/// or Z this tick). The blocks are those the mob's box touches where it
-/// started the tick and where it ended.
+/// or Z this tick). The blocks are those the mob's box touches anywhere along
+/// its move this tick, from where it started to where it ended.
 fn effects_from_blocks(m: &mut Mob, w: &MobWorld) {
     let mut visited: Vec<[i32; 3]> = Vec::new();
-    for at in [m.previous, m.position] {
+    let travel = m.position.subtract(m.previous);
+    let longest = travel.x.abs().max(travel.y.abs()).max(travel.z.abs());
+    let steps = ((longest / 0.2).ceil() as i32).clamp(1, 100);
+    for step in 0..=steps {
         if !m.alive() {
             return;
         }
+        let at = m
+            .previous
+            .add_vector(travel.scale(f64::from(step) / f64::from(steps)));
         let b = m.bounds_at(at).deflate(Vec3::new(1e-5, 1e-5, 1e-5));
         for x in b.min_position().x.floor() as i32..=b.max_position().x.floor() as i32 {
             for y in b.min_position().y.floor() as i32..=b.max_position().y.floor() as i32 {
@@ -465,7 +471,7 @@ fn effects_from_blocks(m: &mut Mob, w: &MobWorld) {
                                 && (moved.x.abs() >= f64::from(0.003_f32)
                                     || moved.z.abs() >= f64::from(0.003_f32))
                             {
-                                m.damage(1.0, Damage::of(DamageKind::Cactus));
+                                m.damage(1.0, Damage::of(DamageKind::SweetBerryBush));
                             }
                         }
                         _ => continue,

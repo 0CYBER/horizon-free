@@ -518,6 +518,8 @@ pub enum DamageKind {
     Magic,
     Sting,
     Cactus,
+    /// `sweet_berry_bush`.
+    SweetBerryBush,
     Generic,
     InWall,
     Thorns,
@@ -573,7 +575,11 @@ impl Damage {
     pub fn causes_panic(&self) -> bool {
         !matches!(
             self.kind,
-            DamageKind::Fall | DamageKind::Drown | DamageKind::Generic | DamageKind::InWall
+            DamageKind::Fall
+                | DamageKind::Drown
+                | DamageKind::Generic
+                | DamageKind::InWall
+                | DamageKind::SweetBerryBush
         )
     }
     /// DamageTypeTags.BYPASSES_ARMOR
@@ -608,6 +614,7 @@ impl Damage {
                 | DamageKind::Drown
                 | DamageKind::Magic
                 | DamageKind::Cactus
+                | DamageKind::SweetBerryBush
                 | DamageKind::Generic
                 | DamageKind::InWall
                 | DamageKind::OutOfWorld
