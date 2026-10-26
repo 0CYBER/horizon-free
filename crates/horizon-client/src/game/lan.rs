@@ -1403,7 +1403,11 @@ impl Game<'_> {
                 let tag = if secure { "" } else { "[Not Secure] " };
                 super::dedicated::log("INFO", &format!("{tag}{line}"));
             }
-            HostEvent::Chat { line, .. } => self.system_message(Text::literal(line)),
+            // Player chat (and `/say`'s or `/me`'s, which are chat messages
+            // too): the host's Chat option decides, as `ChatListener` does
+            // for the guests' packets. Command feedback is a system message
+            // and takes the system-message permission instead.
+            HostEvent::Chat { line, .. } => self.player_message(Text::literal(line)),
             HostEvent::Warn(line) if dedicated => super::dedicated::log("WARN", &line),
             HostEvent::Warn(line) => log::warn!("{line}"),
             HostEvent::Error(line) if dedicated => super::dedicated::log("ERROR", &line),

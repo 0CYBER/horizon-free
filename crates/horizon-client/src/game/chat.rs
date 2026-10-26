@@ -481,6 +481,38 @@ impl Game<'_> {
             self.mods_chat(&line);
         }
     }
+    /// A player's chat line on the window's own chat: a LAN guest's message
+    /// while the host runs in-frame (`HostEvent::Chat`). `ChatListener`
+    /// checks `canReceivePlayerMessages` for these, so Commands Only and
+    /// Hidden drop them; command feedback (`/list`, `/tp`) is a system
+    /// message and takes the system-message permission instead.
+    pub(super) fn player_message(&mut self, text: Text) {
+        if let Some(capture) = self.chat_capture.as_mut() {
+            capture.push(text);
+            return;
+        }
+        // A server's client receives the line as a packet (PlayerChat or
+        // DisguisedChat) and filters it there.
+        if self.remote.is_some() {
+            return;
+        }
+        if !self.ui.chat.shows(ChatSource::Player) {
+            return;
+        }
+        let focused = self.screen == Screen::Chat;
+        let heard = self.mods.running().then(|| text.plain());
+        self.ui.chat.add(
+            &self.gui.atlas,
+            text,
+            None,
+            ChatSource::Player,
+            self.ticks,
+            focused,
+        );
+        if let Some(line) = heard {
+            self.mods_chat(&line);
+        }
+    }
     /// Keys while the chat screen is open.
     pub(super) fn chat_key(&mut self, event: &KeyEvent) {
         if let Some(shortcut) = self.edit_shortcut(event) {
