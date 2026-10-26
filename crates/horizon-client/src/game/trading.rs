@@ -245,7 +245,7 @@ impl Game<'_> {
             self.handle_mob_events(events)?;
             return Ok(true);
         }
-        self.stats.custom("talk_to_villager", 1);
+        self.stats.custom("talked_to_villager", 1);
         self.ensure_offers(index);
         let m = &self.mobs[index];
         let trade = m.extra.trade.as_deref().cloned().unwrap_or_default();
