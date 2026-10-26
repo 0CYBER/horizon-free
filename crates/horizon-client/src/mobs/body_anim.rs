@@ -59,11 +59,11 @@ pub struct Goat {
     pub ramming_x_head_rot: f32,
 }
 impl Goat {
-    pub fn from_mob(_m: &Mob) -> Self {
+    pub fn from_mob(m: &Mob) -> Self {
         Self {
-            left_horn: true,
-            right_horn: true,
-            ramming_x_head_rot: 0.0,
+            left_horn: !m.extra.lost_horns[0],
+            right_horn: !m.extra.lost_horns[1],
+            ramming_x_head_rot: super::goat::ramming_x_head_rot(m),
         }
     }
 }

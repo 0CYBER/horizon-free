@@ -399,6 +399,16 @@ fn mob_meta(
             }
             defaults.push((18, serializer::BYTE, Value::Byte(16)));
         }
+        // Goat.DATA_HAS_LEFT_HORN and DATA_HAS_RIGHT_HORN (after
+        // DATA_IS_SCREAMING_GOAT): both true by default.
+        "minecraft:goat" => {
+            for (index, lost) in [(19, e.lost_horns[0]), (20, e.lost_horns[1])] {
+                if lost {
+                    meta.push((index, serializer::BOOLEAN, Value::Bool(false)));
+                }
+                defaults.push((index, serializer::BOOLEAN, Value::Bool(true)));
+            }
+        }
         // Enderman.DATA_CARRY_STATE.
         "minecraft:enderman" => {
             if let Some(state) = e.carried {

@@ -186,6 +186,9 @@ pub fn register(m: &mut Mob) {
             if m.species() == Species::Turtle {
                 super::turtle::register(m);
             }
+            if m.species() == Species::Goat {
+                super::goat::register(m);
+            }
         }
         Family::Inert => {}
         Family::Witch => super::witch::register(m),
@@ -1016,6 +1019,7 @@ fn species_ai_step(
         }
         Species::Nautilus | Species::ZombieNautilus => super::nautilus::ai_step(m, w, events),
         Species::Chicken => farm::chicken_ai_step(m, w, events),
+        Species::Goat => super::goat::tick(m),
         Species::Turtle => super::turtle::ai_step(m, w, events),
         Species::Sheep if m.extra.anim_ticks > 0 => {
             m.extra.anim_ticks -= 1;

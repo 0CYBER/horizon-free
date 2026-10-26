@@ -92,6 +92,10 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             (Species::Sniffer, 18, Value::Id(state)) => {
                 sniffer::set_state(m, (*state).clamp(0, 6) as u8);
             }
+            // Goat.DATA_HAS_LEFT_HORN and DATA_HAS_RIGHT_HORN: the model hides
+            // a horn the goat lost.
+            (Species::Goat, 19, Value::Bool(has)) => m.extra.lost_horns[0] = !*has,
+            (Species::Goat, 20, Value::Bool(has)) => m.extra.lost_horns[1] = !*has,
             // Shulker.DATA_ATTACH_FACE_ID, DATA_PEEK_ID and DATA_COLOR_ID.
             (Species::Shulker, 16, Value::Id(face)) => m.extra.variant3 = (*face).clamp(0, 5) as u8,
             (Species::Shulker, 17, Value::Byte(peek)) => m.extra.counter = i32::from(*peek),

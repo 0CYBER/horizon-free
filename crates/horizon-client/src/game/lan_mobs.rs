@@ -70,6 +70,10 @@ pub(super) fn acts_on_player(e: &MobEvent) -> bool {
                 target: Who::Player,
                 ..
             }
+            | MobEvent::Knockback {
+                target: Who::Player,
+                ..
+            }
             | MobEvent::Ignite {
                 target: Who::Player,
                 ..

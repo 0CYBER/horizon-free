@@ -947,6 +947,19 @@ impl Game<'_> {
                         }
                     }
                 }
+                MobEvent::Knockback {
+                    target,
+                    power,
+                    x,
+                    z,
+                } => match target {
+                    Who::Player => self.knock_back_player(power, x, z),
+                    Who::Mob(id) => {
+                        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                            m.knockback(power, x, z);
+                        }
+                    }
+                },
                 MobEvent::Wololo { mob } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
                         // DyeColor.RED.

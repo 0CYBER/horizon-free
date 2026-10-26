@@ -33,6 +33,7 @@ pub mod farm;
 pub mod finalize;
 pub mod gear;
 pub mod goals;
+pub mod goat;
 pub mod golem;
 pub mod guardian;
 pub mod happy_ghast;
@@ -771,6 +772,8 @@ pub struct Extra {
     /// A goat's `IsScreamingGoat` and the horns it lost (left, right).
     pub screaming: bool,
     pub lost_horns: [bool; 2],
+    /// A goat's lowered head and ram behaviours.
+    pub goat: goat::State,
     /// Attribute bases and permanent modifiers set by `finalizeSpawn`.
     pub attributes: Option<Box<finalize::Attributes>>,
     /// Brain memories `finalizeSpawn` sets: (memory, value, ticks to expiry).
@@ -1000,6 +1003,13 @@ pub enum MobEvent {
         target: u32,
         amount: f32,
         source: Damage,
+    },
+    /// `LivingEntity.knockback(power, x, z)`: pushed away from the direction.
+    Knockback {
+        target: Who,
+        power: f64,
+        x: f64,
+        z: f64,
     },
     /// Set another mob's attack target (HurtByTargetGoal alerts).
     SetTarget {

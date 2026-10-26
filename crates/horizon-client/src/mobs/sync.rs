@@ -15,7 +15,7 @@
 //!   them in `entity_event`;
 //! - run its client side animation in `client_tick`, sharing the function
 //!   with the server's `ai_step` where the server computes the same.
-use super::{Mob, Species, breeze, camel, shulker, sniffer, warden};
+use super::{Mob, Species, breeze, camel, goat, shulker, sniffer, warden};
 
 // `Pose.id` of the poses mobs take.
 pub const STANDING: u8 = 0;
@@ -60,6 +60,7 @@ pub fn client_tick(m: &mut Mob, game_time: i64) {
         Species::Breeze => breeze::ai_step(m),
         Species::Camel | Species::CamelHusk => camel::client_tick(m, game_time),
         Species::Shulker => shulker::client_tick(m),
+        Species::Goat => goat::tick(m),
         _ => {}
     }
 }
@@ -67,6 +68,9 @@ pub fn client_tick(m: &mut Mob, game_time: i64) {
 /// `handleEntityEvent` of the mob types that start animations by an event
 /// (`ClientboundEntityEventPacket` for a mob of a client).
 pub fn entity_event(m: &mut Mob, event: u8) {
+    if m.species() == Species::Goat {
+        goat::entity_event(m, event);
+    }
     let age = m.age as f32;
     if m.species() == Species::Warden {
         match event {
