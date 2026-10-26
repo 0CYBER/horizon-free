@@ -127,6 +127,52 @@ impl Game<'_> {
             None => vec![own],
         }
     }
+    /// `Container.stillValidBlockEntity`: the open block container closes once
+    /// the player's eyes are out of reach of any of its blocks (a 4-block buffer).
+    pub(super) fn tick_container_reach(&mut self) {
+        // A server's menu ends when the server closes it.
+        if self.remote.is_some() {
+            return;
+        }
+        let Some(eye) = self.eye_position() else {
+            return;
+        };
+        if self
+            .container
+            .is_none_or(|k| k.1 == super::minecarts::CART_KEY_Y)
+        {
+            return;
+        }
+        let range = self.reach() + 4.0;
+        let near = self.container_parts().iter().all(|&((x, y, z), _)| {
+            horizon_client::lan::guest::within_block_range(eye, range, [x, y, z])
+        });
+        if !near {
+            self.close_container();
+            self.screen = super::Screen::Playing;
+            self.capture(true);
+        }
+    }
+    /// `CraftingMenu.stillValid`: the open crafting table closes once its
+    /// block is no longer a crafting table or the player's eyes are out of
+    /// reach (a 4-block buffer).
+    pub(super) fn tick_craft_table(&mut self) {
+        // A server's menu ends when the server closes it.
+        if self.remote.is_some() || self.craft_size != 3 {
+            return;
+        }
+        let (Some(pos), Some(eye)) = (self.craft_table, self.eye_position()) else {
+            return;
+        };
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        let table = &*self.res.facts().get(state).name == "minecraft:crafting_table";
+        let range = self.reach() + 4.0;
+        if !(table && horizon_client::lan::guest::within_block_range(eye, range, pos)) {
+            self.close_container();
+            self.screen = super::Screen::Playing;
+            self.capture(true);
+        }
+    }
     /// The number of slots of the open container.
     pub(super) fn container_size(&self) -> usize {
         self.container_parts().iter().map(|p| p.1).sum()
@@ -227,7 +273,8 @@ impl Game<'_> {
             );
             let title = self.translate("container.shulkerBox", "Shulker Box");
             batch.text(atlas, &title, ox + 8.0, oy + 6.0, grey, false);
-            batch.text(atlas, "Inventory", ox + 8.0, oy + 73.0, grey, false);
+            let inventory = self.translate("container.inventory", "Inventory");
+            batch.text(atlas, &inventory, ox + 8.0, oy + 73.0, grey, false);
             return;
         }
         let rows = self.chest_rows().unwrap_or(3);
@@ -255,9 +302,10 @@ impl Game<'_> {
             grey,
             false,
         );
+        let inventory = self.translate("container.inventory", "Inventory");
         batch.text(
             atlas,
-            "Inventory",
+            &inventory,
             ox + 8.0,
             oy + 114.0 + rows as f32 * 18.0 - 94.0,
             grey,
