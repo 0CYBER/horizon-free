@@ -547,6 +547,8 @@ struct GameLevel<'w> {
     player_collision: Option<PlayerCollision>,
     /// Minecart boxes (detector rails).
     cart_boxes: Vec<([f64; 3], [f64; 3])>,
+    /// Arrow and thrown trident boxes (wooden buttons).
+    arrow_boxes: Vec<([f64; 3], [f64; 3])>,
     /// The other entities that keep blocks from being placed into them.
     blockers: Blockers<'w>,
     biomes: &'w Biomes,
@@ -878,8 +880,9 @@ impl LevelAccess for GameLevel<'_> {
     fn is_ticking_chunk(&self, chunk: horizon_core::position::ChunkPos) -> bool {
         self.tickets.block_ticking(chunk.x, chunk.z) && ticking_chunk(self.world, chunk.x, chunk.z)
     }
-    /// Entities that trigger pressure plates, tripwires and detector rails:
-    /// the players (the host and the LAN guests, mobs) and the minecarts.
+    /// Entities that trigger pressure plates, tripwires, detector rails and
+    /// wooden buttons: the players (the host and the LAN guests, mobs) and
+    /// the minecarts, and for `EntityQuery::Arrows` the arrows.
     fn count_entities(&self, area: Aabb, query: EntityQuery) -> usize {
         let hit = |(lo, hi): &([f64; 3], [f64; 3])| {
             area.intersects(Aabb::new(
@@ -888,6 +891,7 @@ impl LevelAccess for GameLevel<'_> {
             ))
         };
         let carts = || self.cart_boxes.iter().filter(|b| hit(b)).count();
+        let arrows = || self.arrow_boxes.iter().filter(|b| hit(b)).count();
         let players = || {
             self.player_box
                 .iter()
@@ -897,6 +901,7 @@ impl LevelAccess for GameLevel<'_> {
         };
         match query {
             EntityQuery::Minecart => carts(),
+            EntityQuery::Arrows => arrows(),
             EntityQuery::Mobs => players(),
             EntityQuery::Everything => players() + carts(),
         }
@@ -2518,6 +2523,18 @@ impl Game<'_> {
                 )
             })
             .collect();
+        let arrow_boxes = self
+            .creatures
+            .projectiles
+            .iter()
+            .filter(|p| p.arrow.is_some())
+            .map(|p| p.position)
+            .chain(self.tridents.iter().map(|t| t.position))
+            .map(|at| {
+                let b = horizon_client::arrows::arrow_bounds(at);
+                (b.min_position().components(), b.max_position().components())
+            })
+            .collect();
         let guest_boxes = self.lan_block_trigger_boxes();
         let dimension = match self.dim {
             Dim::Overworld => LevelDimension::Overworld,
@@ -2548,6 +2565,7 @@ impl Game<'_> {
         };
         let mut level = GameLevel {
             cart_boxes,
+            arrow_boxes,
             blockers,
             world: &mut self.world,
             facts: self.res.facts(),
@@ -2686,8 +2704,9 @@ impl Game<'_> {
             .copied()
             .filter(|&(x, z)| levels.random_ticking(x, z) && ticking_chunk(&self.world, x, z))
             .collect();
-        // Entity.checkInsideBlocks for the plates, tripwires and detector rails
-        // under the players (the host and the LAN guests) and the minecarts.
+        // Entity.checkInsideBlocks for the plates, tripwires, detector rails and
+        // buttons under the players (the host and the LAN guests), the minecarts
+        // and the arrows.
         let mut inside = Vec::new();
         let guests = self.lan_block_trigger_boxes();
         let boxes = self
@@ -2718,6 +2737,24 @@ impl Game<'_> {
                     }
                 }
             }
+        }
+        // AbstractArrow.applyEffectsFromBlocks: the blocks every arrow passed
+        // through this tick (a wooden button is pressed by one inside it), and
+        // the ones a thrown trident is in.
+        for p in self
+            .creatures
+            .projectiles
+            .iter()
+            .filter(|p| p.arrow.is_some())
+        {
+            inside.extend(horizon_client::arrows::blocks_inside(
+                p.previous, p.position,
+            ));
+        }
+        for t in &self.tridents {
+            inside.extend(horizon_client::arrows::blocks_inside(
+                t.position, t.position,
+            ));
         }
         // BigDripleafBlock.entityInside also asks whether the player stands on
         // the ground and how high its feet are: the leaves its box's feet

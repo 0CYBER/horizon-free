@@ -367,6 +367,29 @@ fn bounds(at: Vec3) -> Aabb {
         Vec3::new(at.x + w, at.y + f64::from(HEIGHT), at.z + w),
     )
 }
+/// The bounding box of an arrow, or a thrown trident, at `at`.
+pub fn arrow_bounds(at: Vec3) -> Aabb {
+    bounds(at)
+}
+/// The blocks an arrow that moved from `from` to `to` was inside
+/// (`Entity.checkInsideBlocks`: the sweep of its box, 16 steps at most), for
+/// the blocks that react to it (`entityInside`).
+pub fn blocks_inside(from: Vec3, to: Vec3) -> Vec<BlockPos> {
+    let deflated = bounds(to).deflate(Vec3::new(
+        f64::from(1.0e-5f32),
+        f64::from(1.0e-5f32),
+        f64::from(1.0e-5f32),
+    ));
+    let mut inside = Vec::new();
+    let _ = sweep_intersected_blocks(from, to, deflated, 1_000_000, |p, iteration| {
+        if iteration >= 16 {
+            return false;
+        }
+        inside.push(p);
+        true
+    });
+    inside
+}
 /// `Projectile.lerpRotation`.
 fn lerp_rotation(mut old: f32, new: f32) -> f32 {
     while new - old < -180.0 {

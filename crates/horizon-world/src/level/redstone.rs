@@ -882,18 +882,84 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         }
         self.game_event(pos, "minecraft:block_activate");
     }
-    /// `ButtonBlock.checkPressed` with no arrows present.
+    /// `ButtonBlock.tick`.
     pub(crate) fn button_tick(&mut self, pos: BlockPos, state: BlockStateId) {
         let b = self.b;
-        if !b.table.bool(state, b.props.powered) {
-            return;
+        if b.table.bool(state, b.props.powered) {
+            self.button_check_pressed(pos, state);
         }
-        self.set_block_and_update(pos, b.table.set_bool(state, b.props.powered, false));
-        self.attached_update_neighbours(pos, state);
-        if let Some(set) = b.data(state).set_type.clone() {
-            self.sound(pos, &set.button_off, 1.0, 1.0);
+    }
+    /// `ButtonBlock.checkPressed`: a button whose type allows arrows is
+    /// pressed while an arrow is inside its shape, and stays pressed (the
+    /// release is scheduled again) as long as one is.
+    pub(crate) fn button_check_pressed(&mut self, pos: BlockPos, state: BlockStateId) {
+        let b = self.b;
+        let data = b.data(state);
+        let should_be_pressed = data.set_type.as_ref().is_some_and(|s| s.arrows)
+            && self
+                .level
+                .count_entities(self.button_bounds(pos, state), super::EntityQuery::Arrows)
+                > 0;
+        let was_pressed = b.table.bool(state, b.props.powered);
+        if should_be_pressed != was_pressed {
+            self.set_block_and_update(
+                pos,
+                b.table.set_bool(state, b.props.powered, should_be_pressed),
+            );
+            self.attached_update_neighbours(pos, state);
+            if let Some(set) = data.set_type.clone() {
+                let sound = if should_be_pressed {
+                    &set.button_on
+                } else {
+                    &set.button_off
+                };
+                self.sound(pos, sound, 1.0, 1.0);
+            }
+            self.game_event(
+                pos,
+                if should_be_pressed {
+                    "minecraft:block_activate"
+                } else {
+                    "minecraft:block_deactivate"
+                },
+            );
         }
-        self.game_event(pos, "minecraft:block_deactivate");
+        if should_be_pressed {
+            self.schedule_tick(pos, b.block(state), data.ticks_to_stay_pressed);
+        }
+    }
+    /// `ButtonBlock.getShape(...).bounds().move(pos)`: a 6 by 4 plate on the
+    /// face it is attached to, 2 pixels thick (1 when pressed).
+    fn button_bounds(&self, pos: BlockPos, state: BlockStateId) -> horizon_core::geometry::Aabb {
+        use horizon_core::geometry::{Aabb, Vec3};
+        let b = self.b;
+        let thickness = if b.table.bool(state, b.props.powered) {
+            1.0 / 16.0
+        } else {
+            2.0 / 16.0
+        };
+        let attached = self.face_attached_connected(state).opposite().normal();
+        let thick = attached.iter().position(|&n| n != 0).unwrap_or(1);
+        // The 6 pixel side lies across the button's facing.
+        let wide = if b.facing(state).normal()[2] != 0 {
+            0
+        } else {
+            2
+        };
+        let tall = 3 - thick - wide;
+        let (mut lo, mut hi) = ([0.0; 3], [1.0; 3]);
+        if attached[thick] > 0 {
+            lo[thick] = 1.0 - thickness;
+        } else {
+            hi[thick] = thickness;
+        }
+        (lo[wide], hi[wide]) = (5.0 / 16.0, 11.0 / 16.0);
+        (lo[tall], hi[tall]) = (6.0 / 16.0, 10.0 / 16.0);
+        let origin = [f64::from(pos.x), f64::from(pos.y), f64::from(pos.z)];
+        Aabb::new(
+            Vec3::new(origin[0] + lo[0], origin[1] + lo[1], origin[2] + lo[2]),
+            Vec3::new(origin[0] + hi[0], origin[1] + hi[1], origin[2] + hi[2]),
+        )
     }
     /// `DaylightDetectorBlock.updateSignalStrength`: the effective sky light
     /// at the detector, shaped by the sun's angle (or inverted), as its
