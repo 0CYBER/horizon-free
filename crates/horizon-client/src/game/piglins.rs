@@ -6,7 +6,10 @@ use horizon_client::{
     items::ItemStack,
     mobs::{
         Mob, Species, Who,
-        finalize::{SLOT_NAMES, set_drop_chance, set_item, stored_drop_chance},
+        finalize::{
+            SLOT_NAMES, set_drop_chance, set_item, set_slot_enchantments, slot_enchantments,
+            stored_drop_chance,
+        },
         piglin::{ADMIRE, ATE_RECENTLY},
     },
 };
@@ -88,7 +91,8 @@ impl Game<'_> {
     /// `Mob.equipItemIfPossible` for a piglin: put it in its slot when that
     /// slot takes it (an armour piece that cannot replace what is worn goes
     /// to an empty main hand), dropping what it replaces by drop chance.
-    fn piglin_equip(&mut self, index: usize, item: &str) -> bool {
+    fn piglin_equip(&mut self, index: usize, stack: &ItemStack) -> bool {
+        let item = &*stack.item;
         let mut slot = self.piglin_slot(item);
         let m = &self.mobs[index];
         let mut replace = self.piglin_can_replace(m, item, slot);
@@ -103,18 +107,18 @@ impl Game<'_> {
         let old = horizon_client::mobs::finalize::item(m, slot);
         let chance = stored_drop_chance(m, slot);
         let drop_old = old.is_some() && (m.random.next_float() - 0.1).max(0.0) < chance;
+        let old_enchantments = slot_enchantments(m, slot);
         set_item(m, slot, item);
+        // The piglin keeps what the stack carried (Protection IV stays on).
+        set_slot_enchantments(m, slot, stack.enchantments().to_vec());
         // setItemSlotAndDropWhenKilled, then persistenceRequired.
         set_drop_chance(m, slot, 2.0);
         m.persistent = true;
         let at = [m.position.x, m.position.y, m.position.z];
         if let (true, Some(old)) = (drop_old, old) {
-            self.spawn_item(
-                ItemStack::new(&old, 1),
-                at,
-                super::dispenser::new_item_motion(),
-                10,
-            );
+            let mut dropped = ItemStack::new(&old, 1);
+            dropped.set_crafting_enchantments(old_enchantments);
+            self.spawn_item(dropped, at, super::dispenser::new_item_motion(), 10);
         }
         true
     }
@@ -153,7 +157,9 @@ impl Game<'_> {
     /// `PiglinAi.stopHoldingOffHandItem` for something that is not
     /// bartering currency: wear it if it can, else keep it in the inventory.
     fn piglin_keep(&mut self, index: usize, stack: ItemStack) {
-        if !self.piglin_equip(index, &stack.item) {
+        // Nuggets keep their whole stack in the inventory (a hand slot here
+        // holds one item id only).
+        if &*stack.item == "minecraft:gold_nugget" || !self.piglin_equip(index, &stack) {
             self.piglin_stash(index, stack);
         }
     }
