@@ -952,6 +952,11 @@ pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
             Some(Tag::compound(entries))
         }
         BlockEntity::Jukebox(_) | BlockEntity::Lectern(_) => None,
+        // CampfireBlockEntity.getUpdateTag: the items alone.
+        BlockEntity::Campfire(c) => Some(Tag::compound([(
+            "Items",
+            crate::save::encode_items(&c.items),
+        )])),
         _ => None,
     }
 }

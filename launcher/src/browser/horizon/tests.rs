@@ -49,6 +49,18 @@ fn searches_by_kind_and_words() {
     assert_eq!(found("", Kind::Modpack), ["cozy"]);
     assert!(found("skyblock", Kind::ResourcePack).is_empty());
     assert_eq!(found("", Kind::Shader), ["glow"]);
+    // The index's download counts, most downloaded first.
+    let mut counted = index.clone();
+    counted.projects.push(index::Project {
+        id: "zoom".into(),
+        name: "Zoom".into(),
+        downloads: 12_345,
+        ..index.project("coords_hud").unwrap().clone()
+    });
+    counted.projects[0].downloads = 80;
+    let first = search(&counted, &Query::new("", Kind::Mod));
+    let order: Vec<(&str, u64)> = first.iter().map(|p| (p.id.as_str(), p.downloads)).collect();
+    assert_eq!(order, [("zoom", 12_345), ("coords_hud", 80)]);
     let p = hud(&index);
     assert_eq!(p.support(), super::super::Support::Works);
     assert_eq!(p.page, "https://playhorizon.dev/mods/coords_hud");
@@ -215,4 +227,32 @@ fn versions_for_a_newer_horizon_are_not_installed() {
     let v = version_of(&index, p, &p.versions[0], Some(0));
     assert_eq!(v.blocked.as_deref(), Some(NEEDS_NEWER));
     assert_eq!(version_of(&index, p, &p.versions[0], Some(1)).blocked, None);
+}
+
+#[test]
+fn ratings_keep_only_what_is_well_formed() {
+    let text = r#"{"projects": {
+        "zoom": {"average": 4.25, "count": 12},
+        "minimap": {"average": 9, "count": 3},
+        "keystrokes": {"average": 3, "count": 0},
+        "Bad Id": {"average": 4, "count": 1},
+        "fps_overlay": {"average": "5", "count": 1}
+    }}"#;
+    let ratings = parse_ratings(text);
+    assert_eq!(
+        ratings.into_iter().collect::<Vec<_>>(),
+        [(
+            "zoom".to_owned(),
+            Rating {
+                average: 4.25,
+                count: 12
+            }
+        )]
+    );
+    assert!(parse_ratings("not json").is_empty());
+    assert!(parse_ratings(r#"{"projects": []}"#).is_empty());
+    assert_eq!(
+        rate_url("zoom"),
+        "https://playhorizon.dev/api/mods/auth/login?back=/mods/zoom"
+    );
 }

@@ -83,11 +83,11 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | Interface | Capability | Functions |
 |---|---|---|
 | `log` | always | `write(level, message)`, in the game log as `[mod <id>]` |
-| `game` | `game-read` | `get-player()`: x y z, yaw, pitch, health, food, dimension; `get-clock()`: game time, day time |
+| `game` | `game-read` | `get-player()`: x y z, yaw, pitch, health, food, dimension; `get-clock()`: game time, day time; `raycast(distance)`: the first block along the view (fluids pass), up to 1024 blocks and across the distant terrain, with the point hit and the block's id |
 | `chat` | `chat` | `show(text)`: a line only the local player sees, after the mod's name (8 per call) |
 | `hud` | `hud` | `set-panel(corner, lines)`, `clear()`: up to 16 lines of 256 characters |
 | `storage` | `storage` | `get(key)`, `set(key, value)`, `delete(key)`: a per-mod folder of up to 64 files, 4 MiB total, at most 1 MiB written per call |
-| `command` | `command` | `run(line)`: a vanilla command run as the player, with the player's permissions, after the hook returns (8 per call); mods' own commands are not run |
+| `command` | `command` | `run(line)`: a vanilla command run as the player, with the player's permissions, after the hook returns (8 per call); mods' own commands are not run. `run-quiet(lines)`: up to 256 a call, the same rights, nothing in the chat (single player and Horizon's servers run them 64 a tick and log one line a batch; elsewhere they go as chat commands and their feedback shows) |
 | `ui` | `ui` | `open-screen`, `close-screen`, `set-settings`: a screen the mod owns and a page in Options > Mods, of text, button, item and list widgets the game lays out and draws with its own menus' code. **Experimental:** the manifest needs `experimental = ["ui"]` |
 | `render` | `render` | `set-hud(shapes)`: up to 1024 fills, four-cornered shapes, GUI sprites, items and text, kept on the HUD (over the hotbar, under chat and screens, hidden with F1) until replaced; `set-corner(corner, w, h, shapes)`: a box the game places in a corner, stacked with its overlays and other panels, as `hud`'s panels are; `text-width(text)`; `frame-stats()`: the game's FPS, min and 1% low; `gui-size()`; `shake(strength, seconds)`: the view turns, the player doesn't, scaled by Distortion Effects; `set-zoom(zoom)`: the field of view divided by up to 10, eased or at once, with slower turning, while playing and not through a spyglass (the strongest of several mods' zooms counts); `set-minimap(minimap)`: a map of the world around the player in a corner, as a map item colours it (the floor underground and under roofs), square or round, turning with the player or north up, with the player's arrow; the game keeps its tiles within its own frame budget (one map at a time, the first loaded mod's). The game's own HUD renderer draws them: a mod never supplies shader code. **Experimental:** `experimental = ["render"]` |
 | `input` | `input` | `claim-items(ids)`: the use button on those items is the mod's (`use-start`, `use-stop` with the ticks held; the game doesn't place, eat or swing); `register-key(name, label, key)`: up to 16 keys (`key.keyboard.r`), heard while playing as `key-down` / `key-up` (the game's own mapping on that key still runs; a screen opening lets held keys up), mouse buttons as `key.mouse.4`. The player rebinds them on the mod's page in Options > Mods, where the game lists them first as Key Binds rows (click, then press a key or mouse button; Esc binds none), even for a mod without `ui`; the choice is kept in `horizon-mods.txt` (`key.<mod>.<name>:key.keyboard.z`) and wins over `register-key`'s default; `claim-wheel(on)`: the wheel's steps become `wheel` events and the hotbar doesn't move (the one input a mod takes from the game; a mod's keys never do); `held()`; `mapping(name)`: a movement or click mapping's key label and whether it is held; `clicks-per-second()`; `poll()` returns the events, at most 256 kept. **Experimental:** `experimental = ["input"]` |
@@ -491,10 +491,40 @@ its component targets the WIT world `horizon-server-mod` instead of
 Capabilities that act on a local player (`game-read`, `chat`, `hud`) are for
 client mods; `players` is for server mods. In Rust: `impl
 horizon_mod_sdk::server::ServerMod` and `export_server_mod!`; the example is
-[`welcome`](../crates/horizon-mod-sdk/examples/welcome/src/lib.rs). The
-runtime, the registry's `check` and the SDK run them today; the game starts
-them once its server code calls these hooks (the next step), and until then a
-server mod that is turned on shows as run elsewhere.
+[`welcome`](../crates/horizon-mod-sdk/examples/welcome/src/lib.rs).
+
+**Where they run.** The game that simulates the world starts the server mods
+that are on, and only that one:
+
+| Mode | Runs server mods | Players they see |
+|---|---|---|
+| Single player (default) | the server thread | the window's player, a connection like any other |
+| Single player `--in-frame` | the window's own game, beside its client mods | the window's player |
+| Open to LAN, Play with Friends | the host's server thread (or its window, in-frame) | the host and every guest |
+| Dedicated server (`--dedicated`, `horizon-server`) | the server | every connected player |
+
+A window that is a client of a server (single player's window, a LAN guest,
+any multiplayer server) never runs them; its Mods page lists a server mod with
+the others, and its switch takes effect the next time a world opens. The mods
+live in `horizon-mods/` of the game folder, or of the server's folder on a
+dedicated server, and are turned on as client mods are: Options > Mods, or
+`mod.<id>:true` in `horizon-mods.txt`. `--dev-mod <file>` runs one always
+on and reloads it when its file changes, on a server too.
+
+**When hooks run.** At the end of each server tick the game tells the server
+mods who joined and who left since the last one, then what players said,
+broke and placed, in order, then calls `tick`. A command a player types
+reaches its mod at once, whatever the player's permission level, and its
+answer goes to that player. `tell` reaches one player, the window's own
+chat for the in-frame player and a system message for a connection;
+`broadcast` reaches every player and the server's log. With no server mod
+on, each of these points costs one branch (measured in the PR that added
+them).
+
+**Not yet.** Clients aren't sent server mods' commands with vanilla's
+command tree, so a player's chat box doesn't complete or colour them; typing
+them works. Block events are a player's own breaking and placing, not
+explosions, pistons or other mods.
 
 ## Publish your mod
 
@@ -514,6 +544,10 @@ published. Players find them at [playhorizon.dev/mods](https://playhorizon.dev/m
    reviewers there.
 5. A reviewer merges it: within minutes the file is a release of horizon-mods, and the project is on the site and in
    the launcher.
+
+Once it is published, its page and its card in the launcher show its downloads (GitHub's counts of its files,
+refreshed every hour) and its rating: players signed in with GitHub on its page give it 1 to 5 stars, one rating per
+account, which they can change. Its owners can't rate it, and nobody sees who rated.
 
 An update is the same form with a new version; only the project's `owners` can publish one, signed with its key if it
 has one. A published file never changes. Without the form, open the pull request by hand (the repository's README
@@ -561,10 +595,10 @@ so the same rustc and `Cargo.lock` give the same file.
   in single player and on any server, vanilla or Horizon. They see only what
   the client already knows (the snapshot), like F3 does, and act only on the
   local screen and chat. A server cannot see them.
-- **Server mods** (`side = "server"`) will run where the world is simulated:
-  Horizon's integrated server in single player and LAN, and the dedicated
-  server. Vanilla clients can join if the mod only uses vanilla content
-  (rules, commands, events).
+- **Server mods** (`side = "server"`, API 0.3) run where the world is
+  simulated: single player's server thread (or the window, in-frame), a LAN
+  host and the dedicated server ([Server mods](#server-mods-api-03-experimental)).
+  They use only vanilla messages, so any client, vanilla or Horizon, can join.
 - **Both** (`side = "both"`): a server mod with a client half (new blocks,
   their textures, a custom screen). On join the Horizon server announces its
   mods (id, version, SHA-256) on a `horizon:mods` custom payload channel; a

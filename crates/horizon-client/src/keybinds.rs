@@ -275,6 +275,20 @@ impl Default for KeyBinds {
         }
     }
 }
+/// Each default key once, in order: two mappings that share a default key
+/// (Advancements and the debug profiler both on L) are one press of it, not
+/// two (the second would close the screen the first opened). Vanilla clicks
+/// both mappings, but the profiler one only acts with F3 held.
+fn distinct<T: PartialEq>(keys: Vec<T>) -> Vec<T> {
+    let mut out = Vec::with_capacity(keys.len());
+    for k in keys {
+        if !out.contains(&k) {
+            out.push(k);
+        }
+    }
+    out
+}
+
 impl KeyBinds {
     pub fn get(&self, name: &str) -> &str {
         self.keys
@@ -320,49 +334,80 @@ impl KeyBinds {
     }
     /// The mapping a physical input triggers (first in list order).
     pub fn mapping_for(&self, key: &str) -> Option<&'static str> {
-        MAPPINGS.iter().map(|m| m.0).find(|n| self.get(n) == key)
+        self.mappings_for(key).next()
+    }
+    /// Every mapping a physical input triggers, in list order: like
+    /// `KeyMapping.set`/`click`, one key drives all the mappings bound to it.
+    pub fn mappings_for<'a>(&'a self, key: &'a str) -> impl Iterator<Item = &'static str> + 'a {
+        MAPPINGS
+            .iter()
+            .map(|m| m.0)
+            .filter(move |n| self.get(n) == key)
     }
     /// Translate a physical key into the default key of the mapping it is
     /// bound to, so game code written against vanilla defaults follows the
     /// player's bindings. `None` means the key now does nothing; mouse
-    /// mappings bound to keys come back as `Err(button)`.
+    /// mappings bound to keys come back as `Err(button)`. The first of
+    /// [`KeyBinds::translate_all`].
     pub fn translate(&self, key: KeyCode) -> Option<Result<KeyCode, MouseButton>> {
+        self.translate_all(key).into_iter().next()
+    }
+    /// The default keys of every mapping `key` is bound to (empty when it
+    /// now does nothing), so a key bound to two mappings (forward and
+    /// sprint) drives both, as `KeyMapping.set` does.
+    pub fn translate_all(&self, key: KeyCode) -> Vec<Result<KeyCode, MouseButton>> {
         let Some(name) = key_name(key) else {
-            return Some(Ok(key));
+            return vec![Ok(key)];
         };
-        if let Some(mapping) = self.mapping_for(name) {
-            let default = Self::default_of(mapping);
-            if let Some(code) = key_code(default) {
-                return Some(Ok(code));
-            }
-            return mouse_button(default).map(Err);
+        let bound: Vec<_> = self
+            .mappings_for(name)
+            .filter_map(|mapping| {
+                let default = Self::default_of(mapping);
+                match key_code(default) {
+                    Some(code) => Some(Ok(code)),
+                    None => mouse_button(default).map(Err),
+                }
+            })
+            .collect();
+        if !bound.is_empty() {
+            return distinct(bound);
         }
         // An unbound key whose default meaning was moved elsewhere is inert.
         if MAPPINGS
             .iter()
             .any(|(n, d, _)| *d == name && !self.is_default(n))
         {
-            return None;
+            return Vec::new();
         }
-        Some(Ok(key))
+        vec![Ok(key)]
     }
     /// Translate a mouse button the same way (keys bound to mouse buttons).
     pub fn translate_mouse(&self, button: MouseButton) -> Option<Result<KeyCode, MouseButton>> {
+        self.translate_mouse_all(button).into_iter().next()
+    }
+    /// [`KeyBinds::translate_all`] for a mouse button.
+    pub fn translate_mouse_all(&self, button: MouseButton) -> Vec<Result<KeyCode, MouseButton>> {
         let name = mouse_name(button);
-        if let Some(mapping) = self.mapping_for(&name) {
-            let default = Self::default_of(mapping);
-            if let Some(b) = mouse_button(default) {
-                return Some(Err(b));
-            }
-            return key_code(default).map(Ok);
+        let bound: Vec<_> = self
+            .mappings_for(&name)
+            .filter_map(|mapping| {
+                let default = Self::default_of(mapping);
+                match mouse_button(default) {
+                    Some(b) => Some(Err(b)),
+                    None => key_code(default).map(Ok),
+                }
+            })
+            .collect();
+        if !bound.is_empty() {
+            return distinct(bound);
         }
         if MAPPINGS
             .iter()
             .any(|(n, d, _)| *d == name && !self.is_default(n))
         {
-            return None;
+            return Vec::new();
         }
-        Some(Err(button))
+        vec![Err(button)]
     }
     /// `AbstractContainerScreen.checkHotbarMouseClicked`: off hand, then hotbar.
     pub fn container_mouse_key(&self, button: MouseButton, creative: bool) -> Option<KeyCode> {
