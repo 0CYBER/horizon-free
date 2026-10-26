@@ -49,6 +49,17 @@ pub struct Furnace {
     /// rather than per item, and a save keeps it as the `RecipesUsed` compound.
     pub recipes_used: HashMap<String, u32>,
 }
+/// The key `recipes_used` keeps a recipe under: its full id, as vanilla's `ResourceKey<Recipe>`
+/// writes it in `RecipesUsed`. Horizon's own recipe ids are file names without the namespace, so
+/// keeping both forms would write a key twice, and vanilla refuses such a furnace
+/// ("Duplicate entry for key").
+pub fn recipe_used_key(id: &str) -> String {
+    if id.contains(':') {
+        id.to_owned()
+    } else {
+        format!("minecraft:{id}")
+    }
+}
 /// A hopper's slots: the only plain container with five.
 pub const HOPPER_SLOTS: usize = 5;
 
@@ -638,7 +649,10 @@ impl Furnace {
                                     Some(out) => out.count += recipe.result.count,
                                     None => self.items[2] = Some(recipe.result.clone()),
                                 }
-                                *self.recipes_used.entry(recipe.id.clone()).or_insert(0) += 1;
+                                *self
+                                    .recipes_used
+                                    .entry(recipe_used_key(&recipe.id))
+                                    .or_insert(0) += 1;
                                 if let Some(i) = self.items[0].as_mut() {
                                     i.count -= 1;
                                     if i.count == 0 {
