@@ -16,6 +16,15 @@ mod bindings {
         world: "horizon-mod",
     });
 }
+/// Capability `ui`'s world beyond `horizon-mod` (docs/mods.md): a second
+/// world, so mods built before it (no `ui-events` export) still instantiate
+/// as `horizon-mod` and simply hear nothing of their widgets.
+mod ui_bindings {
+    wasmtime::component::bindgen!({
+        path: "../horizon-mod-sdk/wit",
+        world: "ui-host",
+    });
+}
 pub use bindings::horizon::mods::{
     game::{Clock, Player},
     hud::{Corner, Line},
@@ -23,8 +32,14 @@ pub use bindings::horizon::mods::{
 use bindings::{
     HorizonMod,
     exports::horizon::mods::events::Registration,
-    horizon::mods::{chat, game, hud, log as mod_log, storage},
+    horizon::mods::{chat, command, game, hud, log as mod_log, storage},
 };
+/// The widget model a `ui` screen or settings page shows (WIT `interface
+/// ui`), for the game to draw with its menus' own widgets.
+pub use ui_bindings::horizon::mods::ui::{
+    ItemWidget, ListWidget, Screen as UiScreen, TextWidget, Widget as UiWidget,
+};
+use ui_bindings::{UiHost, horizon::mods::ui};
 
 /// A mod's linear memory cap.
 const MEMORY: usize = 64 << 20;
@@ -64,8 +79,16 @@ pub enum Output {
     Chat { name: String, text: String },
     /// A mod command's feedback, red when `error`.
     Feedback { text: String, error: bool },
+    /// `command.run`: a vanilla command line, without its slash, to run as
+    /// the player.
+    Command { line: String },
     /// The mod was turned off: it trapped, overran or failed to start.
     Stopped { name: String, reason: String },
+    /// `ui.open-screen`: the mod's entry in `entries()`; what it shows is
+    /// [`Mods::screen`].
+    OpenScreen { owner: usize },
+    /// `ui.close-screen`: the mod closed its own screen (no `closed` back).
+    CloseScreen { owner: usize },
 }
 
 /// A mod's text panel, drawn every frame until it changes.
@@ -95,11 +118,35 @@ pub struct Entry {
     run: Option<Running>,
     modified: Option<SystemTime>,
 }
+impl Entry {
+    /// The running mod has a settings page (capability `ui` set widgets
+    /// with `ui.set-settings`): its row in Options > Mods gains a button.
+    pub fn has_ui_settings(&self) -> bool {
+        self.run
+            .as_ref()
+            .is_some_and(|r| !r.store.data().ui.settings.is_empty())
+    }
+}
 
 struct Running {
     store: Store<State>,
     exports: HorizonMod,
+    /// The mod's `ui-events` export; none for a mod built before `ui`.
+    ui: Option<UiHost>,
     hooks: Registration,
+}
+
+/// What capability `ui` pushed since the hooks last ran.
+#[derive(Default)]
+struct UiState {
+    /// The screen `ui.open-screen` last pushed, until `ui.close-screen`.
+    screen: Option<UiScreen>,
+    /// The widgets `ui.set-settings` last pushed (the mod's page in
+    /// Options > Mods).
+    settings: Vec<UiWidget>,
+    /// The calls since the last hook ended, for [`Output`].
+    open: bool,
+    close: bool,
 }
 
 struct State {
@@ -108,6 +155,7 @@ struct State {
     snapshot: Arc<Snapshot>,
     out: Vec<Output>,
     panel: Option<Panel>,
+    ui: UiState,
     /// Capability `storage`'s folder; made on first `set`.
     data_dir: PathBuf,
     /// Bytes `storage::set` may still write before this hook call ends
@@ -184,6 +232,8 @@ impl Mods {
             let mut linker = Linker::new(&engine);
             HorizonMod::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
+            UiHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
+                .map_err(|e| e.to_string())?;
             self.engine = Some((engine, linker));
         }
         Ok(self.engine.as_ref().expect("made above"))
@@ -242,6 +292,7 @@ impl Mods {
             snapshot,
             out: Vec::new(),
             panel: None,
+            ui: UiState::default(),
             data_dir,
             storage_budget: STORAGE_WRITE_BUDGET,
             limits: StoreLimitsBuilder::new()
@@ -252,8 +303,13 @@ impl Mods {
         let mut store = Store::new(engine, state);
         store.limiter(|s| &mut s.limits);
         store.set_fuel(FUEL_INIT).map_err(|e| e.to_string())?;
-        let exports =
-            HorizonMod::instantiate(&mut store, &component, linker).map_err(|e| reason(&e))?;
+        let instance = linker
+            .instantiate(&mut store, &component)
+            .map_err(|e| reason(&e))?;
+        let exports = HorizonMod::new(&mut store, &instance).map_err(|e| reason(&e))?;
+        // `ui-events` is a mod built since `ui`'s; older mods have no export
+        // and stay callable through `events` alone.
+        let ui = UiHost::new(&mut store, &instance).ok();
         let mut hooks = exports
             .horizon_mods_events()
             .call_init(&mut store)
@@ -269,6 +325,7 @@ impl Mods {
         Ok(Some(Running {
             store,
             exports,
+            ui,
             hooks,
         }))
     }
@@ -290,7 +347,7 @@ impl Mods {
         &mut self,
         fuel: u64,
         wants: impl Fn(&Registration) -> bool,
-        mut f: impl FnMut(&HorizonMod, &mut Store<State>) -> wasmtime::Result<()>,
+        mut f: impl FnMut(&mut Running) -> wasmtime::Result<()>,
     ) {
         for i in 0..self.entries.len() {
             if self.entries[i]
@@ -308,20 +365,28 @@ impl Mods {
         &mut self,
         i: usize,
         fuel: u64,
-        f: impl FnOnce(&HorizonMod, &mut Store<State>) -> wasmtime::Result<R>,
+        f: impl FnOnce(&mut Running) -> wasmtime::Result<R>,
     ) -> Option<R> {
         let entry = &mut self.entries[i];
         let run = entry.run.as_mut()?;
         run.store.data_mut().snapshot = self.snapshot.clone();
         run.store.data_mut().storage_budget = STORAGE_WRITE_BUDGET;
         let started = Instant::now();
-        let result = run
-            .store
-            .set_fuel(fuel)
-            .and_then(|()| f(&run.exports, &mut run.store));
+        let result = run.store.set_fuel(fuel).and_then(|()| f(run));
         // An average over about the last 64 calls.
         entry.cost = (entry.cost * 63 + started.elapsed()) / 64;
-        self.out.append(&mut run.store.data_mut().out);
+        let data = run.store.data_mut();
+        let (open, close) = (
+            std::mem::take(&mut data.ui.open),
+            std::mem::take(&mut data.ui.close),
+        );
+        self.out.append(&mut data.out);
+        if open {
+            self.out.push(Output::OpenScreen { owner: i });
+        }
+        if close {
+            self.out.push(Output::CloseScreen { owner: i });
+        }
         match result {
             Ok(r) => Some(r),
             Err(e) => {
@@ -344,7 +409,11 @@ impl Mods {
         self.each(
             FUEL_TICK,
             |h| h.tick,
-            |m, s| m.horizon_mods_events().call_tick(s, tick),
+            |run| {
+                run.exports
+                    .horizon_mods_events()
+                    .call_tick(&mut run.store, tick)
+            },
         );
     }
     /// A rendered frame, `seconds` after the last.
@@ -352,7 +421,11 @@ impl Mods {
         self.each(
             FUEL_FRAME,
             |h| h.frame,
-            |m, s| m.horizon_mods_events().call_frame(s, seconds),
+            |run| {
+                run.exports
+                    .horizon_mods_events()
+                    .call_frame(&mut run.store, seconds)
+            },
         );
     }
     /// A chat line the player received, as plain text.
@@ -360,7 +433,11 @@ impl Mods {
         self.each(
             FUEL_EVENT,
             |h| h.chat,
-            |m, s| m.horizon_mods_events().call_chat(s, text),
+            |run| {
+                run.exports
+                    .horizon_mods_events()
+                    .call_chat(&mut run.store, text)
+            },
         );
     }
     /// Whether a running mod owns `/name`.
@@ -381,8 +458,10 @@ impl Mods {
         let Some(i) = self.command_owner(name) else {
             return false;
         };
-        let result = self.call(i, FUEL_EVENT, |m, s| {
-            m.horizon_mods_events().call_command(s, name, args)
+        let result = self.call(i, FUEL_EVENT, |run| {
+            run.exports
+                .horizon_mods_events()
+                .call_command(&mut run.store, name, args)
         });
         match result {
             Some(Ok(Some(text))) => self.out.push(Output::Feedback { text, error: false }),
@@ -404,6 +483,60 @@ impl Mods {
         self.entries
             .iter()
             .filter_map(|e| e.run.as_ref()?.store.data().panel.as_ref())
+    }
+    /// The screen mod `i` last pushed with `ui.open-screen`, while it is up.
+    pub fn screen(&self, i: usize) -> Option<&UiScreen> {
+        self.entries
+            .get(i)?
+            .run
+            .as_ref()?
+            .store
+            .data()
+            .ui
+            .screen
+            .as_ref()
+    }
+    /// The widgets `ui.set-settings` pushed: mod `i`'s page in
+    /// Options > Mods. Empty while it has none.
+    pub fn settings_widgets(&self, i: usize) -> &[UiWidget] {
+        self.entries
+            .get(i)
+            .and_then(|e| e.run.as_ref())
+            .map_or(&[], |r| &r.store.data().ui.settings)
+    }
+    /// A `list` widget's row was picked on a surface of mod `i`.
+    pub fn ui_select(&mut self, i: usize, id: u32, row: u32) {
+        self.ui_event(i, |ui, s| {
+            ui.horizon_mods_ui_events().call_select(s, id, row)
+        });
+    }
+    /// The player left mod `i`'s screen (Esc or Done).
+    pub fn ui_closed(&mut self, i: usize) {
+        self.ui_event(i, |ui, s| ui.horizon_mods_ui_events().call_closed(s));
+    }
+    /// The player opened mod `i`'s settings page.
+    pub fn ui_settings_opened(&mut self, i: usize) {
+        self.ui_event(i, |ui, s| {
+            ui.horizon_mods_ui_events().call_settings_opened(s)
+        });
+    }
+    /// A `ui-events` call on mod `i`; no export, no call (mods built
+    /// before `ui` have none).
+    fn ui_event(
+        &mut self,
+        i: usize,
+        f: impl FnOnce(&UiHost, &mut Store<State>) -> wasmtime::Result<()>,
+    ) {
+        let has_ui = self
+            .entries
+            .get(i)
+            .and_then(|e| e.run.as_ref())
+            .is_some_and(|r| r.ui.is_some());
+        if has_ui {
+            self.call(i, FUEL_EVENT, |run| {
+                f(run.ui.as_ref().expect("checked above"), &mut run.store)
+            });
+        }
     }
     /// What mods asked to show since the last call.
     pub fn drain(&mut self) -> Vec<Output> {
@@ -476,6 +609,33 @@ fn clip(text: String) -> String {
     }
 }
 
+/// Widgets on a `ui` screen or settings page, and rows on one `list`.
+const WIDGETS: usize = 64;
+const LIST_ROWS: usize = 512;
+
+fn clip_widgets(widgets: Vec<UiWidget>) -> Vec<UiWidget> {
+    widgets
+        .into_iter()
+        .take(WIDGETS)
+        .map(|w| match w {
+            UiWidget::Text(mut t) => {
+                t.text = clip(t.text);
+                UiWidget::Text(t)
+            }
+            UiWidget::Item(mut i) => {
+                i.item = clip(i.item);
+                i.name = clip(i.name);
+                UiWidget::Item(i)
+            }
+            UiWidget::List(mut l) => {
+                l.rows = l.rows.into_iter().take(LIST_ROWS).map(clip).collect();
+                l.selected = l.selected.filter(|&s| (s as usize) < l.rows.len());
+                UiWidget::List(l)
+            }
+        })
+        .collect()
+}
+
 impl mod_log::Host for State {
     fn write(&mut self, level: mod_log::Level, message: String) {
         let level = match level {
@@ -511,6 +671,18 @@ impl chat::Host for State {
         }
     }
 }
+impl command::Host for State {
+    fn run(&mut self, line: String) {
+        let queued = self
+            .out
+            .iter()
+            .filter(|o| matches!(o, Output::Command { .. }))
+            .count();
+        if queued < CHAT_PER_CALL {
+            self.out.push(Output::Command { line: clip(line) });
+        }
+    }
+}
 impl hud::Host for State {
     fn set_panel(&mut self, corner: Corner, lines: Vec<Line>) {
         let lines = lines
@@ -525,6 +697,21 @@ impl hud::Host for State {
     }
     fn clear(&mut self) {
         self.panel = None;
+    }
+}
+impl ui::Host for State {
+    fn open_screen(&mut self, mut screen: ui::Screen) {
+        screen.title = clip(screen.title);
+        screen.widgets = clip_widgets(screen.widgets);
+        self.ui.screen = Some(screen);
+        self.ui.open = true;
+    }
+    fn close_screen(&mut self) {
+        self.ui.screen = None;
+        self.ui.close = true;
+    }
+    fn set_settings(&mut self, widgets: Vec<ui::Widget>) {
+        self.ui.settings = clip_widgets(widgets);
     }
 }
 impl storage::Host for State {
