@@ -4941,10 +4941,13 @@ impl Game<'_> {
         if capture && !self.focused {
             return;
         }
-        if capture {
-            // The inventory's screens are behind us: no drag survives them.
-            self.reset_inventory_clicks();
-        } else {
+        // The container screen's press state belongs to the screen: a screen
+        // that takes the pointer over starts with its own state, as
+        // `AbstractContainerScreen` does, so a press whose release never
+        // arrived (the pointer left the window) cannot wedge the next
+        // screen's quick move and clicks.
+        self.reset_inventory_clicks();
+        if !capture {
             self.stop_mining();
         }
         // The real pointer takes over from an agent's.
@@ -5788,12 +5791,14 @@ impl Game<'_> {
         }
     }
     /// `AbstractContainerScreen` keeps `isQuickCrafting` and the drag it
-    /// belongs to on the screen; Horizon keeps them on the game, so they are
-    /// dropped when a screen closes. A press whose release never reaches the
-    /// screen (the pointer left the window, or the screen closed first) would
+    /// belongs to on the screen. Horizon keeps both on `Game` (`inv_clicks`,
+    /// `inv_drag`, `last_inv_click`), so they are dropped when the pointer
+    /// changes hands: a screen that opens or closes starts with its own
+    /// state, and a press whose release never reached the screen -- the
+    /// pointer left the window, or the screen closed first -- would
     /// otherwise leave every later press on every later screen swallowed.
     pub(super) fn reset_inventory_clicks(&mut self) {
-        self.inv_clicks = Default::default();
+        self.inv_clicks.cancel_drag();
         self.inv_drag = None;
         self.last_inv_click = None;
     }
