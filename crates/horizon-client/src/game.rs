@@ -2844,6 +2844,12 @@ impl Game<'_> {
                     data,
                 } => self.sculk_charge_event(pos, data),
                 LevelEvent::LevelEvent { id: 3007, pos, .. } => self.shriek_event(pos),
+                // LevelEventHandler 1010 and 1011: the parrots nearby dance or stop.
+                LevelEvent::LevelEvent {
+                    id: id @ (1010 | 1011),
+                    pos,
+                    ..
+                } => self.notify_record_playing([pos.x, pos.y, pos.z], id == 1010),
                 LevelEvent::LevelEvent { id: 2004, pos, .. } => {
                     self.spawner_burst([pos.x, pos.y, pos.z])
                 }
