@@ -1427,6 +1427,10 @@ struct Game<'a> {
     titles: titles::Titles,
     /// `Hud.toolHighlightTimer`: the selected item name.
     tool_highlight: horizon_client::hud_overlays::ToolHighlight,
+    /// `Hud.autosaveIndicatorValue`.
+    saving_indicator: horizon_client::hud_overlays::SavingIndicator,
+    /// This game's world is autosaving this tick (`MinecraftServer.isSaving`).
+    autosaving: bool,
     applied_modifiers: Vec<(String, String)>,
     experience: Experience,
     orbs: Vec<ExperienceOrb>,
@@ -4396,7 +4400,11 @@ impl Game<'_> {
             self.world.weather.tick_levels();
             self.tick_weather_effects();
         }
-        if self.ticks.is_multiple_of(6000) {
+        self.autosaving = self.ticks.is_multiple_of(6000);
+        if let Some(serving) = &self.serving {
+            serving.set_saving(self.autosaving);
+        }
+        if self.autosaving {
             self.save_game_with(false)?;
         }
         if running {
@@ -5399,6 +5407,7 @@ impl Game<'_> {
             Screen::Mod => self.draw_mod_screen(&mut batch),
             Screen::Playing | Screen::Options | Screen::Win => {}
         }
+        self.draw_saving_indicator(&mut batch);
         self.draw_toasts(&mut batch);
         self.draw_pack_toasts(&mut batch);
         self.remote_hud(&mut batch);
@@ -12689,6 +12698,8 @@ impl<'a> Game<'a> {
             command_source: None,
             titles: Default::default(),
             tool_highlight: Default::default(),
+            saving_indicator: Default::default(),
+            autosaving: false,
             applied_modifiers: Vec::new(),
             experience: Experience::default(),
             orbs: Vec::new(),
