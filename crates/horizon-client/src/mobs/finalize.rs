@@ -516,9 +516,13 @@ fn effect_modifiers(m: &Mob, a: Attr) -> impl Iterator<Item = (f64, Op)> + '_ {
 }
 /// `AttributeInstance.getValue`: the base, then the modifiers by operation.
 pub fn value(m: &Mob, a: Attr) -> f64 {
-    compute(m, a, true)
+    compute(m, a, true, &[])
 }
-fn compute(m: &Mob, a: Attr, with_transient: bool) -> f64 {
+/// `value` with more modifiers, such as the ones worn equipment grants.
+pub fn value_with(m: &Mob, a: Attr, extra: &[(f64, Op)]) -> f64 {
+    compute(m, a, true, extra)
+}
+fn compute(m: &Mob, a: Attr, with_transient: bool, extra: &[(f64, Op)]) -> f64 {
     let mut base = base_value(m, a);
     let empty = Vec::new();
     let mods = m.extra.attributes.as_ref().map_or(&empty, |s| &s.modifiers);
@@ -531,6 +535,7 @@ fn compute(m: &Mob, a: Attr, with_transient: bool) -> f64 {
         ops.extend(transient(m, a));
         ops.extend(effect_modifiers(m, a));
     }
+    ops.extend(extra.iter().copied());
     for (amount, op) in &ops {
         if *op == Op::AddValue {
             base += amount;
@@ -573,7 +578,7 @@ fn refresh(m: &mut Mob, a: Attr) {
 /// The value without the transient baby modifier (`speed_bonus` applies
 /// that one to movement speed).
 fn base_with_modifiers(m: &Mob, a: Attr) -> f64 {
-    compute(m, a, false)
+    compute(m, a, false, &[])
 }
 /// `AttributeInstance.setBaseValue`.
 pub fn set_base(m: &mut Mob, a: Attr, v: f64) {
