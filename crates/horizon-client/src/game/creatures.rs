@@ -1066,7 +1066,10 @@ impl Game<'_> {
                 }
                 MobEvent::BreakBlock { pos, drop } => {
                     let old = self.world.block(pos[0], pos[1], pos[2]);
-                    self.destroy_particles(pos, old);
+                    // Block.spawnDestroyParticles: fire breaks leave nothing.
+                    if !self.res.facts().get(old).has_class("BaseFireBlock") {
+                        self.destroy_particles(pos, old);
+                    }
                     if drop {
                         let drops = self.res.items().block_drops_in(
                             self.pack.assets.registry,
