@@ -839,6 +839,7 @@ impl Game<'_> {
                 gliding: p.fall_flying,
                 swimming: p.swimming,
                 crawling: p.pose == horizon_client::pose::Pose::Swimming && !p.swimming,
+                crouching: p.pose == horizon_client::pose::Pose::Crouching,
                 spin_attack: p.auto_spin_attack_ticks > 0,
                 on_fire: p.fire_ticks > 0,
                 invisible: self.potions.effects.get("invisibility").is_some(),

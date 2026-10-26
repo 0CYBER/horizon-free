@@ -100,6 +100,8 @@ pub struct BodyFlags {
     pub swimming: bool,
     /// The swimming pose of a player crawling under a block.
     pub crawling: bool,
+    /// The crouching pose, held without sneaking under a low ceiling.
+    pub crouching: bool,
     /// `LivingEntity.isAutoSpinAttack`: Riptide's spin.
     pub spin_attack: bool,
     /// `Entity.isOnFire`.
@@ -1549,7 +1551,7 @@ impl Hub {
             1
         } else if body.spin_attack {
             4
-        } else if sneaking {
+        } else if sneaking || body.crouching {
             5
         } else {
             0
@@ -2615,6 +2617,7 @@ fn guest_body(g: &Guest) -> BodyFlags {
         gliding: g.fall_flying,
         swimming: m.is_some_and(|m| m.swimming),
         crawling: m.is_some_and(|m| m.pose == crate::pose::Pose::Swimming && !m.swimming),
+        crouching: m.is_some_and(|m| m.pose == crate::pose::Pose::Crouching),
         spin_attack: m.is_some_and(|m| m.auto_spin_attack_ticks > 0),
         on_fire: m.is_some_and(|m| m.fire_ticks > 0),
         invisible: g.effects.get("invisibility").is_some(),
