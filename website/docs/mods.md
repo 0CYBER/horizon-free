@@ -6,7 +6,7 @@ Horizon has its own mod system, written for Horizon and not compatible with Java
 
 Horizon mods are written in Rust, compiled to WebAssembly and run in a sandbox. A mod can only do what it asks for and you allow, and a mod that crashes is switched off without taking the game down.
 
-> **Early.** The mod system is new. There is no store for Horizon mods yet: they are files to put in a folder. The launcher's **Mods** page (see below) finds resource packs and modpacks, not `.hmod` mods.
+> **Early.** The mod system is new. Reviewed mods are listed at [playhorizon.dev/mods](/mods), and any `.hmod` file can be put in the folder by hand.
 
 **Playing with mods**
 
@@ -22,15 +22,17 @@ Horizon mods are written in Rust, compiled to WebAssembly and run in a sandbox. 
 
 **Making a mod**
 
+[Make a mod](/docs/make-a-mod) is the full guide: the tools, your first mod in the game, the manifest and capabilities, the code with a worked example, content mods, testing, and publishing on [the registry](/mods). In short:
+
 ```sh
 rustup target add wasm32-unknown-unknown
 cargo install --git https://github.com/ludovic111/horizon cargo-horizon-mod
 cargo horizon-mod new my-mod
 cd my-mod
-cargo horizon-mod run
+cargo horizon-mod build
 ```
 
-`run` builds the mod and starts the game with it. After an edit, `cargo horizon-mod build` rebuilds it and the running game reloads it. The full guide, with the API, the manifest and the roadmap, is [docs/mods.md](https://github.com/ludovic111/horizon/blob/main/docs/mods.md). Java mod jars don't run in Horizon: their code calls and patches Minecraft's Java classes, and Horizon has none. What carries over is the data and assets inside a jar ([modpacks](https://github.com/ludovic111/horizon/blob/main/docs/modpacks.md)).
+The [Mod API](/docs/api/mods) lists what a mod can do today and what comes next, and its [reference](/docs/api/mods-reference) every function. Java mod jars don't run in Horizon: their code calls and patches Minecraft's Java classes, and Horizon has none. What carries over is the data and assets inside a jar ([modpacks](/docs/modpacks)).
 
 ## Finding resource packs and modpacks
 

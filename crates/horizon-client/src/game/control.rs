@@ -226,6 +226,16 @@ impl Game<'_> {
                 }
                 Ok(Some(json!({ "ok": true, "cull": r.section_cull() })))
             }
+            "section-sides" => {
+                let r = self.renderer.as_mut().ok_or("no renderer")?;
+                match words.get(1).copied() {
+                    None => {}
+                    Some("on") => r.set_section_sides(true),
+                    Some("off") => r.set_section_sides(false),
+                    Some(other) => return Err(format!("unknown section sides mode {other}").into()),
+                }
+                Ok(Some(json!({ "ok": true, "sides": r.section_sides() })))
+            }
             "sculk" => Ok(Some(self.sculk_command(&words)?)),
             "status" => Ok(Some(self.control_status())),
             "pad" => Ok(Some(self.pad_command(&words)?)),
@@ -503,7 +513,10 @@ impl Game<'_> {
                 if self.pending_screenshot.is_some() {
                     return Err("a screenshot is already pending".into());
                 }
-                renderer.screenshot = Some(arg(1)?.into());
+                arg(1)?;
+                // The rest of the line: a path may hold spaces.
+                let path = line.trim_start().strip_prefix("screenshot").unwrap_or("");
+                renderer.screenshot = Some(path.trim().into());
                 self.pending_screenshot = Some(reply.clone());
                 Ok(None)
             }
@@ -556,7 +569,7 @@ impl Game<'_> {
                     }
                     Screen::Creative if self.creative_screen.tab().search => {
                         // As typed: replaces a selected query, keeps the length limit.
-                        self.creative_search_edit(Some(text), false)
+                        self.creative_search_edit(Some(text))
                     }
                     _ => {
                         return Err(
@@ -786,6 +799,7 @@ impl Game<'_> {
             Screen::Friends => "friends",
             Screen::CommandBlock => "command-block",
             Screen::Win => "win",
+            Screen::Mod => "mod",
         }
     }
 
@@ -981,6 +995,7 @@ impl Game<'_> {
         status["destroying"] = json!(destroying);
         status["physical_keys"] = json!(physical_keys);
         status["heard"] = json!(self.audio.heard);
+        status["stopped_sounds"] = json!(self.audio.stopped);
         // Boats, minecarts, armor stands, item frames and paintings.
         status["objects"] = json!(self.objects_status());
         status["lightning"] = json!({"bolts": self.bolts.len(), "struck": self.lightning_seen[0],
