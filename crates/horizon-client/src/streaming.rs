@@ -175,6 +175,11 @@ pub enum Done {
 }
 struct Queued {
     priority: i64,
+    /// The column the job is for and what it adds to the column's distance
+    /// (`Streaming::submit`): the priority is computed again from them when
+    /// the centre moves (`Streaming::requeue`). None for saves, which go first.
+    at: Option<(i32, i32)>,
+    bias: i64,
     order: u64,
     job: Job,
 }
@@ -222,6 +227,9 @@ pub struct Streaming {
     /// radius it was last ranked for.
     decoration_order: DecorationOrder,
     order_area: Option<((i32, i32), i32)>,
+    /// What the queued jobs' priorities were computed from (`requeue`): the
+    /// centre, the loading screen, the band, and the extra areas.
+    queue_basis: (((i32, i32), bool, Option<Band>), Vec<((i32, i32), i32)>),
     finishing: FxHashSet<(i32, i32)>,
     decorates: bool,
     lighting: FxHashMap<(i32, i32), u64>,
@@ -544,6 +552,7 @@ impl Streaming {
             saving: 0,
             decoration_order: DecorationOrder::default(),
             order_area: None,
+            queue_basis: Default::default(),
             finishing: Default::default(),
             decorates: generator.decorates(),
             lighting: Default::default(),
@@ -648,14 +657,38 @@ impl Streaming {
         world.dirty_sections.take_column(x, z);
         world.chunks.remove(&(x, z))
     }
-    fn submit(&mut self, priority: i64, job: Job) {
+    /// Queue a job for the column `at`, nearest first: its distance (`distance`)
+    /// times four plus `bias`, which orders a column's jobs. A job without a
+    /// column (a save) goes ahead of every other.
+    fn submit(&mut self, at: Option<(i32, i32)>, bias: i64, job: Job) {
         self.order += 1;
+        let priority = at.map_or(i64::MIN, |(x, z)| self.distance(x, z) * 4 + bias);
         self.shared.queue.lock().unwrap().push(Queued {
             priority,
+            at,
+            bias,
             order: self.order,
             job,
         });
         self.shared.ready.notify_one();
+    }
+    /// Rank the queued jobs again when what their priorities were computed
+    /// from changed: the centre, the extra areas, the band, or the loading
+    /// screen (ring order, `Ranges::rings`, whose values are far above the
+    /// distances used after it). Vanilla's chunk task queue follows the
+    /// current ticket levels in the same way. Without it, generation queued
+    /// while the loading screen was up waited behind every job queued after
+    /// it, and with it the decoration of the chunks around the player: at
+    /// render distance 32 nothing was decorated until every proto chunk had
+    /// been generated.
+    fn requeue(&mut self) {
+        let basis = (self.center, self.loading, self.band);
+        if self.queue_basis.0 == basis && self.queue_basis.1 == self.extra {
+            return;
+        }
+        self.queue_basis = (basis, self.extra.clone());
+        let mut queue = self.shared.queue.lock().unwrap();
+        rank_again(&mut queue, |x, z| self.distance(x, z));
     }
     fn receive_decorated(&mut self, x: i32, z: i32, region: [Proto; 9]) {
         self.generation_scan.exhausted = false;
@@ -686,7 +719,7 @@ impl Streaming {
             self.saving += 1;
             // Ahead of every other job: a column generated again meanwhile
             // would not find them saved.
-            self.submit(i64::MIN, Job::Save(protos));
+            self.submit(None, 0, Job::Save(protos));
         }
     }
     fn receive_generated(&mut self, mut chunk: Chunk, world: &mut World) {
@@ -829,6 +862,7 @@ impl Streaming {
             return (uploads, Vec::new());
         }
         ExtraCover::refresh(&mut self.cover, &self.extra);
+        self.requeue();
         self.relight_edits(world);
         let deferred = std::mem::take(&mut self.deferred);
         let received = std::iter::from_fn(|| self.results.try_recv().ok());
@@ -984,7 +1018,7 @@ impl Streaming {
                     .expect("present proto");
                 self.finishing.insert((x, z));
                 self.written.remove(&(x, z));
-                self.submit(self.distance(x, z) * 4, Job::Finish(proto));
+                self.submit(Some((x, z)), 0, Job::Finish(proto));
             }
         }
         // Decorate chunks whose 3x3 proto neighbourhood is available, in
@@ -1052,7 +1086,7 @@ impl Streaming {
                 w.0 = self.decoration_order.rank_or_append(w.2, w.3);
             }
             wanted.sort_unstable();
-            for (_, d, x, z) in wanted {
+            for (_, _, x, z) in wanted {
                 if self.decorating >= workers * 2 {
                     break;
                 }
@@ -1091,7 +1125,7 @@ impl Streaming {
                     Err(_) => continue,
                 };
                 self.decorating += 1;
-                self.submit(d * 4 + 1, Job::Decorate(x, z, region));
+                self.submit(Some((x, z)), 1, Job::Decorate(x, z, region));
             }
         }
         self.schedule_generation(world, workers);
@@ -1111,7 +1145,8 @@ impl Streaming {
             self.light_snapshots
                 .insert((x, z), self.light_edit_sequence);
             self.submit(
-                self.distance(x, z) * 4 + 1,
+                Some((x, z)),
+                1,
                 Job::Light(x, z, region, self.sequence, self.sky_light),
             );
         }
@@ -1183,7 +1218,8 @@ impl Streaming {
                 self.sequence += 1;
                 self.meshing.insert((x, sy, z), self.sequence);
                 self.submit(
-                    self.distance(x, z) * 4 + if first { 2 } else { 0 },
+                    Some((x, z)),
+                    if first { 2 } else { 0 },
                     Job::Mesh(
                         x,
                         sy,
@@ -1222,9 +1258,9 @@ impl Streaming {
             loading: self.loading,
         };
         if let Some(wanted) = self.generation_scan.candidates(input, workers * 3) {
-            for (d, x, z) in wanted {
+            for (_, x, z) in wanted {
                 self.generating.insert((x, z));
-                self.submit(d * 4, Job::Generate(x, z));
+                self.submit(Some((x, z)), 0, Job::Generate(x, z));
             }
         }
     }
@@ -1738,9 +1774,77 @@ fn section_indexes(mut bits: u32) -> impl Iterator<Item = i32> {
         })
     })
 }
+/// The queued jobs' priorities computed again from each one's column
+/// `distance` (`Streaming::submit`).
+fn rank_again(queue: &mut BinaryHeap<Queued>, distance: impl Fn(i32, i32) -> i64) {
+    if queue.is_empty() {
+        return;
+    }
+    let mut jobs = std::mem::take(queue).into_vec();
+    for job in &mut jobs {
+        if let Some((x, z)) = job.at {
+            job.priority = distance(x, z) * 4 + job.bias;
+        }
+    }
+    *queue = BinaryHeap::from(jobs);
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queued_jobs_follow_the_centre_and_the_loading_screen() {
+        let forced = HashSet::new();
+        let ranges = |center| Ranges {
+            center,
+            radius: 32,
+            extra: &[],
+            forced: &forced,
+            cover: None,
+            band: None,
+        };
+        let generate = |x, z, priority, order| Queued {
+            priority,
+            at: Some((x, z)),
+            bias: 0,
+            order,
+            job: Job::Generate(x, z),
+        };
+        let loading = ranges((0, 0));
+        let queued = || {
+            BinaryHeap::from(vec![
+                // Queued while the loading screen was up: ring order.
+                generate(3, 1, loading.priority(3, 1, true) * 4, 1),
+                // Queued after it closed: plain distances, far below any ring past the first.
+                generate(20, 0, loading.priority(20, 0, false) * 4, 2),
+                Queued {
+                    priority: i64::MIN,
+                    at: None,
+                    bias: 0,
+                    order: 3,
+                    job: Job::Save(Vec::new()),
+                },
+            ])
+        };
+        let pops = |mut queue: BinaryHeap<Queued>| {
+            std::iter::from_fn(move || queue.pop())
+                .map(|q| q.at)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            pops(queued()),
+            [None, Some((20, 0)), Some((3, 1))],
+            "the stale order"
+        );
+        let mut queue = queued();
+        rank_again(&mut queue, |x, z| loading.priority(x, z, false));
+        assert_eq!(pops(queue), [None, Some((3, 1)), Some((20, 0))]);
+        // The player moved: the job near the new centre goes first.
+        let mut queue = BinaryHeap::from(vec![generate(3, 1, 0, 1), generate(20, 0, 1, 2)]);
+        let moved = ranges((19, 0));
+        rank_again(&mut queue, |x, z| moved.priority(x, z, false));
+        assert_eq!(queue.pop().and_then(|q| q.at), Some((20, 0)));
+    }
 
     #[test]
     fn view_distance_is_vanillas_shape() {
