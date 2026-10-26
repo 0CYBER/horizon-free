@@ -11,12 +11,16 @@
 //! run, keyed by the sha256 of their inputs and outputs recorded in the manifest, as before.
 
 pub mod artifacts;
+pub mod exporters;
+mod files;
 mod inventory;
 pub mod java;
 pub mod pyjson;
 mod sounds;
 mod survival;
+mod worker;
 
+pub use files::clone_or_copy;
 pub use sounds::{fonts, languages, packs, panorama, sounds, BUILT_IN_PACKS};
 
 use pyjson::Value;
@@ -74,7 +78,7 @@ pub fn sources_sha256(crate_dir: &Path) -> Option<String> {
 
 pub struct Options {
     /// The version folder (a release folder, or a checkout): research-lock.json, the exporters'
-    /// Java sources, and `.local/` where everything is written.
+    /// Java sources, optional precompiled `exporters/`, and `.local/` where everything is written.
     pub root: PathBuf,
     /// Import the pinned game files from the player's own copy first (`--prepare`).
     pub import: bool,
@@ -83,7 +87,7 @@ pub struct Options {
     pub minecraft_dir: Option<PathBuf>,
     /// The pinned server jar the player downloaded (`--server-jar`, else HORIZON_SERVER_JAR).
     pub server_jar: Option<PathBuf>,
-    /// The JDK to try after JAVA_HOME and the PATH (the launcher's pick, e.g. Minecraft's
+    /// The Java runtime to try after JAVA_HOME and the PATH (the launcher's pick, e.g. Minecraft's
     /// own Java it downloaded from Mojang).
     pub java_home: Option<PathBuf>,
 }
@@ -302,6 +306,8 @@ struct Run<'a> {
     server_classpath: String,
     /// The client jar and its libraries: the classpath of the client-side exporters.
     client_classpath: String,
+    bundles: std::cell::OnceCell<PathBuf>,
+    workers: std::cell::RefCell<[Option<worker::Worker>; 2]>,
     previous: Value,
     origin: Value,
     log: Log<'a>,
@@ -310,6 +316,13 @@ struct Run<'a> {
 const PARITY: &str = "mods/horizon/src/test/java/dev/horizonlab/parity";
 
 impl Run<'_> {
+    fn bundle(&self) -> Result<&Path, String> {
+        if self.bundles.get().is_none() {
+            self.bundles.set(exporters::classes(self)?).unwrap();
+        }
+        Ok(self.bundles.get().unwrap())
+    }
+
     fn oracle(&self, name: &str) -> PathBuf {
         self.root.join(PARITY).join(name)
     }
@@ -342,33 +355,31 @@ impl Run<'_> {
         fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))
     }
 
-    /// `javac --release <major> -proc:none -cp <classpath> [extra] -d <classes> <sources>`.
-    fn compile(
-        &self,
-        classpath: &str,
-        extra: &[String],
-        classes: &Path,
-        sources: &[&Path],
-        log: &fs::File,
-    ) -> Result<(), String> {
-        let mut args = vec!["-cp".to_string(), classpath.to_string()];
-        args.extend_from_slice(extra);
-        args.push("-d".into());
-        args.push(classes.display().to_string());
-        args.extend(sources.iter().map(|s| s.display().to_string()));
-        self.jdk.javac(self.java_major, &args, log)
-    }
-
     /// `java -Xmx<heap> -cp <classes>:<classpath> dev.horizonlab.parity.<main> <args>`.
     fn run(
         &self,
         heap: &str,
-        classes: &Path,
         classpath: &str,
         main: &str,
         args: &[String],
         log: &fs::File,
+        log_path: &Path,
     ) -> Result<(), String> {
+        let side = usize::from(classpath == self.client_classpath);
+        let classes = self
+            .bundle()?
+            .join(if side == 1 { "client" } else { "server" });
+        if !matches!(
+            main,
+            "VanillaCommandParseOracle" | "VanillaCreativeTabsExporter"
+        ) && std::env::var_os("HORIZON_PREPARE_ISOLATED").is_none()
+        {
+            let mut workers = self.workers.borrow_mut();
+            if workers[side].is_none() {
+                workers[side] = Some(worker::Worker::new(self, &classes, classpath)?);
+            }
+            return workers[side].as_mut().unwrap().run(main, args, log_path);
+        }
         let separator = if cfg!(windows) { ";" } else { ":" };
         let mut all = vec![
             format!("-Xmx{heap}"),
@@ -380,7 +391,7 @@ impl Run<'_> {
         self.jdk.java(&all, None, log)
     }
 
-    /// Compiles `sources` into `classes` and runs each of `mains` with `args`, their output in
+    /// Runs each exporter from the verified shared bundle, with output in
     /// the log at `log`: the shape of every exporter step.
     #[allow(clippy::too_many_arguments)]
     fn export(
@@ -388,7 +399,7 @@ impl Run<'_> {
         what: &str,
         classpath: &str,
         classes: &Path,
-        sources: &[&Path],
+        _sources: &[&Path],
         mains: &[&str],
         heap: &str,
         args: &[String],
@@ -398,10 +409,8 @@ impl Run<'_> {
         mkdir(classes)?;
         let file = self.log_file(log)?;
         let fail = |e: String| format!("{e} while exporting {what}; see {}", log.display());
-        self.compile(classpath, &[], classes, sources, &file)
-            .map_err(fail)?;
         for main in mains {
-            self.run(heap, classes, classpath, main, args, &file)
+            self.run(heap, classpath, main, args, &file, log)
                 .map_err(fail)?;
         }
         Ok(())
@@ -410,6 +419,15 @@ impl Run<'_> {
 
 /// Prepares the resources; returns their folder (`.local/horizon-client/<version>`).
 pub fn prepare(options: &Options, log: Log) -> Result<PathBuf, String> {
+    prepare_impl(options, log, false)
+}
+
+/// Release build tool: compile and link-check only Horizon's original exporter classes.
+pub fn compile_exporters(options: &Options, log: Log) -> Result<PathBuf, String> {
+    prepare_impl(options, log, true)
+}
+
+fn prepare_impl(options: &Options, log: Log, compile_only: bool) -> Result<PathBuf, String> {
     let root = &std::path::absolute(&options.root)
         .map_err(|e| format!("{}: {e}", options.root.display()))?;
     let lock = artifacts::Lock::read(root)?;
@@ -418,17 +436,29 @@ pub fn prepare(options: &Options, log: Log) -> Result<PathBuf, String> {
     homes.extend(java::minecraft_runtimes(
         &artifacts::minecraft_dir(options.minecraft_dir.as_deref()).join("runtime"),
     ));
-    let jdk = java::find(lock.java_major, &homes)?;
-    if options.import && !artifacts::reuse_imported(root, log)? {
-        artifacts::import(
-            root,
-            &lock,
-            options.minecraft_dir.as_deref(),
-            options.server_jar.as_deref(),
-            log,
-        )?;
-    }
-    let found = artifacts::verify(&lock)?;
+    let jdk = java::find_runtime(lock.java_major, &homes)?;
+    let reused = if options.import {
+        artifacts::reuse_verified(root, log)?
+    } else {
+        None
+    };
+    let (found, client_libraries) = match reused {
+        Some(checked) => checked,
+        None => {
+            if options.import {
+                artifacts::import(
+                    root,
+                    &lock,
+                    options.minecraft_dir.as_deref(),
+                    options.server_jar.as_deref(),
+                    log,
+                )?;
+            }
+            let found = artifacts::verify(&lock)?;
+            let libraries = artifacts::client_libraries(&lock, &found.manifest)?;
+            (found, libraries)
+        }
+    };
     let local = root.join(".local");
     let resources = local.join("horizon-client").join(&lock.version);
     mkdir(&resources)?;
@@ -454,7 +484,6 @@ pub fn prepare(options: &Options, log: Log) -> Result<PathBuf, String> {
     } else {
         Value::Object(Vec::new())
     };
-    let client_libraries = artifacts::client_libraries(&lock, &found.manifest)?;
     let run = Run {
         root: root.clone(),
         local,
@@ -465,10 +494,15 @@ pub fn prepare(options: &Options, log: Log) -> Result<PathBuf, String> {
         client: found.jars["client"].clone(),
         server_classpath: classpath_join(&found.jars["server"], &found.libraries),
         client_classpath: classpath_join(&found.jars["client"], &client_libraries),
+        bundles: std::cell::OnceCell::new(),
+        workers: std::cell::RefCell::new([None, None]),
         previous,
         origin,
         log,
     };
+    if compile_only {
+        return Ok(run.bundle()?.to_path_buf());
+    }
     steps(&run, &lock, &oracle, options.minecraft_dir.as_deref())?;
     log(&format!(
         "Prepared Horizon native-client resources: {}",
@@ -688,25 +722,9 @@ fn steps(
     // and every data-pack resource (worldgen, recipes, loot tables, tags), and
     // the vanilla pack's icon (`pack.png`) for the pack screen.
     (run.log)("Copying the client's assets and data");
-    let mut count = 0usize;
-    let mut client = open_zip(&run.client)?;
-    let version = pyjson::loads(&zip_text(&mut client, "version.json")?)?;
-    for name in zip_names(&client) {
-        let wanted = name.starts_with("assets/") || name.starts_with("data/") || name == "pack.png";
-        if !wanted || name.ends_with('/') {
-            continue;
-        }
-        let relative = member_path(&name, "Invalid resource path")?;
-        let data = zip_bytes(&mut client, &name)?;
-        write_if_changed(&root.join(relative), &data)?;
-        count += 1;
-    }
-
-    // The JAR holds only gray 1x1 panorama placeholders and an empty Unifont
-    // include, and none of the built-in packs. Import the indexed ones afterwards, including on reruns that just
-    // extracted the JAR again. They are optional when preparing from
-    // already-imported JARs.
-    sounds::optional_assets(repo, minecraft, run.log);
+    let mut indexed = sounds::Assets::load(repo, minecraft, run.log);
+    let (version, count) = extract_client_resources(&run.client, root, indexed.as_mut().ok())?;
+    sounds::optional_imports(indexed.as_mut().map_err(|e| e.as_str()), run.log);
 
     // One file each, exported again when the exporter or the jar it reads changed.
     let single = |what: &str,
@@ -940,6 +958,54 @@ fn steps(
     )
 }
 
+/// Check existing JAR assets by their ZIP size/CRC without inflating every member again.
+/// Indexed panorama/font/language replacements have stronger SHA-1 checks and take precedence.
+fn extract_client_resources(
+    jar: &Path,
+    root: &Path,
+    mut indexed: Option<&mut sounds::Assets>,
+) -> Result<(Value, usize), String> {
+    let mut client = open_zip(jar)?;
+    let version = pyjson::loads(&zip_text(&mut client, "version.json")?)?;
+    let mut count = 0;
+    for name in zip_names(&client) {
+        if !(name.starts_with("assets/") || name.starts_with("data/") || name == "pack.png")
+            || name.ends_with('/')
+        {
+            continue;
+        }
+        let relative = member_path(&name, "Invalid resource path")?;
+        count += 1;
+        if let Some(assets) = &mut indexed {
+            if assets.imported(&name)? {
+                continue;
+            }
+        }
+        let target = root.join(relative);
+        let member = client.by_name(&name).map_err(|e| e.to_string())?;
+        let (size, crc) = (member.size(), member.crc32());
+        drop(member);
+        if target.is_file() && fs::metadata(&target).map_err(|e| e.to_string())?.len() == size {
+            let mut file = fs::File::open(&target).map_err(|e| e.to_string())?;
+            let mut hash = crc32fast::Hasher::new();
+            let mut buffer = [0; 16 * 1024];
+            loop {
+                let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
+                if n == 0 {
+                    break;
+                }
+                hash.update(&buffer[..n]);
+            }
+            if hash.finalize() == crc {
+                continue;
+            }
+        }
+        mkdir(target.parent().unwrap())?;
+        write(&target, &zip_bytes(&mut client, &name)?)?;
+    }
+    Ok((version, count))
+}
+
 fn datagen_reports_missing(root: &Path) -> bool {
     ["items.json", "registries.json", "commands.json"]
         .iter()
@@ -1126,7 +1192,6 @@ fn prepare_worldgen(run: &Run) -> Result<(), String> {
 /// whose blocks are checked for survival or support (trees, flowers, grass, kelp, ...).
 fn export_block_behavior(run: &Run, export: &Path) -> Result<(), String> {
     (run.log)("Exporting block behavior (VanillaSimpleBlockOracle)");
-    let tests = run.root.join("mods/horizon/src/test/java");
     let classes = export.join("classes");
     mkdir(&classes)?;
     let log_path = export.join("export.log");
@@ -1137,22 +1202,13 @@ fn export_block_behavior(run: &Run, export: &Path) -> Result<(), String> {
             log_path.display()
         )
     };
-    // The oracle's helper classes are compiled on demand from the source path.
-    run.compile(
-        &run.server_classpath,
-        &["-sourcepath".into(), arg(&tests)],
-        &classes,
-        &[&tests.join("dev/horizonlab/parity/VanillaSimpleBlockOracle.java")],
-        &log,
-    )
-    .map_err(fail)?;
     run.run(
         "1G",
-        &classes,
         &run.server_classpath,
         "VanillaSimpleBlockOracle",
         &["export".into(), arg(export)],
         &log,
+        &log_path,
     )
     .map_err(fail)?;
     let rules = survival::bind_definitions(

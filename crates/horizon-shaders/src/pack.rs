@@ -167,6 +167,39 @@ impl Pack {
         names.sort();
         names
     }
+
+    /// Every file of the pack, by its path inside `shaders`, sorted.
+    pub fn all_files(&self) -> Vec<String> {
+        let mut names = match &self.files {
+            Files::Folder(root) => {
+                let mut names = Vec::new();
+                let mut dirs = vec![String::new()];
+                while let Some(dir) = dirs.pop() {
+                    for e in fs::read_dir(root.join(&dir))
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                    {
+                        let name = e.file_name().to_string_lossy().into_owned();
+                        let path = if dir.is_empty() {
+                            name
+                        } else {
+                            format!("{dir}/{name}")
+                        };
+                        match e.file_type() {
+                            Ok(t) if t.is_dir() => dirs.push(path),
+                            Ok(t) if t.is_file() => names.push(path),
+                            _ => {}
+                        }
+                    }
+                }
+                names
+            }
+            Files::Zip { entries, .. } => entries.keys().cloned().collect(),
+        };
+        names.sort();
+        names
+    }
 }
 
 /// `a/./b/../c` → `a/c`; `None` for a path that climbs out of `shaders`.

@@ -79,8 +79,49 @@ jobs:
           # A dry run builds whatever the decision, to test the builds.
           if [[ "${{ steps.mode.outputs.dry_run }}" == true ]]; then echo "release=true" >> "$GITHUB_OUTPUT"; fi
 
-  build:
+  exporters:
     needs: decide
+    if: needs.decide.outputs.release == 'true'
+    # This runner holds the maintainer's own pinned Minecraft jars. Only our classes leave it.
+    runs-on: ${{ vars.MAC_RUNNER || 'ludovics-mac-mini' }}
+    # Three full preparations (two isolated, one batched) besides the compile.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.decide.outputs.head }}
+          persist-credentials: false
+          clean: true
+      - uses: dtolnay/rust-toolchain@stable
+      - run: bash tools/ci/runner-env.sh
+      - run: bash tools/ci/vanilla-data.sh
+      - name: Compile and validate original exporters against the pinned jars
+        shell: bash
+        run: |
+          set -euo pipefail
+          # target/ is gone after the clean checkout, and vanilla-data.sh builds the preparer only when it
+          # prepares afresh.
+          cargo build --release --locked -p horizon-prepare
+          # Compiled here, never taken from the runner's shared preparations: pull requests' parity jobs
+          # write those (vanilla-data.sh links .local/exporters to them).
+          rm -rf .local/exporters
+          bundle=$(target/release/horizon-prepare compile-exporters --root "$PWD" | tail -1)
+          mkdir -p exporters
+          cp -R "$bundle/server" "$bundle/client" "$bundle/manifest.json" exporters/
+          # Only our classes and their manifest leave this runner.
+          stray=$(find exporters -type f ! -path exporters/manifest.json \
+            ! \( -name '*.class' \( -path 'exporters/server/dev/horizonlab/parity/*' -o -path 'exporters/client/dev/horizonlab/parity/*' \) \))
+          [ -z "$stray" ] || { echo "::error::not one of our classes: $stray"; exit 1; }
+          python3 tools/check_prepare_exporters.py --binary target/release/horizon-prepare
+      - uses: actions/upload-artifact@v4
+        with:
+          name: original-exporters
+          path: exporters/
+          if-no-files-found: error
+          retention-days: 3
+
+  build:
+    needs: [decide, exporters]
     if: needs.decide.outputs.release == 'true'
     name: build ${{ matrix.name }}
     strategy:
@@ -220,6 +261,10 @@ jobs:
           path: ${{ runner.temp }}/smoke-test.json
           if-no-files-found: error
           retention-days: 3
+      - uses: actions/download-artifact@v4
+        with:
+          name: original-exporters
+          path: exporters
       - name: Package
         run: |
           set -euo pipefail

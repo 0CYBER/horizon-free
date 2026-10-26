@@ -128,6 +128,27 @@ fn text(nbt: &Compound, key: &str) -> Option<String> {
     }
 }
 
+/// The client block entity for one of a chunk's generated block entities,
+/// before a container's loot is unpacked: `StructureTemplate.placeInWorld`
+/// hands the template's block entity NBT to the level's block entity.
+fn generated_block_entity(block: &str, nbt: &Compound) -> Option<BlockEntity> {
+    let mut entity = BlockEntity::for_block(block)?;
+    match &mut entity {
+        // MonsterRoomFeature and the structures' setEntityId.
+        BlockEntity::Spawner(s) => {
+            **s = crate::mobs::spawner::Spawner::load(&Tag::Compound(nbt.clone()));
+        }
+        BlockEntity::TrialSpawner(s) => {
+            **s = crate::mobs::trial_spawner::TrialSpawner::load(&Tag::Compound(nbt.clone()));
+        }
+        BlockEntity::Vault(v) => **v = crate::vault::Vault::load(&Tag::Compound(nbt.clone())),
+        // BannerBlockEntity.loadAdditional: the End cities' black triangles.
+        BlockEntity::Banner(b) => *b = crate::save::decode_banner(&Tag::Compound(nbt.clone())),
+        _ => {}
+    }
+    Some(entity)
+}
+
 /// Client block entities for the generated block entities of a chunk.
 pub fn block_entities(
     chunk: &ProtoChunk,
@@ -137,19 +158,9 @@ pub fn block_entities(
     for (pos, nbt) in &chunk.block_entities {
         let [x, y, z] = *pos;
         let block = chunk.block_name(x, y, z);
-        let Some(mut entity) = BlockEntity::for_block(block) else {
+        let Some(mut entity) = generated_block_entity(block, nbt) else {
             continue;
         };
-        // MonsterRoomFeature and the structures' setEntityId.
-        if let BlockEntity::Spawner(s) = &mut entity {
-            **s = crate::mobs::spawner::Spawner::load(&Tag::Compound(nbt.clone()));
-        }
-        if let BlockEntity::TrialSpawner(s) = &mut entity {
-            **s = crate::mobs::trial_spawner::TrialSpawner::load(&Tag::Compound(nbt.clone()));
-        }
-        if let BlockEntity::Vault(v) = &mut entity {
-            **v = crate::vault::Vault::load(&Tag::Compound(nbt.clone()));
-        }
         if let (BlockEntity::Chest(slots), Some(table), Some(loot)) =
             (&mut entity, text(nbt, "LootTable"), loot)
         {
@@ -165,14 +176,10 @@ pub fn block_entities(
                 .iter_mut()
                 .zip(loot.fill(&table, seed, 27, Some(biome)))
             {
-                *slot = stack.map(|s| {
-                    let mut item = loot_item(&s);
-                    // An ominous bottle's level (the default, 0, is no component).
-                    if let Some(level) = s.ominous_amplifier.filter(|l| *l > 0) {
-                        item.data_mut().ominous_amplifier = Some(level.clamp(0, 4) as u8);
-                    }
-                    item
-                });
+                // With what the rolls put on them: enchantments
+                // (enchant_with_levels in End city chests), potions and an
+                // ominous bottle's level.
+                *slot = stack.map(|s| loot_item_with_components(&s));
             }
         }
         out.push(((x, y, z), entity));
@@ -211,7 +218,7 @@ pub fn unpack_entity_loot(
     let slots: Vec<Option<ItemStack>> = loot
         .fill(&table, seed, 27, Some(biome))
         .into_iter()
-        .map(|s| s.map(|s| loot_item(&s)))
+        .map(|s| s.map(|s| loot_item_with_components(&s)))
         .collect();
     nbt.remove(&JavaString::from("LootTable"));
     nbt.remove(&JavaString::from("LootTableSeed"));
@@ -223,6 +230,45 @@ pub fn unpack_entity_loot(
 mod tests {
     use super::*;
     use horizon_world::loot::{ExplorationMap, LootStack};
+
+    #[test]
+    fn placed_chest_loot_keeps_its_enchantments_and_potions() {
+        let stack =
+            |item: &str, enchantments: Vec<(String, i32)>, potion: Option<&str>| LootStack {
+                item: item.into(),
+                count: 1,
+                damage: 0,
+                enchantments,
+                potion: potion.map(str::to_owned),
+                map: false,
+                exploration: None,
+                ominous_amplifier: None,
+            };
+        // An End city chest's enchant_with_levels roll.
+        let boots = loot_item_with_components(&stack(
+            "minecraft:diamond_boots",
+            vec![
+                ("minecraft:protection".into(), 3),
+                ("minecraft:unbreaking".into(), 2),
+            ],
+            None,
+        ));
+        assert_eq!(boots.enchantments().len(), 2);
+        // A book's go into stored_enchantments.
+        let book = loot_item_with_components(&stack(
+            "minecraft:enchanted_book",
+            vec![("minecraft:mending".into(), 1)],
+            None,
+        ));
+        assert!(book.enchantments().is_empty());
+        assert_eq!(book.stored_enchantments().len(), 1);
+        let arrow = loot_item_with_components(&stack(
+            "minecraft:tipped_arrow",
+            Vec::new(),
+            Some("minecraft:slowness"),
+        ));
+        assert_eq!(arrow.potion(), Some("minecraft:slowness"));
+    }
 
     #[test]
     fn exploration_maps_wait_in_custom_data_until_searched() {
@@ -277,5 +323,44 @@ mod tests {
         // A plain item has nothing pending.
         stack.exploration = None;
         assert!(!has_pending_map(&loot_item(&stack)));
+    }
+
+    /// The End cities' tower tops save their banners' patterns in the
+    /// template; the placed banner must keep them (`EndCityPieces`).
+    #[test]
+    fn a_generated_banner_keeps_its_template_patterns() {
+        let patterns = Tag::List(vec![
+            Tag::compound([
+                ("color", Tag::String("black".into())),
+                ("pattern", Tag::String("minecraft:triangle_top".into())),
+            ]),
+            Tag::compound([
+                ("color", Tag::String("black".into())),
+                ("pattern", Tag::String("minecraft:triangle_bottom".into())),
+            ]),
+        ]);
+        let nbt = Tag::compound([
+            ("id", Tag::String("minecraft:banner".into())),
+            ("patterns", patterns),
+        ]);
+        let Tag::Compound(nbt) = nbt else {
+            unreachable!()
+        };
+        let Some(BlockEntity::Banner(banner)) =
+            generated_block_entity("minecraft:magenta_banner", &nbt)
+        else {
+            panic!("a banner block makes a banner block entity");
+        };
+        assert_eq!(banner.layers.len(), 2);
+        assert_eq!(&*banner.layers[0].pattern, "minecraft:triangle_top");
+        assert_eq!(&*banner.layers[1].pattern, "minecraft:triangle_bottom");
+        assert_eq!(&*banner.layers[0].color, "black");
+        // A banner the template saved without patterns stays bare.
+        let Some(BlockEntity::Banner(bare)) =
+            generated_block_entity("minecraft:white_banner", &Compound::new())
+        else {
+            panic!("a banner block makes a banner block entity");
+        };
+        assert!(bare.layers.is_empty());
     }
 }

@@ -14,10 +14,11 @@
 //! as it is is listed, so the coverage report can say what generates and how
 //! closely.
 //!
-//! YUNG's, Lithostitched's and CTOV's worldgen files are converted by
+//! YUNG's API's files are carried as written ([`crate::yung`]).
+//! Lithostitched's and CTOV's worldgen files are converted by
 //! `legacy_structure_mods`, called from [`upgrade`], [`crate::carry`] and the
 //! processors.
-use crate::legacy_structure_mods::{lithostitched, yung};
+use crate::{legacy_structure_mods::lithostitched, yung};
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -262,7 +263,7 @@ fn upgrade_types(
     let lost = &mut report.rules_lost;
     // YUNG's and Lithostitched's types are converted apart from this code.
     if let Some(changed) =
-        yung::upgrade(kind, v, set_tags, lost).or_else(|| lithostitched::upgrade(kind, v, lost))
+        yung::upgrade(kind, v, lost).or_else(|| lithostitched::upgrade(kind, v, lost))
     {
         report.mapped += usize::from(changed);
         return changed;
