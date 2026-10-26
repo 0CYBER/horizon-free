@@ -515,6 +515,8 @@ pub enum DamageKind {
     InFire,
     Lava,
     Drown,
+    /// `dry_out`: an axolotl out of water for too long.
+    DryOut,
     Magic,
     Sting,
     Cactus,
@@ -573,7 +575,11 @@ impl Damage {
     pub fn causes_panic(&self) -> bool {
         !matches!(
             self.kind,
-            DamageKind::Fall | DamageKind::Drown | DamageKind::Generic | DamageKind::InWall
+            DamageKind::Fall
+                | DamageKind::Drown
+                | DamageKind::DryOut
+                | DamageKind::Generic
+                | DamageKind::InWall
         )
     }
     /// DamageTypeTags.BYPASSES_ARMOR
@@ -606,6 +612,7 @@ impl Damage {
                 | DamageKind::InFire
                 | DamageKind::Lava
                 | DamageKind::Drown
+                | DamageKind::DryOut
                 | DamageKind::Magic
                 | DamageKind::Cactus
                 | DamageKind::Generic
@@ -1788,6 +1795,12 @@ impl Mob {
                         .push(MobEvent::Sound(sound, at, ai::sound_volume(self), pitch));
                 }
             }
+        }
+        // Squid.hurtServer: a squid hurt after a living entity hit it squirts ink.
+        if matches!(self.species(), Species::Squid | Species::GlowSquid)
+            && self.ai.last_hurt_by.is_some()
+        {
+            aquatic::spawn_ink(self);
         }
         true
     }

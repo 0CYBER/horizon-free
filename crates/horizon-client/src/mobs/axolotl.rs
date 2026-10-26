@@ -3,6 +3,8 @@ use super::{Mob, MobEvent, MobWorld, Species, Who, animal_brain, keyframes::Anim
 use horizon_core::random::RandomSource;
 pub const PLAY_DEAD_TICKS: i32 = 200;
 pub const HUNTING_COOLDOWN: i64 = 2400;
+/// `Axolotl.getMaxAirSupply`.
+pub const MAX_AIR: i32 = 6000;
 
 /// AxolotlAttackablesSensor: always-hostile targets bypass the hunting cooldown.
 pub fn prey_eligible(

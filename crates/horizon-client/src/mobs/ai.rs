@@ -441,6 +441,34 @@ pub fn tick_swing(m: &mut Mob) {
     }
     m.anim.attack_anim = m.ai.swing_time as f32 / 6.0;
 }
+/// `LivingEntity.baseTick` refills a breather's air by 4, then
+/// `Axolotl.handleAirSupply` (unless the mob has no AI): water or rain fills
+/// it, anywhere else it runs down from the pre-tick value, and at -20 the
+/// axolotl dries out.
+fn axolotl_air_supply(m: &mut Mob, w: &MobWorld) {
+    let before = m.air;
+    m.air = (m.air + 4).min(super::axolotl::MAX_AIR);
+    if m.no_ai {
+        return;
+    }
+    // Entity.isInRain: rain at the block, or at the top of the box.
+    let (x, y, z) = (
+        m.position.x.floor() as i32,
+        m.position.y.floor() as i32,
+        m.position.z.floor() as i32,
+    );
+    let top = (m.position.y + f64::from(m.height())).floor() as i32;
+    let in_rain = w.raining && (w.can_see_sky(x, y, z) || w.can_see_sky(x, top, z));
+    if m.fluids.in_water || in_rain {
+        m.air = super::axolotl::MAX_AIR;
+    } else {
+        m.air = before - 1;
+        if m.air <= -20 {
+            m.air = 0;
+            m.damage(2.0, Damage::of(DamageKind::DryOut));
+        }
+    }
+}
 /// Entity.baseTick + LivingEntity.baseTick + Mob.baseTick.
 fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     m.was_eye_in_water = m.fluids.eye_in_water;
@@ -500,7 +528,9 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             m.damage(1.0, Damage::of(DamageKind::InWall));
         }
         // Air supply and drowning (WaterAnimal.handleAirSupply for aquatic mobs).
-        if m.kind.flags.needs_water {
+        if m.species() == Species::Axolotl {
+            axolotl_air_supply(m, w);
+        } else if m.kind.flags.needs_water {
             if !m.fluids.in_water {
                 m.air -= 1;
                 if m.air == -20 {
