@@ -9,7 +9,7 @@ use super::{
         NearestTarget, Prey, RandomLookAround, Stroll, goal_clone,
     },
 };
-use horizon_core::geometry::trig::Mth;
+use horizon_core::geometry::{Vec3, trig::Mth};
 use horizon_core::random::RandomSource;
 use std::f32::consts::PI;
 
@@ -83,12 +83,16 @@ pub fn register_hoglin(m: &mut Mob) {
     g.add(1, BabyPanic(super::goals::Panic::new(1.25)));
     g.add(2, MeleeAttack::new(1.0, true));
     g.add(3, super::goals::Breed::new(1.0));
+    g.add(3, HoglinAvoidRepellent);
     g.add(4, super::goals::FollowParent::new(1.1));
     g.add(5, Stroll::avoiding_water(0.4));
     g.add(6, LookAtPlayer::new(8.0));
     m.ai.targets.add(1, HurtByTarget::new().alert());
-    m.ai.targets
-        .add(2, NearestTarget::player(true).when(|m, _| !m.is_baby()));
+    // `HoglinAi.findNearestValidAttackTarget`: nothing while pacified.
+    m.ai.targets.add(
+        2,
+        NearestTarget::player(true).when(|m, _| !m.is_baby() && m.extra.ints[0] <= 0),
+    );
 }
 pub fn register_zoglin(m: &mut Mob) {
     let g = &mut m.ai.goals;
@@ -107,6 +111,49 @@ pub fn register_zoglin(m: &mut Mob) {
         )
         .interval(10),
     );
+}
+/// `SetWalkTargetAwayFrom.pos(NEAREST_REPELLENT, 1.0, 8, true)` of the hoglin's
+/// idle activity: closer than 8 blocks to a repellent, walk away from it.
+#[derive(Clone, Debug)]
+struct HoglinAvoidRepellent;
+impl Goal for HoglinAvoidRepellent {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let Some(r) = m.extra.repellent else {
+            return false;
+        };
+        // Vec3.atBottomCenterOf.
+        let avoid = [
+            f64::from(r[0]) + 0.5,
+            f64::from(r[1]),
+            f64::from(r[2]) + 0.5,
+        ];
+        if m.distance_sqr(Vec3::new(avoid[0], avoid[1], avoid[2])) >= 64.0 {
+            return false;
+        }
+        for _ in 0..10 {
+            if let Some(p) = m.land_random_pos_away(cx.w, 16, 7, avoid) {
+                let at = [
+                    p[0].floor() as i32,
+                    p[1].floor() as i32,
+                    p[2].floor() as i32,
+                ];
+                m.ai.pending_path = m.create_path_to(cx.w, at, 0);
+                return m.ai.pending_path.is_some();
+            }
+        }
+        false
+    }
+    fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        !m.ai.nav.is_done()
+    }
+    fn start(&mut self, m: &mut Mob, _: &mut Cx) {
+        let path = m.ai.pending_path.take();
+        m.nav_move_to_path(path, 1.0);
+    }
 }
 /// Baby hoglins flee what hurts them; adults stand their ground.
 #[derive(Clone, Debug)]
@@ -165,11 +212,44 @@ impl Goal for GoToWantedItem {
         m.extra.point = None;
     }
 }
+/// `HoglinSpecificSensor.findNearestRepellent`: the nearest `#hoglin_repellents`
+/// block within 8 blocks sideways and 4 up or down.
+fn find_hoglin_repellent(m: &Mob, w: &MobWorld) -> Option<[i32; 3]> {
+    let tag = w.block_tags.get("minecraft:hoglin_repellents")?;
+    let at = [
+        m.position.x.floor() as i32,
+        m.position.y.floor() as i32,
+        m.position.z.floor() as i32,
+    ];
+    w.nearest_block(at, 8, 4, |_, name| tag.contains(name))
+}
+/// The hoglin's repellent memories: the sensor (every 20 ticks), the end of
+/// `PACIFIED` (`ints[0]`), a hit ending it (`HoglinAi.wasHurtBy`, `ints[1]`
+/// remembers the hit seen) and `BecomePassiveIfMemoryPresent(NEAREST_REPELLENT, 200)`.
+fn hoglin_repellent(m: &mut Mob, w: &MobWorld) {
+    if m.extra.ints[0] > 0 {
+        m.extra.ints[0] -= 1;
+    }
+    if m.ai.last_hurt_by.is_some() && m.ai.last_hurt_by_time != m.extra.ints[1] {
+        m.extra.ints[1] = m.ai.last_hurt_by_time;
+        m.extra.ints[0] = 0;
+    }
+    if m.age.wrapping_add(m.id).is_multiple_of(20) {
+        m.extra.repellent = find_hoglin_repellent(m, w);
+    }
+    if m.extra.ints[0] <= 0 && m.extra.repellent.is_some() {
+        m.extra.ints[0] = 200;
+        m.ai.target = None;
+    }
+}
 /// Per-tick piglin and hoglin state: admiring, anger, zombification and the
 /// hoglin attack animation. Returns a conversion when it happens.
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if m.extra.anim_ticks > 0 {
         m.extra.anim_ticks -= 1;
+    }
+    if m.species() == Species::Hoglin && m.alive() {
+        hoglin_repellent(m, w);
     }
     if m.extra.anger > 0 {
         m.extra.anger -= 1;

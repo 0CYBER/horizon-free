@@ -18,6 +18,7 @@ mod mcp;
 mod modpacks_page;
 mod mods_page;
 mod mods_project;
+mod partner;
 mod perf;
 mod scrollbar;
 mod servers_page;
@@ -2130,7 +2131,8 @@ impl Launcher {
         if let Some(crash) = self.crash.clone() {
             page = page.child(self.crash_notice(crash, cx));
         }
-        page
+        // Below everything the player needs to start, so it never moves Play.
+        page.child(partner::banner("partner-home", 560., &t))
     }
 
     /// "Horizon crashed": the report and the logs, and where to report it.

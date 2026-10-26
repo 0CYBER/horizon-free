@@ -77,6 +77,10 @@ pub(super) struct GuestPlay {
     last_inventory: u64,
     /// `Entity.portalProcess` and `portalCooldown` (game/server_travel.rs).
     pub(super) portal: horizon_client::nether_portal::PortalState,
+    /// `ServerPlayer.wonGame`: the End poem is showing, the player waits for
+    /// its client's PERFORM_RESPAWN (`respawn_requested`).
+    pub(super) won_game: bool,
+    pub(super) respawn_requested: bool,
     /// `Player.takeXpDelay`: ticks until the next orb can be taken.
     xp_delay: u32,
     /// What last killed the guest outright (`/kill`): the death message's key.
@@ -875,7 +879,11 @@ impl Game<'_> {
             .filter(|g| host.hub.here(g))
             .filter(|g| {
                 g.menu.as_ref().is_some_and(|m| {
-                    m.slots.valid(&self.world) && !m.slots.still_valid(&self.world, g, m.pos)
+                    (m.slots.valid(&self.world) && !m.slots.still_valid(&self.world, g, m.pos))
+                        || m.pos.is_some_and(|k| {
+                            k.1 == super::minecarts::CART_KEY_Y
+                                && !self.chest_vehicle_still_valid(k.2, g)
+                        })
                 })
             })
             .map(|g| g.conn)
@@ -887,6 +895,35 @@ impl Game<'_> {
                 self.guest_carried_back(host, gi);
             }
         }
+    }
+
+    /// `ContainerEntity.isChestVehicleStillValid`: the chest minecart or chest
+    /// boat is still there and within the guest's entity interaction range
+    /// plus 4 of its box.
+    fn chest_vehicle_still_valid(&self, id: i32, g: &horizon_client::lan::guest::Guest) -> bool {
+        let bounds = self
+            .carts
+            .iter()
+            .find(|c| c.id as i32 == id)
+            .map(|c| c.bounds())
+            .or_else(|| {
+                self.boats
+                    .iter()
+                    .find(|b| b.id as i32 == id)
+                    .map(|b| b.bounds())
+            });
+        let Some(b) = bounds else {
+            return false;
+        };
+        let eye = [g.position[0], g.position[1] + g.eye_height(), g.position[2]];
+        let (lo, hi) = (b.min_position(), b.max_position());
+        let d = [
+            eye[0] - eye[0].clamp(lo.x, hi.x),
+            eye[1] - eye[1].clamp(lo.y, hi.y),
+            eye[2] - eye[2].clamp(lo.z, hi.z),
+        ];
+        let range = if g.creative() { 5.0 } else { 3.0 } + 4.0;
+        d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < range * range
     }
 
     /// A packet from a guest that the hub does not handle itself.
@@ -1314,6 +1351,13 @@ impl Game<'_> {
                 self.guest_suggestions(host, conn, &payload);
             }
             S::PlaceRecipe(p) => self.lan_place_recipe(host, conn, &p),
+            // handleClientCommand: PERFORM_RESPAWN after the poem leaves the End
+            // (the next server tick sends the player on).
+            S::ClientCommand(c)
+                if c.action == 0 && host.play.get(&conn).is_some_and(|p| p.won_game) =>
+            {
+                host.play.entry(conn).or_default().respawn_requested = true;
+            }
             S::ClientCommand(c) if c.action == 0 => self.guest_respawn(host, conn),
             // ServerStatsCounter.sendStats.
             S::ClientCommand(c) if c.action == 1 => {

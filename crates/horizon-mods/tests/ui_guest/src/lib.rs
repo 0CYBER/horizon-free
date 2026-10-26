@@ -5,9 +5,10 @@
 //! `/input_claim`, `/input_poll`, `/input_held` and `/input_wheel` test
 //! `input`; `/zoom FACTOR SMOOTH TURN` tests `render.set-zoom`;
 //! `/corner` and `/readings` the calls the official extras mods use;
-//! `/raycast DISTANCE` says what `game.raycast` sees.
+//! `/raycast DISTANCE` says what `game.raycast` sees; `/quiet A;B` runs
+//! lines with `command.run-quiet` (`/quiet_many N`: N of them).
 use horizon_mod_sdk::{
-    Mod, Registration, chat, game,
+    Mod, Registration, chat, command, game,
     input::{self, Event},
     render::{self, FillShape, ItemShape, Point, QuadShape, Rect, Shape, SpriteShape, TextShape},
     ui::{self, ItemWidget, ListWidget, Screen, TextWidget, Widget},
@@ -99,6 +100,8 @@ impl Mod for Guest {
             "zoom",
             "minimap",
             "raycast",
+            "quiet",
+            "quiet_many",
             "corner",
             "readings",
         ]
@@ -218,6 +221,15 @@ impl Mod for Guest {
                     round: words.get(3) == Some(&"1"),
                 });
                 render::set_minimap(map);
+            }
+            "quiet" => command::run_quiet(&args.split(';').map(str::to_owned).collect::<Vec<_>>()),
+            "quiet_many" => {
+                let n: usize = args.parse().unwrap_or(0);
+                command::run_quiet(
+                    &(0..n)
+                        .map(|i| format!("setblock {i} 300 0 stone"))
+                        .collect::<Vec<_>>(),
+                );
             }
             "raycast" => {
                 let distance = args.parse().unwrap_or(f32::NAN);

@@ -694,6 +694,13 @@ impl Piece {
             Self::Legacy(p) => p.type_name(),
         }
     }
+    /// `StructurePiece.createTag`; None for a type Horizon cannot save yet.
+    pub fn save(&self) -> Option<crate::nbt::Compound> {
+        match self {
+            Self::Pool(p) => Some(p.save()),
+            Self::Legacy(p) => p.save(),
+        }
+    }
 }
 fn legacy(pieces: Vec<impl LegacyPiece + 'static>) -> Vec<Piece> {
     pieces
@@ -734,6 +741,26 @@ pub struct StructureStart {
     pub pieces: Vec<Piece>,
     /// Piece union, inflated by 12 for terrain-adapting structures.
     pub bounding_box: BoundingBox,
+}
+impl StructureStart {
+    /// `StructureStart.createTag` in its own chunk; None while one of its
+    /// pieces cannot be saved. `references` counts `addReference` calls,
+    /// which only locating structures makes: 0 in a freshly made world.
+    pub fn save(&self) -> Option<crate::nbt::Tag> {
+        use crate::nbt::Tag;
+        let children: Option<Vec<Tag>> = self
+            .pieces
+            .iter()
+            .map(|p| p.save().map(Tag::Compound))
+            .collect();
+        Some(Tag::compound([
+            ("id", Tag::String(self.name.as_str().into())),
+            ("ChunkX", Tag::Int(self.chunk.x)),
+            ("ChunkZ", Tag::Int(self.chunk.z)),
+            ("references", Tag::Int(0)),
+            ("Children", Tag::List(children?)),
+        ]))
+    }
 }
 
 /// A block of a noise column (ChunkGenerator.getBaseColumn), by what
@@ -935,6 +962,7 @@ fn try_generate(
             let stub = top_of_chunk_center(context, chunk, HeightmapType::OceanFloorWg)?;
             let piece = super::simple::BuriedTreasurePiece {
                 position: [chunk.x * 16 + 9, 90, chunk.z * 16 + 9],
+                found: std::sync::Mutex::new(None),
             };
             (stub, legacy(vec![piece]))
         }

@@ -8,7 +8,7 @@ use crate::{
     },
     chunk::{ChunkData, LightData},
     entity_data::{EntityData, Particle, Value},
-    item::{Hashed, HashedSlot, Slot, Stack},
+    item::{Component, Hashed, HashedSlot, Slot, Stack},
     packet, packet_enum,
     packets::{
         Empty,
@@ -88,11 +88,31 @@ packet!(ContainerSetContent {
     carried: Option<Stack> => Slot,
 });
 /// ItemCost.STREAM_CODEC: item, count, then the exact component predicate
-/// (Horizon sends and reads it as a component patch without removals).
+/// (a list of typed component values, with no patch removal count).
 #[derive(Clone, Debug, PartialEq)]
 pub struct NetCost {
     pub item: i32,
     pub count: i32,
+    pub components: Vec<(i32, Component)>,
+}
+impl From<Stack> for NetCost {
+    fn from(stack: Stack) -> Self {
+        Self {
+            item: stack.item,
+            count: stack.count,
+            components: stack.added,
+        }
+    }
+}
+impl From<NetCost> for Stack {
+    fn from(cost: NetCost) -> Self {
+        Self {
+            item: cost.item,
+            count: cost.count,
+            added: cost.components,
+            removed: Vec::new(),
+        }
+    }
 }
 /// MerchantOffer.STREAM_CODEC.
 #[derive(Clone, Debug, PartialEq)]
@@ -114,10 +134,17 @@ impl Codec<Vec<NetOffer>> for Offers {
         fn cost(r: &mut Reader) -> Result<NetCost> {
             let item = r.varint()?;
             let count = r.varint()?;
-            if r.varint()? != 0 {
-                return Err(Error::new("item cost components are not supported"));
+            let n = r.count(r.remaining())?;
+            let mut components = Vec::with_capacity(n.min(64));
+            for _ in 0..n {
+                let kind = r.varint()?;
+                components.push((kind, Component::read(kind, r)?));
             }
-            Ok(NetCost { item, count })
+            Ok(NetCost {
+                item,
+                count,
+                components,
+            })
         }
         let n = r.count(r.remaining())?;
         let mut out = Vec::with_capacity(n.min(64));
@@ -144,7 +171,11 @@ impl Codec<Vec<NetOffer>> for Offers {
         fn cost(c: &NetCost, w: &mut Writer) {
             w.varint(c.item);
             w.varint(c.count);
-            w.varint(0);
+            w.varint(c.components.len() as i32);
+            for (kind, value) in &c.components {
+                w.varint(*kind);
+                value.write(*kind, w);
+            }
         }
         w.varint(v.len() as i32);
         for o in v {
@@ -2301,6 +2332,39 @@ mod tests {
     use crate::{chunk::BlockEntityInfo, packets::round_trip, text::literal};
 
     #[test]
+    fn merchant_cost_predicate_is_a_typed_list_without_patch_counts() {
+        // ItemCost.STREAM_CODEC: item=7, count=1, one typed component,
+        // potion_contents=53, potion present (water=0), no color/effects/name.
+        // Result: count=1, item=8, empty component patch. Secondary cost:
+        // item=9, count=2, empty predicate, followed by the offer fields.
+        let mut bytes = vec![1, 7, 1, 1, 53, 1, 0, 0, 0, 0, 1, 8, 0, 0, 1, 9, 2, 0, 0];
+        bytes.extend_from_slice(&[0; 4]); // uses
+        bytes.extend_from_slice(&2i32.to_be_bytes()); // max uses
+        bytes.extend_from_slice(&[0; 16]); // xp, special price, multiplier, demand
+        let mut r = Reader::new(&bytes);
+        let offers = Offers::read(&mut r).unwrap();
+        assert_eq!(r.remaining(), 0);
+        assert_eq!(
+            offers[0].cost_a.components,
+            vec![(
+                53,
+                Component::Potion {
+                    potion: Some(0),
+                    color: None,
+                    rest: Vec::new()
+                }
+            )]
+        );
+        assert!(offers[0].cost_b.as_ref().unwrap().components.is_empty());
+        let mut w = Writer::new();
+        Offers::write(&offers, &mut w);
+        assert_eq!(w.data, bytes);
+        for len in 0..bytes.len() {
+            assert!(Offers::read(&mut Reader::new(&bytes[..len])).is_err());
+        }
+    }
+
+    #[test]
     fn serverbound_abilities_carry_only_flying() {
         // ServerboundPlayerAbilitiesPacket.write: one byte, 2 when flying.
         let flying = Serverbound::PlayerAbilities(PlayerAbilitiesRequest { flags: 2 });
@@ -2576,9 +2640,9 @@ mod tests {
             Clientbound::MerchantOffers(MerchantOffers {
                 container: 3,
                 offers: vec![NetOffer {
-                    cost_a: NetCost { item: 5, count: 24 },
+                    cost_a: Stack::new(5, 24).into(),
                     result: Stack::new(7, 1),
-                    cost_b: Some(NetCost { item: 9, count: 1 }),
+                    cost_b: Some(Stack::new(9, 1).into()),
                     out_of_stock: false,
                     uses: 2,
                     max_uses: 16,

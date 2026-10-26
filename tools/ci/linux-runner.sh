@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # A Horizon CI runner (labels self-hosted, Linux, X64, horizon-game and the host's name) on a Linux machine of the
-# maintainer's (NixOS: ludodesktop, ludothinkpad; Ubuntu: playhorizon, a partner's server), as a systemd user service
+# maintainer's (NixOS: ludodesktop; Ubuntu: playhorizon, a partner's server), as a systemd user service
 # of the account that holds his Minecraft files, like the Mac mini's runners (docs/release-flow.md). Run it on that
 # machine, as that user:
 #
