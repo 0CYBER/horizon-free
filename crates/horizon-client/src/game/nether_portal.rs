@@ -505,6 +505,17 @@ impl Game<'_> {
             );
         }
     }
+    /// `Entity.setPortalCooldown` on an entity that has just spawned in a
+    /// portal: it stands in the portal for 300 ticks without going through.
+    pub(super) fn set_portal_cooldown(&mut self, id: u32) {
+        self.portals.entities.insert(
+            id,
+            PortalState {
+                cooldown: ENTITY_DELAY,
+                process: None,
+            },
+        );
+    }
     /// `canUsePortal(false)` of a mob: alive, riding nothing, not asleep,
     /// not carrying the player, and not a boss that never travels.
     fn mob_can_use_portal(&self, m: &horizon_client::mobs::Mob) -> bool {
