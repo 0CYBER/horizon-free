@@ -452,7 +452,7 @@ impl Game<'_> {
                     ];
                     (c.particle.clone(), v)
                 };
-                self.particles.add(&options, at, velocity);
+                self.particles.add_with(&options, at, velocity, false, true);
             }
         }
     }

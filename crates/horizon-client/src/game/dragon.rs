@@ -2127,10 +2127,12 @@ impl Game<'_> {
                     c.at[1],
                     c.at[2] + f64::from(a.sin() * d),
                 ];
-                self.particles.add(
+                self.particles.add_with(
                     &ParticleOptions::simple(ParticleType::DragonBreath),
                     at,
                     [0.0, 0.0, 0.0],
+                    false,
+                    true,
                 );
             }
             // AreaEffectCloud: after its 20-tick wait, every 20 ticks per entity.

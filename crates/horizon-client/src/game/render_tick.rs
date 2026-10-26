@@ -244,6 +244,7 @@ impl Game<'_> {
                 1.0,
             );
         }
+        self.particles.particle_level = self.settings.particles;
         if let Some(e) = eye {
             self.particles.camera = e;
         }
@@ -292,7 +293,8 @@ impl Game<'_> {
                 let mut random = LegacyRandom::new(self.world.game_time.wrapping_mul(312_987_231));
                 let radius = 10;
                 let diameter = 2 * radius + 1;
-                let count = (0.225 * (diameter * diameter) as f32 * rain * rain) as i32;
+                let count = (0.225 * (diameter * diameter) as f32 * rain * rain) as i32
+                    / if self.settings.particles == 1 { 2 } else { 1 };
                 for _ in 0..count {
                     let x = block[0] + random.next_int_bound(diameter).unwrap_or(0) - radius;
                     let z = block[2] + random.next_int_bound(diameter).unwrap_or(0) - radius;
@@ -303,6 +305,10 @@ impl Game<'_> {
                         || !rains_at(world, biomes, x, top, z)
                     {
                         continue;
+                    }
+                    // The Minimal option stops at the first spot that rains.
+                    if self.settings.particles >= 2 {
+                        break;
                     }
                     let below = top - 1;
                     let (bx, bz) = (random.next_double(), random.next_double());

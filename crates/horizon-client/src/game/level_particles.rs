@@ -9,13 +9,12 @@ use horizon_world::level::LevelEvent;
 
 impl Game<'_> {
     pub(super) fn dragon_egg_particles(&mut self, pos: [i32; 3], data: i32) {
-        self.particles
-            .block_teleportation(pos, data, [16, 8, 16], self.settings.particles);
+        self.particles.block_teleportation(pos, data, [16, 8, 16]);
     }
     /// Event 2017: `TeleportRandomlyConsumeEffect`'s directional particles.
     pub(super) fn consume_teleport_particles(&mut self, pos: [i32; 3], data: i32) {
         self.particles
-            .block_teleportation(pos, data, [127, 127, 127], self.settings.particles);
+            .block_teleportation(pos, data, [127, 127, 127]);
     }
     /// `LevelEventHandler.levelEvent` 3002 to 3005, drawing from the client
     /// level's random.
