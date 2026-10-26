@@ -2582,6 +2582,7 @@ impl Game<'_> {
                     at: pos,
                     setup,
                 }])?;
+                self.damage_held_tool();
             }
             Species::Sheep if item == "minecraft:shears" && !m.extra.sheared && !m.is_baby() => {
                 m.extra.sheared = true;
@@ -2884,23 +2885,9 @@ impl Game<'_> {
         }
         Ok(true)
     }
+    /// `ItemStack.hurtAndBreak(1, ...)` on the held tool: Unbreaking, break sound and stat.
     pub(super) fn damage_held_tool(&mut self) {
-        if self.creative {
-            return;
-        }
-        let slot = self.held_slot();
-        let max_damage = self
-            .held()
-            .and_then(|s| self.res.items().get(&s.item))
-            .map_or(0, |i| i.max_damage);
-        if max_damage > 0
-            && let Some(stack) = self.stack_in_mut(slot).as_mut()
-        {
-            stack.damage += 1;
-            if stack.damage >= max_damage {
-                *self.stack_in_mut(slot) = None;
-            }
-        }
+        self.damage_held(1);
     }
     /// Throwables and spawn eggs (SnowballItem/EggItem/EnderpearlItem/SpawnEggItem.use).
     pub(super) fn throw_item(&mut self, stack: &ItemStack) -> Result<bool> {
