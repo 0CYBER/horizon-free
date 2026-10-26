@@ -1,7 +1,6 @@
-//! Horizon's own shader packs in the game (docs/shaders.md), for development until the Shader
-//! Packs page exists: `HORIZON_SHADER_PACK=<name>` naming one in `shaderpacks/` (a folder with
-//! `horizon-shaders.toml`, or a `.hshader`) runs it once it passes `horizon_shader_api::check`.
-//! The pack is looked at twice a second: a saved file is checked and the pack rebuilt, and a
+//! Horizon's own shader packs in the game (docs/shaders.md): the pick in `shaderpacks/` (a
+//! folder with `horizon-shaders.toml`, or a `.hshader`; `game/shader_packs.rs`) runs once it
+//! passes `horizon_shader_api::check`. The pack is looked at twice a second: a saved file is checked and the pack rebuilt, and a
 //! pack that fails is refused with its problems in the chat while the last good one keeps
 //! drawing.
 
@@ -21,9 +20,20 @@ const RED: u32 = 0xFF5555;
 
 #[derive(Default)]
 pub(super) struct NativeShaders {
+    /// The pack's name in `shaderpacks/`, of either kind (`game/shader_packs.rs`); empty: none.
+    pub picked: String,
     /// The pack's files when it was last read (`fingerprint`).
     stamp: Option<u64>,
     looked: Option<Instant>,
+}
+
+impl NativeShaders {
+    pub fn picking(name: &str) -> Self {
+        Self {
+            picked: name.to_owned(),
+            ..Self::default()
+        }
+    }
 }
 
 impl Game<'_> {

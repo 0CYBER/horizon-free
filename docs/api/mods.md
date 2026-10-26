@@ -19,7 +19,7 @@ the player before the mod is turned on, and checked against the component's real
 | Capabilities | 5: `game-read`, `chat`, `hud`, `storage`, `registries` |
 | Manifest `api` lines served | 2: `0.1` (code), `0.2` (content) |
 | SDK | the `Mod` trait (5 methods), `Registration` (4 builders), `export_mod!`, log helpers |
-| `cargo horizon-mod` | `new` (templates `code` and `content`), `build`, `run`, `check` |
+| `cargo horizon-mod` | `new` (templates `code` and `content`), `build`, `run`, `test`, `check` |
 | Example mods | `coords-hud` (code), `ruby-content` (content) |
 
 ## Guide
@@ -33,7 +33,10 @@ The step-by-step guide, from installing the tools to publishing on the registry,
    ([The manifest](../mods.md#the-manifest)).
 3. `cargo horizon-mod run` builds the `.hmod` and starts the game with it as a dev mod; after an edit,
    `cargo horizon-mod build` and the running game reloads it.
-4. Content mods: [Content mods (API 0.2)](../mods.md#content-mods-api-02).
+4. `cargo horizon-mod test` runs the mod's `tests/*.toml` scripts in the sandbox, with no game: ticks, commands,
+   chat lines and the player's position in, chat, feedback and the HUD panel checked
+   ([Testing a mod](../mods.md#testing-a-mod)).
+5. Content mods: [Content mods (API 0.2)](../mods.md#content-mods-api-02).
 
 ## Reference
 
@@ -94,11 +97,12 @@ What real mods need next, in the order modpacks and servers need it:
 - **Config**: typed settings the game shows and stores for the mod, on the server too.
 - **Keys and the crosshair target**: keybinds in Controls; what the player is looking at.
 - **Script mods and other languages**: see [Ways in](#ways-in).
-- **SDK**: a headless test runner (load a mod, feed it ticks and events, assert on its output, no window), templates
-  per kind of mod, typed wrappers in the SDK for every interface. Dev mods already reload when rebuilt.
+- **SDK**: templates per kind of mod, typed wrappers in the SDK for every interface. Dev mods already reload when
+  rebuilt, and `cargo horizon-mod test` runs a mod headless.
 
 ## Changelog
 
+- SDK: `cargo horizon-mod test` and `horizon_mods::testing`, test scripts in TOML; the template has one.
 - Experimental: `ui` button widget; `render.set-corner`, `text-width`, `frame-stats`; `input.mapping`,
   `clicks-per-second` (what the official FPS, keystrokes and zoom mods need).
 - Experimental `input` (`experimental = ["input"]`): `claim-items`, `register-key`, `held`, `poll` (use-start,

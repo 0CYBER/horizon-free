@@ -60,6 +60,10 @@ pub struct CheckedStage {
     pub label: String,
     pub module: naga::Module,
     pub info: ModuleInfo,
+    /// The stage's WGSL without the entry points (the prelude, the shared
+    /// files, the file), for a renderer that calls the stage function from
+    /// its own shader (the sky).
+    pub source: String,
     pub expressions: usize,
     pub texture_reads: usize,
 }
@@ -169,6 +173,7 @@ pub fn check_stage(pack: &Pack, kind: StageKind, file: &str) -> Result<CheckedSt
         label: file.to_owned(),
         module,
         info,
+        source: own.text,
         expressions,
         texture_reads,
     })

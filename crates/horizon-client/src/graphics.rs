@@ -261,6 +261,10 @@ pub struct Graphics {
     pub battery: bool,
     /// The graphics API (Windows only; see `GraphicsApi`).
     pub api: GraphicsApi,
+    /// The shader pack picked in `shaderpacks/` (`shader_pack_list`); empty: none. Its key is
+    /// not `shaderPack`, which versions before the clean-room rewrite saved and which stays
+    /// ignored.
+    pub shader_pack: String,
 }
 impl Default for Graphics {
     fn default() -> Self {
@@ -284,6 +288,7 @@ impl Default for Graphics {
             fxaa: false,
             battery: false,
             api: GraphicsApi::Auto,
+            shader_pack: String::new(),
         }
     }
 }
@@ -334,6 +339,7 @@ impl Graphics {
                 "fxaa" => g.fxaa = flag(g.fxaa),
                 "batteryMode" => g.battery = flag(g.battery),
                 "graphicsApi" => g.api = GraphicsApi::from_name(value).unwrap_or_default(),
+                "pickedShaderPack" => g.shader_pack = value.to_owned(),
                 "overlay" => {
                     g.overlay = match value {
                         "fps" => Overlay::Fps,
@@ -348,7 +354,7 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nbatteryMode:{}\ngraphicsApi:{}\n",
+            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nbatteryMode:{}\ngraphicsApi:{}\npickedShaderPack:{}\n",
             self.preset.name(),
             self.lod_distance,
             self.far_detail.name(),
@@ -375,6 +381,7 @@ impl Graphics {
             bool_text(self.fxaa),
             bool_text(self.battery),
             self.api.name(),
+            self.shader_pack,
         )
     }
     pub fn save(&self, dir: &Path) {
@@ -471,6 +478,7 @@ mod tests {
             fxaa: true,
             battery: true,
             api: GraphicsApi::Dx12,
+            shader_pack: "Golden Hour".into(),
         };
         assert_eq!(Graphics::parse(&g.serialize()), g);
         assert_eq!(Graphics::parse(""), Graphics::default());
