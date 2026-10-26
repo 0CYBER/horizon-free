@@ -5,7 +5,8 @@ counted only for the game loop because nearly every gameplay change touches it).
 organised and how to build and test are in [AGENTS.md](../AGENTS.md).
 
 Paths: `L/` = `crates/horizon-client/src/`, `G/` = `crates/horizon-client/src/game/`, `W/` =
-`crates/horizon-world/src/`, `K/` = `crates/horizon-client-core/src/`, `C/` = `crates/horizon-command/src/`.
+`crates/horizon-world/src/`, `K/` = `crates/horizon-client-core/src/`, `C/` = `crates/horizon-command/src/`,
+`I/` = `crates/horizon-items/src/`.
 Checks: a bare name is a harness (`python3 tools/parity.py <name>`, script `tools/test_<name>_parity.py`);
 `lan_e2e <check>` is `python3 tools/lan_e2e.py --check <check>`.
 
@@ -30,7 +31,7 @@ file selects ~103.
 | 12 | Guests' actions on a server (98) | `G/lan_actions.rs` (`fn as_guest`, `fn tick_guests`), `G/lan_{attributes,pvp,chat,crafting,stations,trading,mount_menu,waypoints}.rs` | server_player_combat, server_player_damage, server_player_targets, lan_e2e (all) |
 | 13 | Modpack porting, mod content (97) | `crates/horizon-port-pack/`, `L/mod_content.rs`, `tools/port_*.py` | `cargo test -p horizon-port-pack`; `python3 tools/mod_port_harness.py` |
 | 14 | Mob AI (96) | `L/mobs/ai.rs`, `goals.rs`, `brain.rs`, `*_brain.rs`, `nav.rs`, `path.rs`, `control.rs` | mob_ai (probe `examples/mob_ai_probe.rs`; known failure on main: drowned_*, #290) |
-| 15 | Items and item use (96) | `L/items.rs`, `L/item_data.rs`, `G/hand.rs`, `G/consume.rs`, `G/potions.rs`, `L/effects.rs`; game.rs `fn use_hand`, `fn use_item` | use_item_on, item_use, item_use_lifecycle, consumable, consume_effect, status_effect |
+| 15 | Items and item use (96) | `I/items.rs`, `I/item_data.rs`, `G/hand.rs`, `G/consume.rs`, `G/potions.rs`, `L/effects.rs`; game.rs `fn use_hand`, `fn use_item` | use_item_on, item_use, item_use_lifecycle, consumable, consume_effect, status_effect |
 | 16 | Options and settings screens (93) | `L/options_ui.rs`, `G/options.rs`, `L/settings.rs`, `L/options_file.rs`, `L/graphics_ui.rs`, `L/graphics.rs` | options, toggle_keys |
 | 17 | HUD, chat, tab list (93) | `L/hud.rs`, `L/hud_layout.rs`, `L/hud_overlays.rs`, `L/chat.rs`, `G/chat.rs`, `L/tab_list.rs`, `L/locator_bar.rs`, `G/locator_bar.rs` | hud, tab_list, locator_bar, chat_screen, secure_chat |
 | 18 | Command execution (88) | `G/commands.rs`, `G/commands/*.rs`, `L/scoreboard_cmd.rs`, `L/data_cmd.rs`, `K/scoreboard.rs`, `G/functions.rs` | command_exec (corpus `tools/command_exec_corpus.py`), scoreboard, server_ops_feedback, lan_e2e commands |
@@ -40,7 +41,7 @@ file selects ~103.
 | 22 | Player movement and collision (75) | `L/motion.rs` + `L/motion/`, `L/collisions.rs`, `W/entity_move.rs`, `W/player_travel.rs`, `W/collision.rs` | collision, entity_move, player_travel, living_motion, climbing, swimming; `python3 tools/test_native_scene_motion.py` |
 | 23 | Resource packs and models (65) | `L/packs.rs` + `L/packs/`, `L/pack_screen.rs`, `L/atlas_sources.rs`, `L/sprites.rs`, `L/model_library.rs`, `G/packs.rs`, `crates/horizon-assets/` | resource_pack, pack_selection, pack_screen, model_resolution, item_model, mipmap |
 | 24 | Container menus and inventory (61) | `L/menu.rs`, `L/container_screen.rs`, `L/containers.rs`, `L/creative.rs`; game.rs `fn menu_ops`, `fn click_inventory` | menu_click, container_screen, creative, lan_e2e containers clicks |
-| 25 | Workstations (60) | `L/stations.rs`, `G/stations.rs`, `L/enchant.rs`, `L/brewing.rs` | enchanting, screen_layout, lan_e2e brewing loom stonecutter grindstone anvil smithing |
+| 25 | Workstations (60) | `L/stations.rs`, `G/stations.rs`, `I/enchant.rs`, `L/brewing.rs` | enchanting, screen_layout, lan_e2e brewing loom stonecutter grindstone anvil smithing |
 | 26 | Crafting and the recipe book (59) | `L/crafting.rs`, `L/recipe_book.rs`, `L/recipe_book_screen.rs`, `G/recipe_book.rs`, `G/machines.rs`, `G/machines/crafter.rs` | recipe, recipe_book, recipe_book_view, place_recipe, ghost_recipe, crafter |
 | 27 | Vehicles and mounts (54) | `G/boats.rs`, `G/boat_passengers.rs`, `G/minecarts.rs`, `G/mounts.rs`, `G/mount_menu.rs`, `G/llamas.rs`, `G/passengers.rs` | server_entities, lan_e2e boats minecarts riding mounts |
 | 28 | Villagers, trading, raids (50) | `L/mobs/villager*.rs`, `L/merchant.rs`, `G/trading.rs`, `G/villagers.rs`, `L/raid.rs`, `G/raids.rs`, `L/gossip.rs` | trading, raid, mob_ai |
