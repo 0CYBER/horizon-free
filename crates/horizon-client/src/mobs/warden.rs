@@ -796,6 +796,12 @@ pub fn client_tick(m: &mut Mob) {
     animate(m, &mut Vec::new());
 }
 fn animate(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    // The animation values count down after the sync of the last tick.
+    for slot in [TENDRIL, HEART] {
+        if m.anim.v[slot] > 0.0 {
+            m.anim.v[slot] -= 1.0;
+        }
+    }
     let digging_clock = |m: &Mob, slot: usize| {
         m.anim.states[slot]
             .millis(m.age as f32)
