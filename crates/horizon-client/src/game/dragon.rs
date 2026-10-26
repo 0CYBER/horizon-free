@@ -2223,24 +2223,31 @@ impl DragonFireball {
             age: 0,
         }
     }
-    /// `AbstractHurtingProjectile.tick` on a server's client: accelerate
-    /// along the motion (power 0.1, inertia 0.95 or 0.8 in water) and move;
-    /// only the server decides what it hits.
+    /// `AbstractHurtingProjectile.tick` on a server's client: `applyInertia`
+    /// first (power 0.1, inertia 0.95 or 0.8 in water), then the move; only
+    /// the server decides what it hits.
     pub(super) fn remote_step(&mut self, water: bool) {
         self.previous = self.position;
         self.age += 1;
         let v = self.velocity;
+        // Vec3.normalize: a vector shorter than 1e-5 stays zero.
+        let l = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt();
+        let n = if l < 1.0e-5 {
+            Vec3::new(0.0, 0.0, 0.0)
+        } else {
+            Vec3::new(v.x / l, v.y / l, v.z / l)
+        };
+        let inertia = f64::from(if water { 0.8f32 } else { 0.95f32 });
+        let v = Vec3::new(
+            (v.x + n.x * 0.1) * inertia,
+            (v.y + n.y * 0.1) * inertia,
+            (v.z + n.z * 0.1) * inertia,
+        );
+        self.velocity = v;
         self.position = Vec3::new(
             self.position.x + v.x,
             self.position.y + v.y,
             self.position.z + v.z,
-        );
-        let l = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt().max(1.0e-9);
-        let inertia = if water { 0.8 } else { 0.95 };
-        self.velocity = Vec3::new(
-            (v.x + v.x / l * 0.1) * inertia,
-            (v.y + v.y / l * 0.1) * inertia,
-            (v.z + v.z / l * 0.1) * inertia,
         );
     }
 }
