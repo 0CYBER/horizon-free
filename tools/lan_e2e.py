@@ -6977,6 +6977,8 @@ def check_fangs(host, guest, out):
     finally:
         host('command', command='tick unfreeze')
         host('command', command=f'kill @e[tag={tag}]')
+        # The evoker can summon vexes before fangs; killing it leaves those summons alive.
+        host('command', command=f'kill @e[type=minecraft:vex,x={x},y={y},z={z},distance=..32]')
         guest('command', command='effect clear @s')
         face_each_other(host, guest)
     return {'fangs': len(paths['host']), 'warmup': warmup, 'drawn': drawn, 'removed': True}
