@@ -5133,6 +5133,9 @@ impl Game<'_> {
         let spectator = self.spectator();
         let (wi, hi) = (w as i32, h as i32);
         let show_hud = !self.ui.hide_gui;
+        // max(Hud.leftHeight, Hud.rightHeight) after the bars: the item name and
+        // the action bar sit above it.
+        let mut bar_height = 39;
         if show_hud {
             self.draw_spyglass(&mut batch);
             // Hud.extractCrosshair / extractItemHotbar / extractPlayerHealth /
@@ -5202,6 +5205,8 @@ impl Game<'_> {
                     contextual == ContextualBar::JumpableVehicle,
                 )
             };
+            // Without the survival bars only the mount's hearts raise it.
+            bar_height = 39 + 10 * ((vehicle_hearts + 9) / 10);
             if contextual == ContextualBar::Locator {
                 let (sprite, [x, y, w, h]) = horizon_client::locator_bar::background(wi, hi);
                 horizon_client::ui::nine_slice(
@@ -5275,20 +5280,24 @@ impl Game<'_> {
                 };
                 let draws = self.health_hud.layout(&inputs, wi, hi);
                 hud_layout::paint(&mut batch, atlas, &draws);
+                bar_height = self
+                    .health_hud
+                    .left_height
+                    .max(self.health_hud.right_height);
             }
             if contextual == ContextualBar::Locator {
                 let draws = self.locator_bar_draws(wi, hi);
                 hud_layout::paint(&mut batch, &self.gui.atlas, &draws);
             }
             if !spectator {
-                self.draw_selected_name(&mut batch, !self.creative);
+                self.draw_selected_name(&mut batch, bar_height, !self.creative);
             }
         }
         // Hud.extractSleepOverlay: over all health/food bars, under titles and chat.
         let draws = hud_overlays::sleep_overlay(wi, hi, self.sleep_timer as i32);
         hud_layout::paint(&mut batch, &self.gui.atlas, &draws);
         if show_hud {
-            self.draw_titles(&mut batch);
+            self.draw_titles(&mut batch, bar_height);
             self.draw_scoreboard(&mut batch);
             self.draw_subtitles(&mut batch);
         }
