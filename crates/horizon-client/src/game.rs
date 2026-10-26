@@ -12995,6 +12995,14 @@ fn build_renderer(
 ) -> Result<Renderer> {
     let assets = &pack.render;
     let atlas = &gui.atlas;
+    // The new renderer's atlas texture starts from `HudAtlas.pixels`, which
+    // holds the textures but never a glyph rasterized at run time. The font's
+    // cache still answers with the rects it drew into the previous renderer's
+    // texture, so forget them: the glyphs that are drawn again are placed into
+    // this texture (as `ui_theme` does when its atlas changes). Without this,
+    // Chinese and Japanese menu labels go blank when the loading screen hands
+    // over to the game.
+    atlas.font.reset_cache();
     let mut renderer = pollster::block_on(Renderer::new(
         window,
         offscreen,
@@ -13041,6 +13049,12 @@ fn loading_renderer(
         Some(atlas) => (atlas.pixels.as_slice(), atlas.width, atlas.height),
         None => (EMPTY_HUD.as_slice(), 1, 1),
     };
+    // A glyph rasterized into an earlier texture is not in these pixels; the
+    // new texture gets it again when the character is drawn (see
+    // `build_renderer`).
+    if let Some(atlas) = atlas {
+        atlas.font.reset_cache();
+    }
     let mut renderer = pollster::block_on(Renderer::new(
         window,
         offscreen,
