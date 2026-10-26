@@ -91,8 +91,9 @@ pub fn keep(
 pub fn parse(spec: &str) -> Option<ureq::Proxy> {
     if socks(spec) {
         say(&format!(
-            "{spec} is a SOCKS proxy; downloads go without one. Write the http:// address your \
-             proxy app listens on as well."
+            "{} is a SOCKS proxy; downloads go without one. Write the http:// address your \
+             proxy app listens on as well.",
+            redacted(spec)
         ));
         return None;
     }
@@ -100,10 +101,26 @@ pub fn parse(spec: &str) -> Option<ureq::Proxy> {
         Ok(proxy) => Some(proxy),
         Err(e) => {
             say(&format!(
-                "The proxy address {spec} can't be used ({e}); downloads go without one."
+                "The proxy address {} can't be used ({e}); downloads go without one.",
+                redacted(spec)
             ));
             None
         }
+    }
+}
+
+/// `spec` as it may be shown: a user name and password in it become `***`. An address that can't
+/// be used is printed to stderr and shown in the launcher, and a proxy's credentials don't belong in
+/// either. Everything up to the last `@` is the credentials, so a password with an unescaped `/` or
+/// `@` is hidden too.
+pub fn redacted(spec: &str) -> String {
+    let (scheme, rest) = match spec.split_once("://") {
+        Some((scheme, rest)) => (format!("{scheme}://"), rest),
+        None => (String::new(), spec),
+    };
+    match rest.rfind('@') {
+        Some(at) => format!("{scheme}***@{}", &rest[at + 1..]),
+        None => spec.to_owned(),
     }
 }
 
@@ -225,6 +242,26 @@ mod tests {
     fn alone() -> MutexGuard<'static, ()> {
         static TURN: Mutex<()> = Mutex::new(());
         lock(&TURN)
+    }
+
+    #[test]
+    fn credentials_are_not_shown() {
+        assert_eq!(redacted("http://127.0.0.1:7890"), "http://127.0.0.1:7890");
+        assert_eq!(redacted("proxy.local:3128"), "proxy.local:3128");
+        assert_eq!(
+            redacted("http://user:pass@proxy.local:3128"),
+            "http://***@proxy.local:3128"
+        );
+        assert_eq!(
+            redacted("socks5://u:p@10.0.0.1:1080"),
+            "socks5://***@10.0.0.1:1080"
+        );
+        assert_eq!(
+            redacted("user:pass@proxy.local:3128"),
+            "***@proxy.local:3128"
+        );
+        assert_eq!(redacted("http://u:p/a@ss@proxy:1"), "http://***@proxy:1");
+        assert_eq!(redacted("http://user:pass@"), "http://***@");
     }
 
     #[test]
