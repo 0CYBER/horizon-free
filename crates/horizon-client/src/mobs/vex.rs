@@ -29,6 +29,7 @@ pub fn register(m: &mut Mob) {
     g.add(8, RandomMove);
     g.add(9, LookAtPlayer::new(3.0).probability(1.0));
     g.add(10, LookAtPlayer::mobs(8.0));
+    // `HurtByTargetGoal(this, Raider.class)`: raiders are ignored, vexes are not.
     let mut hurt = HurtByTarget::new().alert();
     hurt.ignore = vec![
         Species::Pillager,
@@ -36,7 +37,7 @@ pub fn register(m: &mut Mob) {
         Species::Evoker,
         Species::Illusioner,
         Species::Witch,
-        Species::Vex,
+        Species::Ravager,
     ];
     m.ai.targets.add(1, hurt);
     m.ai.targets.add(2, CopyOwnerTarget);
