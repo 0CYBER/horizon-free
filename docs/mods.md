@@ -12,9 +12,9 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 
 | Part | Where | State |
 |---|---|---|
-| The contract (WIT) | `crates/horizon-mod-sdk/wit/horizon.wit` | 0.1: log, game-read, chat, hud, storage, ui; tick, frame, chat and command hooks |
+| The contract (WIT) | `crates/horizon-mod-sdk/wit/horizon.wit` | 0.1: log, game-read, chat, hud, storage, command, ui; tick, frame, chat and command hooks |
 | SDK for mod authors | `crates/horizon-mod-sdk` | 0.1 |
-| Example mod | `crates/horizon-mod-sdk/examples/coords-hud` | coordinates, facing and time HUD, `/where`, `/coords` |
+| Example mods | `crates/horizon-mod-sdk/examples/coords-hud`, `examples/predator-missile` | coordinates, facing and time HUD, `/where`, `/coords`; `/missile`, a guided missile from vanilla commands |
 | Runtime | `crates/horizon-mods` | wasmtime 36 LTS, component model |
 | Authoring tool | `crates/cargo-horizon-mod` | `cargo horizon-mod new [--template code\|content] / build / run / check`, and the registry's CI (`registry build / review / list`) |
 | In the game | `crates/horizon-client/src/game/mods.rs`, Options > Mods | client mods |
@@ -86,7 +86,9 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | `chat` | `chat` | `show(text)`: a line only the local player sees, after the mod's name (8 per call) |
 | `hud` | `hud` | `set-panel(corner, lines)`, `clear()`: up to 16 lines of 256 characters |
 | `storage` | `storage` | `get(key)`, `set(key, value)`, `delete(key)`: a per-mod folder of up to 64 files, 4 MiB total, at most 1 MiB written per call |
+| `command` | `command` | `run(line)`: a vanilla command run as the player, with the player's permissions, after the hook returns (8 per call); mods' own commands are not run |
 | `ui` | `ui` | `open-screen`, `close-screen`, `set-settings`: a screen the mod owns and a page in Options > Mods, of text, item and list widgets the game lays out and draws with its own menus' code. **Experimental:** the manifest needs `experimental = ["ui"]` |
+| `render` | `render` | `set-hud(shapes)`: up to 1024 fills, four-cornered shapes, GUI sprites, items and text, kept on the HUD (over the hotbar, under chat and screens, hidden with F1) until replaced; `gui-size()`; `shake(strength, seconds)`: the view turns, the player doesn't, scaled by Distortion Effects. The game's own HUD renderer draws them: a mod never supplies shader code. **Experimental:** `experimental = ["render"]` |
 
 | Hook (export) | When |
 |---|---|
@@ -114,7 +116,7 @@ loading. Ordered by what the first native ports need:
 | `inventory-read` | the player's inventory, held item, open container | AppleSkin, recipe viewers |
 | `recipes` | the recipe registry and lookups | JEI/EMI-style viewers |
 | `world-read` | blocks and biomes around the player, within the render distance | minimaps, schematics |
-| `render` | world-space lines, boxes and ghost blocks in a per-frame budget | Litematica-style placement, waypoints |
+| `render` (world) | world-space lines, boxes and billboards, beside the HUD shapes `render` has | Litematica-style placement, waypoints |
 | `registries` | new blocks, items, entities and recipes, mostly data: JSON models, textures, loot and recipes in the `.hmod`'s `assets/` and `data/` | server side; see [Multiplayer](#multiplayer) |
 | `server` | world events (block break/place, entity spawn/death, player join), game rules, server commands | runs where the world is simulated |
 | `net` | a mod's own client↔server channel (custom payloads) | only between the two halves of the same mod |
@@ -289,7 +291,7 @@ experimental = []            # experimental capabilities it uses, e.g. ["ui"]
 ```
 
 Unknown keys are refused, so a typo is an error, not a silently ignored
-permission. An experimental capability (today `ui`) may change in any release
+permission. An experimental capability (today `ui` and `render`) may change in any release
 ([stability](api/stability.md)): a mod uses it only by naming it in
 `experimental` as well, so nobody depends on it by accident.
 

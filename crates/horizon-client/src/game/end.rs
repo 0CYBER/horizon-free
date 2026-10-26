@@ -316,9 +316,10 @@ impl Game<'_> {
                     )?;
                 }
             }
-            // Global LevelEvent 1038: END_PORTAL_SPAWN.
-            self.audio
-                .play("minecraft:block.end_portal.spawn", None, 1.0, 1.0);
+            // EnderEyeItem.useOn: global level event 1038 (END_PORTAL_SPAWN),
+            // heard by every player (vanilla places it at the frame's corner
+            // + (1, 0, 1); only its direction matters).
+            self.global_level_event(1038, c, 0);
         }
         Ok(true)
     }

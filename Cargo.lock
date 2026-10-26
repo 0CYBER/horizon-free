@@ -1408,6 +1408,8 @@ dependencies = [
 name = "horizon-prepare"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
+ "libc",
  "regex",
  "sha1",
  "sha2",
@@ -2731,6 +2733,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb458bb7f6e250e6eb79d5026badc10a3ebb8f9a15d1fff0f13d17c71f4d6dee"
 dependencies = [
  "unicode-xid",
+]
+
+[[package]]
+name = "predator-missile"
+version = "0.1.0"
+dependencies = [
+ "horizon-mod-sdk",
 ]
 
 [[package]]

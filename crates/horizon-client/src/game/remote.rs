@@ -234,6 +234,22 @@ fn number_format(f: &play::NumberFormat) -> horizon_client::scoreboard::NumberFo
 }
 
 impl Game<'_> {
+    /// A `Holder<SoundEvent>` off the wire: an inline event's location, or
+    /// the name of a registered one.
+    pub(super) fn remote_sound_name(
+        &self,
+        sound: &(i32, Option<(String, Option<f32>)>),
+    ) -> Option<String> {
+        match &sound.1 {
+            Some((location, _)) => Some(location.clone()),
+            None => self.remote.as_ref().and_then(|r| {
+                r.builtin
+                    .get("minecraft:sound_event")?
+                    .name(sound.0)
+                    .map(str::to_owned)
+            }),
+        }
+    }
     /// Leave the title for a server (ConnectScreen): an empty world fed by the connection.
     pub(super) fn connect_server(&mut self, address: &str, name: &str) -> Result<()> {
         self.connect_server_with_cookies(address, name, None)
@@ -1710,20 +1726,14 @@ impl Game<'_> {
             // ClientLevel.levelEvent: LevelEventHandler, as this client's own
             // level plays them (particles and sounds: a spawner's burst, bone
             // meal, waxing, a block broken by someone else).
+            // ClientPacketListener.handleLevelEvent: a global one is heard
+            // from anywhere (ClientLevel.globalLevelEvent).
+            C::LevelEvent(p) if p.global => self.global_level_event_sound(p.kind, p.pos),
             C::LevelEvent(p) => self.level_event_at(p.kind, p.pos, p.data),
             C::LevelParticles(p) => self.remote_level_particles(&p),
             C::Explode(p) => self.remote_explode(&p),
             C::Sound(p) => {
-                let name = match &p.sound.1 {
-                    Some((location, _)) => Some(location.clone()),
-                    None => self.remote.as_ref().and_then(|r| {
-                        r.builtin
-                            .get("minecraft:sound_event")?
-                            .name(p.sound.0)
-                            .map(str::to_owned)
-                    }),
-                };
-                if let Some(name) = name {
+                if let Some(name) = self.remote_sound_name(&p.sound) {
                     let at = [
                         f64::from(p.x) / 8.0,
                         f64::from(p.y) / 8.0,
