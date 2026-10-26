@@ -677,7 +677,6 @@ pub struct Extra {
     pub anger: i32,
     pub carried: Option<horizon_world::registry::BlockStateId>,
     pub charged: bool,
-    pub levitation: i32,
     /// Held item ids (main hand, off hand) and head item.
     pub main_hand: Option<Arc<str>>,
     pub off_hand: Option<Arc<str>>,
