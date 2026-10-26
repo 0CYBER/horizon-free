@@ -1,5 +1,6 @@
 // Helpers of a shader pack's post-processing (pack_post.rs): the world into colortex0 and
-// depthtex0, and colortex0 onto the screen for packs without `final`.
+// depthtex0 (a depth attachment, for terrain's depth test), and colortex0 onto the screen for
+// packs without `final`.
 
 @vertex
 fn vs_full(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -12,7 +13,7 @@ fn vs_full(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
 
 struct World {
     @location(0) color: vec4<f32>,
-    @location(1) depth: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
 }
 
 // Pack buffers keep GL's rows (row 0 at the bottom), and GL's window depth: Horizon's
@@ -23,7 +24,7 @@ fn fs_blit(@builtin(position) p: vec4<f32>) -> World {
     let at = vec2<i32>(i32(p.x), size.y - 1 - i32(p.y));
     var out: World;
     out.color = textureLoad(source, at, 0);
-    out.depth = vec4<f32>(1.0 - textureLoad(world_depth, at, 0), 0.0, 0.0, 1.0);
+    out.depth = 1.0 - textureLoad(world_depth, at, 0);
     return out;
 }
 

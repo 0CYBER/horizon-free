@@ -140,11 +140,14 @@ pub const NAMES: &[&str] = &[
     "gbufferProjectionInverse",
     "gbufferPreviousModelView",
     "gbufferPreviousProjection",
+    "atlasSize",
 ];
 
 /// Values carried from frame to frame.
 pub struct FrameUniforms {
     pub values: Vec<Value>,
+    /// The block atlas's size (`atlasSize`), 0 without one.
+    pub atlas: [u32; 2],
     start: std::time::Instant,
     last: Option<std::time::Instant>,
     frame: u32,
@@ -157,6 +160,7 @@ impl Default for FrameUniforms {
     fn default() -> Self {
         Self {
             values: Vec::new(),
+            atlas: [0; 2],
             start: std::time::Instant::now(),
             last: None,
             frame: 0,
@@ -243,6 +247,7 @@ impl FrameUniforms {
                 "worldDay" => Value::i(&[world_day as i32]),
                 "moonPhase" => Value::i(&[world_day.rem_euclid(8) as i32]),
                 "frameCounter" => Value::i(&[self.frame as i32]),
+                "atlasSize" => Value::i(&[self.atlas[0] as i32, self.atlas[1] as i32]),
                 "frameTime" => Value::f(&[dt]),
                 "frameTimeCounter" => Value::f(&[seconds]),
                 "viewWidth" => Value::f(&[size[0] as f32]),
