@@ -3462,6 +3462,13 @@ impl Game<'_> {
             if m.species() == horizon_client::mobs::Species::Creeper {
                 horizon_client::mobs::hostile::creeper_client_tick(m);
             }
+            if matches!(
+                m.species(),
+                horizon_client::mobs::Species::Guardian
+                    | horizon_client::mobs::Species::ElderGuardian
+            ) {
+                horizon_client::mobs::guardian::client_tick(m);
+            }
             if m.hurt_time > 0 {
                 m.hurt_time -= 1;
             }

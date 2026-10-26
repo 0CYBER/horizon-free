@@ -6961,6 +6961,87 @@ CHECKS += ['replant']
 CHECK_FNS['replant'] = check_replant
 
 
+def check_guardian_beams(host, guest, out):
+    """Guardian's synced target drives the same beam on each client (#1491).
+
+    Guardian.defineSynchedData/onSyncedDataUpdated/aiStep and
+    GuardianRenderer.extractRenderState: charge, hit, then target loss.
+    Run with both --server-thread and the in-frame host.
+    """
+    x, y, z = map(math.floor, pos_of(host))
+    host('command', command='difficulty normal')
+    host('command', command='gamerule natural_health_regeneration false')
+    host('command', command=f'fill {x - 10} {y - 2} {z - 10} {x + 10} {y + 4} {z + 10} minecraft:water')
+    seen = {}
+    try:
+        for kind in ('guardian', 'elder_guardian'):
+            for target, observer in ((host, guest), (guest, host)):
+                for game in (host, guest):
+                    game('command', command='gamemode creative')
+                    game('command', command='effect give @s minecraft:water_breathing infinite')
+                target('command', command=f'tp @s {x + 0.5} {y} {z + 0.5} 0 0')
+                observer('command', command=f'tp @s {x + 4.5} {y} {z + 0.5} 0 0')
+                target('command', command='effect give @s minecraft:instant_health 1 10')
+                target('command', command='gamemode survival')
+                host('command', command=f'summon minecraft:{kind} {x + 0.5} {y} {z + 6.5}')
+
+                def mob(game):
+                    return next(m for m in game.raw('mobs', 32)['near'] if m['kind'] == f'minecraft:{kind}')
+
+                def charging():
+                    for _ in range(60):
+                        target.wait(2)
+                        states = [mob(g) for g in (target, observer)]
+                        if all(m['guardian_beam'] is not None for m in states):
+                            return states
+                    raise Failed(f'{kind} never charged on both clients')
+
+                states = charging()
+                assert states[0]['target'] == 'Player', states
+                # The host reads the level that ticks the guardian (its own in-frame, the
+                # server's on the server thread), where a targeted player is `Player`.
+                if observer is host:
+                    assert states[1]['target'] == 'Player', states
+                else:
+                    assert states[1]['target'].startswith('Mob('), states
+                first = states[0]['guardian_beam'][0]
+                target.wait(4)
+                assert mob(target)['guardian_beam'][0] > first, 'client charge clock did not advance'
+                for game in (target, observer):
+                    game.raw('look-at', x + 0.5, y + 0.5, z + 6.5)
+                    game.shot(out, f'{kind}-{target.name}-charge')
+                # The beam must end after the first hit (before another charge).
+                before = target('status')['player']['health']
+                for _ in range(70):
+                    target.wait(2)
+                    if all(mob(g)['guardian_beam'] is None for g in (target, observer)):
+                        break
+                else:
+                    raise Failed(f'{kind} beam did not end after its attack')
+                after = target('status')['player']['health']
+                assert after < before, f'{kind} beam ended without damage: {before} -> {after}'
+                charging()
+                target('command', command='gamemode creative')
+                target.wait(10)
+                assert all(mob(g)['guardian_beam'] is None for g in (target, observer)), 'beam survived target loss'
+                seen[f'{kind}-{target.name}'] = {
+                    'charge': [{'target': m['target'], 'beam': m['guardian_beam']} for m in states],
+                    'health': [before, after]}
+                host('command', command=f'kill @e[type=minecraft:{kind}]')
+                host.wait(10)
+    finally:
+        for kind in ('guardian', 'elder_guardian'):
+            host('command', command=f'kill @e[type=minecraft:{kind}]')
+        for game in (host, guest):
+            game('command', command='gamemode creative')
+            game('command', command='effect clear @s')
+    return seen
+
+
+CHECKS += ['guardian-beams']
+CHECK_FNS['guardian-beams'] = check_guardian_beams
+
+
 def check_sonic(host, guest, out):
     """A real warden's ray reaches connected clients once, with normal damage.
 

@@ -4,14 +4,14 @@
 //! own simulation, which a client of a server doesn't run.
 use super::Game;
 use horizon_client::mobs::render::{PROFESSIONS, VILLAGER_TYPES};
-use horizon_client::mobs::{Mob, Species, bat, tame};
+use horizon_client::mobs::{Mob, Species, Who, bat, tame};
 use horizon_protocol::entity_data::Value;
 use horizon_protocol::registry::Builtin;
 
 /// The values `apply` takes from one SetEntityData packet, by vanilla's entry
 /// indices (Entity 0..=7, LivingEntity 8..=14, Mob 15, then the subclasses).
 /// `builtin` names the ids of built-in registries.
-fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin) {
+fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_entity: i32) {
     let species = m.species();
     let baby = super::lan::baby_index(&m.kind.id);
     for (index, _, value) in values {
@@ -46,6 +46,19 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin) {
             _ => {}
         }
         match (species, *index, value) {
+            (Species::Guardian | Species::ElderGuardian, 16, Value::Bool(moving)) => {
+                m.extra.flag2 = *moving;
+            }
+            (Species::Guardian | Species::ElderGuardian, 17, Value::Int(target)) => {
+                // Guardian.onSyncedDataUpdated resets the visual charge clock.
+                m.extra.counter2 = 0;
+                m.extra.flag = *target != 0;
+                m.ai.target = (*target != 0).then_some(if *target == local_entity {
+                    Who::Player
+                } else {
+                    Who::Mob(*target as u32)
+                });
+            }
             // Bat.DATA_ID_FLAGS: resting in bit 0.
             (Species::Bat, 16, Value::Byte(flags)) => bat::set_resting(m, flags & 1 != 0),
             // Sheep.DATA_WOOL_ID: the colour in the low nibble, 16 sheared.
@@ -116,7 +129,7 @@ impl Game<'_> {
             return;
         };
         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id as u32) {
-            apply(m, values, &r.builtin);
+            apply(m, values, &r.builtin, r.entity_id);
         }
     }
 }
@@ -153,7 +166,7 @@ mod tests {
     }
 
     fn apply(m: &mut Mob, values: &[(u8, i32, Value)]) {
-        super::apply(m, values, &builtin());
+        super::apply(m, values, &builtin(), 99);
     }
 
     fn mob(kind: &str) -> Option<Mob> {
@@ -162,6 +175,49 @@ mod tests {
         let mut m = Mob::new(1, t, horizon_core::geometry::Vec3::ZERO, 0.0);
         client_defaults(&mut m);
         Some(m)
+    }
+
+    #[test]
+    fn guardian_charge_follows_target_updates_and_caps_at_its_duration() {
+        use horizon_client::mobs::guardian::{beam, client_tick};
+        for (kind, duration) in [("guardian", 80), ("elder_guardian", 60)] {
+            let Some(mut m) = mob(&format!("minecraft:{kind}")) else {
+                return;
+            };
+            assert!(beam(&m, 0.0).is_none());
+            apply(
+                &mut m,
+                &[
+                    (16, s::BOOLEAN, Value::Bool(true)),
+                    (17, s::INT, Value::Int(99)),
+                ],
+            );
+            assert!(m.extra.flag2);
+            assert_eq!(m.ai.target, Some(Who::Player));
+            assert_eq!(beam(&m, 0.0), Some((0.0, 0.0)));
+            for _ in 0..duration + 10 {
+                client_tick(&mut m);
+            }
+            assert_eq!(beam(&m, 0.0), Some((duration as f32, 1.0)));
+            // Another player or a mob retains its network entity id.
+            apply(&mut m, &[(17, s::INT, Value::Int(42))]);
+            assert_eq!(m.ai.target, Some(Who::Mob(42)));
+            assert_eq!(m.extra.counter2, 0);
+            client_tick(&mut m);
+            assert_eq!(m.extra.counter2, 1);
+            apply(
+                &mut m,
+                &[
+                    (16, s::BOOLEAN, Value::Bool(false)),
+                    (17, s::INT, Value::Int(0)),
+                ],
+            );
+            client_tick(&mut m);
+            assert!(!m.extra.flag2);
+            assert_eq!(m.ai.target, None);
+            assert_eq!(m.extra.counter2, 0);
+            assert!(beam(&m, 0.0).is_none());
+        }
     }
 
     #[test]
