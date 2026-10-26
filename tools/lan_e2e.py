@@ -91,6 +91,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
               places a log in the inventory's crafting grid (the server places it).
 - recipe_removal: the host and guest each forget all and individual recipes while the book
               is open; it stays empty when reopened, and a later grant appears (#1495).
+- recipe_targets: `/recipe give|take <other player>` changes that player's book, the host's
+              for the guest and (server thread) the guest's for the host; their open book shows it.
 - feedback:  the guest's command feedback names the guest and shows the numbers, and the host (an
              operator) is told of it as `[Guest: ...]`.
 - clicks:    with real mouse presses (not click-slot, which skips the screen's press and drag
@@ -6220,6 +6222,62 @@ def check_recipe_removal(host, guest, out):
 
 CHECKS += ['recipe_removal']
 CHECK_FNS.update(recipe_removal=check_recipe_removal)
+
+
+def check_recipe_targets(host, guest, out):
+    """RecipeCommand gives and takes the recipes of each target's own ServerRecipeBook: a
+    `/recipe give|take <other player>` changes that player's book and reaches their client,
+    not the book of the player who typed it. An in-frame host isn't one of the players a guest's
+    command can name (`command_players` lists the guests), so the guest gives the host a recipe
+    only when the host is a client of its server thread."""
+    host_name = host.raw('lan', 'status').get('host', 'Player')
+    books = {}
+    for game in (host, guest):
+        back_to_game(game)
+        game('command', command='clear @s')
+        game('command', command='recipe take @s *')
+    host.wait(20)
+    for game in (host, guest):
+        game.raw('key', 'e', 'tap')
+        game.wait(5)
+        book = game('screen').get('recipe_book')
+        assert book, f'{game.name}: the inventory has no recipe book'
+        if len(book['targets']) == 1:
+            game.raw('click-at', *centre(book['targets'][0]))
+            game.wait(5)
+
+    def known():
+        return {game.name: game('screen')['recipe_book']['known'] for game in (host, guest)}
+
+    try:
+        books['empty'] = known()
+        assert books['empty'] == {host.name: 0, guest.name: 0}, books
+        host('command', command=f'recipe give {GUEST_NAME} minecraft:oak_planks')
+        host('command', command=f'recipe give {GUEST_NAME} minecraft:stick')
+        host.wait(20)
+        books['host gives guest'] = known()
+        if SERVER_THREAD:
+            guest('command', command=f'recipe give {host_name} minecraft:stick')
+            guest.wait(20)
+        books['guest gives host'] = known()
+        host('command', command=f'recipe take {GUEST_NAME} minecraft:stick')
+        host.wait(20)
+        books['host takes from guest'] = known()
+        host.shot(out, 'recipe-targets-host')
+        guest.shot(out, 'recipe-targets-guest')
+        by_guest = int(SERVER_THREAD)
+        expected = {'empty': (0, 0), 'host gives guest': (0, 2), 'guest gives host': (by_guest, 2),
+                    'host takes from guest': (by_guest, 1)}
+        for step, (in_host, in_guest) in expected.items():
+            assert books[step] == {host.name: in_host, guest.name: in_guest}, (step, books)
+    finally:
+        back_to_game(host)
+        back_to_game(guest)
+    return books
+
+
+CHECKS += ['recipe_targets']
+CHECK_FNS.update(recipe_targets=check_recipe_targets)
 
 
 def check_shulker_bullets(host, guest, out):
