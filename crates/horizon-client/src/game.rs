@@ -2600,9 +2600,40 @@ impl Game<'_> {
                 }
             }
         }
+        // BigDripleafBlock.entityInside also asks whether the player stands on
+        // the ground and how high its feet are: the leaves its box's feet
+        // layer is inside (the host and the LAN guests).
+        let mut standing = Vec::new();
+        let feet = self
+            .player
+            .iter()
+            .filter(|_| !self.spectator())
+            .map(|p| {
+                (
+                    [p.position.x, p.position.y, p.position.z],
+                    p.ground.on_ground,
+                    f64::from(p.dimensions.width) / 2.0,
+                )
+            })
+            .chain(
+                self.lan_guest_feet()
+                    .into_iter()
+                    .map(|(at, on_ground)| (at, on_ground, 0.3)),
+            );
+        for (at, on_ground, w) in feet {
+            let y = (at[1] + 1e-7).floor() as i32;
+            for x in (at[0] - w + 1e-7).floor() as i32..=(at[0] + w - 1e-7).floor() as i32 {
+                for z in (at[2] - w + 1e-7).floor() as i32..=(at[2] + w - 1e-7).floor() as i32 {
+                    standing.push((BlockPos::new(x, y, z), on_ground, at[1]));
+                }
+            }
+        }
         self.with_level(|b, level, ticks| {
             for pos in inside {
                 b.entity_inside(level, ticks, pos);
+            }
+            for (pos, on_ground, feet_y) in standing {
+                b.entity_on_big_dripleaf(level, ticks, pos, on_ground, feet_y);
             }
         });
         self.process_level_events()?;
