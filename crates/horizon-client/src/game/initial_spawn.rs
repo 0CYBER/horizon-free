@@ -121,6 +121,83 @@ impl Game<'_> {
         }
         Ok(Some([ox * 16 + 8, height, oz * 16 + 8]))
     }
+    /// MinecraftServer.setInitialSpawn's bonus chest: BonusChestFeature.place
+    /// in the spawn chunk, a chest with the spawn bonus loot and a torch on
+    /// each side that can hold one, on the first free column of a shuffled
+    /// walk over the chunk. Skipped while the chunk is not loaded.
+    pub(super) fn place_bonus_chest(&mut self, origin: [i32; 3]) -> Result<()> {
+        use horizon_client::containers::BlockEntity;
+        let (cx, cz) = (origin[0] >> 4, origin[2] >> 4);
+        let registry = &self.pack.assets.registry;
+        let (Some(chest), Some(torch)) = (
+            registry.default_state("minecraft:chest"),
+            registry.default_state("minecraft:torch"),
+        ) else {
+            return Ok(());
+        };
+        if !self.streaming.is_lit(cx, cz) {
+            return Ok(());
+        }
+        let mut random = entity_random();
+        // Util.toShuffledList of the chunk's x and z.
+        let mut shuffled = |min: i32| -> [i32; 16] {
+            let mut values: [i32; 16] = std::array::from_fn(|i| min + i as i32);
+            for end in (2..=16usize).rev() {
+                let other = random.next_int_bound(end as i32).unwrap_or(0) as usize;
+                values.swap(end - 1, other);
+            }
+            values
+        };
+        let (xs, zs) = (shuffled(cx * 16), shuffled(cz * 16));
+        for x in xs {
+            for z in zs {
+                let y = self
+                    .spawn_columns()
+                    .height(HeightmapType::MotionBlockingNoLeaves, x, z);
+                if self.world.block(x, y, z) != self.world.air && !self.collision_empty([x, y, z]) {
+                    continue;
+                }
+                self.level_set([x, y, z], chest)?;
+                let seed = random.next_long();
+                self.world
+                    .block_entities
+                    .insert((x, y, z), BlockEntity::Chest(Vec::new()));
+                self.load_block_entity_nbt(
+                    [x, y, z],
+                    &format!(
+                        "{{LootTable:\"minecraft:chests/spawn_bonus_chest\",LootTableSeed:{seed}L}}"
+                    ),
+                );
+                for [dx, dz] in [[0, -1], [1, 0], [0, 1], [-1, 0]] {
+                    let at = [x + dx, y, z + dz];
+                    let survives = self.with_level(|b, level, ticks| {
+                        b.can_survive(level, ticks, BlockPos::new(at[0], at[1], at[2]), torch)
+                    });
+                    if survives {
+                        self.level_set(at, torch)?;
+                    }
+                }
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+    /// The block at `pos` has no collision shape.
+    fn collision_empty(&self, pos: [i32; 3]) -> bool {
+        let mut scene = SceneCollisions {
+            world: &self.world,
+            binding: self.collision,
+            subject: None,
+        };
+        self.collision
+            .collision_shape_with_context(
+                &mut scene,
+                self.world.block(pos[0], pos[1], pos[2]),
+                BlockPos::new(pos[0], pos[1], pos[2]),
+                &CollisionContext::empty(false),
+            )
+            .is_ok_and(|shape| shape.is_empty())
+    }
     /// PlayerSpawnFinder.findSpawn around the world spawn: the feet of a
     /// player who has no position yet. None while a candidate's chunk loads.
     pub(super) fn find_player_spawn(&mut self, suggestion: [i32; 3]) -> Result<Option<Vec3>> {
