@@ -48,6 +48,7 @@ fn searches_by_kind_and_words() {
     // Modpacks under Modpacks; a kind this launcher can't install yet (a world) never.
     assert_eq!(found("", Kind::Modpack), ["cozy"]);
     assert!(found("skyblock", Kind::ResourcePack).is_empty());
+    assert_eq!(found("", Kind::Shader), ["glow"]);
     let p = hud(&index);
     assert_eq!(p.support(), super::super::Support::Works);
     assert_eq!(p.page, "https://playhorizon.dev/mods/coords_hud");
@@ -92,6 +93,41 @@ fn installs_checked_turns_on_and_removes() {
     installed::remove(&home, "coords_hud").unwrap();
     assert!(!home.join("horizon-mods/coords_hud.hmod").exists());
     assert!(installed::Installed::load(&home).entries.is_empty());
+    fs::remove_dir_all(&home).unwrap();
+}
+
+#[test]
+fn installs_a_shader_pack_into_shaderpacks() {
+    let index = sample();
+    let home = scratch("shader");
+    let p = project_of(index.project("glow").unwrap()).unwrap();
+    assert_eq!(p.support(), super::super::Support::Works);
+    let done = install_from(&index, true, &p, &home, &|_, _| {}).unwrap();
+    assert_eq!(done[0].file, "shaderpacks/glow-1.0.0.hshader");
+    assert_eq!(done[0].kind, Kind::Shader);
+    assert!(home.join("shaderpacks/glow-1.0.0.hshader").is_file());
+    // Not a mod: nothing turns on in horizon-mods.txt; the game's Shader Packs page picks it.
+    assert!(!home.join("horizon-mods.txt").exists());
+
+    let mut revoked = index.clone();
+    revoked.revoked.push(index::Revoked {
+        id: "glow".into(),
+        sha256: None,
+        reason: "Test.".into(),
+        date: String::new(),
+    });
+    let said = turn_off_revoked(&revoked, &home);
+    assert_eq!(said, ["Soft Glow was taken down: Test. Remove it."]);
+
+    installed::remove(&home, "glow").unwrap();
+    assert!(!home.join("shaderpacks/glow-1.0.0.hshader").exists());
+    // A file of the same name the registry didn't put there is left alone.
+    fs::write(home.join("shaderpacks/glow-1.0.0.hshader"), b"mine").unwrap();
+    let e = install_from(&index, true, &p, &home, &|_, _| {}).unwrap_err();
+    assert_eq!(
+        e,
+        "shaderpacks/glow-1.0.0.hshader is already there: move it away first."
+    );
     fs::remove_dir_all(&home).unwrap();
 }
 

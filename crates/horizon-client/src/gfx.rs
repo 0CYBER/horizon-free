@@ -69,6 +69,7 @@ pub mod lightning;
 mod lod;
 mod native_pack;
 mod native_post;
+mod native_sky;
 mod occlusion;
 mod pack_atlas;
 pub mod pack_draw;
@@ -2935,8 +2936,8 @@ impl Renderer {
         self.native = None;
         self.pack_atlas = None;
     }
-    /// Runs the post stage of one of Horizon's own shader packs from now on (`None`: no
-    /// pack), with its options' values; replaces a `shaders/` pack. Returns the passes'
+    /// Runs the sky and post stages of one of Horizon's own shader packs from now on (`None`:
+    /// no pack), with its options' values; replaces a `shaders/` pack. Returns the stages'
     /// labels; on an error the pack that ran keeps running.
     pub fn set_native_shader_pack(
         &mut self,
@@ -2947,8 +2948,13 @@ impl Renderer {
             return Ok(Vec::new());
         };
         let format = self.config.format.remove_srgb_suffix();
-        let (pack, labels) =
-            native_pack::NativePack::new(&self.device, report, &constants, format)?;
+        let (pack, labels) = native_pack::NativePack::new(
+            &self.device,
+            &self.terrain_layout,
+            report,
+            &constants,
+            format,
+        )?;
         self.native = pack.draws().then_some(pack);
         if self.native.is_some() {
             self.pack_post = None;
@@ -4110,7 +4116,20 @@ impl Renderer {
             cull.bind_depth(&self.device, world_depth);
         }
         let cull = self.cull.as_ref().filter(|_| culling && solid_draws > 0);
-        // One of Horizon's own packs: this frame's inputs.
+        let clear = if frame.title || (frame.end_sky && !frame.underwater) {
+            wgpu::Color::BLACK
+        } else {
+            wgpu::Color {
+                r: f64::from(fog_color[0]),
+                g: f64::from(fog_color[1]),
+                b: f64::from(fog_color[2]),
+                a: 1.0,
+            }
+        };
+        let sky_visible = sky_open(frame);
+        // One of Horizon's own packs: this frame's inputs; in a timed frame its sky draws in a
+        // pass of its own, so that it has a time of its own.
+        let mut native_sky_pass = false;
         if !frame.title
             && let Some(native) = &mut self.native
         {
@@ -4122,7 +4141,42 @@ impl Renderer {
             native.frame.write(&self.queue, frame, size);
             if let Some(t) = &mut native.timing {
                 t.begin(&self.device, &self.queue);
+                native_sky_pass =
+                    native.sky.is_some() && t.recording() && sky_visible && frame.skybox;
             }
+        }
+        if native_sky_pass
+            && let Some(native) = &mut self.native
+            && let Some(sky) = &native.sky
+        {
+            if let Some(t) = &mut native.timing {
+                let format = self.config.format.remove_srgb_suffix();
+                t.mark(&self.device, &mut encoder, (world_view, format));
+            }
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(&sky.label),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: world_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(clear),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: world_depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: native.timing.as_mut().and_then(|t| t.writes(&sky.label)),
+                ..Default::default()
+            });
+            pass.set_bind_group(0, &self.group, &[]);
+            sky.draw(&mut pass, &native.frame);
         }
         {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
@@ -4130,18 +4184,11 @@ impl Renderer {
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(
-                        if frame.title || (frame.end_sky && !frame.underwater) {
-                            wgpu::Color::BLACK
-                        } else {
-                            wgpu::Color {
-                                r: f64::from(fog_color[0]),
-                                g: f64::from(fog_color[1]),
-                                b: f64::from(fog_color[2]),
-                                a: 1.0,
-                            }
-                        },
-                    ),
+                    load: if native_sky_pass {
+                        wgpu::LoadOp::Load
+                    } else {
+                        wgpu::LoadOp::Clear(clear)
+                    },
                     store: wgpu::StoreOp::Store,
                 },
             })];
@@ -4164,11 +4211,19 @@ impl Renderer {
                 ..Default::default()
             });
             pass.set_bind_group(0, &self.group, &[]);
-            let sky_visible = sky_open(frame);
             if frame.title || (sky_visible && (frame.skybox || frame.end_sky)) {
-                if !frame.title && frame.skybox && !pack_draws_sky {
-                    pass.set_pipeline(&self.sky);
-                    pass.draw(0..3, 0..1);
+                if !frame.title && frame.skybox && !pack_draws_sky && !native_sky_pass {
+                    match self
+                        .native
+                        .as_ref()
+                        .and_then(|n| Some((n.sky.as_ref()?, &n.frame)))
+                    {
+                        Some((sky, native)) => sky.draw(&mut pass, native),
+                        None => {
+                            pass.set_pipeline(&self.sky);
+                            pass.draw(0..3, 0..1);
+                        }
+                    }
                 }
                 if frame.title {
                     self.panorama.draw(&mut pass);
