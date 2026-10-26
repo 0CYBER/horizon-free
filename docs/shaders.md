@@ -13,7 +13,7 @@ Horizon's own format.
 | Authoring tool | `horizon-shader` (same crate) | `new`, `check`, `pack` |
 | Templates | `crates/horizon-shader-api/templates/` | post, sky, material |
 | Example pack | `crates/horizon-shader-api/packs/golden_hour` | a warm sky and two post passes |
-| In the game: the post stage | `HORIZON_SHADER_PACK=<name>` (for development, until the Shader Packs page) | post passes, hot reload |
+| In the game: the post stage | Options > Horizon Settings > Shader Packs | post passes, hot reload |
 | In the game: sky and material; the launcher and the registry | | not yet |
 
 ## Quick start
@@ -46,9 +46,11 @@ my_pack 0.1.0 (shader API 0.1): FAILED
 
 ## Trying a pack in the game
 
-Until the Shader Packs page lists them, put the pack folder (or its `.hshader`) in `shaderpacks/` beside `options.txt`
-and start the game with `HORIZON_SHADER_PACK=<its folder or file name>`. The game checks the pack first, and refuses
-one that fails, with its problems in the chat. While it runs, the game looks at the pack twice a second: save a file
+Put the pack folder (or its `.hshader`) in `shaderpacks/` beside `options.txt` (Open Pack Folder opens it) and pick
+it on Options > Horizon Settings > Shader Packs, which lists Horizon's packs, marked (Horizon), beside packs in the
+`shaders/` format; one runs at a time, and clicking it again turns it off. `HORIZON_SHADER_PACK=<its folder or file
+name>` runs a pack whatever the page says, for development. The game checks the pack first, and refuses one that
+fails, with its problems in the chat. While it runs, the game looks at the pack twice a second: save a file
 and the pack is checked and rebuilt in place ("Shader pack ... reloaded"); if the new version fails, the chat says
 where and the last good version keeps drawing. The post passes run today; the sky and material stages are checked
 but not drawn yet.
@@ -133,5 +135,4 @@ open, each pass is timed on the GPU and the overlay shows the pack's total and i
 
 ## Next
 
-Options > Shader packs listing these packs, then the material and sky stages, and the registry's `shader` kind with
-installs from the launcher.
+The material and sky stages in the game, and the registry's `shader` kind with installs from the launcher.

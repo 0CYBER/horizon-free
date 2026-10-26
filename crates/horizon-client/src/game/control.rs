@@ -612,6 +612,7 @@ impl Game<'_> {
                     "font" => Page::Font,
                     "packs" => Page::Packs,
                     "mods" => Page::Mods,
+                    "shader-packs" => Page::ShaderPacks,
                     "graphics" => Page::Graphics,
                     "graphics-advanced" => Page::GraphicsAdvanced,
                     "extras" => Page::Extras,
@@ -625,6 +626,10 @@ impl Game<'_> {
                 }
                 self.open_options(self.title.is_some());
                 self.ui.options.show(page);
+                if page == Page::ShaderPacks {
+                    self.settings.shader_packs =
+                        horizon_client::shader_pack_list::scan(&Self::shader_packs_dir());
+                }
                 ok()
             }
             "chat-log" => {
