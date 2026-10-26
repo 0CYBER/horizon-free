@@ -193,9 +193,86 @@ pub fn shipwreck_too_big(template: &StructureTemplate) -> bool {
     template.size[0] > 32 || template.size[1] > 32
 }
 
+impl TemplatePiece {
+    /// `TemplateStructurePiece.addAdditionalSaveData` and its subclasses',
+    /// with the height a shipwreck settled on once placed.
+    pub fn saved(&self) -> crate::nbt::Compound {
+        use crate::nbt::Tag;
+        let flag = |b: bool| Tag::Byte(i8::from(b));
+        let adjusted = match self.handler {
+            TemplateHandler::Shipwreck { .. }
+            | TemplateHandler::OceanRuin { .. }
+            | TemplateHandler::Igloo => *self.state.lock().unwrap(),
+            _ => None,
+        };
+        let dy = adjusted.map_or(0, |y| y - self.position[1]);
+        let template_dy = if matches!(self.handler, TemplateHandler::Igloo) {
+            0
+        } else {
+            dy
+        };
+        let mut tag = super::legacy::piece_tag(
+            self.type_name,
+            self.bounding_box.moved([0, dy, 0]),
+            Some(Direction::North),
+            0,
+        );
+        // Mansion and End City pieces keep the name inside their folder.
+        let name = self
+            .template_name
+            .strip_prefix("minecraft:woodland_mansion/")
+            .or_else(|| self.template_name.strip_prefix("minecraft:end_city/"))
+            .unwrap_or(&self.template_name);
+        let rotation = || Tag::String(self.rotation.saved_name().into());
+        let mut entries = vec![
+            ("TPX", Tag::Int(self.position[0])),
+            ("TPY", Tag::Int(self.position[1] + template_dy)),
+            ("TPZ", Tag::Int(self.position[2])),
+            ("Template", Tag::String(name.into())),
+        ];
+        match self.handler {
+            TemplateHandler::Igloo => entries.push(("Rot", rotation())),
+            TemplateHandler::Shipwreck { beached } => entries.extend([
+                ("isBeached", flag(beached)),
+                ("Rot", rotation()),
+                ("height_adjusted", flag(adjusted.is_some())),
+            ]),
+            TemplateHandler::OceanRuin {
+                warm,
+                large,
+                integrity,
+            } => entries.extend([
+                ("Rot", rotation()),
+                ("Integrity", Tag::Float(integrity.to_bits())),
+                (
+                    "BiomeType",
+                    Tag::String(if warm { "WARM" } else { "COLD" }.into()),
+                ),
+                ("IsLarge", flag(large)),
+            ]),
+            TemplateHandler::RuinedPortal(props) => {
+                entries.push(("Rotation", rotation()));
+                entries.push(("Mirror", Tag::String(self.mirror.saved_name().into())));
+                entries.extend(props.save());
+            }
+            TemplateHandler::Mansion => entries.extend([
+                ("Rot", rotation()),
+                ("Mi", Tag::String(self.mirror.saved_name().into())),
+            ]),
+            TemplateHandler::Plain => entries.push(("Rot", rotation())),
+        }
+        for (key, value) in entries {
+            tag.insert(key.into(), value);
+        }
+        tag
+    }
+}
 impl LegacyPiece for TemplatePiece {
     fn bounding_box(&self) -> BoundingBox {
         self.bounding_box
+    }
+    fn save(&self) -> Option<crate::nbt::Compound> {
+        Some(self.saved())
     }
     fn after_place(&self, c: &mut PieceContext<'_>, pieces: &[BoundingBox]) -> Result<()> {
         match self.handler {
@@ -232,6 +309,8 @@ impl LegacyPiece for TemplatePiece {
                     self.position[1] + height - 90 - 1,
                     self.position[2],
                 ];
+                // The box stays moved; templatePosition goes back after placing.
+                *self.state.lock().unwrap() = Some(position[1]);
                 if let Some(markers) = self.place_at(c, position, &[])? {
                     for (marker, pos) in markers {
                         if marker == "chest" {
