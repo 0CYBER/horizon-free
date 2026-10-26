@@ -625,6 +625,11 @@ impl Mob {
             let at = [self.position.x, self.position.y, self.position.z];
             events.push(MobEvent::Sound("entity.breeze.land", at, 1.0, 1.0));
         }
+        // Creeper.causeFallDamage: the fall swells the fuse, up to five ticks
+        // short of exploding.
+        if self.species() == super::Species::Creeper {
+            self.swell = (self.swell + (self.fall_distance * 1.5) as i32).min(30 - 5);
+        }
         if self.kind.flags.fall_immune {
             return;
         }
