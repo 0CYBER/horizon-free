@@ -49,10 +49,12 @@ impl Weight {
 
 /// The sounds of `BundleItem` (`Entity.playSound` at the player): insert
 /// and remove one at volume 0.8 and pitch `0.8 + random * 0.4`, a failed
-/// insert at 1, 1.
+/// insert at 1, 1; the drop of its contents is played at the player's block
+/// like remove one.
 pub const INSERT: &str = "minecraft:item.bundle.insert";
 pub const INSERT_FAIL: &str = "minecraft:item.bundle.insert_fail";
 pub const REMOVE_ONE: &str = "minecraft:item.bundle.remove_one";
+pub const DROP_CONTENTS: &str = "minecraft:item.bundle.drop_contents";
 
 fn max_stack(items: &Items, stack: &ItemStack) -> u32 {
     items.get(&stack.item).map_or(64, |i| i.max_stack).max(1)
