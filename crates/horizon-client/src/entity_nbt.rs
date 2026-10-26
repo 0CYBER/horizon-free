@@ -403,7 +403,36 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             crate::mobs::villager::write_nbt(m, map);
         }
         "minecraft:wandering_trader" => put_offers(map, m),
-        "minecraft:axolotl" => write_axolotl_memories(m, map),
+        "minecraft:axolotl" => {
+            write_axolotl_memories(m, map);
+            map.insert(
+                "Variant".into(),
+                Tag::Int(i32::from(m.extra.variant.min(4))),
+            );
+        }
+        // Rabbit.addAdditionalSaveData (the legacy id; 99 is the killer bunny).
+        "minecraft:rabbit" => {
+            map.insert("RabbitType".into(), Tag::Int(i32::from(m.extra.variant)));
+        }
+        "minecraft:parrot" => {
+            map.insert(
+                "Variant".into(),
+                Tag::Int(i32::from(m.extra.variant.min(4))),
+            );
+        }
+        "minecraft:salmon" => {
+            let size = SALMON_SIZES[usize::from(m.extra.variant).min(2)];
+            map.insert("type".into(), string(size));
+        }
+        // TropicalFish.addAdditionalSaveData: the packed variant.
+        "minecraft:tropical_fish" => {
+            let pattern = m.extra.variant.min(11);
+            let packed = i32::from(pattern >= 6)
+                | i32::from(pattern % 6) << 8
+                | i32::from(m.extra.variant2 & 15) << 16
+                | i32::from(m.extra.variant3 & 15) << 24;
+            map.insert("Variant".into(), Tag::Int(packed));
+        }
         "minecraft:allay" => {
             // InventoryCarrier: the fetched stack; the liked player memory.
             let mut inv = Vec::new();
@@ -843,6 +872,7 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     if m.species() == crate::mobs::Species::Axolotl {
         restore_axolotl_memories(&mut m, tag);
     }
+    read_variant(&mut m, tag);
     m.fire_ticks = number(tag.get("Fire")).unwrap_or(0) as i32;
     m.air = number(tag.get("Air")).unwrap_or(300) as i32;
     if m.species() == crate::mobs::Species::Allay {
@@ -2022,6 +2052,41 @@ fn write_axolotl_memories(m: &Mob, map: &mut Compound) {
         } else {
             memories.remove(&key.into());
         }
+    }
+}
+/// The variant tags `Axolotl`, `Rabbit`, `Parrot`, `Salmon` and
+/// `TropicalFish` read; a missing tag is the default variant (a medium
+/// salmon, otherwise index 0).
+fn read_variant(m: &mut Mob, tag: &Tag) {
+    use crate::mobs::Species as S;
+    let int = |key| number(tag.get(key)).unwrap_or(0) as i32;
+    match m.species() {
+        S::Axolotl | S::Parrot => m.extra.variant = int("Variant").clamp(0, 4) as u8,
+        // Rabbit.Variant.LEGACY_CODEC: an unknown id is brown.
+        S::Rabbit => {
+            m.extra.variant = match int("RabbitType") {
+                v @ (0..=5 | 99) => v as u8,
+                _ => 0,
+            }
+        }
+        S::Salmon => {
+            m.extra.variant = text(tag.get("type"))
+                .and_then(|t| SALMON_SIZES.iter().position(|v| *v == t))
+                .unwrap_or(1) as u8;
+        }
+        S::TropicalFish => {
+            let packed = int("Variant");
+            let (size, index) = (packed & 0xFF, (packed >> 8) & 0xFF);
+            // TropicalFish.Pattern.byId: an unknown id is a kob.
+            m.extra.variant = if size <= 1 && index < 6 {
+                (size * 6 + index) as u8
+            } else {
+                0
+            };
+            m.extra.variant2 = ((packed >> 16) & 15) as u8;
+            m.extra.variant3 = ((packed >> 24) & 15) as u8;
+        }
+        _ => {}
     }
 }
 fn restore_axolotl_memories(m: &mut Mob, tag: &Tag) {
