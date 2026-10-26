@@ -400,7 +400,27 @@ impl Game<'_> {
         for action in actions {
             self.apply_effect_action(action);
         }
+        self.turtle_helmet_tick();
         self.apply_effect_status();
+    }
+    /// `Player.tick` -> `turtleHelmetTick`: with a turtle helmet on the head
+    /// and the eyes out of the water, Water Breathing for 200 ticks (no
+    /// particles, an icon).
+    fn turtle_helmet_tick(&mut self) {
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let eye_y = p.position.y + f64::from(p.dimensions.eye_height);
+        if !p.health.dead_or_dying()
+            && self.armor[0]
+                .as_ref()
+                .is_some_and(|s| &*s.item == "minecraft:turtle_helmet")
+            && !self.eye_in_water(p.position.x, eye_y, p.position.z)
+        {
+            let mut effect = EffectInstance::new("water_breathing", 200, 0);
+            effect.visible = false;
+            self.potions.effects.add(effect);
+        }
     }
     /// A client's own effects (`LivingEntity.tickEffects` on the client,
     /// `MobEffectInstance.tickClient`): they count down, and the server
