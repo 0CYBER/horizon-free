@@ -2,8 +2,9 @@
 """Compare a player's right click on a block with vanilla's, for items that are
 both food and blocks (sweet and glow berries, carrots, potatoes), for sweet
 berry bushes, for spawn eggs used on a monster spawner, for shears carving
-pumpkins, for blocks placed where mobs and armor stands stand, for respawn
-anchors and for beds in the Nether and the End.
+pumpkins, for copper golem statues turned to their next pose, for blocks
+placed where mobs and armor stands stand, for respawn anchors and for beds in
+the Nether and the End.
 
 Every case has a block at the origin, something above it, and a player three
 blocks south, survival or creative, hungry or full, sneaking or not, who
@@ -228,6 +229,32 @@ def pumpkin_case(rng, states, case):
     case['cells'] = cells
 
 
+STATUES = [f'{wax}{age}copper_golem_statue' for wax in ('', 'waxed_')
+           for age in ('', 'exposed_', 'weathered_', 'oxidized_')]
+
+
+def statue_case(rng, states, case):
+    """A copper golem statue right-clicked (`CopperGolemStatueBlock.useItemOn`, the weathering
+    one's): anything but an axe, an empty hand too, turns it to its next pose; honeycomb waxes a
+    statue that still weathers instead (`HoneycombItem.useOn`), and an axe scrapes or unwaxes it."""
+    statue = rng.choice(STATUES)
+    case['cells'] = [[0, 0, 0, states.any(rng, statue)]]
+    items = ['-', '-', 'stick', 'honeycomb', 'honeycomb', 'stone', 'copper_ingot', 'diamond_pickaxe',
+             'copper_golem_statue']
+    if statue != 'copper_golem_statue':
+        # An axe scrapes or unwaxes the others; on the unaffected one it brings the golem back
+        # (`CopperGolemStatueBlockEntity.removeStatue`), which Horizon does not do yet.
+        items.append('iron_axe')
+    item = rng.choice(items)
+    use = {'item': '-' if item == '-' else d_plain(item, rng.choice([1, 16])), 'creative': rng.random() < 0.2,
+           'sneaking': rng.random() < 0.15, 'food': 20,
+           'face': rng.choice(['up', 'up', 'north', 'south', 'west', 'east'])}
+    if rng.random() < 0.2:
+        # The item in the off hand, nothing in the main hand.
+        use.update(offhand=use['item'], item='-')
+    case['use_item'] = use
+
+
 # Entities a block may be placed into (`Entity.blocksBuilding`), and blocks to place.
 BLOCKERS = ['skeleton', 'zombie', 'pig', 'chicken', 'cow', 'armor_stand', 'slime', 'bat']
 PLACED = ['obsidian', 'stone', 'oak_slab', 'oak_fence', 'white_carpet', 'torch', 'glass', 'oak_trapdoor', 'snow']
@@ -286,6 +313,12 @@ def cases(facts, count, seed):
             continue
         if rng.random() < 0.1:
             blocked_case(rng, states, case)
+            case['items'] = []
+            case['mode'] = 'dispense'
+            yield case
+            continue
+        if rng.random() < 0.08:
+            statue_case(rng, states, case)
             case['items'] = []
             case['mode'] = 'dispense'
             yield case

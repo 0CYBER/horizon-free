@@ -38,6 +38,10 @@
 	redir /roadmap /hub#roadmap permanent
 	@doc path_regexp doc ^/docs/([a-z-]+)$
 	rewrite @doc /docs/{re.doc.1}.html
+	# The API portal: /docs/api is its index, /docs/api/<page> its pages.
+	redir /docs/api/ /docs/api permanent
+	@apidoc path_regexp apidoc ^/docs/api/([a-z-]+)$
+	rewrite @apidoc /docs/api/{re.apidoc.1}.html
 	# The registry's submission service (crates/horizon-mod-registry), over Railway's private network. Unset, the
 	# form says it isn't open.
 	handle /api/mods/* {

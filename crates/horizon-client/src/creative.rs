@@ -71,9 +71,51 @@ impl Names {
             .cloned()
             .unwrap_or_else(|| path.replace('_', " "))
     }
+    /// An item's display name in the selected language: `item.*` then
+    /// `block.*`, then the pinned English map (`Names::item`).
+    pub fn display_item(&self, id: &str) -> String {
+        let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", id));
+        if let Some(lang) = crate::lang::current() {
+            for prefix in ["item", "block"] {
+                if let Some(name) = lang.get(&format!("{prefix}.{namespace}.{path}")) {
+                    return name.to_owned();
+                }
+            }
+        }
+        self.item(id)
+    }
+    /// A translation key's text in the selected language, else the pinned
+    /// English map (`HoverName` and tooltip keys such as potion names).
+    pub fn display_get(&self, key: &str) -> Option<String> {
+        crate::lang::current()
+            .and_then(|lang| lang.get(key).map(str::to_owned))
+            .or_else(|| self.get(key).map(str::to_owned))
+    }
     pub fn get(&self, key: &str) -> Option<&str> {
         self.map.get(key).map(String::as_str)
     }
+}
+
+/// `CreativeModeTabs`' key for an exported tab id (`itemGroup.*`); the
+/// export's `title` is the English fallback.
+pub fn item_group_key(id: &str) -> Option<&'static str> {
+    Some(match id.trim_start_matches("minecraft:") {
+        "building_blocks" => "itemGroup.buildingBlocks",
+        "colored_blocks" => "itemGroup.coloredBlocks",
+        "natural_blocks" => "itemGroup.natural",
+        "functional_blocks" => "itemGroup.functional",
+        "redstone_blocks" => "itemGroup.redstone",
+        "hotbar" => "itemGroup.hotbar",
+        "search" => "itemGroup.search",
+        "tools_and_utilities" => "itemGroup.tools",
+        "combat" => "itemGroup.combat",
+        "food_and_drinks" => "itemGroup.foodAndDrink",
+        "ingredients" => "itemGroup.ingredients",
+        "spawn_eggs" => "itemGroup.spawnEggs",
+        "op_blocks" => "itemGroup.op",
+        "inventory" => "itemGroup.inventory",
+        _ => return None,
+    })
 }
 impl Creative {
     pub const WIDTH: f32 = 195.0;
@@ -303,7 +345,17 @@ impl Creative {
                 .collect();
         }
         // FullTextSearchTree: tooltip lines, and the item id after a colon.
+        // The export's lines are English (they come from the vanilla jars);
+        // the hover name in the selected language is matched too, so a
+        // localized search finds the item. It is the whole name (a tipped
+        // arrow's potion, the ominous banner), as the first line is.
         let text = java_lower(term);
+        let localized = |i: usize| {
+            java_lower(&crate::item_tooltip::name_line(
+                &self.search_items[i],
+                &|k| names.display_get(k),
+            ))
+        };
         all.filter(|&i| {
             let e = &self.search_index[i];
             let fallback;
@@ -314,11 +366,15 @@ impl Creative {
                 &e.lines
             };
             match text.split_once(':') {
-                None => any(lines.iter().map(String::as_str), &text),
+                None => {
+                    any(lines.iter().map(String::as_str), &text) || localized(i).contains(&text)
+                }
                 Some((ns, path)) => {
                     let (ns, path) = (java_trim(ns), java_trim(path));
                     e.namespace.contains(ns)
-                        && (e.path.contains(path) || any(lines.iter().map(String::as_str), path))
+                        && (e.path.contains(path)
+                            || any(lines.iter().map(String::as_str), path)
+                            || localized(i).contains(path))
                 }
             }
         })
@@ -760,6 +816,24 @@ mod tests {
     }
 
     #[test]
+    fn search_matches_the_display_name_in_the_selected_language() {
+        let c = creative(0);
+        let names = Names {
+            map: HashMap::from([
+                ("item.minecraft.anvil".to_owned(), "铁砧".to_owned()),
+                ("item.minecraft.wooden_hoe".to_owned(), "木锄".to_owned()),
+            ]),
+        };
+        let q = |s: &str| c.search_results(s, &names);
+        assert_eq!(q("铁砧"), [0]);
+        assert_eq!(q("木锄"), [2]);
+        // The English tooltip lines the export indexed still match.
+        assert_eq!(q("anvil"), [0]);
+        // A colon's path searches the display name too.
+        assert_eq!(q("minecraft:铁砧"), [0]);
+    }
+
+    #[test]
     fn scrollbar_drag_follows_the_mouse_while_held() {
         let mut c = creative(90);
         let names = Names {
@@ -792,6 +866,20 @@ mod tests {
         c.selected = 0;
         assert!(c.press_scrollbar(180.0, 60.0, &names));
         assert!(!c.scrolling);
+    }
+
+    #[test]
+    fn creative_tab_titles_have_vanilla_keys() {
+        assert_eq!(
+            item_group_key("minecraft:building_blocks"),
+            Some("itemGroup.buildingBlocks")
+        );
+        assert_eq!(
+            item_group_key("minecraft:food_and_drinks"),
+            Some("itemGroup.foodAndDrink")
+        );
+        assert_eq!(item_group_key("minecraft:hotbar"), Some("itemGroup.hotbar"));
+        assert_eq!(item_group_key("minecraft:nonsense"), None);
     }
 
     #[test]

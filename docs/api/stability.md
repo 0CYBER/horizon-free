@@ -86,7 +86,7 @@ Deprecations and breaking changes are in bold. The release notes of the game rel
 
 | Part | Level | Version |
 | --- | --- | --- |
-| Mod API: `log`, `game`, `chat`, `hud`, `storage`, `events` | preview | 0.1.0 |
+| Mod API: `log`, `game`, `chat`, `hud`, `storage`, `command`, `events` | preview | 0.1.0 |
 | Mod API: `ui`, `ui-events` (a mod's screens and settings page) | experimental | manifest `experimental = ["ui"]` |
 | Mod API: `render` (HUD shapes, camera shake and zoom; drawn by the game, no mod shaders) | experimental | manifest `experimental = ["render"]` |
 | Mod API: `input` (claimed items' use, the mod's keys, the mouse wheel) | experimental | manifest `experimental = ["input"]` |
