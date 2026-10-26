@@ -2905,11 +2905,18 @@ impl B {
                         let mut bodies = Vec::new();
                         if let Some(t) = cx.w.target_info(target) {
                             let (min, max) = (t.bounds.min_position(), t.bounds.max_position());
-                            bodies.push((t.position, max.x - min.x, max.y - min.y));
+                            bodies.push((partner, t.position, max.x - min.x, max.y - min.y));
                         }
-                        bodies.push((m.position, f64::from(m.width()), f64::from(m.height())));
-                        for (feet, width, height) in bodies {
+                        bodies.push((
+                            m.id,
+                            m.position,
+                            f64::from(m.width()),
+                            f64::from(m.height()),
+                        ));
+                        for (mob, feet, width, height) in bodies {
                             cx.events.push(MobEvent::AroundSelf {
+                                mob,
+                                event: 12,
                                 kind: "heart",
                                 feet: [feet.x, feet.y, feet.z],
                                 width,
@@ -3580,6 +3587,8 @@ fn pois_scan_order(_m: &Mob, found: &[(Poi, [i32; 3])]) -> Vec<usize> {
 /// `AbstractVillager.addParticlesAroundSelf(HAPPY_VILLAGER)` on the client.
 fn happy_particles(m: &Mob, cx: &mut Bx) {
     cx.events.push(MobEvent::AroundSelf {
+        mob: m.id,
+        event: 14,
         kind: "happy_villager",
         feet: [m.position.x, m.position.y, m.position.z],
         width: f64::from(m.width()),

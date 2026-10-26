@@ -25,11 +25,13 @@ impl Game<'_> {
         };
         let m = &mut self.mobs[index];
         let mut used = false;
+        let mut loved = false;
         if item == "minecraft:hay_block" && m.extra.tame && m.extra.age == 0 && m.extra.in_love <= 0
         {
             m.extra.in_love = 600;
             m.extra.love_player = true;
             used = true;
+            loved = true;
         }
         if m.health < m.attrs.max_health {
             m.health = (m.health + heal).min(m.attrs.max_health);
@@ -56,6 +58,10 @@ impl Game<'_> {
         }
         if !used {
             return false;
+        }
+        // Animal.setInLove: entity event 18.
+        if loved {
+            self.mob_event_particles(self.mobs[index].id, 18);
         }
         self.llama_sound(index, "entity.llama.eat", 1.0);
         self.consume_held();

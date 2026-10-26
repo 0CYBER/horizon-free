@@ -116,7 +116,7 @@ impl Game<'_> {
             // VillagerMakeLove: entity event 13 for the partner, then the parent.
             for i in [ib, ia] {
                 let id = self.mobs[i].id;
-                self.villager_particles(id, "angry_villager");
+                self.mob_event_particles(id, 13);
             }
             return;
         };
@@ -141,12 +141,31 @@ impl Game<'_> {
             child.extra.bed = Some(bed);
         }
         // VillagerMakeLove.giveBirth: entity event 12 for the child.
-        self.villager_particles(id, "heart");
+        self.mob_event_particles(id, 12);
     }
-    /// `Villager.handleEntityEvent` 12, 13, 14 and 42:
-    /// `AbstractVillager.addParticlesAroundSelf`.
-    pub(super) fn villager_particles(&mut self, id: u32, kind: &'static str) {
-        self.particles_around_mob(id, kind, horizon_client::particles::Burst::VILLAGER);
+    /// `Level.broadcastEntityEvent` of an event whose `handleEntityEvent`
+    /// draws particles about the mob (villager 12, 13 and 14, taming 6 and 7,
+    /// love 18): the guests get the byte, and this game draws it as its own
+    /// client would.
+    pub(super) fn mob_event_particles(&mut self, id: u32, event: i8) {
+        let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
+            return;
+        };
+        let at = [m.position.x, m.position.y, m.position.z];
+        self.lan_entity_event(id as i32, event, at);
+        self.entity_event_particles(id, event);
+    }
+    /// `handleEntityEvent(event)`'s particles about mob `id`
+    /// (`Villager`, `TamableAnimal`, `AbstractHorse`, `Animal`, `Allay`).
+    pub(super) fn entity_event_particles(&mut self, id: u32, event: i8) {
+        let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
+            return;
+        };
+        if let Some((kind, burst)) =
+            horizon_client::particles::entity_event_burst(&m.kind.id, event as u8)
+        {
+            self.particles_around_mob(id, kind, burst);
+        }
     }
     /// `particles::around_self` about mob `id`.
     pub(super) fn particles_around_mob(
@@ -283,7 +302,7 @@ impl Game<'_> {
         }
         // Villager.setLastHurtByMob: entity event 13.
         for id in angry {
-            self.villager_particles(id, "angry_villager");
+            self.mob_event_particles(id, 13);
         }
     }
     /// `Villager.tellWitnessesThatIWasMurdered`: the villagers that saw a
@@ -338,7 +357,7 @@ impl Game<'_> {
             gossip::REPUTATION_CHANGE_PER_TRADE,
         );
         // Villager.customServerAiStep after a trade: entity event 14.
-        self.villager_particles(id, "happy_villager");
+        self.mob_event_particles(id, 14);
     }
     /// `Villager.getPlayerReputation` of the local player.
     pub(super) fn villager_reputation(&self, id: u32) -> i32 {

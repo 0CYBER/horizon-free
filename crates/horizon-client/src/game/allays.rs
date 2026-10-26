@@ -160,7 +160,7 @@ impl Game<'_> {
             }
             // Allay.duplicateAllay: entity event 18, three spawnHeartParticle.
             let id = self.mobs[index].id;
-            self.particles_around_mob(id, "heart", horizon_client::particles::Burst::ALLAY);
+            self.mob_event_particles(id, 18);
             self.audio
                 .play("minecraft:block.amethyst_block.chime", Some(at), 2.0, 1.0);
             self.consume_held();
