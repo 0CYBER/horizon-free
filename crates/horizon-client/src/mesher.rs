@@ -113,6 +113,14 @@ mod vertex_tests {
             assert!((a - b).abs() <= 0.5 / 32768.0, "{a} {b}");
         }
     }
+    #[test]
+    fn emission_keeps_the_colour_and_the_free_bits() {
+        let rgb = super::pack_rgb([0x12, 0x34, 0x56]);
+        assert_eq!(super::emitting(rgb, 0), rgb);
+        assert_eq!(super::emitting(rgb, 9), 0xF656_3412);
+        assert_eq!(super::emitting(rgb, 15), 0xF056_3412);
+        assert_eq!(super::emitting(rgb, 15) | super::EMISSION_BITS, rgb);
+    }
 }
 pub struct SectionMesh {
     pub solid: Vec<TerrainVertex>,
@@ -330,11 +338,11 @@ impl MeshTables {
         facts: &BlockFacts,
         visibility: FaceVisibility,
     ) -> crate::Result<Self> {
-        // Terrain vertices keep the sprite layer below their flag bits.
+        // Terrain vertices keep the sprite layer below `OPAQUE_LAYER`.
         let layers = render.sprite_layers.values().max().map_or(0, |l| l + 1);
-        if layers > u32::from(EMISSIVE_LAYER) {
+        if layers > u32::from(OPAQUE_LAYER) {
             return Err(
-                format!("{layers} block sprites, terrain vertices index {EMISSIVE_LAYER}").into(),
+                format!("{layers} block sprites, terrain vertices index {OPAQUE_LAYER}").into(),
             );
         }
         let layer = |name: &str| -> crate::Result<u16> {
@@ -566,11 +574,14 @@ impl Padded {
 }
 /// Set on a terrain vertex's sprite layer when its texture alpha must be ignored.
 pub const OPAQUE_LAYER: u16 = 1 << 15;
-/// Marks a face of a light-emitting block (lava included) in `TerrainVertex::layer`,
-/// for HDR output's highlights (`gfx/hdr.rs`): the sprite layer stays below it.
-pub const EMISSIVE_LAYER: u16 = 1 << 14;
-/// The flag bits of `TerrainVertex::layer`; the rest is the sprite layer.
-pub const LAYER_FLAGS: u16 = OPAQUE_LAYER | EMISSIVE_LAYER;
+/// The bits of `TerrainVertex::color`'s alpha byte that hold the light its face emits, for
+/// HDR output's highlights (`gfx/hdr.rs`): 15 minus the level, so the usual 0xFF means none.
+/// The byte's other four bits stay set.
+pub const EMISSION_BITS: u32 = 0x0F00_0000;
+/// `color` marked as emitting light `level` (0 to 15).
+pub fn emitting(color: u32, level: u8) -> u32 {
+    color & !EMISSION_BITS | u32::from(15 - level.min(15)) << 24
+}
 const UNSET: u32 = u32::MAX;
 const NO_BIOME: u16 = u16::MAX;
 /// The `ColorResolver`s `ClientLevel` caches block tints for.
@@ -880,18 +891,12 @@ impl Mesher<'_> {
                 [p[0] + origin[0], p[1] + origin[1], p[2] + origin[2]],
                 q.uv[i],
                 // Opaque leaves (forceOpaque) draw in the solid layer: no alpha cutout.
-                face.layer as u16
-                    | if !self.cutout_leaves && state.leaves {
-                        OPAQUE_LAYER
-                    } else {
-                        0
-                    }
-                    | if state.emission > 0 || q.light_emission > 0 {
-                        EMISSIVE_LAYER
-                    } else {
-                        0
-                    },
-                pack_rgb(rgb),
+                if !self.cutout_leaves && state.leaves {
+                    face.layer as u16 | OPAQUE_LAYER
+                } else {
+                    face.layer as u16
+                },
+                emitting(pack_rgb(rgb), state.emission.max(q.light_emission)),
                 pack_coords(lighting::with_emission(coords[i], q.light_emission)),
             ));
         }

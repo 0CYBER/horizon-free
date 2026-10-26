@@ -227,8 +227,11 @@ pub(super) fn tesselate(
     } else {
         0xFF_FFFF
     };
+    // Lava emits light level 15.
+    let emission = if water { 0 } else { 15 };
     let color = |by: f32| {
-        pack_rgb([16, 8, 0].map(|shift| lighting::scale((tint >> shift & 255) as i32, by) as u32))
+        let rgb = [16, 8, 0].map(|shift| lighting::scale((tint >> shift & 255) as i32, by) as u32);
+        crate::mesher::emitting(pack_rgb(rgb), emission)
     };
     let height = |p: [i32; 3]| -> f32 {
         let s = at(p);
@@ -297,11 +300,7 @@ pub(super) fn tesselate(
             Some(tables.water_overlay),
         )
     } else {
-        (
-            tables.lava_still | crate::mesher::EMISSIVE_LAYER,
-            tables.lava_flow | crate::mesher::EMISSIVE_LAYER,
-            None,
-        )
+        (tables.lava_still, tables.lava_flow, None)
     };
     let target = if water {
         &mut out.translucent
