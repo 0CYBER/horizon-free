@@ -961,6 +961,16 @@ fn species_ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     }
     match m.species() {
         Species::Enderman => super::enderman::ai_step(m, w, events),
+        // Endermite.aiStep: `counter` is the life; an endermite not required
+        // to persist is discarded at 2400.
+        Species::Endermite => {
+            if !m.persistent {
+                m.extra.counter += 1;
+            }
+            if m.extra.counter >= 2400 {
+                m.removed = true;
+            }
+        }
         Species::Wolf => super::tame::ai_step(m, w, events),
         Species::Cat => super::tame::cat_ai_step(m, events),
         Species::Blaze => super::nether::blaze_ai_step(m, events),
