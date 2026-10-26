@@ -256,7 +256,8 @@ impl Game<'_> {
             grey,
             false,
         );
-        batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
+        let inventory = self.translate("container.inventory", "Inventory");
+        batch.text(atlas, &inventory, ox + 8.0, oy + 72.0, grey, false);
         self.paint_screen(batch, ox, oy, rest, true);
     }
     /// `gui.togglable_slot` over an empty, enabled grid slot.
