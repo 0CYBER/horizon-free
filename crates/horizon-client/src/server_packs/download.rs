@@ -34,7 +34,21 @@ pub fn headers(name: &str, uuid: u128) -> Vec<(&'static str, String)> {
     ]
 }
 
-type Job = (Vec<Request>, Vec<(&'static str, String)>);
+/// `HttpUtil.DownloadProgressListener`, on the channel a batch was given.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Progress {
+    /// `requestStart`: the batch's next request begins.
+    RequestStart,
+    /// `downloadStart`: the response came, with its Content-Length if it
+    /// said one.
+    DownloadStart(Option<u64>),
+    /// `downloadedBytes`: what this request has written so far.
+    Bytes(u64),
+    /// `requestFinished`: whether it succeeded.
+    RequestFinished(bool),
+}
+
+type Job = (Vec<Request>, Vec<(&'static str, String)>, Sender<Progress>);
 
 /// `DownloadQueue`: batches download in order, on one thread.
 pub struct Queue {
@@ -50,16 +64,24 @@ impl Queue {
         std::thread::Builder::new()
             .name("download-queue".into())
             .spawn(move || {
-                for (requests, headers) in todo {
-                    if finished.send(run(&dir, &requests, &headers)).is_err() {
+                for (requests, headers, progress) in todo {
+                    if finished
+                        .send(run(&dir, &requests, &headers, &progress))
+                        .is_err()
+                    {
                         break;
                     }
                 }
             })?;
         Ok(Self { jobs, done })
     }
-    pub fn download(&self, requests: Vec<Request>, headers: Vec<(&'static str, String)>) {
-        let _ = self.jobs.send((requests, headers));
+    pub fn download(
+        &self,
+        requests: Vec<Request>,
+        headers: Vec<(&'static str, String)>,
+        progress: Sender<Progress>,
+    ) {
+        let _ = self.jobs.send((requests, headers, progress));
     }
     /// The batches finished since the last call.
     pub fn finished(&self) -> Vec<Batch> {
@@ -68,11 +90,18 @@ impl Queue {
 }
 
 /// `DownloadQueue.runDownload`: each pack into `<dir>/<id>/`, logged.
-fn run(dir: &Path, requests: &[Request], headers: &[(&'static str, String)]) -> Batch {
+fn run(
+    dir: &Path,
+    requests: &[Request],
+    headers: &[(&'static str, String)],
+    progress: &Sender<Progress>,
+) -> Batch {
     let mut batch = Batch::default();
     for request in requests {
         let id = horizon_protocol::crypto::uuid_string(request.id);
-        let result = download_file(&dir.join(&id), request, headers, MAX_SIZE);
+        let _ = progress.send(Progress::RequestStart);
+        let result = download_file(&dir.join(&id), request, headers, MAX_SIZE, progress);
+        let _ = progress.send(Progress::RequestFinished(result.is_ok()));
         // DownloadQueue.LogEntry, its fields in the codec's order.
         let mut entry = vec![
             ("id", serde_json::Value::from(id)),
@@ -165,6 +194,7 @@ pub fn download_file(
     request: &Request,
     headers: &[(&'static str, String)],
     max_size: u64,
+    progress: &Sender<Progress>,
 ) -> Result<PathBuf, String> {
     let target = request.sha1.as_ref().map(|sha1| dir.join(sha1));
     if let (Some(target), Some(sha1)) = (&target, &request.sha1) {
@@ -198,6 +228,7 @@ pub fn download_file(
         .header("Content-Length")
         .and_then(|v| v.trim().parse::<u64>().ok());
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let _ = progress.send(Progress::DownloadStart(size));
     if let Some(size) = size
         && size > max_size
     {
@@ -206,9 +237,13 @@ pub fn download_file(
         ));
     }
     let mut input = response.into_reader();
+    let mut report = |written: u64| {
+        let _ = progress.send(Progress::Bytes(written));
+    };
     match (&target, &request.sha1) {
         (Some(target), Some(sha1)) => {
-            let actual = save_hashed(&mut input, target, max_size).map_err(|e| e.to_string())?;
+            let actual = save_hashed(&mut input, target, max_size, &mut report)
+                .map_err(|e| e.to_string())?;
             if &actual != sha1 {
                 return Err(format!(
                     "Hash of downloaded file ({actual}) did not match requested ({sha1})"
@@ -218,7 +253,7 @@ pub fn download_file(
         }
         _ => {
             let tmp = dir.join(format!("download{:016x}.tmp", rand_suffix()));
-            let result = save_hashed(&mut input, &tmp, max_size).and_then(|actual| {
+            let result = save_hashed(&mut input, &tmp, max_size, &mut report).and_then(|actual| {
                 let path = dir.join(&actual);
                 if matches(&path, &actual) {
                     touch(&path);
@@ -237,7 +272,12 @@ fn rand_suffix() -> u64 {
     RandomState::new().hash_one(std::time::Instant::now())
 }
 /// `downloadAndHash`: write what comes, at most `max_size` bytes.
-fn save_hashed(input: &mut dyn Read, path: &Path, max_size: u64) -> io::Result<String> {
+fn save_hashed(
+    input: &mut dyn Read,
+    path: &Path,
+    max_size: u64,
+    progress: &mut dyn FnMut(u64),
+) -> io::Result<String> {
     let mut out = fs::File::create(path)?;
     let mut hasher = Sha1::new();
     let mut buffer = [0u8; 8196];
@@ -248,6 +288,7 @@ fn save_hashed(input: &mut dyn Read, path: &Path, max_size: u64) -> io::Result<S
             break;
         }
         read_so_far += n as u64;
+        progress(read_so_far);
         if read_so_far > max_size {
             return Err(io::Error::other(format!(
                 "Filesize was bigger than maximum allowed (got >= {read_so_far}, limit was {max_size})"
@@ -366,7 +407,14 @@ mod tests {
             url,
             sha1: Some(sha1(&body)),
         };
-        let path = download_file(&dir, &request, &headers("Alex", 0xab), MAX_SIZE).unwrap();
+        let path = download_file(
+            &dir,
+            &request,
+            &headers("Alex", 0xab),
+            MAX_SIZE,
+            &channel().0,
+        )
+        .unwrap();
         assert_eq!(path, dir.join(sha1(&body)));
         assert_eq!(fs::read(&path).unwrap(), body);
         let sent = server.join().unwrap();
@@ -377,7 +425,10 @@ mod tests {
             url: "http://127.0.0.1:9/gone.zip".into(),
             ..request
         };
-        assert_eq!(download_file(&dir, &cached, &[], MAX_SIZE).unwrap(), path);
+        assert_eq!(
+            download_file(&dir, &cached, &[], MAX_SIZE, &channel().0).unwrap(),
+            path
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -390,7 +441,7 @@ mod tests {
             url,
             sha1: Some("0".repeat(40)),
         };
-        let err = download_file(&dir, &wrong, &[], MAX_SIZE).unwrap_err();
+        let err = download_file(&dir, &wrong, &[], MAX_SIZE, &channel().0).unwrap_err();
         assert!(err.contains("did not match requested"), "{err}");
         server.join().unwrap();
         let dead = Request {
@@ -398,7 +449,7 @@ mod tests {
             url: "http://127.0.0.1:9/pack.zip".into(),
             sha1: None,
         };
-        assert!(download_file(&dir.join("dead"), &dead, &[], MAX_SIZE).is_err());
+        assert!(download_file(&dir.join("dead"), &dead, &[], MAX_SIZE, &channel().0).is_err());
         assert!(!dir.join("dead").exists());
         let (url, server) = serve("200 OK", vec![0; 100]);
         let large = Request {
@@ -406,7 +457,7 @@ mod tests {
             url,
             sha1: None,
         };
-        let err = download_file(&dir, &large, &[], 10).unwrap_err();
+        let err = download_file(&dir, &large, &[], 10, &channel().0).unwrap_err();
         assert!(err.contains("bigger than maximum"), "{err}");
         let _ = server.join();
         let (url, server) = serve("404 Not Found", Vec::new());
@@ -415,7 +466,7 @@ mod tests {
             url,
             sha1: None,
         };
-        assert!(download_file(&dir, &missing, &[], MAX_SIZE).is_err());
+        assert!(download_file(&dir, &missing, &[], MAX_SIZE, &channel().0).is_err());
         server.join().unwrap();
         fs::remove_dir_all(dir).unwrap();
     }
@@ -425,6 +476,7 @@ mod tests {
         let dir = scratch();
         let (url, server) = serve("200 OK", b"zip".to_vec());
         let queue = Queue::open(dir.clone()).unwrap();
+        let (progress, events) = channel();
         let id = 0x5b2c_7a4e_1f3d_4c8b_9a6e_2d4f_8b1c_3e5a;
         queue.download(
             vec![Request {
@@ -433,6 +485,7 @@ mod tests {
                 sha1: None,
             }],
             Vec::new(),
+            progress,
         );
         let batch = loop {
             if let Some(b) = queue.finished().pop() {
@@ -445,6 +498,16 @@ mod tests {
             .join("5b2c7a4e-1f3d-4c8b-9a6e-2d4f8b1c3e5a")
             .join(sha1(b"zip"));
         assert_eq!(batch.downloaded, [(id, file)]);
+        // HttpUtil.downloadFile's listener calls, in order.
+        assert_eq!(
+            events.iter().collect::<Vec<_>>(),
+            [
+                Progress::RequestStart,
+                Progress::DownloadStart(Some(3)),
+                Progress::Bytes(3),
+                Progress::RequestFinished(true),
+            ]
+        );
         let log = fs::read_to_string(dir.join("log.json")).unwrap();
         let entry: serde_json::Value = serde_json::from_str(log.trim()).unwrap();
         assert_eq!(entry["id"], "5b2c7a4e-1f3d-4c8b-9a6e-2d4f8b1c3e5a");

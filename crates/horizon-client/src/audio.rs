@@ -161,6 +161,9 @@ pub struct Audio {
     /// How many times each positional sound played (the control socket's `status`),
     /// with or without an audio device.
     pub heard: std::collections::BTreeMap<String, u32>,
+    /// How many times each selection was stopped ("record *", "* minecraft:…", `*` for
+    /// any), with or without an audio device, as `heard`.
+    pub stopped: std::collections::BTreeMap<String, u32>,
 }
 fn decode(path: &Path) -> Option<(Vec<f32>, u32)> {
     use symphonia::core::{
@@ -595,6 +598,7 @@ impl Audio {
             source_override: None,
             capture: None,
             heard: Default::default(),
+            stopped: Default::default(),
         }
     }
     #[cfg(not(feature = "audio"))]
@@ -825,6 +829,14 @@ impl Audio {
     /// and/or a source.
     pub fn stop_sounds(&mut self, event: Option<&str>, source: Option<usize>) {
         let event = event.map(crate::sound_events::normalize);
+        let selection = format!(
+            "{} {}",
+            source
+                .and_then(|s| crate::settings::SOUND_SOURCES.get(s))
+                .map_or("*", |s| s),
+            event.as_deref().unwrap_or("*")
+        );
+        *self.stopped.entry(selection).or_default() += 1;
         self.engine
             .stop_matching(event.as_deref(), source, &mut self.backend);
     }

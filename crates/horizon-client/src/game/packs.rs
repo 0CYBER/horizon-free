@@ -203,6 +203,7 @@ impl Game<'_> {
             horizon_client::mobs::villager_hats::VillagerHats::load(root);
         horizon_client::ui::load_metadata(root);
         lang::set(lang::Language::load(&[&root.to_path_buf()], &lang::code()));
+        self.refresh_remote_language();
         self.audio.reload(root);
         self.clear_lod();
         self.streaming.reload_resources(&mut self.world, context);

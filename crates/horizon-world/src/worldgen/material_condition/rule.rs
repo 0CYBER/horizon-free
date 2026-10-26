@@ -1,5 +1,7 @@
 //! Compiled material rule composition, sharing the condition worker's context.
-use super::{Compiled, Context, MaterialCondition, MaterialConditions, MaterialSurfaceQueries};
+use super::{
+    Compiled, Context, Facts, MaterialCondition, MaterialConditions, MaterialSurfaceQueries,
+};
 use crate::{registry::BlockStateId, worldgen::DecodeError};
 use horizon_core::{
     density::DensitySampler,
@@ -207,6 +209,161 @@ impl<R: RandomSource> CompiledRule<R> {
                 Ok(None)
             }
         }
+    }
+}
+impl<R: RandomSource> CompiledRule<R>
+where
+    R::Positional: Clone,
+{
+    /// This rule where `facts` hold: conditions they decide are folded away,
+    /// with what can no longer produce a block, and a sequence stops at its
+    /// first child that always produces one. For every position the facts
+    /// cover it gives the block the whole rule gives.
+    fn specialize(&self, facts: Facts) -> Self {
+        match self {
+            Self::Empty => Self::Empty,
+            Self::Block(block) => Self::Block(*block),
+            Self::Bandlands => Self::Bandlands,
+            Self::OreVein {
+                blocks,
+                raw_ore_chance,
+                densities,
+                random,
+            } => Self::OreVein {
+                blocks: *blocks,
+                raw_ore_chance: *raw_ore_chance,
+                densities: *densities,
+                random: random.clone(),
+            },
+            Self::Condition { condition, rule } => match condition.decided(facts) {
+                Some(false) => Self::Empty,
+                Some(true) => rule.specialize(facts),
+                None => match rule.specialize(facts) {
+                    Self::Empty => Self::Empty,
+                    rule => Self::Condition {
+                        condition: condition.clone(),
+                        rule: Box::new(rule),
+                    },
+                },
+            },
+            Self::Sequence(children) => {
+                let mut result = Vec::new();
+                for child in children {
+                    let child = child.specialize(facts);
+                    if matches!(child, Self::Empty) {
+                        continue;
+                    }
+                    let last = child.always_produces();
+                    result.push(child);
+                    if last {
+                        break;
+                    }
+                }
+                match result.len() {
+                    0 => Self::Empty,
+                    1 => result.pop().unwrap(),
+                    _ => Self::Sequence(result),
+                }
+            }
+        }
+    }
+    /// Whether applying this rule never gives `None` (only an error).
+    fn always_produces(&self) -> bool {
+        match self {
+            Self::Block(_) | Self::Bandlands => true,
+            Self::Sequence(children) => children.iter().any(Self::always_produces),
+            Self::Empty | Self::OreVein { .. } | Self::Condition { .. } => false,
+        }
+    }
+    fn inputs(&self, gradients: &mut Vec<(i32, i32)>, surface: &mut bool) {
+        match self {
+            Self::Condition { condition, rule } => {
+                condition.inputs(gradients, surface);
+                rule.inputs(gradients, surface);
+            }
+            Self::Sequence(children) => {
+                for child in children {
+                    child.inputs(gradients, surface);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+/// A rule specialised (`CompiledRule::specialize`) for each band of y between
+/// its vertical gradients' bounds, and below and at or above the preliminary
+/// surface when the rule asks for it: most blocks of a column, deep stone,
+/// then evaluate only the few rules that can apply there.
+pub struct SurfaceVariants {
+    /// The first y of each band after the first, ascending.
+    starts: Vec<i32>,
+    /// The rule index per band (two per band, below then above the surface,
+    /// when `surface`).
+    rules: Vec<usize>,
+    pub surface: bool,
+}
+impl SurfaceVariants {
+    /// The rule for a block at `y`, `above` the preliminary surface (ignored
+    /// unless `surface`).
+    #[inline]
+    pub fn rule(&self, y: i32, above: bool) -> usize {
+        let band = self.starts.partition_point(|&start| start <= y);
+        if self.surface {
+            self.rules[band * 2 + usize::from(above)]
+        } else {
+            self.rules[band]
+        }
+    }
+}
+impl<R: RandomSource, S: MaterialSurfaceQueries> MaterialConditions<R, S>
+where
+    R::Positional: Clone,
+{
+    /// Add the specialised variants of rule `index` (`SurfaceVariants`).
+    pub fn surface_variants(&mut self, index: usize) -> Result<SurfaceVariants, MaterialRuleError> {
+        let rule = self
+            .rules
+            .get(index)
+            .ok_or(MaterialRuleError::UnknownRule)?;
+        let (mut gradients, mut surface) = (Vec::new(), false);
+        rule.inputs(&mut gradients, &mut surface);
+        // A gradient is true at and below `low`, random between, false at
+        // and above `high`: it is decided within each band these bound.
+        let mut starts: Vec<i32> = gradients
+            .iter()
+            .flat_map(|&(low, high)| [low.saturating_add(1), high])
+            .collect();
+        starts.sort_unstable();
+        starts.dedup();
+        let mut variants = Vec::new();
+        for band in 0..=starts.len() {
+            let low = if band == 0 {
+                i32::MIN
+            } else {
+                starts[band - 1]
+            };
+            let high = starts.get(band).map_or(i32::MAX, |&next| next - 1);
+            let sides: &[Option<bool>] = if surface {
+                &[Some(false), Some(true)]
+            } else {
+                &[None]
+            };
+            for &above_surface in sides {
+                let facts = Facts {
+                    low,
+                    high,
+                    above_surface,
+                };
+                variants.push(self.rules[index].specialize(facts));
+            }
+        }
+        let first = self.rules.len();
+        self.rules.extend(variants);
+        Ok(SurfaceVariants {
+            starts,
+            rules: (first..self.rules.len()).collect(),
+            surface,
+        })
     }
 }
 impl<R: RandomSource, S: MaterialSurfaceQueries> MaterialConditions<R, S> {

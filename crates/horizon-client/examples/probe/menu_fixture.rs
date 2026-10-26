@@ -169,6 +169,7 @@ pub fn main() -> horizon_client::Result<()> {
             cooking_timer: menu.data[2],
             cooking_total: menu.data[3],
             speed: 1.0,
+            recipes_used: Default::default(),
         });
         menu.drops.clear();
         menu.equipped.clear();
