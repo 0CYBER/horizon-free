@@ -505,7 +505,10 @@ impl Game<'_> {
             let riding = self.riding.is_some();
             let wanted = !riding && !flying && (on_soul || (active && !on_ground));
             active = wanted;
-            wear = on_ground && on_soul && self.world.random.next_float() < 0.04;
+            // `random_chance` is the first term of the wear's `all_of`: it
+            // draws from the level random before the block is looked at.
+            let roll = self.world.random.next_float() < 0.04;
+            wear = roll && on_ground && on_soul;
         }
         fx.applied_level = if active { level } else { 0 };
         // `Entity.getKnownMovement` horizontal speed of at least 1.0E-5.
@@ -529,10 +532,13 @@ impl Game<'_> {
         if wear && !self.creative {
             self.wear_boots(1);
         }
+        if level == 0 {
+            return;
+        }
+        let r = &mut self.world.random;
         if tick_effects {
             // `spawn_particles`: in the bounding box, 0.1 above the feet, thrown
             // back against the movement (-0.2) and up (0.1).
-            let r = &mut self.world.random;
             let x = position.x + (r.next_double() - 0.5) * f64::from(width);
             let z = position.z + (r.next_double() - 0.5) * f64::from(width);
             self.particles.send_particles(
@@ -542,16 +548,18 @@ impl Game<'_> {
                 1.0,
                 0,
             );
-            // `play_sound`: 35% chance, volume 0.6, pitch 0.6 to 1.0.
-            if r.next_float() < 0.35 {
-                let pitch = r.next_float() * 0.4 + 0.6;
-                self.audio.play(
-                    "minecraft:particle.soul_escape",
-                    Some([position.x, position.y, position.z]),
-                    0.6,
-                    pitch,
-                );
-            }
+        }
+        // `play_sound`: its `random_chance` (35%) comes first in its `all_of`,
+        // so the level random is drawn every tick the boots are worn; volume
+        // 0.6, pitch 0.6 to 1.0.
+        if r.next_float() < 0.35 && tick_effects {
+            let pitch = r.next_float() * 0.4 + 0.6;
+            self.audio.play(
+                "minecraft:particle.soul_escape",
+                Some([position.x, position.y, position.z]),
+                0.6,
+                pitch,
+            );
         }
     }
     /// `ItemStack.hurtAndBreak` on the worn boots (`change_item_damage`):
