@@ -421,10 +421,10 @@ pub fn drop_off_nectar(m: &mut Mob) {
     set_has_nectar(m, false);
     st(m).crops_grown = 0;
 }
-/// `Bee.setStayOutOfHiveCountdown`, which in 26.3 only resets the time
-/// without nectar.
+/// `Bee.setStayOutOfHiveCountdown`: the bee will not enter a hive for 400
+/// ticks (the hive passes that when a sedated hive lets its bees out).
 pub fn set_stay_out_of_hive_countdown(m: &mut Mob) {
-    st(m).ticks_without_nectar = 0;
+    st(m).stay_out_of_hive = 400;
 }
 fn drop_hive(m: &mut Mob) {
     let b = st(m);
