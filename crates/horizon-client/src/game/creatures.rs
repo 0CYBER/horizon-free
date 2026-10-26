@@ -3342,6 +3342,7 @@ fn to_loot(stack: &ItemStack) -> horizon_world::loot::LootStack {
         exploration: None,
         ominous_amplifier: None,
         stew_effects: Vec::new(),
+        names: Vec::new(),
     }
 }
 /// A generated loot stack as a Horizon item stack.
@@ -3360,6 +3361,9 @@ fn from_loot(stack: &horizon_world::loot::LootStack) -> ItemStack {
     }
     if let Some(amplifier) = stack.ominous_amplifier.filter(|a| *a > 0) {
         item.data_mut().ominous_amplifier = Some(amplifier as u8);
+    }
+    for (id, text) in &stack.names {
+        item.data_mut().set_loot_name(id, text);
     }
     item
 }
