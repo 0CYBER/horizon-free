@@ -554,6 +554,43 @@ fn input_claims_keys_and_events() {
 }
 
 #[test]
+fn the_players_key_choice_wins() {
+    let chat = |mods: &mut Mods| -> Vec<String> {
+        mods.drain()
+            .into_iter()
+            .filter_map(|o| match o {
+                Output::Chat { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    assert!(mods.command("input_claim"));
+    // Its keys alone give it a page in Options > Mods, where the game lists them.
+    assert!(mods.settings_widgets(0).is_empty() && mods.entries()[0].has_ui_settings());
+    // Rebinding while held lets the old key go.
+    mods.key("key.keyboard.r", true);
+    assert!(mods.rebind(0, "wheel", "key.mouse.4"));
+    assert_eq!(mods.keys_of(0)[0].key, "key.mouse.4");
+    mods.key("key.keyboard.r", false);
+    mods.key("key.mouse.4", true);
+    assert!(!mods.rebind(0, "wheel", "R") && !mods.rebind(0, "nope", "key.keyboard.g"));
+    chat(&mut mods);
+    assert!(mods.command("input_poll"));
+    assert_eq!(
+        chat(&mut mods),
+        ["key-down wheel", "key-up wheel", "key-down wheel"]
+    );
+    // A choice saved earlier replaces the default, registered before or after.
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    mods.set_bindings(|_| vec![("wheel", "key.keyboard.g"), ("bad", "G")]);
+    assert!(mods.command("input_claim"));
+    assert_eq!(mods.keys_of(0)[0].key, "key.keyboard.g");
+    mods.set_bindings(|_| vec![("wheel", "key.keyboard.h")]);
+    assert_eq!(mods.keys_of(0)[0].key, "key.keyboard.h");
+}
+
+#[test]
 fn input_wheel_is_the_mods_while_claimed() {
     let mut mods = load("horizon_mods_test_ui_guest.hmod");
     let chat = |mods: &mut Mods| -> Vec<String> {
