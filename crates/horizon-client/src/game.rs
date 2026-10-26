@@ -5141,7 +5141,11 @@ impl Game<'_> {
             let delay = horizon_client::attack_strength::delay(self.main_hand_attack_speed());
             let strength = self.hand_strength.scale(0.0, self.main_hand_attack_speed());
             // The 3D crosshair (F3) takes the 2D one's place.
-            if self.camera_type.first_person() && !spectator && !self.debug_crosshair() {
+            // Hud.extractCrosshair: a spectator only sees it over something to open.
+            if self.camera_type.first_person()
+                && (!spectator || self.spectator_crosshair())
+                && !self.debug_crosshair()
+            {
                 let attack = (indicator == 1).then_some(strength);
                 let full = attack.is_some_and(|a| {
                     hud_layout::full_attack_indicator(a, delay, self.crosshair_living())
