@@ -4222,7 +4222,7 @@ def check_occupied_horse(host, guest, out):
                              and math.dist(m['pos'], at) < 0.1)
                 if occupied:
                     # Assert the setup too: a missing passenger would make this a false positive.
-                    passengers_nbt = player('command', command=f'data get entity @e[tag={tag},limit=1] Passengers')
+                    passengers_nbt = host('command', command=f'data get entity @e[tag={tag},limit=1] Passengers')
                     assert 'minecraft:zombie' in json.dumps(passengers_nbt), passengers_nbt
                 player.raw('look-at', at[0], y + 0.8, at[2])
                 player.raw('mouse', 'right', 'click')
