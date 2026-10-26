@@ -199,6 +199,9 @@ fn generated_block_entity(block: &str, nbt: &Compound) -> Option<BlockEntity> {
         BlockEntity::Vault(v) => **v = crate::vault::Vault::load(&Tag::Compound(nbt.clone())),
         // BannerBlockEntity.loadAdditional: the End cities' black triangles.
         BlockEntity::Banner(b) => *b = crate::save::decode_banner(&Tag::Compound(nbt.clone())),
+        BlockEntity::EndGateway(g) => {
+            *g = crate::save::decode_end_gateway(&Tag::Compound(nbt.clone()))
+        }
         _ => {}
     }
     Some(entity)
@@ -241,6 +244,23 @@ pub fn block_entities(
 mod tests {
     use super::*;
     use horizon_world::loot::{ExplorationMap, LootStack};
+
+    #[test]
+    fn generated_end_gateway_keeps_its_exit() {
+        let Tag::Compound(nbt) = Tag::compound([
+            ("exit_portal", Tag::IntArray(vec![100, 50, 0])),
+            ("ExactTeleport", Tag::Byte(1)),
+        ]) else {
+            unreachable!()
+        };
+        let Some(BlockEntity::EndGateway(g)) =
+            generated_block_entity("minecraft:end_gateway", &nbt)
+        else {
+            panic!("gateway");
+        };
+        assert_eq!(g.exit_portal, Some([100, 50, 0]));
+        assert!(g.exact_teleport);
+    }
 
     #[test]
     fn placed_chest_loot_keeps_its_enchantments_and_potions() {
