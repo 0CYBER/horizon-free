@@ -12,7 +12,7 @@ use super::{
 };
 use horizon_core::geometry::trig::Mth;
 use horizon_core::{
-    geometry::{Aabb, Vec3},
+    geometry::{Aabb, Axis, Vec3},
     random::RandomSource,
 };
 use std::f32::consts::PI;
@@ -719,6 +719,7 @@ pub fn register_cat(m: &mut Mob) {
     g.add(1, Float);
     g.add(1, TamePanic(Panic::new(1.5)));
     g.add(2, SitWhenOrdered);
+    g.add(3, CatRelaxOnOwner::default());
     g.add(4, CatTempt(super::goals::Tempt::new(0.6, food, true)));
     g.add(
         4,
@@ -798,6 +799,192 @@ fn empty_above(w: &MobWorld, p: [i32; 3]) -> bool {
         .name
         .as_ref()
         == "minecraft:air"
+}
+/// `Cat.CatRelaxOnOwnerGoal`: while the owner sleeps, the cat lies down beside
+/// them, and may leave a morning gift when they wake up.
+#[derive(Clone, Debug, Default)]
+struct CatRelaxOnOwner {
+    goal: Option<[i32; 3]>,
+    on_bed_ticks: i32,
+}
+impl CatRelaxOnOwner {
+    /// `spaceIsOccupied`: another cat lying or relaxing within two blocks.
+    fn occupied(&self, m: &Mob, w: &MobWorld) -> bool {
+        let Some(g) = self.goal else { return true };
+        let area = Aabb::new(
+            Vec3::new(
+                f64::from(g[0]) - 2.0,
+                f64::from(g[1]) - 2.0,
+                f64::from(g[2]) - 2.0,
+            ),
+            Vec3::new(
+                f64::from(g[0]) + 3.0,
+                f64::from(g[1]) + 3.0,
+                f64::from(g[2]) + 3.0,
+            ),
+        );
+        w.others.iter().any(|o| {
+            o.species == Species::Cat && o.id != m.id && o.lying && o.bounds.intersects(area)
+        })
+    }
+    /// The owner's sleeping state, when this cat may relax on them.
+    fn sleeping_owner<'w>(m: &Mob, w: &'w MobWorld) -> Option<&'w super::PlayerView> {
+        w.player
+            .as_ref()
+            .filter(|p| m.extra.tame && !m.extra.sitting && p.sleeping)
+    }
+}
+impl Goal for CatRelaxOnOwner {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        0
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        let w = cx.w;
+        let Some(p) = Self::sleeping_owner(m, w) else {
+            return false;
+        };
+        if m.distance_sqr(p.position) > 100.0 {
+            return false;
+        }
+        let at = [
+            p.position.x.floor() as i32,
+            p.position.y.floor() as i32,
+            p.position.z.floor() as i32,
+        ];
+        if !has_tag(w, at, "minecraft:cats_can_lie_on") {
+            return false;
+        }
+        // The bed's foot: against `BedBlock.FACING`.
+        let back = match w.prop(at[0], at[1], at[2], "facing") {
+            Some("north") => [0, 0, 1],
+            Some("south") => [0, 0, -1],
+            Some("east") => [-1, 0, 0],
+            Some("west") => [1, 0, 0],
+            Some("up") => [0, -1, 0],
+            Some("down") => [0, 1, 0],
+            _ => [0, 0, 0],
+        };
+        self.goal = Some([at[0] + back[0], at[1] + back[1], at[2] + back[2]]);
+        !self.occupied(m, w)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        Self::sleeping_owner(m, cx.w).is_some() && self.goal.is_some() && !self.occupied(m, cx.w)
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if let Some(g) = self.goal {
+            m.extra.flag2 = false;
+            m.nav_move_to(
+                cx.w,
+                [f64::from(g[0]), f64::from(g[1]), f64::from(g[2])],
+                1.1,
+            );
+        }
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        m.extra.flag = false;
+        // The `gameplay/cat_waking_up_gift_chance` of the `day` timeline: 0.7
+        // from tick 23667 of the day to tick 362 of the next, 0 in between.
+        let day = cx.w.day_time.rem_euclid(24000);
+        let chance = if !cx.w.nether && !cx.w.end && !(362..23667).contains(&day) {
+            0.7
+        } else {
+            0.0
+        };
+        if cx.w.player.as_ref().is_some_and(|p| p.sleep_timer >= 100)
+            && m.random.next_float() < chance
+        {
+            give_morning_gift(m, cx);
+        }
+        self.on_bed_ticks = 0;
+        m.extra.relax_one = false;
+        m.nav_stop();
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let (Some(p), Some(g)) = (cx.w.player.as_ref(), self.goal) else {
+            return;
+        };
+        m.extra.flag2 = false;
+        m.nav_move_to(
+            cx.w,
+            [f64::from(g[0]), f64::from(g[1]), f64::from(g[2])],
+            1.1,
+        );
+        if m.distance_sqr(p.position) < 2.5 {
+            self.on_bed_ticks += 1;
+            if self.on_bed_ticks > reduced(16) {
+                m.extra.flag = true;
+                m.extra.relax_one = false;
+            } else {
+                m.look_at_speed(p.eye, 45.0, 45.0);
+                m.extra.relax_one = true;
+            }
+        } else {
+            m.extra.flag = false;
+        }
+    }
+}
+/// `CatRelaxOnOwnerGoal.giveMorningGift`: hop to a spot within five blocks
+/// (`randomTeleport`, avoiding `#dangerous_for_teleportation`) and drop a
+/// `gameplay/cat_morning_gift` item at its feet.
+fn give_morning_gift(m: &mut Mob, cx: &mut Cx) {
+    let w = cx.w;
+    let at = [
+        m.position.x.floor() as i32,
+        m.position.y.floor() as i32,
+        m.position.z.floor() as i32,
+    ];
+    let x = at[0] + m.random.next_int_bound(11).unwrap_or(5) - 5;
+    let y = at[1] + m.random.next_int_bound(5).unwrap_or(2) - 2;
+    let z = at[2] + m.random.next_int_bound(11).unwrap_or(5) - 5;
+    let tagged = |p: [i32; 3], tag| has_tag(w, p, tag);
+    let mut ground = y - 1;
+    while ground > crate::chunk::MIN_Y
+        && !tagged([x, ground, z], "minecraft:entities_can_teleport_to")
+    {
+        ground -= 1;
+    }
+    if w.world.loaded(x, z) && ground > crate::chunk::MIN_Y {
+        let feet = f64::from(ground + 1);
+        let half = f64::from(m.width()) / 2.0;
+        let b = Aabb::new(
+            Vec3::new(f64::from(x) - half, feet, f64::from(z) - half),
+            Vec3::new(
+                f64::from(x) + half,
+                feet + f64::from(m.height()),
+                f64::from(z) + half,
+            ),
+        );
+        let dangerous = |p| tagged(p, "minecraft:dangerous_for_teleportation");
+        let in_box = |f: &dyn Fn([i32; 3]) -> bool| {
+            (b.min(Axis::X).floor() as i32..=b.max(Axis::X).floor() as i32).any(|bx| {
+                (b.min(Axis::Y).floor() as i32..=b.max(Axis::Y).floor() as i32).any(|by| {
+                    (b.min(Axis::Z).floor() as i32..=b.max(Axis::Z).floor() as i32)
+                        .any(|bz| f([bx, by, bz]))
+                })
+            })
+        };
+        let fluids = w.fluids(b, feet);
+        if !dangerous([x, ground, z])
+            && w.no_collision(b)
+            && !(fluids.in_water || fluids.in_lava)
+            && !in_box(&dangerous)
+        {
+            m.position = Vec3::new(f64::from(x), feet, f64::from(z));
+            m.previous = m.position;
+            m.velocity = Vec3::ZERO;
+        }
+    }
+    let yaw = m.body_yaw * (PI / 180.0);
+    let here = [
+        m.position.x.floor() - f64::from(yaw.msin()),
+        m.position.y.floor(),
+        m.position.z.floor() + f64::from(yaw.mcos()),
+    ];
+    cx.events.push(MobEvent::DropGift {
+        table: "minecraft:gameplay/cat_morning_gift",
+        at: here,
+    });
 }
 /// `CatLieOnBlockGoal`: tame cats lie on beds and other warm blocks.
 #[derive(Clone, Debug)]
@@ -941,6 +1128,7 @@ impl Goal for OcelotAttack {
 /// `Cat.tick`: lying and relaxing amounts and the purr.
 pub fn cat_ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
     let lying = m.extra.flag;
+    let relaxing = m.extra.relax_one;
     let v = &mut m.anim.v;
     if lying {
         v[LIE] = (v[LIE] + 0.15).min(1.0);
@@ -949,8 +1137,12 @@ pub fn cat_ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
         v[LIE] = (v[LIE] - 0.22).max(0.0);
         v[LIE_TAIL] = (v[LIE_TAIL] - 0.13).max(0.0);
     }
-    v[RELAX] = (v[RELAX] - 0.13).max(0.0);
-    if lying && m.age.is_multiple_of(5) {
+    v[RELAX] = if relaxing {
+        (v[RELAX] + 0.1).min(1.0)
+    } else {
+        (v[RELAX] - 0.13).max(0.0)
+    };
+    if (lying || relaxing) && m.age.is_multiple_of(5) {
         let volume = 0.6 + 0.4 * (m.random.next_float() - m.random.next_float());
         events.push(MobEvent::Sound("entity.cat.purr", m.center(), volume, 1.0));
     }

@@ -373,6 +373,8 @@ mod tests {
             uuid: [0; 4],
             allies: Default::default(),
             remote: false,
+            sleeping: false,
+            sleep_timer: 0,
         }
     }
 

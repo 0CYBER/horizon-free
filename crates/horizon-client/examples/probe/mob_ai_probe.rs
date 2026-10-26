@@ -1060,6 +1060,8 @@ pub fn main() -> horizon_client::Result<()> {
                 uuid: PLAYER_UUID,
                 allies: Default::default(),
                 remote: false,
+                sleeping: false,
+                sleep_timer: 0,
             }
         });
         let mut scratch = LegacyRandom::new(0);

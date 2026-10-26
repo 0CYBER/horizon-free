@@ -196,6 +196,8 @@ impl Game<'_> {
             uuid: self.level.player_uuid.unwrap_or_default(),
             allies: std::sync::Arc::new(self.player_allies()),
             remote: false,
+            sleeping: self.sleeping.is_some(),
+            sleep_timer: self.sleep_timer,
         })
     }
     /// Biome facts at a position for finalizeSpawn and variant rules.
@@ -1037,6 +1039,22 @@ impl Game<'_> {
                     [0.0, 0.2, 0.0],
                     10,
                 ),
+                MobEvent::DropGift { table, at } => {
+                    let stacks =
+                        self.res
+                            .items()
+                            .loot_table(table, false, None, &mut self.world.random);
+                    for stack in stacks {
+                        // ItemEntity's own random motion.
+                        let r = &mut self.world.random;
+                        let v = [
+                            f64::from(r.next_float()) * 0.2 - 0.1,
+                            0.2,
+                            f64::from(r.next_float()) * 0.2 - 0.1,
+                        ];
+                        self.spawn_item(stack, at, v, 10);
+                    }
+                }
                 MobEvent::SetBlock { pos, state } => {
                     self.world.set(pos[0], pos[1], pos[2], state)?
                 }
