@@ -629,7 +629,11 @@ impl Mob {
             return;
         }
         let power = self.fall_distance + 1.0e-6 - self.kind.safe_fall_distance;
-        let damage = (power * self.kind.fall_damage_multiplier).floor();
+        let mut damage = (power * self.kind.fall_damage_multiplier).floor();
+        // Frog.calculateFallDamage: five points less than the base damage.
+        if self.species() == super::Species::Frog {
+            damage -= 5.0;
+        }
         if damage > 0.0 {
             let at = [self.position.x, self.position.y, self.position.z];
             let sound = if damage > 4.0 {
