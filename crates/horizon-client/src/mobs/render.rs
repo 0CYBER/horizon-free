@@ -946,25 +946,25 @@ fn draw_normals(
         return;
     }
     let normals = normals.part(p);
-    // `skips` is a name lookup: asking once per part, not once per polygon.
-    if poses.skips(part) {
-        return;
-    }
-    for poly in &part.polygons {
-        let normal = poly.vertex_normal(normals);
-        for v in poly.vertices {
-            let pos = m.transform_point3(glam::Vec3::new(v[0], v[1], v[2]) / 16.0);
-            out.push(Vertex {
-                normal,
-                pos: pos.to_array(),
-                uv: [
-                    uv[0] + (uv[2] - uv[0]) * v[3],
-                    uv[1] + (uv[3] - uv[1]) * v[4],
-                ],
-                layer: overlay,
-                color,
-                light,
-            });
+    // `skips` is a name lookup: ask once per part, not once per polygon. A part
+    // hidden this way still draws its children, so only the polygons are gated.
+    if !poses.skips(part) {
+        for poly in &part.polygons {
+            let normal = poly.vertex_normal(normals);
+            for v in poly.vertices {
+                let pos = m.transform_point3(glam::Vec3::new(v[0], v[1], v[2]) / 16.0);
+                out.push(Vertex {
+                    normal,
+                    pos: pos.to_array(),
+                    uv: [
+                        uv[0] + (uv[2] - uv[0]) * v[3],
+                        uv[1] + (uv[3] - uv[1]) * v[4],
+                    ],
+                    layer: overlay,
+                    color,
+                    light,
+                });
+            }
         }
     }
     for c in &part.children {
