@@ -526,6 +526,12 @@ pub fn encode_block_entity(
             }
         }
         BlockEntity::Sculk(s) => entries.extend(s.to_nbt()),
+        // CampfireBlockEntity.saveAdditional.
+        BlockEntity::Campfire(c) => {
+            entries.push(("Items", encode_items(&c.items)));
+            entries.push(("CookingTimes", Tag::IntArray(c.progress.to_vec())));
+            entries.push(("CookingTotalTimes", Tag::IntArray(c.total.to_vec())));
+        }
         BlockEntity::Crafter(c) => {
             entries.push(("Items", encode_items(&c.items)));
             entries.push((
@@ -677,8 +683,10 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
                         Tag::Int(n) => *n,
                         _ => continue,
                     };
-                    f.recipes_used
-                        .insert(id.to_string_lossy(), count.max(0) as u32);
+                    // Saves from before the key was namespaced hold both forms of an id.
+                    *f.recipes_used
+                        .entry(crate::containers::recipe_used_key(&id.to_string_lossy()))
+                        .or_insert(0) += count.max(0) as u32;
                 }
             }
         }
@@ -705,6 +713,18 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         }
         BlockEntity::Sign(sign) => sign.decode(tag),
         BlockEntity::Sculk(s) => s.load(tag),
+        // CampfireBlockEntity.loadAdditional: missing time arrays stay zeros.
+        BlockEntity::Campfire(c) => {
+            for (slot, item) in decode_items(tag.get("Items"), 4).into_iter().enumerate() {
+                c.items[slot] = item;
+            }
+            let ints = |key: &str| match tag.get(key) {
+                Some(Tag::IntArray(v)) => std::array::from_fn(|i| v.get(i).copied().unwrap_or(0)),
+                _ => [0; 4],
+            };
+            c.progress = ints("CookingTimes");
+            c.total = ints("CookingTotalTimes");
+        }
         BlockEntity::Crafter(c) => {
             for (slot, item) in decode_items(tag.get("Items"), 9).into_iter().enumerate() {
                 c.items[slot] = item;
@@ -3875,6 +3895,31 @@ mod tests {
         assert_eq!(back.redstone_signal(), 2);
     }
     #[test]
+    fn campfire_block_entity_round_trips() {
+        let mut c = crate::containers::Campfire::default();
+        c.items[1] = Some(crate::items::ItemStack::new("minecraft:beef", 1));
+        c.progress[1] = 120;
+        c.total[1] = 600;
+        let tag = encode_block_entity(
+            (3, 64, -2),
+            &crate::containers::BlockEntity::Campfire(Box::new(c.clone())),
+            "minecraft:soul_campfire",
+        );
+        // One block entity type for both campfires.
+        assert_eq!(text(tag.get("id")).as_deref(), Some("minecraft:campfire"));
+        let (pos, back) = decode_block_entity(&tag).expect("campfire");
+        assert_eq!(pos, (3, 64, -2));
+        let crate::containers::BlockEntity::Campfire(back) = back else {
+            panic!("not a campfire");
+        };
+        assert_eq!(*back, c);
+        // The update tag a server's clients get: the items alone.
+        let update =
+            crate::lan::chunks::entity_tag(&crate::containers::BlockEntity::Campfire(Box::new(c)))
+                .expect("update tag");
+        assert!(update.get("Items").is_some() && update.get("CookingTimes").is_none());
+    }
+    #[test]
     fn spawner_block_entity_round_trips() {
         // A dungeon spawner as vanilla saves it (`id` is mob_spawner, not the block).
         let saved = horizon_world::nbt::parse_snbt(
@@ -4383,5 +4428,29 @@ mod tests {
             panic!("a furnace back");
         };
         assert_eq!(back.recipes_used.get("minecraft:cooked_porkchop"), Some(&3));
+    }
+
+    /// A save written before the key was namespaced holds an id twice, once bare: vanilla
+    /// refuses such a furnace, so a load merges them under the full id.
+    #[test]
+    fn a_furnaces_recipes_used_merges_bare_and_full_ids() {
+        use crate::containers::BlockEntity;
+        let Some(BlockEntity::Furnace(mut f)) = BlockEntity::for_block("minecraft:furnace") else {
+            panic!("a furnace");
+        };
+        f.recipes_used
+            .insert("iron_ingot_from_smelting_iron_ore".to_owned(), 2);
+        f.recipes_used
+            .insert("minecraft:iron_ingot_from_smelting_iron_ore".to_owned(), 3);
+        let tag = encode_block_entity((1, 64, 2), &BlockEntity::Furnace(f), "minecraft:furnace");
+        let Some((_, BlockEntity::Furnace(back))) = decode_block_entity(&tag) else {
+            panic!("a furnace back");
+        };
+        assert_eq!(back.recipes_used.len(), 1);
+        assert_eq!(
+            back.recipes_used
+                .get("minecraft:iron_ingot_from_smelting_iron_ore"),
+            Some(&5)
+        );
     }
 }

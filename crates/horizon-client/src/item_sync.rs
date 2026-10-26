@@ -238,6 +238,46 @@ mod tests {
     use super::*;
     use horizon_protocol::registry::Ids;
 
+    /// A bundle's contents cross the wire, so a server's client can draw
+    /// its tooltip (BundleContents' stream codec: a list of templates).
+    #[test]
+    fn a_bundle_keeps_its_contents_across_the_wire() {
+        let mut components = vec![String::new(); 60];
+        components[component::BUNDLE_CONTENTS as usize] = "minecraft:bundle_contents".into();
+        let items = ["minecraft:air", "minecraft:bundle", "minecraft:stone"];
+        let builtin = Builtin {
+            registries: [
+                (
+                    "minecraft:item".to_owned(),
+                    Ids::from_names(items.iter().map(|s| s.to_string()).collect()),
+                ),
+                (
+                    "minecraft:data_component_type".to_owned(),
+                    Ids::from_names(components),
+                ),
+            ]
+            .into(),
+        };
+        let dynamic = Dynamic {
+            registries: Default::default(),
+        };
+        let mut bundle = ItemStack::new("minecraft:bundle", 1);
+        bundle.data_mut().bundle_contents = vec![ItemStack::new("minecraft:stone", 32)];
+        let wire = crate::lan::guest::stack_to_network(
+            |name| items.iter().position(|i| *i == name).unwrap_or(0) as i32,
+            |_, _| None,
+            &Some(bundle),
+        )
+        .unwrap();
+        let back = from_network(&wire, &builtin, &dynamic);
+        let contents = &back.data().expect("components").bundle_contents;
+        assert_eq!(contents.len(), 1);
+        assert_eq!(
+            (&*contents[0].item, contents[0].count),
+            ("minecraft:stone", 32)
+        );
+    }
+
     /// What a creative client sends (`stack_to_network`) comes back whole on
     /// the server: damage, both enchantment lists, repair cost, name, trim.
     #[test]
@@ -246,6 +286,7 @@ mod tests {
         for (id, name) in [
             (component::DAMAGE, "minecraft:damage"),
             (component::CUSTOM_NAME, "minecraft:custom_name"),
+            (component::ITEM_NAME, "minecraft:item_name"),
             (component::ENCHANTMENTS, "minecraft:enchantments"),
             (component::POTION_CONTENTS, "minecraft:potion_contents"),
             (component::REPAIR_COST, "minecraft:repair_cost"),
@@ -305,6 +346,10 @@ mod tests {
             .push((Arc::from("minecraft:sharpness"), 2));
         d.repair_cost = 9;
         d.custom_name = Some("Keeper".to_owned());
+        // A translatable item name reaches the client as the same component.
+        let item_name = Tag::compound([("translate", Tag::String("filled_map.monument".into()))]);
+        d.other
+            .push(("minecraft:item_name".into(), item_name.clone()));
         d.trim = Some((Arc::from("minecraft:gold"), Arc::from("minecraft:sentry")));
         let id = |registry: &str, name: &str| {
             builtin
@@ -334,6 +379,7 @@ mod tests {
         );
         assert_eq!(d.repair_cost, 9);
         assert_eq!(d.custom_name.as_deref(), Some("Keeper"));
+        assert_eq!(d.other("minecraft:item_name"), Some(&item_name));
         assert_eq!(
             d.trim,
             Some((Arc::from("minecraft:gold"), Arc::from("minecraft:sentry")))

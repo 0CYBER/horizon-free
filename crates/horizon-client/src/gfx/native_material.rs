@@ -36,7 +36,7 @@ fn horizon_material_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color
     out.clip = horizon_terrain_globals.view_proj * vec4(pos, 1.0);
     out.uv = uv;
     out.layer = layer;
-    out.tint = color;
+    out.tint = vec4(color.rgb, 1.0);
     let block = max(f32(light.y), horizon_terrain_dynamic_block_light(pos));
     let sky = f32(light.x);
     // 16 per level, 15 levels.
