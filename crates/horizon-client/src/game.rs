@@ -4754,7 +4754,10 @@ impl Game<'_> {
         if capture && !self.focused {
             return;
         }
-        if !capture {
+        if capture {
+            // The inventory's screens are behind us: no drag survives them.
+            self.reset_inventory_clicks();
+        } else {
             self.stop_mining();
         }
         // The real pointer takes over from an agent's.
@@ -5593,7 +5596,18 @@ impl Game<'_> {
             self.draw_inventory_effects(batch, (ox, oy), 176);
         }
     }
+    /// `AbstractContainerScreen` keeps `isQuickCrafting` and the drag it
+    /// belongs to on the screen; Horizon keeps them on the game, so they are
+    /// dropped when a screen closes. A press whose release never reaches the
+    /// screen (the pointer left the window, or the screen closed first) would
+    /// otherwise leave every later press on every later screen swallowed.
+    pub(super) fn reset_inventory_clicks(&mut self) {
+        self.inv_clicks = Default::default();
+        self.inv_drag = None;
+        self.last_inv_click = None;
+    }
     pub(super) fn close_container(&mut self) {
+        self.reset_inventory_clicks();
         self.close_station();
         self.mount_closed();
         self.recipe_ui.reset_screen();

@@ -275,4 +275,30 @@ mod tests {
             Release::Click(Input::QuickMove)
         );
     }
+
+    /// A press whose release never arrives (the pointer left the window, or
+    /// the screen closed first) leaves `isQuickCrafting` set; the next screen
+    /// starts with its own state, as `AbstractContainerScreen` does, so the
+    /// reset the game runs on open/close makes clicks work again.
+    #[test]
+    fn a_lost_release_does_not_wedge_the_next_screen() {
+        let mut clicks = Clicks::default();
+        let slot = Target::<usize>::Slot(3);
+        // Pressed with a stack carried: a quick craft drag starts, and its
+        // release is lost.
+        assert_eq!(clicks.press(&slot, Button::Left, false, false, false), None);
+        assert!(clicks.quick_crafting().is_some());
+        assert_eq!(
+            clicks.press(&slot, Button::Left, true, false, false),
+            None,
+            "the stuck drag swallows the next press"
+        );
+        // A new screen: fresh state, so the press is a normal click again.
+        clicks = Clicks::default();
+        assert!(clicks.quick_crafting().is_none());
+        assert_eq!(
+            clicks.press(&slot, Button::Left, true, false, false),
+            Some(Input::Pickup)
+        );
+    }
 }
