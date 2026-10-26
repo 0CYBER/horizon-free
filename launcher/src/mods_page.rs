@@ -14,10 +14,11 @@ use horizon_port_pack::check::Check;
 use std::collections::HashMap;
 
 /// The kinds, as the Mods page's tabs: name and icon.
-const KINDS: [(PackKind, &str, &str); 3] = [
+const KINDS: [(PackKind, &str, &str); 4] = [
     (PackKind::Mod, "Mods", "box"),
     (PackKind::Modpack, "Modpacks", "archive"),
     (PackKind::ResourcePack, "Resource packs", "image"),
+    (PackKind::Shader, "Shader packs", "zap"),
 ];
 /// Java mods checked at once.
 const CHECKING: usize = 2;
@@ -99,14 +100,18 @@ impl Mods {
 
     pub(super) fn new(cx: &mut App) -> Self {
         let (tx, rx) = channel();
+        let page = std::env::var("HORIZON_LAUNCHER_PAGE");
+        let kind = match page.as_deref() {
+            Ok("modpacks") => PackKind::Modpack,
+            Ok("shaders") => PackKind::Shader,
+            _ => PackKind::Mod,
+        };
         Self {
-            kind: if std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() == Ok("modpacks") {
-                PackKind::Modpack
-            } else {
-                PackKind::Mod
-            },
-            // `HORIZON_LAUNCHER_SOURCE=horizon` opens on Horizon's registry, for screenshots.
+            kind,
+            // `HORIZON_LAUNCHER_SOURCE=horizon` opens on Horizon's registry, for screenshots;
+            // shader packs are only there.
             source: match std::env::var("HORIZON_LAUNCHER_SOURCE").as_deref() {
+                _ if kind == PackKind::Shader => SourceId::Horizon,
                 Ok("horizon") => SourceId::Horizon,
                 _ => SourceId::Modrinth,
             },
@@ -602,9 +607,9 @@ impl Launcher {
         }
         let header = page_header(
             "Mods",
-            "Mods made for Horizon from its own reviewed registry, and Java mods, modpacks and \
-             resource packs from Modrinth: Horizon ports what a Java mod carries (blocks, items, \
-             recipes, worldgen) and says before you install what runs. Each file is checked \
+            "Mods and shader packs made for Horizon from its own reviewed registry, and Java \
+             mods, modpacks and resource packs from Modrinth: Horizon ports what a Java mod \
+             carries (blocks, items, recipes, worldgen) and says before you install what runs. Each file is checked \
              against its source's checksum before it reaches your game folder.",
             &t,
         );
@@ -615,6 +620,10 @@ impl Launcher {
                 let _ = this.update(cx, |this, cx| {
                     if this.mods.kind != kind {
                         this.mods.kind = kind;
+                        // Horizon's own shader packs are on its registry only.
+                        if kind == PackKind::Shader {
+                            this.mods.source = SourceId::Horizon;
+                        }
                         // Categories and loaders differ by kind.
                         this.mods.browse.filters = Default::default();
                         this.mods.browse.open = None;

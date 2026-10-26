@@ -28,16 +28,20 @@ pub enum Kind {
     Modpack,
     /// A Java mod: its content is ported ([`java`]).
     Mod,
+    /// One of Horizon's own shader packs (`.hshader`, docs/shaders.md), from Horizon's registry
+    /// only.
+    Shader,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 3] = [Kind::Mod, Kind::Modpack, Kind::ResourcePack];
+    pub const ALL: [Kind; 4] = [Kind::Mod, Kind::Modpack, Kind::ResourcePack, Kind::Shader];
 
     pub fn label(self) -> &'static str {
         match self {
             Kind::Mod => "Mods",
             Kind::ResourcePack => "Resource packs",
             Kind::Modpack => "Modpacks",
+            Kind::Shader => "Shader packs",
         }
     }
 
@@ -46,6 +50,7 @@ impl Kind {
     pub fn folder(self) -> Option<&'static str> {
         match self {
             Kind::ResourcePack => Some("resourcepacks"),
+            Kind::Shader => Some("shaderpacks"),
             Kind::Modpack | Kind::Mod => None,
         }
     }
@@ -237,6 +242,9 @@ pub trait Source: Send + Sync {
 
 /// What the launcher says wherever CurseForge would be.
 pub const CURSEFORGE_SOON: &str = "CurseForge support is coming soon.";
+/// What another source answers for shader packs: Horizon's own are on its registry only.
+pub const SHADERS_ON_HORIZON: &str =
+    "Horizon's shader packs are on Horizon's registry: pick Horizon.";
 
 /// The sources this launcher uses: Modrinth and Horizon's registry. CurseForge support is coming
 /// soon: its API needs a paid key, so no search or install goes to it; `curseforge` is kept for
@@ -277,6 +285,7 @@ pub fn support(kind: Kind, game_versions: &[String], loaders: &[String]) -> Supp
         Kind::Modpack => {
             Support::Partial("Horizon runs the mods it can port, from your own downloads.".into())
         }
+        Kind::Shader => Support::No("Not one of Horizon's own shader packs.".into()),
         Kind::Mod => {
             if !loaders.iter().any(|l| java::LOADERS.contains(&l.as_str())) {
                 Support::No("Not a Fabric, NeoForge or Forge mod.".into())

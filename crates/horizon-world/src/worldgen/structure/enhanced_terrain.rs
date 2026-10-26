@@ -306,7 +306,6 @@ mod tests {
             legacy: false,
             projection,
             waterlogging: None,
-            yung: None,
             enhanced_terrain: own.map(Arc::new),
             ground_level: 1,
         })

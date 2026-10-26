@@ -159,7 +159,7 @@ impl GameFiles {
 
 /// The layouts horizon-prepare reads in `folder`: the official launcher's, then ATLauncher's,
 /// which saves Mojang's version JSON as is in `configs/json/minecraft` and the client jar as
-/// the library `net.minecraft:client:<version>` (its `InstanceInstaller`).
+/// the library `net.minecraft:client:<version>`.
 fn layouts(folder: &Path, version: &str) -> [GameFiles; 2] {
     let files = |manifest: String, client: String, runtimes: &str| GameFiles {
         folder: folder.to_path_buf(),
@@ -191,9 +191,14 @@ fn layouts(folder: &Path, version: &str) -> [GameFiles; 2] {
 /// packages and Flatpak start it in.
 fn launcher_folders() -> Vec<(&'static str, PathBuf)> {
     let mut folders = vec![("the official launcher", minecraft_dir(None))];
+    // The same folders as the Horizon launcher's (launcher/src/sources.rs `known_folders`).
     let atlauncher: Vec<PathBuf> = if cfg!(target_os = "macos") {
         let app = Path::new("Applications/ATLauncher.app/Contents/Java");
-        vec![Path::new("/").join(app), home().join(app)]
+        vec![
+            home().join("Library/Application Support/ATLauncher"),
+            Path::new("/").join(app),
+            home().join(app),
+        ]
     } else if cfg!(windows) {
         std::env::var_os("APPDATA")
             .map(|d| PathBuf::from(d).join("ATLauncher"))
@@ -203,10 +208,8 @@ fn launcher_folders() -> Vec<(&'static str, PathBuf)> {
         let data = std::env::var_os("XDG_DATA_HOME")
             .filter(|d| !d.is_empty())
             .map_or_else(|| home().join(".local/share"), PathBuf::from);
-        vec![
-            data.join("atlauncher"),
-            home().join(".var/app/com.atlauncher.ATLauncher/data"),
-        ]
+        let flatpak = home().join(".var/app/com.atlauncher.ATLauncher/data");
+        vec![data.join("atlauncher"), flatpak.join("atlauncher"), flatpak]
     };
     folders.extend(atlauncher.into_iter().map(|dir| ("ATLauncher", dir)));
     let curseforge = if cfg!(windows) { "" } else { "Documents" };
@@ -267,31 +270,17 @@ pub(crate) fn import_copy(
     algorithm: &str,
     hint: &str,
 ) -> Result<PathBuf, String> {
-    fs::create_dir_all(destination.parent().unwrap()).map_err(|e| e.to_string())?;
-    if destination.exists() && digest(destination, algorithm)? == checksum {
-        return Ok(destination.to_path_buf());
-    }
-    if !source.is_file() {
-        return Err(format!("Missing {}. {hint}", source.display())
-            .trim()
-            .to_string());
-    }
-    let actual = digest(source, algorithm)?;
-    if actual != checksum {
-        return Err(format!(
-            "{} is not the pinned file: expected {algorithm} {checksum}, got {actual}",
-            source.display()
-        ));
-    }
-    let temporary = destination.with_file_name(format!(
-        ".{}.partial-{}",
-        destination.file_name().unwrap().to_string_lossy(),
-        std::process::id()
-    ));
-    let copied = fs::copy(source, &temporary).and_then(|_| fs::rename(&temporary, destination));
-    let _ = fs::remove_file(&temporary);
-    copied.map_err(|e| format!("{}: {e}", destination.display()))?;
-    Ok(destination.to_path_buf())
+    crate::files::Import::stage(source, destination, checksum, algorithm, false)
+        .map_err(|error| {
+            if !source.is_file() {
+                format!("Missing {}. {hint}", source.display())
+                    .trim()
+                    .to_string()
+            } else {
+                error
+            }
+        })?
+        .commit()
 }
 
 /// The pinned version JSON from the launcher's install. The launcher's copy wins over the
@@ -320,13 +309,22 @@ pub(crate) fn import_manifest(lock: &Lock, files: &GameFiles) -> Result<Value, S
         }
         let checksum = digest(source, "sha1")?;
         if !lock.manifest_accepted(&checksum) {
-            return Err(format!(
-                "{} is a {version} version file Horizon does not know yet (sha1 {checksum}); \
-                 Mojang may have republished it. Update Horizon, or report it if this is the latest release.",
-                source.display()
-            ));
-        }
-        if !(destination.exists() && digest(&destination, "sha1")? == checksum) {
+            // Another launcher's rewrite of Mojang's file (HMCL and PCL add their own fields to
+            // the same jars, #1772), or one Mojang republished: Mojang's own copy saved as the
+            // imported one is used instead.
+            let pinned = lock.pin("manifest_sha1")?;
+            if !(destination.exists() && lock.manifest_accepted(&digest(&destination, "sha1")?)) {
+                return Err(format!(
+                    "{} is not a {version} version file Horizon knows (sha1 {checksum}): your \
+                     launcher may have rewritten it, or Mojang republished it. Prepare from the \
+                     Horizon launcher, which downloads Mojang's own, or save \
+                     https://piston-meta.mojang.com/v1/packages/{pinned}/{version}.json as {} \
+                     and prepare again.",
+                    source.display(),
+                    destination.display()
+                ));
+            }
+        } else if !(destination.exists() && digest(&destination, "sha1")? == checksum) {
             fs::create_dir_all(&lock.directory).map_err(|e| e.to_string())?;
             fs::copy(source, &destination).map_err(|e| e.to_string())?;
         }
@@ -771,9 +769,17 @@ pub struct Artifacts {
 
 /// Reuses checked imports from this root or another installed version beside it.
 pub fn reuse_imported(root: &Path, log: Log) -> Result<bool, String> {
+    Ok(reuse_verified(root, log)?.is_some())
+}
+
+/// Keep this preparation's verified artifacts and client libraries for the exporters.
+pub(crate) fn reuse_verified(
+    root: &Path,
+    log: Log,
+) -> Result<Option<(Artifacts, Vec<PathBuf>)>, String> {
     let root = fs::canonicalize(root).map_err(|e| format!("{}: {e}", root.display()))?;
     let lock = Lock::read(&root)?;
-    let checked = |directory: PathBuf| -> Result<Vec<PathBuf>, String> {
+    let checked = |directory: PathBuf| -> Result<(Artifacts, Vec<PathBuf>), String> {
         let candidate = Lock {
             json: lock.json.clone(),
             version: lock.version.clone(),
@@ -782,17 +788,9 @@ pub fn reuse_imported(root: &Path, log: Log) -> Result<bool, String> {
         };
         let found = verify(&candidate)?;
         let client = client_libraries(&candidate, &found.manifest)?;
-        let mut files = vec![
-            candidate.directory.join("manifest.json"),
-            candidate.directory.join("jars/client.jar"),
-            candidate.directory.join("jars/server.jar"),
-            found.jars["server"].clone(),
-        ];
-        files.extend(found.libraries);
-        files.extend(client);
-        Ok(files)
+        Ok((found, client))
     };
-    if checked(lock.directory.clone()).is_ok() {
+    if let Ok((found, client_libraries)) = checked(lock.directory.clone()) {
         if [
             "prepared.json",
             "reports/client-inventory.json",
@@ -801,8 +799,6 @@ pub fn reuse_imported(root: &Path, log: Log) -> Result<bool, String> {
         .iter()
         .any(|path| !lock.directory.join(path).is_file())
         {
-            let found = verify(&lock)?;
-            let client_libraries = client_libraries(&lock, &found.manifest)?;
             write_import_metadata(
                 &root,
                 &lock,
@@ -814,10 +810,10 @@ pub fn reuse_imported(root: &Path, log: Log) -> Result<bool, String> {
             )?;
         }
         log(&format!("Using imported Minecraft {}", lock.version));
-        return Ok(true);
+        return Ok(Some((found, client_libraries)));
     }
     let Some(versions) = root.parent() else {
-        return Ok(false);
+        return Ok(None);
     };
     // Sibling discovery is intended for the launcher's versions/ folder.
     let mut siblings: Vec<_> = fs::read_dir(versions)
@@ -829,9 +825,17 @@ pub fn reuse_imported(root: &Path, log: Log) -> Result<bool, String> {
     siblings.sort();
     for sibling in siblings {
         let source = sibling.join(".local/minecraft").join(&lock.version);
-        let Ok(files) = checked(source.clone()) else {
+        let Ok((found, client)) = checked(source.clone()) else {
             continue;
         };
+        let mut files = vec![
+            source.join("manifest.json"),
+            source.join("jars/client.jar"),
+            source.join("jars/server.jar"),
+            found.jars["server"].clone(),
+        ];
+        files.extend(found.libraries);
+        files.extend(client);
         for file in files {
             let relative = file.strip_prefix(&source).map_err(|e| e.to_string())?;
             import_copy(
@@ -858,9 +862,9 @@ pub fn reuse_imported(root: &Path, log: Log) -> Result<bool, String> {
             lock.version,
             sibling.display()
         ));
-        return Ok(true);
+        return Ok(Some((found, client_libraries)));
     }
-    Ok(false)
+    Ok(None)
 }
 
 pub fn verify(lock: &Lock) -> Result<Artifacts, String> {
@@ -1215,6 +1219,50 @@ mod tests {
         }
     }
 
+    /// A launcher that rewrites Mojang's version file in the official layout (HMCL, PCL: the same
+    /// id and jars, its own fields, #1772) is refused with what to do, and Mojang's own copy saved
+    /// as the imported one is then used.
+    #[test]
+    fn a_rewritten_version_file_falls_back_to_mojangs() {
+        let root = std::env::temp_dir().join(format!("horizon-rewritten-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let mojang = r#"{"id":"9.9","javaVersion":{"majorVersion":25},"downloads":{"client":{"sha1":"c"},"server":{"sha1":"s"}}}"#;
+        let rewritten = r#"{"id":"9.9","javaVersion":{"majorVersion":25},"downloads":{"client":{"sha1":"c"},"server":{"sha1":"s"}},"patches":[],"root":true}"#;
+        let minecraft = root.join("minecraft");
+        fs::create_dir_all(minecraft.join("versions/9.9")).unwrap();
+        fs::write(minecraft.join("versions/9.9/9.9.json"), rewritten).unwrap();
+        fs::write(root.join("mojang.json"), mojang).unwrap();
+        let pinned = digest(&root.join("mojang.json"), "sha1").unwrap();
+        fs::write(
+            root.join("research-lock.json"),
+            format!(
+                r#"{{"minecraft":{{"version":"9.9","java_major":25,"manifest_sha1":"{pinned}","client_sha1":"c","server_sha1":"s"}}}}"#
+            ),
+        )
+        .unwrap();
+        let lock = Lock::read(&root).unwrap();
+        let destination = lock.directory.join("manifest.json");
+
+        let error = import_manifest(&lock, &game_files(Some(&minecraft), "9.9")).unwrap_err();
+        assert!(error.contains("may have rewritten it"), "{error}");
+        assert!(
+            error.contains(&format!("packages/{pinned}/9.9.json")),
+            "{error}"
+        );
+        assert!(
+            error.contains(&destination.display().to_string()),
+            "{error}"
+        );
+        assert!(!destination.exists());
+
+        fs::create_dir_all(&lock.directory).unwrap();
+        fs::copy(root.join("mojang.json"), &destination).unwrap();
+        let manifest = import_manifest(&lock, &game_files(Some(&minecraft), "9.9")).unwrap();
+        assert!(manifest.get("patches").is_none());
+        assert_eq!(digest(&destination, "sha1").unwrap(), pinned);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
     /// scanfee's Prism Launcher 26.3 install on a Mac (#1487): Prism keeps natives under its own
     /// names and never downloads Netty's native transport, which the game runs without. Preparing
     /// still checks every other library, and the transport whenever the launcher has it.
@@ -1387,7 +1435,7 @@ mod tests {
         );
         assert!(prepare(&atlauncher)
             .unwrap_err()
-            .contains("does not know yet"));
+            .contains("may have rewritten it"));
     }
 
     /// With no launcher's files in the chosen folder, the error names where Horizon looked and

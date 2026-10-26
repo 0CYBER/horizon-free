@@ -7,6 +7,7 @@
 //! behaviour, models, animations and sounds.
 pub mod ai;
 pub mod allay;
+pub mod ambient;
 pub mod anim;
 pub mod animal_brain;
 pub mod aquatic;
@@ -860,6 +861,9 @@ pub struct Mob {
     /// The skin texture of a player mob (`PlayerInfo.getSkin`), which
     /// replaces the type's default when its download is ready.
     pub skin: Option<String>,
+    /// A mannequin's `DATA_PROFILE` (ResolvableProfile): the profile's
+    /// `textures` property resolves to `skin` like a player's.
+    pub profile: Option<horizon_protocol::entity_data::Profile>,
 }
 /// Events a mob tick asks the game to act on.
 #[derive(Clone, Debug)]
@@ -1585,6 +1589,7 @@ impl Mob {
             rider: None,
             outbox: Vec::new(),
             skin: None,
+            profile: None,
             attrs: Attrs {
                 speed: kind.speed,
                 attack_damage: kind.attack_damage,

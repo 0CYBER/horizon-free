@@ -25,13 +25,23 @@ fn selects_a_compatible_compiler_and_runtime() {
             assert!(error.contains(&format!("java {runtime} (")), "{error}");
             return;
         }
-        let jdk = java::find(25, &[]).unwrap();
-        let expected = root.join(if scenario == "target-release" {
+        let jdk = if scenario == "runtime-only" {
+            java::find_runtime(25, &[])
+        } else {
+            java::find(25, &[])
+        }
+        .unwrap();
+        let expected = root.join(if scenario == "runtime-only" {
+            "jre25"
+        } else if scenario == "target-release" {
             "newer"
         } else {
             "jdk25"
         });
         for (actual, name) in [(&jdk.javac, "javac"), (&jdk.java, "java")] {
+            if scenario == "runtime-only" && name == "javac" {
+                continue;
+            }
             assert_eq!(
                 fs::canonicalize(actual).unwrap(),
                 fs::canonicalize(tool(&expected.join("bin"), name)).unwrap()
@@ -64,6 +74,7 @@ fn selects_a_compatible_compiler_and_runtime() {
     );
     for (home, compiler, runtime) in [
         ("jre21", None, "21.0.1"),
+        ("jre25", None, "25.0.1"),
         ("jdk21", Some("21.0.1"), "21.0.1"),
         ("jdk25", Some("25.0.1"), "25.0.1"),
         ("mixed", Some("25.0.1"), "21.0.1"),
@@ -83,6 +94,7 @@ fn selects_a_compatible_compiler_and_runtime() {
     }
     fs::write(root.join("failing/bin/java.exit"), "7").unwrap();
     let scenarios = vec![
+        ("runtime-only", Some("jre25"), vec!["jre21", "jre25"]),
         ("older-runtime", None, vec!["jre21", "jdk25"]),
         ("older-jdk", None, vec!["jdk21", "jdk25"]),
         ("incompatible-home", Some("mixed"), vec!["jdk25"]),

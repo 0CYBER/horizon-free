@@ -103,8 +103,8 @@ fn java_platform() -> Option<&'static str> {
 /// Downloads Mojang's Java runtime `component` (the version JSON's `javaVersion.component`, e.g.
 /// `java-runtime-epsilon`) into the game directory's `runtime` folder, as the official launcher
 /// lays it out: `<component>/<platform>/<component>/`. Each file is checked against its sha1;
-/// files already there and whole are kept. Mojang's runtimes are whole JDKs, javac included,
-/// which is what the exporters need.
+/// files already there and whole are kept. These also include javac for older release preparers;
+/// current releases can use an already installed runtime without it.
 pub fn java_runtime(
     component: &str,
     runtime: &Path,

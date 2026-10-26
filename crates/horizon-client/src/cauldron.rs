@@ -87,6 +87,19 @@ fn filled(player: &mut dyn Player, new: ItemStack, limit_creative: bool) {
     }
 }
 
+/// `LayeredCauldronBlock.handleEntityOnFireInside`: a burning entity in a
+/// water cauldron lowers it a level; a powder snow cauldron becomes a water
+/// cauldron of its level first, then lowers.
+pub fn extinguished(cauldron: &BlockState) -> BlockState {
+    if cauldron.name == "minecraft:powder_snow_cauldron" {
+        let mut water = cauldron.clone();
+        water.name = "minecraft:water_cauldron".into();
+        lowered(&water)
+    } else {
+        lowered(cauldron)
+    }
+}
+
 /// `LayeredCauldronBlock.lowerFillLevel`.
 fn lowered(cauldron: &BlockState) -> BlockState {
     let level: u8 = cauldron
@@ -294,5 +307,26 @@ pub fn interact(
             "minecraft:item.bucket.fill_powder_snow",
         ),
         _ => pass(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_burning_entity_lowers_water_and_melts_powder_snow() {
+        let water = |l| state("minecraft:water_cauldron", Some(l));
+        assert_eq!(extinguished(&water(3)), water(2));
+        assert_eq!(extinguished(&water(1)), state("minecraft:cauldron", None));
+        // Powder snow turns to water of its level, then lowers.
+        assert_eq!(
+            extinguished(&state("minecraft:powder_snow_cauldron", Some(3))),
+            water(2)
+        );
+        assert_eq!(
+            extinguished(&state("minecraft:powder_snow_cauldron", Some(1))),
+            state("minecraft:cauldron", None)
+        );
     }
 }
