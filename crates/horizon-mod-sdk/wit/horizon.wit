@@ -509,6 +509,62 @@ interface recipes {
     known: func() -> list<s32>;
 }
 
+/// Capability `ui` (experimental): a recipe viewer's panel beside the
+/// game's inventory and container screens (not the creative inventory), on
+/// the right of the screen. The game draws it with its own widgets and
+/// slots, pages it and keeps its search box; the mod says what it holds.
+/// The first loaded mod with a panel shows.
+interface browser {
+    /// An item to show: its id, a count (1 draws none) and its components
+    /// beyond the item's own, in vanilla's item syntax, or "".
+    record stack {
+        item: string,
+        count: u32,
+        components: string,
+    }
+    /// A click on an item of the panel, by its index in `set-items`'s list.
+    record click {
+        index: u32,
+        right: bool,
+    }
+    /// A key the mod registered (`input.register-key`) went down while the
+    /// pointer was on an item: a slot of the screen's, or the panel's.
+    record item-key {
+        key: string,
+        stack: stack,
+    }
+    /// A click on a slot of a recipe the panel shows (`set-recipes`).
+    record slot-click {
+        /// The recipe's index in `set-recipes`'s list and the slot's in
+        /// it; the results come after the slots.
+        recipe: u32,
+        slot: u32,
+        /// The stack the slot showed at that moment.
+        stack: stack,
+        right: bool,
+    }
+    variant event {
+        clicked(click),
+        /// The search box's text, each time the player changes it.
+        search(string),
+        key(item-key),
+        slot-clicked(slot-click),
+        /// The action button of the recipe at this index in
+        /// `set-recipes`'s list.
+        action(u32),
+        /// The player turned the recipes' page (`set-recipes`): the index
+        /// of the first recipe now shown.
+        page(u32),
+        /// The back button of `set-recipes`.
+        back,
+    }
+    /// The panel's items, at most 8192 (an empty list hides the panel).
+    set-items: func(items: list<stack>);
+    /// What the player did on the panel since the last poll, at most 256
+    /// kept.
+    poll: func() -> list<event>;
+}
+
 /// Capability `players`, server mods only (manifest `api = "0.3"`,
 /// experimental): the players on the server, and messages to them.
 interface players {
@@ -644,6 +700,7 @@ world horizon-ui-mod {
     import render;
     import input;
     import recipes;
+    import browser;
     export ui-events;
 }
 
@@ -662,4 +719,5 @@ world render-host {
 /// The game's side of capability `recipes` (imports only).
 world recipes-host {
     import recipes;
+    import browser;
 }

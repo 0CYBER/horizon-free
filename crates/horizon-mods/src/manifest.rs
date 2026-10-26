@@ -182,6 +182,10 @@ impl Capability {
         if interface == "log" {
             return Ok(None);
         }
+        // A recipe viewer's panel is part of capability `ui`.
+        if interface == "browser" {
+            return Ok(Some(Capability::Ui));
+        }
         Capability::ALL
             .into_iter()
             .filter(|c| *c != Capability::Registries)

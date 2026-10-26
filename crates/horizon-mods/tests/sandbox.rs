@@ -255,8 +255,8 @@ experimental = ["ui", "render", "input", "recipes"]
         needed(imports(&wasm).unwrap().iter().map(String::as_str)).0
     };
     assert_eq!(level("coords_hud.hmod"), 0);
-    // The UI guest reads the recipes (`recipes`, level 5).
-    assert_eq!(level("horizon_mods_test_ui_guest.hmod"), 5);
+    // The UI guest fills a browser panel (`browser`, level 6).
+    assert_eq!(level("horizon_mods_test_ui_guest.hmod"), 6);
 }
 
 #[test]
@@ -1122,4 +1122,69 @@ fn recipes_reads_the_tables() {
         said(&mut mods, "recipes"),
         ["0 items, 0 recipes, 0 known, 0 brewing"]
     );
+}
+
+#[test]
+fn browser_lists_items_and_hears_the_player() {
+    use horizon_mods::{BrowserClick, BrowserEvent, BrowserStack};
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    let said = |mods: &mut Mods, command: &str| {
+        assert!(mods.command(command));
+        mods.drain()
+            .into_iter()
+            .filter_map(|o| match o {
+                Output::Chat { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert!(mods.browser_items().is_none());
+    let potion = "[minecraft:potion_contents={potion:\"minecraft:swiftness\"}]";
+    assert_eq!(
+        said(
+            &mut mods,
+            &format!("browser minecraft:stone minecraft:potion{potion}")
+        ),
+        ["panel of 2"]
+    );
+    let (owner, version, items) = mods.browser_items().unwrap();
+    assert_eq!(
+        (items[0].item.as_str(), items[1].components.as_str()),
+        ("minecraft:stone", potion)
+    );
+    mods.browser_event(
+        owner,
+        BrowserEvent::Clicked(BrowserClick {
+            index: 1,
+            right: true,
+        }),
+    );
+    mods.browser_event(owner, BrowserEvent::Search("oak".into()));
+    let log = BrowserStack {
+        item: "minecraft:oak_log".into(),
+        count: 3,
+        components: String::new(),
+    };
+    // R is the guest's `recipe`; X is none of its keys.
+    mods.browser_key("key.keyboard.r", &log);
+    mods.browser_key("key.keyboard.x", &log);
+    assert_eq!(
+        said(&mut mods, "browser_poll"),
+        [
+            "3 events",
+            "clicked 1 right",
+            "search \"oak\"",
+            "key recipe on minecraft:oak_log x3"
+        ]
+    );
+    // Each `set-items` is a new version; an empty list hides the panel.
+    said(&mut mods, "browser minecraft:dirt");
+    assert_ne!(mods.browser_items().unwrap().1, version);
+    assert_eq!(said(&mut mods, "browser"), ["panel of 0"]);
+    assert!(mods.browser_items().is_none());
+    // At most 256 events wait for a poll: the oldest go.
+    for _ in 0..300 {
+        mods.browser_event(owner, BrowserEvent::Page(1));
+    }
+    assert_eq!(said(&mut mods, "browser_poll")[0], "256 events");
 }
