@@ -161,6 +161,10 @@ impl Game<'_> {
                 let Some(k) = projectile_kind(kind) else {
                     return false;
                 };
+                if k == ProjectileKind::LlamaSpit {
+                    self.particles
+                        .llama_spit_burst(position, [velocity.x, velocity.y, velocity.z]);
+                }
                 let mut p = Projectile::new(k, at, None);
                 p.id = id;
                 p.velocity = velocity;

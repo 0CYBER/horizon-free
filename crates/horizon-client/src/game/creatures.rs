@@ -1013,6 +1013,11 @@ impl Game<'_> {
                     self.next_entity += 1;
                     p.id = self.next_entity;
                     let (owner, at) = (p.owner, [p.position.x, p.position.y, p.position.z]);
+                    // LlamaSpit.recreateFromPacket: the spit's burst on the client.
+                    if p.kind == ProjectileKind::LlamaSpit {
+                        let v = p.velocity;
+                        self.particles.llama_spit_burst(at, [v.x, v.y, v.z]);
+                    }
                     self.creatures.projectiles.push(p);
                     self.projectile_event("minecraft:projectile_shoot", owner, at);
                 }

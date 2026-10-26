@@ -1398,6 +1398,18 @@ impl ParticleEngine {
         self.add(&ParticleOptions::simple(ty), center, [1.0, 0.0, 0.0]);
         self.explosion_blocks(center, radius, block_count, is_air);
     }
+    /// `LlamaSpit.recreateFromPacket`: seven spit particles thrown ahead of a
+    /// new spit, each faster than the last along x and z.
+    pub fn llama_spit_burst(&mut self, at: [f64; 3], movement: [f64; 3]) {
+        for i in 0..7 {
+            let k = 0.4 + 0.1 * f64::from(i);
+            self.add(
+                &ParticleOptions::simple(ParticleType::Spit),
+                at,
+                [movement[0] * k, movement[1], movement[2] * k],
+            );
+        }
+    }
     /// `ClientExplosionTracker` with `Level.DEFAULT_EXPLOSION_BLOCK_PARTICLES`.
     pub fn explosion_blocks(
         &mut self,
