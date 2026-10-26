@@ -252,6 +252,15 @@ fn mob_meta(
             if let Some(v) = id(registry, name) {
                 meta.push((index, serializer, Value::Id(v)));
             }
+            // Cat.IS_LYING and RELAX_STATE_ONE.
+            if kind == "minecraft:cat" {
+                for (index, on) in [(21, e.flag), (22, e.relax_one)] {
+                    if on {
+                        meta.push((index, serializer::BOOLEAN, Value::Bool(true)));
+                    }
+                    defaults.push((index, serializer::BOOLEAN, Value::Bool(false)));
+                }
+            }
             // Wolf.DATA_COLLAR_COLOR and Cat's, red by default.
             let collar = if kind == "minecraft:cat" { 23 } else { 21 };
             let red = i32::from(horizon_client::mobs::tame::RED);

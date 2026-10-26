@@ -71,6 +71,9 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
                 m.extra.sitting = flags & 1 != 0;
                 m.extra.tame = flags & 4 != 0;
             }
+            // Cat.IS_LYING and RELAX_STATE_ONE.
+            (Species::Cat, 21, Value::Bool(lying)) => m.extra.flag = *lying,
+            (Species::Cat, 22, Value::Bool(relaxing)) => m.extra.relax_one = *relaxing,
             // Wolf.DATA_COLLAR_COLOR and Cat's.
             (Species::Wolf, 21, Value::Int(c)) | (Species::Cat, 23, Value::Int(c)) => {
                 m.extra.color = (*c & 15) as u8;

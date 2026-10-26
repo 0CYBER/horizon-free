@@ -3535,6 +3535,11 @@ impl Game<'_> {
                 m.head_yaw += wrap_degrees(*yaw - m.head_yaw) / *steps as f32;
                 *steps -= 1;
             }
+            // Cat.tick: the lying and relaxing amounts follow the synched flags.
+            if m.species() == horizon_client::mobs::Species::Cat {
+                m.anim.vo = m.anim.v;
+                horizon_client::mobs::tame::cat_amounts(m);
+            }
             // Chicken.aiStep: the wings follow the server's on-ground flag.
             if m.species() == horizon_client::mobs::Species::Chicken {
                 horizon_client::mobs::farm::chicken_flap(m);

@@ -5,7 +5,7 @@
 //! (hits, pushes, fire, its projectiles) runs with that guest swapped in.
 use super::{Game, lan::LanHost};
 use horizon_client::{
-    mobs::{Mob, MobEvent, PlayerView, Who},
+    mobs::{Mob, MobEvent, PlayerView, Species, Who},
     projectiles::{Hit, Projectile},
 };
 use horizon_core::geometry::{Aabb, Vec3};
@@ -26,6 +26,20 @@ pub(super) fn player_for(
     guests: &GuestViews,
     bound: Option<u32>,
 ) -> Option<u32> {
+    // A tame cat reads its owner wherever they are while they sleep, or just
+    // woke up (`CatRelaxOnOwnerGoal` uses `getOwner`, not the nearest player).
+    if m.species() == Species::Cat
+        && m.extra.tame
+        && let Some(owner) = m.extra.owner
+    {
+        let asleep = |v: &PlayerView| v.uuid == owner && (v.sleeping || v.sleep_timer > 0);
+        if host.is_some_and(asleep) {
+            return None;
+        }
+        if let Some((conn, _)) = guests.iter().find(|(_, v)| asleep(v)) {
+            return Some(*conn);
+        }
+    }
     let targeting = m.ai.target == Some(Who::Player)
         || m.ai.last_hurt_by == Some(Who::Player) && m.age as i32 - m.ai.last_hurt_by_time <= 100;
     choose(m.position, targeting, host, guests, bound)
