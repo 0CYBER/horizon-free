@@ -247,6 +247,12 @@ pub fn beacon_required_levels(effect: Option<&str>) -> i32 {
         .map_or(i32::MAX, |i| i as i32 + 1)
 }
 
+/// `Item.canFitInsideContainerItems` (`ShulkerBoxSlot.mayPlace`): shulker
+/// boxes cannot nest.
+pub fn fits_inside_container_items(stack: &ItemStack) -> bool {
+    !stack.item.ends_with("shulker_box")
+}
+
 /// The containers a menu spans.
 const PLAYER: usize = 0;
 const MAIN: usize = 1;
@@ -995,7 +1001,7 @@ impl Menu {
     fn anvil_result(&mut self, env: &Env) {
         let hover = self.containers[MAIN][0]
             .as_ref()
-            .map(|i| crate::stations::hover_name(&|id| env.names.item(id), i))
+            .map(|i| crate::stations::hover_name(&|id| env.names.display_item(id), i))
             .unwrap_or_default();
         let out = crate::stations::anvil_result(
             env.enchantments,
@@ -1210,11 +1216,6 @@ impl Menu {
         env.items.get(&stack.item).is_some_and(|i| i.fuel.is_some())
     }
 
-    /// `Item.canFitInsideContainerItems`: shulker boxes cannot nest.
-    fn fits_inside(stack: &ItemStack) -> bool {
-        !(stack.item.ends_with("shulker_box"))
-    }
-
     // ---- Slot ----
 
     fn may_place(&self, env: &Env, s: usize, stack: &ItemStack) -> bool {
@@ -1247,7 +1248,7 @@ impl Menu {
                         .as_deref()
                         .is_some_and(|m| i.equip_allowed.as_ref().is_none_or(|a| a.contains(m)))
             }),
-            Role::Shulker => Self::fits_inside(stack),
+            Role::Shulker => fits_inside_container_items(stack),
             Role::Fuel => Self::is_fuel(env, stack) || Self::is_bucket(stack),
             Role::Output | Role::CraftResult | Role::Inert => false,
             Role::CrafterIn => self.data.get(self.slots[s].index) != Some(&1),

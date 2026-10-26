@@ -147,6 +147,9 @@ impl TestGame {
             player: self.player.clone(),
             clock: self.clock,
             players: self.players.clone(),
+            // The GUI of a 1280 x 720 window at scale 3, as the trial run's.
+            gui_size: (427.0, 240.0),
+            ..Snapshot::default()
         });
     }
     /// Whether the mod is a server mod.

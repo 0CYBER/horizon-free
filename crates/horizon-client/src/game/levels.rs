@@ -21,7 +21,7 @@ use super::{
 use horizon_client::{
     Result, block_entity_anim::BlockEntityAnims, random_tick_sections::RandomTickSections,
     save::SaveDir, streaming::Streaming, tick_chunk_membership::TickChunkMembership,
-    ticket_levels::ChunkTickets, world::World,
+    ticket_levels::ChunkTickets, vanillagen::VanillaTerrain, world::World,
 };
 use horizon_world::level::{LevelEvent, Ticks};
 use std::{
@@ -39,6 +39,7 @@ const IDLE_TICKS: u32 = 300;
 pub(super) struct Parked {
     world: World,
     streaming: Streaming,
+    locator: Option<Arc<VanillaTerrain>>,
     save: Arc<SaveDir>,
     block_ticks: Ticks,
     tick_chunks: TickChunkMembership,
@@ -122,13 +123,21 @@ impl Levels {
 impl Game<'_> {
     /// A new level for `dim`, opened from the save (`MinecraftServer.createLevels`).
     fn open_level(&self, dim: Dim) -> Result<Parked> {
-        let (streaming, save) =
-            self.make_streaming(&self.world_root.clone(), dim, self.level.seed)?;
+        let (streaming, save, locator) = super::world_loading::make_streaming(
+            &self.res,
+            &self.pack,
+            &self.options,
+            &self.settings,
+            &self.world_root,
+            dim,
+            self.level.seed,
+        )?;
         let mut world = World::new(self.res.facts().air, self.level.seed);
         world.fast_lava = dim == Dim::Nether;
         Ok(Parked {
             world,
             streaming,
+            locator,
             save,
             block_ticks: Ticks::new(self.level.seed as i32),
             tick_chunks: Default::default(),
@@ -176,6 +185,9 @@ impl Game<'_> {
         use std::mem::swap;
         swap(&mut self.world, &mut p.world);
         swap(&mut self.streaming, &mut p.streaming);
+        let mut locator = self.end.locator();
+        swap(&mut locator, &mut p.locator);
+        self.end.set_locator(locator);
         swap(&mut self.save, &mut p.save);
         swap(&mut self.block_ticks, &mut p.block_ticks);
         swap(&mut self.tick_chunks, &mut p.tick_chunks);
@@ -380,7 +392,12 @@ impl Game<'_> {
         }
         *next += self.clock.tick_duration();
         if *next > now {
-            std::thread::sleep(*next - now);
+            // A `/pregen` task keeps the workers fed until the next tick.
+            self.pump_pregen(*next);
+            let now = Instant::now();
+            if *next > now {
+                std::thread::sleep(*next - now);
+            }
         } else if now - *next > Duration::from_secs(2) {
             *next = now;
         }
@@ -388,7 +405,7 @@ impl Game<'_> {
 
     /// The levels this server tick runs, in `MinecraftServer.levels` order
     /// (the Overworld, the Nether, the End): every level with a player in
-    /// it, or the Overworld while nobody is online.
+    /// it or a `/pregen` task, or the Overworld while nobody is online.
     pub(super) fn levels_to_tick(&self) -> Vec<Dim> {
         let guests = self
             .lan
@@ -396,7 +413,9 @@ impl Game<'_> {
             .map_or(&[][..], |h| h.hub.guests.as_slice());
         let mut dims: Vec<Dim> = [Dim::Overworld, Dim::Nether, Dim::End]
             .into_iter()
-            .filter(|d| guests.iter().any(|g| g.dimension == d.id()))
+            .filter(|d| {
+                guests.iter().any(|g| g.dimension == d.id()) || self.pregen_level() == Some(*d)
+            })
             .collect();
         if dims.is_empty() {
             dims.push(Dim::Overworld);

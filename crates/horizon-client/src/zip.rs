@@ -23,7 +23,8 @@ impl Zip {
     pub fn open(path: &Path) -> io::Result<Self> {
         Self::from_bytes(fs::read(path)?)
     }
-    pub fn from_bytes(data: Vec<u8>) -> io::Result<Self> {
+    pub fn from_bytes(mut data: Vec<u8>) -> io::Result<Self> {
+        normalize_end(&mut data);
         let archive = ZipArchive::new(Cursor::new(Arc::from(data))).map_err(invalid)?;
         let entries = (0..archive.len())
             .filter_map(|i| Some((archive.name_for_index(i)?.replace('\\', "/"), i)))
@@ -57,6 +58,59 @@ impl Zip {
             _ => Err(invalid("unsupported zip compression")),
         }
     }
+}
+
+/// The 22 fixed bytes of the end-of-central-directory record.
+const END_HEADER: usize = 22;
+
+/// Java's `ZipFile` ignores the END record's disk numbers and file counts,
+/// reading the central directory from `cenpos` to `cenpos + cenlen` whatever
+/// they say; the `zip` crate insists the record agrees with the directory.
+/// Packs written while streaming (Nexo serves them for gommehd.net, for one)
+/// leave every file's local header a stub and the END counts and disk number
+/// at 0 and 0xFFFF: archives Java opens but the crate refuses. Count the real
+/// directory entries and normalize the record so it does not look multi-disk
+/// or empty.
+fn normalize_end(data: &mut [u8]) {
+    if data.len() < END_HEADER {
+        return;
+    }
+    let u16_at = |data: &[u8], at: usize| u16::from_le_bytes(data[at..at + 2].try_into().unwrap());
+    let u32_at = |data: &[u8], at: usize| u32::from_le_bytes(data[at..at + 4].try_into().unwrap());
+    // The END record's comment can hide the signature: scan back through the
+    // last 64 KiB, like every zip reader.
+    let start = data.len().saturating_sub(END_HEADER + u16::MAX as usize);
+    let mut end = None;
+    for pos in (start..=data.len().saturating_sub(END_HEADER)).rev() {
+        if data[pos..pos + 4] == [0x50, 0x4b, 0x05, 0x06]
+            && pos + END_HEADER + u16_at(data, pos + 20) as usize <= data.len()
+        {
+            end = Some(pos);
+            break;
+        }
+    }
+    let Some(end) = end else { return };
+    // The directory's real position and length, as Java derives them; the
+    // recorded offset is relative to the archive's start.
+    let cenlen = u32_at(data, end + 12) as usize;
+    let cenpos = end.saturating_sub(cenlen);
+    let mut count = 0u16;
+    let mut p = cenpos;
+    while p + 46 <= end && data[p..p + 4] == [0x50, 0x4b, 0x01, 0x02] {
+        count = count.saturating_add(1);
+        p += 46
+            + u16_at(data, p + 28) as usize
+            + u16_at(data, p + 30) as usize
+            + u16_at(data, p + 32) as usize;
+    }
+    let disk = u16_at(data, end + 4);
+    let with_directory = u16_at(data, end + 6);
+    if disk == with_directory && u16_at(data, end + 8) == count && u16_at(data, end + 10) == count {
+        return;
+    }
+    data[end + 4..end + 10].fill(0);
+    data[end + 8..end + 10].copy_from_slice(&count.to_le_bytes());
+    data[end + 10..end + 12].copy_from_slice(&count.to_le_bytes());
 }
 
 #[cfg(test)]
@@ -206,5 +260,62 @@ mod tests {
         let mut cut = written();
         cut.truncate(cut.len() / 2);
         assert!(Zip::from_bytes(cut).is_err());
+    }
+
+    /// A pack as a streaming writer serves it (Nexo/gommehd.net): every
+    /// local header is a 30-byte stub and the END record's disk number and
+    /// counts are wrong. Java 25's `ZipFile` opens it, with each size either
+    /// in the directory or as 0xFFFFFFFF plus its Zip64 extra field (without
+    /// that field it refuses the archive: "invalid zip64 extra len size").
+    #[test]
+    fn reads_a_streamed_archive() {
+        for zip64 in [false, true] {
+            let files: [(&str, &[u8]); 2] = [
+                ("pack.mcmeta", b"{\"pack\":{}}"),
+                ("a/b.txt", b"streamed entry"),
+            ];
+            let mut out = Vec::new();
+            let mut central = Vec::new();
+            for (name, body) in files {
+                let data = miniz_oxide::deflate::compress_to_vec(body, 6);
+                let offset = out.len() as u32;
+                out.extend(0x0403_4b50u32.to_le_bytes());
+                out.extend([0; 26]);
+                out.extend(&data);
+                let extra: Vec<u8> = if zip64 {
+                    [1u16, 8]
+                        .iter()
+                        .flat_map(|v| v.to_le_bytes())
+                        .chain((body.len() as u64).to_le_bytes())
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                central.extend(0x0201_4b50u32.to_le_bytes());
+                central.extend([20, 0, 20, 0, 0, 0]);
+                central.extend(8u16.to_le_bytes());
+                central.extend([0; 8]);
+                central.extend((data.len() as u32).to_le_bytes());
+                central.extend(if zip64 { u32::MAX } else { body.len() as u32 }.to_le_bytes());
+                central.extend((name.len() as u16).to_le_bytes());
+                central.extend((extra.len() as u16).to_le_bytes());
+                central.extend([0; 10]);
+                central.extend(offset.to_le_bytes());
+                central.extend(name.as_bytes());
+                central.extend(extra);
+            }
+            let start = out.len() as u32;
+            out.extend(&central);
+            out.extend(0x0605_4b50u32.to_le_bytes());
+            out.extend(u16::MAX.to_le_bytes());
+            out.extend([0; 6]);
+            out.extend((central.len() as u32).to_le_bytes());
+            out.extend(start.to_le_bytes());
+            out.extend([0; 2]);
+            let zip = Zip::from_bytes(out).unwrap();
+            assert_eq!(zip.names().collect::<Vec<_>>(), ["a/b.txt", "pack.mcmeta"]);
+            assert_eq!(zip.read("pack.mcmeta").unwrap(), b"{\"pack\":{}}");
+            assert_eq!(zip.read("a/b.txt").unwrap(), b"streamed entry");
+        }
     }
 }

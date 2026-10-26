@@ -45,6 +45,7 @@ Game workspace (root `Cargo.toml`); `launcher/` and `crates/horizon-telemetry-se
 | `horizon-friends`, `horizon-relay` | Play with Friends: invite codes, encrypted tunnel, the relay ([docs/play-with-friends.md](docs/play-with-friends.md)) |
 | `horizon-mods`, `horizon-mod-sdk`, `cargo-horizon-mod` | Sandboxed WebAssembly mods: runtime, SDK + WIT, `cargo horizon-mod` ([docs/mods.md](docs/mods.md)) |
 | `horizon-port-pack` | Porting Java modpacks ([docs/modpacks.md](docs/modpacks.md)) |
+| `horizon-shader-api` | Horizon's own WGSL shader packs ([docs/api/shaders.md](docs/api/shaders.md)): `horizon-shaders.toml`, the `.hshader` package; shared by the game, the launcher and the registry |
 | `horizon-shaders` | Shader packs (the `shaders/` folder format), rebuilt clean-room from a written spec of the format; no wgpu |
 | `horizon-theme` | Design tokens and fonts for the launcher, the game's own menus and the website |
 | `horizon-telemetry`, `horizon-telemetry-server`, `horizon-bench` | Opt-in data collection, its ingest server, the benchmark report format |
@@ -81,7 +82,7 @@ python3 tools/agent_control_e2e.py         # horizon-ctl / MCP end to end
   ~25, a file of the client lib ~103, of `horizon-world` ~103–109, of `horizon-core` ~119. Plan for it.
 - Rust integration tests: `crates/horizon-client/tests/` (`lan_bot.rs`, `generation_saves.rs`, `streaming_meshes.rs`).
 - **macOS:** `cargo build/test --workspace` may fail to link the two wasm guest cdylibs (undefined
-  `horizon:mods/events` symbols) until #1446 lands: add `--exclude coords-hud --exclude horizon-mods-test-guest`.
+  `horizon:mods/events` symbols) until #1446 lands: add `--exclude coords-hud --exclude predator-missile --exclude horizon-mods-test-guest --exclude horizon-mods-test-ui-guest`.
   Their real check is `cargo test -p horizon-mods` (builds them for `wasm32-unknown-unknown`).
 - Linux needs `libasound2-dev libudev-dev`; `--no-default-features` drops audio and controllers (the server build).
 - Run and drive the game (starts the `horizon-client` beside `horizon-ctl`; other arguments go to the game):

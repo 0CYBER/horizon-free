@@ -415,6 +415,13 @@ impl Game<'_> {
                 ],
             );
         }
+        // Horizon's own: the shader pack's GPU time per pass (an empty group would move others).
+        let pass_lines = self.renderer.as_ref().map_or_else(Vec::new, |r| {
+            debug_overlay::shader_pass_lines(&r.shader_pass_times())
+        });
+        if !pass_lines.is_empty() {
+            d.group("shader pack", pass_lines);
+        }
         // tps: DebugEntryTps for local and remote connections.
         if self.player.is_some() {
             let [tx, rx] = self.debug_charts.packet_rates.map(|n| n.round() as i64);

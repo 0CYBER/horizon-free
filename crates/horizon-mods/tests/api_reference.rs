@@ -52,7 +52,7 @@ fn definition(resolve: &Resolve, kind: &TypeDefKind) -> String {
     match kind {
         TypeDefKind::Option(t) => format!("option<{}>", ty(resolve, t)),
         TypeDefKind::List(t) => format!("list<{}>", ty(resolve, t)),
-        TypeDefKind::FixedSizeList(t, n) => format!("list<{}, {n}>", ty(resolve, t)),
+        TypeDefKind::FixedLengthList(t, n) => format!("list<{}, {n}>", ty(resolve, t)),
         TypeDefKind::Result(r) => match (&r.ok, &r.err) {
             (None, None) => "result".into(),
             (ok, None) => format!("result<{}>", of(ok)),
@@ -82,7 +82,7 @@ fn signature(resolve: &Resolve, f: &Function) -> String {
     let params: Vec<_> = f
         .params
         .iter()
-        .map(|(name, t)| format!("{name}: {}", ty(resolve, t)))
+        .map(|p| format!("{}: {}", p.name, ty(resolve, &p.ty)))
         .collect();
     let result = f
         .result

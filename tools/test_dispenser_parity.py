@@ -5,7 +5,7 @@ A dispenser or dropper at the origin faces a random direction and holds the
 case's items; the block in front (and below it) comes from a palette of blocks
 the behaviours care about, and some cases put a target entity in front. Vanilla
 `DispenserBlock.dispenseFrom` runs over the headless level of the block update
-oracle (`VanillaDispenserOracle`); Horizon runs its game glue in a headless game
+oracle (`VanillaDispenserOracle`); Horizon runs its game glue as a component probe on a server thread
 (`HORIZON_DISPENSE_FIXTURE`). Both print block changes, container contents,
 spawned entities (type, position, motion), the targets afterwards, level events,
 sounds, game events and the level random. Motion drawn from an entity's own

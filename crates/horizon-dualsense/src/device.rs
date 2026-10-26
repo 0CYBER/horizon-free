@@ -1,14 +1,21 @@
 //! The pad over hidapi, and the thread that writes to it: writes block (a Bluetooth report can
 //! take milliseconds), so the game only hands over what the pad should do.
-use crate::{
-    DEFAULT_LIGHTBAR, Output, PLAYER_1, TRIGGER_OFF, TriggerEffect, Vibration, is_dualsense,
-};
+#[cfg(not(target_os = "ios"))]
+use crate::{DEFAULT_LIGHTBAR, Output, PLAYER_1, Vibration, is_dualsense};
+use crate::{TRIGGER_OFF, TriggerEffect};
+#[cfg(not(target_os = "ios"))]
 use hidapi::{BusType, HidApi, HidDevice, HidResult};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+#[cfg(not(target_os = "ios"))]
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::mpsc::Sender;
+#[cfg(not(target_os = "ios"))]
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(not(target_os = "ios"))]
+use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Transport {
@@ -17,6 +24,7 @@ pub enum Transport {
 }
 
 /// An open DualSense.
+#[cfg(not(target_os = "ios"))]
 pub struct DualSense {
     device: HidDevice,
     transport: Transport,
@@ -34,6 +42,7 @@ pub fn bluetooth_allowed() -> bool {
     cfg!(target_os = "linux") || std::env::var_os("HORIZON_DUALSENSE_BT").is_some_and(|v| v == "1")
 }
 
+#[cfg(not(target_os = "ios"))]
 impl DualSense {
     /// The first DualSense hidapi lists, USB before Bluetooth (as SDL); `None` when there is
     /// none, an error when it can't be opened (Linux without access to its hidraw node).
@@ -119,13 +128,17 @@ impl Default for State {
 /// A vibration: the motors' levels (left, right), each for a while, in order.
 pub type Rumble = Vec<([u8; 2], Duration)>;
 
+// On iOS no thread reads the queue (the Link never opens); the variants stay so the
+// Link's API is the same everywhere.
+#[cfg_attr(target_os = "ios", allow(dead_code))]
 enum Message {
     State(State),
     Rumble(Rumble),
     Scan,
 }
 
-/// The writer thread. Dropping it frees the triggers and stops the motors before it ends.
+/// The output thread. Dropping it frees the triggers and stops the motors before it ends; on
+/// iOS there is none (no hidapi backend) and the Link stays closed.
 pub struct Link {
     tx: Option<Sender<Message>>,
     /// 0: no pad open, else 1 + the transport.
@@ -135,6 +148,7 @@ pub struct Link {
 
 impl Link {
     /// Start the thread and look for a DualSense.
+    #[cfg(not(target_os = "ios"))]
     pub fn start() -> Link {
         let (tx, rx) = mpsc::channel();
         let open = Arc::new(AtomicU8::new(0));
@@ -148,6 +162,16 @@ impl Link {
             tx: Some(tx),
             open,
             thread,
+        }
+    }
+
+    /// No output on iOS: hidapi has no backend there. The Link never opens.
+    #[cfg(target_os = "ios")]
+    pub fn start() -> Link {
+        Link {
+            tx: None,
+            open: Arc::new(AtomicU8::new(0)),
+            thread: None,
         }
     }
 
@@ -194,8 +218,10 @@ impl Drop for Link {
 
 /// Looks for the pad this many more times, a second apart, after a scan finds nothing (its
 /// hidraw node may appear after the controller does).
+#[cfg(not(target_os = "ios"))]
 const SCAN_TRIES: u32 = 5;
 
+#[cfg(not(target_os = "ios"))]
 struct Writer {
     api: Option<HidApi>,
     pad: Option<DualSense>,
@@ -213,6 +239,7 @@ struct Writer {
     next_scan: Instant,
 }
 
+#[cfg(not(target_os = "ios"))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Lights {
     /// Over Bluetooth, until the pad's clock says its animation is over (or this long after
@@ -225,11 +252,13 @@ enum Lights {
 
 /// The pad's sensor clock once its Bluetooth connection animation is over (SDL_hidapi_ps5.c's
 /// `HIDAPI_DriverPS5_CheckPendingLEDReset`).
+#[cfg(not(target_os = "ios"))]
 const ANIMATION_OVER: u32 = 10_200_000;
 
 /// The sensor clock of a Bluetooth input report 0x31: its state block starts at byte 2 and
 /// holds the clock at 27..31, little-endian (SDL's `PS5StatePacketCommon_t`, the kernel's
 /// `dualsense_input_report`).
+#[cfg(not(target_os = "ios"))]
 fn bluetooth_clock(report: &[u8]) -> Option<u32> {
     match report {
         [0x31, _, state @ ..] if state.len() >= 31 => {
@@ -239,6 +268,7 @@ fn bluetooth_clock(report: &[u8]) -> Option<u32> {
     }
 }
 
+#[cfg(not(target_os = "ios"))]
 impl Writer {
     fn new(open: Arc<AtomicU8>) -> Self {
         Writer {
@@ -451,7 +481,7 @@ impl Writer {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "ios")))]
 mod tests {
     use super::*;
 
