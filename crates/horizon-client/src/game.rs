@@ -1381,6 +1381,8 @@ struct Game<'a> {
     /// The link a chat click asks to open (`ConfirmLinkScreen`).
     link_prompt: Option<String>,
     dialogs: dialogs::DialogState,
+    /// Single player's server while it loads its world (`Minecraft.doWorldLoad`).
+    integrated_starting: Option<integrated::Starting>,
     world_renderer_ready: bool,
     collision: &'a BlockCollisionRegistry<'a>,
     motion: &'a MotionResources,
@@ -11414,6 +11416,27 @@ impl Game<'_> {
         Ok(())
     }
     fn render(&mut self) -> Result<bool> {
+        // Minecraft.doWorldLoad: the LevelLoadingScreen while single player's
+        // server starts. Its chunk map and progress are the server's, which
+        // the window doesn't see yet: the title alone, over the menu background.
+        if self.integrated_starting.is_some() {
+            if let Some(renderer) = &mut self.renderer {
+                let mut hud = HudBatch::new([renderer.config.width, renderer.config.height]);
+                let (w, h) = (hud.width, hud.height);
+                horizon_client::ui::menu_background(
+                    &mut hud,
+                    &self.gui.atlas,
+                    0.0,
+                    0.0,
+                    w,
+                    h,
+                    false,
+                );
+                horizon_client::level_loading::draw(&mut hud, &self.gui.atlas, None, None);
+                return renderer.render(&loading_frame(&hud));
+            }
+            return Ok(false);
+        }
         if let Some(loader) = &self.world_loader {
             if let Some(renderer) = &mut self.renderer {
                 let mut hud = HudBatch::new([renderer.config.width, renderer.config.height]);
@@ -12584,7 +12607,9 @@ impl ApplicationHandler for Game<'_> {
             self.perf.cancel_world_opening();
             return;
         }
-        if (self.pending_entry.is_some() || self.world_loader.is_some())
+        if (self.pending_entry.is_some()
+            || self.world_loader.is_some()
+            || self.integrated_starting.is_some())
             && !matches!(
                 &event,
                 WindowEvent::CloseRequested
@@ -13573,6 +13598,7 @@ impl<'a> Game<'a> {
             server_packs: Default::default(),
             link_prompt: None,
             dialogs: Default::default(),
+            integrated_starting: None,
             world_renderer_ready: false,
             collision: res.collision(),
             motion: res.motion(),
@@ -14046,6 +14072,7 @@ impl Game<'_> {
     }
 
     fn resume_world_entry(&mut self) -> Result<()> {
+        self.poll_integrated_start()?;
         self.poll_world_rest()?;
         if let Some(loader) = &self.world_loader {
             if !loader.ready() {
