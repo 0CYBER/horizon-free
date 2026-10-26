@@ -6991,7 +6991,7 @@ impl Game<'_> {
             self.yaw
         };
         for m in &self.mobs {
-            if m.fire_ticks > 0 && !m.removed {
+            if m.is_on_fire() && !m.removed {
                 let at = m.previous.lerp(m.position, alpha);
                 horizon_client::fire_render::flames(
                     [at.x, at.y, at.z],

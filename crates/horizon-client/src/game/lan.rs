@@ -152,7 +152,7 @@ fn mob_meta(
     defaults: &mut Vec<(u8, i32, Value)>,
 ) {
     let kind = m.kind.id.as_str();
-    if m.fire_ticks > 0 {
+    if m.is_on_fire() {
         meta.push((0, serializer::BYTE, Value::Byte(1)));
     }
     if let Some(name) = &m.custom_name {
