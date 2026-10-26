@@ -53,7 +53,11 @@ impl Game<'_> {
         if let Some(player) = self.player.as_mut() {
             player.fire_ticks = 0;
         }
-        // Entity.playEntityOnFireExtinguishedSound
+        self.extinguish_sound(at);
+        Ok(())
+    }
+    /// Entity.playEntityOnFireExtinguishedSound
+    fn extinguish_sound(&mut self, at: [f64; 3]) {
         let r = self.particles.random();
         let pitch = 1.6 + (r.next_float() - r.next_float()) * 0.4;
         self.audio.play(
@@ -62,7 +66,37 @@ impl Game<'_> {
             0.7,
             pitch,
         );
-        Ok(())
+    }
+    /// `Entity.baseTick`: a burning player in the rain (`isInRain`) has the
+    /// fire put out (`clearFire`). Returns whether it did.
+    pub(super) fn rain_extinguish_player(&mut self) -> bool {
+        let Some(player) = self.player.as_ref() else {
+            return false;
+        };
+        let (at, top) = (player.position, player.bounds().max_position().y);
+        if player.fire_ticks <= 0 || !self.in_rain(at, top) {
+            return false;
+        }
+        if let Some(player) = self.player.as_mut() {
+            player.fire_ticks = 0;
+        }
+        true
+    }
+    /// The in-window player's rain extinguish, with its sound (a server's
+    /// fire is the server's).
+    pub(super) fn rain_extinguish_in_frame(&mut self) {
+        if self.remote.is_some() {
+            return;
+        }
+        let at = self
+            .player
+            .as_ref()
+            .map(|p| [p.position.x, p.position.y, p.position.z]);
+        if self.rain_extinguish_player()
+            && let Some(at) = at
+        {
+            self.extinguish_sound(at);
+        }
     }
     /// Whether the block at `pos` is powder snow.
     pub(super) fn is_powder_snow(&self, pos: [i32; 3]) -> bool {

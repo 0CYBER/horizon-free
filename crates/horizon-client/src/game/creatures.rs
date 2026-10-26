@@ -2118,11 +2118,9 @@ impl Game<'_> {
             ArrowEvent::ShootEvent | ArrowEvent::Drop => {}
         }
     }
-    /// `Level.isRainingAt` for arrows: raining, open to the sky (the biome's
-    /// precipitation is not checked here).
+    /// `Level.isRainingAt` for arrows.
     fn arrow_rain(&self) -> impl Fn(BlockPos) -> bool + '_ {
-        let raining = self.world.weather.levels(1.0).0 > 0.2;
-        move |p: BlockPos| raining && self.world.light(p.x, p.y, p.z) >> 4 == 15
+        move |p: BlockPos| self.raining_at(p)
     }
     /// The level as arrows see it.
     fn arrow_scene<'s>(
