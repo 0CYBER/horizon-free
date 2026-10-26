@@ -881,6 +881,25 @@ code { border-radius: 0; background: var(--well); box-shadow: 0 0 0 1px var(--ou
 .mod-side .badge { margin-right: 0; }
 .mod-version { font: var(--text-micro) / 1.4 var(--mono); letter-spacing: var(--text-micro-tracking); color: var(--muted); }
 .mod-empty a { color: var(--accent); }
+.mod-sort { width: auto; }
+.mod-stats { font-size: var(--text-ui); color: var(--muted); white-space: nowrap; }
+.mod-stars { color: color-mix(in srgb, var(--muted) 45%, transparent); letter-spacing: 0.08em; }
+.mod-stars .on { color: var(--warn); }
+.mod-page-stats { margin: 12px 0 0; }
+.mod-rate { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 12px; }
+.mod-rate:empty { display: none; }
+.mod-rate .meta, .mod-rate .mod-error { margin: 0; flex-basis: 100%; }
+.mod-rate-label { font-size: var(--text-ui); color: var(--muted); }
+.mod-rate-stars { display: inline-flex; }
+.mod-star {
+  padding: 0 3px; border: 0; background: none; cursor: pointer; font-size: 26px; line-height: 1;
+  color: color-mix(in srgb, var(--muted) 45%, transparent);
+  transition: color var(--quick) var(--ease-quick);
+}
+/* The rating's stars are lit; hovering lights a star and those before it. */
+.mod-star.lit, .mod-rate-stars:hover .mod-star { color: var(--warn); }
+.mod-rate-stars .mod-star:hover ~ .mod-star { color: color-mix(in srgb, var(--muted) 45%, transparent); }
+.mod-star:disabled { cursor: progress; }
 .badge-signed { background: color-mix(in srgb, var(--success) 22%, var(--panel)); color: var(--ink); }
 .badge-unsigned { background: color-mix(in srgb, var(--warn) 24%, var(--panel)); color: var(--ink); }
 .mod-page { display: grid; gap: 16px; max-width: calc(var(--measure) + 240px); }

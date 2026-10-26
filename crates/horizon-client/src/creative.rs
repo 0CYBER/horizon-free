@@ -1,7 +1,7 @@
 //! Creative inventory (CreativeModeInventoryScreen): vanilla's tabs and their
 //! contents as built by the game's own display generators
 //! (`creative-inventory.json`), a 9x5 scrolling grid and the search tab.
-use crate::{Result, items::ItemStack};
+use crate::{Result, items::ItemStack, ui::EditBox};
 use serde_json::Value;
 use std::{collections::HashMap, fs, path::Path};
 
@@ -35,10 +35,8 @@ pub struct Creative {
     pub scroll: f32,
     /// The scrollbar is held (scrolling): dragging moves it.
     pub scrolling: bool,
-    pub search: String,
-    /// When the search box took the focus (`EditBox.setFocused`): its
-    /// cursor blinks from then.
-    pub search_focused: std::time::Instant,
+    /// CreativeModeInventoryScreen's search box: an unbordered `EditBox` of 50.
+    pub search: EditBox,
     /// The search tab's stacks, in its display order.
     search_items: Vec<ItemStack>,
     search_index: Vec<SearchEntry>,
@@ -284,8 +282,13 @@ impl Creative {
             selected: 0,
             scroll: 0.0,
             scrolling: false,
-            search: String::new(),
-            search_focused: std::time::Instant::now(),
+            search: {
+                let mut search = EditBox::new(0.0, 0.0, 80.0, 9.0);
+                search.bordered = false;
+                search.max_length = 50;
+                search.text_color = u32::MAX;
+                search
+            },
             search_items,
             search_index,
         }
@@ -306,12 +309,13 @@ impl Creative {
     /// selectTab: a different tab empties the search box; the scrollbar goes to the top.
     pub fn select(&mut self, tab: usize) {
         if tab != self.selected {
-            self.search.clear();
+            self.search.set_value("");
         }
         self.selected = tab;
         self.scroll = 0.0;
         if self.tab().search {
-            self.search_focused = std::time::Instant::now();
+            self.search.focused = true;
+            self.search.reset_blink();
         }
     }
     /// The search tab's stacks.
@@ -385,7 +389,7 @@ impl Creative {
         let tab = self.tab();
         if tab.search {
             return self
-                .search_results(&self.search, names)
+                .search_results(&self.search.value, names)
                 .into_iter()
                 .map(|i| self.search_items[i].clone())
                 .collect();
@@ -754,13 +758,13 @@ mod tests {
             (1, false, true),
             (2, true, false),
         ] {
-            c.search = "anvil".into();
+            c.search.set_value("anvil");
             c.scroll = 0.5;
             c.select(selected);
             assert_eq!(c.selected, selected);
             assert_eq!(c.tab().inventory, inventory);
             assert_eq!(c.tab().search, search);
-            assert!(c.search.is_empty());
+            assert!(c.search.value.is_empty());
             assert_eq!(c.scroll, 0.0);
         }
     }
@@ -780,12 +784,12 @@ mod tests {
         assert_eq!(c.tabs[0].items[0].item.as_ref(), "minecraft:anvil");
         let mut c = c;
         c.select(1);
-        c.search = "anvil".into();
+        c.search.set_value("anvil");
         c.scroll = 0.5;
         c.select(1);
-        assert_eq!((c.search.as_str(), c.scroll), ("anvil", 0.0));
+        assert_eq!((c.search.value.as_str(), c.scroll), ("anvil", 0.0));
         c.select(0);
-        assert_eq!(c.search, "");
+        assert_eq!(c.search.value, "");
     }
 
     #[test]
@@ -898,5 +902,26 @@ mod tests {
         assert_eq!(c.scroller_offset(), 0.0);
         c.scroll = 1.0;
         assert_eq!(c.scroller_offset(), 95.0);
+    }
+
+    #[test]
+    fn search_edits_at_its_cursor() {
+        use winit::keyboard::KeyCode;
+        let mut c = creative(0);
+        c.select(1);
+        c.search.insert_text("hello world");
+        for _ in 0..5 {
+            assert!(c.search.key(KeyCode::ArrowLeft, false, false));
+        }
+        c.search.insert_text("X");
+        assert_eq!(c.search.value, "hello Xworld");
+        c.search.key(KeyCode::Home, false, true);
+        c.search.insert_text("Y");
+        assert_eq!(c.search.value, "Yworld");
+        // Ctrl+Left jumps a word; one step right and Backspace deletes before the cursor.
+        c.search.key(KeyCode::ArrowLeft, true, false);
+        c.search.key(KeyCode::ArrowRight, false, false);
+        c.search.key(KeyCode::Backspace, false, false);
+        assert_eq!(c.search.value, "world");
     }
 }

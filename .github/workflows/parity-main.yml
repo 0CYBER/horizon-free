@@ -48,6 +48,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: echo "sha=$(python3 tools/parity_main.py base)" >> "$GITHUB_OUTPUT"
       - name: The harnesses the merges since then can affect
+        id: harnesses
+        # A failure here is judged by the next step: the run passes when every failed harness passes again at HEAD.
+        continue-on-error: true
         env:
           PARITY_HOSTS: ''
           BASE_SHA: ${{ steps.base.outputs.sha }}
@@ -55,8 +58,8 @@ jobs:
           echo "Merges since ${BASE_SHA}:"
           git log --first-parent --format='  %h %s' "$BASE_SHA..HEAD"
           python3 tools/parity.py --changed "$BASE_SHA" --timeout 2400
-      - name: The merge that broke them
-        if: failure()
+      - name: A flake, or the merge that broke them
+        if: steps.harnesses.outcome == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
           PARITY_HOSTS: ''
@@ -65,7 +68,7 @@ jobs:
           rm -rf .local/parity-main-logs && cp -R .local/parity-runner/logs .local/parity-main-logs 2>/dev/null || true
           python3 tools/parity_main.py bisect "$BASE_SHA" --comment
       - name: Logs of the failed harnesses
-        if: failure()
+        if: steps.harnesses.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: parity-main-logs

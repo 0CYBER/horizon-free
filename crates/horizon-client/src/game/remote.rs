@@ -839,7 +839,10 @@ impl Game<'_> {
                         remote.brand = brand;
                     }
                 }
-                Event::Reconfigured(registries) => self.set_registries(registries),
+                Event::Reconfigured(registries) => {
+                    self.boss_overlay.reset();
+                    self.set_registries(registries);
+                }
                 // handleTransfer: "Cannot transfer to server from
                 // singleplayer" (no ServerData), so the world just closes.
                 Event::Transfer { host, port } => {
@@ -1258,6 +1261,9 @@ impl Game<'_> {
         } else {
             self.res.mob_types().get(kind).cloned()
         };
+        if kind == "minecraft:ender_dragon" {
+            self.spawn_remote_dragon(id, position, yaw);
+        }
         if kind == "minecraft:experience_orb" {
             // Its value (ExperienceOrb.DATA_VALUE) follows in SetEntityData.
             self.orbs.retain(|o| o.id != id as u32);
@@ -1364,13 +1370,17 @@ impl Game<'_> {
                 m.on_ground = on_ground;
                 return;
             }
-            if let Some(p) = self.creatures.projectiles.iter_mut().find(|p| {
-                p.id == id as u32
-                    && matches!(
-                        p.kind,
-                        horizon_client::projectiles::ProjectileKind::LargeFireball { .. }
-                    )
-            }) {
+            // Projectiles keep Entity's NO_OP InterpolationHandler too: the
+            // server's position replaces theirs at once and their own tick
+            // flies them on (`tick_remote_projectiles`). Eased towards it
+            // instead, they only moved when an update came, every 10 to 20
+            // ticks.
+            if let Some(p) = self
+                .creatures
+                .projectiles
+                .iter_mut()
+                .find(|p| p.id == id as u32)
+            {
                 if path.is_some() {
                     p.position = Vec3::new(position[0], position[1], position[2]);
                 }
@@ -1378,6 +1388,14 @@ impl Game<'_> {
                     p.yaw = yaw;
                     p.pitch = pitch;
                 }
+                return;
+            }
+            if path.is_some()
+                && (self.potions.move_remote_thrown(
+                    id as u32,
+                    Vec3::new(position[0], position[1], position[2]),
+                ) || self.end.move_remote_eye(id as u32, position))
+            {
                 return;
             }
             if let Some(p) = r.pending_items.get_mut(&id) {
@@ -1426,6 +1444,8 @@ impl Game<'_> {
         self.mobs.retain(|m| m.id != id as u32);
         self.orbs.retain(|o| o.id != id as u32);
         self.dropped.retain(|d| d.id != id as u32);
+        // Before the crystals go: the dragon's beam index follows them.
+        self.remove_remote_dragon(id);
         self.remove_remote_object(id as u32);
         self.remove_remote_projectile(id as u32);
         if let Some(r) = self.remote.as_mut() {
@@ -1958,6 +1978,7 @@ impl Game<'_> {
                 }
                 self.remote_object_data(p.id, &p.values);
                 self.remote_projectile_data(p.id, &p.values);
+                self.remote_dragon_data(p.id, &p.values);
             }
             // ClientPacketListener.handleSetEquipment: what a mob or another
             // player holds and wears (EquipmentSlot ordinals).
@@ -2039,6 +2060,8 @@ impl Game<'_> {
                 } else if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
                     m.limb_speed = 1.5;
                     m.hurt_time = 10;
+                } else {
+                    self.remote_dragon_hurt(p.id);
                 }
             }
             C::HurtAnimation(p) => {
@@ -2048,9 +2071,14 @@ impl Game<'_> {
                     }
                 } else if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
                     m.hurt_time = 10;
+                } else {
+                    self.remote_dragon_hurt(p.id);
                 }
             }
             C::EntityEvent(p) => {
+                if p.event == super::fireworks::FIREWORK_EXPLODE_EVENT {
+                    self.remote_firework_explosion(p.id);
+                }
                 // LocalPlayer.setPermissions also refreshes an open World Options screen.
                 if (24..=28).contains(&p.event)
                     && self.remote.as_ref().is_some_and(|r| r.entity_id == p.id)
@@ -2936,6 +2964,7 @@ impl Game<'_> {
     /// entities whose own tick moves them on a client: dropped items, falling
     /// blocks and primed TNT.
     fn remote_motion(&mut self, id: i32, velocity: [f64; 3]) {
+        self.remote_dragon_motion(id, velocity);
         let v = Vec3::new(velocity[0], velocity[1], velocity[2]);
         if let Some(d) = self.dropped.iter_mut().find(|d| d.id == id as u32) {
             d.velocity = v;
@@ -2956,6 +2985,8 @@ impl Game<'_> {
             .and_then(|r| r.pending_items.get_mut(&id))
         {
             p.1 = v;
+        } else if !self.potions.remote_thrown_motion(id as u32, v) {
+            self.end.remote_eye_motion(id as u32, velocity);
         }
     }
     fn apply_remote_health(&mut self) {
@@ -3062,6 +3093,12 @@ impl Game<'_> {
     fn tick_remote_level(&mut self) -> Result<()> {
         self.ticks += 1;
         self.track_experience_display();
+        // Player.tick's ItemCooldowns.tick: this path replaces `tick_world`'s
+        // for a server's client (multiplayer and the default single player),
+        // so the entries advance here or the slot stays shaded until the
+        // server says the entry ended. `onCooldownEnded` is the plain
+        // ItemCooldowns' no-op on a client.
+        self.cooldowns.tick();
         // Options.broadcastOptions: a changed render distance or Chat option
         // is sent again.
         let view = client_view_distance(self.settings.render_distance);
@@ -3523,6 +3560,18 @@ impl Game<'_> {
             self.remote_player_eating(&item, ticks, at, eye, pitch, yaw);
         }
         if running {
+            // The dragon: LivingEntity's interpolation, inside its aiStep.
+            let dragon_lerp = self
+                .dragon
+                .as_ref()
+                .and_then(|d| lerps.get_mut(&(d.id as i32)))
+                .filter(|l| l.steps > 0)
+                .map(|l| {
+                    let steps = l.steps;
+                    l.steps -= 1;
+                    (l.target, l.rotation.map(|r| r.0), steps)
+                });
+            self.tick_remote_dragon(dragon_lerp);
             // Boats, minecarts, armor stands, projectiles and the rest
             // interpolate like mobs.
             let mut step = |id: u32, at: Vec3| match lerps.get_mut(&(id as i32)) {
