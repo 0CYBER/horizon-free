@@ -259,7 +259,7 @@ impl Game<'_> {
         // ItemInHandLayer submits with OverlayTexture.NO_OVERLAY: no hurt tint.
         for (item, off_hand) in [(&mob.extra.main_hand, false), (&mob.extra.off_hand, true)] {
             let Some(item) = item else { continue };
-            let left = off_hand != mob.extra.main_hand_left;
+            let left = off_hand != mob.main_arm_left();
             let Some(t) =
                 render::held_item_transform(mob, alpha as f32, camera, self.res.mob_data(), left)
             else {
@@ -305,7 +305,7 @@ impl Game<'_> {
                     .player_model
                     .as_ref()
                     .is_some_and(|p| std::ptr::eq(p, mob));
-            owner.main_arm_left = mob.extra.main_hand_left;
+            owner.main_arm_left = mob.main_arm_left();
             if off_hand == mob.extra.using_off_hand && mob.extra.using_item > 0 {
                 owner.using_this_item = true;
                 owner.use_duration = 72_000;

@@ -8,14 +8,14 @@ use crate::{
     },
     chunk::{ChunkData, LightData},
     entity_data::{EntityData, Particle, Value},
-    item::{Hashed, HashedSlot, Slot, Stack},
+    item::{Component, Hashed, HashedSlot, Slot, Stack},
     packet, packet_enum,
     packets::{
         Empty,
         configuration::{
-            ClientInformation, CookieRequest, CookieResponse, CustomPayload, Disconnect, KeepAlive,
-            Ping, ResourcePackPop, ResourcePackPush, ResourcePackResponse, StoreCookie, Transfer,
-            UpdateTags,
+            ClientInformation, CookieRequest, CookieResponse, CustomClickAction, CustomPayload,
+            Disconnect, KeepAlive, Ping, ResourcePackPop, ResourcePackPush, ResourcePackResponse,
+            StoreCookie, Transfer, UpdateTags,
         },
         login::Property,
     },
@@ -88,11 +88,31 @@ packet!(ContainerSetContent {
     carried: Option<Stack> => Slot,
 });
 /// ItemCost.STREAM_CODEC: item, count, then the exact component predicate
-/// (Horizon sends and reads it as a component patch without removals).
+/// (a list of typed component values, with no patch removal count).
 #[derive(Clone, Debug, PartialEq)]
 pub struct NetCost {
     pub item: i32,
     pub count: i32,
+    pub components: Vec<(i32, Component)>,
+}
+impl From<Stack> for NetCost {
+    fn from(stack: Stack) -> Self {
+        Self {
+            item: stack.item,
+            count: stack.count,
+            components: stack.added,
+        }
+    }
+}
+impl From<NetCost> for Stack {
+    fn from(cost: NetCost) -> Self {
+        Self {
+            item: cost.item,
+            count: cost.count,
+            added: cost.components,
+            removed: Vec::new(),
+        }
+    }
 }
 /// MerchantOffer.STREAM_CODEC.
 #[derive(Clone, Debug, PartialEq)]
@@ -114,10 +134,17 @@ impl Codec<Vec<NetOffer>> for Offers {
         fn cost(r: &mut Reader) -> Result<NetCost> {
             let item = r.varint()?;
             let count = r.varint()?;
-            if r.varint()? != 0 {
-                return Err(Error::new("item cost components are not supported"));
+            let n = r.count(r.remaining())?;
+            let mut components = Vec::with_capacity(n.min(64));
+            for _ in 0..n {
+                let kind = r.varint()?;
+                components.push((kind, Component::read(kind, r)?));
             }
-            Ok(NetCost { item, count })
+            Ok(NetCost {
+                item,
+                count,
+                components,
+            })
         }
         let n = r.count(r.remaining())?;
         let mut out = Vec::with_capacity(n.min(64));
@@ -144,7 +171,11 @@ impl Codec<Vec<NetOffer>> for Offers {
         fn cost(c: &NetCost, w: &mut Writer) {
             w.varint(c.item);
             w.varint(c.count);
-            w.varint(0);
+            w.varint(c.components.len() as i32);
+            for (kind, value) in &c.components {
+                w.varint(*kind);
+                value.write(*kind, w);
+            }
         }
         w.varint(v.len() as i32);
         for o in v {
@@ -176,6 +207,9 @@ packet!(
     }
 );
 packet!(ContainerSetData { container: i32 => VarInt, id: i16 => Short, value: i16 => Short });
+// ClientboundCooldownPacket: the cooldown group (an identifier) and the ticks
+// its entry lasts (0 ends it).
+packet!(Cooldown { group: String => Ident, duration: i32 => VarInt });
 packet!(ContainerSetSlot { container: i32 => VarInt, state: i32 => VarInt, slot: i16 => Short, item: Option<Stack> => Slot });
 /// A holder reference: registry id + 1, or 0 for an inline value (unsupported).
 pub struct HolderId;
@@ -190,6 +224,35 @@ impl Codec<i32> for HolderId {
         w.varint(v + 1)
     }
 }
+/// `Holder<Dialog>` as Dialog.STREAM_CODEC sends it: an entry of the
+/// `minecraft:dialog` registry the server sent in configuration, or the
+/// dialog itself.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DialogHolder {
+    Registry(i32),
+    Direct(Tag),
+}
+impl Codec<DialogHolder> for DialogHolder {
+    fn read(r: &mut Reader) -> Result<Self> {
+        Ok(match r.varint()? {
+            0 => Self::Direct(r.nbt()?),
+            id => Self::Registry(id - 1),
+        })
+    }
+    fn write(v: &Self, w: &mut Writer) {
+        match v {
+            Self::Registry(id) => w.varint(id + 1),
+            Self::Direct(tag) => {
+                w.varint(0);
+                w.nbt(tag);
+            }
+        }
+    }
+}
+packet!(
+    /// ClientboundShowDialogPacket.
+    ShowDialog { dialog: DialogHolder => DialogHolder }
+);
 packet!(
     /// ChatType.Bound.
     ChatTypeBound { chat_type: i32 => HolderId, name: Tag => Nbt, target: Option<Tag> => Opt<Nbt> }
@@ -1761,6 +1824,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     ContainerSetData(ContainerSetData) = CONTAINER_SET_DATA,
     ContainerSetSlot(ContainerSetSlot) = CONTAINER_SET_SLOT,
     CookieRequest(CookieRequest) = COOKIE_REQUEST,
+    Cooldown(Cooldown) = COOLDOWN,
     CustomPayload(CustomPayload) = CUSTOM_PAYLOAD,
     Disconnect(Disconnect) = DISCONNECT,
     DisguisedChat(DisguisedChat) = DISGUISED_CHAT,
@@ -1854,6 +1918,8 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     UpdateMobEffect(UpdateMobEffect) = UPDATE_MOB_EFFECT,
     UpdateTags(UpdateTags) = UPDATE_TAGS,
     TrackedWaypoint(TrackedWaypoint) = WAYPOINT,
+    ClearDialog(Empty) = CLEAR_DIALOG,
+    ShowDialog(ShowDialog) = SHOW_DIALOG,
 });
 packet!(
     /// ClientboundClearTitlesPacket: whether to also reset the timings.
@@ -2230,6 +2296,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     ContainerClose(ContainerClose) = CONTAINER_CLOSE,
     CookieResponse(CookieResponse) = COOKIE_RESPONSE,
     CustomPayload(CustomPayload) = CUSTOM_PAYLOAD,
+    CustomClickAction(CustomClickAction) = CUSTOM_CLICK_ACTION,
     EditBook(EditBook) = EDIT_BOOK,
     Interact(Interact) = INTERACT,
     KeepAlive(KeepAlive) = KEEP_ALIVE,
@@ -2264,6 +2331,39 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
 mod tests {
     use super::*;
     use crate::{chunk::BlockEntityInfo, packets::round_trip, text::literal};
+
+    #[test]
+    fn merchant_cost_predicate_is_a_typed_list_without_patch_counts() {
+        // ItemCost.STREAM_CODEC: item=7, count=1, one typed component,
+        // potion_contents=53, potion present (water=0), no color/effects/name.
+        // Result: count=1, item=8, empty component patch. Secondary cost:
+        // item=9, count=2, empty predicate, followed by the offer fields.
+        let mut bytes = vec![1, 7, 1, 1, 53, 1, 0, 0, 0, 0, 1, 8, 0, 0, 1, 9, 2, 0, 0];
+        bytes.extend_from_slice(&[0; 4]); // uses
+        bytes.extend_from_slice(&2i32.to_be_bytes()); // max uses
+        bytes.extend_from_slice(&[0; 16]); // xp, special price, multiplier, demand
+        let mut r = Reader::new(&bytes);
+        let offers = Offers::read(&mut r).unwrap();
+        assert_eq!(r.remaining(), 0);
+        assert_eq!(
+            offers[0].cost_a.components,
+            vec![(
+                53,
+                Component::Potion {
+                    potion: Some(0),
+                    color: None,
+                    rest: Vec::new()
+                }
+            )]
+        );
+        assert!(offers[0].cost_b.as_ref().unwrap().components.is_empty());
+        let mut w = Writer::new();
+        Offers::write(&offers, &mut w);
+        assert_eq!(w.data, bytes);
+        for len in 0..bytes.len() {
+            assert!(Offers::read(&mut Reader::new(&bytes[..len])).is_err());
+        }
+    }
 
     #[test]
     fn serverbound_abilities_carry_only_flying() {
@@ -2541,9 +2641,9 @@ mod tests {
             Clientbound::MerchantOffers(MerchantOffers {
                 container: 3,
                 offers: vec![NetOffer {
-                    cost_a: NetCost { item: 5, count: 24 },
+                    cost_a: Stack::new(5, 24).into(),
                     result: Stack::new(7, 1),
-                    cost_b: Some(NetCost { item: 9, count: 1 }),
+                    cost_b: Some(Stack::new(9, 1).into()),
                     out_of_stock: false,
                     uses: 2,
                     max_uses: 16,
@@ -2896,6 +2996,24 @@ mod tests {
     }
 
     #[test]
+    fn a_cooldown_packet_carries_its_group_and_ticks() {
+        let packet = Clientbound::Cooldown(Cooldown {
+            group: "minecraft:ender_pearl".into(),
+            duration: 20,
+        });
+        round_trip(packet, Clientbound::encode, Clientbound::decode);
+        // The group is an identifier, the ticks a VarInt; a duration of 0
+        // removes the entry.
+        let body = Clientbound::encode(&Clientbound::Cooldown(Cooldown {
+            group: "minecraft:ender_pearl".into(),
+            duration: 0,
+        }));
+        assert_eq!(body[0], crate::ids::play::clientbound::COOLDOWN as u8);
+        assert_eq!(&body[1..3], [21, b'm']);
+        assert_eq!(body[body.len() - 1], 0);
+    }
+
+    #[test]
     fn change_game_mode_uses_the_game_type_varint() {
         for mode in 0..=3 {
             let packet = Serverbound::ChangeGameMode(ChangeGameMode { mode });
@@ -3025,6 +3143,7 @@ mod tests {
         w.varint(101);
         assert!(BookPages::read(&mut Reader::new(&w.data)).is_err());
     }
+
     #[test]
     fn boss_event_round_trips() {
         let add = Clientbound::BossEvent(BossEvent {
@@ -3060,6 +3179,30 @@ mod tests {
             }),
             Clientbound::encode,
             Clientbound::decode,
+        );
+    }
+
+    /// A registry entry is its id + 1, the dialog itself a 0 then its NBT.
+    #[test]
+    fn dialogs_round_trip() {
+        let notice = Tag::compound([("type", Tag::String("minecraft:notice".into()))]);
+        for dialog in [DialogHolder::Registry(3), DialogHolder::Direct(notice)] {
+            crate::packets::round_trip(
+                Clientbound::ShowDialog(ShowDialog { dialog }),
+                Clientbound::encode,
+                Clientbound::decode,
+            );
+        }
+        let mut w = Writer::new();
+        DialogHolder::write(&DialogHolder::Registry(3), &mut w);
+        assert_eq!(w.data, [4]);
+        crate::packets::round_trip(
+            Serverbound::CustomClickAction(CustomClickAction {
+                id: "minecraft:custom".into(),
+                payload: None,
+            }),
+            Serverbound::encode,
+            Serverbound::decode,
         );
     }
 }

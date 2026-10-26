@@ -13,10 +13,10 @@ use std::{
     io::Write,
     path::PathBuf,
     sync::{
-        OnceLock,
+        Mutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
-    time::UNIX_EPOCH,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 const MAGIC: &[u8; 8] = b"HZBEHAV\0";
@@ -149,22 +149,7 @@ fn fingerprint(registry: &BlockRegistry, root: &Path) -> io::Result<[u8; 32]> {
         .duration_since(UNIX_EPOCH)
         .map_err(|e| invalid(e.to_string()))?;
     hasher.update(modified.as_nanos().to_le_bytes());
-    for relative in [
-        "facts.json",
-        "block-behaviours.json",
-        "gameplay-facts.json",
-        "block-tags.json",
-        "cached-collision.nbt",
-    ] {
-        hash_file(&mut hasher, root, &root.join(relative))?;
-    }
-    let mut fluids: Vec<PathBuf> = fs::read_dir(root.join("data/minecraft/tags/fluid"))?
-        .map(|entry| entry.map(|entry| entry.path()))
-        .collect::<io::Result<_>>()?;
-    fluids.sort();
-    for path in fluids {
-        hash_file(&mut hasher, root, &path)?;
-    }
+    hasher.update(sources_digest(root)?);
     // The registry argument may be modified independently of facts.json.
     hasher.update((registry.len() as u64).to_le_bytes());
     let mut seen = std::collections::HashSet::new();
@@ -188,6 +173,55 @@ fn fingerprint(registry: &BlockRegistry, root: &Path) -> io::Result<[u8; 32]> {
         }
     }
     Ok(hasher.finalize().into())
+}
+
+/// The source files the snapshot is resolved from, as their lengths and
+/// modification times, and the hash of their contents.
+type Sources = (Vec<(PathBuf, u64, Option<SystemTime>)>, [u8; 32]);
+/// Source hashes already computed by this process: the client's tables and
+/// the world generator's are loaded from the same folder, and hashing its
+/// 70 MB again took a third of a second on a 4-thread laptop. A file whose
+/// length or modification time changed is read again.
+static SOURCES: Mutex<Vec<Sources>> = Mutex::new(Vec::new());
+
+fn sources_digest(root: &Path) -> io::Result<[u8; 32]> {
+    let mut paths: Vec<PathBuf> = [
+        "facts.json",
+        "block-behaviours.json",
+        "gameplay-facts.json",
+        "block-tags.json",
+        "cached-collision.nbt",
+    ]
+    .iter()
+    .map(|relative| root.join(relative))
+    .collect();
+    let mut fluids: Vec<PathBuf> = fs::read_dir(root.join("data/minecraft/tags/fluid"))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<io::Result<_>>()?;
+    fluids.sort();
+    paths.extend(fluids);
+    let stamps = paths
+        .iter()
+        .map(|path| {
+            let meta = fs::metadata(path)?;
+            Ok((path.clone(), meta.len(), meta.modified().ok()))
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    let known = SOURCES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, digest)) = known.iter().find(|(s, _)| *s == stamps) {
+        return Ok(*digest);
+    }
+    drop(known);
+    let mut hasher = Sha256::new();
+    for path in &paths {
+        hash_file(&mut hasher, root, path)?;
+    }
+    let digest: [u8; 32] = hasher.finalize().into();
+    SOURCES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push((stamps, digest));
+    Ok(digest)
 }
 
 fn hash_str(hasher: &mut Sha256, text: &str) {
@@ -804,6 +838,32 @@ mod tests {
             serde_json::to_value(Snapshot::capture(&restored)).unwrap(),
             "all resolved fields, shape grids and identities should roundtrip",
         );
+    }
+
+    /// A folder's sources are hashed once while they stay as they are; a
+    /// file rewritten at the same length is hashed again.
+    #[test]
+    fn sources_are_hashed_once_until_a_file_changes() {
+        let Some(root) = fixture() else {
+            return;
+        };
+        let entries = || {
+            SOURCES
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(stamps, _)| stamps[0].0.starts_with(&root.0))
+                .count()
+        };
+        let first = sources_digest(&root.0).unwrap();
+        assert_eq!(sources_digest(&root.0).unwrap(), first);
+        assert_eq!(entries(), 1);
+        let tags = root.0.join("block-tags.json");
+        let mut bytes = fs::read(&tags).unwrap();
+        bytes[0] ^= 1;
+        fs::write(&tags, bytes).unwrap();
+        assert_ne!(sources_digest(&root.0).unwrap(), first);
+        assert_eq!(entries(), 2);
     }
 
     #[test]

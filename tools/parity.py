@@ -11,6 +11,9 @@
     python3 tools/parity.py --list          # what would run, without running it
     python3 tools/parity.py --status        # last result of every harness
 
+Harnesses in parity_hosts.json's "named_only" run only when named or with --all
+(the nightly audit): no automatic selection picks them.
+
 Each harness runs unmodified, in parallel, under a tracer that records what it
 read: its Python modules, Java oracle sources, other repository files, and the
 Rust sources of every probe it executed (from Cargo's dep-info). A harness
@@ -44,6 +47,11 @@ import socket
 import subprocess
 import sys
 import time
+
+try:
+    from . import parity_reach
+except ImportError:
+    import parity_reach
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL = ROOT / ".local"
@@ -652,6 +660,9 @@ def prebuild(artifacts, jobs):
 
 
 LARGE_OUTPUT = 64 << 20
+# Vanilla outputs above this are deleted after a pass too: rerunning those few oracles (12 harnesses on the Mac
+# mini's runner) costs less than the 26 GB they held in every checkout; smaller ones stay for oracle reuse.
+KEPT_ORACLE_OUTPUT = 256 << 20
 OWN_DIRECTORIES = {"parity-target", "parity-runner", "rea", "logs", "gate"}
 
 
@@ -667,11 +678,12 @@ def clear_large_outputs(name, trace):
     """After a pass, delete the large files a harness regenerates on every run.
 
     Harness outputs reach gigabytes and used to stay in every worktree. Vanilla
-    oracle outputs are kept, since reusing an oracle run needs them in place;
-    everything else large under the harness's .local directories is rebuilt on
-    its next run."""
+    oracle outputs under KEPT_ORACLE_OUTPUT are kept, since reusing an oracle
+    run needs them in place; everything else large under the harness's .local
+    directories (`<name>...` or `rust-<name>-parity`) is rebuilt on its next run."""
     local = LOCAL.resolve()
     keep = {os.path.realpath(line) for line in outputs_listing(name).read_text(encoding="utf-8").splitlines() if line}
+    own = name.split("#")[0].replace("_", "-")
     directories = set()
     for command in trace["commands"]:
         for argument in command[1:]:
@@ -683,12 +695,13 @@ def clear_large_outputs(name, trace):
             # Only the harness's own directory: another harness running beside it may be writing
             # large files in a directory this one merely read (decorated_region compiles its oracle
             # into chunk-generation-parity while chunk_generation writes its dumps there).
-            if top not in OWN_DIRECTORIES and top.startswith(name.replace("_", "-")):
+            if top not in OWN_DIRECTORIES and (top.startswith(own) or top == f"rust-{own}-parity"):
                 directories.add(local / top)
     for directory in directories:
         for file in (directory.rglob("*") if directory.is_dir() else []):
             try:
-                if file.is_file() and not file.is_symlink() and file.stat().st_size >= LARGE_OUTPUT and str(file) not in keep:
+                size = file.stat().st_size if file.is_file() and not file.is_symlink() else 0
+                if size >= LARGE_OUTPUT and (str(file) not in keep or size > KEPT_ORACLE_OUTPUT):
                     file.unlink()
             except OSError:
                 pass
@@ -823,8 +836,11 @@ class LocalExecutor:
         environment.pop("PARITY_SHARD", None)
         if shard:
             environment["PARITY_SHARD"] = shard
+        # stdin from /dev/null: tools/parity_shim.py never reuses an oracle run that reads a pipe, and CI runners
+        # (and --worker's ssh) give the runner one, which kept oracle reuse off on CI.
         process = subprocess.Popen([sys.executable, str(Path(__file__)), "--trace", str(trace), str(script)],
-                                   cwd=ROOT, env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                                   cwd=ROOT, env=environment, stdin=subprocess.DEVNULL, stdout=log,
+                                   stderr=subprocess.STDOUT, start_new_session=True)
         self.running[name] = {"process": process, "started": time.monotonic(), "log": log, "expected": expected,
                               "slot": slot, "script": script}
         return True
@@ -1224,20 +1240,65 @@ def changed_harnesses(found, records, ref):
     return found_changed
 
 
-def affected_harnesses(found, records, changed):
+def affected_harnesses(found, records, changed, reach=True, base=None):
     """Harnesses the changed files can affect: their script or a recorded dependency (here, or in the shared
-    dependency lists) changed, a file every harness depends on changed, or nothing is recorded about them yet."""
+    dependency lists) changed, a file every harness depends on changed, or nothing is recorded about them yet.
+    With reach, a harness's workspace Rust sources count only if its probes can reach them (tools/parity_reach.py);
+    a harness whose probes can't be placed keeps them all. A changed file counts unless, compared with base (a
+    commit), only declarations of modules the harness doesn't reach changed (tools/parity_reach.py)."""
     if changed & SHARED_INPUTS:
         return set(found)
+    graph, stop = None, frozenset()
+    # Parses are keyed by content, so every worktree sharing the vanilla data shares them.
+    cache_path = (SHARED if SHARED.is_dir() else STATE_DIR) / "reach-cache.json"
+    if reach and any(path.startswith("crates/") for path in changed):
+        try:
+            cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            cache = {}
+        graph = parity_reach.SourceGraph(ROOT, rust_code, cache)
+        # A changed file that differs in more than its `mod` declarations counts as soon as a harness reaches it,
+        # so the search for that harness can stop there.
+        stop = frozenset(path for path in changed if parity_reach.is_workspace_rust(path)
+                         and parity_reach.declarations_changed(ROOT, path, (), base, True))
+    budget, started, over = float(os.environ.get("PARITY_REACH_BUDGET") or 180), time.monotonic(), False
     affected = set()
     for name, script in found.items():
-        dependencies = records.get(name, {}).get("dependencies")
+        record = records.get(name) or {}
+        dependencies = record.get("dependencies")
         template = SHARED / "dependencies" / f"{name}.json"
         if dependencies is None and template.exists():
-            dependencies = json.loads(template.read_text(encoding="utf-8")).get("dependencies")
-        if dependencies is None or Path(script).relative_to(ROOT).as_posix() in changed or \
-                any(path.split(KEEP)[0] in changed for path in dependencies):
+            record = json.loads(template.read_text(encoding="utf-8"))
+            dependencies = record.get("dependencies")
+        if dependencies is None or Path(script).relative_to(ROOT).as_posix() in changed:
             affected.add(name)
+            continue
+        plain = {path.split(KEEP)[0] for path in dependencies}
+        hit = plain & changed
+        if not hit:
+            continue
+        if graph is None or any(not path.startswith("crates/") for path in hit):
+            affected.add(name)  # no narrowing, or a file narrowing always keeps (tools/, Java oracles)
+            continue
+        if not over and time.monotonic() - started > budget:
+            over = True
+            print(f"note: choosing harnesses took over {budget:.0f} s (PARITY_REACH_BUDGET): the rest count every "
+                  "source their probes link", flush=True)
+        if over:
+            affected.add(name)
+            continue
+        narrowed = parity_reach.narrow(dependencies, recorded_artifacts(record), graph, changed, stop)
+        if any(path.split(KEEP)[0] in changed and (children is None or parity_reach.declarations_changed(
+                ROOT, path.split(KEEP)[0], children, base, whole)) for path, (whole, children) in narrowed.items()):
+            affected.add(name)
+    if graph is not None:
+        saved = graph.saved_cache()
+        if len(cache) + len(saved) < 4 * max(len(saved), 1):
+            saved = {**cache, **saved}  # other worktrees' versions of the files too, within bounds
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = cache_path.with_suffix(f".{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(saved), encoding="utf-8")
+        temporary.replace(cache_path)
     return affected
 
 
@@ -1246,6 +1307,12 @@ def platform_skips(config):
     if sys.platform == "linux":
         return {}
     return dict(config.get("linux_only", {}))
+
+
+def named_only(config):
+    """Harnesses tools/parity_hosts.json keeps out of every automatic selection (--changed, --failed, the default,
+    --flake-check): they run only when named or with --all, the nightly audit. {name: reason}"""
+    return dict(config.get("named_only", {}))
 
 
 def finished_run(failed):
@@ -1280,6 +1347,8 @@ def main():
     parser.add_argument("--flake-rounds", type=int, default=3, help="runs required by --flake-check (default 3)")
     parser.add_argument("--changed", metavar="REF", help="only harnesses the changes since the merge base with REF can "
                         "affect (and that have not passed with their current inputs): the pull-request check")
+    parser.add_argument("--by-crate", action="store_true", help="with --changed: count every Rust source a probe "
+                        "links, not only those it can reach (tools/parity_reach.py)")
     parser.add_argument("--changed-files", metavar="FILE", help="like --changed, for the changed paths listed in FILE, "
                         "one per line: for a copy without Git history (tools/pr_ready.py on another machine)")
     args = parser.parse_args()
@@ -1316,7 +1385,11 @@ def main():
             changed, since = changed_files(args.changed), f" since the merge base with {args.changed}"
         if changed is None:
             parser.error(f"no merge base with {args.changed}")
-        affected = affected_harnesses(found, records, changed)
+        base = None
+        if args.changed:
+            merge_base = subprocess.run(["git", "merge-base", "HEAD", args.changed], cwd=ROOT, capture_output=True, text=True)
+            base = merge_base.stdout.strip() or None
+        affected = affected_harnesses(found, records, changed, reach=not args.by_crate, base=base)
         chosen = [name for name in found if name in affected and stale(name, state, hasher, environment)]
         print(f"{len(changed)} files changed{since}: {len(affected)} harnesses "
               f"depend on them, {len(chosen)} without a pass for their current inputs.", flush=True)
@@ -1326,9 +1399,13 @@ def main():
     for name in [name for name in chosen if base_name(name) in skips and not args.names]:
         print(f"skipped on {sys.platform}: {name}: {skips[base_name(name)]}", flush=True)
         chosen.remove(name)
+    manual = {} if args.names or args.all else named_only(host_config())
+    for name in [name for name in chosen if base_name(name) in manual]:
+        print(f"not selected (runs when named, and nightly): {name}: {manual[base_name(name)]}", flush=True)
+        chosen.remove(name)
     rounds = {name: args.repeat for name in chosen} if args.repeat > 1 else {}
     if args.flake_check:
-        changed = changed_harnesses(found, records, args.flake_check)
+        changed = {name for name in changed_harnesses(found, records, args.flake_check) if base_name(name) not in manual}
         for name in sorted(changed):
             # A pass counts for a changed harness only if it held over enough runs.
             if name not in chosen and records.get(name, {}).get("rounds", 1) < args.flake_rounds:

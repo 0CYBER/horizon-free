@@ -863,6 +863,8 @@ pub enum Page {
     Font,
     Packs,
     Mods,
+    /// Horizon's shader packs, either kind (`shader_pack_list`).
+    ShaderPacks,
     /// Horizon's graphics settings (`graphics_ui`).
     Graphics,
     GraphicsAdvanced,
@@ -893,6 +895,9 @@ enum Act {
     ResetPadKey(&'static str),
     ResetPadKeys,
     ToggleMod(usize),
+    /// Pick `s.shader_packs[i]`, or turn it off when it is the pick.
+    PickShaderPack(usize),
+    OpenShaderPackFolder,
     /// The installed mod's own settings page (capability `ui`), shown as a
     /// screen: `Event::ModSettings` has the game open it.
     ModSettings(usize),
@@ -947,6 +952,11 @@ pub enum Event {
     Packs(Vec<String>),
     OpenPackFolder,
     OpenModFolder,
+    /// The Shader Packs page opened: list `shaderpacks/` into `shader_packs`.
+    ListShaderPacks,
+    /// A shader pack was picked or turned off: save and apply it.
+    ShaderPack,
+    OpenShaderPackFolder,
     /// Open the mod's own settings page (capability `ui`): the installed
     /// mod's index in `mods.installed`.
     ModSettings(usize),
@@ -1092,6 +1102,9 @@ fn horizon_page_tooltip(page: Page) -> Option<&'static str> {
             "Optional additions, all off by default: the game stays vanilla until you turn one on."
         }
         Page::Agent => "Let your own AI agent play: horizon-ctl and MCP clients on this computer.",
+        Page::ShaderPacks => {
+            "Shader packs from the shaderpacks folder: Horizon's own and those in the shaders/ format. One runs at a time."
+        }
         Page::Mods => {
             "Mods made for Horizon, from the horizon-mods folder. Each runs in a sandbox and stays off until you turn it on."
         }
@@ -1183,6 +1196,7 @@ impl OptionsUi {
             Page::Font => "options.font.title",
             Page::Packs => "resourcePack.title",
             Page::Mods => "Mods",
+            Page::ShaderPacks => "Shader Packs",
             Page::Graphics | Page::GraphicsAdvanced => "options.videoTitle",
             Page::Controller => "Controller Settings",
             Page::PadBinds => "Controller Binds",
@@ -1299,23 +1313,30 @@ impl OptionsUi {
                         Some(open("Advanced Graphics...", Page::GraphicsAdvanced)),
                     ),
                     Row::Buttons(
-                        open("Controller Settings...", Page::Controller),
-                        Some(self.extra_button(s, crate::extras::Item::DiscordPresence)),
+                        open("Shader Packs...", Page::ShaderPacks),
+                        Some(open("Controller Settings...", Page::Controller)),
                     ),
                     Row::Buttons(
                         open("Extras...", Page::Extras),
                         Some(open("Mods...", Page::Mods)),
                     ),
                     // No AI hides the AI Agent page and everything AI.
-                    if s.extras.no_ai {
-                        Row::Buttons(self.extra_button(s, crate::extras::Item::NoAi), None)
-                    } else {
-                        Row::Buttons(
-                            open("AI Agent...", Page::Agent),
-                            Some(self.extra_button(s, crate::extras::Item::NoAi)),
-                        )
-                    },
+                    Row::Buttons(
+                        self.extra_button(s, crate::extras::Item::DiscordPresence),
+                        Some(if s.extras.no_ai {
+                            self.extra_button(s, crate::extras::Item::NoAi)
+                        } else {
+                            open("AI Agent...", Page::Agent)
+                        }),
+                    ),
                 ]
+                .into_iter()
+                .chain(
+                    (!s.extras.no_ai).then(|| {
+                        Row::Buttons(self.extra_button(s, crate::extras::Item::NoAi), None)
+                    }),
+                )
+                .collect()
             }
             Page::Agent => {
                 let mut rows = vec![Row::Buttons(
@@ -1529,6 +1550,26 @@ impl OptionsUi {
                             let widget = button(0.0, 0.0, 310.0, label, Act::ToggleMod(i));
                             Row::Buttons(if dead { inactive(widget) } else { widget }, None)
                         }
+                    })
+                    .collect()
+            }
+            Page::ShaderPacks => {
+                if s.shader_packs.is_empty() {
+                    return vec![Row::Header(
+                        "No shader packs: put them in the shaderpacks folder",
+                    )];
+                }
+                s.shader_packs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, pack)| {
+                        let kind = match pack.kind {
+                            crate::shader_pack_list::Kind::Horizon => " (Horizon)",
+                            crate::shader_pack_list::Kind::Classic => "",
+                        };
+                        let label = Text::literal(format!("{}{kind}: ", pack.title))
+                            .append(on_off(s.horizon.shader_pack == pack.file));
+                        Row::Buttons(button(0.0, 0.0, 310.0, label, Act::PickShaderPack(i)), None)
                     })
                     .collect()
             }
@@ -2017,13 +2058,18 @@ impl OptionsUi {
                 }
                 content = y + self.scroll - top + 2.0;
                 out[list_start..].iter_mut().for_each(|w| w.list = true);
-                if page == Page::Mods {
+                let folder = match page {
+                    Page::Mods => Some(("Open Mod Folder", Act::OpenModFolder)),
+                    Page::ShaderPacks => Some(("Open Pack Folder", Act::OpenShaderPackFolder)),
+                    _ => None,
+                };
+                if let Some((label, act)) = folder {
                     out.push(button(
                         cx - 154.0,
                         h - 27.0,
                         150.0,
-                        Text::literal("Open Mod Folder"),
-                        Act::OpenModFolder,
+                        Text::literal(label),
+                        act,
                     ));
                     out.push(button(cx + 4.0, h - 27.0, 150.0, tr("gui.done"), Act::Done));
                 } else {
@@ -2475,7 +2521,12 @@ impl OptionsUi {
                 } => {
                     events.push(Event::ButtonClick);
                     match act {
-                        Act::Push(p) => self.push(p),
+                        Act::Push(p) => {
+                            if p == Page::ShaderPacks {
+                                events.push(Event::ListShaderPacks);
+                            }
+                            self.push(p)
+                        }
                         Act::Done => events.extend(self.back(s)),
                         Act::Cycle(opt) => {
                             opt.cycle(s, right, framebuffer);
@@ -2520,6 +2571,17 @@ impl OptionsUi {
                             events.push(Event::ModSettings(i));
                         }
                         Act::OpenModFolder => events.push(Event::OpenModFolder),
+                        Act::PickShaderPack(i) => {
+                            if let Some(pack) = s.shader_packs.get(i) {
+                                s.horizon.shader_pack = if s.horizon.shader_pack == pack.file {
+                                    String::new()
+                                } else {
+                                    pack.file.clone()
+                                };
+                                events.push(Event::ShaderPack);
+                            }
+                        }
+                        Act::OpenShaderPackFolder => events.push(Event::OpenShaderPackFolder),
                         Act::Credits => events.push(Event::Credits),
                         Act::CopyAgentDetails => events.push(Event::CopyAgentDetails),
                         Act::None => {}
@@ -3296,26 +3358,29 @@ mod tests {
             crate::extras::rows().iter().filter(|r| r.is_ok()).count()
         );
         assert_eq!(
-            click(&mut ui, &mut s, Act::Extra(crate::extras::Item::Zoom)),
+            click(&mut ui, &mut s, Act::Extra(crate::extras::Item::Sort)),
             vec![Event::ButtonClick, Event::Changed]
         );
-        assert!(s.extras.zoom);
+        assert!(s.extras.sort);
         assert_eq!(
-            click(&mut ui, &mut s, Act::Extra(crate::extras::Item::ZoomKey)),
+            click(&mut ui, &mut s, Act::Extra(crate::extras::Item::SortKey)),
             vec![Event::ButtonClick]
         );
-        assert_eq!(ui.selected_key, Some(crate::extras::ZOOM_KEY));
+        assert_eq!(ui.selected_key, Some(crate::extras::SORT_KEY));
         assert_eq!(
             ui.key(&mut s, &atlas, winit::keyboard::KeyCode::KeyC, None),
             vec![Event::Changed]
         );
-        assert_eq!(s.extras.zoom_key, "key.keyboard.c");
+        assert_eq!(s.extras.sort_key, "key.keyboard.c");
         assert_eq!(
             crate::extras::Extras::parse(&s.extras.serialize()),
             s.extras
         );
-        ui.scroll(&s, size, -1000.0);
-        let (_, top, bottom, content) = ui.layout(&s, size.0, size.1);
+        // In a window too short for the page, the wheel scrolls to its end.
+        let short = (480.0, 180.0);
+        ui.scroll(&s, short, -1000.0);
+        let (_, top, bottom, content) = ui.layout(&s, short.0, short.1);
+        assert!(content > bottom - top);
         assert_eq!(ui.scroll, content - (bottom - top));
         assert_eq!(
             ui.key(&mut s, &atlas, winit::keyboard::KeyCode::Escape, None),
@@ -3402,9 +3467,6 @@ mod tests {
                 Opt::GuiScale.cycle(&mut s, false, framebuffer);
                 assert_eq!(s.gui_scale, expected);
             }
-            s.gui_scale = u32::MAX;
-            s.clamp_gui_scale(framebuffer);
-            assert_eq!(s.gui_scale, max);
             s.gui_scale = u32::MAX;
             Opt::GuiScale.cycle(&mut s, false, framebuffer);
             assert_eq!(s.gui_scale, 0);
@@ -3870,7 +3932,7 @@ mod tests {
 
     #[test]
     fn extras_and_vanilla_bindings_accept_mouse_buttons() {
-        use crate::extras::{Extras, SORT_KEY, ZOOM_KEY};
+        use crate::extras::{Extras, SORT_KEY};
         use winit::event::MouseButton;
         for button in [
             MouseButton::Left,
@@ -3879,7 +3941,7 @@ mod tests {
             MouseButton::Back,
             MouseButton::Forward,
         ] {
-            for name in [SORT_KEY, ZOOM_KEY, "key.jump"] {
+            for name in [SORT_KEY, "key.jump"] {
                 let mut ui = OptionsUi::default();
                 let mut s = Settings::default();
                 ui.selected_key = Some(name);
@@ -3888,7 +3950,6 @@ mod tests {
                 let value = keybinds::mouse_name(button);
                 match name {
                     SORT_KEY => assert_eq!(s.extras.sort_key, value),
-                    ZOOM_KEY => assert_eq!(s.extras.zoom_key, value),
                     _ => assert_eq!(s.keys.get(name), value),
                 }
                 assert_eq!(Extras::parse(&s.extras.serialize()), s.extras);
@@ -4067,6 +4128,7 @@ mod tests {
             [
                 Page::Graphics,
                 Page::GraphicsAdvanced,
+                Page::ShaderPacks,
                 Page::Controller,
                 Page::Extras,
                 Page::Mods,

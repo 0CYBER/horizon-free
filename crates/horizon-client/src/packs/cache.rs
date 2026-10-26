@@ -8,7 +8,8 @@ use std::io::Read;
 use std::{collections::BTreeSet, fs, io, path::Path, path::PathBuf};
 
 // Bump when overlay/merge semantics change. Markers are disposable cache data.
-const VERSION: u32 = 3;
+// Version 3 could omit untouched vanilla directories on Windows (#1649, #1688).
+const VERSION: u32 = 4;
 
 #[derive(Default, Serialize, Deserialize)]
 pub(super) struct Dependencies {
@@ -422,6 +423,73 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(unix))]
+    fn texture_only_packs_rebuild_incomplete_windows_v3_overlays() {
+        let f = Fixture::new();
+        let blockstate = "assets/minecraft/blockstates/oak_stairs.json";
+        let model = "assets/minecraft/models/block/oak_stairs.json";
+        let texture = "assets/minecraft/textures/block/stone.png";
+        let font = "assets/minecraft/textures/font/ascii.png";
+        f.write(&format!("vanilla/{blockstate}"), br#"{"variants":{}}"#);
+        f.write(&format!("vanilla/{model}"), br#"{"elements":[]}"#);
+        f.write(&format!("vanilla/{texture}"), b"vanilla texture");
+        f.write(&format!("vanilla/{font}"), b"vanilla font");
+        let folder = f.dir_pack("textures");
+        f.write(&format!("textures/{texture}"), b"pack texture");
+        f.write(
+            "textures.zip",
+            &archive(
+                &[
+                    (
+                        "pack.mcmeta",
+                        br#"{"pack":{"description":"test","pack_format":97}}"#.to_vec(),
+                    ),
+                    (texture, b"pack texture".to_vec()),
+                ],
+                true,
+            ),
+        );
+        let zip = packs::pack(
+            "zip".into(),
+            Text::empty(),
+            Source::Zip(f.0.join("textures.zip")),
+        )
+        .unwrap();
+        let vanilla = f.0.join("vanilla");
+        for pack in [folder, zip] {
+            let out = f.0.join(format!("cached-{}", pack.id));
+            let selected = std::slice::from_ref(&pack);
+            packs::build_overlay(&vanilla, selected, &out).unwrap();
+            let check = || {
+                for name in [blockstate, model, font] {
+                    assert_eq!(
+                        fs::read(out.join(name)).unwrap(),
+                        fs::read(vanilla.join(name)).unwrap()
+                    );
+                }
+                assert_eq!(fs::read(out.join(texture)).unwrap(), b"pack texture");
+            };
+            check();
+            // Before #1688, Windows silently omitted untouched directories.
+            // A v3 marker still validates because it checks only source files.
+            let marker_path = marker_path(&out);
+            let mut marker: Marker =
+                serde_json::from_slice(&fs::read(&marker_path).unwrap()).unwrap();
+            marker.version = 3;
+            for dir in ["blockstates", "models", "textures/font"] {
+                fs::remove_dir_all(out.join("assets/minecraft").join(dir)).unwrap();
+            }
+            fs::write(&marker_path, serde_json::to_vec(&marker).unwrap()).unwrap();
+            assert!(marker.dependencies.valid());
+            packs::build_overlay(&vanilla, selected, &out).unwrap();
+            check();
+            // The repaired overlay also remains complete on a cache hit.
+            packs::build_overlay(&vanilla, selected, &out).unwrap();
+            check();
+        }
+    }
+
+    #[test]
     fn directory_inputs_config_and_owned_output_recovery() {
         let f = Fixture::new();
         let resource = "assets/minecraft/lang/en_us.json";
@@ -456,7 +524,10 @@ mod tests {
         let path = f.0.join(format!("high/{resource}"));
         let original_time = fs::metadata(&path).unwrap().modified().unwrap();
         fs::write(&path, br#"{"p":"c"}"#).unwrap();
-        fs::File::open(path)
+        // Windows requires a writable handle to restore the timestamp.
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)
             .unwrap()
             .set_times(fs::FileTimes::new().set_modified(original_time))
             .unwrap();

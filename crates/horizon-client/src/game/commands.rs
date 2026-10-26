@@ -10,6 +10,7 @@ mod items;
 mod misc;
 mod place;
 mod players;
+pub(super) mod pregen;
 mod raid;
 mod terrain_cmds;
 mod text_commands;
@@ -84,16 +85,16 @@ fn format_double(v: f64) -> String {
 
 impl Game<'_> {
     /// Commands.performCommand for a line without its slash.
-    pub(super) fn run_command(&mut self, command: &str) {
+    pub(super) fn run_command(&mut self, command: &str) -> bool {
         if self.mod_command(command) {
-            return;
+            return true;
         }
         let d = vanilla::game_dispatcher();
         let parse = d.parse(command, &self.ui.registries);
         let result = match parse.executable() {
             Err(e) => {
                 self.syntax_failure(&e, command);
-                return;
+                return false;
             }
             Ok((ctx, _)) => {
                 let ctx = ctx.clone();
@@ -102,6 +103,7 @@ impl Game<'_> {
                 self.run_chain(&root, &ctx)
             }
         };
+        let ok = result.is_ok();
         if let Err(e) = result {
             if e.input.is_some() {
                 self.syntax_failure(&e, command);
@@ -113,6 +115,20 @@ impl Game<'_> {
         if self.player.is_some() {
             self.check_inventory_trigger();
         }
+        ok
+    }
+    /// `run_command` with its output suppressed
+    /// (`CommandSourceStack.withSuppressedOutput`): the player's own source,
+    /// rights and checks, no feedback and no failure in the chat.
+    pub(super) fn run_command_quietly(&mut self, command: &str) -> bool {
+        let quiet = execute::Source {
+            silent: true,
+            ..self.player_source()
+        };
+        let outer = self.command_source.replace(quiet);
+        let ok = self.run_command(command);
+        self.command_source = outer;
+        ok
     }
     fn syntax_failure(&mut self, e: &CommandError, command: &str) {
         self.command_failure(e.message.clone());
@@ -751,13 +767,15 @@ impl Game<'_> {
                     && !id.ends_with("get")
                     && let Ok(t) = self.entities(ctx, "target", false)
                 {
-                    self.cmds.waypoint_dirty.push(t[0]);
+                    let target = self.waypoint_target(t[0]);
+                    self.cmds.waypoint_dirty.push(target);
                 }
                 result
             }
             "ride.mount" | "ride.dismount" => self.cmd_ride(id, ctx),
             "spreadplayers" => self.cmd_spreadplayers(ctx),
             id if id.starts_with("forceload.") => self.cmd_forceload(id, ctx),
+            id if id.starts_with("pregen.") => self.cmd_pregen(id, ctx),
             "fillbiome" => self.cmd_fillbiome(ctx),
             id if id.starts_with("worldborder.") => self.cmd_worldborder(id, ctx),
             id if id.starts_with("loot.") => self.cmd_loot(id, ctx),
@@ -1094,6 +1112,12 @@ impl Game<'_> {
             Target::Player => {
                 // ServerPlayer.teleport: removeVehicle before placing the player.
                 self.stop_riding();
+                // A server's player teleported within their level is placed
+                // there at once: the arrival they were waiting for elsewhere
+                // in it (whose chunks lose their tickets) is abandoned.
+                if let Some(conn) = self.lan_acting {
+                    self.server_trips.retain(|trip| !trip.is(conn));
+                }
                 if let Some(p) = self.player.as_mut() {
                     p.position = v;
                     p.velocity = Vec3::new(0.0, 0.0, 0.0);
@@ -1861,17 +1885,91 @@ impl Game<'_> {
                 }
             }
         }
-        let Some((_, new)) = horizon_client::save::decode_block_entity(&tag) else {
+        let Some((_, mut new)) = horizon_client::save::decode_block_entity(&tag) else {
             return false;
         };
+        let rolled = self.take_loot_table(key, &tag, &mut new);
         let after = horizon_client::save::encode_block_entity(key, &new, &name);
-        if after == before {
+        if after == before && !rolled {
             return false;
         }
         self.world.block_entities.insert(key, new);
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let _ = self.world.set(pos[0], pos[1], pos[2], state);
         true
+    }
+    /// RandomizableContainer.tryLoadLootTable for a tag a command gives a
+    /// container (`setblock`, `data`): an empty container with a `LootTable`
+    /// is rolled now, as a loaded chunk's are (`save::roll_loaded_loot`), and
+    /// the roll is kept with its chunk, so that the container saves, and
+    /// `data get` shows, its table and seed until its items change. A tag
+    /// without one drops what the container had. True when it had a table.
+    pub(super) fn take_loot_table(
+        &mut self,
+        key: (i32, i32, i32),
+        tag: &horizon_world::nbt::Tag,
+        entity: &mut horizon_client::containers::BlockEntity,
+    ) -> bool {
+        use horizon_client::{containers::BlockEntity, save, structure_blocks};
+        let table = save::text(tag.get("LootTable"));
+        let rolled = match (table, entity) {
+            (Some(table), BlockEntity::Chest(slots)) if slots.iter().all(Option::is_none) => {
+                let loot = structure_blocks::loot_data(&self.options.resources);
+                let at = Vec3::new(f64::from(key.0), f64::from(key.1), f64::from(key.2));
+                let biome = self.biome_name_at(at).unwrap_or_default();
+                Some(structure_blocks::roll_container(
+                    slots,
+                    loot.as_deref(),
+                    table,
+                    structure_blocks::loot_seed(tag),
+                    key,
+                    &biome,
+                ))
+            }
+            _ => None,
+        };
+        let Some(chunk) = self.world.chunks.get_mut(&(key.0 >> 4, key.2 >> 4)) else {
+            return false;
+        };
+        let held = |c: &horizon_client::chunk::Chunk| {
+            c.saved
+                .as_ref()
+                .is_some_and(|s| s.rolled_loot.iter().any(|r| r.pos == key))
+        };
+        if rolled.is_none() && !held(chunk) {
+            return false;
+        }
+        let chunk = std::sync::Arc::make_mut(chunk);
+        let mut extras = chunk
+            .saved
+            .take()
+            .map(std::sync::Arc::unwrap_or_clone)
+            .unwrap_or_default();
+        extras.rolled_loot.retain(|r| r.pos != key);
+        let taken = rolled.is_some();
+        extras.rolled_loot.extend(rolled);
+        chunk.saved = Some(std::sync::Arc::new(extras));
+        taken
+    }
+    /// The loot table and seed a container still holding its roll saves
+    /// (`RolledLoot::restore`), in place of its items.
+    pub(super) fn restore_loot_table(
+        &self,
+        key: (i32, i32, i32),
+        tag: &mut horizon_world::nbt::Tag,
+    ) {
+        let horizon_world::nbt::Tag::Compound(map) = tag else {
+            return;
+        };
+        let rolled = self
+            .world
+            .chunks
+            .get(&(key.0 >> 4, key.2 >> 4))
+            .and_then(|c| c.saved.as_ref())
+            .and_then(|s| s.rolled_loot.iter().find(|r| r.pos == key));
+        if let Some(r) = rolled {
+            r.restore(map);
+        }
     }
     fn cmd_fill(&mut self, ctx: &Context) -> R<i32> {
         let a = self.block_pos_arg(ctx, "from")?;
@@ -2499,12 +2597,14 @@ impl Game<'_> {
         };
         let max = Self::int(ctx, "maxCount").unwrap_or(-1);
         let counting = max == 0;
-        // Inventory.clearOrCountMatchingItems: main, armor, crafting grid, carried.
+        // Inventory slots 0..40: main, armor feet to head, off hand;
+        // then clearOrCountMatchingItems visits the crafting grid and carried stack.
         let mut removed = 0i32;
         let mut budget = if max < 0 { i32::MAX } else { max };
         let all = |g: &Self| -> Vec<Option<ItemStack>> {
             let mut v: Vec<Option<ItemStack>> = g.inventory.clone();
-            v.extend(g.armor.iter().cloned());
+            v.extend(g.armor.iter().rev().cloned());
+            v.push(g.offhand.clone());
             v.extend(g.craft_grid.iter().cloned());
             v.push(g.carried.clone());
             v
@@ -2518,7 +2618,8 @@ impl Game<'_> {
             .collect();
         let mut slots: Vec<&mut Option<ItemStack>> = Vec::new();
         slots.extend(self.inventory.iter_mut());
-        slots.extend(self.armor.iter_mut());
+        slots.extend(self.armor.iter_mut().rev());
+        slots.push(&mut self.offhand);
         slots.extend(self.craft_grid.iter_mut());
         slots.push(&mut self.carried);
         for (slot, matches) in slots.into_iter().zip(matching) {
@@ -2566,38 +2667,7 @@ impl Game<'_> {
     /// `PoiTypes`: the point of interest type of a block state.
     fn poi_type(&self, state: horizon_world::registry::BlockStateId) -> Option<&'static str> {
         let s = self.pack.assets.registry.state(state)?;
-        let name = s.name.strip_prefix("minecraft:")?;
-        Some(match name {
-            "blast_furnace" => "minecraft:armorer",
-            "smoker" => "minecraft:butcher",
-            "cartography_table" => "minecraft:cartographer",
-            "brewing_stand" => "minecraft:cleric",
-            "composter" => "minecraft:farmer",
-            "barrel" => "minecraft:fisherman",
-            "fletching_table" => "minecraft:fletcher",
-            "cauldron" | "lava_cauldron" | "water_cauldron" | "powder_snow_cauldron" => {
-                "minecraft:leatherworker"
-            }
-            "lectern" => "minecraft:librarian",
-            "stonecutter" => "minecraft:mason",
-            "loom" => "minecraft:shepherd",
-            "smithing_table" => "minecraft:toolsmith",
-            "grindstone" => "minecraft:weaponsmith",
-            "bell" => "minecraft:meeting",
-            "beehive" => "minecraft:beehive",
-            "bee_nest" => "minecraft:bee_nest",
-            "nether_portal" => "minecraft:nether_portal",
-            "lodestone" => "minecraft:lodestone",
-            "test_instance_block" => "minecraft:test_instance",
-            n if n.ends_with("_bed") => {
-                if s.properties.get("part").map(String::as_str) != Some("head") {
-                    return None;
-                }
-                "minecraft:home"
-            }
-            n if n.ends_with("lightning_rod") => "minecraft:lightning_rod",
-            _ => return None,
-        })
+        horizon_client::save::poi_type(s).map(|(kind, _)| kind)
     }
     /// `LocateCommand.locatePoi`: `PoiManager.findClosestWithType` within
     /// 256 blocks of the source, over the loaded chunks.
@@ -2836,9 +2906,14 @@ impl Game<'_> {
             capture.push(line.clone());
         }
         let focused = self.screen == Screen::Chat;
-        self.ui
-            .chat
-            .add(&self.gui.atlas, line, None, self.ticks, focused);
+        self.ui.chat.add(
+            &self.gui.atlas,
+            line,
+            None,
+            horizon_client::chat::ChatSource::Player,
+            self.ticks,
+            focused,
+        );
         Ok(1)
     }
     /// MessageArgument: `@p`-style selectors in a message become names.

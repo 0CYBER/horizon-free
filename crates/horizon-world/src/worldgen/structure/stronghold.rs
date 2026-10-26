@@ -29,6 +29,9 @@ pub fn ring_positions(
         .collect()
 }
 
+/// findBiomeHorizontal's radius, 112 blocks, in quarts.
+const SEARCH_QUARTS: i32 = 28;
+
 /// One ring position before its biome search: the chunk on the ring and the
 /// random its search uses. Vanilla runs each search as its own task.
 #[derive(Clone, Debug)]
@@ -38,6 +41,13 @@ pub struct RingSearch {
     random: LegacyRandom,
 }
 impl RingSearch {
+    /// Whether the search can end within `margin` chunks of chunk (`x`,
+    /// `z`): it ends on its ring chunk or in the square it samples, at most
+    /// 120 blocks from the ring chunk's corner (8 chunks, rounded up).
+    pub fn may_land_near(&self, x: i32, z: i32, margin: i32) -> bool {
+        let reach = (SEARCH_QUARTS * 4 + 8 + 15) / 16 + margin;
+        (self.x - x).abs() <= reach && (self.z - z).abs() <= reach
+    }
     /// BiomeSource.findBiomeHorizontal around the ring chunk's centre: a
     /// random preferred biome within 112 blocks, else the ring chunk itself.
     ///
@@ -53,8 +63,9 @@ impl RingSearch {
     ) -> ChunkPos {
         let mut search = self.random.clone();
         let (cx, cz) = ((self.x * 16 + 8) >> 2, (self.z * 16 + 8) >> 2);
-        let quarts: Vec<[i32; 3]> = (-28..=28)
-            .flat_map(|dz| (-28..=28).map(move |dx| [cx + dx, 0, cz + dz]))
+        let r = SEARCH_QUARTS;
+        let quarts: Vec<[i32; 3]> = (-r..=r)
+            .flat_map(|dz| (-r..=r).map(move |dx| [cx + dx, 0, cz + dz]))
             .collect();
         let mut found = 0;
         let mut result = None;
@@ -1063,6 +1074,48 @@ impl StrongholdPiece {
 impl LegacyPiece for StrongholdPiece {
     fn bounding_box(&self) -> BoundingBox {
         self.frame.bounding_box
+    }
+    fn save(&self) -> Option<crate::nbt::Compound> {
+        use crate::nbt::Tag;
+        let flag = |b: bool| Tag::Byte(i8::from(b));
+        let mut tag = super::legacy::piece_tag(
+            self.type_name(),
+            self.frame.bounding_box,
+            self.frame.orientation,
+            self.depth,
+        );
+        // SmallDoorType.LEGACY_CODEC: the enum name.
+        let door = match self.door {
+            Door::Opening => "OPENING",
+            Door::Wood => "WOOD_DOOR",
+            Door::Grates => "GRATES",
+            Door::Iron => "IRON_DOOR",
+        };
+        let placed = *self.placed.lock().unwrap();
+        let [a, b, c, d] = self.flags;
+        let mut entries = vec![("EntryDoor", Tag::String(door.into()))];
+        match self.kind {
+            Kind::ChestCorridor => entries.push(("Chest", flag(placed))),
+            Kind::Filler => entries.push(("Steps", Tag::Int(self.value))),
+            Kind::FiveCrossing => entries.extend([
+                ("leftLow", flag(a)),
+                ("leftHigh", flag(b)),
+                ("rightLow", flag(c)),
+                ("rightHigh", flag(d)),
+            ]),
+            Kind::Library => entries.push(("Tall", flag(a))),
+            Kind::PortalRoom => entries.push(("Mob", flag(placed))),
+            Kind::RoomCrossing => entries.push(("Type", Tag::Int(self.value))),
+            // StartPiece is a StairsDown that is the source.
+            Kind::StairsDown => entries.push(("Source", flag(false))),
+            Kind::Start => entries.push(("Source", flag(true))),
+            Kind::Straight => entries.extend([("Left", flag(a)), ("Right", flag(b))]),
+            _ => {}
+        }
+        for (key, value) in entries {
+            tag.insert(key.into(), value);
+        }
+        Some(tag)
     }
     fn type_name(&self) -> &'static str {
         match self.kind {

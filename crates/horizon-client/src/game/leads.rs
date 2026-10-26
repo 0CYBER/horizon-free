@@ -79,6 +79,8 @@ impl Game<'_> {
         if horizon_client::mobs::leash::remove(m).is_none() {
             return;
         }
+        // Leashable.tickLeash gates a dying entity's lead drop on entity_drops.
+        let drop = drop && (m.alive() || self.ui.rules.bool("entity_drops"));
         let at = [m.position.x, m.position.y, m.position.z];
         if sound {
             self.lead_sound("break", at);

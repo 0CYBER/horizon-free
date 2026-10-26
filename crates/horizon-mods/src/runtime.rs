@@ -1,5 +1,9 @@
 //! Loading and calling mods with wasmtime's component model.
 use crate::manifest::{Manifest, Package, Side};
+use server_bindings::{
+    HorizonServerMod, exports::horizon::mods::server_events::Registration as ServerRegistration,
+    horizon::mods::players,
+};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -16,6 +20,17 @@ mod bindings {
         world: "horizon-mod",
     });
 }
+/// The server mods' world: `log` and `storage` are the client world's.
+mod server_bindings {
+    wasmtime::component::bindgen!({
+        path: "../horizon-mod-sdk/wit",
+        world: "horizon-server-mod",
+        with: {
+            "horizon:mods/log": super::bindings::horizon::mods::log,
+            "horizon:mods/storage": super::bindings::horizon::mods::storage,
+        },
+    });
+}
 /// Capability `ui`'s world beyond `horizon-mod` (docs/mods.md): a second
 /// world, so mods built before it (no `ui-events` export) still instantiate
 /// as `horizon-mod` and simply hear nothing of their widgets.
@@ -26,20 +41,43 @@ mod ui_bindings {
     });
 }
 pub use bindings::horizon::mods::{
-    game::{Clock, Player},
+    game::{Clock, Hit, Player},
     hud::{Corner, Line},
 };
 use bindings::{
     HorizonMod,
     exports::horizon::mods::events::Registration,
-    horizon::mods::{chat, game, hud, log as mod_log, storage},
+    horizon::mods::{chat, command, game, hud, log as mod_log, storage},
 };
+pub use server_bindings::{
+    exports::horizon::mods::server_events::BlockPos,
+    horizon::mods::players::{GameMode, Player as ServerPlayer},
+};
+type ClientEvents = bindings::exports::horizon::mods::events::Guest;
+type ServerEvents = server_bindings::exports::horizon::mods::server_events::Guest;
 /// The widget model a `ui` screen or settings page shows (WIT `interface
 /// ui`), for the game to draw with its menus' own widgets.
 pub use ui_bindings::horizon::mods::ui::{
-    ItemWidget, ListWidget, Screen as UiScreen, TextWidget, Widget as UiWidget,
+    ButtonWidget, ItemWidget, ListWidget, Screen as UiScreen, TextWidget, Widget as UiWidget,
 };
 use ui_bindings::{UiHost, horizon::mods::ui};
+/// Capability `render`'s imports (docs/mods.md): the game draws the shapes.
+mod render_bindings {
+    wasmtime::component::bindgen!({
+        path: "../horizon-mod-sdk/wit",
+        world: "render-host",
+    });
+}
+use render_bindings::horizon::mods::input;
+/// Capability `input`'s records (WIT `interface input`).
+pub use render_bindings::horizon::mods::input::{Event as InputEvent, HeldItem, ItemUse};
+/// What capability `render` asks the game to draw (WIT `interface render`).
+pub use render_bindings::horizon::mods::render::{
+    Corner as RenderCorner, FillShape, FrameRate, ItemShape, Minimap as ModMinimap,
+    Point as RenderPoint, QuadShape, Rect as RenderRect, Shape, SpriteShape, TextShape,
+    Zoom as ModZoom,
+};
+use render_bindings::{RenderHost, horizon::mods::render};
 
 /// A mod's linear memory cap.
 const MEMORY: usize = 64 << 20;
@@ -51,6 +89,11 @@ const FUEL_FRAME: u64 = 10_000_000;
 const FUEL_EVENT: u64 = 100_000_000;
 /// Chat lines a mod may show per call, HUD lines and their length.
 const CHAT_PER_CALL: usize = 8;
+/// `command.run-quiet` lines one call of a mod may queue (a quiet payload's
+/// cap, `horizon_protocol::quiet::MAX_LINES`).
+const QUIET_PER_CALL: usize = 256;
+/// How far `game.raycast` sees, in blocks.
+pub const RAYCAST_MAX: f32 = 1024.0;
 const HUD_LINES: usize = 16;
 const LINE_CHARS: usize = 256;
 /// Total bytes a mod's `storage` may hold on disk, across all its keys.
@@ -70,6 +113,44 @@ const STORAGE_WRITE_BUDGET: u64 = 1 << 20;
 pub struct Snapshot {
     pub player: Option<Player>,
     pub clock: Option<Clock>,
+    /// The screen in GUI pixels (capability `render`'s `gui-size`).
+    pub gui_size: (f32, f32),
+    /// The main hand's stack (capability `input`'s `held`).
+    pub held: Option<HeldItem>,
+    /// The game's frame counter: fps, min, 1% low (`render.frame-stats`).
+    pub frame: (u32, u32, u32),
+    /// The movement and click mappings `input.mapping` answers for:
+    /// (mapping, the bound key's label, held).
+    pub mappings: Vec<(&'static str, String, bool)>,
+    /// Attack and use clicks in the last second.
+    pub cps: (u32, u32),
+    /// The HUD font's advance per character from U+0000
+    /// (`render.text-width`); empty: 6 each.
+    pub font_widths: Arc<[f32]>,
+    /// The players on the server, for server mods.
+    pub players: Vec<ServerPlayer>,
+    /// The first block along the player's view within [`RAYCAST_MAX`] and
+    /// its distance from the eye, for `game.raycast`; the game works it out
+    /// only while a mod calls it ([`Mods::wants_raycast`]).
+    pub view_hit: Option<(f32, Hit)>,
+}
+
+/// Which mods a game starts: the window's game the client mods, the game
+/// simulating the world the server mods, single player in the frame both.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Runs {
+    Client,
+    Server,
+    Both,
+}
+impl Runs {
+    fn starts(self, side: Side) -> bool {
+        match self {
+            Runs::Both => true,
+            Runs::Client => side != Side::Server,
+            Runs::Server => side == Side::Server,
+        }
+    }
 }
 
 /// What mods asked the game to show since the last [`Mods::drain`].
@@ -79,13 +160,35 @@ pub enum Output {
     Chat { name: String, text: String },
     /// A mod command's feedback, red when `error`.
     Feedback { text: String, error: bool },
+    /// `command.run`: a vanilla command line, without its slash, to run as
+    /// the player.
+    Command { line: String },
+    /// `command.run-quiet`: vanilla command lines to run as the player with
+    /// nothing in the chat (`horizon_protocol::quiet` on a server).
+    QuietCommands { mod_id: String, lines: Vec<String> },
     /// The mod was turned off: it trapped, overran or failed to start.
     Stopped { name: String, reason: String },
+    /// `players.tell`: a line after the mod's name, to the player with this id.
+    Tell {
+        name: String,
+        player: String,
+        text: String,
+    },
+    /// `players.broadcast`: a line after the mod's name, to every player.
+    Broadcast { name: String, text: String },
+    /// A server mod command's feedback, to the player who typed it.
+    Reply {
+        player: String,
+        text: String,
+        error: bool,
+    },
     /// `ui.open-screen`: the mod's entry in `entries()`; what it shows is
     /// [`Mods::screen`].
     OpenScreen { owner: usize },
     /// `ui.close-screen`: the mod closed its own screen (no `closed` back).
     CloseScreen { owner: usize },
+    /// `render.shake`: strength 0 to 1, fading out over `seconds` (≤ 10).
+    Shake { strength: f32, seconds: f32 },
 }
 
 /// A mod's text panel, drawn every frame until it changes.
@@ -100,6 +203,9 @@ pub enum Status {
     /// Installed and turned off by the player.
     Off,
     Running,
+    /// Turned on, and run by another game: a server mod in the window while
+    /// the world runs on its server thread.
+    Elsewhere,
     /// Could not load or start, or stopped while running.
     Failed(String),
 }
@@ -117,20 +223,50 @@ pub struct Entry {
 }
 impl Entry {
     /// The running mod has a settings page (capability `ui` set widgets
-    /// with `ui.set-settings`): its row in Options > Mods gains a button.
+    /// with `ui.set-settings`, or `input` registered keys the player may
+    /// bind there): its row in Options > Mods gains a button.
     pub fn has_ui_settings(&self) -> bool {
-        self.run
-            .as_ref()
-            .is_some_and(|r| !r.store.data().ui.settings.is_empty())
+        self.run.as_ref().is_some_and(|r| {
+            let d = r.store.data();
+            !d.ui.settings.is_empty() || !d.input.keys.is_empty()
+        })
     }
 }
 
 struct Running {
     store: Store<State>,
-    exports: HorizonMod,
-    /// The mod's `ui-events` export; none for a mod built before `ui`.
+    /// The mod's `ui-events` export; none for a mod built before `ui`, or a
+    /// server mod.
     ui: Option<UiHost>,
-    hooks: Registration,
+    hooks: Hooks,
+    /// It imports `game.raycast`.
+    raycasts: bool,
+}
+
+/// A running mod's exports and the hooks its `init` asked for.
+enum Hooks {
+    Client(HorizonMod, Registration),
+    Server(HorizonServerMod, ServerRegistration),
+}
+impl Hooks {
+    fn client(&self) -> Option<&Registration> {
+        match self {
+            Hooks::Client(_, r) => Some(r),
+            Hooks::Server(..) => None,
+        }
+    }
+    fn server(&self) -> Option<&ServerRegistration> {
+        match self {
+            Hooks::Server(_, r) => Some(r),
+            Hooks::Client(..) => None,
+        }
+    }
+    fn commands(&self) -> &[String] {
+        match self {
+            Hooks::Client(_, r) => &r.commands,
+            Hooks::Server(_, r) => &r.commands,
+        }
+    }
 }
 
 /// What capability `ui` pushed since the hooks last ran.
@@ -153,6 +289,15 @@ struct State {
     out: Vec<Output>,
     panel: Option<Panel>,
     ui: UiState,
+    /// Capability `render`'s HUD shapes, drawn until replaced.
+    shapes: Vec<Shape>,
+    /// Capability `render`'s corner panel.
+    corner: Option<CornerPanel>,
+    /// Capability `render`'s zoom, when the mod zooms.
+    zoom: Option<ModZoom>,
+    /// Capability `render`'s minimap, when the mod shows one.
+    minimap: Option<ModMinimap>,
+    input: InputState,
     /// Capability `storage`'s folder; made on first `set`.
     data_dir: PathBuf,
     /// Bytes `storage::set` may still write before this hook call ends
@@ -174,10 +319,20 @@ pub struct Mods {
 }
 
 impl Mods {
-    /// Reads every mod at `paths` and starts those `enabled` says are on.
-    /// A command that `reserved` (vanilla's commands) or an earlier mod
-    /// already uses is refused.
+    /// Reads every mod at `paths` and starts those `enabled` says are on,
+    /// client and server mods alike. A command that `reserved` (vanilla's
+    /// commands) or an earlier mod already uses is refused.
     pub fn load(
+        paths: &[PathBuf],
+        enabled: impl Fn(&str) -> bool,
+        reserved: impl Fn(&str) -> bool,
+    ) -> Mods {
+        Mods::load_for(Runs::Both, paths, enabled, reserved)
+    }
+    /// [`Mods::load`], starting only the mods `runs` says this game runs; the
+    /// others that are on are [`Status::Elsewhere`].
+    pub fn load_for(
+        runs: Runs,
         paths: &[PathBuf],
         enabled: impl Fn(&str) -> bool,
         reserved: impl Fn(&str) -> bool,
@@ -198,7 +353,9 @@ impl Mods {
                 Ok(package) => {
                     let on = enabled(&package.manifest.id);
                     entry.manifest = Some(package.manifest.clone());
-                    if on {
+                    if on && !runs.starts(package.manifest.side) {
+                        entry.status = Status::Elsewhere;
+                    } else if on {
                         // Content is read before the world loads; a mod whose
                         // content is refused stays off, with the reason.
                         let content = crate::Content::read(path, &package.manifest);
@@ -229,7 +386,11 @@ impl Mods {
             let mut linker = Linker::new(&engine);
             HorizonMod::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
+            players::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
+                .map_err(|e| e.to_string())?;
             UiHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
+                .map_err(|e| e.to_string())?;
+            RenderHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
             self.engine = Some((engine, linker));
         }
@@ -250,9 +411,6 @@ impl Mods {
         let Some(wasm) = &package.wasm else {
             return Ok(None);
         };
-        if m.side == Side::Server {
-            return Err("server mods do not run yet".into());
-        }
         // Two running mods with the same id would share one `data_dir`
         // (capability `storage`): the first loaded keeps the id.
         if self
@@ -262,11 +420,13 @@ impl Mods {
         {
             return Err(format!("another running mod already uses id {}", m.id));
         }
+        let server = m.side == Side::Server;
         let taken: Vec<String> = self
             .entries
             .iter()
             .filter_map(|e| e.run.as_ref())
-            .flat_map(|r| r.hooks.commands.iter().cloned())
+            .filter(|r| r.hooks.server().is_some() == server)
+            .flat_map(|r| r.hooks.commands().iter().cloned())
             .collect();
         let snapshot = self.snapshot.clone();
         let (engine, linker) = self.engine()?;
@@ -278,6 +438,12 @@ impl Mods {
             .map(|(name, _)| name.to_string())
             .collect();
         m.check_imports(imports.iter().map(String::as_str))?;
+        // A function this Horizon doesn't have: say so, not wasmtime's linking error.
+        let functions = crate::api_level::imports(wasm)?;
+        let (level, function) = crate::api_level::needed(functions.iter().map(String::as_str));
+        if let Some(why) = crate::api_level::too_new(level, function) {
+            return Err(why);
+        }
         let data_dir = path
             .parent()
             .unwrap_or(Path::new("."))
@@ -290,6 +456,11 @@ impl Mods {
             out: Vec::new(),
             panel: None,
             ui: UiState::default(),
+            shapes: Vec::new(),
+            corner: None,
+            zoom: None,
+            minimap: None,
+            input: InputState::default(),
             data_dir,
             storage_budget: STORAGE_WRITE_BUDGET,
             limits: StoreLimitsBuilder::new()
@@ -303,15 +474,29 @@ impl Mods {
         let instance = linker
             .instantiate(&mut store, &component)
             .map_err(|e| reason(&e))?;
-        let exports = HorizonMod::new(&mut store, &instance).map_err(|e| reason(&e))?;
-        // `ui-events` is a mod built since `ui`'s; older mods have no export
-        // and stay callable through `events` alone.
-        let ui = UiHost::new(&mut store, &instance).ok();
-        let mut hooks = exports
-            .horizon_mods_events()
-            .call_init(&mut store)
-            .map_err(|e| reason(&e))??;
-        hooks.commands.retain(|c| {
+        let (mut hooks, ui) = if server {
+            let exports = HorizonServerMod::new(&mut store, &instance).map_err(|e| reason(&e))?;
+            let r = exports
+                .horizon_mods_server_events()
+                .call_init(&mut store)
+                .map_err(|e| reason(&e))??;
+            (Hooks::Server(exports, r), None)
+        } else {
+            let exports = HorizonMod::new(&mut store, &instance).map_err(|e| reason(&e))?;
+            // `ui-events` is a mod built since `ui`'s; older mods have no export
+            // and stay callable through `events` alone.
+            let ui = UiHost::new(&mut store, &instance).ok();
+            let r = exports
+                .horizon_mods_events()
+                .call_init(&mut store)
+                .map_err(|e| reason(&e))??;
+            (Hooks::Client(exports, r), ui)
+        };
+        let commands = match &mut hooks {
+            Hooks::Client(_, r) => &mut r.commands,
+            Hooks::Server(_, r) => &mut r.commands,
+        };
+        commands.retain(|c| {
             let free = !reserved(c) && !taken.contains(c);
             if !free {
                 log::warn!("Horizon: mod {} cannot take /{c}: already a command", m.id);
@@ -321,15 +506,21 @@ impl Mods {
         self.out.append(&mut store.data_mut().out);
         Ok(Some(Running {
             store,
-            exports,
             ui,
             hooks,
+            raycasts: functions.iter().any(|f| f == "game.raycast"),
         }))
     }
 
     /// True when at least one mod runs: the game skips its mod work otherwise.
     pub fn is_running(&self) -> bool {
         self.entries.iter().any(|e| e.run.is_some())
+    }
+    /// True when a server mod runs: the server skips its mod work otherwise.
+    pub fn runs_server(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|e| e.run.as_ref().is_some_and(|r| r.hooks.server().is_some()))
     }
     pub fn entries(&self) -> &[Entry] {
         &self.entries
@@ -343,7 +534,7 @@ impl Mods {
     fn each(
         &mut self,
         fuel: u64,
-        wants: impl Fn(&Registration) -> bool,
+        wants: impl Fn(&Hooks) -> bool,
         mut f: impl FnMut(&mut Running) -> wasmtime::Result<()>,
     ) {
         for i in 0..self.entries.len() {
@@ -355,6 +546,38 @@ impl Mods {
                 self.call(i, fuel, &mut f);
             }
         }
+    }
+    /// [`Mods::each`] over the client mods.
+    fn each_client(
+        &mut self,
+        fuel: u64,
+        wants: impl Fn(&Registration) -> bool,
+        mut f: impl FnMut(&ClientEvents, &mut Store<State>) -> wasmtime::Result<()>,
+    ) {
+        self.each(
+            fuel,
+            |h| h.client().is_some_and(&wants),
+            |run| match &run.hooks {
+                Hooks::Client(m, _) => f(m.horizon_mods_events(), &mut run.store),
+                Hooks::Server(..) => Ok(()),
+            },
+        );
+    }
+    /// [`Mods::each`] over the server mods.
+    fn each_server(
+        &mut self,
+        fuel: u64,
+        wants: impl Fn(&ServerRegistration) -> bool,
+        mut f: impl FnMut(&ServerEvents, &mut Store<State>) -> wasmtime::Result<()>,
+    ) {
+        self.each(
+            fuel,
+            |h| h.server().is_some_and(&wants),
+            |run| match &run.hooks {
+                Hooks::Server(m, _) => f(m.horizon_mods_server_events(), &mut run.store),
+                Hooks::Client(..) => Ok(()),
+            },
+        );
     }
 
     /// One call into mod `i`; a trap or an overrun turns the mod off.
@@ -403,62 +626,39 @@ impl Mods {
 
     /// A game tick.
     pub fn tick(&mut self, tick: u64) {
-        self.each(
-            FUEL_TICK,
-            |h| h.tick,
-            |run| {
-                run.exports
-                    .horizon_mods_events()
-                    .call_tick(&mut run.store, tick)
-            },
-        );
+        self.each_client(FUEL_TICK, |h| h.tick, |m, s| m.call_tick(s, tick));
     }
     /// A rendered frame, `seconds` after the last.
     pub fn frame(&mut self, seconds: f32) {
-        self.each(
-            FUEL_FRAME,
-            |h| h.frame,
-            |run| {
-                run.exports
-                    .horizon_mods_events()
-                    .call_frame(&mut run.store, seconds)
-            },
-        );
+        self.each_client(FUEL_FRAME, |h| h.frame, |m, s| m.call_frame(s, seconds));
     }
     /// A chat line the player received, as plain text.
     pub fn chat(&mut self, text: &str) {
-        self.each(
-            FUEL_EVENT,
-            |h| h.chat,
-            |run| {
-                run.exports
-                    .horizon_mods_events()
-                    .call_chat(&mut run.store, text)
-            },
-        );
+        self.each_client(FUEL_EVENT, |h| h.chat, |m, s| m.call_chat(s, text));
     }
-    /// Whether a running mod owns `/name`.
+    /// Whether a running client mod owns `/name`.
     pub fn has_command(&self, name: &str) -> bool {
-        self.command_owner(name).is_some()
+        self.command_owner(false, name).is_some()
     }
-    fn command_owner(&self, name: &str) -> Option<usize> {
+    fn command_owner(&self, server: bool, name: &str) -> Option<usize> {
         self.entries.iter().position(|e| {
-            e.run
-                .as_ref()
-                .is_some_and(|r| r.hooks.commands.iter().any(|c| c == name))
+            e.run.as_ref().is_some_and(|r| {
+                r.hooks.server().is_some() == server && r.hooks.commands().iter().any(|c| c == name)
+            })
         })
     }
-    /// Runs `line` (without its slash) if a mod owns its command; false
-    /// when none does.
+    /// Runs `line` (without its slash) if a client mod owns its command;
+    /// false when none does.
     pub fn command(&mut self, line: &str) -> bool {
         let (name, args) = line.split_once(' ').unwrap_or((line, ""));
-        let Some(i) = self.command_owner(name) else {
+        let Some(i) = self.command_owner(false, name) else {
             return false;
         };
-        let result = self.call(i, FUEL_EVENT, |run| {
-            run.exports
+        let result = self.call(i, FUEL_EVENT, |run| match &run.hooks {
+            Hooks::Client(m, _) => m
                 .horizon_mods_events()
-                .call_command(&mut run.store, name, args)
+                .call_command(&mut run.store, name, args),
+            Hooks::Server(..) => Ok(Ok(None)),
         });
         match result {
             Some(Ok(Some(text))) => self.out.push(Output::Feedback { text, error: false }),
@@ -467,19 +667,283 @@ impl Mods {
         }
         true
     }
-    /// The commands running mods own, for suggestions.
+    /// The commands running client mods own, for suggestions.
     pub fn commands(&self) -> impl Iterator<Item = &str> {
+        self.owned_commands(false)
+    }
+    fn owned_commands(&self, server: bool) -> impl Iterator<Item = &str> {
         self.entries
             .iter()
             .filter_map(|e| e.run.as_ref())
-            .flat_map(|r| r.hooks.commands.iter().map(String::as_str))
+            .filter(move |r| r.hooks.server().is_some() == server)
+            .flat_map(|r| r.hooks.commands().iter().map(String::as_str))
     }
 
+    /// A server tick.
+    pub fn server_tick(&mut self, tick: u64) {
+        self.each_server(FUEL_TICK, |h| h.tick, |m, s| m.call_tick(s, tick));
+    }
+    /// `player` joined the server (they are in the snapshot's players).
+    pub fn player_joined(&mut self, player: &ServerPlayer) {
+        self.each_server(
+            FUEL_EVENT,
+            |h| h.joins,
+            |m, s| m.call_player_joined(s, player),
+        );
+    }
+    /// `player` left the server (they are no longer in the snapshot's players).
+    pub fn player_left(&mut self, player: &ServerPlayer) {
+        self.each_server(
+            FUEL_EVENT,
+            |h| h.joins,
+            |m, s| m.call_player_left(s, player),
+        );
+    }
+    /// A chat message `player` sent, as plain text.
+    pub fn player_chat(&mut self, player: &ServerPlayer, text: &str) {
+        self.each_server(FUEL_EVENT, |h| h.chat, |m, s| m.call_chat(s, player, text));
+    }
+    /// `player` broke `state` at `pos`.
+    pub fn block_broken(&mut self, player: &ServerPlayer, pos: BlockPos, state: &str) {
+        self.each_server(
+            FUEL_EVENT,
+            |h| h.blocks,
+            |m, s| m.call_block_broken(s, player, pos, state),
+        );
+    }
+    /// `player` placed `state` at `pos`.
+    pub fn block_placed(&mut self, player: &ServerPlayer, pos: BlockPos, state: &str) {
+        self.each_server(
+            FUEL_EVENT,
+            |h| h.blocks,
+            |m, s| m.call_block_placed(s, player, pos, state),
+        );
+    }
+    /// The commands running server mods own, for the server's command tree.
+    pub fn server_commands(&self) -> impl Iterator<Item = &str> {
+        self.owned_commands(true)
+    }
+    /// Runs `line` (without its slash), typed by `player`, if a server mod
+    /// owns its command; its feedback is an [`Output::Reply`]. False when
+    /// none does.
+    pub fn server_command(&mut self, player: &ServerPlayer, line: &str) -> bool {
+        let (name, args) = line.split_once(' ').unwrap_or((line, ""));
+        let Some(i) = self.command_owner(true, name) else {
+            return false;
+        };
+        let result = self.call(i, FUEL_EVENT, |run| match &run.hooks {
+            Hooks::Server(m, _) => {
+                m.horizon_mods_server_events()
+                    .call_command(&mut run.store, player, name, args)
+            }
+            Hooks::Client(..) => Ok(Ok(None)),
+        });
+        let reply = |text, error| Output::Reply {
+            player: player.id.clone(),
+            text,
+            error,
+        };
+        match result {
+            Some(Ok(Some(text))) => self.out.push(reply(text, false)),
+            Some(Err(text)) => self.out.push(reply(text, true)),
+            Some(Ok(None)) | None => {}
+        }
+        true
+    }
     /// The running mods' HUD panels.
     pub fn panels(&self) -> impl Iterator<Item = &Panel> {
         self.entries
             .iter()
             .filter_map(|e| e.run.as_ref()?.store.data().panel.as_ref())
+    }
+    /// The running mods' corner panels (capability `render`), in load order.
+    pub fn corner_panels(&self) -> impl Iterator<Item = &CornerPanel> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref()?.store.data().corner.as_ref())
+    }
+    /// Some running mod calls `game.raycast`: the snapshot needs a
+    /// [`Snapshot::view_hit`].
+    pub fn wants_raycast(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|e| e.run.as_ref().is_some_and(|r| r.raycasts))
+    }
+    /// Some running mod has a `frame` hook: the game refreshes the snapshot
+    /// every frame for it.
+    pub fn wants_frames(&self) -> bool {
+        self.entries.iter().any(|e| {
+            e.run
+                .as_ref()
+                .is_some_and(|r| r.hooks.client().is_some_and(|h| h.frame))
+        })
+    }
+    /// Some running mod claimed items (capability `input`).
+    pub fn claims_any(&self) -> bool {
+        self.inputs().any(|i| !i.claimed.is_empty())
+    }
+    /// Some running mod claimed the item `id`.
+    pub fn claims(&self, id: &str) -> bool {
+        self.inputs().any(|i| i.claimed.iter().any(|c| c == id))
+    }
+    /// Some running mod registered a key.
+    pub fn has_keys(&self) -> bool {
+        self.inputs().any(|i| !i.keys.is_empty())
+    }
+    /// The mods' keys: (mod name, key name, label, key), for Controls.
+    pub fn mod_keys(&self) -> impl Iterator<Item = (&str, &ModKey)> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref())
+            .flat_map(|r| {
+                let d = r.store.data();
+                d.input.keys.iter().map(move |k| (d.name.as_str(), k))
+            })
+    }
+    /// Mod `i`'s keys, as it registered them (with the player's choices).
+    pub fn keys_of(&self, i: usize) -> &[ModKey] {
+        self.entries
+            .get(i)
+            .and_then(|e| e.run.as_ref())
+            .map_or(&[], |r| r.store.data().input.keys.as_slice())
+    }
+    /// The keys the player chose (`ui`'s key widget), by mod id: each
+    /// running mod's `name → key`. They replace the defaults registered
+    /// so far and later ones. Keys that aren't keys are skipped.
+    pub fn set_bindings<'a>(&mut self, chosen: impl Fn(&str) -> Vec<(&'a str, &'a str)>) {
+        for e in &mut self.entries {
+            let (Some(m), Some(run)) = (&e.manifest, e.run.as_mut()) else {
+                continue;
+            };
+            let input = &mut run.store.data_mut().input;
+            input.bindings = chosen(&m.id)
+                .into_iter()
+                .filter(|(_, key)| key_ok(key))
+                .map(|(n, k)| (n.to_owned(), k.to_owned()))
+                .collect();
+            for (name, key) in input.bindings.clone() {
+                input.rebind(&name, key);
+            }
+        }
+    }
+    /// The player binds mod `i`'s key `name` to `key` (`key.keyboard.x`,
+    /// `key.mouse.4`, `key.keyboard.unknown` for none). False when the mod
+    /// has no such key or `key` isn't one.
+    pub fn rebind(&mut self, i: usize, name: &str, key: &str) -> bool {
+        let Some(run) = self.entries.get_mut(i).and_then(|e| e.run.as_mut()) else {
+            return false;
+        };
+        let input = &mut run.store.data_mut().input;
+        if !key_ok(key) || !input.keys.iter().any(|k| k.name == name) {
+            return false;
+        }
+        input.bindings.retain(|(n, _)| n != name);
+        input.bindings.push((name.to_owned(), key.to_owned()));
+        input.rebind(name, key.to_owned());
+        true
+    }
+    /// The use button went down with `item`: `use-start` to each mod that
+    /// claimed it.
+    pub fn use_start(&mut self, item: &HeldItem) {
+        let event = InputEvent::UseStart(ItemUse {
+            item: item.clone(),
+            ticks: 0,
+        });
+        self.push_input(|i| i.claimed.contains(&item.id), &event);
+    }
+    /// The claimed use ended after `ticks`.
+    pub fn use_stop(&mut self, item: &HeldItem, ticks: u32) {
+        let event = InputEvent::UseStop(ItemUse {
+            item: item.clone(),
+            ticks,
+        });
+        self.push_input(|i| i.claimed.contains(&item.id), &event);
+    }
+    /// The key `key` (`key.keyboard.r`) went down or up: each mod with a
+    /// key on it hears its own name for it.
+    pub fn key(&mut self, key: &str, down: bool) {
+        for run in self.entries.iter_mut().filter_map(|e| e.run.as_mut()) {
+            let input = &mut run.store.data_mut().input;
+            let names: Vec<String> = input
+                .keys
+                .iter()
+                .filter(|k| k.key == key)
+                .map(|k| k.name.clone())
+                .collect();
+            for name in names {
+                let held = input.down.iter().position(|n| *n == name);
+                match (down, held) {
+                    (true, None) => input.down.push(name.clone()),
+                    (false, Some(i)) => {
+                        input.down.swap_remove(i);
+                    }
+                    // Already let go when a screen opened.
+                    (false, None) => continue,
+                    (true, Some(_)) => {}
+                }
+                input.push(if down {
+                    InputEvent::KeyDown(name)
+                } else {
+                    InputEvent::KeyUp(name)
+                });
+            }
+        }
+    }
+    /// A screen opened, or the game stopped playing: every mod key held
+    /// lets go (`key-up`), so a key needs a new press afterwards.
+    pub fn release_keys(&mut self) {
+        for run in self.entries.iter_mut().filter_map(|e| e.run.as_mut()) {
+            let input = &mut run.store.data_mut().input;
+            for name in std::mem::take(&mut input.down) {
+                input.push(InputEvent::KeyUp(name));
+            }
+        }
+    }
+    /// Some running mod holds the mouse wheel.
+    pub fn wheel_claimed(&self) -> bool {
+        self.inputs().any(|i| i.wheel)
+    }
+    /// Wheel steps while playing: `wheel` to the mods holding it; false
+    /// when none does (the hotbar takes them).
+    pub fn wheel(&mut self, steps: f32) -> bool {
+        let event = InputEvent::Wheel(steps);
+        let claimed = self.wheel_claimed();
+        self.push_input(|i| i.wheel, &event);
+        claimed
+    }
+    /// The strongest zoom a running mod asks for (capability `render`).
+    pub fn zoom(&self) -> Option<ModZoom> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref()?.store.data().zoom)
+            .max_by(|a, b| a.factor.total_cmp(&b.factor))
+    }
+    /// The minimap the first running mod shows (capability `render`).
+    pub fn minimap(&self) -> Option<ModMinimap> {
+        self.entries
+            .iter()
+            .find_map(|e| e.run.as_ref()?.store.data().minimap)
+    }
+    fn inputs(&self) -> impl Iterator<Item = &InputState> {
+        self.entries
+            .iter()
+            .filter_map(|e| Some(&e.run.as_ref()?.store.data().input))
+    }
+    fn push_input(&mut self, to: impl Fn(&InputState) -> bool, event: &InputEvent) {
+        for run in self.entries.iter_mut().filter_map(|e| e.run.as_mut()) {
+            let input = &mut run.store.data_mut().input;
+            if to(input) {
+                input.push(event.clone());
+            }
+        }
+    }
+    /// The running mods' HUD shapes (capability `render`), each mod's in
+    /// its own order, mods in load order.
+    pub fn hud_shapes(&self) -> impl Iterator<Item = &Shape> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref())
+            .flat_map(|r| &r.store.data().shapes)
     }
     /// The screen mod `i` last pushed with `ui.open-screen`, while it is up.
     pub fn screen(&self, i: usize) -> Option<&UiScreen> {
@@ -547,7 +1011,7 @@ impl Mods {
         for i in 0..self.entries.len() {
             let entry = &self.entries[i];
             let now = modified(&entry.path);
-            let was_on = entry.status != Status::Off;
+            let was_on = !matches!(entry.status, Status::Off | Status::Elsewhere);
             if now == entry.modified || !was_on {
                 continue;
             }
@@ -619,6 +1083,10 @@ fn clip_widgets(widgets: Vec<UiWidget>) -> Vec<UiWidget> {
                 t.text = clip(t.text);
                 UiWidget::Text(t)
             }
+            UiWidget::Button(mut b) => {
+                b.label = clip(b.label);
+                UiWidget::Button(b)
+            }
             UiWidget::Item(mut i) => {
                 i.item = clip(i.item);
                 i.name = clip(i.name);
@@ -651,19 +1119,315 @@ impl game::Host for State {
     fn get_clock(&mut self) -> Option<Clock> {
         self.snapshot.clock
     }
+    fn raycast(&mut self, distance: f32) -> Option<Hit> {
+        let (at, hit) = self.snapshot.view_hit.as_ref()?;
+        // NaN compares false: no hit.
+        (*at <= distance.min(RAYCAST_MAX) && !distance.is_nan()).then(|| hit.clone())
+    }
 }
-impl chat::Host for State {
-    fn show(&mut self, text: String) {
+impl State {
+    /// Queues a chat line unless the call already sent [`CHAT_PER_CALL`].
+    fn say(&mut self, line: impl FnOnce(String) -> Output) -> bool {
         let shown = self
             .out
             .iter()
-            .filter(|o| matches!(o, Output::Chat { .. }))
+            .filter(|o| {
+                matches!(
+                    o,
+                    Output::Chat { .. } | Output::Tell { .. } | Output::Broadcast { .. }
+                )
+            })
             .count();
         if shown < CHAT_PER_CALL {
             let name = self.name.clone();
-            self.out.push(Output::Chat {
+            self.out.push(line(name));
+        }
+        shown < CHAT_PER_CALL
+    }
+}
+impl chat::Host for State {
+    fn show(&mut self, text: String) {
+        self.say(|name| Output::Chat {
+            name,
+            text: clip(text),
+        });
+    }
+}
+impl players::Host for State {
+    fn online(&mut self) -> Vec<ServerPlayer> {
+        self.snapshot.players.clone()
+    }
+    fn tell(&mut self, player: String, text: String) -> bool {
+        self.snapshot.players.iter().any(|p| p.id == player)
+            && self.say(|name| Output::Tell {
                 name,
+                player,
                 text: clip(text),
+            })
+    }
+    fn broadcast(&mut self, text: String) {
+        self.say(|name| Output::Broadcast {
+            name,
+            text: clip(text),
+        });
+    }
+}
+/// A key a mod registered (capability `input`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModKey {
+    /// The mod's own name for it, echoed in `key-down`.
+    pub name: String,
+    /// What it does, for Controls.
+    pub label: String,
+    /// `key.keyboard.r`.
+    pub key: String,
+}
+
+/// What capability `input` holds for one mod.
+#[derive(Default)]
+struct InputState {
+    claimed: Vec<String>,
+    keys: Vec<ModKey>,
+    events: std::collections::VecDeque<InputEvent>,
+    /// The mod's keys held now, by name.
+    down: Vec<String>,
+    /// It holds the mouse wheel.
+    wheel: bool,
+    /// The keys the player chose, `name → key`: they win over
+    /// `register-key`'s.
+    bindings: Vec<(String, String)>,
+}
+/// Events kept for `poll`, items claimed and keys, per mod.
+const INPUT_EVENTS: usize = 256;
+const CLAIMS: usize = 64;
+const KEYS: usize = 16;
+
+/// `key.keyboard.<name>` or `key.mouse.<name>`, as options.txt writes keys;
+/// the game knows which names exist and ignores a key it has none for.
+fn key_ok(key: &str) -> bool {
+    let rest = key
+        .strip_prefix("key.keyboard.")
+        .or_else(|| key.strip_prefix("key.mouse."));
+    rest.is_some_and(|r| {
+        (1..=32).contains(&r.len())
+            && r.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.')
+    })
+}
+
+impl InputState {
+    /// Key `name` is `key` now; held, it lets go first.
+    fn rebind(&mut self, name: &str, key: String) {
+        let Some(k) = self.keys.iter_mut().find(|k| k.name == name) else {
+            return;
+        };
+        k.key = key;
+        if let Some(i) = self.down.iter().position(|n| n == name) {
+            let name = self.down.swap_remove(i);
+            self.push(InputEvent::KeyUp(name));
+        }
+    }
+    fn push(&mut self, event: InputEvent) {
+        if self.events.len() == INPUT_EVENTS {
+            self.events.pop_front();
+        }
+        self.events.push_back(event);
+    }
+}
+
+impl input::Host for State {
+    fn claim_items(&mut self, ids: Vec<String>) {
+        self.input.claimed = ids.into_iter().take(CLAIMS).map(clip).collect();
+    }
+    fn register_key(&mut self, name: String, label: String, key: String) -> Result<(), String> {
+        if !key_ok(&key) {
+            return Err(format!(
+                "{key:?} is not a key as options.txt writes them (key.keyboard.r)"
+            ));
+        }
+        let (name, label) = (clip(name), clip(label));
+        let key = match self.input.bindings.iter().find(|(n, _)| *n == name) {
+            Some((_, chosen)) => chosen.clone(),
+            None => key,
+        };
+        if let Some(k) = self.input.keys.iter_mut().find(|k| k.name == name) {
+            (k.label, k.key) = (label, key);
+            return Ok(());
+        }
+        if self.input.keys.len() == KEYS {
+            return Err(format!("a mod may register {KEYS} keys"));
+        }
+        self.input.keys.push(ModKey { name, label, key });
+        Ok(())
+    }
+    fn held(&mut self) -> Option<HeldItem> {
+        self.snapshot.held.clone()
+    }
+    fn poll(&mut self) -> Vec<InputEvent> {
+        self.input.events.drain(..).collect()
+    }
+    fn mapping(&mut self, name: String) -> Option<input::MappingState> {
+        let (_, label, down) = self.snapshot.mappings.iter().find(|m| m.0 == name)?;
+        Some(input::MappingState {
+            label: label.clone(),
+            down: *down,
+        })
+    }
+    fn clicks_per_second(&mut self) -> (u32, u32) {
+        self.snapshot.cps
+    }
+    fn claim_wheel(&mut self, on: bool) {
+        self.input.wheel = on;
+    }
+}
+
+/// HUD shapes one mod may keep (capability `render`).
+const SHAPES: usize = 1024;
+/// The longest jolt `render.shake` makes, in seconds.
+const SHAKE_SECONDS: f32 = 10.0;
+/// `render.set-zoom`'s limits: `Camera.tickFov` keeps the modifier at 0.1
+/// or more, and turning never stops.
+const ZOOM_MAX: f32 = 10.0;
+const TURN_MIN: f32 = 0.05;
+/// `set-minimap`'s side in GUI pixels and its blocks per map pixel.
+const MINIMAP_SIZE: (f32, f32) = (16.0, 256.0);
+const MINIMAP_SCALE: (f32, f32) = (0.5, 4.0);
+
+/// A mod's corner panel: shapes in a `width` × `height` box the game
+/// places in `corner`, stacked with the other overlays.
+#[derive(Clone, Debug)]
+pub struct CornerPanel {
+    pub corner: RenderCorner,
+    pub width: f32,
+    pub height: f32,
+    pub shapes: Vec<Shape>,
+}
+
+fn clip_shapes(shapes: Vec<Shape>) -> Vec<Shape> {
+    shapes
+        .into_iter()
+        .take(SHAPES)
+        .map(|shape| match shape {
+            Shape::Sprite(mut s) => {
+                s.sprite = clip(s.sprite);
+                Shape::Sprite(s)
+            }
+            Shape::Item(mut i) => {
+                i.item = clip(i.item);
+                i.scale = if i.scale.is_finite() {
+                    i.scale.clamp(0.0, 16.0)
+                } else {
+                    1.0
+                };
+                Shape::Item(i)
+            }
+            Shape::Text(mut t) => {
+                t.text = clip(t.text);
+                t.color &= 0xFF_FFFF;
+                Shape::Text(t)
+            }
+            other => other,
+        })
+        .collect()
+}
+
+impl render::Host for State {
+    fn set_hud(&mut self, shapes: Vec<Shape>) {
+        self.shapes = clip_shapes(shapes);
+    }
+    fn set_corner(&mut self, corner: RenderCorner, width: f32, height: f32, shapes: Vec<Shape>) {
+        let size = |v: f32| {
+            if v.is_finite() {
+                v.clamp(0.0, 1024.0)
+            } else {
+                0.0
+            }
+        };
+        self.corner = Some(CornerPanel {
+            corner,
+            width: size(width),
+            height: size(height),
+            shapes: clip_shapes(shapes),
+        });
+    }
+    fn clear_corner(&mut self) {
+        self.corner = None;
+    }
+    fn text_width(&mut self, text: String) -> f32 {
+        let widths = &self.snapshot.font_widths;
+        text.chars()
+            .map(|c| widths.get(c as usize).copied().unwrap_or(6.0))
+            .sum::<f32>()
+            .ceil()
+    }
+    fn set_zoom(&mut self, zoom: ModZoom) {
+        let finite = |v: f32, lo: f32, hi: f32| if v.is_finite() { v.clamp(lo, hi) } else { lo };
+        let factor = finite(zoom.factor, 1.0, ZOOM_MAX);
+        self.zoom = (factor > 1.0).then(|| ModZoom {
+            factor,
+            smooth: zoom.smooth,
+            turn: if zoom.turn.is_finite() {
+                zoom.turn.clamp(TURN_MIN, 1.0)
+            } else {
+                1.0
+            },
+        });
+    }
+    fn set_minimap(&mut self, minimap: Option<ModMinimap>) {
+        let finite = |v: f32, lo: f32, hi: f32| if v.is_finite() { v.clamp(lo, hi) } else { lo };
+        self.minimap = minimap.map(|m| ModMinimap {
+            size: finite(m.size, MINIMAP_SIZE.0, MINIMAP_SIZE.1),
+            blocks_per_pixel: finite(m.blocks_per_pixel, MINIMAP_SCALE.0, MINIMAP_SCALE.1),
+            ..m
+        });
+    }
+    fn frame_stats(&mut self) -> FrameRate {
+        let (fps, min, low) = self.snapshot.frame;
+        FrameRate { fps, min, low }
+    }
+    fn gui_size(&mut self) -> (f32, f32) {
+        self.snapshot.gui_size
+    }
+    fn shake(&mut self, strength: f32, seconds: f32) {
+        let ok = |v: f32, max: f32| {
+            if v.is_finite() {
+                v.clamp(0.0, max)
+            } else {
+                0.0
+            }
+        };
+        let (strength, seconds) = (ok(strength, 1.0), ok(seconds, SHAKE_SECONDS));
+        if strength > 0.0 && seconds > 0.0 {
+            self.out.push(Output::Shake { strength, seconds });
+        }
+    }
+}
+
+impl command::Host for State {
+    fn run(&mut self, line: String) {
+        let queued = self
+            .out
+            .iter()
+            .filter(|o| matches!(o, Output::Command { .. }))
+            .count();
+        if queued < CHAT_PER_CALL {
+            self.out.push(Output::Command { line: clip(line) });
+        }
+    }
+    fn run_quiet(&mut self, lines: Vec<String>) {
+        let queued: usize = self
+            .out
+            .iter()
+            .map(|o| match o {
+                Output::QuietCommands { lines, .. } => lines.len(),
+                _ => 0,
+            })
+            .sum();
+        let room = QUIET_PER_CALL.saturating_sub(queued);
+        if room > 0 && !lines.is_empty() {
+            self.out.push(Output::QuietCommands {
+                mod_id: self.id.clone(),
+                lines: lines.into_iter().take(room).map(clip).collect(),
             });
         }
     }

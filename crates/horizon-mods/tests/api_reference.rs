@@ -52,7 +52,7 @@ fn definition(resolve: &Resolve, kind: &TypeDefKind) -> String {
     match kind {
         TypeDefKind::Option(t) => format!("option<{}>", ty(resolve, t)),
         TypeDefKind::List(t) => format!("list<{}>", ty(resolve, t)),
-        TypeDefKind::FixedSizeList(t, n) => format!("list<{}, {n}>", ty(resolve, t)),
+        TypeDefKind::FixedLengthList(t, n) => format!("list<{}, {n}>", ty(resolve, t)),
         TypeDefKind::Result(r) => match (&r.ok, &r.err) {
             (None, None) => "result".into(),
             (ok, None) => format!("result<{}>", of(ok)),
@@ -82,7 +82,7 @@ fn signature(resolve: &Resolve, f: &Function) -> String {
     let params: Vec<_> = f
         .params
         .iter()
-        .map(|(name, t)| format!("{name}: {}", ty(resolve, t)))
+        .map(|p| format!("{}: {}", p.name, ty(resolve, &p.ty)))
         .collect();
     let result = f
         .result
@@ -300,5 +300,40 @@ fn every_capability_with_an_interface_is_in_the_contract() {
                 c.interface()
             );
         }
+    }
+}
+
+/// Every function the game offers (an interface some world imports and none
+/// exports) has an API level, and the levels list nothing else.
+#[test]
+fn every_function_has_an_api_level() {
+    let mut resolve = Resolve::default();
+    let package = resolve.push_file(root().join(WIT)).unwrap();
+    let package = &resolve.packages[package];
+    let exported: Vec<_> = package
+        .worlds
+        .values()
+        .flat_map(|&w| resolve.worlds[w].exports.values())
+        .filter_map(|item| match item {
+            WorldItem::Interface { id, .. } => Some(*id),
+            _ => None,
+        })
+        .collect();
+    let mut offered = Vec::new();
+    for (name, &id) in &package.interfaces {
+        if !exported.contains(&id) {
+            for function in resolve.interfaces[id].functions.keys() {
+                offered.push(format!("{name}.{function}"));
+            }
+        }
+    }
+    for f in &offered {
+        assert!(
+            horizon_mods::api_level::level_of(f).is_some(),
+            "{f} has no level in crates/horizon-mods/src/api_level.rs: add it at the next level"
+        );
+    }
+    for (f, _) in horizon_mods::api_level::FUNCTIONS {
+        assert!(offered.iter().any(|o| o == f), "{f} isn't in the WIT");
     }
 }

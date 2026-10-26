@@ -10,6 +10,8 @@ use crate::{
 use horizon_core::geometry::{Aabb, Vec3};
 use horizon_world::block_collision::BlockCollisionRegistry;
 
+mod fluids;
+
 #[derive(Clone, Debug)]
 pub struct ItemEntity {
     pub health: i32,
@@ -165,18 +167,16 @@ impl ItemEntity {
         facts: &BlockFacts,
         collision: &BlockCollisionRegistry<'_>,
         no_physics: bool,
+        fluids: &crate::motion::FluidResources,
     ) -> bool {
         self.ticks += 1;
         self.previous = self.position;
         if self.pickup_delay > 0 && self.pickup_delay != u32::MAX {
             self.pickup_delay -= 1;
         }
-        let eye = world.block(
-            self.position.x.floor() as i32,
-            (self.position.y + 0.1).floor() as i32,
-            self.position.z.floor() as i32,
-        );
-        let in_water = facts.get(eye).fluid == Fluid::Water;
+        // Entity.baseTick pushes before ItemEntity applies buoyancy and moves.
+        let (water_height, lava_height) = self.update_fluids(world, fluids);
+        let in_water = water_height > f64::from(0.1f32);
         if in_water {
             // ItemEntity.setUnderwaterMovement
             self.velocity = Vec3::new(
@@ -184,7 +184,7 @@ impl ItemEntity {
                 self.velocity.y + if self.velocity.y < 0.06 { 5.0e-4 } else { 0.0 },
                 self.velocity.z * 0.99,
             );
-        } else if facts.get(eye).fluid == Fluid::Lava {
+        } else if lava_height > f64::from(0.1f32) {
             self.velocity = Vec3::new(
                 self.velocity.x * 0.95,
                 self.velocity.y + if self.velocity.y < 0.06 { 5.0e-4 } else { 0.0 },
@@ -245,6 +245,8 @@ impl ItemEntity {
             }
         }
         self.age += 1;
+        // ItemEntity.tick refreshes immersion and pushes again after moving.
+        self.update_fluids(world, fluids);
         self.age < 6000 && self.position.y > -128.0
     }
     /// `ItemEntity.isMergable` at `age`: a stack below its size whose pickup
@@ -587,6 +589,57 @@ impl Painting {
             std::array::from_fn(|i| c[i] - size[i] / 2.0),
             std::array::from_fn(|i| c[i] + size[i] / 2.0),
         )
+    }
+}
+/// The `DyeColor` ordinal of a colour name (`DyeColor.byName`), white when
+/// the name is unknown.
+pub fn dye_index(name: &str) -> u8 {
+    crate::mobs::render::DYE_NAMES
+        .iter()
+        .position(|n| *n == name)
+        .unwrap_or(0) as u8
+}
+/// A cushion (`Cushion`, a `BlockAttachedEntity`): a 1 x 0.25 block pillow
+/// that seats a player. It sits on the top face of a block, at the clicked
+/// height, and is coloured by its `DyeColor`.
+#[derive(Clone, Debug)]
+pub struct Cushion {
+    pub id: u32,
+    /// `Entity.position`: the bottom centre of the cushion.
+    pub position: Vec3,
+    /// `BlockAttachedEntity.pos` (the saved `block_pos`).
+    pub pos: [i32; 3],
+    pub yaw: f32,
+    /// `DyeColor` ordinal: white 0, orange 1, ..., black 15.
+    pub color: u8,
+    /// BlockAttachedEntity.ticksSinceLastCheck.
+    pub check_interval: u32,
+}
+impl Cushion {
+    /// `Entity.makeBoundingBox`: x and z half a block out, y to y + 0.25.
+    pub fn bounds(&self) -> ([f64; 3], [f64; 3]) {
+        let p = self.position;
+        (
+            [p.x - 0.5, p.y, p.z - 0.5],
+            [p.x + 0.5, p.y + 0.25, p.z + 0.5],
+        )
+    }
+    /// The `DyeColor` name of the cushion.
+    pub fn color_name(&self) -> &'static str {
+        crate::mobs::render::DYE_NAMES[usize::from(self.color.min(15))]
+    }
+    /// `Cushion.getCushionItemStackWithData`: the matching coloured item.
+    pub fn item(&self) -> String {
+        format!("minecraft:{}_cushion", self.color_name())
+    }
+    /// `Cushion.interact`'s seat: the vehicle's PASSENGER attachment
+    /// `(0, 0.25, 0)` less the player's `(0, 0.6, 0)`.
+    pub fn seat(&self) -> Vec3 {
+        Vec3::new(self.position.x, self.position.y - 0.35, self.position.z)
+    }
+    /// `Entity.getDismountLocationForPassenger`: on top of the cushion.
+    pub fn dismount(&self) -> Vec3 {
+        Vec3::new(self.position.x, self.position.y + 0.25, self.position.z)
     }
 }
 /// An item frame or glow item frame (`ItemFrame`).

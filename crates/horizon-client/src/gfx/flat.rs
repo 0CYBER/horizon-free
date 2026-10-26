@@ -40,6 +40,8 @@ enum Source {
 struct Plan {
     phase1_calls: usize,
     solid_calls: usize,
+    /// Where the shadow camera's solid and translucent calls begin.
+    shadow_calls: [usize; 2],
     total: u64,
 }
 const QUADS: u32 = u32::MAX;
@@ -73,7 +75,8 @@ pub struct Flat {
     phase2_call_data: Vec<[u32; 5]>,
     /// The copy of phase 2's draws, and its ranges.
     phase2_group: Option<(wgpu::BindGroup, u32)>,
-    draw_layout: wgpu::BindGroupLayout,
+    /// The layout of a page's bind group 1 (shader packs' terrain pipelines share it).
+    pub(super) draw_layout: wgpu::BindGroupLayout,
     blocks_per_page: u64,
     pages: Vec<Option<PageTable>>,
     free_ids: Vec<u32>,
@@ -96,6 +99,10 @@ pub struct Flat {
     pub calls: Vec<Call>,
     pub phase1_calls: usize,
     pub solid_calls: usize,
+    /// Where a shader pack's shadow camera's solid and translucent calls
+    /// begin (`calls.len()` without them): the camera's translucent calls
+    /// end at the first.
+    pub shadow_calls: [usize; 2],
     /// Frames with fewer sections in view keep the per-section draws.
     pub min_sections: usize,
     range_align: u64,
@@ -163,12 +170,16 @@ fn buffer(
 /// draw calls, one per run of draws in the same vertex page, phase 1's solid
 /// ones, phase 2's (draws `phase1_draws..solid_draws`) and translucent ones
 /// apart. A phase 2 range names its draw in phase 2 and its call in phase 2
-/// instead of a destination: the call's room holds all of its draws.
+/// instead of a destination: the call's room holds all of its draws. Draws
+/// from `shadow[0]` (solid) and `shadow[1]` (translucent) on are a shader
+/// pack's shadow camera's, with calls of their own.
+#[allow(clippy::too_many_arguments)]
 fn plan(
     draws: &[[u32; 5]],
     pages: &[(u32, Option<u32>)],
     phase1_draws: usize,
     solid_draws: usize,
+    shadow: [usize; 2],
     align: u64,
     calls: &mut Vec<Call>,
     ranges: &mut Vec<Range>,
@@ -178,6 +189,7 @@ fn plan(
     ranges.clear();
     segments.clear();
     let (mut phase1_calls, mut solid_calls) = (None, None);
+    let mut shadow_calls = [None; 2];
     let mut total = 0u64;
     let mut by_source: Vec<(Source, Vec<Range>)> = Vec::new();
     for (i, (d, &(page, sorted))) in draws.iter().zip(pages).enumerate() {
@@ -187,10 +199,14 @@ fn plan(
         if i == solid_draws {
             solid_calls = Some(calls.len());
         }
-        match calls.last_mut() {
-            Some(last) if last.page == page && i != phase1_draws && i != solid_draws => {
-                last.count += d[0]
+        for (k, &from) in shadow.iter().enumerate() {
+            if i == from {
+                shadow_calls[k].get_or_insert(calls.len());
             }
+        }
+        let starts = i == phase1_draws || i == solid_draws || shadow.contains(&i);
+        match calls.last_mut() {
+            Some(last) if last.page == page && !starts => last.count += d[0],
             _ => calls.push(Call {
                 page,
                 first: total as u32,
@@ -226,6 +242,7 @@ fn plan(
     Plan {
         phase1_calls: phase1_calls.unwrap_or(calls.len()).min(solid_calls),
         solid_calls,
+        shadow_calls: shadow_calls.map(|c| c.unwrap_or(calls.len())),
         total,
     }
 }
@@ -339,6 +356,7 @@ impl Flat {
             calls: Vec::new(),
             phase1_calls: 0,
             solid_calls: 0,
+            shadow_calls: [0; 2],
             min_sections: if std::env::var("HORIZON_FLAT_DRAWS").as_deref() == Ok("1") {
                 0
             } else {
@@ -411,6 +429,7 @@ impl Flat {
     ///
     /// When culling, the solid draws from `phase1_draws` are phase 2's, which
     /// `phase2` holds as the test leaves them: `flatten_phase2` copies them.
+    /// Draws from `shadow` on are a shader pack's shadow camera's (`plan`).
     #[allow(clippy::too_many_arguments)]
     pub fn prepare(
         &mut self,
@@ -421,6 +440,7 @@ impl Flat {
         pages: &[(u32, Option<u32>)],
         phase1_draws: usize,
         solid_draws: usize,
+        shadow: [usize; 2],
         phase2: Option<&wgpu::Buffer>,
         origins: impl Iterator<Item = (u32, [f32; 4])>,
         sorted_page: impl Fn(u32) -> wgpu::Buffer,
@@ -463,12 +483,14 @@ impl Flat {
         let Plan {
             phase1_calls,
             solid_calls,
+            shadow_calls,
             total,
         } = plan(
             draws,
             pages,
             phase1_draws,
             solid_draws,
+            shadow,
             self.range_align,
             &mut self.calls,
             &mut self.range_data,
@@ -476,10 +498,12 @@ impl Flat {
         );
         self.phase1_calls = phase1_calls;
         self.solid_calls = solid_calls;
+        self.shadow_calls = shadow_calls;
         if total == 0 || total * 4 > device.limits().max_storage_buffer_binding_size {
             self.calls.clear();
             self.phase1_calls = 0;
             self.solid_calls = 0;
+            self.shadow_calls = [0; 2];
             return false;
         }
         if self.range_data.len() as u64 > self.range_capacity {
@@ -643,6 +667,11 @@ impl Flat {
         pass.dispatch_workgroups((*count).min(GROUP_LIMIT), count.div_ceil(GROUP_LIMIT), 1);
     }
 
+    /// The camera's translucent calls.
+    pub fn translucent_calls(&self) -> &[Call] {
+        &self.calls[self.solid_calls..self.shadow_calls[0]]
+    }
+
     /// Draws `calls` with a flat pipeline set and `vertices` giving each
     /// page's vertex buffer.
     pub fn draw<'a>(
@@ -651,9 +680,21 @@ impl Flat {
         calls: &[Call],
         vertices: impl Fn(u32) -> &'a wgpu::Buffer,
     ) {
+        self.draw_with(pass, calls, vertices, |_, _| {});
+    }
+    /// `draw`, calling `page` before each run of calls from one arena page (a shader pack binds
+    /// that page's vertices for reading).
+    pub fn draw_with<'a>(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        calls: &[Call],
+        vertices: impl Fn(u32) -> &'a wgpu::Buffer,
+        page: impl Fn(&mut wgpu::RenderPass<'_>, u32),
+    ) {
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
         for call in calls {
             self.bind_page(pass, call.page, &vertices);
+            page(pass, call.page);
             pass.draw_indexed(call.first..call.first + call.count, 0, 0..1);
         }
     }
@@ -722,11 +763,13 @@ mod tests {
             phase1_calls,
             solid_calls,
             total,
+            ..
         } = plan(
             &draws,
             &pages,
             solid,
             solid,
+            [draws.len(); 2],
             4,
             &mut calls,
             &mut ranges,
@@ -761,6 +804,35 @@ mod tests {
         assert_eq!(ranges.len(), 12);
     }
 
+    /// A shader pack's shadow draws follow the camera's, in calls of their
+    /// own even from the same page: solid ones, then translucent ones.
+    #[test]
+    fn plan_gives_the_shadow_lists_calls_of_their_own() {
+        let (mut draws, mut pages, solid) = sample();
+        let camera = draws.len();
+        draws.extend([[6, 1, 0, 40, 6], [6 * 2, 1, 0, 64, 7], [6, 1, 6, 80, 7]]);
+        pages.extend([(0, None), (0, None), (0, Some(0))]);
+        let (mut calls, mut ranges, mut segments) = (Vec::new(), Vec::new(), Vec::new());
+        let plan = plan(
+            &draws,
+            &pages,
+            solid,
+            solid,
+            [camera, camera + 2],
+            4,
+            &mut calls,
+            &mut ranges,
+            &mut segments,
+        );
+        assert_eq!((plan.solid_calls, plan.shadow_calls), (3, [4, 5]));
+        let call = |page, first, count| Call { page, first, count };
+        assert_eq!(
+            &calls[3..],
+            [call(0, 60, 18), call(0, 78, 18), call(0, 96, 6)]
+        );
+        assert_eq!(plan.total, 6 * 17);
+    }
+
     /// Phase 2's draws (here the third and fourth) get calls of their own,
     /// each with room for all of its draws, and ranges naming their draw
     /// and call in phase 2.
@@ -773,6 +845,7 @@ mod tests {
             &pages,
             2,
             solid,
+            [draws.len(); 2],
             4,
             &mut calls,
             &mut ranges,
@@ -783,6 +856,7 @@ mod tests {
             Plan {
                 phase1_calls: 1,
                 solid_calls: 3,
+                shadow_calls: [4, 4],
                 total: 6 * 13
             }
         );
@@ -886,6 +960,7 @@ mod tests {
                 &pages,
                 phase1,
                 solid,
+                [draws.len(); 2],
                 align,
                 &mut calls,
                 &mut ranges,

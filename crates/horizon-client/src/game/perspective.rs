@@ -412,7 +412,8 @@ impl Game<'_> {
     }
     /// Whether the player's own model shows in the world view.
     fn player_model_shown(&self) -> bool {
-        !self.camera_type.first_person()
+        // A shader pack's shadow pass draws the player in first person too (shadowPlayer).
+        (!self.camera_type.first_person() || self.pack_shadow_casters.1)
             && self.sleeping.is_none()
             && !self.spectator()
             && self.potions.effects.get("minecraft:invisibility").is_none()

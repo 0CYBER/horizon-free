@@ -5,8 +5,10 @@ use super::{
     generator::{ChunkWork, GeneratorData, GeneratorError},
     structure::{
         StructureResources,
+        jigsaw::PoolPiece,
         start::{
-            Rings, StartContext, StructureRegistry, StructureStart, beardifier, create_starts,
+            Piece, Rings, StartContext, StructureRegistry, StructureStart, beardifier,
+            create_starts,
         },
         stronghold::RingSearch,
     },
@@ -37,6 +39,8 @@ pub(super) struct StructureState {
     rings: Arc<OnceLock<Rings>>,
     /// Their biome searches while they are computed.
     ring_work: OnceLock<RingWork>,
+    /// `StructureRegistry::zone_reach`.
+    zone_reach: i32,
 }
 
 /// generateRingPositions' biome searches, shared out. Vanilla runs each as
@@ -142,6 +146,9 @@ impl StartCache {
         }
         shard.entry(key).or_insert(starts).clone()
     }
+    fn replace(&self, key: (i32, i32), starts: Starts) {
+        self.shard(key).write().unwrap().insert(key, starts);
+    }
     fn clear(&self) {
         for shard in &self.shards {
             shard.write().unwrap().clear();
@@ -209,7 +216,9 @@ impl StructureState {
         {
             bindings = bindings.with_block_properties(&blocks.properties)?;
         }
+        let zone_reach = registry.zone_reach();
         Ok(Some(Self {
+            zone_reach,
             registry,
             resources: resources.clone(),
             bindings,
@@ -221,10 +230,22 @@ impl StructureState {
             ring_work: OnceLock::new(),
         }))
     }
-    /// Concentric ring positions of a structure set, once the first start
-    /// lookup has computed them.
-    pub(super) fn cached_rings(&self, set: &str) -> Option<Vec<ChunkPos>> {
-        self.rings.get().and_then(|rings| rings.get(set).cloned())
+    /// Concentric ring positions of a structure set (vanilla's
+    /// getRingPositionsFor), computed now if no lookup needed them yet.
+    pub(super) fn ring_positions(
+        &self,
+        context: &mut impl StartContext,
+        set: &str,
+    ) -> Option<Vec<ChunkPos>> {
+        self.rings(context).get(set).cloned()
+    }
+    fn ring_work(&self, context: &impl StartContext) -> &RingWork {
+        self.ring_work.get_or_init(|| {
+            RingWork::new(
+                self.registry
+                    .ring_searches(&self.possible_sets, context.seed()),
+            )
+        })
     }
     /// The concentric ring positions, computing them with the threads that
     /// need them first (see `RingWork`).
@@ -232,18 +253,31 @@ impl StructureState {
         if let Some(rings) = self.rings.get() {
             return rings;
         }
-        let work = self.ring_work.get_or_init(|| {
-            RingWork::new(
-                self.registry
-                    .ring_searches(&self.possible_sets, context.seed()),
-            )
-        });
+        let work = self.ring_work(context);
         let registry = &self.registry;
         work.help(|set| registry.ring_biomes(set), &mut |quarts| {
             context.noise_biomes(quarts)
         });
         self.rings
             .get_or_init(|| work.rings(|set| registry.sets[set].name.clone()))
+    }
+    /// The rings a chunk's starts are decided with. Before they are known,
+    /// a chunk no ring search can end near (with the exclusion zones' reach)
+    /// is decided without them: no ring chunk is near it, which is what the
+    /// rings would say. Strongholds lie 1,400 blocks out or more, so a new
+    /// world's first chunks don't wait for the 128 biome searches (seconds
+    /// on four threads); they run when a chunk near a ring needs them.
+    fn rings_for(&self, context: &mut impl StartContext, chunk: ChunkPos) -> &Rings {
+        static NONE: Rings = Rings::new();
+        if let Some(rings) = self.rings.get() {
+            return rings;
+        }
+        let near = self
+            .ring_work(context)
+            .searches
+            .iter()
+            .any(|(_, search)| search.may_land_near(chunk.x, chunk.z, self.zone_reach));
+        if near { self.rings(context) } else { &NONE }
     }
     /// Drop the cached starts, so that later chunks build fresh pieces (the
     /// pieces keep per-start placement state such as a shipwreck's height).
@@ -263,7 +297,7 @@ impl StructureState {
         }
         // Ring searches enlist other workers and wait for them: never hold a
         // chunk-work lock while helping, even when this chunk has no starts.
-        let rings = self.rings(context);
+        let rings = self.rings_for(context, chunk);
         let work = self.start_work.at((chunk.x, chunk.z));
         let _work = work.lock().unwrap();
         if let Some(found) = self.starts.get((chunk.x, chunk.z)) {
@@ -284,6 +318,45 @@ impl StructureState {
             .collect(),
         );
         self.starts.insert_first((chunk.x, chunk.z), starts)
+    }
+    /// Puts a saved start of `structure` in `chunk`, in place of the one
+    /// this generator builds there from the same structure sets (a set
+    /// starts one structure per chunk): `pieces` as a save lists them (see
+    /// `PoolPiece::from_saved`). Until the starts are forgotten.
+    pub(super) fn use_saved_start(
+        &self,
+        context: &mut impl super::structure::start::StartContext,
+        chunk: ChunkPos,
+        structure: &str,
+        pieces: &[Value],
+    ) -> Result<(), String> {
+        let index = (self.registry.structures.iter())
+            .position(|s| s.name == structure)
+            .ok_or_else(|| format!("unknown structure {structure}"))?;
+        let pieces = (pieces.iter())
+            .map(|p| PoolPiece::from_saved(p, &self.resources, &self.bindings).map(Piece::Pool))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("{structure} at {chunk:?}: {e}"))?;
+        if pieces.is_empty() {
+            return Err(format!("{structure} at {chunk:?}: no pieces"));
+        }
+        let def = &self.registry.structures[index];
+        let sets: Vec<_> = (self.registry.sets.iter())
+            .filter(|set| set.structures.iter().any(|(s, _)| *s == index))
+            .collect();
+        let same_set = |s: usize| {
+            s == index
+                || sets
+                    .iter()
+                    .any(|set| set.structures.iter().any(|(t, _)| *t == s))
+        };
+        let mut starts: Vec<_> = (self.starts_at(context, chunk).iter())
+            .filter(|s| !same_set(s.structure))
+            .cloned()
+            .collect();
+        starts.push(Arc::new(StructureStart::new(index, def, chunk, pieces)));
+        self.starts.replace((chunk.x, chunk.z), Arc::new(starts));
+        Ok(())
     }
     /// ChunkGenerator.findNearestMapStructure: the nearest start of one of
     /// `names` from block `from` (rings: every ring chunk; random spreads:
@@ -468,6 +541,40 @@ mod tests {
         }
         cache.clear();
         assert!(cache.get((3, -4)).is_none());
+    }
+
+    /// A ring search ends where `may_land_near` allows: on its ring chunk
+    /// or in the square it samples, never further.
+    #[test]
+    fn ring_searches_end_where_they_may() {
+        let none = BTreeSet::new();
+        for seed in [0, 1234, -77, i64::MAX] {
+            for (b, search) in ring_searches(seed, 32, 3, 128).iter().enumerate() {
+                // Preferred biomes on one quart at a time, in turn at each
+                // corner of the square, else nowhere (the ring chunk).
+                let corner = (b % 5) as i32;
+                let biomes = |quarts: &[[i32; 3]]| -> Vec<BiomeId> {
+                    let (first, last) = (quarts[0], quarts[quarts.len() - 1]);
+                    let pick = match corner {
+                        0 => first,
+                        1 => [last[0], 0, first[2]],
+                        2 => [first[0], 0, last[2]],
+                        3 => last,
+                        _ => [i32::MIN, 0, i32::MIN],
+                    };
+                    quarts
+                        .iter()
+                        .map(|q| BiomeId(u32::from(*q == pick)))
+                        .collect()
+                };
+                let preferred: BTreeSet<BiomeId> = [BiomeId(1)].into();
+                for wanted in [&preferred, &none] {
+                    let found = search.find(wanted, &mut { biomes });
+                    assert!(search.may_land_near(found.x, found.z, 0));
+                    assert!(!search.may_land_near(found.x + 17, found.z, 0));
+                }
+            }
+        }
     }
 
     /// Searches shared between threads give the positions of one thread

@@ -59,8 +59,6 @@ pub struct JigsawDef {
     waterlogging: bool,
     /// A carried mod's start rules (`"horizon:start_checks"`).
     checks: super::start_checks::StartChecks,
-    /// Laid out by YUNG's API's assembler (`"horizon:yungsapi"`).
-    yung: Option<super::yung::Config>,
     /// Vanilla's draws, or YUNG's API's for `yungsapi:yung_jigsaw`.
     draws: super::jigsaw::Draws,
     /// Laid out by Repurposed Structures' and Moog's piece-limited
@@ -111,9 +109,6 @@ pub struct StructureDef {
     /// A structure library's terrain kernel
     /// (`"horizon:enhanced_terrain_adaptation"`).
     pub enhanced_terrain: Option<super::enhanced_terrain::StructureAdaptation>,
-    /// Another loaded structure turns this one's type off
-    /// (`"horizon:disables"`): it never starts.
-    pub disabled: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Reduction {
@@ -311,19 +306,8 @@ impl StructureRegistry {
         biome_set: &dyn Fn(&Value) -> Result<BTreeSet<BiomeId>, DecodeError>,
     ) -> Result<Self, DecodeError> {
         let mut defs = Vec::new();
-        let (mut types, mut disables) = (Vec::new(), BTreeSet::new());
         for (name, json) in structures {
             let v: Value = serde_json::from_str(json)?;
-            types.push(v["type"].as_str().unwrap_or_default().to_owned());
-            // YUNG's mods turn their vanilla counterparts off (the
-            // DisableVanilla*Mixin on ChunkGenerator.tryGenerateStructure).
-            disables.extend(
-                v["horizon:disables"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|t| Some(t.as_str()?.to_owned())),
-            );
             let draws = match v["type"].as_str() {
                 Some("yungsapi:yung_jigsaw") => super::jigsaw::Draws::Yung,
                 _ => super::jigsaw::Draws::Vanilla,
@@ -347,7 +331,6 @@ impl StructureRegistry {
                     padding: pair(v.get("dimension_padding"), "bottom", "top", 0),
                     waterlogging: v["liquid_settings"].as_str() != Some("ignore_waterlogging"),
                     checks: super::start_checks::StartChecks::decode(v.get("horizon:start_checks")),
-                    yung: v.get("horizon:yungsapi").map(super::yung::Config::decode),
                     piece_limited: v
                         .get("horizon:piece_limited")
                         .map(super::piece_limited::Config::decode),
@@ -408,11 +391,7 @@ impl StructureRegistry {
                     .get("horizon:enhanced_terrain_adaptation")
                     .map(super::enhanced_terrain::StructureAdaptation::decode)
                     .transpose()?,
-                disabled: false,
             });
-        }
-        for (def, kind) in defs.iter_mut().zip(&types) {
-            def.disabled = disables.contains(kind);
         }
         let index = |name: &str| defs.iter().position(|d| d.name == name);
         let mut out = Vec::new();
@@ -510,6 +489,18 @@ impl StructureRegistry {
                 _ => None,
             })
             .collect()
+    }
+    /// How far from a chunk, in chunks, deciding its starts can look at
+    /// other sets' start chunks through exclusion zones: every set's zones
+    /// summed, a bound on any chain of them.
+    pub fn zone_reach(&self) -> i32 {
+        self.sets
+            .iter()
+            .map(|s| {
+                s.exclusion.as_ref().map_or(0, |e| e.1.max(0))
+                    + s.avoid.as_ref().map_or(0, |a| a.chunk_count.max(0))
+            })
+            .sum()
     }
     /// The preferred biomes of a concentric-ring set (empty for others).
     pub fn ring_biomes(&self, set: usize) -> &BTreeSet<BiomeId> {
@@ -703,6 +694,13 @@ impl Piece {
             Self::Legacy(p) => p.type_name(),
         }
     }
+    /// `StructurePiece.createTag`; None for a type Horizon cannot save yet.
+    pub fn save(&self) -> Option<crate::nbt::Compound> {
+        match self {
+            Self::Pool(p) => Some(p.save()),
+            Self::Legacy(p) => p.save(),
+        }
+    }
 }
 fn legacy(pieces: Vec<impl LegacyPiece + 'static>) -> Vec<Piece> {
     pieces
@@ -743,6 +741,26 @@ pub struct StructureStart {
     pub pieces: Vec<Piece>,
     /// Piece union, inflated by 12 for terrain-adapting structures.
     pub bounding_box: BoundingBox,
+}
+impl StructureStart {
+    /// `StructureStart.createTag` in its own chunk; None while one of its
+    /// pieces cannot be saved. `references` counts `addReference` calls,
+    /// which only locating structures makes: 0 in a freshly made world.
+    pub fn save(&self) -> Option<crate::nbt::Tag> {
+        use crate::nbt::Tag;
+        let children: Option<Vec<Tag>> = self
+            .pieces
+            .iter()
+            .map(|p| p.save().map(Tag::Compound))
+            .collect();
+        Some(Tag::compound([
+            ("id", Tag::String(self.name.as_str().into())),
+            ("ChunkX", Tag::Int(self.chunk.x)),
+            ("ChunkZ", Tag::Int(self.chunk.z)),
+            ("references", Tag::Int(0)),
+            ("Children", Tag::List(children?)),
+        ]))
+    }
 }
 
 /// A block of a noise column (ChunkGenerator.getBaseColumn), by what
@@ -879,9 +897,6 @@ fn try_generate(
     chunk: ChunkPos,
 ) -> Option<StructureStart> {
     let def = &registry.structures[structure];
-    if def.disabled {
-        return None;
-    }
     context.set_valid_biomes(&def.biomes);
     let seed = context.seed();
     let mut random = WorldgenRandom::new(LegacyRandom::new(0));
@@ -911,8 +926,8 @@ fn try_generate(
                 padding: jigsaw.padding,
                 waterlogging: jigsaw.waterlogging,
             };
-            let (position, mut pieces) = match (&jigsaw.yung, &jigsaw.piece_limited) {
-                (_, Some(limits)) => super::piece_limited::assemble(
+            let (position, mut pieces) = match &jigsaw.piece_limited {
+                Some(limits) => super::piece_limited::assemble(
                     &config,
                     limits,
                     context,
@@ -922,17 +937,7 @@ fn try_generate(
                     chunk,
                     start,
                 )?,
-                (Some(yung), None) => super::yung::assemble(
-                    &config,
-                    yung,
-                    context,
-                    &registry.pools,
-                    resources,
-                    bindings,
-                    &mut random,
-                    start,
-                )?,
-                (None, None) => assemble_drawing(
+                None => assemble_drawing(
                     jigsaw.draws,
                     &config,
                     context,
@@ -957,6 +962,7 @@ fn try_generate(
             let stub = top_of_chunk_center(context, chunk, HeightmapType::OceanFloorWg)?;
             let piece = super::simple::BuriedTreasurePiece {
                 position: [chunk.x * 16 + 9, 90, chunk.z * 16 + 9],
+                found: std::sync::Mutex::new(None),
             };
             (stub, legacy(vec![piece]))
         }
@@ -1200,24 +1206,31 @@ fn try_generate(
     if !def.biomes.contains(&context.noise_biome(quart)) || pieces.is_empty() {
         return None;
     }
-    let mut bounding_box = pieces[0].bounding_box();
-    for piece in &pieces[1..] {
-        bounding_box.encapsulate(&piece.bounding_box());
+    Some(StructureStart::new(structure, def, chunk, pieces))
+}
+impl StructureStart {
+    /// A start of `def` (registry index `structure`) from its pieces, at
+    /// least one: their box, grown where the structure adapts the terrain.
+    pub fn new(structure: usize, def: &StructureDef, chunk: ChunkPos, pieces: Vec<Piece>) -> Self {
+        let mut bounding_box = pieces[0].bounding_box();
+        for piece in &pieces[1..] {
+            bounding_box.encapsulate(&piece.bounding_box());
+        }
+        if def.terrain != TerrainAdjustment::None {
+            bounding_box = bounding_box.inflated(12, 12);
+        }
+        if let Some(enhanced) = def.enhanced_terrain.as_ref().filter(|e| e.inflate) {
+            let r = enhanced.radius();
+            bounding_box = bounding_box.inflated(r, r);
+        }
+        Self {
+            structure,
+            name: def.name.clone(),
+            chunk,
+            pieces,
+            bounding_box,
+        }
     }
-    if def.terrain != TerrainAdjustment::None {
-        bounding_box = bounding_box.inflated(12, 12);
-    }
-    if let Some(enhanced) = def.enhanced_terrain.as_ref().filter(|e| e.inflate) {
-        let r = enhanced.radius();
-        bounding_box = bounding_box.inflated(r, r);
-    }
-    Some(StructureStart {
-        structure,
-        name: def.name.clone(),
-        chunk,
-        pieces,
-        bounding_box,
-    })
 }
 /// PoolAliasLookup.create.
 fn resolve_aliases(bindings: &[Value], position: [i32; 3], seed: i64) -> BTreeMap<String, String> {
@@ -1435,37 +1448,6 @@ mod tests {
             })
         })
         .unwrap()
-    }
-
-    #[test]
-    fn a_structure_turns_its_vanilla_counterpart_off() {
-        let r = registry(
-            &[
-                (
-                    "minecraft:pyramid",
-                    json!({"type": "minecraft:desert_pyramid"}),
-                ),
-                ("minecraft:igloo", json!({"type": "minecraft:igloo"})),
-                (
-                    "yung:temple",
-                    json!({"type": "minecraft:swamp_hut", "horizon:disables": ["minecraft:desert_pyramid"]}),
-                ),
-            ],
-            &[],
-        );
-        let disabled: Vec<_> = r
-            .structures
-            .iter()
-            .map(|d| (d.name.as_str(), d.disabled))
-            .collect();
-        assert_eq!(
-            disabled,
-            [
-                ("minecraft:igloo", false),
-                ("minecraft:pyramid", true),
-                ("yung:temple", false)
-            ]
-        );
     }
 
     #[test]

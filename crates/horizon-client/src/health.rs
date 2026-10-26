@@ -261,11 +261,17 @@ impl PlayerHealth {
         self.hurt_animation_time = 10;
     }
     /// `LocalPlayer.hurtTo` with `flashOnSetHealth`: a drop below the current
-    /// health starts the hurt animation.
+    /// health starts the hurt animation; `damageCooldownTime` (20 on a drop,
+    /// 10 on a gain) is what lets `Hud.extractPlayerHealth` blink the hearts.
     pub fn flash_health_change(&mut self, health: f32) {
         let damage = self.health() - health;
-        if damage > 0.0 {
+        if damage <= 0.0 {
+            if damage < 0.0 {
+                self.hurt.cooldown = 10;
+            }
+        } else {
             self.hurt.last_hurt = damage;
+            self.hurt.cooldown = 20;
             self.animate_hurt();
         }
     }

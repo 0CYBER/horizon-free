@@ -21,7 +21,7 @@ use std::{fs, path::Path};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
-fn registry(resources: &Path) -> Result<&'static BlockRegistry, Error> {
+pub fn registry(resources: &Path) -> Result<&'static BlockRegistry, Error> {
     let facts: Value = serde_json::from_str(&fs::read_to_string(resources.join("facts.json"))?)?;
     let states = facts["states"].as_array().ok_or("facts states")?;
     let registry = BlockRegistry::from_nbt(&Tag::compound([

@@ -1212,10 +1212,7 @@ impl ParticleEngine {
             requested: None,
             names: Vec::new(),
             rects: Vec::new(),
-            atlas: atlas
-                .iter()
-                .map(|(name, &rect)| (name.clone(), (rect, translucent.contains(name))))
-                .collect(),
+            atlas: HashMap::new(),
             sets: HashMap::new(),
             set_sprites: Vec::new(),
             emitters: Vec::new(),
@@ -1225,6 +1222,34 @@ impl ParticleEngine {
             made: Default::default(),
             item_sprites: HashMap::new(),
         };
+        engine.reload(root, atlas, translucent);
+        engine
+    }
+    /// `onResourceManagerReload`: sprite rects and sets come from the
+    /// reloaded atlas and pack; a live particle keeps drawing its sprite by
+    /// name or index.
+    pub fn reload(
+        &mut self,
+        root: &Path,
+        atlas: &HashMap<String, Rect>,
+        translucent: &HashSet<String>,
+    ) {
+        self.atlas = atlas
+            .iter()
+            .map(|(name, &rect)| (name.clone(), (rect, translucent.contains(name))))
+            .collect();
+        self.rects = self
+            .names
+            .iter()
+            .map(|name| self.atlas.get(name).map(|&(rect, _)| rect))
+            .collect();
+        self.sets.clear();
+        self.set_sprites.clear();
+        self.item_sprites.clear();
+        self.load_sprites(root);
+    }
+    /// The sprite sets of every `particles/*.json` under `root`.
+    fn load_sprites(&mut self, root: &Path) {
         let dir = root.join("assets/minecraft/particles");
         for &ty in ParticleType::ALL {
             let Ok(bytes) = std::fs::read(dir.join(format!("{}.json", ty.name()))) else {
@@ -1239,18 +1264,16 @@ impl ParticleEngine {
                     a.iter()
                         .filter_map(|t| t.as_str())
                         .map(|t| {
-                            engine
-                                .intern(&format!("particle/{}", t.trim_start_matches("minecraft:")))
+                            self.intern(&format!("particle/{}", t.trim_start_matches("minecraft:")))
                         })
                         .collect()
                 })
                 .unwrap_or_default();
             if !sprites.is_empty() {
-                engine.sets.insert(ty, engine.set_sprites.len() as u32);
-                engine.set_sprites.push(sprites);
+                self.sets.insert(ty, self.set_sprites.len() as u32);
+                self.set_sprites.push(sprites);
             }
         }
-        engine
     }
     fn intern(&mut self, name: &str) -> u32 {
         if let Some(i) = self.names.iter().position(|n| n == name) {
@@ -1601,7 +1624,10 @@ impl ParticleEngine {
             return;
         }
         if let Some(set) = p.set {
-            let sprites = &self.set_sprites[set as usize];
+            // A sprite set's index can outlive the reload that rebuilt them.
+            let Some(sprites) = self.set_sprites.get(set as usize) else {
+                return;
+            };
             let lifetime = p.lifetime.max(1);
             let index = (p.age.max(0) as i64 * (sprites.len() as i64 - 1) / i64::from(lifetime))
                 .clamp(0, sprites.len() as i64 - 1);

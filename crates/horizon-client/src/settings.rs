@@ -104,7 +104,7 @@ pub struct Settings {
     pub master_volume: f32,
     /// Volumes of every other sound source, indexed like SOUND_SOURCES.
     pub volumes: [f32; 11],
-    /// 0 = auto.
+    /// Requested scale (0 = auto); rendering caps it to the current framebuffer.
     pub gui_scale: u32,
     pub view_bobbing: bool,
     /// Brightness 0..1 (gamma).
@@ -182,6 +182,9 @@ pub struct Settings {
     pub extras: crate::extras::Extras,
     /// The Horizon mods turned on (`horizon-mods.txt`), all off by default.
     pub mods: crate::mod_list::ModList,
+    /// The packs in `shaderpacks/`, listed when the Shader Packs page opens; the pick is
+    /// `horizon.shader_pack`.
+    pub shader_packs: Vec<crate::shader_pack_list::Entry>,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -255,6 +258,7 @@ impl Default for Settings {
             controller: Default::default(),
             extras: Default::default(),
             mods: Default::default(),
+            shader_packs: Vec::new(),
         }
     }
 }
@@ -284,12 +288,6 @@ fn put_s(f: &mut OptionsFile, key: &str, v: &str) {
     }
 }
 impl Settings {
-    /// `ClampingLazyMaxIntRange.validateValue`: clamp once the framebuffer is known.
-    pub fn clamp_gui_scale(&mut self, framebuffer: [i32; 2]) {
-        let max = crate::window::calculate_scale(framebuffer, 0, self.force_unicode) as u32;
-        self.gui_scale = self.gui_scale.min(max);
-    }
-
     pub fn load(path: &Path) -> Self {
         let horizon = path
             .parent()
@@ -421,6 +419,7 @@ impl Settings {
             controller: Default::default(),
             extras: Default::default(),
             mods: Default::default(),
+            shader_packs: Vec::new(),
             auto_jump: f.bool("autoJump"),
             language: f.string("lang"),
             force_unicode: f.bool("forceUnicodeFont"),
@@ -544,6 +543,21 @@ impl Settings {
         }
         f
     }
+    /// These settings with one `options.txt` value changed (`horizon-ctl
+    /// options-set`, as `OptionsFile::set_text` reads it). Horizon's own
+    /// files (graphics, controller, extras, the mod list) aren't in
+    /// `options.txt`, so they stay as they are.
+    pub fn with_option(&self, key: &str, value: &str) -> Result<Self, String> {
+        let mut file = self.to_file();
+        file.set_text(key, value)?;
+        Ok(Self {
+            horizon: self.horizon.clone(),
+            controller: self.controller.clone(),
+            extras: self.extras.clone(),
+            mods: self.mods.clone(),
+            ..Self::from_file(file)
+        })
+    }
     /// The `options.txt` text (Options.save).
     pub fn serialize(&self) -> String {
         self.to_file().serialize()
@@ -597,6 +611,46 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_option_set_keeps_horizon_files() {
+        let mut s = Settings::parse("fov:70\n");
+        s.mods.enabled.insert("zoom".into());
+        s.extras.minimap = true;
+        s.horizon.fog = !s.horizon.fog;
+        s.controller.vibration = !s.controller.vibration;
+        let set = s.with_option("fov", "90").unwrap();
+        assert_eq!(set.fov, 90.0);
+        assert_eq!(set.mods, s.mods);
+        assert_eq!(set.extras, s.extras);
+        assert_eq!(set.horizon, s.horizon);
+        assert_eq!(set.controller, s.controller);
+        assert!(s.with_option("fov", "200").is_err());
+    }
+    #[test]
+    fn gui_scale_survives_temporary_small_framebuffer() {
+        for requested in [0, 1, 2, 6] {
+            let settings = Settings::parse(&format!("guiScale:{requested}\n"));
+            // Hyprland's initial surface can be smaller than the fullscreen one.
+            for (framebuffer, maximum) in [([715, 860], 2), ([3400, 1913], 7)] {
+                let effective = crate::window::calculate_scale(
+                    framebuffer,
+                    settings.gui_scale as i32,
+                    settings.force_unicode,
+                );
+                assert_eq!(
+                    effective,
+                    if requested == 0 {
+                        maximum
+                    } else {
+                        (requested as i32).min(maximum)
+                    }
+                );
+                let saved = Settings::parse(&settings.serialize());
+                assert_eq!(saved.gui_scale, requested);
+            }
+        }
+    }
+
     #[test]
     fn round_trips_vanilla_options_txt() {
         let text = "version:4000\nfov:0.5\nrenderDistance:16\nmaxFps:260\nrenderClouds:\"fast\"\nkey_key.jump:key.keyboard.j\nsoundCategory_music:0.25\nresourcePacks:[\"vanilla\",\"file/x.zip\"]\nlang:fr_fr\nsomeFutureOption:42\n";

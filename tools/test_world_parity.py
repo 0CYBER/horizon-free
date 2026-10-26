@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import tempfile
 
@@ -35,6 +36,8 @@ def main():
     if args.prepare:
         lab.prepare()
     lock, jars, libraries = test_rust_parity.verify_artifacts()
+    for earlier in directory.glob("run-*"):  # one run per run used to stay behind: 5 GB here after a few weeks
+        shutil.rmtree(earlier, ignore_errors=True)
     base = Path(tempfile.mkdtemp(prefix="run-", dir=directory))
     classes = base / "classes"
     classes.mkdir()

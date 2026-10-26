@@ -17,15 +17,22 @@ The oracle's game is 1.21.1 and Horizon's 26.3. KNOWN lists the starts where 26.
 1.21.1, each checked against 26.3 vanilla (VanillaChunkGenerationOracle's `scan`, HORIZON_PIECES=1), whose
 pieces equal Horizon's there; they are reported, not failed.
 
-Mod profiles compare the mod world's `pieces` instead. Horizon then reads the mod's own data from its jar
-(`.local/structure-oracle/jars/`, or HORIZON_STRUCTURE_JARS): an overlay of the 26.3 resources adds the
-jar's structures, sets, pools, processor lists, biome tags and templates, as they are written. The mod's
-own processors are left out of the overlay's lists: they change blocks, never which pieces are placed.
-Block states are upgraded to 26.3's JSON shape, as the port does.
-The jars are the player's; nothing of them enters the repository.
+Mod profiles compare the mod world's `pieces` instead, through the path players' packs take: the mod jars
+(`.local/structure-oracle/jars/`, or HORIZON_STRUCTURE_JARS) are carried by `horizon-port-pack carry` into
+a fresh work folder, and an overlay of the 26.3 resources adds the carried structures, sets, pools,
+processor lists, biome tags and templates. The jars are the player's; nothing of them enters the
+repository.
 
-usage: test_structure_layout_parity.py [--profile lithostitched|betterdungeons] [--filter REGEX] [--verbose]
+The `yung-probe` profiles check YUNG's API's draws with a data pack of the spec team's own (spec-yungsapi
+§3, probe experiments e1-e9: fallback, max_count, empty elements, min_required_depth, ignore_bounds,
+max_y, is_priority). The pack is carried as one more mod, built at run time from the oracle's profile file
+(`.local/structure-oracle/profiles/<profile>.json`), and its starts are read from the oracle's census of
+every start (`all_starts`).
+
+usage: test_structure_layout_parity.py [--profile lithostitched|betterdungeons|yung-probe|yung-probe2]
+                                       [--filter REGEX] [--verbose]
 """
+import base64
 import argparse
 import gzip
 import json
@@ -44,12 +51,22 @@ except ImportError:
 
 ORACLE = Path(os.environ.get('HORIZON_STRUCTURE_ORACLE', lab.LOCAL / 'structure-oracle'))
 JARS = Path(os.environ.get('HORIZON_STRUCTURE_JARS', ORACLE / 'jars'))
-# Per profile: which saved pieces are expected, the mod jars whose data Horizon reads, and the structures
-# compared (a regex; None: every start that has the pieces).
+# Jars of a modpack's mods the oracle cache does not hold (Lithostitched, CTOV): a pack's jar folder.
+PACK_JARS = Path(os.environ.get('HORIZON_STRUCTURE_PACK_JARS', ORACLE / 'pack-jars'))
+
+
+def jar_path(jar):
+    return JARS / jar if (JARS / jar).exists() else PACK_JARS / jar
+# Per profile: which saved pieces are expected, the mods in the pack (id: jar), those carried, and the
+# structures compared (a regex; None: every start that has the pieces).
 PROFILES = {
-    'lithostitched': {'side': 'base_pieces', 'jars': [], 'structures': None},
-    'betterdungeons': {'side': 'pieces', 'jars': ['YungsApi-1.21.1-NeoForge-5.1.9.jar', 'YungsBetterDungeons-1.21.1-NeoForge-5.1.4.jar'],
-                       'structures': r'^betterdungeons:(small|skeleton|zombie)_dungeon$'},
+    'lithostitched': {'side': 'base_pieces', 'mods': {}, 'carry': [], 'structures': None},
+    'betterdungeons': {'side': 'pieces', 'mods': {'yungsapi': 'YungsApi-1.21.1-NeoForge-5.1.9.jar',
+                                                  'betterdungeons': 'YungsBetterDungeons-1.21.1-NeoForge-5.1.4.jar'},
+                       'carry': ['betterdungeons'], 'structures': r'^betterdungeons:(small|skeleton|zombie)_dungeon$'},
+    **{name: {'side': 'all_starts', 'mods': {'yungsapi': 'YungsApi-1.21.1-NeoForge-5.1.9.jar'},
+              'packs': {'probe': name}, 'carry': ['probe'], 'structures': r'^probe:'}
+       for name in ['yung-probe', 'yung-probe2']},
 }
 BUNDLES = {'structure': 'structures', 'structure_set': 'structure_sets', 'template_pool': 'template_pools',
            'processor_list': 'processor_lists'}
@@ -61,7 +78,7 @@ KNOWN = {
     ('lithostitched', 1234, 'minecraft:village_plains', -24, 47): 'no start in 26.3 vanilla (nor in Horizon)',
     ('lithostitched', 1234, 'minecraft:ruined_portal', -16, 51): RUINED_PORTAL,
     ('lithostitched', 42, 'minecraft:ruined_portal', -19, -38): RUINED_PORTAL,
-        ('betterdungeons', 1234, 'betterdungeons:small_dungeon', 162, 10): SULFUR_CAVES,
+    ('betterdungeons', 1234, 'betterdungeons:small_dungeon', 162, 10): SULFUR_CAVES,
     ('betterdungeons', 42, 'betterdungeons:small_dungeon', -29, -28): SULFUR_CAVES,
     **{('lithostitched', seed, 'minecraft:trial_chambers', x, z): TRIAL_CHAMBERS
        for seed, x, z in [(1234, 13, 21), (2, -28, 13), (2, 11, 16), (2, 146, 44), (42, 17, 7), (42, 38, -25)]},
@@ -91,53 +108,93 @@ def expected_piece(saved):
     return piece
 
 
-def upgrade_states(value):
-    """1.21.1's block states (`{"Name", "Properties"}`) in 26.3's shape (`{"id", "properties"}`)."""
-    if isinstance(value, list):
-        return [upgrade_states(v) for v in value]
-    if not isinstance(value, dict):
-        return value
-    if 'Name' in value and set(value) <= {'Name', 'Properties'}:
-        return {'id': value['Name'], **({'properties': value['Properties']} if 'Properties' in value else {})}
-    return {k: upgrade_states(v) for k, v in value.items()}
+# horizon-port-pack's jar census (inventory.json); the carry does not read it.
+CENSUS = ['blockstates', 'item_models', 'recipes', 'loot_tables', 'tags', 'worldgen', 'structures', 'languages',
+          'textures', 'sounds', 'classes', 'mixin_configs']
 
 
-def overlay(profile, jars):
-    """The 26.3 resources plus the jars' structure data, in a folder the probe reads as its resources."""
-    root = lab.LOCAL / 'structure-layout' / profile
+def pack_jar(work, mod, profile):
+    """The data pack an oracle profile added to its world, as a jar of mod `mod`."""
+    spec = json.loads((ORACLE / 'profiles' / f'{profile}.json').read_text())
+    files = {**spec['config_files'], **{path: base64.b64decode(data) for path, data in spec.get('binary_files', {}).items()}}
+    jar = work / f'{mod}.jar'
+    with zipfile.ZipFile(jar, 'w') as z:
+        for path, content in files.items():
+            parts = Path(path).parts
+            if parts[:2] == ('world', 'datapacks') and len(parts) > 3:
+                z.writestr(str(Path(*parts[3:])), content)
+    return jar
+
+
+def carry(profile, mods, carried, packs=None):
+    """`horizon-port-pack carry` of the profile's mods and packs; the carried mods' data folders."""
+    work = lab.LOCAL / 'structure-layout' / profile / 'work'
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir(parents=True)
+    mods = {key: str(jar_path(jar)) for key, jar in mods.items()}
+    mods.update({key: str(pack_jar(work, key, name)) for key, name in (packs or {}).items()})
+    records = [{'key': key, 'name': key, 'version': '', 'path': jar, 'tier': 'data', 'confidence': 'known',
+                'class': 'content' if key in carried else 'library', 'source': 'file', 'license': '',
+                'client': '', 'server': '', 'depends': [], 'layer': 0, 'jar': jar,
+                'info': {'mod_id': key, 'name': key, 'version': '', 'license': '', 'depends': [],
+                         'census': dict.fromkeys(CENSUS, 0)}}
+               for key, jar in mods.items()]
+    (work / 'inventory.json').write_text(json.dumps(records))
+    subprocess.run(['cargo', 'run', '--release', '-q', '-p', 'horizon-port-pack', '--', 'carry', str(work),
+                    '--resources', str(lab.RESOURCES), *carried], check=True, cwd=lab.ROOT, stdout=subprocess.DEVNULL)
+    data = [work / 'mods' / key / 'carry' / 'data' for key in carried]
+    if not all(d.is_dir() for d in data):
+        raise SystemExit(f'horizon-port-pack carried nothing into {work / "mods"}')
+    return data
+
+
+def overlay(profile, data_dirs):
+    """The 26.3 resources plus the carried structure data, in a folder the probe reads as its resources."""
+    root = lab.LOCAL / 'structure-layout' / profile / 'resources'
     shutil.rmtree(root, ignore_errors=True)
     worldgen = root / 'worldgen'
     (worldgen / 'structure').mkdir(parents=True)
     (root / 'facts.json').symlink_to(lab.RESOURCES / 'facts.json')
     source = lab.RESOURCES / 'worldgen'
     merged = {name: json.loads((source / f'{name}.json').read_text()) for name in [*BUNDLES.values(), 'biome_tags']}
+    additions = []
     for entry in source.iterdir():
         if entry.name != 'structure' and entry.stem not in merged:
             (worldgen / entry.name).symlink_to(entry)
     for namespace in (source / 'structure').iterdir():
         (worldgen / 'structure' / namespace.name).symlink_to(namespace)
-    for jar in jars:
-        with zipfile.ZipFile(JARS / jar) as archive:
-            for name in archive.namelist():
-                parts = name.split('/')
-                if parts[0] != 'data' or len(parts) < 4 or name.endswith('/'):
-                    continue
-                namespace, kind = parts[1], parts[2]
-                if kind == 'structure' and name.endswith('.nbt'):
-                    target = worldgen / 'structure' / namespace / '/'.join(parts[3:])
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(archive.read(name))
-                elif name.endswith('.json') and kind == 'worldgen' and parts[3] in BUNDLES:
-                    value = upgrade_states(json.loads(archive.read(name)))
-                    if parts[3] == 'processor_list':
-                        value['processors'] = [p for p in value['processors'] if p['processor_type'].startswith('minecraft:')]
-                    merged[BUNDLES[parts[3]]][f'{namespace}:' + '/'.join(parts[4:])[:-5]] = json.dumps(value)
-                elif name.endswith('.json') and parts[2:5] == ['tags', 'worldgen', 'biome']:
-                    tag = f'{namespace}:' + '/'.join(parts[5:])[:-5]
-                    value = json.loads(archive.read(name))
-                    if tag in merged['biome_tags'] and not value.get('replace'):
-                        value['values'] = json.loads(merged['biome_tags'][tag])['values'] + value['values']
-                    merged['biome_tags'][tag] = json.dumps(value)
+    for data in data_dirs:
+        for path in sorted(p for p in data.rglob('*') if p.is_file()):
+            parts = path.relative_to(data).parts
+            if len(parts) < 3:
+                continue
+            namespace, kind = parts[0], parts[1]
+            if kind == 'structure' and path.suffix == '.nbt':
+                target = worldgen / 'structure' / namespace / Path(*parts[2:])
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.symlink_to(path)
+            elif path.suffix == '.json' and kind == 'worldgen' and parts[2] in BUNDLES:
+                text = path.read_text()
+                if 'horizon:add_to' in text:
+                    additions.append((BUNDLES[parts[2]], json.loads(text)))
+                else:
+                    merged[BUNDLES[parts[2]]][f'{namespace}:' + '/'.join(parts[3:])[:-5]] = text
+            elif path.suffix == '.json' and parts[1:4] == ('tags', 'worldgen', 'biome'):
+                tag = f'{namespace}:' + '/'.join(parts[4:])[:-5]
+                value = json.loads(path.read_text())
+                if tag in merged['biome_tags'] and not value.get('replace'):
+                    value['values'] = json.loads(merged['biome_tags'][tag])['values'] + value['values']
+                merged['biome_tags'][tag] = json.dumps(value)
+    # A carried file with `horizon:add_to` adds its entries to other sets or pools, as the game's
+    # mod_content.rs merges them.
+    for bundle, addition in additions:
+        targets = addition['horizon:add_to']
+        key = 'structures' if bundle == 'structure_sets' else 'elements'
+        for target in [targets] if isinstance(targets, str) else targets:
+            if target in merged[bundle]:
+                value = json.loads(merged[bundle][target])
+                value[key] = value.get(key, []) + addition.get(key, [])
+                merged[bundle][target] = json.dumps(value)
     for name, bundle in merged.items():
         (worldgen / f'{name}.json').write_text(json.dumps(bundle))
     return root
@@ -179,6 +236,15 @@ def compare(expected, actual):
     return None
 
 
+def census_starts(oracle):
+    """The oracle's census of every start (`all_starts`), as `structures` entries with their `all_starts`."""
+    for chunk in oracle['all_starts']:
+        for start in chunk['starts']:
+            if 'children' in start:
+                yield {'id': start['id'], 'dimension': chunk['dimension'], 'start_chunk': chunk['chunk'],
+                       'all_starts': start['children']}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--profile', default='lithostitched', choices=sorted(PROFILES))
@@ -190,18 +256,23 @@ def main():
         print(f'SKIP: no oracle results in {ORACLE / args.profile} (see this file\'s docstring)')
         return 0
     profile = PROFILES[args.profile]
-    missing = [jar for jar in profile['jars'] if not (JARS / jar).exists()]
+    missing = [jar for jar in profile['mods'].values() if not jar_path(jar).exists()]
+    missing += [str(ORACLE / 'profiles' / f'{name}.json') for name in profile.get('packs', {}).values()
+                if not (ORACLE / 'profiles' / f'{name}.json').exists()]
     if missing:
-        print(f'SKIP: mod jars not in {JARS}: {", ".join(missing)}')
+        print(f'SKIP: not found: {", ".join(missing)}')
         return 0
-    resources = overlay(args.profile, profile['jars']) if profile['jars'] else lab.RESOURCES
+    resources = lab.RESOURCES
+    if profile['carry']:
+        data = carry(args.profile, profile['mods'], profile['carry'], profile.get('packs'))
+        resources = overlay(args.profile, data)
     binary = probe_binary()
     matched, known, failed = 0, 0, []
     for path in results:
         oracle = json.load(gzip.open(path))
         seed = oracle['seed']
         by_dimension = {}
-        for start in oracle['structures']:
+        for start in oracle['structures'] if profile['side'] != 'all_starts' else census_starts(oracle):
             if start.get(profile['side']) is None or not re.search(args.filter, start['id']) \
                     or not re.search(profile['structures'] or '', start['id']):
                 continue

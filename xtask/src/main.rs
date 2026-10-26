@@ -10,7 +10,7 @@
 //! (`cargo build --release -p horizon-client --no-default-features`, without sound or controllers)
 //! as horizon-engine, with horizon-prepare and horizon-server from beside it and the same sources.
 //!
-//! `tokens`: writes `website/src/tokens.css`, the design tokens of `crates/horizon-theme` as CSS
+//! `tokens`: writes `crates/horizon-theme/tokens.css`, the design tokens of `crates/horizon-theme` as CSS
 //! custom properties (a horizon-theme test fails when the file is out of date).
 //!
 //! `icons`: renders the icon masters in `docs/media/brand` (with `rsvg-convert`, from librsvg)
@@ -79,9 +79,9 @@ fn git(repo: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
 }
 
 fn tokens() -> Result<(), String> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../website/src/tokens.css");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/horizon-theme/tokens.css");
     fs::write(&path, horizon_theme::css()).map_err(|e| format!("{}: {e}", path.display()))?;
-    println!("wrote website/src/tokens.css");
+    println!("wrote crates/horizon-theme/tokens.css");
     Ok(())
 }
 
@@ -195,7 +195,7 @@ fn icons() -> Result<(), String> {
         &repo.join("crates/horizon-theme/icons/horizon-64.png"),
         &render(&square, (64, 64))?,
     )?;
-    // Avatars and the website's icons.
+    // Avatars, and the website's icons (horizon-site copies docs/media/brand/web/ into its public/).
     let avatar = brand.join("avatar.svg");
     for (svg, size, out) in [
         (
@@ -203,15 +203,15 @@ fn icons() -> Result<(), String> {
             500,
             "docs/media/brand/social/github-avatar-500.png",
         ),
-        (&avatar, 180, "website/public/apple-touch-icon.png"),
-        (&square, 32, "website/public/favicon-32.png"),
+        (&avatar, 180, "docs/media/brand/web/apple-touch-icon.png"),
+        (&square, 32, "docs/media/brand/web/favicon-32.png"),
         (&square, 1024, "docs/media/brand/icon-1024.png"),
         (&macos, 1024, "docs/media/brand/icon-macos-1024.png"),
     ] {
         write(&repo.join(out), &render(svg, (size, size))?)?;
     }
     write(
-        &repo.join("website/public/favicon.svg"),
+        &repo.join("docs/media/brand/web/favicon.svg"),
         &fs::read(&square).map_err(|e| format!("{}: {e}", square.display()))?,
     )?;
     println!("wrote packaging/icons, the window icon, the avatars and the website's icons");
@@ -222,14 +222,38 @@ fn package(binary: &Path, out: &Path) -> Result<(), String> {
     let repo = new_folder(out)?;
     copy_into(binary, out)?;
     copy_beside(binary, &TOOLS, out)?;
+    copy_exporters(&repo.join("exporters"), &out.join("exporters"))?;
     let play = repo.join("packaging/PLAY.txt");
     copy(&play, &out.join("PLAY.txt"))
 }
 
 fn package_server(engine: &Path, out: &Path) -> Result<(), String> {
-    new_folder(out)?;
+    let repo = new_folder(out)?;
+    copy_exporters(&repo.join("exporters"), &out.join("exporters"))?;
     copy(engine, &out.join(program_name(engine, "horizon-engine")))?;
     copy_beside(engine, &SERVER_TOOLS, out)
+}
+
+/// Release builds supply only our compiled classes and their integrity manifest.
+fn copy_exporters(from: &Path, to: &Path) -> Result<(), String> {
+    if !from.join("manifest.json").is_file() {
+        return Err("Missing exporters/manifest.json; run horizon-prepare compile-exporters and copy its bundle to exporters/".into());
+    }
+    copy_exporter_tree(from, to)
+}
+
+fn copy_exporter_tree(from: &Path, to: &Path) -> Result<(), String> {
+    fs::create_dir_all(to).map_err(|e| e.to_string())?;
+    for entry in fs::read_dir(from).map_err(|e| e.to_string())? {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        let target = to.join(path.file_name().unwrap());
+        if path.is_dir() {
+            copy_exporter_tree(&path, &target)?;
+        } else {
+            copy(&path, &target)?;
+        }
+    }
+    Ok(())
 }
 
 /// `OUT`, emptied, with the sources the release folders take (`ARCHIVED`); the repository's path.

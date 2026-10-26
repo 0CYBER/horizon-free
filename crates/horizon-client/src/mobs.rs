@@ -7,6 +7,7 @@
 //! behaviour, models, animations and sounds.
 pub mod ai;
 pub mod allay;
+pub mod ambient;
 pub mod anim;
 pub mod animal_brain;
 pub mod aquatic;
@@ -860,10 +861,18 @@ pub struct Mob {
     /// The skin texture of a player mob (`PlayerInfo.getSkin`), which
     /// replaces the type's default when its download is ready.
     pub skin: Option<String>,
+    /// A mannequin's `DATA_PROFILE` (ResolvableProfile): the profile's
+    /// `textures` property resolves to `skin` like a player's.
+    pub profile: Option<horizon_protocol::entity_data::Profile>,
 }
 /// Events a mob tick asks the game to act on.
 #[derive(Clone, Debug)]
 pub enum MobEvent {
+    /// Squid.handleEntityEvent(19), resetting the remote tentacle cycle.
+    SquidCycle {
+        mob: u32,
+        at: [f64; 3],
+    },
     /// Rabbit entity event 1, sent only when a ground jump actually happens.
     RabbitHop {
         mob: u32,
@@ -1585,6 +1594,7 @@ impl Mob {
             rider: None,
             outbox: Vec::new(),
             skin: None,
+            profile: None,
             attrs: Attrs {
                 speed: kind.speed,
                 attack_damage: kind.attack_damage,
@@ -1645,6 +1655,11 @@ impl Mob {
     }
     pub fn species(&self) -> Species {
         self.kind.species
+    }
+    /// `Mob.getMainArm`: the left arm when the mob is left-handed, a player's
+    /// `mainHand` option for a player mob.
+    pub fn main_arm_left(&self) -> bool {
+        self.extra.main_hand_left || self.extra.left_handed
     }
     /// The player hit this mob (melee): LivingEntity.hurt with knockback.
     pub fn hurt(
