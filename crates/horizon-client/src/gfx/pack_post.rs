@@ -149,6 +149,8 @@ struct Entities {
     late: [bool; PROGRAMS],
     /// What draws entities and block entities into the shadow map (2.4).
     shadow: [Option<Pass>; 2],
+    /// Only the player, only block entities that emit light (3.2).
+    only: (bool, bool),
 }
 
 impl Entities {
@@ -1086,6 +1088,7 @@ impl PackPost {
             post.particles,
         ];
         let late = [false, false, post.translucent_late, post.particles_late];
+        let shadow_only = (post.shadow_only_player, post.shadow_only_lit_blocks);
         let shadow_programs = [post.shadow_entities, post.shadow_block];
         let entity_vertices = (programs.iter().chain(&shadow_programs))
             .any(Option::is_some)
@@ -1114,6 +1117,7 @@ impl PackPost {
                 passes: entity_passes,
                 late,
                 shadow: shadow_entities,
+                only: shadow_only,
             });
         let cloud_geometry = world.clouds.map(|layout| Geometry {
             buffers: &entity_buffers,
@@ -1221,10 +1225,17 @@ impl PackPost {
         // Timed (and labelled) apart from the terrain's shadow pass, which may run the same
         // program.
         let mut entities = entities;
-        for (part, pass) in (entities.iter_mut()).flat_map(|e| parts.iter().zip(&mut e.shadow)) {
-            if let Some(p) = pass {
-                notes.push(format!("{part} cast shadows with {}", p.name));
-                p.name.push_str(&format!(" ({part})"));
+        for e in entities.iter_mut() {
+            let only = [
+                (e.only.0, " (only the player)"),
+                (e.only.1, " (only those that emit light)"),
+            ];
+            for ((part, pass), (only, which)) in parts.iter().zip(&mut e.shadow).zip(only) {
+                if let Some(p) = pass {
+                    let which = if only { which } else { "" };
+                    notes.push(format!("{part}{which} cast shadows with {}", p.name));
+                    p.name.push_str(&format!(" ({part})"));
+                }
             }
         }
         let depth1 = water.is_some()
@@ -1874,17 +1885,13 @@ impl PackPost {
         spans: &[super::pack_draw::EntitySpan],
         rest: &mut Vec<super::Vertex>,
     ) {
+        let shadow = self.shadow_casters();
         let Some(e) = &mut self.entities else {
             rest.clear();
             rest.extend_from_slice(entities);
             return;
         };
         let drawn = e.passes.each_ref().map(Option::is_some);
-        // Only while the shadow pass draws this frame.
-        let shadow = e
-            .shadow
-            .each_ref()
-            .map(|p| p.is_some() && self.shadow_targets.is_some());
         e.geometry.prepare(
             device,
             queue,
@@ -1895,6 +1902,23 @@ impl PackPost {
             shadow,
             rest,
         );
+    }
+
+    /// Which entity runs the shadow pass draws: none without it.
+    pub fn shadow_casters(&self) -> super::pack_entities::Casters {
+        let Some(e) = self
+            .entities
+            .as_ref()
+            .filter(|_| self.shadow_targets.is_some())
+        else {
+            return Default::default();
+        };
+        super::pack_entities::Casters {
+            entities: e.shadow[0].is_some(),
+            only_player: e.only.0,
+            blocks: e.shadow[1].is_some(),
+            only_lit: e.only.1,
+        }
     }
 
     /// Whether the pack draws entities or block entities itself.

@@ -170,6 +170,30 @@ pub(super) struct Draw {
     pub slot: u32,
 }
 
+/// Which entity runs a pack's shadow pass draws (2.4, 3.2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Casters {
+    /// `shadow_entities` (or `shadow`) draws entities...
+    pub entities: bool,
+    /// ...only the local player (`shadowPlayer` without `shadowEntities`).
+    pub only_player: bool,
+    /// `shadow_block` (or `shadow`) draws block entities...
+    pub blocks: bool,
+    /// ...only those whose block emits light (`shadowLightBlockEntities`).
+    pub only_lit: bool,
+}
+
+impl Casters {
+    /// Whether the shadow pass draws `span`'s run, of kind `program`.
+    pub fn cast(&self, span: &EntitySpan, program: usize) -> bool {
+        match program {
+            ENTITY => self.entities && (!self.only_player || span.player),
+            BLOCK => self.blocks && (!self.only_lit || span.emissive),
+            _ => false,
+        }
+    }
+}
+
 /// The vertices and per-draw uniforms of the runs a pack draws, rebuilt each frame.
 pub(super) struct PackEntities {
     vertices: wgpu::Buffer,
@@ -285,7 +309,7 @@ impl PackEntities {
     /// Splits `entities` between the pack, which draws the runs of `spans` its programs cover
     /// (`drawn`: whether it has `gbuffers_entities`, `gbuffers_block` or their fallbacks), and
     /// Horizon, which draws the rest (`rest`). Uploads the pack's part, and the runs its shadow
-    /// programs draw (`shadow`: entities, block entities).
+    /// programs draw (`shadow`). Runs hidden from the camera only ever cast shadows.
     #[allow(clippy::too_many_arguments)]
     pub fn prepare(
         &mut self,
@@ -295,7 +319,7 @@ impl PackEntities {
         entities: &[Vertex],
         spans: &[EntitySpan],
         drawn: [bool; PROGRAMS],
-        shadow: [bool; 2],
+        shadow: Casters,
         rest: &mut Vec<Vertex>,
     ) {
         self.draws.clear();
@@ -307,9 +331,9 @@ impl PackEntities {
         for (span, range) in runs(entities.len(), spans) {
             let run = &entities[range];
             let program = program_of(&span).filter(|_| plain(run));
-            let pack = program.is_some_and(|p| drawn[p]);
-            let casts = program.is_some_and(|p| shadow.get(p).copied().unwrap_or(false));
-            if !pack {
+            let pack = program.is_some_and(|p| drawn[p]) && !span.hidden;
+            let casts = program.is_some_and(|p| shadow.cast(&span, p));
+            if !pack && !span.hidden {
                 rest.extend_from_slice(run);
             }
             let Some(program) = program.filter(|_| (pack || casts) && !run.is_empty()) else {
@@ -446,7 +470,7 @@ mod tests {
             start,
             stage: render_stage(stage),
             id,
-            translucent: false,
+            ..Default::default()
         };
         let spans = [
             span(2, "ENTITIES", 7),
@@ -473,5 +497,28 @@ mod tests {
         assert_eq!(entity_color(1)[0], 1.0);
         assert!((entity_color(1)[3] - (1.0 - 178.0 / 255.0)).abs() < 1e-6);
         assert_eq!(entity_color(0), [0.0; 4]);
+        // The shadow pass: entities, the player alone, block entities, those that emit light.
+        let all = Casters {
+            entities: true,
+            blocks: true,
+            ..Default::default()
+        };
+        let player = EntitySpan {
+            player: true,
+            ..spans[0]
+        };
+        let lit = EntitySpan {
+            emissive: true,
+            ..spans[2]
+        };
+        assert!(all.cast(&spans[0], ENTITY) && all.cast(&spans[2], BLOCK));
+        assert!(!all.cast(&spans[1], PARTICLE));
+        let some = Casters {
+            only_player: true,
+            only_lit: true,
+            ..all
+        };
+        assert!(!some.cast(&spans[0], ENTITY) && some.cast(&player, ENTITY));
+        assert!(!some.cast(&spans[2], BLOCK) && some.cast(&lit, BLOCK));
     }
 }

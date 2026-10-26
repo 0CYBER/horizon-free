@@ -252,6 +252,11 @@ pub struct Post {
     /// `shadow`) from the light, unless `shadowEntities`/`shadowBlockEntities` is false.
     pub shadow_entities: Option<PostProgram>,
     pub shadow_block: Option<PostProgram>,
+    /// `shadowEntities=false` with `shadowPlayer=true`: of the entities, only the player casts.
+    pub shadow_only_player: bool,
+    /// `shadowBlockEntities=false` with `shadowLightBlockEntities=true`: only block entities
+    /// whose block emits light cast.
+    pub shadow_only_lit_blocks: bool,
     /// `shadowcomp`..`shadowcomp99`, after the shadow pass (2.1).
     pub shadow_comp: Vec<PostProgram>,
     /// Translucent entities draw after deferred (`separateEntityDraws`, 3.2).
@@ -323,6 +328,8 @@ pub fn load_post(
         shadow_water: None,
         shadow_entities: None,
         shadow_block: None,
+        shadow_only_player: false,
+        shadow_only_lit_blocks: false,
         shadow_comp: Vec::new(),
         translucent_late: false,
         particles_late: false,
@@ -545,18 +552,23 @@ fn load_shadow(
         })
     };
     // `shadowTerrain`, `shadowTranslucent`, `shadowEntities` and `shadowBlockEntities` (3.2)
-    // leave their part out of the shadow pass; all are on by default (OQ-19).
+    // leave their part out of the shadow pass; all are on by default (OQ-19). `shadowPlayer`
+    // and `shadowLightBlockEntities` (E, off by default) keep the player, and block entities
+    // that emit light, when the first two are off.
     let keep = |key: &str| properties.get(key).is_none_or(|v| v.trim() != "false");
+    let set = |key: &str| properties.get(key).is_some_and(|v| v.trim() == "true");
+    let only_player = !keep("shadowEntities") && set("shadowPlayer");
+    let only_lit = !keep("shadowBlockEntities") && set("shadowLightBlockEntities");
     let shadow = keep("shadowTerrain")
         .then(|| load(&["shadow"], terrain))
         .flatten();
     let water = keep("shadowTranslucent")
         .then(|| load(&["shadow_water", "shadow"], terrain))
         .flatten();
-    let shadow_entities = keep("shadowEntities")
+    let shadow_entities = (keep("shadowEntities") || only_player)
         .then(|| load(&["shadow_entities", "shadow"], entities))
         .flatten();
-    let shadow_block = keep("shadowBlockEntities")
+    let shadow_block = (keep("shadowBlockEntities") || only_lit)
         .then(|| load(&["shadow_block", "shadow"], entities))
         .flatten();
     if shadow.is_none() && terrain.is_some() {
@@ -569,6 +581,8 @@ fn load_shadow(
     loader.post.shadow_water = water;
     loader.post.shadow_entities = shadow_entities;
     loader.post.shadow_block = shadow_block;
+    loader.post.shadow_only_player = only_player;
+    loader.post.shadow_only_lit_blocks = only_lit;
 }
 
 struct Loader<'a> {
@@ -892,6 +906,13 @@ mod tests {
         assert!(
             off.shadow.is_some() && off.shadow_entities.is_none() && off.shadow_block.is_none()
         );
+        // shadowPlayer and shadowLightBlockEntities keep a part of each.
+        let some = load(
+            "shadowEntities=false\nshadowPlayer=true\nshadowBlockEntities=false\nshadowLightBlockEntities=true",
+        );
+        assert!(some.shadow_entities.is_some() && some.shadow_only_player);
+        assert!(some.shadow_block.is_some() && some.shadow_only_lit_blocks);
+        assert!(!post.shadow_only_player && !post.shadow_only_lit_blocks);
         let comp: Vec<_> = post
             .shadow_comp
             .iter()
