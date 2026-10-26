@@ -291,6 +291,19 @@ def entities():
         cmd('/data get entity @e[tag=root,limit=1] Passengers[0].Health'),
         cmd('/data get entity @e[tag=root,limit=1] Passengers[0].id'),
         cmd('/kill @e[tag=root]'),
+        # Saved attribute bases are read for every mob, then Health or the max
+        # health when there is none (LivingEntity.readAdditionalSaveData, #1483).
+        cmd('/summon minecraft:cow 4.5 210 8.5 {Tags:["attr"],NoAI:1b,NoGravity:1b,'
+            'attributes:[{id:"minecraft:max_health",base:40.0d},{id:"minecraft:movement_speed",base:0.5d}]}'),
+        cmd('/data get entity @e[tag=attr,limit=1] Health'),
+        cmd('/attribute @e[tag=attr,limit=1] minecraft:max_health base get'),
+        cmd('/attribute @e[tag=attr,limit=1] minecraft:movement_speed base get'),
+        cmd('/kill @e[tag=attr]'),
+        cmd('/summon minecraft:zombie 4.5 210 8.5 {Tags:["attr"],NoAI:1b,NoGravity:1b,Health:7.0f,'
+            'attributes:[{id:"minecraft:attack_damage",base:9.0d}]}'),
+        cmd('/data get entity @e[tag=attr,limit=1] Health'),
+        cmd('/attribute @e[tag=attr,limit=1] minecraft:attack_damage base get'),
+        cmd('/kill @e[tag=attr]'),
         *setup('/kill @e[type=minecraft:armor_stand]'),
         {'op': 'tick', 'n': 25},
         cmd('/execute if entity @e[tag=h]'),
@@ -325,6 +338,31 @@ def riding_teleport():
         ]
     return operations + setup('/kill @e[tag=tp_horse]', '/kill @e[tag=tp_destination]',
                               '/tp @s 8.5 230 8.5 0 0')
+
+
+def mob_riding():
+    """Mobs mount and dismount mobs with /ride, NBT passengers included (#1520)."""
+    rider, vehicle = '@e[tag=ride_r,limit=1]', '@e[tag=ride_v,limit=1]'
+    return [
+        *setup('/summon minecraft:cow 4.5 220 12.5 {NoAI:1b,NoGravity:1b,Tags:["ride_v"]}',
+               '/summon minecraft:pig 6.5 220 12.5 {NoAI:1b,NoGravity:1b,Tags:["ride_r"]}'),
+        cmd(f'/ride {rider} dismount'),
+        cmd(f'/ride {rider} mount @s'),
+        cmd(f'/ride {rider} mount {rider}'),
+        cmd(f'/ride {rider} mount {vehicle}'),
+        cmd(f'/ride {rider} mount {vehicle}'),
+        cmd(f'/ride {vehicle} mount {rider}'),
+        cmd('/execute as @e[tag=ride_r] on vehicle run say carrying'),
+        cmd(f'/ride {rider} dismount'),
+        cmd(f'/data get entity {rider} Pos'),
+        cmd('/execute as @e[tag=ride_r] on vehicle run say still carrying'),
+        *setup('/kill @e[tag=ride_r]', '/kill @e[tag=ride_v]'),
+        *setup('/summon minecraft:cow 4.5 220 12.5 {NoAI:1b,NoGravity:1b,Tags:["ride_v"],'
+               'Passengers:[{id:"minecraft:pig",NoAI:1b,NoGravity:1b,Tags:["ride_r"]}]}'),
+        cmd(f'/ride {rider} dismount'),
+        cmd(f'/data get entity {rider} Pos'),
+        *setup('/kill @e[tag=ride_r]', '/kill @e[tag=ride_v]'),
+    ]
 
 
 def scores():
@@ -1017,6 +1055,7 @@ def groups():
         ('blocks and border', world_blocks()),
         ('entities', entities()),
         ('riding teleport', riding_teleport()),
+        ('mob riding', mob_riding()),
         ('scores, teams and bossbars', scores()),
         ('execute', execute()),
         ('levels', levels()),

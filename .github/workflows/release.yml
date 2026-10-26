@@ -1,6 +1,7 @@
 name: release
 # Automatic game releases (docs/release-flow.md). After every green `checks` run on main, every 10 minutes (so a
-# release waiting for merges to settle goes out without another merge) and by hand, tools/release_train.py decides:
+# release waiting for merges to settle goes out without another merge) and by hand, tools/release_train.py decides,
+# for a commit whose checks and parity-main (the vanilla harnesses on main) both passed:
 # a release when 5 pull requests merged since the last one changed what players run and the newest merged 5 minutes
 # ago, or when the oldest has waited 6 hours, or at once for a pull request labelled release-now.
 # RELEASES_PAUSED=1 (repository variable) stops them; so does an open issue labelled release-blocker, forced runs too.
@@ -18,7 +19,8 @@ name: release
 #   gh workflow run release -f dry_run=false -f force=true       # on main: release now, whatever the rules say
 on:
   workflow_run:
-    workflows: [checks]
+    # A game release ships a commit both passed on (parity-main runs on batches: the newest commit it passed on).
+    workflows: [checks, parity-main]
     types: [completed]
     branches: [main]
   schedule:
@@ -64,8 +66,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASES_PAUSED: ${{ vars.RELEASES_PAUSED }}
-          # The commit whose checks just passed; a dry run builds the branch it was started on; otherwise
-          # main's newest commit with green checks.
+          # The commit whose checks or parity-main just passed; a dry run builds the branch it was started on;
+          # otherwise main's newest commit with green checks and parity-main.
           HEAD_SHA: ${{ github.event.workflow_run.head_sha || (steps.mode.outputs.dry_run == 'true' && github.sha) || '' }}
           FORCE: ${{ inputs.force && 'yes' || '' }}
         run: |

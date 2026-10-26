@@ -21,7 +21,7 @@ export function contributorsFrom(list) {
 }
 
 // GitHub serves avatars at any size: 96 px is twice what the page draws, for sharp screens.
-function avatar(url) {
+export function avatar(url) {
   if (!url.startsWith(AVATARS)) return "";
   const u = new URL(url);
   u.searchParams.set("s", "96");

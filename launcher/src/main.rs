@@ -205,6 +205,8 @@ struct Launcher {
     /// The Modpacks page: the imported packs (read when the page first opens), the one shown,
     /// the report's filter, and the pipeline step running now with its log.
     packs: Vec<horizon_launcher::modpacks::Imported>,
+    /// Modpacks installed from Horizon's registry, each its own profile.
+    registry_packs: Vec<horizon_launcher::browser::horizon::pack::Installed>,
     packs_loaded: Option<Instant>,
     pack_open: Option<String>,
     pack_filter: Option<horizon_port_pack::report::Status>,
@@ -265,6 +267,9 @@ impl Launcher {
         {
             settings.selected = installed.first().cloned();
         }
+        // Pin the window's chrome (macOS title bar) to the choice before the theme reads
+        // `window.appearance()`, so both draw the same look.
+        titlebar::apply_appearance(window, settings.appearance);
         let mut this = Self {
             theme: Theme::for_appearance(settings.appearance, window.appearance()),
             page: Page::from_env(),
@@ -330,6 +335,7 @@ impl Launcher {
             play_pressed: None,
             bench: perf::Bench::from_env(),
             packs: Vec::new(),
+            registry_packs: Vec::new(),
             packs_loaded: None,
             pack_open: None,
             pack_filter: None,
@@ -825,13 +831,14 @@ impl Launcher {
         // A little earlier than the spawn: file times can be coarse.
         self.client_started =
             Some(std::time::SystemTime::now() - std::time::Duration::from_secs(2));
-        // The built-in packs the resources lack and the session (a network round trip when the
-        // token needs renewing) come first; `drain` starts the game when the session arrives.
+        // What the resources lack (built-in packs, panorama, sounds) and the session (a network
+        // round trip when the token needs renewing) come first; `drain` starts the game when the
+        // session arrives.
         self.starting_client = Some(tag.clone());
         self.play_pressed = Some(Instant::now());
         let tx = self.tx.clone();
         std::thread::spawn(move || {
-            backend::complete_packs(&tag);
+            backend::complete_assets(&tag);
             let session = (|| {
                 let mut accounts = Accounts::load();
                 let Some((a, secrets)) = account::session_for_launch(
@@ -2482,6 +2489,7 @@ impl Launcher {
                     let _ = this.update(cx, |this, cx| {
                         this.settings.appearance = choice;
                         this.settings.save();
+                        titlebar::apply_appearance(window, choice);
                         this.theme = Theme::for_appearance(choice, window.appearance());
                         cx.notify();
                     });
