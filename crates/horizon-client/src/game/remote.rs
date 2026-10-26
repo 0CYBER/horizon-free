@@ -1619,7 +1619,11 @@ impl Game<'_> {
             }
             C::Login(p) => {
                 self.level.hardcore = p.hardcore;
+                // handleLogin makes a new MultiPlayerGameMode (carried index 0) and a
+                // new LocalPlayer (slot 0).
+                self.selected = 0;
                 if let Some(r) = self.remote.as_mut() {
+                    r.carried = Some(0);
                     r.online_mode = p.online_mode;
                     r.entity_id = p.player_id;
                     r.view_distance = p.chunk_radius;
@@ -2295,10 +2299,11 @@ impl Game<'_> {
                 }
                 self.apply_remote_abilities();
             }
+            // ClientPacketListener.handleSetHeldSlot: a hotbar slot only, and the
+            // carried index stays, so the next tick answers with SetCarriedItem.
             C::SetHeldSlot(p) => {
-                self.selected = p.slot.clamp(0, 8) as usize;
-                if let Some(r) = self.remote.as_mut() {
-                    r.carried = Some(self.selected);
+                if (0..9).contains(&p.slot) {
+                    self.selected = p.slot as usize;
                 }
             }
             C::ContainerSetContent(p) => {
