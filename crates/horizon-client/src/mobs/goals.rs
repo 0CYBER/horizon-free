@@ -1210,6 +1210,9 @@ pub struct NearestTarget {
     pub interval: i32,
     /// Extra condition on the attacker, checked after the random interval.
     pub when: Option<fn(&Mob, &MobWorld) -> bool>,
+    /// Mobs closer than this squared distance are not picked
+    /// (`GuardianAttackSelector`: `distanceToSqr > 9`).
+    pub beyond_sqr: Option<f64>,
     /// A condition checked before anything else, by subclasses overriding
     /// `canUse` (SpiderTargetGoal: only in the dark).
     pub gate: Option<fn(&Mob, &MobWorld) -> bool>,
@@ -1242,6 +1245,7 @@ impl NearestTarget {
             must_reach: false,
             interval: reduced(10),
             when: None,
+            beyond_sqr: None,
             gate: None,
             label: None,
             found: None,
@@ -1272,6 +1276,10 @@ impl NearestTarget {
     }
     pub fn when(mut self, f: fn(&Mob, &MobWorld) -> bool) -> Self {
         self.when = Some(f);
+        self
+    }
+    pub fn beyond(mut self, distance_sqr: f64) -> Self {
+        self.beyond_sqr = Some(distance_sqr);
         self
     }
     pub fn gate(mut self, f: fn(&Mob, &MobWorld) -> bool) -> Self {
@@ -1359,6 +1367,9 @@ impl Goal for NearestTarget {
                     .collect();
                 for (cid, cpos) in candidates {
                     if m.distance_sqr(cpos) > range * range {
+                        continue;
+                    }
+                    if self.beyond_sqr.is_some_and(|d| m.distance_sqr(cpos) <= d) {
                         continue;
                     }
                     if !m.sees(cx.w, Who::Mob(cid)) {
