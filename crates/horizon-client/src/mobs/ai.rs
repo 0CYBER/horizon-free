@@ -641,7 +641,7 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
     }
     // AbstractHorse.aiStep: the tail swishes now and then (moveTail).
     if super::equine::is_equine(m.species()) {
-        let _ = m.random.next_int_bound(200);
+        super::equine::tail_tick(m);
     }
     // Monster.aiStep: updateNoActionTime (Raider: always +2).
     if is_monster(m.species())
