@@ -37,7 +37,9 @@ mod crumbling_tests;
 mod entity_batch;
 mod weather;
 use entity_batch::EntityBatch;
-pub use entity_batch::{SHADOW_OVERLAY, TRANSLUCENT_PARTICLE_OVERLAY, WATER_MASK_OVERLAY};
+pub use entity_batch::{
+    ENERGY_SWIRL_OVERLAY, SHADOW_OVERLAY, TRANSLUCENT_PARTICLE_OVERLAY, WATER_MASK_OVERLAY,
+};
 
 /// Window.getAppropriateLineWidth, in framebuffer pixels.
 pub fn outline_width(width: u32) -> f32 {
@@ -400,6 +402,8 @@ pub struct Renderer {
     cloud_uniform: wgpu::Buffer,
     cloud_group: wgpu::BindGroup,
     additive_pipeline: wgpu::RenderPipeline,
+    /// `RenderPipelines.ENERGY_SWIRL`: additive, unlit, the sprite repeated within itself.
+    energy_swirl_pipeline: wgpu::RenderPipeline,
     lightning_pipeline: wgpu::RenderPipeline,
     lightning: lightning::Renderer,
     see_through_pipeline: wgpu::RenderPipeline,
@@ -1865,6 +1869,27 @@ impl Renderer {
             alpha_blend,
             false,
         );
+        // RenderPipelines.ENERGY_SWIRL: BlendFunction.ADDITIVE (one, one), no culling; no depth
+        // writes either: vanilla sorts the quads far to near, so every face passes the test.
+        let one_one = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let energy_swirl_pipeline = entity_pipeline_with(
+            "Energy swirls",
+            None,
+            false,
+            wgpu::CompareFunction::GreaterEqual,
+            Default::default(),
+            wgpu::BlendState {
+                color: one_one,
+                alpha: one_one,
+            },
+            false,
+            "fs_energy_swirl",
+            wgpu::ColorWrites::ALL,
+        );
         let lightning_attributes = wgpu::vertex_attr_array![6=>Float32x3];
         let lightning_vertex = [
             entity_vertex[0].clone(),
@@ -2379,6 +2404,7 @@ impl Renderer {
             cloud_uniform,
             cloud_group,
             additive_pipeline,
+            energy_swirl_pipeline,
             lightning_pipeline,
             lightning: lightning::Renderer::new(),
             see_through_pipeline,
@@ -3979,6 +4005,7 @@ impl Renderer {
             crumbling_quads,
             translucent_crumbling_quads,
             water_mask_quads,
+            swirl_quads,
             shadow_quads,
             translucent_particle_quads,
         ] = self
@@ -3989,6 +4016,7 @@ impl Renderer {
             + crumbling_quads
             + translucent_crumbling_quads
             + water_mask_quads
+            + swirl_quads
             + shadow_quads
             + translucent_particle_quads;
         let cloud_quads = if let Some(input) = &frame.clouds {
@@ -4552,6 +4580,21 @@ impl Renderer {
                 pass.set_pipeline(&self.lightning_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 self.lightning.draw(&mut pass, &frame.lightning);
+                pass.set_bind_group(0, &self.group, &[]);
+            }
+            if swirl_quads > 0 {
+                pass.set_pipeline(&self.energy_swirl_pipeline);
+                pass.set_bind_group(0, &self.entity_group, &[]);
+                pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                pass.draw_indexed(
+                    0..swirl_quads * 6,
+                    ((entity_quads
+                        + crumbling_quads
+                        + translucent_crumbling_quads
+                        + water_mask_quads)
+                        * 4) as i32,
+                    0..1,
+                );
                 pass.set_bind_group(0, &self.group, &[]);
             }
             if additive_quads > 0 {
@@ -5240,7 +5283,7 @@ mod tests {
         let mut batch = super::EntityBatch::default();
         let counts = batch.update(&entities, &quad(3, 5), &quad(0, 6), &quad(0, 8));
         let vertices = &batch.combined;
-        assert_eq!(counts, [4, 1, 1, 0, 1, 1]);
+        assert_eq!(counts, [4, 1, 1, 0, 0, 1, 1]);
         assert_eq!(
             vertices
                 .as_chunks::<4>()

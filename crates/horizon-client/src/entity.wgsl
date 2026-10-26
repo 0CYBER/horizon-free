@@ -224,6 +224,20 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
     return color;
 }
 
+// RenderPipelines.ENERGY_SWIRL (entity.fsh with EMISSIVE and NO_OVERLAY): the sprite, scrolled by
+// the UV and repeated within itself, times the layer colour 0xFF808080, unlit; the pipeline adds
+// it to the frame. The light bytes carry the sprite's origin and the colour bytes its size, both
+// as breaking::stage_light packs them.
+@fragment fn fs_energy_swirl(in: Out) -> @location(0) vec4<f32> {
+    let bytes = round(in.color * 255.0);
+    let size = vec2(bytes.x + bytes.y * 256.0, bytes.z + bytes.w * 256.0) / 65535.0;
+    let color = textureSample(atlas, atlas_sampler, crumbling_uv(in.uv, in.wrap, size, textureDimensions(atlas)));
+    if color.a < 0.1 { discard; }
+    let f = max(linear_fog(in.spherical, globals.fog.x, globals.fog.y),
+                linear_fog(in.cylindrical, globals.fog.z, globals.fog.w));
+    return vec4(mix(color.rgb * (128.0 / 255.0), globals.fog_color.rgb, f * globals.fog_color.a), color.a);
+}
+
 // RenderPipelines.WATER_MASK: depth only (the pipeline masks the colour off).
 @fragment fn fs_water_mask() -> @location(0) vec4<f32> {
     return vec4(0.0);
