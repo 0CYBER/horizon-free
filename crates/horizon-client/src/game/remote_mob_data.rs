@@ -20,9 +20,28 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin) {
             // client, which draws the flames. A client doesn't count the
             // fire down: the flag goes off when the server's fire is out.
             (0, Value::Byte(flags)) => m.fire_ticks = i32::from(flags & 1),
+            // LivingEntity.DATA_LIVING_ENTITY_FLAGS: using an item 1, in the
+            // off hand 2. The flag starts and stops the use; the client ticks
+            // the count itself (a bow's pull follows it).
+            (8, Value::Byte(flags)) => {
+                m.extra.using_off_hand = flags & 2 != 0;
+                if flags & 1 == 0 {
+                    m.extra.using_item = 0;
+                } else if m.extra.using_item == 0 {
+                    m.extra.using_item = 1;
+                }
+            }
             // LivingEntity.DATA_HEALTH_ID: the boss bars and the death
             // animation follow it.
             (9, Value::Float(health)) => m.health = *health,
+            // Mob.DATA_MOB_FLAGS_ID: no AI 1, left-handed 2, aggressive 4.
+            // Mob.isAggressive draws the illagers' and skeletons' attack
+            // poses and the vindicator's axe.
+            (15, Value::Byte(flags)) => {
+                m.no_ai = flags & 1 != 0;
+                m.extra.left_handed = flags & 2 != 0;
+                m.ai.aggressive = flags & 4 != 0;
+            }
             (i, Value::Bool(b)) if Some(i) == baby => m.extra.age = if *b { -1 } else { 0 },
             _ => {}
         }
@@ -44,6 +63,13 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin) {
             // AbstractCubeMob.ID_SIZE: its size and box (refreshDimensions).
             (Species::Slime | Species::MagmaCube, 18, Value::Int(size)) => {
                 m.extra.size = (*size).clamp(1, 127);
+            }
+            // Pillager.IS_CHARGING_CROSSBOW: the charge pose (Raider's
+            // IS_CELEBRATING takes 16).
+            (Species::Pillager, 17, Value::Bool(charging)) => m.extra.flag = *charging,
+            // SpellcasterIllager.DATA_SPELL_CASTING_ID: the casting pose.
+            (Species::Evoker | Species::Illusioner, 17, Value::Byte(spell)) => {
+                m.extra.variant2 = (*spell).max(0) as u8;
             }
             // Villager.DATA_VILLAGER_DATA and ZombieVillager's (after
             // Zombie's three): what VillagerProfessionLayer draws.
@@ -179,6 +205,19 @@ mod tests {
     }
 
     #[test]
+    fn mob_flags_turn_aggression_on_and_off() {
+        let Some(mut m) = mob("minecraft:vindicator") else {
+            return;
+        };
+        apply(&mut m, &[(15, s::BYTE, Value::Byte(4 | 2))]);
+        assert!(m.ai.aggressive && m.extra.left_handed && !m.no_ai);
+        assert!(horizon_client::mobs::illager::shows_item(&m));
+        apply(&mut m, &[(15, s::BYTE, Value::Byte(0))]);
+        assert!(!m.ai.aggressive && !m.extra.left_handed);
+        assert!(!horizon_client::mobs::illager::shows_item(&m));
+    }
+
+    #[test]
     fn a_villager_takes_its_type_profession_and_level() {
         let Some(mut m) = mob("minecraft:villager") else {
             return;
@@ -217,5 +256,43 @@ mod tests {
             &[(20, s::VILLAGER_DATA, Value::Ids(vec![desert, farmer, 3]))],
         );
         assert_eq!(name(&z), ("desert", "farmer", 3));
+    }
+
+    #[test]
+    fn the_mob_flags_drive_the_aggressive_poses() {
+        let Some(mut m) = mob("minecraft:skeleton") else {
+            return;
+        };
+        apply(&mut m, &[(15, s::BYTE, Value::Byte(2 | 4))]);
+        assert!(m.ai.aggressive && m.extra.left_handed && !m.no_ai);
+        apply(&mut m, &[(15, s::BYTE, Value::Byte(0))]);
+        assert!(!m.ai.aggressive && !m.extra.left_handed);
+    }
+
+    #[test]
+    fn the_living_flags_start_and_stop_a_mob_using_an_item() {
+        let Some(mut m) = mob("minecraft:skeleton") else {
+            return;
+        };
+        apply(&mut m, &[(8, s::BYTE, Value::Byte(1))]);
+        assert_eq!(m.extra.using_item, 1);
+        assert!(!m.extra.using_off_hand);
+        // Using in the off hand.
+        apply(&mut m, &[(8, s::BYTE, Value::Byte(3))]);
+        assert!(m.extra.using_off_hand);
+        apply(&mut m, &[(8, s::BYTE, Value::Byte(0))]);
+        assert_eq!(m.extra.using_item, 0);
+    }
+
+    #[test]
+    fn a_pillager_charges_and_a_spellcaster_casts() {
+        let Some(mut p) = mob("minecraft:pillager") else {
+            return;
+        };
+        apply(&mut p, &[(17, s::BOOLEAN, Value::Bool(true))]);
+        assert!(p.extra.flag);
+        let mut e = mob("minecraft:evoker").unwrap();
+        apply(&mut e, &[(17, s::BYTE, Value::Byte(2))]);
+        assert_eq!(e.extra.variant2, 2);
     }
 }
