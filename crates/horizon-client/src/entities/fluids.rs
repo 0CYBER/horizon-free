@@ -1,7 +1,7 @@
 //! Dropped-item immersion and currents through the shared vanilla fluid helpers.
 use super::ItemEntity;
 use crate::{
-    motion::{FluidResources, LAVA, WATER},
+    motion::{FluidResources, FluidTags, LAVA, WATER},
     world::World,
 };
 use horizon_core::{
@@ -49,19 +49,9 @@ impl ItemEntity {
         (water_height, lava_height)
     }
 }
-struct Tags;
-impl FluidMembership for Tags {
-    fn fluid_in_tag(&self, kind: FluidKind, tag: FluidTagId) -> bool {
-        if tag == WATER {
-            matches!(kind, FluidKind::Water | FluidKind::FlowingWater)
-        } else {
-            matches!(kind, FluidKind::Lava | FluidKind::FlowingLava)
-        }
-    }
-}
 impl FluidMembership for ItemFluidWorld<'_> {
     fn fluid_in_tag(&self, kind: FluidKind, tag: FluidTagId) -> bool {
-        Tags.fluid_in_tag(kind, tag)
+        FluidTags.fluid_in_tag(kind, tag)
     }
 }
 impl CurrentTarget for ItemFluidWorld<'_> {
