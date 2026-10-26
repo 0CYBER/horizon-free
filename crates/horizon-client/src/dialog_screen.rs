@@ -1,15 +1,17 @@
 //! `DialogScreen` and its kinds (`SimpleDialogScreen`, `MultiButtonDialogScreen`):
-//! where a server dialog's title, body and buttons go in a
+//! where a server dialog's title, body, inputs and buttons go in a
 //! `HeaderAndFooterLayout` (a 33 high header, the body in a `ScrollableLayout`,
 //! the footer), and the `WaitingForResponseScreen` an answer can leave open.
 use crate::{
-    dialog::{Body, Dialog, Kind},
+    dialog::{Body, Control, Dialog, Kind},
     font::Font,
     text::Text,
 };
 
 /// `HeaderAndFooterLayout.DEFAULT_HEADER_AND_FOOTER_HEIGHT`.
 const BAR: f32 = 33.0;
+/// `Checkbox.getBoxSize`.
+pub const BOX: f32 = 17.0;
 /// `DialogScreen.WARNING_BUTTON_SPRITES`: normal, disabled, highlighted.
 pub const WARNING_SPRITES: [&str; 3] = [
     "gui/sprites/dialog/warning_button",
@@ -23,6 +25,10 @@ pub const WARNING_SPRITES: [&str; 3] = [
 pub enum Part {
     /// A line of text and where it starts.
     Line(Text, f32, f32),
+    /// A text input's box.
+    Field { input: usize, rect: [f32; 4] },
+    /// A boolean input: the box, its label right of it.
+    Check { input: usize, rect: [f32; 4] },
     /// A button of `Dialog::buttons`.
     Button { index: usize, rect: [f32; 4] },
 }
@@ -51,6 +57,14 @@ impl Element {
     fn at(self, x: f32, y: f32) -> impl Iterator<Item = Part> {
         self.parts.into_iter().map(move |p| match p {
             Part::Line(t, px, py) => Part::Line(t, px + x, py + y),
+            Part::Field { input, rect } => Part::Field {
+                input,
+                rect: shift(rect, x, y),
+            },
+            Part::Check { input, rect } => Part::Check {
+                input,
+                rect: shift(rect, x, y),
+            },
             Part::Button { index, rect } => Part::Button {
                 index,
                 rect: shift(rect, x, y),
@@ -84,6 +98,55 @@ fn message(font: &Font, contents: &Text, width: f32) -> Element {
         h: 9.0 * parts.len() as f32 + 8.0,
         parts,
     }
+}
+
+/// `InputControlHandlers`: the control for input `i`, if Horizon has it.
+fn input(font: &Font, i: usize, control: &Control) -> Option<Element> {
+    Some(match control {
+        Control::Text {
+            width,
+            label,
+            label_visible,
+            ..
+        } => {
+            let w = *width as f32;
+            if !label_visible {
+                return Some(Element {
+                    w,
+                    h: 20.0,
+                    parts: vec![Part::Field {
+                        input: i,
+                        rect: [0.0, 0.0, w, 20.0],
+                    }],
+                });
+            }
+            // CommonLayouts.labeledElement: the label, 4 below it the box,
+            // both on the left.
+            Element {
+                w: w.max(font.width_text(label)),
+                h: 9.0 + 4.0 + 20.0,
+                parts: vec![
+                    Part::Line(label.clone(), 0.0, 0.0),
+                    Part::Field {
+                        input: i,
+                        rect: [0.0, 13.0, w, 20.0],
+                    },
+                ],
+            }
+        }
+        Control::Boolean { label, .. } => {
+            let w = BOX + 4.0 + font.width_text(label);
+            Element {
+                w,
+                h: BOX,
+                parts: vec![Part::Check {
+                    input: i,
+                    rect: [0.0, 0.0, w, BOX],
+                }],
+            }
+        }
+        Control::SingleOption { .. } | Control::NumberRange { .. } => return None,
+    })
 }
 
 /// `DialogScreen.packControlsIntoColumns`: full rows in a grid 2 apart, what
@@ -152,6 +215,13 @@ impl Layout {
                 Body::Item { .. } => None,
             })
             .collect();
+        elements.extend(
+            dialog
+                .inputs
+                .iter()
+                .enumerate()
+                .filter_map(|(i, input_)| input(font, i, &input_.control)),
+        );
         let buttons = dialog.buttons();
         let (listed, footer_buttons, footer_h) = match &dialog.kind {
             Kind::MultiAction {
@@ -236,6 +306,14 @@ impl Layout {
         let body = self.body.iter().map(move |p| {
             let p = match p.clone() {
                 Part::Line(t, x, y) => Part::Line(t, x, y + dy),
+                Part::Field { input, rect } => Part::Field {
+                    input,
+                    rect: shift(rect, 0.0, dy),
+                },
+                Part::Check { input, rect } => Part::Check {
+                    input,
+                    rect: shift(rect, 0.0, dy),
+                },
                 Part::Button { index, rect } => Part::Button {
                     index,
                     rect: shift(rect, 0.0, dy),
