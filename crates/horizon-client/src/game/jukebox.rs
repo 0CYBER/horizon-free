@@ -99,7 +99,7 @@ impl Game<'_> {
     }
     /// Level event 1010: the song from the jukebox, and the "Now Playing" overlay.
     fn start_song(&mut self, pos: [i32; 3], song: &str) {
-        self.stop_song(pos);
+        self.stop_sound(pos);
         let Some(s) = self.res.items().songs.get(song).cloned() else {
             return;
         };
@@ -112,12 +112,22 @@ impl Game<'_> {
             .set_overlay(Text::translate("record.nowPlaying", &[description]), true);
         self.update_song_volumes();
         self.notify_record_playing(pos, true);
+        if self.audio.capture.is_some() {
+            self.lan_songs.push((pos, Some(song.to_owned())));
+        }
     }
-    fn stop_song(&mut self, pos: [i32; 3]) {
+    fn stop_sound(&mut self, pos: [i32; 3]) {
         if let Some(id) = self.jukebox_sounds.remove(&(pos[0], pos[1], pos[2])) {
             self.audio.stop_and_release(id);
         }
+    }
+    /// Level event 1011: the song ends, here and for the guests.
+    fn stop_song(&mut self, pos: [i32; 3]) {
+        self.stop_sound(pos);
         self.notify_record_playing(pos, false);
+        if self.audio.capture.is_some() {
+            self.lan_songs.push((pos, None));
+        }
     }
     /// `LevelEventHandler.notifyNearbyEntities` (level events 1010 and 1011):
     /// parrots within three blocks of the jukebox start or stop dancing.

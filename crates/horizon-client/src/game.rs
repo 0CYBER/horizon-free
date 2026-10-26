@@ -1640,6 +1640,9 @@ struct Game<'a> {
     guest_use: Option<GuestUse>,
     /// Level events of this tick for the guests, and the guest acting now.
     lan_events: Vec<(i32, [i32; 3], i32, Option<u32>)>,
+    /// Jukebox level events 1010 (song name) and 1011 (`None`) for the guests;
+    /// the song's network id is only known once the hub is in hand.
+    lan_songs: Vec<([i32; 3], Option<String>)>,
     /// Block events (position, b0, b1, state) and entity events (id, event,
     /// position) for the guests.
     lan_block_events: Vec<([i32; 3], i32, i32, u32)>,
@@ -12664,6 +12667,7 @@ impl<'a> Game<'a> {
             forced_hit: None,
             guest_use: None,
             lan_events: Vec::new(),
+            lan_songs: Vec::new(),
             lan_block_events: Vec::new(),
             lan_entity_events: Vec::new(),
             lan_critical_hits: Vec::new(),

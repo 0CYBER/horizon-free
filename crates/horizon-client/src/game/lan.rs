@@ -664,6 +664,7 @@ impl Game<'_> {
         self.world.light_log = None;
         self.audio.capture = None;
         self.lan_events.clear();
+        self.lan_songs.clear();
         self.lan_critical_hits.clear();
         self.streaming.extra.clear();
         if announce {
@@ -1254,6 +1255,16 @@ impl Game<'_> {
                     .push([f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])]);
             }
             host.hub.level_event(kind, pos, data, acting);
+        }
+        // Level events 1010 and 1011: the guests' parrots dance or stop.
+        for (pos, song) in std::mem::take(&mut self.lan_songs) {
+            match song {
+                Some(name) => {
+                    let id = host.hub.registry_id("minecraft:jukebox_song", &name);
+                    host.hub.level_event(1010, pos, id.unwrap_or(0), None);
+                }
+                None => host.hub.level_event(1011, pos, 0, None),
+            }
         }
         for (pos, b0, b1, state) in std::mem::take(&mut self.lan_block_events) {
             host.hub.block_event(pos, b0, b1, state);
