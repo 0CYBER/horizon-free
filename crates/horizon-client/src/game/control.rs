@@ -295,13 +295,9 @@ impl Game<'_> {
                         self.debug_key(key, KeyAction::Release);
                     }
                 }
-                // The zoom extra sees the key as the keyboard hook does.
+                // Mods' keys (capability `input`) see the key as the keyboard
+                // hook does.
                 let action = arg(2)?;
-                self.extras_key(physical, action != "up", action == "repeat");
-                if action == "tap" {
-                    self.extras_key(physical, false, false);
-                }
-                // So do mods' keys (capability `input`).
                 self.mod_key(physical, action != "up", action == "repeat");
                 if action == "tap" {
                     self.mod_key(physical, false, false);
@@ -379,15 +375,19 @@ impl Game<'_> {
                 match arg(2)? {
                     "down" => {
                         self.extras_mouse(button, true);
+                        self.mod_mouse_key(button, true);
                         self.play_mouse(button, true)?
                     }
                     "up" => {
                         self.extras_mouse(button, false);
+                        self.mod_mouse_key(button, false);
                         self.play_mouse(button, false)?
                     }
                     "click" => {
                         self.extras_mouse(button, true);
+                        self.mod_mouse_key(button, true);
                         self.extras_mouse(button, false);
+                        self.mod_mouse_key(button, false);
                         self.play_mouse(button, true)?;
                         self.play_mouse(button, false)?;
                     }

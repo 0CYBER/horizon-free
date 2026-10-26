@@ -3296,26 +3296,29 @@ mod tests {
             crate::extras::rows().iter().filter(|r| r.is_ok()).count()
         );
         assert_eq!(
-            click(&mut ui, &mut s, Act::Extra(crate::extras::Item::Zoom)),
+            click(&mut ui, &mut s, Act::Extra(crate::extras::Item::Sort)),
             vec![Event::ButtonClick, Event::Changed]
         );
-        assert!(s.extras.zoom);
+        assert!(s.extras.sort);
         assert_eq!(
-            click(&mut ui, &mut s, Act::Extra(crate::extras::Item::ZoomKey)),
+            click(&mut ui, &mut s, Act::Extra(crate::extras::Item::SortKey)),
             vec![Event::ButtonClick]
         );
-        assert_eq!(ui.selected_key, Some(crate::extras::ZOOM_KEY));
+        assert_eq!(ui.selected_key, Some(crate::extras::SORT_KEY));
         assert_eq!(
             ui.key(&mut s, &atlas, winit::keyboard::KeyCode::KeyC, None),
             vec![Event::Changed]
         );
-        assert_eq!(s.extras.zoom_key, "key.keyboard.c");
+        assert_eq!(s.extras.sort_key, "key.keyboard.c");
         assert_eq!(
             crate::extras::Extras::parse(&s.extras.serialize()),
             s.extras
         );
-        ui.scroll(&s, size, -1000.0);
-        let (_, top, bottom, content) = ui.layout(&s, size.0, size.1);
+        // In a window too short for the page, the wheel scrolls to its end.
+        let short = (480.0, 300.0);
+        ui.scroll(&s, short, -1000.0);
+        let (_, top, bottom, content) = ui.layout(&s, short.0, short.1);
+        assert!(content > bottom - top);
         assert_eq!(ui.scroll, content - (bottom - top));
         assert_eq!(
             ui.key(&mut s, &atlas, winit::keyboard::KeyCode::Escape, None),
@@ -3867,7 +3870,7 @@ mod tests {
 
     #[test]
     fn extras_and_vanilla_bindings_accept_mouse_buttons() {
-        use crate::extras::{Extras, SORT_KEY, ZOOM_KEY};
+        use crate::extras::{Extras, SORT_KEY};
         use winit::event::MouseButton;
         for button in [
             MouseButton::Left,
@@ -3876,7 +3879,7 @@ mod tests {
             MouseButton::Back,
             MouseButton::Forward,
         ] {
-            for name in [SORT_KEY, ZOOM_KEY, "key.jump"] {
+            for name in [SORT_KEY, "key.jump"] {
                 let mut ui = OptionsUi::default();
                 let mut s = Settings::default();
                 ui.selected_key = Some(name);
@@ -3885,7 +3888,6 @@ mod tests {
                 let value = keybinds::mouse_name(button);
                 match name {
                     SORT_KEY => assert_eq!(s.extras.sort_key, value),
-                    ZOOM_KEY => assert_eq!(s.extras.zoom_key, value),
                     _ => assert_eq!(s.keys.get(name), value),
                 }
                 assert_eq!(Extras::parse(&s.extras.serialize()), s.extras);
