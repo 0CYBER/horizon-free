@@ -66,6 +66,12 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
                 m.extra.color = (*wool & 15) as u8;
                 m.extra.sheared = wool & 16 != 0;
             }
+            // SnowGolem.DATA_PUMPKIN_ID: 16 while the pumpkin is on.
+            (Species::SnowGolem, 16, Value::Byte(flags)) => m.extra.sheared = flags & 16 == 0,
+            // MushroomCow.DATA_TYPE: 0 red, 1 brown.
+            (Species::Mooshroom, 17, Value::Int(variant)) => {
+                m.extra.variant = (*variant == 1) as u8
+            }
             // TamableAnimal.DATA_FLAGS_ID: sitting 1, tame 4.
             (Species::Wolf | Species::Cat | Species::Parrot, 18, Value::Byte(flags)) => {
                 m.extra.sitting = flags & 1 != 0;

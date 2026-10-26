@@ -223,6 +223,20 @@ fn mob_meta(
             }
             defaults.push((16, serializer::BYTE, Value::Byte(0)));
         }
+        // SnowGolem.DATA_PUMPKIN_ID: 16 while the pumpkin is on (the default).
+        "minecraft:snow_golem" => {
+            if e.sheared {
+                meta.push((16, serializer::BYTE, Value::Byte(0)));
+            }
+            defaults.push((16, serializer::BYTE, Value::Byte(16)));
+        }
+        // MushroomCow.DATA_TYPE: 0 red, 1 brown.
+        "minecraft:mooshroom" => {
+            if e.variant == 1 {
+                meta.push((17, serializer::INT, Value::Int(1)));
+            }
+            defaults.push((17, serializer::INT, Value::Int(0)));
+        }
         // Sheep.DATA_WOOL_ID: the colour in the low nibble, 16 when sheared.
         "minecraft:sheep" => {
             let value = (e.color & 15) | if e.sheared { 16 } else { 0 };
