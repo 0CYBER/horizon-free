@@ -749,6 +749,19 @@ impl Behaviours {
     ) {
         self.sim(level, ticks).entity_inside(pos);
     }
+    /// `BigDripleafBlock.entityInside` for an entity whose box is inside
+    /// `pos`: whether it is on the ground and its feet's y (`canEntityTilt`).
+    pub fn entity_on_big_dripleaf<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        on_ground: bool,
+        feet_y: f64,
+    ) {
+        self.sim(level, ticks)
+            .big_dripleaf_entity_inside(pos, on_ground, feet_y);
+    }
     /// Redstone signal queries (`SignalGetter`).
     pub fn has_neighbor_signal<L: LevelAccess + ?Sized>(
         &self,

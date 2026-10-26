@@ -30,7 +30,7 @@ fn ticks_to_seconds(ticks: i64) -> String {
 impl Game<'_> {
     // ---- /forceload ----------------------------------------------------------
 
-    fn column_arg(&self, ctx: &Context, name: &str) -> R<[i32; 2]> {
+    pub(super) fn column_arg(&self, ctx: &Context, name: &str) -> R<[i32; 2]> {
         let c = self
             .coords(ctx, name)
             .ok_or_else(|| err("argument.pos2d.incomplete", &[]))?;

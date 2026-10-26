@@ -21,6 +21,7 @@ use {
         extras::Corner,
         extras_hud,
         items::ItemStack,
+        keybinds,
         mod_list::Installed,
         options_ui::Page,
         text::{self, Text},
@@ -33,7 +34,13 @@ use {
 #[derive(Default)]
 pub(super) struct ModsState {
     #[cfg(feature = "mods")]
-    mods: Mods,
+    pub(super) mods: Mods,
+    /// Capability `input`: a claimed item's use while the button is down.
+    #[cfg(feature = "mods")]
+    pub(super) using: Option<super::mod_input::ModUse>,
+    /// Capability `render`'s camera shakes.
+    #[cfg(feature = "mods")]
+    pub(super) shake: super::mod_render::Shake,
     /// `--dev-mod PATH`: always on, reloaded when rebuilt.
     pub(super) dev: Vec<PathBuf>,
     /// When dev mods were last checked for a rebuild.
@@ -53,7 +60,34 @@ pub(super) struct ModsState {
     /// A `ui` mod's screen or settings page while it is up.
     #[cfg(feature = "mods")]
     screen: Option<ModScreen>,
+    /// The HUD font's advances for `render.text-width`, made once.
+    #[cfg(feature = "mods")]
+    font_widths: std::sync::Arc<[f32]>,
+    /// Playing at the last frame, for `mod_input_frame`.
+    #[cfg(feature = "mods")]
+    pub(super) playing: bool,
 }
+
+/// The mappings `input.mapping` answers for, with the default key their
+/// binding is translated to (none: a mouse button, attack or use).
+#[cfg(feature = "mods")]
+const MAPPINGS: [(&str, Option<winit::keyboard::KeyCode>); 9] = {
+    use winit::keyboard::KeyCode as K;
+    [
+        ("key.forward", Some(K::KeyW)),
+        ("key.left", Some(K::KeyA)),
+        ("key.back", Some(K::KeyS)),
+        ("key.right", Some(K::KeyD)),
+        ("key.jump", Some(K::Space)),
+        ("key.sneak", Some(K::ShiftLeft)),
+        ("key.sprint", Some(K::ControlLeft)),
+        ("key.attack", None),
+        ("key.use", None),
+    ]
+};
+/// Characters `render.text-width` knows exactly: U+0000 to U+024F.
+#[cfg(feature = "mods")]
+const FONT_CHARS: u32 = 0x250;
 
 /// A `ui` mod's own screen, or its settings page from Options > Mods: the
 /// widgets the mod pushed, laid out and drawn with the menus' own widgets.
@@ -93,10 +127,10 @@ impl ModsState {
         }
         false
     }
-    /// Whether a mod draws a HUD panel.
+    /// Whether a mod draws a HUD panel or a corner panel.
     pub(super) fn has_panels(&self) -> bool {
         #[cfg(feature = "mods")]
-        if self.mods.panels().next().is_some() {
+        if self.mods.panels().next().is_some() || self.mods.corner_panels().next().is_some() {
             return true;
         }
         false
@@ -322,8 +356,8 @@ impl Game<'_> {
             self.start_mods();
         }
     }
-    /// What mods read this tick.
-    fn mod_snapshot(&self) -> Snapshot {
+    /// What mods read this tick (or frame, for mods with a `frame` hook).
+    fn mod_snapshot(&mut self) -> Snapshot {
         let player = self.player.as_ref().map(|p| Player {
             x: p.position.x,
             y: p.position.y,
@@ -338,7 +372,36 @@ impl Game<'_> {
             game_time: self.world.game_time.max(0) as u64,
             day_time: self.world.day_time.max(0) as u64,
         });
-        Snapshot { player, clock }
+        let (cps, mouse) = self.mouse_reading();
+        // The movement and click mappings, as the keystroke overlay reads them:
+        // keys by the default key their binding is translated to.
+        let mappings = MAPPINGS
+            .iter()
+            .map(|&(name, key)| {
+                let label = keybinds::display_name(self.settings.keys.get(name)).plain();
+                let down = match key {
+                    Some(k) => self.keys.contains(&k),
+                    None => mouse[usize::from(name == "key.use")],
+                };
+                (name, label, down)
+            })
+            .collect();
+        if self.mods.font_widths.is_empty() {
+            let atlas = &self.gui.atlas;
+            self.mods.font_widths = (0..FONT_CHARS)
+                .map(|c| char::from_u32(c).map_or(6.0, |c| atlas.glyph_cell(c).1))
+                .collect();
+        }
+        Snapshot {
+            player,
+            clock,
+            gui_size: self.gui_size(),
+            held: self.mod_held(),
+            frame: self.frame_reading(),
+            mappings,
+            cps,
+            font_widths: self.mods.font_widths.clone(),
+        }
     }
     /// A game tick.
     pub(super) fn tick_mods(&mut self) {
@@ -350,6 +413,7 @@ impl Game<'_> {
         if !self.mods.mods.is_running() {
             return;
         }
+        self.tick_mod_use();
         let snapshot = self.mod_snapshot();
         self.mods.mods.set_snapshot(snapshot);
         self.mods.mods.tick(self.ticks);
@@ -372,6 +436,11 @@ impl Game<'_> {
         }
         if !self.mods.mods.is_running() {
             return;
+        }
+        self.mod_input_frame();
+        if self.mods.mods.wants_frames() {
+            let snapshot = self.mod_snapshot();
+            self.mods.mods.set_snapshot(snapshot);
         }
         self.mods.mods.frame(elapsed.as_secs_f32());
         self.show_mod_output();
@@ -430,6 +499,10 @@ impl Game<'_> {
                     self.open_mod_screen(owner, false);
                     continue;
                 }
+                Output::Shake { strength, seconds } => {
+                    self.mods.shake.add(strength, seconds);
+                    continue;
+                }
                 Output::CloseScreen { owner } => {
                     if self.mods.screen.as_ref().is_some_and(|s| s.owner == owner) {
                         self.close_mod_screen(false);
@@ -438,10 +511,16 @@ impl Game<'_> {
                 }
             };
             // Not through system_message: a mod must not hear its own lines.
+            // Written by this client, so the Chat option doesn't hide it.
             let focused = self.screen == Screen::Chat;
-            self.ui
-                .chat
-                .add(&self.gui.atlas, line, None, self.ticks, focused);
+            self.ui.chat.add(
+                &self.gui.atlas,
+                line,
+                None,
+                horizon_client::chat::ChatSource::Client,
+                self.ticks,
+                focused,
+            );
         }
         // A mod may set or clear its settings page in any call, not only
         // while loading: its row's Settings button follows.
@@ -470,39 +549,51 @@ impl Game<'_> {
                 .collect();
             extras_hud::draw_lines(batch, &self.gui.atlas, corners, corner, &lines);
         }
+        // Capability `render`'s corner panels, placed the same way.
+        for panel in self.mods.mods.corner_panels() {
+            let corner = match panel.corner {
+                horizon_mods::RenderCorner::TopLeft => Corner::TopLeft,
+                horizon_mods::RenderCorner::TopRight => Corner::TopRight,
+                horizon_mods::RenderCorner::BottomLeft => Corner::BottomLeft,
+                horizon_mods::RenderCorner::BottomRight => Corner::BottomRight,
+            };
+            if self.debug && corner == Corner::TopLeft {
+                continue;
+            }
+            let at = corners.place(corner, panel.width, panel.height);
+            self.draw_shapes(batch, &panel.shapes, at);
+        }
     }
 
     /// A `ui` screen's title and widgets as the mod last pushed them; None
-    /// when the surface is gone (the mod stopped or closed it).
-    fn mod_ui_view(&self) -> Option<(String, Vec<UiWidget>)> {
-        let ms = self.mods.screen.as_ref()?;
+    /// when the surface is gone (the mod stopped or closed it). Borrows
+    /// `mods` only, so `self.mods.screen` may stay borrowed for the scrolls.
+    fn mod_ui_view<'a>(mods: &'a Mods, ms: &ModScreen) -> Option<(&'a str, &'a [UiWidget])> {
         if ms.settings {
-            let widgets = self.mods.mods.settings_widgets(ms.owner);
+            let widgets = mods.settings_widgets(ms.owner);
             if widgets.is_empty() {
                 return None;
             }
-            let name = self
-                .mods
-                .mods
+            let name = mods
                 .entries()
                 .get(ms.owner)
                 .and_then(|e| e.manifest.as_ref())
                 .map_or("Mod", |m| m.name.as_str());
-            Some((name.to_string(), widgets.to_vec()))
+            Some((name, widgets))
         } else {
-            let s: &UiScreen = self.mods.mods.screen(ms.owner)?;
-            Some((s.title.clone(), s.widgets.clone()))
+            let s: &UiScreen = mods.screen(ms.owner)?;
+            Some((s.title.as_str(), s.widgets.as_slice()))
         }
     }
     /// The layout the mod screen's widgets get at `h`: (widget, top,
     /// height), the column being `COLUMN` wide down the middle.
-    fn mod_ui_layout(&self, h: f32, widgets: &[UiWidget]) -> Vec<(f32, f32)> {
+    fn mod_ui_layout(h: f32, widgets: &[UiWidget]) -> Vec<(f32, f32)> {
         let mut out = Vec::with_capacity(widgets.len());
         let mut y = MOD_UI_TOP;
         for w in widgets {
             let wh = match w {
                 UiWidget::Text(_) => 12.0,
-                UiWidget::Item(_) => 20.0,
+                UiWidget::Item(_) | UiWidget::Button(_) => 20.0,
                 UiWidget::List(l) => (l.rows.len().min(6) as f32 * 12.0) + 8.0,
             };
             // Nothing may cover Done; a crowded mod loses what won't fit.
@@ -561,13 +652,19 @@ impl Game<'_> {
     /// The mod's screen or settings page: its title over widgets stacked
     /// down the middle, a Done button, Esc to leave (vanilla's menus).
     pub(super) fn draw_mod_screen(&mut self, batch: &mut HudBatch) {
-        if self.mods.screen.is_none() {
+        let Some(ms) = self.mods.screen.as_mut() else {
+            // The screen was dropped while it was up: back to the world,
+            // mouse held again like any return to Playing.
             self.screen = Screen::Playing;
+            if self.player.is_some() {
+                self.capture(true);
+            }
             return;
-        }
-        let Some((title, widgets)) = self.mod_ui_view() else {
-            self.mods.screen = None;
-            self.screen = Screen::Playing;
+        };
+        let Some((title, widgets)) = Self::mod_ui_view(&self.mods.mods, ms) else {
+            // The mod's surface is gone (it stopped or cleared it): leave
+            // the screen like Done did, without `closed` — the mod ended it.
+            self.close_mod_screen(false);
             return;
         };
         // Item icons draw in a second pass: `draw_item` needs `&mut self`,
@@ -587,10 +684,25 @@ impl Game<'_> {
         );
         let cx = (batch.width / 2.0).floor();
         let x = cx - MOD_UI_COLUMN / 2.0;
-        let layout = self.mod_ui_layout(batch.height, &widgets);
+        let layout = Self::mod_ui_layout(batch.height, widgets);
         let mut list_i = 0usize;
         for (w, &(wy, wh)) in widgets.iter().zip(&layout) {
             match w {
+                UiWidget::Button(b) => {
+                    let hover = ui::hovered(self.cursor, x, wy, MOD_UI_COLUMN, 20.0);
+                    let label = Text::literal(b.label.clone());
+                    ui::button(
+                        batch,
+                        atlas,
+                        x,
+                        wy,
+                        MOD_UI_COLUMN,
+                        20.0,
+                        &label,
+                        true,
+                        hover,
+                    );
+                }
                 UiWidget::Text(t) => {
                     let color = if t.color == 0 {
                         u32::MAX
@@ -628,11 +740,8 @@ impl Game<'_> {
                     );
                 }
                 UiWidget::List(l) => {
-                    let scroll = {
-                        let ms = self.mods.screen.as_mut().expect("checked");
-                        ms.scrolls.resize_with(list_i + 1, ui::Scroll::default);
-                        ms.scrolls[list_i]
-                    };
+                    ms.scrolls.resize_with(list_i + 1, ui::Scroll::default);
+                    let scroll = ms.scrolls[list_i];
                     list_i += 1;
                     let rows_top = wy + 4.0;
                     let rows_bottom = wy + wh - 4.0;
@@ -703,53 +812,63 @@ impl Game<'_> {
             self.close_mod_screen(true);
             return;
         }
-        let Some((_, widgets)) = self.mod_ui_view() else {
+        let Some(ms) = self.mods.screen.as_ref() else {
             return;
         };
+        let Some((_, widgets)) = Self::mod_ui_view(&self.mods.mods, ms) else {
+            return;
+        };
+        let owner = ms.owner;
         let x = (w / 2.0).floor() - MOD_UI_COLUMN / 2.0;
-        let layout = self.mod_ui_layout(h, &widgets);
+        let layout = Self::mod_ui_layout(h, widgets);
         let mut list_i = 0usize;
+        // The `ui_select` call needs `&mut`: find the pick first.
+        let mut hit = None;
         for (w, &(wy, wh)) in widgets.iter().zip(&layout) {
+            // A button is `select(id, 0)`.
+            if let UiWidget::Button(b) = w
+                && ui::hovered(cursor, x, wy, MOD_UI_COLUMN, 20.0)
+            {
+                self.audio.play_button_click();
+                let owner = self.mods.screen.as_ref().map_or(0, |ms| ms.owner);
+                self.mods.mods.ui_select(owner, b.id, 0);
+                self.show_mod_output();
+                return;
+            }
             let UiWidget::List(l) = w else { continue };
-            let scroll = self
-                .mods
-                .screen
-                .as_ref()
-                .and_then(|ms| ms.scrolls.get(list_i).copied())
-                .unwrap_or_default();
+            let scroll = ms.scrolls.get(list_i).copied().unwrap_or_default();
             list_i += 1;
             let row = ((cursor.1 - (wy + 4.0) + scroll.amount) / 12.0) as i64;
             if ui::hovered(cursor, x + 1.0, wy + 1.0, MOD_UI_COLUMN - 7.0, wh - 2.0)
                 && row >= 0
                 && (row as usize) < l.rows.len()
             {
-                self.audio.play_button_click();
-                self.mods.mods.ui_select(
-                    self.mods.screen.as_ref().map_or(0, |ms| ms.owner),
-                    l.id,
-                    row as u32,
-                );
-                self.show_mod_output();
-                return;
+                hit = Some((l.id, row as u32));
+                break;
             }
+        }
+        if let Some((id, row)) = hit {
+            self.audio.play_button_click();
+            self.mods.mods.ui_select(owner, id, row);
+            self.show_mod_output();
         }
     }
     /// The wheel over a `list` scrolls it.
     pub(super) fn mod_screen_scroll(&mut self, delta: f32) {
         let (w, h) = self.gui_size();
         let cursor = self.cursor;
-        let Some((_, widgets)) = self.mod_ui_view() else {
+        let Some(ms) = self.mods.screen.as_mut() else {
+            return;
+        };
+        let Some((_, widgets)) = Self::mod_ui_view(&self.mods.mods, ms) else {
             return;
         };
         let x = (w / 2.0).floor() - MOD_UI_COLUMN / 2.0;
-        let layout = self.mod_ui_layout(h, &widgets);
+        let layout = Self::mod_ui_layout(h, widgets);
         let mut list_i = 0usize;
         for (w, &(wy, wh)) in widgets.iter().zip(&layout) {
             let UiWidget::List(l) = w else { continue };
             let over = ui::hovered(cursor, x, wy, MOD_UI_COLUMN, wh);
-            let Some(ms) = self.mods.screen.as_mut() else {
-                return;
-            };
             ms.scrolls.resize_with(list_i + 1, ui::Scroll::default);
             if over {
                 let content = l.rows.len() as f32 * 12.0;

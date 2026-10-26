@@ -8,8 +8,10 @@ use horizon_client::{
     block_entity_anim::{BellEntity, EndGateway, Shulker, ShulkerStatus, Ticker},
     block_entity_render::BlockAnim,
     collisions::{SceneCollisions, no_collision_empty},
+    containers::BlockEntity,
     particles::{ParticleOptions, ParticleType},
     save::number,
+    skins,
 };
 use horizon_core::geometry::{Aabb, Vec3};
 use horizon_world::nbt::Tag;
@@ -391,5 +393,26 @@ impl Game<'_> {
     /// `ChestLidController.getOpenness(partial)` at `pos`.
     pub(super) fn chest_lid(&self, pos: [i32; 3], partial: f32) -> f32 {
         self.be_anims.lid(pos, partial)
+    }
+    /// `SkullBlockRenderer.getPlayerSkin`: the skin sprite of the profile of
+    /// the player head at `pos`. The skin download is started here; while it
+    /// is in flight (or when it cannot be got) the profile's default skin
+    /// stands in. A head with no profile answers None: `SKIN_BY_TYPE`.
+    pub(super) fn skull_skin_at(&self, pos: [i32; 3]) -> Option<&str> {
+        let Some(BlockEntity::Skull(skull)) =
+            self.world.block_entities.get(&(pos[0], pos[1], pos[2]))
+        else {
+            return None;
+        };
+        let skin = skull.skin.as_ref()?;
+        if let Some((url, location)) = &skin.download {
+            self.skin_downloads
+                .borrow_mut()
+                .state(skins::Kind::Skin, url);
+            if self.gui.atlas.sprites.contains_key(location) {
+                return Some(location);
+            }
+        }
+        Some(skin.fallback)
     }
 }

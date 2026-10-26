@@ -592,3 +592,21 @@ fn mod_commands_join_the_tree_for_every_player() {
     // The game's own tree is left as it was.
     assert!(vanilla::game_dispatcher().find("where").is_none());
 }
+
+#[test]
+fn horizon_commands_are_off_unless_the_server_turns_them_on() {
+    // By default the game runs vanilla's tree: /help lists no /pregen.
+    assert!(vanilla::game_dispatcher().find("pregen").is_none());
+    for dev in [false, true] {
+        let vanilla_tree = vanilla::game_tree(dev, false);
+        assert!(vanilla_tree.find("pregen").is_none());
+        let d = vanilla::game_tree(dev, true);
+        let parse = d.parse("pregen start 100 circle", &reg());
+        assert_eq!(parse.executable().unwrap().1, "pregen.start");
+        // Vanilla's commands are the same with or without it.
+        assert_eq!(
+            d.nodes[0].children.len(),
+            vanilla_tree.nodes[0].children.len() + 1
+        );
+    }
+}

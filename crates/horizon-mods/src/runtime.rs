@@ -37,9 +37,25 @@ use bindings::{
 /// The widget model a `ui` screen or settings page shows (WIT `interface
 /// ui`), for the game to draw with its menus' own widgets.
 pub use ui_bindings::horizon::mods::ui::{
-    ItemWidget, ListWidget, Screen as UiScreen, TextWidget, Widget as UiWidget,
+    ButtonWidget, ItemWidget, ListWidget, Screen as UiScreen, TextWidget, Widget as UiWidget,
 };
 use ui_bindings::{UiHost, horizon::mods::ui};
+/// Capability `render`'s imports (docs/mods.md): the game draws the shapes.
+mod render_bindings {
+    wasmtime::component::bindgen!({
+        path: "../horizon-mod-sdk/wit",
+        world: "render-host",
+    });
+}
+use render_bindings::horizon::mods::input;
+/// Capability `input`'s records (WIT `interface input`).
+pub use render_bindings::horizon::mods::input::{Event as InputEvent, HeldItem, ItemUse};
+/// What capability `render` asks the game to draw (WIT `interface render`).
+pub use render_bindings::horizon::mods::render::{
+    Corner as RenderCorner, FillShape, FrameRate, ItemShape, Point as RenderPoint, QuadShape,
+    Rect as RenderRect, Shape, SpriteShape, TextShape, Zoom as ModZoom,
+};
+use render_bindings::{RenderHost, horizon::mods::render};
 
 /// A mod's linear memory cap.
 const MEMORY: usize = 64 << 20;
@@ -70,6 +86,20 @@ const STORAGE_WRITE_BUDGET: u64 = 1 << 20;
 pub struct Snapshot {
     pub player: Option<Player>,
     pub clock: Option<Clock>,
+    /// The screen in GUI pixels (capability `render`'s `gui-size`).
+    pub gui_size: (f32, f32),
+    /// The main hand's stack (capability `input`'s `held`).
+    pub held: Option<HeldItem>,
+    /// The game's frame counter: fps, min, 1% low (`render.frame-stats`).
+    pub frame: (u32, u32, u32),
+    /// The movement and click mappings `input.mapping` answers for:
+    /// (mapping, the bound key's label, held).
+    pub mappings: Vec<(&'static str, String, bool)>,
+    /// Attack and use clicks in the last second.
+    pub cps: (u32, u32),
+    /// The HUD font's advance per character from U+0000
+    /// (`render.text-width`); empty: 6 each.
+    pub font_widths: Arc<[f32]>,
 }
 
 /// What mods asked the game to show since the last [`Mods::drain`].
@@ -89,6 +119,8 @@ pub enum Output {
     OpenScreen { owner: usize },
     /// `ui.close-screen`: the mod closed its own screen (no `closed` back).
     CloseScreen { owner: usize },
+    /// `render.shake`: strength 0 to 1, fading out over `seconds` (≤ 10).
+    Shake { strength: f32, seconds: f32 },
 }
 
 /// A mod's text panel, drawn every frame until it changes.
@@ -156,6 +188,13 @@ struct State {
     out: Vec<Output>,
     panel: Option<Panel>,
     ui: UiState,
+    /// Capability `render`'s HUD shapes, drawn until replaced.
+    shapes: Vec<Shape>,
+    /// Capability `render`'s corner panel.
+    corner: Option<CornerPanel>,
+    /// Capability `render`'s zoom, when the mod zooms.
+    zoom: Option<ModZoom>,
+    input: InputState,
     /// Capability `storage`'s folder; made on first `set`.
     data_dir: PathBuf,
     /// Bytes `storage::set` may still write before this hook call ends
@@ -234,6 +273,8 @@ impl Mods {
                 .map_err(|e| e.to_string())?;
             UiHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
+            RenderHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
+                .map_err(|e| e.to_string())?;
             self.engine = Some((engine, linker));
         }
         Ok(self.engine.as_ref().expect("made above"))
@@ -293,6 +334,10 @@ impl Mods {
             out: Vec::new(),
             panel: None,
             ui: UiState::default(),
+            shapes: Vec::new(),
+            corner: None,
+            zoom: None,
+            input: InputState::default(),
             data_dir,
             storage_budget: STORAGE_WRITE_BUDGET,
             limits: StoreLimitsBuilder::new()
@@ -484,6 +529,138 @@ impl Mods {
             .iter()
             .filter_map(|e| e.run.as_ref()?.store.data().panel.as_ref())
     }
+    /// The running mods' corner panels (capability `render`), in load order.
+    pub fn corner_panels(&self) -> impl Iterator<Item = &CornerPanel> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref()?.store.data().corner.as_ref())
+    }
+    /// Some running mod has a `frame` hook: the game refreshes the snapshot
+    /// every frame for it.
+    pub fn wants_frames(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|e| e.run.as_ref().is_some_and(|r| r.hooks.frame))
+    }
+    /// Some running mod claimed items (capability `input`).
+    pub fn claims_any(&self) -> bool {
+        self.inputs().any(|i| !i.claimed.is_empty())
+    }
+    /// Some running mod claimed the item `id`.
+    pub fn claims(&self, id: &str) -> bool {
+        self.inputs().any(|i| i.claimed.iter().any(|c| c == id))
+    }
+    /// Some running mod registered a key.
+    pub fn has_keys(&self) -> bool {
+        self.inputs().any(|i| !i.keys.is_empty())
+    }
+    /// The mods' keys: (mod name, key name, label, key), for Controls.
+    pub fn mod_keys(&self) -> impl Iterator<Item = (&str, &ModKey)> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref())
+            .flat_map(|r| {
+                let d = r.store.data();
+                d.input.keys.iter().map(move |k| (d.name.as_str(), k))
+            })
+    }
+    /// The use button went down with `item`: `use-start` to each mod that
+    /// claimed it.
+    pub fn use_start(&mut self, item: &HeldItem) {
+        let event = InputEvent::UseStart(ItemUse {
+            item: item.clone(),
+            ticks: 0,
+        });
+        self.push_input(|i| i.claimed.contains(&item.id), &event);
+    }
+    /// The claimed use ended after `ticks`.
+    pub fn use_stop(&mut self, item: &HeldItem, ticks: u32) {
+        let event = InputEvent::UseStop(ItemUse {
+            item: item.clone(),
+            ticks,
+        });
+        self.push_input(|i| i.claimed.contains(&item.id), &event);
+    }
+    /// The key `key` (`key.keyboard.r`) went down or up: each mod with a
+    /// key on it hears its own name for it.
+    pub fn key(&mut self, key: &str, down: bool) {
+        for run in self.entries.iter_mut().filter_map(|e| e.run.as_mut()) {
+            let input = &mut run.store.data_mut().input;
+            let names: Vec<String> = input
+                .keys
+                .iter()
+                .filter(|k| k.key == key)
+                .map(|k| k.name.clone())
+                .collect();
+            for name in names {
+                let held = input.down.iter().position(|n| *n == name);
+                match (down, held) {
+                    (true, None) => input.down.push(name.clone()),
+                    (false, Some(i)) => {
+                        input.down.swap_remove(i);
+                    }
+                    // Already let go when a screen opened.
+                    (false, None) => continue,
+                    (true, Some(_)) => {}
+                }
+                input.push(if down {
+                    InputEvent::KeyDown(name)
+                } else {
+                    InputEvent::KeyUp(name)
+                });
+            }
+        }
+    }
+    /// A screen opened, or the game stopped playing: every mod key held
+    /// lets go (`key-up`), so a key needs a new press afterwards.
+    pub fn release_keys(&mut self) {
+        for run in self.entries.iter_mut().filter_map(|e| e.run.as_mut()) {
+            let input = &mut run.store.data_mut().input;
+            for name in std::mem::take(&mut input.down) {
+                input.push(InputEvent::KeyUp(name));
+            }
+        }
+    }
+    /// Some running mod holds the mouse wheel.
+    pub fn wheel_claimed(&self) -> bool {
+        self.inputs().any(|i| i.wheel)
+    }
+    /// Wheel steps while playing: `wheel` to the mods holding it; false
+    /// when none does (the hotbar takes them).
+    pub fn wheel(&mut self, steps: f32) -> bool {
+        let event = InputEvent::Wheel(steps);
+        let claimed = self.wheel_claimed();
+        self.push_input(|i| i.wheel, &event);
+        claimed
+    }
+    /// The strongest zoom a running mod asks for (capability `render`).
+    pub fn zoom(&self) -> Option<ModZoom> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref()?.store.data().zoom)
+            .max_by(|a, b| a.factor.total_cmp(&b.factor))
+    }
+    fn inputs(&self) -> impl Iterator<Item = &InputState> {
+        self.entries
+            .iter()
+            .filter_map(|e| Some(&e.run.as_ref()?.store.data().input))
+    }
+    fn push_input(&mut self, to: impl Fn(&InputState) -> bool, event: &InputEvent) {
+        for run in self.entries.iter_mut().filter_map(|e| e.run.as_mut()) {
+            let input = &mut run.store.data_mut().input;
+            if to(input) {
+                input.push(event.clone());
+            }
+        }
+    }
+    /// The running mods' HUD shapes (capability `render`), each mod's in
+    /// its own order, mods in load order.
+    pub fn hud_shapes(&self) -> impl Iterator<Item = &Shape> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref())
+            .flat_map(|r| &r.store.data().shapes)
+    }
     /// The screen mod `i` last pushed with `ui.open-screen`, while it is up.
     pub fn screen(&self, i: usize) -> Option<&UiScreen> {
         self.entries
@@ -622,6 +799,10 @@ fn clip_widgets(widgets: Vec<UiWidget>) -> Vec<UiWidget> {
                 t.text = clip(t.text);
                 UiWidget::Text(t)
             }
+            UiWidget::Button(mut b) => {
+                b.label = clip(b.label);
+                UiWidget::Button(b)
+            }
             UiWidget::Item(mut i) => {
                 i.item = clip(i.item);
                 i.name = clip(i.name);
@@ -671,6 +852,208 @@ impl chat::Host for State {
         }
     }
 }
+/// A key a mod registered (capability `input`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModKey {
+    /// The mod's own name for it, echoed in `key-down`.
+    pub name: String,
+    /// What it does, for Controls.
+    pub label: String,
+    /// `key.keyboard.r`.
+    pub key: String,
+}
+
+/// What capability `input` holds for one mod.
+#[derive(Default)]
+struct InputState {
+    claimed: Vec<String>,
+    keys: Vec<ModKey>,
+    events: std::collections::VecDeque<InputEvent>,
+    /// The mod's keys held now, by name.
+    down: Vec<String>,
+    /// It holds the mouse wheel.
+    wheel: bool,
+}
+/// Events kept for `poll`, items claimed and keys, per mod.
+const INPUT_EVENTS: usize = 256;
+const CLAIMS: usize = 64;
+const KEYS: usize = 16;
+
+/// `key.keyboard.<name>` or `key.mouse.<name>`, as options.txt writes keys;
+/// the game knows which names exist and ignores a key it has none for.
+fn key_ok(key: &str) -> bool {
+    let rest = key
+        .strip_prefix("key.keyboard.")
+        .or_else(|| key.strip_prefix("key.mouse."));
+    rest.is_some_and(|r| {
+        (1..=32).contains(&r.len())
+            && r.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.')
+    })
+}
+
+impl InputState {
+    fn push(&mut self, event: InputEvent) {
+        if self.events.len() == INPUT_EVENTS {
+            self.events.pop_front();
+        }
+        self.events.push_back(event);
+    }
+}
+
+impl input::Host for State {
+    fn claim_items(&mut self, ids: Vec<String>) {
+        self.input.claimed = ids.into_iter().take(CLAIMS).map(clip).collect();
+    }
+    fn register_key(&mut self, name: String, label: String, key: String) -> Result<(), String> {
+        if !key_ok(&key) {
+            return Err(format!(
+                "{key:?} is not a key as options.txt writes them (key.keyboard.r)"
+            ));
+        }
+        let (name, label) = (clip(name), clip(label));
+        if let Some(k) = self.input.keys.iter_mut().find(|k| k.name == name) {
+            (k.label, k.key) = (label, key);
+            return Ok(());
+        }
+        if self.input.keys.len() == KEYS {
+            return Err(format!("a mod may register {KEYS} keys"));
+        }
+        self.input.keys.push(ModKey { name, label, key });
+        Ok(())
+    }
+    fn held(&mut self) -> Option<HeldItem> {
+        self.snapshot.held.clone()
+    }
+    fn poll(&mut self) -> Vec<InputEvent> {
+        self.input.events.drain(..).collect()
+    }
+    fn mapping(&mut self, name: String) -> Option<input::MappingState> {
+        let (_, label, down) = self.snapshot.mappings.iter().find(|m| m.0 == name)?;
+        Some(input::MappingState {
+            label: label.clone(),
+            down: *down,
+        })
+    }
+    fn clicks_per_second(&mut self) -> (u32, u32) {
+        self.snapshot.cps
+    }
+    fn claim_wheel(&mut self, on: bool) {
+        self.input.wheel = on;
+    }
+}
+
+/// HUD shapes one mod may keep (capability `render`).
+const SHAPES: usize = 1024;
+/// The longest jolt `render.shake` makes, in seconds.
+const SHAKE_SECONDS: f32 = 10.0;
+/// `render.set-zoom`'s limits: `Camera.tickFov` keeps the modifier at 0.1
+/// or more, and turning never stops.
+const ZOOM_MAX: f32 = 10.0;
+const TURN_MIN: f32 = 0.05;
+
+/// A mod's corner panel: shapes in a `width` × `height` box the game
+/// places in `corner`, stacked with the other overlays.
+#[derive(Clone, Debug)]
+pub struct CornerPanel {
+    pub corner: RenderCorner,
+    pub width: f32,
+    pub height: f32,
+    pub shapes: Vec<Shape>,
+}
+
+fn clip_shapes(shapes: Vec<Shape>) -> Vec<Shape> {
+    shapes
+        .into_iter()
+        .take(SHAPES)
+        .map(|shape| match shape {
+            Shape::Sprite(mut s) => {
+                s.sprite = clip(s.sprite);
+                Shape::Sprite(s)
+            }
+            Shape::Item(mut i) => {
+                i.item = clip(i.item);
+                i.scale = if i.scale.is_finite() {
+                    i.scale.clamp(0.0, 16.0)
+                } else {
+                    1.0
+                };
+                Shape::Item(i)
+            }
+            Shape::Text(mut t) => {
+                t.text = clip(t.text);
+                t.color &= 0xFF_FFFF;
+                Shape::Text(t)
+            }
+            other => other,
+        })
+        .collect()
+}
+
+impl render::Host for State {
+    fn set_hud(&mut self, shapes: Vec<Shape>) {
+        self.shapes = clip_shapes(shapes);
+    }
+    fn set_corner(&mut self, corner: RenderCorner, width: f32, height: f32, shapes: Vec<Shape>) {
+        let size = |v: f32| {
+            if v.is_finite() {
+                v.clamp(0.0, 1024.0)
+            } else {
+                0.0
+            }
+        };
+        self.corner = Some(CornerPanel {
+            corner,
+            width: size(width),
+            height: size(height),
+            shapes: clip_shapes(shapes),
+        });
+    }
+    fn clear_corner(&mut self) {
+        self.corner = None;
+    }
+    fn text_width(&mut self, text: String) -> f32 {
+        let widths = &self.snapshot.font_widths;
+        text.chars()
+            .map(|c| widths.get(c as usize).copied().unwrap_or(6.0))
+            .sum::<f32>()
+            .ceil()
+    }
+    fn set_zoom(&mut self, zoom: ModZoom) {
+        let finite = |v: f32, lo: f32, hi: f32| if v.is_finite() { v.clamp(lo, hi) } else { lo };
+        let factor = finite(zoom.factor, 1.0, ZOOM_MAX);
+        self.zoom = (factor > 1.0).then(|| ModZoom {
+            factor,
+            smooth: zoom.smooth,
+            turn: if zoom.turn.is_finite() {
+                zoom.turn.clamp(TURN_MIN, 1.0)
+            } else {
+                1.0
+            },
+        });
+    }
+    fn frame_stats(&mut self) -> FrameRate {
+        let (fps, min, low) = self.snapshot.frame;
+        FrameRate { fps, min, low }
+    }
+    fn gui_size(&mut self) -> (f32, f32) {
+        self.snapshot.gui_size
+    }
+    fn shake(&mut self, strength: f32, seconds: f32) {
+        let ok = |v: f32, max: f32| {
+            if v.is_finite() {
+                v.clamp(0.0, max)
+            } else {
+                0.0
+            }
+        };
+        let (strength, seconds) = (ok(strength, 1.0), ok(seconds, SHAKE_SECONDS));
+        if strength > 0.0 && seconds > 0.0 {
+            self.out.push(Output::Shake { strength, seconds });
+        }
+    }
+}
+
 impl command::Host for State {
     fn run(&mut self, line: String) {
         let queued = self

@@ -64,6 +64,12 @@ struct Steps {
     in_water: bool,
 }
 #[derive(Default)]
+pub(super) struct PlayerEvents {
+    steps: Option<Steps>,
+    last_health: Option<f32>,
+}
+
+#[derive(Default)]
 pub(super) struct SculkState {
     /// The player's warning level toward a warden.
     pub tracker: WardenSpawnTracker,
@@ -86,6 +92,15 @@ pub(super) struct SculkState {
 }
 
 impl SculkState {
+    pub(super) fn swap_player(&mut self, other: &mut PlayerEvents) {
+        let steps = self.steps.remove(&Who::Player);
+        if let Some(guest) = other.steps.take() {
+            self.steps.insert(Who::Player, guest);
+        }
+        other.steps = steps;
+        std::mem::swap(&mut self.last_health, &mut other.last_health);
+    }
+
     /// Exchange the level-held parts (its sculk block entities and the
     /// chunks scanned for them) with another level's (game/levels.rs).
     pub(super) fn swap_level(&mut self, other: &mut Self) {
@@ -718,17 +733,24 @@ impl Game<'_> {
             })
         };
         // The ticking ones in the index's order, with whether the chunks
-        // around them tick too.
+        // around them tick too. Most sensors and catalysts wait for a
+        // vibration or a death: their tick would change nothing, so they
+        // are passed over here (a vibration scheduled during these ticks is
+        // chosen on the next tick at the earliest, as in vanilla).
+        let entities = &self.world.block_entities;
         let due: Vec<((i32, i32, i32), bool)> = self
             .sculk
             .index
             .iter()
             .filter_map(|&key| {
                 let (cx, cz) = (key.0 >> 4, key.2 >> 4);
-                ticks(cx, cz).then(|| {
-                    let adjacent = (-1..=1).all(|dx| (-1..=1).all(|dz| ticks(cx + dx, cz + dz)));
-                    (key, adjacent)
-                })
+                if !ticks(cx, cz)
+                    || matches!(entities.get(&key), Some(BlockEntity::Sculk(e)) if e.idle())
+                {
+                    return None;
+                }
+                let adjacent = (-1..=1).all(|dx| (-1..=1).all(|dz| ticks(cx + dx, cz + dz)));
+                Some((key, adjacent))
             })
             .collect();
         for (key, adjacent) in due {
@@ -1491,6 +1513,12 @@ impl Game<'_> {
     /// Events from entities moving, getting hurt and dying, derived from what
     /// changed this tick.
     fn tick_entity_events(&mut self) {
+        self.tick_player_sculk_events();
+        self.tick_mob_sculk_events();
+    }
+
+    /// Entity.move emits on the authoritative server too, for each ServerPlayer.
+    pub(super) fn tick_player_sculk_events(&mut self) {
         // The player.
         let player = self.player.as_ref().map(|p| {
             (
@@ -1518,7 +1546,9 @@ impl Game<'_> {
             }
             self.sculk.last_health = Some(health);
         }
-        // Mobs.
+    }
+
+    fn tick_mob_sculk_events(&mut self) {
         let snapshot: Vec<(u32, [f64; 3], bool, bool, Species, Option<i64>)> = self
             .mobs
             .iter()

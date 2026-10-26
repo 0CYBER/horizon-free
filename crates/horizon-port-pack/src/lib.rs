@@ -20,3 +20,4 @@ pub mod pipeline;
 pub mod processors;
 pub mod report;
 pub mod worldgen;
+mod yung;
