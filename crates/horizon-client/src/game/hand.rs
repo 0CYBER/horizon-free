@@ -333,12 +333,16 @@ impl Game<'_> {
             | "dispenser" | "dropper" | "crafter" | "lectern" | "beacon" | "nether_portal"
             | "end_portal" | "end_gateway" => true,
             // ChestBlock.getMenuProvider: none while a redstone conductor
-            // sits on top (a sitting cat aside).
+            // sits on top of either half (a sitting cat aside).
             "chest" | "trapped_chest" => {
-                let above = self.world.block(hit.pos[0], hit.pos[1] + 1, hit.pos[2]);
-                self.res.behaviours().facts(above).flags
-                    & horizon_world::level::data::state_flags::CONDUCTOR
-                    == 0
+                let key = (hit.pos[0], hit.pos[1], hit.pos[2]);
+                let blocked = |p: (i32, i32, i32)| {
+                    let above = self.world.block(p.0, p.1 + 1, p.2);
+                    self.res.behaviours().facts(above).flags
+                        & horizon_world::level::data::state_flags::CONDUCTOR
+                        != 0
+                };
+                !blocked(key) && self.chest_other_half(key).is_none_or(|o| !blocked(o))
             }
             _ => name.ends_with("shulker_box"),
         }
