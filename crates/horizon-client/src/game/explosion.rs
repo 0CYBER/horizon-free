@@ -393,9 +393,11 @@ impl Game<'_> {
                 [feet[0] - w, feet[1], feet[2] - w],
                 [feet[0] + w, feet[1] + h, feet[2] + w],
             );
+            // The exploding mob is the damage source's entity, so victims
+            // it kills drop its charged-creeper loot (`Creeper.killedEntity`).
             let source = horizon_client::mobs::Damage {
                 kind: horizon_client::mobs::DamageKind::Explosion,
-                attacker: None,
+                attacker: exploding.map(horizon_client::mobs::Who::Mob),
                 from: Some(center),
             };
             if hurtable && !m.damage(damage(dist, exposure), source) {

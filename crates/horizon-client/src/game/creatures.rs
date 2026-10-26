@@ -497,6 +497,8 @@ impl Game<'_> {
             self.died.insert(m.id);
             self.mob_died(&m);
         }
+        // Their victims have been looted: no charged creeper is waiting any more.
+        self.combat.charged_exploders.clear();
         let uuid = self.level.player_uuid;
         let mut snapshot: Vec<Seen> = self.mobs.iter().map(|m| seen(m, uuid)).collect();
         let mut events = Vec::new();
@@ -779,7 +781,17 @@ impl Game<'_> {
                     .mobs
                     .iter()
                     .find(|o| o.id == id)
-                    .map(|o| drops::loot_entity(o, None)),
+                    .map(|o| drops::loot_entity(o, None))
+                    // A charged creeper's blast kills after the creeper left the list.
+                    .or_else(|| {
+                        self.combat
+                            .charged_exploders
+                            .contains(&id)
+                            .then(|| LootEntity {
+                                powered: true,
+                                ..LootEntity::new("minecraft:creeper")
+                            })
+                    }),
                 None => None,
             };
             let direct = match d.kind {
@@ -815,12 +827,12 @@ impl Game<'_> {
             world_seed: self.level.seed,
         };
         let (items, skulls) = drops::die(m, &death, &mut self.rand_sequences);
-        if skulls
-            && let Some(Who::Mob(id)) = m.last_damage.and_then(|(d, _)| d.attacker)
-            && let Some(creeper) = self.mobs.iter_mut().find(|o| o.id == id)
-        {
+        if skulls && let Some(Who::Mob(id)) = m.last_damage.and_then(|(d, _)| d.attacker) {
             // Creeper.droppedSkulls: one head per charged explosion.
-            creeper.extra.charged = false;
+            self.combat.charged_exploders.retain(|c| *c != id);
+            if let Some(creeper) = self.mobs.iter_mut().find(|o| o.id == id) {
+                creeper.extra.charged = false;
+            }
         }
         let raider = horizon_client::mobs::raider::is_raider(m.species());
         for d in items {
@@ -903,16 +915,24 @@ impl Game<'_> {
                     owner,
                 } => self.add_fangs(at, yaw, delay, owner),
                 MobEvent::Shoot(..) => {}
+                MobEvent::ExplosionSource { mob, charged } => {
+                    self.combat.explosion_source = Some(mob);
+                    if charged {
+                        self.combat.charged_exploders.push(mob);
+                    }
+                }
                 MobEvent::Explode(at, radius) => {
                     // The exploding mob causes the damage (Creeper.explodeCreeper).
-                    let source_mob = self
-                        .mobs
-                        .iter()
-                        .filter(|m| {
-                            (m.position.x - at[0]).powi(2) + (m.position.z - at[2]).powi(2) < 1.0
-                        })
-                        .map(|m| m.id)
-                        .next();
+                    let source_mob = self.combat.explosion_source.or_else(|| {
+                        self.mobs
+                            .iter()
+                            .filter(|m| {
+                                (m.position.x - at[0]).powi(2) + (m.position.z - at[2]).powi(2)
+                                    < 1.0
+                            })
+                            .map(|m| m.id)
+                            .next()
+                    });
                     if let Some(id) = source_mob {
                         self.note_attacker("minecraft:explosion", id);
                     }

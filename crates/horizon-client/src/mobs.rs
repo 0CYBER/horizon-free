@@ -973,6 +973,14 @@ pub enum MobEvent {
         owner: u32,
     },
     Shoot([f64; 3], [f64; 3]),
+    /// The mob the `Explode` right after this comes from
+    /// (`ServerExplosion.source`), and whether it is a charged creeper: the
+    /// exploding creeper is already out of the mob list when the game applies
+    /// the blast, so its victims' loot cannot look it up.
+    ExplosionSource {
+        mob: u32,
+        charged: bool,
+    },
     Explode([f64; 3], f32),
     /// Melee or ranged damage to another mob.
     AttackMob {
