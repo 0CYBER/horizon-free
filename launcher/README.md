@@ -79,7 +79,8 @@ page `servers.json` (the list), `servers/<name>/` (the servers created there) an
 
 - **Settings**: install new Horizon versions automatically (on unless you turn it off; the
   selected version only moves to the new one if you were on the newest), the opening animation,
-  the game's extra command-line arguments, and the launcher's own version and update state.
+  the game's extra command-line arguments, an HTTP proxy for downloads, and the launcher's own
+  version and update state.
 - **Updates**: there is one channel. Every release is published as the release, GitHub's latest,
   once its smoke test passed (docs/release-flow.md), and the launcher installs it. The game
   pre-releases of the old Alpha channel (v0.2.1 on) stay on the Versions page to install
@@ -90,6 +91,15 @@ page `servers.json` (the list), `servers/<name>/` (the servers created there) an
   launcher's own arguments, kept as `game_args` in `settings.json`, and apply the next time the
   game starts. `horizon-launcher game-args "<line>"` sets them too, and `play --arg <ARG>` passes
   one for a single run.
+- **Proxy**: when the internet here needs one (a school's, an office's, a country where a host is
+  unreachable), Settings' Proxy takes the `http://host:port` address your proxy app listens on, and
+  every download goes through it: Horizon's releases and the launcher's own update, Minecraft's
+  files and Java from Mojang, Modrinth, CurseForge, Horizon's mod registry, pictures, Microsoft
+  sign-in, and the jars a modpack import fetches. It is kept as `proxy` in `settings.json`, and
+  `horizon-launcher settings proxy http://127.0.0.1:7890` sets it too ("default" removes it).
+  Without one, `HTTPS_PROXY` and `HTTP_PROXY` are used when the launcher is started with them, and
+  `NO_PROXY` names the hosts to reach directly, a modpack import's jars included. A server on this
+  computer never goes through it.
 - **Links**: the Discord invite, the Sponsors page and the website come from `launcher/links.json` on main
   (`{"discord": "...", "sponsor": "...", "website": "..."}`), so they change without a launcher release. Offline,
   the launcher uses the same values built in; an empty address hides its button.

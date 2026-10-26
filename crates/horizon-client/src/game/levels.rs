@@ -50,6 +50,7 @@ pub(super) struct Parked {
     paintings: Vec<horizon_client::entities::Painting>,
     item_frames: Vec<horizon_client::entities::ItemFrame>,
     armor_stands: Vec<horizon_client::entities::ArmorStand>,
+    cushions: Vec<horizon_client::entities::Cushion>,
     others: Vec<commands::OtherEntity>,
     boats: Vec<boats::Boat>,
     carts: Vec<minecarts::Minecart>,
@@ -74,6 +75,7 @@ pub(super) struct Parked {
     lan_events: Vec<(i32, [i32; 3], i32, Option<u32>)>,
     lan_block_events: Vec<([i32; 3], i32, i32, u32)>,
     lan_entity_events: Vec<(i32, i8, [f64; 3])>,
+    lan_critical_hits: Vec<(Option<u32>, i32)>,
     /// Only the per-level parts of these are used (`swap_level`).
     anims: BlockEntityAnims,
     raiding: Raiding,
@@ -135,6 +137,7 @@ impl Game<'_> {
             paintings: Vec::new(),
             item_frames: Vec::new(),
             armor_stands: Vec::new(),
+            cushions: Vec::new(),
             others: Vec::new(),
             boats: Vec::new(),
             carts: Vec::new(),
@@ -159,6 +162,7 @@ impl Game<'_> {
             lan_events: Vec::new(),
             lan_block_events: Vec::new(),
             lan_entity_events: Vec::new(),
+            lan_critical_hits: Vec::new(),
             anims: Default::default(),
             raiding: Default::default(),
             sculk: Default::default(),
@@ -185,6 +189,7 @@ impl Game<'_> {
         swap(&mut self.paintings, &mut p.paintings);
         swap(&mut self.item_frames, &mut p.item_frames);
         swap(&mut self.armor_stands, &mut p.armor_stands);
+        swap(&mut self.cushions, &mut p.cushions);
         swap(&mut self.others, &mut p.others);
         swap(&mut self.boats, &mut p.boats);
         swap(&mut self.carts, &mut p.carts);
@@ -209,6 +214,7 @@ impl Game<'_> {
         swap(&mut self.lan_events, &mut p.lan_events);
         swap(&mut self.lan_block_events, &mut p.lan_block_events);
         swap(&mut self.lan_entity_events, &mut p.lan_entity_events);
+        swap(&mut self.lan_critical_hits, &mut p.lan_critical_hits);
         let (a, b) = (&mut self.be_anims, &mut p.anims);
         swap(&mut a.chests, &mut b.chests);
         swap(&mut a.books, &mut b.books);
