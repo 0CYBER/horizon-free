@@ -241,6 +241,7 @@ impl Game<'_> {
                 kind: "minecraft:fishing_bobber".into(),
                 position: [hook.position.x, hook.position.y, hook.position.z],
                 on_ground: hook.on_ground,
+                fishing_open_water: Some(hook.open_water),
                 ..Default::default()
             };
             self.trigger_fishing_rod_hooked(rod, &bobber, &caught);
