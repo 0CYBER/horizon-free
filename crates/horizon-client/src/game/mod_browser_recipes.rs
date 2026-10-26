@@ -11,12 +11,14 @@ use horizon_client::{
     hud::{HudBatch, rgba},
     items::ItemStack,
 };
-use horizon_mods::{BrowserEvent, BrowserLayout, BrowserRecipe, BrowserSlotClick, BrowserStack};
+use horizon_mods::{BrowserEvent, BrowserLayout, BrowserSlotClick, BrowserStack, RecipePage};
 use std::time::Instant;
 
 const SLOT: f32 = 18.0;
 /// The title row's height, and the gap under each recipe.
 const TITLE: f32 = 18.0;
+/// A tab's step: an 18 px slot and a gap.
+const TAB: f32 = 20.0;
 const GAP: f32 = 6.0;
 
 /// One recipe as the game draws it.
@@ -34,6 +36,9 @@ pub(super) struct Shown {
 /// The recipes a panel shows, and its page.
 pub(super) struct Pages {
     title: String,
+    /// The tabs' icons and the selected one.
+    tabs: Vec<(BrowserStack, Option<ItemStack>)>,
+    tab: usize,
     recipes: Vec<Shown>,
     page: usize,
     since: Instant,
@@ -42,11 +47,11 @@ pub(super) struct Pages {
 impl Pages {
     pub(super) fn new(
         items: &horizon_client::items::Items,
-        title: &str,
-        list: &[BrowserRecipe],
+        shown: &RecipePage,
         old: Option<Pages>,
     ) -> Self {
-        let kept = old.filter(|o| o.title == title);
+        let (title, list, tab) = (&shown.title, &shown.recipes, shown.tab as usize);
+        let kept = old.filter(|o| o.title == *title && o.tab == tab);
         let cycle = |stacks: &[BrowserStack]| -> Vec<(BrowserStack, ItemStack)> {
             stacks
                 .iter()
@@ -69,7 +74,13 @@ impl Pages {
             })
             .collect();
         Self {
-            title: title.to_owned(),
+            title: title.clone(),
+            tabs: shown
+                .tabs
+                .iter()
+                .map(|t| (t.clone(), browser_stack(items, t)))
+                .collect(),
+            tab,
             recipes,
             page: kept.as_ref().map_or(0, |o| o.page),
             since: kept.map_or_else(Instant::now, |o| o.since),
@@ -131,11 +142,30 @@ impl Shown {
     }
 }
 
+/// The tabs' places, in rows under the title row.
+fn tab_places(pages: &Pages, layout: &Layout) -> Vec<(f32, f32)> {
+    let per_row = ((layout.width() / TAB).floor() as usize).max(1);
+    (0..pages.tabs.len())
+        .map(|i| {
+            (
+                layout.grid.0 + (i % per_row) as f32 * TAB,
+                layout.grid.1 + TITLE + 3.0 + (i / per_row) as f32 * TAB,
+            )
+        })
+        .collect()
+}
+/// Where the recipes start: under the title row and the tabs.
+fn recipes_top(pages: &Pages, layout: &Layout) -> f32 {
+    let tabs = tab_places(pages, layout);
+    tabs.last()
+        .map_or(layout.grid.1 + TITLE, |&(_, y)| y + TAB + 3.0)
+}
+
 impl Game<'_> {
-    /// The first recipe of each page, filling the panel from the title row
-    /// to the search box.
+    /// The first recipe of each page, filling the panel from the tabs to
+    /// the search box.
     fn recipe_pages(pages: &Pages, layout: &Layout) -> Vec<usize> {
-        let room = layout.search[1] - 4.0 - (layout.grid.1 + TITLE);
+        let room = layout.search[1] - 4.0 - recipes_top(pages, layout);
         let mut starts = vec![0];
         let mut used = 0.0;
         for (i, r) in pages.recipes.iter().enumerate() {
@@ -156,7 +186,7 @@ impl Game<'_> {
         let starts = Self::recipe_pages(pages, layout);
         let page = pages.page.min(starts.len() - 1);
         let end = starts.get(page + 1).copied().unwrap_or(pages.recipes.len());
-        let mut y = layout.grid.1 + TITLE;
+        let mut y = recipes_top(pages, layout);
         (starts[page]..end)
             .map(|i| {
                 let at = (layout.grid.0, y);
@@ -176,6 +206,21 @@ impl Game<'_> {
         let stacks = pages.recipes.get(recipe)?.slots.get(slot)?;
         let n = pages.since.elapsed().as_secs() as usize;
         stacks.get(n % stacks.len().max(1))
+    }
+    /// The tab under the pointer: its index and icon.
+    pub(super) fn recipe_tab_hovered(
+        &self,
+        layout: &Layout,
+    ) -> Option<(usize, BrowserStack, ItemStack)> {
+        let pages = self.mods.browser.recipes.as_ref()?;
+        let places = tab_places(pages, layout);
+        places.iter().enumerate().find_map(|(i, &(x, y))| {
+            if !inside(self.cursor, [x, y, SLOT, SLOT]) {
+                return None;
+            }
+            let (sent, stack) = pages.tabs.get(i)?;
+            Some((i, sent.clone(), stack.clone()?))
+        })
     }
     /// The recipe slot under the pointer: recipe, slot, and its stack now.
     pub(super) fn recipe_slot_hovered(
@@ -237,6 +282,7 @@ impl Game<'_> {
             u32::MAX,
             true,
         );
+        self.draw_recipe_tabs(batch, layout);
         if pages_n > 1 {
             let labels = [
                 self.translate("gui.recipebook.previous_page", "Previous Page"),
@@ -351,6 +397,50 @@ impl Game<'_> {
         }
     }
 
+    /// The tabs, on slots; the selected one framed.
+    fn draw_recipe_tabs(&mut self, batch: &mut HudBatch, layout: &Layout) {
+        let Some(pages) = &self.mods.browser.recipes else {
+            return;
+        };
+        let places = tab_places(pages, layout);
+        let tabs: Vec<Option<ItemStack>> = pages.tabs.iter().map(|t| t.1.clone()).collect();
+        let selected = pages.tab;
+        for (i, (&(x, y), stack)) in places.iter().zip(tabs).enumerate() {
+            let atlas = &self.gui.atlas;
+            batch.sprite(atlas, "gui/sprites/container/slot", x, y);
+            let Some(stack) = stack else {
+                continue;
+            };
+            self.draw_item(batch, &stack, x + 1.0, y + 1.0);
+            // The selected tab: a white frame around its slot.
+            if i == selected {
+                let white = rgba(255, 255, 255, 255);
+                let atlas = &self.gui.atlas;
+                batch.fill(atlas, x - 1.0, y - 1.0, SLOT + 2.0, 1.0, white);
+                batch.fill(atlas, x - 1.0, y + SLOT, SLOT + 2.0, 1.0, white);
+                batch.fill(atlas, x - 1.0, y, 1.0, SLOT, white);
+                batch.fill(atlas, x + SLOT, y, 1.0, SLOT, white);
+            }
+            if inside(self.cursor, [x, y, SLOT, SLOT]) {
+                batch.fill(
+                    &self.gui.atlas,
+                    x + 1.0,
+                    y + 1.0,
+                    16.0,
+                    16.0,
+                    rgba(255, 255, 255, 128),
+                );
+            }
+            let name = self.pack.names.display_item(&stack.item);
+            horizon_client::widgets::record_as(
+                &format!("{name} tab"),
+                [x + 1.0, y + 1.0, 16.0, 16.0],
+                true,
+                horizon_client::widgets::Kind::Tab(i == selected),
+            );
+        }
+    }
+
     /// A press on the recipes: true when it hit one of their parts.
     pub(super) fn browser_recipes_press(
         &mut self,
@@ -381,6 +471,14 @@ impl Game<'_> {
             self.mods
                 .mods
                 .browser_event(owner, BrowserEvent::Page(starts[to] as u32));
+            return true;
+        }
+        if let Some((tab, _, _)) = self.recipe_tab_hovered(layout) {
+            self.audio
+                .play("minecraft:ui.button.click", None, 0.25, 1.0);
+            self.mods
+                .mods
+                .browser_event(owner, BrowserEvent::Tab(tab as u32));
             return true;
         }
         if inside(cursor, self.back_button(layout).0) {

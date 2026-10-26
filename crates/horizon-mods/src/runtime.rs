@@ -336,8 +336,17 @@ struct BrowserState {
     /// across mods and reloads, so the game converts them once.
     version: u64,
     /// `set-recipes`' title and recipes, shown instead of the items.
-    recipes: Option<(String, Vec<BrowserRecipe>)>,
+    recipes: Option<RecipePage>,
     events: std::collections::VecDeque<BrowserEvent>,
+}
+/// What `browser.set-recipes` shows: a title, tabs (`tab` the selected
+/// one) and the recipes.
+#[derive(Clone, Debug)]
+pub struct RecipePage {
+    pub title: String,
+    pub tabs: Vec<BrowserStack>,
+    pub tab: u32,
+    pub recipes: Vec<BrowserRecipe>,
 }
 static BROWSER_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 /// Items a panel may hold, and events kept for `browser.poll`.
@@ -347,6 +356,7 @@ const RECIPE_ACTIONS: usize = 36;
 /// Recipes `set-recipes` may show, slots in one, and stacks a slot cycles.
 const BROWSER_RECIPES: usize = 256;
 const RECIPE_SLOTS: usize = 9;
+const RECIPE_TABS: usize = 16;
 const SLOT_STACKS: usize = 64;
 const BROWSER_EVENTS: usize = 256;
 impl BrowserState {
@@ -863,13 +873,11 @@ impl Mods {
             ))
         })
     }
-    /// The recipes mod `owner`'s panel shows instead of its items
-    /// (`browser.set-recipes`): the title and the recipes.
-    pub fn browser_recipes(&self, owner: usize) -> Option<(&str, &[BrowserRecipe])> {
+    /// What mod `owner`'s panel shows instead of its items
+    /// (`browser.set-recipes`).
+    pub fn browser_recipes(&self, owner: usize) -> Option<&RecipePage> {
         let b = &self.entries.get(owner)?.run.as_ref()?.store.data().browser;
-        b.recipes
-            .as_ref()
-            .map(|(title, list)| (title.as_str(), list.as_slice()))
+        b.recipes.as_ref()
     }
     /// The player did `event` on mod `owner`'s panel.
     pub fn browser_event(&mut self, owner: usize, event: BrowserEvent) {
@@ -1276,7 +1284,13 @@ impl browser::Host for State {
             .collect();
         self.browser.version = BROWSER_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
-    fn set_recipes(&mut self, title: String, recipes: Vec<BrowserRecipe>) {
+    fn set_recipes(
+        &mut self,
+        title: String,
+        tabs: Vec<BrowserStack>,
+        tab: u32,
+        recipes: Vec<BrowserRecipe>,
+    ) {
         let stack = |s: BrowserStack| BrowserStack {
             item: clip(s.item),
             components: clip_to(s.components, 4096),
@@ -1298,7 +1312,12 @@ impl browser::Host for State {
                     ..r
                 })
                 .collect();
-            (clip(title), recipes)
+            RecipePage {
+                title: clip(title),
+                tabs: tabs.into_iter().take(RECIPE_TABS).map(stack).collect(),
+                tab,
+                recipes,
+            }
         });
         self.browser.version = BROWSER_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
