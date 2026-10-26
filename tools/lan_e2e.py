@@ -2075,6 +2075,53 @@ def check_recipes(host, guest, out):
         guest.raw('key', 'esc', 'tap')
         guest.wait(5)
     assert any('oak_log' in str(item) for item in grid.values()), f'nothing placed in the grid: {grid}'
+    # #2019: the alternatives popup belongs to one screen. Check both the
+    # in-frame host (or --server-thread host) and the remote guest, with both
+    # inventory-close keys and a different recipe-book type on reopening.
+    for game in (host, guest):
+        game('command', command='recipe give @s minecraft:oak_planks')
+        game('command', command='recipe give @s minecraft:birch_planks')
+        game.wait(10)
+        for close_key, reopen in (('e', 'inventory'), ('esc', 'furnace')):
+            game.raw('key', 'e', 'tap')
+            game.wait(5)
+            book = game('screen')['recipe_book']
+            if len(book['targets']) == 1:
+                game.raw('click-at', *centre(book['targets'][0]))
+                game.wait(5)
+                book = game('screen')['recipe_book']
+            for rect in book['targets']:
+                if rect[2:] != [25.0, 25.0]:
+                    continue
+                game.raw('click-at', *centre(rect), 'right')
+                game.wait(2)
+                targets = game('screen')['recipe_book']['targets']
+                if targets and all(r[2:] == [24.0, 24.0] for r in targets):
+                    break
+            else:
+                raise AssertionError(f'{game.name}: no alternatives popup opened: {book}')
+            game.shot(out, f'recipe-overlay-{close_key}-before')
+            game.raw('key', close_key, 'tap')
+            game.wait(5)
+            if reopen == 'inventory':
+                game.raw('key', 'e', 'tap')
+            else:
+                x, y, z = (int(v // 1) for v in pos_of(game))
+                game('command', command=f'setblock {x} {y} {z - 2} minecraft:furnace')
+                game.wait(5)
+                game.raw('interact', x, y, z - 2)
+            game.wait(5)
+            targets = game('screen')['recipe_book']['targets']
+            if reopen == 'furnace' and len(targets) == 1 and targets[0][2:] == [20.0, 18.0]:
+                game.raw('click-at', *centre(targets[0]))
+                game.wait(5)
+                targets = game('screen')['recipe_book']['targets']
+            game.shot(out, f'recipe-overlay-{close_key}-after')
+            assert any(r[2:] == [20.0, 18.0] for r in targets), f'{game.name}: stale popup: {targets}'
+            if reopen == 'inventory':
+                assert len(targets) > 1, f'{game.name}: the book forgot its open setting'
+            game.raw('key', 'esc', 'tap')
+            game.wait(5)
     return {'known': known, 'grid': grid}
 
 
