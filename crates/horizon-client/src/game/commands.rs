@@ -1042,6 +1042,17 @@ impl Game<'_> {
         // An air stack is empty: nothing is given (but the message still is).
         let empty = id == "minecraft:air";
         for &t in targets.iter().filter(|_| !empty) {
+            // The player's UUID, which an item they could not hold is set to.
+            let conn = match t {
+                Target::Guest(conn) => Some(conn),
+                _ => self.lan_acting,
+            };
+            let uuid = match conn {
+                Some(conn) => self
+                    .command_guest(conn)
+                    .map(|g| horizon_client::lan::playerdata::uuid_ints(g.uuid)),
+                None => Some(self.level.ensure_player_uuid()),
+            };
             self.for_player(t, |g| {
                 let mut remaining = count;
                 while remaining > 0 {
@@ -1058,8 +1069,19 @@ impl Game<'_> {
                         .target_position(Target::Player)
                         .unwrap_or(g.source_position());
                     if let Some(rest) = left {
-                        // Inventory full: drop the rest at the player's feet without pickup delay.
-                        g.spawn_item(rest, [p[0], p[1] + 1.32, p[2]], [0.0, 0.0, 0.0], 0);
+                        // Inventory full: Player.createItemStackToDrop (thrown from
+                        // the eyes), then setNoPickUpDelay and setTarget(player).
+                        let eye = g.eye_position().unwrap_or([
+                            p[0],
+                            p[1] + g.target_eye_height(Target::Player),
+                            p[2],
+                        ]);
+                        g.throw_from_eyes(rest, eye);
+                        if let Some(item) = g.dropped.last_mut() {
+                            item.thrower = None;
+                            item.pickup_delay = 0;
+                            item.target = uuid;
+                        }
                     } else {
                         let r = &mut g.world.random;
                         let pitch = ((r.next_float() - r.next_float()) * 0.7 + 1.0) * 2.0;
