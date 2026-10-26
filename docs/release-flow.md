@@ -90,8 +90,9 @@ processes, fleet-load's own detection, or a process outside the CI slice using t
 under way is throttled to 2 threads at the lowest weight and the runner stops after it: freezing the job would make
 GitHub drop it as lost and the harnesses time out. Old pull requests' `runner-env.sh` know only the Mac: the
 runner's `.env` and `.path` give their jobs Python, the JDK and the vanilla data (`HORIZON_SHARED_SOURCE`) all the
-same. The nightly audit stays on the Mac mini's runners, so its comparison with the previous night is always made
-on one platform.
+same. The nightly audit and parity-main stay on the Mac mini's runners: the audit compares with the previous night,
+so it stays on one platform, and a parity-main job slowed down on the desktop because he came back could time out,
+and its failures bisect and comment on merges.
 
 ## Merging
 

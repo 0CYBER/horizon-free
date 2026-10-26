@@ -24,8 +24,9 @@ version=2.338.0
 sha=af4b794c1bc41d73d40535e3fe092a39f9679cd8d965954c2aca25a05ca41d32
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
-# Nix packages the jobs need, kept alive by GC roots in $dir/nix.
-nix_out() { nix-build '<nixpkgs>' -A "$1" -o "$dir/nix/$2" > /dev/null && readlink -f "$dir/nix/$2"; }
+# Nix packages the jobs need, kept alive by GC roots in $dir/nix. nix-build prints the store path; the root's name
+# gets the output's suffix (alsa-dev-dev for alsa-lib.dev), so it is not read back from the link.
+nix_out() { nix-build '<nixpkgs>' -A "$1" -o "$dir/nix/$2" | tail -1; }
 
 # The runner is a .NET program: on NixOS its native libraries (libstdc++, ICU, OpenSSL) come from nix-ld.
 export LD_LIBRARY_PATH=/run/current-system/sw/share/nix-ld/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}

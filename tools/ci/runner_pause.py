@@ -5,7 +5,7 @@ The runner works while nobody uses the machine: its screen locked, or untouched 
 It pauses when any of these holds:
   - keyboard, mouse or gamepad input in the last INPUT_PAUSE seconds (60), or an unlocked session on seat0 with
     input in the last IDLE_AFTER seconds;
-  - the CPU package at TEMP_LIMIT °C (90) or more;
+  - the CPU package at TEMP_LIMIT °C (90) or more (the median of 5 readings);
   - fleet-load says a game runs (~/fleet/load: Steam, gamescope, Wine or Proton processes);
   - a process of his matches GAME below (the same, plus Minecraft and a Horizon game he started himself);
   - a process outside horizon-ci.slice keeps the GPU busy (nvidia-smi: SM use >= GPU_BUSY %, default 50, in two
@@ -63,7 +63,7 @@ class Input:
 
     def __init__(self):
         self.devices = {}  # path -> file descriptor
-        self.last = time.monotonic()  # a start counts as input: nothing is known yet
+        self.last = 0.0  # the boot (the monotonic clock's zero on Linux) counts as input
 
     def poll(self):
         try:
@@ -115,14 +115,20 @@ def at_the_screen(input_idle):
 
 
 def too_hot():
-    """The CPU package above TEMP_LIMIT °C (coretemp or k10temp)."""
+    """The CPU package at TEMP_LIMIT °C or more (coretemp or k10temp), as the median of 5 readings over 2 s: under
+    load it jumps for a second at a time (to 96 °C on ludodesktop at a median of 68 °C), which is no reason to stop."""
     for monitor in Path("/sys/class/hwmon").glob("hwmon*"):
         try:
-            if (monitor / "name").read_text().strip() in ("coretemp", "k10temp"):
-                celsius = int((monitor / "temp1_input").read_text()) / 1000
-                return f"CPU at {celsius:.0f} °C" if celsius >= TEMP_LIMIT else None
+            if (monitor / "name").read_text().strip() not in ("coretemp", "k10temp"):
+                continue
+            readings = []
+            for _ in range(5):
+                readings.append(int((monitor / "temp1_input").read_text()) / 1000)
+                time.sleep(0.5)
         except (OSError, ValueError):
-            pass
+            continue
+        celsius = sorted(readings)[2]
+        return f"CPU at {celsius:.0f} °C" if celsius >= TEMP_LIMIT else None
     return None
 
 
@@ -219,9 +225,9 @@ def pause_reason(hot, keys):
 
 def main():
     hot, keys = {}, Input()
-    # A boot (or a restart of this watcher) counts as a sign: the runner starts RESUME_AFTER seconds later at the
-    # earliest, which leaves time to log in after switching the machine on.
-    last_sign = time.monotonic()
+    # The boot counts as a sign: the runner starts RESUME_AFTER seconds after it at the earliest, which leaves time
+    # to log in after switching the machine on. Restarting this watcher later changes nothing for a running job.
+    last_sign = 0.0
     paused = None
     while True:
         reason = pause_reason(hot, keys)

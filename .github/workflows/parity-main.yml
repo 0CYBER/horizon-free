@@ -23,7 +23,9 @@ env:
 
 jobs:
   parity-main:
-    runs-on: [self-hosted, horizon-game]
+    # The Mac mini's runners only: a desktop job slowed down because the maintainer came back could time out, and a
+    # failure here bisects and comments on merges.
+    runs-on: [self-hosted, horizon-game, macOS]
     timeout-minutes: 240  # a core-crate batch reruns ~300 harnesses (~60-90 min), a bisect a few rounds of the failures
     steps:
       - uses: actions/checkout@v4
