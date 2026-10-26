@@ -6750,6 +6750,9 @@ impl Game<'_> {
     ) -> Vec<Vertex> {
         self.prepare_entity_culling(camera);
         self.prepare_trims();
+        // One scan for both passes that draw them (block entities below and the
+        // overlay near the end of this function).
+        let cracks = self.cracks(camera);
         let fire_yaw = if self.camera_type == perspective::CameraType::ThirdPersonFront {
             self.yaw + 180.0
         } else {
@@ -6964,7 +6967,7 @@ impl Game<'_> {
                     .block_entity_render()
                     .render(&scene, visible, &mut out);
             }
-            for (pos, stage) in self.cracks(camera) {
+            for &(pos, stage) in &cracks {
                 let state = self.world.block(pos[0], pos[1], pos[2]);
                 self.res
                     .block_entity_render()
@@ -7089,7 +7092,7 @@ impl Game<'_> {
             &mut out,
         );
         // Breaking progress overlays (destroy_stage_0..9): ours and the other players'.
-        for (pos, stage) in self.cracks(camera) {
+        for &(pos, stage) in &cracks {
             let o = (glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]))
                 - camera)
                 .as_vec3();
@@ -7137,6 +7140,20 @@ impl Game<'_> {
     /// other players' (`renderBlockDestroyAnimation`: within 32 blocks of the camera, the
     /// furthest progress on each block).
     fn cracks(&self, camera: glam::DVec3) -> Vec<([i32; 3], [f32; 2])> {
+        // `destroy_stage_0` .. `destroy_stage_9`: the sprite name by stage, so the
+        // lookup does not format a string per crack.
+        const DESTROY_STAGES: [&str; 10] = [
+            "block/destroy_stage_0",
+            "block/destroy_stage_1",
+            "block/destroy_stage_2",
+            "block/destroy_stage_3",
+            "block/destroy_stage_4",
+            "block/destroy_stage_5",
+            "block/destroy_stage_6",
+            "block/destroy_stage_7",
+            "block/destroy_stage_8",
+            "block/destroy_stage_9",
+        ];
         let mut stages: Vec<([i32; 3], u32)> = Vec::new();
         let mut add = |pos: [i32; 3], stage: u32| match stages.iter_mut().find(|c| c.0 == pos) {
             Some(c) => c.1 = c.1.max(stage),
@@ -7162,11 +7179,8 @@ impl Game<'_> {
                 d.length_squared() <= 1024.0
             })
             .filter_map(|(pos, stage)| {
-                let r = self
-                    .gui
-                    .atlas
-                    .sprites
-                    .get(&format!("block/destroy_stage_{stage}"))?;
+                let name = DESTROY_STAGES.get(stage as usize)?;
+                let r = self.gui.atlas.sprites.get(*name)?;
                 Some((pos, [r.u0, r.v0]))
             })
             .collect()
