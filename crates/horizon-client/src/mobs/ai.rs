@@ -301,6 +301,20 @@ fn generic(m: &mut Mob) {
         m.ai.targets.add(1, HurtByTarget::new());
         m.ai.targets.add(2, NearestTarget::player(true));
     } else {
+        if m.kind.species == Species::Goat {
+            // GoatAi's idle and core behaviours (the ram and long jump
+            // activities are not here): panic 2.0, AnimalMakeLove, tempting
+            // with goat_food and baby follow at 1.25, then stroll.
+            g.add(0, Float);
+            g.add(1, Panic::new(2.0));
+            g.add(2, Breed::new(1.0));
+            g.add(3, Tempt::new(1.25, m.kind.food.clone(), false));
+            g.add(4, FollowParent::new(1.25));
+            g.add(5, Stroll::avoiding_water(1.0));
+            g.add(6, LookAtPlayer::new(6.0));
+            g.add(7, RandomLookAround::default());
+            return;
+        }
         g.add(0, Float);
         let rabbit = m.kind.species == Species::Rabbit;
         g.add(1, Panic::new(if rabbit { 2.2 } else { 1.25 }));
