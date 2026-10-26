@@ -1074,15 +1074,15 @@ impl Game<'_> {
         };
         let name = self.target_name(target);
         if id == "ride.dismount" {
-            let vehicle = match target {
-                Target::Player => self.riding.map(Target::Mob),
-                _ => None,
-            };
-            let Some(v) = vehicle else {
+            let Some(v) = self.ride_vehicle(target) else {
                 return Err(err("commands.ride.not_riding", &[&name.plain()]));
             };
             let vehicle_name = self.target_name(v);
-            self.dismount_mount();
+            match target {
+                Target::Player => self.dismount_mount(),
+                Target::Mob(rider) => self.dismount_mob(rider),
+                _ => {}
+            }
             self.feedback(Text::translate(
                 "commands.ride.dismount.success",
                 &[name, vehicle_name],
@@ -1094,11 +1094,8 @@ impl Game<'_> {
             return Ok(0);
         };
         let vehicle_name = self.target_name(vehicle);
-        if target == Target::Player && self.riding.is_some() {
-            let current = self
-                .riding
-                .map(Target::Mob)
-                .map_or_else(Text::empty, |v| self.target_name(v));
+        if let Some(current) = self.ride_vehicle(target) {
+            let current = self.target_name(current);
             return Err(err(
                 "commands.ride.already_riding",
                 &[&name.plain(), &current.plain()],
@@ -1107,21 +1104,41 @@ impl Game<'_> {
         if vehicle == Target::Player {
             return Err(err("commands.ride.mount.failure.cant_ride_players", &[]));
         }
-        if target == vehicle {
-            return Err(err("commands.ride.mount.failure.loop", &[]));
+        // getSelfAndPassengers: the vehicle is the target or rides it.
+        let mut up = Some(vehicle);
+        while let Some(v) = up {
+            if v == target {
+                return Err(err("commands.ride.mount.failure.loop", &[]));
+            }
+            up = self.ride_vehicle(v);
         }
-        // The player can ride mobs that carry a rider.
+        // Players and mobs can ride mobs.
         let Target::Mob(mob_id) = vehicle else {
             return Err(err(
                 "commands.ride.mount.failure.generic",
                 &[&name.plain(), &vehicle_name.plain()],
             ));
         };
-        if target != Target::Player || !self.mobs.iter().any(|m| m.id == mob_id && m.alive()) {
+        let rider = match target {
+            Target::Mob(id) => Some(id),
+            _ => None,
+        };
+        if !(target == Target::Player || rider.is_some())
+            || !self.mobs.iter().any(|m| m.id == mob_id && m.alive())
+        {
             return Err(err(
                 "commands.ride.mount.failure.generic",
                 &[&name.plain(), &vehicle_name.plain()],
             ));
+        }
+        if let Some(rider) = rider {
+            // Entity.startRiding.
+            self.mount_mob(rider, mob_id);
+            self.feedback(Text::translate(
+                "commands.ride.mount.success",
+                &[name, vehicle_name],
+            ));
+            return Ok(1);
         }
         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob_id) {
             m.extra.flag = false;
@@ -1136,6 +1153,47 @@ impl Game<'_> {
             &[name, vehicle_name],
         ));
         Ok(1)
+    }
+
+    /// Entity.getVehicle: the player's mount, or a mob's.
+    pub(super) fn ride_vehicle(&self, t: Target) -> Option<Target> {
+        let id = match t {
+            Target::Player => return self.riding.map(Target::Mob),
+            Target::Mob(id) => self.mobs.iter().find(|m| m.id == id)?.extra.mount?,
+            _ => return None,
+        };
+        Some(if self.boats.iter().any(|b| b.id == id) {
+            Target::Boat(id)
+        } else {
+            Target::Mob(id)
+        })
+    }
+    /// LivingEntity.stopRiding for a mob: off its vehicle
+    /// (Entity.removePassenger), then to where the vehicle lets it out
+    /// (LivingEntity.dismountVehicle).
+    fn dismount_mob(&mut self, rider: u32) {
+        let Some(i) = self.mobs.iter().position(|m| m.id == rider) else {
+            return;
+        };
+        let Some(v) = self.mobs[i].extra.mount.take() else {
+            return;
+        };
+        let (width, yaw) = (f64::from(self.mobs[i].width()), self.mobs[i].yaw);
+        let at = if let Some(b) = self.boats.iter().position(|b| b.id == v) {
+            self.boat_dismount_target(b, width, yaw)
+        } else if let Some(m) = self.mobs.iter_mut().find(|m| m.id == v) {
+            m.extra.rider = None;
+            // Entity.getDismountLocationForPassenger: on top of the vehicle.
+            let p = m.position;
+            horizon_core::geometry::Vec3::new(p.x, p.y + f64::from(m.height()), p.z)
+        } else {
+            self.mobs[i].position
+        };
+        let m = &mut self.mobs[i];
+        m.extra.passenger = false;
+        m.extra.boarding_cooldown = super::super::boat_passengers::BOARDING_COOLDOWN;
+        m.position = at;
+        m.previous = at;
     }
 
     // ---- /spreadplayers -----------------------------------------------------------------------

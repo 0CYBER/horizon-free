@@ -38,6 +38,8 @@ pub(super) struct GuestPlay {
     use_delay: u32,
     /// The shield's ItemCooldowns entry: an axe disabled it for this many ticks.
     pub(super) shield_cooldown: u32,
+    /// The guest's `Player.getCooldowns()` (`Game::cooldowns` for its turn).
+    pub(super) cooldowns: horizon_client::cooldowns::Cooldowns,
     attack_ticks: u32,
     /// The main hand's item at the guest's last tick (`Game::attack_item`).
     attack_item: Option<std::sync::Arc<str>>,
@@ -84,6 +86,7 @@ pub(super) struct GuestPlay {
     equipped: Option<Vec<Option<ItemStack>>>,
     /// The guest's cast fishing hook (`Player.fishing`).
     pub(super) hook: Option<super::fishing::Hook>,
+    sculk: super::sculk::PlayerEvents,
 }
 
 /// A guest's command waiting for the hub (`LanHost::commands`).
@@ -125,6 +128,8 @@ pub(super) struct GuestSwap {
     using: Option<(usize, u32)>,
     use_delay: u32,
     pub(super) shield_cooldown: u32,
+    /// The guest's item cooldowns (`Game::cooldowns` for its turn).
+    cooldowns: horizon_client::cooldowns::Cooldowns,
     attack_ticks: u32,
     attack_item: Option<std::sync::Arc<str>>,
     swing: horizon_client::first_person::SwingState,
@@ -144,6 +149,8 @@ pub(super) struct GuestSwap {
     adv_loaded: bool,
     last_inventory: u64,
     death_cause: Option<String>,
+    /// The guest's own damage record, in place while they act.
+    combat: super::combat::CombatTracker,
     /// The guest whose turn this one nests in, if any.
     acting: (Option<u32>, Option<String>, Option<u128>),
     /// The packets queued for that guest.
@@ -250,6 +257,7 @@ impl Game<'_> {
         if fresh {
             // A new body (joined, respawned, changed level): nothing on it yet.
             play.equipped = None;
+            play.sculk = Default::default();
         }
         let g = &mut host.hub.guests[i];
         // The guest's body.
@@ -257,6 +265,15 @@ impl Game<'_> {
             host.play.insert(conn, play);
             return None;
         };
+        self.sculk.swap_player(&mut play.sculk);
+        // The guest's own CombatTracker: damage to them is not the host's.
+        // A new body starts with no record of the last one.
+        let guest_combat = if fresh {
+            Default::default()
+        } else {
+            self.guest_combat.remove(&conn).unwrap_or_default()
+        };
+        let host_combat = std::mem::replace(&mut self.combat, guest_combat);
         self.potions.swap_player(&mut g.effects, &mut play.potions);
         motion.position = Vec3::new(g.position[0], g.position[1], g.position[2]);
         motion.ground.on_ground = g.on_ground;
@@ -265,6 +282,8 @@ impl Game<'_> {
         motion.sprinting = g.sprinting;
         motion.may_fly = g.creative() || g.game_mode == SPECTATOR;
         motion.flying = g.flying;
+        // FireworkRocketItem.use boosts only a gliding player.
+        motion.fall_flying = g.fall_flying;
         motion.invulnerable = motion.may_fly;
         let _ = motion.set_health(g.health, false);
         motion.health.food.food = g.food;
@@ -316,6 +335,7 @@ impl Game<'_> {
         let using = std::mem::replace(&mut self.using, play.using.take());
         let use_delay = std::mem::replace(&mut self.use_delay, play.use_delay);
         let shield_cooldown = std::mem::replace(&mut self.shield_cooldown, play.shield_cooldown);
+        let cooldowns = std::mem::replace(&mut self.cooldowns, std::mem::take(&mut play.cooldowns));
         let attack_ticks = std::mem::replace(&mut self.attack_ticks, play.attack_ticks);
         let attack_item = std::mem::replace(&mut self.attack_item, play.attack_item.take());
         let swing = std::mem::replace(&mut self.swing, play.swing);
@@ -400,6 +420,7 @@ impl Game<'_> {
             using,
             use_delay,
             shield_cooldown,
+            cooldowns,
             attack_ticks,
             attack_item,
             swing,
@@ -421,6 +442,7 @@ impl Game<'_> {
             swings,
             projectiles,
             modifiers,
+            combat: host_combat,
         })
     }
 
@@ -456,6 +478,7 @@ impl Game<'_> {
             using,
             use_delay,
             shield_cooldown,
+            cooldowns,
             attack_ticks,
             attack_item,
             swing,
@@ -472,12 +495,17 @@ impl Game<'_> {
             adv_loaded,
             last_inventory,
             death_cause,
+            combat,
             acting,
             packets,
             swings,
             projectiles,
             modifiers,
         } = swap;
+        self.sculk.swap_player(&mut play.sculk);
+        // The guest's damage record back into their slot, the host's in place.
+        let guest_combat = std::mem::replace(&mut self.combat, combat);
+        self.guest_combat.insert(conn, guest_combat);
         play.modifiers = std::mem::replace(&mut self.applied_modifiers, modifiers);
         // What the guest shot is theirs (Projectile.setOwner).
         for p in self.creatures.projectiles.iter_mut().skip(projectiles) {
@@ -490,6 +518,16 @@ impl Game<'_> {
         self.swings_started = swings;
         for packet in std::mem::replace(&mut self.guest_packets, packets) {
             host.hub.send_to(conn, &packet);
+        }
+        // ServerItemCooldowns.onCooldownStarted: the guest's own cooldown.
+        for (group, duration) in std::mem::take(&mut self.guest_cooldowns) {
+            host.hub.send_to(
+                conn,
+                &C::Cooldown(play::Cooldown {
+                    group: group.to_string(),
+                    duration,
+                }),
+            );
         }
         (self.lan_acting, self.lan_acting_name, self.lan_acting_uuid) = acting;
         play.death_cause = std::mem::replace(&mut self.ui.death_cause, death_cause);
@@ -520,6 +558,7 @@ impl Game<'_> {
         play.using = std::mem::replace(&mut self.using, using);
         play.use_delay = std::mem::replace(&mut self.use_delay, use_delay);
         play.shield_cooldown = std::mem::replace(&mut self.shield_cooldown, shield_cooldown);
+        play.cooldowns = std::mem::replace(&mut self.cooldowns, cooldowns);
         play.attack_ticks = std::mem::replace(&mut self.attack_ticks, attack_ticks);
         play.attack_item = std::mem::replace(&mut self.attack_item, attack_item);
         play.swing = std::mem::replace(&mut self.swing, swing);
@@ -1261,29 +1300,28 @@ impl Game<'_> {
         host: &LanHost,
         stack: &Option<horizon_protocol::item::Stack>,
     ) -> Option<ItemStack> {
-        use horizon_protocol::item::{Component, component};
         let s = stack.as_ref()?;
-        let name = host
-            .hub
-            .item_name(s.item)
-            .unwrap_or_else(|| "minecraft:air".into());
-        let mut out = ItemStack::new(&name, s.count.max(1) as u32);
-        out.damage = s.damage().max(0) as u32;
-        if let Some(Component::Enchantments(list)) = s.component(component::ENCHANTMENTS) {
-            for (id, level) in list {
-                if let Some(e) = host.hub.enchantment_name(*id) {
-                    out.enchant(&e, *level as u32);
-                }
-            }
-        }
-        if let Some(Component::Potion {
-            potion: Some(id), ..
-        }) = s.component(component::POTION_CONTENTS)
-            && let Some(potion) = host.hub.registry_name("minecraft:potion", *id)
-        {
-            out = out.with_potion(potion);
-        }
+        let mut out = host.hub.stack_from_network(s);
+        out.count = out.count.max(1);
         Some(out)
+    }
+
+    /// `LivingEntity.tickDeath`: 20 ticks after dying the player is removed,
+    /// and `Player.remove`'s `inventoryMenu.removed` drops what the cursor
+    /// held (`dropOrPlaceInInventory` for a removed player). Respawning
+    /// sooner removes it too.
+    fn guest_tick_death(&mut self, host: &mut LanHost, gi: usize) {
+        let g = &mut host.hub.guests[gi];
+        g.death_time += 1;
+        if g.death_time >= 20 {
+            self.guest_drop_carried(host, gi);
+        }
+    }
+
+    fn guest_drop_carried(&mut self, host: &mut LanHost, gi: usize) {
+        if let Some(c) = host.hub.guests[gi].carried.take() {
+            self.drop_guest_items(host, gi, vec![c]);
+        }
     }
 
     /// `AbstractContainerMenu.removed`: what a closing player held on the
@@ -1625,6 +1663,8 @@ impl Game<'_> {
         if !host.hub.guests[i].dead {
             return;
         }
+        // PlayerList.respawn removes the dead player (Player.remove).
+        self.guest_drop_carried(host, i);
         // PlayerList.respawn: a server's player comes back in its respawn
         // point's level: the Overworld, where the world spawn and beds are,
         // or another one's anchor or forced point, which its block resolves
@@ -1665,6 +1705,7 @@ impl Game<'_> {
         }
         let g = &mut host.hub.guests[i];
         g.dead = false;
+        g.death_time = 0;
         g.health = 20.0;
         g.food = 20;
         g.saturation = 5.0;
@@ -1701,6 +1742,11 @@ impl Game<'_> {
             border: &self.border,
         };
         host.hub.respawn(i, spawn, &ctx);
+        // ServerGamePacketListenerImpl.handleClientCommand: a hardcore world's
+        // respawned player only watches.
+        if self.level.hardcore {
+            host.hub.set_game_mode(conn, SPECTATOR);
+        }
         if let Some(config) = elsewhere {
             self.respawn_trip(conn, config);
         }
@@ -1748,13 +1794,28 @@ impl Game<'_> {
                 continue;
             };
             self.guest_sleep_tick(host, gi);
-            if host.hub.guests[gi].dead || self.on_server_trip(conn) {
+            if host.hub.guests[gi].dead {
+                self.guest_tick_death(host, gi);
+                continue;
+            }
+            if self.on_server_trip(conn) {
                 continue;
             }
             let play = host.play.entry(conn).or_default();
             // Player.tick's ItemCooldowns.tick, once a tick for each player
-            // (the shield an axe disabled).
+            // (the shield an axe disabled, a thrown pearl).
             play.shield_cooldown = play.shield_cooldown.saturating_sub(1);
+            // ServerItemCooldowns.onCooldownEnded: a finished entry is told to
+            // the guest (a duration of 0 removes it).
+            for group in play.cooldowns.tick() {
+                host.hub.send_to(
+                    conn,
+                    &C::Cooldown(play::Cooldown {
+                        group: group.to_string(),
+                        duration: 0,
+                    }),
+                );
+            }
             let digging = play.digging;
             let using = play.using.is_some();
             let delayed = play.destroy_delay > 0 || play.use_delay > 0 || play.attack_ticks < 100;
@@ -1780,14 +1841,13 @@ impl Game<'_> {
                         g.use_delay -= 1;
                     }
                 });
-                // ServerPlayerGameMode.handleBlockBreakAction: a creative
-                // player's START breaks the block once (destroyAndAck) and
-                // leaves nothing being destroyed; its client sends no STOP.
-                // Kept, the dig broke whatever was put there next, every
-                // destroy delay, for as long as the player broke nothing else.
+                // ServerPlayerGameMode.handleBlockBreakAction: creative and
+                // instant survival STARTs finish without a STOP from the client.
+                // tick_mining clears mining on completion; forget the START too,
+                // so a flower or crop planted here later is not broken again.
                 if digging.is_some()
-                    && host.hub.guests[gi].creative()
                     && let Some(play) = host.play.get_mut(&conn)
+                    && (host.hub.guests[gi].creative() || play.mining.is_none())
                 {
                     play.digging = None;
                 }
@@ -1846,31 +1906,34 @@ impl Game<'_> {
                 let drops = (g.game_mode != SPECTATOR)
                     .then(|| [at[0], at[1] + g.eye_height() - 0.3, at[2]]);
                 let cause = host.play.get_mut(&conn).and_then(|p| p.death_cause.take());
-                let message = match cause {
-                    // ServerPlayer.die: the death message, to everyone unless
-                    // the player's team hides it.
-                    Some(key) if self.ui.rules.bool("show_death_messages") => {
-                        let text = horizon_client::text::Text::translate(
-                            &key,
-                            &[self.player_text(&name, uuid)],
-                        );
-                        let message = horizon_client::lan::data::component_nbt(&text.component());
-                        let team = self.score.board.players_team(&name);
-                        if horizon_client::scoreboard::own_death_message_shown(team) {
-                            host.hub.system_message(message.clone());
-                            if self.options.dedicated.is_some() {
-                                super::dedicated::log(
-                                    "INFO",
-                                    &format!("System chat: {}", text.plain()),
-                                );
-                            } else if self.player.is_some() {
-                                self.system_message(text);
-                            }
+                // ServerPlayer.die: with showDeathMessages, the message goes to
+                // the dying player's death screen and to everyone the team lets
+                // see it; without it, the death screen gets an empty one.
+                let message = if self.ui.rules.bool("show_death_messages") {
+                    let me = self.player_text(&name, uuid);
+                    let text = match cause {
+                        Some(key) => horizon_client::text::Text::translate(&key, &[me]),
+                        None if at[1] < f64::from(horizon_client::chunk::MIN_Y - 64) => {
+                            horizon_client::text::Text::translate("death.attack.outOfWorld", &[me])
                         }
-                        message
+                        None => self.guest_death_message(conn, me),
+                    };
+                    let message = horizon_client::lan::data::component_nbt(&text.component());
+                    let team = self.score.board.players_team(&name);
+                    if horizon_client::scoreboard::own_death_message_shown(team) {
+                        host.hub.system_message(message.clone());
+                        if self.options.dedicated.is_some() {
+                            super::dedicated::log(
+                                "INFO",
+                                &format!("System chat: {}", text.plain()),
+                            );
+                        } else if self.player.is_some() {
+                            self.system_message(text);
+                        }
                     }
-                    Some(_) => literal(""),
-                    None => literal(&format!("{name} died")),
+                    message
+                } else {
+                    literal("")
                 };
                 host.hub.send_to(
                     conn,
@@ -1884,6 +1947,21 @@ impl Game<'_> {
                 self.spawn_orbs(at, reward);
             }
         }
+    }
+
+    /// `ServerPlayer.die`'s message from a guest's own `CombatTracker`, which
+    /// sits in `guest_combat` between turns.
+    fn guest_death_message(
+        &mut self,
+        conn: u32,
+        me: horizon_client::text::Text,
+    ) -> horizon_client::text::Text {
+        let mut tracker = self.guest_combat.remove(&conn).unwrap_or_default();
+        std::mem::swap(&mut self.combat, &mut tracker);
+        let text = self.combat_death_message_for(me);
+        std::mem::swap(&mut self.combat, &mut tracker);
+        self.guest_combat.insert(conn, tracker);
+        text
     }
 
     /// `Player.tick`'s sleep counter, and `LivingEntity.tick`'s wake-up of a
@@ -1996,6 +2074,7 @@ impl Game<'_> {
         let events = self.as_guest(host, conn, |game| {
             let (rules, motion) = (game.world.health_rules, game.motion);
             let health = &motion.health;
+            let freeze_immune = game.wears_freeze_immune();
             let Some(player) = game.player.as_mut() else {
                 return (Vec::new(), None);
             };
@@ -2059,11 +2138,24 @@ impl Game<'_> {
             // Entity.applyEffectsFromBlocks along those moves: magma, cactus,
             // lit campfires and grown sweet berry bushes hurt (#1305).
             w.player.shift_key_down = sneaking;
+            w.player.freeze_immune = freeze_immune;
             let _ = w.server_block_damage(start);
             let _ = w.tick_environment_damage();
             let _ = w.apply_fire_contact();
             let _ = w.server_hazards_tick(in_wall);
             let mut events = std::mem::take(&mut w.player.events);
+            // LayeredCauldronBlock.handleEntityOnFireInside along those moves.
+            for event in &events {
+                if let MotionEvent::CauldronExtinguish { pos } = event {
+                    game.cauldron_extinguish(*pos);
+                }
+            }
+            // WitherRoseBlock.entityInside along those moves.
+            for event in &events {
+                if matches!(event, MotionEvent::InsideWitherRose) {
+                    game.wither_rose_contact();
+                }
+            }
             // ServerGamePacketListenerImpl.handleMovePlayer:
             // Player.checkMovementStatistics for each move.
             for d in travelled {
@@ -2087,14 +2179,19 @@ impl Game<'_> {
                 resources: game.motion,
             }
             .server_travel();
+            // Landing damage from this travel reaches the tracker too.
+            events.append(&mut player.events);
             // A hurt since the last tick marked the velocity (Entity.markHurt):
             // ServerEntity.sendChanges sends it as it is after this travel.
             let marked = std::mem::take(&mut player.health.sync_velocity);
-            (events, marked.then_some(player.velocity))
+            let velocity = marked.then_some(player.velocity);
+            game.record_combat(&events);
+            (events, velocity)
         });
         let Some((events, marked)) = events else {
             return;
         };
+        self.as_guest(host, conn, |game| game.tick_player_sculk_events());
         for event in events {
             match event {
                 MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, at),

@@ -39,6 +39,8 @@ pub mod component {
     pub const WRITABLE_BOOK_CONTENT: i32 = 56;
     pub const WRITTEN_BOOK_CONTENT: i32 = 57;
     pub const TRIM: i32 = 58;
+    pub const FIREWORK_EXPLOSION: i32 = 70;
+    pub const FIREWORKS: i32 = 71;
 }
 
 /// A written book's content (`WrittenBookContent.STREAM_CODEC`): the
@@ -89,6 +91,13 @@ pub enum Component {
     WrittenBook(WrittenBook),
     /// `ChargedProjectiles`: a loaded crossbow's ammunition, as templates.
     Stacks(Vec<Stack>),
+    /// `Fireworks`: flight duration and its explosions.
+    Fireworks {
+        flight: i32,
+        explosions: Vec<FireworkExplosion>,
+    },
+    /// `FireworkExplosion` (a firework star).
+    FireworkExplosion(FireworkExplosion),
     /// `ArmorTrim` naming its material and pattern by registry id (`trim_material`,
     /// `trim_pattern`); a trim with a direct holder stays [`Component::Raw`].
     Trim {
@@ -98,6 +107,41 @@ pub enum Component {
     /// A component Horizon reads past without interpreting it: its encoded
     /// bytes, written back as they came.
     Raw(Vec<u8>),
+}
+
+/// `FireworkExplosion.STREAM_CODEC`: shape id, colors, fade colors, trail
+/// and twinkle (FireworkExplosion.Shape's BY_ID order).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FireworkExplosion {
+    pub shape: i32,
+    pub colors: Vec<i32>,
+    pub fade: Vec<i32>,
+    pub trail: bool,
+    pub twinkle: bool,
+}
+impl FireworkExplosion {
+    fn read(r: &mut Reader) -> Result<Self> {
+        let ints = |r: &mut Reader| -> Result<Vec<i32>> {
+            let n = r.count(1024)?;
+            (0..n).map(|_| r.i32()).collect()
+        };
+        Ok(Self {
+            shape: r.varint()?,
+            colors: ints(r)?,
+            fade: ints(r)?,
+            trail: r.bool()?,
+            twinkle: r.bool()?,
+        })
+    }
+    fn write(&self, w: &mut Writer) {
+        w.varint(self.shape);
+        w.varint(self.colors.len() as i32);
+        self.colors.iter().for_each(|c| w.i32(*c));
+        w.varint(self.fade.len() as i32);
+        self.fade.iter().for_each(|c| w.i32(*c));
+        w.bool(self.trail);
+        w.bool(self.twinkle);
+    }
 }
 
 /// `Filterable.streamCodec`: the raw value, then an optional filtered one
@@ -260,6 +304,17 @@ impl Component {
                     hidden: (0..n).map(|_| r.varint()).collect::<Result<_>>()?,
                 }
             }
+            FIREWORKS => {
+                let flight = r.varint()?;
+                let n = r.count(256)?;
+                Self::Fireworks {
+                    flight,
+                    explosions: (0..n)
+                        .map(|_| FireworkExplosion::read(r))
+                        .collect::<Result<_>>()?,
+                }
+            }
+            FIREWORK_EXPLOSION => Self::FireworkExplosion(FireworkExplosion::read(r)?),
             // ArmorTrim.STREAM_CODEC: two holders, each a reference's id plus
             // one. A direct material or pattern has no registry name: read past.
             TRIM => {
@@ -375,6 +430,12 @@ impl Component {
                 w.varint(stacks.len() as i32);
                 stacks.iter().for_each(|s| Template::write(s, w));
             }
+            Self::Fireworks { flight, explosions } => {
+                w.varint(*flight);
+                w.varint(explosions.len() as i32);
+                explosions.iter().for_each(|e| e.write(w));
+            }
+            Self::FireworkExplosion(e) => e.write(w),
             Self::WritableBook(pages) => {
                 w.varint(pages.len() as i32);
                 for page in pages {
@@ -668,6 +729,44 @@ mod tests {
         round::<Option<Stack>, Slot>(Some(sword.clone()));
         round::<Option<Hashed>, HashedSlot>(Some(Hashed::of(&sword)));
         round::<Option<Hashed>, HashedSlot>(None);
+    }
+
+    #[test]
+    fn fireworks_components_round_trip() {
+        let mut rocket = Stack::new(42, 1);
+        rocket.added.push((
+            component::FIREWORKS,
+            Component::Fireworks {
+                flight: 3,
+                explosions: vec![
+                    FireworkExplosion {
+                        shape: 4,
+                        colors: vec![0xff0000, 0x00ff00],
+                        fade: vec![0x0000ff],
+                        trail: true,
+                        twinkle: false,
+                    },
+                    FireworkExplosion {
+                        shape: 0,
+                        colors: vec![],
+                        fade: vec![],
+                        trail: false,
+                        twinkle: true,
+                    },
+                ],
+            },
+        ));
+        rocket.added.push((
+            component::FIREWORK_EXPLOSION,
+            Component::FireworkExplosion(FireworkExplosion {
+                shape: 2,
+                colors: vec![7],
+                fade: vec![],
+                trail: false,
+                twinkle: false,
+            }),
+        ));
+        round::<Option<Stack>, Slot>(Some(rocket));
     }
 
     #[test]

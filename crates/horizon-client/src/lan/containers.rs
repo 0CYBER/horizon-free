@@ -78,6 +78,17 @@ impl Hub {
         );
     }
 
+    /// `ServerLevel.globalLevelEvent`: the packet with its global flag, for
+    /// every player on the server (`PlayerList.broadcastAll`).
+    pub fn global_level_event(&self, kind: i32, pos: [i32; 3], data: i32) {
+        self.broadcast(&C::LevelEvent(play::LevelEvent {
+            kind,
+            pos,
+            data,
+            global: true,
+        }));
+    }
+
     /// ClientboundBlockEventPacket (`PlayerList.broadcast` within 64 blocks).
     pub fn block_event(&self, pos: [i32; 3], b0: i32, b1: i32, state: u32) {
         let block = self
@@ -350,6 +361,14 @@ impl Hub {
             return Vec::new();
         }
         let source = self.guests[i].menu.as_ref().map(|m| m.slots);
+        let shulker_box = self
+            .sync
+            .builtin
+            .get("minecraft:menu")
+            .and_then(|m| m.id("minecraft:shulker_box"));
+        let shulker = in_menu
+            && shulker_box.is_some()
+            && self.guests[i].menu.as_ref().map(|m| m.kind) == shulker_box;
         let mut drag = if in_menu {
             self.guests[i].menu.as_mut().and_then(|m| m.drag.take())
         } else {
@@ -363,6 +382,7 @@ impl Hub {
         let mut view = View {
             guest,
             container: items.as_deref_mut(),
+            shulker,
         };
         let (drops, changed) = menu::click(
             &mut view,

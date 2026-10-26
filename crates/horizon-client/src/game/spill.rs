@@ -373,11 +373,28 @@ impl GameLevel<'_> {
         let mut neighbour_updates = 0;
         if side_effects {
             match kind {
-                PreRemove::Contents { slots, .. } => {
+                PreRemove::Contents { slots, furnace } => {
                     let items = entity.as_ref().map_or(&[][..], BlockEntity::slots);
                     for slot in 0..slots {
                         let stack = items.get(slot).cloned().flatten();
                         self.drop_item_stack(pos, stack);
+                    }
+                    // AbstractFurnaceBlockEntity.preRemoveSideEffects: then the
+                    // experience of what it made, at the block's centre.
+                    if furnace && let Some(BlockEntity::Furnace(f)) = &entity {
+                        let at = [
+                            f64::from(pos.x) + 0.5,
+                            f64::from(pos.y) + 0.5,
+                            f64::from(pos.z) + 0.5,
+                        ];
+                        for (count, experience) in f.recipe_experience(self.recipes) {
+                            let xp = horizon_client::containers::create_experience(
+                                count,
+                                experience,
+                                &mut self.world.random,
+                            );
+                            self.award_orbs(at, xp);
+                        }
                     }
                 }
                 PreRemove::Campfire => {

@@ -70,7 +70,8 @@ impl Game<'_> {
             _ => return,
         };
         self.extras.mouse[i] = pressed;
-        if pressed && self.settings.extras.keystrokes {
+        // Mods read the clicks too (`input.clicks-per-second`).
+        if pressed && (self.settings.extras.keystrokes || self.mods.running()) {
             let now = self.extras_now();
             self.extras.cps[i].click(now);
         }
@@ -87,12 +88,27 @@ impl Game<'_> {
             self.extras.mouse = [false; 2];
         }
         self.update_minimap();
-        if self.settings.extras.fps {
+        // Mods read the counter too (`render.frame-stats`).
+        if self.settings.extras.fps || self.mods.running() {
             let now = self.extras_now();
             self.extras.fps.record(now, elapsed.as_secs_f32() * 1000.0);
         } else {
             self.extras.fps.clear();
         }
+    }
+    /// The frame counter for mods: fps, min, 1% low.
+    #[cfg(feature = "mods")]
+    pub(super) fn frame_reading(&self) -> (u32, u32, u32) {
+        let r = self.extras.fps.reading();
+        (r.fps, r.min, r.low)
+    }
+    /// Attack and use clicks in the last second, and whether each is held.
+    #[cfg(feature = "mods")]
+    pub(super) fn mouse_reading(&mut self) -> ((u32, u32), [bool; 2]) {
+        let now = self.extras_now();
+        let [l, r] = &mut self.extras.cps;
+        let cps = (l.per_second(now) as u32, r.per_second(now) as u32);
+        (cps, self.extras.mouse)
     }
     /// Auto-reconnect: a connection to `address` as `name` starts.
     pub(super) fn extras_connecting(&mut self, address: &str, name: &str) {

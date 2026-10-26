@@ -55,6 +55,10 @@ pub enum Event {
     PackPush(cfg::ResourcePackPush),
     /// ClientboundResourcePackPopPacket: one pack, or every pack.
     PackPop(Option<u128>),
+    /// `show_dialog` in configuration: the dialog itself.
+    ShowDialog(horizon_world::nbt::Tag),
+    /// `clear_dialog` in configuration.
+    ClearDialog,
     /// `ClientboundTransferPacket`: the server sent us to another address.
     /// The connection ends right after; the game reconnects there with the
     /// stored cookies.
@@ -227,6 +231,25 @@ impl Session {
             cfg::Serverbound::ResourcePack(status).encode()
         } else {
             play::Serverbound::ResourcePack(status).encode()
+        };
+        if let Some(w) = writer.as_mut()
+            && w.send(&body).is_err()
+        {
+            w.shutdown();
+        }
+    }
+    /// ServerboundCustomClickActionPacket (a dialog's answer), in whichever
+    /// phase the connection is.
+    pub fn send_custom_click(&self, id: &str, payload: Option<horizon_world::nbt::Tag>) {
+        let click = cfg::CustomClickAction {
+            id: id.to_owned(),
+            payload,
+        };
+        let mut writer = self.writer.lock().unwrap();
+        let body = if self.configuring.load(Ordering::Relaxed) {
+            cfg::Serverbound::CustomClickAction(click).encode()
+        } else {
+            play::Serverbound::CustomClickAction(click).encode()
         };
         if let Some(w) = writer.as_mut()
             && w.send(&body).is_err()
@@ -602,6 +625,13 @@ fn configure(
             cfg::Clientbound::ResourcePackPop(p) => {
                 let _ = send.send(Event::PackPop(p.id));
             }
+            // The game shows it; the answer goes back from there.
+            cfg::Clientbound::ShowDialog(d) => {
+                let _ = send.send(Event::ShowDialog(d.dialog));
+            }
+            cfg::Clientbound::ClearDialog(_) => {
+                let _ = send.send(Event::ClearDialog);
+            }
             cfg::Clientbound::CookieRequest(q) => {
                 let payload = cookies.lock().unwrap().get(&q.key).cloned();
                 reply(cfg::Serverbound::CookieResponse(cfg::CookieResponse {
@@ -686,8 +716,14 @@ pub fn json_text(v: &serde_json::Value, lang: &Language) -> String {
     }
 }
 
-/// en_us.json from the prepared resources.
+/// The language a session resolves server-sent components with: the selected
+/// one as `lang` loaded it (`en_us` under it, packs included), so a menu title
+/// the server sends as a key follows the language screen. A process with no
+/// language set (a dedicated server's log) reads en_us.json.
 pub fn load_language(resources: &std::path::Path) -> Language {
+    if let Some(lang) = crate::lang::current() {
+        return lang.map().clone();
+    }
     std::fs::read(resources.join("assets/minecraft/lang/en_us.json"))
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())

@@ -392,6 +392,9 @@ impl Game<'_> {
         Ok(())
     }
     pub(super) fn screen_label(&self) -> &'static str {
+        if self.dialog_open() {
+            return "dialog";
+        }
         if self.title.is_some() {
             return "title";
         }
@@ -418,6 +421,7 @@ impl Game<'_> {
             Screen::Friends => "friends",
             Screen::CommandBlock => "command-block",
             Screen::Win => "win",
+            Screen::Mod => "mod",
         }
     }
     pub(super) fn inventory_counts(&self) -> BTreeMap<String, i64> {
@@ -486,6 +490,7 @@ impl Game<'_> {
             })
         });
         json!({
+            "dialog": self.dialog_status(),
             "screen": self.screen_label(),
             "menu": self.title.as_ref().map(|_| self.title_value()),
             "world": (self.title.is_none()).then(|| match &self.integrated {
@@ -684,6 +689,18 @@ impl Game<'_> {
             v["craft_size"] = json!(self.craft_size);
             v["station"] = json!(self.station.as_ref().map(|s| format!("{:?}", s.kind)));
             v["container"] = json!(self.container);
+            // The title a server gave the menu, span by span as it is drawn.
+            if let Some(title) = self.remote_menu_title() {
+                let spans = title.spans.iter().map(|s| {
+                    json!({
+                        "text": s.text,
+                        "color": s.style.color.map(|c| format!("#{c:06X}")),
+                        "bold": s.style.is_bold(),
+                        "italic": s.style.is_italic(),
+                    })
+                });
+                v["title"] = json!(spans.collect::<Vec<_>>());
+            }
             // The recipe book's buttons (GUI pixels): the book button, then
             // the recipe buttons of the page, page arrows, filter and tabs.
             let book = self.recipe_book_targets();
@@ -1602,8 +1619,12 @@ impl Game<'_> {
                 if self.screen != Screen::Dead {
                     return Err("respawn needs the death screen".into());
                 }
-                let label =
-                    horizon_client::text::Text::translate("deathScreen.respawn", &[]).plain();
+                let key = if self.level.hardcore {
+                    "deathScreen.spectate"
+                } else {
+                    "deathScreen.respawn"
+                };
+                let label = horizon_client::text::Text::translate(key, &[]).plain();
                 let w = widgets::find(&widgets::last(), &label)?;
                 if !w.enabled {
                     // DeathScreen enables its buttons after 20 ticks.

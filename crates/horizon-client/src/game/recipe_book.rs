@@ -502,7 +502,7 @@ impl Game<'_> {
                     horizon_client::item_tooltip::lines(
                         stack,
                         self.res.items().get(&stack.item),
-                        &|k| self.pack.names.get(k).map(str::to_owned),
+                        &|k| self.pack.names.display_get(k),
                     )
                 })
             {
@@ -1163,8 +1163,12 @@ impl Game<'_> {
     }
     /// Paints recipe book calls; returns the first tooltip set (vanilla keeps
     /// the first one a frame asks for).
-    fn paint_book(&mut self, batch: &mut HudBatch, calls: &[Drawn]) -> Option<Vec<(String, u32)>> {
-        let mut tooltip: Option<Vec<(String, u32)>> = None;
+    fn paint_book(
+        &mut self,
+        batch: &mut HudBatch,
+        calls: &[Drawn],
+    ) -> Option<Vec<(horizon_client::text::Text, u32)>> {
+        let mut tooltip: Option<Vec<(horizon_client::text::Text, u32)>> = None;
         for d in calls {
             let start = batch.vertices.len();
             let atlas = &self.gui.atlas;
@@ -1259,7 +1263,14 @@ impl Game<'_> {
                         tooltip = Some(
                             lines
                                 .iter()
-                                .map(|l| (l.iter().map(|r| r.text.as_str()).collect(), u32::MAX))
+                                .map(|l| {
+                                    (
+                                        horizon_client::text::Text::literal(
+                                            l.iter().map(|r| r.text.as_str()).collect::<String>(),
+                                        ),
+                                        u32::MAX,
+                                    )
+                                })
                                 .collect(),
                         );
                     }
@@ -1269,10 +1280,10 @@ impl Game<'_> {
                         let mut lines = self.stack_tooltip(stack);
                         if *more {
                             lines.push((
-                                self.translate(
+                                horizon_client::text::Text::literal(self.translate(
                                     "gui.recipebook.moreRecipes",
                                     "Right Click for More",
-                                ),
+                                )),
                                 u32::MAX,
                             ));
                         }

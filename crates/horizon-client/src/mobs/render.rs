@@ -92,6 +92,11 @@ fn climate(m: &Mob) -> &'static str {
         _ => "temperate",
     }
 }
+/// `AvatarRenderer` entities: a mannequin draws exactly like a player —
+/// the player model, its resolved skin and the same scale.
+fn avatar(m: &Mob) -> bool {
+    matches!(&*m.kind.id, "minecraft:player" | "minecraft:mannequin")
+}
 /// The model layer key and texture for the mob's body.
 pub fn body(m: &Mob) -> (String, String) {
     use Species as S;
@@ -103,7 +108,7 @@ pub fn body(m: &Mob) -> (String, String) {
             s.to_owned()
         }
     };
-    if &*m.kind.id == "minecraft:player" {
+    if avatar(m) {
         return (
             "main".into(),
             m.skin.clone().unwrap_or_else(|| m.kind.texture.clone()),
@@ -334,7 +339,7 @@ pub fn body_color(m: &Mob, alpha: f32) -> u32 {
 pub fn layers(m: &Mob) -> Vec<Layer> {
     use Species as S;
     let mut v = Vec::new();
-    if &*m.kind.id == "minecraft:player" {
+    if avatar(m) {
         return v;
     }
     let white = 0xFFFF_FFFF;
@@ -754,7 +759,7 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
         body += (f64::from(ticks * 3.25).cos() * std::f64::consts::PI * 0.4) as f32;
     }
     // A sleeping villager, or another player lying in their bed.
-    let sleep = (m.species() == Species::Villager || m.kind.id == "minecraft:player")
+    let sleep = (m.species() == Species::Villager || avatar(m))
         .then(|| super::villager::sleep_pose(m))
         .flatten();
     let rotation = match sleep {
@@ -873,7 +878,7 @@ fn red_overlay(m: &Mob) -> bool {
     m.hurt_time > 0 || (m.death_time > 0 && !super::creaking::tearing_down(m))
 }
 fn species_scale(m: &Mob, alpha: f32) -> glam::Mat4 {
-    if m.kind.id == "minecraft:player" {
+    if avatar(m) {
         // AvatarRenderer.scale, shared by the inventory and world renderer.
         return glam::Mat4::from_scale(glam::Vec3::splat(0.9375));
     }
