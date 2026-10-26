@@ -25,7 +25,7 @@ pub struct Moved {
     pub name: &'static str,
 }
 
-pub const MOVED: [Moved; 2] = [
+pub const MOVED: [Moved; 3] = [
     Moved {
         id: "fps_overlay",
         name: "FPS counter",
@@ -34,13 +34,18 @@ pub const MOVED: [Moved; 2] = [
         id: "keystrokes",
         name: "Keystrokes",
     },
+    Moved {
+        id: "zoom",
+        name: "Zoom",
+    },
 ];
 
 impl Moved {
     fn was_on(&self, e: &Extras) -> bool {
         match self.id {
             "fps_overlay" => e.fps,
-            _ => e.keystrokes,
+            "keystrokes" => e.keystrokes,
+            _ => e.zoom,
         }
     }
     /// The extra's settings as the mod keeps them (its storage keys).
@@ -51,10 +56,23 @@ impl Moved {
                 ("corner", e.fps_corner.name().into()),
                 ("lows", flag(e.fps_lows)),
             ],
-            _ => vec![
+            "keystrokes" => vec![
                 ("corner", e.keystrokes_corner.name().into()),
                 ("cps", flag(e.keystrokes_cps)),
             ],
+            _ => vec![
+                ("level", e.zoom_level.to_string()),
+                ("smooth", flag(e.zoom_smooth)),
+                ("sensitivity", flag(e.zoom_sensitivity)),
+            ],
+        }
+    }
+    /// The extra's key as the mod's key (`horizon-mods.txt`), when the
+    /// player had changed it from the mod's default.
+    pub fn keys(&self, e: &Extras) -> Vec<(&'static str, String)> {
+        match self.id {
+            "zoom" if e.zoom_key != "key.keyboard.z" => vec![("zoom", e.zoom_key.clone())],
+            _ => Vec::new(),
         }
     }
     /// The line the player reads once it is installed.
@@ -171,6 +189,12 @@ pub fn install(index: &Index, m: &Moved, e: &Extras, dir: &Path) -> Result<(), S
     }
     let mut list = ModList::load(dir);
     list.enabled.insert(m.id.to_owned());
+    // A key the player already chose for the mod stays.
+    let keys = list.keys.entry(m.id.to_owned()).or_default();
+    for (name, key) in m.keys(e) {
+        keys.entry(name.to_owned()).or_insert(key);
+    }
+    list.keys.retain(|_, k| !k.is_empty());
     list.save(dir);
     Ok(())
 }
@@ -184,7 +208,7 @@ mod tests {
     fn only_extras_that_were_on_are_installed_and_each_once() {
         let mut e = Extras::default();
         assert!(pending(&e).is_empty());
-        assert_eq!(nothing_to_do(&e).len(), 2);
+        assert_eq!(nothing_to_do(&e).len(), 3);
         e.fps = true;
         e.fps_corner = Corner::BottomRight;
         e.fps_lows = true;
@@ -199,7 +223,23 @@ mod tests {
         );
         e.moved.push("fps_overlay".into());
         assert!(pending(&e).is_empty());
-        assert_eq!(nothing_to_do(&e), [&MOVED[1]]);
+        assert_eq!(nothing_to_do(&e), [&MOVED[1], &MOVED[2]]);
+        // Zoom: its settings, and its key only when the player changed it.
+        e.zoom = true;
+        e.zoom_level = 8;
+        e.zoom_smooth = false;
+        assert_eq!(pending(&e), [&MOVED[2]]);
+        assert_eq!(
+            MOVED[2].settings(&e),
+            [
+                ("level", "8".into()),
+                ("smooth", "false".into()),
+                ("sensitivity", "true".into())
+            ]
+        );
+        assert!(MOVED[2].keys(&e).is_empty());
+        e.zoom_key = "key.mouse.4".into();
+        assert_eq!(MOVED[2].keys(&e), [("zoom", "key.mouse.4".into())]);
         assert_eq!(
             MOVED[0].notice(),
             "FPS counter moved to the mod browser: installed for you"

@@ -1,6 +1,6 @@
 # Horizon extras
 
-Optional conveniences built into the client: fullbright, dynamic lights, zoom, a minimap, auto-reconnect,
+Optional conveniences built into the client: fullbright, dynamic lights, a minimap, auto-reconnect,
 Mouse Tweaks-style inventory controls and inventory sorting. **Every one is off by default**: a fresh
 install looks and behaves exactly like vanilla 26.3, and turning an extra off
 again restores vanilla's behaviour completely.
@@ -10,7 +10,7 @@ again restores vanilla's behaviour completely.
 | Part | Code |
 |---|---|
 | Settings, parsing and saving | `crates/horizon-client/src/extras.rs` |
-| Zoom curve; FPS and click counters (for mods) | `extras.rs` (pure logic, unit tested) |
+| FPS and click counters (for mods) | `extras.rs` (pure logic, unit tested) |
 | Dynamic lights: item glow, nearest sources | `crates/horizon-client/src/dynamic_light.rs` (unit tested), `game/dynamic_lights.rs`, `terrain.wgsl` and `entity.wgsl` (`dynamic_block_light`) |
 | HUD drawing (minimap frame, corner stacking) | `crates/horizon-client/src/extras_hud.rs` |
 | Minimap colours, tiles and image | `crates/horizon-client/src/minimap.rs` |
@@ -34,10 +34,9 @@ extras stay out of the way of other input and options work.
 `horizon-graphics.txt`. `options.txt` is untouched, so a vanilla client can share
 the folder. Unknown or broken lines fall back to the defaults.
 
-The zoom key is a Horizon setting stored in that file (`zoomKey:key.keyboard.z`)
-and bound on the Extras page, not in vanilla's Key Binds screen: Horizon has no
-Horizon category in Controls, and adding one would put a non-vanilla mapping into
-`options.txt`.
+Extras' keys (the sort key) are Horizon settings stored in that file and bound on
+the Extras page, not in vanilla's Key Binds screen: Horizon has no Horizon category
+in Controls, and adding one would put a non-vanilla mapping into `options.txt`.
 
 ## The extras
 
@@ -61,33 +60,13 @@ Horizon category in Controls, and adding one would put a non-vanilla mapping int
 - Off: nothing is gathered and the shaders' loop runs zero times (the count is 0), so it costs
   nothing measurable (numbers in the pull request, #814).
 
-### Zoom (`zoom`, default off)
-- Hold the zoom key (default **Z**, unused by every vanilla 26.3 key mapping; C
-  is `key.saveToolbarActivator`) to zoom. The key does nothing while zoom is off.
-- It zooms only while playing: in chat, signs, books, text fields and every
-  other screen the key is typed or handled as usual. The key is never taken
-  from vanilla's mappings: one bound to the same key still acts (a key bound
-  twice triggers both, as vanilla's do), and the Extras page marks the zoom key
-  "Also bound" and names the mapping.
-- Starts at the default level (4x, settable 2x to 10x); the scroll wheel changes
-  it while the key is held (and does not move the hotbar then).
-- **Smooth** (default on) goes through vanilla's own FOV easing: the zoom divides
-  the field-of-view modifier target `Camera.tickFov` eases toward, the path the
-  spyglass uses (`AbstractClientPlayer.getFieldOfViewModifier` returns 0.1 while
-  scoping). The modifier keeps vanilla's 0.1 floor, so 10x is the deepest zoom.
-  Off applies the zoom to the final FOV with no easing.
-- While scoping with a spyglass the zoom does nothing: the spyglass view and its
-  overlay stay exactly vanilla's.
-- **Slower turning** (default on) divides mouse turning by the zoom factor.
-- With zoom off (or the key up) the FOV target and mouse are vanilla's, bit for
-  bit; the FOV harness covers this.
-
 ### Moved to the mod browser
 
-The **FPS counter** and **Keystrokes** are official mods now (`mods/official/`, [mods.md](mods.md#horizons-official-mods)),
+The **FPS counter**, **Keystrokes** and **Zoom** are official mods now (`mods/official/`, [mods.md](mods.md#horizons-official-mods)),
 with the same look and options. On the first start after the update, a player who had one on gets the mod installed
-from Horizon's registry and turned on, with their corner and options carried over, and reads one line in the chat
-("FPS counter moved to the mod browser: installed for you"). The install is checked like the launcher's (size,
+from Horizon's registry and turned on, with their corner and options carried over (Zoom's key too, into
+`horizon-mods.txt`, when it wasn't Z), and reads one line in the chat ("Zoom moved to the mod browser: installed for
+you"). The install is checked like the launcher's (size,
 SHA-256, signature, manifest); if it fails (offline), the next start tries again. `horizon-extras.txt` keeps the old
 keys and lists what was done in `movedToMods`. Code: `crates/horizon-client/src/moved_extras.rs`,
 `game/moved_extras.rs`.

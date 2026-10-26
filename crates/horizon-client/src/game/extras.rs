@@ -1,24 +1,22 @@
-//! Horizon's extras in the game (`docs/extras.md`): the zoom key and wheel,
-//! the minimap's tiles and image, and their HUD; clicks and frame times for
-//! mods (`input.clicks-per-second`, `render.frame-stats`). Each hook does
-//! nothing while its extra is off and no mod runs.
+//! Horizon's extras in the game (`docs/extras.md`): the minimap's tiles and
+//! image, and its HUD; a mod's zoom (`render.set-zoom`) on the camera; clicks
+//! and frame times for mods (`input.clicks-per-second`, `render.frame-stats`).
+//! Each hook does nothing while its extra is off and no mod runs.
 use super::{Dim, Game, Screen};
 use horizon_client::{
-    extras::{Corner, Cps, FpsCounter, Zoom, fov_target, turn_scale},
+    extras::{Corner, Cps, FpsCounter, fov_target},
     extras_hud::{self, Corners},
     hud::{HudBatch, MINIMAP_SPRITE},
-    keybinds,
     minimap::{self, Layer, Minimap, View},
     multiplayer,
     reconnect::{Retry, Tracker},
     title::Mode,
 };
 use std::time::Duration;
-use winit::{event::MouseButton, keyboard::KeyCode};
+use winit::event::MouseButton;
 
 #[derive(Default)]
 pub(super) struct ExtrasState {
-    zoom: Zoom,
     fps: FpsCounter,
     /// Left and right mouse buttons: held, and their clicks.
     mouse: [bool; 2],
@@ -36,34 +34,8 @@ impl Game<'_> {
     fn extras_now(&self) -> f64 {
         self.started.elapsed().as_secs_f64()
     }
-    fn zoom_key(&self) -> Option<KeyCode> {
-        let e = &self.settings.extras;
-        e.zoom.then(|| keybinds::key_code(&e.zoom_key)).flatten()
-    }
-    /// A key press or release. The zoom key zooms only while playing with
-    /// no text open; the key itself always goes on to the screen and the key
-    /// binds, as a vanilla key mapping's would.
-    pub(super) fn extras_key(&mut self, key: KeyCode, pressed: bool, repeat: bool) {
-        if self.zoom_key() != Some(key) {
-            return;
-        }
-        let playing = self.screen == Screen::Playing
-            && self.title.is_none()
-            && self.sign_edit.is_none()
-            && self.book.is_none();
-        let level = self.settings.extras.zoom_level;
-        self.extras.zoom.key(pressed, repeat, playing, level);
-    }
-    /// Wheel steps while playing; true when zooming took them from the hotbar.
-    pub(super) fn extras_scroll(&mut self, steps: f32) -> bool {
-        self.settings.extras.zoom && self.extras.zoom.scroll(steps)
-    }
-    /// Mouse buttons while playing, for zoom and the keystroke overlay.
+    /// Mouse buttons while playing, for mods' clicks.
     pub(super) fn extras_mouse(&mut self, button: MouseButton, pressed: bool) {
-        let e = &self.settings.extras;
-        if e.zoom && e.zoom_key == keybinds::mouse_name(button) {
-            self.extras.zoom.key(pressed, false, true, e.zoom_level);
-        }
         let i = match button {
             MouseButton::Left => 0,
             MouseButton::Right => 1,
@@ -81,9 +53,6 @@ impl Game<'_> {
         // Under agent control the window may lack focus without pausing.
         let focused = self.focused || self.control.is_some();
         let playing = self.screen == Screen::Playing && self.title.is_none() && focused;
-        if !playing || !self.settings.extras.zoom {
-            self.extras.zoom.release();
-        }
         if !playing {
             self.extras.mouse = [false; 2];
         }
@@ -225,24 +194,12 @@ impl Game<'_> {
             rgba: self.extras.minimap.image.clone(),
         });
     }
-    /// The zoom in effect (1 unless the key is held).
-    fn zoom_factor(&self) -> f32 {
-        self.extras.zoom.factor(self.scoping())
-    }
-    /// The zoom in effect, the extra's or a mod's (`render.set-zoom`),
-    /// whichever is stronger: (factor, smooth, turning scale).
+    /// A mod's zoom in effect (`render.set-zoom`): (factor, smooth, turning
+    /// scale); none is 1.
     fn zoom_now(&self) -> (f32, bool, f64) {
-        let factor = self.zoom_factor();
-        let e = &self.settings.extras;
-        let own = (
-            factor,
-            e.zoom_smooth,
-            turn_scale(factor, e.zoom_sensitivity),
-        );
-        match self.mod_zoom() {
-            Some(z) if z.factor > factor => (z.factor, z.smooth, f64::from(z.turn)),
-            _ => own,
-        }
+        self.mod_zoom().map_or((1.0, true, 1.0), |z| {
+            (z.factor, z.smooth, f64::from(z.turn))
+        })
     }
     /// The field-of-view modifier target, divided by a smooth zoom.
     pub(super) fn zoomed_fov_target(&self, vanilla: f32) -> f32 {
