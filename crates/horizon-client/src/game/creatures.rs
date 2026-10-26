@@ -45,6 +45,9 @@ pub(super) struct Creatures {
     pub projectiles: Vec<Projectile>,
     /// Wind bursts from a guest's turn, waiting for it to end (game/wind.rs).
     pub wind_bursts: Vec<super::wind::Burst>,
+    /// Mace smash knockback on the other players from a guest's turn, waiting
+    /// for it to end (game/mace.rs).
+    pub smash_pushes: Vec<super::mace::SmashPush>,
     /// Ticks left of the elder guardian's apparition (MobAppearanceParticle).
     pub elder_apparition: i32,
     /// The wandering trader spawner's clock.
