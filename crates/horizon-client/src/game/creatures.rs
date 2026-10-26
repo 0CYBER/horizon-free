@@ -1946,22 +1946,32 @@ impl Game<'_> {
             None => self.projectile_hit(p, hit),
         }
     }
-    /// What an arrow or a thrown trident hits an entity for
-    /// (`AbstractArrow.onHitEntity`, `ThrownTrident.onHitEntity`): a trident's
-    /// 8, plus Impaling on aquatic `victim`s.
-    fn shot_damage(&mut self, shot: &mut Projectile, victim: Option<u32>) -> f32 {
+    /// What an arrow or a thrown trident hits an entity of type `victim`
+    /// for (`AbstractArrow.onHitEntity`, `ThrownTrident.onHitEntity`): a
+    /// trident's 8 through `EnchantmentHelper.modifyDamage` of the trident
+    /// (Impaling's `minecraft:damage` on `#sensitive_to_impaling`).
+    fn shot_damage(&mut self, shot: &mut Projectile, victim: Option<&str>) -> f32 {
         if !matches!(shot.kind, ProjectileKind::Trident) {
             return arrow_damage(shot, &mut self.world.random) + shot.bonus.damage;
         }
-        let impaling = shot
-            .arrow
-            .as_ref()
-            .map_or(0, |a| a.pickup_item.enchantment_level("minecraft:impaling"))
-            as f32;
-        let aquatic = victim
-            .and_then(|id| self.mobs.iter().find(|m| m.id == id))
-            .is_some_and(|m| m.kind.flags.aquatic_swimmer || m.kind.flags.breathes_water);
-        8.0 + if aquatic { 2.5 * impaling } else { 0.0 }
+        let Some(trident) = shot.arrow.as_ref().map(|a| a.pickup_item.clone()) else {
+            return 8.0;
+        };
+        let ctx = horizon_client::enchant::EffectContext {
+            this: victim,
+            attacker: (shot.owner == Some(Who::Player)).then_some("minecraft:player"),
+            direct_attacker: Some("minecraft:trident"),
+            damage_type: Some("minecraft:trident"),
+            items: Some(self.res.items()),
+            ..Default::default()
+        };
+        self.res.stations().enchantments.modify_value(
+            Some(&trident),
+            "minecraft:damage",
+            &ctx,
+            &mut self.world.random,
+            8.0,
+        )
     }
     /// What an arrow's tick asked for: its particles and sounds.
     fn arrow_event(&mut self, at: Vec3, event: horizon_client::arrows::ArrowEvent) {
@@ -2203,10 +2213,14 @@ impl Game<'_> {
             (ProjectileKind::Trident, Hit::Entity { who, .. }) => {
                 let mut trident = p.clone();
                 let victim = match who {
-                    Who::Mob(id) => Some(id),
-                    Who::Player => None,
+                    Who::Mob(id) => self
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == id)
+                        .map(|m| m.kind.id.clone()),
+                    Who::Player => Some("minecraft:player".to_owned()),
                 };
-                let amount = self.shot_damage(&mut trident, victim);
+                let amount = self.shot_damage(&mut trident, victim.as_deref());
                 let hurt = match who {
                     Who::Player => self.mob_hits_player(
                         amount,
