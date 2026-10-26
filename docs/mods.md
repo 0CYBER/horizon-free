@@ -515,6 +515,10 @@ published. Players find them at [playhorizon.dev/mods](https://playhorizon.dev/m
 5. A reviewer merges it: within minutes the file is a release of horizon-mods, and the project is on the site and in
    the launcher.
 
+Once it is published, its page and its card in the launcher show its downloads (GitHub's counts of its files,
+refreshed every hour) and its rating: players signed in with GitHub on its page give it 1 to 5 stars, one rating per
+account, which they can change. Its owners can't rate it, and nobody sees who rated.
+
 An update is the same form with a new version; only the project's `owners` can publish one, signed with its key if it
 has one. A published file never changes. Without the form, open the pull request by hand (the repository's README
 says how). The formats: [api/mod-index.md](api/mod-index.md).

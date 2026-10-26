@@ -8,6 +8,8 @@ const REGISTRY = "https://github.com/ludovic111/horizon-mods";
 export const SUBMIT = "/mods/submit";
 // The submission form's service (crates/horizon-mod-registry), behind the site's own address.
 export const API = "/api/mods";
+// Every project's ratings: {projects: {<id>: {average, count}}}.
+export const RATINGS = `${API}/ratings`;
 export const SCHEMA = 1;
 
 // The kinds the site shows, in the filter's order. Kinds a newer index adds are left out until the site knows them.
@@ -43,21 +45,66 @@ const initial = (p) => escape((p.name || p.id).trim().charAt(0).toUpperCase());
 const icon = (p) =>
   https(p.icon) ? `<img class="mod-icon" src="${escape(p.icon)}" alt="" width="48" height="48" loading="lazy">` : `<span class="mod-icon" aria-hidden="true">${initial(p)}</span>`;
 
+// A count as the launcher writes it: 999, 12.3k, 4.1M.
+export function count(n) {
+  if (n < 1000) return String(n);
+  if (n < 1e6) return `${(n / 1e3).toFixed(1)}k`;
+  return `${(n / 1e6).toFixed(1)}M`;
+}
+
+const downloads = (p) => {
+  const n = Number.isSafeInteger(p.downloads) && p.downloads > 0 ? p.downloads : 0;
+  return `${count(n)} download${n === 1 ? "" : "s"}`;
+};
+
+// A project's ratings from the service's answer, or null when it has none.
+export function ratingOf(ratings, id) {
+  const r = ratings?.[id];
+  return r && Number.isFinite(r.average) && Number.isSafeInteger(r.count) && r.count > 0 ? r : null;
+}
+
+// Five stars, the mean's nearest whole number of them filled, and the mean and count beside.
+export function starsHtml(r) {
+  if (!r) return `<span class="mod-stars-none">No ratings yet</span>`;
+  const on = Math.min(5, Math.max(0, Math.round(r.average)));
+  const mean = r.average.toFixed(1);
+  return `<span class="mod-rating-line" title="${mean} out of 5 from ${r.count} rating${r.count === 1 ? "" : "s"}"><span class="mod-stars" aria-hidden="true"><span class="on">${"★".repeat(on)}</span>${"★".repeat(5 - on)}</span><span class="sr-only">Rated ${mean} out of 5</span> ${mean} (${count(r.count)})</span>`;
+}
+
+// The list's orders: the most downloaded first (the default), the best rated, or by name.
+export const SORTS = [
+  ["downloads", "Most downloaded"],
+  ["rating", "Best rated"],
+  ["name", "Name"],
+];
+
+export function sorted(projects, by, ratings) {
+  const avg = (p) => ratingOf(ratings, p.id)?.average || 0;
+  const votes = (p) => ratingOf(ratings, p.id)?.count || 0;
+  const name = (a, b) => a.name.localeCompare(b.name);
+  const order = {
+    downloads: (a, b) => (b.downloads || 0) - (a.downloads || 0) || name(a, b),
+    rating: (a, b) => avg(b) - avg(a) || votes(b) - votes(a) || name(a, b),
+    name,
+  }[by] || (() => 0);
+  return [...projects].sort(order);
+}
+
 export function matches(p, kind, text) {
   if (kind !== "all" && p.kind !== kind) return false;
   const hay = `${p.id} ${p.name} ${p.summary} ${(p.authors || []).join(" ")}`.toLowerCase();
   return text.toLowerCase().split(/\s+/).filter(Boolean).every((w) => hay.includes(w));
 }
 
-// The list: a row per project, newest version and kind on the right.
-export function listHtml(projects) {
+// The list: a row per project; its kind, ratings (once `ratings` is known), downloads and newest version on the right.
+export function listHtml(projects, ratings = null) {
   if (!projects.length) return `<p class="lede mod-empty">Nothing here yet. <a href="${SUBMIT}">Submit yours</a>.</p>`;
   return projects
     .map(
       (p) => `<a class="mod-row" href="/mods/${p.id}" data-kind="${escape(p.kind)}" data-search="${escape(`${p.id} ${p.name} ${p.summary} ${(p.authors || []).join(" ")}`.toLowerCase())}">
   ${icon(p)}
   <span class="mod-text"><span class="mod-name">${escape(p.name)}</span><span class="mod-summary">${escape(p.summary || "")}</span></span>
-  <span class="mod-side"><span class="badge">${escape(KIND_NAMES[p.kind] || p.kind)}</span><span class="mod-version">${escape(p.versions[0].version)} · ${escape((p.authors || []).join(", "))}</span></span>
+  <span class="mod-side"><span class="badge">${escape(KIND_NAMES[p.kind] || p.kind)}</span><span class="mod-stats">${ratings ? `${starsHtml(ratingOf(ratings, p.id))} · ` : ""}${downloads(p)}</span><span class="mod-version">${escape(p.versions[0].version)} · ${escape((p.authors || []).join(", "))}</span></span>
 </a>`,
     )
     .join("\n");
@@ -92,8 +139,19 @@ export function ownersHtml(p) {
   return `<p class="meta mod-owners">Published by ${links}</p>`;
 }
 
-// One project's page.
-export function projectHtml(p) {
+// The rating control under a project's ratings: five stars to press when signed in (`mine`, the account's own
+// rating, pressed), a sign-in link when not, a note for the project's owners.
+export function rateHtml(p, me, mine) {
+  if (!me) return `<a class="button secondary small" href="${API}/auth/login?back=/mods/${escape(p.id)}">Sign in with GitHub to rate</a>`;
+  if ((p.owners || []).some((o) => o.toLowerCase() === String(me.login).toLowerCase())) return `<p class="meta">You publish it: players rate it.</p>`;
+  const stars = [1, 2, 3, 4, 5]
+    .map((n) => `<button type="button" class="mod-star${n <= (mine || 0) ? " lit" : ""}" data-stars="${n}" aria-pressed="${mine === n}" aria-label="${n} star${n === 1 ? "" : "s"}">★</button>`)
+    .join("");
+  return `<span class="mod-rate-label">${mine ? "Your rating" : "Rate it"}</span><span class="mod-rate-stars" role="group" aria-label="Your rating">${stars}</span>`;
+}
+
+// One project's page; `rating` is its ratings (null: none yet), left out when they aren't known.
+export function projectHtml(p, rating) {
   const v = p.versions[0];
   const caps = v.capabilities || [];
   const capsHtml = caps.length
@@ -108,7 +166,9 @@ export function projectHtml(p) {
   return `<article class="mod-page" data-id="${escape(p.id)}">
   <header class="mod-head">${icon(p)}<div><p class="kicker"><span>${escape(KIND_NAMES[p.kind] || p.kind)}</span>${escape((p.authors || []).join(", "))}</p>${ownersHtml(p)}
   <h1 class="display page-title">${escape(p.name)}</h1><p class="lede">${escape(p.summary || "")}</p>
-  <p class="mod-badges">${trust(p)} <span class="badge">${escape(p.license)}</span> <span class="badge">${escape(v.version)}</span>${v.side ? ` <span class="badge">${escape(v.side)}</span>` : ""}</p></div></header>
+  <p class="mod-badges">${trust(p)} <span class="badge">${escape(p.license)}</span> <span class="badge">${escape(v.version)}</span>${v.side ? ` <span class="badge">${escape(v.side)}</span>` : ""}</p>
+  <p class="mod-stats mod-page-stats"><span data-mod-rating>${rating === undefined ? "" : `${starsHtml(rating)} · `}</span>${downloads(p)}</p>
+  <div class="mod-rate" id="mod-rate" aria-live="polite"></div></div></header>
   ${p.description ? `<div class="prose">${markdown(p.description)}</div>` : ""}
   ${p.kind === "mod" ? `<h2 class="heading">What it may do</h2>${capsHtml}<p class="meta">Mods run in a sandbox with no file, network or clock access. The game refuses a mod whose code uses more than this list.</p>` : ""}
   ${requires}
