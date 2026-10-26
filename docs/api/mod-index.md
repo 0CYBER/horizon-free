@@ -1,7 +1,7 @@
 # The registry index and `.hpack`
 
 Horizon's registry lists what is made for Horizon and reviewed: mods (`.hmod`), modpacks (`.hpack`), resource packs
-and, once their format exists, Horizon shader packs. Submissions are pull requests in
+and Horizon shader packs (`.hshader`, [shaders.md](../shaders.md)). Submissions are pull requests in
 [ludovic111/horizon-mods](https://github.com/ludovic111/horizon-mods); merging one publishes it. The launcher and the
 website read one file, `index.json`, which that repository's CI builds. The Rust types and every check below are
 `horizon_mods::index` and `horizon_mods::modpack` (feature `index`); the sample is
@@ -99,7 +99,7 @@ own check (`index::inspect`): a mod's API, side and capabilities, a modpack's mo
 
 ```toml
 id = "coords_hud"                # the file's name, and the manifest's id
-kind = "mod"                     # mod | modpack | resourcepack; shader once its format exists
+kind = "mod"                     # mod | modpack | resourcepack | shader
 name = "Coordinates HUD"
 summary = "One line, at most 160 characters."
 description = """Markdown."""    # optional
@@ -156,10 +156,13 @@ How the repository runs (its workflows are in `.github/workflows/`):
 - **Taking a file down** is a pull request adding it to `revoked.toml`. Removing an entry outright (a test, a project
   nobody installed) fails `registry review` on purpose and needs an administrator's merge.
 
-Kinds open to submissions: `mod`, `modpack`, `resourcepack`. `shader` is in the schema and stays closed until
-Horizon's own shader pack format exists (Iris and OptiFine packs are for the Modrinth browser); its check will compile
-the pack in a headless Horizon. A new kind gets its own check before it opens.
+Kinds open to submissions: `mod`, `modpack`, `resourcepack`, `shader`. A shader pack (`.hshader`) passes
+`horizon_shader_api::check`, the check the game runs before it loads one (`horizon-shader check`, [shaders.md](../shaders.md)):
+every stage validated by naga and translated for Vulkan, Metal and DirectX 12; its manifest's id, version and shader
+API line are its facts. Iris and OptiFine packs are for the Modrinth browser. A new kind gets its own check before it
+opens.
 
 ## Changelog
 
+- 2026-10-25: `shader` opens, checked by `horizon_shader_api::check`; its files are `.hshader`.
 - Schema 1 (2026-10-24): kinds `mod`, `modpack`, `resourcepack`, `shader`; `.hpack` format 1.

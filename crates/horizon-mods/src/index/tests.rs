@@ -163,3 +163,55 @@ fn resource_packs_need_a_pack_mcmeta() {
     assert!(e.contains("plain path"), "{e}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn shader_packs_pass_the_game_s_own_check() {
+    let manifest = "schema = 1\nid = \"glow\"\nname = \"Glow\"\nversion = \"1.0.0\"\napi = \"0.1\"\n\
+                    [[post]]\nfile = \"post.wgsl\"\n";
+    let pack = |post: &str| {
+        let files = [
+            (horizon_shader_api::MANIFEST, manifest),
+            ("post.wgsl", post),
+        ]
+        .map(|(n, t)| (n.to_owned(), t.as_bytes().to_vec()))
+        .into();
+        horizon_shader_api::Pack::from_files(files)
+            .unwrap()
+            .package()
+            .unwrap()
+    };
+    let dir = std::env::temp_dir().join(format!("horizon-mods-shader-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let good = dir.join("glow-1.0.0.hshader");
+    std::fs::write(
+        &good,
+        pack("fn post(input: PostInput) -> vec4<f32> { return input.color; }\n"),
+    )
+    .unwrap();
+    let bad = dir.join("bad.hshader");
+    std::fs::write(
+        &bad,
+        pack("fn post(input: PostInput) -> vec4<f32> { return input.color }\n"),
+    )
+    .unwrap();
+    let facts = inspect(&Kind::Shader, &good);
+    let refused = inspect(&Kind::Shader, &bad).unwrap_err();
+    let not_a_pack = inspect(&Kind::Shader, &fixtures().join("cozy-1.0.0.hpack")).unwrap_err();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let facts = facts.unwrap();
+    assert_eq!(
+        (
+            facts.id.as_deref(),
+            facts.version.as_deref(),
+            facts.api.as_str()
+        ),
+        (Some("glow"), Some("1.0.0"), "0.1")
+    );
+    assert!(refused.contains("post.wgsl:1:"), "{refused}");
+    assert!(
+        not_a_pack.contains(horizon_shader_api::MANIFEST),
+        "{not_a_pack}"
+    );
+    assert_eq!(Kind::Shader.extension(), Some("hshader"));
+    assert!(open(&Kind::Shader).is_ok());
+}

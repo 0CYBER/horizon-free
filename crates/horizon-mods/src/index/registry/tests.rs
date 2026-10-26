@@ -154,7 +154,11 @@ fn lists_every_problem_of_a_registry() {
         "{errors:?}"
     );
     assert!(has("coords_hud 0.1.0: the project has a key"), "{errors:?}");
-    assert!(has("glow: shader packs open when"), "{errors:?}");
+    // A shader entry is taken now, and checked like the others.
+    assert!(
+        has("glow 1.0.0: the file isn't the one its sha256 names"),
+        "{errors:?}"
+    );
     assert!(
         has("other 0.1.0: the file's id is \"coords_hud\""),
         "{errors:?}"
@@ -219,7 +223,7 @@ fn a_review_protects_published_files() {
 #[test]
 fn only_open_kinds_are_taken() {
     assert!(open(&Kind::Mod).is_ok() && open(&Kind::ResourcePack).is_ok());
-    assert!(open(&Kind::Shader).unwrap_err().contains("Iris"));
+    assert!(open(&Kind::Shader).is_ok());
     assert!(open(&Kind::Other("world".into())).is_err());
     let mut submit: Entry = toml::from_str(COZY).unwrap();
     submit.id = "submit".into();

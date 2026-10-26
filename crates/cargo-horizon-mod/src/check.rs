@@ -69,6 +69,8 @@ impl Report {
         if let Some(side) = f.side {
             let side = serde_json::to_value(side).unwrap_or_default();
             out += &format!(", API {}, {}", f.api, side.as_str().unwrap_or("?"));
+        } else if self.kind == Kind::Shader {
+            out += &format!(", shader API {}", f.api);
         } else if !f.api.is_empty() {
             out += &format!(", format {}", f.api);
         }
@@ -113,6 +115,7 @@ pub fn kind_of(path: &Path) -> Option<Kind> {
         "hmod" => Some(Kind::Mod),
         "hpack" => Some(Kind::Modpack),
         "zip" => Some(Kind::ResourcePack),
+        "hshader" => Some(Kind::Shader),
         _ => None,
     }
 }
@@ -285,7 +288,7 @@ mod tests {
         .unwrap();
         assert!(e.contains("signature"), "{e}");
         let e = check(&pack, Kind::Shader, None, None).err().unwrap();
-        assert!(e.contains("shader packs open"), "{e}");
+        assert!(e.contains("horizon-shaders.toml"), "{e}");
         assert!(check(&pack, Kind::Mod, None, None).is_err());
     }
 }
