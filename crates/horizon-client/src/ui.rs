@@ -657,6 +657,8 @@ pub struct EditBox {
     display: usize,
     pub max_length: usize,
     pub bordered: bool,
+    /// `MultiLineEditBox`: a book page keeps line breaks. A single-line box strips them.
+    pub multiline: bool,
     pub x: f32,
     pub y: f32,
     pub width: f32,
@@ -668,7 +670,7 @@ pub struct EditBox {
     pub text_color: u32,
 }
 /// The focused text field of a screen that keeps its values as `String`s
-/// (the world list's search, world names, seeds): the `EditBox` state that
+/// (the world list's search, world names, seeds, and the server screens): the `EditBox` state that
 /// outlives a frame, its cursor, selection and scroll.
 #[derive(Clone, Debug)]
 pub struct Caret {
@@ -886,6 +888,7 @@ impl EditBox {
             display: 0,
             max_length: 32,
             bordered: true,
+            multiline: false,
             x,
             y,
             width,
@@ -916,6 +919,10 @@ impl EditBox {
     pub fn reset_blink(&mut self) {
         self.focused_at = Instant::now();
     }
+    /// The caret is showing (`EditBox`'s blink, on for 300 ms of every 600).
+    pub fn cursor_visible(&self) -> bool {
+        self.focused && (self.focused_at.elapsed().as_millis() / 300).is_multiple_of(2)
+    }
     pub fn set_value(&mut self, value: &str) {
         self.value = value.chars().take(self.max_length).collect();
         self.move_cursor_to_end(false);
@@ -933,7 +940,7 @@ impl EditBox {
     /// EditBox.insertText: replace the selection, respecting the maximum length.
     pub fn insert_text(&mut self, text: &str) {
         let (a, b) = self.selected();
-        let filtered = crate::clipboard::filter_text(text, false);
+        let filtered = crate::clipboard::filter_text(text, self.multiline);
         let room = self
             .max_length
             .saturating_sub(char_len(&self.value) - (b - a));

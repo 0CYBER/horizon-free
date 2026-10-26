@@ -1113,7 +1113,8 @@ impl Title {
             Mode::Multiplayer(screen) => screen.draw(
                 atlas,
                 batch,
-                (self.started.elapsed().as_millis() / 300).is_multiple_of(2),
+                &mut self.caret.borrow_mut(),
+                self.started,
                 cursor,
             ),
         }
@@ -1408,8 +1409,7 @@ impl Title {
             mode => caret_field(mode, self.search_focused, &mut self.search),
         }
     }
-    /// Whether the focused field edits at its cursor (every field but the
-    /// server screens', which still append).
+    /// Whether the focused field edits at its cursor.
     pub fn has_caret_field(&mut self) -> bool {
         caret_field(&mut self.mode, self.search_focused, &mut self.search).is_some()
     }
@@ -1429,15 +1429,9 @@ impl Title {
     }
     /// EditBox.charTyped / insertText at the cursor.
     pub fn type_text(&mut self, text: &str) {
-        if let Mode::Multiplayer(screen) = &mut self.mode {
-            return screen.type_text(text);
-        }
         self.edit_field(|edit| edit.insert_text(text));
     }
     pub fn backspace(&mut self) {
-        if let Mode::Multiplayer(screen) = &mut self.mode {
-            return screen.backspace();
-        }
         self.field_key(winit::keyboard::KeyCode::Backspace, false, false);
     }
     /// EditBox.keyPressed: moving and deleting in the focused field.
@@ -1465,6 +1459,7 @@ impl Title {
             Mode::Create { focus, options, .. } => create_world::field_rect(w, h, options.tab)
                 .filter(|(id, _)| id == focus)
                 .map(|(_, rect)| rect),
+            Mode::Multiplayer(screen) => screen.focused_box((w, h)),
             _ => None,
         }
     }
@@ -1617,8 +1612,9 @@ const SEARCH: crate::clipboard::FieldId = ("world.search", 0);
 const EDIT_NAME: crate::clipboard::FieldId = ("world.edit-name", 0);
 const WORLD_NAME: crate::clipboard::FieldId = ("world.name", 0);
 const WORLD_SEED: crate::clipboard::FieldId = ("world.seed", 0);
-/// The focused field of the world screens: the list's search, the world
-/// name being edited, or Create New World's name or seed.
+/// The focused field of the world screens and the server screens: the list's
+/// search, a world name or seed, or Add Server, Direct Connection and Join a
+/// Friend.
 fn caret_field<'a>(
     mode: &'a mut Mode,
     search_focused: bool,
@@ -1638,6 +1634,7 @@ fn caret_field<'a>(
             1 => Some((WORLD_SEED, seed, 32)),
             _ => None,
         },
+        Mode::Multiplayer(screen) => screen.focused_text(),
         _ => None,
     }
 }

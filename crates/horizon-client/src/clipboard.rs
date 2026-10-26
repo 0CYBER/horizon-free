@@ -346,6 +346,11 @@ mod tests {
         assert_eq!(filter_text(s, true), "abc\nde\u{80}");
         assert_eq!(strip_formatting("§aRed§r §zx§"), "Red §zx§");
         assert_eq!(helper_clipboard_contents("§lone\r\ntwo"), "one\ntwo");
+        // TextFieldHelper.getClipboardContents runs before insertText's filter.
+        assert_eq!(
+            filter_text(&helper_clipboard_contents("§aHello"), false),
+            "Hello"
+        );
     }
 
     struct Field {

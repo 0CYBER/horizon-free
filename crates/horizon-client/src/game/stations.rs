@@ -134,8 +134,10 @@ pub(super) struct Station {
     pub(super) offers: EnchantOffers,
     bookcases: i32,
     pub(super) anvil: AnvilResult,
-    /// Anvil rename box text.
+    /// Anvil rename box text (`AnvilMenu.itemName`).
     pub(super) name: String,
+    /// The box itself (`AnvilScreen`'s `EditBox` of 50, unbordered).
+    pub(super) rename: horizon_client::ui::EditBox,
     /// Stonecutter: the menu's recipe list (horizon_client::menu), its
     /// `selectedRecipeIndex` and the screen's first shown index.
     pub(super) stone: horizon_client::menu::Stonecutter,
@@ -145,8 +147,6 @@ pub(super) struct Station {
     anvil_last: Option<ItemStack>,
     /// Anvil on a server: the name last sent (the client menu's `itemName`).
     pub(super) anvil_sent: Option<String>,
-    /// When the screen opened: the rename box has the focus from then.
-    opened: std::time::Instant,
     pub(super) last_sound: u64,
     /// Villager trading state.
     pub(super) merchant: Option<Box<super::trading::MerchantState>>,
@@ -168,12 +168,12 @@ impl Station {
             bookcases: 0,
             anvil: AnvilResult::default(),
             name: String::new(),
+            rename: anvil_box(),
             stone: Default::default(),
             selected: None,
             start: 0,
             anvil_last: None,
             anvil_sent: None,
-            opened: std::time::Instant::now(),
             last_sound: 0,
             merchant: None,
             beacon: [None; 2],
@@ -867,6 +867,9 @@ impl Game<'_> {
             if kind == Kind::Stonecutter && self.stonecutter_click(local) {
                 return true;
             }
+            if kind == Kind::Anvil && !right && self.anvil_name_click(ox, oy) {
+                return true;
+            }
         }
         let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
             return true;
@@ -893,6 +896,8 @@ impl Game<'_> {
                 .as_ref()
                 .map(|i| stations::hover_name(&|id| self.pack.names.display_item(id), i))
                 .unwrap_or_default();
+            let name = s.name.clone();
+            s.rename.set_value(&name);
         }
         self.station_changed();
     }
@@ -959,20 +964,28 @@ impl Game<'_> {
         let Some(s) = self.station.as_mut() else {
             return;
         };
-        let cleared = self.text_selection.take(ANVIL_NAME, &mut s.name);
         if backspace {
-            if !cleared {
-                s.name.pop();
-            }
+            s.rename.delete_chars(-1);
         } else if let Some(t) = text {
-            for c in t.chars().filter(|c| !c.is_control()) {
-                if s.name.chars().count() < ANVIL_NAME_CHARS {
-                    s.name.push(c);
-                }
-            }
+            s.rename.insert_text(t);
         }
+        s.name.clone_from(&s.rename.value);
         self.station_changed();
         self.remote_anvil_rename();
+    }
+    /// `AnvilScreen.keyPressed`: the rename box handles the key.
+    pub(super) fn station_key(&mut self, key: winit::keyboard::KeyCode) -> bool {
+        let (ctrl, shift) = (self.has_control_down(), self.has_shift_down());
+        let Some(s) = self.station.as_mut() else {
+            return false;
+        };
+        if !s.rename.key(key, ctrl, shift) {
+            return false;
+        }
+        s.name.clone_from(&s.rename.value);
+        self.station_changed();
+        self.remote_anvil_rename();
+        true
     }
     /// Ctrl+A/C/V/X in the anvil's rename box (an `EditBox` of 50) or the
     /// recipe book's search box.
@@ -984,17 +997,51 @@ impl Game<'_> {
         let Some(s) = self.station.as_mut() else {
             return;
         };
-        if Self::append_shortcut(
-            &mut self.text_selection,
-            &mut self.clipboard,
-            ANVIL_NAME,
-            &mut s.name,
-            shortcut,
-            ANVIL_NAME_CHARS,
-        ) {
+        if s.rename.shortcut(shortcut, &mut self.clipboard) {
+            s.name.clone_from(&s.rename.value);
             self.station_changed();
             self.remote_anvil_rename();
         }
+    }
+    /// A click in the anvil's name box (`EditBox.onClick`).
+    fn anvil_name_click(&mut self, ox: f32, oy: f32) -> bool {
+        let open = self
+            .station
+            .as_ref()
+            .is_some_and(|s| s.kind == Kind::Anvil && s.inputs[0].is_some());
+        if !open {
+            return false;
+        }
+        let (x, y, w, h) = (ox + 62.0, oy + 24.0, 103.0, 12.0);
+        let (mx, my) = self.cursor;
+        if mx < x || my < y || mx >= x + w || my >= y + h {
+            return false;
+        }
+        let shift = self.has_shift_down();
+        let Some(s) = self.station.as_mut() else {
+            return false;
+        };
+        s.rename.x = x;
+        s.rename.y = y;
+        s.rename.width = w;
+        s.rename.click(&self.gui.atlas, mx, shift, false);
+        true
+    }
+    /// AnvilScreen's name box, drawn after the station picture.
+    fn draw_anvil_name(&mut self, batch: &mut HudBatch, ox: f32, oy: f32) {
+        let Some(s) = self.station.as_mut() else {
+            return;
+        };
+        let edit = &mut s.rename;
+        edit.x = ox + 62.0;
+        edit.y = oy + 24.0;
+        edit.width = 103.0;
+        edit.height = 12.0;
+        edit.bordered = false;
+        edit.focused = true;
+        edit.text_color = u32::MAX;
+        edit.max_length = ANVIL_NAME_CHARS;
+        edit.draw(batch, &self.gui.atlas, None);
     }
 
     // ---------------------------------------------------------------- drawing
@@ -1093,6 +1140,7 @@ impl Game<'_> {
         let (ox, oy) = self.inventory_origin(batch);
         let local = (self.cursor.0 - ox, self.cursor.1 - oy);
         let mut tooltip: Option<Vec<(horizon_client::text::Text, u32)>> = None;
+        let mut anvil_name = false;
         {
             let atlas = &self.gui.atlas;
             batch.fill(
@@ -1424,18 +1472,8 @@ impl Game<'_> {
                         );
                     }
                     if s.inputs[0].is_some() {
-                        // AnvilScreen's name box: white, 103 wide, no inverted highlight.
-                        horizon_client::ui::append_field(
-                            batch,
-                            atlas,
-                            &s.name,
-                            (ox + 62.0, oy + 24.0, 103.0),
-                            (u32::MAX, true),
-                            ANVIL_NAME_CHARS,
-                            self.text_selection.covers(ANVIL_NAME, &s.name),
-                            false,
-                            s.opened.elapsed().as_millis(),
-                        );
+                        // Drawn once this borrow of the station ends.
+                        anvil_name = true;
                     }
                     let cost = s.anvil.cost;
                     if cost > 0 {
@@ -1581,6 +1619,9 @@ impl Game<'_> {
                     }
                 }
             }
+        }
+        if anvil_name {
+            self.draw_anvil_name(batch, ox, oy);
         }
         let drag = self.drag_view();
         for i in self.station_slots().unwrap_or_default() {
@@ -2037,5 +2078,13 @@ impl Game<'_> {
 }
 
 /// The anvil's rename box (`AnvilScreen`: `setMaxLength(50)`).
-const ANVIL_NAME: horizon_client::clipboard::FieldId = ("anvil.name", 0);
 const ANVIL_NAME_CHARS: usize = 50;
+
+fn anvil_box() -> horizon_client::ui::EditBox {
+    let mut edit = horizon_client::ui::EditBox::new(0.0, 0.0, 103.0, 12.0);
+    edit.bordered = false;
+    edit.max_length = ANVIL_NAME_CHARS;
+    edit.text_color = u32::MAX;
+    edit.focused = true;
+    edit
+}

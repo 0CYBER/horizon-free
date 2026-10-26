@@ -5548,8 +5548,9 @@ impl Game<'_> {
         if self.creative_screen.tab().search {
             // CreativeModeInventoryScreen.slotClicked: moveCursorToEnd, then
             // setHighlightPos(0), so typing replaces the whole query.
-            let search = &self.creative_screen.search;
-            self.text_selection.select(("creative.search", 0), search);
+            let search = &mut self.creative_screen.search;
+            search.move_cursor_to_end(false);
+            search.highlight = 0;
         }
         let items = self.creative_screen.items(&self.pack.names);
         let first = self.creative_screen.first_row(&self.pack.names);
@@ -9586,20 +9587,16 @@ impl Game<'_> {
             );
         }
         if tab.search {
-            // The search box: an unbordered EditBox of 80 at (82, 6), white.
-            let search = &self.creative_screen.search;
-            horizon_client::ui::append_field(
-                batch,
-                atlas,
-                search,
-                (ox + 82.0, oy + 6.0, 80.0),
-                (u32::MAX, true),
-                clipboard::CREATIVE_SEARCH_CHARS,
-                self.text_selection
-                    .covers(clipboard::CREATIVE_SEARCH, search),
-                true,
-                self.creative_screen.search_focused.elapsed().as_millis(),
-            );
+            // CreativeModeInventoryScreen: an unbordered EditBox of 50 at (82, 6).
+            let search = &mut self.creative_screen.search;
+            search.x = ox + 82.0;
+            search.y = oy + 6.0;
+            search.width = 80.0;
+            search.bordered = false;
+            search.focused = true;
+            search.text_color = u32::MAX;
+            search.max_length = clipboard::CREATIVE_SEARCH_CHARS;
+            search.draw(batch, atlas, None);
         }
         let mut hovered: Option<ItemStack> = None;
         if tab.inventory {
@@ -9761,6 +9758,9 @@ impl Game<'_> {
             }
             return;
         }
+        if !right && self.creative_search_click(ox, oy) {
+            return;
+        }
         // Holding the scrollbar scrolls as the mouse moves (mouseDragged).
         if !right
             && self
@@ -9772,6 +9772,24 @@ impl Game<'_> {
         if self.slot_at(&batch, cx, cy).is_some() || self.clicked_outside(&batch) {
             self.inventory_press(right);
         }
+    }
+    /// A click on the search tab's box (`EditBox.onClick`).
+    fn creative_search_click(&mut self, ox: f32, oy: f32) -> bool {
+        if !self.creative_screen.tab().search {
+            return false;
+        }
+        let (x, y, w, h) = (ox + 82.0, oy + 6.0, 80.0, 9.0);
+        let (mx, my) = self.cursor;
+        if mx < x || my < y || mx >= x + w || my >= y + h {
+            return false;
+        }
+        let shift = self.has_shift_down();
+        let search = &mut self.creative_screen.search;
+        search.x = x;
+        search.y = y;
+        search.width = w;
+        search.click(&self.gui.atlas, mx, shift, false);
+        true
     }
     /// Copy the live player and world state into the `Level` that gets saved.
     pub(super) fn sync_level(&mut self) {
@@ -11380,8 +11398,17 @@ impl ApplicationHandler for Game<'_> {
                         // The hovered slot took the key (`ignoreTextInput`).
                     } else if let Some(shortcut) = self.edit_shortcut(&event) {
                         self.creative_search_shortcut(shortcut);
-                    } else if event.physical_key == PhysicalKey::Code(KeyCode::Backspace) {
-                        self.creative_search_backspace(self.has_control_down());
+                    } else if let PhysicalKey::Code(key) = event.physical_key {
+                        // EditBox.keyPressed: arrows, Home, End, Delete and Backspace.
+                        let before = self.creative_screen.search.value.clone();
+                        let (ctrl, shift) = (self.has_control_down(), self.has_shift_down());
+                        if self.creative_screen.search.key(key, ctrl, shift) {
+                            if self.creative_screen.search.value != before {
+                                self.creative_screen.scroll = 0.0;
+                            }
+                        } else {
+                            self.creative_search_edit(event.text.as_deref());
+                        }
                     } else {
                         self.creative_search_edit(event.text.as_deref());
                     }
@@ -11402,6 +11429,9 @@ impl ApplicationHandler for Game<'_> {
                     // The anvil rename box takes every key but Escape (AnvilScreen.keyPressed).
                     if let Some(shortcut) = self.edit_shortcut(&event) {
                         self.station_shortcut(shortcut);
+                    } else if let PhysicalKey::Code(key) = event.physical_key
+                        && self.station_key(key)
+                    {
                     } else {
                         let backspace = event.physical_key == PhysicalKey::Code(KeyCode::Backspace);
                         self.station_text(event.text.as_deref(), backspace);
