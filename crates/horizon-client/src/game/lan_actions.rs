@@ -77,6 +77,10 @@ pub(super) struct GuestPlay {
     last_inventory: u64,
     /// `Entity.portalProcess` and `portalCooldown` (game/server_travel.rs).
     pub(super) portal: horizon_client::nether_portal::PortalState,
+    /// `ServerPlayer.wonGame`: the End poem is showing, the player waits for
+    /// its client's PERFORM_RESPAWN (`respawn_requested`).
+    pub(super) won_game: bool,
+    pub(super) respawn_requested: bool,
     /// `Player.takeXpDelay`: ticks until the next orb can be taken.
     xp_delay: u32,
     /// What last killed the guest outright (`/kill`): the death message's key.
@@ -94,11 +98,14 @@ pub(super) struct GuestPlay {
 
 /// A guest's command waiting for the hub (`LanHost::commands`).
 pub(super) struct GuestCommand {
-    conn: u32,
-    command: String,
-    permission: u8,
+    pub(super) conn: u32,
+    pub(super) command: String,
+    pub(super) permission: u8,
     /// An integrated server's: no level teleports (yet).
-    integrated: bool,
+    pub(super) integrated: bool,
+    /// A mod's quiet command (game/lan_quiet.rs): its output suppressed, as
+    /// `CommandSourceStack.withSuppressedOutput` does.
+    pub(super) quiet: bool,
 }
 
 /// The game's own state while a guest's is swapped in (`enter_guest`), and
@@ -872,7 +879,11 @@ impl Game<'_> {
             .filter(|g| host.hub.here(g))
             .filter(|g| {
                 g.menu.as_ref().is_some_and(|m| {
-                    m.slots.valid(&self.world) && !m.slots.still_valid(&self.world, g, m.pos)
+                    (m.slots.valid(&self.world) && !m.slots.still_valid(&self.world, g, m.pos))
+                        || m.pos.is_some_and(|k| {
+                            k.1 == super::minecarts::CART_KEY_Y
+                                && !self.chest_vehicle_still_valid(k.2, g)
+                        })
                 })
             })
             .map(|g| g.conn)
@@ -884,6 +895,35 @@ impl Game<'_> {
                 self.guest_carried_back(host, gi);
             }
         }
+    }
+
+    /// `ContainerEntity.isChestVehicleStillValid`: the chest minecart or chest
+    /// boat is still there and within the guest's entity interaction range
+    /// plus 4 of its box.
+    fn chest_vehicle_still_valid(&self, id: i32, g: &horizon_client::lan::guest::Guest) -> bool {
+        let bounds = self
+            .carts
+            .iter()
+            .find(|c| c.id as i32 == id)
+            .map(|c| c.bounds())
+            .or_else(|| {
+                self.boats
+                    .iter()
+                    .find(|b| b.id as i32 == id)
+                    .map(|b| b.bounds())
+            });
+        let Some(b) = bounds else {
+            return false;
+        };
+        let eye = [g.position[0], g.position[1] + g.eye_height(), g.position[2]];
+        let (lo, hi) = (b.min_position(), b.max_position());
+        let d = [
+            eye[0] - eye[0].clamp(lo.x, hi.x),
+            eye[1] - eye[1].clamp(lo.y, hi.y),
+            eye[2] - eye[2].clamp(lo.z, hi.z),
+        ];
+        let range = if g.creative() { 5.0 } else { 3.0 } + 4.0;
+        d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < range * range
     }
 
     /// A packet from a guest that the hub does not handle itself.
@@ -1192,6 +1232,10 @@ impl Game<'_> {
                 {
                     self.container_changed(key);
                 }
+                // A vehicle's menu edits the vehicle's own items.
+                if let Some(Slots::Block(key)) = slots {
+                    self.store_cart_items(key);
+                }
                 self.drop_guest_items(host, gi, drops);
             }
             S::ContainerClose(p) => {
@@ -1206,6 +1250,9 @@ impl Game<'_> {
                 self.guest_carried_back(host, gi);
             }
             S::ChatCommand(c) => self.guest_chat_command(host, conn, &c.command),
+            S::CustomPayload(p) if p.channel == horizon_protocol::quiet::CHANNEL => {
+                self.guest_quiet_commands(host, conn, &p.data)
+            }
             S::ChatCommandSigned(p) => self.guest_signed_command(host, conn, p),
             S::ChangeDifficulty(p) if host.hub.guests[gi].permission >= 2 => {
                 if !self.level.difficulty_locked && (0..=3).contains(&p.difficulty) {
@@ -1304,6 +1351,13 @@ impl Game<'_> {
                 self.guest_suggestions(host, conn, &payload);
             }
             S::PlaceRecipe(p) => self.lan_place_recipe(host, conn, &p),
+            // handleClientCommand: PERFORM_RESPAWN after the poem leaves the End
+            // (the next server tick sends the player on).
+            S::ClientCommand(c)
+                if c.action == 0 && host.play.get(&conn).is_some_and(|p| p.won_game) =>
+            {
+                host.play.entry(conn).or_default().respawn_requested = true;
+            }
             S::ClientCommand(c) if c.action == 0 => self.guest_respawn(host, conn),
             // ServerStatsCounter.sendStats.
             S::ClientCommand(c) if c.action == 1 => {
@@ -1559,6 +1613,7 @@ impl Game<'_> {
             command: command.trim_start_matches('/').to_owned(),
             permission,
             integrated,
+            quiet: false,
         });
     }
 
@@ -1573,39 +1628,52 @@ impl Game<'_> {
                 return;
             }
             let c = host.commands.remove(0);
-            let mut host = self.lan.take().expect("checked above");
-            let Some(swap) = self.enter_guest(&mut host, c.conn) else {
-                self.lan = Some(host);
-                continue;
-            };
-            self.lan = Some(host);
-            self.chat_capture = Some(Vec::new());
-            let level = std::mem::replace(&mut self.ui.registries.permission, c.permission);
-            self.run_command(&c.command);
-            self.ui.registries.permission = level;
-            let lines = self.chat_capture.take().unwrap_or_default();
-            let mut host = self.lan.take().expect("a command puts the hub back");
-            self.leave_guest(&mut host, swap);
-            host.hub.sync_all_effects();
-            if !c.integrated {
-                // A teleport into another level happens before its feedback is sent.
-                self.run_level_teleports(&mut host);
-            }
-            // What the command earned is announced before its feedback.
-            self.announce_guest_advancements(&mut host);
-            for line in lines {
-                host.hub.send_to(
-                    c.conn,
-                    &C::SystemChat(play::SystemChat {
-                        content: horizon_client::lan::data::component_nbt(&line.component()),
-                        overlay: false,
-                    }),
-                );
-            }
-            // The other operators hear of it; never the player whose command it was.
-            self.send_admin_feedback(&mut host, Some(c.conn));
-            self.lan = Some(host);
+            self.run_guest_command(c);
         }
+    }
+
+    /// One guest's command as that guest, its feedback sent to them; false
+    /// when it failed (or the guest is gone).
+    pub(super) fn run_guest_command(&mut self, c: GuestCommand) -> bool {
+        let Some(mut host) = self.lan.take() else {
+            return false;
+        };
+        let Some(swap) = self.enter_guest(&mut host, c.conn) else {
+            self.lan = Some(host);
+            return false;
+        };
+        self.lan = Some(host);
+        self.chat_capture = Some(Vec::new());
+        let level = std::mem::replace(&mut self.ui.registries.permission, c.permission);
+        let ok = if c.quiet {
+            self.run_command_quietly(&c.command)
+        } else {
+            self.run_command(&c.command)
+        };
+        self.ui.registries.permission = level;
+        let lines = self.chat_capture.take().unwrap_or_default();
+        let mut host = self.lan.take().expect("a command puts the hub back");
+        self.leave_guest(&mut host, swap);
+        host.hub.sync_all_effects();
+        if !c.integrated {
+            // A teleport into another level happens before its feedback is sent.
+            self.run_level_teleports(&mut host);
+        }
+        // What the command earned is announced before its feedback.
+        self.announce_guest_advancements(&mut host);
+        for line in lines {
+            host.hub.send_to(
+                c.conn,
+                &C::SystemChat(play::SystemChat {
+                    content: horizon_client::lan::data::component_nbt(&line.component()),
+                    overlay: false,
+                }),
+            );
+        }
+        // The other operators hear of it; never the player whose command it was.
+        self.send_admin_feedback(&mut host, Some(c.conn));
+        self.lan = Some(host);
+        ok
     }
 
     /// The `broadcastToAdmins` lines a command queued (`source`: the guest
@@ -1835,6 +1903,10 @@ impl Game<'_> {
                 continue;
             }
             if self.on_server_trip(conn) {
+                // LivingEntity.hurt kills at once (die), whether the level
+                // has loaded around the player or not: its respawn request
+                // is taken as soon as it comes.
+                self.guest_die(host, gi, conn);
                 continue;
             }
             let play = host.play.entry(conn).or_default();
@@ -1920,69 +1992,72 @@ impl Game<'_> {
             self.guest_dig_feedback(host, conn);
             self.guest_pickups(host, gi);
             self.guest_orbs(host, gi);
-            if host.hub.guests[gi].health <= 0.0 && !host.hub.guests[gi].dead {
-                self.guest_forget_digging(host, conn);
-                // FishingHook.shouldStopFishing: its owner is dead.
-                if let Some(play) = host.play.get_mut(&conn) {
-                    play.hook = None;
-                }
+            self.guest_die(host, gi, conn);
+        }
+    }
+
+    /// `ServerPlayer.die` for a guest whose health has run out: the death
+    /// message, the loot and experience, the death screen.
+    fn guest_die(&mut self, host: &mut LanHost, gi: usize, conn: u32) {
+        if host.hub.guests[gi].health <= 0.0 && !host.hub.guests[gi].dead {
+            self.guest_forget_digging(host, conn);
+            // FishingHook.shouldStopFishing: its owner is dead.
+            if let Some(play) = host.play.get_mut(&conn) {
+                play.hook = None;
             }
-            let g = &mut host.hub.guests[gi];
-            if g.health <= 0.0 && !g.dead {
-                g.dead = true;
-                g.last_death = Some(g.position.map(|v| v.floor() as i32));
-                let (id, at) = (g.entity_id, g.position);
-                let reward = Experience {
-                    level: g.xp_level,
-                    progress: g.xp_progress,
-                    total: g.xp_total,
-                }
-                .death_reward(self.ui.rules.bool("keep_inventory") || g.game_mode == SPECTATOR);
-                let (name, uuid) = (g.name.clone(), g.uuid);
-                // ServerPlayer.die: dropAllDeathLoot unless a spectator, from the eyes less 0.3.
-                let drops = (g.game_mode != SPECTATOR)
-                    .then(|| [at[0], at[1] + g.eye_height() - 0.3, at[2]]);
-                let cause = host.play.get_mut(&conn).and_then(|p| p.death_cause.take());
-                // ServerPlayer.die: with showDeathMessages, the message goes to
-                // the dying player's death screen and to everyone the team lets
-                // see it; without it, the death screen gets an empty one.
-                let message = if self.ui.rules.bool("show_death_messages") {
-                    let me = self.player_text(&name, uuid);
-                    let text = match cause {
-                        Some(key) => horizon_client::text::Text::translate(&key, &[me]),
-                        None if at[1] < f64::from(horizon_client::chunk::MIN_Y - 64) => {
-                            horizon_client::text::Text::translate("death.attack.outOfWorld", &[me])
-                        }
-                        None => self.guest_death_message(conn, me),
-                    };
-                    let message = horizon_client::lan::data::component_nbt(&text.component());
-                    let team = self.score.board.players_team(&name);
-                    if horizon_client::scoreboard::own_death_message_shown(team) {
-                        host.hub.system_message(message.clone());
-                        if self.options.dedicated.is_some() {
-                            super::dedicated::log(
-                                "INFO",
-                                &format!("System chat: {}", text.plain()),
-                            );
-                        } else if self.player.is_some() {
-                            self.system_message(text);
-                        }
+        }
+        let g = &mut host.hub.guests[gi];
+        if g.health <= 0.0 && !g.dead {
+            g.dead = true;
+            g.last_death = Some(g.position.map(|v| v.floor() as i32));
+            let (id, at) = (g.entity_id, g.position);
+            let reward = Experience {
+                level: g.xp_level,
+                progress: g.xp_progress,
+                total: g.xp_total,
+            }
+            .death_reward(self.ui.rules.bool("keep_inventory") || g.game_mode == SPECTATOR);
+            let (name, uuid) = (g.name.clone(), g.uuid);
+            // ServerPlayer.die: dropAllDeathLoot unless a spectator, from the eyes less 0.3.
+            let drops =
+                (g.game_mode != SPECTATOR).then(|| [at[0], at[1] + g.eye_height() - 0.3, at[2]]);
+            let cause = host.play.get_mut(&conn).and_then(|p| p.death_cause.take());
+            // ServerPlayer.die: with showDeathMessages, the message goes to
+            // the dying player's death screen and to everyone the team lets
+            // see it; without it, the death screen gets an empty one.
+            let message = if self.ui.rules.bool("show_death_messages") {
+                let me = self.player_text(&name, uuid);
+                let text = match cause {
+                    Some(key) => horizon_client::text::Text::translate(&key, &[me]),
+                    None if at[1] < f64::from(horizon_client::chunk::MIN_Y - 64) => {
+                        horizon_client::text::Text::translate("death.attack.outOfWorld", &[me])
                     }
-                    message
-                } else {
-                    literal("")
+                    None => self.guest_death_message(conn, me),
                 };
-                host.hub.send_to(
-                    conn,
-                    &C::PlayerCombatKill(play::PlayerCombatKill { id, message }),
-                );
-                // LivingEntity.die: the death animation, the dying player included.
-                host.hub.entity_event(id, 3, at);
-                if let Some(eyes) = drops {
-                    self.as_guest(host, conn, |game| game.drop_inventory(eyes));
+                let message = horizon_client::lan::data::component_nbt(&text.component());
+                let team = self.score.board.players_team(&name);
+                if horizon_client::scoreboard::own_death_message_shown(team) {
+                    host.hub.system_message(message.clone());
+                    if self.options.dedicated.is_some() {
+                        super::dedicated::log("INFO", &format!("System chat: {}", text.plain()));
+                    } else if self.player.is_some() {
+                        self.system_message(text);
+                    }
                 }
-                self.spawn_orbs(at, reward);
+                message
+            } else {
+                literal("")
+            };
+            host.hub.send_to(
+                conn,
+                &C::PlayerCombatKill(play::PlayerCombatKill { id, message }),
+            );
+            // LivingEntity.die: the death animation, the dying player included.
+            host.hub.entity_event(id, 3, at);
+            if let Some(eyes) = drops {
+                self.as_guest(host, conn, |game| game.drop_inventory(eyes));
             }
+            self.spawn_orbs(at, reward);
         }
     }
 
@@ -2180,6 +2255,9 @@ impl Game<'_> {
             let _ = w.tick_environment_damage();
             let _ = w.apply_fire_contact();
             let _ = w.server_hazards_tick(in_wall);
+            // Player.tick ends with updatePlayerPose: a swimmer, or a player
+            // crawling under a block, takes the short box its moves are checked with.
+            let _ = w.update_player_pose();
             let mut events = std::mem::take(&mut w.player.events);
             // LayeredCauldronBlock.handleEntityOnFireInside along those moves.
             for event in &events {
@@ -2223,6 +2301,7 @@ impl Game<'_> {
             let marked = std::mem::take(&mut player.health.sync_velocity);
             let velocity = marked.then_some(player.velocity);
             game.record_combat(&events);
+            game.wear_armor(&events);
             (events, velocity)
         });
         let Some((events, marked)) = events else {
@@ -2316,9 +2395,13 @@ impl Game<'_> {
             }
             if (next / 10) % 2 == 0
                 && !creative
-                && let Some(elytra) = game.armor[1].as_mut()
+                && let Some(stack) = game.armor[1].clone()
             {
-                elytra.damage += 1;
+                // `ItemStack.hurtAndBreak`: Unbreaking can save the wear.
+                let loss = game.durability_loss(&stack, 1);
+                if let Some(elytra) = game.armor[1].as_mut() {
+                    elytra.damage += loss;
+                }
             }
             let ctx = game.player_context(None);
             game.post_game_event("minecraft:elytra_glide", at, ctx);
@@ -2581,7 +2664,13 @@ impl Game<'_> {
             .random
             .next_int_bound(touching.len() as i32)
             .unwrap_or(0) as usize;
-        let orb = self.orbs.remove(touching[pick]);
+        // A merged orb gives its value once per count and goes at zero.
+        let orb = self.orbs[touching[pick]].clone();
+        if orb.count <= 1 {
+            self.orbs.remove(touching[pick]);
+        } else {
+            self.orbs[touching[pick]].count -= 1;
+        }
         play.xp_delay = 2;
         host.hub.take_item(orb.id as i32, id, 1, at);
         // ClientPacketListener.handleTakeItemEntity's sound, at the orb.

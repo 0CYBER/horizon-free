@@ -72,6 +72,8 @@ pub fn register_vindicator(m: &mut Mob) {
     let g = &mut m.ai.goals;
     g.add(0, Float);
     g.add(1, avoid_creaking(1.0, 1.2));
+    g.add(2, super::doors::BreakDoor::vindicator());
+    g.add(3, super::doors::RaiderOpenDoor::default());
     g.add(4, super::raider::HoldGroundAttack::new(10.0));
     g.add(5, MeleeAttack::new(1.0, false));
     g.add(8, Stroll::new(0.6));
@@ -85,6 +87,13 @@ pub fn register_vindicator(m: &mut Mob) {
             .interval(0)
             .when(|m, _| m.custom_name.as_deref() == Some("Johnny")),
     );
+}
+/// `Vindicator.customServerAiStep`: its navigation opens doors while a raid
+/// is at its position.
+pub fn vindicator_server_ai_step(m: &mut Mob) {
+    if super::doors::can_navigate_ground(m) {
+        m.ai.nav.can_open_doors = super::raider::state(m).is_some_and(|s| s.raided);
+    }
 }
 // Evoker state: `counter` spellCastingTickCount, `variant2` the spell
 // being cast (0 none, 1 vexes, 2 fangs, 3 wololo), `counter2` the wololo
@@ -179,8 +188,8 @@ impl Goal for UseSpell {
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         let age = i64::from(m.age);
         if self.spell == Spell::Wololo {
-            // EvokerWololoSpellGoal.canUse: a blue sheep within 16 (4 up or
-            // down), no target, griefing on.
+            // EvokerWololoSpellGoal.canUse: a blue sheep within the box
+            // (16 sideways, 4 up or down) and `range(16)`, no target, griefing on.
             if m.ai.target.is_some() || m.extra.counter > 0 || age < self.next || !cx.w.mob_griefing
             {
                 return false;
@@ -196,6 +205,7 @@ impl Goal for UseSpell {
                             && (s.position.x - p.x).abs() <= 16.0
                             && (s.position.y - p.y).abs() <= 4.0
                             && (s.position.z - p.z).abs() <= 16.0
+                            && s.position.distance_squared(p) <= 16.0 * 16.0
                     })
                     .map(|s| s.id)
                     .collect();
@@ -210,7 +220,8 @@ impl Goal for UseSpell {
             return false;
         }
         if self.spell == Spell::Vexes {
-            // EvokerSummonSpellGoal: fewer vexes nearby than a roll of 1..8.
+            // EvokerSummonSpellGoal: fewer vexes within `range(16)` than a
+            // roll of 1..8.
             let p = m.position;
             let vexes =
                 cx.w.others
@@ -218,7 +229,7 @@ impl Goal for UseSpell {
                     .filter(|s| {
                         s.species == Species::Vex
                             && s.alive
-                            && s.position.distance_squared(p) <= 16.0 * 16.0 * 3.0
+                            && s.position.distance_squared(p) <= 16.0 * 16.0
                     })
                     .count() as i32;
             return m.random.next_int_bound(8).unwrap_or(0) + 1 > vexes;

@@ -34,6 +34,22 @@ Not breaking: a new function, interface, capability, command, endpoint, tool or 
 argument or JSON field (readers must ignore fields they don't know); a new WIT function or type (mods built earlier
 don't import it); faster, or fixing behaviour to what the reference already says.
 
+### Mod API levels
+
+A new WIT function doesn't break older mods, but a mod that calls it can't run on a Horizon from before it. So every
+function the game offers mods has an **API level**, the one it arrived at (`crates/horizon-mods/src/api_level.rs`):
+level 0 is the contract of Horizon 0.2.67 to 0.2.69, level 1 adds `render.set-minimap` and server mods' `players`, level 2 `game.raycast`, level 3 `command.run-quiet`, level 4 server mods' `world`. A mod needs the level of
+the newest function it imports (a component imports only the functions it calls). The level is read from the file,
+never declared:
+
+- the game refuses a mod that needs a function it doesn't have, with "made for a newer Horizon (it uses
+  render.set-minimap): update Horizon to run it", instead of a linking error;
+- the registry's CI writes each mod version's level into the index (`api_level`), and installers take the newest
+  version the running game can run.
+
+A pull request that adds a function lists it in `api_level.rs` at the next level and raises `LEVEL`; the
+`api_reference` test fails until it does.
+
 ## Stability levels
 
 Every part of an API has one level, shown in its reference and its surface page.

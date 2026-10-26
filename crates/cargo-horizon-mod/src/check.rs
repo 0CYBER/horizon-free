@@ -47,6 +47,7 @@ impl Report {
             "api": self.facts.api,
             "side": self.facts.side,
             "capabilities": self.facts.capabilities,
+            "api_level": self.facts.api_level,
             "game": self.facts.game,
             "requires": requires,
             "sha256": self.sha256,
@@ -70,6 +71,8 @@ impl Report {
         if let Some(side) = f.side {
             let side = serde_json::to_value(side).unwrap_or_default();
             out += &format!(", API {}, {}", f.api, side.as_str().unwrap_or("?"));
+        } else if self.kind == Kind::Shader {
+            out += &format!(", shader API {}", f.api);
         } else if !f.api.is_empty() {
             out += &format!(", format {}", f.api);
         }
@@ -85,6 +88,9 @@ impl Report {
             ")\n  {} bytes, SHA-256 {}, {signed}\n",
             self.size, self.sha256
         );
+        if let Some(level) = f.api_level {
+            out += &format!("  needs mod API level {level} or newer\n");
+        }
         for c in &f.capabilities {
             out += &format!("  may {}\n", c.describe());
         }
@@ -114,6 +120,7 @@ pub fn kind_of(path: &Path) -> Option<Kind> {
         "hmod" => Some(Kind::Mod),
         "hpack" => Some(Kind::Modpack),
         "zip" => Some(Kind::ResourcePack),
+        "hshader" => Some(Kind::Shader),
         _ => None,
     }
 }
@@ -255,6 +262,9 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
                 format!("{}: {text}", if error { "error" } else { "feedback" })
             }
             Output::Command { line } => format!("command: /{line}"),
+            Output::QuietCommands { lines, .. } => {
+                format!("{} quiet command(s)", lines.len())
+            }
             Output::Stopped { reason, .. } => return Err(format!("it stopped: {reason}")),
             Output::SetBlocks {
                 dimension, blocks, ..
@@ -317,7 +327,7 @@ mod tests {
         .unwrap();
         assert!(e.contains("signature"), "{e}");
         let e = check(&pack, Kind::Shader, None, None).err().unwrap();
-        assert!(e.contains("shader packs open"), "{e}");
+        assert!(e.contains("horizon-shaders.toml"), "{e}");
         assert!(check(&pack, Kind::Mod, None, None).is_err());
     }
 }

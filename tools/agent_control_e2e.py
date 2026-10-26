@@ -75,6 +75,8 @@ def game_env(screen, home=None):
         extra['HORIZON_HOME'] = home
     if sys.platform == 'darwin':
         return lab.game_env(**extra)
+    if not shutil.which('vscreen') and os.environ.get('DISPLAY'):
+        return lab.game_env(**extra)
     env = lab.game_env(VSCREEN=screen, **extra)
     subprocess.run(['vscreen', 'up'], env=env, check=False, capture_output=True)
     text = subprocess.run(['vscreen', 'env'], env=env, capture_output=True, text=True, check=True).stdout

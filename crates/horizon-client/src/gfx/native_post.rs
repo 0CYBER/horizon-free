@@ -3,7 +3,8 @@
 //! the pack's options as pipeline constants. A pass reads bind group 3: the frame, the world's
 //! colour and depth, the previous pass's output and two samplers. Passes before the last write
 //! half-float targets of the world's size, so values over 1 carry to the next; the last draws
-//! onto the screen.
+//! onto the screen. Every stage of a pack reads the same `frame`, written once a frame
+//! (`NativeFrame`).
 
 use glam::{Mat4, Vec3};
 use horizon_shader_api::{Frame as FrameInputs, check::CheckedStage, stages::GROUP};
@@ -25,12 +26,87 @@ pub struct NativePost {
     targets: Option<([u32; 2], [wgpu::TextureView; 2])>,
     /// One bind group per pass, for these world views.
     groups: Option<(WorldViews, Vec<wgpu::BindGroup>)>,
-    start: std::time::Instant,
-    frames: u32,
     /// The screen's colour format, the world target's too.
     format: wgpu::TextureFormat,
-    /// GPU time of each pass, while the renderer asks for it (`pack_timing.rs`).
-    pub timing: Option<super::pack_timing::PassTiming>,
+}
+
+/// The `frame` every stage of a pack reads (group 3, binding 0), written once a frame.
+pub struct NativeFrame {
+    pub(super) buffer: wgpu::Buffer,
+    /// Group 3 of the stages that read only the frame (the sky).
+    pub layout: wgpu::BindGroupLayout,
+    pub group: wgpu::BindGroup,
+    start: std::time::Instant,
+    frames: u32,
+}
+
+/// The uniform `frame` at binding 0, read by `visibility`.
+fn frame_entry(visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding: 0,
+        visibility,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: wgpu::BufferSize::new(size_of::<FrameInputs>() as u64),
+        },
+        count: None,
+    }
+}
+
+impl NativeFrame {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Native shader pack frame"),
+            size: size_of::<FrameInputs>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Native shader pack frame"),
+            entries: &[frame_entry(wgpu::ShaderStages::VERTEX_FRAGMENT)],
+        });
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Native shader pack frame"),
+            layout: &layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
+        });
+        Self {
+            buffer,
+            layout,
+            group,
+            start: std::time::Instant::now(),
+            frames: 0,
+        }
+    }
+
+    /// Writes this frame's inputs, for a world of `size`.
+    pub fn write(&mut self, queue: &wgpu::Queue, frame: &Frame, size: [u32; 2]) {
+        let seconds = self.start.elapsed().as_secs_f32() % 3600.0;
+        let inputs = frame_inputs(frame, size, seconds, self.frames);
+        self.frames = self.frames.wrapping_add(1);
+        queue.write_buffer(&self.buffer, 0, bytemuck::bytes_of(&inputs));
+    }
+}
+
+/// The option values of `constants` that `module` declares as overrides (wgpu refuses others).
+pub fn present_constants<'a>(
+    module: &naga::Module,
+    constants: &'a [(String, f64)],
+) -> Vec<(&'a str, f64)> {
+    constants
+        .iter()
+        .filter(|(id, _)| {
+            module
+                .overrides
+                .iter()
+                .any(|(_, o)| o.name.as_ref() == Some(id))
+        })
+        .map(|(id, v)| (id.as_str(), *v))
+        .collect()
 }
 
 fn texture_entry(binding: u32, sample_type: wgpu::TextureSampleType) -> wgpu::BindGroupLayoutEntry {
@@ -63,21 +139,13 @@ impl NativePost {
         stages: Vec<CheckedStage>,
         constants: &[(String, f64)],
         format: wgpu::TextureFormat,
+        frame: &NativeFrame,
     ) -> Result<Self, String> {
         let float = wgpu::TextureSampleType::Float { filterable: true };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Native shader pack post"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(size_of::<FrameInputs>() as u64),
-                    },
-                    count: None,
-                },
+                frame_entry(wgpu::ShaderStages::FRAGMENT),
                 texture_entry(1, float),
                 texture_entry(2, wgpu::TextureSampleType::Depth),
                 texture_entry(3, float),
@@ -95,17 +163,7 @@ impl NativePost {
         let count = stages.len();
         let mut passes = Vec::with_capacity(count);
         for (i, stage) in stages.into_iter().enumerate() {
-            let present: Vec<(&str, f64)> = constants
-                .iter()
-                .filter(|(id, _)| {
-                    stage
-                        .module
-                        .overrides
-                        .iter()
-                        .any(|(_, o)| o.name.as_ref() == Some(id))
-                })
-                .map(|(id, v)| (id.as_str(), *v))
-                .collect();
+            let present = present_constants(&stage.module, constants);
             let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(&stage.label),
@@ -145,12 +203,6 @@ impl NativePost {
             }
             passes.push((stage.label, pipeline));
         }
-        let frame = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Native shader pack frame"),
-            size: size_of::<FrameInputs>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
         let sampler = |label, filter| {
             device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some(label),
@@ -162,15 +214,12 @@ impl NativePost {
         Ok(Self {
             passes,
             layout,
-            frame,
+            frame: frame.buffer.clone(),
             linear: sampler("Native shader pack linear", wgpu::FilterMode::Linear),
             nearest: sampler("Native shader pack nearest", wgpu::FilterMode::Nearest),
             targets: None,
             groups: None,
-            start: std::time::Instant::now(),
-            frames: 0,
             format,
-            timing: None,
         })
     }
 
@@ -264,37 +313,18 @@ impl NativePost {
     }
 
     /// Runs the passes over the world target `world` (colour, depth) of `size`, the last onto
-    /// `screen`.
+    /// `screen`, timed by `timing` when it times this frame.
     pub fn run(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         world: (&wgpu::TextureView, &wgpu::TextureView),
         screen: &wgpu::TextureView,
-        frame: &Frame,
         size: [u32; 2],
-    ) {
-        let seconds = self.start.elapsed().as_secs_f32() % 3600.0;
-        let inputs = frame_inputs(frame, size, seconds, self.frames);
-        self.frames = self.frames.wrapping_add(1);
-        self.draw(device, queue, encoder, world, screen, &inputs, size);
-    }
-
-    fn draw(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        world: (&wgpu::TextureView, &wgpu::TextureView),
-        screen: &wgpu::TextureView,
-        inputs: &FrameInputs,
-        size: [u32; 2],
+        mut timing: Option<&mut super::pack_timing::PassTiming>,
     ) {
         self.prepare(device, world, size);
-        queue.write_buffer(&self.frame, 0, bytemuck::bytes_of(inputs));
-        if let Some(t) = &mut self.timing {
-            t.begin(device, queue);
+        if let Some(t) = timing.as_deref_mut() {
             t.mark(device, encoder, (world.0, self.format));
         }
         let Some((_, groups)) = &self.groups else {
@@ -317,7 +347,7 @@ impl NativePost {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label),
                 color_attachments: &attachments,
-                timestamp_writes: self.timing.as_mut().and_then(|t| t.writes(label)),
+                timestamp_writes: timing.as_deref_mut().and_then(|t| t.writes(label)),
                 ..Default::default()
             });
             pass.set_pipeline(pipeline);
@@ -437,8 +467,20 @@ mod tests {
             .into();
         let report = check(&Pack::from_files(files).unwrap()).unwrap();
         let format = wgpu::TextureFormat::Rgba8Unorm;
-        let mut post =
-            NativePost::new(&device, report.stages, &[("gain".into(), 1.0)], format).unwrap();
+        let frame = NativeFrame::new(&device);
+        queue.write_buffer(
+            &frame.buffer,
+            0,
+            bytemuck::bytes_of(&FrameInputs::default()),
+        );
+        let mut post = NativePost::new(
+            &device,
+            report.stages,
+            &[("gain".into(), 1.0)],
+            format,
+            &frame,
+        )
+        .unwrap();
         assert_eq!(post.labels(), ["a.wgsl", "b.wgsl"]);
 
         let usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
@@ -478,15 +520,7 @@ mod tests {
             ..Default::default()
         });
         let view = screen.create_view(&Default::default());
-        post.draw(
-            &device,
-            &queue,
-            &mut encoder,
-            (&color, &depth),
-            &view,
-            &FrameInputs::default(),
-            [4, 4],
-        );
+        post.run(&device, &mut encoder, (&color, &depth), &view, [4, 4], None);
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT * 4),

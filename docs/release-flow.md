@@ -28,12 +28,18 @@ The job is `.github/workflows/parity.yml`, a reusable workflow: `checks` calls i
 repository, `run-parity.yml` for a fork's pull request a maintainer labels `run-parity`.
 
 Horizon never downloads the game, so harnesses that compare with vanilla run only where the maintainer's own
-copy is: the Mac mini and his Linux desktop. Their runners run as the maintainer's account and keep their checkout
+copy is: the Mac mini, his Linux desktop and playhorizon (below). Their runners run as the maintainer's account and keep their checkout
 between runs (`clean: false`), so the probes build incrementally into `.local/parity-target` and earlier passes
 stand.
 
+The job tests the pull request's head merged into main's current tip, which is what merging it would land: harness
+and game fixes that reached main after the branch was made apply to it too, and an old branch runs main's runner
+scripts and selection unless it changes them. The base for the selection is that main commit, so only the pull
+request's own changes count. The job summary names the main commit. A head that conflicts with main is tested
+alone, with a warning. The check is still reported on the head.
+
 1. `tools/ci/runner-env.sh` puts the machine's Python 3.13 and the JDK `research-lock.json` pins on the PATH
-   (Homebrew and `java_home` on the Mac; on NixOS what `linux-runner.sh` pinned, else nixpkgs), and sccache when
+   (Homebrew and `java_home` on the Mac; on Linux what `linux-runner.sh` pinned, else nixpkgs), and sccache when
    the machine has it.
 2. `tools/ci/vanilla-data.sh` links `.local/` to the runner's copy of the vanilla data, cloned once from
    `~/code/horizon-parity/shared-local` into `~/.actions-runners/horizon/_work/horizon/shared-local`, and
@@ -50,9 +56,6 @@ stand.
    modules, Java oracles and every Rust source their probes compile) changed since the merge base, plus any
    harness nothing is recorded about yet, and runs those that have no pass for their current inputs. A change to
    `Cargo.lock` or `research-lock.json` affects every harness. Each harness has 25 minutes, the job 45.
-   The selection runs with main's `tools/parity.py` and `tools/parity_reach.py` (`--changed <base> --list`), so a
-   branch made before a better selection landed gets it too, and the head's own `parity.py` then runs the named
-   harnesses. A branch that changes either file selects with its own code.
 
 Failed harnesses' logs are uploaded as the `parity-logs` artifact.
 
@@ -93,6 +96,15 @@ runner's `.env` and `.path` give their jobs Python, the JDK and the vanilla data
 same. The nightly audit and parity-main stay on the Mac mini's runners: the audit compares with the previous night,
 so it stays on one platform, and a parity-main job slowed down on the desktop because he came back could time out,
 and its failures bisect and comment on merges.
+
+**playhorizon's runner.** `playhorizon-horizon` runs on a server a hosting partner lends the project (Ubuntu, 8
+AMD EPYC threads, 30 GB, in Detroit; reachable only through the maintainer's tailnet). Nobody sits at it, so the
+watcher never pauses it except by hand, and it gets the machine: `RUNNER_CPUS=7 RUNNER_MEMORY=24 RUNNER_JOBS=6`.
+Without Nix, `linux-runner.sh` takes the build libraries, the JDK, sccache, Xvfb and Mesa's software Vulkan
+(lavapipe; there is no GPU) from apt, and Python 3.13 from uv. The partner can reach the machine, so gh is not
+logged in there: the registration token comes from another machine (`RUNNER_TOKEN`), and no job with secrets may
+run there (parity has none). It is also a parity host (`playhorizon` in `tools/parity_hosts.json`, 6 jobs). Like
+the desktop's, it gets the `horizon-game` label only once a full trial has passed there.
 
 ## Merging
 

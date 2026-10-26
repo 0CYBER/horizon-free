@@ -18,7 +18,8 @@ interface log {
     write: func(level: level, message: string);
 }
 
-/// Capability `game-read`: the local player and the world clock.
+/// Capability `game-read`: the local player, the world clock and the block
+/// the player looks at.
 interface game {
     record player {
         /// Feet position, in blocks.
@@ -46,6 +47,24 @@ interface game {
     get-player: func() -> option<player>;
     /// None on the title screen.
     get-clock: func() -> option<clock>;
+    /// A block along the player's view.
+    record hit {
+        /// The block hit.
+        block-x: s32,
+        block-y: s32,
+        block-z: s32,
+        /// The point on its face where the view meets it.
+        x: f64,
+        y: f64,
+        z: f64,
+        /// `minecraft:stone`, ...
+        block: string,
+    }
+    /// The first block along the player's view (fluids pass), up to
+    /// `distance` blocks (at most 1024; past the loaded chunks, across the
+    /// distant terrain when LOD Distance is on), as of this tick. None when
+    /// nothing is hit, and on the title screen.
+    raycast: func(distance: f32) -> option<hit>;
 }
 
 /// Capability `chat`: messages only the local player sees.
@@ -92,6 +111,14 @@ interface storage {
 interface command {
     /// `line` without its slash; its feedback goes to the chat as if typed.
     run: func(line: string);
+    /// `lines` (each without its slash, at most 256 a call) as `run` does,
+    /// but with nothing in the chat: no feedback and no failure. In single
+    /// player and on Horizon's servers, each runs exactly as the player
+    /// typing it would (the same rights), in order, 64 a tick, and the
+    /// server logs one line a batch; one that carries a chat message (`say`,
+    /// `msg`) is refused. On any other server they go as chat commands, and
+    /// there their feedback shows: a mod running many should say so.
+    run-quiet: func(lines: list<string>);
 }
 
 /// Capability `ui`: widgets the game draws with its own menus' widgets, for

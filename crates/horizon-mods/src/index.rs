@@ -47,8 +47,8 @@ pub enum Kind {
     Modpack,
     /// A resource pack (`.zip` with `pack.mcmeta`) made or tested for Horizon.
     ResourcePack,
-    /// A Horizon shader pack (the native WGSL format, not Iris or OptiFine
-    /// packs). Listed by the schema; submissions open with its API.
+    /// A Horizon shader pack (`.hshader`, the native WGSL format of
+    /// docs/shaders.md; not the shaders/-folder packs, which stay on Modrinth).
     Shader,
     Other(String),
 }
@@ -69,7 +69,8 @@ impl Kind {
         match self {
             Kind::Mod => Some("hmod"),
             Kind::Modpack => Some("hpack"),
-            Kind::ResourcePack | Kind::Shader => Some("zip"),
+            Kind::ResourcePack => Some("zip"),
+            Kind::Shader => Some(horizon_shader_api::EXTENSION),
             Kind::Other(_) => None,
         }
     }
@@ -121,6 +122,14 @@ pub struct Project {
     pub key: Option<String>,
     /// Newest first.
     pub versions: Vec<Version>,
+    /// Its files' downloads from their releases, all versions together:
+    /// GitHub's counts, added by the registry's publish job (hourly).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub downloads: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -137,6 +146,11 @@ pub struct Version {
     pub side: Option<Side>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<Capability>,
+    /// The mod API level a mod's code needs ([`crate::api_level`]), read
+    /// from its file; none for content and other kinds, and in indexes
+    /// built before levels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_level: Option<u32>,
     /// The Minecraft version it is for.
     pub game: String,
     /// A modpack's mods, as its manifest lists them.
@@ -316,6 +330,21 @@ impl Index {
         Ok(())
     }
 
+    /// A project's newest version for Minecraft `game` that wasn't taken
+    /// down and that a Horizon serving mod API `level` can run (an unknown
+    /// level counts as runnable: the game still checks when it starts it).
+    pub fn installable<'a>(
+        &self,
+        project: &'a Project,
+        game: &str,
+        level: u32,
+    ) -> Option<&'a Version> {
+        project.versions.iter().find(|v| {
+            v.game == game
+                && v.api_level.is_none_or(|l| l <= level)
+                && self.revoked(&project.id, &v.file.sha256).is_none()
+        })
+    }
     pub fn project(&self, id: &str) -> Option<&Project> {
         self.projects.iter().find(|p| p.id == id)
     }
@@ -448,7 +477,7 @@ pub fn check_file(
         (None, None) => Trust::Unsigned,
         _ => return Err("its signature and the project's key don't go together".into()),
     };
-    if matches!(project.kind, Kind::Shader | Kind::Other(_)) {
+    if matches!(project.kind, Kind::Other(_)) {
         return Err(format!(
             "this Horizon can't install a {} yet",
             project.kind.name()
@@ -471,6 +500,8 @@ pub struct Facts {
     pub side: Option<Side>,
     /// In the manifest's order.
     pub capabilities: Vec<Capability>,
+    /// The mod API level a mod's code needs, from the functions it imports.
+    pub api_level: Option<u32>,
     /// The Minecraft version, when the file names one (a modpack does).
     pub game: Option<String>,
     pub requires: Vec<Requirement>,
@@ -487,6 +518,7 @@ impl Facts {
             || self.api != version.api
             || self.side != version.side
             || caps != listed
+            || version.api_level.is_some() && self.api_level != version.api_level
             || self.game.as_ref().is_some_and(|g| *g != version.game)
             || self.requires != version.requires;
         if !differs {
@@ -502,6 +534,13 @@ impl Facts {
                 names(&self.capabilities)
             ),
             Kind::Modpack => format!("its {} isn't what the index lists", modpack::MANIFEST),
+            Kind::Shader => format!(
+                "its {} ({} {}, shader API {}) isn't what the index lists",
+                horizon_shader_api::MANIFEST,
+                self.id.as_deref().unwrap_or("?"),
+                self.version.as_deref().unwrap_or("?"),
+                self.api
+            ),
             _ => format!("its pack format {} isn't what the index lists", self.api),
         })
     }
@@ -509,14 +548,22 @@ impl Facts {
 
 /// Reads and checks a file as its kind: a mod's manifest and content, a
 /// modpack's manifest and overrides, a resource pack's `pack.mcmeta` and
-/// paths. Shader packs and kinds this build doesn't know are refused: their
-/// checks come with their formats.
+/// paths, a shader pack's `horizon_shader_api::check` (the game's own). Kinds
+/// this build doesn't know are refused: their checks come with their formats.
 pub fn inspect(kind: &Kind, path: &Path) -> Result<Facts, String> {
     match kind {
         Kind::Mod => {
-            let m = Package::read(path)?.manifest;
+            let Package { manifest: m, wasm } = Package::read(path)?;
             crate::Content::read(path, &m)?;
+            let api_level = match wasm {
+                Some(wasm) => {
+                    let functions = crate::api_level::imports(&wasm)?;
+                    Some(crate::api_level::needed(functions.iter().map(String::as_str)).0)
+                }
+                None => None,
+            };
             Ok(Facts {
+                api_level,
                 capabilities: m.capabilities,
                 id: Some(m.id),
                 version: Some(m.version),
@@ -540,9 +587,23 @@ pub fn inspect(kind: &Kind, path: &Path) -> Result<Facts, String> {
             api: check_resource_pack(path)?,
             ..Facts::default()
         }),
-        Kind::Shader => Err(
-            "Horizon's own shader pack format isn't out yet: shader packs open when it is".into(),
-        ),
+        Kind::Shader => {
+            let pack = horizon_shader_api::Pack::read(path)?;
+            if let Err(problems) = horizon_shader_api::check(&pack) {
+                let lines: Vec<String> = problems.iter().map(ToString::to_string).collect();
+                return Err(format!(
+                    "the shader pack fails its check:\n{}",
+                    lines.join("\n")
+                ));
+            }
+            let m = pack.manifest;
+            Ok(Facts {
+                id: Some(m.id),
+                version: Some(m.version),
+                api: m.api,
+                ..Facts::default()
+            })
+        }
         Kind::Other(name) => Err(format!("this Horizon can't read a {name} yet")),
     }
 }
@@ -591,14 +652,11 @@ fn check_resource_pack(path: &Path) -> Result<String, String> {
     Ok(format)
 }
 
-/// The kinds the registry takes submissions for. Shader packs wait for
-/// Horizon's own format; other kinds for theirs.
+/// The kinds the registry takes submissions for; other kinds wait for their
+/// formats.
 pub fn open(kind: &Kind) -> Result<(), String> {
     match kind {
-        Kind::Mod | Kind::Modpack | Kind::ResourcePack => Ok(()),
-        Kind::Shader => Err(
-            "shader packs open when Horizon's own shader pack format is out (Iris and OptiFine packs stay on Modrinth)".into(),
-        ),
+        Kind::Mod | Kind::Modpack | Kind::ResourcePack | Kind::Shader => Ok(()),
         Kind::Other(name) => Err(format!("the registry doesn't take {name} yet")),
     }
 }

@@ -15,10 +15,10 @@
 //! closely.
 //!
 //! YUNG's API's files are carried as written ([`crate::yung`]).
-//! Lithostitched's and CTOV's worldgen files are converted by
-//! `legacy_structure_mods`, called from [`upgrade`], [`crate::carry`] and the
-//! processors.
-use crate::{legacy_structure_mods::lithostitched, yung};
+//! Lithostitched's jigsaws, elements, modifiers and processors are carried by
+//! [`crate::lithostitched`]; the entries CTOV adds to vanilla's structure sets
+//! by `legacy_structure_mods`, called from [`crate::carry`].
+use crate::{lithostitched, yung};
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -191,28 +191,19 @@ fn drop_java_processors(list: &mut Value, dropped: &mut BTreeMap<String, usize>)
     let before = processors.len();
     processors.retain(|p| {
         let t = p["processor_type"].as_str().unwrap_or_default();
-        let java = !t.starts_with("minecraft:") && !t.starts_with("horizon:");
+        let java = !t.starts_with("minecraft:")
+            && !t.starts_with("horizon:")
+            && !lithostitched::game_reads(p);
         if java {
             *dropped.entry(t.to_owned()).or_default() += 1;
         }
         !java
     });
     let mut changed = processors.len() != before;
-    // The inline lists inside the game's apply_random and condition.
+    // The inline lists inside Lithostitched's apply_random and condition.
     for p in processors.iter_mut() {
         let inner: Vec<&mut Value> = match p["processor_type"].as_str() {
-            Some("horizon:apply_random") => p["processor_lists"]
-                .as_array_mut()
-                .into_iter()
-                .flatten()
-                .map(|e| &mut e["data"])
-                .collect(),
-            Some("horizon:condition") => {
-                let o = p.as_object_mut().into_iter().flat_map(|o| o.iter_mut());
-                o.filter(|(k, _)| *k == "then" || *k == "else")
-                    .map(|(_, v)| v)
-                    .collect()
-            }
+            Some(t) if t.starts_with("lithostitched:") => lithostitched::inner_lists(p),
             Some("horizon:pillar" | "horizon:bottom_pillar") => {
                 p.get_mut("pillar_processor_list").into_iter().collect()
             }
@@ -398,7 +389,9 @@ fn upgrade_types(
                 }
             }
             for element in elements {
-                if yung::upgrade_pool_element(element, lost) {
+                if yung::upgrade_pool_element(element, lost)
+                    || lithostitched::upgrade_pool_element(element, lost)
+                {
                     changed = true;
                     continue;
                 }
