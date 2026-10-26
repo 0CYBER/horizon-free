@@ -338,6 +338,25 @@ impl Game<'_> {
         ui.client_known = Some(known.clone());
         ui.client_version += 1;
     }
+    /// Every entry of the book, in its order (capability `recipes`).
+    #[cfg(feature = "mods")]
+    pub(super) fn recipe_book_entries(&mut self) -> Vec<Entry> {
+        self.ensure_book();
+        self.recipe_ui
+            .book
+            .as_ref()
+            .map_or_else(Vec::new, |b| b.entries.clone())
+    }
+    /// The display ids the player's book holds, and a number that changes
+    /// whenever they do (capability `recipes`).
+    #[cfg(feature = "mods")]
+    pub(super) fn recipe_book_displays(&mut self) -> (u64, Vec<i32>) {
+        self.sync_client_book();
+        (
+            self.recipe_ui.client_version,
+            self.recipe_ui.client.displays(),
+        )
+    }
     fn ensure_book(&mut self) {
         if self.recipe_ui.book.is_none() {
             let mut book = Book::build(self.res.recipes(), self.res.items());

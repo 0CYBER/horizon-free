@@ -44,6 +44,17 @@ Harnesses can also run on the Mac mini, the desktop and playhorizon (`tools/pari
 
 Harnesses a host can't run are listed in the file: `local_only` (`save_roundtrip` runs the game on a virtual screen) and each host's `exclude`. The Mac excludes nothing: vanilla's `Math.sin`, `pow`, `log` and the like don't round the same on an Apple silicon Mac as on Linux (HotSpot uses fdlibm there, Intel's stubs on x86-64), and Rust's float functions round like neither (they call the platform libm), so code that mirrors a vanilla `Math` call uses `horizon_core::jmath`, which computes what HotSpot computes on the host architecture. The ThinkPad no longer runs harnesses (2026-10-26): playhorizon is the Linux host that is always on.
 
+### Any command on playhorizon: `tools/remote.sh`
+
+For Linux work that doesn't need a whole parity run (a crate's tests, a few harnesses, a server build), `tools/remote.sh <worktree> <command...>` runs the command on playhorizon at the worktree's commit and streams its output back; its exit status is the command's. Commit and push first: the host fetches the commit from GitHub, and nothing else leaves this machine (no files, no credentials, no environment). Each worktree keeps one checkout there, `~/remote-work/<name>` with its own `target/`, so the next run only rebuilds what changed, and one run per name goes at a time. The command runs niced in the host's CI slice, pinned to CPUs 4-7 (`--cpus`; 0-3 stay free for benchmarks), with scratch game and launcher homes and the vanilla data linked as CI links it; a command naming `parity`, `lan_e2e` or `horizon-prepare` also gets `.local/horizon-client`, prepared as CI prepares it. Logs stay in `~/remote-work/<name>.logs/`; `--list` shows the checkouts, `--gc [DAYS]` removes old ones.
+
+```sh
+tools/remote.sh .claude/worktrees/my-fix cargo test -p horizon-world --lib   # 33 s, warm
+tools/remote.sh . python3 tools/parity.py food                               # 19 s warm (4 min the first time); here: 188 s, 229 CPU-seconds
+```
+
+The host is lent by a partner who keeps hypervisor access: send it no secret, token or credential, and never take a result from it as a CI result.
+
 ### Shards and Rust scopes
 
 A harness can declare, at the top level of its script:

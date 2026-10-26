@@ -81,6 +81,18 @@ pub use render_bindings::horizon::mods::render::{
     Zoom as ModZoom,
 };
 use render_bindings::{RenderHost, horizon::mods::render};
+/// Capability `recipes`'s imports (docs/mods.md): the game's recipes and items.
+mod recipes_bindings {
+    wasmtime::component::bindgen!({
+        path: "../horizon-mod-sdk/wit",
+        world: "recipes-host",
+    });
+}
+/// What capability `recipes` reads (WIT `interface recipes`).
+pub use recipes_bindings::horizon::mods::recipes::{
+    Item as RecipeItem, Kind as RecipeKind, Recipe, Stack as RecipeStack,
+};
+use recipes_bindings::{RecipesHost, horizon::mods::recipes};
 
 /// A mod's linear memory cap.
 const MEMORY: usize = 64 << 20;
@@ -138,6 +150,19 @@ pub struct Snapshot {
     /// its distance from the eye, for `game.raycast`; the game works it out
     /// only while a mod calls it ([`Mods::wants_raycast`]).
     pub view_hit: Option<(f32, Hit)>,
+    /// Every item and recipe, for capability `recipes`; the game makes them
+    /// once, and only while a mod reads them ([`Mods::wants_recipes`]).
+    pub recipes: Option<Arc<Recipes>>,
+    /// The `book-id`s of the recipes the player's book holds.
+    pub known_recipes: Arc<[i32]>,
+}
+
+/// Capability `recipes`'s tables: `items` in the registry's order, which
+/// each [`RecipeStack::item`] indexes.
+#[derive(Clone, Debug, Default)]
+pub struct Recipes {
+    pub items: Vec<RecipeItem>,
+    pub recipes: Vec<Recipe>,
 }
 
 /// Which mods a game starts: the window's game the client mods, the game
@@ -270,6 +295,8 @@ struct Running {
     hooks: Hooks,
     /// It imports `game.raycast`.
     raycasts: bool,
+    /// It imports capability `recipes`.
+    reads_recipes: bool,
 }
 
 /// A running mod's exports and the hooks its `init` asked for.
@@ -448,6 +475,8 @@ impl Mods {
                 .map_err(|e| e.to_string())?;
             RenderHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
+            RecipesHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
+                .map_err(|e| e.to_string())?;
             self.engine = Some((engine, linker));
         }
         Ok(self.engine.as_ref().expect("made above"))
@@ -567,6 +596,7 @@ impl Mods {
             ui,
             hooks,
             raycasts: functions.iter().any(|f| f == "game.raycast"),
+            reads_recipes: functions.iter().any(|f| f.starts_with("recipes.")),
         }))
     }
 
@@ -826,6 +856,13 @@ impl Mods {
         self.entries
             .iter()
             .any(|e| e.run.as_ref().is_some_and(|r| r.raycasts))
+    }
+    /// Some running mod reads capability `recipes`: the snapshot needs
+    /// [`Snapshot::recipes`] and [`Snapshot::known_recipes`].
+    pub fn wants_recipes(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|e| e.run.as_ref().is_some_and(|r| r.reads_recipes))
     }
     /// Some running mod has a `frame` hook: the game refreshes the snapshot
     /// every frame for it.
@@ -1181,6 +1218,23 @@ impl game::Host for State {
         let (at, hit) = self.snapshot.view_hit.as_ref()?;
         // NaN compares false: no hit.
         (*at <= distance.min(RAYCAST_MAX) && !distance.is_nan()).then(|| hit.clone())
+    }
+}
+impl recipes::Host for State {
+    fn items(&mut self) -> Vec<RecipeItem> {
+        self.snapshot
+            .recipes
+            .as_ref()
+            .map_or_else(Vec::new, |r| r.items.clone())
+    }
+    fn all(&mut self) -> Vec<Recipe> {
+        self.snapshot
+            .recipes
+            .as_ref()
+            .map_or_else(Vec::new, |r| r.recipes.clone())
+    }
+    fn known(&mut self) -> Vec<i32> {
+        self.snapshot.known_recipes.to_vec()
     }
 }
 impl State {
