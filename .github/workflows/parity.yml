@@ -13,6 +13,13 @@ on:
         description: The commit to check out and test
         type: string
         required: true
+      full:
+        description: >-
+          The pull request carries the full-parity label (a change every harness reaches, such as a crate split): it
+          runs on the desktop's runner only, so the Mac mini's runners stay free for the others. While the desktop is
+          in use the job waits for it.
+        type: boolean
+        default: false
 permissions:
   contents: read
 env:
@@ -21,8 +28,10 @@ env:
 
 jobs:
   parity:
-    runs-on: [self-hosted, horizon-game]
-    timeout-minutes: 120  # a change to core crates reruns ~300 harnesses: ~60-90 min on the Mac mini
+    runs-on: ${{ inputs.full && fromJSON('["self-hosted", "horizon-game", "ludodesktop"]') || fromJSON('["self-hosted", "horizon-game"]') }}
+    # A change to core crates reruns ~350 harnesses: ~60-90 min on the Mac mini, ~35 min on the desktop, longer if
+    # someone comes back to the desktop meanwhile (the job then goes on with 2 threads).
+    timeout-minutes: ${{ inputs.full && 300 || 120 }}
     steps:
       - uses: actions/checkout@v4
         with:
