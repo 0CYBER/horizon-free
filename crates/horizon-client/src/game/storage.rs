@@ -142,8 +142,10 @@ impl Game<'_> {
         let pitch = self.world.random.next_float() * 0.1 + 0.9;
         self.audio.play(sound, Some(at), 0.5, pitch);
     }
-    /// The close sound of the container block at `key`, if it has one.
-    pub(super) fn container_close_sound(&mut self, key: (i32, i32, i32)) {
+    /// The open or close sound of the container block at `key`, if it has one.
+    /// Callers play it only when the opener count crosses zero
+    /// (`ContainerOpenersCounter.onOpen` / `onClose`).
+    pub(super) fn container_edge_sound(&mut self, key: (i32, i32, i32), open: bool) {
         let name = self
             .res
             .facts()
@@ -151,13 +153,29 @@ impl Game<'_> {
             .name
             .clone();
         let sound = if is_shulker_box(&name) {
-            "minecraft:block.shulker_box.close"
+            if open {
+                "minecraft:block.shulker_box.open"
+            } else {
+                "minecraft:block.shulker_box.close"
+            }
         } else if &*name == "minecraft:ender_chest" {
-            "minecraft:block.ender_chest.close"
+            if open {
+                "minecraft:block.ender_chest.open"
+            } else {
+                "minecraft:block.ender_chest.close"
+            }
         } else if name.contains("chest") {
-            "minecraft:block.chest.close"
+            if open {
+                "minecraft:block.chest.open"
+            } else {
+                "minecraft:block.chest.close"
+            }
         } else if &*name == "minecraft:barrel" {
-            "minecraft:block.barrel.close"
+            if open {
+                "minecraft:block.barrel.open"
+            } else {
+                "minecraft:block.barrel.close"
+            }
         } else {
             return;
         };
