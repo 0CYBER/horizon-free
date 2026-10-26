@@ -743,8 +743,9 @@ pub fn perform_ranged_attack(m: &mut Mob, who: Who, cx: &mut Cx, power: f32) {
     let zd = t.position.z - m.position.z;
     let dist = (xd * xd + zd * zd).sqrt();
     // AbstractArrow.setBaseDamageFromMob: power * 2 + triangle(difficulty * 0.11, 0.57425).
+    let id = i32::from(cx.w.difficulty.id);
     let mut arrow_random = crate::projectiles::own_random(m);
-    let base = f64::from(power) * 2.0 + arrow_random.triangle(2.0 * 0.11, 0.574_25);
+    let base = f64::from(power) * 2.0 + arrow_random.triangle(f64::from(id) * 0.11, 0.574_25);
     let effect = match m.species() {
         Species::Stray => Some(("minecraft:slowness", 600)),
         Species::Bogged => Some(("minecraft:poison", 100)),
@@ -765,7 +766,7 @@ pub fn perform_ranged_attack(m: &mut Mob, who: Who, cx: &mut Cx, power: f32) {
         &mut arrow_random,
         [xd, yd + dist * 0.2, zd],
         1.6,
-        (14 - 2 * 4) as f32,
+        (14 - id * 4) as f32,
     );
     cx.events.push(MobEvent::Projectile(p));
     let pitch = 1.0 / (m.random.next_float() * 0.4 + 0.8);
