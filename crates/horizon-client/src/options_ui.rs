@@ -3377,7 +3377,7 @@ mod tests {
             s.extras
         );
         // In a window too short for the page, the wheel scrolls to its end.
-        let short = (480.0, 300.0);
+        let short = (480.0, 180.0);
         ui.scroll(&s, short, -1000.0);
         let (_, top, bottom, content) = ui.layout(&s, short.0, short.1);
         assert!(content > bottom - top);

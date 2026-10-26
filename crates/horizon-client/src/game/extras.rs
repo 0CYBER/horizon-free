@@ -1,5 +1,5 @@
-//! Horizon's extras in the game (`docs/extras.md`): the minimap's tiles and
-//! image, and its HUD; a mod's zoom (`render.set-zoom`) on the camera; clicks
+//! Horizon's extras in the game (`docs/extras.md`); a mod's minimap
+//! (`render.set-minimap`: its tiles, image and HUD) and zoom (`render.set-zoom`) on the camera; clicks
 //! and frame times for mods (`input.clicks-per-second`, `render.frame-stats`).
 //! Each hook does nothing while its extra is off and no mod runs.
 use super::{Dim, Game, Screen};
@@ -128,44 +128,29 @@ impl Game<'_> {
         }
         Ok(())
     }
-    /// The minimap that shows, the extra's or else a mod's
-    /// (`render.set-minimap`): its corner, its side in GUI pixels and its
-    /// view of the player.
+    /// The minimap a mod shows (`render.set-minimap`): its corner, its side
+    /// in GUI pixels and its view of the player.
     fn minimap_shown(&self) -> Option<(Corner, f32, View)> {
         let p = self.player.as_ref()?;
         if self.title.is_some() || self.ui.hide_gui {
             return None;
         }
-        let e = &self.settings.extras;
-        let (corner, size, rotate, blocks_per_pixel, round) = if e.minimap {
-            let size = f32::from(e.minimap_size);
-            (
-                e.minimap_corner,
-                size,
-                e.minimap_rotate,
-                e.minimap_zoom,
-                e.minimap_round,
-            )
-        } else {
-            let m = self.mod_minimap()?;
-            (m.corner, m.size, m.rotate, m.blocks_per_pixel, m.round)
-        };
+        let m = self.mod_minimap()?;
         let view = View {
             x: p.position.x,
             z: p.position.z,
             yaw: self.yaw,
-            rotate,
-            blocks_per_pixel,
-            round,
+            rotate: m.rotate,
+            blocks_per_pixel: m.blocks_per_pixel,
+            round: m.round,
         };
-        Some((corner, size, view))
+        Some((m.corner, m.size, view))
     }
     /// Refresh the minimap's tiles within the frame budget, recompose its
     /// image when the view or a tile changed, and queue the upload.
     fn update_minimap(&mut self) {
         let Some((_, _, view)) = self.minimap_shown() else {
-            let wanted = self.settings.extras.minimap || self.mod_minimap().is_some();
-            if !wanted || self.player.is_none() {
+            if self.mod_minimap().is_none() || self.player.is_none() {
                 self.extras.minimap.clear();
                 self.extras.minimap_dim = None;
             }

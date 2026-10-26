@@ -1,6 +1,6 @@
 # Horizon extras
 
-Optional conveniences built into the client: fullbright, dynamic lights, a minimap, auto-reconnect,
+Optional conveniences built into the client: fullbright, dynamic lights, auto-reconnect,
 Mouse Tweaks-style inventory controls and inventory sorting. **Every one is off by default**: a fresh
 install looks and behaves exactly like vanilla 26.3, and turning an extra off
 again restores vanilla's behaviour completely.
@@ -12,8 +12,8 @@ again restores vanilla's behaviour completely.
 | Settings, parsing and saving | `crates/horizon-client/src/extras.rs` |
 | FPS and click counters (for mods) | `extras.rs` (pure logic, unit tested) |
 | Dynamic lights: item glow, nearest sources | `crates/horizon-client/src/dynamic_light.rs` (unit tested), `game/dynamic_lights.rs`, `terrain.wgsl` and `entity.wgsl` (`dynamic_block_light`) |
-| HUD drawing (minimap frame, corner stacking) | `crates/horizon-client/src/extras_hud.rs` |
-| Minimap colours, tiles and image | `crates/horizon-client/src/minimap.rs` |
+| HUD drawing (a mod's minimap, corner stacking) | `crates/horizon-client/src/extras_hud.rs` |
+| Minimap colours, tiles and image (for `render.set-minimap`) | `crates/horizon-client/src/minimap.rs` |
 | Reconnect policy and backoff | `crates/horizon-client/src/reconnect.rs` |
 | Game glue (input hooks, per-frame update) | `crates/horizon-client/src/game/extras.rs` |
 | Mouse Tweaks-style controls, sort buttons | `crates/horizon-client/src/game/tweaks.rs` |
@@ -62,7 +62,7 @@ in Controls, and adding one would put a non-vanilla mapping into `options.txt`.
 
 ### Moved to the mod browser
 
-The **FPS counter**, **Keystrokes** and **Zoom** are official mods now (`mods/official/`, [mods.md](mods.md#horizons-official-mods)),
+The **FPS counter**, **Keystrokes**, **Zoom** and the **Minimap** are official mods now (`mods/official/`, [mods.md](mods.md#horizons-official-mods)),
 with the same look and options. On the first start after the update, a player who had one on gets the mod installed
 from Horizon's registry and turned on, with their corner and options carried over (Zoom's key too, into
 `horizon-mods.txt`, when it wasn't Z), and reads one line in the chat ("Zoom moved to the mod browser: installed for
@@ -71,19 +71,14 @@ SHA-256, signature, manifest); if it fails (offline), the next start tries again
 keys and lists what was done in `movedToMods`. Code: `crates/horizon-client/src/moved_extras.rs`,
 `game/moved_extras.rs`.
 
-### Minimap (`minimap`, default off)
-- A corner map (top right by default), square or round, small/medium/large,
-  zoom 0.5 to 4 blocks per pixel, rotating with the player or north up, with the
-  player arrow (vanilla's map decoration sprite).
-- Colours are vanilla's `MapColor` per block, as map items use, with the map
-  item's height shading and water-depth dithering.
-- Underground, in the Nether and under any roof, it maps the floor around the
-  player's height instead of the top block, so caves read sensibly.
-- Cost: one cached 16x16 tile per loaded chunk (packed map colour and height).
-  Tiles are filled nearest first and refreshed when blocks change, within a time
-  budget of 0.3 ms a frame; composing the 128x128 image is a few thousand
-  lookups, done only when the view moved or a tile changed, and uploaded into a
-  dedicated atlas slot. With the minimap off nothing runs.
+The game still draws the minimap, for the mod (`render.set-minimap`, [mods.md](mods.md)):
+- a corner map (top right by default), square or round, small/medium/large, zoom 0.5 to 4 blocks per pixel, rotating
+  with the player or north up, with the player arrow (vanilla's map decoration sprite);
+- vanilla's `MapColor` per block, as map items use, with the map item's height shading and water-depth dithering;
+- underground, in the Nether and under any roof, the floor around the player's height instead of the top block;
+- one cached 16x16 tile per loaded chunk (packed map colour and height), filled nearest first and refreshed when
+  blocks change within 0.3 ms a frame; the 128x128 image is recomposed only when the view moved or a tile changed, and
+  uploaded into a dedicated atlas slot. With no mod showing a map, nothing runs.
 
 ### Auto-reconnect (`autoReconnect`, default off)
 - On the "Connection lost" screen after a multiplayer connection drops, a
@@ -140,11 +135,11 @@ and the container screen tests are unchanged).
   the world, like vanilla's HUD. Extras in the top left corner give way to the
   debug screen (F3), which shows the FPS anyway.
 - Corners stack: extras placed in the same corner stack downward (top corners)
-  or upward (bottom corners) in the order minimap, then mods' panels. The top
+  or upward (bottom corners) in the order a mod's minimap, then mods' panels. The top
   right corner starts below the status effect icons.
 
 ## Perf budget
 
 Off: a flag check per frame per extra (no allocations, no world access).
-On: the minimap stays under 0.3 ms of CPU
+A mod's minimap stays under 0.3 ms of CPU
 per frame (tile budget) plus a 64 KiB texture upload when its image changes.
