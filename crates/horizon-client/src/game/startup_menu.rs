@@ -272,8 +272,6 @@ impl Loading {
     }
     pub(super) fn apply_menu_settings(&mut self) {
         if let Some(renderer) = &mut self.renderer {
-            self.settings
-                .clamp_gui_scale([renderer.config.width as i32, renderer.config.height as i32]);
             renderer.gamma = self.settings.gamma;
             renderer.set_present_mode(self.settings.vsync, self.settings.horizon.present_mode);
         }
@@ -383,6 +381,8 @@ impl Loading {
                         self.menu.win = Some((screen, Instant::now()));
                     }
                 }
+                // Mods' settings pages open only in a running game.
+                Event::ModSettings(_) => {}
                 // The startup menu runs before the game opens a control socket.
                 Event::ButtonClick | Event::CopyAgentDetails => {}
             }

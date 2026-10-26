@@ -1,7 +1,9 @@
-//! Loads real mods built with the SDK: the coords-hud example and a guest
+//! Loads real mods built with the SDK: the coords-hud and predator-missile
+//! examples and a guest
 //! that misbehaves on command. Needs `rustup target add wasm32-unknown-unknown`.
 use horizon_mods::{
-    Clock, Corner, Mods, Output, Package, Player, Snapshot, Status, manifest::componentize,
+    Clock, Corner, HeldItem, Mods, Output, Package, Player, Shape, Snapshot, Status,
+    manifest::componentize,
 };
 use std::{
     path::{Path, PathBuf},
@@ -17,8 +19,16 @@ version = "0.1.0"
 api = "0.1"
 capabilities = ["chat", "storage"]
 "#;
+const UI_MANIFEST: &str = r#"
+id = "test_ui_guest"
+name = "Test UI Guest"
+version = "0.1.0"
+api = "0.1"
+capabilities = ["chat", "ui", "render", "input"]
+experimental = ["ui", "render", "input"]
+"#;
 
-/// Builds both mods once and writes their `.hmod` files; returns the folder.
+/// Builds the mods once and writes their `.hmod` files; returns the folder.
 fn mods_dir() -> &'static Path {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
@@ -31,7 +41,11 @@ fn mods_dir() -> &'static Path {
                 "-p",
                 "coords-hud",
                 "-p",
+                "predator-missile",
+                "-p",
                 "horizon-mods-test-guest",
+                "-p",
+                "horizon-mods-test-ui-guest",
                 "--target-dir",
             ])
             .arg(&target)
@@ -44,10 +58,15 @@ fn mods_dir() -> &'static Path {
         let built = target.join("wasm32-unknown-unknown/release");
         let dir = target.join("mods");
         std::fs::create_dir_all(&dir).unwrap();
-        let example = root.join("crates/horizon-mod-sdk/examples/coords-hud/horizon-mod.toml");
+        let example = |name: &str| {
+            let path = format!("crates/horizon-mod-sdk/examples/{name}/horizon-mod.toml");
+            std::fs::read_to_string(root.join(path)).unwrap()
+        };
         let mods = [
-            ("coords_hud", std::fs::read_to_string(example).unwrap()),
+            ("coords_hud", example("coords-hud")),
+            ("predator_missile", example("predator-missile")),
             ("horizon_mods_test_guest", GUEST_MANIFEST.to_string()),
+            ("horizon_mods_test_ui_guest", UI_MANIFEST.to_string()),
         ];
         for (name, manifest) in mods {
             let core = std::fs::read(built.join(format!("{name}.wasm"))).unwrap();
@@ -78,7 +97,39 @@ fn player() -> Snapshot {
             game_time: 100,
             day_time: 24000 + 6000,
         }),
+        gui_size: (427.0, 240.0),
+        ..Snapshot::default()
     }
+}
+
+/// Capability `command`: `/missile` queues vanilla commands, and the chat
+/// line its impact check prints sets off the warhead.
+#[test]
+fn predator_missile_runs_commands() {
+    let mut mods = load("predator_missile.hmod");
+    assert_eq!(mods.entries()[0].status, Status::Running);
+    mods.set_snapshot(player());
+    let commands = |mods: &mut Mods| -> Vec<String> {
+        mods.drain()
+            .into_iter()
+            .filter_map(|o| match o {
+                Output::Command { line } => Some(line),
+                _ => None,
+            })
+            .collect()
+    };
+    assert!(mods.command("missile"));
+    let launch = commands(&mut mods);
+    assert_eq!(launch.len(), 6);
+    assert!(launch.contains(&"gamemode spectator".to_string()));
+    mods.tick(1);
+    mods.tick(2);
+    let flight = commands(&mut mods);
+    assert!(flight.iter().any(|l| l.ends_with("run tp @s ^ ^ ^1.5")));
+    mods.chat("Predator: impact");
+    let blast = commands(&mut mods);
+    assert_eq!(blast.len(), 4);
+    assert!(blast.iter().all(|l| l.contains("summon tnt")));
 }
 
 #[test]
@@ -363,6 +414,225 @@ fn hook_overhead() {
     println!(
         "load coords-hud:      {:8.1} ms",
         started.elapsed().as_secs_f64() * 1000.0
+    );
+}
+
+#[test]
+fn ui_screens_settings_and_events() {
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    assert_eq!(mods.entries()[0].status, Status::Running);
+    assert!(!mods.entries()[0].has_ui_settings());
+    // `/ui_screen` pushes the screen; the host clips nothing of this one.
+    assert!(mods.command("ui_screen"));
+    assert_eq!(mods.drain(), [Output::OpenScreen { owner: 0 }]);
+    let screen = mods.screen(0).expect("a pushed screen");
+    assert_eq!(screen.title, "Guest's screen");
+    assert_eq!(screen.widgets.len(), 3);
+    // What the player did comes back through `ui-events`.
+    mods.ui_select(0, 7, 2);
+    mods.ui_closed(0);
+    assert_eq!(
+        mods.drain(),
+        [
+            Output::Chat {
+                name: "Test UI Guest".into(),
+                text: "selected 7:2".into(),
+            },
+            Output::Chat {
+                name: "Test UI Guest".into(),
+                text: "closed".into(),
+            },
+        ]
+    );
+    // The settings page: empty until the mod fills it, refreshed on open.
+    assert!(mods.command("ui_settings"));
+    assert_eq!(mods.settings_widgets(0).len(), 3);
+    assert!(mods.entries()[0].has_ui_settings());
+    mods.ui_settings_opened(0);
+    assert_eq!(mods.settings_widgets(0).len(), 2);
+    // `/ui_close` closes the mod's own screen.
+    assert!(mods.command("ui_close"));
+    assert!(mods.drain().contains(&Output::CloseScreen { owner: 0 }));
+    assert!(mods.screen(0).is_none());
+}
+
+#[test]
+fn render_shapes_and_shakes() {
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    mods.set_snapshot(Snapshot {
+        gui_size: (427.0, 240.0),
+        ..Snapshot::default()
+    });
+    assert_eq!(mods.hud_shapes().count(), 0);
+    assert!(mods.command("render_hud"));
+    let shapes: Vec<_> = mods.hud_shapes().cloned().collect();
+    assert_eq!(shapes.len(), 5);
+    // The guest read `gui-size`; text is clipped to 256 characters.
+    let Shape::Text(t) = &shapes[4] else {
+        panic!("{:?}", shapes[4])
+    };
+    assert!(t.text.starts_with("gui 427x240 "), "{}", t.text);
+    assert_eq!(t.text.chars().count(), 256);
+    assert!(mods.command("render_clear"));
+    assert_eq!(mods.hud_shapes().count(), 0);
+    // One jolt, clamped; zero and NaN shake nothing.
+    mods.drain();
+    assert!(mods.command("render_shake"));
+    assert_eq!(
+        mods.drain(),
+        [Output::Shake {
+            strength: 1.0,
+            seconds: 10.0
+        }]
+    );
+}
+
+#[test]
+fn input_claims_keys_and_events() {
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    let chat = |mods: &mut Mods| -> Vec<String> {
+        mods.drain()
+            .into_iter()
+            .filter_map(|o| match o {
+                Output::Chat { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect()
+    };
+    assert!(!mods.claims_any() && !mods.has_keys());
+    assert!(mods.command("input_claim"));
+    let said = chat(&mut mods);
+    assert!(
+        said[0].starts_with("claimed; \"R\" is not a key"),
+        "{said:?}"
+    );
+    assert!(mods.claims("minecraft:stick") && !mods.claims("minecraft:stone"));
+    let keys: Vec<_> = mods
+        .mod_keys()
+        .map(|(m, k)| (m.to_owned(), k.key.clone()))
+        .collect();
+    assert_eq!(
+        keys,
+        [("Test UI Guest".to_owned(), "key.keyboard.r".to_owned())]
+    );
+    // The game feeds the events; the mod reads them in order with `poll`.
+    let stick = HeldItem {
+        id: "minecraft:stick".into(),
+        count: 3,
+        slot: 2,
+    };
+    mods.use_start(&stick);
+    mods.key("key.keyboard.r", true);
+    mods.key("key.keyboard.t", true);
+    mods.key("key.keyboard.r", false);
+    mods.use_stop(&stick, 12);
+    assert!(mods.command("input_poll"));
+    assert_eq!(
+        chat(&mut mods),
+        [
+            "use-start minecraft:stick 0",
+            "key-down wheel",
+            "key-up wheel",
+            "use-stop minecraft:stick 12"
+        ]
+    );
+    // `held` reads the snapshot.
+    mods.set_snapshot(Snapshot {
+        held: Some(stick),
+        ..Snapshot::default()
+    });
+    assert!(mods.command("input_held"));
+    assert_eq!(chat(&mut mods), ["holding minecraft:stick x3 in 2"]);
+    // A screen opening lets held keys up, once; the release that follows
+    // is not sent again.
+    mods.key("key.keyboard.r", true);
+    mods.release_keys();
+    mods.release_keys();
+    mods.key("key.keyboard.r", false);
+    assert!(mods.command("input_poll"));
+    assert_eq!(chat(&mut mods), ["key-down wheel", "key-up wheel"]);
+}
+
+#[test]
+fn input_wheel_is_the_mods_while_claimed() {
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    let chat = |mods: &mut Mods| -> Vec<String> {
+        mods.drain()
+            .into_iter()
+            .filter_map(|o| match o {
+                Output::Chat { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect()
+    };
+    // Unclaimed, the hotbar keeps the wheel and the mod hears nothing.
+    assert!(!mods.wheel_claimed() && !mods.wheel(1.0));
+    assert!(mods.command("input_wheel"));
+    assert!(mods.wheel_claimed());
+    assert!(mods.wheel(1.0) && mods.wheel(-2.0));
+    assert!(mods.command("input_poll"));
+    assert_eq!(chat(&mut mods), ["wheel 1", "wheel -2"]);
+    assert!(mods.command("input_wheel off"));
+    assert!(!mods.wheel(1.0));
+}
+
+#[test]
+fn render_zoom_is_clamped_and_the_strongest_counts() {
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    let zoom = |mods: &mut Mods, args: &str| {
+        assert!(mods.command(&format!("zoom {args}")));
+        mods.zoom().map(|z| (z.factor, z.smooth, z.turn))
+    };
+    assert!(mods.zoom().is_none());
+    assert_eq!(zoom(&mut mods, "4 1 0.25"), Some((4.0, true, 0.25)));
+    // Over 10 and a turn under 0.05 are clamped.
+    assert_eq!(zoom(&mut mods, "50 0 0"), Some((10.0, false, 0.05)));
+    // A NaN turn keeps the player's sensitivity.
+    assert_eq!(zoom(&mut mods, "2 0 x"), Some((2.0, false, 1.0)));
+    // 1, under 1 and NaN end the zoom.
+    assert_eq!(zoom(&mut mods, "1 0 1"), None);
+    assert_eq!(zoom(&mut mods, "0.5 0 1"), None);
+    assert_eq!(zoom(&mut mods, "x 0 1"), None);
+}
+
+#[test]
+fn corner_panels_text_width_and_readings() {
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    // A font of 5-pixel glyphs, 3-pixel spaces.
+    let mut widths = vec![5.0f32; 0x250];
+    widths[' ' as usize] = 3.0;
+    mods.set_snapshot(Snapshot {
+        frame: (60, 41, 52),
+        mappings: vec![("key.forward", "W".into(), true)],
+        cps: (7, 2),
+        font_widths: widths.into(),
+        ..Snapshot::default()
+    });
+    assert!(mods.command("corner"));
+    let panels: Vec<_> = mods.corner_panels().cloned().collect();
+    assert_eq!(panels.len(), 1);
+    // "60 fps": five glyphs and a space, plus the box's 4.
+    assert_eq!(
+        (panels[0].width, panels[0].height),
+        (5.0 * 5.0 + 3.0 + 4.0, 12.0)
+    );
+    assert_eq!(panels[0].shapes.len(), 2);
+    assert!(matches!(
+        panels[0].corner,
+        horizon_mods::RenderCorner::TopRight
+    ));
+    assert!(matches!(
+        &mods.settings_widgets(0)[0],
+        horizon_mods::UiWidget::Button(b) if b.id == 3 && b.label == "Corner: Top Right"
+    ));
+    mods.drain();
+    assert!(mods.command("readings"));
+    assert_eq!(
+        mods.drain(),
+        [Output::Chat {
+            name: "Test UI Guest".into(),
+            text: "60 41 52; forward W true; cps 7 2; other true".into(),
+        }]
     );
 }
 

@@ -13,9 +13,9 @@ use crate::{
     packets::{
         Empty,
         configuration::{
-            ClientInformation, CookieRequest, CookieResponse, CustomPayload, Disconnect, KeepAlive,
-            Ping, ResourcePackPop, ResourcePackPush, ResourcePackResponse, StoreCookie, Transfer,
-            UpdateTags,
+            ClientInformation, CookieRequest, CookieResponse, CustomClickAction, CustomPayload,
+            Disconnect, KeepAlive, Ping, ResourcePackPop, ResourcePackPush, ResourcePackResponse,
+            StoreCookie, Transfer, UpdateTags,
         },
         login::Property,
     },
@@ -176,6 +176,9 @@ packet!(
     }
 );
 packet!(ContainerSetData { container: i32 => VarInt, id: i16 => Short, value: i16 => Short });
+// ClientboundCooldownPacket: the cooldown group (an identifier) and the ticks
+// its entry lasts (0 ends it).
+packet!(Cooldown { group: String => Ident, duration: i32 => VarInt });
 packet!(ContainerSetSlot { container: i32 => VarInt, state: i32 => VarInt, slot: i16 => Short, item: Option<Stack> => Slot });
 /// A holder reference: registry id + 1, or 0 for an inline value (unsupported).
 pub struct HolderId;
@@ -190,6 +193,35 @@ impl Codec<i32> for HolderId {
         w.varint(v + 1)
     }
 }
+/// `Holder<Dialog>` as Dialog.STREAM_CODEC sends it: an entry of the
+/// `minecraft:dialog` registry the server sent in configuration, or the
+/// dialog itself.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DialogHolder {
+    Registry(i32),
+    Direct(Tag),
+}
+impl Codec<DialogHolder> for DialogHolder {
+    fn read(r: &mut Reader) -> Result<Self> {
+        Ok(match r.varint()? {
+            0 => Self::Direct(r.nbt()?),
+            id => Self::Registry(id - 1),
+        })
+    }
+    fn write(v: &Self, w: &mut Writer) {
+        match v {
+            Self::Registry(id) => w.varint(id + 1),
+            Self::Direct(tag) => {
+                w.varint(0);
+                w.nbt(tag);
+            }
+        }
+    }
+}
+packet!(
+    /// ClientboundShowDialogPacket.
+    ShowDialog { dialog: DialogHolder => DialogHolder }
+);
 packet!(
     /// ChatType.Bound.
     ChatTypeBound { chat_type: i32 => HolderId, name: Tag => Nbt, target: Option<Tag> => Opt<Nbt> }
@@ -1761,6 +1793,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     ContainerSetData(ContainerSetData) = CONTAINER_SET_DATA,
     ContainerSetSlot(ContainerSetSlot) = CONTAINER_SET_SLOT,
     CookieRequest(CookieRequest) = COOKIE_REQUEST,
+    Cooldown(Cooldown) = COOLDOWN,
     CustomPayload(CustomPayload) = CUSTOM_PAYLOAD,
     Disconnect(Disconnect) = DISCONNECT,
     DisguisedChat(DisguisedChat) = DISGUISED_CHAT,
@@ -1854,6 +1887,8 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     UpdateMobEffect(UpdateMobEffect) = UPDATE_MOB_EFFECT,
     UpdateTags(UpdateTags) = UPDATE_TAGS,
     TrackedWaypoint(TrackedWaypoint) = WAYPOINT,
+    ClearDialog(Empty) = CLEAR_DIALOG,
+    ShowDialog(ShowDialog) = SHOW_DIALOG,
 });
 packet!(
     /// ClientboundClearTitlesPacket: whether to also reset the timings.
@@ -2229,6 +2264,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     ContainerClose(ContainerClose) = CONTAINER_CLOSE,
     CookieResponse(CookieResponse) = COOKIE_RESPONSE,
     CustomPayload(CustomPayload) = CUSTOM_PAYLOAD,
+    CustomClickAction(CustomClickAction) = CUSTOM_CLICK_ACTION,
     EditBook(EditBook) = EDIT_BOOK,
     Interact(Interact) = INTERACT,
     KeepAlive(KeepAlive) = KEEP_ALIVE,
@@ -2895,6 +2931,24 @@ mod tests {
     }
 
     #[test]
+    fn a_cooldown_packet_carries_its_group_and_ticks() {
+        let packet = Clientbound::Cooldown(Cooldown {
+            group: "minecraft:ender_pearl".into(),
+            duration: 20,
+        });
+        round_trip(packet, Clientbound::encode, Clientbound::decode);
+        // The group is an identifier, the ticks a VarInt; a duration of 0
+        // removes the entry.
+        let body = Clientbound::encode(&Clientbound::Cooldown(Cooldown {
+            group: "minecraft:ender_pearl".into(),
+            duration: 0,
+        }));
+        assert_eq!(body[0], crate::ids::play::clientbound::COOLDOWN as u8);
+        assert_eq!(&body[1..3], [21, b'm']);
+        assert_eq!(body[body.len() - 1], 0);
+    }
+
+    #[test]
     fn change_game_mode_uses_the_game_type_varint() {
         for mode in 0..=3 {
             let packet = Serverbound::ChangeGameMode(ChangeGameMode { mode });
@@ -3024,6 +3078,7 @@ mod tests {
         w.varint(101);
         assert!(BookPages::read(&mut Reader::new(&w.data)).is_err());
     }
+
     #[test]
     fn boss_event_round_trips() {
         let add = Clientbound::BossEvent(BossEvent {
@@ -3059,6 +3114,30 @@ mod tests {
             }),
             Clientbound::encode,
             Clientbound::decode,
+        );
+    }
+
+    /// A registry entry is its id + 1, the dialog itself a 0 then its NBT.
+    #[test]
+    fn dialogs_round_trip() {
+        let notice = Tag::compound([("type", Tag::String("minecraft:notice".into()))]);
+        for dialog in [DialogHolder::Registry(3), DialogHolder::Direct(notice)] {
+            crate::packets::round_trip(
+                Clientbound::ShowDialog(ShowDialog { dialog }),
+                Clientbound::encode,
+                Clientbound::decode,
+            );
+        }
+        let mut w = Writer::new();
+        DialogHolder::write(&DialogHolder::Registry(3), &mut w);
+        assert_eq!(w.data, [4]);
+        crate::packets::round_trip(
+            Serverbound::CustomClickAction(CustomClickAction {
+                id: "minecraft:custom".into(),
+                payload: None,
+            }),
+            Serverbound::encode,
+            Serverbound::decode,
         );
     }
 }

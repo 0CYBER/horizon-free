@@ -619,26 +619,7 @@ impl TextField {
     /// `getWordPosition(dir, from)`: past the next space run, or back to the
     /// start of the word.
     pub fn word_position(&self, dir: isize, from: usize) -> usize {
-        let v: Vec<char> = self.value.chars().collect();
-        let mut at = from;
-        if dir > 0 {
-            at = v
-                .iter()
-                .skip(at)
-                .position(|c| *c == ' ')
-                .map_or(v.len(), |p| p + at);
-            while at < v.len() && v[at] == ' ' {
-                at += 1;
-            }
-        } else {
-            while at > 0 && v[at - 1] == ' ' {
-                at -= 1;
-            }
-            while at > 0 && v[at - 1] != ' ' {
-                at -= 1;
-            }
-        }
-        at
+        crate::ui::word_position(&self.value, dir, from)
     }
     /// `keyPressed` of a focused, editable box: `Some(changed)` when handled.
     pub fn key(

@@ -182,6 +182,23 @@ def player_state():
         cmd('/item modify entity @s weapon.mainhand {type:"minecraft:set_count",count:1}'),
         cmd('/clear @s'),
         cmd('/clear @s'),
+        # Inventory.clearOrCountMatchingItems visits the off hand as well as
+        # the main inventory, and consumes limited clears in inventory-slot order.
+        cmd('/item replace entity @s weapon.offhand with minecraft:shield'),
+        cmd('/clear @s minecraft:shield 0'),
+        cmd('/clear @s minecraft:shield 1'),
+        cmd('/clear @s minecraft:shield 0'),
+        cmd('/item replace entity @s weapon.offhand with minecraft:stone 5'),
+        cmd('/clear @s minecraft:stone 2'),
+        cmd('/clear @s minecraft:stone 0'),
+        cmd('/clear @s'),
+        cmd('/clear @s minecraft:stone 0'),
+        cmd('/item replace entity @s armor.head with minecraft:iron_helmet'),
+        cmd('/item replace entity @s armor.feet with minecraft:iron_boots'),
+        cmd('/clear @s * 1'),
+        cmd('/clear @s minecraft:iron_boots 0'),
+        cmd('/clear @s minecraft:iron_helmet 0'),
+        cmd('/clear @s'),
         cmd('/attribute @s minecraft:max_health get'),
         cmd('/attribute @s minecraft:max_health base get'),
         cmd('/attribute @s minecraft:max_health base set 30'),
@@ -291,6 +308,19 @@ def entities():
         cmd('/data get entity @e[tag=root,limit=1] Passengers[0].Health'),
         cmd('/data get entity @e[tag=root,limit=1] Passengers[0].id'),
         cmd('/kill @e[tag=root]'),
+        # Saved attribute bases are read for every mob, then Health or the max
+        # health when there is none (LivingEntity.readAdditionalSaveData, #1483).
+        cmd('/summon minecraft:cow 4.5 210 8.5 {Tags:["attr"],NoAI:1b,NoGravity:1b,'
+            'attributes:[{id:"minecraft:max_health",base:40.0d},{id:"minecraft:movement_speed",base:0.5d}]}'),
+        cmd('/data get entity @e[tag=attr,limit=1] Health'),
+        cmd('/attribute @e[tag=attr,limit=1] minecraft:max_health base get'),
+        cmd('/attribute @e[tag=attr,limit=1] minecraft:movement_speed base get'),
+        cmd('/kill @e[tag=attr]'),
+        cmd('/summon minecraft:zombie 4.5 210 8.5 {Tags:["attr"],NoAI:1b,NoGravity:1b,Health:7.0f,'
+            'attributes:[{id:"minecraft:attack_damage",base:9.0d}]}'),
+        cmd('/data get entity @e[tag=attr,limit=1] Health'),
+        cmd('/attribute @e[tag=attr,limit=1] minecraft:attack_damage base get'),
+        cmd('/kill @e[tag=attr]'),
         *setup('/kill @e[type=minecraft:armor_stand]'),
         {'op': 'tick', 'n': 25},
         cmd('/execute if entity @e[tag=h]'),
@@ -325,6 +355,31 @@ def riding_teleport():
         ]
     return operations + setup('/kill @e[tag=tp_horse]', '/kill @e[tag=tp_destination]',
                               '/tp @s 8.5 230 8.5 0 0')
+
+
+def mob_riding():
+    """Mobs mount and dismount mobs with /ride, NBT passengers included (#1520)."""
+    rider, vehicle = '@e[tag=ride_r,limit=1]', '@e[tag=ride_v,limit=1]'
+    return [
+        *setup('/summon minecraft:cow 4.5 220 12.5 {NoAI:1b,NoGravity:1b,Tags:["ride_v"]}',
+               '/summon minecraft:pig 6.5 220 12.5 {NoAI:1b,NoGravity:1b,Tags:["ride_r"]}'),
+        cmd(f'/ride {rider} dismount'),
+        cmd(f'/ride {rider} mount @s'),
+        cmd(f'/ride {rider} mount {rider}'),
+        cmd(f'/ride {rider} mount {vehicle}'),
+        cmd(f'/ride {rider} mount {vehicle}'),
+        cmd(f'/ride {vehicle} mount {rider}'),
+        cmd('/execute as @e[tag=ride_r] on vehicle run say carrying'),
+        cmd(f'/ride {rider} dismount'),
+        cmd(f'/data get entity {rider} Pos'),
+        cmd('/execute as @e[tag=ride_r] on vehicle run say still carrying'),
+        *setup('/kill @e[tag=ride_r]', '/kill @e[tag=ride_v]'),
+        *setup('/summon minecraft:cow 4.5 220 12.5 {NoAI:1b,NoGravity:1b,Tags:["ride_v"],'
+               'Passengers:[{id:"minecraft:pig",NoAI:1b,NoGravity:1b,Tags:["ride_r"]}]}'),
+        cmd(f'/ride {rider} dismount'),
+        cmd(f'/data get entity {rider} Pos'),
+        *setup('/kill @e[tag=ride_r]', '/kill @e[tag=ride_v]'),
+    ]
 
 
 def scores():
@@ -573,7 +628,9 @@ def world_misc():
         cmd('/fill 0 210 0 2 212 2 minecraft:glass keep'),
         cmd('/fill 0 210 0 2 212 2 minecraft:dirt replace #minecraft:base_stone_overworld'),
         cmd('/fill 0 210 0 2 212 2 minecraft:air strict'),
-        cmd('/fill 0 210 0 100 300 100 minecraft:stone'),
+        # A connected server loads more terrain than the oracle's 5x5 core.
+        # Keep the far corner unambiguously unloaded in both executions.
+        cmd('/fill 0 210 0 1000 300 1000 minecraft:stone'),
         cmd('/setblock 0 211 0 minecraft:oak_sign{front_text:{messages:["a","b","c","d"]}}'),
         cmd('/data get block 0 211 0 front_text.messages'),
         cmd('/clone 0 211 0 0 211 0 1 211 1 replace move'),
@@ -776,6 +833,9 @@ def functions_and_packs():
 
 def ticking():
     return [
+        # Isolate named-stream commands from earlier loot rolls, including
+        # ocean vegetation updated while asynchronous terrain loads settle.
+        *setup('/random reset *'),
         cmd('/tick query'),
         cmd('/tick rate 40'),
         cmd('/tick query'),
@@ -1008,15 +1068,32 @@ def test_command():
     ]
 
 
+def server_clock():
+    """Only explicit tick operations advance the script's authoritative clock."""
+    return [
+        *setup('/scoreboard objectives add harness_clock dummy',
+               '/execute store result score before harness_clock run time query gametime'),
+        {'op': 'tick', 'n': 3},
+        *setup('/execute store result score elapsed harness_clock run time query gametime',
+               '/scoreboard players operation elapsed harness_clock -= before harness_clock'),
+        cmd('/scoreboard players get elapsed harness_clock'),
+        # The connected owner is the only player; @s and @a use the same body.
+        cmd('/execute as @a run say connected owner'),
+        *setup('/scoreboard objectives remove harness_clock'),
+    ]
+
+
 def groups():
     return [
         ('setup', group_setup()),
+        ('server clock', server_clock()),
         ('client commands', client_commands()),
         ('game state', game_state()),
         ('player state', player_state()),
         ('blocks and border', world_blocks()),
         ('entities', entities()),
         ('riding teleport', riding_teleport()),
+        ('mob riding', mob_riding()),
         ('scores, teams and bossbars', scores()),
         ('execute', execute()),
         ('levels', levels()),

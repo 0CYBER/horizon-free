@@ -118,9 +118,55 @@ impl Default for Buffer {
     }
 }
 
+/// The shadow map's settings (6.3, 7.1), from `const` lines of the stage files.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Shadow {
+    /// `shadowMapResolution`: the map's side in pixels.
+    pub resolution: u32,
+    /// `shadowDistance`: half the side of the area the map covers, in blocks.
+    pub distance: f32,
+    /// `shadowDistanceRenderMul`: when > 0, geometry beyond `distance × mul` is not drawn.
+    pub render_mul: f32,
+    /// `shadowIntervalSize`: the shadow camera moves in steps of this many blocks (0: none).
+    pub interval: f32,
+    /// `sunPathRotation`, degrees.
+    pub sun_path_rotation: f32,
+    /// `shadowMapFov`: a perspective projection of this many degrees instead of orthographic.
+    pub fov: Option<f32>,
+    /// `shadowNearPlane`, `shadowFarPlane`.
+    pub near: f32,
+    pub far: f32,
+    /// `shadowHardwareFiltering(0|1)`: shadowtex0/1 sampled with depth comparison.
+    pub hardware_filtering: [bool; 2],
+    /// `shadowcolor0/1`: format, cleared every frame, clear colour (default white).
+    pub colors: [Buffer; 2],
+}
+
+impl Default for Shadow {
+    fn default() -> Self {
+        let white = Buffer {
+            clear_color: Some([1.0; 4]),
+            ..Buffer::default()
+        };
+        Self {
+            resolution: 1024,
+            distance: 160.0,
+            render_mul: -1.0,
+            interval: 2.0,
+            sun_path_rotation: 0.0,
+            fov: None,
+            near: 0.05,
+            far: 256.0,
+            hardware_filtering: [false; 2],
+            colors: [white.clone(), white],
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     pub buffers: [Buffer; BUFFERS],
+    pub shadow: Shadow,
     /// Conflicting or unreadable settings, as `file:line: message`.
     pub notes: Vec<String>,
     format_set: [bool; BUFFERS],
@@ -133,6 +179,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             buffers: std::array::from_fn(|_| Buffer::default()),
+            shadow: Shadow::default(),
             notes: Vec::new(),
             format_set: [false; BUFFERS],
             seen: Vec::new(),
@@ -197,6 +244,9 @@ impl Config {
     }
 
     fn constant(&mut self, place: &str, ty: &str, name: &str, value: &str) {
+        if self.shadow_constant(ty, name, value) {
+            return;
+        }
         let settings = [
             ("Format", "int"),
             ("ClearColor", "vec4"),
@@ -240,6 +290,70 @@ impl Config {
             Some(_) => {}
             None => self.seen.push((key, value.to_owned())),
         }
+    }
+}
+
+impl Config {
+    /// A shadow setting of 6.3 or 7.1; true when `name` is one (read or not).
+    fn shadow_constant(&mut self, ty: &str, name: &str, value: &str) -> bool {
+        let s = &mut self.shadow;
+        let float = |v: &mut f32| {
+            if let Some(n) = number(value) {
+                *v = n;
+            }
+        };
+        match name {
+            "shadowMapResolution" => {
+                if let Some(n) = number(value).filter(|n| *n >= 1.0) {
+                    s.resolution = (n as u32).min(16384);
+                }
+            }
+            "shadowDistance" => float(&mut s.distance),
+            "shadowDistanceRenderMul" => float(&mut s.render_mul),
+            "shadowIntervalSize" => float(&mut s.interval),
+            "sunPathRotation" => float(&mut s.sun_path_rotation),
+            "shadowNearPlane" => float(&mut s.near),
+            "shadowFarPlane" => float(&mut s.far),
+            "shadowMapFov" => s.fov = number(value).filter(|f| *f > 0.0),
+            "shadowHardwareFiltering" => {
+                if let Some(b) = boolean(value) {
+                    s.hardware_filtering = [b; 2];
+                }
+            }
+            "shadowHardwareFiltering0" | "shadowHardwareFiltering1" => {
+                if let Some(b) = boolean(value) {
+                    s.hardware_filtering[usize::from(name.ends_with('1'))] = b;
+                }
+            }
+            _ => {
+                let color = ["shadowcolor0", "shadowcolor1", "shadowcolor"]
+                    .iter()
+                    .find_map(|b| Some((b, name.strip_prefix(b)?)));
+                let Some((buffer, setting)) = color else {
+                    return false;
+                };
+                let b = &mut s.colors[usize::from(buffer.ends_with('1'))];
+                match (setting, ty) {
+                    ("Format", "int") => {
+                        if let Some(f) = Format::parse(value) {
+                            b.format = f;
+                        }
+                    }
+                    ("Clear", "bool") => {
+                        if let Some(v) = boolean(value) {
+                            b.clear = v;
+                        }
+                    }
+                    ("ClearColor", "vec4") => {
+                        if let Some(c) = vec4(value) {
+                            b.clear_color = Some(c);
+                        }
+                    }
+                    _ => return false,
+                }
+            }
+        }
+        true
     }
 }
 
@@ -400,6 +514,28 @@ mod tests {
         assert_eq!(b[2].clear_color, Some([1.0; 4]));
         assert_eq!(b[1].format, Format::parse("RGBA32F").unwrap(), "gdepth");
         assert!(config.notes.is_empty(), "{:?}", config.notes);
+    }
+
+    #[test]
+    fn shadow_settings() {
+        let mut c = Config::default();
+        c.read(&stage(
+            "const int shadowMapResolution = 2048;\nconst float shadowDistance = 128.0f;\n\
+             const float sunPathRotation = -40.0;\nconst bool shadowHardwareFiltering = true;\n\
+             /* const int shadowcolor1Format = RGBA16F; */\nconst bool shadowcolor0Clear = false;\n",
+        ));
+        let s = c.finish().shadow;
+        assert_eq!(
+            (s.resolution, s.distance, s.sun_path_rotation),
+            (2048, 128.0, -40.0)
+        );
+        assert_eq!(
+            (s.interval, s.fov, s.hardware_filtering),
+            (2.0, None, [true; 2])
+        );
+        assert!(!s.colors[0].clear && s.colors[1].clear);
+        assert_eq!(s.colors[1].format, Format::parse("RGBA16F").unwrap());
+        assert_eq!(s.colors[1].clear_color, Some([1.0; 4]));
     }
 
     #[test]
