@@ -66,10 +66,10 @@ impl ModelPart {
             children,
         }
     }
-    /// `parse` of the entity model layer `layer`. The pot's `top` and `bottom` are flat
-    /// boxes (`DecoratedPotRenderer.createBaseLayer`) drawn with a culling render type, so
-    /// from outside only `top`'s up face and `bottom`'s down face show. Both faces of each
-    /// plane would fight for the same pixels here: keep the outer one.
+    /// `parse` of the entity model layer `layer`. Vanilla culls back faces for the pot's
+    /// `top` and `bottom` planes (`DecoratedPotRenderer.createBaseLayer`), so only the
+    /// up face of `top` and the down face of `bottom` show; ours draws both faces of each
+    /// plane, which fight for the same pixels, so the culled face is dropped here.
     pub fn parse_layer(layer: &str, v: &Value) -> Self {
         let mut part = Self::parse(v);
         if layer == "minecraft:decorated_pot_base#main" {
