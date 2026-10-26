@@ -74,7 +74,10 @@ impl Game<'_> {
     /// creative inventory; a server hears it as `SetCreativeModeSlot`
     /// through the inventory's sync, and refuses it unless creative.
     pub(super) fn mod_give(&mut self, item: &str, count: u32, components: &str) {
-        if !self.creative || self.res.items().get(item).is_none() {
+        let Some(max) = self.res.items().get(item).map(|i| i.max_stack) else {
+            return;
+        };
+        if !self.creative {
             return;
         }
         let (damage, extra) = horizon_client::item_data::command_components(components)
@@ -83,7 +86,8 @@ impl Game<'_> {
             });
         let _ = self.give(ItemStack {
             item: item.into(),
-            count,
+            // One stack at most, as the creative inventory hands out.
+            count: count.min(max),
             damage,
             extra,
         });

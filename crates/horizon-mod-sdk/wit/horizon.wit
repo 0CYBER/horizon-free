@@ -516,7 +516,8 @@ interface recipes {
     place: func(book-id: s32, all: bool) -> result<_, string>;
     /// Creative mode only: gives the player the stack, as taking it from
     /// the creative inventory does (`ServerboundSetCreativeModeSlot`): the
-    /// selected slot first, then the hotbar, then the inventory.
+    /// selected slot first, then the hotbar, then the inventory. The count
+    /// is cut to one stack of the item (64, 16 or 1).
     give: func(stack: stack) -> result<_, string>;
 }
 
