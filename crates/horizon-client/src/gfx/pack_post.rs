@@ -156,7 +156,9 @@ struct Pass {
     atlas: Option<wgpu::TextureView>,
     /// Reads `mc_Entity`'s table (`PackPost::block_ids`).
     ids: bool,
-    groups: HashMap<u16, wgpu::BindGroup>,
+    /// Bind groups by the sides read (low 16 bits) and the buffers whose mip chain is current
+    /// (high 16 bits).
+    groups: HashMap<u32, wgpu::BindGroup>,
 }
 
 /// One side of a buffer with mipmaps.
@@ -1152,7 +1154,10 @@ impl PackPost {
             queue.write_buffer(&pass.ubo, 0, &pass.block);
         }
         let targets = self.targets.as_ref().expect("resized");
-        let key = self.main & pass.reads;
+        // A chain is sampled only while it is current: a buffer written since its last chain
+        // reads its first level, never stale levels (6.1.7).
+        let current = self.mips_valid & self.mipped & pass.reads;
+        let key = u32::from(self.main & pass.reads) | u32::from(current) << 16;
         let group = pass.groups.entry(key).or_insert_with(|| {
             let mut entries = vec![wgpu::BindGroupEntry {
                 binding: 0,
@@ -1163,9 +1168,9 @@ impl PackPost {
                     Source::Color(i) => {
                         let side = usize::from(key & 1 << i != 0);
                         match (&targets.mips[i], &targets.color[i]) {
-                            (Some(m), _) => &m[side].all,
-                            (None, Some(t)) => &t[side],
-                            (None, None) => &self.dummy,
+                            (Some(m), _) if current & 1 << i != 0 => &m[side].all,
+                            (_, Some(t)) => &t[side],
+                            (_, None) => &self.dummy,
                         }
                     }
                     Source::Depth => &targets.depth,
