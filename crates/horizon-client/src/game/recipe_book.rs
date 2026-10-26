@@ -338,6 +338,25 @@ impl Game<'_> {
         ui.client_known = Some(known.clone());
         ui.client_version += 1;
     }
+    /// Every entry of the book, in its order (capability `recipes`).
+    #[cfg(feature = "mods")]
+    pub(super) fn recipe_book_entries(&mut self) -> Vec<Entry> {
+        self.ensure_book();
+        self.recipe_ui
+            .book
+            .as_ref()
+            .map_or_else(Vec::new, |b| b.entries.clone())
+    }
+    /// The display ids the player's book holds, and a number that changes
+    /// whenever they do (capability `recipes`).
+    #[cfg(feature = "mods")]
+    pub(super) fn recipe_book_displays(&mut self) -> (u64, Vec<i32>) {
+        self.sync_client_book();
+        (
+            self.recipe_ui.client_version,
+            self.recipe_ui.client.displays(),
+        )
+    }
     fn ensure_book(&mut self) {
         if self.recipe_ui.book.is_none() {
             let mut book = Book::build(self.res.recipes(), self.res.items());
@@ -825,6 +844,34 @@ impl Game<'_> {
         self.recipe_ui.last_placed = Some(id);
         self.recipe_ui.ghost.clear();
         self.place_recipe(book_type, entry_index, use_max);
+    }
+    /// Whether the open screen takes `recipes.place`: a crafting grid's
+    /// book (the inventory's or a crafting table's).
+    #[cfg(feature = "mods")]
+    pub(super) fn mod_recipe_screen(&self) -> bool {
+        self.screen == Screen::Inventory
+            && self.active_book() == Some(BookType::Crafting)
+            && !self.spectator()
+    }
+    /// `recipes.place`: the book's click on the recipe with this display
+    /// id, refused as `handlePlaceRecipe` refuses it (no crafting screen,
+    /// not in the player's book; an impossible one in `place_recipe`).
+    #[cfg(feature = "mods")]
+    pub(super) fn mod_place_recipe(&mut self, display_id: i32, all: bool) {
+        if !self.mod_recipe_screen() || !self.recipe_ui.client.displays().contains(&display_id) {
+            return;
+        }
+        self.ensure_book();
+        let Some(index) = self
+            .recipe_ui
+            .book
+            .as_ref()
+            .and_then(|b| b.entries.iter().position(|e| e.display_id == display_id))
+        else {
+            return;
+        };
+        self.recipe_ui.ghost.clear();
+        self.place_recipe(BookType::Crafting, index, all);
     }
     /// `ServerboundPlaceRecipePacket`: the server places the recipe
     /// (`ServerPlaceRecipe` on the menu engine) and answers with a ghost
