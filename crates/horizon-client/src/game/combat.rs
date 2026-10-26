@@ -31,6 +31,10 @@ pub(super) struct CombatTracker {
     /// The mob exploding now (`ServerExplosion.source`): its team's friendly
     /// fire decides whom the blast may hurt.
     pub(super) explosion_source: Option<u32>,
+    /// The blast now going off comes from a primed TNT, creeper, wither
+    /// skull, wither or TNT minecart, the sources that empty a hive they
+    /// destroy (`BeehiveBlock.getDrops`).
+    pub(super) hive_emptying_blast: bool,
     /// The player's fall distance before this tick's movement (as of the
     /// end of the last one).
     fall_before: f64,

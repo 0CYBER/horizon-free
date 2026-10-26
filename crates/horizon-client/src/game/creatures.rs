@@ -915,7 +915,15 @@ impl Game<'_> {
                         self.note_attacker("minecraft:explosion", id);
                     }
                     self.combat.explosion_source = source_mob;
-                    let result = self.explode(at, radius);
+                    // Only a creeper or a wither empties the hives it blows up.
+                    let empties_hives = source_mob
+                        .and_then(|id| self.mobs.iter().find(|m| m.id == id))
+                        .is_some_and(|m| matches!(m.species(), Species::Creeper | Species::Wither));
+                    let result = if empties_hives {
+                        self.with_hive_emptying_blast(|g| g.explode(at, radius))
+                    } else {
+                        self.explode(at, radius)
+                    };
                     self.combat.explosion_source = None;
                     result?
                 }

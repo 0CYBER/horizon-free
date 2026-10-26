@@ -196,7 +196,7 @@ impl Game<'_> {
     }
     /// `BeehiveBlock.angerNearbyBees`: bees within 8 blocks (6 up and down)
     /// without a target go for a player in the same box.
-    fn anger_nearby_bees(&mut self, at: [i32; 3]) {
+    pub(super) fn anger_nearby_bees(&mut self, at: [i32; 3]) {
         let min = Vec3::new(
             f64::from(at[0]) - 8.0,
             f64::from(at[1]) - 6.0,

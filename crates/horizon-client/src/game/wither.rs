@@ -130,7 +130,7 @@ impl Game<'_> {
         if let Some(id) = owner {
             self.note_attacker("minecraft:explosion", id);
         }
-        self.explode(at, 1.0)
+        self.with_hive_emptying_blast(|g| g.explode(at, 1.0))
     }
 }
 /// Wither skulls drawn as the skull model, blue when dangerous.
