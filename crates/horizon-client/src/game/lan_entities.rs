@@ -11,18 +11,6 @@ use horizon_client::lan::{
 use horizon_protocol::entity_data::{Value, serializer};
 use horizon_world::nbt::Tag;
 
-/// `ArmorStand`'s default poses (head, body, left arm, right arm, left leg,
-/// right leg), DATA_HEAD_POSE to DATA_RIGHT_LEG_POSE (entries 16 to 21),
-/// under their `Pose` keys.
-const STAND_POSES: [(&str, [f32; 3]); 6] = [
-    ("Head", [0.0, 0.0, 0.0]),
-    ("Body", [0.0, 0.0, 0.0]),
-    ("LeftArm", [-10.0, 0.0, -10.0]),
-    ("RightArm", [-15.0, 0.0, 10.0]),
-    ("LeftLeg", [-1.0, 0.0, -1.0]),
-    ("RightLeg", [1.0, 0.0, 1.0]),
-];
-
 fn state(id: u32, kind: &str, position: [f64; 3], yaw: f32, on_ground: bool) -> EntityState {
     EntityState {
         id: id as i32,
@@ -61,28 +49,21 @@ fn vehicle_meta(hurt_time: i32, hurt_dir: i32, damage: f32) -> Vec<(u8, i32, Val
     meta
 }
 
-/// An armor stand's pose from its compound (`ArmorStandPose`), each part
-/// that differs from the default.
-fn stand_poses(raw: Option<&Tag>) -> Vec<(u8, i32, Value)> {
-    let Some(pose) = raw.and_then(|t| t.get("Pose")) else {
-        return Vec::new();
-    };
+/// An armor stand's pose (`ArmorStandPose`), each part that differs from the
+/// default, as DATA_HEAD_POSE to DATA_RIGHT_LEG_POSE (entries 16 to 21).
+fn stand_poses(a: &horizon_client::entities::ArmorStand) -> Vec<(u8, i32, Value)> {
     let mut meta = Vec::new();
-    for (i, (key, default)) in STAND_POSES.iter().enumerate() {
-        let Some(Tag::List(values)) = pose.get(key) else {
-            continue;
-        };
-        let mut r = *default;
-        for (k, v) in values.iter().take(3).enumerate() {
-            if let Tag::Float(bits) = v {
-                r[k] = f32::from_bits(*bits);
-            }
-        }
-        if r != *default {
+    for (i, (rotation, default)) in a
+        .pose
+        .iter()
+        .zip(horizon_client::entities::ArmorStand::DEFAULT_POSE)
+        .enumerate()
+    {
+        if *rotation != default {
             meta.push((
                 16 + i as u8,
                 serializer::ROTATIONS,
-                Value::Floats(r.to_vec()),
+                Value::Floats(rotation.to_vec()),
             ));
         }
     }
@@ -185,7 +166,7 @@ impl Game<'_> {
             if flags != 0 {
                 e.meta.push((15, serializer::BYTE, Value::Byte(flags)));
             }
-            e.meta.extend(stand_poses(self.persist.raw.get(&a.id)));
+            e.meta.extend(stand_poses(a));
             // Stored main hand, off hand, feet, legs, chest, head: the wire's slots 0 to 5.
             for (slot, item) in a.equipment.iter().enumerate() {
                 if item.is_some() {
@@ -510,11 +491,9 @@ mod tests {
 
     #[test]
     fn armor_stand_poses_send_only_what_differs() {
-        let tag =
-            horizon_world::nbt::parse_snbt("{Pose:{Head:[10f,20f,0f],LeftArm:[-10f,0f,-10f]}}")
-                .unwrap()
-                .0;
-        let meta = stand_poses(Some(&tag));
+        let mut stand = horizon_client::entities::ArmorStand::new(1, Default::default(), 0.0);
+        stand.pose[0] = [10.0, 20.0, 0.0];
+        let meta = stand_poses(&stand);
         assert_eq!(
             meta,
             vec![(
@@ -523,6 +502,7 @@ mod tests {
                 Value::Floats(vec![10.0, 20.0, 0.0])
             )]
         );
-        assert!(stand_poses(None).is_empty());
+        let plain = horizon_client::entities::ArmorStand::new(1, Default::default(), 0.0);
+        assert!(stand_poses(&plain).is_empty());
     }
 }
