@@ -87,7 +87,6 @@ pub(super) fn component(kind: i32, r: &mut Reader) -> Result<()> {
         }
         // BundleContents: templates.
         52 => list(r, template),
-        53 => potion_contents(r),
         // SuspiciousStewEffects: effect, duration.
         55 => list(r, |r| {
             varint(r)?;
@@ -410,10 +409,9 @@ fn kinetic_weapon(r: &mut Reader) -> Result<()> {
     optional(r, sound)?;
     optional(r, sound)
 }
-/// PotionContents: potion, customColor, customEffects, customName.
-fn potion_contents(r: &mut Reader) -> Result<()> {
-    optional(r, varint)?;
-    optional(r, i32)?;
+/// PotionContents' customEffects and customName (`Component::read` reads
+/// the potion and colour before them).
+pub(super) fn potion_effects_and_name(r: &mut Reader) -> Result<()> {
     list(r, mob_effect)?;
     optional(r, string)
 }
