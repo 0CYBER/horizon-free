@@ -173,9 +173,14 @@ fn object_style(o: &serde_json::Map<String, Value>) -> Style {
     if let Some(e) = o.get("click_event").and_then(Value::as_object) {
         let text = |k: &str| e.get(k).and_then(Value::as_str).map(str::to_owned);
         style.click = match e.get("action").and_then(Value::as_str) {
-            // ClickEvent.OpenUrl.CODEC: ExtraCodecs.UNTRUSTED_URI allows http and https only.
+            // ClickEvent.OpenUrl.CODEC: ExtraCodecs.UNTRUSTED_URI allows http and
+            // https only, the scheme in any case (Util.parseAndValidateUntrustedUri).
             Some("open_url") => text("url")
-                .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
+                .filter(|u| {
+                    u.split_once(':').is_some_and(|(scheme, _)| {
+                        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+                    })
+                })
                 .map(crate::text::ClickEvent::OpenUrl),
             // ClickEvent.ChangePage.CODEC: ExtraCodecs.POSITIVE_INT.
             Some("change_page") => e
