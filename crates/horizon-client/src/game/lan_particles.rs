@@ -225,8 +225,14 @@ impl Game<'_> {
     /// `ServerLevel.explode`'s packet to each player within 64 blocks. The
     /// sound and the push reach them on their own (the level's sounds, the
     /// motion a hurt player is sent), so the packet carries neither.
-    pub(super) fn lan_explode(&self, center: [f64; 3], radius: f32, block_count: usize) {
-        let emitter = if radius < 2.0 {
+    pub(super) fn lan_explode(
+        &self,
+        center: [f64; 3],
+        small: bool,
+        radius: f32,
+        block_count: usize,
+    ) {
+        let emitter = if small {
             "minecraft:explosion"
         } else {
             "minecraft:explosion_emitter"

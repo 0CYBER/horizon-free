@@ -1381,16 +1381,17 @@ impl ParticleEngine {
         }
     }
     /// `ClientPacketListener.handleExplosion` + `ClientExplosionTracker`: the
-    /// explosion particle (emitter for radius >= 2) and up to 512 poof/smoke
-    /// particles thrown from air inside the radius.
+    /// explosion particle (the emitter unless `ServerExplosion.isSmall`) and up
+    /// to 512 poof/smoke particles thrown from air inside the radius.
     pub fn explosion(
         &mut self,
         center: [f64; 3],
-        radius: f32,
+        small: bool,
         block_count: usize,
+        radius: f32,
         is_air: &dyn Fn([i32; 3]) -> bool,
     ) {
-        let ty = if radius < 2.0 {
+        let ty = if small {
             ParticleType::Explosion
         } else {
             ParticleType::ExplosionEmitter
