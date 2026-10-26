@@ -288,11 +288,13 @@ impl Game<'_> {
             ];
             animate_tick(self.res.animate(), &mut self.particles, &ctx, block);
             if rain > 0.0 {
-                // ClientLevel.tickWeatherEffects: rain splashes (weather radius 10).
+                // ClientLevel.tickWeatherEffects: rain splashes (weather radius 10)
+                // and the rain sound.
                 let mut random = LegacyRandom::new(self.world.game_time.wrapping_mul(312_987_231));
                 let radius = 10;
                 let diameter = 2 * radius + 1;
                 let count = (0.225 * (diameter * diameter) as f32 * rain * rain) as i32;
+                let mut rain_position = None;
                 for _ in 0..count {
                     let x = block[0] + random.next_int_bound(diameter).unwrap_or(0) - radius;
                     let z = block[2] + random.next_int_bound(diameter).unwrap_or(0) - radius;
@@ -305,6 +307,7 @@ impl Game<'_> {
                         continue;
                     }
                     let below = top - 1;
+                    rain_position = Some([x, below, z]);
                     let (bx, bz) = (random.next_double(), random.next_double());
                     let state = world.block(x, below, z);
                     let f = facts.get(state);
@@ -335,6 +338,24 @@ impl Game<'_> {
                     ];
                     self.particles
                         .add(&ParticleOptions::simple(ty), p, [0.0; 3]);
+                }
+                // The last rain column of the tick makes the sound, more often the
+                // longer it has been quiet; indoors it is the quieter one.
+                if let Some(at) = rain_position {
+                    let waited = self.rain_sound_time;
+                    self.rain_sound_time += 1;
+                    if random.next_int_bound(3).unwrap_or(0) < waited {
+                        self.rain_sound_time = 0;
+                        let roof =
+                            motion_blocking(world, facts, block[0], block[2], MIN_Y + HEIGHT);
+                        let (name, volume, pitch) = if at[1] > block[1] + 1 && roof > block[1] {
+                            ("minecraft:weather.rain.above", 0.1, 0.5)
+                        } else {
+                            ("minecraft:weather.rain", 0.2, 1.0)
+                        };
+                        let p = at.map(|c| f64::from(c) + 0.5);
+                        self.audio.play(name, Some(p), volume, pitch);
+                    }
                 }
             }
         }
