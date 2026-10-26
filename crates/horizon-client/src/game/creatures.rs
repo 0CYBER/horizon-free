@@ -43,10 +43,6 @@ fn arrow_damage(arrow: &mut Projectile, fallback: &mut impl RandomSource) -> f32
 #[derive(Default)]
 pub(super) struct Creatures {
     pub projectiles: Vec<Projectile>,
-    /// Player status effects applied by mobs: (effect, ticks left, amplifier).
-    pub pearl_cooldown: u32,
-    /// The wind charge's use cooldown (ticks).
-    pub wind_cooldown: u32,
     /// Wind bursts from a guest's turn, waiting for it to end (game/wind.rs).
     pub wind_bursts: Vec<super::wind::Burst>,
     /// Ticks left of the elder guardian's apparition (MobAppearanceParticle).
@@ -642,7 +638,6 @@ impl Game<'_> {
         self.tick_allays();
         self.tick_breeze_effects();
         self.tick_sniffer_effects();
-        self.tick_player_effects();
         self.piglin_pickups();
         self.sulfur_cube_pickups();
         // Hurt and death sounds of damage dealt outside the mob ticks.
@@ -1571,13 +1566,6 @@ impl Game<'_> {
             return;
         }
         self.give_player_effect("minecraft:wither", 40, 0);
-    }
-    /// Burning applied to the player by mobs.
-    fn tick_player_effects(&mut self) {
-        self.creatures.wind_cooldown = self.creatures.wind_cooldown.saturating_sub(1);
-        if self.creatures.pearl_cooldown > 0 {
-            self.creatures.pearl_cooldown -= 1;
-        }
     }
     pub(super) fn hurt_player_by(&mut self, damage_type: &str, amount: f32) {
         if self.creative {
@@ -2879,14 +2867,14 @@ impl Game<'_> {
         let kind = match item {
             "minecraft:snowball" => ProjectileKind::Snowball,
             "minecraft:egg" | "minecraft:blue_egg" | "minecraft:brown_egg" => ProjectileKind::Egg,
-            "minecraft:ender_pearl" => {
-                if self.creatures.pearl_cooldown > 0 {
-                    return Ok(true);
+            "minecraft:ender_pearl" => ProjectileKind::EnderPearl,
+            "minecraft:wind_charge" => {
+                let thrown = self.throw_wind_charge()?;
+                if thrown {
+                    self.apply_use_cooldown(stack);
                 }
-                self.creatures.pearl_cooldown = 20;
-                ProjectileKind::EnderPearl
+                return Ok(thrown);
             }
-            "minecraft:wind_charge" => return self.throw_wind_charge(),
             _ if item.ends_with("_spawn_egg") => return self.use_spawn_egg(stack),
             _ => return Ok(false),
         };
@@ -2911,6 +2899,9 @@ impl Game<'_> {
         );
         self.creatures.projectiles.push(proj);
         self.player_projectile_shot();
+        // ItemStack.use's applyAfterUseComponentSideEffects: the pearl's
+        // second is the `use_cooldown` component, as for any thrown item.
+        self.apply_use_cooldown(stack);
         let sound = match kind {
             ProjectileKind::Snowball => "minecraft:entity.snowball.throw",
             ProjectileKind::Egg => "minecraft:entity.egg.throw",

@@ -46,6 +46,7 @@ pub mod confirm_screen;
 pub mod container_screen;
 pub mod containers;
 pub mod control;
+pub mod cooldowns;
 pub mod crafting;
 pub mod crash;
 pub mod creative;
