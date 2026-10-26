@@ -259,7 +259,11 @@ class OracleReuseTests(unittest.TestCase):
         self.input, self.output = root / "work" / "in.txt", root / "work" / "out.txt"
         self.input.parent.mkdir()
         self.input.write_text("a")
-        python = Path(sys.executable).parent
+        # The shim starts with `#!/usr/bin/env python3`, and a Python's own folder may name it only
+        # python3.13 (Homebrew's): a python3 of its own keeps the PATH below enough.
+        python = root / "python"
+        python.mkdir()
+        (python / "python3").symlink_to(sys.executable)
         self.env = dict(os.environ, PATH=f"{self.shim}:{self.bin}:{python}", PARITY_SHIM_REAL_PATH=str(self.bin),
                         PARITY_SHIM_CACHE=str(root / "cache"))
         self.subprocess = subprocess

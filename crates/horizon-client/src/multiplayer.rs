@@ -11,8 +11,14 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
+
+const SERVER_NAME: crate::clipboard::FieldId = ("server.name", 0);
+const SERVER_ADDRESS: crate::clipboard::FieldId = ("server.address", 0);
+const SERVER_DIRECT: crate::clipboard::FieldId = ("server.direct", 0);
+const FRIEND_CODE: crate::clipboard::FieldId = ("friend.code", 0);
+const FRIEND_RELAY: crate::clipboard::FieldId = ("friend.relay", 0);
 
 /// The result of pinging one address.
 #[derive(Clone, Debug)]
@@ -491,7 +497,7 @@ impl Screen {
                     w / 2.0 - 100.0,
                     h / 4.0 + 96.0 + 18.0,
                     200.0,
-                    "Done",
+                    &crate::lang::get_or("gui.done", "Done"),
                     servers::parse_address(address).is_some(),
                     50,
                 ),
@@ -499,7 +505,7 @@ impl Screen {
                     w / 2.0 - 100.0,
                     h / 4.0 + 120.0 + 18.0,
                     200.0,
-                    "Cancel",
+                    &crate::lang::get_or("gui.cancel", "Cancel"),
                     true,
                     51,
                 ),
@@ -532,7 +538,7 @@ impl Screen {
                     w / 2.0 - 100.0,
                     h / 4.0 + 96.0 + 12.0,
                     200.0,
-                    "Join Server",
+                    &crate::lang::get_or("selectServer.select", "Join Server"),
                     servers::parse_address(address).is_some(),
                     52,
                 ),
@@ -540,7 +546,7 @@ impl Screen {
                     w / 2.0 - 100.0,
                     h / 4.0 + 120.0 + 12.0,
                     200.0,
-                    "Cancel",
+                    &crate::lang::get_or("gui.cancel", "Cancel"),
                     true,
                     53,
                 ),
@@ -558,7 +564,7 @@ impl Screen {
                     w / 2.0 - 100.0,
                     h / 4.0 + 120.0 + 18.0,
                     200.0,
-                    "Cancel",
+                    &crate::lang::get_or("gui.cancel", "Cancel"),
                     true,
                     57,
                 ),
@@ -568,7 +574,7 @@ impl Screen {
                     w / 2.0 - 100.0,
                     h / 2.0 + 30.0,
                     200.0,
-                    "Back to Server List",
+                    &crate::lang::get_or("gui.toMenu", "Back to Server List"),
                     true,
                     54,
                 )];
@@ -587,18 +593,21 @@ impl Screen {
         }
     }
     /// An EditBox and its label: the label at `label_y` (one pixel in, in
-    /// 0xA0A0A0), the 200x20 box at `box_y`.
+    /// 0xA0A0A0), the 200x20 box at `box_y`. The box is the same `EditBox`
+    /// the world screens edit (`Caret`): cursor, selection and scrolling.
     fn field(
         atlas: &HudAtlas,
         batch: &mut HudBatch,
+        caret: &mut crate::ui::Caret,
+        focused_at: Instant,
         label: &str,
         value: &str,
+        id: crate::clipboard::FieldId,
+        max: usize,
         (label_y, box_y): (f32, f32),
         focused: bool,
-        blink: bool,
     ) {
         let x = (batch.width.ceil() / 2.0).floor() - 100.0;
-        crate::widgets::target_as([x, box_y, 200.0, 20.0], crate::widgets::Kind::Field);
         batch.text(
             atlas,
             label,
@@ -607,35 +616,25 @@ impl Screen {
             rgba(160, 160, 160, 255),
             true,
         );
-        batch.fill(
+        caret.draw(
+            batch,
             atlas,
-            x,
-            box_y,
-            200.0,
-            20.0,
-            if focused {
-                u32::MAX
-            } else {
-                rgba(160, 160, 160, 255)
-            },
-        );
-        batch.fill(atlas, x + 1.0, box_y + 1.0, 198.0, 18.0, rgba(0, 0, 0, 255));
-        let shown = if focused && blink {
-            format!("{value}_")
-        } else {
-            value.to_owned()
-        };
-        batch.text(
-            atlas,
-            &shown,
-            x + 4.0,
-            box_y + 6.0,
-            rgba(224, 224, 224, 255),
-            true,
+            (id, value, max),
+            [x, box_y, 200.0, 20.0],
+            focused,
+            focused_at,
         );
     }
-    pub fn draw(&self, atlas: &HudAtlas, batch: &mut HudBatch, blink: bool, cursor: (f32, f32)) {
+    pub fn draw(
+        &self,
+        atlas: &HudAtlas,
+        batch: &mut HudBatch,
+        caret: &mut crate::ui::Caret,
+        focused_at: Instant,
+        cursor: (f32, f32),
+    ) {
         let (w, h) = (batch.width, batch.height);
+        let max = self.max_length();
         crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
         let centered = |batch: &mut HudBatch, text: &str, y: f32, color: u32| {
             let tw = HudBatch::text_width(atlas, text);
@@ -876,10 +875,10 @@ impl Screen {
             } => {
                 centered(
                     batch,
-                    if index.is_some() {
-                        "Edit Server Info"
+                    &if index.is_some() {
+                        crate::lang::get_or("manageServer.edit.title", "Edit Server Info")
                     } else {
-                        "Add Server"
+                        crate::lang::get_or("manageServer.add.title", "Add Server")
                     },
                     17.0,
                     u32::MAX,
@@ -888,20 +887,26 @@ impl Screen {
                 Self::field(
                     atlas,
                     batch,
-                    "Server Name",
+                    caret,
+                    focused_at,
+                    &crate::lang::get_or("manageServer.enterName", "Server Name"),
                     name,
+                    SERVER_NAME,
+                    max,
                     (53.0, 66.0),
                     *focus == 0,
-                    blink,
                 );
                 Self::field(
                     atlas,
                     batch,
-                    "Server Address",
+                    caret,
+                    focused_at,
+                    &crate::lang::get_or("manageServer.enterIp", "Server Address"),
                     address,
+                    SERVER_ADDRESS,
+                    max,
                     (94.0, 106.0),
                     *focus == 1,
-                    blink,
                 );
             }
             Self::Direct { address } => {
@@ -916,11 +921,14 @@ impl Screen {
                 Self::field(
                     atlas,
                     batch,
-                    &crate::lang::get_or("addServer.enterIp", "Server Address"),
+                    caret,
+                    focused_at,
+                    &crate::lang::get_or("manageServer.enterIp", "Server Address"),
                     address,
+                    SERVER_DIRECT,
+                    max,
                     (100.0, 116.0),
                     true,
-                    blink,
                 );
             }
             Self::ConfirmDelete { name, lines, .. } => {
@@ -954,26 +962,32 @@ impl Screen {
                 Self::field(
                     atlas,
                     batch,
+                    caret,
+                    focused_at,
                     "Invite Code",
                     code,
+                    FRIEND_CODE,
+                    max,
                     (53.0, 64.0),
                     *focus == 0,
-                    blink,
                 );
                 Self::field(
                     atlas,
                     batch,
+                    caret,
+                    focused_at,
                     "Relay (optional)",
                     relay,
+                    FRIEND_RELAY,
+                    max,
                     (94.0, 105.0),
                     *focus == 1,
-                    blink,
                 );
             }
             Self::Disconnected { reason, retry } => {
                 centered(
                     batch,
-                    "Connection Lost",
+                    &crate::lang::get_or("disconnect.lost", "Connection Lost"),
                     h / 2.0 - 40.0,
                     rgba(170, 170, 170, 255),
                 );
@@ -1019,7 +1033,7 @@ impl Screen {
             (Self::List { .. }, Some(42)) => {
                 *self = Self::Edit {
                     index: None,
-                    name: "Minecraft Server".into(),
+                    name: crate::lang::get_or("selectServer.defaultName", "Minecraft Server"),
                     address: String::new(),
                     focus: 1,
                     packs: None,
@@ -1261,6 +1275,19 @@ impl Screen {
             scroll.release();
         }
     }
+    /// The focused box, in GUI pixels: name at 66, address at 106
+    /// (`ManageServerScreen`), direct address at 116, friend fields at 64 and 105.
+    pub fn focused_box(&self, (w, _h): (f32, f32)) -> Option<[f32; 4]> {
+        let y = match self {
+            Self::Edit { focus: 0, .. } => 66.0,
+            Self::Edit { .. } => 106.0,
+            Self::Direct { .. } => 116.0,
+            Self::Friend { focus: 0, .. } => 64.0,
+            Self::Friend { .. } => 105.0,
+            _ => return None,
+        };
+        Some([(w / 2.0).floor() - 100.0, y, 200.0, 20.0])
+    }
     fn focused_field(&mut self) -> Option<&mut String> {
         match self {
             Self::Edit {
@@ -1297,11 +1324,11 @@ impl Screen {
     /// The focused text field, its id and maximum length (copy and paste).
     pub fn focused_text(&mut self) -> Option<(crate::clipboard::FieldId, &mut String, usize)> {
         let id = match self {
-            Self::Edit { focus: 0, .. } => ("server.name", 0),
-            Self::Edit { .. } => ("server.address", 0),
-            Self::Direct { .. } => ("server.direct", 0),
-            Self::Friend { focus: 0, .. } => ("friend.code", 0),
-            Self::Friend { .. } => ("friend.relay", 0),
+            Self::Edit { focus: 0, .. } => SERVER_NAME,
+            Self::Edit { .. } => SERVER_ADDRESS,
+            Self::Direct { .. } => SERVER_DIRECT,
+            Self::Friend { focus: 0, .. } => FRIEND_CODE,
+            Self::Friend { .. } => FRIEND_RELAY,
             _ => return None,
         };
         let max = self.max_length();
@@ -1313,21 +1340,6 @@ impl Screen {
             256
         } else {
             128
-        }
-    }
-    pub fn type_text(&mut self, text: &str) {
-        let max = self.max_length();
-        if let Some(field) = self.focused_field() {
-            for c in text.chars().filter(|c| !c.is_control()) {
-                if field.chars().count() < max {
-                    field.push(c);
-                }
-            }
-        }
-    }
-    pub fn backspace(&mut self) {
-        if let Some(field) = self.focused_field() {
-            field.pop();
         }
     }
     pub fn tab(&mut self) {

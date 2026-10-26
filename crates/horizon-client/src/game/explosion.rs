@@ -296,12 +296,14 @@ impl Game<'_> {
             if !creative
                 && !spectator
                 && hurtable
-                && let Ok(o) = p.hurt_blocking(
+                && let Ok(o) = p.hurt_caused_by(
                     &self.motion.health,
                     self.world.health_rules,
                     id,
                     amount,
                     blocking,
+                    // The exploding mob is the causing entity.
+                    exploding.is_some(),
                 )
             {
                 outcome = o;
@@ -313,9 +315,6 @@ impl Game<'_> {
                     p.velocity.z + dir[2] * power,
                 );
             }
-        }
-        if outcome.hurt && !creative {
-            self.hurt_armor(amount);
         }
         if raised {
             self.after_block(outcome, amount, None, false);
@@ -391,9 +390,11 @@ impl Game<'_> {
                 [feet[0] - w, feet[1], feet[2] - w],
                 [feet[0] + w, feet[1] + h, feet[2] + w],
             );
+            // The exploding mob is the damage source's entity, so victims
+            // it kills drop its charged-creeper loot (`Creeper.killedEntity`).
             let source = horizon_client::mobs::Damage {
                 kind: horizon_client::mobs::DamageKind::Explosion,
-                attacker: None,
+                attacker: exploding.map(horizon_client::mobs::Who::Mob),
                 from: Some(center),
             };
             if hurtable && !m.damage(damage(dist, exposure), source) {
@@ -620,6 +621,7 @@ impl Game<'_> {
                 &mut self.world.random,
                 Some((&mut self.rand_sequences, self.level.seed)),
                 decay,
+                false,
             );
             for mut stack in drops {
                 if &*stack.item == "minecraft:air" || stack.count == 0 {

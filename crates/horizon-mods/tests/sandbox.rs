@@ -47,6 +47,8 @@ fn mods_dir() -> &'static Path {
                 "-p",
                 "welcome",
                 "-p",
+                "beacons",
+                "-p",
                 "horizon-mods-test-guest",
                 "-p",
                 "horizon-mods-test-ui-guest",
@@ -70,6 +72,7 @@ fn mods_dir() -> &'static Path {
             ("coords_hud", example("coords-hud")),
             ("predator_missile", example("predator-missile")),
             ("welcome", example("welcome")),
+            ("beacons", example("beacons")),
             ("horizon_mods_test_guest", GUEST_MANIFEST.to_string()),
             ("horizon_mods_test_ui_guest", UI_MANIFEST.to_string()),
         ];
@@ -202,7 +205,7 @@ fn undeclared_capabilities_are_refused() {
 /// from the functions they import.
 #[test]
 fn a_mod_for_a_newer_horizon_is_refused() {
-    use horizon_mods::api_level::{LEVEL, imports, needed};
+    use horizon_mods::api_level::{imports, needed};
     use wit_parser::{ManglingAndAbi, Resolve};
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let wit = std::fs::read_to_string(root.join("crates/horizon-mod-sdk/wit/horizon.wit"))
@@ -252,8 +255,8 @@ experimental = ["ui", "render", "input", "recipes"]
         needed(imports(&wasm).unwrap().iter().map(String::as_str)).0
     };
     assert_eq!(level("coords_hud.hmod"), 0);
-    // The UI guest shows a minimap (`render.set-minimap`).
-    assert_eq!(level("horizon_mods_test_ui_guest.hmod"), LEVEL);
+    // The UI guest fills a browser panel (`browser`, level 6).
+    assert_eq!(level("horizon_mods_test_ui_guest.hmod"), 6);
 }
 
 #[test]
@@ -866,7 +869,12 @@ capabilities = ["registries"]
 fn the_examples_test_scripts_pass() {
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../horizon-mod-sdk/examples");
     let mut ran = 0;
-    for (example, hmod) in [("coords-hud", "coords_hud"), ("welcome", "welcome")] {
+    let examples_and_files = [
+        ("coords-hud", "coords_hud"),
+        ("welcome", "welcome"),
+        ("beacons", "beacons"),
+    ];
+    for (example, hmod) in examples_and_files {
         for entry in std::fs::read_dir(examples.join(example).join("tests")).unwrap() {
             let path = entry.unwrap().path();
             let script = Script::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
@@ -877,7 +885,24 @@ fn the_examples_test_scripts_pass() {
             ran += 1;
         }
     }
-    assert_eq!(ran, 4);
+    assert_eq!(ran, 5);
+}
+
+/// Capability `world` without a world lent (the registry's trial run):
+/// `get-block` finds nothing, `set-blocks` checks its count and queues.
+#[test]
+fn a_server_mod_without_a_world_reads_nothing() {
+    let mut game = TestGame::load(&mods_dir().join("beacons.hmod")).unwrap();
+    game.join("Alex");
+    let alex = game.players[0].clone();
+    assert!(game.player_command(&alex, "ground"));
+    let out = game.drain();
+    assert!(
+        out.iter()
+            .any(|o| matches!(o, Output::Reply { text, error: true, .. }
+            if text == "The ground under you isn't loaded")),
+        "{out:?}"
+    );
 }
 
 #[test]

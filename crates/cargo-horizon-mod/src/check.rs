@@ -266,6 +266,11 @@ fn play(path: &Path, report: &mut Report) -> Result<(), String> {
                 format!("{} quiet command(s)", lines.len())
             }
             Output::Stopped { reason, .. } => return Err(format!("it stopped: {reason}")),
+            Output::SetBlocks {
+                dimension, blocks, ..
+            } => {
+                format!("set {} block(s) in {dimension}", blocks.len())
+            }
             Output::OpenScreen { .. } => "opened a screen".to_string(),
             Output::CloseScreen { .. } => "closed its screen".to_string(),
             Output::Shake { strength, seconds } => {

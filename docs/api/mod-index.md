@@ -18,7 +18,7 @@ Level: preview ([stability.md](stability.md)). Schema 1.
   "projects": [{
     "id": "coords_hud", "kind": "mod", "name": "Coordinates HUD", "summary": "One line.",
     "description": "Markdown.", "authors": ["Horizon"], "owners": ["ludovic111"],
-    "license": "MIT", "source": "https://github.com/...", "icon": "https://...png", "key": "RWT...",
+    "license": "MIT", "source": "https://github.com/...", "icon": "https://...png", "key": "RWT...", "downloads": 1234,
     "versions": [{
       "version": "0.1.0", "published": "2026-10-24", "changelog": "",
       "api": "0.1", "side": "client", "capabilities": ["game-read", "hud", "chat"], "api_level": 0, "game": "26.3",
@@ -41,6 +41,7 @@ Level: preview ([stability.md](stability.md)). Schema 1.
 | `icon` | `https://`, optional. |
 | `key` | The author's [minisign](https://jedisct1.github.io/minisign/) public key. When set, every version must be signed with it; an update signed with another key is refused. Absent: the project is unsigned and the launcher says so. |
 | `versions` | Newest first, at least one. |
+| `downloads` | How many times its files were downloaded, every version together: GitHub's count of each release asset, summed by the publish job, which runs every hour. Absent until a file is downloaded. Read-only: never in an entry. |
 | `api` | A mod's API line (its manifest's `api`); a modpack's manifest format (`1`). |
 | `side`, `capabilities` | A mod's, read from its manifest by CI, never typed by hand. |
 | `api_level` | The mod API level a mod's code needs ([stability.md](stability.md#mod-api-levels)): its newest imported function's, read from the file by CI. Absent for content-only mods and in indexes built before levels. Installers take the newest version whose level the running game serves. |
@@ -167,6 +168,7 @@ opens.
 
 ## Changelog
 
+- 2026-10-26: `projects[].downloads`, GitHub's download counts of a project's files, refreshed every hour.
 - 2026-10-26: the launcher installs `shader` files into `shaderpacks/`; the sample index lists one (`glow`).
 - 2026-10-25: `shader` opens, checked by `horizon_shader_api::check`; its files are `.hshader`.
 - Schema 1 (2026-10-24): kinds `mod`, `modpack`, `resourcepack`, `shader`; `.hpack` format 1.
