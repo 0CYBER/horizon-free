@@ -44,6 +44,10 @@ pub struct Furnace {
     pub cooking_timer: i32,
     pub cooking_total: i32,
     pub speed: f32,
+    /// `AbstractFurnaceBlockEntity.recipesUsed`: how many of each recipe this furnace has
+    /// made since a player last took from its output. The experience is owed per recipe
+    /// rather than per item, and a save keeps it as the `RecipesUsed` compound.
+    pub recipes_used: HashMap<String, u32>,
 }
 /// A hopper's slots: the only plain container with five.
 pub const HOPPER_SLOTS: usize = 5;
@@ -190,6 +194,7 @@ impl BlockEntity {
                 cooking_timer: 0,
                 cooking_total: 0,
                 speed: 1.0,
+                recipes_used: HashMap::new(),
             }));
         }
         if name == "minecraft:creaking_heart" {
@@ -483,6 +488,14 @@ impl Furnace {
             self.cooking_timer = 0;
         }
     }
+    /// `recipesUsed`, each recipe with its `experience` (0 for one this data pack does
+    /// not have), in the order `getRecipesToAwardAndPopExperience` pays them.
+    pub fn recipe_experience(&self, recipes: &Recipes) -> Vec<(u32, f32)> {
+        self.recipes_used
+            .iter()
+            .map(|(id, count)| (*count, recipes.cooking_experience(id)))
+            .collect()
+    }
     /// A menu click wrote its slots into `items`, and `before` was the input
     /// slot until then: the menu called `setItem` on it only if it changed
     /// (`Slot.setByPlayer`; partial takes and merges keep the stack).
@@ -564,6 +577,7 @@ impl Furnace {
                                     Some(out) => out.count += recipe.result.count,
                                     None => self.items[2] = Some(recipe.result.clone()),
                                 }
+                                *self.recipes_used.entry(recipe.id.clone()).or_insert(0) += 1;
                                 if let Some(i) = self.items[0].as_mut() {
                                     i.count -= 1;
                                     if i.count == 0 {
@@ -592,5 +606,43 @@ fn total_time(time: u32, speed: f32) -> i32 {
         (time as f32 / speed).ceil() as i32
     } else {
         time as i32
+    }
+}
+
+/// `AbstractFurnaceBlockEntity.createExperience`: `count * experience`, floored, and one
+/// more with the chance of what is left over (a level random draw only when there is some).
+pub fn create_experience(
+    count: u32,
+    experience: f32,
+    random: &mut impl horizon_core::random::RandomSource,
+) -> u32 {
+    let total = count as f32 * experience;
+    let whole = total.floor();
+    let fraction = total - whole;
+    let mut xp = whole.max(0.0) as u32;
+    if fraction != 0.0 && random.next_float() < fraction {
+        xp += 1;
+    }
+    xp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use horizon_core::random::{LegacyRandom, RandomSource};
+
+    /// A whole amount pays itself without a draw; a fraction is a chance of one more.
+    #[test]
+    fn create_experience_rounds_the_fraction_by_chance() {
+        let mut random = LegacyRandom::new(7);
+        let mut untouched = LegacyRandom::new(7);
+        assert_eq!(create_experience(4, 0.5, &mut random), 2);
+        assert_eq!(create_experience(3, 0.0, &mut random), 0);
+        assert_eq!(random.next_long(), untouched.next_long());
+        let paid: u32 = (0..1000)
+            .map(|_| create_experience(1, 0.35, &mut random))
+            .sum();
+        assert!((250..450).contains(&paid), "{paid}");
+        assert!((0..100).all(|_| (1..=2).contains(&create_experience(1, 1.7, &mut random))));
     }
 }
