@@ -168,6 +168,8 @@ pub struct Hub {
     level_sync: std::collections::HashMap<String, LevelSync>,
     /// Operators and their permission levels (dedicated servers).
     pub ops: std::collections::HashMap<u128, u8>,
+    /// `entity-broadcast-range-percentage` (dedicated servers).
+    pub entity_range_percent: i32,
     chat_type: i32,
     dimension_type: i32,
     clock_ids: Vec<i32>,
@@ -332,6 +334,7 @@ impl Hub {
             ticking: (20.0, false),
             stepping: 0,
             ops: Default::default(),
+            entity_range_percent: 100,
             weather: (false, 0.0, 0.0),
             level_sync: Default::default(),
             chat_type,
@@ -1678,6 +1681,7 @@ impl Hub {
                 out,
             })
             .collect();
+        level.range_percent = Some(self.entity_range_percent);
         let (types, sync) = (&mut self.entity_types, &self.sync);
         level.tick(&entities, &self.riding, &mut viewers, |kind| {
             entity_type(types, sync, kind)
