@@ -370,7 +370,14 @@ impl Mob {
     /// Entity.move with block collisions and step-up; updates collision flags
     /// and fall distance (Entity.checkFallDamage).
     pub fn do_move(&mut self, w: &MobWorld, events: &mut Vec<MobEvent>) {
-        let wanted = self.velocity;
+        let mut wanted = self.velocity;
+        // Entity.move: a block the mob is stuck in (sweet berry bush) scales
+        // this move once and stops it.
+        if self.stuck_multiplier.length_squared() > 1.0e-7 {
+            wanted = wanted.multiply(self.stuck_multiplier);
+            self.stuck_multiplier = Vec3::ZERO;
+            self.velocity = Vec3::ZERO;
+        }
         let step = self.kind.step_height as f32;
         let mut scene = SceneCollisions {
             world: w.world,
