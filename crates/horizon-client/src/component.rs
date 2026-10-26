@@ -173,6 +173,10 @@ fn object_style(o: &serde_json::Map<String, Value>) -> Style {
     if let Some(e) = o.get("click_event").and_then(Value::as_object) {
         let text = |k: &str| e.get(k).and_then(Value::as_str).map(str::to_owned);
         style.click = match e.get("action").and_then(Value::as_str) {
+            // ClickEvent.OpenUrl.CODEC: ExtraCodecs.UNTRUSTED_URI allows http and https only.
+            Some("open_url") => text("url")
+                .filter(|u| u.starts_with("http://") || u.starts_with("https://"))
+                .map(crate::text::ClickEvent::OpenUrl),
             Some("suggest_command") => text("command").map(crate::text::ClickEvent::SuggestCommand),
             Some("copy_to_clipboard") => {
                 text("value").map(crate::text::ClickEvent::CopyToClipboard)

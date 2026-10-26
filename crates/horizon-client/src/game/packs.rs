@@ -34,6 +34,10 @@ pub fn open_folder(dir: &Path) {
         log::warn!("Horizon: could not open {}: {e}", dir.display());
     }
 }
+/// `Util.getPlatform().openUri`: the system's handler for a link.
+pub fn open_uri(uri: &str) {
+    open_folder(Path::new(uri));
+}
 /// The resource root to load from, given the vanilla root, the selection and
 /// a server's packs, which go on top (`Pack.Position.TOP`, fixed).
 pub fn startup_root(

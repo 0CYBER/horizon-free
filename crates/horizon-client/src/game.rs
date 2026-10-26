@@ -1218,6 +1218,8 @@ struct Game<'a> {
     pending_pack_reload: bool,
     /// A server's resource packs (game/server_packs.rs).
     server_packs: server_packs::ServerPackState,
+    /// The link a chat click asks to open (`ConfirmLinkScreen`).
+    link_prompt: Option<String>,
     dialogs: dialogs::DialogState,
     world_renderer_ready: bool,
     collision: &'a BlockCollisionRegistry<'a>,
@@ -5150,6 +5152,7 @@ impl Game<'_> {
         };
         self.draw_dialog(&mut batch);
         self.draw_pack_prompt(&mut batch);
+        self.draw_link_prompt(&mut batch);
         // Gui.extractRenderState: the debug overlay comes after the screen
         // and the toasts, so it is over everything, menus included.
         self.draw_debug_overlay(&mut batch, size);
@@ -11825,6 +11828,11 @@ impl ApplicationHandler for Game<'_> {
                         self.advancements_scroll(scaled(raw_x) as f32, d);
                     }
                 }
+                WindowEvent::MouseInput { state, button, .. } if self.link_prompt.is_some() => {
+                    if state == ElementState::Pressed && button == MouseButton::Left {
+                        self.link_prompt_click();
+                    }
+                }
                 WindowEvent::MouseInput { state, button, .. }
                     if self.server_packs.prompt.is_some() =>
                 {
@@ -12044,6 +12052,13 @@ impl ApplicationHandler for Game<'_> {
                     }
                 }
                 // ConfirmScreen.keyPressed: Escape answers no.
+                WindowEvent::KeyboardInput { event, .. } if self.link_prompt.is_some() => {
+                    if event.state == ElementState::Pressed
+                        && event.physical_key == PhysicalKey::Code(KeyCode::Escape)
+                    {
+                        self.answer_link_prompt(false);
+                    }
+                }
                 WindowEvent::KeyboardInput { event, .. } if self.server_packs.prompt.is_some() => {
                     if event.state == ElementState::Pressed
                         && event.physical_key == PhysicalKey::Code(KeyCode::Escape)
@@ -12559,6 +12574,7 @@ impl<'a> Game<'a> {
             world_loader: None,
             pending_pack_reload: false,
             server_packs: Default::default(),
+            link_prompt: None,
             dialogs: Default::default(),
             world_renderer_ready: false,
             collision: res.collision(),
