@@ -3813,19 +3813,25 @@ impl Game<'_> {
                 .and_modify(|p| p.0 = sequence)
                 .or_insert((sequence, state.0 as i32));
         }
-        let s = self.res.facts().get(state).sounds.clone();
-        let at = [
-            f64::from(pos[0]) + 0.5,
-            f64::from(pos[1]) + 0.5,
-            f64::from(pos[2]) + 0.5,
-        ];
-        self.audio.play(
-            &s.break_sound,
-            Some(at),
-            (s.volume + 1.0) / 2.0,
-            s.pitch * 0.8,
-        );
-        self.destroy_particles(pos, state);
+        // Block.playerWillDestroy's destroy event (particles and the break
+        // sound), which BaseFireBlock skips: the server's extinguish sound
+        // is all a player hears.
+        let facts = self.res.facts().get(state);
+        if !self.res.items().block_in_tag("minecraft:fire", &facts.name) {
+            let s = facts.sounds.clone();
+            let at = [
+                f64::from(pos[0]) + 0.5,
+                f64::from(pos[1]) + 0.5,
+                f64::from(pos[2]) + 0.5,
+            ];
+            self.audio.play(
+                &s.break_sound,
+                Some(at),
+                (s.volume + 1.0) / 2.0,
+                s.pitch * 0.8,
+            );
+            self.destroy_particles(pos, state);
+        }
         // The server's block update follows (waterlogged blocks leave water).
         let air = self.world.air;
         if self.world.set(pos[0], pos[1], pos[2], air).is_ok() {
