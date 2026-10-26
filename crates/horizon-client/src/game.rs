@@ -1266,6 +1266,13 @@ struct Game<'a> {
     /// Controllers (Horizon's own).
     pad: pad::Pads,
     frames: u64,
+    /// `item_level` for one frame, game time, day time and dimension.
+    item_level_cache: std::cell::RefCell<
+        Option<(
+            (u64, i64, i64, &'static str),
+            horizon_assets::item_model::LevelState,
+        )>,
+    >,
     /// Frames drawn with the player in the world, for `--world-frames`.
     world_frames: u64,
     fps: f32,
@@ -12157,6 +12164,7 @@ impl<'a> Game<'a> {
             last_input: now,
             pad: Default::default(),
             frames: 0,
+            item_level_cache: Default::default(),
             world_frames: 0,
             fps: 0.0,
             fps_frames: 0,
