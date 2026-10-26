@@ -6,7 +6,7 @@
 //! survive a Horizon save.
 use crate::{
     arrows::Pickup,
-    entities::{ArmorStand, ExperienceOrb, ItemEntity, ItemFrame, Painting},
+    entities::{ArmorStand, Cushion, ExperienceOrb, ItemEntity, ItemFrame, Painting},
     mobs::{Mob, MobType, Who},
     projectiles::{Projectile, ProjectileKind},
     save::{
@@ -1312,6 +1312,79 @@ pub fn painting_from_nbt(tag: &Tag) -> Option<([i32; 3], u8, String)> {
     };
     let facing = (number(tag.get("facing")).unwrap_or(0) & 3) as u8;
     Some((pos, facing, text(tag.get("variant"))?))
+}
+/// Cushion.addAdditionalSaveData: the block it sits on and its colour.
+pub fn cushion_to_nbt(c: &Cushion, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
+    let base = Base {
+        id: "minecraft:cushion",
+        uuid,
+        position: c.position,
+        motion: Vec3::ZERO,
+        rotation: [c.yaw, 0.0],
+        on_ground: false,
+        fall_distance: 0.0,
+    };
+    let mut tag = base.tag(raw);
+    put(&mut tag, "block_pos", Tag::IntArray(c.pos.to_vec()));
+    put(&mut tag, "color", string(c.color_name()));
+    tag
+}
+/// The position, block position, yaw and colour of a saved cushion.
+pub fn cushion_from_nbt(tag: &Tag, id: u32) -> Option<Cushion> {
+    let position = position(tag)?;
+    let pos = match tag.get("block_pos") {
+        Some(Tag::IntArray(v)) if v.len() == 3 => [v[0], v[1], v[2]],
+        _ => [
+            position.x.floor() as i32,
+            position.y.floor() as i32,
+            position.z.floor() as i32,
+        ],
+    };
+    let yaw = match tag.get("Rotation") {
+        Some(Tag::List(l)) => l
+            .first()
+            .and_then(|v| crate::save::float(Some(v)))
+            .unwrap_or(0.0) as f32,
+        _ => 0.0,
+    };
+    let color =
+        crate::entities::dye_index(&text(tag.get("color")).unwrap_or_else(|| "white".into()));
+    Some(Cushion {
+        id,
+        position,
+        pos,
+        yaw,
+        color,
+        check_interval: 0,
+    })
+}
+
+#[cfg(test)]
+mod cushion_tests {
+    use super::*;
+
+    #[test]
+    fn cushion_save_preserves_color_anchor_rotation_and_unknown_data() {
+        let cushion = Cushion {
+            id: 7,
+            position: Vec3::new(-1.5, 64.5, 3.5),
+            pos: [-2, 64, 3],
+            yaw: 270.0,
+            color: 14,
+            check_interval: 55,
+        };
+        let raw = Tag::compound([("CustomName", string("Seat"))]);
+        let tag = cushion_to_nbt(&cushion, [1, 2, 3, 4], Some(&raw));
+        assert_eq!(text(tag.get("CustomName")).as_deref(), Some("Seat"));
+        let loaded = cushion_from_nbt(&tag, 8).unwrap();
+        assert_eq!(loaded.id, 8);
+        assert_eq!(loaded.position, cushion.position);
+        assert_eq!(loaded.pos, cushion.pos);
+        assert_eq!(loaded.yaw, cushion.yaw);
+        assert_eq!(loaded.color_name(), "red");
+        assert_eq!(loaded.check_interval, 0);
+        assert_eq!(loaded.bounds(), cushion.bounds());
+    }
 }
 /// ItemFrame.addAdditionalSaveData.
 pub fn item_frame_to_nbt(f: &ItemFrame, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {

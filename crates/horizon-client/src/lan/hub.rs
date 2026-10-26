@@ -376,9 +376,21 @@ impl Hub {
         id
     }
     pub fn stack(&mut self, s: &Option<ItemStack>) -> Option<horizon_protocol::item::Stack> {
-        let id = s.as_ref().map(|s| self.item_id(&s.item))?;
+        let item = s.as_ref()?.item.clone();
+        let id = self.item_id(&item);
         let sync = self.sync.clone();
-        stack_to_network(|_| id, |registry, name| sync.id(registry, name), s)
+        // The stacks inside it (a bundle's contents, a crossbow's projectiles)
+        // have ids of their own.
+        let item_id = |name: &str| {
+            if name == &*item {
+                return id;
+            }
+            sync.builtin
+                .get("minecraft:item")
+                .and_then(|i| i.id(name))
+                .unwrap_or(0)
+        };
+        stack_to_network(item_id, |registry, name| sync.id(registry, name), s)
     }
 
     pub fn broadcast(&self, packet: &C) {
