@@ -166,9 +166,10 @@ pub fn after_hurt(m: &mut Mob) {
 }
 /// `Shulker.hurtServer` after a shulker bullet's damage: unless the
 /// low-health teleport was drawn instead (`else if`), `hitByShulkerBullet`
-/// runs on the next tick.
+/// runs on the next tick. Whether the shell is open is read here, at hurt
+/// time, so a goal opening it before that tick cannot change the outcome.
 pub fn hit_by_bullet(m: &mut Mob) {
-    if m.species() == Species::Shulker && !m.extra.flag {
+    if m.species() == Species::Shulker && !m.extra.flag && m.extra.counter != 0 {
         m.extra.flag2 = true;
     }
 }
@@ -188,9 +189,10 @@ pub fn ai_step(
         hit_by_shulker_bullet(m, w, level_random, events);
     }
 }
-/// `Shulker.hitByShulkerBullet`: an open shulker teleports, and leaves a
-/// new one of its colour behind unless shulkers crowd the place (one in
-/// five fewer chances for every other shulker within 8 blocks).
+/// `Shulker.hitByShulkerBullet` (only queued by an open shulker): it
+/// teleports, and leaves a new one of its colour behind unless shulkers
+/// crowd the place (one in five fewer chances for every other shulker
+/// within 8 blocks).
 fn hit_by_shulker_bullet(
     m: &mut Mob,
     w: &MobWorld,
@@ -199,7 +201,7 @@ fn hit_by_shulker_bullet(
 ) {
     let old_position = m.position;
     let old_box = m.bounds();
-    if m.extra.counter == 0 || !teleport(m, w, events) {
+    if !teleport(m, w, events) {
         return;
     }
     let area = old_box.inflate(Vec3::new(8.0, 8.0, 8.0));
