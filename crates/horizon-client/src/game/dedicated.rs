@@ -409,6 +409,8 @@ struct ServerState {
     paused: bool,
     /// `broadcast-console-to-ops`.
     broadcast_console: bool,
+    /// `op-permission-level`: what `/op` grants (operatorUserPermissions).
+    op_level: i32,
 }
 
 /// The dedicated-only commands' replies vanilla sends with `broadcast`
@@ -663,6 +665,7 @@ impl Game<'_> {
             ticks: Default::default(),
             paused: false,
             broadcast_console: props.broadcast_console_to_ops,
+            op_level: props.op_permission_level,
         };
         let pause_after = props.pause_when_empty_seconds * 20;
         let idle_timeout = props.player_idle_timeout;
@@ -924,7 +927,7 @@ impl Game<'_> {
                 let Some(user) = self.resolve(rest[0]) else {
                     return;
                 };
-                let level = 4;
+                let level = state.op_level;
                 let changed = {
                     let mut l = state.lists.lock().unwrap();
                     if command == "op" {
