@@ -278,6 +278,13 @@ pub fn detail_lines(
                 .replacen("%s", "5", 1),
         );
     }
+    // InstrumentComponent.addToTooltip: the instrument's description.
+    if let Some(id) = crate::items::instrument_id(stack)
+        && TooltipDisplay::for_stack(stack).shows("minecraft:instrument")
+    {
+        let (namespace, name) = id.split_once(':').unwrap_or(("minecraft", &id));
+        lines.push(text(&format!("instrument.{namespace}.{name}")));
+    }
     let data = stack.data();
     // PotDecorations.addToTooltip.
     if let Some(sherds) = data

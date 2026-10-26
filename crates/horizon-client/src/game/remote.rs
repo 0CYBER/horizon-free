@@ -4334,6 +4334,12 @@ impl Game<'_> {
             }
             // SpyglassItem.use (its sound is the server's).
             "minecraft:spyglass" => true,
+            // InstrumentItem.use: the horn plays here too (`playSound(player, ...)`
+            // skips the player's own client), the server's copy tells the others.
+            "minecraft:goat_horn" => {
+                self.remote_use_instrument(held);
+                return;
+            }
             // ShieldItem.use: anything that blocks attacks, off cooldown.
             _ => {
                 self.raise_shield(self.held_slot());
@@ -4342,6 +4348,27 @@ impl Game<'_> {
         };
         if start {
             self.using = Some((self.held_slot(), 0));
+        }
+    }
+    /// `InstrumentItem.use` on this client: unless the horn is on cooldown,
+    /// it is held up, plays its sound at the player and starts its cooldown.
+    fn remote_use_instrument(&mut self, held: &ItemStack) {
+        let Some(instrument) = self.res.items().instrument(held).cloned() else {
+            return;
+        };
+        let group = horizon_client::cooldowns::group(held, None);
+        if self.cooldowns.is_on_cooldown(&group) {
+            return;
+        }
+        self.using = Some((self.held_slot(), 0));
+        let at = self
+            .player
+            .as_ref()
+            .map(|p| [p.position.x, p.position.y, p.position.z]);
+        self.audio
+            .play(&instrument.sound, at, instrument.range / 16.0, 1.0);
+        if instrument.use_duration > 0.0 {
+            self.add_cooldown(group, instrument.use_ticks());
         }
     }
     /// Whether `stack` stays in use until the button lets go (bows,
@@ -4387,6 +4414,15 @@ impl Game<'_> {
         // the button lets go.
         if stack.as_ref().is_some_and(|s| self.held_until_released(s)) {
             self.using = in_hand.then_some((slot, ticks + 1));
+            return;
+        }
+        // A goat horn is held up for its instrument's use duration.
+        if let Some(duration) = stack
+            .as_ref()
+            .and_then(|s| self.res.items().instrument(s))
+            .map(|i| i.use_ticks().max(0) as u32)
+        {
+            self.using = (in_hand && ticks + 1 < duration).then_some((slot, ticks + 1));
             return;
         }
         let consumable = stack

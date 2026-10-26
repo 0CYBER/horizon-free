@@ -1097,6 +1097,7 @@ impl Game<'_> {
                 let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
                 let g = &mut host.hub.guests[gi];
                 (g.yaw, g.pitch) = (p.yaw, p.pitch);
+                let heard = self.audio.capture.as_ref().map_or(0, Vec::len);
                 let swung = self.as_guest(host, conn, |g| {
                     g.guest_use = Some(GuestUse::Item(hand));
                     let swings = g.swings_started;
@@ -1105,6 +1106,7 @@ impl Game<'_> {
                     g.swings_started != swings
                 });
                 self.lan_swing_back(host, conn, swung);
+                self.guest_instrument_sound(host, conn, heard);
             }
             S::Attack(p) => self.guest_attack(host, conn, p.id),
             S::Interact(p) => {
@@ -2755,6 +2757,25 @@ impl Game<'_> {
         for (name, at, volume, pitch) in sounds {
             let source = horizon_client::settings::sound_source(&name) as i32;
             host.hub.sound(&name, at, volume, pitch, source, Some(conn));
+        }
+    }
+
+    /// `InstrumentItem.play`'s `level.playSound(player, ...)`: the others hear
+    /// a guest's horn now, the guest's own client played it as it used it.
+    fn guest_instrument_sound(&mut self, host: &mut LanHost, conn: u32, heard: usize) {
+        let Some(capture) = self.audio.capture.as_mut() else {
+            return;
+        };
+        let instruments = &self.res.items().instruments;
+        let mut i = heard.min(capture.len());
+        while i < capture.len() {
+            if instruments.values().any(|x| x.sound == capture[i].0) {
+                let (name, at, volume, pitch) = capture.remove(i);
+                let source = horizon_client::settings::sound_source(&name) as i32;
+                host.hub.sound(&name, at, volume, pitch, source, Some(conn));
+            } else {
+                i += 1;
+            }
         }
     }
 

@@ -3592,9 +3592,13 @@ impl Game<'_> {
             return;
         };
         let group = horizon_client::cooldowns::group(stack, default.as_ref());
-        self.cooldowns.add(Arc::clone(&group), component.ticks());
+        self.add_cooldown(group, component.ticks());
+    }
+    /// `ItemCooldowns.addCooldown` (a guest also gets the packet).
+    pub(super) fn add_cooldown(&mut self, group: Arc<str>, ticks: i32) {
+        self.cooldowns.add(Arc::clone(&group), ticks);
         if self.lan_acting.is_some() {
-            self.guest_cooldowns.push((group, component.ticks()));
+            self.guest_cooldowns.push((group, ticks));
         }
     }
     /// One hand's turn in `startUseItem`: `useItemOn` the block aimed at,
@@ -3739,6 +3743,10 @@ impl Game<'_> {
         }
         if !on_block && &*stack.item == "minecraft:spyglass" {
             self.use_spyglass();
+            return Ok(true);
+        }
+        if !on_block && &*stack.item == "minecraft:goat_horn" {
+            self.use_instrument(&stack);
             return Ok(true);
         }
         if !on_block && &*stack.item == "minecraft:bow" {
@@ -3888,6 +3896,34 @@ impl Game<'_> {
         }
         true
     }
+    /// `InstrumentItem.use` for a goat horn: the player holds it up for the
+    /// instrument's `use_duration`, its sound plays at the player
+    /// (`SoundSource.RECORDS`, volume `range / 16`), `INSTRUMENT_PLAY` is
+    /// posted, the used statistic counts and the horn is on cooldown as long.
+    /// A horn whose instrument is unknown fails, which still ends the click.
+    fn use_instrument(&mut self, stack: &ItemStack) {
+        let Some(instrument) = self.res.items().instrument(stack).cloned() else {
+            return;
+        };
+        if self.using.is_none() {
+            self.using = Some((self.held_slot(), 0));
+        }
+        let at = self
+            .player
+            .as_ref()
+            .map(|p| [p.position.x, p.position.y, p.position.z]);
+        self.audio
+            .play(&instrument.sound, at, instrument.range / 16.0, 1.0);
+        self.post_entity_event(
+            "minecraft:instrument_play",
+            horizon_client::mobs::Who::Player,
+        );
+        if instrument.use_duration > 0.0 {
+            let group = horizon_client::cooldowns::group(stack, None);
+            self.add_cooldown(group, instrument.use_ticks());
+        }
+        self.stats.add("used", &stack.item, 1);
+    }
     fn apply_consume_effect(&mut self, effect: &horizon_client::items::ConsumeEffect) {
         use horizon_client::items::ConsumeEffect;
         match effect {
@@ -4008,6 +4044,16 @@ impl Game<'_> {
             } else {
                 self.using = Some((slot, ticks + 1));
             }
+            return;
+        }
+        if let Some(duration) = self
+            .res
+            .items()
+            .instrument(&stack)
+            .map(|i| i.use_ticks().max(0) as u32)
+        {
+            // InstrumentItem.getUseDuration: held up that long, nothing more.
+            self.using = (ticks + 1 < duration).then_some((slot, ticks + 1));
             return;
         }
         let Some(consumable) = info.consumable.as_ref() else {
