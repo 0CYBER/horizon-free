@@ -5164,7 +5164,8 @@ impl Game<'_> {
                 | BlockEntity::TrialSpawner(_)
                 | BlockEntity::Vault(_)
                 | BlockEntity::Beehive(_)
-                | BlockEntity::CommandBlock(_),
+                | BlockEntity::CommandBlock(_)
+                | BlockEntity::Skull(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -5433,7 +5434,8 @@ impl Game<'_> {
                     | BlockEntity::TrialSpawner(_)
                     | BlockEntity::Vault(_)
                     | BlockEntity::Beehive(_)
-                    | BlockEntity::CommandBlock(_),
+                    | BlockEntity::CommandBlock(_)
+                    | BlockEntity::Skull(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
@@ -6950,6 +6952,7 @@ impl Game<'_> {
                     _ => None,
                 },
                 banner: &|p| self.banner_layers_at(p),
+                skull: &|p| self.skull_skin_at(p),
                 glyph: &|c| self.gui.atlas.glyph_cell(c),
             };
             // Block entities outside the view frustum are skipped (with a
