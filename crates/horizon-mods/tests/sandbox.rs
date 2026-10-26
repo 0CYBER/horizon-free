@@ -197,6 +197,65 @@ fn undeclared_capabilities_are_refused() {
     assert_eq!(mods.entries()[0].status, refused);
 }
 
+/// A mod calling a function this Horizon doesn't have is refused with
+/// "update Horizon", not a linking error; the test mods' levels are read
+/// from the functions they import.
+#[test]
+fn a_mod_for_a_newer_horizon_is_refused() {
+    use horizon_mods::api_level::{LEVEL, imports, needed};
+    use wit_parser::{ManglingAndAbi, Resolve};
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let wit = std::fs::read_to_string(root.join("crates/horizon-mod-sdk/wit/horizon.wit"))
+        .unwrap()
+        .replace(
+            "    set-minimap: func(minimap: option<minimap>);",
+            "    set-minimap: func(minimap: option<minimap>);\n    set-sky: func(on: bool);",
+        );
+    let mut resolve = Resolve::default();
+    let package = resolve.push_str("horizon.wit", &wit).unwrap();
+    let world = resolve
+        .select_world(&[package], Some("horizon-ui-mod"))
+        .unwrap();
+    let mut module = wit_component::dummy_module(&resolve, world, ManglingAndAbi::Standard32);
+    wit_component::embed_component_metadata(
+        &mut module,
+        &resolve,
+        world,
+        wit_component::StringEncoding::UTF8,
+    )
+    .unwrap();
+    let wasm = wit_component::ComponentEncoder::default()
+        .module(&module)
+        .unwrap()
+        .encode()
+        .unwrap();
+    let functions = imports(&wasm).unwrap();
+    assert!(functions.iter().any(|f| f == "render.set-sky"));
+    let dir = mods_dir().join("too_new");
+    std::fs::create_dir_all(&dir).unwrap();
+    let manifest = r#"
+id = "too_new"
+name = "Too New"
+version = "0.1.0"
+api = "0.1"
+capabilities = ["game-read", "chat", "hud", "storage", "command", "ui", "render", "input"]
+experimental = ["ui", "render", "input"]
+"#;
+    std::fs::write(dir.join("horizon-mod.toml"), manifest).unwrap();
+    std::fs::write(dir.join("mod.wasm"), wasm).unwrap();
+    let mods = Mods::load(&[dir], |_| true, |_| false);
+    let refused = "made for a newer Horizon (it uses render.set-sky): update Horizon to run it";
+    assert_eq!(mods.entries()[0].status, Status::Failed(refused.into()));
+
+    let level = |file: &str| {
+        let wasm = Package::read(&mods_dir().join(file)).unwrap().wasm.unwrap();
+        needed(imports(&wasm).unwrap().iter().map(String::as_str)).0
+    };
+    assert_eq!(level("coords_hud.hmod"), 0);
+    // The UI guest shows a minimap (`render.set-minimap`).
+    assert_eq!(level("horizon_mods_test_ui_guest.hmod"), LEVEL);
+}
+
 #[test]
 fn vanilla_commands_win() {
     let mods = Mods::load(
@@ -735,22 +794,23 @@ capabilities = ["registries"]
     assert!(!mods.is_running());
 }
 
-/// `cargo horizon-mod test` on the example: its own `tests/*.toml` pass.
+/// `cargo horizon-mod test` on the examples: their own `tests/*.toml` pass.
 #[test]
 fn the_examples_test_scripts_pass() {
-    let tests =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../horizon-mod-sdk/examples/coords-hud/tests");
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../horizon-mod-sdk/examples");
     let mut ran = 0;
-    for entry in std::fs::read_dir(tests).unwrap() {
-        let path = entry.unwrap().path();
-        let script = Script::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        let mut game = TestGame::load(&mods_dir().join("coords_hud.hmod")).unwrap();
-        script
-            .run(&mut game)
-            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        ran += 1;
+    for (example, hmod) in [("coords-hud", "coords_hud"), ("welcome", "welcome")] {
+        for entry in std::fs::read_dir(examples.join(example).join("tests")).unwrap() {
+            let path = entry.unwrap().path();
+            let script = Script::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            let mut game = TestGame::load(&mods_dir().join(format!("{hmod}.hmod"))).unwrap();
+            script
+                .run(&mut game)
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            ran += 1;
+        }
     }
-    assert_eq!(ran, 2);
+    assert_eq!(ran, 4);
 }
 
 #[test]
@@ -773,6 +833,13 @@ fn a_test_script_says_which_step_failed_and_why() {
     assert!(
         Script::parse("[[step]]\ntick = 1").is_err(),
         "a typo is an error"
+    );
+
+    let mut game = TestGame::load(&mods_dir().join("welcome.hmod")).unwrap();
+    let script = "[[step]]\njoin = \"Alex\"\n\n[[step]]\nas = \"Steve\"\ncommand = \"mined\"";
+    assert_eq!(
+        Script::parse(script).unwrap().run(&mut game).unwrap_err(),
+        "step 2 (/mined): Steve is not on the server"
     );
 }
 

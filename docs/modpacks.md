@@ -504,21 +504,22 @@ Two cases the oracle fills in:
     mod. Better Dungeons' small dungeons keep one chest and each other one with a fifth's
     chance, two at most (the game's `horizon:count_cap`, counted per placement as the mod's
     DungeonContext is): 12 chests in five small dungeons at seed 1234 become 6.
-    Lithostitched's `block_swap` (137 lists, all in ChoiceTheorem's Overhauled Village) is the
-    game's `horizon:block_swap`: the same map, with Block.withPropertiesOf's properties kept;
-    a target block the game does not have (most of them are Nature's Spirit's and Croptopia's)
-    leaves the block as it is, as the mod does. Lithostitched's `reference` (CTOV builds most
-    of its lists from others) has the referenced lists' processors written in its place; its
-    `apply_random`, `condition` and `set_block` are the game's `horizon:apply_random`,
-    `horizon:condition` and `horizon:set_block`, with Lithostitched's random (the world seed
-    plus the name's hash, at the block, piece or structure). In a CTOV plains village at seed
-    1234 the farms now grow carrots, potatoes and beetroot besides wheat, and 1,655
-    cobblestone blocks become paths, grass, mossy cobblestone and planks. No Lithostitched processor is
-    dropped now (130 before). CTOV's compat hooks for other mods inside them (its
-    `modular_compat`, 142 copies) run a list of their own only when the mod they name is
-    loaded: carry writes that list in when the mod is ported along and takes the hook out (a
-    no-op, as in the mod) when it is not. In ATM10 all 142 name Nature's Spirit, which the
-    pack does not have.
+    Lithostitched's processors (all in ChoiceTheorem's Overhauled Village in ATM10) are the
+    game's own types, read as the mod writes them. `block_swap` keeps the properties the new
+    block can have: a farm's ripe wheat becomes ripe carrots, but beetroot, whose age stops at
+    3, keeps its default; a target block the game does not have (most are Nature's Spirit's and
+    Croptopia's) leaves the block as it is. `reference` runs the lists it names, `condition`
+    tests the template's block or the world's, `apply_random` and `set_block` draw per block or
+    per piece as the data says. Lithostitched's own random is not known yet, so the shares of a
+    random choice are the Java pack's but the blocks chosen differ. Lists named by tag and state
+    providers other than simple and weighted ones are dropped and counted (ATM10 has none).
+    CTOV's compat hooks for other mods (its `modular_compat`, 30 of them in 17 lists) become a
+    `reference` when the mod they name is ported along, and are taken out (a no-op, as in the
+    mod) when it is not. In ATM10 they all name Nature's Spirit, which the pack does not have.
+    In Java, Lithostitched also lays out every jigsaw structure its own way (villages,
+    outposts, trial chambers; CTOV's villages are `lithostitched:jigsaw`, carried as vanilla's
+    jigsaw). Horizon keeps vanilla's layouts, so with Lithostitched in a pack, structure layouts
+    differ from the Java pack's for the same seed (their positions do not).
     The processors that build outside their template are carried too: Repurposed's and
     Moog's pillar processors become the game's `horizon:pillar` (a column from a placeholder
     block down to the ground, with the processor list they run on each of its blocks written

@@ -11021,11 +11021,7 @@ impl Game<'_> {
                     bytes += size;
                 }
             }
-            for c in unloaded {
-                for sy in 0..(HEIGHT / 16) {
-                    renderer.remove((c.x, sy, c.z));
-                }
-            }
+            renderer.remove_columns(unloaded.iter().map(|c| (c.x, c.z)));
             if let (Some(lod), Some(player)) = (&mut self.lod, &self.player) {
                 let lod_distance = self.settings.horizon.lod_distance_on(&renderer.info);
                 lod.set_near_loading(self.streaming.busy());

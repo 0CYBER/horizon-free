@@ -88,6 +88,7 @@ mod stars;
 mod timing;
 pub mod translucency;
 pub(crate) mod upload;
+mod wgsl_prefix;
 mod world_post;
 
 /// A column whose every section has its mesh (`Renderer::lod_detail_columns`).
@@ -459,7 +460,7 @@ pub struct Renderer {
     lod_retiring: crate::fast_hash::FxHashSet<SectionKey>,
     /// Finished tile meshes `upload_lods` has yet to upload.
     lod_pending: Option<lod::Pending>,
-    detail_columns: HashMap<(i32, i32), u32>,
+    detail_columns: crate::fast_hash::FxHashMap<(i32, i32), u32>,
     /// Bumped whenever a column becomes or stops being complete.
     detail_revision: u64,
     arena: arena::Arena,
@@ -493,7 +494,7 @@ pub struct Renderer {
     /// The shadow camera's draws by page, in bands of distance from the light.
     shadow_runs: page_runs::PageRuns,
     /// Block-entity blocks per meshed section (world position, state id).
-    block_entities: HashMap<SectionKey, Vec<([i32; 3], u32)>>,
+    block_entities: crate::fast_hash::FxHashMap<SectionKey, Vec<([i32; 3], u32)>>,
     /// Changes whenever `block_entities` does (unique across renderers).
     block_entity_revision: u64,
     /// VisGraph face connectivity per meshed section (cave culling).
@@ -2390,7 +2391,7 @@ impl Renderer {
             lod_cutout: Default::default(),
             lod_retiring: Default::default(),
             lod_pending: None,
-            detail_columns: HashMap::new(),
+            detail_columns: Default::default(),
             detail_revision: 0,
             arena,
             sorted_indices,
@@ -2411,7 +2412,7 @@ impl Renderer {
             solid_runs: page_runs::PageRuns::default(),
             phase2_runs: page_runs::PageRuns::default(),
             shadow_runs: page_runs::PageRuns::default(),
-            block_entities: HashMap::new(),
+            block_entities: Default::default(),
             block_entity_revision: next_block_entity_revision(),
             occlusion: occlusion::Occlusion::new(crate::chunk::MIN_Y, crate::chunk::HEIGHT / 16),
             world_post,
@@ -2847,18 +2848,47 @@ impl Renderer {
             self.detail_columns.insert(column, next);
         }
     }
-    pub fn remove(&mut self, key: SectionKey) {
-        self.set_detail(key, false);
-        if self.block_entities.remove(&key).is_some() {
+    /// Every section of these columns goes: one lookup per column where the
+    /// tables are by column, and the meshes' ranges freed in one batch. A
+    /// teleport removes a few thousand columns in one frame.
+    pub fn remove_columns(&mut self, columns: impl IntoIterator<Item = (i32, i32)>) {
+        let mut released = Vec::new();
+        let mut block_entities = false;
+        for (x, z) in columns {
+            if self.detail_columns.remove(&(x, z)) == Some(COMPLETE_COLUMN) {
+                self.detail_revision += 1;
+            }
+            self.occlusion.remove_column(x, z);
+            let retiring = !self.lod_cutout.is_empty() && self.lod_cutout.contains(&(x, z));
+            for sy in 0..crate::chunk::SECTIONS as i32 {
+                let key = (x, sy, z);
+                block_entities |= self.block_entities.remove(&key).is_some();
+                if retiring {
+                    // Distant tiles still leave its column out: drawn until they don't.
+                    self.lod_retiring.insert(key);
+                } else if let Some(section) = self.sections.remove(key) {
+                    released.push(section);
+                }
+            }
+        }
+        if block_entities {
             self.block_entity_revision = next_block_entity_revision();
         }
-        self.occlusion.remove(key);
-        if !self.lod_cutout.is_empty() && self.lod_cutout.contains(&(key.0, key.2)) {
-            // Distant tiles still leave its column out: drawn until they don't.
-            self.lod_retiring.insert(key);
-        } else {
-            self.release_section(key);
+        if let Some(flat) = &mut self.flat {
+            for id in released.iter().filter_map(|s| s.flat_id) {
+                flat.remove(id);
+            }
         }
+        self.sorted_indices
+            .release_all(released.iter().filter_map(|s| {
+                let (page, start) = s.sorted_indices?;
+                Some((page, start, u64::from(s.translucent) * 6))
+            }));
+        self.arena.release_all(
+            released
+                .iter()
+                .map(|s| (s.page, s.start, u64::from(s.solid + s.translucent) * 4)),
+        );
     }
     /// Horizon's resolution scale (world pixels per window pixel) and FXAA.
     pub fn set_world_post(&mut self, scale: f32, antialias: bool) {
