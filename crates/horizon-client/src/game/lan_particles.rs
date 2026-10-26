@@ -1,7 +1,8 @@
 //! Particles a server sends its players and its clients draw:
 //! `ClientboundLevelParticlesPacket` (`ServerLevel.sendParticles`, which
 //! `/particle` uses) and `ClientboundExplodePacket` (`ServerLevel.explode`).
-use super::Game;
+use super::{Game, lan::LanHost};
+use horizon_client::lan::hub::Hub;
 use horizon_client::particles::{ParticleOptions, ParticleType};
 use horizon_core::{geometry::Vec3, random::RandomSource};
 use horizon_protocol::{
@@ -52,6 +53,66 @@ impl Game<'_> {
         }
     }
 
+    /// `LivingEntity.checkFallDamage`'s `ServerLevel.sendParticles` of the
+    /// landing block's crumbs: drawn in this window, when it has one, and
+    /// sent to each player within 32 blocks. `host` is the hub of a guest's
+    /// turn, which is out of `self.lan` meanwhile.
+    pub(super) fn landing_dust(
+        &mut self,
+        host: Option<&LanHost>,
+        state: BlockStateId,
+        at: Vec3,
+        count: i32,
+        speed: f64,
+    ) {
+        let at = [at.x, at.y, at.z];
+        if self.serving.is_none() && self.options.dedicated.is_none() {
+            let block = [
+                at[0].floor() as i32,
+                (at[1] - 0.2).floor() as i32,
+                at[2].floor() as i32,
+            ];
+            if let Some((sprite, tint)) = self.particle_sprite(state, block) {
+                self.particles.send_particles(
+                    &ParticleOptions::block(ParticleType::Block, sprite, tint),
+                    at,
+                    [0.0; 3],
+                    speed,
+                    count as u32,
+                );
+            }
+        }
+        let Some(hub) = host.or(self.lan.as_ref()).map(|h| &h.hub) else {
+            return;
+        };
+        let Some(particle) = Self::hub_particle(
+            hub,
+            &ParticleOptions::simple(ParticleType::Block),
+            Some(state),
+        ) else {
+            return;
+        };
+        let packet = C::LevelParticles(play::LevelParticles {
+            particle,
+            override_limiter: false,
+            always_show: false,
+            pos: at,
+            dist: [0.0; 3],
+            max_speed: [speed as f32; 3],
+            count,
+            randomization: 0,
+        });
+        for g in hub.guests.iter().filter(|g| hub.here(g)) {
+            // ServerLevel compares the player's block centre, strictly within 32.
+            let distance: f64 = (0..3)
+                .map(|k| (g.position[k].floor() + 0.5 - at[k]).powi(2))
+                .sum();
+            if distance < 32.0 * 32.0 {
+                g.send(&packet);
+            }
+        }
+    }
+
     /// `ParticleTypes.STREAM_CODEC`'s value for `options`: the type's
     /// network id and the data it carries (`state` for the block particles).
     /// None while not serving, or for a particle whose data isn't sent from
@@ -61,12 +122,18 @@ impl Game<'_> {
         options: &ParticleOptions,
         state: Option<BlockStateId>,
     ) -> Option<Particle> {
+        Self::hub_particle(&self.lan.as_ref()?.hub, options, state)
+    }
+
+    /// `network_particle` for a hub that is out of `self.lan` meanwhile (a
+    /// guest's turn).
+    fn hub_particle(
+        hub: &Hub,
+        options: &ParticleOptions,
+        state: Option<BlockStateId>,
+    ) -> Option<Particle> {
         let name = format!("minecraft:{}", options.ty.name());
-        let id = self
-            .lan
-            .as_ref()?
-            .hub
-            .registry_id("minecraft:particle_type", &name)?;
+        let id = hub.registry_id("minecraft:particle_type", &name)?;
         use ParticleType as T;
         let c = options.color;
         let data = match options.ty {
