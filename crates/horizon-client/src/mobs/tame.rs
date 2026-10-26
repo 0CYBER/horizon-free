@@ -110,6 +110,35 @@ pub fn register_parrot(m: &mut Mob) {
     g.add(2, SitWhenOrdered);
     g.add(2, FollowOwner::new(1.0, 5.0, 1.0));
     g.add(2, Stroll::avoiding_water(1.0));
+    g.add(3, LandOnOwnersShoulder);
+}
+/// `LandOnOwnersShoulderGoal`: a standing parrot, 100 ticks old, lands on
+/// the shoulder of the owner it touches; the host does the landing.
+#[derive(Clone, Debug)]
+struct LandOnOwnersShoulder;
+impl Goal for LandOnOwnersShoulder {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        0
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        // ShoulderRidingEntity.canSitOnShoulder: rideCooldownCounter > 100.
+        owner(m, cx.w).is_some_and(|(_, _, spectator)| !spectator)
+            && !m.extra.sitting
+            && m.age > 100
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if !m.extra.sitting
+            && m.extra.leash.is_none()
+            && cx
+                .w
+                .player
+                .as_ref()
+                .is_some_and(|p| m.bounds().intersects(p.bounds))
+        {
+            cx.events.push(MobEvent::ParrotToShoulder { mob: m.id });
+        }
+    }
 }
 /// `Wolf.PREY_SELECTOR`: sheep, rabbits and foxes.
 fn wolf_prey(s: &super::Seen) -> bool {

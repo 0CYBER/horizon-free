@@ -378,6 +378,7 @@ impl Game<'_> {
         std::mem::swap(&mut self.adv.changed, &mut g.advancements_changed);
         std::mem::swap(&mut self.adv.unlocked, &mut g.recipes_unlocked);
         std::mem::swap(&mut self.level.recipe_book, &mut g.recipe_book);
+        std::mem::swap(&mut self.level.player_extra, &mut g.saved);
         std::mem::swap(&mut self.stats, &mut play.stats);
         std::mem::swap(&mut self.hook, &mut play.hook);
         let adv_loaded = std::mem::replace(&mut self.adv.loaded, true);
@@ -610,6 +611,7 @@ impl Game<'_> {
         std::mem::swap(&mut self.adv.changed, &mut g.advancements_changed);
         std::mem::swap(&mut self.adv.unlocked, &mut g.recipes_unlocked);
         std::mem::swap(&mut self.level.recipe_book, &mut g.recipe_book);
+        std::mem::swap(&mut self.level.player_extra, &mut g.saved);
         std::mem::swap(&mut self.stats, &mut play.stats);
         std::mem::swap(&mut self.hook, &mut play.hook);
         self.adv.loaded = adv_loaded;
@@ -2178,6 +2180,7 @@ impl Game<'_> {
             if !g.effects.list.is_empty() {
                 self.as_guest(host, conn, |game| game.tick_mob_effects());
             }
+            self.as_guest(host, conn, |game| game.handle_shoulder_entities());
             return;
         }
         let in_wall = !g.sleeping && self.in_wall(g.position, g.eye_height());
@@ -2279,6 +2282,7 @@ impl Game<'_> {
             // LivingEntity.baseTick: outside the world border, then tickEffects.
             game.border_damage();
             game.tick_mob_effects();
+            game.handle_shoulder_entities();
             let Some(player) = game.player.as_mut() else {
                 return (Vec::new(), None);
             };

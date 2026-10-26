@@ -49,6 +49,8 @@ pub(super) struct Creatures {
     pub elder_apparition: i32,
     /// The wandering trader spawner's clock.
     pub trader: super::wandering_trader::Spawner,
+    /// When each player last put a parrot on a shoulder (`timeEntitySatOnShoulder`).
+    pub shoulder_time: std::collections::HashMap<[i32; 4], i64>,
 }
 pub(super) struct ProjWorld<'a, 'w> {
     pub w: &'a MobWorld<'w>,
@@ -992,6 +994,7 @@ impl Game<'_> {
                 }
                 MobEvent::BecomeStatue { mob } => self.golem_become_statue(mob),
                 MobEvent::EnterHive { mob, hive } => self.bee_enter_hive(mob, hive),
+                MobEvent::ParrotToShoulder { mob } => self.parrot_to_shoulder(mob),
                 MobEvent::Gift { target, item } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == target)
                         && m.saddle_item().is_none()
