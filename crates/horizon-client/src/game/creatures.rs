@@ -1520,15 +1520,19 @@ impl Game<'_> {
         if let Some(a) = attacker.or(owner) {
             self.note_attacker(damage_type, a);
         }
+        // DamageSource.scalesWithDifficulty: a mob (or its projectile's
+        // owner) caused the hit, not a player.
+        let living_cause = attacker.or(owner).is_some();
         let mut outcome = horizon_client::health::BlockOutcome::default();
         if let Some(player) = self.player.as_mut()
             && let Some(id) = self.motion.health.damage.id(damage_type)
-            && let Ok(o) = player.hurt_blocking(
+            && let Ok(o) = player.hurt_caused_by(
                 &self.motion.health,
                 self.world.health_rules,
                 id,
                 amount,
                 blocking,
+                living_cause,
             )
             && {
                 outcome = o;
