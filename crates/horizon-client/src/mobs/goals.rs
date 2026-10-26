@@ -1964,6 +1964,30 @@ impl Goal for RestrictSun {
         m.ai.nav.avoid_sun = false;
     }
 }
+/// `FleeSunGoal.getHidePos`: a spot within 10 blocks that the sky does not
+/// see and the mob likes.
+pub fn hide_pos(m: &mut Mob, w: &MobWorld) -> Option<[f64; 3]> {
+    let (bx, by, bz) = (
+        m.position.x.floor() as i32,
+        m.position.y.floor() as i32,
+        m.position.z.floor() as i32,
+    );
+    for _ in 0..10 {
+        let p = [
+            bx + m.random.next_int_bound(20).unwrap_or(0) - 10,
+            by + m.random.next_int_bound(6).unwrap_or(0) - 3,
+            bz + m.random.next_int_bound(20).unwrap_or(0) - 10,
+        ];
+        if !w.can_see_sky(p[0], p[1], p[2]) && m.walk_target_value(w, p) < 0.0 {
+            return Some([
+                f64::from(p[0]) + 0.5,
+                f64::from(p[1]),
+                f64::from(p[2]) + 0.5,
+            ]);
+        }
+    }
+    None
+}
 /// FleeSunGoal: find shade while burning.
 #[derive(Clone, Debug)]
 pub struct FleeSun {
@@ -1995,22 +2019,13 @@ impl Goal for FleeSun {
         if !cx.w.can_see_sky(bx, by, bz) {
             return false;
         }
-        for _ in 0..10 {
-            let p = [
-                bx + m.random.next_int_bound(20).unwrap_or(0) - 10,
-                by + m.random.next_int_bound(6).unwrap_or(0) - 3,
-                bz + m.random.next_int_bound(20).unwrap_or(0) - 10,
-            ];
-            if !cx.w.can_see_sky(p[0], p[1], p[2]) && m.walk_target_value(cx.w, p) < 0.0 {
-                self.wanted = [
-                    f64::from(p[0]) + 0.5,
-                    f64::from(p[1]),
-                    f64::from(p[2]) + 0.5,
-                ];
-                return true;
+        match hide_pos(m, cx.w) {
+            Some(at) => {
+                self.wanted = at;
+                true
             }
+            None => false,
         }
-        false
     }
     fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
         !m.ai.nav.is_done()

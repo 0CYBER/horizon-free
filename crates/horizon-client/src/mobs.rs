@@ -1156,6 +1156,13 @@ pub enum MobEvent {
         to: [f64; 3],
         ticks: i32,
     },
+    /// `Level.levelEvent` from a mob (a faceplanted fox's 2001, the snow's
+    /// crumbs).
+    LevelEvent {
+        id: i32,
+        pos: [i32; 3],
+        data: i32,
+    },
     /// The crumbs of the block under a digging or emerging warden.
     DigParticles {
         at: [f64; 3],

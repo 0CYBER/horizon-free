@@ -181,6 +181,20 @@ pub fn body(m: &Mob) -> (String, String) {
             baby_or(m, "rabbit#main", "rabbit_baby#main"),
             b(&m.kind.texture),
         ),
+        // FoxRenderer.getTextureLocation: snow variant, sleeping, baby.
+        S::Fox => (
+            baby_or(m, "fox#main", "fox_baby#main"),
+            format!(
+                "entity/fox/fox{}{}{}",
+                if m.extra.variant == 0 { "" } else { "_snow" },
+                if super::fox::flag(m, super::fox::SLEEPING) {
+                    "_sleep"
+                } else {
+                    ""
+                },
+                if baby { "_baby" } else { "" },
+            ),
+        ),
         S::Pig => {
             let model = if baby {
                 "pig_baby#main".into()
@@ -855,6 +869,11 @@ fn species_rotations(m: &Mob, alpha: f32) -> glam::Mat4 {
     match m.species() {
         Species::Cat => super::tame::cat_rotations(m, alpha),
         Species::Shulker => super::shulker::rotations(m),
+        // FoxRenderer.setupRotations: the body follows a pounce's pitch.
+        Species::Fox if super::fox::flag(m, super::fox::POUNCING | super::fox::FACEPLANTED) => {
+            let pitch = m.previous_head_pitch + (m.head_pitch - m.previous_head_pitch) * alpha;
+            glam::Mat4::from_rotation_x((-pitch).to_radians())
+        }
         _ => glam::Mat4::IDENTITY,
     }
 }
