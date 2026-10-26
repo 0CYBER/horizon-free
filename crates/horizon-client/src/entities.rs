@@ -95,6 +95,15 @@ impl ItemEntity {
                 self.health -= fire_damage as i32;
             }
         }
+        // CactusBlock.entityInside: `entity.hurt(cactus, 1.0)`. An item has no
+        // hurt cooldown, so it loses 1 health every tick it touches a cactus
+        // (5 health: gone in 5 ticks). Fire resistance does not help;
+        // `ItemStack.canBeHurtBy` only skips it for a damage_resistant stack.
+        if crate::motion::environment::cactus_contact(world, registry, self.bounds())
+            && !items.resists_cactus(&self.stack)
+        {
+            self.health -= 1;
+        }
         ItemEnvironmentTick {
             alive: self.health > 0,
             lava_hurt,
