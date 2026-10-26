@@ -558,6 +558,8 @@ struct GameLevel<'w> {
     /// Where the chunk tickets let blocks tick.
     tickets: horizon_client::ticket_levels::Levels,
     random_tick_sections: &'w mut horizon_client::random_tick_sections::RandomTickSections,
+    /// Players with each chest open (a trapped chest's signal).
+    lid_openers: &'w HashMap<(i32, i32, i32), i32>,
 }
 struct PlayerCollision {
     y: f64,
@@ -693,6 +695,10 @@ impl LevelAccess for GameLevel<'_> {
         _state: BlockStateId,
         _direction: Direction,
     ) -> i32 {
+        // TrappedChestBlock.getSignal: the players with it open, at most 15.
+        if let Some(count) = self.lid_openers.get(&(pos.x, pos.y, pos.z)) {
+            return (*count).clamp(0, 15);
+        }
         jukebox::jukebox_signals(self.world, self.items, pos).map_or(0, |(signal, _)| signal)
     }
     fn biome_name(&self, pos: BlockPos) -> Option<&str> {
@@ -2474,6 +2480,7 @@ impl Game<'_> {
             spill: &mut self.spill,
             tickets: self.tickets.levels(),
             random_tick_sections: &mut self.random_tick_sections,
+            lid_openers: &self.lid_openers,
         };
         let result = f(self.res.behaviours(), &mut level, &mut self.block_ticks);
         self.flush_spill();
