@@ -845,6 +845,34 @@ impl Game<'_> {
         self.recipe_ui.ghost.clear();
         self.place_recipe(book_type, entry_index, use_max);
     }
+    /// Whether the open screen takes `recipes.place`: a crafting grid's
+    /// book (the inventory's or a crafting table's).
+    #[cfg(feature = "mods")]
+    pub(super) fn mod_recipe_screen(&self) -> bool {
+        self.screen == Screen::Inventory
+            && self.active_book() == Some(BookType::Crafting)
+            && !self.spectator()
+    }
+    /// `recipes.place`: the book's click on the recipe with this display
+    /// id, refused as `handlePlaceRecipe` refuses it (no crafting screen,
+    /// not in the player's book; an impossible one in `place_recipe`).
+    #[cfg(feature = "mods")]
+    pub(super) fn mod_place_recipe(&mut self, display_id: i32, all: bool) {
+        if !self.mod_recipe_screen() || !self.recipe_ui.client.displays().contains(&display_id) {
+            return;
+        }
+        self.ensure_book();
+        let Some(index) = self
+            .recipe_ui
+            .book
+            .as_ref()
+            .and_then(|b| b.entries.iter().position(|e| e.display_id == display_id))
+        else {
+            return;
+        };
+        self.recipe_ui.ghost.clear();
+        self.place_recipe(BookType::Crafting, index, all);
+    }
     /// `ServerboundPlaceRecipePacket`: the server places the recipe
     /// (`ServerPlaceRecipe` on the menu engine) and answers with a ghost
     /// recipe when the items are missing.

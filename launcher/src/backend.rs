@@ -2545,6 +2545,13 @@ pub struct Settings {
     /// first-run question, or on the Play page once if they answered that before it existed.
     #[serde(default)]
     pub ping_notice_seen: bool,
+    /// Seconds the sidebar's partner banner has been on screen, over every start, up to
+    /// `partner::SEEN_BEFORE_HIDE`: only then can the player hide it.
+    #[serde(default)]
+    pub partner_seen_secs: u64,
+    /// The player hid the sidebar's partner banner. The Servers page keeps its own.
+    #[serde(default)]
+    pub partner_hidden: bool,
 }
 
 impl Settings {
