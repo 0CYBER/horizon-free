@@ -26,9 +26,14 @@ pub(super) fn player_for(
     guests: &GuestViews,
     bound: Option<u32>,
 ) -> Option<u32> {
+    let targeting = m.ai.target == Some(Who::Player)
+        || m.ai.last_hurt_by == Some(Who::Player) && m.age as i32 - m.ai.last_hurt_by_time <= 100;
     // A tame wolf or cat sees its owner (`TamableAnimal.getOwner`), while they
-    // are in play, whoever is nearer.
-    if matches!(m.species(), Species::Wolf | Species::Cat)
+    // are in play, whoever is nearer. Not while it targets or was just hurt by
+    // a player: then `Who::Player` is that attacker, whoever it is, and the
+    // owner goals ignore it until the wolf lets go.
+    if !targeting
+        && matches!(m.species(), Species::Wolf | Species::Cat)
         && m.extra.tame
         && let Some(owner) = m.extra.owner
     {
@@ -39,8 +44,6 @@ pub(super) fn player_for(
             return Some(*conn);
         }
     }
-    let targeting = m.ai.target == Some(Who::Player)
-        || m.ai.last_hurt_by == Some(Who::Player) && m.age as i32 - m.ai.last_hurt_by_time <= 100;
     choose(m.position, targeting, host, guests, bound)
 }
 
