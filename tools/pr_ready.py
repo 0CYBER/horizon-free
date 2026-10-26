@@ -46,12 +46,10 @@ from tools import parity, release_train  # noqa: E402
 
 RBUILD = Path.home() / "fleet" / "rbuild"
 LINE_LIMIT = 500
-# What rbuild's login shell needs on each fleet machine before cargo (it adds sccache itself). The ThinkPad hosts
-# the Claude account pool: three jobs at most.
+# What rbuild's login shell needs on each fleet machine before cargo (it adds sccache itself). The ThinkPad no
+# longer builds (2026-10-26: it keeps the AI pool and a few services; Linux work goes to playhorizon's runner).
 HOST_SETUP = {
     "macmini": "source ~/.cargo/env; export PATH=/opt/homebrew/bin:$PATH CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-10}",
-    "thinkpad": 'export CARGO_BUILD_JOBS=3 PKG_CONFIG_PATH="$(ls -d /nix/store/*-alsa-lib-*-dev/lib/pkgconfig | tail -1):'
-                '$(ls -d /nix/store/*-systemd-*-dev/lib/pkgconfig | tail -1)"',
     "local": "",
 }
 # Hosts that hold the vanilla data, and how a run there gets it: CI's own runner scripts on the parity runner's

@@ -28,19 +28,7 @@
    "python": "python3.13",
    "jobs": 6,
    "nice": 10,
-   "note": "a partner's server (Ubuntu, 8 EPYC threads, 30 GB, Detroit; tailnet only), used by nothing else: 6 jobs, in the CI runner's environment, slice and Xvfb screen (tools/ci/linux-runner.sh); the light Linux checks that used to go to the ThinkPad go here"
-  },
-  "thinkpad": {
-   "ssh": "thinkpad",
-   "root": "code/horizon-parity",
-   "shell": "sh -c",
-   "jobs": 2,
-   "nice": 19,
-   "environment": {
-    "PARITY_BUILD_JOBS": "2"
-   },
-   "note": "hosts the Claude account pool: two harnesses at most, at the lowest priority",
-   "setup": "export PKG_CONFIG_PATH=$HOME/code/horizon-parity/alsa-dev/lib/pkgconfig"
+   "note": "a partner's server (Ubuntu, 8 EPYC threads, 30 GB, Detroit; tailnet only), used by nothing else: 6 jobs, in the CI runner's environment, slice and Xvfb screen (tools/ci/linux-runner.sh); the always-on Linux host since the ThinkPad stopped running harnesses (2026-10-26)"
   }
  },
  "local_only": {
