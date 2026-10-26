@@ -30,7 +30,7 @@ impl Game<'_> {
         Some(HeldName {
             item: stack.item.to_string(),
             hover_name: Text::literal(item_tooltip::name_line(stack, &|key| {
-                self.pack.names.get(key).map(str::to_owned)
+                self.pack.names.display_get(key)
             })),
             rarity_color: match rarity {
                 "uncommon" => text::YELLOW,

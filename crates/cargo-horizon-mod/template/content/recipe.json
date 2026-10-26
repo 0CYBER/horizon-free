@@ -1,0 +1,6 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "building",
+  "ingredients": ["minecraft:amethyst_block", "minecraft:glowstone_dust"],
+  "result": { "id": "{id}:glowing_amethyst" }
+}

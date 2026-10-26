@@ -889,13 +889,31 @@ impl Game<'_> {
         let key_is_cart = self
             .container
             .is_some_and(|k| k.1 == super::minecarts::CART_KEY_Y);
-        let (texture, height, title) = match screen {
-            Screen::Hopper if key_is_cart => {
-                ("gui/container/hopper", 133.0, "Minecart with Hopper")
-            }
-            Screen::Hopper => ("gui/container/hopper", 133.0, "Item Hopper"),
-            Screen::Dispenser => ("gui/container/dispenser", 166.0, "Dispenser"),
-            Screen::Dropper => ("gui/container/dispenser", 166.0, "Dropper"),
+        let (texture, height, key, fallback) = match screen {
+            Screen::Hopper if key_is_cart => (
+                "gui/container/hopper",
+                133.0,
+                "entity.minecraft.hopper_minecart",
+                "Minecart with Hopper",
+            ),
+            Screen::Hopper => (
+                "gui/container/hopper",
+                133.0,
+                "container.hopper",
+                "Item Hopper",
+            ),
+            Screen::Dispenser => (
+                "gui/container/dispenser",
+                166.0,
+                "container.dispenser",
+                "Dispenser",
+            ),
+            Screen::Dropper => (
+                "gui/container/dispenser",
+                166.0,
+                "container.dropper",
+                "Dropper",
+            ),
         };
         if let Some(mut r) = atlas.sprites.get(texture).copied() {
             let dv = (r.v1 - r.v0) / r.h as f32;
@@ -905,23 +923,17 @@ impl Game<'_> {
             batch.rect_uv(ox, oy, 176.0, height, r, u32::MAX);
         }
         let grey = horizon_client::hud::rgba(64, 64, 64, 255);
-        let title = &self
+        let title = self
             .remote_menu_title()
-            .unwrap_or_else(|| self.container_title(title.to_owned()));
+            .unwrap_or_else(|| self.container_title(self.translate(key, fallback)));
         let title_x = if screen == Screen::Hopper {
             8.0
         } else {
-            (176.0 - horizon_client::hud::HudBatch::text_width(atlas, title)) / 2.0
+            (176.0 - horizon_client::hud::HudBatch::text_width(atlas, &title)) / 2.0
         };
-        batch.text(atlas, title, ox + title_x, oy + 6.0, grey, false);
-        batch.text(
-            atlas,
-            "Inventory",
-            ox + 8.0,
-            oy + height - 94.0,
-            grey,
-            false,
-        );
+        batch.text(atlas, &title, ox + title_x, oy + 6.0, grey, false);
+        let inventory = self.translate("container.inventory", "Inventory");
+        batch.text(atlas, &inventory, ox + 8.0, oy + height - 94.0, grey, false);
         true
     }
 }
