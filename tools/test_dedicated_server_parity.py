@@ -206,6 +206,17 @@ def game_time(server, timeout=300):
     raise AssertionError(f'{server.log_path.name}: no game time in {timeout:.0f} s')
 
 
+def wait_ticks(server, count, timeout=300):
+    """Waits until the server's game clock has advanced `count` ticks: a server that stalls under load still gets
+    as many ticks as an idle one, where a sleep gives it fewer. (Not while ticking is frozen.)"""
+    deadline = time.time() + timeout
+    until = game_time(server, timeout) + count
+    while game_time(server, max(1.0, deadline - time.time())) < until:
+        if time.time() > deadline:
+            raise AssertionError(f'{server.log_path.name}: the game clock did not advance {count} ticks in {timeout} s')
+        time.sleep(0.2)
+
+
 def legacy_ping(port):
     """The reply to a 1.6 client's 0xFE 0x01 0xFA MC|PingHost query (LegacyQueryHandler)."""
     host = 'localhost'
@@ -333,7 +344,9 @@ def run_side(label, command, directory, client):
         joined.join()
         if failure:
             raise failure[0]
-        time.sleep(1)
+        # The client has gone; `list` must find no one, once the server has handled its leaving (a busy machine
+        # took longer than a second).
+        server.wait_for(rf'{PLAYER} left the game', timeout=60)
         server.console('list')
         server.console('say console says hi')
         server.wait_for(r'\[Server\] console says hi', timeout=30)
