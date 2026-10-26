@@ -26,7 +26,7 @@ id = "test_ui_guest"
 name = "Test UI Guest"
 version = "0.1.0"
 api = "0.1"
-capabilities = ["game-read", "chat", "ui", "render", "input"]
+capabilities = ["game-read", "chat", "command", "ui", "render", "input"]
 experimental = ["ui", "render", "input"]
 "#;
 
@@ -761,6 +761,32 @@ fn game_raycast_sees_the_view_hit_within_its_distance() {
     // NaN asks for nothing; past 1024 is 1024.
     assert_eq!(said(&mut mods, "x"), ["no hit"]);
     assert_eq!(said(&mut mods, "1e9"), [hit]);
+}
+
+#[test]
+fn quiet_commands_come_out_as_one_batch_capped() {
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    let quiet = |mods: &mut Mods, command: &str| -> Vec<(String, Vec<String>)> {
+        assert!(mods.command(command));
+        mods.drain()
+            .into_iter()
+            .filter_map(|o| match o {
+                Output::QuietCommands { mod_id, lines } => Some((mod_id, lines)),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(
+        quiet(&mut mods, "quiet setblock 0 0 0 stone;say hi"),
+        [(
+            "test_ui_guest".to_string(),
+            vec!["setblock 0 0 0 stone".to_string(), "say hi".to_string()]
+        )]
+    );
+    let batches = quiet(&mut mods, "quiet_many 300");
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].1.len(), 256);
+    assert_eq!(batches[0].1[255], "setblock 255 300 0 stone");
 }
 
 #[test]

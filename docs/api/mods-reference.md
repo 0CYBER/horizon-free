@@ -176,6 +176,7 @@ Capability `command`: vanilla commands run as the player, with the player's perm
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `run` | `func(line: string)` | `line` without its slash; its feedback goes to the chat as if typed. |
+| `run-quiet` | `func(lines: list<string>)` | `lines` (each without its slash, at most 256 a call) as `run` does, but with nothing in the chat: no feedback and no failure. In single player and on Horizon's servers, each runs exactly as the player typing it would (the same rights), in order, 64 a tick, and the server logs one line a batch; one that carries a chat message (`say`, `msg`) is refused. On any other server they go as chat commands, and there their feedback shows: a mod running many should say so. |
 
 ## `ui`
 
