@@ -946,7 +946,11 @@ fn draw_normals(
         return;
     }
     let normals = normals.part(p);
-    for poly in part.polygons.iter().filter(|_| !poses.skips(part)) {
+    // `skips` is a name lookup: asking once per part, not once per polygon.
+    if poses.skips(part) {
+        return;
+    }
+    for poly in &part.polygons {
         let normal = poly.vertex_normal(normals);
         for v in poly.vertices {
             let pos = m.transform_point3(glam::Vec3::new(v[0], v[1], v[2]) / 16.0);
