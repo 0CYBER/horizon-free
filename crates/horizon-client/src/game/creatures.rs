@@ -2739,6 +2739,7 @@ impl Game<'_> {
             .items()
             .get(&item)
             .is_some_and(|i| i.max_damage > 0);
+        let acting = self.acting_uuid();
         let m = &mut self.mobs[index];
         if !m.alive() {
             return Ok(false);
@@ -2833,6 +2834,7 @@ impl Game<'_> {
             }
             Species::Wolf
                 if m.extra.tame
+                    && m.extra.owner == Some(acting)
                     && item.ends_with("_dye")
                     && horizon_client::mobs::render::DYE_NAMES
                         .iter()
@@ -2855,7 +2857,9 @@ impl Game<'_> {
                 consume = true;
             }
             Species::Wolf
-                if m.extra.tame && !(is_food && m.extra.age == 0 && m.extra.in_love <= 0) =>
+                if m.extra.tame
+                    && m.extra.owner == Some(acting)
+                    && !(is_food && m.extra.age == 0 && m.extra.in_love <= 0) =>
             {
                 m.extra.sitting = !m.extra.sitting;
                 m.ai.jumping = false;
@@ -2875,7 +2879,7 @@ impl Game<'_> {
                 let tamed = m.random.next_int_bound(3).unwrap_or(1) == 0;
                 if tamed {
                     horizon_client::mobs::tame::set_tame(m, true);
-                    m.extra.owner = self.level.player_uuid.or(Some([0, 0, 0, 1]));
+                    m.extra.owner = Some(acting);
                     m.persistent = true;
                     m.nav_stop();
                     m.ai.target = None;
@@ -2902,6 +2906,7 @@ impl Game<'_> {
             // Cat.mobInteract: dye, heal or sit when tame; fish may tame a wild one.
             Species::Cat
                 if m.extra.tame
+                    && m.extra.owner == Some(acting)
                     && item.ends_with("_dye")
                     && horizon_client::mobs::render::DYE_NAMES
                         .iter()
@@ -2924,7 +2929,12 @@ impl Game<'_> {
                 m.persistent = true;
                 consume = true;
             }
-            Species::Cat if m.extra.tame && is_food && m.health < m.attrs.max_health => {
+            Species::Cat
+                if m.extra.tame
+                    && m.extra.owner == Some(acting)
+                    && is_food
+                    && m.health < m.attrs.max_health =>
+            {
                 let heal = self
                     .res
                     .items()
@@ -2937,7 +2947,9 @@ impl Game<'_> {
                 eat = eating_sound(m, &mut self.world.random);
             }
             Species::Cat
-                if m.extra.tame && !(is_food && m.extra.age == 0 && m.extra.in_love <= 0) =>
+                if m.extra.tame
+                    && m.extra.owner == Some(acting)
+                    && !(is_food && m.extra.age == 0 && m.extra.in_love <= 0) =>
             {
                 m.extra.sitting = !m.extra.sitting;
                 self.world.modified.insert((
@@ -2951,7 +2963,7 @@ impl Game<'_> {
                 let tamed = m.random.next_int_bound(3).unwrap_or(1) == 0;
                 if tamed {
                     m.extra.tame = true;
-                    m.extra.owner = self.level.player_uuid.or(Some([0, 0, 0, 1]));
+                    m.extra.owner = Some(acting);
                     m.extra.sitting = true;
                 }
                 eat = eating_sound(m, &mut self.world.random);
