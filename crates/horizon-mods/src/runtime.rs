@@ -31,6 +31,15 @@ mod server_bindings {
         },
     });
 }
+/// Capability `ui`'s world beyond `horizon-mod` (docs/mods.md): a second
+/// world, so mods built before it (no `ui-events` export) still instantiate
+/// as `horizon-mod` and simply hear nothing of their widgets.
+mod ui_bindings {
+    wasmtime::component::bindgen!({
+        path: "../horizon-mod-sdk/wit",
+        world: "ui-host",
+    });
+}
 pub use bindings::horizon::mods::{
     game::{Clock, Player},
     hud::{Corner, Line},
@@ -38,7 +47,7 @@ pub use bindings::horizon::mods::{
 use bindings::{
     HorizonMod,
     exports::horizon::mods::events::Registration,
-    horizon::mods::{chat, game, hud, log as mod_log, storage},
+    horizon::mods::{chat, command, game, hud, log as mod_log, storage},
 };
 pub use server_bindings::{
     exports::horizon::mods::server_events::BlockPos,
@@ -46,6 +55,29 @@ pub use server_bindings::{
 };
 type ClientEvents = bindings::exports::horizon::mods::events::Guest;
 type ServerEvents = server_bindings::exports::horizon::mods::server_events::Guest;
+/// The widget model a `ui` screen or settings page shows (WIT `interface
+/// ui`), for the game to draw with its menus' own widgets.
+pub use ui_bindings::horizon::mods::ui::{
+    ButtonWidget, ItemWidget, ListWidget, Screen as UiScreen, TextWidget, Widget as UiWidget,
+};
+use ui_bindings::{UiHost, horizon::mods::ui};
+/// Capability `render`'s imports (docs/mods.md): the game draws the shapes.
+mod render_bindings {
+    wasmtime::component::bindgen!({
+        path: "../horizon-mod-sdk/wit",
+        world: "render-host",
+    });
+}
+use render_bindings::horizon::mods::input;
+/// Capability `input`'s records (WIT `interface input`).
+pub use render_bindings::horizon::mods::input::{Event as InputEvent, HeldItem, ItemUse};
+/// What capability `render` asks the game to draw (WIT `interface render`).
+pub use render_bindings::horizon::mods::render::{
+    Corner as RenderCorner, FillShape, FrameRate, ItemShape, Minimap as ModMinimap,
+    Point as RenderPoint, QuadShape, Rect as RenderRect, Shape, SpriteShape, TextShape,
+    Zoom as ModZoom,
+};
+use render_bindings::{RenderHost, horizon::mods::render};
 
 /// A mod's linear memory cap.
 const MEMORY: usize = 64 << 20;
@@ -76,6 +108,20 @@ const STORAGE_WRITE_BUDGET: u64 = 1 << 20;
 pub struct Snapshot {
     pub player: Option<Player>,
     pub clock: Option<Clock>,
+    /// The screen in GUI pixels (capability `render`'s `gui-size`).
+    pub gui_size: (f32, f32),
+    /// The main hand's stack (capability `input`'s `held`).
+    pub held: Option<HeldItem>,
+    /// The game's frame counter: fps, min, 1% low (`render.frame-stats`).
+    pub frame: (u32, u32, u32),
+    /// The movement and click mappings `input.mapping` answers for:
+    /// (mapping, the bound key's label, held).
+    pub mappings: Vec<(&'static str, String, bool)>,
+    /// Attack and use clicks in the last second.
+    pub cps: (u32, u32),
+    /// The HUD font's advance per character from U+0000
+    /// (`render.text-width`); empty: 6 each.
+    pub font_widths: Arc<[f32]>,
     /// The players on the server, for server mods.
     pub players: Vec<ServerPlayer>,
 }
@@ -105,6 +151,9 @@ pub enum Output {
     Chat { name: String, text: String },
     /// A mod command's feedback, red when `error`.
     Feedback { text: String, error: bool },
+    /// `command.run`: a vanilla command line, without its slash, to run as
+    /// the player.
+    Command { line: String },
     /// The mod was turned off: it trapped, overran or failed to start.
     Stopped { name: String, reason: String },
     /// `players.tell`: a line after the mod's name, to the player with this id.
@@ -121,6 +170,13 @@ pub enum Output {
         text: String,
         error: bool,
     },
+    /// `ui.open-screen`: the mod's entry in `entries()`; what it shows is
+    /// [`Mods::screen`].
+    OpenScreen { owner: usize },
+    /// `ui.close-screen`: the mod closed its own screen (no `closed` back).
+    CloseScreen { owner: usize },
+    /// `render.shake`: strength 0 to 1, fading out over `seconds` (≤ 10).
+    Shake { strength: f32, seconds: f32 },
 }
 
 /// A mod's text panel, drawn every frame until it changes.
@@ -153,9 +209,23 @@ pub struct Entry {
     run: Option<Running>,
     modified: Option<SystemTime>,
 }
+impl Entry {
+    /// The running mod has a settings page (capability `ui` set widgets
+    /// with `ui.set-settings`, or `input` registered keys the player may
+    /// bind there): its row in Options > Mods gains a button.
+    pub fn has_ui_settings(&self) -> bool {
+        self.run.as_ref().is_some_and(|r| {
+            let d = r.store.data();
+            !d.ui.settings.is_empty() || !d.input.keys.is_empty()
+        })
+    }
+}
 
 struct Running {
     store: Store<State>,
+    /// The mod's `ui-events` export; none for a mod built before `ui`, or a
+    /// server mod.
+    ui: Option<UiHost>,
     hooks: Hooks,
 }
 
@@ -185,12 +255,35 @@ impl Hooks {
     }
 }
 
+/// What capability `ui` pushed since the hooks last ran.
+#[derive(Default)]
+struct UiState {
+    /// The screen `ui.open-screen` last pushed, until `ui.close-screen`.
+    screen: Option<UiScreen>,
+    /// The widgets `ui.set-settings` last pushed (the mod's page in
+    /// Options > Mods).
+    settings: Vec<UiWidget>,
+    /// The calls since the last hook ended, for [`Output`].
+    open: bool,
+    close: bool,
+}
+
 struct State {
     name: String,
     id: String,
     snapshot: Arc<Snapshot>,
     out: Vec<Output>,
     panel: Option<Panel>,
+    ui: UiState,
+    /// Capability `render`'s HUD shapes, drawn until replaced.
+    shapes: Vec<Shape>,
+    /// Capability `render`'s corner panel.
+    corner: Option<CornerPanel>,
+    /// Capability `render`'s zoom, when the mod zooms.
+    zoom: Option<ModZoom>,
+    /// Capability `render`'s minimap, when the mod shows one.
+    minimap: Option<ModMinimap>,
+    input: InputState,
     /// Capability `storage`'s folder; made on first `set`.
     data_dir: PathBuf,
     /// Bytes `storage::set` may still write before this hook call ends
@@ -281,6 +374,10 @@ impl Mods {
                 .map_err(|e| e.to_string())?;
             players::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
+            UiHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
+                .map_err(|e| e.to_string())?;
+            RenderHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
+                .map_err(|e| e.to_string())?;
             self.engine = Some((engine, linker));
         }
         Ok(self.engine.as_ref().expect("made above"))
@@ -338,6 +435,12 @@ impl Mods {
             snapshot,
             out: Vec::new(),
             panel: None,
+            ui: UiState::default(),
+            shapes: Vec::new(),
+            corner: None,
+            zoom: None,
+            minimap: None,
+            input: InputState::default(),
             data_dir,
             storage_budget: STORAGE_WRITE_BUDGET,
             limits: StoreLimitsBuilder::new()
@@ -348,22 +451,26 @@ impl Mods {
         let mut store = Store::new(engine, state);
         store.limiter(|s| &mut s.limits);
         store.set_fuel(FUEL_INIT).map_err(|e| e.to_string())?;
-        let mut hooks = if server {
-            let exports = HorizonServerMod::instantiate(&mut store, &component, linker)
-                .map_err(|e| reason(&e))?;
+        let instance = linker
+            .instantiate(&mut store, &component)
+            .map_err(|e| reason(&e))?;
+        let (mut hooks, ui) = if server {
+            let exports = HorizonServerMod::new(&mut store, &instance).map_err(|e| reason(&e))?;
             let r = exports
                 .horizon_mods_server_events()
                 .call_init(&mut store)
                 .map_err(|e| reason(&e))??;
-            Hooks::Server(exports, r)
+            (Hooks::Server(exports, r), None)
         } else {
-            let exports =
-                HorizonMod::instantiate(&mut store, &component, linker).map_err(|e| reason(&e))?;
+            let exports = HorizonMod::new(&mut store, &instance).map_err(|e| reason(&e))?;
+            // `ui-events` is a mod built since `ui`'s; older mods have no export
+            // and stay callable through `events` alone.
+            let ui = UiHost::new(&mut store, &instance).ok();
             let r = exports
                 .horizon_mods_events()
                 .call_init(&mut store)
                 .map_err(|e| reason(&e))??;
-            Hooks::Client(exports, r)
+            (Hooks::Client(exports, r), ui)
         };
         let commands = match &mut hooks {
             Hooks::Client(_, r) => &mut r.commands,
@@ -377,7 +484,7 @@ impl Mods {
             free
         });
         self.out.append(&mut store.data_mut().out);
-        Ok(Some(Running { store, hooks }))
+        Ok(Some(Running { store, ui, hooks }))
     }
 
     /// True when at least one mod runs: the game skips its mod work otherwise.
@@ -403,7 +510,7 @@ impl Mods {
         &mut self,
         fuel: u64,
         wants: impl Fn(&Hooks) -> bool,
-        mut f: impl FnMut(&Hooks, &mut Store<State>) -> wasmtime::Result<()>,
+        mut f: impl FnMut(&mut Running) -> wasmtime::Result<()>,
     ) {
         for i in 0..self.entries.len() {
             if self.entries[i]
@@ -425,8 +532,8 @@ impl Mods {
         self.each(
             fuel,
             |h| h.client().is_some_and(&wants),
-            |h, s| match h {
-                Hooks::Client(m, _) => f(m.horizon_mods_events(), s),
+            |run| match &run.hooks {
+                Hooks::Client(m, _) => f(m.horizon_mods_events(), &mut run.store),
                 Hooks::Server(..) => Ok(()),
             },
         );
@@ -441,8 +548,8 @@ impl Mods {
         self.each(
             fuel,
             |h| h.server().is_some_and(&wants),
-            |h, s| match h {
-                Hooks::Server(m, _) => f(m.horizon_mods_server_events(), s),
+            |run| match &run.hooks {
+                Hooks::Server(m, _) => f(m.horizon_mods_server_events(), &mut run.store),
                 Hooks::Client(..) => Ok(()),
             },
         );
@@ -453,20 +560,28 @@ impl Mods {
         &mut self,
         i: usize,
         fuel: u64,
-        f: impl FnOnce(&Hooks, &mut Store<State>) -> wasmtime::Result<R>,
+        f: impl FnOnce(&mut Running) -> wasmtime::Result<R>,
     ) -> Option<R> {
         let entry = &mut self.entries[i];
         let run = entry.run.as_mut()?;
         run.store.data_mut().snapshot = self.snapshot.clone();
         run.store.data_mut().storage_budget = STORAGE_WRITE_BUDGET;
         let started = Instant::now();
-        let result = run
-            .store
-            .set_fuel(fuel)
-            .and_then(|()| f(&run.hooks, &mut run.store));
+        let result = run.store.set_fuel(fuel).and_then(|()| f(run));
         // An average over about the last 64 calls.
         entry.cost = (entry.cost * 63 + started.elapsed()) / 64;
-        self.out.append(&mut run.store.data_mut().out);
+        let data = run.store.data_mut();
+        let (open, close) = (
+            std::mem::take(&mut data.ui.open),
+            std::mem::take(&mut data.ui.close),
+        );
+        self.out.append(&mut data.out);
+        if open {
+            self.out.push(Output::OpenScreen { owner: i });
+        }
+        if close {
+            self.out.push(Output::CloseScreen { owner: i });
+        }
         match result {
             Ok(r) => Some(r),
             Err(e) => {
@@ -514,8 +629,10 @@ impl Mods {
         let Some(i) = self.command_owner(false, name) else {
             return false;
         };
-        let result = self.call(i, FUEL_EVENT, |h, s| match h {
-            Hooks::Client(m, _) => m.horizon_mods_events().call_command(s, name, args),
+        let result = self.call(i, FUEL_EVENT, |run| match &run.hooks {
+            Hooks::Client(m, _) => m
+                .horizon_mods_events()
+                .call_command(&mut run.store, name, args),
             Hooks::Server(..) => Ok(Ok(None)),
         });
         match result {
@@ -589,10 +706,11 @@ impl Mods {
         let Some(i) = self.command_owner(true, name) else {
             return false;
         };
-        let result = self.call(i, FUEL_EVENT, |h, s| match h {
-            Hooks::Server(m, _) => m
-                .horizon_mods_server_events()
-                .call_command(s, player, name, args),
+        let result = self.call(i, FUEL_EVENT, |run| match &run.hooks {
+            Hooks::Server(m, _) => {
+                m.horizon_mods_server_events()
+                    .call_command(&mut run.store, player, name, args)
+            }
             Hooks::Client(..) => Ok(Ok(None)),
         });
         let reply = |text, error| Output::Reply {
@@ -612,6 +730,242 @@ impl Mods {
         self.entries
             .iter()
             .filter_map(|e| e.run.as_ref()?.store.data().panel.as_ref())
+    }
+    /// The running mods' corner panels (capability `render`), in load order.
+    pub fn corner_panels(&self) -> impl Iterator<Item = &CornerPanel> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref()?.store.data().corner.as_ref())
+    }
+    /// Some running mod has a `frame` hook: the game refreshes the snapshot
+    /// every frame for it.
+    pub fn wants_frames(&self) -> bool {
+        self.entries.iter().any(|e| {
+            e.run
+                .as_ref()
+                .is_some_and(|r| r.hooks.client().is_some_and(|h| h.frame))
+        })
+    }
+    /// Some running mod claimed items (capability `input`).
+    pub fn claims_any(&self) -> bool {
+        self.inputs().any(|i| !i.claimed.is_empty())
+    }
+    /// Some running mod claimed the item `id`.
+    pub fn claims(&self, id: &str) -> bool {
+        self.inputs().any(|i| i.claimed.iter().any(|c| c == id))
+    }
+    /// Some running mod registered a key.
+    pub fn has_keys(&self) -> bool {
+        self.inputs().any(|i| !i.keys.is_empty())
+    }
+    /// The mods' keys: (mod name, key name, label, key), for Controls.
+    pub fn mod_keys(&self) -> impl Iterator<Item = (&str, &ModKey)> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref())
+            .flat_map(|r| {
+                let d = r.store.data();
+                d.input.keys.iter().map(move |k| (d.name.as_str(), k))
+            })
+    }
+    /// Mod `i`'s keys, as it registered them (with the player's choices).
+    pub fn keys_of(&self, i: usize) -> &[ModKey] {
+        self.entries
+            .get(i)
+            .and_then(|e| e.run.as_ref())
+            .map_or(&[], |r| r.store.data().input.keys.as_slice())
+    }
+    /// The keys the player chose (`ui`'s key widget), by mod id: each
+    /// running mod's `name → key`. They replace the defaults registered
+    /// so far and later ones. Keys that aren't keys are skipped.
+    pub fn set_bindings<'a>(&mut self, chosen: impl Fn(&str) -> Vec<(&'a str, &'a str)>) {
+        for e in &mut self.entries {
+            let (Some(m), Some(run)) = (&e.manifest, e.run.as_mut()) else {
+                continue;
+            };
+            let input = &mut run.store.data_mut().input;
+            input.bindings = chosen(&m.id)
+                .into_iter()
+                .filter(|(_, key)| key_ok(key))
+                .map(|(n, k)| (n.to_owned(), k.to_owned()))
+                .collect();
+            for (name, key) in input.bindings.clone() {
+                input.rebind(&name, key);
+            }
+        }
+    }
+    /// The player binds mod `i`'s key `name` to `key` (`key.keyboard.x`,
+    /// `key.mouse.4`, `key.keyboard.unknown` for none). False when the mod
+    /// has no such key or `key` isn't one.
+    pub fn rebind(&mut self, i: usize, name: &str, key: &str) -> bool {
+        let Some(run) = self.entries.get_mut(i).and_then(|e| e.run.as_mut()) else {
+            return false;
+        };
+        let input = &mut run.store.data_mut().input;
+        if !key_ok(key) || !input.keys.iter().any(|k| k.name == name) {
+            return false;
+        }
+        input.bindings.retain(|(n, _)| n != name);
+        input.bindings.push((name.to_owned(), key.to_owned()));
+        input.rebind(name, key.to_owned());
+        true
+    }
+    /// The use button went down with `item`: `use-start` to each mod that
+    /// claimed it.
+    pub fn use_start(&mut self, item: &HeldItem) {
+        let event = InputEvent::UseStart(ItemUse {
+            item: item.clone(),
+            ticks: 0,
+        });
+        self.push_input(|i| i.claimed.contains(&item.id), &event);
+    }
+    /// The claimed use ended after `ticks`.
+    pub fn use_stop(&mut self, item: &HeldItem, ticks: u32) {
+        let event = InputEvent::UseStop(ItemUse {
+            item: item.clone(),
+            ticks,
+        });
+        self.push_input(|i| i.claimed.contains(&item.id), &event);
+    }
+    /// The key `key` (`key.keyboard.r`) went down or up: each mod with a
+    /// key on it hears its own name for it.
+    pub fn key(&mut self, key: &str, down: bool) {
+        for run in self.entries.iter_mut().filter_map(|e| e.run.as_mut()) {
+            let input = &mut run.store.data_mut().input;
+            let names: Vec<String> = input
+                .keys
+                .iter()
+                .filter(|k| k.key == key)
+                .map(|k| k.name.clone())
+                .collect();
+            for name in names {
+                let held = input.down.iter().position(|n| *n == name);
+                match (down, held) {
+                    (true, None) => input.down.push(name.clone()),
+                    (false, Some(i)) => {
+                        input.down.swap_remove(i);
+                    }
+                    // Already let go when a screen opened.
+                    (false, None) => continue,
+                    (true, Some(_)) => {}
+                }
+                input.push(if down {
+                    InputEvent::KeyDown(name)
+                } else {
+                    InputEvent::KeyUp(name)
+                });
+            }
+        }
+    }
+    /// A screen opened, or the game stopped playing: every mod key held
+    /// lets go (`key-up`), so a key needs a new press afterwards.
+    pub fn release_keys(&mut self) {
+        for run in self.entries.iter_mut().filter_map(|e| e.run.as_mut()) {
+            let input = &mut run.store.data_mut().input;
+            for name in std::mem::take(&mut input.down) {
+                input.push(InputEvent::KeyUp(name));
+            }
+        }
+    }
+    /// Some running mod holds the mouse wheel.
+    pub fn wheel_claimed(&self) -> bool {
+        self.inputs().any(|i| i.wheel)
+    }
+    /// Wheel steps while playing: `wheel` to the mods holding it; false
+    /// when none does (the hotbar takes them).
+    pub fn wheel(&mut self, steps: f32) -> bool {
+        let event = InputEvent::Wheel(steps);
+        let claimed = self.wheel_claimed();
+        self.push_input(|i| i.wheel, &event);
+        claimed
+    }
+    /// The strongest zoom a running mod asks for (capability `render`).
+    pub fn zoom(&self) -> Option<ModZoom> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref()?.store.data().zoom)
+            .max_by(|a, b| a.factor.total_cmp(&b.factor))
+    }
+    /// The minimap the first running mod shows (capability `render`).
+    pub fn minimap(&self) -> Option<ModMinimap> {
+        self.entries
+            .iter()
+            .find_map(|e| e.run.as_ref()?.store.data().minimap)
+    }
+    fn inputs(&self) -> impl Iterator<Item = &InputState> {
+        self.entries
+            .iter()
+            .filter_map(|e| Some(&e.run.as_ref()?.store.data().input))
+    }
+    fn push_input(&mut self, to: impl Fn(&InputState) -> bool, event: &InputEvent) {
+        for run in self.entries.iter_mut().filter_map(|e| e.run.as_mut()) {
+            let input = &mut run.store.data_mut().input;
+            if to(input) {
+                input.push(event.clone());
+            }
+        }
+    }
+    /// The running mods' HUD shapes (capability `render`), each mod's in
+    /// its own order, mods in load order.
+    pub fn hud_shapes(&self) -> impl Iterator<Item = &Shape> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref())
+            .flat_map(|r| &r.store.data().shapes)
+    }
+    /// The screen mod `i` last pushed with `ui.open-screen`, while it is up.
+    pub fn screen(&self, i: usize) -> Option<&UiScreen> {
+        self.entries
+            .get(i)?
+            .run
+            .as_ref()?
+            .store
+            .data()
+            .ui
+            .screen
+            .as_ref()
+    }
+    /// The widgets `ui.set-settings` pushed: mod `i`'s page in
+    /// Options > Mods. Empty while it has none.
+    pub fn settings_widgets(&self, i: usize) -> &[UiWidget] {
+        self.entries
+            .get(i)
+            .and_then(|e| e.run.as_ref())
+            .map_or(&[], |r| &r.store.data().ui.settings)
+    }
+    /// A `list` widget's row was picked on a surface of mod `i`.
+    pub fn ui_select(&mut self, i: usize, id: u32, row: u32) {
+        self.ui_event(i, |ui, s| {
+            ui.horizon_mods_ui_events().call_select(s, id, row)
+        });
+    }
+    /// The player left mod `i`'s screen (Esc or Done).
+    pub fn ui_closed(&mut self, i: usize) {
+        self.ui_event(i, |ui, s| ui.horizon_mods_ui_events().call_closed(s));
+    }
+    /// The player opened mod `i`'s settings page.
+    pub fn ui_settings_opened(&mut self, i: usize) {
+        self.ui_event(i, |ui, s| {
+            ui.horizon_mods_ui_events().call_settings_opened(s)
+        });
+    }
+    /// A `ui-events` call on mod `i`; no export, no call (mods built
+    /// before `ui` have none).
+    fn ui_event(
+        &mut self,
+        i: usize,
+        f: impl FnOnce(&UiHost, &mut Store<State>) -> wasmtime::Result<()>,
+    ) {
+        let has_ui = self
+            .entries
+            .get(i)
+            .and_then(|e| e.run.as_ref())
+            .is_some_and(|r| r.ui.is_some());
+        if has_ui {
+            self.call(i, FUEL_EVENT, |run| {
+                f(run.ui.as_ref().expect("checked above"), &mut run.store)
+            });
+        }
     }
     /// What mods asked to show since the last call.
     pub fn drain(&mut self) -> Vec<Output> {
@@ -684,6 +1038,37 @@ fn clip(text: String) -> String {
     }
 }
 
+/// Widgets on a `ui` screen or settings page, and rows on one `list`.
+const WIDGETS: usize = 64;
+const LIST_ROWS: usize = 512;
+
+fn clip_widgets(widgets: Vec<UiWidget>) -> Vec<UiWidget> {
+    widgets
+        .into_iter()
+        .take(WIDGETS)
+        .map(|w| match w {
+            UiWidget::Text(mut t) => {
+                t.text = clip(t.text);
+                UiWidget::Text(t)
+            }
+            UiWidget::Button(mut b) => {
+                b.label = clip(b.label);
+                UiWidget::Button(b)
+            }
+            UiWidget::Item(mut i) => {
+                i.item = clip(i.item);
+                i.name = clip(i.name);
+                UiWidget::Item(i)
+            }
+            UiWidget::List(mut l) => {
+                l.rows = l.rows.into_iter().take(LIST_ROWS).map(clip).collect();
+                l.selected = l.selected.filter(|&s| (s as usize) < l.rows.len());
+                UiWidget::List(l)
+            }
+        })
+        .collect()
+}
+
 impl mod_log::Host for State {
     fn write(&mut self, level: mod_log::Level, message: String) {
         let level = match level {
@@ -750,6 +1135,249 @@ impl players::Host for State {
         });
     }
 }
+/// A key a mod registered (capability `input`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModKey {
+    /// The mod's own name for it, echoed in `key-down`.
+    pub name: String,
+    /// What it does, for Controls.
+    pub label: String,
+    /// `key.keyboard.r`.
+    pub key: String,
+}
+
+/// What capability `input` holds for one mod.
+#[derive(Default)]
+struct InputState {
+    claimed: Vec<String>,
+    keys: Vec<ModKey>,
+    events: std::collections::VecDeque<InputEvent>,
+    /// The mod's keys held now, by name.
+    down: Vec<String>,
+    /// It holds the mouse wheel.
+    wheel: bool,
+    /// The keys the player chose, `name → key`: they win over
+    /// `register-key`'s.
+    bindings: Vec<(String, String)>,
+}
+/// Events kept for `poll`, items claimed and keys, per mod.
+const INPUT_EVENTS: usize = 256;
+const CLAIMS: usize = 64;
+const KEYS: usize = 16;
+
+/// `key.keyboard.<name>` or `key.mouse.<name>`, as options.txt writes keys;
+/// the game knows which names exist and ignores a key it has none for.
+fn key_ok(key: &str) -> bool {
+    let rest = key
+        .strip_prefix("key.keyboard.")
+        .or_else(|| key.strip_prefix("key.mouse."));
+    rest.is_some_and(|r| {
+        (1..=32).contains(&r.len())
+            && r.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.')
+    })
+}
+
+impl InputState {
+    /// Key `name` is `key` now; held, it lets go first.
+    fn rebind(&mut self, name: &str, key: String) {
+        let Some(k) = self.keys.iter_mut().find(|k| k.name == name) else {
+            return;
+        };
+        k.key = key;
+        if let Some(i) = self.down.iter().position(|n| n == name) {
+            let name = self.down.swap_remove(i);
+            self.push(InputEvent::KeyUp(name));
+        }
+    }
+    fn push(&mut self, event: InputEvent) {
+        if self.events.len() == INPUT_EVENTS {
+            self.events.pop_front();
+        }
+        self.events.push_back(event);
+    }
+}
+
+impl input::Host for State {
+    fn claim_items(&mut self, ids: Vec<String>) {
+        self.input.claimed = ids.into_iter().take(CLAIMS).map(clip).collect();
+    }
+    fn register_key(&mut self, name: String, label: String, key: String) -> Result<(), String> {
+        if !key_ok(&key) {
+            return Err(format!(
+                "{key:?} is not a key as options.txt writes them (key.keyboard.r)"
+            ));
+        }
+        let (name, label) = (clip(name), clip(label));
+        let key = match self.input.bindings.iter().find(|(n, _)| *n == name) {
+            Some((_, chosen)) => chosen.clone(),
+            None => key,
+        };
+        if let Some(k) = self.input.keys.iter_mut().find(|k| k.name == name) {
+            (k.label, k.key) = (label, key);
+            return Ok(());
+        }
+        if self.input.keys.len() == KEYS {
+            return Err(format!("a mod may register {KEYS} keys"));
+        }
+        self.input.keys.push(ModKey { name, label, key });
+        Ok(())
+    }
+    fn held(&mut self) -> Option<HeldItem> {
+        self.snapshot.held.clone()
+    }
+    fn poll(&mut self) -> Vec<InputEvent> {
+        self.input.events.drain(..).collect()
+    }
+    fn mapping(&mut self, name: String) -> Option<input::MappingState> {
+        let (_, label, down) = self.snapshot.mappings.iter().find(|m| m.0 == name)?;
+        Some(input::MappingState {
+            label: label.clone(),
+            down: *down,
+        })
+    }
+    fn clicks_per_second(&mut self) -> (u32, u32) {
+        self.snapshot.cps
+    }
+    fn claim_wheel(&mut self, on: bool) {
+        self.input.wheel = on;
+    }
+}
+
+/// HUD shapes one mod may keep (capability `render`).
+const SHAPES: usize = 1024;
+/// The longest jolt `render.shake` makes, in seconds.
+const SHAKE_SECONDS: f32 = 10.0;
+/// `render.set-zoom`'s limits: `Camera.tickFov` keeps the modifier at 0.1
+/// or more, and turning never stops.
+const ZOOM_MAX: f32 = 10.0;
+const TURN_MIN: f32 = 0.05;
+/// `set-minimap`'s side in GUI pixels and its blocks per map pixel.
+const MINIMAP_SIZE: (f32, f32) = (16.0, 256.0);
+const MINIMAP_SCALE: (f32, f32) = (0.5, 4.0);
+
+/// A mod's corner panel: shapes in a `width` × `height` box the game
+/// places in `corner`, stacked with the other overlays.
+#[derive(Clone, Debug)]
+pub struct CornerPanel {
+    pub corner: RenderCorner,
+    pub width: f32,
+    pub height: f32,
+    pub shapes: Vec<Shape>,
+}
+
+fn clip_shapes(shapes: Vec<Shape>) -> Vec<Shape> {
+    shapes
+        .into_iter()
+        .take(SHAPES)
+        .map(|shape| match shape {
+            Shape::Sprite(mut s) => {
+                s.sprite = clip(s.sprite);
+                Shape::Sprite(s)
+            }
+            Shape::Item(mut i) => {
+                i.item = clip(i.item);
+                i.scale = if i.scale.is_finite() {
+                    i.scale.clamp(0.0, 16.0)
+                } else {
+                    1.0
+                };
+                Shape::Item(i)
+            }
+            Shape::Text(mut t) => {
+                t.text = clip(t.text);
+                t.color &= 0xFF_FFFF;
+                Shape::Text(t)
+            }
+            other => other,
+        })
+        .collect()
+}
+
+impl render::Host for State {
+    fn set_hud(&mut self, shapes: Vec<Shape>) {
+        self.shapes = clip_shapes(shapes);
+    }
+    fn set_corner(&mut self, corner: RenderCorner, width: f32, height: f32, shapes: Vec<Shape>) {
+        let size = |v: f32| {
+            if v.is_finite() {
+                v.clamp(0.0, 1024.0)
+            } else {
+                0.0
+            }
+        };
+        self.corner = Some(CornerPanel {
+            corner,
+            width: size(width),
+            height: size(height),
+            shapes: clip_shapes(shapes),
+        });
+    }
+    fn clear_corner(&mut self) {
+        self.corner = None;
+    }
+    fn text_width(&mut self, text: String) -> f32 {
+        let widths = &self.snapshot.font_widths;
+        text.chars()
+            .map(|c| widths.get(c as usize).copied().unwrap_or(6.0))
+            .sum::<f32>()
+            .ceil()
+    }
+    fn set_zoom(&mut self, zoom: ModZoom) {
+        let finite = |v: f32, lo: f32, hi: f32| if v.is_finite() { v.clamp(lo, hi) } else { lo };
+        let factor = finite(zoom.factor, 1.0, ZOOM_MAX);
+        self.zoom = (factor > 1.0).then(|| ModZoom {
+            factor,
+            smooth: zoom.smooth,
+            turn: if zoom.turn.is_finite() {
+                zoom.turn.clamp(TURN_MIN, 1.0)
+            } else {
+                1.0
+            },
+        });
+    }
+    fn set_minimap(&mut self, minimap: Option<ModMinimap>) {
+        let finite = |v: f32, lo: f32, hi: f32| if v.is_finite() { v.clamp(lo, hi) } else { lo };
+        self.minimap = minimap.map(|m| ModMinimap {
+            size: finite(m.size, MINIMAP_SIZE.0, MINIMAP_SIZE.1),
+            blocks_per_pixel: finite(m.blocks_per_pixel, MINIMAP_SCALE.0, MINIMAP_SCALE.1),
+            ..m
+        });
+    }
+    fn frame_stats(&mut self) -> FrameRate {
+        let (fps, min, low) = self.snapshot.frame;
+        FrameRate { fps, min, low }
+    }
+    fn gui_size(&mut self) -> (f32, f32) {
+        self.snapshot.gui_size
+    }
+    fn shake(&mut self, strength: f32, seconds: f32) {
+        let ok = |v: f32, max: f32| {
+            if v.is_finite() {
+                v.clamp(0.0, max)
+            } else {
+                0.0
+            }
+        };
+        let (strength, seconds) = (ok(strength, 1.0), ok(seconds, SHAKE_SECONDS));
+        if strength > 0.0 && seconds > 0.0 {
+            self.out.push(Output::Shake { strength, seconds });
+        }
+    }
+}
+
+impl command::Host for State {
+    fn run(&mut self, line: String) {
+        let queued = self
+            .out
+            .iter()
+            .filter(|o| matches!(o, Output::Command { .. }))
+            .count();
+        if queued < CHAT_PER_CALL {
+            self.out.push(Output::Command { line: clip(line) });
+        }
+    }
+}
 impl hud::Host for State {
     fn set_panel(&mut self, corner: Corner, lines: Vec<Line>) {
         let lines = lines
@@ -764,6 +1392,21 @@ impl hud::Host for State {
     }
     fn clear(&mut self) {
         self.panel = None;
+    }
+}
+impl ui::Host for State {
+    fn open_screen(&mut self, mut screen: ui::Screen) {
+        screen.title = clip(screen.title);
+        screen.widgets = clip_widgets(screen.widgets);
+        self.ui.screen = Some(screen);
+        self.ui.open = true;
+    }
+    fn close_screen(&mut self) {
+        self.ui.screen = None;
+        self.ui.close = true;
+    }
+    fn set_settings(&mut self, widgets: Vec<ui::Widget>) {
+        self.ui.settings = clip_widgets(widgets);
     }
 }
 impl storage::Host for State {

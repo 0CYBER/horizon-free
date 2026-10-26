@@ -63,7 +63,7 @@ Horizon plays with PlayStation (DualShock 4 and DualSense), Xbox (360, One and S
 
 ## Extras
 
-**Options, Horizon Settings, Extras** holds small, optional conveniences. Every one is off by default, so a fresh install behaves like vanilla: fullbright, zoom, a minimap, an FPS counter, a keystroke display, auto-reconnect, Mouse Tweaks-style inventory controls and inventory sorting. One more is **dynamic lights**: a torch, lantern or other light source that you hold, that lies dropped as an item, or a burning mob, lights the blocks around it. It is client-side only, so other players do not see it.
+**Options, Horizon Settings, Extras** holds small, optional conveniences. Every one is off by default, so a fresh install behaves like vanilla: fullbright, a minimap, auto-reconnect, Mouse Tweaks-style inventory controls and inventory sorting. The FPS counter, the keystroke display and zoom are official mods now, in **Options, Mods**: if you had one on, the game installed it for you on its first start after the update, with your settings. One more is **dynamic lights**: a torch, lantern or other light source that you hold, that lies dropped as an item, or a burning mob, lights the blocks around it. It is client-side only, so other players do not see it.
 
 ## Where your settings are stored
 

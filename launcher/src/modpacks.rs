@@ -7,6 +7,7 @@
 //! `home/`, the profile's own saves and options. Nothing is uploaded or shared: mod jars are
 //! often All Rights Reserved, so the ports stay on the player's machine.
 use crate::backend;
+use crate::browser::horizon::pack as horizon_pack;
 use horizon_port_pack::{
     fetch::{Fetched, How},
     import::Pack,
@@ -232,6 +233,9 @@ pub fn outcome(pack: &Imported) -> String {
 
 /// Removes an imported pack: its jars, ports and the profile's saves.
 pub fn remove(work: &Path) -> Result<(), String> {
+    if horizon_pack::is_pack(work) {
+        return horizon_pack::remove(work);
+    }
     if work.parent() != Some(ports_dir().as_path()) {
         return Err(format!("{} is not an imported pack", work.display()));
     }
@@ -245,7 +249,11 @@ pub fn profile_home(work: &Path) -> PathBuf {
 
 /// Turns the game's command into this pack's profile: its own home (the player's options.txt
 /// copied in the first time, so keys and video settings carry over) and its carried-over mods.
+/// A modpack from Horizon's registry (`horizon-packs/<id>/`) plays its own profile the same way.
 pub fn apply_profile(cmd: &mut Command, work: &Path) -> Result<(), String> {
+    if horizon_pack::is_pack(work) {
+        return horizon_pack::apply(cmd, work);
+    }
     // Only mods that load together: the game would refuse the later of two sharing a namespace.
     let (mods, _) = pipeline::loadable(&carried(work));
     if mods.is_empty() {

@@ -87,6 +87,8 @@ impl TestGame {
         self.mods.set_snapshot(Snapshot {
             player: self.player.clone(),
             clock: self.clock,
+            // The GUI of a 1280 x 720 window at scale 3, as the trial run's.
+            gui_size: (427.0, 240.0),
             ..Snapshot::default()
         });
     }

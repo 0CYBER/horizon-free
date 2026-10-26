@@ -1651,8 +1651,15 @@ trait SeededPipeline: Send + Sync {
         pos: ChunkPos,
     ) -> Vec<Arc<super::structure::start::StructureStart>>;
     fn unsupported_features(&self) -> Vec<(String, String)>;
+    fn use_saved_start(
+        &self,
+        worker: &mut WorkerState,
+        chunk: ChunkPos,
+        structure: &str,
+        pieces: &[serde_json::Value],
+    ) -> Result<(), String>;
     fn forget_structure_starts(&self);
-    fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>>;
+    fn ring_positions(&self, worker: &mut WorkerState, set: &str) -> Option<Vec<ChunkPos>>;
     fn spawn_position(&self) -> Result<[i32; 2], GeneratorError>;
     fn locate(
         &self,
@@ -1747,13 +1754,35 @@ where
             .map(super::generator_decoration::Decoration::unsupported)
             .unwrap_or_default()
     }
+    fn use_saved_start(
+        &self,
+        worker: &mut WorkerState,
+        chunk: ChunkPos,
+        structure: &str,
+        pieces: &[serde_json::Value],
+    ) -> Result<(), String> {
+        let structures = (self.structures.as_ref()).ok_or("structures were not loaded")?;
+        let mut queries = StructureQueries {
+            pipeline: self,
+            worker,
+            valid: BTreeSet::new(),
+        };
+        structures.use_saved_start(&mut queries, chunk, structure, pieces)
+    }
     fn forget_structure_starts(&self) {
         if let Some(structures) = &self.structures {
             structures.forget_starts();
         }
     }
-    fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>> {
-        self.structures.as_ref()?.cached_rings(set)
+    fn ring_positions(&self, worker: &mut WorkerState, set: &str) -> Option<Vec<ChunkPos>> {
+        self.structures.as_ref()?.ring_positions(
+            &mut StructureQueries {
+                pipeline: self,
+                worker,
+                valid: BTreeSet::new(),
+            },
+            set,
+        )
     }
     fn spawn_position(&self) -> Result<[i32; 2], GeneratorError> {
         if let Some(position) = self.spawn_position.get() {
@@ -2375,11 +2404,6 @@ impl OverworldGenerator {
     pub fn unsupported_features(&self) -> Vec<(String, String)> {
         self.pipeline.unsupported_features()
     }
-    /// ConcentricRingsStructurePlacement chunks of a structure set (such as
-    /// `minecraft:strongholds`), available once structure starts were looked up.
-    pub fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>> {
-        self.pipeline.ring_positions(set)
-    }
     /// NoiseBasedChunkGenerator.getOrigin: the chunk a new world's spawn
     /// search starts from (NoiseSpawnFinder over the `spawn_target` points).
     pub fn origin(&self) -> Result<ChunkPos, GeneratorError> {
@@ -2487,12 +2511,28 @@ impl GeneratorWorker {
     pub fn jigsaw_pieces(&mut self, query: &JigsawQuery<'_>) -> Option<JigsawPieces> {
         self.pipeline.jigsaw_pieces(&mut self.state, query)
     }
+    /// ConcentricRingsStructurePlacement chunks of a structure set (such as
+    /// `minecraft:strongholds`), searched for now if nothing needed them yet.
+    pub fn ring_positions(&mut self, set: &str) -> Option<Vec<ChunkPos>> {
+        self.pipeline.ring_positions(&mut self.state, set)
+    }
     /// STRUCTURE_STARTS: the structure starts owned by a chunk (cached).
     pub fn structure_starts(
         &mut self,
         pos: ChunkPos,
     ) -> Vec<Arc<super::structure::start::StructureStart>> {
         self.pipeline.structure_starts(&mut self.state, pos)
+    }
+    /// Puts a saved start of `structure` (its pieces as a save lists them, in
+    /// JSON) in `chunk`, in place of the one generation builds there, until
+    /// the starts are forgotten. Harnesses place another game's layout.
+    pub fn use_saved_start(
+        &mut self,
+        chunk: ChunkPos,
+        structure: &str,
+        pieces: &[serde_json::Value],
+    ) -> Result<(), String> {
+        (self.pipeline).use_saved_start(&mut self.state, chunk, structure, pieces)
     }
     /// Forget the cached structure starts: chunks generated afterwards get
     /// fresh starts, as in a new level that has not loaded the old chunks.
@@ -2887,8 +2927,8 @@ mod tests {
             return;
         };
         let generator = OverworldGenerator::new(data, 1234).expect("generator");
-        generator.worker().structure_starts(ChunkPos::new(0, 0));
         let rings = generator
+            .worker()
             .ring_positions("minecraft:strongholds")
             .expect("ring positions");
         assert_eq!(rings.len(), 128);
@@ -2900,6 +2940,40 @@ mod tests {
         ] {
             assert_eq!(rings[i], ChunkPos::new(x, z), "stronghold {i}");
         }
+    }
+
+    /// Chunks no ring search can end near are decided without the rings,
+    /// which stay unsearched, and get the starts they get with them.
+    #[test]
+    fn chunks_far_from_the_rings_do_not_search_them() {
+        let Some(data) = prepared_data() else {
+            return;
+        };
+        let generator = OverworldGenerator::new(data.clone(), 4321).expect("generator");
+        let mut worker = generator.worker();
+        let summary = |worker: &mut GeneratorWorker, c: ChunkPos| -> Vec<(String, i32, i32)> {
+            worker
+                .structure_starts(c)
+                .iter()
+                .map(|s| (s.name.clone(), s.chunk.x, s.chunk.z))
+                .collect()
+        };
+        let chunks: Vec<ChunkPos> = (-24..=24)
+            .step_by(3)
+            .flat_map(|x| (-24..=24).step_by(3).map(move |z| ChunkPos::new(x, z)))
+            .collect();
+        let before: Vec<_> = chunks.iter().map(|&c| summary(&mut worker, c)).collect();
+        assert!(before.iter().any(|s| !s.is_empty()), "no starts to compare");
+        let searched = || data.ring_cache.lock().unwrap()[0].1.get().is_some();
+        assert!(!searched());
+        let rings = worker
+            .ring_positions("minecraft:strongholds")
+            .expect("ring positions");
+        assert_eq!(rings.len(), 128);
+        assert!(searched());
+        worker.forget_structure_starts();
+        let after: Vec<_> = chunks.iter().map(|&c| summary(&mut worker, c)).collect();
+        assert_eq!(before, after);
     }
 
     /// Generators of one seed and dimension share their ring positions;

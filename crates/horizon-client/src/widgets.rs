@@ -1,8 +1,47 @@
 //! The labelled widgets and focus targets drawn in the last frame, for the
 //! control socket: a script clicks a button by its label (`horizon-ctl
 //! click-button Respawn`) or any widget by its id in [`tree`] (`horizon-ctl
-//! click done`), whatever screen drew it.
-use std::cell::RefCell;
+//! click done`), whatever screen drew it. Also the mouse cursor the widget
+//! under the mouse asks for.
+use std::cell::{Cell, RefCell};
+
+/// The mouse cursor a frame's widgets asked for (`CursorTypes`; the others
+/// aren't asked for yet).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Cursor {
+    #[default]
+    Arrow,
+    PointingHand,
+    NotAllowed,
+}
+
+thread_local! {
+    /// `GuiGraphicsExtractor.requestCursor`: the last request since [`take_cursor`].
+    static CURSOR: Cell<Cursor> = const { Cell::new(Cursor::Arrow) };
+}
+
+/// `GuiGraphicsExtractor.requestCursor`: the last request of a frame wins.
+pub fn request_cursor(cursor: Cursor) {
+    CURSOR.set(cursor);
+}
+
+/// `AbstractWidget.handleCursor`: a hovered widget asks for the pointing
+/// hand, or for not-allowed when it is inactive.
+pub fn widget_cursor(hovered: bool, active: bool) {
+    if hovered {
+        request_cursor(if active {
+            Cursor::PointingHand
+        } else {
+            Cursor::NotAllowed
+        });
+    }
+}
+
+/// The cursor the frame asked for, and back to the arrow for the next one
+/// (the window shows the arrow unless a widget asks).
+pub fn take_cursor() -> Cursor {
+    CURSOR.replace(Cursor::Arrow)
+}
 
 /// A labelled widget in GUI pixels (the coordinates screens take input in).
 #[derive(Clone, Debug)]
@@ -131,6 +170,29 @@ pub fn record_as(label: &str, [x, y, w, h]: [f32; 4], enabled: bool, kind: Kind)
             });
         }
     });
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::*;
+
+    #[test]
+    fn hovered_widgets_ask_for_the_hand_or_not_allowed() {
+        let _ = take_cursor();
+        widget_cursor(false, true);
+        assert_eq!(take_cursor(), Cursor::Arrow);
+        widget_cursor(true, true);
+        assert_eq!(take_cursor(), Cursor::PointingHand);
+        // Taken: the next frame starts from the arrow.
+        assert_eq!(take_cursor(), Cursor::Arrow);
+        widget_cursor(true, false);
+        assert_eq!(take_cursor(), Cursor::NotAllowed);
+        // The last request of a frame wins.
+        widget_cursor(true, false);
+        widget_cursor(false, true);
+        widget_cursor(true, true);
+        assert_eq!(take_cursor(), Cursor::PointingHand);
+    }
 }
 
 /// Once per event loop turn with the count of rendered frames: when a new

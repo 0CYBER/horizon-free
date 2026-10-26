@@ -606,10 +606,7 @@ impl Game<'_> {
                     .collect(),
                 _ => Vec::new(),
             },
-            Some("vehicle") => match entity {
-                Target::Player => self.riding.map(Target::Mob).into_iter().collect(),
-                _ => Vec::new(),
-            },
+            Some("vehicle") => self.ride_vehicle(entity).into_iter().collect(),
             Some("controller") | Some("passengers") => match entity {
                 Target::Mob(id) if self.mobs.iter().any(|m| m.id == id && m.rider.is_some()) => {
                     vec![Target::Player]
