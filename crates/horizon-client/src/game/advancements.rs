@@ -681,6 +681,19 @@ impl Game<'_> {
             adv::conditions(&c["player"], &pctx, w) && adv::conditions(&c[&key], &ectx, w)
         });
     }
+    /// `KilledByArrowTrigger`: what the arrow killed and the weapon it came from.
+    pub(super) fn trigger_killed_by_arrow(
+        &mut self,
+        victims: &[EntityView],
+        weapon: Option<&ItemStack>,
+    ) {
+        let me = self.player_entity();
+        let victims = victims.to_vec();
+        let weapon = weapon.map(item_view);
+        self.trigger("minecraft:killed_by_arrow", move |c, w| {
+            adv::killed_by_arrow(c, &me, &victims, weapon.as_ref(), w)
+        });
+    }
     /// A player condition plus one item (`item` key).
     pub(super) fn trigger_item(&mut self, name: &str, stack: &ItemStack) {
         let me = self.player_entity();

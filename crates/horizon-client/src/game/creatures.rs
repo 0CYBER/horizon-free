@@ -2111,6 +2111,17 @@ impl Game<'_> {
                             .is_some_and(|m| m.damage(amount, source));
                         if p.owner == Some(Who::Player) {
                             self.last_hurt_by_player.insert(id, self.lan_acting);
+                            // AbstractArrow.onHitEntity: KILLED_BY_ARROW for a kill
+                            // (piercing arrows are not modelled).
+                            if hurt
+                                && let Some(m) = self.mobs.iter().find(|m| m.id == id)
+                                && !m.alive()
+                            {
+                                let victim = self.mob_entity(m);
+                                let weapon =
+                                    p.arrow.as_ref().and_then(|a| a.fired_from_weapon.as_ref());
+                                self.trigger_killed_by_arrow(&[victim], weapon);
+                            }
                         }
                         hurt
                     }
