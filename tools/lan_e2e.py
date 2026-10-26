@@ -6955,5 +6955,51 @@ CHECKS += ['sonic']
 CHECK_FNS['sonic'] = check_sonic
 
 
+def check_cushions(host, guest, out):
+    """#1935: place a colored cushion, consume it, track it, sit, dismount and break it."""
+    seen = {}
+    for label, player, color in (('host', host, 'red'), ('guest', guest, 'blue')):
+        x, y, z = (int(v // 1) for v in pos_of(player))
+        at = (x + 0.5, y, z + 2.5)
+        host('command', command=f'fill {x - 1} {y} {z + 1} {x + 1} {y + 3} {z + 3} minecraft:air')
+        host('command', command=f'setblock {x} {y - 1} {z + 2} minecraft:stone')
+        player('command', command='gamemode survival')
+        player('command', command=f'item replace entity @s weapon.mainhand with minecraft:{color}_cushion')
+        player.wait(10)
+        player.raw('look-at', *at)
+        player.raw('mouse', 'right', 'click')
+        player.wait(15)
+        def cushions(game):
+            return [o for o in game('status')['objects'] if o['kind'] == 'minecraft:cushion'
+                    and abs(o['position'][0] - at[0]) < .1 and abs(o['position'][2] - at[2]) < .1]
+        server, client = cushions(host), cushions(player)
+        seen[label] = {'server': server, 'client': client,
+                       'remaining': player('inventory')['counts'].get(f'minecraft:{color}_cushion', 0)}
+        assert len(server) == len(client) == 1, seen
+        assert server[0]['color'] == client[0]['color'] == color, seen
+        assert seen[label]['remaining'] == 0, seen
+        player.shot(out, 'cushion-placed')
+        player.raw('look-at', at[0], at[1] + .125, at[2])
+        player.raw('mouse', 'right', 'click')
+        player.wait(10)
+        seen[label]['riding'] = player('status').get('riding')
+        assert seen[label]['riding'] == server[0]['id'], seen
+        player.raw('key', 'shift', 'down')
+        player.wait(5)
+        player.raw('key', 'shift', 'up')
+        player.wait(5)
+        assert player('status').get('riding') is None, seen
+        player('command', command='gamemode creative')
+        player.raw('look-at', at[0], at[1] + .125, at[2])
+        player.raw('mouse', 'left', 'click')
+        player.wait(10)
+        assert not cushions(host) and not cushions(player), seen
+    return seen
+
+
+CHECKS += ['cushions']
+CHECK_FNS['cushions'] = check_cushions
+
+
 if __name__ == '__main__':
     main()

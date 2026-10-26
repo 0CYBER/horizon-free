@@ -33,6 +33,7 @@ mod copper_golems;
 mod creaking;
 mod creatures;
 mod crossbow;
+pub(crate) mod cushions;
 mod debug_keys;
 mod decorated_pot;
 mod dedicated;
@@ -1431,6 +1432,8 @@ struct Game<'a> {
     map_frame_model: frames::FrameModel,
     glow_map_frame_model: frames::FrameModel,
     armor_stands: Vec<horizon_client::entities::ArmorStand>,
+    /// `Cushion` decoration entities (game/cushions.rs).
+    cushions: Vec<horizon_client::entities::Cushion>,
     /// Entities of types Horizon does not simulate.
     others: Vec<commands::OtherEntity>,
     armor_stand_assets: armor_stands::ArmorStandAssets,
@@ -1446,6 +1449,8 @@ struct Game<'a> {
     boat_models: boats::BoatModels,
     /// EndCrystalModel's baked layer.
     crystal_model: Option<horizon_client::mobs::Part>,
+    /// CushionModel's baked layer.
+    cushion_model: Option<horizon_client::mobs::Part>,
     carts: Vec<minecarts::Minecart>,
     /// Songs playing from jukeboxes (tracked sound handles).
     jukebox_sounds: HashMap<(i32, i32, i32), u64>,
@@ -3483,6 +3488,7 @@ impl Game<'_> {
     fn interact_entity(&mut self) -> Result<bool> {
         Ok(self.interact_frame()
             || self.interact_armor_stand()
+            || self.interact_cushion()
             || self.interact_boat()
             || self.interact_cart()
             || self.interact_mob()?
@@ -3669,6 +3675,7 @@ impl Game<'_> {
                 || self.place_painting(hit, &stack)
                 || self.place_item_frame(hit, &stack)
                 || self.place_armor_stand(hit, &stack)
+                || self.place_cushion(hit, &stack)
                 || self.place_end_crystal(hit, &stack))
         {
             return Ok(true);
@@ -4554,6 +4561,7 @@ impl Game<'_> {
             horizon_client::spans::time("tick_paintings", || self.tick_paintings());
             horizon_client::spans::time("tick_item_frames", || self.tick_item_frames());
             horizon_client::spans::time("tick_armor_stands", || self.tick_armor_stands());
+            horizon_client::spans::time("tick_cushions", || self.tick_cushions());
             horizon_client::spans::time("tick_boats", || self.tick_boats());
             horizon_client::spans::time("tick_carts", || self.tick_carts());
             horizon_client::spans::time("tick_thunder", || self.tick_thunder());
@@ -7260,6 +7268,7 @@ impl Game<'_> {
         self.frame_geometry(camera, &mut out);
         self.mark_entity(out.len(), "minecraft:armor_stand");
         self.armor_stand_geometry(camera, alpha, &mut out);
+        self.cushion_geometry(camera, &mut out);
         self.mark_entity(out.len(), "minecraft:oak_boat");
         self.boat_geometry(camera, alpha, &mut out);
         self.mark_entity(out.len(), "minecraft:minecart");
@@ -7556,6 +7565,7 @@ impl Game<'_> {
                 .map_or(0.0, |i| i.attack_damage);
         if self.attack_frame()
             || self.attack_armor_stand()
+            || self.attack_cushion()
             || self.attack_boat(hand_damage)
             || self.attack_cart(hand_damage)
             || self.attack_dragon()
@@ -8300,6 +8310,7 @@ impl Game<'_> {
         self.boats.clear();
         self.carts.clear();
         self.armor_stands.clear();
+        self.cushions.clear();
         self.item_frames.clear();
         self.paintings.clear();
         self.others.clear();
@@ -12304,6 +12315,7 @@ impl<'a> Game<'a> {
             map_frame_model: prepared.map_frame_model,
             glow_map_frame_model: prepared.glow_map_frame_model,
             armor_stands: Vec::new(),
+            cushions: Vec::new(),
             others: Vec::new(),
             armor_stand_assets: prepared.armor_stand_assets,
             waypoint_styles: prepared.waypoint_styles,
@@ -12313,6 +12325,7 @@ impl<'a> Game<'a> {
             boats: Vec::new(),
             boat_models: prepared.boat_models,
             crystal_model: prepared.crystal_model,
+            cushion_model: prepared.cushion_model,
             carts: Vec::new(),
             jukebox_sounds: HashMap::new(),
             bolts: Vec::new(),
@@ -12451,6 +12464,7 @@ struct GameCpuResources {
     boat_models: boats::BoatModels,
     cart_models: minecarts::CartModels,
     crystal_model: Option<horizon_client::mobs::Part>,
+    cushion_model: Option<horizon_client::mobs::Part>,
     dragon_model: Option<horizon_client::mobs::Part>,
     arrow_model: Option<horizon_client::mobs::Part>,
     trident_model: Option<horizon_client::mobs::Part>,
@@ -12471,6 +12485,7 @@ impl GameCpuResources {
             boat_models: boats::BoatModels::load(document.as_ref()),
             cart_models: minecarts::CartModels::load(document.as_ref()),
             crystal_model: model("minecraft:end_crystal#main"),
+            cushion_model: model("minecraft:cushion#main"),
             dragon_model: model("minecraft:ender_dragon#main"),
             arrow_model: model("minecraft:arrow#main"),
             trident_model: model("minecraft:trident#main"),
@@ -13826,7 +13841,7 @@ mod startup_cpu_tests {
             r#"{
             "minecraft:end_crystal#main": {}, "minecraft:ender_dragon#main": {},
             "minecraft:arrow#main": {}, "minecraft:trident#main": {},
-            "minecraft:armor_stand#main": {}
+            "minecraft:armor_stand#main": {}, "minecraft:cushion#main": {}
         }"#,
         )
         .unwrap();
@@ -13846,6 +13861,7 @@ mod startup_cpu_tests {
         .unwrap();
         std::fs::remove_dir_all(&root).unwrap();
         assert!(prepared.crystal_model.is_some());
+        assert!(prepared.cushion_model.is_some());
         assert!(prepared.dragon_model.is_some());
         assert!(prepared.arrow_model.is_some());
         assert!(prepared.trident_model.is_some());
