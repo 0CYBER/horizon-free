@@ -21,6 +21,38 @@ impl Game<'_> {
     fn item_max_stack(&self, item: &str) -> u32 {
         self.res.items().get(item).map_or(64, |i| i.max_stack)
     }
+    /// `WorkAtComposter.useWorkstation`: at a composter the farmer makes
+    /// bread, then composts seeds.
+    pub(super) fn villager_work_at_composter(&mut self, id: u32, pos: [i32; 3]) {
+        let Some(i) = self.villager_index(id) else {
+            return;
+        };
+        if self.composter_level(pos).is_none() {
+            return;
+        }
+        self.villager_make_bread(i);
+        self.villager_compost_items(i, pos);
+    }
+    /// `WorkAtComposter.makeBread`: up to three loaves from nine wheat while
+    /// the villager holds at most 36 bread; what does not fit drops.
+    fn villager_make_bread(&mut self, i: usize) {
+        let max_stack = self.item_max_stack("minecraft:bread");
+        let e = villager::ext_mut(&mut self.mobs[i]);
+        if e.count_item("minecraft:bread") > 36 {
+            return;
+        }
+        let loaves = (e.count_item("minecraft:wheat") / 3).min(3);
+        if loaves == 0 {
+            return;
+        }
+        e.remove_item("minecraft:wheat", loaves * 3);
+        let left = e.add_item(ItemStack::new("minecraft:bread", loaves), max_stack);
+        if let Some(rest) = left {
+            // spawnAtLocation(level, stack, 0.5F)
+            let p = self.mobs[i].position;
+            self.spawn_item(rest, [p.x, p.y + 0.5, p.z], [0.0, 0.2, 0.0], 10);
+        }
+    }
     /// `BehaviorUtils.throwItem`: toss a stack from a villager's hand toward
     /// a point.
     fn villager_throw(&mut self, from: Vec3, eye: f64, to: Vec3, stack: ItemStack) {
