@@ -464,7 +464,28 @@ impl Game<'_> {
             return;
         }
         // The Chat option's Hidden level takes the server's messages too.
-        if !self.ui.chat.shows(ChatSource::Server) {
+        self.local_chat_line(text, Some(SYSTEM_INDICATOR), ChatSource::Server);
+    }
+    /// A player's chat line on the window's own chat: a LAN guest's message
+    /// while the host runs in-frame (`HostEvent::Chat`). `ChatListener`
+    /// checks `canReceivePlayerMessages` for these, so Commands Only and
+    /// Hidden drop them; command feedback (`/list`, `/tp`) is a system
+    /// message and takes the system-message permission instead.
+    pub(super) fn player_message(&mut self, text: Text) {
+        if let Some(capture) = self.chat_capture.as_mut() {
+            capture.push(text);
+            return;
+        }
+        // A server's client receives the line as a packet (PlayerChat or
+        // DisguisedChat) and filters it there.
+        if self.remote.is_none() {
+            self.local_chat_line(text, None, ChatSource::Player);
+        }
+    }
+    /// A line on the window's own chat when the Chat option lets `source`
+    /// through; running mods hear it.
+    fn local_chat_line(&mut self, text: Text, indicator: Option<u32>, source: ChatSource) {
+        if !self.ui.chat.shows(source) {
             return;
         }
         let focused = self.screen == Screen::Chat;
@@ -472,8 +493,8 @@ impl Game<'_> {
         self.ui.chat.add(
             &self.gui.atlas,
             text,
-            Some(SYSTEM_INDICATOR),
-            ChatSource::Server,
+            indicator,
+            source,
             self.ticks,
             focused,
         );

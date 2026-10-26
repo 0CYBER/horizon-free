@@ -455,7 +455,64 @@ impl Game<'_> {
             cps,
             font_widths: self.mods.font_widths.clone(),
             players,
+            view_hit: self.mod_view_hit(),
         }
+    }
+    /// The first block along the player's view within
+    /// [`horizon_mods::RAYCAST_MAX`] and its distance from the eye
+    /// (`game.raycast`): through the loaded chunks as the crosshair's ray
+    /// goes (fluids pass), then across the distant terrain's ground heights,
+    /// a block at a time.
+    fn mod_view_hit(&self) -> Option<(f32, horizon_mods::Hit)> {
+        if !self.mods.mods.wants_raycast() {
+            return None;
+        }
+        let eye = self.eye_position()?;
+        let dir = super::view_vector(self.yaw, self.pitch);
+        let reach = f64::from(horizon_mods::RAYCAST_MAX);
+        let (pos, point, state) = match self.clip_ray(eye, dir, reach) {
+            Some(hit) => (
+                hit.pos,
+                hit.point,
+                self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]),
+            ),
+            None => self.lod_ray(eye, dir, reach)?,
+        };
+        let distance = (0..3).map(|i| (point[i] - eye[i]).powi(2)).sum::<f64>();
+        let hit = horizon_mods::Hit {
+            block_x: pos[0],
+            block_y: pos[1],
+            block_z: pos[2],
+            x: point[0],
+            y: point[1],
+            z: point[2],
+            block: self.res.facts().get(state).name.to_string(),
+        };
+        Some((distance.sqrt() as f32, hit))
+    }
+    /// Past the resident chunks: the view walked across the distant
+    /// terrain's ground heights (`Lod::ground`), a block at a time. Columns in
+    /// loaded chunks are left to `clip_ray`, which has already missed them.
+    fn lod_ray(
+        &self,
+        eye: [f64; 3],
+        dir: [f64; 3],
+        reach: f64,
+    ) -> Option<([i32; 3], [f64; 3], horizon_world::registry::BlockStateId)> {
+        let lod = self.lod.as_ref()?;
+        let mut t = 0.0;
+        while t <= reach {
+            let p = [0, 1, 2].map(|i| eye[i] + dir[i] * t);
+            let (x, z) = (p[0].floor() as i32, p[2].floor() as i32);
+            if !self.world.loaded(x, z)
+                && let Some((height, state)) = lod.ground(x, z)
+                && p[1] <= f64::from(height)
+            {
+                return Some(([x, height - 1, z], [p[0], f64::from(height), p[2]], state));
+            }
+            t += 1.0;
+        }
+        None
     }
     /// A game tick.
     pub(super) fn tick_mods(&mut self) {

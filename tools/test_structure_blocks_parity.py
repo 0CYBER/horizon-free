@@ -55,6 +55,12 @@ KNOWN = {
             "Better Dungeons' own structure types (spec-betterdungeons §5, §6; OPEN-B14, B15) are not "
             'implemented yet',
     },
+    'ctov': {
+        r'^ctov:': "Lithostitched's random is not known (spec-lithostitched OPEN-L6): per-block road and palette "
+                   'choices match by share, not by block; and decoration (grass, trees) differs where the village '
+                   'changed the terrain',
+        r'^minecraft:village_plains$': 'decoration (grass, trees) differs where the village changed the terrain',
+    },
 }
 
 

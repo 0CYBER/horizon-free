@@ -54,11 +54,11 @@ enum Page {
 }
 
 impl Page {
-    /// `HORIZON_LAUNCHER_PAGE=mods` (or `modpacks`, `servers`, `versions`, `notes`, `settings`)
-    /// opens on that page, for screenshots; Home otherwise.
+    /// `HORIZON_LAUNCHER_PAGE=mods` (or `modpacks`, `shaders`, `servers`, `versions`, `notes`,
+    /// `settings`) opens on that page, for screenshots; Home otherwise.
     fn from_env() -> Page {
         match std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() {
-            Ok("mods" | "modpacks") => Page::Mods,
+            Ok("mods" | "modpacks" | "shaders") => Page::Mods,
             Ok("servers") => Page::Servers,
             Ok("versions") => Page::Versions,
             Ok("notes") => Page::Notes,

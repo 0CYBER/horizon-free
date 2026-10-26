@@ -13,10 +13,11 @@
 //! The general code reaches them only through the `pub(crate)` entry points
 //! of these three modules. Nothing in them is used by another mod's
 //! conversion.
+#[allow(dead_code)] // its modular compat is `crate::lithostitched`'s now; the rest goes with C1
 pub(crate) mod ctov;
-pub(crate) mod lithostitched;
 
 #[cfg(test)]
+#[allow(dead_code)] // the old Lithostitched tests used it
 fn data() -> crate::processors::ProcessorData {
     let mut d = crate::processors::ProcessorData::default();
     d.spawners.insert(

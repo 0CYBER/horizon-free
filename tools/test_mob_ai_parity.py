@@ -311,6 +311,23 @@ def scenarios():
     add('villager_golem_panic', 100, ['fill -2 -60 -3 4 -60 4 minecraft:oak_fence', 'fill -1 -60 -2 3 -60 3 minecraft:air',
                                       'player 14.5 -60 0.5'] + golem_callers[:3]
         + ['mob minecraft:zombie 6.5 -60 0.5 90 86 persistent noai'], 'time=18000')
+    # Mob.checkDespawn removes disallowed types before persistence/NoAI checks.
+    # Keep the non-Peaceful controls and the allowed hostile/neutral exceptions.
+    for difficulty in range(4):
+        for flags in ('', 'persistent', 'named', 'noai', 'persistent noai'):
+            suffix = flags.replace(' ', '_') or 'ordinary'
+            add(f'peaceful_zombie_{difficulty}_{suffix}', 1, [
+                'player 6.5 -60 0.5',
+                f'mob minecraft:zombie 0.5 -60 0.5 0 1 {flags}',
+            ], f'difficulty={difficulty} time=18000')
+    # Not slime, piglin or bee: a slime made without finalizeSpawn keeps 20 health, the probe
+    # doesn't model a piglin's brain, and a NoAI bee's flower cooldown differs (none of it Peaceful).
+    for species in ('skeleton', 'creeper', 'warden', 'wither', 'shulker', 'wolf', 'iron_golem', 'cow'):
+        add(f'peaceful_type_{species}', 1, [
+            'player 6.5 -60 0.5',
+            f'mob minecraft:{species} 0.5 -60 0.5 0 1 persistent noai',
+        ], 'difficulty=0 time=18000')
+
     return s
 
 
