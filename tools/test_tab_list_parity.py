@@ -240,7 +240,7 @@ def main():
     run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-nowarn', '-cp', dependencies, '-d', classes,
          *(PARITY / f'{n}.java' for n in ('ParityData', 'ParityFont', 'VanillaTabListOracle', 'VanillaSkinImageOracle'))], 'compile-java')
     run(['java', '-Xmx2G', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.VanillaTabListOracle',
-         inputs, build / 'vanilla.jsonl'], 'vanilla')
+         inputs, build / 'vanilla.jsonl', resources / 'assets'], 'vanilla')
     run(['cargo', 'run', '--quiet', '--profile', 'fast', '-p', 'horizon-client', '--example', 'client_probe', '--',
          'tab_list_fixture', resources, inputs, build / 'rust.jsonl'], 'rust')
     images = build / 'skins.txt'; images.write_text(''.join(i + '\n' for i in skin_images(args.images)))

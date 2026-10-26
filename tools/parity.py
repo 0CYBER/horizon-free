@@ -11,6 +11,9 @@
     python3 tools/parity.py --list          # what would run, without running it
     python3 tools/parity.py --status        # last result of every harness
 
+Harnesses in parity_hosts.json's "named_only" run only when named or with --all
+(the nightly audit): no automatic selection picks them.
+
 Each harness runs unmodified, in parallel, under a tracer that records what it
 read: its Python modules, Java oracle sources, other repository files, and the
 Rust sources of every probe it executed (from Cargo's dep-info). A harness
@@ -1306,6 +1309,12 @@ def platform_skips(config):
     return dict(config.get("linux_only", {}))
 
 
+def named_only(config):
+    """Harnesses tools/parity_hosts.json keeps out of every automatic selection (--changed, --failed, the default,
+    --flake-check): they run only when named or with --all, the nightly audit. {name: reason}"""
+    return dict(config.get("named_only", {}))
+
+
 def finished_run(failed):
     """Record that this run completed, for tools/gate.py: a crashed runner never writes it."""
     STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1390,9 +1399,13 @@ def main():
     for name in [name for name in chosen if base_name(name) in skips and not args.names]:
         print(f"skipped on {sys.platform}: {name}: {skips[base_name(name)]}", flush=True)
         chosen.remove(name)
+    manual = {} if args.names or args.all else named_only(host_config())
+    for name in [name for name in chosen if base_name(name) in manual]:
+        print(f"not selected (runs when named, and nightly): {name}: {manual[base_name(name)]}", flush=True)
+        chosen.remove(name)
     rounds = {name: args.repeat for name in chosen} if args.repeat > 1 else {}
     if args.flake_check:
-        changed = changed_harnesses(found, records, args.flake_check)
+        changed = {name for name in changed_harnesses(found, records, args.flake_check) if base_name(name) not in manual}
         for name in sorted(changed):
             # A pass counts for a changed harness only if it held over enough runs.
             if name not in chosen and records.get(name, {}).get("rounds", 1) < args.flake_rounds:

@@ -1192,6 +1192,10 @@ impl Game<'_> {
                 {
                     self.container_changed(key);
                 }
+                // A vehicle's menu edits the vehicle's own items.
+                if let Some(Slots::Block(key)) = slots {
+                    self.store_cart_items(key);
+                }
                 self.drop_guest_items(host, gi, drops);
             }
             S::ContainerClose(p) => {
@@ -2183,6 +2187,9 @@ impl Game<'_> {
             let _ = w.tick_environment_damage();
             let _ = w.apply_fire_contact();
             let _ = w.server_hazards_tick(in_wall);
+            // Player.tick ends with updatePlayerPose: a swimmer, or a player
+            // crawling under a block, takes the short box its moves are checked with.
+            let _ = w.update_player_pose();
             let mut events = std::mem::take(&mut w.player.events);
             // LayeredCauldronBlock.handleEntityOnFireInside along those moves.
             for event in &events {

@@ -13,9 +13,8 @@ Horizon's own format.
 | Authoring tool | `horizon-shader` (same crate) | `new`, `check`, `pack` |
 | Templates | `crates/horizon-shader-api/templates/` | post, sky, material |
 | Example pack | `crates/horizon-shader-api/packs/golden_hour` | a warm sky and two post passes |
-| In the game: the sky and post stages | Options > Horizon Settings > Shader Packs | sky, post passes, hot reload |
+| In the game: every stage | Options > Horizon Settings > Shader Packs | sky, material, post passes, hot reload |
 | The registry and the launcher | `shader` kind ([api/mod-index.md](api/mod-index.md)); the Mods page's Shader packs tab | checked, then installed into `shaderpacks/` |
-| In the game: the material stage | | not yet |
 
 ## Quick start
 
@@ -53,8 +52,7 @@ it on Options > Horizon Settings > Shader Packs, which lists Horizon's packs, ma
 name>` runs a pack whatever the page says, for development. The game checks the pack first, and refuses one that
 fails, with its problems in the chat. While it runs, the game looks at the pack twice a second: save a file
 and the pack is checked and rebuilt in place ("Shader pack ... reloaded"); if the new version fails, the chat says
-where and the last good version keeps drawing. The sky and post stages run today; the material stage is checked but
-not drawn yet.
+where and the last good version keeps drawing. All three stages run.
 
 ## A pack
 
@@ -90,7 +88,7 @@ by Horizon: a pack changes how things look, not how they are drawn.
 | Stage | Your function | What it does |
 | --- | --- | --- |
 | `[sky]` | `fn sky(input: SkyInput) -> vec4<f32>` | the sky's colour along each view ray, opaque (alpha is ignored), drawn where vanilla draws its sky dome (the Overworld's sky; not the Nether's or the End's); the sun, moon, stars and clouds are drawn over it |
-| `[material]` | `fn material(input: MaterialInput) -> Surface` | the lit colour of each point of a block's surface, before the alpha test and fog |
+| `[material]` | `fn material(input: MaterialInput) -> Surface` | the lit colour of each point of a block's surface, before the alpha test and fog: every terrain section and distant tile, solid, cutout and translucent (not entities, block entities or particles) |
 | `[[post]]` | `fn post(input: PostInput) -> vec4<f32>` | a full-screen pass over the world's picture (up to 8, in order), under the hand and HUD |
 
 A pack has at least one stage; a stage it leaves out keeps vanilla's look. Each input says what vanilla would draw
@@ -133,8 +131,10 @@ one keeps drawing), the launcher before it installs one, and the registry's CI b
 `[budget] gpu_ms` is the GPU time your pack aims to add to a frame. To compare, open F3 in the game: while it is
 open, each pass is timed on the GPU and the overlay shows the pack's total and its costliest passes, by their `name`
 (the median of the last 15 timed frames). Timing waits for nothing, so it does not slow the game. In a timed frame the sky
-stage draws in a pass of its own (it shares the world's pass otherwise), so its time includes clearing the picture.
+stage draws in a pass of its own (it shares the world's pass otherwise), so its time includes clearing the picture. The
+material stage runs inside terrain's own draws, so it has no time of its own: compare the frame's GPU time with and
+without the pack.
 
 ## Next
 
-The material stage in the game.
+The overlay, lighting and shadow stages, and option values other than the defaults.

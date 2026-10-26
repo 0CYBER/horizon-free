@@ -83,7 +83,7 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | Interface | Capability | Functions |
 |---|---|---|
 | `log` | always | `write(level, message)`, in the game log as `[mod <id>]` |
-| `game` | `game-read` | `get-player()`: x y z, yaw, pitch, health, food, dimension; `get-clock()`: game time, day time |
+| `game` | `game-read` | `get-player()`: x y z, yaw, pitch, health, food, dimension; `get-clock()`: game time, day time; `raycast(distance)`: the first block along the view (fluids pass), up to 1024 blocks and across the distant terrain, with the point hit and the block's id |
 | `chat` | `chat` | `show(text)`: a line only the local player sees, after the mod's name (8 per call) |
 | `hud` | `hud` | `set-panel(corner, lines)`, `clear()`: up to 16 lines of 256 characters |
 | `storage` | `storage` | `get(key)`, `set(key, value)`, `delete(key)`: a per-mod folder of up to 64 files, 4 MiB total, at most 1 MiB written per call |
@@ -251,7 +251,8 @@ key> --signature <file>.minisig`.
 `cargo horizon-mod test` builds the mod, then runs each `tests/<name>.toml` in
 the sandbox the game uses, with no game and no window: the test plays the
 game's part (the player and the clock the mod reads, ticks, frames, chat lines,
-commands) and checks what the mod showed. A script fails at its first wrong
+commands; for a server mod, players joining, chatting, typing commands,
+breaking and placing blocks and leaving) and checks what the mod showed. A script fails at its first wrong
 step, with what it expected and what it got; the command fails if any script
 does. `--debug` builds without optimizing, `--hmod <file>` tests a `.hmod`
 already built, and a name runs only the scripts whose path holds it. Each
@@ -288,6 +289,16 @@ A step's parts happen in this order:
 | `ticks = n`, `frames = n` | that many ticks (the game's tick counter and the clock move on), then frames 1/60 s apart |
 | `chat = "<Steve> hi"` | a chat line the player receives |
 | `command = "where north"` | the player types `/where north`; a command the mod doesn't own fails the step |
+| `break = { x = 1, y = 63, z = 0, state = "minecraft:stone" }`, `place = { ... }` | server mods: the player breaks or places that block |
+| `leave = "Alex"` | server mods: that player leaves |
+
+A server mod starts with nobody on: `join = "Alex"` (after `reload` and `title-screen`) brings a
+player in at the defaults, in survival, with the id
+`00000000-0000-4000-8000-000000000001` for the first name that joined, `...2`
+for the second, the same id when a name joins again. `player`, `chat`,
+`command`, `break` and `place` are then that player's doing: the one named by
+`as = "Steve"`, or the first one on. `player` takes `game-mode` there, and the
+script's own `[player]` and `[clock]` are a client mod's.
 
 Then `expect` checks what the mod did during the step; a key left out is not
 checked:
@@ -298,6 +309,7 @@ checked:
 | `chat = ["..."]` | every chat line it showed, in order (`[]`: none) |
 | `feedback = "..."`, `error = "..."` | the command's answer, shown plain or in red |
 | `panel = ["..."]`, `corner = "top-left"` | its HUD panel's lines (`[]`: no panel) and corner |
+| `told = ["Alex: Welcome!"]`, `broadcast = ["..."]` | server mods: every `players.tell` (as `name: text`) and `players.broadcast`, in order |
 | `stopped = "panic"` | the mod was turned off, for a reason holding this text; without it, a mod that traps, panics or overruns fails the test |
 
 Unknown keys are errors, so a typo never passes silently. The same runner is
@@ -533,6 +545,12 @@ so the same rustc and `Cargo.lock` give the same file.
   release cycle, so existing mods keep working while authors move.
 - The manifest's `api` names the line it needs (`0.1`); the game refuses a
   line it does not serve with a clear message.
+- Within a line, each function has an API level, the one it arrived at
+  ([stability](api/stability.md#mod-api-levels)). A mod needs the level of
+  the newest function it calls, read from its file: an older Horizon refuses
+  it with "made for a newer Horizon: update Horizon", and the registry lists
+  the level so installers take a version the game can run.
+  `cargo horizon-mod check` prints it ("needs mod API level 1 or newer").
 - Horizon follows Minecraft releases; the mod API does not have to. Vanilla
   concepts mods see (dimensions, block and item ids) are the game's own ids,
   so a version port changes the data, not the API.
