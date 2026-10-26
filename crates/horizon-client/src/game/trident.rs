@@ -236,10 +236,11 @@ impl Game<'_> {
             .as_ref()
             .map(|p| [p.position.x, p.position.y, p.position.z]);
         if riptide > 0 {
-            if !self.in_water_or_rain() {
+            // `isInWaterOrRain() && !isPassenger()`.
+            if !self.in_water_or_rain() || self.riding.is_some() {
                 return;
             }
-            self.damage_held(1);
+            self.hurt_held_without_breaking(1);
             // trident_spin_attack_strength: 1.5 + 0.75 per level above the first.
             let strength = 1.5 + 0.75 * (riptide as f32 - 1.0);
             let d = view_vector(self.yaw, self.pitch);
@@ -260,12 +261,8 @@ impl Game<'_> {
             self.audio.play(&sound, at, 1.0, 1.0);
             return;
         }
-        // hurtWithoutBreaking, then the thrown copy.
-        if !self.creative
-            && let Some(s) = self.held_mut().as_mut()
-        {
-            s.damage += 1;
-        }
+        // hurtWithoutBreaking (Unbreaking applies), then the thrown copy.
+        self.hurt_held_without_breaking(1);
         let thrown = self.held().cloned().unwrap_or(stack);
         if !self.creative {
             *self.held_mut() = None;
