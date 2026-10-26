@@ -3,7 +3,8 @@ name: checks
 # check main requires, so it never has a condition: a skipped job counts as passed, and every run of this workflow
 # must report a real verify (a pull request that changes no Rust finishes it in seconds instead).
 # parity: the vanilla harnesses a pull request's changes can affect, on the Mac mini's runner, which holds the
-# maintainer's own Minecraft files (Horizon never downloads the game); .github/workflows/parity.yml. A fork's pull
+# maintainer's own Minecraft files (Horizon never downloads the game); .github/workflows/parity.yml. Only for a pull
+# request that changes a harness, oracle, probe or the runner: the rest are checked on main by parity-main. A fork's pull
 # request runs it only when a maintainer adds the run-parity label (.github/workflows/run-parity.yml), so labels
 # never start this workflow. See docs/release-flow.md.
 on:
@@ -72,8 +73,37 @@ jobs:
         run: |
           cargo +stable test --workspace --lib --bins --tests --features horizon-client/mods,horizon-mods/pack
           cargo +stable test --workspace --doc --features horizon-client/mods,horizon-mods/pack
-  parity:
+  # Most pull requests leave the harnesses to parity-main, which runs them on main a batch of merges at a time
+  # (.github/workflows/parity-main.yml; releases wait for it). A pull request still runs them itself when it changes
+  # a harness, an oracle, a probe or the runner, or carries the run-parity label (run-parity.yml, when it is added).
+  parity-scope:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+        run: |
+          changed=$(git diff --name-only "$(git merge-base "$BASE_SHA" HEAD)" HEAD)
+          harness=$(grep -E '^(tools/test_[a-z0-9_]+_parity\.py|tools/(parity[a-z_]*|lab)\.py|tools/parity_hosts\.json|mods/horizon/src/test/|crates/[^/]+/examples/|crates/horizon-client/src/game/[a-z_]*(fixture|harness)\.rs|\.github/workflows/parity[a-z-]*\.yml)' <<< "$changed" || true)
+          if [ -n "$harness" ] || [[ " $LABELS " == *" run-parity "* ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "The pull request runs its harnesses: ${harness:-label run-parity}"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No harness, oracle, probe or runner change: parity-main checks this on main"
+          fi
+  parity:
+    needs: parity-scope
+    if: needs.parity-scope.outputs.run == 'true'
     uses: ./.github/workflows/parity.yml
     with:
       base: ${{ github.event.pull_request.base.sha }}

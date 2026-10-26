@@ -54,6 +54,9 @@ QUIET = [
 ]
 CASES = {'broadcast': ({}, BROADCAST), 'quiet': ({'broadcast-console-to-ops': 'false'}, QUIET)}
 STEP_SECONDS = 2.0
+# Steps whose reply can take longer than a step: the next step waits for this console line first. A loaded machine
+# took 2 s to save vanilla's world, and the transcript ended before "Saved the game".
+WAIT_FOR = {'console-save': r'System chat: Saved the game'}
 
 
 def run_side(label, case, server_command, client_command, build, world):
@@ -88,6 +91,8 @@ def run_side(label, case, server_command, client_command, build, world):
                         server.console(command)
                     for action in actions:
                         tell(action)
+                    if step in WAIT_FOR:
+                        server.wait_for(WAIT_FOR[step], timeout=120)
                     time.sleep(STEP_SECONDS)
                 tell('end')
                 client.wait(timeout=60)

@@ -123,13 +123,15 @@ pub fn gpu_vendor(gpu: &str) -> &'static str {
 }
 
 pub struct Store {
-    db: Connection,
+    pub(crate) db: Connection,
 }
 
 impl Store {
     pub fn open(path: &str) -> rusqlite::Result<Self> {
         let mut db = Connection::open(path)?;
         db.execute_batch(SCHEMA)?;
+        db.execute_batch(crate::hub::SCHEMA)?;
+        db.execute_batch(crate::intake::SCHEMA)?;
         migrate(&mut db)?;
         Ok(Self { db })
     }

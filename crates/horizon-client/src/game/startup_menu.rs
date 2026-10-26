@@ -33,6 +33,7 @@ impl StartupMenu {
             Some(PendingWorldEntry::Server {
                 address: address.clone(),
                 name: options.player_name(),
+                cookies: None,
             })
         } else {
             options
@@ -125,6 +126,7 @@ impl StartupMenu {
             Action::Connect { address } => PendingWorldEntry::Server {
                 address,
                 name: player_name,
+                cookies: None,
             },
             _ => return,
         };
@@ -270,8 +272,6 @@ impl Loading {
     }
     pub(super) fn apply_menu_settings(&mut self) {
         if let Some(renderer) = &mut self.renderer {
-            self.settings
-                .clamp_gui_scale([renderer.config.width as i32, renderer.config.height as i32]);
             renderer.gamma = self.settings.gamma;
             renderer.set_present_mode(self.settings.vsync, self.settings.horizon.present_mode);
         }
@@ -381,6 +381,8 @@ impl Loading {
                         self.menu.win = Some((screen, Instant::now()));
                     }
                 }
+                // Mods' settings pages open only in a running game.
+                Event::ModSettings(_) => {}
                 // The startup menu runs before the game opens a control socket.
                 Event::ButtonClick | Event::CopyAgentDetails => {}
             }
@@ -762,7 +764,7 @@ mod tests {
             "Guest".into(),
         );
         assert!(
-            matches!(menu.pending.take(), Some(PendingWorldEntry::Server { address, name })
+            matches!(menu.pending.take(), Some(PendingWorldEntry::Server { address, name, .. })
             if address == "localhost:25565" && name == "Guest")
         );
         assert!(menu.pending.take().is_none(), "an entry is consumed once");

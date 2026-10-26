@@ -41,6 +41,10 @@ pub struct VanillaTerrain {
     tick_states: Vec<u32>,
     seed: i64,
     dimension: String,
+    /// When the last proto chunk was generated, in milliseconds since
+    /// `created`: the ring search waits for a pause in generation.
+    last_proto: std::sync::atomic::AtomicU64,
+    created: std::time::Instant,
 }
 /// A proto chunk, or the position of one whose generation failed.
 enum VanillaProto {
@@ -139,6 +143,8 @@ impl VanillaTerrain {
             tick_states,
             seed,
             dimension: dimension.to_owned(),
+            last_proto: std::sync::atomic::AtomicU64::new(0),
+            created: std::time::Instant::now(),
         })
     }
     /// A proto chunk's blocks, biomes, scheduled ticks and post-processing
@@ -272,9 +278,53 @@ impl VanillaTerrain {
     pub fn origin(&self) -> crate::Result<ChunkPos> {
         Ok(self.generator.origin()?)
     }
-    /// Concentric ring positions of a structure set (strongholds), once known.
+    /// Concentric ring positions of a structure set (strongholds), searched
+    /// for now if no chunk needed them yet.
     pub fn ring_positions(&self, set: &str) -> Option<Vec<ChunkPos>> {
-        self.generator.ring_positions(set)
+        let mut worker = self.query.lock().unwrap_or_else(|e| e.into_inner());
+        let worker = worker.get_or_insert_with(|| self.generator.worker());
+        worker.ring_positions(set)
+    }
+    /// Searches the concentric rings on a thread of their own, as vanilla's
+    /// background executor does, once generation pauses for two seconds
+    /// (at the latest a minute after the world opens) and in the idle
+    /// class: on a laptop's few cores, sharing them with the first chunks,
+    /// which don't need the rings, made those 3 s slower. An eye of ender
+    /// thrown later finds the rings ready, and a chunk or a query that
+    /// needs them first shares the remaining searches with this thread.
+    pub fn search_rings_behind(self: &Arc<Self>) {
+        const QUIET: u64 = 2_000;
+        const LATEST: u64 = 60_000;
+        let terrain = Arc::downgrade(self);
+        let spawned = std::thread::Builder::new()
+            .name("Ring search".into())
+            .spawn(move || {
+                horizon_threads::idle_current();
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    // The world closed: nothing to search for.
+                    let Some(terrain) = terrain.upgrade() else {
+                        return;
+                    };
+                    let now = terrain.elapsed_ms();
+                    let last = terrain
+                        .last_proto
+                        .load(std::sync::atomic::Ordering::Relaxed);
+                    if now >= LATEST || (last > 0 && now - last >= QUIET) {
+                        let _ = terrain
+                            .generator
+                            .worker()
+                            .ring_positions("minecraft:strongholds");
+                        return;
+                    }
+                }
+            });
+        if let Err(e) = spawned {
+            log::warn!("ring search thread: {e}");
+        }
+    }
+    fn elapsed_ms(&self) -> u64 {
+        u64::try_from(self.created.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 }
 /// The worldgen bundle at `dir`, loaded once and shared by every generator
@@ -323,6 +373,10 @@ impl ChunkGenerator for VanillaTerrain {
         }
     }
     fn proto(&self, worker: &mut GeneratorWorker, x: i32, z: i32) -> Proto {
+        self.last_proto.store(
+            self.elapsed_ms().max(1),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         match worker.generate_proto(ChunkPos::new(x, z)) {
             Ok(chunk) => Box::new(VanillaProto::Ready(Box::new(chunk))),
             Err(e) => {
