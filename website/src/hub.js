@@ -6,6 +6,7 @@
 import { escape, inline } from "./markdown.js";
 import { parts, plainItem, sections } from "./releases.js";
 import { isGame, isLauncher } from "./versions.js";
+import { avatar } from "./contributors.js";
 
 export const REPO = "ludovic111/horizon";
 const issueUrl = (n) => `https://github.com/${REPO}/issues/${n}`;
@@ -85,11 +86,16 @@ export function progress(item, live) {
 
 const areaName = (roadmap, id) => roadmap.areas.find((a) => a.id === id)?.name || id;
 
+// An item's vote button: hidden until the page has the counts from the hub's server (hub-page.js).
+export function voteHtml(item) {
+  return `<button type="button" class="button secondary small hub-vote" data-vote="${escape(item.id)}" aria-pressed="false" hidden><span class="hub-vote-label">Want it</span><span class="hub-vote-count" data-votes></span></button>`;
+}
+
 export function itemHtml(item, roadmap, live) {
   const done = item.status === "shipped";
   const state = done ? "" : progress(item, live);
   return `<article class="hub-item" id="${escape(item.id)}" data-area="${escape(item.area)}" data-item="${escape(item.id)}">
-  <p class="hub-item-meta"><span class="badge">${escape(areaName(roadmap, item.area))}</span>${done ? `<span class="badge badge-game">${escape(item.shipped_in)}</span>` : ""}${item.ongoing ? `<span class="hub-ongoing">Ongoing</span>` : ""}</p>
+  <p class="hub-item-meta"><span class="badge">${escape(areaName(roadmap, item.area))}</span>${done ? `<span class="badge badge-game">${escape(item.shipped_in)}</span>` : ""}${item.ongoing ? `<span class="hub-ongoing">Ongoing</span>` : ""}${done ? "" : voteHtml(item)}</p>
   <h3 class="hub-item-title">${escape(item.title)}</h3>
   <p class="hub-plain">${inline(item.plain)}</p>
   <p class="hub-dev">${devHtml(item)}</p>
@@ -160,7 +166,7 @@ export function overviewHtml(roadmap, live = new Map()) {
   <h2 class="title" id="h-ov-help">How to help</h2>
   <p class="hub-plain">${inline(o.help_plain)}</p>
   <p class="hub-dev">${inline(o.help_dev)}</p>
-  <p class="hub-actions"><a class="button primary" href="#contribute" data-goto="contribute">Contribute</a><a class="button secondary" href="#help-wanted" data-goto="roadmap">Help wanted</a></p>
+  <p class="hub-actions"><a class="button primary" href="#contribute" data-goto="contribute">Contribute</a><a class="button secondary" href="#help-wanted" data-goto="roadmap">Help wanted</a><a class="button secondary" href="#report">Report a bug</a><a class="button secondary" href="#suggest">Suggest something</a></p>
 </section>`;
 }
 
@@ -417,4 +423,35 @@ export function journalHtml(entries, roadmap) {
 </article>`;
     })
     .join("\n");
+}
+
+// --- Contribute: the suggestion form's items and the contributors ------------------------------------------------
+
+// The suggestion form's "About" choices: the items still to come.
+export function suggestItemsHtml(roadmap) {
+  const open = roadmap.items.filter((i) => i.status !== "shipped");
+  return [`<option value="">Something new</option>`]
+    .concat(open.map((i) => `<option value="${escape(i.id)}">${escape(i.title)}</option>`))
+    .join("");
+}
+
+// The contributors, from GitHub (contributors.js's list), with the Discord name of those who linked their accounts
+// on Kira and agreed to be credited (Kira's /contributors.json: { contributors: [{ github, discord }] }).
+export function creditFrom(github, kira) {
+  const discord = new Map(
+    (Array.isArray(kira?.contributors) ? kira.contributors : [])
+      .filter((c) => c && typeof c.github === "string" && typeof c.discord === "string")
+      .map((c) => [c.github.toLowerCase(), c.discord]),
+  );
+  return github.map((c) => ({ ...c, discord: discord.get(c.login.toLowerCase()) || "" }));
+}
+
+export function creditHtml(list) {
+  return list
+    .map((c) => {
+      const src = avatar(c.avatar_url);
+      const count = `${c.contributions.toLocaleString("en-US")} ${c.contributions === 1 ? "commit" : "commits"}`;
+      return `<li><a class="contributor" href="${escape(c.html_url)}">${src ? `<img class="contributor-avatar" loading="lazy" decoding="async" src="${escape(src)}" width="48" height="48" alt="">` : `<span class="contributor-avatar" aria-hidden="true"></span>`}<span class="contributor-name">${escape(c.login)}</span><span class="contributor-count">${count}${c.discord ? ` · ${escape(c.discord)} on Discord` : ""}</span></a></li>`;
+    })
+    .join("");
 }

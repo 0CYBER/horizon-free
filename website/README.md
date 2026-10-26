@@ -81,8 +81,13 @@ mark merged-but-unreleased things "next release". `{{HARNESSES}}` and `{{PERCENT
 the README. A line holding only `![caption](/media/...)` becomes a figure (the file must be in
 `public/media/`); links to other pages are `/docs/<slug>#heading`. The build checks every link
 between pages and every image, and fails with the list when one is broken. `/server`
-redirects to `/docs/hosting`. The developer docs in the repository's `docs/` stay as they are and are linked from
-the Contributing page.
+redirects to `/docs/hosting`.
+
+The API portal is the repository's `docs/api/`, not a copy: `nav.json` lists its README as `api` (`/docs/api`) and
+its pages as `api/<page>` (`/docs/api/<page>`), read from the checkout or from `main` on GitHub like the README.
+Links between its pages become the site's, every other relative link goes to the file on GitHub, and the same link
+check applies. Markdown tables render as tables. The other developer docs in `docs/` stay on GitHub and are linked
+from the Contributing page.
 
 ## Run it locally
 

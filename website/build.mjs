@@ -3,12 +3,13 @@
 // docs/nav.json), plus public/ and fingerprinted CSS and JS. No dependencies.
 //
 // Railway builds only website/, so the README and links.json come from the repo when they
-// are next to it (a local checkout) and from main on GitHub otherwise. The documentation lives in website/. The latest releases and
+// are next to it (a local checkout) and from main on GitHub otherwise. The documentation lives in website/, except the
+// API portal (docs/api/), read the same way as the README. The latest releases and
 // the contributors are baked in when GitHub answers, so the page reads well before (or without) JavaScript.
 import { readFile, writeFile, mkdir, rm, cp } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join, dirname } from "node:path";
+import { join, dirname, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { markdown, inline, section, escape } from "./src/markdown.js";
 import { recentHtml, releasesPageHtml } from "./src/releases.js";
@@ -16,7 +17,7 @@ import { machinesHtml, playersHtml } from "./src/bench.js";
 import { CPUS, GPUS, singleThread } from "./src/hardware.js";
 import { isGame, isLauncher, launcherVersion, newestFirst } from "./src/versions.js";
 import { contributorsFrom, contributorsHtml } from "./src/contributors.js";
-import { areaFilterHtml, boardFilterHtml, boardFrom, boardHtml, helpWantedHtml, journalFrom, journalHtml, journalJson, overviewHtml, roadmapHtml, slimIssue } from "./src/hub.js";
+import { areaFilterHtml, boardFilterHtml, boardFrom, boardHtml, creditFrom, creditHtml, helpWantedHtml, journalFrom, journalHtml, journalJson, overviewHtml, roadmapHtml, slimIssue, suggestItemsHtml } from "./src/hub.js";
 import { INDEX_URL, KINDS, SUBMIT, listHtml, projectHtml, readIndex, submitHtml } from "./src/mods.js";
 
 const site = dirname(fileURLToPath(import.meta.url));
@@ -134,6 +135,18 @@ try {
 const hubLinked = new Map(hubLive.filter((i) => linked.has(i.n)).map((i) => [i.n, i]));
 const board = boardFrom(hubLive, roadmap);
 const journal = journalFrom(releases, hubLive, roadmap);
+
+// The hub's server (crates/horizon-telemetry-server: votes, bug reports, suggestions), and Kira's list of the
+// contributors who linked their Discord account and agreed to be credited (kira's /contributors.json).
+const hubApi = process.env.HUB_API_URL || "https://telemetry.playhorizon.dev";
+let kiraCredit = {};
+try {
+  const res = await fetch(process.env.KIRA_CONTRIBUTORS_URL || "https://kira-production-500e.up.railway.app/contributors.json", { signal: AbortSignal.timeout(10000) });
+  if (!res.ok) throw new Error(`${res.status} from Kira`);
+  kiraCredit = await res.json();
+} catch (e) {
+  console.warn(`hub: contributors' Discord names: ${e.message}`);
+}
 
 // --- The parity table ------------------------------------------------------------------
 
@@ -348,22 +361,44 @@ const values = {
   HUB_BOARD: hubLive.length ? boardHtml(board, roadmap) : `<p class="lede">The board could not be loaded here.</p>`,
   HUB_BOARD_FILTER: boardFilterHtml(board, roadmap),
   HUB_JOURNAL: journalHtml(journal, roadmap) || unavailable,
-  HUB_DATA: JSON.stringify({ roadmap, live: [...hubLinked.values()] }).replace(/</g, "\\u003c"),
+  HUB_DATA: JSON.stringify({ roadmap, live: [...hubLinked.values()], api: hubApi }).replace(/</g, "\\u003c"),
+  HUB_SUGGEST_ITEMS: suggestItemsHtml(roadmap),
+  HUB_VERSION: escape(game[0]?.tag_name || ""),
+  HUB_CREDIT: creditHtml(creditFrom(contributors, kiraCredit)),
   YEAR: String(new Date().getUTCFullYear()),
 };
 
 // --- The documentation ---------------------------------------------------------------------
 // website/docs/<slug>.md: "# Title", a one-paragraph lede, then the body. docs/nav.json orders them in groups.
+// The API portal is the repository's docs/api/ (the pages and their generated references): nav.json lists it as
+// `api` (its README, /docs/api) and `api/<page>` (/docs/api/<page>). Its links are written for GitHub, so links
+// between its pages become the site's and every other relative link goes to the file on GitHub.
 
 const docsNav = JSON.parse(await readFile(join(site, "docs", "nav.json"), "utf8"));
+const docSlugs = new Set(docsNav.flatMap((g) => g.pages));
+const apiSource = (slug) => `docs/api/${slug === "api" ? "README" : slug.slice(4)}.md`;
+function apiLinks(text, from) {
+  return text.replace(/\]\(([^)\s]+)\)/g, (all, url) => {
+    if (url.startsWith("https://playhorizon.dev/")) return `](${url.slice(23)})`;
+    if (/^([a-z]+:|#|\/)/i.test(url)) return all;
+    const [file, id] = url.split("#");
+    const path = posix.normalize(posix.join(posix.dirname(from), file));
+    const page = path.match(/^docs\/api\/([\w-]+)\.md$/)?.[1];
+    const slug = page === "README" ? "api" : page && `api/${page}`;
+    const to = docSlugs.has(slug) ? `/docs/${slug}` : `https://github.com/${REPO}/blob/main/${path}`;
+    return `](${to}${id ? `#${id}` : ""})`;
+  });
+}
 const docs = [];
 for (const { group, pages: slugs } of docsNav) {
   for (const slug of slugs) {
-    const file = `${slug}.md`;
-    const text = (await readFile(join(site, "docs", file), "utf8")).replace(/\r\n?/g, "\n");
+    const api = slug === "api" || slug.startsWith("api/");
+    const file = api ? apiSource(slug) : `website/docs/${slug}.md`;
+    let text = (api ? (await repoFile(file))[0] : await readFile(join(site, "docs", `${slug}.md`), "utf8")).replace(/\r\n?/g, "\n");
+    if (api) text = apiLinks(text.replace(/^<!--[\s\S]*?-->\n/, ""), file);
     const m = text.match(/^# (.+)\n\n((?:[^\n]+\n)+)\n/);
-    if (!m) throw new Error(`docs/${file}: needs "# Title", a blank line, a lede paragraph and a blank line`);
-    docs.push({ slug, file, group, title: m[1].trim(), lede: m[2].trim().replace(/\n/g, " "), body: text.slice(m[0].length), path: slug === "index" ? "/docs/" : `/docs/${slug}` });
+    if (!m) throw new Error(`${file}: needs "# Title", a blank line, a lede paragraph and a blank line`);
+    docs.push({ slug, file, group, title: m[1].replace(/`/g, "").trim(), lede: m[2].trim().replace(/\n/g, " "), body: text.slice(m[0].length), path: slug === "index" ? "/docs/" : `/docs/${slug}` });
   }
 }
 const plain = (md) => md.replace(/`/g, "").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/\*\*/g, "");
@@ -403,7 +438,7 @@ const docNav = (current) =>
     .join("\n");
 const pagerLink = (d, rel) => (d ? `<a class="docs-pager-${rel}" href="${d.path}"><span>${rel === "next" ? "Next" : "Previous"}</span>${escape(d.title)}</a>` : "");
 
-await mkdir(join(dist, "docs"), { recursive: true });
+await mkdir(join(dist, "docs", "api"), { recursive: true });
 const docPageFiles = [];
 const docPages = renderedDocs.map((d, i) => {
   const toc = d.headings.filter((h) => h.level === 2);
@@ -442,7 +477,7 @@ const modsTemplate = await readFile(join(site, "src", "mods.html"), "utf8");
 const modsList = `        <p class="kicker"><span>Mods</span>Made for Horizon, reviewed</p>
         <h1 class="display page-title">Horizon mods</h1>
         <p class="lede">Mods, modpacks and resource packs made for Horizon. Each one was reviewed before it was listed, and the launcher checks every file before it installs it. Mods run in a sandbox and can only do what their page says.</p>
-        <p class="mod-actions"><a class="button primary" href="${SUBMIT}">Submit yours</a> <a class="button secondary" href="/docs/mods">Make a mod</a></p>
+        <p class="mod-actions"><a class="button primary" href="${SUBMIT}">Submit yours</a> <a class="button secondary" href="/docs/make-a-mod">Make a mod</a></p>
         <div class="mod-tools">
           <input class="mod-search" id="mod-search" type="search" placeholder="Search" aria-label="Search the registry" autocomplete="off">
           <div class="release-filter" role="group" aria-label="Show">
