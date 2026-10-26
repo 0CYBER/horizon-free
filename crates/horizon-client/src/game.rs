@@ -62,7 +62,6 @@ mod frames;
 mod friends;
 mod functions;
 mod game_mode;
-mod game_rules_screen;
 mod gamemode_switcher;
 mod ghasts;
 mod golems;
@@ -11879,7 +11878,8 @@ impl ApplicationHandler for Game<'_> {
                     let (action, sound) = self.title.as_mut().map_or((Action::None, false), |t| {
                         let clicked = t.click(self.cursor.0, self.cursor.1, (b.width, b.height));
                         t.press_field(atlas, self.cursor, (b.width, b.height), shift);
-                        clicked
+                        let rules = t.press_rules(atlas, self.cursor, (b.width, b.height));
+                        (clicked.0, clicked.1 || rules)
                     });
                     self.save_title_options();
                     if sound {
