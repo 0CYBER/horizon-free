@@ -114,3 +114,7 @@ Deprecations and breaking changes are in bold. The release notes of the game rel
   keys may consume too is decided before `input` becomes preview.
 - **`input`'s `wheel` event** is a new case in a variant the game sends, so it breaks mods built before it (allowed
   because `input` is experimental): an `input` mod that calls `poll` needs a rebuild against the new WIT.
+- **`render.set-minimap`** draws a map the game makes, not one a mod composes: reading the blocks around the player
+  for a map image costs too much through hook calls, so the game keeps the tiles (vanilla's map colours) and the mod
+  picks the corner, side, scale and shape. One map shows at a time, the first loaded mod's. It is a new function and a
+  new type, so mods built before it keep loading.

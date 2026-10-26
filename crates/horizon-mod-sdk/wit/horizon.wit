@@ -364,6 +364,27 @@ interface render {
     /// wins) leave the camera vanilla's. With several mods, the strongest
     /// zoom counts.
     set-zoom: func(zoom: zoom);
+    record minimap {
+        corner: corner,
+        /// Its side in GUI pixels, 16 to 256.
+        size: f32,
+        /// World blocks per map pixel, 0.5 to 4; the map is 128 × 128 pixels.
+        blocks-per-pixel: f32,
+        /// The map turns with the player, who faces up, and an N on its rim
+        /// marks north. Otherwise north is up and the player's arrow turns.
+        rotate: bool,
+        /// Round, the corners left clear; otherwise square.
+        round: bool,
+    }
+    /// Shows a map of the world around the player in `corner`, stacked with
+    /// the game's overlays and the mods' panels, until the next call (none
+    /// hides it). It looks like a map item: vanilla's map colours with their
+    /// height shading and water depth, and the player's arrow. Underground,
+    /// under a roof and in the Nether it maps the floor around the player's
+    /// height. The game keeps the map's tiles and refreshes them within its
+    /// own frame budget; hidden, they are dropped. One map shows at a time:
+    /// the first loaded mod's.
+    set-minimap: func(minimap: option<minimap>);
 }
 
 /// What the game calls. Only the hooks `init` asks for are ever called.
