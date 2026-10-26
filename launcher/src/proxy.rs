@@ -8,6 +8,10 @@
 //! Tailscale's API, and the jars a modpack import downloads. A local address never does, and the
 //! Servers page's calls to a game server's API (`servers.rs`) build their agent without it: they
 //! are on loopback and asked every second.
+//!
+//! The jars an import downloads are fetched by `horizon-port-pack`, which builds its own agents and
+//! keeps these same `NO_PROXY` rules (`crates/horizon-port-pack/src/net.rs`). The two crates share
+//! no code, so a change to them here belongs there too.
 use crate::backend::Settings;
 
 /// The proxy to reach `url` through: the one set for the launcher or in the environment, unless
@@ -55,8 +59,9 @@ pub fn refuse(spec: &str) -> Option<String> {
     None
 }
 
-/// Tells the parts that build their own agents (`horizon-port-pack`) what to use. Called at start
-/// and whenever the player changes the setting.
+/// Tells the parts that build their own agents (`horizon-port-pack`) which proxy to use. Called at
+/// start and whenever the player changes the setting; the hosts `NO_PROXY` names stay direct there
+/// too, since it reads the same list.
 pub fn announce() {
     horizon_port_pack::net::set_proxy(written("https"));
 }

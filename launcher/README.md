@@ -98,7 +98,8 @@ page `servers.json` (the list), `servers/<name>/` (the servers created there) an
   sign-in, and the jars a modpack import fetches. It is kept as `proxy` in `settings.json`, and
   `horizon-launcher settings proxy http://127.0.0.1:7890` sets it too ("default" removes it).
   Without one, `HTTPS_PROXY` and `HTTP_PROXY` are used when the launcher is started with them, and
-  `NO_PROXY` names the hosts to reach directly. A server on this computer never goes through it.
+  `NO_PROXY` names the hosts to reach directly, a modpack import's jars included. A server on this
+  computer never goes through it.
 - **Links**: the Discord invite, the Sponsors page and the website come from `launcher/links.json` on main
   (`{"discord": "...", "sponsor": "...", "website": "..."}`), so they change without a launcher release. Offline,
   the launcher uses the same values built in; an empty address hides its button.
