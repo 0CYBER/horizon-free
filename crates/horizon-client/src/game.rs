@@ -9910,12 +9910,15 @@ impl Game<'_> {
                 } else {
                     ("minecraft:weather.rain", 0.2, 1.0)
                 };
-                self.audio.play(
-                    name,
-                    Some([f64::from(x) + 0.5, f64::from(top), f64::from(z) + 0.5]),
-                    volume,
-                    pitch,
-                );
+                // The Horizon Weather option off silences the rain too.
+                if self.settings.horizon.weather {
+                    self.audio.play(
+                        name,
+                        Some([f64::from(x) + 0.5, f64::from(top), f64::from(z) + 0.5]),
+                        volume,
+                        pitch,
+                    );
+                }
             }
         }
     }
