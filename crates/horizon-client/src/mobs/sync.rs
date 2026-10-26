@@ -15,7 +15,10 @@
 //!   them in `entity_event`;
 //! - run its client side animation in `client_tick`, sharing the function
 //!   with the server's `ai_step` where the server computes the same.
-use super::{Mob, Species, breeze, camel, shulker, sniffer, warden};
+use super::{
+    Mob, Species, allay, axolotl, breeze, camel, copper_golem, creaking, golem, guardian, piglin,
+    ravager, shulker, sniffer, warden,
+};
 
 // `Pose.id` of the poses mobs take.
 pub const STANDING: u8 = 0;
@@ -60,6 +63,23 @@ pub fn client_tick(m: &mut Mob, game_time: i64) {
         Species::Breeze => breeze::ai_step(m),
         Species::Camel | Species::CamelHusk => camel::client_tick(m, game_time),
         Species::Shulker => shulker::client_tick(m),
+        Species::Ravager => ravager::client_tick(m),
+        Species::Hoglin | Species::Zoglin => piglin::client_tick(m),
+        Species::IronGolem => golem::client_tick(m),
+        Species::Creaking => creaking::animate(m),
+        Species::Allay => {
+            m.anim.vo = m.anim.v;
+            allay::animate(m);
+        }
+        Species::Axolotl => axolotl::tick_animation(m),
+        Species::Guardian | Species::ElderGuardian => {
+            m.anim.vo = m.anim.v;
+            guardian::tail_and_spikes(m);
+        }
+        // The head spin's sound is the server's.
+        Species::CopperGolem if !m.no_ai => {
+            copper_golem::animate(m);
+        }
         _ => {}
     }
 }
@@ -68,8 +88,8 @@ pub fn client_tick(m: &mut Mob, game_time: i64) {
 /// (`ClientboundEntityEventPacket` for a mob of a client).
 pub fn entity_event(m: &mut Mob, event: u8) {
     let age = m.age as f32;
-    if m.species() == Species::Warden {
-        match event {
+    match m.species() {
+        Species::Warden => match event {
             // Attack: the roar ends, the swing starts.
             4 => {
                 m.anim.states[warden::ROAR].stop();
@@ -80,6 +100,11 @@ pub fn entity_event(m: &mut Mob, event: u8) {
             // The sonic boom.
             62 => m.anim.states[warden::SONIC_BOOM].start(age),
             _ => {}
-        }
+        },
+        Species::Ravager => ravager::entity_event(m, event),
+        Species::Hoglin | Species::Zoglin => piglin::client_event(m, event),
+        Species::IronGolem => golem::client_event(m, event),
+        Species::Creaking => creaking::entity_event(m, event),
+        _ => {}
     }
 }

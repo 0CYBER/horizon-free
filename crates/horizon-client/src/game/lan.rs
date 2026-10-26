@@ -399,6 +399,66 @@ fn mob_meta(
             }
             defaults.push((18, serializer::BYTE, Value::Byte(16)));
         }
+        // Vex.DATA_FLAGS_ID: charging in bit 0 (the arms and the glowing
+        // texture).
+        "minecraft:vex" => {
+            if e.flag {
+                meta.push((16, serializer::BYTE, Value::Byte(1)));
+            }
+            defaults.push((16, serializer::BYTE, Value::Byte(0)));
+        }
+        // Creaking.CAN_MOVE, IS_ACTIVE and IS_TEARING_DOWN.
+        "minecraft:creaking" => {
+            if e.flag2 {
+                meta.push((16, serializer::BOOLEAN, Value::Bool(false)));
+            }
+            defaults.push((16, serializer::BOOLEAN, Value::Bool(true)));
+            if e.flag {
+                meta.push((17, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((17, serializer::BOOLEAN, Value::Bool(false)));
+            if horizon_client::mobs::creaking::tearing_down(m) {
+                meta.push((18, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((18, serializer::BOOLEAN, Value::Bool(false)));
+        }
+        // Allay.DATA_DANCING and DATA_CAN_DUPLICATE (the held item is its
+        // main hand equipment).
+        "minecraft:allay" => {
+            if e.flag {
+                meta.push((16, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((16, serializer::BOOLEAN, Value::Bool(false)));
+            if e.egg_time > 0 {
+                meta.push((17, serializer::BOOLEAN, Value::Bool(false)));
+            }
+            defaults.push((17, serializer::BOOLEAN, Value::Bool(true)));
+        }
+        // Axolotl.DATA_PLAYING_DEAD (after DATA_VARIANT).
+        "minecraft:axolotl" => {
+            if horizon_client::mobs::axolotl::is_playing_dead(m) {
+                meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((19, serializer::BOOLEAN, Value::Bool(false)));
+        }
+        // CopperGolem.COPPER_GOLEM_STATE (after DATA_WEATHER_STATE).
+        "minecraft:copper_golem" => {
+            if e.variant3 != 0 {
+                meta.push((
+                    17,
+                    serializer::COPPER_GOLEM_STATE,
+                    Value::Id(i32::from(e.variant3)),
+                ));
+            }
+            defaults.push((17, serializer::COPPER_GOLEM_STATE, Value::Id(0)));
+        }
+        // Strider.DATA_SUFFOCATING (after DATA_BOOST_TIME): the shiver.
+        "minecraft:strider" => {
+            if e.flag {
+                meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((19, serializer::BOOLEAN, Value::Bool(false)));
+        }
         // Enderman.DATA_CARRY_STATE.
         "minecraft:enderman" => {
             if let Some(state) = e.carried {
