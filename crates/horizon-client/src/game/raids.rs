@@ -762,7 +762,7 @@ impl Game<'_> {
             }
             positions.push((m.id, m.position, s.active_raid));
         }
-        let banners: Vec<(usize, Vec3)> = self
+        let banners: Vec<(usize, u32, Vec3)> = self
             .dropped
             .iter()
             .enumerate()
@@ -771,7 +771,7 @@ impl Game<'_> {
                     && e.stack.data().is_some_and(|d| d.ominous_banner)
                     && e.pickup_delay == 0
             })
-            .map(|(i, e)| (i, e.position))
+            .map(|(i, e)| (i, e.id, e.position))
             .collect();
         let mut taken: Vec<usize> = Vec::new();
         let mut collectors: Vec<(usize, u32)> = Vec::new();
@@ -858,18 +858,23 @@ impl Game<'_> {
             {
                 let near = banners
                     .iter()
-                    .filter(|(i, p)| {
+                    .filter(|(i, item, p)| {
                         !taken.contains(i)
+                            && !s
+                                .unreachable_banners
+                                .iter()
+                                .any(|&(b, until)| b == *item && now < until)
                             && (p.x - position.x).abs() <= range
                             && (p.z - position.z).abs() <= range
                             && (p.y - position.y).abs() <= 8.0
                     })
                     .min_by(|a, b| {
-                        a.1.distance_squared(position)
-                            .total_cmp(&b.1.distance_squared(position))
+                        a.2.distance_squared(position)
+                            .total_cmp(&b.2.distance_squared(position))
                     });
-                if let Some((i, p)) = near {
+                if let Some((i, item, p)) = near {
                     s.banner_at = Some([p.x, p.y, p.z]);
+                    s.banner_item = *item;
                     if p.distance_squared(position) < 1.414 * 1.414 {
                         // pickUpItem: the banner becomes the wave's leader.
                         taken.push(*i);
