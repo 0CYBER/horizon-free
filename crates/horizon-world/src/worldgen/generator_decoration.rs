@@ -851,6 +851,33 @@ impl PlacementContext for World<'_> {
         self.entities.push(nbt);
         Ok(())
     }
+    /// SpikeFeature.placeSpike: the crystal is a fresh entity of the region,
+    /// saved with the chunk.
+    fn spawn_end_crystal(
+        &mut self,
+        position: [f64; 3],
+        yaw: f32,
+        beam_target: Option<[i32; 3]>,
+        invulnerable: bool,
+    ) -> Result<(), PlacementQueryError> {
+        use crate::nbt::Tag;
+        let mut nbt = crate::nbt::Compound::new();
+        nbt.insert("id".into(), Tag::String("minecraft:end_crystal".into()));
+        nbt.insert(
+            "Pos".into(),
+            Tag::List(position.iter().map(|v| Tag::Double(v.to_bits())).collect()),
+        );
+        nbt.insert(
+            "Rotation".into(),
+            Tag::List(vec![Tag::Float(yaw.to_bits()), Tag::Float(0)]),
+        );
+        nbt.insert("Invulnerable".into(), Tag::Byte(i8::from(invulnerable)));
+        nbt.insert("ShowBottom".into(), Tag::Byte(1));
+        if let Some(b) = beam_target {
+            nbt.insert("beam_target".into(), Tag::IntArray(b.to_vec()));
+        }
+        self.add_entity(nbt)
+    }
     fn set_block_entity(
         &mut self,
         position: [i32; 3],
