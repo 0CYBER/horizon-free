@@ -1503,7 +1503,14 @@ impl LootContext<'_> {
                         [random.next_int_bound(options.len() as i32).unwrap_or(0) as usize]
                         .clone();
                     let max = e.get(&id).map_or(1, |d| d.max_level).max(1);
-                    let level = 1 + random.next_int_bound(max as i32).unwrap_or(0) as u32;
+                    // `Mth.nextInt(random, 1, max)`: a single-level
+                    // enchantment (Mending) returns 1 without drawing, so the
+                    // rolls after this one keep vanilla's sequence.
+                    let level = if max <= 1 {
+                        1
+                    } else {
+                        1 + random.next_int_bound(max as i32).unwrap_or(0) as u32
+                    };
                     if book {
                         *stack = ItemStack::new("minecraft:enchanted_book", 1);
                     }
@@ -1781,6 +1788,37 @@ mod tests {
             {"type":"minecraft:enchant_with_levels","levels":{"type":"minecraft:constant","value":30.0}}]}]}]});
         let drops = ctx(&items, None, &props, "").evaluate(&dirt, &mut random);
         assert!(drops[0].enchantments().is_empty());
+    }
+
+    /// `Mth.nextInt(random, 1, max)` returns `1` without drawing when the
+    /// enchantment has one level (`EnchantRandomlyFunction.enchantItem`), so
+    /// the rolls after it must not shift. Vanilla with `LegacyRandom(11)`: a
+    /// Mending book, then `set_count` uniform 1..64, is 46.
+    #[test]
+    fn a_single_level_enchantment_draws_no_level() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
+        let items = Items::load(&root, assets.registry, &facts).unwrap();
+        let props = BTreeMap::new();
+        let table = json!({"pools":[{"rolls":1,"entries":[{"type":"minecraft:item",
+            "name":"minecraft:book","modifier":[
+            {"type":"minecraft:enchant_randomly","options":"minecraft:mending"},
+            {"type":"minecraft:set_count","count":{"type":"minecraft:uniform","min":1.0,"max":64.0}}]}]}]});
+        let drops = ctx(&items, None, &props, "").evaluate(&table, &mut LegacyRandom::new(11));
+        assert_eq!(drops.len(), 1);
+        assert_eq!(&*drops[0].item, "minecraft:enchanted_book");
+        assert_eq!(
+            drops[0].stored_enchantments(),
+            [("minecraft:mending".to_owned().into(), 1)],
+            "the book keeps its single-level enchantment"
+        );
+        // 46 is vanilla's count for this seed; an extra level draw gives 28.
+        assert_eq!(drops[0].count, 46);
     }
 
     #[test]
