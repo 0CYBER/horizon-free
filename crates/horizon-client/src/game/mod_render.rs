@@ -86,23 +86,29 @@ impl Game<'_> {
 impl Game<'_> {
     /// The running mods' HUD shapes, in order, over the HUD.
     pub(super) fn draw_mod_shapes(&self, batch: &mut HudBatch) {
-        let atlas = &self.gui.atlas;
         for shape in self.mods.mods.hud_shapes() {
+            self.draw_shapes(batch, std::slice::from_ref(shape), (0.0, 0.0));
+        }
+    }
+    /// Shapes with their GUI coordinates moved by `(ox, oy)`.
+    pub(super) fn draw_shapes(&self, batch: &mut HudBatch, shapes: &[Shape], (ox, oy): (f32, f32)) {
+        let atlas = &self.gui.atlas;
+        for shape in shapes {
             match shape {
                 Shape::Fill(f) => {
                     let r = f.rect;
-                    batch.fill(atlas, r.x, r.y, r.w, r.h, argb(f.color));
+                    batch.fill(atlas, ox + r.x, oy + r.y, r.w, r.h, argb(f.color));
                 }
                 Shape::Quad(q) => {
                     let (a, b, c, d) = q.corners;
-                    let corners = [[a.x, a.y], [b.x, b.y], [c.x, c.y], [d.x, d.y]];
+                    let corners = [a, b, c, d].map(|p| [ox + p.x, oy + p.y]);
                     batch.fill_quad(atlas, corners, argb(q.color));
                 }
                 Shape::Sprite(s) => {
                     let r = s.rect;
                     let name = s.sprite.strip_prefix("minecraft:").unwrap_or(&s.sprite);
                     let name = format!("gui/sprites/{name}");
-                    batch.sprite_scaled(atlas, &name, r.x, r.y, r.w, r.h, argb(s.color));
+                    batch.sprite_scaled(atlas, &name, ox + r.x, oy + r.y, r.w, r.h, argb(s.color));
                 }
                 Shape::Item(i) => {
                     if self.res.items().get(&i.item).is_none() {
@@ -110,21 +116,23 @@ impl Game<'_> {
                     }
                     let start = batch.vertices.len();
                     let stack = ItemStack::new(i.item.as_str(), 1);
-                    self.draw_item_model(batch, &stack, i.at.x, i.at.y);
-                    batch.scale_since(start, i.at.x, i.at.y, i.scale, i.scale);
+                    let (x, y) = (ox + i.at.x, oy + i.at.y);
+                    self.draw_item_model(batch, &stack, x, y);
+                    batch.scale_since(start, x, y, i.scale, i.scale);
                 }
                 Shape::Text(t) => {
                     let text = Text::literal(t.text.clone());
-                    let x = if t.centered {
-                        t.at.x - (HudBatch::text_width(atlas, &t.text) / 2.0).floor()
+                    let centre = if t.centered {
+                        (HudBatch::text_width(atlas, &t.text) / 2.0).floor()
                     } else {
-                        t.at.x
+                        0.0
                     };
+                    let x = ox + t.at.x - centre;
                     batch.text_styled(
                         atlas,
                         &text,
                         x,
-                        t.at.y,
+                        oy + t.at.y,
                         argb(t.color | 0xFF00_0000),
                         t.shadow,
                     );
