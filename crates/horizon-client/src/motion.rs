@@ -1007,7 +1007,7 @@ impl MotionWorld<'_, '_, '_> {
             )
         });
         self.player.try_add_frost(on_air)?;
-        self.player.location_effects.on_soul_speed_block = self.on_soul_speed_block()?;
+        self.update_soul_speed_block()?;
         if self.player.health.tick_count % 40 == 0
             && self.player.is_fully_frozen()
             && self.player.can_freeze()
@@ -1018,6 +1018,13 @@ impl MotionWorld<'_, '_, '_> {
             self.player.auto_spin_attack_ticks -= 1;
             self.check_auto_spin_attack(before_travel);
         }
+        Ok(())
+    }
+    /// Refresh whether the player stands on a soul speed block, for the
+    /// `location_changed` enchantment effects (a server's player too, whose
+    /// client does the walking).
+    pub fn update_soul_speed_block(&mut self) -> Result<()> {
+        self.player.location_effects.on_soul_speed_block = self.on_soul_speed_block()?;
         Ok(())
     }
     /// `MovementAffectedByPredicate` for `#minecraft:soul_speed_blocks`.

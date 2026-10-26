@@ -9,7 +9,6 @@ use super::Game;
 use horizon_client::{
     enchant::{EffectContext, Enchantments, level_value},
     items::ItemStack,
-    particles::{ParticleOptions, ParticleType},
 };
 use horizon_core::{position::BlockPos, random::RandomSource};
 
@@ -474,15 +473,16 @@ impl Game<'_> {
     ///   (`enchantment_active_check`);
     /// - the boots lose 1 durability with a 4% chance when on such a block.
     ///
-    /// Every fifth tick the player walking on one also gets soul particles and
-    /// sometimes a sound. A remote server applies and syncs all of this itself.
-    pub(super) fn tick_soul_speed(&mut self) {
+    /// Every fifth tick the player walking on one also gets a soul particle
+    /// (returned as its position and velocity, for the caller to show or send
+    /// to the players around) and sometimes a sound. Runs for the window's own
+    /// player and for each guest on the server (`guest_server_tick`); a remote
+    /// client leaves it to its server.
+    pub(super) fn tick_soul_speed(&mut self) -> Option<([f64; 3], [f64; 3])> {
         const ID: &str = "minecraft:soul_speed";
-        let Some(player) = self.player.as_mut() else {
-            return;
-        };
+        let player = self.player.as_mut()?;
         if player.client_side {
-            return;
+            return None;
         }
         let level = self.armor[3]
             .as_ref()
@@ -533,22 +533,19 @@ impl Game<'_> {
             self.wear_boots(1);
         }
         if level == 0 {
-            return;
+            return None;
         }
         let r = &mut self.world.random;
-        if tick_effects {
-            // `spawn_particles`: in the bounding box, 0.1 above the feet, thrown
-            // back against the movement (-0.2) and up (0.1).
+        // `spawn_particles`: in the bounding box, 0.1 above the feet, thrown
+        // back against the movement (-0.2) and up (0.1).
+        let particle = tick_effects.then(|| {
             let x = position.x + (r.next_double() - 0.5) * f64::from(width);
             let z = position.z + (r.next_double() - 0.5) * f64::from(width);
-            self.particles.send_particles(
-                &ParticleOptions::simple(ParticleType::Soul),
+            (
                 [x, position.y + 0.1, z],
                 [moved.x * -0.2, 0.1, moved.z * -0.2],
-                1.0,
-                0,
-            );
-        }
+            )
+        });
         // `play_sound`: its `random_chance` (35%) comes first in its `all_of`,
         // so the level random is drawn every tick the boots are worn; volume
         // 0.6, pitch 0.6 to 1.0.
@@ -561,6 +558,7 @@ impl Game<'_> {
                 pitch,
             );
         }
+        particle
     }
     /// `ItemStack.hurtAndBreak` on the worn boots (`change_item_damage`):
     /// Unbreaking applies, and they break when worn out.
