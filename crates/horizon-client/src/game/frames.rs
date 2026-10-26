@@ -7,6 +7,7 @@ use horizon_assets::{bake::bake_model, model::CuboidModel, resolve::ModelLibrary
 use horizon_client::{entities::ItemFrame, items::ItemStack, mesher::Vertex};
 use horizon_core::{
     geometry::{Aabb, Vec3},
+    position::BlockPos,
     random::RandomSource,
 };
 use std::sync::Arc;
@@ -223,6 +224,7 @@ impl Game<'_> {
         }
         let p = self.item_frames[i].pos;
         self.world.modified.insert((p[0] >> 4, p[2] >> 4));
+        self.frame_output_changed(p);
         self.swing_arm();
         true
     }
@@ -255,7 +257,16 @@ impl Game<'_> {
         }
         self.drop_frame_items(&f, with_frame, true);
         self.world.modified.insert((f.pos[0] >> 4, f.pos[2] >> 4));
+        if f.item.is_some() {
+            self.frame_output_changed(f.pos);
+        }
         true
+    }
+    /// `ItemFrame.setItem` / `setRotation`: `updateNeighbourForOutputSignal`, so
+    /// the comparators reading the frame take its new signal.
+    fn frame_output_changed(&mut self, pos: [i32; 3]) {
+        let at = BlockPos::new(pos[0], pos[1], pos[2]);
+        self.with_level(|b, level, ticks| b.update_neighbour_for_output_signal(level, ticks, at));
     }
     /// `ItemFrame.dropItem`: the frame (when breaking) and the held item.
     fn drop_frame_items(&mut self, f: &ItemFrame, with_frame: bool, by_player: bool) {
@@ -300,6 +311,9 @@ impl Game<'_> {
                     self.audio
                         .play(&sound(&f, "break"), Some(center(&f)), 1.0, 1.0);
                     self.drop_frame_items(&f, true, false);
+                    if f.item.is_some() {
+                        self.frame_output_changed(f.pos);
+                    }
                     continue;
                 }
             }
