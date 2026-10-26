@@ -567,11 +567,11 @@ A key the mod registered (`input.register-key`) went down while the pointer was 
 
 ### record `slot-click`
 
-A click on a slot of the recipe the panel shows (`set-recipes`).
+A click on a slot of a recipe the panel shows (`set-recipes`).
 
 | Field | Type | |
 | --- | --- | --- |
-| `recipe` | `u32` | The recipe's index on the page and the slot's in it; the results come after the slots. |
+| `recipe` | `u32` | The recipe's index in `set-recipes`'s list and the slot's in it; the results come after the slots. |
 | `slot` | `u32` |  |
 | `stack` | `stack` | The stack the slot showed at that moment. |
 | `right` | `bool` |  |
@@ -584,8 +584,8 @@ A click on a slot of the recipe the panel shows (`set-recipes`).
 | `search` | `string` | The search box's text, each time the player changes it. |
 | `key` | `item-key` |  |
 | `slot-clicked` | `slot-click` |  |
-| `action` | `u32` | The action button of the recipe at this index on the page. |
-| `page` | `s32` | The page arrows of `set-recipes`: -1 or 1. |
+| `action` | `u32` | The action button of the recipe at this index in `set-recipes`'s list. |
+| `page` | `u32` | The player turned the recipes' page (`set-recipes`): the index of the first recipe now shown. |
 | `back` |  | The back button of `set-recipes`. |
 
 | Function | Signature | What it does |
