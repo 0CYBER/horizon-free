@@ -354,6 +354,20 @@ impl Game<'_> {
                         a.is_some_and(|a| a.in_ground) || p.stuck,
                     ));
                 }
+                // ThrownTrident.ID_LOYALTY (none for a mob's) and ID_FOIL, on
+                // AbstractArrow's flags.
+                K::Trident => {
+                    let a = p.arrow.as_deref();
+                    e.meta.extend(arrow_meta(
+                        false,
+                        a.is_some_and(|a| a.no_physics),
+                        0,
+                        a.is_some_and(|a| a.in_ground) || p.stuck,
+                    ));
+                    if a.is_some_and(|a| a.pickup_item.has_any_enchantments()) {
+                        e.meta.push((12, serializer::BOOLEAN, Value::Bool(true)));
+                    }
+                }
                 // WitherSkull.DATA_DANGEROUS.
                 K::WitherSkull { dangerous: true } => {
                     e.meta.push((8, serializer::BOOLEAN, Value::Bool(true)));

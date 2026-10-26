@@ -1946,6 +1946,23 @@ impl Game<'_> {
             None => self.projectile_hit(p, hit),
         }
     }
+    /// What an arrow or a thrown trident hits an entity for
+    /// (`AbstractArrow.onHitEntity`, `ThrownTrident.onHitEntity`): a trident's
+    /// 8, plus Impaling on aquatic `victim`s.
+    fn shot_damage(&mut self, shot: &mut Projectile, victim: Option<u32>) -> f32 {
+        if !matches!(shot.kind, ProjectileKind::Trident) {
+            return arrow_damage(shot, &mut self.world.random) + shot.bonus.damage;
+        }
+        let impaling = shot
+            .arrow
+            .as_ref()
+            .map_or(0, |a| a.pickup_item.enchantment_level("minecraft:impaling"))
+            as f32;
+        let aquatic = victim
+            .and_then(|id| self.mobs.iter().find(|m| m.id == id))
+            .is_some_and(|m| m.kind.flags.aquatic_swimmer || m.kind.flags.breathes_water);
+        8.0 + if aquatic { 2.5 * impaling } else { 0.0 }
+    }
     /// What an arrow's tick asked for: its particles and sounds.
     fn arrow_event(&mut self, at: Vec3, event: horizon_client::arrows::ArrowEvent) {
         use horizon_client::arrows::{ArrowEvent, ArrowParticle, ArrowSound, BlockReaction};
@@ -1974,6 +1991,8 @@ impl Game<'_> {
                     ArrowSound::Splash => "minecraft:entity.generic.splash",
                     ArrowSound::HitGround => "minecraft:entity.arrow.hit",
                     ArrowSound::Extinguish => "minecraft:entity.generic.extinguish_fire",
+                    ArrowSound::TridentHitGround => "minecraft:item.trident.hit_ground",
+                    ArrowSound::TridentHit => "minecraft:item.trident.hit",
                 };
                 self.audio
                     .play(name, Some([at.x, at.y, at.z]), volume, pitch);
@@ -2123,11 +2142,11 @@ impl Game<'_> {
             && id >= super::dragon::SPECIAL
         {
             let by_player = p.owner == Some(Who::Player);
-            if let ProjectileKind::Arrow { .. } = p.kind {
+            if p.arrow.is_some() {
                 // AbstractArrow.onHitEntity: spent if the part or crystal took
                 // it, else turned back (a perched dragon sets it alight first).
                 let mut arrow = p.clone();
-                let amount = arrow_damage(&mut arrow, &mut self.world.random) + p.bonus.damage;
+                let amount = self.shot_damage(&mut arrow, None);
                 let outcome = match self.hit_special(id, amount, by_player, true) {
                     super::dragon::Hurt::Landed { .. } => EntityHit::Hurt,
                     super::dragon::Hurt::Refused => EntityHit::Refused,
@@ -2148,17 +2167,15 @@ impl Game<'_> {
             self.hit_special(id, amount, by_player, false);
             return Ok(());
         }
-        if let (
-            ProjectileKind::Arrow { .. },
-            Hit::Entity {
+        if p.arrow.is_some()
+            && let Hit::Entity {
                 who: Who::Mob(id), ..
-            },
-        ) = (&p.kind, hit)
+            } = hit
             && let Some(i) = self.carts.iter().position(|c| c.id == id)
         {
             // AbstractArrow.onHitEntity on a minecart.
             let mut arrow = p.clone();
-            let amount = arrow_damage(&mut arrow, &mut self.world.random) + p.bonus.damage;
+            let amount = self.shot_damage(&mut arrow, None);
             let burning = p.arrow.as_ref().is_some_and(|a| a.on_fire());
             let creative = p.owner == Some(Who::Player) && self.creative;
             self.arrow_hits_cart(i, amount, p.velocity, burning, creative);
@@ -2169,7 +2186,7 @@ impl Game<'_> {
         // Projectile.onHit: the landing is heard.
         self.projectile_event("minecraft:projectile_land", p.owner, atp);
         let source_kind = match p.kind {
-            ProjectileKind::Arrow { .. } => DamageKind::Arrow,
+            ProjectileKind::Arrow { .. } | ProjectileKind::Trident => DamageKind::Arrow,
             ProjectileKind::SmallFireball | ProjectileKind::LargeFireball { .. } => {
                 DamageKind::Fireball
             }
@@ -2181,6 +2198,36 @@ impl Game<'_> {
             from: Some([p.previous.x, p.previous.y, p.previous.z]),
         };
         match (&p.kind, hit) {
+            // ThrownTrident.onHitEntity: 8 damage (Impaling on aquatic mobs),
+            // dealt whether or not the hurt lands, then it bounces off.
+            (ProjectileKind::Trident, Hit::Entity { who, .. }) => {
+                let mut trident = p.clone();
+                let victim = match who {
+                    Who::Mob(id) => Some(id),
+                    Who::Player => None,
+                };
+                let amount = self.shot_damage(&mut trident, victim);
+                let hurt = match who {
+                    Who::Player => self.mob_hits_player(
+                        amount,
+                        [p.previous.x, p.previous.y, p.previous.z],
+                        "minecraft:trident",
+                    ),
+                    Who::Mob(id) => self
+                        .mobs
+                        .iter_mut()
+                        .find(|m| m.id == id)
+                        .is_some_and(|m| m.damage(amount, source)),
+                };
+                let outcome = if hurt {
+                    EntityHit::Hurt
+                } else {
+                    EntityHit::Refused
+                };
+                self.finish_arrow_hit(trident, outcome);
+            }
+            // AbstractArrow.onHitBlock plays its sound itself (ArrowEvent).
+            (ProjectileKind::Trident, Hit::Block { .. }) => {}
             (ProjectileKind::Arrow { effect, .. }, Hit::Entity { who, .. }) => {
                 let mut arrow = p.clone();
                 let amount = arrow_damage(&mut arrow, &mut self.world.random) + p.bonus.damage;
@@ -3303,6 +3350,30 @@ impl Game<'_> {
                 if a.arrow.as_ref().is_some_and(|s| s.on_fire()) {
                     flame_geometry(atlas, c, 0.5, 0.5, self.yaw, light, out);
                 }
+                continue;
+            }
+            // ThrownTridentRenderer.
+            if matches!(a.kind, ProjectileKind::Trident) {
+                let Some(model) = self.trident_model.as_ref() else {
+                    continue;
+                };
+                let Some(r) = atlas.sprites.get("entity/trident/trident").copied() else {
+                    continue;
+                };
+                let m = glam::Mat4::from_translation(c)
+                    * glam::Mat4::from_rotation_y((a.yaw - 90.0).to_radians())
+                    * glam::Mat4::from_rotation_z((a.pitch + 90.0).to_radians());
+                let poses = horizon_client::mobs::anim::Poses::new(model);
+                horizon_client::mobs::render::draw(
+                    model,
+                    m,
+                    &poses,
+                    [r.u0, r.v0, r.u1, r.v1],
+                    0xFFFF_FFFF,
+                    packed,
+                    0,
+                    out,
+                );
                 continue;
             }
             // WindChargeRenderer.
