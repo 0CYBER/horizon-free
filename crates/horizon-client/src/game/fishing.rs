@@ -14,6 +14,7 @@ use horizon_client::{
 };
 use horizon_core::{
     geometry::{Aabb, Vec3, trig},
+    position::BlockPos,
     random::RandomSource,
 };
 use horizon_protocol::entity_data::{Value, serializer};
@@ -301,9 +302,12 @@ impl Game<'_> {
         let mut speed = 1;
         let above = [b[0], b[1] + 1, b[2]];
         let sky = self.world.light(above[0], above[1], above[2]) >> 4 == 15;
-        let raining = self.world.weather.raining;
-        let r = &mut self.world.random;
-        if r.next_float() < 0.25 && raining && sky {
+        // Level.isRainingAt: rain (not snow) reaches the position.
+        if self.world.random.next_float() < 0.25
+            && self.with_level(|b, level, _| {
+                b.is_raining_at(level, BlockPos::new(above[0], above[1], above[2]))
+            })
+        {
             speed += 1;
         }
         let r = &mut self.world.random;
