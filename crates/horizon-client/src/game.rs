@@ -9721,8 +9721,9 @@ impl Game<'_> {
     fn draw_creative(&mut self, batch: &mut HudBatch) {
         let (ox, oy) = Self::creative_origin(batch);
         let selected = self.creative_screen.selected;
-        let tabs = self.creative_screen.tabs.clone();
-        let tab = self.creative_screen.tab().clone();
+        // Only what is drawn of the tabs: their stacks stay where they are.
+        let tabs = self.creative_screen.tab_headers();
+        let tab = tabs[selected.min(tabs.len() - 1)].clone();
         let tab_sprite = |t: &horizon_client::creative::Tab, on: bool| {
             format!(
                 "gui/sprites/container/creative_inventory/tab_{}_{}_{}",
