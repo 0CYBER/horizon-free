@@ -257,8 +257,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             direction != Direction::Down && self.has_signal(rel(up, direction), direction)
         })
     }
-    /// `PistonBaseBlock.checkIfExtend`.
+    /// `PistonBaseBlock.checkIfExtend`, which `neighborChanged`, `onPlace`
+    /// and `setPlacedBy` call only server-side: a client moves its pistons on
+    /// the server's block events alone.
     pub(crate) fn piston_check_if_extend(&mut self, pos: BlockPos, state: BlockStateId) {
+        if self.level.is_client_side() {
+            return;
+        }
         let b = self.b;
         let direction = b.facing(state);
         let extend = self.piston_neighbor_signal(pos, direction);

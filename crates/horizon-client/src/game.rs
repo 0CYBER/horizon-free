@@ -867,6 +867,10 @@ impl LevelAccess for GameLevel<'_> {
                 self.drop_resources_now(pos, state)
             }
             LevelEvent::DropResources { .. } => {}
+            // `ClientLevel.playSeededSound` plays only when the excluded
+            // player is this client's own: the block's `playSound(null, ...)`
+            // (a piston's move, a note) reaches it from the server instead.
+            LevelEvent::Sound { .. } if self.client_side => {}
             // Block.popResource of the block's own item (tall flowers, flower beds).
             LevelEvent::BlockEvent {
                 pos,
