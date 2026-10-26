@@ -18,6 +18,7 @@ use horizon_core::{
     geometry::{Aabb, Vec3},
     random::{LegacyRandom, RandomSource},
 };
+use horizon_protocol::entity_data::Value;
 use horizon_world::nbt::Tag;
 
 /// Mob ids from here on are dragon parts (`SPECIAL + part`) and crystals
@@ -1559,6 +1560,7 @@ impl Game<'_> {
                         y -= 1.0;
                     }
                     self.breath_clouds.push(Breath {
+                        id: 0,
                         at: [x, y.floor() + 1.0, z],
                         radius: 5.0,
                         age: 0,
@@ -1692,25 +1694,8 @@ impl Game<'_> {
         }
         if d.random.next_int_bound(10).unwrap_or(1) == 0 {
             let p = d.position;
-            d.nearest_crystal = self
-                .crystals
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| {
-                    (c.position.x - p.x).abs() <= 32.0
-                        && (c.position.y - p.y).abs() <= 32.0
-                        && (c.position.z - p.z).abs() <= 32.0
-                })
-                .min_by(|a, b| {
-                    let da = (a.1.position.x - p.x).powi(2)
-                        + (a.1.position.y - p.y).powi(2)
-                        + (a.1.position.z - p.z).powi(2);
-                    let db = (b.1.position.x - p.x).powi(2)
-                        + (b.1.position.y - p.y).powi(2)
-                        + (b.1.position.z - p.z).powi(2);
-                    da.total_cmp(&db)
-                })
-                .map(|(i, _)| i);
+            let nearest = self.nearest_crystal_to(p);
+            self.dragon.as_mut().expect("dragon").nearest_crystal = nearest;
         }
         let d = self.dragon.as_mut().expect("dragon");
         d.yaw = wrap(d.yaw);
@@ -2038,6 +2023,7 @@ impl Game<'_> {
         // assignDirectionalMovement: the direction times the acceleration power 0.1.
         let velocity = Vec3::new(v.x * 0.1, v.y * 0.1, v.z * 0.1);
         self.dragon_fireballs.push(DragonFireball {
+            id: 0,
             position: at,
             previous: at,
             velocity,
@@ -2084,6 +2070,7 @@ impl Game<'_> {
             });
             if hit_block || hit_player || b.age > 600 {
                 self.breath_clouds.push(Breath {
+                    id: 0,
                     at: [next.x, next.y, next.z],
                     radius: 3.0,
                     age: 0,
@@ -2213,15 +2200,58 @@ impl Game<'_> {
     }
 }
 pub(super) struct DragonFireball {
-    position: Vec3,
-    previous: Vec3,
-    velocity: Vec3,
+    /// Its entity id once a server's players track it (0 until then).
+    pub(super) id: u32,
+    pub(super) position: Vec3,
+    pub(super) previous: Vec3,
+    pub(super) velocity: Vec3,
     age: i32,
 }
+impl DragonFireball {
+    /// One a server sent (`handleAddEntity`).
+    pub(super) fn remote(id: u32, at: Vec3, velocity: Vec3) -> Self {
+        Self {
+            id,
+            position: at,
+            previous: at,
+            velocity,
+            age: 0,
+        }
+    }
+    /// `AbstractHurtingProjectile.tick` on a server's client: `applyInertia`
+    /// first (power 0.1, inertia 0.95 or 0.8 in water), then the move; only
+    /// the server decides what it hits.
+    pub(super) fn remote_step(&mut self, water: bool) {
+        self.previous = self.position;
+        self.age += 1;
+        let v = self.velocity;
+        // Vec3.normalize: a vector shorter than 1e-5 stays zero.
+        let l = (v.x * v.x + v.y * v.y + v.z * v.z).sqrt();
+        let n = if l < 1.0e-5 {
+            Vec3::new(0.0, 0.0, 0.0)
+        } else {
+            Vec3::new(v.x / l, v.y / l, v.z / l)
+        };
+        let inertia = f64::from(if water { 0.8f32 } else { 0.95f32 });
+        let v = Vec3::new(
+            (v.x + n.x * 0.1) * inertia,
+            (v.y + n.y * 0.1) * inertia,
+            (v.z + n.z * 0.1) * inertia,
+        );
+        self.velocity = v;
+        self.position = Vec3::new(
+            self.position.x + v.x,
+            self.position.y + v.y,
+            self.position.z + v.z,
+        );
+    }
+}
 pub(super) struct Breath {
-    at: [f64; 3],
-    radius: f32,
-    age: i32,
+    /// Its entity id once a server's players track it (0 until then).
+    pub(super) id: u32,
+    pub(super) at: [f64; 3],
+    pub(super) radius: f32,
+    pub(super) age: i32,
     duration: i32,
     from_dragon: bool,
 }
@@ -3142,6 +3172,204 @@ impl Game<'_> {
         self.reset_spike_crystals();
         let _ = self.activate_exit_portal();
         self.fight.dirty = true;
+    }
+    /// `EnderDragon.checkCrystals`' search: the nearest crystal within 32
+    /// blocks on each axis.
+    fn nearest_crystal_to(&self, p: Vec3) -> Option<usize> {
+        self.crystals
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| {
+                (c.position.x - p.x).abs() <= 32.0
+                    && (c.position.y - p.y).abs() <= 32.0
+                    && (c.position.z - p.z).abs() <= 32.0
+            })
+            .min_by(|a, b| {
+                let da = (a.1.position.x - p.x).powi(2)
+                    + (a.1.position.y - p.y).powi(2)
+                    + (a.1.position.z - p.z).powi(2);
+                let db = (b.1.position.x - p.x).powi(2)
+                    + (b.1.position.y - p.y).powi(2)
+                    + (b.1.position.z - p.z).powi(2);
+                da.total_cmp(&db)
+            })
+            .map(|(i, _)| i)
+    }
+}
+
+/// The dragon on a server's client (`ClientPacketListener.handleAddEntity`
+/// and the client side of `EnderDragon.aiStep`): the server flies it and
+/// sends its moves, health and phase; the client flaps its wings, keeps
+/// its flight history and places its parts, so it can be drawn and hit.
+impl Game<'_> {
+    /// `handleAddEntity` for `minecraft:ender_dragon`. Its constructor
+    /// sets the full health and the hovering phase until the server's
+    /// synched data says otherwise.
+    pub(super) fn spawn_remote_dragon(&mut self, id: i32, position: [f64; 3], yaw: f32) {
+        let at = Vec3::new(position[0], position[1], position[2]);
+        let mut d = Dragon::new(at, yaw, i64::from(id));
+        d.id = id as u32;
+        d.phase = Phase::from_id(10);
+        self.dragon = Some(d);
+        self.place_dragon_parts();
+        if let Some(d) = self.dragon.as_mut() {
+            for part in &mut d.parts {
+                part.1 = part.0;
+            }
+        }
+    }
+    /// The remote dragon, if `id` is it.
+    fn remote_dragon_mut(&mut self, id: i32) -> Option<&mut Dragon> {
+        self.dragon.as_mut().filter(|d| d.id as i32 == id)
+    }
+    /// `handleSetEntityData`: LivingEntity.DATA_HEALTH_ID and
+    /// EnderDragon.DATA_PHASE (`onSyncedDataUpdated` sets the phase).
+    pub(super) fn remote_dragon_data(&mut self, id: i32, values: &[(u8, i32, Value)]) {
+        let Some(d) = self.remote_dragon_mut(id) else {
+            return;
+        };
+        for (index, _, value) in values {
+            match (index, value) {
+                (9, Value::Float(health)) => d.health = *health,
+                (16, Value::Int(phase)) => d.set_phase(Phase::from_id(*phase)),
+                _ => {}
+            }
+        }
+    }
+    /// `handleSetEntityMotion`: the velocity its wings flap by.
+    pub(super) fn remote_dragon_motion(&mut self, id: i32, velocity: [f64; 3]) {
+        if let Some(d) = self.remote_dragon_mut(id) {
+            d.velocity = Vec3::new(velocity[0], velocity[1], velocity[2]);
+        }
+    }
+    /// `handleHurtAnimation` and `handleDamageEvent`: the red flash.
+    pub(super) fn remote_dragon_hurt(&mut self, id: i32) {
+        if let Some(d) = self.remote_dragon_mut(id) {
+            d.hurt_time = 10;
+        }
+    }
+    /// `handleRemoveEntities`, or a crystal removed: the healing beam
+    /// keeps pointing at the same crystal.
+    pub(super) fn remove_remote_dragon(&mut self, id: i32) {
+        if self.remote_dragon_mut(id).is_some() {
+            self.dragon = None;
+            return;
+        }
+        let Some(index) = self.crystals.iter().position(|c| c.id as i32 == id) else {
+            return;
+        };
+        if let Some(d) = self.dragon.as_mut() {
+            match d.nearest_crystal {
+                Some(n) if n == index => d.nearest_crystal = None,
+                Some(n) if n > index => d.nearest_crystal = Some(n - 1),
+                _ => {}
+            }
+        }
+    }
+    /// One client tick of the dragon. `lerp`: the step toward its last
+    /// sent position and yaw (LivingEntity's interpolation), and the
+    /// steps left including this one.
+    pub(super) fn tick_remote_dragon(&mut self, lerp: Option<([f64; 3], Option<f32>, u32)>) {
+        let Some(d) = self.dragon.as_mut() else {
+            return;
+        };
+        d.previous = d.position;
+        d.previous_yaw = d.yaw;
+        d.old_flap = d.flap;
+        d.ticks += 1;
+        d.hurt_time = (d.hurt_time - 1).max(0);
+        for part in &mut d.parts {
+            part.1 = part.0;
+        }
+        if let Some((target, yaw, steps)) = lerp {
+            let n = f64::from(steps.max(1));
+            d.position = Vec3::new(
+                d.position.x + (target[0] - d.position.x) / n,
+                d.position.y + (target[1] - d.position.y) / n,
+                d.position.z + (target[2] - d.position.z) / n,
+            );
+            if let Some(yaw) = yaw {
+                d.yaw += wrap(yaw - d.yaw) / steps.max(1) as f32;
+            }
+        }
+        if !d.alive() {
+            // EnderDragon.tickDeath on a client: it rises, and bursts
+            // from tick 180 to 200; the server removes it.
+            d.death_time += 1;
+            let (t, p) = (d.death_time, d.position);
+            if (180..=200).contains(&t) {
+                let r = &mut d.random;
+                let o = [
+                    f64::from((r.next_float() - 0.5) * 8.0),
+                    f64::from((r.next_float() - 0.5) * 4.0),
+                    f64::from((r.next_float() - 0.5) * 8.0),
+                ];
+                self.particles.add(
+                    &ParticleOptions::simple(ParticleType::ExplosionEmitter),
+                    [p.x + o[0], p.y + 2.0 + o[1], p.z + o[2]],
+                    [0.0; 3],
+                );
+            }
+            if let Some(d) = self.dragon.as_mut() {
+                d.position.y += 0.1;
+                for part in &mut d.parts {
+                    part.0.y += 0.1;
+                }
+            }
+            return;
+        }
+        // processFlappingMovement and onFlap: its wing beats, and their sound.
+        let flap_was = (d.old_flap * std::f32::consts::TAU).cos();
+        let v = d.velocity;
+        let mut flap_speed = 0.2 / ((v.x.hypot(v.z) as f32) * 10.0 + 1.0);
+        flap_speed *= 2f32.powf(v.y as f32);
+        d.flap += if d.phase.sitting() { 0.1 } else { flap_speed };
+        let flap_now = (d.flap * std::f32::consts::TAU).cos();
+        let at = [d.position.x, d.position.y, d.position.z];
+        if flap_was <= -0.3 && flap_now >= -0.3 {
+            let pitch = 0.8 + self.world.random.next_float() * 0.3;
+            self.audio
+                .play("minecraft:entity.ender_dragon.flap", Some(at), 5.0, pitch);
+        }
+        let d = self.dragon.as_mut().expect("dragon");
+        if !d.phase.sitting() {
+            d.growl -= 1;
+            if d.growl < 0 {
+                d.growl = 200 + d.random.next_int_bound(200).unwrap_or(0);
+                let pitch = 0.8 + self.world.random.next_float() * 0.3;
+                self.audio
+                    .play("minecraft:entity.ender_dragon.growl", Some(at), 2.5, pitch);
+            }
+        }
+        // checkCrystals' search runs on a client too (the healing beam).
+        let d = self.dragon.as_mut().expect("dragon");
+        if d.random.next_int_bound(10).unwrap_or(1) == 0 {
+            let p = d.position;
+            let nearest = self.nearest_crystal_to(p);
+            self.dragon.as_mut().expect("dragon").nearest_crystal = nearest;
+        }
+        let d = self.dragon.as_mut().expect("dragon");
+        d.yaw = wrap(d.yaw);
+        d.record();
+        self.place_dragon_parts();
+    }
+    /// The dragon's parts as a server's client attacks them: the server's
+    /// ids for `EnderDragonPart`s follow the dragon's.
+    pub(super) fn remote_dragon_part_hit(
+        &self,
+        eye: [f64; 3],
+        dir: [f64; 3],
+        reach: f64,
+    ) -> Option<(i32, f64, [f64; 3])> {
+        let d = self.dragon.as_ref().filter(|d| d.alive() && d.id != 0)?;
+        (0..8)
+            .filter_map(|i| {
+                let b = d.part_box(i);
+                let p = d.parts[i].0;
+                super::ray_box(eye, dir, reach, b)
+                    .map(|t| ((d.id + 1 + i as u32) as i32, t, [p.x, p.y, p.z]))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
     }
 }
 

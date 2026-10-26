@@ -87,9 +87,12 @@ pub(super) struct Minecart {
     pub fuse: i32,
     /// Hopper minecarts: an unpowered activator rail enables them.
     pub enabled: bool,
+    /// Chest minecarts: the loot table rolled into `items` on load, saved
+    /// again while the items are still that roll.
+    pub loot: Option<horizon_client::save::RolledLoot>,
 }
-const WIDTH: f64 = 0.98;
-const HEIGHT: f64 = 0.7;
+pub(super) const WIDTH: f64 = 0.98;
+pub(super) const HEIGHT: f64 = 0.7;
 /// AbstractMinecart.getDefaultDisplayOffset, in sixteenths of a block.
 fn display_offset(kind: CartKind) -> f64 {
     if kind == CartKind::Hopper { 1.0 } else { 6.0 }
@@ -97,7 +100,7 @@ fn display_offset(kind: CartKind) -> f64 {
 /// The minecart's passenger attachment minus Player.DEFAULT_VEHICLE_ATTACHMENT.
 pub(super) const SEAT: f64 = 0.1875 - 0.6;
 /// The placeholder container key under which an open cart's items live.
-pub(super) const CART_KEY_Y: i32 = -100_000;
+pub(super) const CART_KEY_Y: i32 = horizon_client::lan::menu::VEHICLE_KEY_Y;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Shape {
@@ -182,6 +185,7 @@ impl Minecart {
             push: [0.0; 2],
             fuse: -1,
             enabled: true,
+            loot: None,
         }
     }
     pub fn bounds(&self) -> Aabb {
@@ -1526,6 +1530,12 @@ impl Minecart {
                     put("UpdateLastExecution", Tag::Byte(1));
                 }
                 CartKind::Rideable => {}
+            }
+            // A loaded loot table goes back while the items are still its roll;
+            // otherwise the items replace it, as vanilla's unpackLootTable does.
+            if !self.loot.as_ref().is_some_and(|l| l.restore(map)) {
+                map.remove(&JavaString::from("LootTable"));
+                map.remove(&JavaString::from("LootTableSeed"));
             }
         }
         tag

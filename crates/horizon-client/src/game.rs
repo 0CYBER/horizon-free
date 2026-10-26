@@ -18,6 +18,7 @@ mod boats;
 mod books;
 mod bossbars;
 mod breezes;
+mod campfire;
 mod cartography;
 mod chat;
 mod client_ambient;
@@ -1269,6 +1270,13 @@ struct Game<'a> {
     /// Controllers (Horizon's own).
     pad: pad::Pads,
     frames: u64,
+    /// `item_level` for one frame, game time, day time and dimension.
+    item_level_cache: std::cell::RefCell<
+        Option<(
+            (u64, i64, i64, &'static str),
+            horizon_assets::item_model::LevelState,
+        )>,
+    >,
     /// Frames drawn with the player in the world, for `--world-frames`.
     world_frames: u64,
     fps: f32,
@@ -3345,6 +3353,13 @@ impl Game<'_> {
         self.with_player_actor(|game| game.break_block_as_player(pos))
     }
     fn break_block_as_player(&mut self, pos: [i32; 3]) -> Result<()> {
+        if !self
+            .res
+            .items()
+            .can_destroy_block(self.held(), self.creative)
+        {
+            return Ok(());
+        }
         self.pad_rumble(horizon_client::gamepad::Rumble::BlockBroken);
         // ServerPlayerGameMode.destroyBlock.
         let state = self.world.block(pos[0], pos[1], pos[2]);
@@ -3970,7 +3985,12 @@ impl Game<'_> {
             return Ok(());
         };
         // GameType.isBlockPlacingRestricted: adventure and spectator.
-        if !self.may_build() {
+        if !self.may_build()
+            || !self
+                .res
+                .items()
+                .can_destroy_block(self.held(), self.creative)
+        {
             self.mining = None;
             return Ok(());
         }
@@ -5302,7 +5322,8 @@ impl Game<'_> {
                 | BlockEntity::Vault(_)
                 | BlockEntity::Beehive(_)
                 | BlockEntity::CommandBlock(_)
-                | BlockEntity::Skull(_),
+                | BlockEntity::Skull(_)
+                | BlockEntity::Campfire(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -5572,7 +5593,8 @@ impl Game<'_> {
                     | BlockEntity::Vault(_)
                     | BlockEntity::Beehive(_)
                     | BlockEntity::CommandBlock(_)
-                    | BlockEntity::Skull(_),
+                    | BlockEntity::Skull(_)
+                    | BlockEntity::Campfire(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
@@ -6366,6 +6388,13 @@ impl Game<'_> {
             false,
         );
         if outside {
+            // AbstractRecipeBookScreen.mouseClicked: the book takes the click
+            // before the outside test, and its tabs sit left of the strip
+            // hasClickedOutside counts as the book.
+            if self.recipe_book_click(right) {
+                self.inv_clicks.skip_release();
+                return;
+            }
             // slotId -999: an empty hand throws nothing; a carried stack
             // starts a drag whose release drops it.
             match input {
@@ -7030,6 +7059,9 @@ impl Game<'_> {
         // `VaultRenderer`.
         self.mark_entity(out.len(), "");
         self.vault_geometry(camera, alpha, &mut out);
+        // `CampfireRenderer`.
+        self.mark_entity(out.len(), "");
+        self.campfire_geometry(camera, &mut out);
         self.mark_entity(out.len(), "minecraft:ominous_item_spawner");
         self.ominous_item_spawner_geometry(camera, alpha, &mut out);
         // Mobs and their projectiles (a span each).
@@ -8041,6 +8073,7 @@ impl Game<'_> {
     /// (scaled coordinates, or the End portal's fixed destination).
     pub(super) fn switch_level(&mut self, target: Dim, from: Vec3) -> Result<Vec3> {
         // Save the departing dimension's changed chunks.
+        self.save.save_forced_chunks(&self.streaming.forced)?;
         self.streaming.save(&mut self.world, true);
         let keys: Vec<_> = self.world.modified.drain().collect();
         let chunks = self.with_entities(keys.iter().filter_map(|k| self.world.chunks.get(k)));
@@ -8732,6 +8765,13 @@ impl Game<'_> {
             && self.use_on_cauldron(hit.pos)?
         {
             return Ok(UseResult::Success { swing: true });
+        }
+        if allow_block_actions
+            && let Some(hit) = self.pick()
+            && let Some(placed) = self.use_on_campfire(hit.pos)?
+        {
+            // SUCCESS_SERVER swings; a full campfire's CONSUME does not.
+            return Ok(UseResult::Success { swing: placed });
         }
         // BucketItem has no useOn: a guest's UseItemOn leaves it to UseItem.
         let bucket = horizon_client::items::bucket_contents(&stack.item);
@@ -9783,8 +9823,9 @@ impl Game<'_> {
     fn draw_creative(&mut self, batch: &mut HudBatch) {
         let (ox, oy) = Self::creative_origin(batch);
         let selected = self.creative_screen.selected;
-        let tabs = self.creative_screen.tabs.clone();
-        let tab = self.creative_screen.tab().clone();
+        // Only what is drawn of the tabs: their stacks stay where they are.
+        let tabs = self.creative_screen.tab_headers();
+        let tab = tabs[selected.min(tabs.len() - 1)].clone();
         let tab_sprite = |t: &horizon_client::creative::Tab, on: bool| {
             format!(
                 "gui/sprites/container/creative_inventory/tab_{}_{}_{}",
@@ -10172,6 +10213,7 @@ impl Game<'_> {
     }
     /// Save the level in place: its changed chunks, its entities and its raids.
     fn save_level(&mut self, wait: bool) -> Result<()> {
+        self.save.save_forced_chunks(&self.streaming.forced)?;
         self.streaming.save(&mut self.world, wait);
         let keys: Vec<_> = self.world.modified.drain().collect();
         let chunks = self.with_entities(keys.iter().filter_map(|k| self.world.chunks.get(k)));
@@ -12244,6 +12286,7 @@ impl<'a> Game<'a> {
             last_input: now,
             pad: Default::default(),
             frames: 0,
+            item_level_cache: Default::default(),
             world_frames: 0,
             fps: 0.0,
             fps_frames: 0,

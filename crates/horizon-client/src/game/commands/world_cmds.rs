@@ -49,26 +49,12 @@ impl Game<'_> {
         let mut tracker = Tracker::default();
         for &t in &targets {
             let h = holder(self.target_name(t));
-            // ServerRecipeBook.addRecipes/removeRecipes count recipe book
-            // displays (a transmute recipe has one per material count).
-            let mut n = 0;
-            // ServerPlayer.awardRecipes / resetRecipes: the displays changed.
-            let index = &self.res.stations().recipe_index;
-            n += if give {
-                let (count, unlocked) = self.level.recipe_book.add_recipes(index, &recipes);
-                self.recipe_unlocked(&unlocked);
-                count as i32
-            } else {
-                let removed = self.level.recipe_book.remove_recipes(index, &recipes);
-                let count = removed.len() as i32;
-                // A network player's client drops them from its book.
-                if self.lan_acting.is_some() && !removed.is_empty() {
-                    self.guest_packets.push(C::RecipeBookRemove(
-                        horizon_protocol::packets::recipes::RecipeBookRemove { ids: removed },
-                    ));
-                }
-                count
-            };
+            // ServerPlayer.awardRecipes / resetRecipes on the target's own
+            // ServerRecipeBook: a guest's is swapped in for the call, and the
+            // packets go to its client.
+            let n = self
+                .for_player(t, |g| g.change_recipes(give, &recipes))
+                .unwrap_or(0);
             tracker.track(&h, n);
         }
         let verb = if give { "give" } else { "take" };
@@ -90,6 +76,27 @@ impl Game<'_> {
         )?;
         self.feedback(message);
         Ok(total)
+    }
+
+    /// ServerRecipeBook.addRecipes/removeRecipes for the player in place: how
+    /// many recipe book displays changed (a transmute recipe has one per
+    /// material count).
+    fn change_recipes(&mut self, give: bool, recipes: &[String]) -> i32 {
+        let index = &self.res.stations().recipe_index;
+        if give {
+            let (count, unlocked) = self.level.recipe_book.add_recipes(index, recipes);
+            self.recipe_unlocked(&unlocked);
+            return count as i32;
+        }
+        let removed = self.level.recipe_book.remove_recipes(index, recipes);
+        let count = removed.len() as i32;
+        // A network player's client drops them from its book.
+        if self.lan_acting.is_some() && !removed.is_empty() {
+            self.guest_packets.push(C::RecipeBookRemove(
+                horizon_protocol::packets::recipes::RecipeBookRemove { ids: removed },
+            ));
+        }
+        count
     }
 
     // ---- /damage ----------------------------------------------------------------

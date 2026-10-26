@@ -68,6 +68,10 @@ pub(super) struct ModsState {
     /// is still being shown, and a mod answering its own lines would recurse.
     #[cfg(feature = "mods")]
     commands: Vec<String>,
+    /// `command.run-quiet` batches for this window's own world, by mod id,
+    /// run on the next tick as `commands` are.
+    #[cfg(feature = "mods")]
+    quiet: Vec<(String, Vec<String>)>,
     /// The server's command tree with the running mods' commands added.
     #[cfg(feature = "mods")]
     remote_tree: Option<Dispatcher>,
@@ -505,12 +509,60 @@ impl Game<'_> {
         }
         None
     }
+    /// A mod's `command.run-quiet` lines (vanilla's commands only, as
+    /// `command.run`): to a server that runs them quietly as one payload
+    /// (`horizon_protocol::quiet`), to any other as chat commands, or for this
+    /// window's own world next tick.
+    fn mod_quiet_commands(&mut self, mod_id: String, lines: Vec<String>) {
+        let lines: Vec<String> = lines
+            .into_iter()
+            .filter(|l| vanilla_command(l.split(' ').next().unwrap_or_default()))
+            .collect();
+        match self.remote.as_ref().map(|r| r.quiet_commands) {
+            Some(true) => {
+                for data in horizon_protocol::quiet::encode(&mod_id, &lines) {
+                    self.send(horizon_protocol::packets::play::Serverbound::CustomPayload(
+                        horizon_protocol::packets::configuration::CustomPayload {
+                            channel: horizon_protocol::quiet::CHANNEL.into(),
+                            data,
+                        },
+                    ));
+                }
+            }
+            // The server checks the player's permissions; its feedback shows.
+            Some(false) => {
+                for line in lines {
+                    self.send_chat(&format!("/{line}"));
+                }
+            }
+            None => self.mods.quiet.push((mod_id, lines)),
+        }
+    }
+    /// A quiet batch in this window's own world, as a server runs one
+    /// (game/lan_quiet.rs): each line as the player typing it, no chat, a
+    /// chat message refused; one line in the log.
+    fn run_quiet_batch(&mut self, mod_id: &str, lines: &[String]) {
+        let permission = self.ui.registries.permission;
+        let mut failed = 0;
+        for line in lines {
+            let ok = self.signable_arguments(permission, line).is_empty()
+                && self.run_command_quietly(line);
+            failed += usize::from(!ok);
+        }
+        log::info!(
+            "[mod {mod_id}] ran {} quiet command(s): {failed} failed",
+            lines.len()
+        );
+    }
     /// A game tick.
     pub(super) fn tick_mods(&mut self) {
         // Here, at the player's level: shown inside a console call (a control
         // socket command set the hook off), they would run as the console.
         for line in std::mem::take(&mut self.mods.commands) {
             self.run_command(&line);
+        }
+        for (mod_id, lines) in std::mem::take(&mut self.mods.quiet) {
+            self.run_quiet_batch(&mod_id, &lines);
         }
         if !self.mods.mods.is_running() {
             return;
@@ -604,6 +656,10 @@ impl Game<'_> {
                     } else {
                         self.mods.commands.push(line);
                     }
+                    continue;
+                }
+                Output::QuietCommands { mod_id, lines } => {
+                    self.mod_quiet_commands(mod_id, lines);
                     continue;
                 }
                 Output::Stopped { name, reason } => {

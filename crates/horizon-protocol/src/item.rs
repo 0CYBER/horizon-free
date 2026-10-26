@@ -164,7 +164,7 @@ pub struct Profile {
     pub properties: Vec<(String, String, Option<String>)>,
 }
 impl Component {
-    fn read(kind: i32, r: &mut Reader) -> Result<Self> {
+    pub(crate) fn read(kind: i32, r: &mut Reader) -> Result<Self> {
         use component::*;
         Ok(match kind {
             MAX_STACK_SIZE | MAX_DAMAGE | DAMAGE | RARITY | REPAIR_COST | MAP_ID
@@ -338,7 +338,7 @@ impl Component {
             }
         })
     }
-    fn write(&self, kind: i32, w: &mut Writer) {
+    pub(crate) fn write(&self, kind: i32, w: &mut Writer) {
         match self {
             Self::Raw(bytes) => w.bytes(bytes),
             Self::Trim { material, pattern } => {

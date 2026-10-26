@@ -3,7 +3,7 @@
 A player's own AI agent (Claude Code, Codex, Cursor, any MCP client) or a script can do
 everything a player does with the mouse and keyboard, in the launcher and in the game. This page
 covers developers: the surfaces, the full inventory, and the rules every new command follows.
-Players read [Control Horizon with your AI agent](../website/docs/agents.md)
+Players read [Control Horizon with your AI agent](https://playhorizon.dev/docs/agents)
 (playhorizon.dev/docs/agents).
 
 The command lists are generated, so they can't drift:
