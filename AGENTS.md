@@ -54,7 +54,8 @@ Game workspace (root `Cargo.toml`); `launcher/` and `crates/horizon-telemetry-se
 
 Other top-level folders: `tools/` (harnesses and dev scripts), `tests/` (Python unit tests: `python3 -m
 unittest discover -s tests`), `mods/horizon/src/test/java/dev/horizonlab/parity/` (Java oracles),
-`website/` (playhorizon.dev; its paths are relative to `website/`), `docs/`, `.github/workflows/`.
+`docs/`, `.github/workflows/`. The website (playhorizon.dev) is the private ludovic111/horizon-site: its build
+reads `README.md`, `launcher/links.json`, `docs/api/`, `roadmap/roadmap.json` and `crates/horizon-theme/tokens.css` from main.
 
 ## Build and test fast
 
