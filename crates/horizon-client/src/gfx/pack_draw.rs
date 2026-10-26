@@ -4,6 +4,20 @@
 
 use horizon_shaders::{RENDER_STAGES, render_stage};
 
+/// Where a run of `Frame::entities` begins, and what it is (slice 7): the run lasts until the
+/// next span. Recorded only while a shader pack draws entities, so Horizon's own frames carry
+/// none; Horizon itself still draws the whole list at once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EntitySpan {
+    /// The first vertex.
+    pub start: u32,
+    /// The render stage (5.4: `ENTITIES`, `BLOCK_ENTITIES`, `PARTICLES`, `DESTROY`), which picks
+    /// the program.
+    pub stage: u32,
+    /// `entityId` for entities, `blockEntityId` for block entities (5.3), else 0.
+    pub id: i32,
+}
+
 /// `HzDraw`'s size: `renderStage`, `entityId`, `blockEntityId`, a pad, `entityColor`.
 const SIZE: u32 = 32;
 
