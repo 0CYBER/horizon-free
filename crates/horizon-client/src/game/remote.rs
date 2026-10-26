@@ -3062,6 +3062,12 @@ impl Game<'_> {
     fn tick_remote_level(&mut self) -> Result<()> {
         self.ticks += 1;
         self.track_experience_display();
+        // Player.tick's ItemCooldowns.tick: this path replaces `tick_world`'s
+        // for a server's client (multiplayer and the default single player),
+        // so the entries advance here or the slot stays shaded until the
+        // server says the entry ended. `onCooldownEnded` is the plain
+        // ItemCooldowns' no-op on a client.
+        self.cooldowns.tick();
         // Options.broadcastOptions: a changed render distance or Chat option
         // is sent again.
         let view = client_view_distance(self.settings.render_distance);
