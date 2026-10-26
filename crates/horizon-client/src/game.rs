@@ -2097,6 +2097,33 @@ impl Game<'_> {
     }
     /// `TerrainParticle` at `pos`: the model's particle sprite and tint source
     /// 0's `colorAsTerrainParticle` (white when the block has none).
+    /// `HoneyBlock.showSlideParticles` (entity event 53): five honey block
+    /// particles at the entity.
+    fn honey_slide_particles(&mut self, at: [f64; 3]) {
+        use horizon_client::particles::{ParticleOptions, ParticleType};
+        let Some(honey) = self
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:honey_block")
+        else {
+            return;
+        };
+        let block = [
+            at[0].floor() as i32,
+            at[1].floor() as i32,
+            at[2].floor() as i32,
+        ];
+        if let Some((sprite, tint)) = self.particle_sprite(honey, block) {
+            for _ in 0..5 {
+                self.particles.add(
+                    &ParticleOptions::block(ParticleType::Block, sprite.clone(), tint),
+                    at,
+                    [0.0; 3],
+                );
+            }
+        }
+    }
     fn particle_sprite(&self, state: BlockStateId, pos: [i32; 3]) -> Option<(String, u32)> {
         let sprite = Self::block_particle_sprite(&self.pack, state)?;
         let chunks = &self.world.chunks;
@@ -4545,28 +4572,18 @@ impl Game<'_> {
                 MotionEvent::Snowflake { position, velocity } => self.snowflake(position, velocity),
                 MotionEvent::EnterBlock { state } => self.trigger_enter_block(state),
                 MotionEvent::HoneySlide {
-                    pos,
-                    sound,
-                    particles,
+                    sound, particles, ..
                 } => {
                     if sound {
                         self.audio
                             .play("minecraft:block.honey_block.slide", Some(feet), 1.0, 1.0);
                     }
-                    // HoneyBlock.showSlideParticles: five block particles.
-                    if particles
-                        && let Some((sprite, tint)) = self.particle_sprite(
-                            self.world.block(pos.x, pos.y, pos.z),
-                            [pos.x, pos.y, pos.z],
-                        )
-                    {
-                        use horizon_client::particles::{ParticleOptions, ParticleType};
-                        for _ in 0..5 {
-                            self.particles.add(
-                                &ParticleOptions::block(ParticleType::Block, sprite.clone(), tint),
-                                feet,
-                                [0.0; 3],
-                            );
+                    if particles {
+                        self.honey_slide_particles(feet);
+                        // The server's event 53 reaches the guests too.
+                        let id = self.lan.as_ref().map(|h| h.host_entity);
+                        if let Some(id) = id {
+                            self.lan_entity_event(id, 53, feet);
                         }
                     }
                 }

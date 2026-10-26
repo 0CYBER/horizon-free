@@ -204,8 +204,8 @@ pub enum MotionEvent {
         position: Vec3,
     },
     /// `HoneyBlock.maybeDoSlideEffects` for a player sliding down the side of
-    /// the honey block at `pos`: its slide sound, and the client's five
-    /// block particles (entity event 53) at the player.
+    /// the honey block at `pos`: its slide sound, and the server's entity
+    /// event 53 (the five block particles at the player).
     HoneySlide {
         pos: BlockPos,
         sound: bool,
@@ -1381,6 +1381,9 @@ impl MotionWorld<'_, '_, '_> {
                     "minecraft:sweet_berry_bush" if damage_only => {
                         self.sweet_berry_bush_damage(state)?;
                     }
+                    // HoneyBlock.entityInside: a server's player slides too, so
+                    // its fall distance resets (its client moves it).
+                    "minecraft:honey_block" => self.honey_block_inside(p)?,
                     // PowderSnowBlock.entityInside's FREEZE.
                     "minecraft:powder_snow" if damage_only => entered.push((step, p)),
                     _ => {}
@@ -1394,7 +1397,6 @@ impl MotionWorld<'_, '_, '_> {
                         entered.push((step, p));
                     }
                     "minecraft:cobweb" => self.web_inside(),
-                    "minecraft:honey_block" => self.honey_block_inside(p)?,
                     "minecraft:sweet_berry_bush" => self.sweet_berry_bush_inside(state)?,
                     "minecraft:bubble_column" => {
                         let precise = moved_far || deflated.intersects(Aabb::block(p));
@@ -1444,7 +1446,9 @@ impl MotionWorld<'_, '_, '_> {
         // maybeDoSlideEffects: the sound, then the server's event 53.
         let random = &mut self.scene.random;
         let sound = random.next_int_bound(5).map_err(|e| format!("{e:?}"))? == 0;
-        let particles = random.next_int_bound(5).map_err(|e| format!("{e:?}"))? == 0;
+        // Only the server broadcasts event 53 (`!level.isClientSide()`).
+        let particles = !self.player.client_side
+            && random.next_int_bound(5).map_err(|e| format!("{e:?}"))? == 0;
         if sound || particles {
             self.player.events.push(MotionEvent::HoneySlide {
                 pos,

@@ -2311,6 +2311,27 @@ impl Game<'_> {
             match event {
                 MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, at),
                 MotionEvent::Fall(event) => self.landing_block_updates(&event),
+                // HoneyBlock.maybeDoSlideEffects: the sound reaches the
+                // others (Player.playSound excludes the player, whose client
+                // plays it), the entity event 53 everyone around.
+                MotionEvent::HoneySlide {
+                    sound, particles, ..
+                } => {
+                    let Some((id, at)) = host.hub.guest(conn).map(|g| (g.entity_id, g.position))
+                    else {
+                        continue;
+                    };
+                    if sound {
+                        let name = "minecraft:block.honey_block.slide";
+                        let source = horizon_client::settings::sound_source(name) as i32;
+                        self.audio.play_unshared(name, Some(at), 1.0, 1.0);
+                        host.hub.sound(name, at, 1.0, 1.0, source, Some(conn));
+                    }
+                    if particles {
+                        self.honey_slide_particles(at);
+                        host.hub.entity_event(id, 53, at);
+                    }
+                }
                 _ => {}
             }
         }

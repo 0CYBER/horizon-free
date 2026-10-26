@@ -2133,6 +2133,23 @@ impl Game<'_> {
                 if p.event == super::totem::TOTEM_EVENT {
                     self.remote_totem(p.id);
                 }
+                // Entity event 53: the honey slide particles of a player
+                // sliding down a honey block (HoneyBlock.showSlideParticles).
+                if p.event == 53 {
+                    let at = if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
+                        self.player
+                            .as_ref()
+                            .map(|q| [q.position.x, q.position.y, q.position.z])
+                    } else {
+                        self.mobs
+                            .iter()
+                            .find(|m| m.id == p.id as u32)
+                            .map(|m| [m.position.x, m.position.y, m.position.z])
+                    };
+                    if let Some(at) = at {
+                        self.honey_slide_particles(at);
+                    }
+                }
             }
             C::Animate(p) => self.remote_animate(p.id, p.action),
             // ClientPacketListener.handleSwingAnimation: the entity swings
@@ -3325,6 +3342,13 @@ impl Game<'_> {
                 // the player).
                 horizon_client::motion::MotionEvent::InsidePortal { .. } => {
                     self.client_inside_nether_portal();
+                }
+                // HoneyBlock.maybeDoSlideEffects on the client's own level:
+                // the slide sound, heard here (LocalPlayer.playSound); the
+                // particles come from the server's event 53.
+                horizon_client::motion::MotionEvent::HoneySlide { sound: true, .. } => {
+                    self.audio
+                        .play("minecraft:block.honey_block.slide", Some(feet), 1.0, 1.0);
                 }
                 _ => {}
             }
