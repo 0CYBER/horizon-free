@@ -252,27 +252,17 @@ impl Game<'_> {
         out: &mut Vec<Vertex>,
         see_through: &mut Vec<Vertex>,
     ) {
-        // renderNameTag's text colours: a discrete name's faded 0x20FFFFFF,
-        // the see-through copy's 0x80FFFFFF.
-        const DISCRETE: u32 = 0x20;
-        const FADED: u32 = 0x80;
+        // The text alpha that goes with getBackgroundOpacity(0.25):
+        // max((0.25 + 0.75) / 2, 0.5), as ARGB.color (the floor of 255 times it).
+        const FADED: u32 = 0x7F;
         for tag in self.name_tags(camera, alpha) {
             let o = tag.at - camera;
             if tag.discrete {
-                self.name_tag_quads(
-                    o,
-                    &tag.lines,
-                    DISCRETE,
-                    true,
-                    0,
-                    vertex_light(tag.light),
-                    out,
-                );
+                self.name_tag_quads(o, &tag.lines, FADED, true, 0, vertex_light(tag.light), out);
                 continue;
             }
-            // LightCoordsUtil.lightCoordsWithEmission(lightCoords, 2): the block
-            // channel at least 2, the sky channel unchanged.
-            let lit = (tag.light & 0xF0) | (tag.light & 15).max(2);
+            // LightCoordsUtil.lightCoordsWithEmission(lightCoords, 2).
+            let lit = (tag.light >> 4).max(2) << 4 | (tag.light & 15).max(2);
             self.name_tag_quads(o, &tag.lines, 0xFF, false, 0, vertex_light(lit), out);
             // RenderPipelines.TEXT_SEE_THROUGH: no depth test, no lightmap.
             self.name_tag_quads(o, &tag.lines, FADED, true, 2, 0, see_through);
