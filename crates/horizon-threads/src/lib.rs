@@ -126,6 +126,38 @@ fn idle() -> bool {
     false
 }
 
+/// How many stop requests (Ctrl-C, SIGTERM, SIGHUP) arrived since `catch_stop_signals`.
+pub fn stop_requests() -> u32 {
+    STOP_REQUESTS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+static STOP_REQUESTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Count stop requests from outside instead of dying on them: vanilla's "Client Shutdown Thread"
+/// (`Main.java`) halts the integrated server when the JVM shuts down, and the JVM does that on
+/// these signals, so a killed game still saves. The caller's event loop turns the first request
+/// into a normal quit; a second one (the save is stuck) ends the process at once.
+#[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
+pub fn catch_stop_signals() {
+    extern "C" fn handle(_: libc::c_int) {
+        if STOP_REQUESTS.fetch_add(1, Ordering::SeqCst) >= 1 {
+            // SAFETY: _exit is async-signal-safe; 130 is the shell's code for a Ctrl-C death.
+            unsafe { libc::_exit(130) }
+        }
+    }
+    let handler = handle as extern "C" fn(libc::c_int);
+    for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+        // SAFETY: the handler only touches an atomic and calls _exit, both async-signal-safe.
+        unsafe {
+            libc::signal(signal, handler as libc::sighandler_t);
+        }
+    }
+}
+
+/// Windows and the other systems keep their default: a closed window is a `CloseRequested`.
+#[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
+pub fn catch_stop_signals() {}
+
 #[cfg(test)]
 mod tests {
     /// The hint holds on the platforms that take it.
