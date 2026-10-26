@@ -13,6 +13,7 @@ use super::respawn_anchor::RespawnConfig;
 use super::{Dim, Game, lan::LanHost};
 use horizon_client::{lan::hub::TickCtx, text::Text};
 use horizon_core::{geometry::Vec3, position::BlockPos};
+use horizon_protocol::packets::play::{self, Clientbound as C};
 
 /// A trip under way: the player is in the destination's level, whose
 /// chunks are loading around `target`.
@@ -103,8 +104,35 @@ impl Game<'_> {
         if let Some(pos) = self.nether_portal_inside(at) {
             self.portals.player.set_inside(pos, PLAYER_DELAY);
         }
+        // `ServerPlayer.showEndCredits`: the player stays out of the world while the
+        // poem rolls, then PERFORM_RESPAWN takes it to its respawn point.
+        let play = host.play.entry(conn).or_default();
+        if play.won_game {
+            if std::mem::take(&mut play.respawn_requested) {
+                play.won_game = false;
+                self.start_server_trip(host, conn, Dim::Overworld, None);
+                self.portals.player.cooldown = 10;
+            }
+            return;
+        }
         let (end_portal, gateway) = self.inside_end_portals(at, WIDTH, HEIGHT);
         if end_portal {
+            // EndPortalBlock.entityInside: the first exit from the End shows the credits.
+            if self.dim == Dim::End && !host.hub.guest(conn).is_some_and(|g| g.seen_credits) {
+                if let Some(g) = host.hub.guests.iter_mut().find(|g| g.conn == conn) {
+                    g.seen_credits = true;
+                }
+                host.play.entry(conn).or_default().won_game = true;
+                // ClientboundGameEventPacket.WIN_GAME.
+                host.hub.send_to(
+                    conn,
+                    &C::GameEvent(play::GameEvent {
+                        event: 4,
+                        param: 0.0,
+                    }),
+                );
+                return;
+            }
             if self.portals.player.cooldown == 0 {
                 let target = if self.dim == Dim::End {
                     Dim::Overworld
