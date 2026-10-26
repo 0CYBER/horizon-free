@@ -1580,6 +1580,8 @@ struct Game<'a> {
     /// position) for the guests.
     lan_block_events: Vec<([i32; 3], i32, i32, u32)>,
     lan_entity_events: Vec<(i32, i8, [f64; 3])>,
+    /// Successful crits (attacking guest, hit entity), queued while the hub is taken.
+    lan_critical_hits: Vec<(Option<u32>, i32)>,
     /// Global level events for every guest (`ServerLevel.globalLevelEvent`).
     lan_global_events: Vec<(i32, [i32; 3], i32)>,
     /// `ContainerOpenersCounter`: how many players (the host and the guests)
@@ -7605,10 +7607,9 @@ impl Game<'_> {
             self.stats
                 .custom("damage_dealt", (actual * 10.0).round() as i32);
             if crit {
-                self.particles.tracking_emitter(
-                    horizon_client::particles::ParticleOptions::simple(
-                        horizon_client::particles::ParticleType::Crit,
-                    ),
+                self.critical_hit(
+                    self.lan_acting,
+                    self.mobs[index].id as i32,
                     feet,
                     width,
                     height,
@@ -12363,6 +12364,7 @@ impl<'a> Game<'a> {
             lan_events: Vec::new(),
             lan_block_events: Vec::new(),
             lan_entity_events: Vec::new(),
+            lan_critical_hits: Vec::new(),
             lan_global_events: Vec::new(),
             lid_openers: HashMap::new(),
             lan_acting: None,
