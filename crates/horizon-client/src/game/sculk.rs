@@ -1515,6 +1515,16 @@ impl Game<'_> {
     fn tick_entity_events(&mut self) {
         self.tick_player_sculk_events();
         self.tick_mob_sculk_events();
+        // Dropped items are entities too: Entity.applyEffectsFromBlocks.
+        let items: Vec<[f64; 3]> = self
+            .dropped
+            .iter()
+            .filter(|i| i.on_ground)
+            .map(|i| [i.position.x, i.position.y, i.position.z])
+            .collect();
+        for at in items {
+            self.step_on_redstone_ore(at, false);
+        }
     }
 
     /// Entity.move emits on the authoritative server too, for each ServerPlayer.
