@@ -1,5 +1,9 @@
 //! Rabbit hopping controls and the clocks consumed by `RabbitModel`.
-use super::{Mob, MobEvent, MobWorld, control::Operation};
+use super::{
+    Mob, MobEvent, MobWorld,
+    control::Operation,
+    goals::{Breed, Tempt},
+};
 use horizon_core::{
     geometry::{Vec3, trig},
     random::RandomSource,
@@ -14,7 +18,12 @@ const IDLE_TIMEOUT: usize = 3;
 const CLIENT_JUMP_TICKS: usize = 4;
 const CLIENT_JUMP_DURATION: usize = 5;
 
+/// Rabbit.registerGoals after the generic panic and stroll: BreedGoal and
+/// TemptGoal with rabbit food.
 pub fn register(m: &mut Mob) {
+    let food = m.kind.food.clone();
+    m.ai.goals.add(2, Breed::new(0.8));
+    m.ai.goals.add(3, Tempt::new(1.0, food, false));
     m.ai.mov.kind = super::control::MoveKind::Custom;
     m.ai.nav.can_float = true;
     m.extra.ints[IDLE_TIMEOUT] = m.random.next_int_bound(40).unwrap_or(0) + 180;
