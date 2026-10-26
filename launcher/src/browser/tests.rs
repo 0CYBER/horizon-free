@@ -18,6 +18,7 @@ fn version(id: &str, games: &[&str], loaders: &[&str]) -> Version {
             name: format!("{id}.zip"),
             size: 3,
             sha512: Some("ab".into()),
+            sha256: None,
             sha1: None,
             primary: true,
         }],
@@ -305,6 +306,7 @@ fn file_for(body: &[u8], sha512: bool) -> FileRef {
         name: "pack.zip".into(),
         size: body.len() as u64,
         sha512: sha512.then(|| hex(&sha2::Sha512::digest(body))),
+        sha256: None,
         sha1: (!sha512).then(|| hex(&sha1::Sha1::digest(body))),
         primary: true,
     }
@@ -383,6 +385,6 @@ fn live_modrinth_search_pick_and_download() {
 #[test]
 fn curseforge_is_coming_soon_and_never_searched() {
     let ids: Vec<SourceId> = sources().iter().map(|s| s.id()).collect();
-    assert_eq!(ids, [SourceId::Modrinth]);
+    assert_eq!(ids, [SourceId::Modrinth, SourceId::Horizon]);
     assert!(source(SourceId::CurseForge).is_none());
 }
