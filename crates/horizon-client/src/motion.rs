@@ -311,6 +311,9 @@ pub struct PlayerMotion {
     /// it travels on the server: `isLocalInstanceAuthoritative` is false, so
     /// its moves check no fall damage.
     pub server_copy: bool,
+    /// The span of `events` a wall hit on the server's copy pushed (sound and
+    /// damage): `server_travel` keeps them while it drops the simulated moves.
+    pub wall_hit_events: Option<std::ops::Range<usize>>,
     /// A client's copy of its own player (`Level.isClientSide`): only the
     /// server hurts it (`Entity.hurt` does nothing on a client) and ticks its
     /// food (`ServerPlayer.tick`). Its hurt animation comes from the server.
@@ -480,6 +483,7 @@ impl PlayerMotion {
             freeze_immune: false,
             old_position: position,
             server_copy: false,
+            wall_hit_events: None,
             client_side: false,
             block_effects: true,
             powder_snow_entered: Vec::new(),
@@ -1073,7 +1077,14 @@ impl MotionWorld<'_, '_, '_> {
         p.server_copy = false;
         (p.position, p.ground, p.collision) = (position, ground, collision);
         (p.history, p.fall_distance, p.steps) = (history, fall_distance, steps);
+        // The wall hit is the server's own: its sound and damage events stay.
+        let kept: Vec<_> = p
+            .wall_hit_events
+            .take()
+            .map(|span| p.events.drain(span).collect())
+            .unwrap_or_default();
         p.events.truncate(events);
+        p.events.extend(kept);
         travelled
     }
     /// `LivingEntity.checkAutoSpinAttack`: the first living entity in the
@@ -1590,6 +1601,7 @@ impl MotionWorld<'_, '_, '_> {
             };
             let dmg = ((move_h - new_h) * 10.0 - 3.0) as f32;
             if dmg > 0.0 {
+                let first = self.player.events.len();
                 // getFallDamageSound((int) dmg)
                 let sound = if dmg as i32 > 4 {
                     crate::landing::SceneSound::BigFall
@@ -1612,6 +1624,9 @@ impl MotionWorld<'_, '_, '_> {
                     .ok_or("missing fly_into_wall damage type")?;
                 let rules = self.scene.health_rules;
                 self.player.hurt(&self.resources.health, rules, id, dmg)?;
+                if self.player.server_copy {
+                    self.player.wall_hit_events = Some(first..self.player.events.len());
+                }
             }
         }
         Ok(())

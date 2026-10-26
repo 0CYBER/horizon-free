@@ -2326,9 +2326,13 @@ impl Game<'_> {
             }
             if (next / 10) % 2 == 0
                 && !creative
-                && let Some(elytra) = game.armor[1].as_mut()
+                && let Some(stack) = game.armor[1].clone()
             {
-                elytra.damage += 1;
+                // `ItemStack.hurtAndBreak`: Unbreaking can save the wear.
+                let loss = game.durability_loss(&stack, 1);
+                if let Some(elytra) = game.armor[1].as_mut() {
+                    elytra.damage += loss;
+                }
             }
             let ctx = game.player_context(None);
             game.post_game_event("minecraft:elytra_glide", at, ctx);
