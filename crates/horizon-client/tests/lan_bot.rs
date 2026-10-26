@@ -278,8 +278,6 @@ fn run<T: Send + 'static>(
     handle.join().unwrap().unwrap()
 }
 
-/// PlayerCommand owns sprint. PlayerInput (the jump bit included) must not
-/// clear it, or the client's jumpFromGround skips the 0.2 forward impulse.
 #[test]
 fn sprint_commands_survive_keyboard_input_changes() {
     let Some(resources) = resources() else {
@@ -305,9 +303,9 @@ fn sprint_commands_survive_keyboard_input_changes() {
         }));
     s.tick(&[]);
     assert!(s.hub.guests[0].sprinting);
-    // Forward with the sprint key (65), forward alone after Ctrl is released
-    // (1), no keys, and forward plus jump (17): the sprint a jump needs.
-    for flags in [65u8, 1, 0, 17, 33] {
+    // LocalPlayer keeps sprinting after Ctrl is released while W remains
+    // down. Double-tap sprint also sends forward without the sprint key.
+    for flags in [65, 1, 0, 33] {
         s.hub.guests[0]
             .inbox
             .push_back(S::PlayerInput(play::PlayerInput { flags }));

@@ -13,16 +13,19 @@ the player before the mod is turned on, and checked against the component's real
 
 | | Count |
 | --- | --- |
-| Interfaces the game offers | 5: `log`, `game`, `chat`, `hud`, `storage` |
-| Functions in them | 9 |
-| Hooks a mod exports | 5: `init`, `tick`, `frame`, `command`, `chat` |
-| Capabilities | 5: `game-read`, `chat`, `hud`, `storage`, `registries` |
-| Manifest `api` lines served | 2: `0.1` (code), `0.2` (content) |
-| SDK | the `Mod` trait (5 methods), `Registration` (4 builders), `export_mod!`, log helpers |
-| `cargo horizon-mod` | `new`, `build`, `run` |
-| Example mods | `coords-hud` (code), `ruby-content` (content) |
+| Interfaces the game offers | 6: `log`, `game`, `chat`, `hud`, `storage`; `players` for server mods |
+| Functions in them | 12 |
+| Hooks a mod exports | 5: `init`, `tick`, `frame`, `command`, `chat`; a server mod 8: `init`, `tick`, `player-joined`, `player-left`, `chat`, `command`, `block-broken`, `block-placed` |
+| Capabilities | 6: `game-read`, `chat`, `hud`, `storage`, `registries`, `players` |
+| Manifest `api` lines served | 3: `0.1` (code), `0.2` (content), `0.3` (server mods, experimental) |
+| SDK | the `Mod` trait (5 methods), `Registration` (4 builders), `export_mod!`, log helpers; `server::ServerMod` (8 methods), `server::Registration` (5 builders), `export_server_mod!` |
+| `cargo horizon-mod` | `new` (templates `code` and `content`), `build`, `run`, `test`, `check` |
+| Example mods | `coords-hud` (code), `ruby-content` (content), `welcome` (server) |
 
 ## Guide
+
+The step-by-step guide, from installing the tools to publishing on the registry, is
+[Make a mod](https://playhorizon.dev/docs/make-a-mod) on the website. In short:
 
 1. `rustup target add wasm32-unknown-unknown`, `cargo install --git https://github.com/ludovic111/horizon
    cargo-horizon-mod`, then `cargo horizon-mod new my-mod` ([Making a mod](../mods.md#making-a-mod)).
@@ -30,7 +33,10 @@ the player before the mod is turned on, and checked against the component's real
    ([The manifest](../mods.md#the-manifest)).
 3. `cargo horizon-mod run` builds the `.hmod` and starts the game with it as a dev mod; after an edit,
    `cargo horizon-mod build` and the running game reloads it.
-4. Content mods: [Content mods (API 0.2)](../mods.md#content-mods-api-02).
+4. `cargo horizon-mod test` runs the mod's `tests/*.toml` scripts in the sandbox, with no game: ticks, commands,
+   chat lines and the player's position in, chat, feedback and the HUD panel checked
+   ([Testing a mod](../mods.md#testing-a-mod)).
+5. Content mods: [Content mods (API 0.2)](../mods.md#content-mods-api-02).
 
 ## Reference
 
@@ -43,6 +49,8 @@ call, 4 MiB of storage, fuel per call).
 - `crates/horizon-mod-sdk/examples/coords-hud`: coordinates, facing and time on the HUD; `/where`, `/coords`; storage.
 - `crates/horizon-mod-sdk/examples/ruby-content`: no code; a gem and a block of ruby from vanilla templates, with
   their recipes, loot, tags, models, textures and names.
+- `crates/horizon-mod-sdk/examples/welcome`: a server mod; greets players who join, announces newcomers (kept in
+  storage), `/online` and `/mined`.
 - `crates/horizon-mods/tests/guest`: a mod that misbehaves on command (spins, panics, grows its memory), for the
   sandbox tests.
 
@@ -55,6 +63,7 @@ scripting runtime in the game.
 | Way in | For | Status | Template and example |
 | --- | --- | --- | --- |
 | Rust | most mods; the fastest | first-class: the SDK, `cargo horizon-mod` | `cargo horizon-mod new`, `coords-hud` |
+| Data only | blocks and items with no code | first-class: content mods (API 0.2) | `cargo horizon-mod new --template content`, `ruby-content` |
 | Lua scripts | people who don't want a compiler | planned: a script mod whose code is a `.lua` file, run by Horizon's own interpreter mod | planned, with the same example as Rust |
 | C, C++, Zig | authors of those languages | to evaluate: bindings generated from the WIT, built without WASI | one each if it passes |
 | Go (TinyGo), AssemblyScript, JavaScript / TypeScript | authors of those languages | to evaluate: each needs its toolchain to emit a component without WASI imports, or an interpreter mod as for Lua | one each if it passes |
@@ -71,15 +80,16 @@ scripting runtime in the game.
 ## Stability
 
 Preview ([stability.md](stability.md)): API 0.1 and content 0.2 are served together; a mod built for 0.1.0 keeps
-loading on every 0.1.x game. Server mods come as their own line, `api = "0.3"`, experimental first.
+loading on every 0.1.x game. Server mods are their own line, `api = "0.3"`, experimental: they may change in any
+release.
 
 ## Not there yet
 
 What real mods need next, in the order modpacks and servers need it:
 
-- **Server mods** (`api = "0.3"`): the same component running on the server thread and the dedicated server, with world events (block
-  broken or placed, entity spawned or killed, player joined or left), game rules and server commands with typed
-  arguments.
+- **Server mods in the game** (`api = "0.3"`, [Server mods](../mods.md#server-mods-api-03-experimental)): the
+  contract, runtime and SDK are here; next the server thread, LAN host and dedicated server start them and call
+  their hooks, then entity events, game rules and server commands with typed arguments.
 - **World and blocks**: read blocks, block states and biomes in loaded chunks; change them through the server's block
   log, so clients and the parity harnesses see vanilla's updates.
 - **Items and inventories**: the player's inventory, held item and open container; item stacks with components.
@@ -90,10 +100,19 @@ What real mods need next, in the order modpacks and servers need it:
 - **Config**: typed settings the game shows and stores for the mod, on the server too.
 - **Keys and the crosshair target**: keybinds in Controls; what the player is looking at.
 - **Script mods and other languages**: see [Ways in](#ways-in).
-- **SDK**: a headless test runner (load a mod, feed it ticks and events, assert on its output, no window), templates
-  per kind of mod, typed wrappers in the SDK for every interface. Dev mods already reload when rebuilt.
+- **SDK**: templates per kind of mod, typed wrappers in the SDK for every interface. Dev mods already reload when
+  rebuilt, and `cargo horizon-mod test` runs a mod headless.
 
 ## Changelog
 
+- API 0.3 (server mods, experimental): world `horizon-server-mod`, capability `players`, the `server-events`
+  hooks; SDK `server::ServerMod`; example `welcome`.
+- SDK: `cargo horizon-mod test` and `horizon_mods::testing`, test scripts in TOML; the template has one.
+- Experimental: `ui` button widget; `render.set-corner`, `text-width`, `frame-stats`; `input.mapping`,
+  `clicks-per-second` (what the official FPS, keystrokes and zoom mods need).
+- Experimental `input` (`experimental = ["input"]`): `claim-items`, `register-key`, `held`, `poll` (use-start,
+  use-stop, key-down, key-up).
+- Experimental `render` (`experimental = ["render"]`): HUD shapes (fill, quad, sprite, item, text), `gui-size`, camera
+  `shake`, drawn by the game's own renderer.
 - API 0.2 (content): data-driven blocks and items, tags, `horizon:add_to`, terrain adaptation.
 - API 0.1.0: `log`, `game`, `chat`, `hud`, `storage`; `init`, `tick`, `frame`, `command`, `chat`.

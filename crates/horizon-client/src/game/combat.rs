@@ -52,10 +52,15 @@ impl Game<'_> {
     /// Remember who deals the next `damage_type` damage to the player.
     pub(super) fn note_attacker(&mut self, damage_type: &str, mob: u32) {
         if let Some(name) = self.mob_display_name(mob) {
-            self.combat
-                .pending
-                .push((damage_type.to_owned(), (mob, name)));
+            self.note_named_attacker(damage_type, mob, name);
         }
+    }
+    /// `note_attacker` for an entity that is not one of `self.mobs` (the
+    /// ender dragon).
+    pub(super) fn note_named_attacker(&mut self, damage_type: &str, id: u32, name: Text) {
+        self.combat
+            .pending
+            .push((damage_type.to_owned(), (id, name)));
     }
     /// `LivingEntity.handleDamageEvent` for the player: the hurt sound of the
     /// source's `DamageEffects` (`Player.getHurtSound`).
@@ -191,8 +196,12 @@ impl Game<'_> {
     }
     /// `CombatTracker.getDeathMessage`.
     pub(super) fn combat_death_message(&mut self) -> Text {
+        self.combat_death_message_for(Text::literal(PLAYER_NAME))
+    }
+    /// `CombatTracker.getDeathMessage` for a player whose display name is
+    /// `me`: a server's guest is not `PLAYER_NAME`.
+    pub(super) fn combat_death_message_for(&mut self, me: Text) -> Text {
         self.recheck_combat();
-        let me = Text::literal(PLAYER_NAME);
         let entries = std::mem::take(&mut self.combat.entries);
         self.combat.in_combat = false;
         let Some(killing) = entries.last() else {

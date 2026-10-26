@@ -1283,3 +1283,44 @@ fn player_breaks_fire_with_extinguish_not_generic_break_event() {
         assert_eq!(w.get(pos), w.b().air());
     }
 }
+
+#[test]
+fn big_dripleaf_tilts_under_an_entity_standing_on_it() {
+    let mut w = world!();
+    w.floor(0, 2, "clay");
+    let pos = BlockPos::new(0, 1, 0);
+    let leaf = w.id("big_dripleaf", &[("facing", "north")]);
+    w.put(pos, leaf);
+    let stand = |w: &mut World, on_ground: bool, feet: f64| {
+        w.f.behaviours
+            .entity_on_big_dripleaf(&mut w.level, &mut w.ticks, pos, on_ground, feet);
+    };
+    // canEntityTilt: in the air, or with its feet at or under 0.6875, nothing.
+    stand(&mut w, false, 1.9375);
+    stand(&mut w, true, 1.6875);
+    assert_eq!(w.prop(pos, "tilt"), "none");
+    // Standing on the leaf's top (15/16): UNSTABLE, then PARTIAL and FULL
+    // 10 ticks apart, and back to NONE 100 ticks later.
+    stand(&mut w, true, 1.9375);
+    assert_eq!(w.prop(pos, "tilt"), "unstable");
+    for _ in 0..10 {
+        w.tick();
+    }
+    assert_eq!(w.prop(pos, "tilt"), "partial");
+    for _ in 0..10 {
+        w.tick();
+    }
+    assert_eq!(w.prop(pos, "tilt"), "full");
+    // A tilted leaf doesn't restart under the entity.
+    stand(&mut w, true, 1.9375);
+    assert_eq!(w.prop(pos, "tilt"), "full");
+    for _ in 0..100 {
+        w.tick();
+    }
+    assert_eq!(w.prop(pos, "tilt"), "none");
+    // A powered leaf doesn't tilt.
+    let power = w.id("redstone_block", &[]);
+    w.put(BlockPos::new(1, 1, 0), power);
+    stand(&mut w, true, 1.9375);
+    assert_eq!(w.prop(pos, "tilt"), "none");
+}

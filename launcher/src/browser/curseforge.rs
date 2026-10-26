@@ -24,11 +24,16 @@ fn class(kind: Kind) -> u64 {
         Kind::ResourcePack => 12,
         Kind::Modpack => 4471,
         Kind::Mod => 6,
+        Kind::Shader => 6552,
     }
 }
 
+/// The kind of a CurseForge class; its shader packs (the shaders/ format) are not offered.
 fn kind_of(class_id: u64) -> Option<Kind> {
-    Kind::ALL.into_iter().find(|k| class(*k) == class_id)
+    Kind::ALL
+        .into_iter()
+        .filter(|k| *k != Kind::Shader)
+        .find(|k| class(*k) == class_id)
 }
 
 /// The key: the environment's, else the one built in. Empty counts as none.
@@ -164,6 +169,7 @@ pub(super) fn parse_file(f: &Value) -> Option<Version> {
                 name: name.clone(),
                 size: f["fileLength"].as_u64().unwrap_or(0),
                 sha512: None,
+                sha256: None,
                 sha1,
                 primary: true,
             }]
@@ -195,6 +201,9 @@ impl Source for CurseForge {
     }
 
     fn search(&self, query: &Query) -> Result<Vec<Project>, String> {
+        if query.kind == Kind::Shader {
+            return Err(super::SHADERS_ON_HORIZON.into());
+        }
         let found = self.get(&search_url(query))?;
         Ok(found["data"]
             .as_array()

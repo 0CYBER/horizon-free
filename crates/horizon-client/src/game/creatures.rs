@@ -43,10 +43,6 @@ fn arrow_damage(arrow: &mut Projectile, fallback: &mut impl RandomSource) -> f32
 #[derive(Default)]
 pub(super) struct Creatures {
     pub projectiles: Vec<Projectile>,
-    /// Player status effects applied by mobs: (effect, ticks left, amplifier).
-    pub pearl_cooldown: u32,
-    /// The wind charge's use cooldown (ticks).
-    pub wind_cooldown: u32,
     /// Wind bursts from a guest's turn, waiting for it to end (game/wind.rs).
     pub wind_bursts: Vec<super::wind::Burst>,
     /// Ticks left of the elder guardian's apparition (MobAppearanceParticle).
@@ -316,12 +312,15 @@ impl Game<'_> {
     /// The `mobs` command: nearby mobs with position, health and running goals.
     pub(super) fn control_mobs(&self, radius: f64) -> serde_json::Value {
         let center = self.player.as_ref().map_or(Vec3::ZERO, |p| p.position);
+        self.control_mobs_at(radius, center)
+    }
+    pub(super) fn control_mobs_at(&self, radius: f64, center: Vec3) -> serde_json::Value {
         let list: Vec<serde_json::Value> = self
             .mobs
             .iter()
             .filter(|m| m.distance_sqr(center) <= radius * radius)
             .map(|m| {
-                serde_json::json!({
+                let mut state = serde_json::json!({
                     "id": m.id,
                     "kind": m.kind.id,
                     "pos": [m.position.x, m.position.y, m.position.z],
@@ -370,7 +369,11 @@ impl Game<'_> {
                         "patrol_target": s.patrol_target,
                         "vehicle": m.extra.mount,
                     })),
-                })
+                });
+                // Drawn seated (Entity.isPassenger); set apart because the
+                // json! above is at the macro recursion limit.
+                state["passenger"] = m.extra.passenger.into();
+                state
             })
             .collect();
         serde_json::json!({ "count": self.mobs.len(), "near": list, "projectiles": self.creatures.projectiles.len() })
@@ -388,6 +391,9 @@ impl Game<'_> {
     }
     pub(super) fn mob_world_base<'s>(&'s self, others: &'s [Seen]) -> MobWorld<'s> {
         let (rain, thunder) = self.world.weather.levels(1.0);
+        // Level.canHaveWeather: only the overworld's rain and thunder levels
+        // ever rise, so nothing rains or thunders in the Nether or the End.
+        let weather = self.dim == Dim::Overworld;
         let player = self.player_view();
         MobWorld {
             world: &self.world,
@@ -404,8 +410,8 @@ impl Game<'_> {
             daylight: self.dim != Dim::Nether && self.sky_darken() < 4,
             game_time: self.world.game_time,
             day_time: self.world.day_time,
-            raining: rain > 0.2,
-            thundering: thunder > 0.9,
+            raining: weather && rain > 0.2,
+            thundering: weather && thunder > 0.9,
             nether: self.dim == Dim::Nether,
             block_tags: &self.res.items().block_tags,
             biomes: self.res.biomes(),
@@ -504,6 +510,17 @@ impl Game<'_> {
             Some(host) if !guests.is_empty() => std::mem::take(&mut host.mob_players),
             _ => Default::default(),
         };
+        // The guests' entity ids by connection, for the shulker bullets fired
+        // at the guest a mob sees.
+        let guest_ids: Vec<(u32, u32)> = match self.lan.as_ref() {
+            Some(host) if !guests.is_empty() => host
+                .hub
+                .guests
+                .iter()
+                .map(|g| (g.conn, g.entity_id as u32))
+                .collect(),
+            _ => Vec::new(),
+        };
         let mut guest_events = Vec::new();
         let level_random;
         {
@@ -578,6 +595,19 @@ impl Game<'_> {
                 let kept = m.tick(&w, &mut scratch, &mut events);
                 horizon_client::mobs::take_mob_pushes(&mut events, from, &mut pushes);
                 if let Some(conn) = seen_guest {
+                    // ShulkerBullet.finalTarget is the guest's entity: the
+                    // bullet homes on it while the projectiles tick, where
+                    // `Who::Player` is the host's own player.
+                    if let Some(&(_, id)) = guest_ids.iter().find(|g| g.0 == conn) {
+                        for e in &mut events[from..] {
+                            if let MobEvent::Projectile(p) = e
+                                && let ProjectileKind::ShulkerBullet { target, .. } = &mut p.kind
+                                && *target == Who::Player
+                            {
+                                *target = Who::Mob(id);
+                            }
+                        }
+                    }
                     let mut k = from;
                     while k < events.len() {
                         if super::lan_mobs::acts_on_player(&events[k]) {
@@ -638,7 +668,6 @@ impl Game<'_> {
         self.tick_allays();
         self.tick_breeze_effects();
         self.tick_sniffer_effects();
-        self.tick_player_effects();
         self.piglin_pickups();
         self.sulfur_cube_pickups();
         // Hurt and death sounds of damage dealt outside the mob ticks.
@@ -1058,6 +1087,9 @@ impl Game<'_> {
                             self.ensure_item_particle_sprites();
                         }
                         let options = horizon_client::particles::ParticleOptions::simple(ty);
+                        if ty == horizon_client::particles::ParticleType::SonicBoom {
+                            self.lan_sonic_boom(&options, at);
+                        }
                         // Count 0: one particle exactly there, at rest.
                         if count == 0 {
                             self.particles.add(&options, at, [0.0; 3]);
@@ -1558,12 +1590,15 @@ impl Game<'_> {
                 id, ticks, amplifier,
             ));
     }
-    /// Burning applied to the player by mobs.
-    fn tick_player_effects(&mut self) {
-        self.creatures.wind_cooldown = self.creatures.wind_cooldown.saturating_sub(1);
-        if self.creatures.pearl_cooldown > 0 {
-            self.creatures.pearl_cooldown -= 1;
+    /// `WitherRoseBlock.entityInside` for the player: on a server level that
+    /// isn't peaceful, `getBeeInteractionEffect` (Wither, 40 ticks) unless the
+    /// player is invulnerable to wither damage (creative, spectator). A
+    /// server's player gets it from the server.
+    pub(super) fn wither_rose_contact(&mut self) {
+        if self.remote.is_some() || self.ui.difficulty == 0 {
+            return;
         }
+        self.give_player_effect("minecraft:wither", 40, 0);
     }
     pub(super) fn hurt_player_by(&mut self, damage_type: &str, amount: f32) {
         if self.creative {
@@ -1694,7 +1729,26 @@ impl Game<'_> {
                 targets: targets_guests,
             };
             let guest_entities = self.lan_guest_entities();
+            // ThrownEnderpearl.tick: a dead player's pearl is discarded in
+            // place of its tick while ender_pearls_vanish_on_death is on.
+            let vanish = self.ui.rules.bool("ender_pearls_vanish_on_death");
+            let host_dead = self.player_view().is_some_and(|p| !p.alive);
+            let dead_guests: Vec<u32> = self.lan.as_ref().map_or_else(Vec::new, |h| {
+                h.hub
+                    .guests
+                    .iter()
+                    .filter(|g| g.dead)
+                    .map(|g| g.conn)
+                    .collect()
+            });
             projectiles.retain_mut(|p| {
+                if vanish
+                    && matches!(p.kind, ProjectileKind::EnderPearl)
+                    && p.owner == Some(Who::Player)
+                    && p.guest.map_or(host_dead, |c| dead_guests.contains(&c))
+                {
+                    return false;
+                }
                 let mob_shot = !matches!(p.owner, Some(Who::Player));
                 // A player's arrows, snowballs and eggs meet every player; a
                 // guest's flies from that guest (Projectile.getOwner), not
@@ -2846,14 +2900,14 @@ impl Game<'_> {
         let kind = match item {
             "minecraft:snowball" => ProjectileKind::Snowball,
             "minecraft:egg" | "minecraft:blue_egg" | "minecraft:brown_egg" => ProjectileKind::Egg,
-            "minecraft:ender_pearl" => {
-                if self.creatures.pearl_cooldown > 0 {
-                    return Ok(true);
+            "minecraft:ender_pearl" => ProjectileKind::EnderPearl,
+            "minecraft:wind_charge" => {
+                let thrown = self.throw_wind_charge()?;
+                if thrown {
+                    self.apply_use_cooldown(stack);
                 }
-                self.creatures.pearl_cooldown = 20;
-                ProjectileKind::EnderPearl
+                return Ok(thrown);
             }
-            "minecraft:wind_charge" => return self.throw_wind_charge(),
             _ if item.ends_with("_spawn_egg") => return self.use_spawn_egg(stack),
             _ => return Ok(false),
         };
@@ -2878,6 +2932,9 @@ impl Game<'_> {
         );
         self.creatures.projectiles.push(proj);
         self.player_projectile_shot();
+        // ItemStack.use's applyAfterUseComponentSideEffects: the pearl's
+        // second is the `use_cooldown` component, as for any thrown item.
+        self.apply_use_cooldown(stack);
         let sound = match kind {
             ProjectileKind::Snowball => "minecraft:entity.snowball.throw",
             ProjectileKind::Egg => "minecraft:entity.egg.throw",
@@ -2998,6 +3055,7 @@ impl Game<'_> {
                     continue;
                 }
             }
+            self.mark_entity(entity_start, &mob.kind.id);
             let light = self.world.light(
                 mob.position.x.floor() as i32,
                 (mob.position.y + mob.eye_height()).floor() as i32,

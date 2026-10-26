@@ -814,7 +814,6 @@ pub fn carry(
                     if kind == "structure" {
                         let path = rel.trim_start_matches("worldgen/structure/");
                         let structure = format!("{ns}:{}", path.trim_end_matches(".json"));
-                        changed |= crate::legacy_structure_mods::yung::disables(&structure, &mut v);
                         changed |=
                             crate::worldgen::add_piece_counts(&structure, &mut v, &piece_counts);
                     }
@@ -829,9 +828,9 @@ pub fn carry(
                 // Additions to other sets and pools, as files the game merges.
                 let modifier = serde_json::from_slice::<Value>(&bytes).ok();
                 let types = &mut report.worldgen_types;
-                if let Some((kind, mut added)) = modifier.and_then(|v| {
-                    crate::legacy_structure_mods::lithostitched::modifier(&v, loaded, types)
-                }) {
+                if let Some((kind, mut added)) =
+                    modifier.and_then(|v| crate::lithostitched::modifier(&v, loaded, types))
+                {
                     crate::processors::carry(
                         kind,
                         &mut added,

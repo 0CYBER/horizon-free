@@ -92,6 +92,11 @@ fn climate(m: &Mob) -> &'static str {
         _ => "temperate",
     }
 }
+/// `AvatarRenderer` entities: a mannequin draws exactly like a player —
+/// the player model, its resolved skin and the same scale.
+fn avatar(m: &Mob) -> bool {
+    matches!(&*m.kind.id, "minecraft:player" | "minecraft:mannequin")
+}
 /// The model layer key and texture for the mob's body.
 pub fn body(m: &Mob) -> (String, String) {
     use Species as S;
@@ -103,7 +108,7 @@ pub fn body(m: &Mob) -> (String, String) {
             s.to_owned()
         }
     };
-    if &*m.kind.id == "minecraft:player" {
+    if avatar(m) {
         return (
             "main".into(),
             m.skin.clone().unwrap_or_else(|| m.kind.texture.clone()),
@@ -334,7 +339,7 @@ pub fn body_color(m: &Mob, alpha: f32) -> u32 {
 pub fn layers(m: &Mob) -> Vec<Layer> {
     use Species as S;
     let mut v = Vec::new();
-    if &*m.kind.id == "minecraft:player" {
+    if avatar(m) {
         return v;
     }
     let white = 0xFFFF_FFFF;
@@ -754,7 +759,7 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
         body += (f64::from(ticks * 3.25).cos() * std::f64::consts::PI * 0.4) as f32;
     }
     // A sleeping villager, or another player lying in their bed.
-    let sleep = (m.species() == Species::Villager || m.kind.id == "minecraft:player")
+    let sleep = (m.species() == Species::Villager || avatar(m))
         .then(|| super::villager::sleep_pose(m))
         .flatten();
     let rotation = match sleep {
@@ -873,7 +878,7 @@ fn red_overlay(m: &Mob) -> bool {
     m.hurt_time > 0 || (m.death_time > 0 && !super::creaking::tearing_down(m))
 }
 fn species_scale(m: &Mob, alpha: f32) -> glam::Mat4 {
-    if m.kind.id == "minecraft:player" {
+    if avatar(m) {
         // AvatarRenderer.scale, shared by the inventory and world renderer.
         return glam::Mat4::from_scale(glam::Vec3::splat(0.9375));
     }
@@ -946,21 +951,25 @@ fn draw_normals(
         return;
     }
     let normals = normals.part(p);
-    for poly in part.polygons.iter().filter(|_| !poses.skips(part)) {
-        let normal = poly.vertex_normal(normals);
-        for v in poly.vertices {
-            let pos = m.transform_point3(glam::Vec3::new(v[0], v[1], v[2]) / 16.0);
-            out.push(Vertex {
-                normal,
-                pos: pos.to_array(),
-                uv: [
-                    uv[0] + (uv[2] - uv[0]) * v[3],
-                    uv[1] + (uv[3] - uv[1]) * v[4],
-                ],
-                layer: overlay,
-                color,
-                light,
-            });
+    // `skips` is a name lookup: ask once per part, not once per polygon. A part
+    // hidden this way still draws its children, so only the polygons are gated.
+    if !poses.skips(part) {
+        for poly in &part.polygons {
+            let normal = poly.vertex_normal(normals);
+            for v in poly.vertices {
+                let pos = m.transform_point3(glam::Vec3::new(v[0], v[1], v[2]) / 16.0);
+                out.push(Vertex {
+                    normal,
+                    pos: pos.to_array(),
+                    uv: [
+                        uv[0] + (uv[2] - uv[0]) * v[3],
+                        uv[1] + (uv[3] - uv[1]) * v[4],
+                    ],
+                    layer: overlay,
+                    color,
+                    light,
+                });
+            }
         }
     }
     for c in &part.children {
@@ -1089,6 +1098,9 @@ fn render_visible(
             }
         }
     }
+    // One Poses refilled for every layer (armour draws up to seven): it keeps
+    // its maps' capacity.
+    let mut layer_poses = Poses::default();
     for layer in all_layers {
         let Some(part) = m.kind.layer(&layer.model).cloned() else {
             continue;
@@ -1096,8 +1108,8 @@ fn render_visible(
         let Some(uv) = atlas(&layer.texture) else {
             continue;
         };
-        let mut poses = Poses::new(&part);
-        anim::setup(m, &s, &mut poses, &data.animations);
+        layer_poses.reset(&part);
+        anim::setup(m, &s, &mut layer_poses, &data.animations);
         if matches!(m.species(), Species::Villager | Species::ZombieVillager)
             && let Some((folder, variant)) = layer
                 .texture
@@ -1108,7 +1120,7 @@ fn render_visible(
             data.villager_hats
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .apply(folder, variant, profession, &mut poses);
+                .apply(folder, variant, profession, &mut layer_poses);
         }
         let light = if layer.full_bright {
             240 | 240 << 8
@@ -1123,7 +1135,16 @@ fn render_visible(
             None => overlay,
         };
         let start = out.len();
-        draw(&part, base, &poses, uv, layer.color, light, overlay, out);
+        draw(
+            &part,
+            base,
+            &layer_poses,
+            uv,
+            layer.color,
+            light,
+            overlay,
+            out,
+        );
         if layer.full_bright && m.species() != Species::Warden {
             for vertex in &mut out[start..] {
                 vertex.normal = [0; 4];

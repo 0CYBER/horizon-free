@@ -25,9 +25,15 @@ pub(super) struct Rocket {
     pub(super) velocity: Vec3,
     life: i32,
     lifetime: i32,
-    explosions: Vec<FireworkExplosion>,
+    pub(super) explosions: Vec<FireworkExplosion>,
     /// Boosting the player (attachedToEntity).
     pub(super) attached: bool,
+    /// On a server, the player it boosts when not this game's own: a guest's
+    /// connection.
+    pub(super) guest: Option<u32>,
+    /// `DATA_ATTACHED_TO_TARGET`: the server entity the rocket follows;
+    /// boosting happens when it is the local player.
+    pub(super) attached_to: Option<u32>,
     /// `DATA_SHOT_AT_ANGLE` (dispensers): constant velocity, exploding on
     /// the first block it hits.
     pub(super) angled: bool,
@@ -48,6 +54,8 @@ impl Rocket {
             lifetime: i32::MAX,
             explosions,
             attached: false,
+            guest: None,
+            attached_to: None,
             angled: false,
             item,
         }
@@ -63,7 +71,19 @@ impl Rocket {
         (self.position, self.velocity)
     }
 }
-fn fireworks_of(stack: &ItemStack) -> (u8, Vec<FireworkExplosion>) {
+/// `damageAmount * (float)Math.sqrt((5.0 - this.distanceTo(target)) / 5.0)`
+/// from the rocket at `from` to a target at `to`; `Entity.distanceTo` sums
+/// the squared offsets in floats.
+fn blast_damage(damage: f32, from: Vec3, to: Vec3) -> f32 {
+    let (x, y, z) = (
+        (from.x - to.x) as f32,
+        (from.y - to.y) as f32,
+        (from.z - to.z) as f32,
+    );
+    let distance = f64::from(x * x + y * y + z * z).sqrt() as f32;
+    damage * ((5.0 - f64::from(distance)) / 5.0).sqrt() as f32
+}
+pub(super) fn fireworks_of(stack: &ItemStack) -> (u8, Vec<FireworkExplosion>) {
     // The item's default component: flight 1, no explosions.
     stack
         .data()
@@ -89,6 +109,8 @@ impl Game<'_> {
             lifetime,
             explosions,
             attached,
+            guest: None,
+            attached_to: None,
             angled: false,
             item: stack.clone(),
         }
@@ -127,7 +149,8 @@ impl Game<'_> {
             return false;
         }
         let at = self.player.as_ref().map_or(Vec3::ZERO, |p| p.position);
-        let rocket = self.new_rocket(at, stack, true);
+        let mut rocket = self.new_rocket(at, stack, true);
+        rocket.guest = self.lan_acting;
         self.rockets.push(rocket);
         if !self.creative {
             self.consume_held();
@@ -140,7 +163,18 @@ impl Game<'_> {
         while i < self.rockets.len() {
             let mut r = self.rockets.remove(i);
             r.previous = r.position;
-            if r.attached {
+            if r.attached
+                && let Some(conn) = r.guest
+            {
+                // A guest's rocket follows them; their own client boosts them.
+                let guest = self
+                    .lan
+                    .as_ref()
+                    .and_then(|host| host.hub.guests.iter().find(|g| g.conn == conn));
+                if let Some(g) = guest {
+                    r.position = Vec3::new(g.position[0], g.position[1], g.position[2]);
+                }
+            } else if r.attached {
                 if let Some(p) = self.player.as_mut() {
                     if p.fall_flying {
                         let look = view_vector(self.yaw, self.pitch);
@@ -229,10 +263,24 @@ impl Game<'_> {
         let at = [r.position.x, r.position.y, r.position.z];
         if !r.explosions.is_empty() {
             let damage = 5.0 + r.explosions.len() as f32 * 2.0;
-            if r.attached {
-                self.hurt_player_by("minecraft:fireworks", damage);
-            }
             let from = r.position;
+            // `attachedToEntity` takes the full damage, a guest as well; every
+            // other player in range and in sight takes the blast.
+            let boosted = r.guest.filter(|_| r.attached);
+            if r.attached && boosted.is_none() {
+                self.rocket_hurt_player(damage);
+            } else {
+                self.rocket_blast_player(from, damage);
+            }
+            if let Some(conn) = boosted
+                && let Some(mut host) = self.lan.take()
+            {
+                self.as_guest(&mut host, conn, |g| g.rocket_hurt_player(damage));
+                self.lan = Some(host);
+            }
+            // Every other player in the level (LAN guests, the players of a
+            // server thread), each swapped in as the player.
+            self.each_guest_hit_except(boosted, |g| g.rocket_blast_player(from, damage));
             let hits: Vec<(u32, f32)> = {
                 let world = self.mob_world_base(&[]);
                 self.mobs
@@ -252,7 +300,7 @@ impl Game<'_> {
                                 );
                                 world.clear_between(from, to, false)
                             });
-                        sees.then(|| (m.id, damage * ((5.0 - d2.sqrt()) / 5.0).sqrt() as f32))
+                        sees.then(|| (m.id, blast_damage(damage, from, m.position)))
                     })
                     .collect()
             };
@@ -273,6 +321,49 @@ impl Game<'_> {
         let v = [r.velocity.x, r.velocity.y, r.velocity.z];
         self.particles
             .fireworks(at, v, r.explosions.clone(), camera);
+    }
+    /// `dealExplosionDamage` on a player that is not the rocket's
+    /// `attachedToEntity`: within 5 blocks, when the rocket sees its feet or
+    /// its middle (`ClipContext.Block.COLLIDER`, no fluids).
+    fn rocket_blast_player(&mut self, from: Vec3, damage: f32) {
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let feet = p.position;
+        let d2 = (feet.x - from.x).powi(2) + (feet.y - from.y).powi(2) + (feet.z - from.z).powi(2);
+        if d2 > 25.0 {
+            return;
+        }
+        let height = f64::from(p.dimensions.height);
+        let sees = {
+            let world = self.mob_world_base(&[]);
+            (0..2).any(|step| {
+                let to = Vec3::new(feet.x, feet.y + height * 0.5 * f64::from(step), feet.z);
+                world.clear_between(from, to, false)
+            })
+        };
+        if sees {
+            self.rocket_hurt_player(blast_damage(damage, from, feet));
+        }
+    }
+    /// `hurtServer` with `damageSources().fireworks`: armor absorbs it and
+    /// wears (`hurtArmor`); creative and spectator players are immune.
+    fn rocket_hurt_player(&mut self, amount: f32) {
+        if self.creative || self.spectator() {
+            return;
+        }
+        let hurt = if let Some(p) = self.player.as_mut()
+            && !p.health.dead_or_dying()
+            && let Some(id) = self.motion.health.damage.id("minecraft:fireworks")
+        {
+            p.hurt(&self.motion.health, self.world.health_rules, id, amount)
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        if hurt {
+            self.hurt_armor(amount);
+        }
     }
     /// `FireworkEntityRenderer.submit`: the item (GROUND) facing the camera,
     /// lit at the rocket's light probe.

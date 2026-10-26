@@ -1,7 +1,7 @@
 # The registry index and `.hpack`
 
 Horizon's registry lists what is made for Horizon and reviewed: mods (`.hmod`), modpacks (`.hpack`), resource packs
-and, once their format exists, Horizon shader packs. Submissions are pull requests in
+and Horizon shader packs (`.hshader`, [shaders.md](../shaders.md)). Submissions are pull requests in
 [ludovic111/horizon-mods](https://github.com/ludovic111/horizon-mods); merging one publishes it. The launcher and the
 website read one file, `index.json`, which that repository's CI builds. The Rust types and every check below are
 `horizon_mods::index` and `horizon_mods::modpack` (feature `index`); the sample is
@@ -21,7 +21,7 @@ Level: preview ([stability.md](stability.md)). Schema 1.
     "license": "MIT", "source": "https://github.com/...", "icon": "https://...png", "key": "RWT...",
     "versions": [{
       "version": "0.1.0", "published": "2026-10-24", "changelog": "",
-      "api": "0.1", "side": "client", "capabilities": ["game-read", "hud", "chat"], "game": "26.3",
+      "api": "0.1", "side": "client", "capabilities": ["game-read", "hud", "chat"], "api_level": 0, "game": "26.3",
       "file": { "name": "coords_hud-0.1.0.hmod", "url": "https://github.com/ludovic111/horizon-mods/releases/download/...",
                 "size": 438, "sha256": "e113...", "signature": "untrusted comment: ...\n...\ntrusted comment: ...\n...\n" }
     }]
@@ -43,6 +43,7 @@ Level: preview ([stability.md](stability.md)). Schema 1.
 | `versions` | Newest first, at least one. |
 | `api` | A mod's API line (its manifest's `api`); a modpack's manifest format (`1`). |
 | `side`, `capabilities` | A mod's, read from its manifest by CI, never typed by hand. |
+| `api_level` | The mod API level a mod's code needs ([stability.md](stability.md#mod-api-levels)): its newest imported function's, read from the file by CI. Absent for content-only mods and in indexes built before levels. Installers take the newest version whose level the running game serves. |
 | `game` | The Minecraft version it is for. |
 | `requires` | A modpack's mods: `{ id, version, sha256 }`, each a version in this index with that hash. |
 | `file` | A plain name with the kind's extension (`.hmod`, `.hpack`, `.zip`), an `https://` URL, the size (at most 64 MiB), the lowercase hex SHA-256, and the `.minisig` text when the project has a key. |
@@ -57,9 +58,11 @@ changing what one means, makes schema 2.
 
 1. Its size and SHA-256 are the ones the entry lists, and it isn't revoked.
 2. With a project key: its signature verifies with that key (minisign's prehashed and legacy signatures both).
-3. What the file says matches the entry: a mod's `horizon-mod.toml` (id, version, API, side, capabilities) and its
+3. What the file says matches the entry: a mod's `horizon-mod.toml` (id, version, API, side, capabilities), its API
+   level when the entry lists one, and its
    content's fence ([mods.md](../mods.md#content-mods-api-02)); a modpack's manifest (id, version, format, game,
-   mods); a resource pack's `pack.mcmeta`.
+   mods); a resource pack's `pack.mcmeta`; a shader pack's `horizon_shader_api::check` and manifest (id, version,
+   shader API).
 4. A kind this build can't install is refused with "this Horizon can't install a … yet".
 
 The game still checks a mod's component imports against its capabilities when it starts it, as for any mod.
@@ -99,7 +102,7 @@ own check (`index::inspect`): a mod's API, side and capabilities, a modpack's mo
 
 ```toml
 id = "coords_hud"                # the file's name, and the manifest's id
-kind = "mod"                     # mod | modpack | resourcepack; shader once its format exists
+kind = "mod"                     # mod | modpack | resourcepack | shader
 name = "Coordinates HUD"
 summary = "One line, at most 160 characters."
 description = """Markdown."""    # optional
@@ -138,13 +141,32 @@ Unknown keys are refused. Its CI runs `cargo-horizon-mod` (`crates/cargo-horizon
 | `cargo horizon-mod check <file> [--json]` | A submission's checks: its kind's (above), its signature with `--key` and `--signature`, and for a mod a trial run in the sandbox (40 ticks, 120 frames, a chat line, each command). |
 | `cargo horizon-mod registry check <base> <head> --files <dir>` | `check` on each file `head` lists and `base` doesn't: a pull request's new files. |
 | `cargo horizon-mod registry list <checkout>` | `<sha256> <id> <version> <file>` per version: the files to download. |
-| `cargo horizon-mod registry build <checkout> --files <dir> --out index.json` | Reads every entry and its file (`<dir>/<sha256>`), lists every problem, and writes the index with URLs `<release>/<id>-<version>/<file>`. |
+| `cargo horizon-mod registry build <checkout> --files <dir> --out index.json` | Reads every entry and its file (`<dir>/<sha256>`), lists every problem, and writes the index with URLs `<release><id>-<version>/<file>` (`--release`, ending in `/`, defaults to the repository's releases). |
 | `cargo horizon-mod registry review <base> <head> --author <login>` | A pull request's changes: a published file never changes and is never removed (take it down in `revoked.toml`), a kind never changes; changes by a non-owner and to owners or keys are pointed out for the reviewers. |
 
-Kinds open to submissions: `mod`, `modpack`, `resourcepack`. `shader` is in the schema and stays closed until
-Horizon's own shader pack format exists (Iris and OptiFine packs are for the Modrinth browser); its check will compile
-the pack in a headless Horizon. A new kind gets its own check before it opens.
+How the repository runs (its workflows are in `.github/workflows/`):
+
+- **A pull request** (`check.yml`) runs `registry review`, downloads each new file from the `staging` prerelease, runs
+  `registry check` on it and builds the index it would publish; the report is the run's summary. The tool is
+  `cargo-horizon-mod` from Horizon at the commit in the repository variable `HORIZON_REV`. The form's pull requests
+  are opened with the token of the account in the variable `REGISTRY_BOT`; for those, the author is the login in the
+  body's `<!-- submitted-by: … -->` line.
+- **Merging** needs the `check` run and a CODEOWNER's review. `publish.yml` then makes each new version a release
+  `<id>-<version>` and deploys `index.json` and `icons/` to GitHub Pages:
+  `https://ludovic111.github.io/horizon-mods/index.json`, served with `Access-Control-Allow-Origin: *`.
+- **Weekly**, `cleanup.yml` deletes staged copies of published files after 7 days and of files no open pull request
+  lists after 30.
+- **Taking a file down** is a pull request adding it to `revoked.toml`. Removing an entry outright (a test, a project
+  nobody installed) fails `registry review` on purpose and needs an administrator's merge.
+
+Kinds open to submissions: `mod`, `modpack`, `resourcepack`, `shader`. A shader pack (`.hshader`) passes
+`horizon_shader_api::check`, the check the game runs before it loads one (`horizon-shader check`, [shaders.md](../shaders.md)):
+every stage validated by naga and translated for Vulkan, Metal and DirectX 12; its manifest's id, version and shader
+API line are its facts. Iris and OptiFine packs are for the Modrinth browser. A new kind gets its own check before it
+opens.
 
 ## Changelog
 
+- 2026-10-26: the launcher installs `shader` files into `shaderpacks/`; the sample index lists one (`glow`).
+- 2026-10-25: `shader` opens, checked by `horizon_shader_api::check`; its files are `.hshader`.
 - Schema 1 (2026-10-24): kinds `mod`, `modpack`, `resourcepack`, `shader`; `.hpack` format 1.

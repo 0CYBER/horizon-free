@@ -45,6 +45,7 @@ Game workspace (root `Cargo.toml`); `launcher/` and `crates/horizon-telemetry-se
 | `horizon-friends`, `horizon-relay` | Play with Friends: invite codes, encrypted tunnel, the relay ([docs/play-with-friends.md](docs/play-with-friends.md)) |
 | `horizon-mods`, `horizon-mod-sdk`, `cargo-horizon-mod` | Sandboxed WebAssembly mods: runtime, SDK + WIT, `cargo horizon-mod` ([docs/mods.md](docs/mods.md)) |
 | `horizon-port-pack` | Porting Java modpacks ([docs/modpacks.md](docs/modpacks.md)) |
+| `horizon-shader-api` | Horizon's own WGSL shader packs ([docs/api/shaders.md](docs/api/shaders.md)): `horizon-shaders.toml`, the `.hshader` package; shared by the game, the launcher and the registry |
 | `horizon-shaders` | Shader packs (the `shaders/` folder format), rebuilt clean-room from a written spec of the format; no wgpu |
 | `horizon-theme` | Design tokens and fonts for the launcher, the game's own menus and the website |
 | `horizon-telemetry`, `horizon-telemetry-server`, `horizon-bench` | Opt-in data collection, its ingest server, the benchmark report format |
@@ -65,7 +66,7 @@ cargo build --profile fast -p horizon-client        # optimized, quick to link: 
 python3 tools/parity.py --changed origin/main       # the harnesses your branch can affect (CI's parity job)
 python3 tools/parity.py --changed-files paths.txt --list   # which harnesses cover these files, without running them
 python3 tools/parity.py mob_ai sculk       # named harnesses
-python3 tools/lan_e2e.py --check chest     # two real games over LAN (host in-frame); --server-thread for the host on its server thread
+python3 tools/lan_e2e.py --check chest     # two real games over LAN (server-thread host); --in-frame compares the fallback
 python3 tools/agent_control_e2e.py         # horizon-ctl / MCP end to end
 ```
 
@@ -81,7 +82,7 @@ python3 tools/agent_control_e2e.py         # horizon-ctl / MCP end to end
   ~25, a file of the client lib ~103, of `horizon-world` ~103–109, of `horizon-core` ~119. Plan for it.
 - Rust integration tests: `crates/horizon-client/tests/` (`lan_bot.rs`, `generation_saves.rs`, `streaming_meshes.rs`).
 - **macOS:** `cargo build/test --workspace` may fail to link the two wasm guest cdylibs (undefined
-  `horizon:mods/events` symbols) until #1446 lands: add `--exclude coords-hud --exclude horizon-mods-test-guest`.
+  `horizon:mods/events` symbols) until #1446 lands: add `--exclude coords-hud --exclude predator-missile --exclude horizon-mods-test-guest --exclude horizon-mods-test-ui-guest`.
   Their real check is `cargo test -p horizon-mods` (builds them for `wasm32-unknown-unknown`).
 - Linux needs `libasound2-dev libudev-dev`; `--no-default-features` drops audio and controllers (the server build).
 - Run and drive the game (starts the `horizon-client` beside `horizon-ctl`; other arguments go to the game):
@@ -155,7 +156,7 @@ python3 tools/agent_control_e2e.py         # horizon-ctl / MCP end to end
    exactly as a LAN guest or a dedicated server's player does. This is what players run. Open
    `[server-thread]` issues list the gaps left.
 2. **In-frame (`--in-frame`, `--no-server-thread` or `HORIZON_SERVER_THREAD=0`):** the window's `Game` ticks
-   the world itself, one level that follows the player (`fn enter_dimension`). Most harnesses test this path.
+   the world itself, one level that follows the player (`fn enter_dimension`). Deterministic rule fixtures still use this path; player-facing integration uses the default server thread.
 
 LAN guests and dedicated servers always use the server code, so a fix there serves both. Test both paths
 when you touch player-facing gameplay:
@@ -163,8 +164,8 @@ when you touch player-facing gameplay:
 ```sh
 cargo run --profile fast -p horizon-client -- --resources .local/horizon-client/26.3 --world T               # server thread
 cargo run --profile fast -p horizon-client -- --resources .local/horizon-client/26.3 --world T --in-frame    # in-frame
-python3 tools/lan_e2e.py --check <name>                  # host in-frame, guest is a server client
-python3 tools/lan_e2e.py --server-thread --check <name>  # host on its server thread (portals, levels, distance, lava need it)
+python3 tools/lan_e2e.py --check <name>                  # host on its server thread, guest is a server client
+python3 tools/lan_e2e.py --in-frame --check <name>       # comparison (portals, levels, distance, lava need server-thread mode)
 python3 tools/parity.py dedicated_server server_entities server_player_damage
 ```
 

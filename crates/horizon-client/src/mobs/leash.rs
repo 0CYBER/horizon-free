@@ -198,6 +198,15 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         m.extra.leash_spin = 0.0;
         return;
     };
+    // Leashable.tickLeash: a dying entity cannot interact with the level.
+    if !m.alive() {
+        events.push(MobEvent::LeashBreak {
+            mob: m.id,
+            drop: true,
+            sound: false,
+        });
+        return;
+    }
     let Some(state) = holder_state(w, holder) else {
         // The holder is gone: the lead drops.
         if !matches!(holder, Holder::Player) {
