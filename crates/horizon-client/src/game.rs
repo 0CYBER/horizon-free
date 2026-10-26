@@ -10452,6 +10452,9 @@ impl Game<'_> {
             }
             return Ok(());
         }
+        if self.screen == Screen::Mod && self.mod_screen_key(key) {
+            return Ok(());
+        }
         if self.sort_key_press(key) {
             return Ok(());
         }
@@ -11110,6 +11113,7 @@ impl ApplicationHandler for Game<'_> {
                     if self.screen == Screen::Playing
                         && self.sleeping.is_none()
                         && self.player.is_some()
+                        && !self.mod_wheel(d)
                         && !self.extras_scroll(d)
                         && let Some((wheel, (_, vertical_steps))) =
                             self.mouse
@@ -11280,6 +11284,7 @@ impl ApplicationHandler for Game<'_> {
                                 return Ok(());
                             }
                             self.extras_mouse(button, pressed);
+                            self.mod_mouse_key(button, pressed);
                             match self.settings.keys.translate_mouse(button) {
                                 Some(Err(b)) => self.play_mouse(b, pressed)?,
                                 Some(Ok(k)) if pressed => {
@@ -11362,9 +11367,7 @@ impl ApplicationHandler for Game<'_> {
                                 .map_or([1, 1], |r| [r.config.width, r.config.height]);
                             self.stats_click(size);
                         }
-                        Screen::Mod if pressed && button == MouseButton::Left => {
-                            self.mod_screen_click()
-                        }
+                        Screen::Mod if pressed => self.mod_screen_click(button),
                         _ => {}
                     }
                 }
