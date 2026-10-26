@@ -75,6 +75,11 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin) {
             // Zombie's three): what VillagerProfessionLayer draws.
             (Species::Villager, 19, Value::Ids(data))
             | (Species::ZombieVillager, 20, Value::Ids(data)) => villager_data(m, data, builtin),
+            // Mannequin.DATA_PROFILE (after Avatar's two): whose skin it
+            // wears; update_remote_skins resolves it like a tab player's.
+            (Species::Mannequin, 17, Value::Profile(profile)) => {
+                m.profile = Some(profile.clone());
+            }
             _ => {}
         }
     }
@@ -294,5 +299,23 @@ mod tests {
         let mut e = mob("minecraft:evoker").unwrap();
         apply(&mut e, &[(17, s::BYTE, Value::Byte(2))]);
         assert_eq!(e.extra.variant2, 2);
+    }
+
+    #[test]
+    fn a_mannequin_exists_and_takes_its_profile() {
+        let Some(mut m) = mob("minecraft:mannequin") else {
+            return;
+        };
+        assert_eq!(&*m.kind.id, "minecraft:mannequin");
+        let profile = horizon_protocol::entity_data::Profile {
+            name: Some("Gommunity".into()),
+            uuid: Some(1),
+            ..Default::default()
+        };
+        apply(
+            &mut m,
+            &[(17, s::RESOLVABLE_PROFILE, Value::Profile(profile.clone()))],
+        );
+        assert_eq!(m.profile, Some(profile));
     }
 }

@@ -524,10 +524,16 @@ impl Game<'_> {
                 }
             };
             // Not through system_message: a mod must not hear its own lines.
+            // Written by this client, so the Chat option doesn't hide it.
             let focused = self.screen == Screen::Chat;
-            self.ui
-                .chat
-                .add(&self.gui.atlas, line, None, self.ticks, focused);
+            self.ui.chat.add(
+                &self.gui.atlas,
+                line,
+                None,
+                horizon_client::chat::ChatSource::Client,
+                self.ticks,
+                focused,
+            );
         }
         // A mod may set or clear its settings page in any call, not only
         // while loading: its row's Settings button follows.

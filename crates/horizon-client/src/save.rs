@@ -553,6 +553,17 @@ pub fn encode_block_entity(
                 entries.push(("creaking", uuid_tag(uuid)));
             }
         }
+        BlockEntity::Skull(s) => {
+            if let Some(profile) = &s.profile {
+                entries.push(("profile", profile.clone()));
+            }
+            if let Some(sound) = &s.note_block_sound {
+                entries.push(("note_block_sound", string(sound)));
+            }
+            if let Some(name) = &s.custom_name {
+                entries.push(("custom_name", name.clone()));
+            }
+        }
         BlockEntity::Spawner(s) => entries.extend(s.save()),
         BlockEntity::TrialSpawner(s) => entries.extend(s.save()),
         BlockEntity::Vault(v) => entries.extend(v.save()),
@@ -571,6 +582,17 @@ fn merge_block_entity(original: &Tag, loaded: &Tag, current: &Tag) -> Tag {
         map.remove(&"LootTableSeed".into());
     }
     merged
+}
+/// `BannerBlockEntity.loadAdditional` (and the `components` a block entity keeps).
+pub fn decode_banner(tag: &Tag) -> crate::containers::Banner {
+    crate::containers::Banner {
+        layers: crate::banner::layers_from_nbt(tag.get("patterns")),
+        name: text(tag.get("CustomName")),
+        components: match tag.get("components") {
+            Some(Tag::Compound(c)) => c.clone(),
+            _ => Compound::new(),
+        },
+    }
 }
 pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
     use crate::containers::BlockEntity;
@@ -605,17 +627,7 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         return Some((pos, BlockEntity::Lectern(lectern)));
     }
     if id == "minecraft:banner" {
-        return Some((
-            pos,
-            BlockEntity::Banner(crate::containers::Banner {
-                layers: crate::banner::layers_from_nbt(tag.get("patterns")),
-                name: text(tag.get("CustomName")),
-                components: match tag.get("components") {
-                    Some(Tag::Compound(c)) => c.clone(),
-                    _ => Compound::new(),
-                },
-            }),
-        ));
+        return Some((pos, BlockEntity::Banner(decode_banner(tag))));
     }
     if id == "minecraft:beacon" {
         let beacon = crate::containers::Beacon {
@@ -626,6 +638,18 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
             ..Default::default()
         };
         return Some((pos, BlockEntity::Beacon(Box::new(beacon))));
+    }
+    // A skull's block entity id is not its block's name (every head block).
+    if id == "minecraft:skull" {
+        return Some((
+            pos,
+            BlockEntity::Skull(crate::containers::Skull::new(
+                tag.get("profile").cloned(),
+                text(tag.get("note_block_sound")),
+                tag.get("custom_name")
+                    .and_then(crate::block_entity_nbt::component),
+            )),
+        ));
     }
     // A spawner's block entity id is not its block's name.
     let block = match id.as_str() {
@@ -699,7 +723,8 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         | BlockEntity::Beacon(_)
         | BlockEntity::Lectern(_)
         | BlockEntity::Banner(_)
-        | BlockEntity::CreakingHeart(_) => {}
+        | BlockEntity::CreakingHeart(_)
+        | BlockEntity::Skull(_) => {}
         BlockEntity::Spawner(s) => **s = crate::mobs::spawner::Spawner::load(tag),
         BlockEntity::TrialSpawner(s) => **s = crate::mobs::trial_spawner::TrialSpawner::load(tag),
         BlockEntity::Vault(v) => **v = crate::vault::Vault::load(tag),
@@ -3891,6 +3916,54 @@ mod tests {
         assert_eq!(back.components, banner.components);
     }
     use super::*;
+
+    #[test]
+    fn skull_block_entity_keeps_its_profile() {
+        // A placed `player_head` as vanilla saves it: the owning player's
+        // `profile` survives load, encode and `canonical`.
+        let saved = horizon_world::nbt::parse_snbt(
+            r#"{id:"minecraft:skull",x:10,y:64,z:20,profile:{name:"Steve",id:[I;1,2,3,4],properties:[{name:"textures",value:"abc"}]},note_block_sound:"minecraft:entity.player.hurt",custom_name:"Trophy"}"#,
+        )
+        .unwrap()
+        .0;
+        let (pos, back) = decode_block_entity(&saved).expect("skull");
+        assert_eq!(pos, (10, 64, 20));
+        let crate::containers::BlockEntity::Skull(skull) = &back else {
+            panic!("not a skull");
+        };
+        assert_eq!(skull.profile, saved.get("profile").cloned());
+        assert_eq!(
+            skull.note_block_sound.as_deref(),
+            Some("minecraft:entity.player.hurt")
+        );
+        assert_eq!(back.id(), "minecraft:skull");
+        let tag = encode_block_entity(pos, &back, "minecraft:player_head");
+        assert_eq!(
+            crate::block_entity_nbt::id(&tag).as_deref(),
+            Some("minecraft:skull")
+        );
+        assert_eq!(tag.get("profile"), saved.get("profile"));
+        let (_, again) = decode_block_entity(&tag).expect("skull again");
+        let crate::containers::BlockEntity::Skull(again) = again else {
+            panic!("not a skull");
+        };
+        assert_eq!(again.profile, skull.profile);
+        // A profile-less head (skeleton, creeper) round-trips too.
+        let plain = encode_block_entity(
+            pos,
+            &crate::containers::BlockEntity::Skull(crate::containers::Skull::default()),
+            "minecraft:creeper_head",
+        );
+        let (_, decoded) = decode_block_entity(&plain).expect("plain skull");
+        assert!(matches!(decoded, crate::containers::BlockEntity::Skull(_)));
+        // The heads and skulls have one; the piston's head is no skull.
+        use crate::containers::BlockEntity;
+        assert!(matches!(
+            BlockEntity::for_block("minecraft:player_wall_head"),
+            Some(BlockEntity::Skull(_))
+        ));
+        assert!(BlockEntity::for_block("minecraft:piston_head").is_none());
+    }
 
     #[test]
     fn uuid_text_round_trips() {

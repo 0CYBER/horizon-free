@@ -16,8 +16,8 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | SDK for mod authors | `crates/horizon-mod-sdk` | 0.1 |
 | Example mods | `crates/horizon-mod-sdk/examples/coords-hud`, `examples/predator-missile` | coordinates, facing and time HUD, `/where`, `/coords`; `/missile`, a guided missile from vanilla commands |
 | Horizon's official mods | `mods/official/` | the extras moving to the registry: FPS Counter (`fps-overlay`), Keystrokes, Zoom |
-| Runtime | `crates/horizon-mods` | wasmtime 36 LTS, component model |
-| Authoring tool | `crates/cargo-horizon-mod` | `cargo horizon-mod new [--template code\|content] / build / run / check`, and the registry's CI (`registry build / review / list`) |
+| Runtime | `crates/horizon-mods` | wasmtime 48 LTS, component model |
+| Authoring tool | `crates/cargo-horizon-mod` | `cargo horizon-mod new [--template code\|content] / build / run / test / check`, and the registry's CI (`registry build / review / list`) |
 | In the game | `crates/horizon-client/src/game/mods.rs`, Options > Mods | client mods |
 | Launcher mod browser (Modrinth, CurseForge with a key) | [mod-browser.md](mod-browser.md) | resource packs, modpacks |
 | Registry index (`index.json`, `.hpack`), signatures | `horizon_mods::index`, [api/mod-index.md](api/mod-index.md) | schema 1; launcher and website next |
@@ -136,8 +136,10 @@ There is no file, socket, process or raw-input interface, on purpose.
 | native `cdylib` plugins | none | no: per OS and arch, unstable Rust ABI | yes | none | unsafe for players |
 | an embedded JVM | none per mod | yes | Java | 100+ MB, seconds of startup | see the research |
 
-wasmtime 36 is a long-term-support line (security fixes until August 2027)
-that builds on the client's Rust 1.90. Only its `runtime`, `cranelift`,
+wasmtime 48 is a long-term-support line (security fixes until August 2028)
+and needs Rust 1.95. It reads WebAssembly with the same wasm-tools release
+(0.254) as the `wit-component` that packs mods and the SDK's `wit-bindgen`, so
+the build carries one copy of them. Only its `runtime`, `cranelift`,
 `component-model` and `std` features are on: no WASI, no async, no GC
 proposal, no profiling. Its cranelift backend generates native code for x86-64
 and ARM64 on Windows, macOS and Linux, which is why one `.hmod` serves them
@@ -218,11 +220,12 @@ Benchmarks (`--benchmark`) never load mods.
 ```sh
 rustup target add wasm32-unknown-unknown
 cargo install --git https://github.com/ludovic111/horizon cargo-horizon-mod
-cargo horizon-mod new my-mod        # Cargo.toml, horizon-mod.toml, src/lib.rs
+cargo horizon-mod new my-mod        # Cargo.toml, horizon-mod.toml, src/lib.rs, tests/hello.toml
                                     # (--template content: a content mod, no code)
 cd my-mod
 cargo horizon-mod run               # build, then start the game with it
 cargo horizon-mod build             # again after an edit: the running game reloads it
+cargo horizon-mod test              # build, then run tests/*.toml with no game
 ```
 
 `run` starts `horizon-client` (on `PATH`, or `--game PATH`, or
@@ -243,13 +246,73 @@ and each of its commands: it must start and never trap or overrun. It checks a
 `.hpack` and a resource pack `.zip` too, and a signature with `--key <public
 key> --signature <file>.minisig`.
 
+### Testing a mod
+
+`cargo horizon-mod test` builds the mod, then runs each `tests/<name>.toml` in
+the sandbox the game uses, with no game and no window: the test plays the
+game's part (the player and the clock the mod reads, ticks, frames, chat lines,
+commands) and checks what the mod showed. A script fails at its first wrong
+step, with what it expected and what it got; the command fails if any script
+does. `--debug` builds without optimizing, `--hmod <file>` tests a `.hmod`
+already built, and a name runs only the scripts whose path holds it. Each
+script gets a scratch copy of the mod, so its `storage` starts empty and is
+removed afterwards.
+
+```toml
+# tests/panel.toml (examples/coords-hud)
+[player]                 # where the script starts; unset fields keep the defaults
+x = 12.5                 # (0.5 64 0.5, yaw 0, 20 health and food, the Overworld)
+z = -3.25
+yaw = 180.0
+
+[clock]                  # day-time 0 is 6:00 on day 1; each tick adds one
+day-time = 29999
+
+[[step]]
+ticks = 1
+expect.panel = ["XYZ 12.5 / 64.0 / -3.2", "Facing North (-Z)", "Day 2, 12:00"]
+expect.corner = "top-left"
+
+[[step]]
+command = "coords"
+expect.feedback = "Coordinates panel hidden"
+```
+
+A step's parts happen in this order:
+
+| Key | Does |
+| --- | --- |
+| `reload = true` | stops the mod and starts it again, as a rebuild does in the game: its memory starts over, its `storage` stays |
+| `title-screen = true` | no player and no clock until a step sets them |
+| `player = { x = 3.0, ... }`, `clock = { day-time = 0 }` | changes those fields (`x y z yaw pitch health food dimension`, `game-time day-time`) |
+| `ticks = n`, `frames = n` | that many ticks (the game's tick counter and the clock move on), then frames 1/60 s apart |
+| `chat = "<Steve> hi"` | a chat line the player receives |
+| `command = "where north"` | the player types `/where north`; a command the mod doesn't own fails the step |
+
+Then `expect` checks what the mod did during the step; a key left out is not
+checked:
+
+| `expect.` | Checks |
+| --- | --- |
+| `commands = ["where"]` | the commands the mod owns |
+| `chat = ["..."]` | every chat line it showed, in order (`[]`: none) |
+| `feedback = "..."`, `error = "..."` | the command's answer, shown plain or in red |
+| `panel = ["..."]`, `corner = "top-left"` | its HUD panel's lines (`[]`: no panel) and corner |
+| `stopped = "panic"` | the mod was turned off, for a reason holding this text; without it, a mod that traps, panics or overruns fails the test |
+
+Unknown keys are errors, so a typo never passes silently. The same runner is
+`horizon_mods::testing` for Rust code that drives a mod (`TestGame`,
+`Script`): Horizon's own tests run the examples' scripts with it. Scripts test
+any mod, whatever it was written in.
+
 ### Template layout
 
 ```
 my-mod/
 ├── Cargo.toml           # cdylib, horizon-mod-sdk, release: opt-level "s", LTO
 ├── horizon-mod.toml     # the manifest
-└── src/lib.rs           # impl Mod, export_mod!
+├── src/lib.rs           # impl Mod, export_mod!
+└── tests/hello.toml     # cargo horizon-mod test
 ```
 
 A mod is a type implementing `horizon_mod_sdk::Mod`; its state lives in the
@@ -373,14 +436,14 @@ A pool addition holds `"elements"` as a pool does. This is what lithostitched's
 NeoForge and Fabric, and `horizon-port-pack carry` writes them from those.
 
 A structure (and any of its pool elements, in place of the structure's) may
-hold `horizon:enhanced_terrain_adaptation`: YUNG's API's and
-MoogsStructureLib's terrain kernel, which carves or buries terrain around the
+hold `horizon:enhanced_terrain_adaptation`: MoogsStructureLib's terrain
+kernel, which carves or buries terrain around the
 pieces on top of vanilla's `terrain_adaptation`. `kernel_size` and
 `kernel_distance` shape the kernel; `top` and `bottom` (`carve`, `bury` or
 `none`) act above and below a piece's floor; `bottom_offset`, `padding`
 (`x`, `top`, `bottom`, `z`) and MoogsStructureLib's `band` (`bottom`, `top`,
 `piece_heights`) move the box it measures from. On a structure,
-`rigid_junctions` (YUNG's API) adds rigid pieces' junctions as well and
+`rigid_junctions` adds rigid pieces' junctions as well and
 `inflate` grows the start's box by the kernel radius. `kernel_size` 0 is
 none.
 
