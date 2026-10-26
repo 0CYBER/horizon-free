@@ -121,33 +121,58 @@ impl Game<'_> {
         }
         Ok(Some([ox * 16 + 8, height, oz * 16 + 8]))
     }
+    /// PlayerSpawnFinder.findSpawn: the finder for a suggestion, its radius
+    /// the respawn radius cut to the world border.
+    fn spawn_finder(&self, suggestion: [i32; 3]) -> PlayerSpawnFinder {
+        if self.level.game_mode == 2 {
+            // Adventure mode: the suggestion itself.
+            let mut finder = PlayerSpawnFinder::new(suggestion, 0, |_| 0);
+            finder.next_candidate();
+            return finder;
+        }
+        let mut radius = self.ui.rules.int("respawn_radius").max(0);
+        let to_border = self
+            .border
+            .distance(f64::from(suggestion[0]), f64::from(suggestion[2]))
+            .floor() as i32;
+        if to_border < radius {
+            radius = to_border;
+        }
+        if to_border <= 1 {
+            radius = 1;
+        }
+        PlayerSpawnFinder::new(suggestion, radius, |n| {
+            entity_random().next_int_bound(n).unwrap_or(0)
+        })
+    }
+    /// PlayerSpawnFinder.findSpawn around the world spawn for a player placed
+    /// at once (TeleportTransition.createDefault and missingRespawnBlock): the
+    /// first free column within the respawn radius, the suggestion's own
+    /// column when none is. A candidate whose chunk is not loaded counts as
+    /// not free; the suggestion's chunk must be.
+    pub(super) fn respawn_spawn(&self, suggestion: [i32; 3]) -> Vec3 {
+        let mut finder = self.spawn_finder(suggestion);
+        while let Some(candidate) = finder.next_candidate() {
+            let SpawnCandidate::Column(x, z) = candidate else {
+                break;
+            };
+            if !self.streaming.is_lit(x >> 4, z >> 4) {
+                continue;
+            }
+            if let Some(pos) = level_respawn_pos(&self.spawn_columns(), x, z)
+                && self.player_fits(pos)
+            {
+                return bottom_center(pos);
+            }
+        }
+        self.fixup_spawn_height(suggestion)
+    }
     /// PlayerSpawnFinder.findSpawn around the world spawn: the feet of a
     /// player who has no position yet. None while a candidate's chunk loads.
     pub(super) fn find_player_spawn(&mut self, suggestion: [i32; 3]) -> Result<Option<Vec3>> {
         let mut finder = match self.player_spawn {
             Some(finder) => finder,
-            None if self.level.game_mode == 2 => {
-                // Adventure mode: the suggestion itself.
-                let mut finder = PlayerSpawnFinder::new(suggestion, 0, |_| 0);
-                finder.next_candidate();
-                finder
-            }
-            None => {
-                let mut radius = self.ui.rules.int("respawn_radius").max(0);
-                let to_border = self
-                    .border
-                    .distance(f64::from(suggestion[0]), f64::from(suggestion[2]))
-                    .floor() as i32;
-                if to_border < radius {
-                    radius = to_border;
-                }
-                if to_border <= 1 {
-                    radius = 1;
-                }
-                PlayerSpawnFinder::new(suggestion, radius, |n| {
-                    entity_random().next_int_bound(n).unwrap_or(0)
-                })
-            }
+            None => self.spawn_finder(suggestion),
         };
         let found = loop {
             let Some(candidate) = finder.next_candidate() else {

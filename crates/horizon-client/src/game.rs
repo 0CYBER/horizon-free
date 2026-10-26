@@ -4253,11 +4253,18 @@ impl Game<'_> {
             if !(-1..=1).all(|dz| (-1..=1).all(|dx| self.streaming.is_lit(cx + dx, cz + dz))) {
                 return Ok(());
             }
-            // WorldSpawn: the stored column, lifted onto its current surface.
-            let y = self
-                .land_column(s.x.floor() as i32, s.z.floor() as i32)
-                .map_or(s.y, f64::from);
-            Vec3::new(s.x, y.max(s.y), s.z)
+            let column = [s.x.floor() as i32, s.y.floor() as i32, s.z.floor() as i32];
+            if self.level.world_spawn == Some(column) {
+                // TeleportTransition.missingRespawnBlock: PlayerSpawnFinder
+                // around the world spawn, not its exact column.
+                self.respawn_spawn(column)
+            } else {
+                // A spawnpoint: the stored column, lifted onto its current surface.
+                let y = self
+                    .land_column(column[0], column[2])
+                    .map_or(s.y, f64::from);
+                Vec3::new(s.x, y.max(s.y), s.z)
+            }
         };
         let mut player = PlayerMotion::new(self.motion, feet)?;
         player.yaw = self.yaw;

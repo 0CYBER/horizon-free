@@ -578,9 +578,13 @@ impl Game<'_> {
             let s = self.level.spawn.unwrap_or([0.0, 64.0, 0.0]);
             target = Vec3::new(s[0].floor() + 0.5, s[1], s[2].floor() + 0.5);
         }
-        let y = self
-            .land_column(target.x.floor() as i32, target.z.floor() as i32)
-            .map_or(target.y, f64::from);
+        let (x, z) = (target.x.floor() as i32, target.z.floor() as i32);
+        // TeleportTransition.missingRespawnBlock: PlayerSpawnFinder around
+        // the world spawn.
+        if let Some(world) = self.level.world_spawn.filter(|w| w[0] == x && w[2] == z) {
+            return Ok((self.respawn_spawn(world), None));
+        }
+        let y = self.land_column(x, z).map_or(target.y, f64::from);
         Ok((Vec3::new(target.x, y, target.z), None))
     }
 

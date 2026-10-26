@@ -31,6 +31,9 @@ pub(super) struct Trip {
     /// A respawn at this point outside the Overworld, resolved through its
     /// block on arrival.
     respawn: Option<RespawnConfig>,
+    /// A respawn at the world spawn, moved onto a free column within the
+    /// respawn radius once the chunks around it have loaded.
+    world_spawn: bool,
     /// Sent by a command: the player is already where it goes.
     placed: bool,
 }
@@ -66,10 +69,11 @@ impl Game<'_> {
     /// in it (Nether portals count up their transition time, End portals
     /// take them at once).
     pub(super) fn tick_server_travel(&mut self, host: &mut LanHost) {
+        // Outside a server only the respawns at the world spawn wait for chunks.
+        self.arrive_server_trips(host);
         if self.options.dedicated.is_none() {
             return;
         }
-        self.arrive_server_trips(host);
         let conns: Vec<u32> = host
             .hub
             .guests
@@ -253,6 +257,7 @@ impl Game<'_> {
             plan,
             gateway: None,
             respawn: None,
+            world_spawn: false,
             placed: false,
         });
         if let Err(e) = self.enter_level(Some(host), source) {
@@ -272,6 +277,7 @@ impl Game<'_> {
             plan: None,
             gateway: None,
             respawn: Some(config),
+            world_spawn: false,
             placed: false,
         });
     }
@@ -304,6 +310,27 @@ impl Game<'_> {
         }
     }
 
+    /// TeleportTransition.createDefault and missingRespawnBlock: the player
+    /// waits at the world spawn for its chunks, then PlayerSpawnFinder puts
+    /// it on a free column within the respawn radius.
+    pub(super) fn world_spawn_trip(&mut self, conn: u32) {
+        let Some([x, y, z]) = self.level.world_spawn else {
+            return;
+        };
+        self.server_trips.retain(|t| !t.is(conn));
+        self.server_trips.push(Trip {
+            conn,
+            dim: Dim::Overworld,
+            target: Vec3::new(f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5),
+            end: false,
+            plan: None,
+            gateway: None,
+            respawn: None,
+            world_spawn: true,
+            placed: false,
+        });
+    }
+
     /// TeleportTransition.missingRespawnBlock: the world spawn, in the
     /// Overworld.
     fn respawn_at_world_spawn(&mut self, host: &mut LanHost, conn: u32) {
@@ -318,6 +345,7 @@ impl Game<'_> {
             rotation: None,
         });
         self.run_level_teleports(host);
+        self.world_spawn_trip(conn);
     }
 
     /// `TheEndGatewayBlockEntity.getPortalPosition` and the teleport within
@@ -343,6 +371,7 @@ impl Game<'_> {
             plan: None,
             gateway: Some(job),
             respawn: None,
+            world_spawn: false,
             placed: false,
         });
     }
@@ -383,6 +412,11 @@ impl Game<'_> {
                         continue;
                     }
                 }
+            } else if trip.world_spawn {
+                // PlayerSpawnFinder.findSpawn around the world spawn.
+                let suggestion =
+                    [trip.target.x, trip.target.y, trip.target.z].map(|v| v.floor() as i32);
+                (self.respawn_spawn(suggestion), yaw)
             } else if let Some(job) = trip.gateway {
                 match self.resolve_gateway(job, trip.target) {
                     Ok(at) => (at, yaw),
@@ -458,6 +492,7 @@ impl Game<'_> {
                 plan: None,
                 gateway: None,
                 respawn: None,
+                world_spawn: false,
                 placed: true,
             });
             if let Err(e) = self.enter_level(Some(host), source) {
