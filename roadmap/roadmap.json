@@ -320,7 +320,7 @@
     "#1816",
     "#1837",
     "docs/api/stability.md",
-    "website/docs/test-a-mod.md"
+    "https://playhorizon.dev/docs/test-a-mod"
    ]
   },
   {
@@ -434,7 +434,7 @@
    "dev": "Partly done: an opt-in 60 FPS cap with fewer workers on battery, Far Detail Reduced for integrated GPUs and animated textures on the GPU (both shipped). Left: measured targets and fixes per class of machine (memory use, worker counts, startup) on a Steam Deck, old Intel and Apple Silicon Macs and 8 GB computers, reported on the Benchmarks page.",
    "links": [
     "docs/benchmark.md",
-    "website/docs/performance.md"
+    "https://playhorizon.dev/docs/performance"
    ]
   },
   {
@@ -677,9 +677,9 @@
    "status": "next",
    "area": "ai",
    "plain": "You can port a mod to Horizon with your own AI agent on your own computer. Horizon documents how and gives you the tools, but provides no hosted agents.",
-   "dev": "A player runs their own agent locally with `horizon-ctl` and the MCP servers (docs/agent-control.md), `cargo horizon-mod`, `horizon-port-pack` and the parity harnesses as the check. Horizon writes the guide (website/docs/agents.md, docs/modpacks.md) and runs no agents, accounts or keys for players. The No AI switch turns all of it off.",
+   "dev": "A player runs their own agent locally with `horizon-ctl` and the MCP servers (docs/agent-control.md), `cargo horizon-mod`, `horizon-port-pack` and the parity harnesses as the check. Horizon writes the guide (playhorizon.dev/docs/agents, docs/modpacks.md) and runs no agents, accounts or keys for players. The No AI switch turns all of it off.",
    "links": [
-    "website/docs/agents.md",
+    "https://playhorizon.dev/docs/agents",
     "docs/modpacks.md",
     "docs/agent-control.md"
    ]
@@ -1001,9 +1001,9 @@
    "status": "help-wanted",
    "area": "performance",
    "plain": "Run Horizon's built-in benchmark and share the report: every new computer makes the performance work more accurate. No coding needed.",
-   "dev": "`horizon-launcher play --arg=--benchmark --arg=standard` writes a JSON report; `horizon-launcher data benchmark <report>` shows what would be sent and uploads it (website/docs/performance.md). Results from three installs with the same hardware appear on the Benchmarks page. Example: #1711.",
+   "dev": "`horizon-launcher play --arg=--benchmark --arg=standard` writes a JSON report; `horizon-launcher data benchmark <report>` shows what would be sent and uploads it (playhorizon.dev/docs/performance). Results from three installs with the same hardware appear on the Benchmarks page. Example: #1711.",
    "links": [
-    "website/docs/performance.md",
+    "https://playhorizon.dev/docs/performance",
     "#1711"
    ]
   },

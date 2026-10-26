@@ -1,7 +1,8 @@
 # Benchmark summary fixtures
 
-Shared by the website's aggregator test (`website/scripts/benchmarks.test.mjs`) and the telemetry server's
-`GET /v1/benchmarks/summary` test: the same `benchmark` items in, the same groups out.
+Used by the telemetry server's `GET /v1/benchmarks/summary` test (`tests/summary.rs`) and, as a copy, by the
+website's aggregator test (`scripts/benchmarks.test.mjs` in ludovic111/horizon-site, which checks its copy against
+this one on main): the same `benchmark` items in, the same groups out. Change both together.
 
 - `items.jsonl`: one stored item per line (`install_id`, `day`, `version`, `data`: a benchmark report). Group
   RTX 4080 + i7-13700KF at render distance 12 has three installs (one with two runs); the same install at 32,
