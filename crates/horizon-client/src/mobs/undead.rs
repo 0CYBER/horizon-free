@@ -621,8 +621,10 @@ impl BowAttack {
         }
     }
 }
+/// `LivingEntity.isHolding(Items.BOW)`: the bow can sit in either hand.
 fn holding_bow(m: &Mob) -> bool {
     m.extra.main_hand.as_deref() == Some("minecraft:bow")
+        || m.extra.off_hand.as_deref() == Some("minecraft:bow")
 }
 impl Goal for BowAttack {
     goal_clone!();
@@ -715,7 +717,10 @@ impl Goal for BowAttack {
         } else {
             self.attack_time -= 1;
             if self.attack_time <= 0 && self.see_time >= -60 {
+                // mob.startUsingItem(ProjectileUtil.getWeaponHoldingHand):
+                // the off hand when the main one doesn't hold the bow.
                 m.extra.using_item = 1;
+                m.extra.using_off_hand = m.extra.main_hand.as_deref() != Some("minecraft:bow");
             }
         }
     }

@@ -7,6 +7,11 @@ welcome on [Discord](https://discord.gg/HcTeMZxe5E).
 This repository holds the game, the launcher and the website, plus the tools, tests and docs that build, check and
 release them. Anything else (videos, Discord and other community material) lives elsewhere.
 
+**Where to start: [playhorizon.dev/hub](https://playhorizon.dev/hub).** It shows what is being done now and next
+([ROADMAP.md](ROADMAP.md) in the repository), the work board, good first tasks, and the forms to report a bug or
+suggest something. A pull request for a roadmap item carries its `roadmap:<id>` label; ideas go to the suggestion
+queue (the hub, or `/suggest` on Discord) rather than to issues, which are for bugs.
+
 ## Build it
 
 You need Rust (stable), Python 3.10+, JDK 25, and on Linux the ALSA and udev headers (`libasound2-dev libudev-dev`).
@@ -39,6 +44,8 @@ probe against Horizon, and compares their outputs. There are about 290 of them.
 
 Never commit game files, decompiled source or prepared resources (`.local/`): `tools/check_public_tree.py` rejects
 them (`git config core.hooksPath .githooks` runs it before every commit).
+The pre-push hook checks the full history reachable from the branches and tags being pushed. Run
+`python3 tools/check_public_tree.py --history` to audit the history of all local refs.
 
 ## Only original code
 

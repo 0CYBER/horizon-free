@@ -267,20 +267,21 @@ impl Opt {
             Opt::HighContrastBlockOutlines => "options.accessibility.high_contrast_block_outline",
             Opt::ForceUnicode => "options.forceUnicodeFont",
             Opt::JapaneseGlyphs => "options.japaneseGlyphVariants",
-            // Horizon's own options: English captions (no vanilla keys).
-            Opt::PadEnabled => "Controller",
-            Opt::PadVibration => "Vibration",
-            Opt::PadAdaptiveTriggers => "Adaptive Triggers",
-            Opt::PadLightbar => "Lightbar",
-            Opt::PadLookSensitivity => "Look Sensitivity",
-            Opt::PadInvertX => "Invert Look X",
-            Opt::PadInvertY => "Invert Look Y",
-            Opt::PadToggleSneak => "Sneak Button",
-            Opt::PadMoveDeadzone => "Move Deadzone",
-            Opt::PadLookDeadzone => "Look Deadzone",
-            Opt::PadGlyphs => "Button Glyphs",
-            Opt::PadMenuNav => "Menu Navigation",
-            Opt::PadKeyboard => "On-Screen Keyboard",
+            // Horizon's own options: vanilla has no keys for them, so they read
+            // the namespace the client bundles (assets/horizon/lang).
+            Opt::PadEnabled => "horizon.options.controller",
+            Opt::PadVibration => "horizon.options.vibration",
+            Opt::PadAdaptiveTriggers => "horizon.options.adaptive_triggers",
+            Opt::PadLightbar => "horizon.options.lightbar",
+            Opt::PadLookSensitivity => "horizon.options.look_sensitivity",
+            Opt::PadInvertX => "horizon.options.invert_x",
+            Opt::PadInvertY => "horizon.options.invert_y",
+            Opt::PadToggleSneak => "horizon.options.sneak_button",
+            Opt::PadMoveDeadzone => "horizon.options.move_deadzone",
+            Opt::PadLookDeadzone => "horizon.options.look_deadzone",
+            Opt::PadGlyphs => "horizon.options.button_glyphs",
+            Opt::PadMenuNav => "horizon.options.menu_navigation",
+            Opt::PadKeyboard => "horizon.options.on_screen_keyboard",
         }
     }
     pub(crate) fn kind(self, s: &Settings) -> Kind {
@@ -892,6 +893,9 @@ enum Act {
     ResetPadKey(&'static str),
     ResetPadKeys,
     ToggleMod(usize),
+    /// The installed mod's own settings page (capability `ui`), shown as a
+    /// screen: `Event::ModSettings` has the game open it.
+    ModSettings(usize),
     OpenModFolder,
     /// Credits & Attribution's Credits button (WinScreen without the poem).
     Credits,
@@ -943,6 +947,9 @@ pub enum Event {
     Packs(Vec<String>),
     OpenPackFolder,
     OpenModFolder,
+    /// Open the mod's own settings page (capability `ui`): the installed
+    /// mod's index in `mods.installed`.
+    ModSettings(usize),
     /// Roll the credits (`CreditsAndAttributionScreen.openCreditsScreen`).
     Credits,
     /// Copy how an agent connects (the AI Agent page).
@@ -1291,7 +1298,10 @@ impl OptionsUi {
                         open("Graphics...", Page::Graphics),
                         Some(open("Advanced Graphics...", Page::GraphicsAdvanced)),
                     ),
-                    Row::Buttons(open("Controller Settings...", Page::Controller), None),
+                    Row::Buttons(
+                        open("Controller Settings...", Page::Controller),
+                        Some(self.extra_button(s, crate::extras::Item::DiscordPresence)),
+                    ),
                     Row::Buttons(
                         open("Extras...", Page::Extras),
                         Some(open("Mods...", Page::Mods)),
@@ -1499,15 +1509,26 @@ impl OptionsUi {
                         } else if installed.dev {
                             label = label.append(" (Dev)");
                         }
-                        let widget = button(0.0, 0.0, 310.0, label, Act::ToggleMod(i));
-                        Row::Buttons(
-                            if installed.dev || installed.id.is_empty() {
-                                inactive(widget)
-                            } else {
-                                widget
-                            },
-                            None,
-                        )
+                        let dead = installed.dev || installed.id.is_empty();
+                        // A running mod with a settings page (capability
+                        // `ui`) gets its own button beside the toggle.
+                        if installed.has_settings {
+                            let toggle = button(0.0, 0.0, 150.0, label, Act::ToggleMod(i));
+                            let settings = button(
+                                0.0,
+                                0.0,
+                                150.0,
+                                Text::literal("Settings"),
+                                Act::ModSettings(i),
+                            );
+                            Row::Buttons(
+                                if dead { inactive(toggle) } else { toggle },
+                                Some(settings),
+                            )
+                        } else {
+                            let widget = button(0.0, 0.0, 310.0, label, Act::ToggleMod(i));
+                            Row::Buttons(if dead { inactive(widget) } else { widget }, None)
+                        }
                     })
                     .collect()
             }
@@ -2494,6 +2515,10 @@ impl OptionsUi {
                             s.mods.toggle(i);
                             events.push(Event::Changed);
                         }
+                        Act::ModSettings(i) => {
+                            events.push(Event::ButtonClick);
+                            events.push(Event::ModSettings(i));
+                        }
                         Act::OpenModFolder => events.push(Event::OpenModFolder),
                         Act::Credits => events.push(Event::Credits),
                         Act::CopyAgentDetails => events.push(Event::CopyAgentDetails),
@@ -2984,6 +3009,7 @@ mod tests {
                 description: "May show HUD panels.".into(),
                 problem: id.is_empty().then(|| "Invalid package".into()),
                 dev,
+                has_settings: false,
             });
         }
         let (widgets, ..) = ui.layout(&s, size.0, size.1);

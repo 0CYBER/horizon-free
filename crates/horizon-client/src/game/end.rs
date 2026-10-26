@@ -4,7 +4,12 @@
 //! inactive until the dragon dies.
 use super::{Dim, Game};
 use horizon_client::{
-    Result, environment::Environment, items::ItemStack, mesher::Vertex, motion::PlayerMotion,
+    Result,
+    environment::Environment,
+    items::ItemStack,
+    mesher::Vertex,
+    motion::PlayerMotion,
+    particles::{ParticleOptions, ParticleType},
     vanillagen::VanillaTerrain,
 };
 use horizon_core::{
@@ -311,9 +316,10 @@ impl Game<'_> {
                     )?;
                 }
             }
-            // Global LevelEvent 1038: END_PORTAL_SPAWN.
-            self.audio
-                .play("minecraft:block.end_portal.spawn", None, 1.0, 1.0);
+            // EnderEyeItem.useOn: global level event 1038 (END_PORTAL_SPAWN),
+            // heard by every player (vanilla places it at the frame's corner
+            // + (1, 0, 1); only its direction matters).
+            self.global_level_event(1038, c, 0);
         }
         Ok(true)
     }
@@ -1122,6 +1128,35 @@ impl Game<'_> {
         self.end.eyes = eyes;
     }
 
+    /// `EyeOfEnder.tick` on a client: behind each eye (a quarter of its last
+    /// move back), four bubbles in water, else a portal particle.
+    pub(super) fn eye_particles(&mut self) {
+        for i in 0..self.end.eyes.len() {
+            let e = &self.end.eyes[i];
+            let movement = (e.position - e.previous).to_array();
+            let origin = (e.position - (e.position - e.previous) * 0.25).to_array();
+            let block = origin.map(|v| v.floor() as i32);
+            let water = self
+                .res
+                .facts()
+                .get(self.world.block(block[0], block[1], block[2]))
+                .fluid
+                == horizon_client::blocks::Fluid::Water;
+            if water {
+                let bubble = ParticleOptions::simple(ParticleType::Bubble);
+                for _ in 0..4 {
+                    self.particles.add(&bubble, origin, movement);
+                }
+            } else {
+                let r = self.particles.random();
+                let x = origin[0] + r.next_double() * 0.6 - 0.3;
+                let z = origin[2] + r.next_double() * 0.6 - 0.3;
+                let portal = ParticleOptions::simple(ParticleType::Portal);
+                self.particles
+                    .add(&portal, [x, origin[1] - 0.5, z], movement);
+            }
+        }
+    }
     /// ThrownItemRenderer: the ender eye item facing the camera.
     fn eye_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
         let Some(r) = self.gui.atlas.sprites.get("item/ender_eye").copied() else {
