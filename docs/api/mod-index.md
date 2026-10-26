@@ -59,7 +59,8 @@ changing what one means, makes schema 2.
 2. With a project key: its signature verifies with that key (minisign's prehashed and legacy signatures both).
 3. What the file says matches the entry: a mod's `horizon-mod.toml` (id, version, API, side, capabilities) and its
    content's fence ([mods.md](../mods.md#content-mods-api-02)); a modpack's manifest (id, version, format, game,
-   mods); a resource pack's `pack.mcmeta`.
+   mods); a resource pack's `pack.mcmeta`; a shader pack's `horizon_shader_api::check` and manifest (id, version,
+   shader API).
 4. A kind this build can't install is refused with "this Horizon can't install a … yet".
 
 The game still checks a mod's component imports against its capabilities when it starts it, as for any mod.
@@ -164,5 +165,6 @@ opens.
 
 ## Changelog
 
+- 2026-10-26: the launcher installs `shader` files into `shaderpacks/`; the sample index lists one (`glow`).
 - 2026-10-25: `shader` opens, checked by `horizon_shader_api::check`; its files are `.hshader`.
 - Schema 1 (2026-10-24): kinds `mod`, `modpack`, `resourcepack`, `shader`; `.hpack` format 1.

@@ -14,7 +14,8 @@ Horizon's own format.
 | Templates | `crates/horizon-shader-api/templates/` | post, sky, material |
 | Example pack | `crates/horizon-shader-api/packs/golden_hour` | a warm sky and two post passes |
 | In the game: the sky and post stages | Options > Horizon Settings > Shader Packs | sky, post passes, hot reload |
-| In the game: the material stage; the launcher and the registry | | not yet |
+| The registry and the launcher | `shader` kind ([api/mod-index.md](api/mod-index.md)); the Mods page's Shader packs tab | checked, then installed into `shaderpacks/` |
+| In the game: the material stage | | not yet |
 
 ## Quick start
 
@@ -136,4 +137,4 @@ stage draws in a pass of its own (it shares the world's pass otherwise), so its 
 
 ## Next
 
-The material stage in the game, and the registry's `shader` kind with installs from the launcher.
+The material stage in the game.
