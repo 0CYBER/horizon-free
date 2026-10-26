@@ -7875,15 +7875,18 @@ impl Game<'_> {
         }
     }
     /// ServerExplosion: rays from a 16^3 grid lose (resistance + 0.3) * 0.3 per step.
-    /// A mob explosion (`Level.ExplosionInteraction.MOB`: drop decay with the
-    /// default mobGriefing rule).
+    /// A mob explosion (`ServerLevel.explode` with `ExplosionInteraction.MOB`:
+    /// blocks are kept without mobGriefing, else the mob_explosion_drop_decay
+    /// rule picks decay).
     fn explode(&mut self, center: [f64; 3], radius: f32) -> Result<()> {
-        self.server_explode(
-            center,
-            radius,
-            explosion::BlockInteraction::DestroyWithDecay,
-            false,
-        )
+        let interaction = if !self.ui.rules.bool("mob_griefing") {
+            explosion::BlockInteraction::Keep
+        } else if self.ui.rules.bool("mob_explosion_drop_decay") {
+            explosion::BlockInteraction::DestroyWithDecay
+        } else {
+            explosion::BlockInteraction::Destroy
+        };
+        self.server_explode(center, radius, interaction, false)
     }
     /// Copies of a save batch carrying its live block entities and save data.
     fn with_entities<'a>(
