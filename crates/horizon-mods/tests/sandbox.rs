@@ -26,8 +26,8 @@ id = "test_ui_guest"
 name = "Test UI Guest"
 version = "0.1.0"
 api = "0.1"
-capabilities = ["game-read", "chat", "command", "ui", "render", "input"]
-experimental = ["ui", "render", "input"]
+capabilities = ["game-read", "chat", "command", "ui", "render", "input", "recipes"]
+experimental = ["ui", "render", "input", "recipes"]
 "#;
 
 /// Builds the mods once and writes their `.hmod` files; returns the folder.
@@ -241,8 +241,8 @@ id = "too_new"
 name = "Too New"
 version = "0.1.0"
 api = "0.1"
-capabilities = ["game-read", "chat", "hud", "storage", "command", "ui", "render", "input"]
-experimental = ["ui", "render", "input"]
+capabilities = ["game-read", "chat", "hud", "storage", "command", "ui", "render", "input", "recipes"]
+experimental = ["ui", "render", "input", "recipes"]
 "#;
     std::fs::write(dir.join("horizon-mod.toml"), manifest).unwrap();
     std::fs::write(dir.join("mod.wasm"), wasm).unwrap();
@@ -255,8 +255,8 @@ experimental = ["ui", "render", "input"]
         needed(imports(&wasm).unwrap().iter().map(String::as_str)).0
     };
     assert_eq!(level("coords_hud.hmod"), 0);
-    // The UI guest runs quiet commands (`command.run-quiet`, level 3).
-    assert_eq!(level("horizon_mods_test_ui_guest.hmod"), 3);
+    // The UI guest reads the recipes (`recipes`, level 5).
+    assert_eq!(level("horizon_mods_test_ui_guest.hmod"), 5);
 }
 
 #[test]
@@ -1039,5 +1039,87 @@ fn a_server_mod_runs_only_where_the_world_does() {
     assert!(
         !mods.command("online"),
         "a server command isn't the window's"
+    );
+}
+
+/// Capability `recipes`: the guest reads tables as big as vanilla's (1,500
+/// items, 1,600 recipes of nine five-item slots) within one command's fuel.
+#[test]
+fn recipes_reads_the_tables() {
+    use horizon_mods::{Recipe, RecipeItem, RecipeKind, RecipeStack, Recipes};
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    let stack = |item| RecipeStack {
+        item,
+        count: 1,
+        components: String::new(),
+    };
+    let items = (0..1500)
+        .map(|i| RecipeItem {
+            id: format!("minecraft:item_{i}"),
+            name: format!("Item {i}"),
+            tags: vec!["planks".into(), "logs".into()],
+        })
+        .collect();
+    let mut recipes: Vec<Recipe> = (0..1600)
+        .map(|i| Recipe {
+            id: format!("minecraft:recipe_{i}"),
+            kind: RecipeKind::CraftingShaped,
+            category: "crafting_misc".into(),
+            group: String::new(),
+            width: 3,
+            height: 3,
+            slots: (0..9)
+                .map(|k| (0..5).map(|j| stack((i + k + j) % 1500)).collect())
+                .collect(),
+            results: vec![RecipeStack {
+                item: 7,
+                count: 4,
+                components: String::new(),
+            }],
+            cooking_time: 0,
+            experience: 0.0,
+            book_id: i as i32,
+        })
+        .collect();
+    recipes[1].kind = RecipeKind::Brewing;
+    recipes[1].results[0].components =
+        "[minecraft:potion_contents={potion:\"minecraft:swiftness\"}]".into();
+    mods.set_snapshot(Snapshot {
+        recipes: Some(std::sync::Arc::new(Recipes { items, recipes })),
+        known_recipes: vec![1, 5, 9].into(),
+        ..Snapshot::default()
+    });
+    let said = |mods: &mut Mods, command: &str| {
+        assert!(mods.command(command));
+        mods.drain()
+            .into_iter()
+            .filter_map(|o| match o {
+                Output::Chat { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        said(&mut mods, "recipes"),
+        ["1500 items, 1600 recipes, 3 known, 1 brewing"]
+    );
+    assert_eq!(
+        said(&mut mods, "recipes minecraft:recipe_1"),
+        [
+            "minecraft:recipe_1 Kind::Brewing 3x3 0t slots 9, the first 1 minecraft:item_1 -> \
+          4 minecraft:item_7[minecraft:potion_contents={potion:\"minecraft:swiftness\"}] known true"
+        ]
+    );
+    assert!(
+        mods.entries()
+            .iter()
+            .all(|e| e.status == horizon_mods::Status::Running),
+        "it ran out of fuel"
+    );
+    // Without the game's tables (no mod read them yet): empty, not a trap.
+    mods.set_snapshot(Snapshot::default());
+    assert_eq!(
+        said(&mut mods, "recipes"),
+        ["0 items, 0 recipes, 0 known, 0 brewing"]
     );
 }

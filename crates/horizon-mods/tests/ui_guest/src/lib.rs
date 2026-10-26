@@ -6,10 +6,12 @@
 //! `input`; `/zoom FACTOR SMOOTH TURN` tests `render.set-zoom`;
 //! `/corner` and `/readings` the calls the official extras mods use;
 //! `/raycast DISTANCE` says what `game.raycast` sees; `/quiet A;B` runs
-//! lines with `command.run-quiet` (`/quiet_many N`: N of them).
+//! lines with `command.run-quiet` (`/quiet_many N`: N of them). `/recipes`
+//! counts what `recipes` reads; `/recipes ID` describes that recipe.
 use horizon_mod_sdk::{
     Mod, Registration, chat, command, game,
     input::{self, Event},
+    recipes,
     render::{self, FillShape, ItemShape, Point, QuadShape, Rect, Shape, SpriteShape, TextShape},
     ui::{self, ItemWidget, ListWidget, Screen, TextWidget, Widget},
 };
@@ -102,6 +104,7 @@ impl Mod for Guest {
             "raycast",
             "quiet",
             "quiet_many",
+            "recipes",
             "corner",
             "readings",
         ]
@@ -239,6 +242,41 @@ impl Mod for Guest {
                         h.block, h.block_x, h.block_y, h.block_z, h.x, h.y, h.z
                     ),
                     None => "no hit".into(),
+                });
+            }
+            "recipes" => {
+                let items = recipes::items();
+                let all = recipes::all();
+                let known = recipes::known();
+                let name = |s: &recipes::Stack| {
+                    let id = items.get(s.item as usize).map_or("?", |i| i.id.as_str());
+                    format!("{} {id}{}", s.count, s.components)
+                };
+                chat::show(&match all.iter().find(|r| r.id == args) {
+                    Some(r) => format!(
+                        "{} {:?} {}x{} {}t slots {}, the first {} -> {} known {}",
+                        r.id,
+                        r.kind,
+                        r.width,
+                        r.height,
+                        r.cooking_time,
+                        r.slots.len(),
+                        r.slots
+                            .first()
+                            .and_then(|s| s.first())
+                            .map_or("-".into(), name),
+                        r.results.first().map_or("-".into(), name),
+                        known.contains(&r.book_id)
+                    ),
+                    None => format!(
+                        "{} items, {} recipes, {} known, {} brewing",
+                        items.len(),
+                        all.len(),
+                        known.len(),
+                        all.iter()
+                            .filter(|r| r.kind == recipes::Kind::Brewing)
+                            .count()
+                    ),
                 });
             }
             // Clamped to (1, 10); the two after it shake nothing.

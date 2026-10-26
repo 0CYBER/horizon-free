@@ -18,6 +18,7 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `input` | [`input`](#input) | see the keys you hold and your clicks, take over the use button on its own items and the mouse wheel, and add keys |
 | `players` | [`players`](#players) | see who is on the server and message them |
 | `world` | [`world`](#world) | read and change the world's blocks |
+| `recipes` | [`recipes`](#recipes) | read the game's recipes and items, and which recipes you know |
 
 ## World `horizon-mod`
 
@@ -37,7 +38,7 @@ A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs whe
 
 A mod with widgets (capability `ui`): the SDK builds every mod against this world. Mods built for `horizon-mod` alone (no `ui-events` export) still load and simply hear nothing of their widgets.
 
-- Imports (what the game offers): `ui`, `render`, `input`, `log`, `game`, `chat`, `hud`, `storage`, `command`
+- Imports (what the game offers): `ui`, `render`, `input`, `recipes`, `log`, `game`, `chat`, `hud`, `storage`, `command`
 - Exports (what the mod provides): `ui-events`, `events`
 
 ## World `ui-host`
@@ -52,6 +53,13 @@ The game's side of `horizon-ui-mod` beyond `horizon-mod`.
 The game's side of capability `render` (imports only).
 
 - Imports (what the game offers): `render`, `input`
+- Exports (what the mod provides): 
+
+## World `recipes-host`
+
+The game's side of capability `recipes` (imports only).
+
+- Imports (what the game offers): `recipes`
 - Exports (what the mod provides): 
 
 ## `log`
@@ -461,6 +469,68 @@ What the game calls. Only the hooks `init` asks for are ever called.
 | `frame` | `func(seconds: f32)` | Each rendered frame, with the seconds since the last one. |
 | `command` | `func(name: string, args: string) -> result<option<string>, string>` | `/name args`: ok(some(text)) is shown as feedback, err(text) in red. |
 | `chat` | `func(text: string)` | Each chat line the player receives, as plain text. |
+
+## `recipes`
+
+Access: capability `recipes`.
+
+Capability `recipes` (experimental): the recipes and items the game knows, for recipe viewers. In single player and on Horizon's servers they are the world's; on any other server they are vanilla 26.3's (a client is sent no others), while `known` follows that server's book.
+
+### record `stack`
+
+An item of `items`, by its index there, with a count and the components it has beyond the item's own, in vanilla's item syntax (`[potion_contents={potion:"minecraft:swiftness"}]`), or "".
+
+| Field | Type | |
+| --- | --- | --- |
+| `item` | `u32` |  |
+| `count` | `u32` |  |
+| `components` | `string` |  |
+
+### enum `kind`
+
+The station a recipe is made at.
+
+| Case | |
+| --- | --- |
+| `crafting-shaped` |  |
+| `crafting-shapeless` |  |
+| `smelting` |  |
+| `blasting` |  |
+| `smoking` |  |
+| `campfire` |  |
+| `stonecutting` |  |
+| `smithing` |  |
+| `brewing` |  |
+
+### record `recipe`
+
+| Field | Type | |
+| --- | --- | --- |
+| `id` | `string` | `minecraft:oak_planks`. |
+| `kind` | `kind` |  |
+| `category` | `string` | The recipe book's tab (`crafting_building_blocks`, `furnace_food`), or "". |
+| `group` | `string` | Recipes the book shows on one button share a group, or "". |
+| `width` | `u32` | A shaped recipe's grid: `slots` holds its cells row by row. 0 for the other kinds. |
+| `height` | `u32` |  |
+| `slots` | `list<list<stack>>` | Each slot's stacks, any one of which fits; an empty list is an empty cell. Cooking and stonecutting: the input. Smithing: the template, the base, the addition. Brewing: the bottle, the reagent. |
+| `results` | `list<stack>` | What it makes; several when that varies (a trim on any armour). |
+| `cooking-time` | `u32` | Cooking: game ticks and experience; 0 for the other kinds. |
+| `experience` | `f32` |  |
+| `book-id` | `s32` | The recipe book's id for it (one per way the book shows it), as `known` lists them; -1 for the kinds the book doesn't show (campfire, stonecutting, smithing, brewing). |
+
+### record `item`
+
+| Field | Type | |
+| --- | --- | --- |
+| `id` | `string` | `minecraft:diamond`, `<mod>:<path>`. |
+| `name` | `string` | In the player's language. |
+| `tags` | `list<string>` | Its item tags, without the `#`. |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `items` | `func() -> list<item>` | Every item, in the registry's order: `stack.item` indexes this list. |
+| `all` | `func() -> list<recipe>` | Every recipe: the book's in its order, then campfire, stonecutting, smithing and brewing. They don't change while a world is open. |
+| `known` | `func() -> list<s32>` | The `book-id`s of the recipes the player's recipe book holds now. |
 
 ## `players`
 
