@@ -290,7 +290,15 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # Match normal single player; --in-frame is the comparison path.
 SERVER_THREAD = True
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'doors', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
+          'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles',
+          'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing',
+          'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push',
+          'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles',
+          'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects',
+          'portals', 'distance', 'growth', 'doors', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands',
+          'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption',
+          'breath', 'lava', 'levels', 'drops', 'underwater', 'fireworks']
 
 
 class Game:
@@ -2898,6 +2906,55 @@ def sparked(player, other, kinds, act, ticks=20):
     return seen
 
 
+def check_fireworks(host, guest, out):
+    """Event 17 must arrive before removal, with the item's colored, trailing explosion (#1478).
+
+    FireworkRocketEntity.explode / handleEntityEvent; run with and without --server-thread.
+    The flash proves a configured explosion reached both clients; red pixels in later screenshots
+    check that its sparks keep rendering after the tracked rocket disappears.
+    """
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    at = (x, y - 1, z + 3)
+    host('command', command=f'fill {x - 5} {y - 1} {z - 2} {x + 5} {y - 1} {z + 8} minecraft:stone')
+    host('command', command=f'fill {x - 5} {y} {z - 2} {x + 5} {y + 4} {z + 8} minecraft:air')
+    host('command', command=f'fill {x - 2} {y + 2} {z + 1} {x + 2} {y + 2} {z + 5} minecraft:stone')
+    for game, dx in ((host, -2), (guest, 2)):
+        game('command', command='gamemode creative')
+        game('command', command=f'tp @s {x + dx + 0.5} {y} {z + 0.5}')
+        game.raw('look-at', x + 0.5, y + 1.5, z + 3.5)
+
+    def red(path):
+        rows, bpp = png_rows(path)
+        # Exclude the hotbar and chat at the bottom of the view.
+        return sum(row[i] > 80 and row[i] > 2 * row[i + 1] and row[i] > 2 * row[i + 2]
+                   for row in rows[:len(rows) * 3 // 4] for i in range(0, len(row), bpp))
+
+    baseline = {g.name: red(g.shot(out, 'fireworks-before')) for g in (host, guest)}
+    before = {g.name: made(g, 'flash') for g in (host, guest)}
+    host('command', command='item replace entity @s weapon.mainhand with minecraft:firework_rocket'
+         '[fireworks={flight_duration:0,explosions:[{shape:"large_ball",colors:[I;16711680],has_trail:true}]}]')
+    host.raw('interact', *at)
+    # The held item's red texture must not count as a burst or a later spark.
+    host('command', command='item replace entity @s weapon.mainhand with minecraft:air')
+    for _ in range(30):
+        host.wait(2)
+        if all(made(g, 'flash') > before[g.name] for g in (host, guest)):
+            break
+    flashes = {g.name: made(g, 'flash') - before[g.name] for g in (host, guest)}
+    assert all(n == 1 for n in flashes.values()), f'configured burst missing or duplicated: {flashes}'
+    # Capture both views before decoding PNGs: decoding must not consume the sparks' lifetime.
+    burst_shots = {g.name: g.shot(out, 'fireworks-burst') for g in (host, guest)}
+    host.wait(16)
+    trail_shots = {g.name: g.shot(out, 'fireworks-trail-fade') for g in (host, guest)}
+    burst = {name: red(path) - baseline[name] for name, path in burst_shots.items()}
+    trails = {name: red(path) - baseline[name] for name, path in trail_shots.items()}
+    rockets = {g.name: g('status')['rockets'] for g in (host, guest)}
+    assert not any(rockets.values()), f'exploded rocket remains: {rockets}'
+    assert all(n > 20 for n in burst.values()), f'no red burst: {burst}'
+    assert all(n > 20 for n in trails.values()), f'no later red trail/fade: {trails}'
+    return {'flashes': flashes, 'red_burst': burst, 'red_trail_fade': trails, 'rockets': rockets}
+
+
 def check_sparks(host, guest, out):
     spots = apart(host, guest)
     result = {}
@@ -4631,7 +4688,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'hud': check_hud,
              'sidebar': check_sidebar,
              'border': check_border,
-             'particles': check_particles}
+             'particles': check_particles, 'fireworks': check_fireworks}
 
 
 def run(ctl, out, resources, checks):
@@ -7037,6 +7094,52 @@ def check_sonic(host, guest, out):
 
 CHECKS += ['sonic']
 CHECK_FNS['sonic'] = check_sonic
+
+
+def check_cushions(host, guest, out):
+    """#1935: place a colored cushion, consume it, track it, sit, dismount and break it."""
+    seen = {}
+    for label, player, color in (('host', host, 'red'), ('guest', guest, 'blue')):
+        x, y, z = (int(v // 1) for v in pos_of(player))
+        at = (x + 0.5, y, z + 2.5)
+        host('command', command=f'fill {x - 1} {y} {z + 1} {x + 1} {y + 3} {z + 3} minecraft:air')
+        host('command', command=f'setblock {x} {y - 1} {z + 2} minecraft:stone')
+        player('command', command='gamemode survival')
+        player('command', command=f'item replace entity @s weapon.mainhand with minecraft:{color}_cushion')
+        player.wait(10)
+        player.raw('look-at', *at)
+        player.raw('mouse', 'right', 'click')
+        player.wait(15)
+        def cushions(game):
+            return [o for o in game('status')['objects'] if o['kind'] == 'minecraft:cushion'
+                    and abs(o['position'][0] - at[0]) < .1 and abs(o['position'][2] - at[2]) < .1]
+        server, client = cushions(host), cushions(player)
+        seen[label] = {'server': server, 'client': client,
+                       'remaining': player('inventory')['counts'].get(f'minecraft:{color}_cushion', 0)}
+        assert len(server) == len(client) == 1, seen
+        assert server[0]['color'] == client[0]['color'] == color, seen
+        assert seen[label]['remaining'] == 0, seen
+        player.shot(out, 'cushion-placed')
+        player.raw('look-at', at[0], at[1] + .125, at[2])
+        player.raw('mouse', 'right', 'click')
+        player.wait(10)
+        seen[label]['riding'] = player('status').get('riding')
+        assert seen[label]['riding'] == server[0]['id'], seen
+        player.raw('key', 'shift', 'down')
+        player.wait(5)
+        player.raw('key', 'shift', 'up')
+        player.wait(5)
+        assert player('status').get('riding') is None, seen
+        player('command', command='gamemode creative')
+        player.raw('look-at', at[0], at[1] + .125, at[2])
+        player.raw('mouse', 'left', 'click')
+        player.wait(10)
+        assert not cushions(host) and not cushions(player), seen
+    return seen
+
+
+CHECKS += ['cushions']
+CHECK_FNS['cushions'] = check_cushions
 
 
 if __name__ == '__main__':

@@ -28,6 +28,7 @@ mod cloud_fixture;
 mod command_parse_fixture;
 mod container_screen_probe;
 mod creative_search_fixture;
+mod cushion_placement_probe;
 mod emitter_particles_probe;
 mod enchanting_fixture;
 mod entity_anim_fixture;
@@ -107,6 +108,7 @@ probes! {
     block_transform_fixture,
     breaking_fixture,
     camera_probe,
+    cushion_placement_probe,
     cauldron_fixture,
     chat_screen_fixture,
     cloud_fixture,

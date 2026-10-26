@@ -18,7 +18,7 @@ import { CPUS, GPUS, singleThread } from "./src/hardware.js";
 import { isGame, isLauncher, launcherVersion, newestFirst } from "./src/versions.js";
 import { contributorsFrom, contributorsHtml } from "./src/contributors.js";
 import { areaFilterHtml, boardFilterHtml, boardFrom, boardHtml, creditFrom, creditHtml, helpWantedHtml, journalFrom, journalHtml, journalJson, overviewHtml, roadmapHtml, slimIssue, suggestItemsHtml } from "./src/hub.js";
-import { INDEX_URL, KINDS, SUBMIT, listHtml, projectHtml, readIndex, submitHtml } from "./src/mods.js";
+import { INDEX_URL, KINDS, SORTS, SUBMIT, listHtml, projectHtml, readIndex, sorted, submitHtml } from "./src/mods.js";
 
 const site = dirname(fileURLToPath(import.meta.url));
 const dist = join(site, "dist");
@@ -484,10 +484,11 @@ const modsList = `        <p class="kicker"><span>Mods</span>Made for Horizon, r
             <button type="button" class="button secondary small" data-kind-filter="all" aria-pressed="true">All</button>
 ${KINDS.map(([k, label]) => `            <button type="button" class="button secondary small" data-kind-filter="${k}" aria-pressed="false">${label}</button>`).join("\n")}
           </div>
+          <select class="mod-search mod-sort" id="mod-sort" aria-label="Order">${SORTS.map(([k, label]) => `<option value="${k}">${label}</option>`).join("")}</select>
         </div>
         <p class="meta release-count" data-mod-count>${modProjects.length} of ${modProjects.length}</p>
         <div class="mod-list" id="mod-list" aria-live="polite">
-${listHtml(modProjects)}
+${listHtml(sorted(modProjects, "downloads"))}
         </div>`;
 const modPages = [
   { file: "mods.html", path: "/mods", title: "Mods", description: "Mods, modpacks and resource packs made for Horizon, reviewed, each with what it may do and how to install it.", main: modsList },
