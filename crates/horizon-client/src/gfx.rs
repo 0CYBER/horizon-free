@@ -69,7 +69,10 @@ pub mod lightning;
 mod lod;
 mod occlusion;
 mod pack_atlas;
+mod pack_draw;
 mod pack_post;
+mod pack_sky;
+mod pack_timing;
 pub mod pack_uniforms;
 mod page_runs;
 pub mod panorama;
@@ -86,6 +89,19 @@ const COMPLETE_COLUMN: u32 = (1 << (crate::chunk::HEIGHT / 16)) - 1;
 /// its fixed-point UVs (`terrain.wgsl`'s `terrain_uv`).
 /// The world pass again after occlusion culling's test: it loads both
 /// targets (phase 2 draws over phase 1, reading the test's results).
+/// LevelRenderer: no sky inside lava or powder snow (sky fog ends within 2 blocks).
+fn sky_open(frame: &Frame) -> bool {
+    match frame.fog {
+        Some(f) => f.sky_end > 2.0,
+        None => !frame.underwater,
+    }
+}
+
+/// The Overworld-style sky (disc, sunset, stars, void) draws this frame.
+fn sky_visible(frame: &Frame) -> bool {
+    !frame.title && frame.skybox && sky_open(frame)
+}
+
 fn world_pass_after_culling<'e>(
     encoder: &'e mut wgpu::CommandEncoder,
     view: &wgpu::TextureView,
@@ -844,12 +860,17 @@ async fn open_device(
             continue;
         }
         // Mappable primary buffers: section pages that no longer fit in
-        // video memory go to system memory.
+        // video memory go to system memory. Shader packs' 16-bit normalized buffers (render
+        // targets with the adapter's own format features) and R11F_G11F_B10F: a float
+        // stand-in neither clamps nor drops NaN.
         let features = timing::GpuTimer::features(&adapter)
             | cull::Cull::features(&adapter)
             | (adapter.features()
                 & (wgpu::Features::INDIRECT_FIRST_INSTANCE
-                    | wgpu::Features::MAPPABLE_PRIMARY_BUFFERS));
+                    | wgpu::Features::MAPPABLE_PRIMARY_BUFFERS
+                    | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+                    | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+                    | wgpu::Features::RG11B10UFLOAT_RENDERABLE));
         let driver = format!("{} {}", info.driver, info.driver_info);
         startup_step(format_args!(
             "requesting the device (driver {}) with features [{features}] and the adapter's \
@@ -2151,13 +2172,16 @@ impl Renderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let flat_wanted = flat::wanted(&adapter, &device);
+        // Readable as storage where flat draws run: a shader pack's terrain program reads them.
         let arena = arena::Arena::new(
             &device,
             std::mem::size_of::<TerrainVertex>() as u64,
             1 << 20,
+            flat_wanted,
         );
         // Sections as one index list per frame where multi-draw is emulated.
-        let flat = flat::wanted(&adapter, &device).then(|| {
+        let flat = flat_wanted.then(|| {
             let buffers = [Some(wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<TerrainVertex>() as u64,
                 step_mode: wgpu::VertexStepMode::Vertex,
@@ -2796,12 +2820,14 @@ impl Renderer {
         self.world_post.scale = scale.clamp(0.25, 2.0);
         self.world_post.antialias = antialias;
     }
-    /// Runs `post` over the world from now on (`None`: no pack), for the dimension `dimension`.
+    /// Runs `post` over the world from now on (`None`: no pack), for the dimension `dimension`;
+    /// `block_ids` gives each block sprite layer's `mc_Entity` (id, fluid) pair.
     /// Returns the programs that run and the notes of loading them.
     pub fn set_shader_pack(
         &mut self,
         dimension: i32,
         pack: Option<horizon_shaders::Post>,
+        block_ids: &[i32],
     ) -> Option<(Vec<String>, Vec<String>)> {
         if pack.is_none() {
             self.pack_atlas = None;
@@ -2826,7 +2852,17 @@ impl Renderer {
                 terrain: self.pack_atlas.as_ref().map(|_| pack_post::Geometry {
                     buffers: if flat { &buffers[..1] } else { &buffers },
                     table: self.flat.as_ref().filter(|_| flat).map(|f| &f.draw_layout),
+                    depth_write: true,
+                    atlas: None,
+                    ids: None,
+                    cull: true,
                 }),
+                block_ids,
+                celestial: self
+                    .hud
+                    .atlas_texture
+                    .as_ref()
+                    .map(|t| t.create_view(&Default::default())),
             };
             pack_post::PackPost::new(
                 &self.device,
@@ -2843,9 +2879,17 @@ impl Renderer {
         self.pack_post = Some((dimension, post));
         report
     }
-    /// What a shader pack's terrain program reads from Horizon's terrain vertices, in the
-    /// pack's block atlas (made here when missing); `None` when the atlas does not fit.
-    pub fn pack_terrain_inputs(&mut self) -> Option<horizon_shaders::GbuffersInputs> {
+    /// What a shader pack's gbuffers programs read from Horizon's geometry: the sky's, and
+    /// terrain's in the pack's block atlas (made here when missing; none when it does not fit).
+    pub fn pack_inputs(&mut self) -> horizon_shaders::GameInputs {
+        horizon_shaders::GameInputs {
+            terrain: self.pack_terrain_inputs(),
+            sky: Some(pack_sky::inputs()),
+            celestial: Some(pack_sky::celestial_inputs()),
+        }
+    }
+
+    fn pack_terrain_inputs(&mut self) -> Option<horizon_shaders::GbuffersInputs> {
         if self.pack_atlas.is_none() {
             let mut encoder = self.device.create_command_encoder(&Default::default());
             let layers = self
@@ -3764,6 +3808,24 @@ impl Renderer {
         let pack_post = !frame.title && self.pack_post.as_ref().is_some_and(|p| p.1.is_some());
         // The pack's program reads the vertices this frame's draws bind.
         let pack_draws_terrain = pack_terrain && flat_frame == self.pack_terrain_flat;
+        let pack_draws_sky = pack_post
+            && self
+                .pack_post
+                .as_ref()
+                .and_then(|p| p.1.as_ref())
+                .is_some_and(|p| p.has_sky());
+        let pack_draws_celestial = pack_post
+            && self
+                .pack_post
+                .as_ref()
+                .and_then(|p| p.1.as_ref())
+                .is_some_and(|p| p.has_celestial());
+        let pack_draws_water = pack_draws_terrain
+            && self
+                .pack_post
+                .as_ref()
+                .and_then(|p| p.1.as_ref())
+                .is_some_and(|p| p.has_water());
         let scaled = self.world_post.prepare(
             &self.device,
             [self.config.width, self.config.height],
@@ -3817,13 +3879,9 @@ impl Renderer {
                 ..Default::default()
             });
             pass.set_bind_group(0, &self.group, &[]);
-            // LevelRenderer: no sky inside lava or powder snow (sky fog ends within 2 blocks).
-            let sky_visible = match frame.fog {
-                Some(f) => f.sky_end > 2.0,
-                None => !frame.underwater,
-            };
+            let sky_visible = sky_open(frame);
             if frame.title || (sky_visible && (frame.skybox || frame.end_sky)) {
-                if !frame.title && frame.skybox {
+                if !frame.title && frame.skybox && !pack_draws_sky {
                     pass.set_pipeline(&self.sky);
                     pass.draw(0..3, 0..1);
                 }
@@ -3837,17 +3895,17 @@ impl Renderer {
                     if frame.end_sky {
                         self.end_sky.draw(&mut pass);
                     }
-                    if celestial_vertices > 0 {
+                    if celestial_vertices > 0 && !pack_draws_celestial {
                         pass.set_vertex_buffer(0, self.celestial_buffer.slice(..));
                         pass.draw_indexed(0..(celestial_vertices as u32 / 4) * 6, 0, 0..1);
                     }
                     pass.set_bind_group(0, &self.group, &[]);
                 }
-                if !frame.title && frame.stars.is_some() {
+                if !frame.title && frame.stars.is_some() && !pack_draws_sky {
                     self.stars.draw(&mut pass);
                     pass.set_bind_group(0, &self.group, &[]);
                 }
-                if !frame.title && frame.dark_disc {
+                if !frame.title && frame.dark_disc && !pack_draws_sky {
                     pass.set_pipeline(&self.dark_disc);
                     pass.draw(0..3, 0..1);
                 }
@@ -3995,6 +4053,8 @@ impl Renderer {
                 pass.draw(0..4, debug_depth..debug_depth + debug_top);
             }
             match self.flat.as_ref().filter(|_| flat_frame) {
+                // The pack draws translucent terrain after its deferred programs.
+                _ if pack_draws_water => {}
                 Some(flat) => {
                     pass.set_pipeline(&flat.translucent);
                     flat.draw(&mut pass, &flat.calls[flat.solid_calls..], |p| {
@@ -4087,23 +4147,42 @@ impl Renderer {
         {
             let size = self.world_post.size().unwrap_or([1, 1]);
             let flat = self.flat.as_ref().filter(|_| flat_frame);
-            let mut terrain = |rp: &mut wgpu::RenderPass<'_>| {
-                if !pack_draws_terrain {
-                    return;
-                }
-                match flat {
-                    Some(flat) => {
-                        flat.draw(rp, &flat.calls[..flat.solid_calls], |p| {
-                            self.arena.buffer(p)
-                        });
-                    }
-                    None => {
-                        rp.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
-                        rp.set_vertex_buffer(1, self.instances.slice(..));
-                        self.draw_sections(rp, &self.indirect, 0, 0, solid_draws);
-                    }
-                }
+            let pages: Vec<(u32, wgpu::Buffer)> = match flat {
+                Some(_) if pack_draws_terrain => self
+                    .arena
+                    .page_buffers()
+                    .map(|(p, b)| (p, b.clone()))
+                    .collect(),
+                _ => Vec::new(),
             };
+            let mut terrain =
+                |rp: &mut wgpu::RenderPass<'_>,
+                 translucent: bool,
+                 page: &dyn Fn(&mut wgpu::RenderPass<'_>, u32)| {
+                    if !pack_draws_terrain {
+                        return;
+                    }
+                    match flat {
+                        Some(flat) => {
+                            let calls = if translucent {
+                                &flat.calls[flat.solid_calls..]
+                            } else {
+                                &flat.calls[..flat.solid_calls]
+                            };
+                            flat.draw_with(rp, calls, |p| self.arena.buffer(p), page);
+                        }
+                        None => {
+                            rp.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                            rp.set_vertex_buffer(1, self.instances.slice(..));
+                            let (first, count) = if translucent {
+                                (solid_draws, translucent_draws)
+                            } else {
+                                (0, solid_draws)
+                            };
+                            self.draw_sections(rp, &self.indirect, 0, first, count);
+                        }
+                    }
+                };
             post.run(
                 &self.device,
                 &self.queue,
@@ -4115,6 +4194,7 @@ impl Renderer {
                 &frame.pack,
                 size,
                 [self.config.width, self.config.height],
+                &pages,
                 &mut terrain,
             );
             self.pack_post = Some((dimension, Some(post)));

@@ -65,8 +65,15 @@ pub struct Arena {
 }
 
 impl Arena {
-    pub fn new(device: &wgpu::Device, stride: u64, capacity: u64) -> Self {
-        Self::with_usage(device, stride, capacity, wgpu::BufferUsages::VERTEX)
+    /// Vertices; `storage` also lets shaders read them as a storage buffer (a shader pack's
+    /// terrain program reads the other corners of a vertex's quad for its normal).
+    pub fn new(device: &wgpu::Device, stride: u64, capacity: u64, storage: bool) -> Self {
+        let usage = if storage {
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE
+        } else {
+            wgpu::BufferUsages::VERTEX
+        };
+        Self::with_usage(device, stride, capacity, usage)
     }
     /// Sorted translucent indices; `storage` when compute passes read them.
     pub fn indices(device: &wgpu::Device, capacity: u64, storage: bool) -> Self {
@@ -147,6 +154,11 @@ impl Arena {
     }
     pub fn has_page(&self, page: u32) -> bool {
         self.pages.get(page as usize).is_some_and(Option::is_some)
+    }
+    /// Each live page's buffer, by page.
+    pub fn page_buffers(&self) -> impl Iterator<Item = (u32, &wgpu::Buffer)> {
+        let pages = self.pages.iter().enumerate();
+        pages.filter_map(|(i, p)| Some((i as u32, &p.as_ref()?.buffer)))
     }
     pub fn buffer(&self, page: u32) -> &wgpu::Buffer {
         &self.pages[page as usize]
@@ -352,7 +364,7 @@ mod tests {
             eprintln!("no GPU adapter: skipped");
             return;
         };
-        let mut arena = Arena::new(&device, 4, GRAIN);
+        let mut arena = Arena::new(&device, 4, GRAIN, false);
         arena.page_limit = 2 * GRAIN;
         assert_eq!(arena.bytes(), 0);
         let (first, a) = alloc(&mut arena, &device, &queue, GRAIN).unwrap();
@@ -395,7 +407,7 @@ mod tests {
             return;
         };
         for mut arena in [
-            Arena::new(&device, 28, GRAIN),
+            Arena::new(&device, 28, GRAIN, false),
             Arena::indices(&device, GRAIN, false),
         ] {
             alloc(&mut arena, &device, &queue, GRAIN).unwrap();

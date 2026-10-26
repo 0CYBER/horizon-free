@@ -652,9 +652,21 @@ impl Flat {
         calls: &[Call],
         vertices: impl Fn(u32) -> &'a wgpu::Buffer,
     ) {
+        self.draw_with(pass, calls, vertices, |_, _| {});
+    }
+    /// `draw`, calling `page` before each run of calls from one arena page (a shader pack binds
+    /// that page's vertices for reading).
+    pub fn draw_with<'a>(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        calls: &[Call],
+        vertices: impl Fn(u32) -> &'a wgpu::Buffer,
+        page: impl Fn(&mut wgpu::RenderPass<'_>, u32),
+    ) {
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
         for call in calls {
             self.bind_page(pass, call.page, &vertices);
+            page(pass, call.page);
             pass.draw_indexed(call.first..call.first + call.count, 0, 0..1);
         }
     }

@@ -141,6 +141,10 @@ pub const NAMES: &[&str] = &[
     "gbufferPreviousModelView",
     "gbufferPreviousProjection",
     "atlasSize",
+    "shadowModelView",
+    "shadowModelViewInverse",
+    "shadowProjection",
+    "shadowProjectionInverse",
 ];
 
 /// Values carried from frame to frame.
@@ -226,6 +230,14 @@ impl FrameUniforms {
             ),
             None => (frame.sky.fog_color, frame.distance * 0.9, frame.distance),
         };
+        // The shadow camera (OQ-6, impl-plan.md): orthographic, `shadowDistance` (160) blocks
+        // each side, 100 blocks from the player toward the shadow light, world +z up.
+        let light = view
+            .inverse()
+            .transform_vector3(if day { sun } else { moon })
+            .normalize();
+        let shadow_view = Mat4::look_at_rh(light * 100.0, Vec3::ZERO, Vec3::Z);
+        let shadow_projection = Mat4::orthographic_rh_gl(-160.0, 160.0, -160.0, 160.0, 0.05, 256.0);
         let day_time = inputs.day_time.rem_euclid(24000) as i32;
         let world_day = inputs.day_time.div_euclid(24000);
         let seconds = (now - self.start).as_secs_f32() % 3600.0;
@@ -247,6 +259,10 @@ impl FrameUniforms {
                 "worldDay" => Value::i(&[world_day as i32]),
                 "moonPhase" => Value::i(&[world_day.rem_euclid(8) as i32]),
                 "frameCounter" => Value::i(&[self.frame as i32]),
+                "shadowModelView" => m4(shadow_view),
+                "shadowModelViewInverse" => m4(shadow_view.inverse()),
+                "shadowProjection" => m4(shadow_projection),
+                "shadowProjectionInverse" => m4(shadow_projection.inverse()),
                 "atlasSize" => Value::i(&[self.atlas[0] as i32, self.atlas[1] as i32]),
                 "frameTime" => Value::f(&[dt]),
                 "frameTimeCounter" => Value::f(&[seconds]),
@@ -301,6 +317,47 @@ impl FrameUniforms {
             Vec4::new(color[0], color[1], color[2], 1.0),
             Vec4::new(1.0, start, end, 1.0 / (end - start).max(1e-3)),
         ]
+    }
+}
+
+impl FrameUniforms {
+    /// Evaluates the pack's custom uniforms with this frame's values and puts them after
+    /// `NAMES`' values, in `custom.uniforms()` order.
+    pub fn eval_custom(&mut self, custom: &mut horizon_shaders::Custom) {
+        self.values.truncate(NAMES.len());
+        let values = &self.values;
+        let builtin = |name: &str| {
+            let v = values.get(index(name)?)?;
+            let n = components(name);
+            Some(match *v {
+                Value::F(f) => horizon_shaders::Val::vector(&f.map(f64::from)[..n]),
+                Value::I(i) => horizon_shaders::Val::vector(&i.map(f64::from)[..n.min(3)]),
+            })
+        };
+        let dt = match index("frameTime").and_then(|i| values.get(i)) {
+            Some(Value::F(f)) => f64::from(f[0]),
+            _ => 0.0,
+        };
+        let out = custom.eval(dt, &builtin);
+        self.values
+            .extend(out.iter().map(|v| Value::f(&v.v.map(|x| x as f32)[..v.n])));
+    }
+}
+
+/// How many components the uniform `name` has (16 for a matrix).
+fn components(name: &str) -> usize {
+    match name {
+        "cameraPosition"
+        | "previousCameraPosition"
+        | "upPosition"
+        | "sunPosition"
+        | "moonPosition"
+        | "shadowLightPosition"
+        | "fogColor"
+        | "skyColor" => 3,
+        "eyeBrightness" | "eyeBrightnessSmooth" | "atlasSize" => 2,
+        n if n.starts_with("gbuffer") || n.starts_with("shadow") && n != "shadowAngle" => 16,
+        _ => 1,
     }
 }
 

@@ -53,3 +53,11 @@ fn vs_uv(@builtin(vertex_index) i: u32) -> Full {
 fn fs_copy(v: Full) -> @location(0) vec4<f32> {
     return textureSample(source, linear, v.uv);
 }
+
+// One level of a buffer's mip chain from the level above (6.1.7): the average of the 2×2
+// texels under each destination texel, by one bilinear sample at their shared corner.
+@fragment
+fn fs_down(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
+    let size = max(textureDimensions(source) / 2u, vec2<u32>(1u));
+    return textureSampleLevel(source, linear, p.xy / vec2<f32>(size), 0.0);
+}
