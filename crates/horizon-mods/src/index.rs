@@ -122,6 +122,14 @@ pub struct Project {
     pub key: Option<String>,
     /// Newest first.
     pub versions: Vec<Version>,
+    /// Its files' downloads from their releases, all versions together:
+    /// GitHub's counts, added by the registry's publish job (hourly).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub downloads: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
