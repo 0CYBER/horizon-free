@@ -71,10 +71,16 @@ impl Rocket {
         (self.position, self.velocity)
     }
 }
-/// `damageAmount * (float)Math.sqrt((5.0 - this.distanceTo(target)) / 5.0)`,
-/// `distanceTo` being a float.
-fn blast_damage(damage: f32, distance_sqr: f64) -> f32 {
-    let distance = distance_sqr.sqrt() as f32;
+/// `damageAmount * (float)Math.sqrt((5.0 - this.distanceTo(target)) / 5.0)`
+/// from the rocket at `from` to a target at `to`; `Entity.distanceTo` sums
+/// the squared offsets in floats.
+fn blast_damage(damage: f32, from: Vec3, to: Vec3) -> f32 {
+    let (x, y, z) = (
+        (from.x - to.x) as f32,
+        (from.y - to.y) as f32,
+        (from.z - to.z) as f32,
+    );
+    let distance = f64::from(x * x + y * y + z * z).sqrt() as f32;
     damage * ((5.0 - f64::from(distance)) / 5.0).sqrt() as f32
 }
 pub(super) fn fireworks_of(stack: &ItemStack) -> (u8, Vec<FireworkExplosion>) {
@@ -294,7 +300,7 @@ impl Game<'_> {
                                 );
                                 world.clear_between(from, to, false)
                             });
-                        sees.then(|| (m.id, blast_damage(damage, d2)))
+                        sees.then(|| (m.id, blast_damage(damage, from, m.position)))
                     })
                     .collect()
             };
@@ -337,7 +343,7 @@ impl Game<'_> {
             })
         };
         if sees {
-            self.rocket_hurt_player(blast_damage(damage, d2));
+            self.rocket_hurt_player(blast_damage(damage, from, feet));
         }
     }
     /// `hurtServer` with `damageSources().fireworks`: armor absorbs it and
