@@ -2546,6 +2546,19 @@ impl Game<'_> {
             }
             return Ok(true);
         }
+        // Creeper.mobInteract: any item in #creeper_igniters, damaged when it
+        // is damageable and used up otherwise.
+        let creeper_igniter = self
+            .res
+            .items()
+            .item_tags
+            .get("minecraft:creeper_igniters")
+            .is_some_and(|t| t.contains(&*item));
+        let damageable = self
+            .res
+            .items()
+            .get(&item)
+            .is_some_and(|i| i.max_damage > 0);
         let m = &mut self.mobs[index];
         if !m.alive() {
             return Ok(false);
@@ -2786,10 +2799,21 @@ impl Game<'_> {
                 consume = true;
                 sound = Some("entity.iron_golem.repair");
             }
-            Species::Creeper if item == "minecraft:flint_and_steel" => {
+            Species::Creeper if creeper_igniter => {
                 m.extra.flag = true;
-                sound = Some("item.flintandsteel.use");
-                self.damage_held_tool();
+                // FIRECHARGE_USE for a fire charge, else FLINTANDSTEEL_USE,
+                // at the creeper's feet with a pitch from its own random.
+                let event = if item == "minecraft:fire_charge" {
+                    "item.firecharge.use"
+                } else {
+                    "item.flintandsteel.use"
+                };
+                eat = Some((event, 1.0, m.random.next_float() * 0.4 + 0.8));
+                if damageable {
+                    self.damage_held_tool();
+                } else {
+                    consume = true;
+                }
             }
             // Parrot.mobInteract: parrot food may tame a wild one (one time in
             // ten); a parrot never takes it as Animal food (isFood is false).
