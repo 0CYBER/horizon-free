@@ -123,9 +123,13 @@ callers. Run Linux games under `xvfb-run -a` when no display is available. Each
 process gets scratch game, launcher, XDG data and config homes; telemetry, audio
 and launcher self-update are disabled.
 
-`lan_integration` and `friends_integration` register these suites with the normal
-`parity.py` selection used by CI. Their traced imports and Cargo artifacts select
-them when the drivers or game implementation change. LAN writes `results.json`
+`lan_integration` and `friends_integration` register these suites with `parity.py`.
+`friends_integration` (under a minute) is selected like any harness when the
+drivers or game implementation change. `lan_integration` is the whole LAN suite
+(~40 minutes on a loaded runner, and single checks flake under load), so
+`tools/parity_hosts.json` lists it under `named_only`: no automatic selection
+(`--changed`, `--failed`, `--flake-check`, CI, parity-main) picks it; it runs
+when named and in the nightly audit (`--all`). LAN writes `results.json`
 with the host mode and each result beside its screenshots and logs. A skipped
 case is recorded explicitly and does not count as passing coverage.
 
