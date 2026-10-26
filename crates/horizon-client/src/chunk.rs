@@ -24,6 +24,20 @@ pub fn block_strategy() -> Strategy {
     Strategy::blocks(BLOCK_BITS.load(std::sync::atomic::Ordering::Relaxed))
 }
 
+/// Frees `columns` (`count` of them) on a short-lived thread of its own
+/// when there are many: a teleport or a dimension change drops a few
+/// thousand columns at once, and freeing their sections took the frame
+/// 15-20 ms. A few are freed here.
+pub fn free_columns<T: Send + 'static>(columns: T, count: usize) {
+    if count < 64 {
+        return;
+    }
+    // Should the thread not start, the closure drops `columns` here.
+    let _ = std::thread::Builder::new()
+        .name("Chunk freeing".into())
+        .spawn(move || drop(columns));
+}
+
 /// Sizes the block states' global palette for a registry of `states`.
 pub fn set_block_states(states: usize) {
     let bits = horizon_core::paletted::ceil_log2(states).max(16);
