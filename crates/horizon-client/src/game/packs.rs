@@ -163,7 +163,7 @@ impl Game<'_> {
             self.pack.context.biomes.clone(),
             self.pack.context.light.clone(),
         )?;
-        // Keep the working GPU resources, but release its exclusive window surface.
+        // Keep the working GPU resources, and hand its window surface over.
         if let Some(renderer) = &mut self.renderer {
             renderer.release_surface();
         }
