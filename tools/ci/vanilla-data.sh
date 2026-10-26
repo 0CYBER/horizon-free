@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The vanilla data for this checkout on the self-hosted runner. Horizon never downloads the game: the runner
 # holds the maintainer's own copy, imported and decompiled once (HORIZON_SHARED_SOURCE, default
-# ~/code/horizon-parity/shared-local). It is cloned once into the runner's work folder ($RUNNER_WORKSPACE/
-# shared-local; APFS clones, so no second copy of the bytes), and .local/ links to it as in a parity worktree.
+# ~/code/horizon-parity/shared-local; tools/ci/linux-runner.sh sets it on Linux). It is cloned once into the runner's
+# work folder ($RUNNER_WORKSPACE/shared-local; APFS clones, or reflinks where the file system has them, so no second
+# copy of the bytes), and .local/ links to it as in a parity worktree.
 # .local/horizon-client and the exporter outputs beside it, what horizon-prepare makes, are prepared by this
 # checkout's own preparer once per preparer version (its sources, the exporters and research-lock.json), so a
 # change to the preparer is checked with what it prepares; the four newest preparations are kept.
@@ -12,17 +13,15 @@ source="${HORIZON_SHARED_SOURCE:-$HOME/code/horizon-parity/shared-local}"
 version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' research-lock.json | head -1)
 if [ ! -f "$shared/minecraft/$version/prepared.json" ]; then
   [ -f "$source/minecraft/$version/prepared.json" ] || { echo "::error::no imported Minecraft $version in $source"; exit 1; }
-  mkdir -p "$shared"
-  if [ "$(uname)" = Darwin ]; then
-    for entry in "$source"/*; do
-      [ "$(basename "$entry")" = horizon-client ] || cp -cR "$entry" "$shared/"
-    done
-  else
-    for entry in "$source"/*; do
-      [ "$(basename "$entry")" = horizon-client ] || cp -R --reflink=auto "$entry" "$shared/"
-    done
-  fi
 fi
+# Whatever the source holds and this runner's copy doesn't yet: all of it the first time, and later additions (the
+# sounds came after the release runner's first clone, and its audio harnesses failed for want of them).
+mkdir -p "$shared"
+for entry in "$source"/*; do
+  name=$(basename "$entry")
+  [ "$name" = horizon-client ] || [ -e "$shared/$name" ] && continue
+  if [ "$(uname)" = Darwin ]; then cp -cR "$entry" "$shared/"; else cp -R --reflink=auto "$entry" "$shared/"; fi
+done
 mkdir -p .local "$shared/prepared"
 for entry in "$shared"/*; do
   name=$(basename "$entry")
@@ -31,7 +30,8 @@ for entry in "$shared"/*; do
 done
 
 # HORIZON_PREPARE_KEY: the same key, computed where the Git history is (tools/pr_ready.py on another machine).
-key=${HORIZON_PREPARE_KEY:-$(git ls-files -s crates/horizon-prepare mods/horizon/src/test/java research-lock.json | shasum -a 256 | cut -c1-16)}
+sha256() { if command -v shasum > /dev/null; then shasum -a 256; else sha256sum; fi; }
+key=${HORIZON_PREPARE_KEY:-$(git ls-files -s crates/horizon-prepare mods/horizon/src/test/java research-lock.json | sha256 | cut -c1-16)}
 prepared="$shared/prepared/$key"
 # Two runners share the vanilla data (~/.actions-runners/horizon-2/_work/horizon/shared-local links to the first
 # one's): one preparation at a time. A lock older than 30 minutes belongs to a job that died.
@@ -42,7 +42,21 @@ until mkdir "$lock" 2>/dev/null; do
 done
 trap 'rmdir "$lock" 2>/dev/null || true' EXIT
 # horizon-prepare writes .local/horizon-client and its exporters' outputs beside it: all of them live in
-# $prepared, listed in $prepared/.entries, and .local/ links to them.
+# $prepared, listed in $prepared/.entries, and .local/ links to them. A real folder of that kind in .local/ is
+# what an older failed preparation left: it would hide the preparations (and a new one would not count it as its
+# own output), so it goes.
+outputs=$({ cat "$shared"/prepared/*/.entries; cd .local && ls -d horizon-client*; } 2>/dev/null || true)
+for name in $(echo "$outputs" | LC_ALL=C sort -u); do
+  if [ -e ".local/$name" ] && [ ! -L ".local/$name" ]; then
+    rm -rf ".local/${name:?}"
+    echo "Removed .local/$name, left by a failed preparation"
+  fi
+done
+# A preparation made while such a folder was there did not list it (horizon-client above all), so it is made again.
+if [ -f "$prepared/.entries" ] && ! grep -qx horizon-client "$prepared/.entries"; then
+  echo "Preparation $key lacks horizon-client: preparing again"
+  rm -rf "$prepared"
+fi
 if [ ! -f "$prepared/.entries" ]; then
   echo "Preparing resources with this checkout's horizon-prepare ($key)"
   rm -rf "$prepared" && mkdir -p "$prepared"
@@ -55,6 +69,9 @@ if [ ! -f "$prepared/.entries" ]; then
   cargo build --release --locked -p horizon-prepare
   if ! target/release/horizon-prepare --root "$PWD" > "$RUNNER_TEMP/prepare.log" 2>&1; then
     tail -40 "$RUNNER_TEMP/prepare.log"
+    # Nothing of a failed preparation stays in .local/: the next job prepares again.
+    LC_ALL=C comm -13 <(echo "$before") <(ls -1A .local | LC_ALL=C sort) |
+      while read -r name; do rm -rf ".local/${name:?}"; done
     rm -rf "$prepared"
     exit 1
   fi

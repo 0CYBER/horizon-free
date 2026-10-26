@@ -94,6 +94,7 @@ pub enum Species {
     Nautilus,
     ZombieNautilus,
     SulfurCube,
+    Mannequin,
 }
 /// Baby bounding boxes (each class's BABY_DIMENSIONS).
 #[derive(Clone, Copy, Debug)]
@@ -1307,6 +1308,18 @@ pub const ALL: &[Def] = &[
         None,
         Baby::None
     ),
+    // Mannequin: the player model; the DATA_PROFILE ResolvableProfile picks
+    // its skin, this texture only while that has none.
+    def!(
+        Mannequin,
+        "mannequin",
+        "player#main",
+        "entity/player/wide/steve",
+        A::Humanoid { zombie_arms: false },
+        ["", "entity.generic.hurt", "entity.generic.death"],
+        None,
+        Baby::None
+    ),
 ];
 pub fn def(s: Species) -> &'static Def {
     ALL.iter().find(|d| d.species == s).unwrap_or(&ALL[0])
@@ -1488,7 +1501,7 @@ impl Def {
             // Nautilus.handleAirSupply: it dries out on land.
             needs_water: aquatic || s == S::Nautilus,
             water_sensitive: matches!(s, S::Enderman | S::Blaze | S::SnowGolem),
-            animal: !matches!(s, S::Bat | S::SulfurCube)
+            animal: !matches!(s, S::Bat | S::SulfurCube | S::Mannequin)
                 && !self.hostile_class()
                 && !aquatic
                 && !matches!(

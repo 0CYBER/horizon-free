@@ -151,10 +151,13 @@ impl Game<'_> {
                     .clone()
                     .unwrap_or_else(|| Text::literal(&name))
             };
+            // StringDecomposer.iterateFormatted: `§` codes a server leaves
+            // inside the team prefix or the name itself apply at draw time.
             let shown = match team {
                 Some(t) => t.formatted_name(member),
                 None => member,
-            };
+            }
+            .resolve_legacy();
             let mut lines = Vec::new();
             // EntityRenderer.extractNameTags: the score shows within the
             // below-name distance (10), under the name.
@@ -162,7 +165,7 @@ impl Game<'_> {
             if distance_sqr < 10.0 * 10.0
                 && let Some(score) = holder.and_then(|h| self.below_name_text(&h))
             {
-                lines.push((score, 0.0));
+                lines.push((score.resolve_legacy(), 0.0));
                 lift = f64::from(9.0f32 * 1.15 * 0.025);
             }
             lines.push((shown, lift));
@@ -213,14 +216,15 @@ impl Game<'_> {
             let shown = match team {
                 Some(t) => t.formatted_name(name.clone()),
                 None => name.clone(),
-            };
+            }
+            .resolve_legacy();
             let mut lines = Vec::new();
             let mut lift = 0.0;
             let holder = self.persist.uuids.get(&a.id).map(|u| uuid_text(*u));
             if distance_sqr < 10.0 * 10.0
                 && let Some(score) = holder.and_then(|h| self.below_name_text(&h))
             {
-                lines.push((score, 0.0));
+                lines.push((score.resolve_legacy(), 0.0));
                 lift = f64::from(9.0f32 * 1.15 * 0.025);
             }
             lines.push((shown, lift));
@@ -235,6 +239,42 @@ impl Game<'_> {
                 light: l,
                 discrete: false,
             });
+        }
+        // ItemFrameRenderer.shouldShowName/getNameTag: only the targeted
+        // frame's custom-named item, with the HUD visible (also glow frames).
+        if !self.ui.hide_gui
+            && let Some((i, distance)) = self.frame_hit()
+            && self.before_block(distance)
+            && self.mob_hit().is_none_or(|(_, d)| d > distance)
+            && let Some(name) = self.item_frames[i]
+                .item
+                .as_ref()
+                .and_then(|item| item.custom_name())
+        {
+            let frame = &self.item_frames[i];
+            let (lo, hi) = frame.bounds();
+            let center = glam::DVec3::from_array(std::array::from_fn(|a| (lo[a] + hi[a]) / 2.0));
+            if center.distance_squared(camera) < 64.0 * 64.0 {
+                // NAME_TAG is at the entity height (0.5), then the name
+                // submitter lifts it 0.5. ItemFrameRenderer offsets rendering
+                // 0.3 toward its facing and -0.25 vertically.
+                let step = frame.step();
+                tags.push(NameTag {
+                    at: center
+                        + glam::DVec3::new(
+                            f64::from(step[0] as f32 * 0.3),
+                            0.75,
+                            f64::from(step[2] as f32 * 0.3),
+                        ),
+                    lines: vec![(Text::literal(name).resolve_legacy(), 0.0)],
+                    light: self.world.light(
+                        center.x.floor() as i32,
+                        center.y.floor() as i32,
+                        center.z.floor() as i32,
+                    ),
+                    discrete: false,
+                });
+            }
         }
         tags
     }
@@ -253,12 +293,16 @@ impl Game<'_> {
         const FADED: u32 = 0x7F;
         for tag in self.name_tags(camera, alpha) {
             let o = tag.at - camera;
+            // `gbuffers_entities` draws name tag text (2.3); a sneaking player's faded tag, on its
+            // background, blends.
             if tag.discrete {
+                self.mark_translucent_entity(out.len(), "minecraft:name_tag");
                 self.name_tag_quads(o, &tag.lines, FADED, true, 0, vertex_light(tag.light), out);
                 continue;
             }
             // LightCoordsUtil.lightCoordsWithEmission(lightCoords, 2).
             let lit = (tag.light >> 4).max(2) << 4 | (tag.light & 15).max(2);
+            self.mark_entity(out.len(), "minecraft:name_tag");
             self.name_tag_quads(o, &tag.lines, 0xFF, false, 0, vertex_light(lit), out);
             // RenderPipelines.TEXT_SEE_THROUGH: no depth test, no lightmap.
             self.name_tag_quads(o, &tag.lines, FADED, true, 2, 0, see_through);

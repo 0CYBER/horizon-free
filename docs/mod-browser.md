@@ -149,6 +149,32 @@ horizon-launcher mods remove faithful-32x
 
 ## Sources
 
+**Horizon's registry.** Mods (`.hmod`) and resource packs made for Horizon, reviewed as pull requests in
+[ludovic111/horizon-mods](https://github.com/ludovic111/horizon-mods) ([api/mod-index.md](api/mod-index.md)). The
+launcher reads its `index.json` (`browser/horizon.rs`; `HORIZON_MOD_INDEX=<file or https address>` reads a test
+registry instead, whose files may then be on disk) at most every ten minutes, and keeps the last copy in
+`mod-browser/horizon-index.json`. Before a result is installed it shows whether its files are signed and, for a mod,
+what it may do, in the words of the game's Options > Mods. A download goes to `mod-browser/downloads/` and is moved
+into place only after `horizon_mods::index::check_file` passes (size, SHA-256, the author's signature when the project
+has a key, the file's own manifest against the index). A mod becomes `horizon-mods/<id>.hmod`, turned on;
+`mods disable` and `mods enable` switch it in `horizon-mods.txt`. When the index takes a file down, the launcher turns
+it off the next time it reads the index or starts the game, says why, and refuses to install it or turn it back on.
+A Horizon modpack (`.hpack`) installs as its own profile (`browser/horizon/pack.rs`): `horizon-packs/<id>/` holds the
+checked pack, `pack.json` and `home/`, the profile's game folder, where each of the pack's mods is downloaded and checked
+like any registry mod and turned on or off as the pack says; its overrides (settings, resource packs, a mod's saved
+settings) are copied in on the first install only, so the player's changes survive updates. A pack whose mod was taken
+down installs nothing. It is listed on the Modpacks tab with **Play** and **Remove**, and plays like an imported pack
+(`modpacks::apply_profile`). Shader packs are listed by the index but not installed by this launcher yet.
+
+```sh
+horizon-launcher mods search --source horizon --kind mod coords   # with whether it is signed and what it may do
+horizon-launcher mods install --source horizon coords_hud
+horizon-launcher mods disable coords_hud
+horizon-launcher mods install --source horizon cozy               # a modpack: its own profile
+horizon-launcher modpack play cozy
+```
+
+
 **Modrinth.** The public API (`api.modrinth.com/v2`) needs no key. The launcher names itself in its user agent, as
 Modrinth asks.
 

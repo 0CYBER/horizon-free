@@ -642,7 +642,7 @@ pub fn setup(
             } else {
                 ArmPose::Empty
             };
-            let mut h = if m.extra.main_hand_left {
+            let mut h = if m.main_arm_left() {
                 Hum::new(ArmPose::Empty, main)
             } else {
                 Hum::new(main, ArmPose::Empty)
@@ -693,7 +693,7 @@ pub fn setup(
             } else {
                 ArmPose::Empty
             };
-            let mut h = if m.extra.main_hand_left {
+            let mut h = if m.main_arm_left() {
                 Hum::new(off, pose)
             } else {
                 Hum::new(pose, off)

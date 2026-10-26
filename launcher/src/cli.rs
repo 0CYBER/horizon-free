@@ -199,6 +199,10 @@ enum ModsCmd {
     },
     /// Remove a pack the browser installed
     Remove { project: String },
+    /// Turn on a mod the browser installed (horizon-mods.txt, as the game's Options > Mods does)
+    Enable { project: String },
+    /// Turn off a mod the browser installed; it stays installed
+    Disable { project: String },
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -213,6 +217,8 @@ enum SourceArg {
     Modrinth,
     /// CurseForge support is coming soon
     Curseforge,
+    /// Horizon's own registry: mods, modpacks and resource packs made for Horizon, reviewed
+    Horizon,
 }
 
 impl SourceArg {
@@ -221,6 +227,7 @@ impl SourceArg {
         let id = match self {
             SourceArg::Modrinth => SourceId::Modrinth,
             SourceArg::Curseforge => SourceId::CurseForge,
+            SourceArg::Horizon => SourceId::Horizon,
         };
         browser::source(id).ok_or_else(|| browser::CURSEFORGE_SOON.into())
     }
@@ -1064,11 +1071,23 @@ fn servers(action: ServersCmd, as_json: bool) -> Result<(), String> {
 }
 
 fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
-    use horizon_launcher::browser::{installed, Kind, Query};
+    use horizon_launcher::browser::{horizon, installed, Kind, Query, SourceId};
     use horizon_launcher::modpacks;
     let home = backend::game_home();
     let entry_json = |e: &installed::Entry| serde_json::to_value(e).unwrap_or_default();
     let line = |label: &str, f: f32| progress(label.to_string())(f);
+    let from_registry = installed::Installed::load(&home)
+        .entries
+        .iter()
+        .any(|e| e.source == SourceId::Horizon);
+    if from_registry {
+        if let Ok(index) = horizon::index() {
+            for said in horizon::turn_off_revoked(&index, &home) {
+                eprintln!("{said}");
+            }
+        }
+    }
+    let on = matches!(action, ModsCmd::Enable { .. });
     match action {
         ModsCmd::List => {
             let list = installed::Installed::load(&home).entries;
@@ -1114,11 +1133,19 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                         "id": p.id, "slug": p.slug, "title": p.title, "summary": p.summary,
                         "author": p.author, "downloads": p.downloads, "page": p.page,
                         "license": p.license, "support": support.label(), "reason": support.reason(),
+                        "about": if p.source == SourceId::Horizon { horizon::trust_and_capabilities(&p.id) } else { Vec::new() },
                     })
                 }).collect());
             } else {
                 for p in &found {
                     let support = p.support();
+                    if p.source == SourceId::Horizon {
+                        println!("{}  ({})  {}\n  {}", p.title, p.slug, p.author, p.summary);
+                        for line in horizon::trust_and_capabilities(&p.id) {
+                            println!("  {line}");
+                        }
+                        continue;
+                    }
                     let unchecked = p.kind == Kind::Mod && support.installable();
                     println!(
                         "{}  ({})  {} · {} downloads\n  {}",
@@ -1187,6 +1214,23 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
         } => {
             let source = source.get()?;
             let p = source.project(&project)?;
+            if p.kind == Kind::Modpack && p.source == SourceId::Horizon {
+                let pack = horizon::pack::install(&p.id, &line)?;
+                if as_json {
+                    json(
+                        serde_json::json!({"pack": pack.id, "version": pack.version, "mods": pack.mods, "home": horizon::pack::home(&pack.work)}),
+                    );
+                } else {
+                    println!(
+                        "{} {} is installed as its own profile, with {}.",
+                        pack.name,
+                        pack.version,
+                        pack.mods.join(", ")
+                    );
+                    println!("Play it: horizon-launcher modpack play {}", pack.id);
+                }
+                return Ok(());
+            }
             if p.kind == Kind::Modpack {
                 let folder = modpacks::ports_dir().join("downloads");
                 let file =
@@ -1251,15 +1295,43 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
             let e = installed::remove(&home, &project)?;
             println!("Removed {} ({}).", e.title, e.file);
         }
+        ModsCmd::Enable { project } | ModsCmd::Disable { project } => {
+            let e = installed::Installed::load(&home)
+                .lookup(&project)
+                .cloned()
+                .ok_or_else(|| format!("{project} wasn't installed by the browser."))?;
+            let id = horizon::mod_id(&e)
+                .filter(|_| e.kind == Kind::Mod)
+                .ok_or_else(|| format!("{} isn't a mod: only mods turn on and off.", e.title))?;
+            if on {
+                if let Some(r) = horizon::index()
+                    .ok()
+                    .filter(|_| e.source == SourceId::Horizon)
+                    .and_then(|i| {
+                        i.revoked(&e.project, e.checksum.trim_start_matches("SHA-256:"))
+                            .cloned()
+                    })
+                {
+                    return Err(format!("{} was taken down: {}", e.title, r.reason));
+                }
+            }
+            horizon_launcher::browser::java::set_enabled(&home, id, on)?;
+            println!("{} is {}.", e.title, if on { "on" } else { "off" });
+        }
     }
     Ok(())
 }
 
 fn modpack(action: ModpackCmd, as_json: bool) -> Result<(), String> {
+    use horizon_launcher::browser::horizon;
     use horizon_launcher::modpacks::{self, Imported};
     use horizon_port_pack::report::Status;
     let log = &|line: String| eprintln!("{line}");
     let work = |pack: &str| {
+        let registry = horizon::pack::packs_dir().join(pack);
+        if horizon::pack::is_pack(&registry) {
+            return Ok(registry);
+        }
         let work = modpacks::ports_dir().join(pack);
         modpacks::load(&work).map(|_| work)
     };
@@ -1293,10 +1365,26 @@ fn modpack(action: ModpackCmd, as_json: bool) -> Result<(), String> {
     match action {
         ModpackCmd::List => {
             let packs = modpacks::list();
-            if packs.is_empty() && !as_json {
+            let registry = horizon::pack::list();
+            if packs.is_empty() && registry.is_empty() && !as_json {
                 println!("No modpack imported yet: horizon-launcher modpack import <pack>");
             }
             packs.iter().for_each(show);
+            for p in &registry {
+                if as_json {
+                    json(
+                        serde_json::json!({"pack": p.id, "name": p.name, "version": p.version, "source": "horizon", "mods": p.mods}),
+                    );
+                } else {
+                    println!(
+                        "{} {}  ({}, from Horizon's registry)\n  {}",
+                        p.name,
+                        p.version,
+                        p.id,
+                        p.mods.join(", ")
+                    );
+                }
+            }
         }
         ModpackCmd::Import { path } => show(&modpacks::import(&path, log)?),
         ModpackCmd::Port {

@@ -29,6 +29,9 @@ pub fn ring_positions(
         .collect()
 }
 
+/// findBiomeHorizontal's radius, 112 blocks, in quarts.
+const SEARCH_QUARTS: i32 = 28;
+
 /// One ring position before its biome search: the chunk on the ring and the
 /// random its search uses. Vanilla runs each search as its own task.
 #[derive(Clone, Debug)]
@@ -38,6 +41,13 @@ pub struct RingSearch {
     random: LegacyRandom,
 }
 impl RingSearch {
+    /// Whether the search can end within `margin` chunks of chunk (`x`,
+    /// `z`): it ends on its ring chunk or in the square it samples, at most
+    /// 120 blocks from the ring chunk's corner (8 chunks, rounded up).
+    pub fn may_land_near(&self, x: i32, z: i32, margin: i32) -> bool {
+        let reach = (SEARCH_QUARTS * 4 + 8 + 15) / 16 + margin;
+        (self.x - x).abs() <= reach && (self.z - z).abs() <= reach
+    }
     /// BiomeSource.findBiomeHorizontal around the ring chunk's centre: a
     /// random preferred biome within 112 blocks, else the ring chunk itself.
     ///
@@ -53,8 +63,9 @@ impl RingSearch {
     ) -> ChunkPos {
         let mut search = self.random.clone();
         let (cx, cz) = ((self.x * 16 + 8) >> 2, (self.z * 16 + 8) >> 2);
-        let quarts: Vec<[i32; 3]> = (-28..=28)
-            .flat_map(|dz| (-28..=28).map(move |dx| [cx + dx, 0, cz + dz]))
+        let r = SEARCH_QUARTS;
+        let quarts: Vec<[i32; 3]> = (-r..=r)
+            .flat_map(|dz| (-r..=r).map(move |dx| [cx + dx, 0, cz + dz]))
             .collect();
         let mut found = 0;
         let mut result = None;

@@ -413,6 +413,13 @@ impl SculkEntity {
             spreader: SculkSpreader::default(),
         }
     }
+    /// Whether its block entity tick does nothing: no vibration chosen
+    /// or on its way, none waiting to be chosen, and no charge to spread.
+    pub fn idle(&self) -> bool {
+        self.vibration.current.is_none()
+            && self.vibration.selector.current().is_none()
+            && self.spreader.cursors.is_empty()
+    }
     pub fn for_block(name: &str) -> Option<Self> {
         Some(Self::new(match name {
             "minecraft:sculk_sensor" => SculkKind::Sensor,
