@@ -76,6 +76,15 @@ fn a_changed_file_key_or_manifest_is_refused() {
     let e = check(&more_caps, "coords_hud", &hmod).unwrap_err();
     assert!(e.contains("isn't what the index lists"), "{e}");
 
+    let mut other_level = index.clone();
+    other_level.projects[0].versions[0].api_level = Some(1);
+    let e = check(&other_level, "coords_hud", &hmod).unwrap_err();
+    assert!(e.contains("isn't what the index lists"), "{e}");
+    // An index built before levels lists none: the file still passes.
+    let mut no_level = index.clone();
+    no_level.projects[0].versions[0].api_level = None;
+    assert_eq!(check(&no_level, "coords_hud", &hmod), Ok(Trust::Verified));
+
     let mut revoked = index.clone();
     revoked.revoked.push(Revoked {
         id: "coords_hud".into(),
@@ -165,6 +174,30 @@ fn resource_packs_need_a_pack_mcmeta() {
     let e = check_resource_pack(&pack(&[("pack.mcmeta", meta), ("../x", "")])).unwrap_err();
     assert!(e.contains("plain path"), "{e}");
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn the_newest_version_this_horizon_runs_is_installed() {
+    let mut index = sample();
+    let mut newer = index.projects[0].versions[0].clone();
+    newer.version = "0.2.0".into();
+    newer.file.sha256 = "2".repeat(64);
+    newer.api_level = Some(crate::api_level::LEVEL + 1);
+    index.projects[0].versions.insert(0, newer);
+    let p = index.project("coords_hud").unwrap();
+    let pick = |level| {
+        index
+            .installable(p, "26.3", level)
+            .map(|v| v.version.as_str())
+    };
+    assert_eq!(pick(crate::api_level::LEVEL), Some("0.1.0"));
+    assert_eq!(pick(crate::api_level::LEVEL + 1), Some("0.2.0"));
+    assert_eq!(index.installable(p, "26.4", crate::api_level::LEVEL), None);
+    // No level listed: runnable as far as the index knows.
+    index.projects[0].versions[0].api_level = None;
+    let p = index.project("coords_hud").unwrap();
+    let v = index.installable(p, "26.3", 0).unwrap();
+    assert_eq!(v.version, "0.2.0");
 }
 
 #[test]

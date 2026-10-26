@@ -65,13 +65,16 @@ import struct
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 import zlib
 
 try:
     from . import lab, oracle_harness as oh, test_rust_parity as base
+    from .integration_env import game_environment, run_game
     from .lab import free_port  # the other server harnesses import it from here
 except ImportError:
+    from integration_env import game_environment, run_game
     import lab
     import oracle_harness as oh
     import test_rust_parity as base
@@ -124,9 +127,11 @@ class Server:
         self.log_path = directory.parent / f'{log_name}.log'
         self.log = self.log_path.open('w', encoding='utf-8')
         self.lines = []
-        self.process = subprocess.Popen(list(map(str, command)), cwd=directory, stdin=subprocess.PIPE,
+        self.scratch = tempfile.TemporaryDirectory(prefix='hz-server-')
+        env = game_environment(os.environ, self.scratch.name)
+        self.process = subprocess.Popen(list(map(str, command)), cwd=directory, env=env, stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                        encoding='utf-8', errors='replace', env=lab.game_env())
+                                        encoding='utf-8', errors='replace')
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
 
@@ -163,6 +168,7 @@ class Server:
                 self.process.wait()
         self.reader.join(timeout=10)
         self.log.close()
+        self.scratch.cleanup()
 
 
 def settle(server, ticks=600, timeout=600):
@@ -359,7 +365,7 @@ def horizon_client_joins(vanilla_server, binary, world, build, reference):
         server.wait_for(r'Done \(')
         env = lab.game_env(HORIZON_NET_REPORT=report)
         with (build / 'horizon-client-run.log').open('w') as log:
-            subprocess.run([str(c) for c in [binary, '--resources', lab.RESOURCES, '--render-distance', 2,
+            run_game([str(c) for c in [binary, '--resources', lab.RESOURCES, '--render-distance', 2,
                                              '--server', f'127.0.0.1:{port}', '--name', PLAYER]],
                            cwd=client_dir, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=300, check=True)
         server.wait_for(r'left the game', timeout=30)

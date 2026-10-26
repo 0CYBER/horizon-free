@@ -168,7 +168,14 @@ fn project_of(p: &index::Project) -> Option<Project> {
     })
 }
 
-fn version_of(index: &Index, p: &index::Project, v: &index::Version) -> Version {
+/// Version `v` of `p` as the browser shows it; blocked when taken down, or when it needs a newer
+/// mod API level than `level`, the game's.
+fn version_of(
+    index: &Index,
+    p: &index::Project,
+    v: &index::Version,
+    level: Option<u32>,
+) -> Version {
     Version {
         id: v.version.clone(),
         number: v.version.clone(),
@@ -187,7 +194,8 @@ fn version_of(index: &Index, p: &index::Project, v: &index::Version) -> Version 
         required: v.requires.iter().map(|r| r.id.clone()).collect(),
         blocked: index
             .revoked(&p.id, &v.file.sha256)
-            .map(|r| format!("taken down: {}", r.reason)),
+            .map(|r| format!("taken down: {}", r.reason))
+            .or_else(|| needs_newer(v, level).then(|| NEEDS_NEWER.to_string())),
     }
 }
 
@@ -254,9 +262,10 @@ impl Source for Registry {
         let p = index
             .project(&project.id)
             .ok_or_else(|| format!("{} isn't in Horizon's registry.", project.title))?;
+        let level = crate::backend::game_mod_api_level();
         Ok(p.versions
             .iter()
-            .map(|v| version_of(&index, p, v))
+            .map(|v| version_of(&index, p, v, level))
             .collect())
     }
 
@@ -378,20 +387,24 @@ fn relative(kind: Kind, id: &str, file_name: &str) -> Result<String, String> {
     }
 }
 
-/// Installs a registry project into the game folder `home`: its newest version for this game,
-/// downloaded into `mod-browser/downloads/`, checked against the index, then moved into place.
-/// A mod is `horizon-mods/<id>.hmod`, turned on in `horizon-mods.txt`.
+/// Installs a registry project into the game folder `home`: its newest version for this game that
+/// the game the player runs can load, downloaded into `mod-browser/downloads/`, checked against
+/// the index, then moved into place. A mod is `horizon-mods/<id>.hmod`, turned on in
+/// `horizon-mods.txt`.
 pub fn install(
     project: &Project,
     home: &Path,
     progress: &dyn Fn(&str, f32),
 ) -> Result<Vec<installed::Entry>, String> {
-    install_from(&*index()?, local(), project, home, progress)
+    let level = crate::backend::game_mod_api_level();
+    install_from(&*index()?, local(), level, project, home, progress)
 }
 
+/// [`install`] from `index`, for a game serving mod API `level`.
 fn install_from(
     index: &Index,
     local: bool,
+    level: Option<u32>,
     project: &Project,
     home: &Path,
     progress: &dyn Fn(&str, f32),
@@ -399,25 +412,39 @@ fn install_from(
     let p = index
         .project(&project.id)
         .ok_or_else(|| format!("{} isn't in Horizon's registry.", project.title))?;
-    let v = newest(index, p)?;
+    let v = newest(index, p, level)?;
     install_version(index, local, p, v, home, progress).map(|e| vec![e])
 }
 
-/// A project's newest version for this game that wasn't taken down.
-fn newest<'a>(index: &Index, p: &'a index::Project) -> Result<&'a index::Version, String> {
-    let mut taken_down = None;
+/// A project's newest version for this game that wasn't taken down and that a game serving mod
+/// API `level` runs (any, when the level isn't known).
+fn newest<'a>(
+    index: &Index,
+    p: &'a index::Project,
+    level: Option<u32>,
+) -> Result<&'a index::Version, String> {
+    let (mut taken_down, mut too_new) = (None, false);
     for v in p.versions.iter().filter(|v| v.game == GAME) {
-        match index.revoked(&p.id, &v.file.sha256) {
-            None => return Ok(v),
-            Some(r) => {
-                taken_down.get_or_insert(r);
-            }
+        if let Some(r) = index.revoked(&p.id, &v.file.sha256) {
+            taken_down.get_or_insert(r);
+        } else if needs_newer(v, level) {
+            too_new = true;
+        } else {
+            return Ok(v);
         }
     }
     Err(match taken_down {
+        _ if too_new => format!("{} {NEEDS_NEWER}: update it first.", p.name),
         Some(r) => format!("{} was taken down: {}", p.name, r.reason),
         None => format!("{} has no version for {GAME} to install.", p.name),
     })
+}
+
+const NEEDS_NEWER: &str = "needs a newer Horizon than the game you play";
+
+/// Whether version `v` calls mod API functions a game serving `level` doesn't have.
+fn needs_newer(v: &index::Version, level: Option<u32>) -> bool {
+    matches!((v.api_level, level), (Some(needed), Some(level)) if needed > level)
 }
 
 /// Installs version `v` of the registry's mod, resource pack or shader pack `p` into the game
@@ -462,7 +489,7 @@ fn install_version(
         return Err(format!("{relative} is already there: move it away first."));
     }
     let line = format!("{} {}", p.name, v.version);
-    let file = &version_of(index, p, v).files[0];
+    let file = &version_of(index, p, v, None).files[0];
     let staging = home.join("mod-browser/downloads");
     let path = fetch(file, &staging, local, &|f| progress(&line, f))?;
     let trust = index::check_file(index, p, v, &path).inspect_err(|_| {

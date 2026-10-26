@@ -2126,6 +2126,7 @@ impl Game<'_> {
                 self.apply_remote_health();
                 if p.health <= 0.0 && self.screen != Screen::Dead && self.player.is_some() {
                     self.screen = Screen::Dead;
+                    self.ui.death_time = 0;
                     self.capture(false);
                 }
             }
@@ -2142,6 +2143,7 @@ impl Game<'_> {
                 // screen, whatever health was last sent.
                 if me && self.screen != Screen::Dead && self.player.is_some() {
                     self.screen = Screen::Dead;
+                    self.ui.death_time = 0;
                     self.capture(false);
                 }
             }
@@ -3180,6 +3182,11 @@ impl Game<'_> {
         );
         let was_flying = player.flying;
         self.sync_player_body();
+        // LivingEntity.tickDeath: the local player counts its deathTime once
+        // per client tick while dead (the camera's death roll and zoom).
+        if self.screen == Screen::Dead {
+            self.ui.death_time = self.ui.death_time.saturating_add(1);
+        }
         let Some(player) = self.player.as_mut() else {
             return Ok(());
         };
@@ -3508,7 +3515,7 @@ impl Game<'_> {
         // ticks), and only the server removes it.
         let (world, facts, collision) = (&self.world, self.res.facts(), self.collision);
         for d in self.dropped.iter_mut().filter(|_| running) {
-            d.tick(world, facts, collision, false);
+            d.tick(world, facts, collision, false, &self.res.motion().fluids);
         }
         head_lerps.retain(|_, (_, steps)| *steps > 0);
         for (item, ticks, at, eye, pitch, yaw) in using {
@@ -3958,6 +3965,10 @@ impl Game<'_> {
                 if let Some(placed) = &placed {
                     self.predict_place(placed, seq);
                     self.with_hand(hand, Game::consume_held);
+                } else if let Some(r) = self.remote.as_mut() {
+                    // BlockItem.place plays its sound only once the block is set: the
+                    // server's resend of the target it refused is no placement.
+                    r.placing = None;
                 }
                 if reacts || placed.is_some() {
                     self.with_hand(hand, Game::swing_arm);
