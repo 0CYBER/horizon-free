@@ -1526,12 +1526,17 @@ impl Game<'_> {
                 i += 1;
                 continue;
             }
-            let GatewayArrival {
-                job,
-                target,
-                mut tag,
-            } = self.end.arrivals.remove(i);
-            let at = self.resolve_gateway(job, target)?;
+            let (job, target) = (self.end.arrivals[i].job, self.end.arrivals[i].target);
+            let at = match self.resolve_gateway(job, target) {
+                Ok(at) => at,
+                Err(e) => {
+                    // The traveller waits for the exit: the failure is retried.
+                    log::warn!("End gateway: {e}");
+                    i += 1;
+                    continue;
+                }
+            };
+            let mut tag = self.end.arrivals.remove(i).tag;
             if let Tag::Compound(c) = &mut tag {
                 c.insert("Pos".into(), doubles([at.x, at.y, at.z]));
                 c.insert("Motion".into(), doubles([0.0, 0.0, 0.0]));
