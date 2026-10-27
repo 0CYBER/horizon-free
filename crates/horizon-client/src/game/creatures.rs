@@ -201,6 +201,7 @@ impl Game<'_> {
             // EntitySelector.NO_CREATIVE_OR_SPECTATOR.
             creative: self.creative || self.spectator(),
             sneaking: self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft),
+            swimming: p.swimming,
             look: view_vector(self.yaw, self.pitch),
             main_hand: self.held().map(|s| s.item.clone()),
             off_hand: None,
@@ -1432,6 +1433,27 @@ impl Game<'_> {
                         .effects
                         .list
                         .retain(|e| e.id != "mining_fatigue");
+                }
+                MobEvent::DolphinTreasure { mob } => {
+                    // ServerLevel.findNearestMapStructure(#dolphin_located, 50).
+                    let Some(at) = self.mobs.iter().find(|m| m.id == mob).map(|m| {
+                        [
+                            m.position.x.floor() as i32,
+                            m.position.y.floor() as i32,
+                            m.position.z.floor() as i32,
+                        ]
+                    }) else {
+                        continue;
+                    };
+                    let names = self.structure_tag("minecraft:dolphin_located");
+                    let found = self
+                        .end
+                        .locator()
+                        .filter(|_| !names.is_empty())
+                        .and_then(|t| t.locate(&names, at, 50));
+                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
+                        m.extra.home = found.map(|(_, p)| p);
+                    }
                 }
                 MobEvent::EffectPlayer {
                     effect,
@@ -3175,6 +3197,12 @@ impl Game<'_> {
             .item_tags
             .get("minecraft:creeper_igniters")
             .is_some_and(|t| t.contains(&*item));
+        let fish = self
+            .res
+            .items()
+            .item_tags
+            .get("minecraft:fishes")
+            .is_some_and(|t| t.contains(&*item));
         let damageable = self
             .res
             .items()
@@ -3469,6 +3497,18 @@ impl Game<'_> {
                     let view = self.mob_entity(&self.mobs[index]);
                     self.trigger_entity("minecraft:tame_animal", "entity", &view);
                 }
+            }
+            // Dolphin.mobInteract: a fish makes a baby grow by a tenth and an
+            // adult remember it (`gotFish`), to swim to a treasure.
+            Species::Dolphin if fish => {
+                eat = Some(("entity.dolphin.eat", 1.0, 1.0));
+                if m.extra.age < 0 {
+                    let secs = ((-m.extra.age / 20) as f32 * 0.1) as i32;
+                    horizon_client::mobs::ai::age_up(m, secs, true);
+                } else {
+                    m.extra.flag = true;
+                }
+                consume = true;
             }
             // Tadpole.feed: frog food ages it by a tenth of the time left to
             // grow into a frog (it grows on its next tick once past 24000).
