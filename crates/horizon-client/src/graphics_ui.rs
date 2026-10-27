@@ -276,7 +276,7 @@ pub fn rows(level: Level) -> Vec<Row> {
             h(
                 H::GraphicsApi,
                 None,
-                "Vulkan, or DirectX 12 where Vulkan fails. Next start.",
+                "Vulkan, then DirectX 12 (Windows) or OpenGL (Linux) where it fails. Next start.",
             ),
             h(
                 H::UploadBudget,
@@ -291,8 +291,8 @@ pub fn rows(level: Level) -> Vec<Row> {
             ),
         ],
     };
-    // Only Windows has more than one graphics API.
-    if !cfg!(windows) {
+    // Only Windows and Linux have more than one graphics API.
+    if cfg!(target_os = "macos") {
         rows.retain(
             |row| !matches!(row, Row::Setting(s) if s.item == Item::Horizon(H::GraphicsApi)),
         );
@@ -444,7 +444,7 @@ impl H {
             H::Antialiasing => g.fxaa = !g.fxaa,
             H::Hdr => g.hdr = !g.hdr,
             H::BatteryMode => g.battery = !g.battery,
-            H::GraphicsApi => g.api = step(&GraphicsApi::ALL, g.api, back),
+            H::GraphicsApi => g.api = step(GraphicsApi::choices(), g.api, back),
             H::Pacing => {
                 g.pacing = match g.pacing {
                     Pacing::Efficient => Pacing::Precise,

@@ -760,8 +760,14 @@ fn mip_chain(
 /// pass is also what passes each draw's first instance to shaders reading
 /// `instance_index`, and DirectX 12 is the fallback, where working matters
 /// more than CPU time.
-fn instance_descriptor(backends: wgpu::Backends) -> wgpu::InstanceDescriptor {
+fn instance_descriptor(
+    backends: wgpu::Backends,
+    window: Option<&Arc<Window>>,
+) -> wgpu::InstanceDescriptor {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    if let Some(window) = window {
+        descriptor = descriptor.with_display_handle(Box::new(WindowDisplay(window.clone())));
+    }
     descriptor.backends = backends.with_env();
     let dx12 = cfg!(windows) && descriptor.backends.contains(wgpu::Backends::DX12);
     if !cfg!(debug_assertions) && !dx12 {
@@ -770,6 +776,21 @@ fn instance_descriptor(backends: wgpu::Backends) -> wgpu::InstanceDescriptor {
             .remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
     }
     descriptor.with_env()
+}
+/// The window's display connection, so the OpenGL backend creates its EGL
+/// display from the X11 or Wayland connection the window lives on. Without
+/// one, wgpu-hal falls back to `EGL_MESA_platform_surfaceless`, whose configs
+/// cannot present to a window; the backend then reports the surface as
+/// incompatible and the game has no OpenGL to fall back to (`gl not
+/// compatible with provided surface`).
+#[derive(Debug, Clone)]
+struct WindowDisplay(Arc<Window>);
+impl wgpu::rwh::HasDisplayHandle for WindowDisplay {
+    fn display_handle(
+        &self,
+    ) -> std::result::Result<wgpu::rwh::DisplayHandle<'_>, wgpu::rwh::HandleError> {
+        wgpu::rwh::HasDisplayHandle::display_handle(&*self.0)
+    }
 }
 /// The backends to open a device on, each tried in turn until one gives a
 /// device. `api` is the player's choice (`GraphicsApi::with_env` applied);
@@ -885,7 +906,7 @@ async fn open_device(
         if attempt > 0 {
             log::warn!("Horizon renderer: trying {name} ({})", failures.join("; "));
         }
-        let instance = wgpu::Instance::new(instance_descriptor(backends));
+        let instance = wgpu::Instance::new(instance_descriptor(backends, Some(window)));
         let surface = if offscreen {
             None
         } else {
@@ -5682,7 +5703,7 @@ mod tests {
     #[test]
     fn indirect_draws_are_validated_only_in_debug_builds_and_on_directx_12() {
         let validated = |backends| {
-            super::instance_descriptor(backends)
+            super::instance_descriptor(backends, None)
                 .flags
                 .contains(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL)
         };
