@@ -79,6 +79,7 @@ impl Game<'_> {
         if !self.creative {
             self.consume_held();
         }
+        self.stats.custom("play_record", 1);
         self.world.block_entities.insert(
             (pos[0], pos[1], pos[2]),
             BlockEntity::Jukebox(Jukebox {
@@ -90,6 +91,8 @@ impl Game<'_> {
         self.set_has_record(pos, true);
         self.start_song(pos, &song);
         self.jukebox_changed(pos);
+        // ServerPlayerGameMode.useItemOn: the action was consumed.
+        self.trigger_block("minecraft:item_used_on_block", pos, stack);
         true
     }
     /// Level event 1010: the song from the jukebox, and the "Now Playing" overlay.

@@ -35,6 +35,23 @@ impl Mode {
             Self::Redstone => "minecraft:command_block",
         }
     }
+    /// `Enum.ordinal`, which `ServerboundSetCommandBlockPacket` writes.
+    pub fn ordinal(self) -> i32 {
+        match self {
+            Self::Sequence => 0,
+            Self::Auto => 1,
+            Self::Redstone => 2,
+        }
+    }
+    /// The mode of a packet's ordinal; `handleSetCommandBlock` treats any
+    /// other value as a plain command block (its `default` branch).
+    pub fn from_ordinal(ordinal: i32) -> Self {
+        match ordinal {
+            0 => Self::Sequence,
+            1 => Self::Auto,
+            _ => Self::Redstone,
+        }
+    }
     /// `CycleButton`: the next value, wrapping round.
     pub fn next(self) -> Self {
         match self {
