@@ -83,5 +83,13 @@
   "Choose a cape…": "Выбрать плащ…",
   "No cape": "Без плаща",
   "Default": "По умолчанию",
-  "A 64×64 (or 64×32) skin PNG and a 64×32 cape PNG, kept by the launcher and given to the game when this name plays. The game draws the default skins for now; it uses these once it can. A Microsoft account's skin and cape: coming soon.": "PNG скина 64×64 (или 64×32) и PNG плаща 64×32 хранятся в лаунчере и передаются игре, когда играет это имя. Пока игра рисует стандартные скины; она начнёт использовать эти, как только сможет. Скин и плащ аккаунта Microsoft: скоро."
+  "A 64×64 (or 64×32) skin PNG and a 64×32 cape PNG, kept by the launcher and given to the game when this name plays. The game draws the default skins for now; it uses these once it can. A Microsoft account's skin and cape: coming soon.": "PNG скина 64×64 (или 64×32) и PNG плаща 64×32 хранятся в лаунчере и передаются игре, когда играет это имя. Пока игра рисует стандартные скины; она начнёт использовать эти, как только сможет. Скин и плащ аккаунта Microsoft: скоро.",
+  "Accent colour": "Цвет акцента",
+  "Horizon's violet by default. Every colour keeps text as easy to read.": "По умолчанию фиолетовый Horizon. С любым цветом текст читается так же легко.",
+  "Choose": "Выбрать",
+  "Choose a picture…": "Выбрать картинку…",
+  "Landscape": "Пейзаж",
+  "Your picture, behind Home, cropped to fill it.": "Ваша картинка за главной страницей, обрезанная по размеру.",
+  "Horizon's landscape. Pick a PNG, JPEG or WebP picture of your own.": "Пейзаж Horizon. Выберите свою картинку PNG, JPEG или WebP.",
+  "Home background": "Фон главной"
 }

@@ -36,6 +36,7 @@ mod shortcut_page;
 mod skin_page;
 mod switch_page;
 mod theme;
+mod themes_page;
 mod titlebar;
 mod while_playing;
 mod worlds_page;
@@ -172,6 +173,8 @@ struct Launcher {
     account_menu: bool,
     /// Settings > Account's skin panel for an offline name (`skin_page.rs`).
     skin: Option<skin_page::SkinPanel>,
+    /// Why the last picture for Home's background was refused.
+    background_error: Option<String>,
     settings: Settings,
     /// The Discord, sponsor and website links: built in until links.json on main has been read.
     links: backend::Links,
@@ -277,7 +280,7 @@ impl Launcher {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (tx, rx) = channel();
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
-            this.theme = Theme::for_appearance(this.settings.appearance, window.appearance());
+            this.theme = this.settings_theme(window);
             cx.notify();
         });
         cx.spawn(async move |this, cx| loop {
@@ -344,7 +347,7 @@ impl Launcher {
         // `window.appearance()`, so both draw the same look.
         titlebar::apply_appearance(window, settings.appearance);
         let mut this = Self {
-            theme: Theme::for_appearance(settings.appearance, window.appearance()),
+            theme: Theme::for_appearance(settings.appearance, settings.accent, window.appearance()),
             page: Page::from_env(),
             switches: 0,
             content_scroll: Scrollbar::default(),
@@ -373,6 +376,7 @@ impl Launcher {
             picker_open: false,
             account_menu: false,
             skin: None,
+            background_error: None,
             args_input: settings.game_args.clone(),
             args_focused: false,
             args_focus: cx.focus_handle(),
@@ -2218,6 +2222,21 @@ impl Launcher {
                     gpui::linear_color_stop(t.page.opacity(to), at),
                 ))
         };
+        let picture = self.home_background();
+        let scene = match picture {
+            Some(path) => gpui::img(path)
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .object_fit(gpui::ObjectFit::Cover),
+            None => gpui::img(scene)
+                .absolute()
+                .bottom_0()
+                .left_0()
+                .w(px(scene_width))
+                .h(px(art::SCENE_HEIGHT as f32 * art::SCENE_TEXEL)),
+        };
         let banner = div()
             .relative()
             .flex()
@@ -2232,14 +2251,7 @@ impl Launcher {
             .bg(gpui::rgb(art::sky_top(t.dark)))
             .border_b_2()
             .border_color(t.outline)
-            .child(
-                gpui::img(scene)
-                    .absolute()
-                    .bottom_0()
-                    .left_0()
-                    .w(px(scene_width))
-                    .h(px(art::SCENE_HEIGHT as f32 * art::SCENE_TEXEL)),
-            )
+            .child(scene)
             .child(veil(90., 0.82, 0., 0.62))
             .child(veil(180., 0., 0.75, 1.))
             .child(div().relative().child(hero))
@@ -2679,7 +2691,7 @@ impl Launcher {
                         this.settings.appearance = choice;
                         this.settings.save();
                         titlebar::apply_appearance(window, choice);
-                        this.theme = Theme::for_appearance(choice, window.appearance());
+                        this.theme = this.settings_theme(window);
                         cx.notify();
                     });
                 }
@@ -2722,6 +2734,8 @@ impl Launcher {
                         Some(appearance.into_any_element()),
                         &t,
                     ))
+                    .child(self.accent_row(cx))
+                    .child(self.home_background_row(cx))
                     .child(self.language_row(cx))
                     .child(self.while_playing_row(n + 3, cx))
                     .child(index_row(

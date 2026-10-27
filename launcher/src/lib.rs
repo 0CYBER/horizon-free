@@ -29,4 +29,5 @@ pub mod skins;
 pub mod sources;
 pub mod tailscale;
 pub mod telemetry;
+pub mod themes;
 pub mod worlds;

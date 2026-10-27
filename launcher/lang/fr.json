@@ -83,5 +83,13 @@
   "Choose a cape…": "Choisir une cape…",
   "No cape": "Pas de cape",
   "Default": "Par défaut",
-  "A 64×64 (or 64×32) skin PNG and a 64×32 cape PNG, kept by the launcher and given to the game when this name plays. The game draws the default skins for now; it uses these once it can. A Microsoft account's skin and cape: coming soon.": "Un PNG de skin 64×64 (ou 64×32) et un PNG de cape 64×32, gardés par le launcher et donnés au jeu quand ce nom joue. Le jeu dessine encore les skins par défaut ; il utilisera ceux-ci dès qu'il le pourra. Skin et cape d'un compte Microsoft : bientôt."
+  "A 64×64 (or 64×32) skin PNG and a 64×32 cape PNG, kept by the launcher and given to the game when this name plays. The game draws the default skins for now; it uses these once it can. A Microsoft account's skin and cape: coming soon.": "Un PNG de skin 64×64 (ou 64×32) et un PNG de cape 64×32, gardés par le launcher et donnés au jeu quand ce nom joue. Le jeu dessine encore les skins par défaut ; il utilisera ceux-ci dès qu'il le pourra. Skin et cape d'un compte Microsoft : bientôt.",
+  "Accent colour": "Couleur d'accent",
+  "Horizon's violet by default. Every colour keeps text as easy to read.": "Le violet d'Horizon par défaut. Chaque couleur garde le texte aussi lisible.",
+  "Choose": "Choisir",
+  "Choose a picture…": "Choisir une image…",
+  "Landscape": "Paysage",
+  "Your picture, behind Home, cropped to fill it.": "Votre image, derrière l'accueil, recadrée pour le remplir.",
+  "Horizon's landscape. Pick a PNG, JPEG or WebP picture of your own.": "Le paysage d'Horizon. Choisissez votre propre image PNG, JPEG ou WebP.",
+  "Home background": "Fond de l'accueil"
 }
