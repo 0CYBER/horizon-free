@@ -468,6 +468,70 @@ impl Launcher {
         });
     }
 
+    /// Updates every installed pack a newer version was found for, one after the other on a
+    /// thread, each checked as an install is. One failing doesn't stop the others.
+    fn mods_update_all(&mut self) {
+        if self.mods.busy.is_some() || self.mods.updates.is_empty() {
+            return;
+        }
+        let mut todo: Vec<(SourceId, String, String)> = self
+            .mods
+            .installed
+            .iter()
+            .filter(|e| {
+                self.mods
+                    .updates
+                    .contains_key(&(e.source, e.project.clone()))
+            })
+            .map(|e| (e.source, e.project.clone(), e.title.clone()))
+            .collect();
+        todo.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+        self.mods.message = None;
+        self.mods.busy = Some(("all".into(), "Updating…".into(), 0.));
+        self.mods.updates.clear();
+        let tx = self.mods.tx.clone();
+        std::thread::spawn(move || {
+            let home = backend::game_home();
+            let count = todo.len();
+            let (mut done, mut failed) = (Vec::new(), Vec::new());
+            for (i, (source_id, id, title)) in todo.into_iter().enumerate() {
+                let step = |line: &str, f: f32| {
+                    let overall = (i as f32 + f) / count as f32;
+                    let _ = tx.send(Event::Progress(
+                        format!("{} of {count}: {line}", i + 1),
+                        overall,
+                    ));
+                };
+                let updated = browser::source(source_id)
+                    .ok_or_else(|| format!("{} isn't set up", source_id.label()))
+                    .and_then(|source| {
+                        let p = source.project(&id)?;
+                        installed::install(&*source, &p, true, &home, &step)
+                    });
+                match updated {
+                    Ok(entries) => done.extend(
+                        entries
+                            .into_iter()
+                            .filter(|e| e.project == id)
+                            .map(|e| format!("{} {}", e.title, e.number)),
+                    ),
+                    Err(e) => failed.push(format!("{title}: {e}")),
+                }
+            }
+            let updated = match done.is_empty() {
+                true => String::new(),
+                false => format!("Updated {}, checksums checked.", done.join(", ")),
+            };
+            let result = match failed.is_empty() {
+                true => Ok(updated),
+                false => Err(format!("{updated} Not updated: {}", failed.join("; "))
+                    .trim()
+                    .to_string()),
+            };
+            let _ = tx.send(Event::Done(result, false));
+        });
+    }
+
     /// Installs (or updates) a project on a thread: a pack into its folder, a modpack into
     /// Modpacks. `known` is the project when the page has it; else it is asked for first.
     pub(super) fn mods_install(&mut self, source: SourceId, id: String, known: Option<Project>) {
@@ -731,14 +795,19 @@ impl Launcher {
     pub(super) fn mods_busy_plate(&self) -> Vec<Div> {
         let t = self.theme;
         let mut out = Vec::new();
-        if let Some((_, line, f)) = &self.mods.busy {
+        if let Some((what, line, f)) = &self.mods.busy {
+            let caption = if what == "all" {
+                "Updating"
+            } else {
+                "Installing"
+            };
             out.push(
                 plate(&t)
                     .flex()
                     .flex_col()
                     .gap(px(8.))
                     .p(px(16.))
-                    .child(caps("Installing").text_color(t.accent))
+                    .child(caps(caption).text_color(t.accent))
                     .child(
                         text(theme::CAPTION)
                             .font_family(theme::MONO)
@@ -889,6 +958,23 @@ impl Launcher {
                 &t,
             )
         };
+        // Every kind's updates at once, whichever tab is open.
+        let update_all = (!self.mods.updates.is_empty()).then(|| {
+            let b = button(
+                "mods-update-all",
+                format!("Update all ({})", self.mods.updates.len()),
+                Kind::Secondary,
+                &t,
+            );
+            if busy {
+                disabled(b)
+            } else {
+                b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.mods_update_all();
+                    cx.notify();
+                }))
+            }
+        });
         let list = self.mods.installed_list.column(
             &self.content_scroll.handle,
             entries.len(),
@@ -901,7 +987,14 @@ impl Launcher {
                 .flex()
                 .flex_col()
                 .gap(px(12.))
-                .child(caps("Installed").text_color(t.muted))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(caps("Installed").text_color(t.muted))
+                        .children(update_all),
+                )
                 .child(list),
         )
     }
