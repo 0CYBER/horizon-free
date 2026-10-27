@@ -184,6 +184,7 @@ pub fn creeper_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
         events.push(MobEvent::Explode(
             [m.position.x, m.position.y, m.position.z],
             radius,
+            m.species(),
         ));
         m.removed = true;
     }

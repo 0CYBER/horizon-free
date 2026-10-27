@@ -203,6 +203,8 @@ pub(super) struct Remote {
     stop_mining: bool,
     placing: Option<([i32; 3], u64)>,
     death_message: Option<String>,
+    /// `LocalPlayer.showDeathScreen`: off with `immediate_respawn`.
+    show_death_screen: bool,
     player_type: Option<Arc<MobType>>,
     /// Inventory as last synchronised, for creative-mode slot updates.
     synced: Vec<Option<ItemStack>>,
@@ -496,6 +498,7 @@ impl Game<'_> {
             stop_mining: false,
             placing: None,
             death_message: None,
+            show_death_screen: true,
             player_type,
             synced: vec![None; 36],
             decode_errors: 0,
@@ -1664,6 +1667,7 @@ impl Game<'_> {
                     r.online_mode = p.online_mode;
                     r.entity_id = p.player_id;
                     r.view_distance = p.chunk_radius;
+                    r.show_death_screen = p.show_death_screen;
                 }
                 self.streaming.radius =
                     self.settings.render_distance.min(p.chunk_radius + 1).max(2);
@@ -1914,7 +1918,8 @@ impl Game<'_> {
             }
             C::SetPassengers(p) => self.remote_set_passengers(p.vehicle, &p.passengers),
             // ClientPacketListener.handleEntityLinkPacket: who holds a mob's
-            // lead (this player, another player or a mob), for the rope.
+            // lead (this player, another player, a mob or a fence knot), for
+            // the rope.
             C::SetEntityLink(p) => {
                 let me = self.remote.as_ref().map(|r| r.entity_id);
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.source as u32) {
@@ -1922,7 +1927,12 @@ impl Game<'_> {
                     m.extra.leash = match p.dest {
                         0 => None,
                         d if Some(d) == me => Some(Holder::Player),
-                        d => Some(Holder::Mob(d as u32)),
+                        d => match self.remote_knots.get(&(d as u32)) {
+                            Some(&block) => Some(Holder::Knot(block)),
+                            // Not a known knot yet: kept by id until the knot
+                            // arrives (game/remote_objects.rs).
+                            None => Some(Holder::Mob(d as u32)),
+                        },
                     };
                 }
             }
@@ -2194,8 +2204,9 @@ impl Game<'_> {
             }
             C::HurtAnimation(p) => {
                 if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
+                    // Player.animateHurt: the tilt turns around the yaw.
                     if let Some(pl) = self.player.as_mut() {
-                        pl.health.animate_hurt();
+                        pl.health.animate_hurt_dir(p.yaw);
                     }
                 } else if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
                     m.hurt_time = 10;
@@ -2232,6 +2243,10 @@ impl Game<'_> {
                 {
                     m.health = 0.0;
                 }
+                // The events that start a mob's animation (the warden's).
+                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
+                    horizon_client::mobs::sync::entity_event(m, p.event as u8);
+                }
                 // LivingEntity.handleEntityEvent 60: the poof as the dead body goes.
                 if p.event == 60
                     && let Some(m) = self.mobs.iter().find(|m| m.id == p.id as u32)
@@ -2241,6 +2256,37 @@ impl Game<'_> {
                 }
                 if p.event == super::totem::TOTEM_EVENT {
                     self.remote_totem(p.id);
+                }
+                // Mob.handleEntityEvent 20: the spawn poof.
+                if p.event == 20 && self.mobs.iter().any(|m| m.id == p.id as u32) {
+                    self.poof_particles(p.id as u32);
+                }
+                // Villager 12, 13 and 14, TamableAnimal and AbstractHorse 6 and
+                // 7, Animal and Allay 18: the particles about the mob.
+                if matches!(p.event, 6 | 7 | 12 | 13 | 14 | 18) {
+                    self.entity_event_particles(p.id as u32, p.event);
+                }
+                // Snowball and ThrownEgg.handleEntityEvent 3: the crumbs where
+                // the projectile is (the server removes it right after).
+                if p.event == 3 {
+                    let crumbs = self
+                        .creatures
+                        .projectiles
+                        .iter()
+                        .find(|pr| pr.id == p.id as u32)
+                        .and_then(|pr| {
+                            let item = match pr.kind {
+                                horizon_client::projectiles::ProjectileKind::Snowball => {
+                                    "minecraft:snowball"
+                                }
+                                horizon_client::projectiles::ProjectileKind::Egg => "minecraft:egg",
+                                _ => return None,
+                            };
+                            Some(([pr.position.x, pr.position.y, pr.position.z], item))
+                        });
+                    if let Some((at, item)) = crumbs {
+                        self.item_burst(at, item);
+                    }
                 }
                 if p.event == super::combat::DROWN_EVENT {
                     self.remote_drown(p.id);
@@ -2316,7 +2362,11 @@ impl Game<'_> {
                     pl.health.flash_health_change(p.health);
                 }
                 self.apply_remote_health();
-                if p.health <= 0.0 && self.screen != Screen::Dead && self.player.is_some() {
+                // The death screen opens (or the respawn is asked for) with the
+                // death packet when the rule hides it.
+                let shown = self.remote.as_ref().is_none_or(|r| r.show_death_screen);
+                if p.health <= 0.0 && shown && self.screen != Screen::Dead && self.player.is_some()
+                {
                     self.screen = Screen::Dead;
                     self.ui.death_time = 0;
                     self.capture(false);
@@ -2332,11 +2382,16 @@ impl Game<'_> {
                     r.death_message = Some(message);
                 }
                 // ClientPacketListener.handlePlayerCombatKill: the death
-                // screen, whatever health was last sent.
+                // screen, whatever health was last sent, or `respawn()` at
+                // once when it is hidden.
                 if me && self.screen != Screen::Dead && self.player.is_some() {
-                    self.screen = Screen::Dead;
-                    self.ui.death_time = 0;
-                    self.capture(false);
+                    if self.remote.as_ref().is_none_or(|r| r.show_death_screen) {
+                        self.screen = Screen::Dead;
+                        self.ui.death_time = 0;
+                        self.capture(false);
+                    } else {
+                        self.respawn_player()?;
+                    }
                 }
             }
             C::TrackedWaypoint(p) => self.handle_waypoint(&p),
@@ -2410,6 +2465,12 @@ impl Game<'_> {
                     self.set_mode_id(mode);
                     if let Some(r) = self.remote.as_mut() {
                         r.game_mode = mode;
+                    }
+                }
+                // IMMEDIATE_RESPAWN: LocalPlayer.setShowDeathScreen.
+                11 => {
+                    if let Some(r) = self.remote.as_mut() {
+                        r.show_death_screen = p.param == 0.0;
                     }
                 }
                 7 => {
@@ -3291,6 +3352,15 @@ impl Game<'_> {
 
     fn tick_remote_level(&mut self) -> Result<()> {
         self.ticks += 1;
+        // AbstractSignEditScreen.tick: the editor closes once its sign is removed.
+        if let Some(edit) = &self.sign_edit
+            && !matches!(
+                self.world.block_entities.get(&edit.pos),
+                Some(BlockEntity::Sign(_))
+            )
+        {
+            self.close_sign_editor();
+        }
         self.track_experience_display();
         // Leaving a slot clears its bundle's selection here and on the server.
         self.tick_bundle_hover();
@@ -3666,6 +3736,7 @@ impl Game<'_> {
                 m.fluids = fluids;
             }
         }
+        let game_time = self.world.game_time;
         let Some(r) = self.remote.as_mut() else {
             return;
         };
@@ -3789,6 +3860,8 @@ impl Game<'_> {
             if m.species() == horizon_client::mobs::Species::Bat {
                 horizon_client::mobs::bat::setup_animation_states(m);
             }
+            // The animation states a server computes in its own `ai_step`.
+            horizon_client::mobs::sync::client_tick(m, game_time);
         }
         for o in self.orbs.iter_mut().filter(|_| running) {
             o.previous = o.position;
@@ -4389,6 +4462,16 @@ impl Game<'_> {
         let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
         if self.keys.contains(&KeyCode::ShiftLeft) && hands_full {
             return (false, DryUse::default());
+        }
+        // BeehiveBlock.useItemOn: shears or a glass bottle on a full hive
+        // (honey level 5) is SUCCESS, so the click ends after UseItemOn and
+        // no UseItem follows (the server does the harvest, see `use_beehive`).
+        if held.is_some_and(|s| matches!(&*s.item, "minecraft:shears" | "minecraft:glass_bottle"))
+            && self
+                .hive_state(hit.pos)
+                .is_some_and(|(honey, _)| honey == Some(5))
+        {
+            return (true, DryUse::default());
         }
         use horizon_core::geometry::Direction;
         let face = match hit.face {

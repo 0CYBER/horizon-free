@@ -563,6 +563,17 @@ impl Mob {
         // Entity.checkSupportingBlock
         self.supporting = self.supporting_block(w, moved);
         self.movement_emission(w, moved, events);
+        // Entity.applyEffectsFromBlocks: bubble columns push the mob.
+        if crate::motion::bubble_column_push(
+            w.world,
+            w.registry,
+            w.facts,
+            w.collision,
+            self.bounds(),
+            &mut self.velocity,
+        ) {
+            self.fall_distance = 0.0;
+        }
     }
     /// LivingEntity.checkFallDamage: the fluid state refreshed out of water
     /// (touching water resets the fall), then Entity.checkFallDamage.
@@ -575,9 +586,34 @@ impl Mob {
         }
         if self.on_ground {
             if self.fall_distance > 0.0 {
+                self.trample_farmland(w, events);
                 self.cause_fall_damage(events);
             }
             self.fall_distance = 0.0;
+        }
+    }
+    /// `FarmlandBlock.fallOn`: a landing on farmland turns it to dirt with
+    /// chance `fallDistance - 0.5`, if mobs may grief and the mob's
+    /// `width * width * height` is over 0.512. `Block.pushEntitiesUp` lifts
+    /// the mob onto the dirt, which is a full block.
+    fn trample_farmland(&mut self, w: &MobWorld, events: &mut Vec<MobEvent>) {
+        let p = self.block_on_legacy(w);
+        if w.block_name(p[0], p[1], p[2]) != "minecraft:farmland" {
+            return;
+        }
+        let roll = f64::from(self.random.next_float());
+        let Some(dirt) = w.registry.default_state("minecraft:dirt") else {
+            return;
+        };
+        if roll < self.fall_distance - 0.5
+            && w.mob_griefing
+            && self.width() * self.width() * self.height() > 0.512
+        {
+            events.push(MobEvent::SetBlock {
+                pos: p,
+                state: dirt,
+            });
+            self.position.y = self.position.y.max(f64::from(p[1]) + 1.0);
         }
     }
     /// Entity.updateFluidInteraction: the fluid state, then touching water

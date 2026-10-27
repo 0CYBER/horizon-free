@@ -353,6 +353,10 @@ fn generic(m: &mut Mob) {
         g.add(5, Stroll::avoiding_water(if rabbit { 0.6 } else { 1.0 }));
         g.add(6, LookAtPlayer::new(6.0));
         g.add(7, RandomLookAround::default());
+        if m.kind.species == Species::Armadillo {
+            // Armadillo's constructor: pickNextScuteDropTime.
+            m.extra.egg_time = next_scute_time(m);
+        }
     }
 }
 /// Subclasses of `net.minecraft.world.entity.monster.Monster`.
@@ -1080,9 +1084,31 @@ fn server_ai_step(
     }
     m.jump_control_tick();
 }
+/// `Armadillo.pickNextScuteDropTime`: 5 to 10 minutes.
+fn next_scute_time(m: &mut Mob) -> i32 {
+    m.random.next_int_bound(20 * 60 * 5).unwrap_or(0) + 20 * 60 * 5
+}
+/// `Armadillo.customServerAiStep`: the scute timer keeps counting down and is
+/// only reset once `shouldDropLoot` (not a baby, `mob_drops` on) lets it shed.
+fn armadillo_server_ai_step(m: &mut Mob, mob_drops: bool, events: &mut Vec<MobEvent>) {
+    if !m.alive() {
+        return;
+    }
+    m.extra.egg_time -= 1;
+    if m.extra.egg_time <= 0 && !m.is_baby() && mob_drops {
+        let pitch = (m.random.next_float() - m.random.next_float()) * 0.2 + 1.0;
+        events.push(MobEvent::ShedScute {
+            mob: m.id,
+            at: [m.position.x, m.position.y, m.position.z],
+            pitch,
+        });
+        m.extra.egg_time = next_scute_time(m);
+    }
+}
 fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
     match m.species() {
         Species::Rabbit => super::rabbit::server_ai_step(m),
+        Species::Armadillo => armadillo_server_ai_step(m, cx.w.mob_drops, cx.events),
         Species::Sheep => {}
         Species::Zombie
         | Species::Husk
@@ -1175,6 +1201,19 @@ pub fn despawn_check(m: &mut Mob, w: &MobWorld) -> bool {
     }
     true
 }
+/// `Mob.requiresCustomPersistence` and its overrides: a passenger or a leashed
+/// mob, a raider in a raid, an enderman carrying a block, a tame nautilus, a
+/// sulfur cube holding a block or let out of a bucket. The spawn caps do not
+/// count these mobs either (`NaturalSpawner.createState`).
+pub fn requires_custom_persistence(m: &Mob) -> bool {
+    super::riders::keeps_alive(m)
+        || m.extra.leash.is_some()
+        || super::raider::state(m).is_some_and(|s| s.raid_id.is_some())
+        || m.species() == Species::Enderman && m.extra.carried.is_some()
+        || super::nautilus::is_nautilus(m.species()) && m.extra.tame
+        || m.species() == Species::SulfurCube
+            && (super::sulfur_cube::has_body(m) || m.extra.scratch[3] != 0)
+}
 /// Mob.checkDespawn, before the tick (players are the only despawn
 /// reference). Returns false when the mob is discarded.
 fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
@@ -1190,12 +1229,7 @@ fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
         return true;
     };
     let d = m.distance_sqr(p);
-    // requiresCustomPersistence: raiders in a raid, a tame nautilus, a sulfur
-    // cube holding a block or let out of a bucket.
-    let persistent = m.persistent
-        || super::nautilus::is_nautilus(m.species()) && m.extra.tame
-        || m.species() == Species::SulfurCube
-            && (super::sulfur_cube::has_body(m) || m.extra.scratch[3] != 0);
+    let persistent = m.persistent || requires_custom_persistence(m);
     // removeWhenFarAway: animals, villagers, golems, patrols and raiders,
     // zombie villagers being cured and ridden mobs stay.
     let creature = m.kind.category == "creature";
@@ -1682,25 +1716,31 @@ fn tick_effects(m: &mut Mob) {
     let mut effects = std::mem::take(&mut m.extra.effects);
     for (effect, ticks, amp) in &mut effects {
         let interval = |base: i32| (base >> (*amp).max(0)).max(1);
+        // MobEffectInstance.tickServer: an infinite (-1) effect times its
+        // ticks by the mob's tickCount and never counts down.
+        let infinite = *ticks == -1;
+        let count = if infinite { m.age as i32 } else { *ticks };
         match *effect {
             "minecraft:poison"
-                if *ticks % interval(25) == 0 && !m.kind.flags.undead && m.health > 1.0 =>
+                if count % interval(25) == 0 && !m.kind.flags.undead && m.health > 1.0 =>
             {
                 m.damage(1.0, Damage::of(DamageKind::Magic));
             }
-            "minecraft:wither" if *ticks % interval(40) == 0 => {
+            "minecraft:wither" if count % interval(40) == 0 => {
                 m.damage(1.0, Damage::of(DamageKind::Magic));
             }
             "minecraft:regeneration"
-                if *ticks % interval(50) == 0 && !m.kind.flags.undead && m.alive() =>
+                if count % interval(50) == 0 && !m.kind.flags.undead && m.alive() =>
             {
                 m.health = (m.health + 1.0).min(m.attrs.max_health);
             }
             _ => {}
         }
-        *ticks -= 1;
+        if !infinite {
+            *ticks -= 1;
+        }
     }
-    effects.retain(|e| e.1 > 0);
+    effects.retain(|e| e.1 > 0 || e.1 == -1);
     m.extra
         .hidden_effects
         .retain(|h| effects.iter().any(|e| e.0 == *h));
