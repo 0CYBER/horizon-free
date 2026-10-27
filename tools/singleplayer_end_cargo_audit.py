@@ -3,12 +3,13 @@
 
 Build horizon-client and horizon-ctl with the fast profile first, then run:
   python3 tools/singleplayer_end_cargo_audit.py --case gateway
-Runs both the default server-thread and the in-frame singleplayer, in scratch
-homes: a cow and a seven-diamond stack stand in a gateway in the End, and
-both are expected to leave it and land at the gateway's exit, the stack with
-its seven diamonds.
+Runs the in-frame singleplayer (and the server-thread one with --mode server):
+a cow and a seven-diamond stack stand in a gateway in the End, and both are
+expected to leave it and land at the gateway's exit, the stack with its seven
+diamonds.
 """
 import argparse
+import math
 import os
 from pathlib import Path
 import re
@@ -35,7 +36,7 @@ def data_get(cli, selector, path):
         reply = cli('events', since=since)
         for event in reply['events']:
             text = event.get('text', '')
-            if event.get('event') == 'chat' and path in text:
+            if event.get('event') == 'chat' and 'entity data' in text:
                 return text
         time.sleep(0.1)
     raise AssertionError(f'no answer for /data get entity {selector} {path}')
@@ -83,17 +84,32 @@ def run(bin_dir, resources, in_frame):
                     f'execute in minecraft:the_end run setblock {x} {y} {z} minecraft:end_gateway'))
                 cli('command', command=(
                     f'execute in minecraft:the_end run summon minecraft:cow {x}.5 {y}.5 {z}.5 {{NoAI:1b}}'))
+                nbt = '{Item:{id:"minecraft:diamond",count:' + str(DIAMONDS) + '}}'
                 cli('command', command=(
-                    f'execute in minecraft:the_end run summon minecraft:item {x}.5 {y}.5 {z}.5 '
-                    f'{{Item:{{id:"minecraft:diamond",count:{DIAMONDS}}}}}'))
-                # The gateway takes the cow, and the stack 40 ticks later.
-                cli('wait', ticks=200)
-                cow = numbers(data_get(cli, '@e[type=minecraft:cow,limit=1]', 'Pos'))
-                item = numbers(data_get(cli, '@e[type=minecraft:item,limit=1]', 'Pos'))
-                count = numbers(data_get(cli, '@e[type=minecraft:item,limit=1]', 'Item.count'))
-                print(f'cow at {cow}, item at {item}, count {count}')
-                for name, at in (('cow', cow), ('item', item)):
-                    assert len(at) == 3, f'{name}: no position in {at}'
+                    'execute in minecraft:the_end run summon minecraft:item '
+                    + f'{x}.5 {y}.5 {z}.5 ' + nbt))
+                # The gateway takes the stack, and the cow 40 ticks later
+                # (TheEndGatewayBlockEntity.triggerCooldown).
+                cli('wait', ticks=120)
+                # The exit is 1024 blocks away (findOrCreateValidTeleportPos): the
+                # player waits there, so the travellers are near enough to see.
+                length = math.hypot(x, z)
+                ex, ez = 1024 * x / length, 1024 * z / length
+                cli('command', command=f'execute in minecraft:the_end run tp @s {ex:.1f} 80 {ez:.1f}')
+                for _ in range(60):
+                    cli('wait', ticks=20)
+                    cow = data_get(cli, '@e[type=cow,limit=1]', 'Pos')
+                    if 'entity data' in cow:
+                        break
+                else:
+                    raise AssertionError('the cow never arrived')
+                item = data_get(cli, '@e[type=item,limit=1]', 'Pos')
+                count = numbers(data_get(cli, '@e[type=item,limit=1]', 'Item.count'))
+                cow_at, item_at = numbers(cow), numbers(item)
+                print(f'cow at {cow_at}, item at {item_at}, count {count}')
+                assert len(cow_at) == 3, f'the cow has no position: {cow_at}'
+                assert len(item_at) == 3, f'the stack has no position: {item_at}'
+                for name, at in (('cow', cow_at), ('item', item_at)):
                     assert abs(at[0] - x) > 64 or abs(at[2] - z) > 64, \
                         f'{name} stayed in the gateway at {at}'
                 assert count and int(count[0]) == DIAMONDS, f'the stack lost diamonds: {count}'
@@ -101,7 +117,13 @@ def run(bin_dir, resources, in_frame):
                 assert process.wait(timeout=120) == 0
             except Exception:
                 log.flush()
-                print((work / 'game.log').read_text(errors='replace')[-6000:])
+                text = (work / 'game.log').read_text(errors='replace')
+                Path('/tmp/end-gateway-game.log').write_text(text)
+                for log in (home / 'logs').glob('*'):
+                    if log.is_file():
+                        Path('/tmp/end-gateway-' + log.name).write_text(
+                            log.read_text(errors='replace'))
+                print(text[-4000:])
                 raise
             finally:
                 if process.poll() is None:
@@ -114,11 +136,12 @@ def run(bin_dir, resources, in_frame):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--case', choices=['gateway'], default='gateway')
-    parser.add_argument('--bin-dir', type=Path,
-                        default=Path(__file__).resolve().parents[1] / 'target/fast')
+    parser.add_argument('--bin-dir', type=Path, default=lab.cargo_target() / 'fast')
     parser.add_argument('--resources', type=Path, default=lab.RESOURCES)
+    parser.add_argument('--mode', choices=['server', 'in-frame', 'both'], default='in-frame')
     args = parser.parse_args()
-    for in_frame in (False, True):
+    modes = {'server': (False,), 'in-frame': (True,), 'both': (False, True)}
+    for in_frame in modes[args.mode]:
         run(args.bin_dir.resolve(), args.resources.resolve(), in_frame)
 
 
