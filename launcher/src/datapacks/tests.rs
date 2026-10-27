@@ -101,3 +101,38 @@ fn lists_adds_and_removes_as_the_game_reads_them() {
     assert_eq!(find(&world, "Trades").unwrap().file, "Trades.zip");
     fs::remove_dir_all(&root).unwrap();
 }
+
+#[test]
+fn coverage_says_what_runs() {
+    let root = scratch("coverage");
+    let file = root.join("p.zip");
+    zip_file(
+        &file,
+        &[
+            ("pack.mcmeta", META),
+            ("data/a/function/x.mcfunction", ""),
+            ("data/a/predicate/p.json", "{}"),
+            ("data/a/item_modifier/m.json", "{}"),
+            ("data/a/tags/item/i.json", "{}"),
+            ("data/a/loot_table/l.json", "{}"),
+            ("data/a/loot_table/k.json", "{}"),
+            ("data/a/worldgen/biome/b.json", "{}"),
+            ("assets/a/lang/en_us.json", "{}"),
+        ],
+    );
+    let c = coverage(&file).unwrap();
+    assert_eq!(
+        c.summary(),
+        "Runs its 1 function, 1 item modifier, 1 predicate. Not read yet: 2 loot tables, 1 item \
+         tag, 1 worldgen."
+    );
+    let many = Coverage {
+        read: Vec::new(),
+        unread: (1..=8).map(|n| (format!("kind{n}"), n)).collect(),
+    };
+    assert_eq!(
+        many.not_read(),
+        "8 kind8s, 7 kind7s, 6 kind6s, 5 kind5s, 4 kind4s, 3 kind3s and 2 other kinds"
+    );
+    fs::remove_dir_all(&root).unwrap();
+}

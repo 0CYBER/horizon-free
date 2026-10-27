@@ -368,9 +368,12 @@ enum ModsCmd {
     },
     /// Install a pack and what it needs into an instance, by its id or slug (checksums
     /// checked); a Java mod is ported into horizon-mods and turned on; a modpack is imported as
-    /// an instance of its own
+    /// an instance of its own; a data pack goes into the world `--world` names
     Install {
         project: String,
+        /// Install the project's data pack into this world of the instance (its name or folder)
+        #[arg(long)]
+        world: Option<String>,
         /// The instance (default: the selected one)
         #[arg(long)]
         instance: Option<String>,
@@ -420,6 +423,8 @@ enum KindArg {
     Modpack,
     /// Horizon's own shader packs (Horizon's registry only)
     Shader,
+    /// Data packs (Modrinth): install one into a world with `mods install <pack> --world <name>`
+    Datapack,
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -1424,12 +1429,14 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                 KindArg::Modpack => Kind::Modpack,
                 KindArg::Mod => Kind::Mod,
                 KindArg::Shader => Kind::Shader,
+                KindArg::Datapack => Kind::DataPack,
             };
             let query = Query {
                 everything,
                 ..Query::new(&text.join(" "), kind)
             };
             let found = source.get()?.search(&query)?;
+            let datapack = kind == Kind::DataPack;
             if as_json {
                 json(found.iter().map(|p| {
                     let support = p.support();
@@ -1441,6 +1448,9 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                     })
                 }).collect());
             } else {
+                if datapack && !found.is_empty() {
+                    println!("{}\n", horizon_launcher::browser::DATAPACK_SUPPORT);
+                }
                 for p in &found {
                     let support = p.support();
                     if p.source == SourceId::Horizon {
@@ -1465,6 +1475,8 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                     );
                     if unchecked {
                         println!("  horizon-launcher mods check {}", p.slug);
+                    } else if datapack {
+                        println!("  horizon-launcher mods install {} --world <world>", p.slug);
                     } else if let Some(why) = support.reason() {
                         println!("  {why}");
                     }
@@ -1515,10 +1527,44 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
             project,
             everything,
             source,
+            world,
             ..
         } => {
             let source = source.get()?;
             let p = source.project(&project)?;
+            if let Some(world) = world {
+                let world = horizon_launcher::worlds::find(&home, &world)?;
+                let done = installed::install_datapack(
+                    &*source,
+                    &p,
+                    everything,
+                    &world.path,
+                    &progress(p.title.clone()),
+                )?;
+                if as_json {
+                    json(serde_json::json!({
+                        "world": world.folder, "file": done.pack.file, "version": done.number,
+                        "runs": done.coverage.read, "not_read": done.coverage.unread,
+                    }));
+                } else {
+                    println!(
+                        "{} {} is in {}'s data packs as {}: the game turns it on when the world \
+                         opens. {}",
+                        p.title,
+                        done.number,
+                        world.name,
+                        done.pack.file,
+                        done.coverage.summary()
+                    );
+                }
+                return Ok(());
+            }
+            if p.kind == Kind::DataPack {
+                return Err(format!(
+                    "{} is a data pack: say which world with --world.",
+                    p.title
+                ));
+            }
             if p.kind == Kind::Modpack && p.source == SourceId::Horizon {
                 let pack = horizon::pack::install(&p.id, &line)?;
                 if as_json {

@@ -16,6 +16,15 @@ pub(super) struct WorldPacks {
     note: Option<Result<String, String>>,
 }
 
+impl WorldPacks {
+    /// Reads the open world's packs again, after something else changed them.
+    pub(super) fn reread(&mut self) {
+        if let Some(world) = &self.open {
+            self.list = datapacks::list(world);
+        }
+    }
+}
+
 impl Launcher {
     /// Opens or closes the packs of `world` under its row.
     pub(super) fn toggle_world_packs(&mut self, world: &World) {

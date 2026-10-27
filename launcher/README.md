@@ -92,7 +92,9 @@ The opening, then Play ([clip](docs/opening.webm)):
   `datapacks/` under its row: what is there (and which the game has turned off), **Add data pack…**,
   and **Remove** (to the trash); a data pack `.zip` dropped on a world goes into it. The game turns
   a new one on when the world opens. From the command line: `horizon-launcher worlds
-  datapack-list|datapack-add|datapack-remove <world> …`.
+  datapack-list|datapack-add|datapack-remove <world> …`. The Mods page's **Data packs** tab finds
+  them on Modrinth and installs one into the world picked there (`mods search --kind datapack`,
+  `mods install <pack> --world <world>`), saying what of it runs in Horizon.
 - **Packs**: Home lists the selected instance's resource packs and shader packs, each with a switch.
   The choice is the game's own: `resourcePacks` in options.txt (a pack turned on goes on top, as
   the game's Resource Packs screen does) and `pickedShaderPack` in `horizon-graphics.txt` (one shader
