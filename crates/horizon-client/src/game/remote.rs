@@ -1172,6 +1172,10 @@ impl Game<'_> {
                     new.spin = old.spin;
                     new.o_spin = old.o_spin;
                 }
+                (Some(BlockEntity::TrialSpawner(old)), BlockEntity::TrialSpawner(new)) => {
+                    new.spin = old.spin;
+                    new.o_spin = old.o_spin;
+                }
                 _ => {}
             }
             self.world.block_entities.insert(key, loaded);

@@ -953,6 +953,13 @@ pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
         }
         // VaultBlockEntity.getUpdateTag: the shared data, which holds the display item.
         BlockEntity::Vault(v) => Some(v.update_tag()),
+        // TrialSpawnerStateData.getUpdateTag: the spawn data the mob is drawn from.
+        // next_mob_spawns_at (ACTIVE only) is left out: nothing in the client
+        // reads it, and the block state it depends on is not known here.
+        BlockEntity::TrialSpawner(t) => t
+            .next_spawn_data
+            .as_ref()
+            .map(|d| Tag::compound([("spawn_data", d.encode())])),
         // SkullBlockEntity: the profile is the whole reason a head differs.
         BlockEntity::Skull(s) => {
             let mut entries = Vec::new();
