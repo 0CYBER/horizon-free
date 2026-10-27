@@ -119,6 +119,7 @@ impl Game<'_> {
             "magic" | "indirect_magic" | "dragon_breath" => DamageKind::Magic,
             "sting" => DamageKind::Sting,
             "cactus" | "sweet_berry_bush" => DamageKind::Cactus,
+            "freeze" => DamageKind::Freeze,
             "in_wall" => DamageKind::InWall,
             "thorns" => DamageKind::Thorns,
             _ => DamageKind::Generic,

@@ -38,10 +38,18 @@ pub(super) enum Field {
     /// Home's Multiplayer section's (`multiplayer_page.rs`).
     ServerName,
     ServerAddress,
+    /// Home's Console's search (`console_page.rs`).
+    ConsoleSearch,
+    /// The Launch panel's (`launch_page.rs`).
+    PreLaunch,
+    Wrapper,
+    LaunchEnv,
+    /// Settings' new offline name (`switch_page.rs`).
+    OfflineName,
 }
 
 impl Field {
-    const ALL: [Field; 13] = [
+    const ALL: [Field; 18] = [
         Field::Name,
         Field::Seed,
         Field::Players,
@@ -55,6 +63,11 @@ impl Field {
         Field::InstanceGroup,
         Field::ServerName,
         Field::ServerAddress,
+        Field::ConsoleSearch,
+        Field::PreLaunch,
+        Field::Wrapper,
+        Field::LaunchEnv,
+        Field::OfflineName,
     ];
 }
 
@@ -1031,7 +1044,9 @@ impl Launcher {
             Field::Port => self.save_port(),
             Field::Token => self.save_token(),
             Field::Email => self.invite_friend(),
-            Field::InstanceName | Field::InstanceGroup => {}
+            Field::InstanceName | Field::InstanceGroup | Field::ConsoleSearch => {}
+            Field::PreLaunch | Field::Wrapper | Field::LaunchEnv => self.save_launch(),
+            Field::OfflineName => self.offline_name_enter(),
             Field::ServerName | Field::ServerAddress => self.add_server(),
         }
     }
