@@ -3152,7 +3152,7 @@ impl Level {
                                 ("amplifier", Tag::Byte(*amplifier as i8)),
                                 ("ambient", Tag::Byte(i8::from(*ambient))),
                                 ("show_particles", Tag::Byte(i8::from(*particles))),
-                                ("show_icon", Tag::Byte(1)),
+                                ("show_icon", Tag::Byte(i8::from(*particles))),
                             ])
                         })
                         .collect(),
