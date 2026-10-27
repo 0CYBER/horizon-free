@@ -108,7 +108,11 @@ impl Game<'_> {
                 rain,
                 thunder,
                 skybox: self.dim == Dim::Overworld,
-                blindness: None,
+                blindness: self
+                    .potions
+                    .effects
+                    .get("blindness")
+                    .map(|effect| (effect.duration, effect.duration == -1)),
                 darkness: self.darkness_fog(),
                 darken_world: self
                     .boss_overlay
@@ -140,7 +144,8 @@ impl Game<'_> {
         } else {
             63.0
         };
-        camera.y < horizon
+        self.dim == Dim::Overworld
+            && camera.y < horizon
             && fog_type(
                 &self.world,
                 self.res.facts(),

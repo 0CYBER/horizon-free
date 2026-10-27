@@ -11755,6 +11755,17 @@ impl Game<'_> {
             depth_far,
             underwater,
             title,
+            sky_blocked: self.potions.effects.get("blindness").is_some()
+                || self.potions.effects.get("darkness").is_some()
+                || matches!(
+                    horizon_client::fog::fog_type(
+                        &self.world,
+                        self.res.facts(),
+                        [camera.x, camera.y, camera.z],
+                        self.forward(),
+                    ),
+                    horizon_client::fog::FogType::Lava | horizon_client::fog::FogType::PowderSnow
+                ),
             skybox: self.dim == Dim::Overworld && self.settings.horizon.sky,
             end_sky: self.dim == Dim::End && self.settings.horizon.sky,
             end_sky_sprite: self
@@ -14655,6 +14666,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         underwater: false,
         cave_culling: false,
         title: true,
+        sky_blocked: false,
         skybox: false,
         end_sky: false,
         end_sky_sprite: None,
