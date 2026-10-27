@@ -73,7 +73,7 @@ pub(super) struct Minecart {
     pub yaw: f32,
     pub previous_yaw: f32,
     pub flipped: bool,
-    on_ground: bool,
+    pub(super) on_ground: bool,
     horizontal_collision: bool,
     fall_distance: f64,
     pub hurt_time: i32,
