@@ -5495,17 +5495,9 @@ impl Game<'_> {
                 } else {
                     hud_layout::HeartKind::Normal
                 };
-                let eye = p.position.y + f64::from(p.dimensions.eye_height);
-                let under_water = self
-                    .res
-                    .facts()
-                    .get(self.world.block(
-                        p.position.x.floor() as i32,
-                        eye.floor() as i32,
-                        p.position.z.floor() as i32,
-                    ))
-                    .fluid
-                    == horizon_client::blocks::Fluid::Water;
+                // Hud.extractAirBubbles: `isEyeInFluidMatching`, so the eyes are below
+                // the surface, not merely in the water block.
+                let under_water = p.is_eye_in_fluid(horizon_client::motion::WATER);
                 let inputs = hud_layout::HealthInputs {
                     tick: self.ticks as i32,
                     millis: self.started.elapsed().as_millis() as i64,
