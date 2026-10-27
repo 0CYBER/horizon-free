@@ -1677,7 +1677,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 let jump = self.uniform(600, 1200);
                 set_memory(m, "long_jump_cooldown", i64::from(jump), i64::MAX);
                 let ram = self.uniform(600, 6000);
-                set_memory(m, "ram_cooldown", i64::from(ram), i64::MAX);
+                m.extra.goat.ram_cooldown = ram;
                 m.extra.screaming = self.random.next_double() < 0.02;
                 age_boundary_reached(m);
                 if !m.is_baby() && self.float() < 0.1 {

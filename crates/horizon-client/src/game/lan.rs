@@ -11,7 +11,7 @@ use horizon_client::{
         chunks::ChunkEncoder,
         data::SyncData,
         entity::{EntityState, States},
-        hub::{HostEvent, HostState, Hub, HubConfig, TickCtx},
+        hub::{BodyFlags, HostEvent, HostState, Hub, HubConfig, TickCtx},
         playerdata,
     },
     mobs::{Mob, Who, leash::Holder},
@@ -161,12 +161,19 @@ fn mob_meta(
     m: &Mob,
     hub: &Hub,
     player_entity: Option<i32>,
+    game_time: i64,
     meta: &mut Vec<(u8, i32, Value)>,
     defaults: &mut Vec<(u8, i32, Value)>,
 ) {
     let kind = m.kind.id.as_str();
     if m.fire_ticks > 0 {
         meta.push((0, serializer::BYTE, Value::Byte(1)));
+    }
+    // Entity.DATA_POSE: the pose the species keeps in its own fields (a
+    // pose back at standing goes out by the entity's own default).
+    let pose = horizon_client::mobs::sync::pose_id(m);
+    if pose != 0 {
+        meta.push((6, serializer::POSE, Value::Id(i32::from(pose))));
     }
     if let Some(name) = &m.custom_name {
         meta.push((
@@ -191,6 +198,17 @@ fn mob_meta(
         meta.push((9, serializer::FLOAT, Value::Float(health)));
     }
     defaults.push((9, serializer::FLOAT, Value::Float(1.0)));
+    // LivingEntity.DATA_EFFECT_PARTICLES and DATA_EFFECT_AMBIENCE_ID: the
+    // swirls of its effects (the ones a mob has are visible, not ambient).
+    meta.extend(
+        hub.effect_meta(
+            (m.extra.effects.iter())
+                .filter(|e| !m.extra.hidden_effects.contains(&e.0))
+                .map(|e| (e.0, false)),
+        ),
+    );
+    defaults.push((10, serializer::PARTICLES, Value::Particles(Vec::new())));
+    defaults.push((11, serializer::BOOLEAN, Value::Bool(false)));
     // Mob.DATA_MOB_FLAGS_ID: no AI 1, left-handed 2, aggressive 4 (what
     // draws a vindicator's axe, a skeleton's drawn bow, a piglin's raised
     // weapon).
@@ -235,6 +253,27 @@ fn mob_meta(
                 meta.push((16, serializer::BYTE, Value::Byte(1)));
             }
             defaults.push((16, serializer::BYTE, Value::Byte(0)));
+        }
+        // SnowGolem.DATA_PUMPKIN_ID: 16 while the pumpkin is on (the default).
+        "minecraft:snow_golem" => {
+            if e.sheared {
+                meta.push((16, serializer::BYTE, Value::Byte(0)));
+            }
+            defaults.push((16, serializer::BYTE, Value::Byte(16)));
+        }
+        // MushroomCow.DATA_TYPE: 0 red, 1 brown.
+        "minecraft:mooshroom" => {
+            if e.variant == 1 {
+                meta.push((17, serializer::INT, Value::Int(1)));
+            }
+            defaults.push((17, serializer::INT, Value::Int(0)));
+        }
+        // Piglin.DATA_IS_DANCING (after the baby flag and the crossbow charge).
+        "minecraft:piglin" => {
+            if e.scratch[0] > 0 {
+                meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((19, serializer::BOOLEAN, Value::Bool(false)));
         }
         // Sheep.DATA_WOOL_ID: the colour in the low nibble, 16 when sheared.
         "minecraft:sheep" => {
@@ -362,12 +401,135 @@ fn mob_meta(
             }
             defaults.push((17, serializer::BOOLEAN, Value::Bool(false)));
         }
+        // PolarBear.DATA_STANDING_ID (after AgeableMob's two): the bear
+        // rears up; the client animates it.
+        "minecraft:polar_bear" => {
+            if e.flag {
+                meta.push((18, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((18, serializer::BOOLEAN, Value::Bool(false)));
+        }
         // SpellcasterIllager.DATA_SPELL_CASTING_ID: the casting pose.
         "minecraft:evoker" | "minecraft:illusioner" => {
             if e.variant2 != 0 {
                 meta.push((17, serializer::BYTE, Value::Byte(e.variant2 as i8)));
             }
             defaults.push((17, serializer::BYTE, Value::Byte(0)));
+        }
+        // Warden.CLIENT_ANGER_LEVEL: the heartbeat's pace.
+        "minecraft:warden" => {
+            let anger = e.warden.as_ref().map_or(0, |w| w.client_anger);
+            if anger != 0 {
+                meta.push((16, serializer::INT, Value::Int(anger)));
+            }
+            defaults.push((16, serializer::INT, Value::Int(0)));
+        }
+        // Sniffer.DATA_STATE (after AgeableMob's two).
+        "minecraft:sniffer" => {
+            if e.variant != 0 {
+                meta.push((
+                    18,
+                    serializer::SNIFFER_STATE,
+                    Value::Id(i32::from(e.variant)),
+                ));
+            }
+            defaults.push((18, serializer::SNIFFER_STATE, Value::Id(0)));
+        }
+        // Shulker.DATA_ATTACH_FACE_ID, DATA_PEEK_ID and DATA_COLOR_ID (16
+        // for none).
+        "minecraft:shulker" => {
+            if e.variant3 != 0 {
+                meta.push((16, serializer::DIRECTION, Value::Id(i32::from(e.variant3))));
+            }
+            defaults.push((16, serializer::DIRECTION, Value::Id(0)));
+            if e.counter != 0 {
+                meta.push((17, serializer::BYTE, Value::Byte(e.counter as i8)));
+            }
+            defaults.push((17, serializer::BYTE, Value::Byte(0)));
+            if e.color != 16 {
+                meta.push((18, serializer::BYTE, Value::Byte(e.color as i8)));
+            }
+            defaults.push((18, serializer::BYTE, Value::Byte(16)));
+        }
+        // Vex.DATA_FLAGS_ID: charging in bit 0 (the arms and the glowing
+        // texture).
+        "minecraft:vex" => {
+            if e.flag {
+                meta.push((16, serializer::BYTE, Value::Byte(1)));
+            }
+            defaults.push((16, serializer::BYTE, Value::Byte(0)));
+        }
+        // Creaking.CAN_MOVE, IS_ACTIVE and IS_TEARING_DOWN.
+        "minecraft:creaking" => {
+            if e.flag2 {
+                meta.push((16, serializer::BOOLEAN, Value::Bool(false)));
+            }
+            defaults.push((16, serializer::BOOLEAN, Value::Bool(true)));
+            if e.flag {
+                meta.push((17, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((17, serializer::BOOLEAN, Value::Bool(false)));
+            if horizon_client::mobs::creaking::tearing_down(m) {
+                meta.push((18, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((18, serializer::BOOLEAN, Value::Bool(false)));
+        }
+        // Allay.DATA_DANCING and DATA_CAN_DUPLICATE (the held item is its
+        // main hand equipment).
+        "minecraft:allay" => {
+            if e.flag {
+                meta.push((16, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((16, serializer::BOOLEAN, Value::Bool(false)));
+            if e.egg_time > 0 {
+                meta.push((17, serializer::BOOLEAN, Value::Bool(false)));
+            }
+            defaults.push((17, serializer::BOOLEAN, Value::Bool(true)));
+        }
+        // Axolotl.DATA_PLAYING_DEAD (after DATA_VARIANT).
+        "minecraft:axolotl" => {
+            if horizon_client::mobs::axolotl::is_playing_dead(m) {
+                meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((19, serializer::BOOLEAN, Value::Bool(false)));
+        }
+        // CopperGolem.COPPER_GOLEM_STATE (after DATA_WEATHER_STATE).
+        "minecraft:copper_golem" => {
+            if e.variant3 != 0 {
+                meta.push((
+                    17,
+                    serializer::COPPER_GOLEM_STATE,
+                    Value::Id(i32::from(e.variant3)),
+                ));
+            }
+            defaults.push((17, serializer::COPPER_GOLEM_STATE, Value::Id(0)));
+        }
+        // Armadillo.ARMADILLO_STATE (after AgeableMob's two).
+        "minecraft:armadillo" => {
+            let state = horizon_client::mobs::armadillo::state(m);
+            if state != 0 {
+                meta.push((18, serializer::ARMADILLO_STATE, Value::Id(i32::from(state))));
+            }
+            defaults.push((18, serializer::ARMADILLO_STATE, Value::Id(0)));
+        }
+        // Frog.DATA_TONGUE_TARGET_ID (after the variant): the entity id plus
+        // one, 0 for none.
+        "minecraft:frog" => {
+            if let Some(target) = e.frog.tongue_target {
+                let id = i32::try_from(target).map_or(0, |t| t + 1);
+                meta.push((19, serializer::OPTIONAL_UNSIGNED_INT, Value::Id(id)));
+            }
+            defaults.push((19, serializer::OPTIONAL_UNSIGNED_INT, Value::Id(0)));
+        }
+        // Goat.DATA_HAS_LEFT_HORN and DATA_HAS_RIGHT_HORN (after
+        // DATA_IS_SCREAMING_GOAT): both true by default.
+        "minecraft:goat" => {
+            for (index, lost) in [(19, e.lost_horns[0]), (20, e.lost_horns[1])] {
+                if lost {
+                    meta.push((index, serializer::BOOLEAN, Value::Bool(false)));
+                }
+                defaults.push((index, serializer::BOOLEAN, Value::Bool(true)));
+            }
         }
         // Enderman.DATA_CARRY_STATE.
         "minecraft:enderman" => {
@@ -380,6 +542,38 @@ fn mob_meta(
             }
         }
         _ => {}
+    }
+    // Camel.DASH and LAST_POSE_CHANGE_TICK (after AbstractHorse's flags).
+    if horizon_client::mobs::camel::is_camel(m.species()) {
+        if e.flag2 {
+            meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+        }
+        defaults.push((19, serializer::BOOLEAN, Value::Bool(false)));
+        let tick = horizon_client::mobs::camel::synced_pose_tick(m, game_time);
+        if tick != 0 {
+            meta.push((20, serializer::LONG, Value::Long(tick)));
+        }
+        defaults.push((20, serializer::LONG, Value::Long(0)));
+    }
+}
+
+/// What a client shakes a mob by: Entity.DATA_TICKS_FROZEN (7), whose full
+/// count is `isFullyFrozen`, and Strider.DATA_SUFFOCATING (19, after
+/// AgeableMob's two and DATA_BOOST_TIME).
+fn mob_freeze_meta(
+    m: &Mob,
+    meta: &mut Vec<(u8, i32, Value)>,
+    defaults: &mut Vec<(u8, i32, Value)>,
+) {
+    if m.ticks_frozen > 0 {
+        meta.push((7, serializer::INT, Value::Int(m.ticks_frozen)));
+    }
+    defaults.push((7, serializer::INT, Value::Int(0)));
+    if m.kind.id == "minecraft:strider" {
+        if m.extra.flag {
+            meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+        }
+        defaults.push((19, serializer::BOOLEAN, Value::Bool(false)));
     }
 }
 
@@ -857,6 +1051,16 @@ impl Game<'_> {
             living_flags: living_flags(self.using)
                 | if p.auto_spin_attack_ticks > 0 { 4 } else { 0 },
             bed: self.sleeping,
+            body: BodyFlags {
+                gliding: p.fall_flying,
+                swimming: p.swimming,
+                crawling: p.pose == horizon_client::pose::Pose::Swimming && !p.swimming,
+                crouching: p.pose == horizon_client::pose::Pose::Crouching,
+                spin_attack: p.auto_spin_attack_ticks > 0,
+                on_fire: p.fire_ticks > 0,
+                invisible: self.potions.effects.get("invisibility").is_some(),
+                glowing: self.potions.effects.get("glowing").is_some(),
+            },
         })
     }
 
@@ -889,7 +1093,15 @@ impl Game<'_> {
             e.on_ground = m.on_ground;
             e.velocity = [m.velocity.x, m.velocity.y, m.velocity.z];
             e.needs_sync = m.needs_sync;
-            mob_meta(m, hub, player_entity, &mut e.meta, &mut e.defaults);
+            mob_meta(
+                m,
+                hub,
+                player_entity,
+                self.world.game_time,
+                &mut e.meta,
+                &mut e.defaults,
+            );
+            mob_freeze_meta(m, &mut e.meta, &mut e.defaults);
             mob_equipment(m, hub, &mut e.equipment);
             self.mob_attributes(m, &mut e.attributes);
             e.leash = leash;
@@ -974,6 +1186,16 @@ impl Game<'_> {
                 host.hub.block_event(pos, b0, b1, state);
             }
             let entities = states.as_slice();
+            // An entity that left the level since the last tick (a snowball
+            // that hit) is dropped by the tracker below: its event goes out
+            // first, as `Level.broadcastEntityEvent` precedes the discard.
+            let (gone, later): (Vec<_>, Vec<_>) = std::mem::take(&mut self.lan_entity_events)
+                .into_iter()
+                .partition(|(id, ..)| !entities.iter().any(|e| e.id == *id));
+            self.lan_entity_events = later;
+            for (id, event, at) in gone {
+                host.hub.entity_event(id, event, at);
+            }
             let spawn = self.spawn.map_or([0.5, 80.0, 0.5], |s| [s.x, s.y, s.z]);
             let events = {
                 let clock_rate = self.network_clock_rate();
@@ -1255,8 +1477,9 @@ impl Game<'_> {
             self.lan_entity_events.push((id, event, at));
         }
     }
-    /// `ServerPlayer.crit`: this window's emitter, and an animation for the
-    /// attacker's client and observers once the hub is back in place.
+    /// `ServerPlayer.crit` (or `magicCrit` when `magic`): this window's
+    /// emitter, and an animation for the attacker's client and observers once
+    /// the hub is back in place.
     pub(super) fn critical_hit(
         &mut self,
         attacker: Option<u32>,
@@ -1264,16 +1487,18 @@ impl Game<'_> {
         feet: [f64; 3],
         width: f64,
         height: f64,
+        magic: bool,
     ) {
         use horizon_client::particles::{ParticleOptions, ParticleType};
-        self.particles.tracking_emitter(
-            ParticleOptions::simple(ParticleType::Crit),
-            feet,
-            width,
-            height,
-        );
+        let particle = if magic {
+            ParticleType::EnchantedHit
+        } else {
+            ParticleType::Crit
+        };
+        self.particles
+            .tracking_emitter(ParticleOptions::simple(particle), feet, width, height);
         if self.audio.capture.is_some() {
-            self.lan_critical_hits.push((attacker, id));
+            self.lan_critical_hits.push((attacker, id, magic));
         }
     }
     /// Send the tick's level events, sounds and mob animations.
@@ -1351,13 +1576,13 @@ impl Game<'_> {
             seen.insert(m.id, (m.hurt_time, dead, swing));
         }
         host.mob_state.insert(self.dim, seen);
-        for (attacker, target) in critical_hits {
+        for (attacker, target, magic) in critical_hits {
             let Some(attacker) = attacker.map_or(Some(host.host_entity), |conn| {
                 host.hub.guest(conn).map(|g| g.entity_id)
             }) else {
                 continue;
             };
-            host.hub.critical_hit(attacker, target);
+            host.hub.critical_hit(attacker, target, magic);
         }
     }
 
@@ -1440,6 +1665,13 @@ impl Game<'_> {
                 .each_ref()
                 .map(|s| s.as_ref().map(|s| s.item.clone()));
             m.extra.crouching = g.sneaking;
+            m.extra.sprinting = g.sprinting;
+            // LivingEntity.DATA_EFFECT_PARTICLES: the swirls of its visible effects.
+            let visible = || g.effects.list.iter().filter(|e| e.visible);
+            m.extra.effect_particles = visible()
+                .filter_map(|e| super::client_ambient::effect_particle(e.id, e.ambient))
+                .collect();
+            m.extra.effect_ambient = visible().all(|e| e.ambient);
             // Lying in its bed (LivingEntity.getBedOrientation).
             m.extra.ints[1] = g.bed.map_or(0, |b| self.bed_facing(b));
             // LivingEntity.updateSwingTime: the arm swing lan_swings started.

@@ -143,6 +143,10 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             }
         }
     }
+    peek_step(m);
+}
+/// `Shulker.updatePeekAmount`: the lid eases to the raw peek.
+fn peek_step(m: &mut Mob) {
     let a = &mut m.anim;
     let target = m.extra.counter as f32 * 0.01;
     let cur = a.v[PEEK];
@@ -151,6 +155,13 @@ pub fn tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     } else if cur < target {
         a.v[PEEK] = (cur + 0.05).clamp(0.0, target);
     }
+}
+/// `Shulker.tick` on a client that is not the server: the lid eases to the
+/// peek it was sent, and its body stays square (`ShulkerBodyRotationControl`).
+pub fn client_tick(m: &mut Mob) {
+    m.anim.vo = m.anim.v;
+    peek_step(m);
+    m.body_yaw = 0.0;
 }
 /// `Shulker.hurtServer` before the damage: arrows bounce off a closed shell.
 pub fn accepts(m: &Mob, source: &Damage) -> bool {
