@@ -3542,6 +3542,16 @@ impl Game<'_> {
             if m.species() == horizon_client::mobs::Species::Rabbit {
                 horizon_client::mobs::rabbit::base_tick(m);
             }
+            if matches!(
+                m.species(),
+                horizon_client::mobs::Species::Horse
+                    | horizon_client::mobs::Species::Donkey
+                    | horizon_client::mobs::Species::Mule
+                    | horizon_client::mobs::Species::SkeletonHorse
+                    | horizon_client::mobs::Species::ZombieHorse
+            ) {
+                horizon_client::mobs::equine::tail_tick(m);
+            }
             if m.species() == horizon_client::mobs::Species::Creeper {
                 horizon_client::mobs::hostile::creeper_client_tick(m);
             }
