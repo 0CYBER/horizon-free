@@ -728,6 +728,18 @@ impl Furnace {
                                     .recipes_used
                                     .entry(recipe_used_key(&recipe.id))
                                     .or_insert(0) += 1;
+                                // AbstractFurnaceBlockEntity.burn: drying a wet sponge fills
+                                // the bucket in the fuel slot.
+                                if self.items[0]
+                                    .as_ref()
+                                    .is_some_and(|i| &*i.item == "minecraft:wet_sponge")
+                                    && self.items[1]
+                                        .as_ref()
+                                        .is_some_and(|f| &*f.item == "minecraft:bucket")
+                                {
+                                    self.items[1] =
+                                        Some(ItemStack::new("minecraft:water_bucket", 1));
+                                }
                                 if let Some(i) = self.items[0].as_mut() {
                                     i.count -= 1;
                                     if i.count == 0 {

@@ -1430,6 +1430,13 @@ impl Game<'_> {
             {
                 return;
             }
+            // So does a firework rocket: its own tick flies it on.
+            if path.is_some()
+                && let Some(f) = self.rockets.iter_mut().find(|f| f.id == id as u32)
+            {
+                f.position = Vec3::new(position[0], position[1], position[2]);
+                return;
+            }
             // A dragon fireball keeps Entity's NO_OP InterpolationHandler too:
             // the server's position replaces its own at once.
             if let Some(b) = self.dragon_fireballs.iter_mut().find(|b| b.id == id as u32) {
@@ -1954,6 +1961,22 @@ impl Game<'_> {
                         }
                     }
                 }
+                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
+                    for (index, _, value) in &p.values {
+                        match (index, value) {
+                            // Entity.DATA_TICKS_FROZEN: isFullyFrozen shakes it.
+                            (7, Value::Int(ticks)) => m.ticks_frozen = *ticks,
+                            // Strider.DATA_SUFFOCATING (after AgeableMob's two
+                            // and DATA_BOOST_TIME): a cold strider shakes.
+                            (19, Value::Bool(cold))
+                                if m.species() == horizon_client::mobs::Species::Strider =>
+                            {
+                                m.extra.flag = *cold;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 // LivingEntity.DATA_LIVING_ENTITY_FLAGS: for another player
                 // too, remote_mob_data's apply reads index 8 above.
                 let mannequin = self
@@ -2052,13 +2075,22 @@ impl Game<'_> {
             // player holds and wears (EquipmentSlot ordinals).
             C::SetEquipment(p) => {
                 self.remote_object_equipment(p.id, &p.slots);
-                let items: Vec<(u8, Option<Arc<str>>)> = p
+                let items: Vec<(u8, Option<Arc<str>>, Option<ItemStack>)> = p
                     .slots
                     .iter()
-                    .map(|(slot, stack)| (*slot, stack.as_ref().map(|s| self.item_name(s.item))))
+                    .map(|(slot, stack)| {
+                        (
+                            *slot,
+                            stack.as_ref().map(|s| self.item_name(s.item)),
+                            self.to_stack(stack),
+                        )
+                    })
                     .collect();
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
-                    for (slot, item) in items {
+                    // The body slot (6: horse armour, llama carpet, harness)
+                    // is kept in `head`, as Horizon's own mobs do.
+                    let body = horizon_client::mobs::drops::head_is_body(m.species());
+                    for (slot, item, stack) in items {
                         let e = &mut m.extra;
                         match slot {
                             0 => e.main_hand = item,
@@ -2066,7 +2098,9 @@ impl Game<'_> {
                             2 => e.feet = item,
                             3 => e.legs = item,
                             4 => e.chest = item,
-                            5 => e.head = item,
+                            5 if !body => e.head = item,
+                            6 if body => e.head = item,
+                            7 => m.set_saddle(stack),
                             _ => {}
                         }
                     }
@@ -2184,6 +2218,9 @@ impl Game<'_> {
                 }
                 if p.event == super::totem::TOTEM_EVENT {
                     self.remote_totem(p.id);
+                }
+                if p.event == super::combat::DROWN_EVENT {
+                    self.remote_drown(p.id);
                 }
                 // Entity event 53: the honey slide particles of a player
                 // sliding down a honey block (HoneyBlock.showSlideParticles).
@@ -3091,6 +3128,8 @@ impl Game<'_> {
             p.velocity = v;
         } else if let Some(b) = self.dragon_fireballs.iter_mut().find(|b| b.id == id as u32) {
             b.velocity = v;
+        } else if let Some(r) = self.rockets.iter_mut().find(|r| r.id == id as u32) {
+            r.velocity = v;
         } else if let Some(p) = self
             .remote
             .as_mut()
@@ -3403,6 +3442,14 @@ impl Game<'_> {
                     self.audio
                         .play("minecraft:entity.player.swim", Some(feet), volume, pitch);
                 }
+                horizon_client::motion::MotionEvent::Chime { volume, pitch } => {
+                    self.audio.play(
+                        "minecraft:block.amethyst_block.chime",
+                        Some(feet),
+                        volume,
+                        pitch,
+                    );
+                }
                 // NetherPortalBlock.entityInside on the client's own level:
                 // the portal overlay and its trigger sound (the server moves
                 // the player).
@@ -3577,10 +3624,14 @@ impl Game<'_> {
         let head_lerps = &mut r.head_lerps;
         let players = &r.level_players;
         let mut using = Vec::new();
+        let mut wither_heads = Vec::new();
         for m in &mut self.mobs {
             let player = players.contains_key(&(m.id as i32));
             if !running && !player {
                 continue;
+            }
+            if m.species() == horizon_client::mobs::Species::Wither {
+                wither_heads.extend((0..3).map(|i| horizon_client::mobs::wither::head_pos(m, i)));
             }
             m.previous = m.position;
             m.previous_yaw = m.yaw;
@@ -3654,7 +3705,7 @@ impl Game<'_> {
                         m.extra.main_hand.clone()
                     };
                     if let Some(item) = item {
-                        let eye = if m.extra.crouching { 1.27 } else { 1.62 };
+                        let eye = m.eye_height();
                         let at = [m.position.x, m.position.y, m.position.z];
                         using.push((
                             item,
@@ -3712,10 +3763,24 @@ impl Game<'_> {
             d.tick(world, facts, collision, false, &self.res.motion().fluids);
         }
         head_lerps.retain(|_, (_, steps)| *steps > 0);
+        // WitherBoss.aiStep runs on a client too: smoke around each head.
+        let smoke = horizon_client::particles::ParticleOptions::simple(
+            horizon_client::particles::ParticleType::Smoke,
+        );
+        for h in wither_heads {
+            let r = self.particles.random();
+            let at = [
+                h[0] + r.next_gaussian() * 0.3,
+                h[1] + r.next_gaussian() * 0.3,
+                h[2] + r.next_gaussian() * 0.3,
+            ];
+            self.particles.add(&smoke, at, [0.0; 3]);
+        }
         for (item, ticks, at, eye, pitch, yaw) in using {
             self.remote_player_eating(&item, ticks, at, eye, pitch, yaw);
         }
         if running {
+            self.guardian_bubbles();
             // The dragon: LivingEntity's interpolation, inside its aiStep.
             let dragon_lerp = self
                 .dragon
@@ -4152,6 +4217,7 @@ impl Game<'_> {
             }
             if reacts {
                 self.predict_use(&changes, seq);
+                self.open_command_block_if_editable((hit.pos[0], hit.pos[1], hit.pos[2]));
             } else if let Some(stack) = held.as_ref()
                 && self.predict_item_on_block(stack, &hit)
             {

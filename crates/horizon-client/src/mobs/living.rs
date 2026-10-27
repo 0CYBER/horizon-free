@@ -301,6 +301,15 @@ impl Mob {
             return (f64::from(0.2_f32), f64::from(0.2_f32), f64::from(0.2_f32));
         }
         let k = &self.kind;
+        // Avatar.POSES: a player's or mannequin's box follows its pose.
+        if matches!(&*k.id, "minecraft:player" | "minecraft:mannequin") {
+            let d = self.extra.avatar_pose.dimensions(1.0);
+            return (
+                f64::from(d.width),
+                f64::from(d.height),
+                f64::from(d.eye_height),
+            );
+        }
         let (mut w, mut h, mut e) = (k.width as f32, k.height as f32, k.eye_height as f32);
         // Sniffer.DIGGING_DIMENSIONS: 0.4 lower, its eyes at 0.81.
         if k.species == super::Species::Sniffer && super::sniffer::digging(self) {
@@ -549,13 +558,15 @@ impl Mob {
         }
     }
     /// `Entity.nextStep`: the next whole metre walked; a warden's steps come
-    /// every 0.55, a strider's every 0.6.
+    /// every 0.55, a strider's every 0.6, a turtle's every 0.15.
     fn next_step(&self) -> f32 {
         let walked = self.ai.steps.move_dist;
         if self.kind.species == super::Species::Warden {
             walked + 0.55
         } else if self.kind.species == super::Species::Strider {
             walked + 0.6
+        } else if self.kind.species == super::Species::Turtle {
+            walked + 0.15
         } else {
             (walked as i32).wrapping_add(1) as f32
         }
@@ -649,7 +660,11 @@ impl Mob {
             return;
         }
         let power = self.fall_distance + 1.0e-6 - self.kind.safe_fall_distance;
-        let damage = (power * self.kind.fall_damage_multiplier).floor();
+        let mut damage = (power * self.kind.fall_damage_multiplier).floor();
+        // Frog.calculateFallDamage: five points less than the base damage.
+        if self.species() == super::Species::Frog {
+            damage -= 5.0;
+        }
         if damage > 0.0 {
             let at = [self.position.x, self.position.y, self.position.z];
             let sound = if damage > 4.0 {
