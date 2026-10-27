@@ -65,6 +65,17 @@ pub(super) fn load_parts(root: &Path) -> HashMap<String, ModelPart> {
         .collect()
 }
 
+/// Marks every quad passed on as drawn with a back-face-culling render type (`entitySolid`).
+struct CullBack<'a>(&'a mut dyn ItemSink);
+impl ItemSink for CullBack<'_> {
+    fn quad(&mut self, quad: ItemQuad) {
+        self.0.quad(ItemQuad {
+            cull_back: true,
+            ..quad
+        });
+    }
+}
+
 /// A pose override for a named part (`setupAnim`).
 type Adjust<'a> = &'a dyn Fn(&str, &mut [f32; 9]);
 fn none(_: &str, _: &mut [f32; 9]) {}
@@ -120,6 +131,7 @@ fn draw(
             color,
             foil,
             light_emission: 0,
+            cull_back: false,
             translucent: false,
         });
     }
@@ -571,6 +583,8 @@ pub(super) fn submit(
         }
         SpecialKind::DecoratedPot => {
             let sides = pot_sides(argument);
+            // `DecoratedPotRenderer` draws every part with `entitySolid`.
+            let sink = &mut CullBack(sink);
             if let Some(base) = renderer.part("decorated_pot_base")
                 && let Some(r) = sprites
                     .get("entity/decorated_pot/decorated_pot_base")

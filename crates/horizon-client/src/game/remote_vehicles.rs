@@ -128,6 +128,17 @@ impl Game<'_> {
         } else if self.riding == Some(vehicle_id) {
             // The server takes the player out, then teleports it.
             self.riding = None;
+            // HappyGhast.removePassenger: a still timeout of 10 (the server's
+            // STAYS_STILL confirms it), and the rider lands on top of the ghast
+            // (`place_ghast_under`).
+            if let Some(m) = self.mobs.iter_mut().find(|m| {
+                m.id == vehicle_id && m.species() == horizon_client::mobs::Species::HappyGhast
+            }) {
+                m.extra.counter = 10;
+                if let Some(r) = self.remote.as_mut() {
+                    r.ghast_dismount = Some(vehicle_id);
+                }
+            }
         }
     }
 

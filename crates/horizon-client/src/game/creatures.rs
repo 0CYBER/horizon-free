@@ -21,7 +21,7 @@ use horizon_client::{
     text::Text,
 };
 use horizon_core::{
-    geometry::{Aabb, Vec3, traverse_blocks},
+    geometry::{Aabb, Direction, Vec3, traverse_blocks},
     position::BlockPos,
     random::RandomSource,
 };
@@ -49,6 +49,9 @@ pub(super) struct Creatures {
     /// Mace smash knockback on the other players from a guest's turn, waiting
     /// for it to end (game/mace.rs).
     pub smash_pushes: Vec<super::mace::SmashPush>,
+    /// Sweep attacks from a guest's turn, waiting for it to end
+    /// (game/lan_pvp.rs).
+    pub sweeps: Vec<super::lan_pvp::Sweep>,
     /// Explosion packets from a guest's turn, waiting for it to end
     /// (centre, small, radius, blocks hit; game/lan_particles.rs).
     pub lan_explosions: Vec<([f64; 3], bool, f32, usize)>,
@@ -56,6 +59,8 @@ pub(super) struct Creatures {
     pub elder_apparition: i32,
     /// The wandering trader spawner's clock.
     pub trader: super::wandering_trader::Spawner,
+    /// When each player last put a parrot on a shoulder (`timeEntitySatOnShoulder`).
+    pub shoulder_time: std::collections::HashMap<[i32; 4], i64>,
     /// The cat spawner's countdown (`CatSpawner.nextTick`).
     pub cat_tick: i32,
     /// Particles from a guest's turn, waiting for it to end
@@ -451,9 +456,10 @@ impl Game<'_> {
             teams: std::sync::Arc::new(self.mob_teams()),
             items: Some(self.res.items()),
             lid_openers: &self.lid_openers,
+            // The first player in the level: a server has no player of its own.
             difficulty: self.local_difficulty(
-                self.player
-                    .as_ref()
+                self.level_players()
+                    .first()
                     .map_or([0.0; 3], |p| [p.position.x, p.position.y, p.position.z]),
             ),
         }
@@ -508,6 +514,7 @@ impl Game<'_> {
             self.tick_wandering_trader();
             self.tick_patrol_spawner();
             self.tick_cat_spawner();
+            self.tick_village_siege();
         }
         self.tick_raids();
         self.tick_creature_entities()
@@ -938,6 +945,55 @@ impl Game<'_> {
             }
         }
     }
+    /// Melee or ranged damage to another mob; whether the hit landed.
+    fn mob_hits_mob(&mut self, target: u32, amount: f32, source: Damage) -> bool {
+        let mut killed = false;
+        let mut hurt = false;
+        let mut infested = false;
+        if let Some(t) = self.mobs.iter_mut().find(|m| m.id == target) {
+            let hit = t.damage(amount, source);
+            hurt = hit;
+            if hit {
+                killed = !t.alive();
+                // The hurt or death sound the mob raised.
+                let center = t.center();
+                for event in std::mem::take(&mut t.outbox) {
+                    match event {
+                        MobEvent::Sound(s, _, volume, pitch) => {
+                            self.audio
+                                .play(&format!("minecraft:{s}"), Some(center), volume, pitch);
+                        }
+                        MobEvent::Infested { .. } => infested = true,
+                        other => {
+                            // Left for the end of the tick.
+                            t.outbox.push(other);
+                        }
+                    }
+                }
+            }
+        }
+        if infested {
+            self.mob_infested(target);
+        }
+        if hurt
+            && let Some(Who::Mob(attacker)) = source.attacker
+            && let Some(m) = self
+                .mobs
+                .iter()
+                .find(|m| m.id == attacker && m.species() == Species::Axolotl)
+        {
+            self.audio.play(
+                "minecraft:entity.axolotl.attack",
+                Some([m.position.x, m.position.y, m.position.z]),
+                1.0,
+                1.0,
+            );
+        }
+        if killed && let Some(Who::Mob(killer)) = source.attacker {
+            self.zombie_killed(killer, target);
+        }
+        hurt
+    }
     /// `InfestedMobEffect.onMobHurt` for a mob: silverfish from half its height up.
     pub(super) fn mob_infested(&mut self, mob: u32) {
         if let Some(m) = self.mobs.iter().find(|m| m.id == mob) {
@@ -1016,6 +1072,20 @@ impl Game<'_> {
                 }
                 MobEvent::EntityEvent { mob, event, at } => {
                     self.lan_entity_event(mob as i32, event, at)
+                }
+                MobEvent::LevelParticles {
+                    kind,
+                    at,
+                    spread,
+                    speed,
+                    count,
+                } => {
+                    if let Some(ty) = horizon_client::particles::ParticleType::from_name(kind) {
+                        let options = horizon_client::particles::ParticleOptions::simple(ty);
+                        self.particles
+                            .send_particles(&options, at, spread, speed, count);
+                        self.lan_level_particles(&options, at, spread, speed, count);
+                    }
                 }
                 MobEvent::Sound(name, at, volume, pitch)
                 | MobEvent::LocalSound(name, at, volume, pitch) => {
@@ -1155,54 +1225,48 @@ impl Game<'_> {
                     amount,
                     source,
                 } => {
-                    let mut killed = false;
-                    let mut hurt = false;
-                    let mut infested = false;
-                    if let Some(t) = self.mobs.iter_mut().find(|m| m.id == target) {
-                        let hit = t.damage(amount, source);
-                        hurt = hit;
-                        if hit {
-                            killed = !t.alive();
-                            // The hurt or death sound the mob raised.
-                            let center = t.center();
-                            for event in std::mem::take(&mut t.outbox) {
-                                match event {
-                                    MobEvent::Sound(s, _, volume, pitch) => {
-                                        self.audio.play(
-                                            &format!("minecraft:{s}"),
-                                            Some(center),
-                                            volume,
-                                            pitch,
-                                        );
-                                    }
-                                    MobEvent::Infested { .. } => infested = true,
-                                    other => {
-                                        // Left for the end of the tick.
-                                        t.outbox.push(other);
-                                    }
-                                }
-                            }
+                    self.mob_hits_mob(target, amount, source);
+                }
+                MobEvent::SonicBoom {
+                    target,
+                    attacker,
+                    from,
+                    direction,
+                } => {
+                    // SonicBoom: the push only follows a hit that landed, scaled
+                    // by the target's KNOCKBACK_RESISTANCE.
+                    let (hurt, resistance) = match target {
+                        Who::Player => {
+                            let hurt = self.mob_hits_player(10.0, from, "minecraft:sonic_boom");
+                            let resistance = self.player.as_mut().map_or(0.0, |p| {
+                                p.attribute("minecraft:knockback_resistance").unwrap_or(0.0)
+                            });
+                            (hurt, resistance)
                         }
-                    }
-                    if infested {
-                        self.mob_infested(target);
-                    }
-                    if hurt
-                        && let Some(Who::Mob(attacker)) = source.attacker
-                        && let Some(m) = self
-                            .mobs
-                            .iter()
-                            .find(|m| m.id == attacker && m.species() == Species::Axolotl)
-                    {
-                        self.audio.play(
-                            "minecraft:entity.axolotl.attack",
-                            Some([m.position.x, m.position.y, m.position.z]),
-                            1.0,
-                            1.0,
-                        );
-                    }
-                    if killed && let Some(Who::Mob(killer)) = source.attacker {
-                        self.zombie_killed(killer, target);
+                        Who::Mob(id) => {
+                            let source = Damage {
+                                kind: DamageKind::SonicBoom,
+                                attacker: Some(Who::Mob(attacker)),
+                                from: Some(from),
+                            };
+                            let hurt = self.mob_hits_mob(id, 10.0, source);
+                            let resistance = self
+                                .mobs
+                                .iter()
+                                .find(|m| m.id == id)
+                                .map_or(0.0, |m| self.mob_knockback_resistance(m));
+                            (hurt, resistance)
+                        }
+                    };
+                    if hurt {
+                        let horizontal = 2.5 * (1.0 - resistance);
+                        let vertical = 0.5 * (1.0 - resistance);
+                        let velocity = [
+                            direction[0] * horizontal,
+                            direction[1] * vertical,
+                            direction[2] * horizontal,
+                        ];
+                        self.handle_mob_events(vec![MobEvent::Push { target, velocity }])?;
                     }
                 }
                 MobEvent::FinishAdmiring { mob } => self.finish_admiring(mob),
@@ -1232,6 +1296,7 @@ impl Game<'_> {
                 }
                 MobEvent::BecomeStatue { mob } => self.golem_become_statue(mob),
                 MobEvent::EnterHive { mob, hive } => self.bee_enter_hive(mob, hive),
+                MobEvent::ParrotToShoulder { mob } => self.parrot_to_shoulder(mob),
                 MobEvent::Infested { mob } => self.mob_infested(mob),
                 MobEvent::Gift { target, item } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == target)
@@ -1248,6 +1313,14 @@ impl Game<'_> {
                 MobEvent::SetTarget { mob, target } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
                         m.ai.target = Some(target);
+                    }
+                }
+                MobEvent::HuntHoglin { mob, target, ticks } => {
+                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
+                        m.extra.ints[0] = ticks;
+                        if m.ai.target.is_none() {
+                            m.ai.target = Some(Who::Mob(target));
+                        }
                     }
                 }
                 MobEvent::Projectile(mut p) => {
@@ -1345,8 +1418,50 @@ impl Game<'_> {
                         self.world.set(pos[0], pos[1], pos[2], state)?;
                     }
                 }
+                MobEvent::Infest {
+                    pos,
+                    infested,
+                    poof,
+                } => {
+                    let registry = &self.pack.assets.registry;
+                    let old = self.world.block(pos[0], pos[1], pos[2]);
+                    if let Some(mut state) = registry.state(old).cloned() {
+                        let (from, to) = if infested {
+                            ("minecraft:", "minecraft:infested_")
+                        } else {
+                            ("minecraft:infested_", "minecraft:")
+                        };
+                        state.name = state.name.replacen(from, to, 1);
+                        if let Ok(id) = registry.resolve(&state) {
+                            self.world.set(pos[0], pos[1], pos[2], id)?;
+                        }
+                    }
+                    if let Some(mob) = poof {
+                        self.mob_poof(mob);
+                    }
+                }
                 MobEvent::BreakBlock { pos, drop } => {
                     let old = self.world.block(pos[0], pos[1], pos[2]);
+                    // InfestedBlock.spawnAfterBreak: its silverfish comes out
+                    // when blocks drop.
+                    if drop
+                        && self
+                            .res
+                            .facts()
+                            .get(old)
+                            .name
+                            .starts_with("minecraft:infested_")
+                        && self.ui.rules.bool("block_drops")
+                    {
+                        let at = [
+                            f64::from(pos[0]) + 0.5,
+                            f64::from(pos[1]),
+                            f64::from(pos[2]) + 0.5,
+                        ];
+                        if let Some(id) = self.spawn_mob("minecraft:silverfish", at, false) {
+                            self.mob_poof(id);
+                        }
+                    }
                     // Block.spawnDestroyParticles: fire breaks leave nothing.
                     if !self.res.facts().get(old).has_class("BaseFireBlock") {
                         self.destroy_particles(pos, old);
@@ -2379,6 +2494,22 @@ impl Game<'_> {
             8.0,
         )
     }
+    /// `BellBlock.onProjectileHit`: a projectile that strikes the bell proper
+    /// rings it, and a player's shot counts as the player's ring.
+    fn bell_projectile_hit(&mut self, p: &Projectile, pos: [i32; 3], at: Vec3, face: [i32; 3]) {
+        let Some(face) = Direction::ALL.into_iter().find(|d| d.normal() == face) else {
+            return;
+        };
+        let block = BlockPos::new(pos[0], pos[1], pos[2]);
+        let rang = self
+            .with_level(|b, level, ticks| b.bell_projectile_hit(level, ticks, block, face, at.y));
+        if rang {
+            let _ = self.process_level_events();
+            if p.owner == Some(Who::Player) {
+                self.stats.custom("bell_ring", 1);
+            }
+        }
+    }
     /// What an arrow's tick asked for: its particles and sounds.
     fn arrow_event(&mut self, at: Vec3, event: horizon_client::arrows::ArrowEvent) {
         use horizon_client::arrows::{ArrowEvent, ArrowParticle, ArrowSound, BlockReaction};
@@ -2521,6 +2652,13 @@ impl Game<'_> {
         }
     }
     pub(super) fn projectile_hit(&mut self, p: &Projectile, hit: Hit) -> Result<()> {
+        // Projectile.onHitBlock: BlockState.onProjectileHit, for every
+        // projectile (a wind charge out of the world's top has no face).
+        if let Hit::Block { pos, at, face } = hit
+            && face != [0; 3]
+        {
+            self.bell_projectile_hit(p, pos, at, face);
+        }
         self.combat.projectile_owner = match p.owner {
             Some(Who::Mob(id)) => Some(id),
             _ => None,
@@ -3009,7 +3147,7 @@ impl Game<'_> {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id)
                         && m.damage(4.0, source)
                     {
-                        m.extra.levitation = 200;
+                        m.add_effect("minecraft:levitation", 200, 0);
                         // Shulker.hurtServer: a shulker hit by a bullet.
                         horizon_client::mobs::shulker::hit_by_bullet(m);
                     }
@@ -3173,6 +3311,10 @@ impl Game<'_> {
             self.swing_arm();
             return Ok(true);
         }
+        if self.interact_shear_mob(index, &item) {
+            self.swing_arm();
+            return Ok(true);
+        }
         // AbstractHorse.mobInteract: feed, equip or ride.
         if self.interact_mount(index, &item) {
             self.swing_arm();
@@ -3208,13 +3350,25 @@ impl Game<'_> {
             .items()
             .get(&item)
             .is_some_and(|i| i.max_damage > 0);
+        let parrot_poisonous = self
+            .res
+            .items()
+            .item_tags
+            .get("minecraft:parrot_poisonous_food")
+            .is_some_and(|t| t.contains(&*item));
         let acting = self.acting_player_uuid();
+        let sneaking = self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)
+            || self.keys.contains(&winit::keyboard::KeyCode::ShiftRight);
+        let held_damage = held.as_ref().map_or(0, |h| h.damage as i32);
+        let held_extra = held.as_ref().and_then(|h| h.extra.clone());
         let m = &mut self.mobs[index];
         if !m.alive() {
             return Ok(false);
         }
         let species = m.species();
         let center = m.center();
+        // Wolf armor the owner takes off with shears or leaves a dropped stack of.
+        let mut armor_drop: Option<ItemStack> = None;
         let mut consume = false;
         let mut give: Option<&str> = None;
         let mut sound: Option<&str> = None;
@@ -3299,6 +3453,23 @@ impl Game<'_> {
                     handled = false;
                 }
             }
+            // Entity.interact: shears take a tamed wolf's armor off for its owner.
+            Species::Wolf
+                if item == "minecraft:shears"
+                    && m.extra.tame
+                    && m.extra.owner == Some(acting)
+                    && m.extra.head.is_some()
+                    && !sneaking =>
+            {
+                let mut stack = ItemStack::new("minecraft:wolf_armor", 1);
+                stack.damage = m.extra.body_damage.max(0) as u32;
+                stack.extra = m.extra.body_extra.take();
+                armor_drop = Some(stack);
+                m.extra.head = None;
+                m.extra.body_damage = 0;
+                eat = Some(("item.armor.unequip_wolf", 1.0, 1.0));
+                self.damage_held_tool();
+            }
             // Wolf.mobInteract: heal, dye the collar or sit/stand when tame;
             // a bone tames a wild one a third of the time.
             Species::Wolf if m.extra.tame && is_food && m.health < m.attrs.max_health => {
@@ -3312,6 +3483,36 @@ impl Game<'_> {
                 // then playEatingSound, which wolves leave empty.
                 m.health = (m.health + heal).min(m.attrs.max_health);
                 consume = true;
+            }
+            // Wolf.mobInteract: the owner puts wolf armor on a tamed adult.
+            Species::Wolf
+                if item == "minecraft:wolf_armor"
+                    && m.extra.tame
+                    && m.extra.owner == Some(acting)
+                    && m.extra.head.is_none()
+                    && !m.is_baby() =>
+            {
+                m.extra.head = Some(item.as_str().into());
+                m.extra.body_damage = held_damage;
+                m.extra.body_extra = held_extra;
+                consume = true;
+                eat = Some(("item.armor.equip_wolf", 1.0, 1.0));
+            }
+            // Wolf.mobInteract: an armadillo scute repairs a sitting wolf's
+            // armor by an eighth of its durability.
+            Species::Wolf
+                if item == "minecraft:armadillo_scute"
+                    && m.extra.tame
+                    && m.extra.owner == Some(acting)
+                    && m.extra.sitting
+                    && m.extra.head.is_some()
+                    && m.extra.body_damage > 0 =>
+            {
+                m.extra.body_damage = (m.extra.body_damage
+                    - (horizon_client::mobs::WOLF_ARMOR_DURABILITY as f32 * 0.125) as i32)
+                    .max(0);
+                consume = true;
+                eat = Some(("item.wolf_armor.repair", 1.0, 1.0));
             }
             Species::Wolf
                 if m.extra.tame
@@ -3432,6 +3633,15 @@ impl Game<'_> {
                     m.position.z.floor() as i32 >> 4,
                 ));
             }
+            // Parrot.mobInteract: the owner makes a tame parrot on the ground
+            // sit or stand (poisonous food is handled apart).
+            Species::Parrot if m.extra.tame && m.on_ground && !parrot_poisonous => {
+                m.extra.sitting = !m.extra.sitting;
+                self.world.modified.insert((
+                    m.position.x.floor() as i32 >> 4,
+                    m.position.z.floor() as i32 >> 4,
+                ));
+            }
             Species::Cat if !m.extra.tame && is_food => {
                 consume = true;
                 m.persistent = true;
@@ -3489,7 +3699,7 @@ impl Game<'_> {
                 let tamed = m.random.next_int_bound(10).unwrap_or(1) == 0;
                 if tamed {
                     m.extra.tame = true;
-                    m.extra.owner = self.level.player_uuid.or(Some([0, 0, 0, 1]));
+                    m.extra.owner = Some(acting);
                 }
                 // TamableAnimal.spawnTamingParticles (entity event 7 or 6).
                 self.mob_event_particles(self.mobs[index].id, if tamed { 7 } else { 6 });
@@ -3609,6 +3819,9 @@ impl Game<'_> {
                 self.spawn_item(rest, at, [0.0, 0.0, 0.0], 40);
             }
         }
+        if let Some(stack) = armor_drop {
+            self.spawn_item(stack, [center[0], center[1] + 0.5, center[2]], [0.0; 3], 10);
+        }
         for (item, count) in drops {
             for _ in 0..count {
                 let v = [
@@ -3630,6 +3843,39 @@ impl Game<'_> {
             }
         }
         Ok(true)
+    }
+    /// `SnowGolem.mobInteract` and `Bogged.mobInteract` with shears: the
+    /// pumpkin or the mushrooms come off (the shearing loot table), the shear
+    /// game event is posted and the tool takes one damage.
+    fn interact_shear_mob(&mut self, index: usize, item: &str) -> bool {
+        let m = &self.mobs[index];
+        if item != "minecraft:shears" || !m.alive() || m.extra.sheared {
+            return false;
+        }
+        let (sound, table, height) = match m.species() {
+            Species::SnowGolem => (
+                "minecraft:entity.snow_golem.shear",
+                "minecraft:shearing/snow_golem",
+                m.eye_height(),
+            ),
+            Species::Bogged => (
+                "minecraft:entity.bogged.shear",
+                "minecraft:shearing/bogged",
+                f64::from(m.height()),
+            ),
+            _ => return false,
+        };
+        let at = m.position;
+        let tool = self.held().cloned();
+        self.audio.play(sound, Some([at.x, at.y, at.z]), 1.0, 1.0);
+        self.mobs[index].extra.sheared = true;
+        for stack in self.sequence_loot(table, table, tool.as_ref()) {
+            self.spawn_at_location(at, height, stack);
+        }
+        let ctx = self.who_context(Some(horizon_client::mobs::Who::Player), None);
+        self.post_game_event("minecraft:shear", [at.x, at.y, at.z], ctx);
+        self.damage_held_tool();
+        true
     }
     /// `Armadillo.mobInteract`: a brush brushes a scute off an adult
     /// (`brushOffScute`) and loses 16 durability.
@@ -3979,6 +4225,18 @@ impl Game<'_> {
                 &armor,
                 out,
             );
+            if &*mob.kind.id == "minecraft:player" {
+                // PlayerRenderer's WingsLayer and SpinAttackEffectLayer.
+                self.player_elytra_geometry(
+                    mob,
+                    mob.extra.chest.as_deref(),
+                    camera,
+                    alpha as f32,
+                    packed,
+                    out,
+                );
+                self.spin_attack_geometry(mob, camera, alpha as f32, packed, out);
+            }
             self.mob_block_geometry(mob, camera, alpha, packed, out);
             if let Some(rgb) = outline {
                 self.mark_outline(&out[entity_start..], rgb);
@@ -4213,6 +4471,7 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
     match kind {
         K::PlayerAttack => "minecraft:player_attack",
         K::MaceSmash => "minecraft:mace_smash",
+        K::Spear => "minecraft:spear",
         K::MobAttack => "minecraft:mob_attack",
         K::Arrow => "minecraft:arrow",
         K::Thrown => "minecraft:thrown",
@@ -4229,6 +4488,7 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::Magic => "minecraft:magic",
         K::Sting => "minecraft:sting",
         K::Cactus => "minecraft:cactus",
+        K::SweetBerryBush => "minecraft:sweet_berry_bush",
         K::Generic => "minecraft:generic",
         K::InWall => "minecraft:in_wall",
         K::Thorns => "minecraft:thorns",
@@ -4289,13 +4549,10 @@ impl Game<'_> {
             f64::from((pos[0] >> 4) * 16 + 8),
             f64::from((pos[2] >> 4) * 16 + 8),
         ];
-        let spectator = self.spectator();
-        let Some(close) = self.player.as_ref().filter(|_| !spectator).map(|p| {
+        let close = self.level_players().iter().any(|p| {
             let (dx, dz) = (p.position.x - centre[0], p.position.z - centre[1]);
-            dx * dx + dz * dz < 16384.0
-        }) else {
-            return;
-        };
+            !p.spectator && dx * dx + dz * dz < 16384.0
+        });
         if !close {
             return;
         }

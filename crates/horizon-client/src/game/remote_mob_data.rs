@@ -17,6 +17,9 @@ use horizon_protocol::registry::{Builtin, Dynamic};
 fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_entity: i32) {
     let species = m.species();
     let baby = super::lan::baby_index(&m.kind.id);
+    if &*m.kind.id == "minecraft:player" {
+        player_poses(m, values);
+    }
     for (index, _, value) in values {
         match (*index, value) {
             // Entity.DATA_POSE: a player's or mannequin's box follows it.
@@ -117,6 +120,9 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             (Species::Slime | Species::MagmaCube, 18, Value::Int(size)) => {
                 m.extra.size = (*size).clamp(1, 127);
             }
+            // Enderman.DATA_CREEPY (after DATA_CARRY_STATE): the open mouth
+            // and raised head of an angry enderman.
+            (Species::Enderman, 17, Value::Bool(creepy)) => m.extra.flag = *creepy,
             // Warden.CLIENT_ANGER_LEVEL: the heartbeat's pace.
             (Species::Warden, 16, Value::Int(anger)) => {
                 if let Some(st) = m.extra.warden.as_mut() {
@@ -212,6 +218,10 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             // Pillager.IS_CHARGING_CROSSBOW: the charge pose (Raider's
             // IS_CELEBRATING takes 16).
             (Species::Pillager, 17, Value::Bool(charging)) => m.extra.flag = *charging,
+            // HappyGhast.STAYS_STILL (after AgeableMob's two and IS_LEASH_HOLDER):
+            // `isOnStillTimeout` on a client, which keeps the ghast solid to
+            // the player (`canBeCollidedWith`).
+            (Species::HappyGhast, 19, Value::Bool(still)) => m.extra.counter = i32::from(*still),
             // SpellcasterIllager.DATA_SPELL_CASTING_ID: the casting pose.
             (Species::Evoker | Species::Illusioner, 17, Value::Byte(spell)) => {
                 m.extra.variant2 = (*spell).max(0) as u8;
@@ -276,6 +286,21 @@ fn apply_registry_data(
             && let Some(name) = registries.name(registry, *id)
         {
             m.extra.variant = finalize::variant_index(species, name);
+        }
+    }
+}
+
+/// What another player's pose draws from: gliding (Entity.isFallFlying, flag
+/// 0x80 of the shared flags), the pose (swimming), Riptide's spin
+/// (LivingEntity.isAutoSpinAttack, flag 4) and a loaded crossbow in the
+/// hand (the held stack comes with SetEquipment).
+fn player_poses(m: &mut Mob, values: &[(u8, i32, Value)]) {
+    for (index, _, value) in values {
+        match (*index, value) {
+            (0, Value::Byte(flags)) => m.extra.fall_flying = flags & -128 != 0,
+            (6, Value::Id(pose)) => m.extra.synced_pose = (*pose).clamp(0, 17) as u8,
+            (8, Value::Byte(flags)) => m.extra.auto_spin_attack = flags & 4 != 0,
+            _ => {}
         }
     }
 }
