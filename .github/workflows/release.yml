@@ -40,7 +40,10 @@ permissions:
   # The open release-blocker issues (decide).
   issues: read
 concurrency:
-  group: game-release
+  # One release at a time. A hand-started dry run publishes nothing, so it can't race a real release: it gets a
+  # group of its own. In the shared group, a release queued behind it replaced it as the pending run and GitHub
+  # cancelled it (#2779's dry run, 2026-10-27), which happens all day while releases go out in batches.
+  group: game-release${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '-dry-run' || '' }}
   cancel-in-progress: false
 jobs:
   decide:
