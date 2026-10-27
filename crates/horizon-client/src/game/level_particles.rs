@@ -15,8 +15,7 @@ impl Game<'_> {
     /// Event 2016: `Shulker.teleportSomewhere`'s particles between the
     /// shell's old and new cells.
     pub(super) fn shulker_teleport_particles(&mut self, pos: [i32; 3], data: i32) {
-        self.particles
-            .block_teleportation(pos, data, [8, 8, 8], self.settings.particles);
+        self.particles.block_teleportation(pos, data, [8, 8, 8]);
     }
     /// Event 2017: `TeleportRandomlyConsumeEffect`'s directional particles.
     pub(super) fn consume_teleport_particles(&mut self, pos: [i32; 3], data: i32) {
