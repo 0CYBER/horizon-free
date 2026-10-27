@@ -1310,7 +1310,7 @@ def affected_harnesses(found, records, changed, reach=True, base=None):
             affected.add(name)
             continue
         plain = {path.split(KEEP)[0] for path in dependencies}
-        hit = plain & changed
+        hit = (plain & changed) | parity_reach.unrecorded(ROOT, plain, changed)
         if not hit:
             continue
         if graph is None or any(not path.startswith("crates/") for path in hit):
