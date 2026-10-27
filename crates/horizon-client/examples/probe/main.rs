@@ -27,7 +27,9 @@ mod chat_screen_fixture;
 mod cloud_fixture;
 mod command_parse_fixture;
 mod container_screen_probe;
+mod creative_mining_probe;
 mod creative_search_fixture;
+mod cushion_placement_probe;
 mod emitter_particles_probe;
 mod enchanting_fixture;
 mod entity_anim_fixture;
@@ -83,6 +85,7 @@ mod sound_engine_fixture;
 mod sound_event_fixture;
 mod spawn_rules_fixture;
 mod sprint_probe;
+mod squid_client_probe;
 mod subtitle_fixture;
 mod tab_list_fixture;
 mod team_rules_fixture;
@@ -107,6 +110,9 @@ probes! {
     block_transform_fixture,
     breaking_fixture,
     camera_probe,
+    squid_client_probe,
+    creative_mining_probe,
+    cushion_placement_probe,
     cauldron_fixture,
     chat_screen_fixture,
     cloud_fixture,

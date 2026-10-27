@@ -35,7 +35,7 @@ if __name__ == '__main__':
         sources=[
             lab.ROOT / 'crates/horizon-client/src/item_tooltip.rs',
             lab.ROOT / 'crates/horizon-client/src/item_data.rs',
-            lab.ROOT / 'crates/horizon-client/src/text.rs',
-            lab.ROOT / 'crates/horizon-client/src/component.rs',
+            lab.ROOT / 'crates/horizon-client-core/src/text.rs',
+            lab.ROOT / 'crates/horizon-client-core/src/component.rs',
         ],
         expected_lines=len(CASES))
