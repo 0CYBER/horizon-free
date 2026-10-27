@@ -4029,6 +4029,10 @@ impl Game<'_> {
                 self.swing_arm();
                 return Ok(true);
             }
+            if self.use_beehive(hit.pos, held.as_ref())? {
+                self.swing_arm();
+                return Ok(true);
+            }
             if self.use_campfire_douse(hit.pos, held.as_ref())? {
                 self.swing_arm();
                 return Ok(true);
