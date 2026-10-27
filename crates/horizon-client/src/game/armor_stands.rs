@@ -495,7 +495,7 @@ impl Game<'_> {
                 area,
                 Some(id as i32),
                 super::mace::Spared::Stand(id),
-                magic > 0.0,
+                (magic > 0.0).then_some(id as i32),
             );
             self.swing_arm();
         }

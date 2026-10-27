@@ -1032,7 +1032,7 @@ impl Game<'_> {
             return false;
         }
         // A dragon part is no LivingEntity: `canCriticalAttack` is false.
-        let (amount, _, _, magic) = self.melee_damage("minecraft:ender_dragon", false);
+        let (amount, _, _, _) = self.melee_damage("minecraft:ender_dragon", false);
         self.swing_arm();
         // The part's box (a part is no living entity: no critical sound).
         let area = self
@@ -1043,7 +1043,7 @@ impl Game<'_> {
         let hurt = self.hit_special(id, amount, true, false);
         // The sweep and the sounds read the charge, which the hit then spends.
         if let (Some(area), Hurt::Landed { .. }) = (area, hurt) {
-            self.attack_effects(area, None, super::mace::Spared::Nothing, magic > 0.0);
+            self.attack_effects(area, None, super::mace::Spared::Nothing, None);
         }
         self.attack_ticks = 0;
         true

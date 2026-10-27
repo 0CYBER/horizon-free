@@ -328,35 +328,70 @@ impl Game<'_> {
         let base = sweep_base_damage(ratio, attribute, scale);
         let (xd, zd) = self.extra_knockback_direction();
         let uuid = self.level.player_uuid.or(Some([0, 0, 0, 1]));
-        let victims: Vec<usize> = self
-            .mobs
-            .iter()
-            .enumerate()
-            .filter(|(_, m)| {
-                spared != Spared::Mob(m.id)
-                    && m.alive()
-                    && !m.removed
-                    && !ally_of_player(m, uuid)
-                    && m.bounds().intersects(area)
-                    && near(m.position)
-            })
-            .map(|(i, _)| i)
-            .collect();
-        // The armor stands in reach, highest index first (a hit may remove one).
-        let stands: Vec<usize> = self
-            .armor_stands
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| {
-                !s.marker
-                    && spared != Spared::Stand(s.id)
-                    && s.bounds().intersects(area)
-                    && near(s.position)
-            })
-            .map(|(i, _)| i)
-            .rev()
-            .collect();
-        for i in victims {
+        // getEntitiesOfClass walks the entity sections (x, then z, then y)
+        // under the box, each in the order its entities were added.
+        let section = |at: Vec3| {
+            (
+                (at.x.floor() as i32) >> 4,
+                (at.z.floor() as i32) >> 4,
+                (at.y.floor() as i32) >> 4,
+            )
+        };
+        let mut victims: Vec<((i32, i32, i32), u32, bool)> = Vec::new();
+        for m in &self.mobs {
+            if spared != Spared::Mob(m.id)
+                && m.alive()
+                && !m.removed
+                && !ally_of_player(m, uuid)
+                && m.bounds().intersects(area)
+                && near(m.position)
+            {
+                victims.push((section(m.position), m.id, false));
+            }
+        }
+        for s in &self.armor_stands {
+            if !s.marker
+                && spared != Spared::Stand(s.id)
+                && s.bounds().intersects(area)
+                && near(s.position)
+            {
+                victims.push((section(s.position), s.id, true));
+            }
+        }
+        victims.sort_by_key(|&(key, id, _)| (key, id));
+        for (_, id, is_stand) in victims {
+            if is_stand {
+                let Some(i) = self.armor_stands.iter().position(|s| s.id == id) else {
+                    continue;
+                };
+                // knockback(0.4, ..) follows a hurtServer that landed, on a
+                // stand that is still there (LivingEntity.knockback).
+                if !self.punch_armor_stand(i) {
+                    continue;
+                }
+                let (mut kx, mut kz) = (xd, zd);
+                while kx * kx + kz * kz < f64::from(1.0e-5_f32) {
+                    let r = &mut self.world.random;
+                    kx = (r.next_double() - r.next_double()) * 0.01;
+                    kz = (r.next_double() - r.next_double()) * 0.01;
+                }
+                let len = (kx * kx + kz * kz).sqrt();
+                if let Some(s) = self.armor_stands.iter_mut().find(|s| s.id == id) {
+                    s.velocity = Vec3::new(
+                        s.velocity.x / 2.0 - kx / len * 0.4,
+                        if s.on_ground {
+                            (s.velocity.y / 2.0 + 0.4).min(0.4)
+                        } else {
+                            s.velocity.y
+                        },
+                        s.velocity.z / 2.0 - kz / len * 0.4,
+                    );
+                }
+                continue;
+            }
+            let Some(i) = self.mobs.iter().position(|m| m.id == id) else {
+                continue;
+            };
             let kind = self.mobs[i].kind.id.clone();
             let kind = format!("minecraft:{}", kind.trim_start_matches("minecraft:"));
             let amount = self.enchanted_damage(&kind, base) * scale;
@@ -368,32 +403,6 @@ impl Game<'_> {
                 self.last_hurt_by_player
                     .insert(self.mobs[i].id, self.lan_acting);
                 self.post_attack(i);
-            }
-        }
-        for i in stands {
-            let id = self.armor_stands[i].id;
-            // knockback(0.4, ..) follows a hurtServer that landed, on a stand
-            // that is still there (LivingEntity.knockback).
-            if !self.punch_armor_stand(i) {
-                continue;
-            }
-            let (mut kx, mut kz) = (xd, zd);
-            while kx * kx + kz * kz < f64::from(1.0e-5_f32) {
-                let r = &mut self.world.random;
-                kx = (r.next_double() - r.next_double()) * 0.01;
-                kz = (r.next_double() - r.next_double()) * 0.01;
-            }
-            let len = (kx * kx + kz * kz).sqrt();
-            if let Some(s) = self.armor_stands.iter_mut().find(|s| s.id == id) {
-                s.velocity = Vec3::new(
-                    s.velocity.x / 2.0 - kx / len * 0.4,
-                    if s.on_ground {
-                        (s.velocity.y / 2.0 + 0.4).min(0.4)
-                    } else {
-                        s.velocity.y
-                    },
-                    s.velocity.z / 2.0 - kz / len * 0.4,
-                );
             }
         }
         // The players among the victims need the hub, which is out while a

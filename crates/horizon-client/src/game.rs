@@ -7594,8 +7594,8 @@ impl Game<'_> {
     /// and can't be hit critically): knockback when sprinting at full
     /// strength, then strong or weak, or the sweep around the vehicle's
     /// box `area`. Before `swing_arm` resets the charge.
-    pub(super) fn vehicle_attack_sounds(&mut self, area: Aabb) {
-        self.attack_effects(area, None, mace::Spared::Nothing, false);
+    pub(super) fn vehicle_attack_sounds(&mut self, area: Aabb, magic: Option<i32>) {
+        self.attack_effects(area, None, mace::Spared::Nothing, magic);
     }
     /// `Player.attack` after a target that is not a mob took the hit:
     /// the sprint knockback sound, a living target's critical hit (`living`:
@@ -7606,7 +7606,7 @@ impl Game<'_> {
         area: Aabb,
         living: Option<i32>,
         spared: mace::Spared,
-        magic: bool,
+        magic: Option<i32>,
     ) {
         let scale = self.attack_strength_scale();
         let full = scale > 0.9;
@@ -7644,7 +7644,7 @@ impl Game<'_> {
             self.audio.play(sound, from, 1.0, 1.0);
         }
         // Player.magicCrit: the enchantments added damage.
-        if magic && let Some(id) = living {
+        if let Some(id) = magic {
             let (feet, size) = (area.bottom_center(), area.size());
             self.critical_hit(
                 self.lan_acting,
@@ -7694,16 +7694,11 @@ impl Game<'_> {
         if self.attack_redirectable() {
             return true;
         }
-        let hand_damage = 1.0
-            + self
-                .held()
-                .and_then(|h| self.res.items().get(&h.item))
-                .map_or(0.0, |i| i.attack_damage);
         if self.attack_frame()
             || self.attack_armor_stand()
             || self.attack_cushion()
-            || self.attack_boat(hand_damage)
-            || self.attack_cart(hand_damage)
+            || self.attack_boat()
+            || self.attack_cart()
             || self.attack_dragon()
             || self.attack_guest()
         {

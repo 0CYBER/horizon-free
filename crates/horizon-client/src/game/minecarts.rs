@@ -1170,7 +1170,7 @@ impl Game<'_> {
             })
     }
     /// `VehicleEntity.hurtServer` from the player's attack.
-    pub(super) fn attack_cart(&mut self, damage: f32) -> bool {
+    pub(super) fn attack_cart(&mut self) -> bool {
         let Some((i, d)) = self.cart_hit() else {
             return false;
         };
@@ -1181,8 +1181,11 @@ impl Game<'_> {
             .held()
             .is_some_and(|s| s.enchantment_level("minecraft:fire_aspect") > 0);
         let area = self.carts[i].bounds();
+        // Player.attack's full damage against the cart's entity type.
+        let id = self.carts[i].id as i32;
+        let (damage, _, _, magic) = self.melee_damage(self.carts[i].kind.id(), false);
         self.hurt_cart(i, damage, self.creative, burning);
-        self.vehicle_attack_sounds(area);
+        self.vehicle_attack_sounds(area, (magic > 0.0).then_some(id));
         self.swing_arm();
         true
     }

@@ -811,7 +811,7 @@ impl Game<'_> {
         true
     }
     /// `VehicleEntity.hurtServer` from the player's attack.
-    pub(super) fn attack_boat(&mut self, damage: f32) -> bool {
+    pub(super) fn attack_boat(&mut self) -> bool {
         let Some((i, d)) = self.boat_hit() else {
             return false;
         };
@@ -819,8 +819,11 @@ impl Game<'_> {
             return false;
         }
         let area = self.boats[i].bounds();
+        // Player.attack's full damage against the boat's entity type.
+        let (kind, id) = (self.boats[i].entity_type(), self.boats[i].id as i32);
+        let (damage, _, _, magic) = self.melee_damage(&kind, false);
         self.hurt_boat(i, damage, self.creative);
-        self.vehicle_attack_sounds(area);
+        self.vehicle_attack_sounds(area, (magic > 0.0).then_some(id));
         self.swing_arm();
         true
     }
