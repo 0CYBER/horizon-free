@@ -4862,6 +4862,7 @@ impl Game<'_> {
             }
         }
         self.powder_snow_fire()?;
+        self.rain_extinguish_in_frame();
         self.tick_totem();
         let Some(player) = self.player.as_mut() else {
             return Ok(());
@@ -10132,6 +10133,14 @@ impl Game<'_> {
             b.temperature
         };
         Some(t < 0.15)
+    }
+    /// `Level.isRainingAt`: it rains, the sky light is 15, nothing that stops
+    /// motion is above, and the biome's precipitation there is rain.
+    fn raining_at(&self, p: BlockPos) -> bool {
+        self.world.weather.levels(1.0).0 > 0.2
+            && self.world.light(p.x, p.y, p.z) >> 4 == 15
+            && self.rain_height(p.x, p.z) <= p.y
+            && self.precipitation(p.x, p.y, p.z) == Some(false)
     }
     /// `getHeight(Heightmap.Types.MOTION_BLOCKING, x, z)`: one above the
     /// highest block in `blocks_motion_in_heightmap` or holding a fluid.

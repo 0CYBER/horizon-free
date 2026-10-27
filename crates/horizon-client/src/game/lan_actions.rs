@@ -2294,6 +2294,8 @@ impl Game<'_> {
                     game.cauldron_extinguish(*pos);
                 }
             }
+            // Entity.baseTick: rain puts out a burning player.
+            game.rain_extinguish_player();
             // WitherRoseBlock.entityInside along those moves.
             for event in &events {
                 if matches!(event, MotionEvent::InsideWitherRose) {
