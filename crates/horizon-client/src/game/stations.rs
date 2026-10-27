@@ -1768,6 +1768,11 @@ impl Game<'_> {
         };
         let gray = rgba(170, 170, 170, 255);
         let item_info = self.res.items().get(&stack.item);
+        // SmithingTemplateItem.appendHoverText: `Item.appendHoverText` comes
+        // before the components.
+        for (text, c) in horizon_client::item_tooltip::smithing_template_lines(stack, &translate) {
+            push(&mut lines, text, c);
+        }
         // InstrumentComponent.addToTooltip.
         if let Some(text) =
             horizon_client::item_tooltip::instrument_line(stack, &display, &translate)
