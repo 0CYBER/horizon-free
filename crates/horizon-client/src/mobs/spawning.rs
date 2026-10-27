@@ -109,6 +109,19 @@ pub fn armor_stats(item: &str) -> (f32, f32) {
     };
     (points[slot], toughness)
 }
+/// The armour and toughness a horse armor item adds in the body slot
+/// (`ArmorMaterial.createAttributes(ArmorType.BODY)`).
+pub fn horse_armor_stats(item: &str) -> (f32, f32) {
+    match item.strip_prefix("minecraft:") {
+        Some("leather_horse_armor") => (3.0, 0.0),
+        Some("copper_horse_armor") => (4.0, 0.0),
+        Some("iron_horse_armor") => (5.0, 0.0),
+        Some("golden_horse_armor") => (7.0, 0.0),
+        Some("diamond_horse_armor") => (11.0, 2.0),
+        Some("netherite_horse_armor") => (19.0, 3.0),
+        _ => (0.0, 0.0),
+    }
+}
 /// `Mob.populateDefaultEquipmentSlots`: sometimes a set of armour, from the
 /// head down, of one random material.
 fn populate_armor(m: &mut Mob, d: &LocalDifficulty) {
