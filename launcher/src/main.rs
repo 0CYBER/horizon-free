@@ -748,6 +748,11 @@ impl Launcher {
                                 self.settings.selected = Some(tag);
                             }
                             self.settings.save();
+                            // After the save: the selected version is never pruned.
+                            let tx = self.tx.clone();
+                            std::thread::spawn(move || {
+                                let _ = tx.send(Msg::Pruned(backend::prune_old_versions()));
+                            });
                         }
                         Err(e) => self.install_error = Some((tag, e)),
                     }
@@ -761,6 +766,11 @@ impl Launcher {
                         selection_after_removal(&self.installed, Settings::load().selected);
                     if let Err(e) = result {
                         self.install_error = Some((tag, e));
+                    }
+                }
+                Msg::Pruned(gone) => {
+                    if !gone.is_empty() {
+                        self.installed = backend::installed();
                     }
                 }
                 Msg::Updates(Ok(updates)) => {
@@ -2779,6 +2789,13 @@ impl Launcher {
                 cx.notify();
             }),
         );
+        let prune = switch("auto-prune", self.settings.auto_prune(), &t).on_click(cx.listener(
+            |this, _: &ClickEvent, _, cx| {
+                this.settings.prune_old_versions = Some(!this.settings.auto_prune());
+                this.settings.save();
+                cx.notify();
+            },
+        ));
         let opening = switch("opening", !self.settings.skip_opening, &t).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 this.settings.skip_opening = !this.settings.skip_opening;
@@ -2927,6 +2944,20 @@ impl Launcher {
                             "Your selected version only changes if you were playing the newest one.",
                         )),
                         Some(toggle.into_any_element()),
+                        &t,
+                    ))
+                    .child(index_row(
+                        n + 2,
+                        tr("Delete old versions automatically"),
+                        Some(
+                            div()
+                                .child(trf(
+                                    "Keeps the {count} newest, the one in use and the ones your instances use. Deleted versions install again from the Versions page.",
+                                    &[("count", &self.settings.keep_newest().to_string())],
+                                ))
+                                .into_any_element(),
+                        ),
+                        Some(prune.into_any_element()),
                         &t,
                     ))
                     .child(self.nightly_row(n + 2, cx))

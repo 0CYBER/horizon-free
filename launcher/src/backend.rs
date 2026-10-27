@@ -1925,7 +1925,11 @@ pub fn prune_old_versions() -> Vec<String> {
         return Vec::new();
     }
     let mut protected: Vec<String> = settings.selected.iter().cloned().collect();
-    protected.extend(crate::instances::list().into_iter().filter_map(|i| i.version));
+    protected.extend(
+        crate::instances::list()
+            .into_iter()
+            .filter_map(|i| i.version),
+    );
     let mut gone = Vec::new();
     for tag in stale_versions(&installed(), settings.keep_newest(), &protected) {
         if in_use(&tag) {
@@ -2525,6 +2529,8 @@ pub enum Msg {
     Installed(String, Result<(), String>),
     /// A version's files are gone (or could not be deleted).
     Removed(String, Result<(), String>),
+    /// `prune_old_versions` ended; these versions were deleted.
+    Pruned(Vec<String>),
     Line(Job, String),
     Exit(Job, Result<(), String>),
     Updates(Result<Updates, String>),

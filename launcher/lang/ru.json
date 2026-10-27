@@ -176,5 +176,7 @@
   "Download and prepare": "Скачать и подготовить",
   "Not prepared. Horizon can download Minecraft {version} from Mojang for your account, or use your own install.": "Не подготовлено. Horizon может скачать Minecraft {version} у Mojang для вашего аккаунта или взять вашу установку.",
   "Not prepared. Sign in with the Microsoft account that owns Minecraft {version} first.": "Не подготовлено. Сначала войдите в аккаунт Microsoft, у которого есть Minecraft {version}.",
-  "Cancel": "Отмена"
+  "Cancel": "Отмена",
+  "Delete old versions automatically": "Автоматически удалять старые версии",
+  "Keeps the {count} newest, the one in use and the ones your instances use. Deleted versions install again from the Versions page.": "Оставляет {count} самых новых, используемую и те, что нужны вашим сборкам. Удалённую версию можно снова установить на странице «Версии»."
 }
