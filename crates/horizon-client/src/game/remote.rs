@@ -700,10 +700,14 @@ impl Game<'_> {
         }
         let text = content.plain();
         log::info!("[chat] {text}");
+        // addServerSystemMessage and addClientSystemMessage both carry
+        // GuiMessageTag.systemSinglePlayer: the grey bar at the line's left.
+        let indicator = (source != horizon_client::chat::ChatSource::Player)
+            .then_some(horizon_client::chat::SYSTEM_INDICATOR);
         self.ui.chat.add(
             &self.gui.atlas,
             content,
-            None,
+            indicator,
             source,
             self.ticks,
             self.screen == Screen::Chat,
