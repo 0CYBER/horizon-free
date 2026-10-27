@@ -546,6 +546,17 @@ fn next_double_between(random: &mut impl RandomSource, min: f64, max: f64) -> f6
 pub fn on_block_faces(
     random: &mut impl RandomSource,
     pos: [i32; 3],
+    emit: impl FnMut([f64; 3], [f64; 3]),
+) {
+    on_block_faces_between(random, pos, 3, 5, emit);
+}
+/// `ParticleUtils.spawnParticlesOnBlockFaces` with `UniformInt.of(min, max)`
+/// particles per face (3009 sniffer egg cracks use 3 to 6).
+pub fn on_block_faces_between(
+    random: &mut impl RandomSource,
+    pos: [i32; 3],
+    min: i32,
+    max: i32,
     mut emit: impl FnMut([f64; 3], [f64; 3]),
 ) {
     const FACES: [[i32; 3]; 6] = [
@@ -557,7 +568,7 @@ pub fn on_block_faces(
         [1, 0, 0],
     ];
     for face in FACES {
-        let count = random.next_int_bound(5 - 3 + 1).unwrap_or(0) + 3;
+        let count = random.next_int_bound(max - min + 1).unwrap_or(0) + min;
         for _ in 0..count {
             // getRandomSpeedRanges, then spawnParticleOnFace with step factor 0.55.
             let speed: [f64; 3] = std::array::from_fn(|_| next_double_between(random, -0.5, 0.5));
@@ -983,6 +994,8 @@ pub struct ParticleEngine {
     emitters: Vec<(ParticleOptions, [f64; 3], f64, f64, u32)>,
     /// Camera position for the 32-block spawn limiter.
     pub camera: [f64; 3],
+    /// The Particles option (`ParticleStatus`): 0 all, 1 decreased, 2 minimal.
+    pub particle_level: u8,
     /// FireworkParticles.Starter instances.
     starters: Vec<Starter>,
     /// Local sounds requested by particles (dripstone drips): (event, position, volume, pitch).
@@ -1013,6 +1026,7 @@ impl ParticleEngine {
             emitters: Vec::new(),
             starters: Vec::new(),
             camera: [0.0; 3],
+            particle_level: 0,
             sounds: Vec::new(),
             made: Default::default(),
             item_sprites: HashMap::new(),
@@ -1123,30 +1137,48 @@ impl ParticleEngine {
         &mut self.level_random
     }
     /// `ClientLevel.addParticle`: dropped beyond 32 blocks of the camera unless
-    /// the type overrides the limiter.
+    /// the type overrides the limiter, and thinned by the Particles option.
     pub fn add(&mut self, options: &ParticleOptions, p: [f64; 3], v: [f64; 3]) {
+        self.add_with(options, p, v, false, false);
+    }
+    /// `ClientLevel.addParticle(particle, overrideLimiter, alwaysShow, ...)`
+    /// (`doAddParticle`). `always_show` is `addAlwaysVisibleParticle`'s flag.
+    pub fn add_with(
+        &mut self,
+        options: &ParticleOptions,
+        p: [f64; 3],
+        v: [f64; 3],
+        override_limiter: bool,
+        always_show: bool,
+    ) {
         let c = self.camera;
         let d2 = (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2);
         if let Some(requested) = &mut self.requested {
             requested.push((options.clone(), p, v));
             return;
         }
-        if !options.ty.override_limiter() && d2 > 1024.0 {
-            return;
+        let minimal = self.calculate_particle_level(always_show) == 2;
+        if override_limiter || options.ty.override_limiter() || (d2 <= 1024.0 && !minimal) {
+            self.create(options, p, v);
         }
-        self.create(options, p, v);
+    }
+    /// `ClientLevel.calculateParticleLevel`: minimal still shows one in ten
+    /// always-visible particles as decreased, and decreased drops a third.
+    fn calculate_particle_level(&mut self, always_show: bool) -> u8 {
+        let mut level = self.particle_level.min(2);
+        if always_show && level == 2 && self.level_random.next_int_bound(10).unwrap_or(0) == 0 {
+            level = 1;
+        }
+        if level == 1 && self.level_random.next_int_bound(3).unwrap_or(0) == 0 {
+            level = 2;
+        }
+        level
     }
     /// `LevelEventHandler.singleBlockTeleportationParticles` towards
     /// `BlockUtil.unpackDifferenceInPosition(from, data, radius)`: the dragon
     /// egg's event 2015 packs offsets within (16, 8, 16), a consumable's
     /// teleport (2017) within (127, 127, 127).
-    pub fn block_teleportation(
-        &mut self,
-        from: [i32; 3],
-        data: i32,
-        radius: [i32; 3],
-        particle_level: u8,
-    ) {
+    pub fn block_teleportation(&mut self, from: [i32; 3], data: i32, radius: [i32; 3]) {
         let to = [
             from[0].wrapping_add(((data >> 16) & 255) - radius[0]),
             from[1].wrapping_add(((data >> 8) & 255) - radius[1]),
@@ -1164,15 +1196,7 @@ impl ParticleEngine {
                 to[1] + t * (from[1] - to[1]) + r.next_double() - 0.5,
                 to[2] + t * (from[2] - to[2]) + (r.next_double() - 0.5) + 0.5,
             ];
-            // The option roll shares the level random and precedes the distance check.
-            let limited = match particle_level {
-                1 => r.next_int_bound(3).unwrap_or(0) == 0,
-                2 => true,
-                _ => false,
-            };
-            if !limited {
-                self.add(&options, position, velocity);
-            }
+            self.add(&options, position, velocity);
         }
     }
     /// `ClientPacketListener.handleExplosion` + `ClientExplosionTracker`: the
@@ -1214,6 +1238,10 @@ impl ParticleEngine {
         block_count: usize,
         is_air: &dyn Fn([i32; 3]) -> bool,
     ) {
+        // ClientExplosionTracker.tick: only the All option throws the debris.
+        if self.particle_level != 0 {
+            return;
+        }
         for _ in 0..block_count.min(512) {
             let r = &mut self.random;
             let d = Vec3::new(
@@ -3754,6 +3782,8 @@ impl ParticleEngine {
                         },
                         color,
                         light,
+
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             }
@@ -3778,7 +3808,7 @@ mod tests {
         let mut engine = ParticleEngine::new(Path::new(""), &HashMap::new(), &HashSet::new());
         engine.seed_randoms(0, 0, 0);
         // Destination offset (-15, 7, 15); the unused top byte is ignored.
-        engine.block_teleportation([4, 12, -5], 0xff01_0f1fu32 as i32, [16, 8, 16], 0);
+        engine.block_teleportation([4, 12, -5], 0xff01_0f1fu32 as i32, [16, 8, 16]);
         assert_eq!(engine.pending.len(), 128);
         assert!(engine.pending.iter().all(|p| p.ty == ParticleType::Portal));
         let first = &engine.pending[0];
@@ -3805,7 +3835,7 @@ mod tests {
         // TeleportRandomlyConsumeEffect: BlockUtil.clampedPackDifferenceInPosition
         // of the move (-7, -3, 9) with radii 127, from (4, 12, -5) to (-3, 9, 4).
         let data = (-7 + 127) << 16 | (-3 + 127) << 8 | (9 + 127);
-        engine.block_teleportation([4, 12, -5], data, [127, 127, 127], 0);
+        engine.block_teleportation([4, 12, -5], data, [127, 127, 127]);
         assert_eq!(engine.pending.len(), 128);
         for p in &engine.pending {
             let [x, y, z] = p.position;
@@ -3831,7 +3861,8 @@ mod tests {
                 if distant {
                     engine.camera = [1000.0; 3];
                 }
-                engine.block_teleportation([4, 12, -5], 0x010f1f, [16, 8, 16], option);
+                engine.particle_level = option;
+                engine.block_teleportation([4, 12, -5], 0x010f1f, [16, 8, 16]);
                 assert_eq!(engine.pending.len(), if distant { 0 } else { count });
                 assert_eq!(engine.level_random.state(), state);
             }

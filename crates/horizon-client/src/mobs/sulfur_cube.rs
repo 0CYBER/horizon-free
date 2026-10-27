@@ -298,6 +298,7 @@ pub fn accepts_damage(m: &mut Mob, source: &Damage, amount: f32) -> bool {
             | DamageKind::Fall
             | DamageKind::Sting
             | DamageKind::Cactus
+            | DamageKind::Freeze
     );
     if immune {
         if let Some(from) = source.from {
@@ -371,6 +372,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         events.push(MobEvent::Explode(
             [m.position.x, m.position.y + 0.0625, m.position.z],
             power,
+            m.species(),
         ));
         m.removed = true;
         return;

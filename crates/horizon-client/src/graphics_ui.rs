@@ -5,8 +5,7 @@ use crate::{
     graphics::{FarDetail, GraphicsApi, Overlay, Pacing, PresentMode, Preset},
     graphics_style::{Cost, STYLE},
     hud::{HudAtlas, HudBatch},
-    options_ui::Opt,
-    settings::Settings,
+    settings::{Opt, Settings},
     text::Text,
     ui,
 };

@@ -205,7 +205,7 @@ fn undeclared_capabilities_are_refused() {
 /// from the functions they import.
 #[test]
 fn a_mod_for_a_newer_horizon_is_refused() {
-    use horizon_mods::api_level::{imports, needed};
+    use horizon_mods::api_level::{LEVEL, imports, needed};
     use wit_parser::{ManglingAndAbi, Resolve};
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let wit = std::fs::read_to_string(root.join("crates/horizon-mod-sdk/wit/horizon.wit"))
@@ -255,8 +255,8 @@ experimental = ["ui", "render", "input", "recipes"]
         needed(imports(&wasm).unwrap().iter().map(String::as_str)).0
     };
     assert_eq!(level("coords_hud.hmod"), 0);
-    // The UI guest fills a browser panel (`browser`, level 6).
-    assert_eq!(level("horizon_mods_test_ui_guest.hmod"), 6);
+    // The UI guest draws far terrain (`render.set-far-terrain`).
+    assert_eq!(level("horizon_mods_test_ui_guest.hmod"), LEVEL);
 }
 
 #[test]
@@ -723,6 +723,21 @@ fn render_minimap_is_clamped_and_hidden() {
         Some((corner, 16.0, 4.0, false, false))
     );
     assert_eq!(map(&mut mods, "off"), None);
+}
+
+#[test]
+fn render_far_terrain_is_clamped_and_ended() {
+    let mut mods = load("horizon_mods_test_ui_guest.hmod");
+    let far = |mods: &mut Mods, args: &str| {
+        assert!(mods.command(&format!("far_terrain {args}")));
+        mods.far_terrain().map(|f| (f.distance, f.reduced))
+    };
+    assert!(mods.far_terrain().is_none());
+    assert_eq!(far(&mut mods, "256 1"), Some((256, true)));
+    // The distance is clamped to LOD Distance's 64 to 1024 chunks.
+    assert_eq!(far(&mut mods, "8 0"), Some((64, false)));
+    assert_eq!(far(&mut mods, "99999 0"), Some((1024, false)));
+    assert_eq!(far(&mut mods, "off"), None);
 }
 
 /// `game.raycast`: the view's hit the game worked out, up to the distance
