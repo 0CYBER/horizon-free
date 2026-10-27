@@ -48,11 +48,8 @@
   "Applications menu": "应用程序菜单",
   "Horizon and its icon are in your desktop's menu.": "Horizon 及其图标已在桌面的应用程序菜单中。",
   "Not in your desktop's menu.": "不在桌面的应用程序菜单中。",
-  "Microsoft account (coming soon)": "Microsoft 账户（即将推出）",
   "Microsoft account": "Microsoft 账户",
   "Another account": "其他账户",
-  "Microsoft sign-in is coming soon. Until then the game plays offline: single player, LAN and servers in offline mode work.": "Microsoft 登录即将推出。在此之前游戏以离线方式运行：单人游戏、局域网和离线模式的服务器都能玩。",
-  "Coming soon": "即将推出",
   "Microsoft account · plays": "Microsoft 账户 · 当前使用",
   "Microsoft account · signed in": "Microsoft 账户 · 已登录",
   "Asking Microsoft…": "正在询问 Microsoft…",
@@ -158,5 +155,12 @@
   "15% off": "八五折",
   "Not prepared. Horizon needs the files of your own Minecraft {version}.": "未准备。Horizon 需要你自己的 Minecraft {version} 的文件。",
   "Prepared for Minecraft {version}": "已为 Minecraft {version} 准备好",
-  "Prepared for Minecraft {version}, without its sounds: the game will be silent. Prepare again to copy them from your Minecraft install.": "已为 Minecraft {version} 准备好，但缺少声音：游戏将没有声音。重新准备即可从你的 Minecraft 安装中复制声音。"
+  "Prepared for Minecraft {version}, without its sounds: the game will be silent. Prepare again to copy them from your Minecraft install.": "已为 Minecraft {version} 准备好，但缺少声音：游戏将没有声音。重新准备即可从你的 Minecraft 安装中复制声音。",
+  "Nightly builds": "每夜构建",
+  "Plays in its own Nightly instance: your worlds and the release stay as they are.": "在单独的 Nightly 实例中运行：你的世界和正式版保持不变。",
+  "The nightly could not be installed: {error}": "无法安装每夜构建：{error}",
+  "No nightly build yet.": "还没有每夜构建。",
+  "Microsoft account (coming soon)": "Microsoft 账户（即将推出）",
+  "Microsoft sign-in is coming soon. Until then the game plays offline: single player, LAN and servers in offline mode work.": "Microsoft 登录即将推出。在此之前游戏以离线方式运行：单人游戏、局域网和离线模式的服务器都能玩。",
+  "Coming soon": "即将推出"
 }
