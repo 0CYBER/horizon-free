@@ -212,6 +212,10 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             // Pillager.IS_CHARGING_CROSSBOW: the charge pose (Raider's
             // IS_CELEBRATING takes 16).
             (Species::Pillager, 17, Value::Bool(charging)) => m.extra.flag = *charging,
+            // HappyGhast.STAYS_STILL (after AgeableMob's two and IS_LEASH_HOLDER):
+            // `isOnStillTimeout` on a client, which keeps the ghast solid to
+            // the player (`canBeCollidedWith`).
+            (Species::HappyGhast, 19, Value::Bool(still)) => m.extra.counter = i32::from(*still),
             // SpellcasterIllager.DATA_SPELL_CASTING_ID: the casting pose.
             (Species::Evoker | Species::Illusioner, 17, Value::Byte(spell)) => {
                 m.extra.variant2 = (*spell).max(0) as u8;
