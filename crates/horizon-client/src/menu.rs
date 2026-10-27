@@ -3211,4 +3211,64 @@ pub(crate) mod tests {
             assert_eq!(menu.slot(0), stack("dirt", 1).as_ref());
         });
     }
+
+    /// #1737: a Shift+Right-Click quick move in a chest (a double chest's
+    /// 54 slots) moves the stack and leaves the menu's state clean, so the
+    /// next quick move still moves its stack and the inventory still
+    /// answers.
+    #[test]
+    fn a_chest_quick_move_keeps_the_next_one_working() {
+        with_menu(Kind::Chest(6), |env, menu| {
+            menu.creative = false;
+            // The hotbar holds two stacks; the chest is empty.
+            menu.set_slot(env, 81, stack("cobblestone", 64));
+            menu.set_slot(env, 82, stack("dirt", 32));
+            // Shift+Right-Click on the hotbar: the stack goes into the chest.
+            menu.click(env, 81, 1, Input::QuickMove).unwrap();
+            assert_eq!(menu.slot(81), None);
+            assert_eq!(menu.slot(0).map(|s| s.count), Some(64));
+            // Nothing is left on the cursor and no quick craft is running.
+            assert_eq!(menu.carried, None);
+            assert_eq!(menu.quick_status, 0);
+            // The next quick move still works.
+            menu.click(env, 82, 1, Input::QuickMove).unwrap();
+            assert_eq!(menu.slot(82), None);
+            assert_eq!(menu.slot(1).map(|s| s.count), Some(32));
+            assert_eq!(menu.carried, None);
+            assert_eq!(menu.quick_status, 0);
+        });
+    }
+
+    /// #1832: a potion taken from the creative inventory and put in the
+    /// hotbar keeps its `PotionContents` (the brew), as vanilla's
+    /// `PotionContents.createItemStack` builds it: the item tab's stack is
+    /// the real one, and the hotbar slot holds it as it is.
+    #[test]
+    fn a_creative_potion_keeps_its_contents_in_the_hotbar() {
+        let snbt = r#"{components:{"minecraft:potion_contents":{potion:"minecraft:swiftness"}},count:1,id:"minecraft:potion"}"#;
+        let potion = crate::item_data::parse_stack(snbt).unwrap().unwrap();
+        assert_eq!(potion.potion(), Some("minecraft:swiftness"));
+        // The creative screen hands the stack over...
+        let mut carried = None;
+        crate::creative::click_display(
+            &mut carried,
+            Some(&potion),
+            |_: &ItemStack| 1,
+            0,
+            Input::Pickup,
+        );
+        assert_eq!(
+            carried.as_ref().and_then(|s| s.potion()),
+            Some("minecraft:swiftness")
+        );
+        // ... and the hotbar slot keeps it: it is not the uncraftable
+        // potion, which is a `minecraft:potion` with no contents at all.
+        with_menu(Kind::ItemPicker, |env, menu| {
+            menu.carried = carried;
+            menu.click(env, 45, 0, Input::Pickup).unwrap();
+            let in_hand = menu.slot(45).expect("the hotbar slot");
+            assert_eq!(in_hand.potion(), Some("minecraft:swiftness"));
+            assert_eq!(&*in_hand.item, "minecraft:potion");
+        });
+    }
 }

@@ -5,7 +5,7 @@
 //! menu are returned for the game to drop.
 use super::guest::Guest;
 use crate::{
-    bundle::{Contents, can_be_in_bundle},
+    bundle::{Contents, can_be_in_bundle, toggle_selected},
     items::{ItemStack, Items},
     world::World,
 };
@@ -514,7 +514,10 @@ fn bundle_click(view: &mut View, i: usize, right: bool, rules: &dyn Rules) -> bo
             }
         }
         (carried, _) => {
+            // toggleSelectedItem(-1), then the click goes on.
             view.guest.carried = carried;
+            toggle_selected(&mut bundle, -1);
+            view.set(i, Some(bundle));
             return false;
         }
     }

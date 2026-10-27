@@ -36,6 +36,8 @@ pub struct WorldOptions {
     pub flat_settings: Option<super::flat::FlatSettings>,
     pub structures: bool,
     pub bonus_chest: bool,
+    /// `getGameRules`: the Game Rules screen's values, saved with the world.
+    pub rules: crate::gamerules::GameRules,
 }
 impl Default for WorldOptions {
     fn default() -> Self {
@@ -48,6 +50,7 @@ impl Default for WorldOptions {
             flat_settings: None,
             structures: true,
             bonus_chest: false,
+            rules: crate::gamerules::GameRules::default(),
         }
     }
 }
@@ -73,6 +76,7 @@ impl WorldOptions {
                 .flatten(),
             structures: generation.structures,
             bonus_chest: generation.bonus_chest,
+            rules: crate::gamerules::GameRules::load(dir),
             ..Self::default()
         }
     }
@@ -282,7 +286,7 @@ pub(super) fn buttons(w: f32, h: f32, creative: bool, o: &WorldOptions) -> Vec<B
                 28,
             ),
         ],
-        // Game rules, experiments and data packs have no screens yet.
+        // Experiments and data packs have no screens yet.
         _ => [
             "selectWorld.gameRules",
             "selectWorld.experiments",
@@ -296,7 +300,7 @@ pub(super) fn buttons(w: f32, h: f32, creative: bool, o: &WorldOptions) -> Vec<B
                 gy + 28.0 * i as f32,
                 210.0,
                 tr(key),
-                false,
+                i == 0,
                 29 + i as u8,
             )
         })

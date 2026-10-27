@@ -307,6 +307,12 @@ impl Game<'_> {
                 )
             {
                 outcome = o;
+                // dealDefaultKnockback's `indicateDamage` points at the blast
+                // (the source position), not the no-direction fallback.
+                if o.knockback && o.blocked <= 0.0 {
+                    p.health
+                        .indicate_damage(center[0] - feet[0], center[2] - feet[2], p.yaw);
+                }
             }
             if !spectator && !(creative && flying) {
                 p.velocity = Vec3::new(
@@ -315,9 +321,6 @@ impl Game<'_> {
                     p.velocity.z + dir[2] * power,
                 );
             }
-        }
-        if outcome.hurt && !creative {
-            self.hurt_armor(amount);
         }
         if raised {
             self.after_block(outcome, amount, None, false);
@@ -393,9 +396,11 @@ impl Game<'_> {
                 [feet[0] - w, feet[1], feet[2] - w],
                 [feet[0] + w, feet[1] + h, feet[2] + w],
             );
+            // The exploding mob is the damage source's entity, so victims
+            // it kills drop its charged-creeper loot (`Creeper.killedEntity`).
             let source = horizon_client::mobs::Damage {
                 kind: horizon_client::mobs::DamageKind::Explosion,
-                attacker: None,
+                attacker: exploding.map(horizon_client::mobs::Who::Mob),
                 from: Some(center),
             };
             if hurtable && !m.damage(damage(dist, exposure), source) {
@@ -573,16 +578,16 @@ impl Game<'_> {
         let pitch = (1.0 + (client_float() - client_float()) * 0.2) * 0.7;
         self.audio
             .play("minecraft:entity.generic.explode", Some(center), 4.0, pitch);
-        let block_count = if interaction == BlockInteraction::Keep {
-            0
-        } else {
-            targets.len()
-        };
+        // ServerLevel.explode sends toBlow.size() whatever the interaction, and
+        // `ServerExplosion.isSmall` also covers an explosion that keeps blocks.
+        let block_count = targets.len();
+        let small = radius < 2.0 || interaction == BlockInteraction::Keep;
         let (world, facts) = (&self.world, self.res.facts());
-        self.particles.explosion(center, radius, block_count, &|b| {
-            facts.is_air(world.block(b[0], b[1], b[2]))
-        });
-        self.lan_explode(center, radius, block_count);
+        self.particles
+            .explosion(center, small, block_count, radius, &|b| {
+                facts.is_air(world.block(b[0], b[1], b[2]))
+            });
+        self.lan_explode(center, small, radius, block_count);
         Ok(())
     }
     /// `BlockBehaviour.onExplosionHit` (TNT: `wasExploded` primes a short fuse).
@@ -599,6 +604,11 @@ impl Game<'_> {
         }
         let name = self.res.facts().get(state).name.clone();
         let is_tnt = &*name == "minecraft:tnt";
+        // CreakingHeartBlock.onExplosionHit: its creaking dies (no
+        // experience, as Horizon does not track a TNT's owner).
+        if &*name == "minecraft:creaking_heart" {
+            self.creaking_heart_broken(pos, false);
+        }
         // Block.onExplosionHit: the drops copy from the block entity, which
         // then spills its contents as the block turns to air.
         let key = (pos[0], pos[1], pos[2]);
@@ -622,6 +632,7 @@ impl Game<'_> {
                 &mut self.world.random,
                 Some((&mut self.rand_sequences, self.level.seed)),
                 decay,
+                false,
             );
             for mut stack in drops {
                 if &*stack.item == "minecraft:air" || stack.count == 0 {

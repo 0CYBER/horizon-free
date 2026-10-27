@@ -37,6 +37,8 @@ pub(super) struct Strike {
     amount: f32,
     scale: f32,
     crit: bool,
+    /// `Player.attack`'s `magicBoost > 0`: the enchantments added damage.
+    magic: bool,
     from: [f64; 3],
     sweep: Option<[f64; 3]>,
     /// `causeExtraKnockback`: its strength and direction (the attacker's
@@ -84,9 +86,11 @@ impl Game<'_> {
         };
         if let Some(strike) = self.pvp_strike()
             && self.pvp_land(&mut host, Victim::Guest(conn), &strike)
-            && strike.stops_sprint()
         {
-            self.stop_sprint_after_extra_knockback();
+            self.pvp_exhaustion();
+            if strike.stops_sprint() {
+                self.stop_sprint_after_extra_knockback();
+            }
         }
         self.lan = Some(host);
         true
@@ -104,27 +108,33 @@ impl Game<'_> {
             .map(|g| Victim::Guest(g.conn))
     }
 
-    /// The attacker's side of `Player.attack` (the host, or a guest swapped
-    /// in): the damage, the charge reset, the exhaustion and the swing.
-    pub(super) fn pvp_strike(&mut self) -> Option<Strike> {
-        let p = self.player.as_ref()?;
-        let from = [p.position.x, p.position.y, p.position.z];
-        let (amount, scale, crit) = self.melee_damage("minecraft:player");
-        let sweep = self.sweep_attack_position(scale, crit);
-        let (strength, knockback_attack) = self.extra_knockback("minecraft:player", scale);
-        let (xd, zd) = self.extra_knockback_direction();
-        self.attack_ticks = 0;
+    /// `Player.attack`'s `causeFoodExhaustion(0.1F)`, charged to the attacker
+    /// (the host, or a guest swapped in) only once the hit hurt the victim.
+    pub(super) fn pvp_exhaustion(&mut self) {
         if let Some(p) = self.player.as_mut()
             && !self.creative
         {
             p.cause_food_exhaustion(0.1);
         }
+    }
+
+    /// The attacker's side of `Player.attack` (the host, or a guest swapped
+    /// in): the damage, the charge reset and the swing.
+    pub(super) fn pvp_strike(&mut self) -> Option<Strike> {
+        let p = self.player.as_ref()?;
+        let from = [p.position.x, p.position.y, p.position.z];
+        let (amount, scale, crit, magic) = self.melee_damage("minecraft:player");
+        let sweep = self.sweep_attack_position(scale, crit);
+        let (strength, knockback_attack) = self.extra_knockback("minecraft:player", scale);
+        let (xd, zd) = self.extra_knockback_direction();
+        self.attack_ticks = 0;
         self.swing_arm();
         Some(Strike {
             attacker: self.lan_acting,
             amount,
             scale,
             crit,
+            magic,
             from,
             sweep,
             knockback: (strength, xd, zd),
@@ -257,7 +267,7 @@ impl Game<'_> {
         } else {
             Default::default()
         };
-        if hurt && s.crit {
+        if hurt && (s.crit || s.magic) {
             let target = match victim {
                 Victim::Host => self.player.as_ref().map(|p| (host.host_entity, p)),
                 Victim::Guest(conn) => host
@@ -267,13 +277,17 @@ impl Game<'_> {
             };
             if let Some((id, p)) = target {
                 let d = p.dimensions;
-                self.critical_hit(
-                    s.attacker,
-                    id,
+                let (feet, width, height) = (
                     [p.position.x, p.position.y, p.position.z],
                     f64::from(d.width),
                     f64::from(d.height),
                 );
+                if s.crit {
+                    self.critical_hit(s.attacker, id, feet, width, height, false);
+                }
+                if s.magic {
+                    self.critical_hit(s.attacker, id, feet, width, height, true);
+                }
             }
         }
         // `Enchantment.doPostAttack`: thorns hurt the attacking player.
