@@ -390,22 +390,13 @@ fn mob_meta(
                 meta.push((index, serializer, Value::Id(v)));
             }
         }
-        // Axolotl.DATA_VARIANT (after AgeableMob's two), Fox.DATA_TYPE_ID,
-        // Rabbit.DATA_TYPE_ID and Parrot.DATA_VARIANT_ID (after
-        // TamableAnimal's two and its flags and owner).
-        "minecraft:axolotl" | "minecraft:fox" | "minecraft:rabbit" | "minecraft:parrot" => {
+        // Axolotl.DATA_VARIANT and Rabbit.DATA_TYPE_ID (after AgeableMob's
+        // two), Parrot.DATA_VARIANT_ID (after TamableAnimal's two and its
+        // flags and owner). The fox's type goes with its flags (#2538).
+        "minecraft:axolotl" | "minecraft:rabbit" | "minecraft:parrot" => {
             let index = if kind == "minecraft:parrot" { 20 } else { 18 };
             if e.variant != 0 {
                 meta.push((index, serializer::INT, Value::Int(i32::from(e.variant))));
-            }
-        }
-        // Panda.MAIN_GENE_ID and HIDDEN_GENE_ID (after its three counters).
-        "minecraft:panda" => {
-            if e.variant != 0 {
-                meta.push((21, serializer::BYTE, Value::Byte(e.variant as i8)));
-            }
-            if e.variant2 != 0 {
-                meta.push((22, serializer::BYTE, Value::Byte(e.variant2 as i8)));
             }
         }
         // Bee.DATA_FLAGS_ID (rolling 2, stung 4, nectar 8) and

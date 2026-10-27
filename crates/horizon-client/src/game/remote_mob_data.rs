@@ -113,19 +113,14 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             (Species::Llama | Species::TraderLlama, 21, Value::Int(variant)) => {
                 m.extra.variant = (*variant).clamp(0, 3) as u8;
             }
-            // Axolotl.DATA_VARIANT (lucy 0 to blue 4), Fox.DATA_TYPE_ID (red
-            // 0, snow 1) and Parrot.DATA_VARIANT_ID (after TamableAnimal's
-            // flags and owner).
+            // Axolotl.DATA_VARIANT (lucy 0 to blue 4) and Parrot.DATA_VARIANT_ID
+            // (after TamableAnimal's flags and owner).
             (Species::Axolotl, 18, Value::Int(v)) => m.extra.variant = (*v).clamp(0, 4) as u8,
-            (Species::Fox, 18, Value::Int(v)) => m.extra.variant = (*v).clamp(0, 1) as u8,
             (Species::Parrot, 20, Value::Int(v)) => m.extra.variant = (*v).clamp(0, 4) as u8,
             // Rabbit.DATA_TYPE_ID: the killer bunny's 99 has no model here.
             (Species::Rabbit, 18, Value::Int(t)) if (0..=5).contains(t) => {
                 m.extra.variant = *t as u8;
             }
-            // Panda.MAIN_GENE_ID and HIDDEN_GENE_ID (after the three counters).
-            (Species::Panda, 21, Value::Byte(gene)) => m.extra.variant = (*gene).clamp(0, 6) as u8,
-            (Species::Panda, 22, Value::Byte(gene)) => m.extra.variant2 = (*gene).clamp(0, 6) as u8,
             // Bee.DATA_FLAGS_ID and DATA_ANGER_END_TIME (after Animal's).
             (Species::Bee, 18, Value::Byte(flags)) => bee::set_synced(m, Some(*flags as u8), None),
             (Species::Bee, 19, Value::Long(end)) => bee::set_synced(m, None, Some(*end)),
