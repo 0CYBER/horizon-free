@@ -1,12 +1,12 @@
 //! Mob controls: `MoveControl` (with the flying and smooth-swimming
 //! variants), `LookControl`, `JumpControl` and `BodyRotationControl`.
-use super::{Mob, MobWorld, living::wrap};
+use super::{Mob, MobWorld, Species, living::wrap};
 use horizon_core::geometry::trig;
 
 /// `2.5000003E-7F` widened: the squared distance controls treat as arrived.
 const ARRIVED: f64 = 2.500_000_3e-7_f32 as f64;
 /// `1.0E-5F` widened.
-const EPSILON: f64 = 1.0e-5_f32 as f64;
+pub(super) const EPSILON: f64 = 1.0e-5_f32 as f64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Operation {
@@ -90,6 +90,9 @@ pub enum LookKind {
     Fixed,
     /// `HappyGhast.HappyGhastLookControl`.
     HappyGhast,
+    /// `Shulker.ShulkerLookControl`: the yaw turns in the attach face's
+    /// plane and the head is never clamped to the body.
+    Shulker,
 }
 #[derive(Clone, Debug, Default)]
 pub struct LookControl {
@@ -113,8 +116,16 @@ pub struct BodyRotation {
     last_stable_head: f32,
 }
 impl Mob {
+    /// `Mob.getMaxHeadXRot`, with `Wolf`'s 20 degrees while sitting.
+    pub fn max_head_x_rot(&self) -> f32 {
+        if self.species() == Species::Wolf && self.extra.sitting {
+            20.0
+        } else {
+            self.kind.max_head_x_rot
+        }
+    }
     pub fn look_at(&mut self, at: [f64; 3]) {
-        let (y, x) = (self.kind.head_rot_speed, self.kind.max_head_x_rot);
+        let (y, x) = (self.kind.head_rot_speed, self.max_head_x_rot());
         self.ai.look.set_look_at(at, y, x);
     }
     pub fn look_at_speed(&mut self, at: [f64; 3], y_speed: f32, x_max: f32) {
@@ -134,6 +145,9 @@ impl Mob {
     pub fn move_control_tick(&mut self, w: &MobWorld, events: &mut Vec<super::MobEvent>) {
         if self.species() == super::Species::Rabbit {
             return super::rabbit::move_control(self, w);
+        }
+        if self.species() == super::Species::Turtle {
+            return super::turtle::move_control(self);
         }
         let attr_speed = self.movement_speed();
         match self.ai.mov.kind {
@@ -344,6 +358,20 @@ impl Mob {
                 } else if diff > max {
                     self.body_yaw += 4.0;
                 }
+            }
+            LookKind::Shulker => {
+                // ShulkerLookControl: resetXRotOnTick, getXRotD 0, and the
+                // yaw worked out in the attach face's plane (getYRotD).
+                self.head_pitch = 0.0;
+                if look.cooldown > 0 {
+                    self.ai.look.cooldown -= 1;
+                    if let Some(y) = super::shulker::look_yaw(self, look.wanted) {
+                        self.head_yaw = rotate_towards(self.head_yaw, y, look.y_max_rot_speed);
+                    }
+                } else {
+                    self.head_yaw = rotate_towards(self.head_yaw, self.body_yaw, 10.0);
+                }
+                // clampHeadRotationToBody does nothing for a shulker.
             }
             LookKind::Default | LookKind::Fixed => {
                 if look.kind == LookKind::Default {

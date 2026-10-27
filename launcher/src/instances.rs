@@ -448,7 +448,7 @@ fn record_play_in(
 pub fn play_time(played: Duration) -> String {
     let minutes = played.as_secs() / 60;
     match (minutes / 60, minutes % 60) {
-        (0, 0) => "under a minute".into(),
+        (0, 0) => crate::i18n::tr("under a minute").into(),
         (0, m) => format!("{m} min"),
         (h, m) if h < 100 => format!("{h} h {m:02} min"),
         (h, _) => format!("{h} h"),

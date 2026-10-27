@@ -603,7 +603,10 @@ enum Cmd {
     /// Show the launcher's settings, or set one (the Settings page): selected-version TAG,
     /// minecraft-dir PATH, server-dir PATH ("default" resets a folder), install-new-versions
     /// on|off, opening-animation on|off, proxy http://host:port ("default" removes it),
-    /// while-playing stay|minimize|hide (what the window does while the game runs)
+    /// while-playing stay|minimize|hide (what the window does while the game runs), language
+    /// system|en|fr|ru (the window's language; system follows the computer's), accent
+    /// violet|blue|teal|green|amber|red|pink, background PATH (a picture behind Home; "default"
+    /// shows Horizon's landscape)
     Settings {
         #[arg(value_parser = SETTING_KEYS)]
         key: Option<String>,
@@ -740,7 +743,7 @@ pub fn command() -> clap::Command {
 pub const AI_COMMANDS: [&str; 2] = ["mcp", "agent-config"];
 
 /// The keys `settings` sets.
-const SETTING_KEYS: [&str; 7] = [
+const SETTING_KEYS: [&str; 10] = [
     "selected-version",
     "minecraft-dir",
     "server-dir",
@@ -748,6 +751,9 @@ const SETTING_KEYS: [&str; 7] = [
     "opening-animation",
     "proxy",
     "while-playing",
+    "language",
+    "accent",
+    "background",
 ];
 
 fn on_off(value: &str) -> Result<bool, String> {
@@ -769,6 +775,32 @@ fn set_setting(s: &mut backend::Settings, key: &str, value: &str) -> Result<(), 
         "while-playing" => {
             s.while_playing = backend::WhilePlaying::parse(value)
                 .ok_or_else(|| format!("{value}: say stay, minimize or hide"))?
+        }
+        "accent" => {
+            use horizon_launcher::themes::Accent;
+            s.accent = Accent::parse(value).ok_or_else(|| {
+                let names: Vec<_> = Accent::ALL.iter().map(|a| a.name()).collect();
+                format!("{value}: say {}", names.join(", "))
+            })?
+        }
+        "background" => {
+            s.background = match value.trim() {
+                "default" | "" => None,
+                file => Some(horizon_launcher::themes::keep_background(
+                    &backend::data_dir(),
+                    std::path::Path::new(file),
+                )?),
+            }
+        }
+        "language" => {
+            use horizon_launcher::i18n::Language;
+            s.language = match value.trim() {
+                "system" | "default" => None,
+                code => Some(
+                    Language::parse(code)
+                        .ok_or_else(|| format!("{value}: say system, en, fr or ru"))?,
+                ),
+            }
         }
         "proxy" => {
             if value == "default" || value.is_empty() {
@@ -796,6 +828,9 @@ fn settings_json(s: &backend::Settings) -> serde_json::Value {
         "proxy": s.proxy,
         "desktop_entry": s.desktop_entry.unwrap_or(true),
         "while_playing": s.while_playing.name(),
+        "language": s.language.map_or("system", |l| l.code()),
+        "accent": s.accent.name(),
+        "background": horizon_launcher::themes::background(&backend::data_dir(), s.background.as_deref()),
         "no_ai": backend::no_ai(),
     })
 }
