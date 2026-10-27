@@ -80,6 +80,12 @@ pub fn default_skin(uuid: u128) -> &'static str {
     SKINS[hash.rem_euclid(SKINS.len() as i32) as usize]
 }
 
+/// The default skin a player model wears: `default_skin`'s character, in its wide variant, since
+/// the player model has no slim arms.
+pub fn default_model_skin(uuid: u128) -> String {
+    default_skin(uuid).replace("/slim/", "/wide/")
+}
+
 /// `blitSprite(sprite, x, y, w, h)`.
 fn sprite(name: &'static str, x: i32, y: i32, w: i32, h: i32) -> GuiDraw {
     GuiDraw::Sprite {
@@ -639,6 +645,8 @@ mod tests {
         assert_eq!(ping_sprite(1000), "icon/ping_1");
         // UUID.hashCode of 0 is 0: the first default skin.
         assert_eq!(default_skin(0), "entity/player/slim/alex");
+        // The player model wears the same character with wide arms.
+        assert_eq!(default_model_skin(0), "entity/player/wide/alex");
         assert!(!visible(true, true, 1, false));
         assert!(visible(true, true, 1, true));
         assert!(visible(true, false, 1, false));

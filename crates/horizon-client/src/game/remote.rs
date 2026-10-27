@@ -3086,6 +3086,20 @@ impl Game<'_> {
             .collect();
         Some((players, r.online_mode, upside_down))
     }
+    /// The signed-in account's `textures`, once the services answered.
+    fn own_textures(&self) -> Option<horizon_client::skins::Textures> {
+        use horizon_client::skins::{self, NameOrId, Resolve};
+        let auth = horizon_client::auth::current()?;
+        let state = self
+            .skin_profiles
+            .borrow_mut()
+            .state(&NameOrId::Id(auth.uuid));
+        let Resolve::Done(Some(profile)) = state else {
+            return None;
+        };
+        let (value, signature) = profile.textures()?;
+        Some(skins::unpack(&value, signature, &skins::TEXTURE_URIS))
+    }
     /// `PlayerInfo.getSkin` for every player entity, including NPCs that are
     /// never in the tab list: resolve each profile's textures and give the
     /// level's player models their skin.
@@ -3094,11 +3108,20 @@ impl Game<'_> {
             return;
         };
         let local = r.profile;
-        let entries: Vec<(u128, horizon_client::skins::Textures)> = r
+        let mut entries: Vec<(u128, horizon_client::skins::Textures)> = r
             .skin_textures
             .iter()
             .map(|(uuid, textures)| (*uuid, textures.clone()))
             .collect();
+        // Minecraft.profileFuture: the signed-in account's own profile, fetched from the
+        // services, gives the local player its skin where the server sends none (single
+        // player's offline-mode server).
+        if !entries.iter().any(|(u, t)| *u == local && t.skin.is_some())
+            && let Some(own) = self.own_textures()
+        {
+            entries.retain(|(u, _)| *u != local);
+            entries.push((local, own));
+        }
         let mut resolved: Vec<(u128, String)> = Vec::new();
         for (uuid, textures) in entries {
             // PlayerInfo.createSkinLookup: only the local player's own skin
@@ -3122,27 +3145,30 @@ impl Game<'_> {
                     .map(|(id, uuid)| (*id as u32, *uuid))
                     .collect::<Vec<_>>(),
                 r.skins.clone(),
-                r.skins.get(&r.profile).cloned(),
+                // Without a skin, the profile's default one (DefaultPlayerSkin.get).
+                r.skins
+                    .get(&r.profile)
+                    .cloned()
+                    .unwrap_or_else(|| horizon_client::tab_list::default_model_skin(r.profile)),
             )
         }) else {
             return;
         };
         for (id, uuid) in level {
-            let Some(skin) = skins.get(&uuid) else {
-                continue;
-            };
+            let skin = skins
+                .get(&uuid)
+                .cloned()
+                .unwrap_or_else(|| horizon_client::tab_list::default_model_skin(uuid));
             if let Some(mob) = self
                 .mobs
                 .iter_mut()
                 .find(|m| m.id == id && &*m.kind.id == "minecraft:player")
             {
-                mob.skin = Some(skin.clone());
+                mob.skin = Some(skin);
             }
         }
-        if let Some(skin) = own
-            && let Some(mob) = self.player_model.as_mut()
-        {
-            mob.skin = Some(skin);
+        if let Some(mob) = self.player_model.as_mut() {
+            mob.skin = Some(own);
         }
         // ClientMannequin.updateSkin (PlayerSkinRenderCache.lookup): a
         // mannequin's DATA_PROFILE `textures` property resolves like a
