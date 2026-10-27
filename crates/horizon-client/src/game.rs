@@ -7906,7 +7906,7 @@ impl Game<'_> {
                 );
             }
         }
-        if !self.camera_type.first_person()
+        if self.own_body_in_view()
             && let Some(p) = &self.player
             && p.fire_ticks > 0
             && !p.spectator
@@ -7986,7 +7986,7 @@ impl Game<'_> {
         // Mobs and their projectiles (a span each).
         self.mob_geometry(camera, alpha, &mut out);
         // In first person only a shader pack's shadow pass draws the player.
-        self.mark_player(out.len(), self.camera_type.first_person());
+        self.mark_player(out.len(), !self.own_body_in_view());
         self.player_model_geometry(camera, self.clock.camera_fraction(), &mut out);
         self.mark_entity(out.len(), "minecraft:player");
         self.guest_model_geometry(camera, alpha, &mut out);
@@ -10873,6 +10873,11 @@ impl Game<'_> {
         } else {
             (pos, [pos[0] - d[0], pos[1], pos[2] - d[2]])
         };
+        // AbstractBedBlock.useWithoutItem: a villager asleep in the bed is
+        // woken (kickVillagerOutOfBed) and the player stays up.
+        if self.kick_villager_out_of_bed(head) {
+            return;
+        }
         // ServerPlayer.bedInRange / isReachableBedBlock: within 3 blocks
         // sideways and 2 vertically of the head or the foot.
         let reachable = |bed: [i32; 3]| {

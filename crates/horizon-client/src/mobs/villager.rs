@@ -884,6 +884,17 @@ mod tests {
         });
         Mob::new(1, kind, horizon_core::geometry::Vec3::ZERO, 0.0)
     }
+    /// A sleeper's box is 0.2 high, but `LivingEntityRenderer` moves it
+    /// toward the foot of the bed by its standing eye height, so its head
+    /// lies on the pillow.
+    #[test]
+    fn a_sleeper_lies_by_its_standing_eye_height() {
+        let mut m = villager();
+        m.extra.ints[1] = bed_facing_code(Some("east"));
+        assert!(sleeping(&m));
+        assert_eq!(m.eye_height(), f64::from(0.2_f32));
+        assert_eq!(m.awake_dims().2, f64::from(1.62_f32));
+    }
     #[test]
     fn a_new_profession_rolls_new_offers() {
         let mut m = villager();
