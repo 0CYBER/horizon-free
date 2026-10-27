@@ -563,7 +563,12 @@ pub fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         return zombified_piglin_step(m, cx);
     }
     if matches!(m.species(), Species::Zombie | Species::Husk) && m.alive() {
-        if m.extra.counter2 > 0 {
+        if m.extra.counter2 > 0 && !m.fluids.eye_in_water {
+            // ConversionTracker.tick: leaving the water ends a started
+            // conversion too.
+            m.extra.counter = -1;
+            m.extra.counter2 = 0;
+        } else if m.extra.counter2 > 0 {
             m.extra.counter2 -= 1;
             if m.extra.counter2 == 0 {
                 let (kind, sound) = if m.species() == Species::Husk {
@@ -839,8 +844,9 @@ pub fn perform_ranged_attack(m: &mut Mob, who: Who, cx: &mut Cx, power: f32) {
     let zd = t.position.z - m.position.z;
     let dist = (xd * xd + zd * zd).sqrt();
     // AbstractArrow.setBaseDamageFromMob: power * 2 + triangle(difficulty * 0.11, 0.57425).
+    let id = i32::from(cx.w.difficulty.id);
     let mut arrow_random = crate::projectiles::own_random(m);
-    let base = f64::from(power) * 2.0 + arrow_random.triangle(2.0 * 0.11, 0.574_25);
+    let base = f64::from(power) * 2.0 + arrow_random.triangle(f64::from(id) * 0.11, 0.574_25);
     let effect = match m.species() {
         Species::Stray => Some(("minecraft:slowness", 600)),
         Species::Bogged => Some(("minecraft:poison", 100)),
@@ -861,7 +867,7 @@ pub fn perform_ranged_attack(m: &mut Mob, who: Who, cx: &mut Cx, power: f32) {
         &mut arrow_random,
         [xd, yd + dist * 0.2, zd],
         1.6,
-        (14 - 2 * 4) as f32,
+        (14 - id * 4) as f32,
     );
     cx.events.push(MobEvent::Projectile(p));
     let pitch = 1.0 / (m.random.next_float() * 0.4 + 0.8);
@@ -1035,16 +1041,21 @@ impl Goal for AttackTurtleEgg {
                 pos: eat,
                 drop: false,
             });
+            // `sendParticles(POOF, ..., 1, xa, ya, za, 0.15)`, twenty times.
             for _ in 0..20 {
-                m.random.next_gaussian();
-                m.random.next_gaussian();
-                m.random.next_gaussian();
+                let spread = [
+                    m.random.next_gaussian() * 0.02,
+                    m.random.next_gaussian() * 0.02,
+                    m.random.next_gaussian() * 0.02,
+                ];
+                cx.events.push(MobEvent::LevelParticles {
+                    kind: "poof",
+                    at: [center[0], f64::from(eat[1]), center[2]],
+                    spread,
+                    speed: 0.15,
+                    count: 1,
+                });
             }
-            cx.events.push(MobEvent::Particles {
-                kind: "poof",
-                at: [center[0], f64::from(eat[1]), center[2]],
-                count: 20,
-            });
             // The break sound's pitch draws from the level random.
             cx.events.push(MobEvent::Sound(
                 "block.turtle_egg.break",

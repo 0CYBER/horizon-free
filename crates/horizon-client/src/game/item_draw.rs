@@ -183,8 +183,9 @@ fn use_duration(components: &Components) -> i32 {
         | "minecraft:crossbow"
         | "minecraft:trident"
         | "minecraft:spyglass"
-        | "minecraft:goat_horn"
-        | "minecraft:brush" => 72_000,
+        | "minecraft:goat_horn" => 72_000,
+        // BrushItem.USE_DURATION.
+        "minecraft:brush" => 200,
         _ => 0,
     }
 }
@@ -252,6 +253,11 @@ impl Game<'_> {
         owner.main_arm_left = self.settings.main_hand_left;
         owner.is_local_player = true;
         owner.is_view_entity = true;
+        owner.last_death_location = self
+            .level
+            .last_death
+            .clone()
+            .map(|(dimension, pos)| GlobalPos { dimension, pos });
         if let (Some((slot, ticks)), Some(stack)) = (self.using, stack)
             && self.stack_in(slot) == Some(stack)
         {

@@ -28,6 +28,8 @@ use std::{
 pub struct BakedFace {
     pub quad: ModelQuad,
     pub layer: u32,
+    /// The texels under the quad's UVs are all opaque (`SpriteContents.computeTransparency`):
+    /// drawn in the solid layer without an alpha test.
     pub opaque: bool,
     /// Fractional alpha: drawn in the sorted translucent pass.
     pub translucent: bool,
@@ -230,9 +232,9 @@ impl StateModels {
                         Ok(BakedFace {
                             translucent: quad.material.force_translucent
                                 || sprites.translucent[layer as usize],
+                            opaque: sprites.region_opaque(layer, &quad.uv),
                             quad,
                             layer,
-                            opaque: sprites.opaque[layer as usize],
                         })
                     })
                     .collect::<Result<_>>()?;
