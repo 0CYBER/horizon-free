@@ -5089,11 +5089,12 @@ impl Game<'_> {
             KeyCode::KeyE => {
                 // The inventory opens without telling the server.
                 self.recipe_ui.reset_screen();
-                self.screen = if self.creative {
-                    Screen::Creative
+                if self.creative {
+                    self.screen = Screen::Creative;
+                    self.creative_screen.reopen();
                 } else {
-                    Screen::Inventory
-                };
+                    self.screen = Screen::Inventory;
+                }
                 self.craft_size = 2;
                 self.capture(false);
                 Ok(true)

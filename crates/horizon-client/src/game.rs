@@ -11784,11 +11784,12 @@ impl Game<'_> {
                 Screen::Playing => {
                     // key.inventory while riding a tamed mount opens its inventory.
                     if !self.open_ridden_mount_menu() {
-                        self.screen = if self.creative {
-                            Screen::Creative
+                        if self.creative {
+                            self.screen = Screen::Creative;
+                            self.creative_screen.reopen();
                         } else {
-                            Screen::Inventory
-                        };
+                            self.screen = Screen::Inventory;
+                        }
                         self.capture(false);
                     }
                 }
