@@ -225,6 +225,16 @@ impl Game<'_> {
             }
             out.push(e);
         }
+        for (p, &id) in &self.knot_ids {
+            // LeashFenceKnotEntity.getAddEntityPacket: the fence's block.
+            out.push(state(
+                id,
+                "minecraft:leash_knot",
+                p.map(f64::from),
+                0.0,
+                false,
+            ));
+        }
         for p in &self.paintings {
             let mut e = state(p.id, "minecraft:painting", p.pos.map(f64::from), 0.0, false);
             // Direction.get2DDataValue (south 0, west 1, north 2, east 3) to its
@@ -270,6 +280,24 @@ impl Game<'_> {
     /// Gives the entities Horizon keeps without an id one (`Entity.id`, from
     /// the same counter as the rest) before they are first tracked.
     pub(super) fn lan_assign_ids(&mut self) {
+        // LeashFenceKnotEntity: one per fence post with a lead on it
+        // (`notifyLeasheeRemoved` discards it once the last lead is gone).
+        let knots: Vec<[i32; 3]> = self
+            .mobs
+            .iter()
+            .filter(|m| !m.removed)
+            .filter_map(|m| match m.extra.leash {
+                Some(horizon_client::mobs::leash::Holder::Knot(p)) => Some(p),
+                _ => None,
+            })
+            .collect();
+        self.knot_ids.retain(|p, _| knots.contains(p));
+        for p in knots {
+            self.knot_ids.entry(p).or_insert_with(|| {
+                self.next_entity += 1;
+                self.next_entity
+            });
+        }
         let next = &mut self.next_entity;
         let mut give = |id: &mut u32| {
             if *id == 0 {

@@ -247,14 +247,10 @@ impl Game<'_> {
             return;
         };
         let (d, s) = (p.dist.map(f64::from), p.max_speed.map(f64::from));
-        // ClientLevel.addParticle: the camera's 32 blocks unless the packet
-        // (`force`) or the type overrides the limiter.
+        // ClientLevel.addParticle: the camera's 32 blocks and the Particles
+        // option, unless the packet or the type overrides the limiter.
         let add = |particles: &mut horizon_client::particles::ParticleEngine, at, v| {
-            if p.override_limiter {
-                particles.create(&options, at, v);
-            } else {
-                particles.add(&options, at, v);
-            }
+            particles.add_with(&options, at, v, p.override_limiter, p.always_show);
         };
         if p.count == 0 {
             add(

@@ -107,6 +107,8 @@ impl Goal for SwimToTreasure {
         if m.random.next_int_bound(80).unwrap_or(1) == 0 {
             // Entity event 38: happy villager particles about the dolphin.
             cx.events.push(MobEvent::AroundSelf {
+                mob: m.id,
+                event: 38,
                 kind: "happy_villager",
                 feet: [m.position.x, m.position.y, m.position.z],
                 width: f64::from(m.width()),

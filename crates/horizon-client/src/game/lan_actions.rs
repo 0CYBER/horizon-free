@@ -74,7 +74,12 @@ pub(super) struct GuestPlay {
     potions: super::potions::BodyPotions,
     /// `ServerPlayer.getStats` and the inventory `inventory_changed` last saw.
     pub(super) stats: super::stats::Stats,
+    /// `Stats.LEAVE_GAME` is counted: a guest is saved more than once on the
+    /// way out, the statistic is awarded once (`LanHost::award_leave_game`).
+    pub(super) left_game: bool,
     last_inventory: u64,
+    /// `ServerPlayer.levitationStartPos` and `levitationStartTime`.
+    levitation: Option<([f64; 3], u64)>,
     /// `Entity.portalProcess` and `portalCooldown` (game/server_travel.rs).
     pub(super) portal: horizon_client::nether_portal::PortalState,
     /// `ServerPlayer.wonGame`: the End poem is showing, the player waits for
@@ -158,6 +163,7 @@ pub(super) struct GuestSwap {
     host_ender: Option<(i32, i32, i32)>,
     adv_loaded: bool,
     last_inventory: u64,
+    levitation: Option<([f64; 3], u64)>,
     death_cause: Option<String>,
     /// The guest's own damage record, in place while they act.
     combat: super::combat::CombatTracker,
@@ -386,6 +392,7 @@ impl Game<'_> {
         std::mem::swap(&mut self.hook, &mut play.hook);
         let adv_loaded = std::mem::replace(&mut self.adv.loaded, true);
         let last_inventory = std::mem::replace(&mut self.adv.last_inventory, play.last_inventory);
+        let levitation = std::mem::replace(&mut self.adv.levitation, play.levitation);
         let death_cause = std::mem::replace(&mut self.ui.death_cause, play.death_cause.take());
         let acting = (
             self.lan_acting.replace(conn),
@@ -457,6 +464,7 @@ impl Game<'_> {
             host_ender,
             adv_loaded,
             last_inventory,
+            levitation,
             death_cause,
             acting,
             packets,
@@ -516,6 +524,7 @@ impl Game<'_> {
             host_ender,
             adv_loaded,
             last_inventory,
+            levitation,
             death_cause,
             combat,
             acting,
@@ -638,6 +647,7 @@ impl Game<'_> {
         std::mem::swap(&mut self.hook, &mut play.hook);
         self.adv.loaded = adv_loaded;
         play.last_inventory = std::mem::replace(&mut self.adv.last_inventory, last_inventory);
+        play.levitation = std::mem::replace(&mut self.adv.levitation, levitation);
         let stat_events = std::mem::take(&mut play.stats.events);
         let name = g.name.clone();
         self.potions.swap_player(&mut g.effects, &mut play.potions);
@@ -681,6 +691,13 @@ impl Game<'_> {
                 g.sprinting = false;
             }
             m.sprinting = false;
+            // ServerPlayer.indicateDamage: the hit's direction to the player.
+            if let Some(yaw) = m.health.indicated_dir.take() {
+                g.send(&C::HurtAnimation(play::HurtAnimation {
+                    id: g.entity_id,
+                    yaw,
+                }));
+            }
             let teleported = std::mem::take(&mut m.teleported);
             let moved: f64 = (0..3).map(|k| (at[k] - g.position[k]).powi(2)).sum();
             g.motion = Some(Box::new(m));
@@ -882,13 +899,17 @@ impl Game<'_> {
     }
 
     /// The guest's open container is closing (`AbstractContainerMenu.removed`):
-    /// it no longer counts among the openers of the lid.
+    /// it no longer counts among the openers of the lid, and the lid's close
+    /// sound is played for everyone around (`ChestBlockEntity.onClose`, a
+    /// `playSound` with no player), the guest included, once the last opener
+    /// has left.
     pub(super) fn guest_container_closed(&mut self, host: &mut LanHost, conn: u32) {
         if let Some(g) = host.hub.guest(conn)
             && let Some(pos) = g.menu.as_ref().and_then(|m| m.pos)
             && !g.spectator()
+            && self.container_openers_changed(pos, false)
         {
-            self.container_openers_changed(pos, false);
+            self.container_edge_sound(pos, false);
         }
     }
 
@@ -982,6 +1003,20 @@ impl Game<'_> {
                     // The pause between two blocks is the client's (MultiPlayerGameMode's
                     // destroyDelay); the server digs from the START it receives.
                     play.destroy_delay = 0;
+                    // ServerPlayerGameMode.handleBlockBreakAction: a survival START
+                    // attacks the block at once, so a tap released in the same tick
+                    // still plays a note. The dig is marked begun for tick_mining.
+                    let pos = a.pos;
+                    self.as_guest(host, conn, |g| {
+                        if g.may_build() && !g.creative {
+                            let _ = g.attack_block(pos);
+                            g.mining = Some(Mining {
+                                pos,
+                                progress: 0.0,
+                                ticks: 0,
+                            });
+                        }
+                    });
                 }
                 1 => {}
                 3 => {

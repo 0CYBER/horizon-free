@@ -67,6 +67,11 @@ pub struct HudAtlas {
     pub fire_animations: Vec<(Rect, crate::sprites::SpriteAnimation)>,
     /// The default font (bitmap sheets in this atlas, unifont rasterized on demand).
     pub font: crate::font::Font,
+    /// `misc/enchanted_glint_item` as its own image: vanilla's `GlintSampler`
+    /// repeats it per pixel, which one sprite inside this atlas cannot.
+    pub glint: (Vec<u8>, u32, u32),
+    /// `misc/enchanted_glint_armor`, the armour layers' `GlintSampler`.
+    pub glint_armor: (Vec<u8>, u32, u32),
     white: Rect,
 }
 /// Atlas rows reserved for glyphs rasterized at run time.
@@ -526,6 +531,8 @@ impl HudAtlas {
             }
         }
         let white = sprites["horizon/white"];
+        let glint = Self::glint_texture(root, defaults, "enchanted_glint_item");
+        let glint_armor = Self::glint_texture(root, defaults, "enchanted_glint_armor");
         let font = crate::font::Font::load(
             root,
             &sprites,
@@ -542,9 +549,21 @@ impl HudAtlas {
             translucent,
             flags,
             fire_animations,
+            glint,
+            glint_armor,
             font,
             white,
         })
+    }
+    /// `misc/<name>.png` on its own, or a transparent texel if the resource
+    /// pack lacks it.
+    fn glint_texture(root: &Path, defaults: &Path, name: &str) -> (Vec<u8>, u32, u32) {
+        let relative = format!("assets/minecraft/textures/misc/{name}.png");
+        let mut path = root.join(&relative);
+        if !path.exists() && defaults != root {
+            path = defaults.join(&relative);
+        }
+        decode(&path).map_or((vec![0; 4], 1, 1), |(w, h, pixels)| (pixels, w, h))
     }
 }
 #[repr(C)]
@@ -554,6 +573,9 @@ pub struct HudVertex {
     pub uv: [f32; 2],
     pub color: u32,
     pub depth: f32,
+    /// The `GLINT_TEXTURING` UV into the repeating glint texture, unused
+    /// unless `uv.x >= 2`.
+    pub glint_uv: [f32; 2],
 }
 /// The GUI Scale option (0 = auto).
 pub static GUI_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -569,6 +591,8 @@ pub struct HudBatch {
     pub blends: Vec<(std::ops::Range<u32>, Blend)>,
     /// The textures and time of the `Blend::EndPortal` runs.
     pub end_portal: EndPortalFill,
+    /// `options.glintStrength` for the glint pass (`GlintAlpha`).
+    pub glint_alpha: f32,
     /// Screen's first vertex: the preceding HUD is part of its blurred background.
     pub blur_at: u32,
 }
@@ -620,6 +644,7 @@ impl HudBatch {
             patches: Vec::new(),
             blends: Vec::new(),
             end_portal: EndPortalFill::default(),
+            glint_alpha: 0.75,
             blur_at: 0,
         }
     }
@@ -695,6 +720,26 @@ impl HudBatch {
                 uv: uv[i],
                 color,
                 depth: 0.0,
+                glint_uv: [0.0, 0.0],
+            });
+        }
+    }
+    /// A quad whose texture is the `GLINT_TEXTURING` sample at `glint_uv`;
+    /// `uv` is the item's atlas UV, which the shader masks by.
+    pub fn quad_glint(
+        &mut self,
+        p: [[f32; 2]; 4],
+        uv: [[f32; 2]; 4],
+        glint_uv: [[f32; 2]; 4],
+        color: u32,
+    ) {
+        for i in [0, 1, 2, 0, 2, 3] {
+            self.vertices.push(HudVertex {
+                pos: p[i],
+                uv: uv[i],
+                color,
+                depth: 0.0,
+                glint_uv: glint_uv[i],
             });
         }
     }
@@ -705,6 +750,7 @@ impl HudBatch {
                 uv: uv[i],
                 color,
                 depth: p[i][2],
+                glint_uv: [0.0, 0.0],
             });
         }
     }
@@ -875,6 +921,7 @@ impl HudBatch {
                 uv,
                 color: c[i],
                 depth: 0.0,
+                glint_uv: [0.0, 0.0],
             });
         }
     }
@@ -1055,6 +1102,8 @@ impl HudRenderer {
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
         view: &wgpu::TextureView,
+        glint_view: &wgpu::TextureView,
+        glint_sampler: &wgpu::Sampler,
     ) -> Result<Self> {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Horizon HUD"),
@@ -1099,6 +1148,22 @@ impl HudRenderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1117,6 +1182,14 @@ impl HudRenderer {
                     binding: 2,
                     resource: wgpu::BindingResource::Sampler(&sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(glint_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(glint_sampler),
+                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1124,7 +1197,8 @@ impl HudRenderer {
             bind_group_layouts: &[Some(&layout)],
             ..Default::default()
         });
-        let attributes = wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Unorm8x4,3=>Float32];
+        let attributes =
+            wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Unorm8x4,3=>Float32,4=>Float32x2];
         let create = |label, blend, fragment_entry, depth: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
@@ -1339,7 +1413,12 @@ impl HudRenderer {
             &self.uniform,
             0,
             bytemuck::bytes_of(&HudUniform::new(
-                [size[0] as f32, size[1] as f32, batch.scale, 0.0],
+                [
+                    size[0] as f32,
+                    size[1] as f32,
+                    batch.scale,
+                    batch.glint_alpha,
+                ],
                 batch.end_portal,
             )),
         );
@@ -1789,6 +1868,7 @@ mod tests {
                 patches: Vec::new(),
                 blends: Vec::new(),
                 end_portal: EndPortalFill::default(),
+                glint_alpha: 0.75,
                 blur_at: 0,
             };
             for (image_width, image_height) in [(195, 136), (176, 166), (176, 222)] {

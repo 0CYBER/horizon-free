@@ -67,6 +67,7 @@ pub mod spawning;
 pub mod species;
 pub mod strider;
 pub mod sulfur_cube;
+pub mod sync;
 pub mod tame;
 pub mod trader;
 pub mod transport_items;
@@ -803,6 +804,8 @@ pub struct Extra {
     pub memories: Vec<(&'static str, i64, i64)>,
     /// A camel's `LAST_POSE_CHANGE_TICK`.
     pub pose_change_tick: i64,
+    /// `Entity.DATA_POSE` as a mob of a server has it (`sync::pose_id`).
+    pub pose: u8,
     /// The school leader a fish follows, and a tropical fish that swims alone.
     pub leader: Option<u32>,
     pub lone: bool,
@@ -921,6 +924,12 @@ pub enum MobEvent {
         mob: u32,
         at: [f64; 3],
     },
+    /// `Level.broadcastEntityEvent` for a mob: guests run `sync::entity_event`.
+    EntityEvent {
+        mob: u32,
+        event: i8,
+        at: [f64; 3],
+    },
     Sound(&'static str, [f64; 3], f32, f32),
     /// `ChestBlockEntity.startOpen` / `stopOpen` by a copper golem: the
     /// chest's opener count goes up or down (interaction range 3).
@@ -943,6 +952,10 @@ pub enum MobEvent {
         chest: [i32; 3],
         slot: usize,
         stack: Option<crate::items::ItemStack>,
+    },
+    /// `InfestedMobEffect.onMobHurt`: the mob was hurt while infested.
+    Infested {
+        mob: u32,
     },
     /// `OfferFlowerGoal.stop`: the item goes to the target's antenna (saddle)
     /// slot if it is empty, as a guaranteed drop.
@@ -1027,7 +1040,9 @@ pub enum MobEvent {
         mob: u32,
         charged: bool,
     },
-    Explode([f64; 3], f32),
+    /// The centre, the radius and the kind of the mob blowing up (it may be
+    /// gone from the list by the time the blast is handled).
+    Explode([f64; 3], f32, Species),
     /// Melee or ranged damage to another mob.
     AttackMob {
         target: u32,
@@ -1091,8 +1106,11 @@ pub enum MobEvent {
         at: [f64; 3],
         count: u32,
     },
-    /// Client particles about a mob's box (`particles::around_self`).
+    /// Client particles about a mob's box (`particles::around_self`) and the
+    /// entity event `event` that shows them, sent for mob `mob`.
     AroundSelf {
+        mob: u32,
+        event: i8,
         kind: &'static str,
         feet: [f64; 3],
         width: f64,
@@ -1225,6 +1243,12 @@ pub enum MobEvent {
         mob: u32,
         table: &'static str,
         at: [f64; 3],
+    },
+    /// `Armadillo.customServerAiStep`: the armadillo sheds a scute.
+    ShedScute {
+        mob: u32,
+        at: [f64; 3],
+        pitch: f32,
     },
     /// A lead snaps or loses its holder: the lead item drops when asked.
     LeashBreak {
@@ -1584,6 +1608,8 @@ pub struct PlayerView {
     pub off_hand: Option<Arc<str>>,
     pub head: Option<Arc<str>>,
     pub armor_cover: f32,
+    /// The Invisibility effect (`isInvisible`).
+    pub invisible: bool,
     pub spectator: bool,
     /// `PiglinAi.isWearingSafeArmor`: some golden armour.
     pub gold_armor: bool,
@@ -1609,6 +1635,17 @@ pub struct PlayerView {
     pub passenger: bool,
 }
 impl PlayerView {
+    /// `LivingEntity.getVisibilityPercent` without the worn-skull scaling.
+    pub fn visibility_percent(&self) -> f64 {
+        let mut visibility = 1.0;
+        if self.sneaking {
+            visibility *= 0.8;
+        }
+        if self.invisible {
+            visibility *= 0.7 * f64::from(self.armor_cover).max(0.1);
+        }
+        visibility
+    }
     /// `LivingEntity.hasEffect`, by id without namespace.
     pub fn has_effect(&self, effect: &str) -> bool {
         self.effects.contains(&effect)
@@ -1643,6 +1680,8 @@ pub struct MobWorld<'a> {
     pub biomes: &'a crate::biome::Biomes,
     /// The `mob_griefing` game rule.
     pub mob_griefing: bool,
+    /// The `mob_drops` game rule (`shouldDropLoot`).
+    pub mob_drops: bool,
     /// `getCurrentDifficultyAt` near the player.
     pub difficulty: spawning::LocalDifficulty,
     /// The End (its dimension type's monster spawn light rules).
@@ -1951,6 +1990,9 @@ impl Mob {
                 }
             }
         }
+        if self.has_effect("minecraft:infested") {
+            self.outbox.push(MobEvent::Infested { mob: self.id });
+        }
         // Squid.hurtServer: a squid hurt after a living entity hit it squirts ink.
         if matches!(self.species(), Species::Squid | Species::GlowSquid)
             && self.ai.last_hurt_by.is_some()
@@ -2028,14 +2070,14 @@ impl Mob {
     }
     pub fn add_effect(&mut self, effect: &'static str, ticks: i32, amplifier: i32) {
         if let Some(e) = self.extra.effects.iter_mut().find(|e| e.0 == effect) {
-            // MobEffectInstance.update: a stronger effect replaces the old one
-            // with its own duration, an equal one keeps the longer duration,
-            // and a weaker one never changes the active effect.
+            // MobEffectInstance.update: a stronger effect replaces with its
+            // own duration, an equal one only extends it; a weaker one is
+            // ignored (vanilla keeps it hidden behind the active one).
             if amplifier > e.2 {
                 e.1 = ticks;
                 e.2 = amplifier;
-            } else if amplifier == e.2 {
-                e.1 = e.1.max(ticks);
+            } else if amplifier == e.2 && e.1 != -1 && (ticks == -1 || e.1 < ticks) {
+                e.1 = ticks;
             }
         } else {
             self.extra.effects.push((effect, ticks, amplifier));
@@ -2189,6 +2231,7 @@ pub fn render_model(
                     layer: overlay,
                     color: 0xFFFF_FFFF,
                     light,
+                    glint_uv: [0.0, 0.0],
                 });
             }
         }
@@ -2323,7 +2366,7 @@ mod lighting_tests {
     #[test]
     fn packed_normal_uses_native_snorm_bytes_without_changing_vertex_offsets() {
         assert_eq!(std::mem::offset_of!(Vertex, normal), 32);
-        assert_eq!(std::mem::size_of::<Vertex>(), 36);
+        assert_eq!(std::mem::size_of::<Vertex>(), 44);
         let part = plane([0.0, 1.0, 0.0]);
         assert_eq!(
             part.polygons[0].vertex_normal(ModelNormals::new(Mat4::from_scale(Vec3::ZERO))),

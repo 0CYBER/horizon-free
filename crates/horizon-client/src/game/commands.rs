@@ -2049,8 +2049,7 @@ impl Game<'_> {
             return false;
         }
         self.world.block_entities.insert(key, new);
-        let state = self.world.block(pos[0], pos[1], pos[2]);
-        let _ = self.world.set(pos[0], pos[1], pos[2], state);
+        self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
         true
     }
     /// RandomizableContainer.tryLoadLootTable for a tag a command gives a

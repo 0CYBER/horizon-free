@@ -559,20 +559,26 @@ impl Behaviours {
         sim.game_event_state(pos, "minecraft:block_change", next);
     }
 
-    /// The state change of `RedStoneOreBlock.attack` when mining begins.
+    /// `BlockBehaviour.attack` when mining begins: `RedStoneOreBlock.attack`
+    /// lights the ore, `NoteBlock.attack` plays the note. True for a note
+    /// block, whose player also earns the `play_noteblock` statistic.
     pub fn attack_block<L: LevelAccess + ?Sized>(
         &self,
         level: &mut L,
         ticks: &mut Ticks,
         pos: BlockPos,
-    ) {
+    ) -> bool {
         let mut sim = self.sim(level, ticks);
         let state = sim.state(pos);
-        if self.data(state).chain.contains(&Class::RedStoneOre)
-            && !self.table.bool(state, self.props.lit)
-        {
+        let chain = &self.data(state).chain;
+        if chain.contains(&Class::Note) {
+            sim.note_play(pos, state);
+            return true;
+        }
+        if chain.contains(&Class::RedStoneOre) && !self.table.bool(state, self.props.lit) {
             sim.set_block_and_update(pos, self.table.set_bool(state, self.props.lit, true));
         }
+        false
     }
 
     /// `BlockState.useWithoutItem` for a right-click on `pos` (hit face and
@@ -640,6 +646,25 @@ impl Behaviours {
         }
         if self.data(state).chain.contains(&Class::CopperGolemStatue) {
             return self.turn_statue(level, ticks, pos, state, item);
+        }
+        // NoteBlock.useItemOn: a mob head on the top face is placed, not tuned
+        // (`#minecraft:noteblock_top_instruments`).
+        if face == Direction::Up
+            && self.data(state).chain.contains(&Class::Note)
+            && item.is_some_and(|i| {
+                matches!(
+                    i,
+                    "minecraft:zombie_head"
+                        | "minecraft:skeleton_skull"
+                        | "minecraft:creeper_head"
+                        | "minecraft:dragon_head"
+                        | "minecraft:wither_skeleton_skull"
+                        | "minecraft:piglin_head"
+                        | "minecraft:player_head"
+                )
+            })
+        {
+            return InteractionResult::Pass;
         }
         self.use_without_item(level, ticks, pos, face, hit, player)
     }

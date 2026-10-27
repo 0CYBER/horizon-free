@@ -1527,6 +1527,8 @@ struct Game<'a> {
     /// `ClientAvatarState`: walked distance and view bob.
     avatar: horizon_client::camera::AvatarBob,
     flash: u32,
+    /// `ClientLevel.rainSoundTime`: ticks of rain since the last rain sound.
+    rain_sound_time: i32,
     /// Bolts that struck here and sky flashes they made, in total (`status`).
     lightning_seen: [u32; 2],
     /// The head of the bed while sleeping; the visual timer also survives waking.
@@ -1609,6 +1611,12 @@ struct Game<'a> {
     /// Map textures waiting for the next HUD batch to upload them.
     map_patches: Vec<horizon_client::font::Patch>,
     text_displays: std::collections::HashMap<i32, text_displays::RemoteTextDisplay>,
+    /// The fence knots a server tracks to this client, by entity id, at their
+    /// block (`LeashFenceKnotEntity`).
+    remote_knots: HashMap<u32, [i32; 3]>,
+    /// The entity ids a hosted server gives the knots its mobs hang on, by
+    /// block, while a lead is tied there.
+    knot_ids: HashMap<[i32; 3], u32>,
     text_display_vertices: usize,
     /// Player skin downloads, and which skin each atlas skin slot holds
     /// (least recently shown first).
@@ -2517,6 +2525,15 @@ impl Game<'_> {
                 no_physics,
                 &self.res.motion().fluids,
             );
+            // Entity.applyEffectsFromBlocks: bubble columns lift or drag the item.
+            horizon_client::motion::bubble_column_push(
+                &self.world,
+                self.pack.assets.registry,
+                self.res.facts(),
+                self.collision,
+                item.bounds(),
+                &mut item.velocity,
+            );
             cells.moved(i, item.previous, item.position);
             // ItemEntity.tick: merge every 2 ticks while moving between
             // blocks, every 40 otherwise, before the lifetime check.
@@ -2787,9 +2804,13 @@ impl Game<'_> {
         self.process_level_events()
     }
     fn attack_block(&mut self, pos: [i32; 3]) -> Result<()> {
-        self.with_level(|b, level, ticks| {
-            b.attack_block(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]));
+        let note = self.with_level(|b, level, ticks| {
+            b.attack_block(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]))
         });
+        // NoteBlock.attack awards the statistic.
+        if note {
+            self.stats.custom("play_noteblock", 1);
+        }
         self.process_level_events()
     }
     /// Track which chunks are ticking (Ticks needs chunk load/unload).
@@ -3459,15 +3480,9 @@ impl Game<'_> {
             self.open_ender_chest(key);
             // EnderChestBlock.useWithoutItem
             self.stats.custom("open_enderchest", 1);
-            self.container_opener_event(key, true);
-            let at = [
-                f64::from(key.0) + 0.5,
-                f64::from(key.1) + 0.5,
-                f64::from(key.2) + 0.5,
-            ];
-            let pitch = self.world.random.next_float() * 0.1 + 0.9;
-            self.audio
-                .play("minecraft:block.ender_chest.open", Some(at), 0.5, pitch);
+            if self.container_opener_event(key, true) {
+                self.container_edge_sound(key, true);
+            }
         } else if &*name == "minecraft:beacon" && self.open_station(pos, &name) {
             self.world.block_entities.get_or_insert_with(key, || {
                 BlockEntity::for_block(&name).unwrap_or(BlockEntity::Chest(Vec::new()))
@@ -3483,7 +3498,7 @@ impl Game<'_> {
             ];
             self.resolve_container_maps(key, centre);
             self.container = Some(key);
-            self.container_opener_event(key, true);
+            let first = self.container_opener_event(key, true);
             self.post_block_game_event(
                 "minecraft:container_open",
                 [key.0, key.1, key.2],
@@ -3507,26 +3522,8 @@ impl Game<'_> {
             if self.guarded_by_piglins(&name) {
                 self.anger_piglins(true);
             }
-            let sound = if storage::is_shulker_box(&name) {
-                Some("minecraft:block.shulker_box.open")
-            } else if name.contains("chest") {
-                Some("minecraft:block.chest.open")
-            } else if &*name == "minecraft:barrel" {
-                Some("minecraft:block.barrel.open")
-            } else {
-                None
-            };
-            if let Some(sound) = sound {
-                self.audio.play(
-                    sound,
-                    Some([
-                        f64::from(key.0) + 0.5,
-                        f64::from(key.1) + 0.5,
-                        f64::from(key.2) + 0.5,
-                    ]),
-                    0.5,
-                    1.0,
-                );
+            if first {
+                self.container_edge_sound(key, true);
             }
         } else if self.open_station(pos, &name) {
             // Workstation menus: game/stations.rs.
@@ -4010,6 +4007,10 @@ impl Game<'_> {
                 self.swing_arm();
                 return Ok(true);
             }
+            if self.use_beehive(hit.pos, held.as_ref())? {
+                self.swing_arm();
+                return Ok(true);
+            }
             if self.use_campfire_douse(hit.pos, held.as_ref())? {
                 self.swing_arm();
                 return Ok(true);
@@ -4366,6 +4367,8 @@ impl Game<'_> {
             self.release_used_item(&stack, ticks, hand_changed);
             return;
         }
+        // ServerPlayer.updateUsingItem: USING_ITEM every tick of the use.
+        self.trigger_using_item(&stack);
         let Some(info) = self.res.items().get(&stack.item).cloned() else {
             self.using = None;
             return;
@@ -5858,6 +5861,7 @@ impl Game<'_> {
                 | BlockEntity::Vault(_)
                 | BlockEntity::Beehive(_)
                 | BlockEntity::CommandBlock(_)
+                | BlockEntity::EndGateway(_)
                 | BlockEntity::Skull(_)
                 | BlockEntity::DaylightDetector
                 | BlockEntity::Campfire(_),
@@ -6130,6 +6134,7 @@ impl Game<'_> {
                     | BlockEntity::Vault(_)
                     | BlockEntity::Beehive(_)
                     | BlockEntity::CommandBlock(_)
+                    | BlockEntity::EndGateway(_)
                     | BlockEntity::Skull(_)
                     | BlockEntity::DaylightDetector
                     | BlockEntity::Campfire(_),
@@ -6211,41 +6216,15 @@ impl Game<'_> {
         if let Some(key) = self.container.take() {
             // A cart's or chest boat's items go back to it.
             self.close_cart_container(key);
-            self.container_opener_event(key, false);
+            let last = self.container_opener_event(key, false);
             self.post_block_game_event(
                 "minecraft:container_close",
                 [key.0, key.1, key.2],
                 Some(horizon_client::mobs::Who::Player),
                 None,
             );
-            let name = self
-                .res
-                .facts()
-                .get(self.world.block(key.0, key.1, key.2))
-                .name
-                .clone();
-            let sound = if storage::is_shulker_box(&name) {
-                Some("minecraft:block.shulker_box.close")
-            } else if &*name == "minecraft:ender_chest" {
-                Some("minecraft:block.ender_chest.close")
-            } else if name.contains("chest") {
-                Some("minecraft:block.chest.close")
-            } else if &*name == "minecraft:barrel" {
-                Some("minecraft:block.barrel.close")
-            } else {
-                None
-            };
-            if let Some(sound) = sound {
-                self.audio.play(
-                    sound,
-                    Some([
-                        f64::from(key.0) + 0.5,
-                        f64::from(key.1) + 0.5,
-                        f64::from(key.2) + 0.5,
-                    ]),
-                    0.5,
-                    1.0,
-                );
+            if last {
+                self.container_edge_sound(key, false);
             }
             self.world.modified.insert((key.0 >> 4, key.2 >> 4));
         }
@@ -6765,6 +6744,7 @@ impl Game<'_> {
             self.player_menu_sound(sound);
         }
         let crafted = std::mem::take(&mut menu.crafted);
+        let brewed = std::mem::take(&mut menu.brewed);
         let equipped = std::mem::take(&mut menu.equipped);
         for (i, stack) in after.into_iter().enumerate() {
             if let Some(g) = game_of[i] {
@@ -6780,6 +6760,9 @@ impl Game<'_> {
                 self.player_drop(stack);
             }
             self.award_crafted(&crafted);
+            for stack in &brewed {
+                self.trigger_brewed_potion(stack);
+            }
             if furnace_before > furnace_after
                 && self.remote.is_none()
                 && let (Some(pos), Some(p)) = (self.container, self.player.as_ref())
@@ -7818,6 +7801,8 @@ impl Game<'_> {
                         layer: 0,
                         color,
                         light: packed,
+
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             }
@@ -8276,6 +8261,15 @@ impl Game<'_> {
             None => horizon_client::mobs::Damage::of(horizon_client::mobs::DamageKind::Generic),
         };
         let landed = self.hurt_by_player(index, amount, source);
+        if landed {
+            let victim = self.mob_entity(&self.mobs[index]);
+            self.player_hit(
+                &victim,
+                creatures::damage_type(source.kind, true),
+                None,
+                amount,
+            );
+        }
         if let Some(p) = self.player.as_mut() {
             if p.attack_log.len() >= 64 {
                 p.attack_log.remove(0);
@@ -8369,14 +8363,23 @@ impl Game<'_> {
             // The hurt or death sound the mob raised (getHurtSound / getDeathSound,
             // its voice pitch from its own random).
             let queued = std::mem::take(&mut self.mobs[index].outbox);
+            let mut infested = false;
             for event in queued {
-                if let horizon_client::mobs::MobEvent::Sound(s, at, volume, pitch) = event {
-                    self.audio
-                        .play(&format!("minecraft:{s}"), Some(at), volume, pitch);
-                } else {
-                    // Left for the end of the tick.
-                    self.mobs[index].outbox.push(event);
+                match event {
+                    horizon_client::mobs::MobEvent::Sound(s, at, volume, pitch) => {
+                        self.audio
+                            .play(&format!("minecraft:{s}"), Some(at), volume, pitch);
+                    }
+                    horizon_client::mobs::MobEvent::Infested { .. } => infested = true,
+                    other => {
+                        // Left for the end of the tick.
+                        self.mobs[index].outbox.push(other);
+                    }
                 }
+            }
+            if infested {
+                let id = self.mobs[index].id;
+                self.mob_infested(id);
             }
             self.weapon_hit(index);
             // Player.attack: causeFoodExhaustion(0.1F) only when the hit hurt
@@ -8465,6 +8468,8 @@ impl Game<'_> {
                     layer: 2,
                     color,
                     light: 0,
+
+                    glint_uv: [0.0, 0.0],
                 });
             }
         };
@@ -10340,40 +10345,7 @@ impl Game<'_> {
         if self.flash > 0 {
             self.flash -= 1;
         }
-        let (rain, _) = self.world.weather.levels(1.0);
-        let Some(eye) = self.eye_position() else {
-            return;
-        };
-        // WeatherEffectRenderer.tickRainParticles: occasional rain sounds.
-        if rain > 0.0 && self.world.random.next_int_bound(3).unwrap_or(1) < (rain * 3.0) as i32 {
-            let r = &mut self.world.random;
-            let (dx, dz) = (
-                r.next_int_bound(21).unwrap_or(10) - 10,
-                r.next_int_bound(21).unwrap_or(10) - 10,
-            );
-            let (x, z) = (eye[0].floor() as i32 + dx, eye[2].floor() as i32 + dz);
-            let top = self.rain_height(x, z);
-            if self.precipitation(x, top, z) == Some(false)
-                && (top - eye[1] as i32).abs() < 10
-                && self.world.random.next_int_bound(5).unwrap_or(1) == 0
-            {
-                let above = f64::from(top) > eye[1] + 1.0;
-                let (name, volume, pitch) = if above {
-                    ("minecraft:weather.rain.above", 0.1, 0.5)
-                } else {
-                    ("minecraft:weather.rain", 0.2, 1.0)
-                };
-                // The Horizon Weather option off silences the rain too.
-                if self.settings.horizon.weather {
-                    self.audio.play(
-                        name,
-                        Some([f64::from(x) + 0.5, f64::from(top), f64::from(z) + 0.5]),
-                        volume,
-                        pitch,
-                    );
-                }
-            }
-        }
+        // The rain sounds come with the rain splashes (`tick_particles`).
     }
     /// WeatherEffectRenderer: rain and snow columns within the weather radius.
     fn weather_geometry(
@@ -11414,6 +11386,8 @@ impl Game<'_> {
             debug_lines_on_top: &debug_lines_on_top,
             debug_crosshair: &debug_crosshair,
             hud: &hud,
+            glint_alpha: self.settings.file.double("glintStrength") as f32,
+            glint_ticks: self.glint_ticks(),
             clouds: (!title
                 && self.dim == Dim::Overworld
                 && horizon_client::clouds::visible(&self.settings.clouds, sky.cloud_color[3]))
@@ -13294,6 +13268,7 @@ impl<'a> Game<'a> {
             dragging: false,
             avatar: Default::default(),
             flash: 0,
+            rain_sound_time: 0,
             lightning_seen: [0; 2],
             sleeping: None,
             sleep_timer: 0,
@@ -13348,6 +13323,8 @@ impl<'a> Game<'a> {
             dragon_model: prepared.dragon_model,
             map_patches: Vec::new(),
             text_displays: Default::default(),
+            remote_knots: Default::default(),
+            knot_ids: Default::default(),
             text_display_vertices: 0,
             skin_downloads: RefCell::new(horizon_client::skins::Downloader::new(
                 std::env::current_dir()
@@ -14096,6 +14073,12 @@ fn build_renderer(
         &assets.sprite_mips,
         &assets.animations,
         (&atlas.pixels, atlas.width, atlas.height),
+        (&atlas.glint.0, atlas.glint.1, atlas.glint.2),
+        (
+            &atlas.glint_armor.0,
+            atlas.glint_armor.1,
+            atlas.glint_armor.2,
+        ),
         (&pack.forcefield.2, pack.forcefield.0),
         &gui.panorama,
         prepared,
@@ -14122,6 +14105,7 @@ fn loading_renderer(
 ) -> Result<Renderer> {
     static FORCEFIELD: [u8; 4] = [0; 4];
     static EMPTY_HUD: [u8; 4] = [0, 0, 0, 255];
+    static EMPTY_GLINT: [u8; 4] = [0; 4];
     let empty_panorama = horizon_client::gfx::panorama::Faces {
         size: 1,
         pixels: [0u8; 4].repeat(6),
@@ -14131,6 +14115,10 @@ fn loading_renderer(
     let (pixels, width, height) = match atlas {
         Some(atlas) => (atlas.pixels.as_slice(), atlas.width, atlas.height),
         None => (EMPTY_HUD.as_slice(), 1, 1),
+    };
+    let (glint_pixels, glint_width, glint_height) = match atlas {
+        Some(atlas) => (atlas.glint.0.as_slice(), atlas.glint.1, atlas.glint.2),
+        None => (EMPTY_GLINT.as_slice(), 1, 1),
     };
     // A glyph rasterized into an earlier texture is not in these pixels; the
     // new texture gets it again when the character is drawn (see
@@ -14148,6 +14136,8 @@ fn loading_renderer(
         &[],
         &[],
         (pixels, width, height),
+        (glint_pixels, glint_width, glint_height),
+        (glint_pixels, glint_width, glint_height),
         (&FORCEFIELD[..], 1),
         panorama,
         None,
@@ -14195,6 +14185,8 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         debug_lines_on_top: &[],
         debug_crosshair: &[],
         hud,
+        glint_alpha: 0.75,
+        glint_ticks: 0.0,
         nether_lighting: false,
         entities: &[],
         entity_spans: &[],
