@@ -3871,6 +3871,9 @@ impl Game<'_> {
             }
         }
         if let Some(stack) = armor_drop {
+            // Mob.shearItem: PLAYER_SHEARED_EQUIPMENT with the armor and the wolf.
+            let target = self.mob_entity(&self.mobs[index]);
+            self.trigger_item_entity("minecraft:player_sheared_equipment", &stack, &target);
             self.spawn_item(stack, [center[0], center[1] + 0.5, center[2]], [0.0; 3], 10);
         }
         for (item, count) in drops {

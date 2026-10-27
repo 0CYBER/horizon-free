@@ -408,6 +408,14 @@ impl Game<'_> {
             equipment[4] = slot(&m.extra.legs);
             equipment[5] = slot(&m.extra.feet);
         }
+        // A wolf's armor is its body slot, with its durability.
+        if m.species() == horizon_client::mobs::Species::Wolf {
+            equipment[6] = m.extra.head.as_ref().map(|id| {
+                let mut armor = ItemStack::new(id, 1);
+                armor.damage = m.extra.body_damage.max(0) as u32;
+                item_view(&armor)
+            });
+        }
         EntityView {
             kind: m.kind.id.clone(),
             position: [m.position.x, m.position.y, m.position.z],
