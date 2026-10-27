@@ -62,6 +62,7 @@ gilrs = { version = "0.11", optional = true }
 horizon-dualsense = { path = "../horizon-dualsense", optional = true }
 # HTTPS to the Minecraft services (online-mode session join).
 ureq = { version = "2", default-features = false, features = ["tls"] }
+unicode-bidi = "0.3.18"
 
 [target.'cfg(unix)'.dependencies]
 # The server thread's CPU time per tick (`HORIZON_SPIKES`, spans.rs).

@@ -165,6 +165,8 @@ pub(super) struct GuestSwap {
     acting: (Option<u32>, Option<String>, Option<u128>),
     /// The packets queued for that guest.
     packets: Vec<play::Clientbound>,
+    /// The entity events queued for that guest.
+    entity_events: Vec<i8>,
     /// The host's count of swings started, kept while the guest acts.
     swings: u32,
     /// How many projectiles there were: those added since are the guest's.
@@ -389,6 +391,7 @@ impl Game<'_> {
             self.lan_acting_uuid.replace(g.uuid),
         );
         let packets = std::mem::take(&mut self.guest_packets);
+        let entity_events = std::mem::take(&mut self.guest_entity_events);
         let swings = self.swings_started;
         let projectiles = self.creatures.projectiles.len();
         let modifiers = std::mem::replace(
@@ -449,6 +452,7 @@ impl Game<'_> {
             death_cause,
             acting,
             packets,
+            entity_events,
             swings,
             projectiles,
             modifiers,
@@ -508,6 +512,7 @@ impl Game<'_> {
             combat,
             acting,
             packets,
+            entity_events,
             swings,
             projectiles,
             modifiers,
@@ -528,6 +533,17 @@ impl Game<'_> {
         self.swings_started = swings;
         for packet in std::mem::replace(&mut self.guest_packets, packets) {
             host.hub.send_to(conn, &packet);
+        }
+        // ServerPlayer.connection.send: the guest's own entity events.
+        let entity_id = host.hub.guests[i].entity_id;
+        for event in std::mem::replace(&mut self.guest_entity_events, entity_events) {
+            host.hub.send_to(
+                conn,
+                &C::EntityEvent(play::EntityEvent {
+                    id: entity_id,
+                    event,
+                }),
+            );
         }
         // ServerItemCooldowns.onCooldownStarted: the guest's own cooldown.
         for (group, duration) in std::mem::take(&mut self.guest_cooldowns) {
@@ -1200,6 +1216,7 @@ impl Game<'_> {
             }
             S::RenameItem(p) => self.lan_station_rename(host, conn, &p.name),
             S::SignUpdate(p) => self.lan_sign_update(host, conn, p),
+            S::SetCommandBlock(p) => self.lan_set_command_block(host, conn, p),
             S::EditBook(p) => self.lan_edit_book(host, conn, p),
             S::ContainerSlotStateChanged(p) => {
                 self.lan_crafter_slot_state(host, conn, p.container, p.slot, p.enabled);
@@ -1916,21 +1933,8 @@ impl Game<'_> {
                 continue;
             }
             let play = host.play.entry(conn).or_default();
-            // Player.tick's ItemCooldowns.tick, once a tick for each player
-            // (the shield an axe disabled, a thrown pearl).
-            play.shield_cooldown = play.shield_cooldown.saturating_sub(1);
+            // ServerGamePacketListenerImpl.tick's dropSpamThrottler.
             play.creative_drops = play.creative_drops.saturating_sub(1);
-            // ServerItemCooldowns.onCooldownEnded: a finished entry is told to
-            // the guest (a duration of 0 removes it).
-            for group in play.cooldowns.tick() {
-                host.hub.send_to(
-                    conn,
-                    &C::Cooldown(play::Cooldown {
-                        group: group.to_string(),
-                        duration: 0,
-                    }),
-                );
-            }
             let digging = play.digging;
             let using = play.using.is_some();
             let delayed = play.destroy_delay > 0 || play.use_delay > 0 || play.attack_ticks < 100;
@@ -1966,6 +1970,24 @@ impl Game<'_> {
                 {
                     play.digging = None;
                 }
+            }
+            // Player.tick's ItemCooldowns.tick, once a tick for each player
+            // (the shield an axe disabled, a thrown pearl), after
+            // LivingEntity.tick's use: an entry a finished use starts has 20
+            // ticks left when the next tick's packets are handled, as the
+            // guest's own client counts.
+            let play = host.play.entry(conn).or_default();
+            play.shield_cooldown = play.shield_cooldown.saturating_sub(1);
+            // ServerItemCooldowns.onCooldownEnded: a finished entry is told to
+            // the guest (a duration of 0 removes it).
+            for group in play.cooldowns.tick() {
+                host.hub.send_to(
+                    conn,
+                    &C::Cooldown(play::Cooldown {
+                        group: group.to_string(),
+                        duration: 0,
+                    }),
+                );
             }
             // Player.tick: a different main-hand item resets the attack
             // strength, and detectEquipmentUpdates gives the guest its modifiers.
@@ -2188,7 +2210,7 @@ impl Game<'_> {
         }
         let in_wall = !g.sleeping && self.in_wall(g.position, g.eye_height());
         let at = g.position;
-        let sneaking = g.sneaking;
+        let (sneaking, sleeping) = (g.sneaking, g.sleeping);
         let mut soul = None;
         let events = self.as_guest(host, conn, |game| {
             let (rules, motion) = (game.world.health_rules, game.motion);
@@ -2257,6 +2279,7 @@ impl Game<'_> {
             // Entity.applyEffectsFromBlocks along those moves: magma, cactus,
             // lit campfires and grown sweet berry bushes hurt (#1305).
             w.player.shift_key_down = sneaking;
+            let _ = w.player.set_sleeping(sleeping);
             w.player.freeze_immune = freeze_immune;
             let _ = w.server_block_damage(start);
             let _ = w.update_soul_speed_block();
@@ -2273,6 +2296,8 @@ impl Game<'_> {
                     game.cauldron_extinguish(*pos);
                 }
             }
+            // Entity.baseTick: rain puts out a burning player.
+            game.rain_extinguish_player();
             // WitherRoseBlock.entityInside along those moves.
             for event in &events {
                 if matches!(event, MotionEvent::InsideWitherRose) {
@@ -2333,6 +2358,15 @@ impl Game<'_> {
                     speed,
                 }) => self.landing_dust(Some(host), state, position, count, speed),
                 MotionEvent::Fall(event) => self.landing_block_updates(&event),
+                // LivingEntity.baseTick's entity event 67, to every client
+                // around, the guest's own included; this window draws it too.
+                MotionEvent::Drown => {
+                    if let Some(g) = host.hub.guest(conn) {
+                        host.hub
+                            .entity_event(g.entity_id, super::combat::DROWN_EVENT, at);
+                    }
+                    self.drown_particles(at, [0.0; 3]);
+                }
                 // HoneyBlock.maybeDoSlideEffects: the sound reaches the
                 // others (Player.playSound excludes the player, whose client
                 // plays it), the entity event 53 everyone around.
@@ -2668,8 +2702,7 @@ impl Game<'_> {
     /// with Mending and gives the rest as points. Everyone near hears it.
     fn guest_orbs(&mut self, host: &mut LanHost, gi: usize) {
         let g = &host.hub.guests[gi];
-        // Player's standing and crouching boxes: 1.8 and 1.5 high.
-        let height = if g.sneaking { 1.5 } else { 1.8 };
+        let height = f64::from(g.dimensions().height);
         let (conn, id, at) = (g.conn, g.entity_id, g.position);
         let unable = g.spectator() || g.dead || g.health <= 0.0;
         let play = host.play.entry(conn).or_default();

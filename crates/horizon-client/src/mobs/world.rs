@@ -206,18 +206,24 @@ impl MobWorld<'_> {
         }
         self.world.light(x, y, z) >> 4 == 15
     }
-    /// Level.isRainingAt: raining, open to the sky, nothing motion blocking
-    /// above, and the biome's precipitation at the position is rain, not snow
+    /// Level.precipitationAt: raining, open to the sky, nothing motion
+    /// blocking above, then the biome's precipitation at the position:
+    /// `Some(true)` rain, `Some(false)` snow, `None` nothing.
+    pub fn precipitation_at(&self, x: i32, y: i32, z: i32) -> Option<bool> {
+        if !self.raining || !self.can_see_sky(x, y, z) || self.motion_blocking_height(x, z) > y {
+            return None;
+        }
+        let chunk = self.world.chunks.get(&(x >> 4, z >> 4))?;
+        let biome = self.biomes.get(chunk.biome(x, y, z));
+        if !biome.precipitation {
+            return None;
+        }
+        Some(biome.temperature_at(BlockPos::new(x, y, z), self.sea_level) >= 0.15)
+    }
+    /// Level.isRainingAt: the precipitation at the position is rain, not snow
     /// or none.
     pub fn raining_at(&self, x: i32, y: i32, z: i32) -> bool {
-        if !self.raining || !self.can_see_sky(x, y, z) || self.motion_blocking_height(x, z) > y {
-            return false;
-        }
-        let Some(chunk) = self.world.chunks.get(&(x >> 4, z >> 4)) else {
-            return false;
-        };
-        let biome = self.biomes.get(chunk.biome(x, y, z));
-        biome.precipitation && biome.temperature_at(BlockPos::new(x, y, z), self.sea_level) >= 0.15
+        self.precipitation_at(x, y, z) == Some(true)
     }
     /// Level.getLightLevelDependentMagicValue: the dimension's brightness curve
     /// at the raw (sky darkened) light level.
