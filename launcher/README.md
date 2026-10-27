@@ -108,6 +108,13 @@ The opening, then Play ([clip](docs/opening.webm)):
   through `"$@"` untouched; on Windows `cmd /C` runs `<command> && <game>`. Both the window's Play
   and `play` use them. `horizon-launcher instance launch <instance> [--pre-launch …]
   [--wrapper …] [--env …]` (an MCP agent needs `confirm: true`: it sets commands Play runs).
+  On Linux the panel also has switches for what the computer has: **GameMode** (`gamemoderun`
+  on the PATH), **MangoHud** (`mangohud`), and, with two graphics cards under
+  `/sys/class/drm`, the **dedicated graphics card** (`DRI_PRIME=1`, or NVIDIA's
+  `__NV_PRIME_RENDER_OFFLOAD`, `__VK_LAYER_NV_optimus` and `__GLX_VENDOR_LIBRARY_NAME` when its
+  driver is loaded). A switch whose tool is gone does nothing. `instance launch --gamemode
+  on|off --mangohud on|off --dedicated-gpu on|off`; `HORIZON_LAUNCHER_LINUX_TOOLS` makes any
+  system show them, for tests.
 - **Desktop shortcut**: Home's Instance row has **Shortcut**: a shortcut on the desktop that plays
   the selected instance without opening the launcher (`horizon-launcher play --instance <id>`).
   A `.desktop` file on Linux (also put in the applications menu, and marked trusted with `gio`

@@ -29,6 +29,118 @@ pub struct Launch {
     /// Environment variables for the game (and the two commands above).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
+    /// Linux: run the game through Feral's GameMode (`gamemoderun`), when it is installed.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub gamemode: bool,
+    /// Linux: MangoHud's overlay (`mangohud`), when it is installed.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub mangohud: bool,
+    /// Linux: the dedicated graphics card of a computer with two (PRIME render offload).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dedicated_gpu: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// What this Linux computer has for the three switches. Elsewhere, nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Found {
+    pub gamemode: bool,
+    pub mangohud: bool,
+    /// More than one graphics card.
+    pub two_gpus: bool,
+    /// NVIDIA's own driver is loaded: offload asks for it, not Mesa.
+    pub nvidia: bool,
+}
+
+/// `HORIZON_LAUNCHER_LINUX_TOOLS=gamemode,mangohud,gpu,nvidia`: what [`Found::here`] says is
+/// installed, on any system (for tests and screenshots).
+pub const TOOLS_ENV: &str = "HORIZON_LAUNCHER_LINUX_TOOLS";
+
+fn on_path(program: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path).any(|dir| {
+            let file = dir.join(program);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                file.metadata()
+                    .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            }
+            #[cfg(not(unix))]
+            file.is_file()
+        })
+    })
+}
+
+impl Found {
+    /// What is installed here: on Linux, `gamemoderun` and `mangohud` on the PATH, the cards
+    /// under `/sys/class/drm`, and `/proc/driver/nvidia`.
+    pub fn here() -> Found {
+        if let Some(list) = std::env::var_os(TOOLS_ENV) {
+            let list = list.to_string_lossy();
+            let has = |n: &str| list.split(',').any(|w| w.trim() == n);
+            return Found {
+                gamemode: has("gamemode"),
+                mangohud: has("mangohud"),
+                two_gpus: has("gpu"),
+                nvidia: has("nvidia"),
+            };
+        }
+        if !cfg!(target_os = "linux") {
+            return Found::default();
+        }
+        let cards = std::fs::read_dir("/sys/class/drm")
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                name.strip_prefix("card")
+                    .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+            })
+            .count();
+        Found {
+            gamemode: on_path("gamemoderun"),
+            mangohud: on_path("mangohud"),
+            two_gpus: cards >= 2,
+            nvidia: std::path::Path::new("/proc/driver/nvidia/gpus").is_dir(),
+        }
+    }
+
+    /// Whether any switch can be shown.
+    pub fn any(&self) -> bool {
+        self.gamemode || self.mangohud || self.two_gpus
+    }
+}
+
+/// The programs the switches put before the game (and the player's wrapper), outermost first.
+fn switch_programs(launch: &Launch, found: &Found) -> Vec<OsString> {
+    let mut out = Vec::new();
+    if launch.gamemode && found.gamemode {
+        out.push("gamemoderun".into());
+    }
+    if launch.mangohud && found.mangohud {
+        out.push("mangohud".into());
+    }
+    out
+}
+
+/// The variables the dedicated GPU switch sets: NVIDIA's offload variables with its driver,
+/// else Mesa's `DRI_PRIME`. The player's own variables come after and win.
+pub fn switch_env(launch: &Launch, found: &Found) -> Vec<(&'static str, &'static str)> {
+    match (launch.dedicated_gpu && found.two_gpus, found.nvidia) {
+        (false, _) => vec![],
+        (true, true) => vec![
+            ("__NV_PRIME_RENDER_OFFLOAD", "1"),
+            ("__VK_LAYER_NV_optimus", "NVIDIA_only"),
+            ("__GLX_VENDOR_LIBRARY_NAME", "nvidia"),
+        ],
+        (true, false) => vec![("DRI_PRIME", "1")],
+    }
 }
 
 impl Launch {
@@ -44,6 +156,15 @@ impl Launch {
         }
         if !self.wrapper.trim().is_empty() {
             parts.push(format!("through {}", self.wrapper.trim()));
+        }
+        if self.gamemode {
+            parts.push("with GameMode".into());
+        }
+        if self.mangohud {
+            parts.push("with MangoHud".into());
+        }
+        if self.dedicated_gpu {
+            parts.push("on the dedicated GPU".into());
         }
         match self.env.len() {
             0 => {}
@@ -144,12 +265,11 @@ pub enum Plan {
     Cmd { line: String },
 }
 
-/// The plan for `words` (the game's program and arguments) with `launch`, on Windows or not.
-pub fn plan(launch: &Launch, words: Vec<OsString>, windows: bool) -> Plan {
-    let mut all: Vec<OsString> = split_args(&launch.wrapper)
-        .into_iter()
-        .map(OsString::from)
-        .collect();
+/// The plan for `words` (the game's program and arguments) with `launch`, on Windows or not,
+/// with what the computer has for the switches.
+pub fn plan(launch: &Launch, words: Vec<OsString>, windows: bool, found: &Found) -> Plan {
+    let mut all = switch_programs(launch, found);
+    all.extend(split_args(&launch.wrapper).into_iter().map(OsString::from));
     all.extend(words);
     let pre = launch.pre_launch.trim();
     match (pre.is_empty(), windows) {
@@ -179,7 +299,12 @@ pub fn wrap(cmd: Command, launch: &Launch) -> Command {
     let words: Vec<OsString> = std::iter::once(cmd.get_program().to_owned())
         .chain(cmd.get_args().map(OsStr::to_owned))
         .collect();
-    let mut out = match plan(launch, words, cfg!(windows)) {
+    // The override only shows the switches: they act on Linux.
+    let found = match cfg!(target_os = "linux") {
+        true => Found::here(),
+        false => Found::default(),
+    };
+    let mut out = match plan(launch, words, cfg!(windows), &found) {
         Plan::Direct(words) => {
             let mut c = Command::new(&words[0]);
             c.args(&words[1..]);
@@ -211,6 +336,7 @@ pub fn wrap(cmd: Command, launch: &Launch) -> Command {
             None => out.env_remove(key),
         };
     }
+    out.envs(switch_env(launch, &found));
     out.envs(&launch.env);
     out
 }

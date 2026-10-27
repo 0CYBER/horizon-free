@@ -29,6 +29,7 @@ fn a_summary_says_what_runs() {
         pre_launch: "./sync.sh".into(),
         wrapper: "nice -n 5".into(),
         env: parse_env("A=1 B=2").unwrap(),
+        ..Launch::default()
     };
     assert_eq!(
         launch.summary().unwrap(),
@@ -44,7 +45,7 @@ fn each_system_gets_its_plan() {
         ..Launch::default()
     };
     assert_eq!(
-        plan(&wrapper, game.clone(), false),
+        plan(&wrapper, game.clone(), false, &Found::default()),
         Plan::Direct(os(&[
             "nice",
             "-n",
@@ -58,7 +59,7 @@ fn each_system_gets_its_plan() {
         pre_launch: "echo hi".into(),
         ..wrapper.clone()
     };
-    let Plan::Shell { script, words } = plan(&both, game.clone(), false) else {
+    let Plan::Shell { script, words } = plan(&both, game.clone(), false, &Found::default()) else {
         panic!()
     };
     assert!(script.starts_with("(\necho hi\n) || "));
@@ -68,7 +69,8 @@ fn each_system_gets_its_plan() {
         plan(
             &both,
             os(&[r"C:\Horizon\horizon-client.exe", "--world", "My World"]),
-            true
+            true,
+            &Found::default()
         ),
         Plan::Cmd {
             line: r#"echo hi && nice -n 5 C:\Horizon\horizon-client.exe --world "My World""#.into()
@@ -116,6 +118,7 @@ fn the_wrapped_game_runs_after_its_pre_launch_command_in_its_folder() {
         pre_launch: "echo ran > pre.txt".into(),
         wrapper: "/usr/bin/env WRAPPED=1".into(),
         env: parse_env("FROM_INSTANCE=\"it works\"").unwrap(),
+        ..Launch::default()
     };
     let out = wrap(game, &launch).output().unwrap();
     assert!(out.status.success(), "{out:?}");
@@ -140,4 +143,53 @@ fn the_wrapped_game_runs_after_its_pre_launch_command_in_its_folder() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("pre-launch command failed (exit 3)"));
     assert!(!dir.join("started.txt").exists());
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn the_linux_switches_act_only_where_their_tools_are() {
+    let all = Found {
+        gamemode: true,
+        mangohud: true,
+        two_gpus: true,
+        nvidia: false,
+    };
+    let launch = Launch {
+        wrapper: "nice".into(),
+        gamemode: true,
+        mangohud: true,
+        dedicated_gpu: true,
+        ..Launch::default()
+    };
+    assert_eq!(
+        plan(&launch, os(&["game"]), false, &all),
+        Plan::Direct(os(&["gamemoderun", "mangohud", "nice", "game"]))
+    );
+    assert_eq!(switch_env(&launch, &all), [("DRI_PRIME", "1")]);
+    let nvidia = Found {
+        nvidia: true,
+        ..all
+    };
+    assert_eq!(
+        switch_env(&launch, &nvidia),
+        [
+            ("__NV_PRIME_RENDER_OFFLOAD", "1"),
+            ("__VK_LAYER_NV_optimus", "NVIDIA_only"),
+            ("__GLX_VENDOR_LIBRARY_NAME", "nvidia")
+        ]
+    );
+    // Not installed (or not Linux): switched on, but nothing is added.
+    let none = Found::default();
+    assert_eq!(
+        plan(&launch, os(&["game"]), false, &none),
+        Plan::Direct(os(&["nice", "game"]))
+    );
+    assert!(switch_env(&launch, &none).is_empty());
+    assert!(!none.any() && all.any());
+    assert_eq!(
+        launch.summary().unwrap(),
+        "through nice, with GameMode, with MangoHud, on the dedicated GPU"
+    );
+    // Off switches aren't written.
+    let text = serde_json::to_string(&Launch::default()).unwrap();
+    assert_eq!(text, "{}");
 }
