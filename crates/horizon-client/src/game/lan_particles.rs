@@ -318,6 +318,67 @@ impl Game<'_> {
         }
     }
 
+    /// `ServerLevel.sendParticles` for the players a server serves: one
+    /// `ClientboundLevelParticlesPacket` to each player in the level whose
+    /// block is within 32 blocks of `at`. The window's own player is not
+    /// sent it (the caller draws it in this window). While the host holds
+    /// the players (a guest's turn through `as_guest`, a host's hit on a
+    /// guest) the packet waits for the turn to end so that it reaches every
+    /// player, the guest too.
+    pub(super) fn lan_send_particles(
+        &mut self,
+        options: &ParticleOptions,
+        at: [f64; 3],
+        spread: [f64; 3],
+        speed: f64,
+        count: u32,
+    ) {
+        if self.lan.is_none() {
+            // The server is running (its sounds are captured for the guests).
+            if self.audio.capture.is_some() {
+                self.creatures
+                    .lan_particles
+                    .push((options.clone(), at, spread, speed, count));
+            }
+            return;
+        }
+        let Some(particle) = self.network_particle(options, None) else {
+            return;
+        };
+        let Some(host) = self.lan.as_ref() else {
+            return;
+        };
+        let body = C::LevelParticles(play::LevelParticles {
+            particle,
+            override_limiter: false,
+            always_show: false,
+            pos: at,
+            dist: spread.map(|d| d as f32),
+            max_speed: [speed as f32; 3],
+            count: count as i32,
+            randomization: 0,
+        })
+        .encode();
+        for g in host.hub.guests.iter().filter(|g| host.hub.here(g)) {
+            // BlockPos.closerToCenterThan(at, 32): from the centre of the
+            // player's block.
+            let d: f64 = (0..3)
+                .map(|k| (g.position[k].floor() + 0.5 - at[k]).powi(2))
+                .sum();
+            if d < 32.0 * 32.0 {
+                g.sender.send(body.clone());
+            }
+        }
+    }
+
+    /// The particles guests' turns put off.
+    pub(super) fn flush_lan_particles(&mut self) {
+        for (options, at, spread, speed, count) in std::mem::take(&mut self.creatures.lan_particles)
+        {
+            self.lan_send_particles(&options, at, spread, speed, count);
+        }
+    }
+
     /// `ServerLevel.explode`'s packet to each player within 64 blocks. The
     /// sound and the push reach them on their own (the level's sounds, the
     /// motion a hurt player is sent), so the packet carries neither.

@@ -1196,6 +1196,8 @@ impl Game<'_> {
         // A blast from a guest's attack, and a mace's wind burst.
         self.flush_lan_explosions();
         let _ = self.flush_wind_bursts();
+        // Particles a guest's turn sent (sweep attack, damage indicator, a hook's splashes).
+        self.flush_lan_particles();
     }
 
     fn lan_guest_joined(
