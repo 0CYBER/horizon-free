@@ -245,6 +245,7 @@ impl Game<'_> {
                 1.0,
             );
         }
+        self.particles.particle_level = self.settings.particles;
         if let Some(e) = eye {
             self.particles.camera = e;
         }
@@ -295,7 +296,8 @@ impl Game<'_> {
                 let mut random = LegacyRandom::new(self.world.game_time.wrapping_mul(312_987_231));
                 let radius = self.settings.weather_radius;
                 let diameter = 2 * radius + 1;
-                let count = (0.225 * (diameter * diameter) as f32 * rain * rain) as i32;
+                let count = (0.225 * (diameter * diameter) as f32 * rain * rain) as i32
+                    / if self.settings.particles == 1 { 2 } else { 1 };
                 let mut rain_position = None;
                 for _ in 0..count {
                     let x = block[0] + random.next_int_bound(diameter).unwrap_or(0) - radius;
@@ -310,6 +312,11 @@ impl Game<'_> {
                     }
                     let below = top - 1;
                     rain_position = Some([x, below, z]);
+                    // The Minimal option stops at the first spot that rains (the
+                    // rain sound still plays there).
+                    if self.settings.particles >= 2 {
+                        break;
+                    }
                     let (bx, bz) = (random.next_double(), random.next_double());
                     let state = world.block(x, below, z);
                     let f = facts.get(state);

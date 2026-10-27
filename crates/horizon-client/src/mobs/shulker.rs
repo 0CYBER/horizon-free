@@ -325,6 +325,13 @@ pub fn look_yaw(m: &Mob, at: [f64; 3]) -> Option<f32> {
         f64::from(delta_forward),
     ))
 }
+/// `Shulker.tick` on a client that is not the server: the lid eases to the
+/// peek it was sent, and its body stays square (`ShulkerBodyRotationControl`).
+pub fn client_tick(m: &mut Mob) {
+    m.anim.vo = m.anim.v;
+    ease_peek(m);
+    m.body_yaw = 0.0;
+}
 /// `Shulker.hurtServer` before the damage: arrows bounce off a closed shell.
 pub fn accepts(m: &Mob, source: &Damage) -> bool {
     !(m.extra.counter == 0 && source.kind == DamageKind::Arrow)

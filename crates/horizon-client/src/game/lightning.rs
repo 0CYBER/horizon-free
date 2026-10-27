@@ -16,7 +16,7 @@ pub(super) struct Bolt {
     flashes: i32,
     seed: i64,
     visual_only: bool,
-    /// Mooshrooms switch colour once per bolt.
+    /// Mooshrooms and copper golems change once per bolt.
     converted: Vec<u32>,
 }
 impl Game<'_> {
@@ -278,6 +278,13 @@ impl Game<'_> {
                     }
                     self.strike_rod(b.at);
                 }
+                // LightningBolt.tick runs clearCopperOnLightningStrike for
+                // every server bolt, a skeleton trap's visual one included;
+                // a client's copy of a server bolt (spawn_remote_bolt) only
+                // flashes.
+                if self.remote.is_none() {
+                    self.bolt_clear_copper(b.at);
+                }
             }
             b.life -= 1;
             if b.life < 0 {
@@ -333,6 +340,16 @@ impl Game<'_> {
             };
             self.level_event_at(3002, p, axis);
         }
+    }
+    /// `LightningBolt.clearCopperOnLightningStrike` at the block the bolt struck.
+    fn bolt_clear_copper(&mut self, at: [f64; 3]) {
+        let p = BlockPos::new(
+            at[0].floor() as i32,
+            (at[1] - 1.0e-6).floor() as i32,
+            at[2].floor() as i32,
+        );
+        self.with_level(|b, level, ticks| b.lightning_clear_copper(level, ticks, p));
+        let _ = self.process_level_events();
     }
     /// `thunderHit` for entities within 3 blocks (up to 9 above).
     fn thunder_hit(&mut self, b: &mut Bolt) {
@@ -393,6 +410,17 @@ impl Game<'_> {
                     continue;
                 }
                 Species::Creeper => m.extra.charged = true,
+                // CopperGolem.thunderHit (after Entity.thunderHit's fire and
+                // damage): once per bolt, an oxidized golem goes back one step
+                // and its weathering timer (or wax, -2) is reset to -1.
+                Species::CopperGolem if !b.converted.contains(&m.id) => {
+                    b.converted.push(m.id);
+                    if m.extra.variant > 0 {
+                        m.extra.vector[0] = -1.0;
+                        m.extra.variant =
+                            horizon_client::mobs::copper_golem::weather_previous(m.extra.variant);
+                    }
+                }
                 _ => {}
             }
             // Entity.thunderHit: burning (8 seconds) and 5 lightning damage.

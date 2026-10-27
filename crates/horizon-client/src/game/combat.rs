@@ -45,6 +45,10 @@ pub(super) struct CombatTracker {
     /// The mob exploding now (`ServerExplosion.source`): its team's friendly
     /// fire decides whom the blast may hurt.
     pub(super) explosion_source: Option<u32>,
+    /// The blast now going off comes from a primed TNT, creeper, wither
+    /// skull, wither or TNT minecart, the sources that empty a hive they
+    /// destroy (`BeehiveBlock.getDrops`).
+    pub(super) hive_emptying_blast: bool,
     /// Charged creepers whose blast just went off and that have not dropped
     /// a head yet (`Creeper.droppedSkulls`): they are gone from the mob list,
     /// but the mobs they killed still ask for their loot.
@@ -131,6 +135,19 @@ impl Game<'_> {
         self.recheck_combat();
         for e in events {
             let (name, amount) = match e {
+                // LivingEntity.getDamageAfterMagicAbsorb (Resistance) and
+                // Player.actuallyHurt (absorption hearts) and
+                // LivingEntity.hurtServer (the shield, only for an accepted
+                // hit), in tenths.
+                MotionEvent::Health(HealthEvent::Statistic { name, amount }) => {
+                    match *name {
+                        "resisted" => self.stats.custom("damage_resisted", *amount),
+                        "absorbed" => self.stats.custom("damage_absorbed", *amount),
+                        "blocked" => self.stats.custom("damage_blocked_by_shield", *amount),
+                        _ => {}
+                    }
+                    continue;
+                }
                 MotionEvent::Health(HealthEvent::RecordedDamage { source, amount }) => {
                     let Some(d) = self.motion.health.damage.definition(*source) else {
                         continue;
