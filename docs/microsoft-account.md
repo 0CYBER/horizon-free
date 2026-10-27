@@ -77,6 +77,11 @@ possible; the launcher just doesn't offer it on its own.
   again for each account, the selected one first, until one owns the game: the token renewal
   (below) if due, then entitlements and profile. Without an owner the game doesn't start and Play
   says "Sign in with a Microsoft account that owns Minecraft: Java Edition to play", with Sign in.
+- **The window says it once.** A player without an owner (one who played offline until now) sees
+  the gate's screen once when the launcher opens: why Horizon needs the account ("like other
+  launchers"), that worlds, offline names and settings stay where they are, and Sign in, which shows
+  the device code on the same screen. It comes back whenever Play is refused; Not now closes it,
+  and Home keeps a Sign in row (`launcher/src/owner_page.rs`).
 - **The answer lives with the tokens.** Each account's keychain item keeps the last answer
   (`owns`), so no plain file can say yes. With no network (or a sign-in that can't be renewed) the
   last answer stands: being offline never blocks a player who passed before, and the game starts

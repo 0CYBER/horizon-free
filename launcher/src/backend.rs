@@ -2625,6 +2625,10 @@ pub struct Settings {
     /// first-run question, or on the Play page once if they answered that before it existed.
     #[serde(default)]
     pub ping_notice_seen: bool,
+    /// The player without an account that owns the game has read, once, why the launcher needs
+    /// one now (the owner gate's screen).
+    #[serde(default)]
+    pub owner_notice_seen: bool,
     /// Seconds the sidebar's partner banner has been on screen, over every start, up to
     /// `partner::SEEN_BEFORE_HIDE`: only then can the player hide it.
     #[serde(default)]
