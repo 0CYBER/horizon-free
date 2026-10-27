@@ -65,6 +65,11 @@ pub fn split(buffer: &mut Vec<u8>) -> Result<Option<Vec<u8>>> {
         };
         len |= usize::from(b & 0x7F) << (7 * i);
         if b & 0x80 == 0 {
+            if len == 0 {
+                // Varint21FrameDecoder: a frame with no bytes is a
+                // corrupted frame, not an empty packet.
+                return Err(Error::new("Frame length cannot be zero"));
+            }
             let start = i + 1;
             if buffer.len() < start + len {
                 return Ok(None);
