@@ -651,14 +651,17 @@ fn sounds_in(resources: &Path) -> bool {
 
 /// What the Play page says of a version's resources.
 pub fn resources_summary(prepared: bool, sounds: bool, version: &str) -> String {
+    use crate::i18n::trf;
     match (prepared, sounds) {
-        (false, _) => {
-            format!("Not prepared. Horizon needs the files of your own Minecraft {version}.")
-        }
-        (true, true) => format!("Prepared for Minecraft {version}"),
-        (true, false) => format!(
+        (false, _) => trf(
+            "Not prepared. Horizon needs the files of your own Minecraft {version}.",
+            &[("version", version)],
+        ),
+        (true, true) => trf("Prepared for Minecraft {version}", &[("version", version)]),
+        (true, false) => trf(
             "Prepared for Minecraft {version}, without its sounds: the game will be silent. \
-             Prepare again to copy them from your Minecraft install."
+             Prepare again to copy them from your Minecraft install.",
+            &[("version", version)],
         ),
     }
 }
