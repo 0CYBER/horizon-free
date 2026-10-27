@@ -34,6 +34,8 @@ pub fn placement_ok(species: Species, w: &MobWorld, x: i32, y: i32, z: i32) -> b
 /// `DifficultyInstance`: the local difficulty at a position.
 #[derive(Clone, Copy, Debug)]
 pub struct LocalDifficulty {
+    /// The world difficulty id, 0 peaceful to 3 hard.
+    pub base: u8,
     pub effective: f32,
     /// The world difficulty is normal.
     pub normal: bool,
@@ -52,6 +54,7 @@ impl LocalDifficulty {
         let normal = base == 2;
         if base == 0 {
             return Self {
+                base,
                 effective: 0.0,
                 normal,
                 hard,
@@ -66,6 +69,7 @@ impl LocalDifficulty {
             local *= 0.5;
         }
         Self {
+            base,
             effective: f32::from(base) * (0.75 + global + local),
             normal,
             hard,

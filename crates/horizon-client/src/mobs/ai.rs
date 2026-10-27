@@ -1556,17 +1556,26 @@ pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
     let from = [m.position.x, m.position.y, m.position.z];
     let source = Damage::mob(m.id, from);
     match m.species() {
-        // Difficulty NORMAL: cave spiders poison for 7 seconds.
-        Species::CaveSpider if who == Who::Player => cx.events.push(MobEvent::EffectPlayer {
-            effect: "minecraft:poison",
-            ticks: 7 * 20,
-            amplifier: 0,
-        }),
-        Species::Husk if who == Who::Player => cx.events.push(MobEvent::EffectPlayer {
-            effect: "minecraft:hunger",
-            ticks: 140,
-            amplifier: 0,
-        }),
+        // CaveSpider.doHurtTarget: poison for 7 s on normal, 15 s on hard.
+        Species::CaveSpider if who == Who::Player && cx.w.difficulty.base >= 2 => {
+            cx.events.push(MobEvent::EffectPlayer {
+                effect: "minecraft:poison",
+                ticks: if cx.w.difficulty.base == 2 { 7 } else { 15 } * 20,
+                amplifier: 0,
+            })
+        }
+        // Husk.doHurtTarget: hunger for 140 ticks per whole point of the
+        // local difficulty, only with an empty main hand.
+        Species::Husk if who == Who::Player && m.extra.main_hand.is_none() => {
+            let ticks = 140 * cx.w.difficulty.effective as i32;
+            if ticks > 0 {
+                cx.events.push(MobEvent::EffectPlayer {
+                    effect: "minecraft:hunger",
+                    ticks,
+                    amplifier: 0,
+                })
+            }
+        }
         Species::WitherSkeleton if who == Who::Player => cx.events.push(MobEvent::EffectPlayer {
             effect: "minecraft:wither",
             ticks: 200,

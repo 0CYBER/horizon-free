@@ -1676,7 +1676,8 @@ pub struct MobWorld<'a> {
     pub mob_griefing: bool,
     /// The `mob_drops` game rule (`shouldDropLoot`).
     pub mob_drops: bool,
-    /// `getCurrentDifficultyAt` near the player.
+    /// `getCurrentDifficultyAt` at the mob being ticked (near the player
+    /// outside the mob tick).
     pub difficulty: spawning::LocalDifficulty,
     /// The End (its dimension type's monster spawn light rules).
     pub end: bool,

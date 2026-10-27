@@ -587,6 +587,9 @@ impl Game<'_> {
                     ..base.clone()
                 };
                 let m = &mut mobs[i];
+                // getCurrentDifficultyAt(blockPosition()): the mob's own chunk,
+                // not the local player's (a server thread has no player).
+                w.difficulty = self.local_difficulty([m.position.x, m.position.y, m.position.z]);
                 w.nearest_player = super::natural_spawning::nearest_player(
                     &players,
                     m.position.x,
