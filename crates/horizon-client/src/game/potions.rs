@@ -553,7 +553,12 @@ impl Game<'_> {
             self.drink_ominous_bottle(slot, stack);
             return true;
         }
-        let (lasting, now) = PlayerEffects::potion_effects(stack.potion(), 1.0);
+        // PotionContents.onConsume: the potion's and the custom effects, at the
+        // stack's POTION_DURATION_SCALE.
+        let (lasting, now) = PlayerEffects::contents_effects(
+            &brewing::contents_effects(stack),
+            stack.potion_duration_scale(),
+        );
         for e in lasting {
             self.add_player_effect(e);
         }
