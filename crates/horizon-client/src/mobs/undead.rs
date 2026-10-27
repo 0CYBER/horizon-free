@@ -563,7 +563,12 @@ pub fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
         return zombified_piglin_step(m, cx);
     }
     if matches!(m.species(), Species::Zombie | Species::Husk) && m.alive() {
-        if m.extra.counter2 > 0 {
+        if m.extra.counter2 > 0 && !m.fluids.eye_in_water {
+            // ConversionTracker.tick: leaving the water ends a started
+            // conversion too.
+            m.extra.counter = -1;
+            m.extra.counter2 = 0;
+        } else if m.extra.counter2 > 0 {
             m.extra.counter2 -= 1;
             if m.extra.counter2 == 0 {
                 let (kind, sound) = if m.species() == Species::Husk {
