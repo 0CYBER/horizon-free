@@ -67,35 +67,27 @@ impl Game<'_> {
             pitch,
         );
     }
-    /// `Entity.baseTick`: a burning player in the rain (`isInRain`) has the
-    /// fire put out (`clearFire`). Returns whether it did.
-    pub(super) fn rain_extinguish_player(&mut self) -> bool {
+    /// `Entity.applyEffectsFromBlocks`: a burning player in the rain
+    /// (`isInRain`) has the fire put out (`clearFire`), with the extinguish
+    /// sound that everyone near hears.
+    pub(super) fn rain_extinguish_player(&mut self) {
         let Some(player) = self.player.as_ref() else {
-            return false;
+            return;
         };
         let (at, top) = (player.position, player.bounds().max_position().y);
         if player.fire_ticks <= 0 || !self.in_rain(at, top) {
-            return false;
+            return;
         }
         if let Some(player) = self.player.as_mut() {
             player.fire_ticks = 0;
         }
-        true
+        self.extinguish_sound([at.x, at.y, at.z]);
     }
-    /// The in-window player's rain extinguish, with its sound (a server's
-    /// fire is the server's).
+    /// The in-window player's rain extinguish (a server's player has its
+    /// fire put out by the server).
     pub(super) fn rain_extinguish_in_frame(&mut self) {
-        if self.remote.is_some() {
-            return;
-        }
-        let at = self
-            .player
-            .as_ref()
-            .map(|p| [p.position.x, p.position.y, p.position.z]);
-        if self.rain_extinguish_player()
-            && let Some(at) = at
-        {
-            self.extinguish_sound(at);
+        if self.remote.is_none() {
+            self.rain_extinguish_player();
         }
     }
     /// Whether the block at `pos` is powder snow.
