@@ -121,7 +121,7 @@ impl Game<'_> {
     }
     /// `WitherSkull.onHitEntity` / `onHit`: 8 damage (healing the wither 5
     /// when it kills), withering on a hit (10 seconds on Normal, 40 on Hard,
-/// none on Easy), then a power 1 blast.
+    /// none on Easy), then a power 1 blast.
     pub(super) fn wither_skull_hit(
         &mut self,
         p: &Projectile,
