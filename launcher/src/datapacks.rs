@@ -151,6 +151,82 @@ pub fn remove(world: &Path, pack: &DataPack) -> Result<(), String> {
     forget(world, &pack.file)
 }
 
+/// What of a data pack the game reads today (its `DataStore`): `data/<namespace>/<kind>/`.
+pub const READ: [&str; 4] = ["function", "function tag", "predicate", "item_modifier"];
+
+/// A data pack's files by kind (`function`, `worldgen`, `item tag`...), with how many each.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Coverage {
+    /// What Horizon runs.
+    pub read: Vec<(String, usize)>,
+    /// What it doesn't read yet.
+    pub unread: Vec<(String, usize)>,
+}
+
+impl Coverage {
+    /// "Runs its 12 functions, 1 predicate. Not read yet: 40 worldgen, 3 recipes."
+    pub fn summary(&self) -> String {
+        let runs = match self.read.is_empty() {
+            true => "Nothing in it runs in Horizon yet.".to_string(),
+            false => format!("Runs its {}.", counts(&self.read)),
+        };
+        match self.unread.is_empty() {
+            true => runs,
+            false => format!("{runs} Not read yet: {}.", self.not_read()),
+        }
+    }
+
+    /// "1077 worldgen, 653 loot tables, 16 recipes": what Horizon doesn't read yet, the six
+    /// biggest kinds and how many other kinds.
+    pub fn not_read(&self) -> String {
+        let mut biggest = self.unread.clone();
+        biggest.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+        let others = biggest.len().saturating_sub(6);
+        biggest.truncate(6);
+        match others {
+            0 => counts(&biggest),
+            1 => format!("{} and 1 other kind", counts(&biggest)),
+            n => format!("{} and {n} other kinds", counts(&biggest)),
+        }
+    }
+}
+
+fn counts(list: &[(String, usize)]) -> String {
+    list.iter()
+        .map(|(k, n)| {
+            let k = k.replace('_', " ");
+            match *n == 1 || k == "worldgen" {
+                true => format!("{n} {k}"),
+                false => format!("{n} {k}s"),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Counts a data pack zip's files by kind, and splits them into what the game reads and what
+/// it doesn't yet.
+pub fn coverage(file: &Path) -> Result<Coverage, String> {
+    let zip = fs::File::open(file)
+        .ok()
+        .and_then(|f| zip::ZipArchive::new(f).ok())
+        .ok_or_else(|| format!("{} is not a zip file that can be read.", file.display()))?;
+    let mut kinds = std::collections::BTreeMap::<String, usize>::new();
+    for name in zip.file_names().filter(|n| !n.ends_with('/')) {
+        let parts: Vec<&str> = name.split('/').collect();
+        let kind = match parts.as_slice() {
+            ["data", _, "tags", tag, _, ..] => format!("{tag} tag"),
+            ["data", _, kind, _, ..] => kind.to_string(),
+            _ => continue,
+        };
+        *kinds.entry(kind).or_default() += 1;
+    }
+    let (read, unread) = kinds
+        .into_iter()
+        .partition(|(k, _)| READ.contains(&k.as_str()));
+    Ok(Coverage { read, unread })
+}
+
 #[cfg(test)]
 #[path = "datapacks/tests.rs"]
 mod tests;

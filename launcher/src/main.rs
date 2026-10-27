@@ -66,7 +66,7 @@ impl Page {
     /// `settings`) opens on that page, for screenshots; Home otherwise.
     fn from_env() -> Page {
         match std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() {
-            Ok("mods" | "modpacks" | "shaders") => Page::Mods,
+            Ok("mods" | "modpacks" | "shaders" | "datapacks") => Page::Mods,
             Ok("servers") => Page::Servers,
             Ok("versions") => Page::Versions,
             Ok("notes") => Page::Notes,
