@@ -133,6 +133,11 @@ pub fn ai_step(m: &mut Mob) {
     if m.extra.egg_time > 0 {
         m.extra.egg_time -= 1;
     }
+    animate(m);
+}
+/// `Allay.tick`'s client half: the hold and spin clocks (the server's and a
+/// client's).
+pub fn animate(m: &mut Mob) {
     let holding = m.extra.main_hand.is_some();
     let v = &mut m.anim.v;
     v[HOLD] = (v[HOLD] + if holding { 1.0 } else { -1.0 }).clamp(0.0, 5.0);

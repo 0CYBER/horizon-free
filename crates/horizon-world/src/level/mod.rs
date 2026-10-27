@@ -137,7 +137,7 @@ mod tests;
 pub use buckets::BucketContent;
 pub use data::{BlockData, ItemBinding, ItemKind, Named, Props, PushReaction, StateFacts, Tags};
 pub use falling::Landing;
-pub use interact::{InteractionResult, PlayerContext, PlayerEffect};
+pub use interact::{InteractionResult, PlayerContext, PlayerEffect, hit_slot};
 pub use pistons::{BlockEventData, MovingPiston};
 pub use place::{PlaceContext, PlaceOutcome};
 pub use states::{BlockId, PropKey, StateTable};
@@ -652,6 +652,20 @@ impl Behaviours {
         creative: bool,
     ) -> bool {
         self.sim(level, ticks).player_destroy(pos, creative)
+    }
+    /// `IceBlock.playerDestroy` after the drops: mined ice melts into water
+    /// unless the tool prevents ice melting (silk touch). `destroyed` is the
+    /// state that was broken.
+    pub fn ice_destroyed_by_player<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        destroyed: BlockStateId,
+        prevents_melting: bool,
+    ) {
+        self.sim(level, ticks)
+            .ice_destroyed_by_player(pos, destroyed, prevents_melting);
     }
     /// `BaseFireBlock.getState(level, pos)`: soul fire on its base blocks,
     /// otherwise fire shaped by its neighbours.
