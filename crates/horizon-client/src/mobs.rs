@@ -650,6 +650,9 @@ pub struct Attrs {
 pub struct Extra {
     /// Players: crouching and riding (HumanoidModel's poses).
     pub crouching: bool,
+    /// A player's or mannequin's synced pose (`Entity.DATA_POSE`), which
+    /// sets its box (`Avatar.POSES`).
+    pub avatar_pose: crate::pose::Pose,
     /// Players: sprinting (`Entity.DATA_SHARED_FLAGS_ID`), for the dust they raise.
     pub sprinting: bool,
     pub passenger: bool,

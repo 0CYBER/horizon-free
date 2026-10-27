@@ -288,6 +288,8 @@ pub struct PlayerMotion {
     pub pitch: f32,
     /// Gliding (shared flag 7) and LivingEntity.fallFlyTicks.
     pub fall_flying: bool,
+    /// Asleep in a bed (`LivingEntity.isSleeping`): the sleeping pose.
+    pub sleeping: bool,
     pub fall_fly_ticks: i32,
     /// The server saw the glide end last tick (`updateFallFlying`'s `canGlide`
     /// failed): the cleared flag reaches the client at its next tick.
@@ -488,6 +490,7 @@ impl PlayerMotion {
             glider: false,
             pitch: 0.0,
             fall_flying: false,
+            sleeping: false,
             fall_fly_ticks: 0,
             glide_ending: false,
             glider_wear: 0,

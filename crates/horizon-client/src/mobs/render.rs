@@ -765,7 +765,14 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
     let rotation = match sleep {
         // setupRotations for Pose.SLEEPING, with the head moved toward the pillow.
         Some((angle, step)) => {
-            let head = (m.eye_y() - m.position.y) as f32 - 0.1;
+            // The eye height of the standing pose (LivingEntityRenderer
+            // extracts `getEyeHeight(Pose.STANDING)` for a bed).
+            let eye = if avatar(m) {
+                m.kind.eye_height as f32
+            } else {
+                (m.eye_y() - m.position.y) as f32
+            };
+            let head = eye - 0.1;
             glam::Mat4::from_translation(glam::Vec3::new(-step[0] * head, 0.0, -step[1] * head))
                 * glam::Mat4::from_rotation_y(angle.to_radians())
                 * glam::Mat4::from_rotation_z(90.0_f32.to_radians())
