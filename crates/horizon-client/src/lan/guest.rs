@@ -614,6 +614,21 @@ fn network_stack(
             ));
         }
         stack.added.extend(firework_components(d));
+        // The compass's lodestone target.
+        if let Some(t) = d.other("minecraft:lodestone_tracker") {
+            let target = t.get("target").and_then(|g| {
+                let Some(horizon_world::nbt::Tag::IntArray(pos)) = g.get("pos") else {
+                    return None;
+                };
+                let dimension = crate::save::text(g.get("dimension"))?;
+                Some((dimension, [*pos.first()?, *pos.get(1)?, *pos.get(2)?]))
+            });
+            let tracked = crate::save::number(t.get("tracked")).is_none_or(|v| v != 0);
+            stack.added.push((
+                horizon_protocol::item::component::LODESTONE_TRACKER,
+                horizon_protocol::item::Component::LodestoneTracker { target, tracked },
+            ));
+        }
         // PotionContents: the potion by its `minecraft:potion` id.
         if let Some(id) = (d.potion.as_deref()).and_then(|potion| {
             synced_id(
@@ -669,11 +684,14 @@ fn network_stack(
                         title: w.title.clone(),
                         author: w.author.clone(),
                         generation: i32::from(w.generation),
-                        pages: w
-                            .pages
-                            .iter()
-                            .map(|p| horizon_protocol::text::literal(p))
-                            .collect(),
+                        pages: if w.page_tags.len() == w.pages.len() {
+                            w.page_tags.clone()
+                        } else {
+                            w.pages
+                                .iter()
+                                .map(|p| horizon_protocol::text::literal(p))
+                                .collect()
+                        },
                         resolved: true,
                     },
                 ),

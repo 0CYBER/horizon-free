@@ -568,6 +568,22 @@ impl Game<'_> {
                 "generate_structures": options.structures,
                 "bonus_chest": options.bonus_chest(),
             }),
+            Mode::CreateFlat {
+                name,
+                seed,
+                options,
+                flat,
+                ..
+            } => json!({
+                "mode": "customize-flat",
+                "fields": { "name": name, "seed": seed },
+                "superflat": options.flat,
+                "biome": flat.settings().biome,
+                "layers": flat.settings().layers.iter().map(|layer| json!({
+                    "block": layer.block,
+                    "height": layer.height,
+                })).collect::<Vec<_>>(),
+            }),
             Mode::Edit {
                 world,
                 name,

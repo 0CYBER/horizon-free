@@ -937,6 +937,11 @@ impl B {
                 mm.sonic_boom_sound_delay.set_ttl((), SONIC_SOUND_DELAY);
                 // Entity event 62: the sonic boom keyframes start.
                 m.anim.states[warden::SONIC_BOOM].start(m.age as f32);
+                cx.events.push(MobEvent::EntityEvent {
+                    mob: m.id,
+                    event: 62,
+                    at: [m.position.x, m.position.y, m.position.z],
+                });
                 sound(m, "entity.warden.sonic_charge", 3.0, 1.0, cx.events);
                 true
             }

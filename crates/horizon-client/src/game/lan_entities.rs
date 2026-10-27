@@ -11,18 +11,6 @@ use horizon_client::lan::{
 use horizon_protocol::entity_data::{Value, serializer};
 use horizon_world::nbt::Tag;
 
-/// `ArmorStand`'s default poses (head, body, left arm, right arm, left leg,
-/// right leg), DATA_HEAD_POSE to DATA_RIGHT_LEG_POSE (entries 16 to 21),
-/// under their `Pose` keys.
-const STAND_POSES: [(&str, [f32; 3]); 6] = [
-    ("Head", [0.0, 0.0, 0.0]),
-    ("Body", [0.0, 0.0, 0.0]),
-    ("LeftArm", [-10.0, 0.0, -10.0]),
-    ("RightArm", [-15.0, 0.0, 10.0]),
-    ("LeftLeg", [-1.0, 0.0, -1.0]),
-    ("RightLeg", [1.0, 0.0, 1.0]),
-];
-
 fn state(id: u32, kind: &str, position: [f64; 3], yaw: f32, on_ground: bool) -> EntityState {
     EntityState {
         id: id as i32,
@@ -61,28 +49,21 @@ fn vehicle_meta(hurt_time: i32, hurt_dir: i32, damage: f32) -> Vec<(u8, i32, Val
     meta
 }
 
-/// An armor stand's pose from its compound (`ArmorStandPose`), each part
-/// that differs from the default.
-fn stand_poses(raw: Option<&Tag>) -> Vec<(u8, i32, Value)> {
-    let Some(pose) = raw.and_then(|t| t.get("Pose")) else {
-        return Vec::new();
-    };
+/// An armor stand's pose (`ArmorStandPose`), each part that differs from the
+/// default, as DATA_HEAD_POSE to DATA_RIGHT_LEG_POSE (entries 16 to 21).
+fn stand_poses(a: &horizon_client::entities::ArmorStand) -> Vec<(u8, i32, Value)> {
     let mut meta = Vec::new();
-    for (i, (key, default)) in STAND_POSES.iter().enumerate() {
-        let Some(Tag::List(values)) = pose.get(key) else {
-            continue;
-        };
-        let mut r = *default;
-        for (k, v) in values.iter().take(3).enumerate() {
-            if let Tag::Float(bits) = v {
-                r[k] = f32::from_bits(*bits);
-            }
-        }
-        if r != *default {
+    for (i, (rotation, default)) in a
+        .pose
+        .iter()
+        .zip(horizon_client::entities::ArmorStand::DEFAULT_POSE)
+        .enumerate()
+    {
+        if *rotation != default {
             meta.push((
                 16 + i as u8,
                 serializer::ROTATIONS,
-                Value::Floats(r.to_vec()),
+                Value::Floats(rotation.to_vec()),
             ));
         }
     }
@@ -185,7 +166,19 @@ impl Game<'_> {
             if flags != 0 {
                 e.meta.push((15, serializer::BYTE, Value::Byte(flags)));
             }
-            e.meta.extend(stand_poses(self.persist.raw.get(&a.id)));
+            e.meta.extend(stand_poses(a));
+            // A pose put back to its default (`/data`) is sent as that default.
+            e.defaults.push((15, serializer::BYTE, Value::Byte(0)));
+            for (i, default) in horizon_client::entities::ArmorStand::DEFAULT_POSE
+                .iter()
+                .enumerate()
+            {
+                e.defaults.push((
+                    16 + i as u8,
+                    serializer::ROTATIONS,
+                    Value::Floats(default.to_vec()),
+                ));
+            }
             // Stored main hand, off hand, feet, legs, chest, head: the wire's slots 0 to 5.
             for (slot, item) in a.equipment.iter().enumerate() {
                 if item.is_some() {
@@ -224,6 +217,16 @@ impl Game<'_> {
                     .push((10, serializer::INT, Value::Int(i32::from(f.rotation))));
             }
             out.push(e);
+        }
+        for (p, &id) in &self.knot_ids {
+            // LeashFenceKnotEntity.getAddEntityPacket: the fence's block.
+            out.push(state(
+                id,
+                "minecraft:leash_knot",
+                p.map(f64::from),
+                0.0,
+                false,
+            ));
         }
         for p in &self.paintings {
             let mut e = state(p.id, "minecraft:painting", p.pos.map(f64::from), 0.0, false);
@@ -270,6 +273,24 @@ impl Game<'_> {
     /// Gives the entities Horizon keeps without an id one (`Entity.id`, from
     /// the same counter as the rest) before they are first tracked.
     pub(super) fn lan_assign_ids(&mut self) {
+        // LeashFenceKnotEntity: one per fence post with a lead on it
+        // (`notifyLeasheeRemoved` discards it once the last lead is gone).
+        let knots: Vec<[i32; 3]> = self
+            .mobs
+            .iter()
+            .filter(|m| !m.removed)
+            .filter_map(|m| match m.extra.leash {
+                Some(horizon_client::mobs::leash::Holder::Knot(p)) => Some(p),
+                _ => None,
+            })
+            .collect();
+        self.knot_ids.retain(|p, _| knots.contains(p));
+        for p in knots {
+            self.knot_ids.entry(p).or_insert_with(|| {
+                self.next_entity += 1;
+                self.next_entity
+            });
+        }
         let next = &mut self.next_entity;
         let mut give = |id: &mut u32| {
             if *id == 0 {
@@ -342,6 +363,7 @@ impl Game<'_> {
             let mut e = state(p.id, kind, at(p.position), p.yaw, false);
             e.pitch = p.pitch;
             e.velocity = at(p.velocity);
+            e.needs_sync = p.needs_sync;
             // Projectile.getAddEntityPacket: the owner's id.
             e.data = match p.guest.and_then(|conn| hub.guest(conn)) {
                 Some(g) => g.entity_id,
@@ -466,10 +488,12 @@ impl Game<'_> {
             }
             out.push(e);
         }
-        // The dragon's breath clouds (AreaEffectCloud's DATA_RADIUS,
+        // The dragon's breath and lingering potion clouds (AreaEffectCloud's DATA_RADIUS,
         // DATA_WAITING for its 20-tick wait, and DATA_PARTICLE): the
         // client draws them from these (`tick_remote_clouds`).
-        let breath = self.network_particle(
+        // The hub is out of `self.lan` meanwhile, so it is passed in.
+        let breath = Self::hub_particle(
+            hub,
             &horizon_client::particles::ParticleOptions::simple(
                 horizon_client::particles::ParticleType::DragonBreath,
             ),
@@ -484,10 +508,14 @@ impl Game<'_> {
         for b in self.breath_clouds.iter().filter(|b| b.id != 0) {
             let mut e = state(b.id, "minecraft:area_effect_cloud", b.at, 0.0, false);
             e.meta.push((8, serializer::FLOAT, Value::Float(b.radius)));
-            if b.age < 20 {
+            if b.waiting() {
                 e.meta.push((9, serializer::BOOLEAN, Value::Bool(true)));
             }
-            if let Some(p) = &breath {
+            let particle = match &b.potion {
+                Some(p) => self.network_particle(&p.particle(), None),
+                None => breath.clone(),
+            };
+            if let Some(p) = &particle {
                 e.meta
                     .push((10, serializer::PARTICLE, Value::Particle(p.clone())));
             }
@@ -527,11 +555,9 @@ mod tests {
 
     #[test]
     fn armor_stand_poses_send_only_what_differs() {
-        let tag =
-            horizon_world::nbt::parse_snbt("{Pose:{Head:[10f,20f,0f],LeftArm:[-10f,0f,-10f]}}")
-                .unwrap()
-                .0;
-        let meta = stand_poses(Some(&tag));
+        let mut stand = horizon_client::entities::ArmorStand::new(1, Default::default(), 0.0);
+        stand.pose[0] = [10.0, 20.0, 0.0];
+        let meta = stand_poses(&stand);
         assert_eq!(
             meta,
             vec![(
@@ -540,6 +566,7 @@ mod tests {
                 Value::Floats(vec![10.0, 20.0, 0.0])
             )]
         );
-        assert!(stand_poses(None).is_empty());
+        let plain = horizon_client::entities::ArmorStand::new(1, Default::default(), 0.0);
+        assert!(stand_poses(&plain).is_empty());
     }
 }

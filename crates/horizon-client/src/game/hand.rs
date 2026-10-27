@@ -3,7 +3,7 @@
 //! `continueAttack`, `MultiPlayerGameMode` block breaking), the arm swing
 //! (`LivingEntity.SwingState`) and the first-person equip heights
 //! (`FirstPersonHandsAndItems`) with the item swap ticker they read.
-use super::{Game, Mining, Screen};
+use super::{Game, Mining, Screen, minecarts::CartKind};
 use horizon_client::{
     Result,
     attack_strength::HeldStack,
@@ -143,6 +143,11 @@ impl Game<'_> {
         }
         let harvest = !facts.requires_tool || self.res.items().correct_for_drops(held, &facts.name);
         speed / facts.hardness / if harvest { 30.0 } else { 100.0 }
+    }
+    /// A key for the main-hand stack (`destroyingItem`): its item and components.
+    pub(super) fn main_hand_key(&self) -> String {
+        self.held()
+            .map_or(String::new(), |s| format!("{} {:?}", s.item, s.extra))
     }
     /// Whether an attack would hit an entity rather than the block behind
     /// it: the crosshair's `EntityHitResult`.
@@ -288,6 +293,64 @@ impl Game<'_> {
         }
         // Only alive mobs are hit, so a picked living entity is alive.
         Some(true)
+    }
+    /// `Hud.canRenderCrosshairForSpectator` for the nearest hit in reach: an
+    /// entity that is a `MenuProvider` (a chest or hopper minecart, a chest
+    /// boat), or a block whose `showAsInteractableInSpectatorMode` holds.
+    pub(super) fn spectator_crosshair(&self) -> bool {
+        let cart = self.cart_hit().map(|(i, d)| {
+            let kind = &self.carts[i].kind;
+            (d, matches!(kind, CartKind::Chest | CartKind::Hopper))
+        });
+        let boat = self.boat_hit().map(|(i, d)| (d, self.boats[i].chest));
+        let others = [
+            self.mob_hit().map(|h| h.1),
+            self.armor_stand_hit().map(|h| h.1),
+            self.cushion_hit().map(|h| h.1),
+            self.painting_hit().map(|h| h.1),
+            self.frame_hit().map(|h| h.1),
+            self.dragon_hit().map(|h| h.1),
+        ];
+        let nearest = cart
+            .into_iter()
+            .chain(boat)
+            .chain(others.into_iter().flatten().map(|d| (d, false)))
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((distance, menu)) = nearest
+            && self.before_block(distance)
+        {
+            return menu;
+        }
+        let Some(hit) = self.pick() else {
+            return false;
+        };
+        let name = &*self
+            .res
+            .facts()
+            .get(self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]))
+            .name;
+        let name = name.trim_start_matches("minecraft:");
+        match name {
+            // BlockBehaviour.getMenuProvider and `instanceof Portal`.
+            "crafting_table" | "enchanting_table" | "anvil" | "chipped_anvil" | "damaged_anvil"
+            | "stonecutter" | "loom" | "cartography_table" | "grindstone" | "smithing_table"
+            | "barrel" | "furnace" | "blast_furnace" | "smoker" | "brewing_stand" | "hopper"
+            | "dispenser" | "dropper" | "crafter" | "lectern" | "beacon" | "nether_portal"
+            | "end_portal" | "end_gateway" => true,
+            // ChestBlock.getMenuProvider: none while a redstone conductor
+            // sits on top of either half (a sitting cat aside).
+            "chest" | "trapped_chest" => {
+                let key = (hit.pos[0], hit.pos[1], hit.pos[2]);
+                let blocked = |p: (i32, i32, i32)| {
+                    let above = self.world.block(p.0, p.1 + 1, p.2);
+                    self.res.behaviours().facts(above).flags
+                        & horizon_world::level::data::state_flags::CONDUCTOR
+                        != 0
+                };
+                !blocked(key) && self.chest_other_half(key).is_none_or(|o| !blocked(o))
+            }
+            _ => name.ends_with("shulker_box"),
+        }
     }
     /// `Attributes.ATTACK_SPEED` with the main-hand item's modifier.
     pub(super) fn main_hand_attack_speed(&self) -> f64 {
@@ -445,9 +508,7 @@ impl HandWorld for GameHands<'_, '_> {
         true
     }
     fn main_hand_key(&mut self) -> String {
-        self.game
-            .held()
-            .map_or(String::new(), |s| format!("{} {:?}", s.item, s.extra))
+        self.game.main_hand_key()
     }
     fn destroy_stage(&mut self, _: [i32; 3], _: Option<i32>) {}
     fn swing(&mut self, hand: Hand, animation: SwingAnimation) {
