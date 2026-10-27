@@ -263,6 +263,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - instant_digging: an instant survival break leaves no repeated stone hit sounds or stale server dig (#1908).
 - replant:   flowers and crops replanted after a short harvest click stay planted for both players;
              the server forgets the completed instant break (#1880).
+- dig_stop:  a block the client breaks at once (a creative break, a dead bush) leaves the
+             server no dig to keep: the block put back stays and no mining sound plays on (#1340, #1908).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -7603,6 +7605,57 @@ def check_forced_levels(host, guest, out):
 
 CHECKS += ['forced-levels']
 CHECK_FNS['forced-levels'] = check_forced_levels
+
+
+def check_dig_stop(host, guest, out):
+    """#1340 and #1908: a block the client breaks at once leaves the server no dig to keep.
+
+    MultiPlayerGameMode sends no STOP or ABORT for a creative break or an instant
+    survival break (its isDestroying stays false), so the server must forget the dig on
+    its own, as ServerPlayerGameMode.handleBlockBreakAction's creative and insta-mine
+    branches do. Otherwise the server keeps mining the old spot: the block put back
+    there is destroyed again (#1340) and the mining sound keeps playing at it (#1908).
+    """
+    result = {}
+    spots = apart(host, guest)
+    for label, player in (('host', host), ('guest', guest)):
+        x, y, z = spots[label]
+        cell = (x, y + 1, z + 2)
+        seen = result[label] = {}
+        for mode, block in (('creative', 'minecraft:stone'), ('survival', 'minecraft:dead_bush')):
+            player('command', command=f'gamemode {mode}')
+            player('command', command='clear @s')
+            host('command', command=f'fill {x - 1} {y} {z + 1} {x + 1} {y + 3} {z + 4} minecraft:air')
+            host('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} {block}')
+            player.wait(10)
+            before = {g.name: heard(g, 'minecraft:block.stone.hit') for g in (host, guest)}
+            player.raw('look-at', f'{cell[0] + 0.5:.2f}', f'{cell[1] + 0.4:.2f}', f'{cell[2] + 0.5:.2f}')
+            # One left-click, then the attack released.
+            player.raw('mouse', 'left', 'click')
+            player.wait(40)
+            seen[f'{mode} broken'] = host.raw('block', *cell).get('block')
+            seen[f'{mode} mining'] = player('state').get('mining')
+            # The block put back must stay: the server has no dig left to destroy it.
+            host('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} minecraft:stone')
+            player.wait(100)
+            seen[f'{mode} replacement'] = [g.raw('block', *cell).get('block') for g in (host, player)]
+            seen[f'{mode} hits'] = {g.name: heard(g, 'minecraft:block.stone.hit') - before[g.name]
+                                    for g in (host, guest)}
+            host('command', command=f'setblock {cell[0]} {cell[1]} {cell[2]} minecraft:air')
+        assert seen['creative broken'] == 'minecraft:air', f'{label}: the creative break failed: {seen}'
+        assert seen['survival broken'] == 'minecraft:air', f'{label}: the instant break failed: {seen}'
+        assert seen['creative mining'] is None, f'{label}: the client still digs: {seen}'
+        assert seen['survival mining'] is None, f'{label}: the client still digs: {seen}'
+        for mode in ('creative', 'survival'):
+            assert seen[f'{mode} replacement'] == ['minecraft:stone'] * 2, \
+                f'{label} {mode}: the server kept digging: {seen}'
+            assert all(hits == 0 for hits in seen[f'{mode} hits'].values()), \
+                f'{label} {mode}: the mining sound kept playing: {seen}'
+    return result
+
+
+CHECKS += ['dig_stop']
+CHECK_FNS['dig_stop'] = check_dig_stop
 
 
 if __name__ == '__main__':
