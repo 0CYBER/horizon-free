@@ -86,10 +86,32 @@ enum AccountCmd {
         /// Its name or UUID
         who: String,
     },
-    /// Play as this account
+    /// Play as this account, or as one of your offline names
     Select { who: String },
-    /// Play offline, without an account
-    Offline,
+    /// Play offline, without an account: as NAME (kept to switch back to; 3 to 16 letters,
+    /// digits or _), or as the name the game made up
+    Offline { name: Option<String> },
+    /// Forget one of your offline names
+    ForgetOffline { name: String },
+    /// Show or set an offline name's skin and cape: a 64x64 (or 64x32) skin PNG, a 64x32 cape
+    /// PNG, the model. Kept by the launcher and given to the game when that name plays
+    Skin {
+        name: String,
+        /// The skin's PNG
+        file: Option<PathBuf>,
+        /// classic or slim arms
+        #[arg(long)]
+        model: Option<String>,
+        /// The cape's PNG
+        #[arg(long)]
+        cape: Option<PathBuf>,
+        /// Back to the default skin
+        #[arg(long)]
+        no_skin: bool,
+        /// Take the cape off
+        #[arg(long)]
+        no_cape: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -183,6 +205,70 @@ enum InstanceCmd {
     Select { instance: String },
     /// Keep an instance on one installed Horizon version, or "latest" to follow updates again
     Version { instance: String, version: String },
+    /// Export an instance (or a port) to share: its settings, packs, Horizon mods and the worlds
+    /// named, as a .mrpack (resource packs from Modrinth listed by download) or a zip. Never
+    /// logs, screenshots or account data; worlds go without their per-player files
+    Export {
+        /// The instance (default: the selected one)
+        instance: Option<String>,
+        #[arg(long, value_enum, default_value_t = ExportFormat::Mrpack)]
+        format: ExportFormat,
+        /// A world to put in it (its name or folder); repeat for more
+        #[arg(long)]
+        world: Vec<String>,
+        /// Where to write it (default: "<name>.mrpack" in the current folder)
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Show or set what runs around an instance's game: a shell command before it (the game
+    /// starts only if it succeeds), a wrapper it runs through (`nice -n 5`), and environment
+    /// variables ("NAME=value NAME2=value"). An empty value clears one. On Linux, also GameMode,
+    /// MangoHud and the dedicated graphics card, when the computer has them
+    Launch {
+        instance: String,
+        #[arg(long)]
+        pre_launch: Option<String>,
+        #[arg(long)]
+        wrapper: Option<String>,
+        #[arg(long)]
+        env: Option<String>,
+        /// Linux: run it through GameMode (gamemoderun), on or off
+        #[arg(long)]
+        gamemode: Option<String>,
+        /// Linux: MangoHud's overlay, on or off
+        #[arg(long)]
+        mangohud: Option<String>,
+        /// Linux: the dedicated graphics card (DRI_PRIME, or NVIDIA's offload), on or off
+        #[arg(long)]
+        dedicated_gpu: Option<String>,
+    },
+    /// Put a shortcut on the desktop that plays an instance (`play --instance`): a .desktop
+    /// file (also in the applications menu) on Linux, an app on macOS, a .lnk on Windows
+    Shortcut {
+        /// The instance (default: the selected one)
+        instance: Option<String>,
+        /// Move the instance's shortcuts to the trash instead
+        #[arg(long)]
+        remove: bool,
+    },
+    /// Import what a file is, as dropping it on the window does: a shared instance (a .mrpack
+    /// without mod loaders, such as `instance export` writes, or a game folder zip) becomes a
+    /// new instance; a Java modpack goes to the Modpacks import; a resource or shader pack into
+    /// the instance (default: the selected one)
+    Import {
+        file: PathBuf,
+        /// The instance a pack goes into
+        #[arg(long)]
+        instance: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum ExportFormat {
+    /// Modrinth's modpack format
+    Mrpack,
+    /// The game folder's layout, zipped
+    Zip,
 }
 
 #[derive(Subcommand)]
@@ -209,6 +295,86 @@ enum WorldsCmd {
     /// Move a world to the system's trash
     Delete {
         world: String,
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// A world's data packs, and which are on
+    DatapackList {
+        world: String,
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Copy a data pack zip into a world (the game turns it on when the world opens)
+    DatapackAdd {
+        world: String,
+        file: PathBuf,
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Move a world's data pack to the system's trash
+    DatapackRemove {
+        world: String,
+        /// Its file name, with or without .zip
+        pack: String,
+        #[arg(long)]
+        instance: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum PackKindArg {
+    Resource,
+    Shader,
+}
+
+impl From<PackKindArg> for horizon_launcher::packs::Kind {
+    fn from(k: PackKindArg) -> Self {
+        match k {
+            PackKindArg::Resource => Self::Resource,
+            PackKindArg::Shader => Self::Shader,
+        }
+    }
+}
+
+#[derive(Subcommand)]
+enum PacksCmd {
+    /// The resource and shader packs, and which are on (the default)
+    List {
+        /// Only this kind
+        #[arg(long, value_enum)]
+        kind: Option<PackKindArg>,
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Copy a pack file in: a resource pack .zip, a shader pack .zip or a .hshader
+    Add {
+        file: PathBuf,
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Turn a pack on (a resource pack goes on top; a shader pack replaces the one that was on)
+    On {
+        /// Its file name or title
+        pack: String,
+        #[arg(long, value_enum, default_value_t = PackKindArg::Resource)]
+        kind: PackKindArg,
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Turn a pack off
+    Off {
+        pack: String,
+        #[arg(long, value_enum, default_value_t = PackKindArg::Resource)]
+        kind: PackKindArg,
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Turn a pack off and move it to the system's trash
+    Remove {
+        pack: String,
+        #[arg(long, value_enum, default_value_t = PackKindArg::Resource)]
+        kind: PackKindArg,
         #[arg(long)]
         instance: Option<String>,
     },
@@ -259,8 +425,12 @@ enum MultiplayerCmd {
 
 #[derive(Subcommand)]
 enum ModsCmd {
-    /// What the browser installed (the default)
-    List,
+    /// What the browser installed in an instance (the default)
+    List {
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
+    },
     /// Search for packs Horizon loads
     Search {
         text: Vec<String>,
@@ -282,10 +452,17 @@ enum ModsCmd {
         #[arg(long, value_enum, default_value_t = SourceArg::Modrinth)]
         source: SourceArg,
     },
-    /// Install a pack and what it needs, by its id or slug (checksums checked); a Java mod is
-    /// ported into horizon-mods and turned on; a modpack is imported
+    /// Install a pack and what it needs into an instance, by its id or slug (checksums
+    /// checked); a Java mod is ported into horizon-mods and turned on; a modpack is imported as
+    /// an instance of its own; a data pack goes into the world `--world` names
     Install {
         project: String,
+        /// Install the project's data pack into this world of the instance (its name or folder)
+        #[arg(long)]
+        world: Option<String>,
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
         /// Allow a version made for another Minecraft version
         #[arg(long)]
         everything: bool,
@@ -298,13 +475,31 @@ enum ModsCmd {
         /// Only say what is newer
         #[arg(long)]
         check: bool,
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
     },
     /// Remove a pack the browser installed
-    Remove { project: String },
+    Remove {
+        project: String,
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
+    },
     /// Turn on a mod the browser installed (horizon-mods.txt, as the game's Options > Mods does)
-    Enable { project: String },
+    Enable {
+        project: String,
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
+    },
     /// Turn off a mod the browser installed; it stays installed
-    Disable { project: String },
+    Disable {
+        project: String,
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -314,6 +509,8 @@ enum KindArg {
     Modpack,
     /// Horizon's own shader packs (Horizon's registry only)
     Shader,
+    /// Data packs (Modrinth): install one into a world with `mods install <pack> --world <name>`
+    Datapack,
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -405,7 +602,11 @@ enum Cmd {
     },
     /// Show the launcher's settings, or set one (the Settings page): selected-version TAG,
     /// minecraft-dir PATH, server-dir PATH ("default" resets a folder), install-new-versions
-    /// on|off, opening-animation on|off, proxy http://host:port ("default" removes it)
+    /// on|off, opening-animation on|off, proxy http://host:port ("default" removes it),
+    /// while-playing stay|minimize|hide (what the window does while the game runs), language
+    /// system|en|fr|ru (the window's language; system follows the computer's), accent
+    /// violet|blue|teal|green|amber|red|pink, background PATH (a picture behind Home; "default"
+    /// shows Horizon's landscape)
     Settings {
         #[arg(value_parser = SETTING_KEYS)]
         key: Option<String>,
@@ -420,6 +621,16 @@ enum Cmd {
         #[arg(allow_hyphen_values = true)]
         args: Option<String>,
     },
+    /// Upload an instance's latest.log to mclo.gs (a paste service for Minecraft logs) and print
+    /// its link, for a bug report: only when the player asks. The home folder, the user name and
+    /// the account names are taken out first; the link expires after 90 days unread
+    ShareLog {
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Delete a log shared with share-log: the "<id>:<token>" it printed
+    UnshareLog { shared: String },
     /// Print the end of the game's log (logs/latest.log in the game folder), or its newest crash
     /// report
     Logs {
@@ -458,6 +669,11 @@ enum Cmd {
     Worlds {
         #[command(subcommand)]
         action: Option<WorldsCmd>,
+    },
+    /// An instance's resource and shader packs: list, add, turn on or off, remove
+    Packs {
+        #[command(subcommand)]
+        action: Option<PacksCmd>,
     },
     /// The screenshots F2 took in an instance: list, delete
     Screenshots {
@@ -527,13 +743,17 @@ pub fn command() -> clap::Command {
 pub const AI_COMMANDS: [&str; 2] = ["mcp", "agent-config"];
 
 /// The keys `settings` sets.
-const SETTING_KEYS: [&str; 6] = [
+const SETTING_KEYS: [&str; 10] = [
     "selected-version",
     "minecraft-dir",
     "server-dir",
     "install-new-versions",
     "opening-animation",
     "proxy",
+    "while-playing",
+    "language",
+    "accent",
+    "background",
 ];
 
 fn on_off(value: &str) -> Result<bool, String> {
@@ -552,6 +772,36 @@ fn set_setting(s: &mut backend::Settings, key: &str, value: &str) -> Result<(), 
         "server-dir" => s.server_dir = folder(value),
         "install-new-versions" => s.install_new_versions = Some(on_off(value)?),
         "opening-animation" => s.skip_opening = !on_off(value)?,
+        "while-playing" => {
+            s.while_playing = backend::WhilePlaying::parse(value)
+                .ok_or_else(|| format!("{value}: say stay, minimize or hide"))?
+        }
+        "accent" => {
+            use horizon_launcher::themes::Accent;
+            s.accent = Accent::parse(value).ok_or_else(|| {
+                let names: Vec<_> = Accent::ALL.iter().map(|a| a.name()).collect();
+                format!("{value}: say {}", names.join(", "))
+            })?
+        }
+        "background" => {
+            s.background = match value.trim() {
+                "default" | "" => None,
+                file => Some(horizon_launcher::themes::keep_background(
+                    &backend::data_dir(),
+                    std::path::Path::new(file),
+                )?),
+            }
+        }
+        "language" => {
+            use horizon_launcher::i18n::Language;
+            s.language = match value.trim() {
+                "system" | "default" => None,
+                code => Some(
+                    Language::parse(code)
+                        .ok_or_else(|| format!("{value}: say system, en, fr or ru"))?,
+                ),
+            }
+        }
         "proxy" => {
             if value == "default" || value.is_empty() {
                 s.proxy = None;
@@ -577,6 +827,10 @@ fn settings_json(s: &backend::Settings) -> serde_json::Value {
         "game_args": s.game_args,
         "proxy": s.proxy,
         "desktop_entry": s.desktop_entry.unwrap_or(true),
+        "while_playing": s.while_playing.name(),
+        "language": s.language.map_or("system", |l| l.code()),
+        "accent": s.accent.name(),
+        "background": horizon_launcher::themes::background(&backend::data_dir(), s.background.as_deref()),
         "no_ai": backend::no_ai(),
     })
 }
@@ -763,7 +1017,12 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             }
             cmd.args(arg);
             let started = std::time::Instant::now();
-            let played = attached(cmd);
+            let accounts = Accounts::load();
+            if let Some(name) = accounts.name_arg() {
+                cmd.arg("--name").arg(name);
+            }
+            cmd.envs(accounts.look_env());
+            let played = attached(horizon_launcher::launch::wrap(cmd, &instance.launch));
             if let Err(e) = instances::record_play(&instance.id, started.elapsed()) {
                 eprintln!("Play time not saved: {e}");
             }
@@ -907,6 +1166,41 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 println!("Game arguments: {line}");
             }
         }
+        Cmd::ShareLog { instance } => {
+            use horizon_launcher::game_log;
+            let i = match instance {
+                Some(name) => instances::find(&name)?,
+                None => instances::selected(),
+            };
+            let path = i.home.join("logs/latest.log");
+            let text =
+                std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let names = game_log::names(&[&i.home, &backend::game_home()]);
+            let text = game_log::private(&text, dirs::home_dir().as_deref(), &names);
+            let shared = game_log::share(&text)?;
+            if as_json {
+                json(serde_json::json!({
+                    "url": shared.url, "delete": format!("{}:{}", shared.id, shared.token),
+                }));
+            } else {
+                println!("{}", shared.url);
+                println!(
+                    "Delete it: horizon-launcher unshare-log {}:{}",
+                    shared.id, shared.token
+                );
+            }
+        }
+        Cmd::UnshareLog { shared } => {
+            let (id, token) = shared
+                .split_once(':')
+                .ok_or("Give the \"<id>:<token>\" share-log printed.")?;
+            horizon_launcher::game_log::unshare(&horizon_launcher::game_log::Shared {
+                url: String::new(),
+                id: id.into(),
+                token: token.into(),
+            })?;
+            println!("Deleted the shared log {id}.");
+        }
         Cmd::Logs { lines, crash } => {
             let (path, text) = backend::read_logs(lines, crash)?;
             if as_json {
@@ -933,6 +1227,13 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             action.unwrap_or(WorldsCmd::List { instance: None }),
             as_json,
         )?,
+        Cmd::Packs { action } => game_packs(
+            action.unwrap_or(PacksCmd::List {
+                kind: None,
+                instance: None,
+            }),
+            as_json,
+        )?,
         Cmd::Screenshots { action } => screenshots(
             action.unwrap_or(ScreenshotsCmd::List { instance: None }),
             as_json,
@@ -943,7 +1244,7 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
         )?,
         Cmd::Instance { action } => instance(action.unwrap_or(InstanceCmd::List), as_json)?,
         Cmd::Modpack { action } => modpack(action.unwrap_or(ModpackCmd::List), as_json)?,
-        Cmd::Mods { action } => mods(action.unwrap_or(ModsCmd::List), as_json)?,
+        Cmd::Mods { action } => mods(action.unwrap_or(ModsCmd::List { instance: None }), as_json)?,
         Cmd::Servers { action } => servers(action.unwrap_or(ServersCmd::List), as_json)?,
         Cmd::Mcp => unreachable!(),
     }
@@ -1006,9 +1307,13 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                         "name": a.name, "uuid": a.uuid,
                         "selected": accounts.selected.as_ref() == Some(&a.uuid),
                     })).collect::<Vec<_>>(),
+                    "offline": accounts.offline.iter().map(|n| serde_json::json!({
+                        "name": n,
+                        "selected": accounts.player() == account::Player::Offline(n.clone()),
+                    })).collect::<Vec<_>>(),
                     "sign_in_configured": account::client_id().is_some(),
                 }));
-            } else if accounts.accounts.is_empty() {
+            } else if accounts.accounts.is_empty() && accounts.offline.is_empty() {
                 println!("No Microsoft account signed in: the game plays offline.");
             } else {
                 for a in &accounts.accounts {
@@ -1019,8 +1324,14 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                     };
                     println!("{mark} {}  {}", a.name, a.uuid);
                 }
-                if accounts.selected().is_none() {
-                    println!("Playing offline (`account select NAME` to play as one).");
+                for n in &accounts.offline {
+                    let on = accounts.player() == account::Player::Offline(n.clone());
+                    println!("{} {n}  offline", if on { "*" } else { " " });
+                }
+                if accounts.player() == account::Player::GameName {
+                    println!(
+                        "Playing offline as the game's own name (`account select NAME` to switch)."
+                    );
                 }
             }
         }
@@ -1048,15 +1359,94 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
             println!("Signed out {}.", a.name);
         }
         AccountCmd::Select { who } => {
-            let a = find(&accounts, &who)?;
-            accounts.selected = Some(a.uuid);
+            let offline = accounts
+                .offline
+                .iter()
+                .find(|n| n.eq_ignore_ascii_case(&who))
+                .cloned();
+            let (player, name) = match (accounts.find(&who).cloned(), offline) {
+                (Some(a), _) => (account::Player::Microsoft(a.uuid), a.name),
+                (None, Some(n)) => (
+                    account::Player::Offline(n.clone()),
+                    format!("{n} (offline)"),
+                ),
+                (None, None) => return Err(find(&accounts, &who).unwrap_err()),
+            };
+            accounts.play_as(player)?;
             accounts.save()?;
-            println!("The game plays as {}.", a.name);
+            println!("The game plays as {name}.");
         }
-        AccountCmd::Offline => {
-            accounts.selected = None;
+        AccountCmd::Offline { name } => {
+            let player = match name {
+                Some(n) => account::Player::Offline(n),
+                None => account::Player::GameName,
+            };
+            accounts.play_as(player)?;
             accounts.save()?;
-            println!("The game plays offline.");
+            match accounts.name_arg() {
+                Some(n) => println!("The game plays offline as {n}."),
+                None => println!("The game plays offline, as the name it made up."),
+            }
+        }
+        AccountCmd::Skin {
+            name,
+            file,
+            model,
+            cape,
+            no_skin,
+            no_cape,
+        } => {
+            use horizon_launcher::skins::{self, Model};
+            let name = accounts
+                .offline
+                .iter()
+                .find(|n| n.eq_ignore_ascii_case(&name))
+                .cloned()
+                .ok_or_else(|| {
+                    format!("No offline name {name}: add it with `account offline {name}`.")
+                })?;
+            let model = match model.as_deref() {
+                None => None,
+                Some("classic") => Some(Model::Classic),
+                Some("slim") => Some(Model::Slim),
+                Some(m) => return Err(format!("{m}: say classic or slim")),
+            };
+            let mut look = accounts.look(&name);
+            if let Some(file) = &file {
+                skins::keep(&skins::dir(), &name, file, false)?;
+                look.skin = true;
+            }
+            if let Some(file) = &cape {
+                skins::keep(&skins::dir(), &name, file, true)?;
+                look.cape = true;
+            }
+            if let Some(m) = model {
+                look.model = m;
+            }
+            look.skin &= !no_skin;
+            look.cape &= !no_cape;
+            accounts
+                .looks
+                .insert(name.to_ascii_lowercase(), look.clone());
+            accounts.save()?;
+            if as_json {
+                json(serde_json::json!({
+                    "name": name, "skin": look.skin, "cape": look.cape, "model": look.model.name(),
+                }));
+            } else {
+                let say = |on: bool, what: &str| if on { what.to_string() } else { "none".into() };
+                println!(
+                    "{name}: skin {} ({} arms), cape {}",
+                    say(look.skin, "kept"),
+                    look.model.name(),
+                    say(look.cape, "kept")
+                );
+            }
+        }
+        AccountCmd::ForgetOffline { name } => {
+            accounts.remove_offline(&name)?;
+            accounts.save()?;
+            println!("Forgot the offline name {name}.");
         }
     }
     Ok(())
@@ -1245,7 +1635,20 @@ fn servers(action: ServersCmd, as_json: bool) -> Result<(), String> {
 fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
     use horizon_launcher::browser::{horizon, installed, Kind, Query, SourceId};
     use horizon_launcher::modpacks;
-    let home = backend::game_home();
+    // What the browser installs goes into an instance's game folder; Java mods' checks are kept
+    // in the default one, shared by all.
+    let home = match &action {
+        ModsCmd::List { instance }
+        | ModsCmd::Install { instance, .. }
+        | ModsCmd::Update { instance, .. }
+        | ModsCmd::Remove { instance, .. }
+        | ModsCmd::Enable { instance, .. }
+        | ModsCmd::Disable { instance, .. } => match instance {
+            Some(name) => instances::find(name)?.home,
+            None => instances::selected().home,
+        },
+        ModsCmd::Search { .. } | ModsCmd::Check { .. } => backend::game_home(),
+    };
     let entry_json = |e: &installed::Entry| serde_json::to_value(e).unwrap_or_default();
     let line = |label: &str, f: f32| progress(label.to_string())(f);
     let from_registry = installed::Installed::load(&home)
@@ -1261,7 +1664,7 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
     }
     let on = matches!(action, ModsCmd::Enable { .. });
     match action {
-        ModsCmd::List => {
+        ModsCmd::List { .. } => {
             let list = installed::Installed::load(&home).entries;
             if as_json {
                 json(list.iter().map(entry_json).collect());
@@ -1293,12 +1696,14 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                 KindArg::Modpack => Kind::Modpack,
                 KindArg::Mod => Kind::Mod,
                 KindArg::Shader => Kind::Shader,
+                KindArg::Datapack => Kind::DataPack,
             };
             let query = Query {
                 everything,
                 ..Query::new(&text.join(" "), kind)
             };
             let found = source.get()?.search(&query)?;
+            let datapack = kind == Kind::DataPack;
             if as_json {
                 json(found.iter().map(|p| {
                     let support = p.support();
@@ -1310,6 +1715,9 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                     })
                 }).collect());
             } else {
+                if datapack && !found.is_empty() {
+                    println!("{}\n", horizon_launcher::browser::DATAPACK_SUPPORT);
+                }
                 for p in &found {
                     let support = p.support();
                     if p.source == SourceId::Horizon {
@@ -1334,6 +1742,8 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                     );
                     if unchecked {
                         println!("  horizon-launcher mods check {}", p.slug);
+                    } else if datapack {
+                        println!("  horizon-launcher mods install {} --world <world>", p.slug);
                     } else if let Some(why) = support.reason() {
                         println!("  {why}");
                     }
@@ -1384,9 +1794,44 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
             project,
             everything,
             source,
+            world,
+            ..
         } => {
             let source = source.get()?;
             let p = source.project(&project)?;
+            if let Some(world) = world {
+                let world = horizon_launcher::worlds::find(&home, &world)?;
+                let done = installed::install_datapack(
+                    &*source,
+                    &p,
+                    everything,
+                    &world.path,
+                    &progress(p.title.clone()),
+                )?;
+                if as_json {
+                    json(serde_json::json!({
+                        "world": world.folder, "file": done.pack.file, "version": done.number,
+                        "runs": done.coverage.read, "not_read": done.coverage.unread,
+                    }));
+                } else {
+                    println!(
+                        "{} {} is in {}'s data packs as {}: the game turns it on when the world \
+                         opens. {}",
+                        p.title,
+                        done.number,
+                        world.name,
+                        done.pack.file,
+                        done.coverage.summary()
+                    );
+                }
+                return Ok(());
+            }
+            if p.kind == Kind::DataPack {
+                return Err(format!(
+                    "{} is a data pack: say which world with --world.",
+                    p.title
+                ));
+            }
             if p.kind == Kind::Modpack && p.source == SourceId::Horizon {
                 let pack = horizon::pack::install(&p.id, &line)?;
                 if as_json {
@@ -1429,7 +1874,7 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                 }
             }
         }
-        ModsCmd::Update { project, check } => {
+        ModsCmd::Update { project, check, .. } => {
             let list = installed::Installed::load(&home).entries;
             let chosen: Vec<_> = list
                 .iter()
@@ -1464,11 +1909,11 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                 }
             }
         }
-        ModsCmd::Remove { project } => {
+        ModsCmd::Remove { project, .. } => {
             let e = installed::remove(&home, &project)?;
             println!("Removed {} ({}).", e.title, e.file);
         }
-        ModsCmd::Enable { project } | ModsCmd::Disable { project } => {
+        ModsCmd::Enable { project, .. } | ModsCmd::Disable { project, .. } => {
             let e = installed::Installed::load(&home)
                 .lookup(&project)
                 .cloned()
@@ -1564,7 +2009,297 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             };
             changed(instances::edit(&instance, |m| m.version = pin)?)
         }
+        InstanceCmd::Launch {
+            instance,
+            pre_launch,
+            wrapper,
+            env,
+            gamemode,
+            mangohud,
+            dedicated_gpu,
+        } => {
+            use horizon_launcher::launch;
+            let env = env.as_deref().map(launch::parse_env).transpose()?;
+            let [gamemode, mangohud, dedicated_gpu] =
+                [gamemode, mangohud, dedicated_gpu].map(|v| v.as_deref().map(on_off));
+            let [gamemode, mangohud, dedicated_gpu] = [
+                gamemode.transpose()?,
+                mangohud.transpose()?,
+                dedicated_gpu.transpose()?,
+            ];
+            let found = launch::Found::here();
+            for (on, has, name) in [
+                (gamemode, found.gamemode, "GameMode (gamemoderun)"),
+                (mangohud, found.mangohud, "MangoHud"),
+                (dedicated_gpu, found.two_gpus, "A second graphics card"),
+            ] {
+                if on == Some(true) && !has {
+                    eprintln!(
+                        "{name} isn't on this computer: the switch does nothing until it is."
+                    );
+                }
+            }
+            let changing = pre_launch.is_some()
+                || wrapper.is_some()
+                || env.is_some()
+                || gamemode.is_some()
+                || mangohud.is_some()
+                || dedicated_gpu.is_some();
+            let i = match changing {
+                false => instances::find(&instance)?,
+                true => instances::edit(&instance, |m| {
+                    if let Some(p) = pre_launch {
+                        m.launch.pre_launch = p.trim().to_string();
+                    }
+                    if let Some(w) = wrapper {
+                        m.launch.wrapper = w.trim().to_string();
+                    }
+                    if let Some(e) = env {
+                        m.launch.env = e;
+                    }
+                    if let Some(on) = gamemode {
+                        m.launch.gamemode = on;
+                    }
+                    if let Some(on) = mangohud {
+                        m.launch.mangohud = on;
+                    }
+                    if let Some(on) = dedicated_gpu {
+                        m.launch.dedicated_gpu = on;
+                    }
+                })?,
+            };
+            let l = &i.launch;
+            if as_json {
+                json(serde_json::json!({
+                    "instance": i.id, "pre_launch": l.pre_launch, "wrapper": l.wrapper, "env": l.env,
+                    "gamemode": l.gamemode, "mangohud": l.mangohud, "dedicated_gpu": l.dedicated_gpu,
+                    "found": {
+                        "gamemode": found.gamemode, "mangohud": found.mangohud,
+                        "two_gpus": found.two_gpus, "nvidia": found.nvidia,
+                    },
+                }));
+            } else {
+                println!(
+                    "{}: {}",
+                    i.name,
+                    l.summary().unwrap_or("nothing around the game".into())
+                );
+                println!("  pre-launch: {}", l.pre_launch);
+                println!("  wrapper:    {}", l.wrapper);
+                println!("  env:        {}", launch::env_line(&l.env));
+                let yes = |b: bool| if b { "on" } else { "off" };
+                for (name, on, has) in [
+                    ("gamemode:", l.gamemode, found.gamemode),
+                    ("mangohud:", l.mangohud, found.mangohud),
+                    ("gpu:", l.dedicated_gpu, found.two_gpus),
+                ] {
+                    let note = if has { "" } else { " (not on this computer)" };
+                    println!("  {name:<11} {}{note}", yes(on));
+                }
+            }
+        }
+        InstanceCmd::Shortcut { instance, remove } => {
+            use horizon_launcher::shortcut;
+            let i = match instance {
+                Some(name) => instances::find(&name)?,
+                None => instances::selected(),
+            };
+            let paths = match remove {
+                false => shortcut::make(backend::exe_path(), &i.id, &i.name)?,
+                true => shortcut::remove(&i.id)?,
+            };
+            if as_json {
+                json(serde_json::json!({ "instance": i.id, "paths": paths }));
+            } else if remove && paths.is_empty() {
+                println!("{} has no shortcut.", i.name);
+            } else {
+                let did = if remove { "Moved to the trash" } else { "Made" };
+                for path in paths {
+                    println!("{did}: {}", path.display());
+                }
+            }
+        }
+        InstanceCmd::Import { file, instance } => {
+            use horizon_launcher::import::{self, Dropped};
+            use horizon_launcher::modpacks;
+            match import::what(&file)? {
+                Dropped::Instance => {
+                    let i = import::import_instance(&file, &|line, _| eprintln!("{line}"))?;
+                    if as_json {
+                        json(value(&i, false));
+                    } else {
+                        println!(
+                            "Made the instance {} in {}: horizon-launcher instance select \"{}\"",
+                            i.name,
+                            i.home.display(),
+                            i.name
+                        );
+                    }
+                }
+                Dropped::Modpack => {
+                    let pack = modpacks::import(&file, &|line: String| eprintln!("{line}"))?;
+                    println!("{} ({})", modpacks::outcome(&pack), pack.summary());
+                    println!(
+                        "Port and play it: horizon-launcher modpack port {}",
+                        pack.slug
+                    );
+                }
+                Dropped::Pack(_) => {
+                    let i = match instance {
+                        Some(name) => instances::find(&name)?,
+                        None => instances::selected(),
+                    };
+                    let p = horizon_launcher::packs::add(&i.home, &file)?;
+                    println!(
+                        "Added {} to {}: turn it on with horizon-launcher packs on",
+                        p.title, i.name
+                    );
+                }
+                Dropped::DataPack => {
+                    return Err(format!(
+                        "{} is a data pack: put it into a world with horizon-launcher worlds \
+                         datapack-add <world> <file>",
+                        file.display()
+                    ))
+                }
+            }
+        }
+        InstanceCmd::Export {
+            instance,
+            format,
+            world,
+            out,
+        } => {
+            use horizon_launcher::export::{self, Format};
+            let i = match instance {
+                Some(name) => instances::find(&name)?,
+                None => instances::selected(),
+            };
+            let format = match format {
+                ExportFormat::Mrpack => Format::Mrpack,
+                ExportFormat::Zip => Format::Zip,
+            };
+            let worlds = world
+                .iter()
+                .map(|w| horizon_launcher::worlds::find(&i.home, w).map(|w| w.folder))
+                .collect::<Result<Vec<_>, _>>()?;
+            let linked = match format {
+                Format::Mrpack => export::linkable(&i.home, &export::from_modrinth),
+                Format::Zip => Vec::new(),
+            };
+            let out = match out {
+                Some(out) => out,
+                None => export::free_path(
+                    &std::env::current_dir().map_err(|e| e.to_string())?,
+                    &i.name,
+                    format,
+                ),
+            };
+            let done = export::export(&i.home, &i.name, format, &worlds, &linked, &out)?;
+            if as_json {
+                json(serde_json::json!({
+                    "path": done.path, "copied": done.copied, "linked": done.linked,
+                    "worlds": done.worlds,
+                }));
+            } else {
+                println!(
+                    "Exported {} to {}: {} files, {} listed by their Modrinth download{}.",
+                    i.name,
+                    done.path.display(),
+                    done.copied,
+                    done.linked,
+                    match done.worlds.is_empty() {
+                        true => String::new(),
+                        false => format!(", worlds: {}", done.worlds.join(", ")),
+                    }
+                );
+            }
+        }
     }
+    Ok(())
+}
+
+fn game_packs(action: PacksCmd, as_json: bool) -> Result<(), String> {
+    use horizon_launcher::packs::{self, Kind};
+    let home = |instance: Option<String>| -> Result<PathBuf, String> {
+        Ok(match instance {
+            Some(name) => instances::find(&name)?.home,
+            None => instances::selected().home,
+        })
+    };
+    let value = |p: &packs::Pack| {
+        serde_json::json!({
+            "kind": format!("{:?}", p.kind).to_lowercase(), "file": p.file, "title": p.title,
+            "description": p.description, "enabled": p.enabled, "path": p.path,
+        })
+    };
+    match action {
+        PacksCmd::List { kind, instance } => {
+            let home = home(instance)?;
+            let kinds = match kind {
+                Some(k) => vec![Kind::from(k)],
+                None => vec![Kind::Resource, Kind::Shader],
+            };
+            let all: Vec<packs::Pack> = kinds.iter().flat_map(|k| packs::list(&home, *k)).collect();
+            if as_json {
+                json(all.iter().map(value).collect());
+            }
+            for k in kinds.iter().filter(|_| !as_json) {
+                println!("{}:", k.folder());
+                let these: Vec<_> = all.iter().filter(|p| p.kind == *k).collect();
+                if these.is_empty() {
+                    println!("    none");
+                }
+                for p in these {
+                    let on = if p.enabled { "on " } else { "off" };
+                    match p.title == p.file {
+                        true => println!("  {on} {}", p.file),
+                        false => println!("  {on} {} ({})", p.title, p.file),
+                    }
+                }
+            }
+        }
+        PacksCmd::Add { file, instance } => {
+            let pack = packs::add(&home(instance)?, &file)?;
+            match as_json {
+                true => json(value(&pack)),
+                false => println!("Added {} to {} (off).", pack.file, pack.kind.folder()),
+            }
+        }
+        PacksCmd::On {
+            pack,
+            kind,
+            instance,
+        } => set_pack(&home(instance)?, kind.into(), &pack, true)?,
+        PacksCmd::Off {
+            pack,
+            kind,
+            instance,
+        } => set_pack(&home(instance)?, kind.into(), &pack, false)?,
+        PacksCmd::Remove {
+            pack,
+            kind,
+            instance,
+        } => {
+            let home = home(instance)?;
+            let p = packs::find(&home, kind.into(), &pack)?;
+            packs::remove(&home, &p)?;
+            println!("{} is in the trash.", p.file);
+        }
+    }
+    Ok(())
+}
+
+fn set_pack(
+    home: &std::path::Path,
+    kind: horizon_launcher::packs::Kind,
+    query: &str,
+    on: bool,
+) -> Result<(), String> {
+    use horizon_launcher::packs;
+    let pack = packs::find(home, kind, query)?;
+    packs::set_enabled(home, &pack, on)?;
+    println!("{} is {}.", pack.title, if on { "on" } else { "off" });
     Ok(())
 }
 
@@ -1661,6 +2396,7 @@ fn multiplayer(action: MultiplayerCmd, as_json: bool) -> Result<(), String> {
 }
 
 fn worlds(action: WorldsCmd, as_json: bool) -> Result<(), String> {
+    use horizon_launcher::datapacks;
     use horizon_launcher::worlds::{self, World};
     let home = |instance: Option<String>| -> Result<PathBuf, String> {
         Ok(match instance {
@@ -1717,6 +2453,46 @@ fn worlds(action: WorldsCmd, as_json: bool) -> Result<(), String> {
             let w = worlds::find(&home, &world)?;
             worlds::delete(&w)?;
             println!("{} is in the trash.", w.name);
+        }
+        WorldsCmd::DatapackList { world, instance } => {
+            let w = worlds::find(&home(instance)?, &world)?;
+            let packs = datapacks::list(&w.path);
+            if as_json {
+                json(
+                    packs
+                        .iter()
+                        .map(|p| serde_json::json!({ "file": p.file, "description": p.description, "enabled": p.enabled, "path": p.path }))
+                        .collect(),
+                );
+            } else if packs.is_empty() {
+                println!("No data packs in {}", w.name);
+            }
+            for p in packs.iter().filter(|_| !as_json) {
+                let on = if p.enabled { "on " } else { "off" };
+                println!("  {on} {}  {}", p.file, p.description);
+            }
+        }
+        WorldsCmd::DatapackAdd {
+            world,
+            file,
+            instance,
+        } => {
+            let w = worlds::find(&home(instance)?, &world)?;
+            let p = datapacks::add(&w.path, &file)?;
+            println!(
+                "Added {} to {}: the game turns it on when the world opens.",
+                p.file, w.name
+            );
+        }
+        WorldsCmd::DatapackRemove {
+            world,
+            pack,
+            instance,
+        } => {
+            let w = worlds::find(&home(instance)?, &world)?;
+            let p = datapacks::find(&w.path, &pack)?;
+            datapacks::remove(&w.path, &p)?;
+            println!("{} is in the trash.", p.file);
         }
     }
     Ok(())
@@ -1852,5 +2628,40 @@ mod tests {
             }
             _ => panic!("expected game-args"),
         }
+    }
+
+    #[test]
+    fn mods_commands_name_their_instance() {
+        let parse = |args: &[&str]| {
+            let cli = Cli::try_parse_from([&["horizon-launcher", "mods"], args].concat()).unwrap();
+            match cli.command {
+                Some(Cmd::Mods { action }) => action,
+                _ => panic!("expected mods"),
+            }
+        };
+        match parse(&["install", "fresh-animations", "--instance", "Skyblock"]) {
+            Some(ModsCmd::Install {
+                project, instance, ..
+            }) => assert_eq!(
+                (project.as_str(), instance.as_deref()),
+                ("fresh-animations", Some("Skyblock"))
+            ),
+            _ => panic!("expected mods install"),
+        }
+        assert!(matches!(
+            parse(&["list"]),
+            Some(ModsCmd::List { instance: None })
+        ));
+        assert!(parse(&[]).is_none());
+        // Search and Check read no instance: checks are shared.
+        assert!(Cli::try_parse_from([
+            "horizon-launcher",
+            "mods",
+            "search",
+            "x",
+            "--instance",
+            "A"
+        ])
+        .is_err());
     }
 }

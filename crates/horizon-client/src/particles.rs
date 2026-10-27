@@ -1176,22 +1176,35 @@ impl ParticleEngine {
         }
     }
     /// `ClientPacketListener.handleExplosion` + `ClientExplosionTracker`: the
-    /// explosion particle (emitter for radius >= 2) and up to 512 poof/smoke
-    /// particles thrown from air inside the radius.
+    /// explosion particle (the emitter unless `ServerExplosion.isSmall`) and up
+    /// to 512 poof/smoke particles thrown from air inside the radius.
     pub fn explosion(
         &mut self,
         center: [f64; 3],
-        radius: f32,
+        small: bool,
         block_count: usize,
+        radius: f32,
         is_air: &dyn Fn([i32; 3]) -> bool,
     ) {
-        let ty = if radius < 2.0 {
+        let ty = if small {
             ParticleType::Explosion
         } else {
             ParticleType::ExplosionEmitter
         };
         self.add(&ParticleOptions::simple(ty), center, [1.0, 0.0, 0.0]);
         self.explosion_blocks(center, radius, block_count, is_air);
+    }
+    /// `LlamaSpit.recreateFromPacket`: seven spit particles thrown ahead of a
+    /// new spit, each faster than the last along x and z.
+    pub fn llama_spit_burst(&mut self, at: [f64; 3], movement: [f64; 3]) {
+        for i in 0..7 {
+            let k = 0.4 + 0.1 * f64::from(i);
+            self.add(
+                &ParticleOptions::simple(ParticleType::Spit),
+                at,
+                [movement[0] * k, movement[1], movement[2] * k],
+            );
+        }
     }
     /// `ClientExplosionTracker` with `Level.DEFAULT_EXPLOSION_BLOCK_PARTICLES`.
     pub fn explosion_blocks(

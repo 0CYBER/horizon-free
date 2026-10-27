@@ -28,8 +28,8 @@ The opening, then Play ([clip](docs/opening.webm)):
   packs and modpacks, each marked Works, Partly or Doesn't run in
   Horizon; Java mod jars are never offered. Install puts a pack and what it needs in
   `resourcepacks/` only after its SHA-512 matches, and a
-  modpack goes to the Modpacks page; installed packs show their source and checksum, with Update
-  and Remove ([docs/mod-browser.md](../docs/mod-browser.md)).
+  modpack goes to the Modpacks page; installed packs show their source and checksum, with Update,
+  **Update all** and Remove ([docs/mod-browser.md](../docs/mod-browser.md)).
 - **Modpacks**: import a Java modpack (a Modrinth `.mrpack`, a CurseForge zip, or a Prism,
   MultiMC or CurseForge instance folder) and see its coverage report: per mod, ported, partial,
   not yet or not needed, with the reason ([docs/modpacks.md](../docs/modpacks.md)). **Port**
@@ -83,12 +83,98 @@ The opening, then Play ([clip](docs/opening.webm)):
   instance plays the launcher's version, which follows updates, unless the Play page's version
   picker keeps it on another installed one (to keep an old world on the version it was made
   with); picking the version marked "follows updates" lets it follow again.
+- **Export**: Home's Instance row has **Export…**: the selected instance (or a port) as a `.mrpack`
+  (Modrinth's modpack format: resource packs the browser installed from Modrinth are listed by
+  their download, the rest is in `overrides/`) or a `.zip` of the game folder's layout, with the
+  worlds switched on. It is written to `exports/` in the launcher's data folder (**Show in
+  folder**). Only settings (options.txt, horizon-*.txt, servers.dat), resource and shader packs,
+  `horizon-mods/` and `config/` go in: never logs, screenshots, backups, caches or account files;
+  a world goes without `playerdata/`, `stats/` and `advancements/`, and its level.dat without the
+  player's UUID. `horizon-launcher instance export [<instance>] [--format mrpack|zip] [--world
+  <w>]… [--out <file>]`.
+- **Import by dropping a file**: a file dropped anywhere on the window is imported for what it is
+  (`horizon_launcher::import`). A shared instance (a `.mrpack` that needs no mod loader, such as
+  Export writes, or a game folder `.zip`) becomes a new instance, opened on Home. Its `.mrpack`
+  downloads come from Modrinth with their SHA-512 checked, and only what an instance keeps is
+  taken, inside its folder. A Java modpack goes to the Modpacks import, and a resource or shader
+  pack into the selected instance. A data pack is pointed at the world rows, and the Packs section
+  and the world rows keep taking their own drops. A note in the corner says what happened.
+  `horizon-launcher instance import <file>`.
+- **Launch options**: Home's Instance row has **Launch…**: per instance, a shell command run in its
+  folder before the game (the game starts only if it succeeds), a wrapper the game runs through
+  (`nice -n 5`), and environment variables (`NAME=value OTHER="two words"`), kept in
+  `instances.json` (`horizon_launcher::launch`). The game stays one process the launcher follows:
+  on Unix `/bin/sh` runs the command and then `exec`s the wrapper and the game, whose words pass
+  through `"$@"` untouched; on Windows `cmd /C` runs `<command> && <game>`. Both the window's Play
+  and `play` use them. `horizon-launcher instance launch <instance> [--pre-launch …]
+  [--wrapper …] [--env …]` (an MCP agent needs `confirm: true`: it sets commands Play runs).
+  On Linux the panel also has switches for what the computer has: **GameMode** (`gamemoderun`
+  on the PATH), **MangoHud** (`mangohud`), and, with two graphics cards under
+  `/sys/class/drm`, the **dedicated graphics card** (`DRI_PRIME=1`, or NVIDIA's
+  `__NV_PRIME_RENDER_OFFLOAD`, `__VK_LAYER_NV_optimus` and `__GLX_VENDOR_LIBRARY_NAME` when its
+  driver is loaded). A switch whose tool is gone does nothing. `instance launch --gamemode
+  on|off --mangohud on|off --dedicated-gpu on|off`; `HORIZON_LAUNCHER_LINUX_TOOLS` makes any
+  system show them, for tests.
+- **Desktop shortcut**: Home's Instance row has **Shortcut**: a shortcut on the desktop that plays
+  the selected instance without opening the launcher (`horizon-launcher play --instance <id>`).
+  A `.desktop` file on Linux (also put in the applications menu, and marked trusted with `gio`
+  where it exists), a small app with Horizon's icon on macOS, a `.lnk` on Windows
+  (`horizon_launcher::shortcut`). **Remove shortcut** moves it to the trash; it is found by the
+  instance id inside it, so a rename doesn't lose it. `horizon-launcher instance shortcut
+  [instance] [--remove]`; `HORIZON_LAUNCHER_DESKTOP` points it at another folder.
+- **Accounts and quick switch**: the top bar's account chip opens a menu of everyone who can play:
+  each signed-in Microsoft account, the offline names the player keeps, and the name the game
+  made up (`horizon-player.txt`). Picking one plays as it from the next Play. Settings > Account
+  adds offline names (3 to 16 letters, digits or `_`; the game gets `--name`) and forgets them;
+  the Console's Share log takes them out of the log too. `horizon-launcher account offline
+  [NAME]`, `account select <name>` (an account or an offline name), `account forget-offline
+  <name>`.
+- **Accent and Home background**: on top of Dark, Light or System, Settings > Launcher picks an
+  accent (Horizon's violet, blue, teal, green, amber, red or pink) and a picture of the player's
+  own behind Home (PNG, JPEG or WebP, cropped to fill; **Landscape** brings Horizon's back). An
+  accent turns the violet tokens to its hue, then darkens or lightens them just enough to keep
+  white on the Play button at 4.5:1 and the accent at 3:1 on every background (a test holds every
+  accent in both looks to it). The picture is copied into the data folder.
+  `horizon-launcher settings accent NAME`, `settings background PATH|default`.
+- **Language**: English, French and Russian (the languages Horizon's own game menus have).
+  The window follows the system's language unless the player picks one in Settings > Launcher
+  (each named in itself); a string a table lacks shows in English. The tables are
+  `launcher/lang/<code>.json`, English text to its translation, Horizon's own; a test fails when
+  the code asks `tr("…")` for a string a table lacks, or a table keeps one the code dropped.
+  `horizon-launcher settings language system|en|fr|ru`.
+- **Skin and cape**: each offline name's **Skin…** in Settings > Account shows the front of its
+  skin and cape, takes a skin PNG (64×64, or the older 64×32) and a cape PNG (64×32), and picks
+  classic or slim arms. The launcher keeps copies in its `skins/` folder and gives the game
+  `HORIZON_OFFLINE_SKIN`, `HORIZON_OFFLINE_SKIN_MODEL` and `HORIZON_OFFLINE_CAPE` when that name
+  plays; the game draws the default skins until it reads them. A Microsoft account's skin and
+  cape: coming soon, with sign-in. `horizon-launcher account skin <name> [FILE] [--model
+  classic|slim] [--cape FILE] [--no-skin] [--no-cape]`.
+- **Console**: Home's Console shows the game's output of this run as it comes: a search (every
+  word, any case), Follow to keep the newest line in view, Copy, and Open logs folder. Warnings
+  and errors stand out. **Share log…** uploads the log to [mclo.gs](https://mclo.gs), a paste
+  service for Minecraft logs, only after the player confirms; the home folder, the user name and
+  the account names are taken out first (`horizon_launcher::game_log`), and **Delete it** removes
+  the paste. `horizon-launcher share-log [--instance]` and `unshare-log <id:token>`;
+  `HORIZON_LAUNCHER_PASTE_URL` points it at a test server.
 - **Worlds**: Home lists the selected instance's worlds (picture, mode, version, last played,
   size). **Back up** zips one into the instance's `backups/` as the game's Make Backup does
   (`<date>_<time>_<folder>.zip`); **Copy** puts "<name> (1)" beside it; **Delete** moves it to the
   system's trash after a confirmation; **Open folder**. The same from the command line:
   `horizon-launcher worlds [list|backup|copy|delete] [--instance <name>]`.
-  **Play** on a world starts the game straight into it.
+  **Play** on a world starts the game straight into it. **Data packs** opens the world's
+  `datapacks/` under its row: what is there (and which the game has turned off), **Add data pack…**,
+  and **Remove** (to the trash); a data pack `.zip` dropped on a world goes into it. The game turns
+  a new one on when the world opens. From the command line: `horizon-launcher worlds
+  datapack-list|datapack-add|datapack-remove <world> …`. The Mods page's **Data packs** tab finds
+  them on Modrinth and installs one into the world picked there (`mods search --kind datapack`,
+  `mods install <pack> --world <world>`), saying what of it runs in Horizon.
+- **Packs**: Home lists the selected instance's resource packs and shader packs, each with a switch.
+  The choice is the game's own: `resourcePacks` in options.txt (a pack turned on goes on top, as
+  the game's Resource Packs screen does) and `pickedShaderPack` in `horizon-graphics.txt` (one shader
+  pack at a time). **Add pack…** or a `.zip` / `.hshader` dropped on the section copies it into the
+  right folder; **Remove** turns it off and moves it to the trash after a confirmation. From the
+  command line: `horizon-launcher packs [list|add|on|off|remove] [--kind resource|shader]
+  [--instance <name>]`.
 - **Screenshots**: Home shows the selected instance's newest screenshots (what F2 saves in its
   `screenshots/` folder) and all of them on request. Clicking one opens it over the window (← and →
   step through) with **Copy** (the picture, to the clipboard), **Open**, **Show in folder** and
@@ -110,8 +196,10 @@ page `servers.json` (the list), `servers/<name>/` (the servers created there) an
 
 - **Settings**: install new Horizon versions automatically (on unless you turn it off; the
   selected version only moves to the new one if you were on the newest), the opening animation,
-  the game's extra command-line arguments, an HTTP proxy for downloads, and the launcher's own
-  version and update state.
+  what the window does while you play (stays by default; Minimise, or Hide on macOS, puts it away
+  when the game starts and brings it back to the front when the game closes; `settings
+  while-playing stay|minimize|hide`), the game's extra command-line arguments, an HTTP proxy for
+  downloads, and the launcher's own version and update state.
 - **Updates**: there is one channel. Every release is published as the release, GitHub's latest,
   once its smoke test passed (docs/release-flow.md), and the launcher installs it. The game
   pre-releases of the old Alpha channel (v0.2.1 on) stay on the Versions page to install
@@ -202,6 +290,8 @@ and don't set `%ERRORLEVEL%` / `$LASTEXITCODE`. Scripts that need the exit code 
     horizon-launcher instance version <instance> <tag|latest>   keep it on one installed version, or follow updates
     horizon-launcher worlds [list] [--instance <name>]        an instance's worlds
     horizon-launcher worlds backup|copy|delete <world> [--instance <name>]   delete moves it to the trash
+    horizon-launcher packs [list] [--kind resource|shader] [--instance <name>]   resource and shader packs, on or off
+    horizon-launcher packs add <file> | on|off|remove <pack> [--kind shader]
     horizon-launcher screenshots [list] [--instance <name>]   an instance's screenshots, the newest first
     horizon-launcher screenshots delete <name> [--instance <name>]   moves it to the trash
     horizon-launcher multiplayer [list] [--instance <name>]   the servers in an instance's Multiplayer list
@@ -233,7 +323,10 @@ and don't set `%ERRORLEVEL%` / `$LASTEXITCODE`. Scripts that need the exit code 
 `--json` prints JSON where there is something to report (`versions`, `install`, `notes`,
 `next`, `links`, `game-args`, `update --check`, `logs`, `account`, `benchmark`, `data`, `modpack`). Errors go to stderr with exit code 1. `server` runs in the terminal,
 so lines you type reach its console. `HORIZON_LAUNCHER_HOME` replaces the data folder (for
-scripts and tests).
+scripts and tests). Test runs also set `HORIZON_LAUNCHER_TRASH=<folder>` and
+`HORIZON_LAUNCHER_CLIPBOARD=<file>` inside their scratch folders: what Delete would move to the
+system's trash goes into that folder, and what Copy would put on the clipboard is written to that
+file, so a test never touches the real trash or clipboard.
 
 ## AI agents (MCP)
 

@@ -184,15 +184,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             }
         }
     }
-    if (m.fluids.in_water
-        || w.raining
-            && w.can_see_sky(
-                m.position.x.floor() as i32,
-                m.eye_y().floor() as i32,
-                m.position.z.floor() as i32,
-            ))
-        && m.alive()
-    {
+    if (m.fluids.in_water || super::ai::in_rain(m, w)) && m.alive() {
         // Hurt by water: teleport away.
         m.extra.counter2 = m.extra.counter2.max(1);
     }

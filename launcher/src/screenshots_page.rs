@@ -82,7 +82,10 @@ impl Launcher {
         };
         self.screenshots.note = Some(match std::fs::read(&shot.path) {
             Ok(bytes) => {
-                cx.write_to_clipboard(ClipboardItem::new_image(&Image::from_bytes(format, bytes)));
+                copy_to_clipboard(
+                    cx,
+                    ClipboardItem::new_image(&Image::from_bytes(format, bytes)),
+                );
                 Ok("Copied to the clipboard.".into())
             }
             Err(e) => Err(format!("Could not read {}: {e}", shot.name)),

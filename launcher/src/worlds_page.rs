@@ -32,9 +32,9 @@ pub(super) fn ago(when: std::time::SystemTime) -> String {
     let when: chrono::DateTime<chrono::Local> = when.into();
     let days = (chrono::Local::now().date_naive() - when.date_naive()).num_days();
     match days {
-        ..=0 => "today".into(),
-        1 => "yesterday".into(),
-        2..=13 => format!("{days} days ago"),
+        ..=0 => tr("today").into(),
+        1 => tr("yesterday").into(),
+        2..=13 => trf("{days} days ago", &[("days", &days.to_string())]),
         _ => when.format("%Y-%m-%d").to_string(),
     }
 }
@@ -166,7 +166,10 @@ impl Launcher {
             );
         }
         for (i, w) in list.into_iter().enumerate() {
-            section = section.child(self.world_row(i, w, cx));
+            let row = self.world_row(i, w.clone(), cx);
+            section = section
+                .child(self.world_drop_target(i, &w, row, cx))
+                .children(self.world_packs_panel(&w, cx));
         }
         Some(section)
     }
@@ -275,6 +278,19 @@ impl Launcher {
                         },
                     )),
                 )
+                .child({
+                    let world = w.clone();
+                    let label = match self.world_packs_open(&w) {
+                        true => "Hide data packs",
+                        false => "Data packs",
+                    };
+                    act("world-packs", label, Kind::Ghost).on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| {
+                            this.toggle_world_packs(&world);
+                            cx.notify();
+                        },
+                    ))
+                })
                 .child(
                     act("world-folder", "Open folder", Kind::Ghost)
                         .on_click(move |_, _, cx| cx.open_with_system(&folder)),
