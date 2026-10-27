@@ -163,6 +163,8 @@ pub fn main() -> Result<()> {
                                     ArrowSound::HitGround => "hit",
                                     ArrowSound::Splash => "splash",
                                     ArrowSound::Extinguish => "extinguish",
+                                    ArrowSound::TridentHitGround => "trident_hit_ground",
+                                    ArrowSound::TridentHit => "trident_hit",
                                 },
                                 volume.to_bits(),
                                 pitch.to_bits()

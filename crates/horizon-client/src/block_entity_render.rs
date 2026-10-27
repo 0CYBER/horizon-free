@@ -612,7 +612,9 @@ fn sign_text_calls(
         .iter()
         .enumerate()
         .map(|(i, line)| {
+            // The line that fits, in the order it is drawn (getVisualOrder).
             let shown = first_line(line, data.max_line_width(), &advance);
+            let shown = crate::bidi::visual_str(&shown).into_owned();
             TextCall {
                 matrix: m,
                 x: -((width(&shown) as i32) / 2) as f32,
@@ -738,7 +740,7 @@ pub struct Scene<'a> {
     /// The skin sprite a `player_head` shows at a position (`SkullBlockRenderer`
     /// profile → skin): a downloaded `skins/<sha1>` slot or the profile's
     /// `DefaultPlayerSkin` fallback; None keeps `SKIN_BY_TYPE` (`DefaultPlayerSkin.getDefaultTexture`, slim steve).
-    pub skull: &'a dyn Fn([i32; 3]) -> Option<&'a str>,
+    pub skull: &'a dyn Fn([i32; 3]) -> Option<String>,
     /// Font glyph cell (none for blank glyphs such as the space) and advance.
     pub glyph: &'a dyn Fn(char) -> (Option<Rect>, f32),
 }
@@ -1290,11 +1292,12 @@ impl BlockEntityRenderer {
                 };
                 // SkullBlockRenderer.getRenderType: the profile's skin when it
                 // resolves, `SKIN_BY_TYPE` (steve) otherwise.
-                let texture = if *kind == SkullType::Player {
-                    (scene.skull)(pos).unwrap_or(texture)
+                let skin = if *kind == SkullType::Player {
+                    (scene.skull)(pos)
                 } else {
-                    texture
+                    None
                 };
+                let texture = skin.as_deref().unwrap_or(texture);
                 let (Some(model), Some(paint)) =
                     (self.models.get(model), paint(texture, 0xFFFFFF, packed))
                 else {

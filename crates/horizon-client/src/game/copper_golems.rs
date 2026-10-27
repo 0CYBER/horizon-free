@@ -44,13 +44,13 @@ impl Game<'_> {
         slot: usize,
         stack: Option<ItemStack>,
     ) {
-        if let Some(e) = self
-            .world
-            .block_entities
-            .get_mut(&(chest[0], chest[1], chest[2]))
+        let key = (chest[0], chest[1], chest[2]);
+        if let Some(e) = self.world.block_entities.get_mut(&key)
             && let Some(s) = e.slots_mut().get_mut(slot)
         {
             *s = stack;
+            // TransportItemsBetweenContainers calls Container.setChanged.
+            self.container_changed(key);
         }
     }
     /// `ContainerOpenersCounter.recheckOpeners` every five ticks: the golems

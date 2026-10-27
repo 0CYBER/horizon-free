@@ -13,7 +13,7 @@ use horizon_client::{
     save::VERSION_NAME,
     text::Text,
 };
-use horizon_core::geometry::Axis;
+use horizon_core::geometry::{Axis, Vec3};
 use winit::keyboard::KeyCode;
 
 /// `ChatFormatting.YELLOW` and `RED`.
@@ -766,7 +766,8 @@ impl Game<'_> {
         }
         let lerp = |a: f64, b: f64| a + f64::from(alpha) * (b - a);
         let lerpf = |a: f32, b: f32| a + alpha * (b - a);
-        for m in &self.mobs {
+        let guests = self.lan.iter().flat_map(|h| h.models.values());
+        for m in self.mobs.iter().chain(guests) {
             if m.removed || m.invisible || m.has_effect("minecraft:invisibility") {
                 continue;
             }
@@ -795,6 +796,159 @@ impl Game<'_> {
             ];
             // EntityType.ITEM: 0.25 by 0.25, eyes at 0.2125.
             g.hitbox(pos, (0.25, 0.25), 0.2125, false, (0.0, 0.0));
+        }
+        // The other entities (EntityTypes sizes; eyes at 0.85 of the height
+        // unless the type sets one). `at` is the interpolated position.
+        let at = |previous: Vec3, now: Vec3| {
+            [
+                lerp(previous.x, now.x),
+                lerp(previous.y, now.y),
+                lerp(previous.z, now.z),
+            ]
+        };
+        for p in &self.paintings {
+            let (min, max) = p.bounds();
+            let centre = std::array::from_fn(|i| (min[i] + max[i]) / 2.0);
+            g.entity_box(min, max, centre, 0.425, false, step_view(p.step()));
+        }
+        for f in self.item_frames.iter().filter(|f| !f.invisible) {
+            let (min, max) = f.bounds();
+            let centre = std::array::from_fn(|i| (min[i] + max[i]) / 2.0);
+            g.entity_box(min, max, centre, 0.0, false, step_view(f.step()));
+        }
+        for c in &self.cushions {
+            let (min, max) = c.bounds();
+            let p = c.position;
+            g.entity_box(min, max, [p.x, p.y, p.z], 0.2125, false, (0.0, c.yaw));
+        }
+        for a in self.armor_stands.iter().filter(|a| !a.invisible) {
+            // ArmorStand.getDimensions: a marker has none, a small one is
+            // half scale with its eyes at 0.9875.
+            let (size, eye) = match (a.marker, a.small) {
+                (true, _) => ((0.0, 0.0), 0.0),
+                (_, true) => ((0.25, 0.9875), 0.9875),
+                _ => ((0.5, 1.975), 1.7775),
+            };
+            let p = a.position;
+            g.hitbox([p.x, p.y, p.z], size, eye, true, (0.0, a.yaw));
+        }
+        for b in &self.boats {
+            let h = super::boats::HEIGHT as f32;
+            g.hitbox(
+                at(b.previous, b.position),
+                (super::boats::WIDTH as f32, h),
+                h,
+                false,
+                (0.0, b.yaw),
+            );
+        }
+        for c in &self.carts {
+            let (w, h) = (
+                super::minecarts::WIDTH as f32,
+                super::minecarts::HEIGHT as f32,
+            );
+            g.hitbox(
+                at(c.previous, c.position),
+                (w, h),
+                h * 0.85,
+                false,
+                (0.0, c.yaw),
+            );
+        }
+        for o in &self.orbs {
+            g.hitbox(
+                at(o.previous, o.position),
+                (0.5, 0.5),
+                0.425,
+                false,
+                (0.0, 0.0),
+            );
+        }
+        for f in &self.falling {
+            g.hitbox(
+                at(f.previous, f.position),
+                (0.98, 0.98),
+                0.833,
+                false,
+                (0.0, 0.0),
+            );
+        }
+        for t in &self.tnts {
+            g.hitbox(
+                at(t.previous, t.position),
+                (0.98, 0.98),
+                0.15,
+                false,
+                (0.0, 0.0),
+            );
+        }
+        for c in &self.crystals {
+            let p = c.position;
+            g.hitbox([p.x, p.y, p.z], (2.0, 2.0), 1.7, false, (0.0, 0.0));
+        }
+        for p in &self.creatures.projectiles {
+            use horizon_client::projectiles::ProjectileKind as K;
+            let (size, eye) = match p.kind {
+                K::Arrow { .. } | K::Trident => (0.5, 0.13),
+                K::Snowball | K::Egg | K::EnderPearl | K::LlamaSpit | K::Potion { .. } => {
+                    (0.25, 0.2125)
+                }
+                K::SmallFireball | K::ShulkerBullet { .. } | K::WitherSkull { .. } => {
+                    (0.3125, 0.265_625)
+                }
+                K::WindCharge | K::BreezeWindCharge => (0.3125, 0.0),
+                K::LargeFireball { .. } => (1.0, 0.85),
+            };
+            g.hitbox(
+                at(p.previous, p.position),
+                (size, size),
+                eye,
+                false,
+                (p.pitch, p.yaw),
+            );
+        }
+        for t in &self.tridents {
+            g.hitbox(
+                at(t.previous, t.position),
+                (0.5, 0.5),
+                0.13,
+                false,
+                (t.pitch, t.yaw),
+            );
+        }
+        for r in &self.rockets {
+            // Projectile.updateRotation: the look follows the motion.
+            let v = r.velocity;
+            let yaw = v.x.atan2(v.z).to_degrees() as f32;
+            let pitch = v.y.atan2(v.x.hypot(v.z)).to_degrees() as f32;
+            g.hitbox(
+                at(r.previous, r.position),
+                (0.25, 0.25),
+                0.2125,
+                false,
+                (pitch, yaw),
+            );
+        }
+        for h in self
+            .hook
+            .iter()
+            .map(|h| (h.previous, h.position))
+            .chain(self.remote_hooks.iter().map(|h| (h.previous, h.position)))
+        {
+            g.hitbox(at(h.0, h.1), (0.25, 0.25), 0.2125, false, (0.0, 0.0));
+        }
+        for b in &self.bolts {
+            g.hitbox(b.at, (0.0, 0.0), 0.0, false, (0.0, 0.0));
+        }
+        // The dragon: 16 by 8, a living entity; its parts follow.
+        if let Some(d) = &self.dragon {
+            g.hitbox(
+                at(d.previous, d.position),
+                (16.0, 8.0),
+                6.8,
+                true,
+                (0.0, d.yaw),
+            );
         }
         // The dragon's parts.
         for (id, b) in self.special_targets() {
@@ -827,4 +981,13 @@ impl Game<'_> {
         }
         g
     }
+}
+
+/// The (x, y) rotations whose view vector is the step of a direction.
+fn step_view(step: [i32; 3]) -> (f32, f32) {
+    let [x, y, z] = step.map(f64::from);
+    (
+        (-y).asin().to_degrees() as f32,
+        (-x.atan2(z)).to_degrees() as f32,
+    )
 }

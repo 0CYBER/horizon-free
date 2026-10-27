@@ -5,14 +5,10 @@
 //! forcing the game mode. Its difficulty lock asks first (PopupScreen), and
 //! Restrictions opens RestrictionsScreen.
 //! Parity reference: https://mcsrc.dev/2/26.3/net/minecraft/client/gui/screens/WorldOptionsScreen
-use super::{
-    Game, Screen,
-    game_rules_screen::{Exit, RulesScreen},
-    integrated::ServerOptions,
-    lan::LanSettings,
-};
+use super::{Game, Screen, integrated::ServerOptions, lan::LanSettings};
 use horizon_client::{
     font::Font,
+    game_rules_screen::{Exit, RulesScreen},
     hud::{HudBatch, rgba},
     text::{Text, named_color},
     ui::{self, EditBox},

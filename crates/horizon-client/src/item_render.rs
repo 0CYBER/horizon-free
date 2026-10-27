@@ -49,6 +49,9 @@ pub struct ItemQuad {
     pub foil: Foil,
     /// `MaterialInfo.lightEmission` (block light floor).
     pub light_emission: u8,
+    /// The quad's sprite has translucent pixels (`MaterialInfo.itemRenderType`
+    /// is a translucent sheet): drawn with the translucent entities.
+    pub translucent: bool,
 }
 /// `TextureTransform.setupGlintTexturing`'s inputs.
 #[derive(Clone, Copy, Debug)]
@@ -203,7 +206,7 @@ impl ItemRenderState {
             let m = pose * layer.matrix;
             match &layer.geometry {
                 LayerGeometry::Quads(baked) => {
-                    submit_quads(baked, layer, self.display, m, sprites, sink);
+                    submit_quads(renderer, baked, layer, self.display, m, sprites, sink);
                 }
                 LayerGeometry::Special { model, argument } => special::submit(
                     renderer,
@@ -247,6 +250,7 @@ pub fn argb(color: i32) -> u32 {
 
 /// `ItemFeatureRenderer.prepareMainSubmit` for one cuboid layer.
 fn submit_quads(
+    renderer: &ItemRenderer,
     baked: &BakedItemModel,
     layer: &LayerRender,
     display: DisplayContext,
@@ -260,6 +264,8 @@ fn submit_quads(
         FoilType::Special => Foil::Special,
     };
     let _ = display;
+    // Quads of one layer mostly share a sprite: look its translucency up once.
+    let mut last: Option<(&str, bool)> = None;
     for q in &baked.quads {
         let Some(r) = sprites
             .get(sprite_name(&q.material.sprite))
@@ -283,6 +289,16 @@ fn submit_quads(
         let pos = q.positions.map(|p| m.transform_point3(Vec3::from(p)));
         let uv =
             q.uv.map(|[u, v]| [r.u0 + (r.u1 - r.u0) * u, r.v0 + (r.v1 - r.v0) * v]);
+        let translucent = match last {
+            Some((sprite, translucent)) if sprite == q.material.sprite => translucent,
+            _ => {
+                let translucent = renderer
+                    .sprites
+                    .translucent(sprite_name(&q.material.sprite));
+                last = Some((&q.material.sprite, translucent));
+                translucent
+            }
+        };
         sink.quad(ItemQuad {
             pos,
             uv,
@@ -291,6 +307,7 @@ fn submit_quads(
             color: argb(color),
             foil,
             light_emission: q.light_emission,
+            translucent: translucent || q.material.force_translucent,
         });
     }
 }
@@ -305,6 +322,9 @@ struct FileSprites {
     root: PathBuf,
     permutations: Vec<PalettedPermutations>,
     cache: Mutex<HashMap<String, Option<SpriteMask>>>,
+    /// Sprites with a pixel that is neither fully transparent nor opaque
+    /// (`Transparency.hasTranslucent`), filled in as sprites load.
+    translucent: Mutex<HashMap<String, bool>>,
 }
 impl SpriteLookup for FileSprites {
     fn mask(&self, sprite: &str) -> Option<SpriteMask> {
@@ -328,6 +348,13 @@ fn argb_pixels(rgba: &[u8]) -> Vec<u32> {
         .collect()
 }
 impl FileSprites {
+    fn translucent(&self, sprite: &str) -> bool {
+        let known = |this: &Self| this.translucent.lock().ok()?.get(sprite).copied();
+        known(self).unwrap_or_else(|| {
+            self.mask(sprite);
+            known(self).unwrap_or(false)
+        })
+    }
     fn png(&self, sprite: &str, directory: &str) -> PathBuf {
         crate::atlas_sources::texture_path(&self.root, sprite, directory)
     }
@@ -348,6 +375,10 @@ impl FileSprites {
                 (w, h, pixels)
             }
         };
+        let translucent = argb.iter().any(|p| matches!(p >> 24, 1..=254));
+        if let Ok(mut cache) = self.translucent.lock() {
+            cache.insert(sprite.to_owned(), translucent);
+        }
         let alpha: Vec<u8> = argb.iter().map(|p| (p >> 24) as u8).collect();
         let animation = fs::read_to_string(png.with_extension("png.mcmeta"))
             .ok()
@@ -497,6 +528,7 @@ impl ItemRenderer {
                 root: root.to_path_buf(),
                 permutations,
                 cache: Mutex::default(),
+                translucent: Mutex::default(),
             },
             baked: Mutex::default(),
             extents: Mutex::default(),
@@ -698,6 +730,7 @@ pub fn tag_json(tag: &Tag) -> Value {
 /// The resolver's view of a client stack: its item, count and component patch.
 pub fn stack_view(stack: &crate::items::ItemStack) -> StackView {
     let mut view = StackView::new(&stack.item, stack.count as i32);
+    view.bundle_selected = stack.data().map_or(-1, |d| d.bundle_selected.0);
     if let Some(Tag::Compound(c)) = crate::item_data::components_tag(stack.damage, stack.data()) {
         for (k, v) in &c {
             let key = k.to_string_lossy();
@@ -745,7 +778,12 @@ impl ItemSink for WorldSink<'_> {
         } else {
             self.glint
         };
-        let overlay = if glint.is_some() { 7 } else { 0 };
+        let overlay = match (glint.is_some(), q.translucent) {
+            (false, true) => crate::gfx::TRANSLUCENT_ITEM_OVERLAY,
+            (false, false) => 0,
+            (true, true) => crate::gfx::TRANSLUCENT_GLINT_ITEM_OVERLAY,
+            (true, false) => 7,
+        };
         for (i, (p, uv)) in q.pos.iter().zip(q.uv).enumerate() {
             let glint_uv = glint.map_or([0.0, 0.0], |glint| glint.uv(q.foil_uv[i]));
             self.out.push(Vertex {
@@ -811,6 +849,33 @@ pub fn cluster_poses(state: &ItemRenderState, pose: Mat4, amount: u32, seed: i64
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A bad item model surfaces only once items.json has loaded, so a broken
+    /// items.json still reports itself first.
+    #[test]
+    fn item_model_errors_wait_for_the_item_definitions() -> crate::Result<()> {
+        let root =
+            std::env::temp_dir().join(format!("horizon-item-model-errors-{}", std::process::id()));
+        let model = root.join("assets/horizon/models/INVALID.json");
+        fs::create_dir_all(model.parent().unwrap())?;
+        fs::write(model, "{}")?;
+        let library = crate::model_library::ParsedModels::load(&root).into_item_library();
+        assert!(library.is_err());
+        fs::write(root.join("items.json"), "{")?;
+        let load = || {
+            ItemRenderer::load_with_library(&root, library.clone())
+                .err()
+                .unwrap()
+                .to_string()
+        };
+        let broken_items = load();
+        fs::write(root.join("items.json"), "{}")?;
+        let bad_model = load();
+        let _ = fs::remove_dir_all(&root);
+        assert!(!broken_items.starts_with("item models:"));
+        assert!(bad_model.starts_with("item models:"));
+        Ok(())
+    }
 
     #[test]
     fn rendered_amounts_follow_the_count_bands() {

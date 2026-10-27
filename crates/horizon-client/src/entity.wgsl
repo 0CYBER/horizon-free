@@ -239,7 +239,8 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
     // lit texture, then the lightmap, then the glint and fog.
     color = vec4(mix(in.overlay_color.rgb, color.rgb, in.overlay_color.a), color.a);
     color *= in.light_color;
-    if in.overlay == 7u || in.overlay == 8u {
+    if in.overlay == 7u || in.overlay == 8u || in.overlay == 33u {
+        // 33: a translucent item with the glint.
         // Enchantment glint: item.fsh's GLINT path, sampled from
         // enchanted_glint_item at the `GLINT_TEXTURING` UV.
         color = glint_over(color, textureSample(glint_tex, glint_sampler, in.glint_uv));
@@ -255,9 +256,43 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
     return vec4(mix(color.rgb, globals.fog_color.rgb, f * globals.fog_color.a), color.a);
 }
 
+// rendertype_outline.fsh: the vertex colour (the team colour; outline vertices carry no
+// normal, so no cardinal light) wherever the texture is not fully clear.
+@fragment fn fs_outline(in: Out) -> @location(0) vec4<f32> {
+    if textureSample(atlas, atlas_sampler, in.uv).a == 0.0 { discard; }
+    return vec4(in.color.rgb, 1.0);
+}
+
+fn celestial_color(in: Out) -> vec4<f32> {
+    return textureSample(atlas, atlas_sampler, in.uv) * in.color * in.light_color;
+}
 @fragment fn fs_celestial(in: Out) -> @location(0) vec4<f32> {
-    let color = textureSample(atlas, atlas_sampler, in.uv) * in.color * in.light_color;
-    return color;
+    return celestial_color(in);
+}
+
+// The sky's celestial pass (sun, moon, the End sky): fs_celestial's light,
+// premultiplied for an additive (one, one) blend, and as alpha how much of it
+// the texel adds, which the blend takes off the frame's alpha. HDR output
+// (hdr.wgsl) lifts only where that left it low: the sun's and moon's discs, not
+// the dark rest of their quads or the dim End sky.
+@fragment fn fs_sky_celestial(in: Out) -> @location(0) vec4<f32> {
+    let color = celestial_color(in);
+    let added = color.rgb * color.a;
+    return vec4(added, smoothstep(0.1, 0.3, max(added.r, max(added.g, added.b))));
+}
+
+// RenderPipelines.ENERGY_SWIRL (entity.fsh with EMISSIVE and NO_OVERLAY): the sprite, scrolled by
+// the UV and repeated within itself, times the layer colour 0xFF808080, unlit; the pipeline adds
+// it to the frame. The light bytes carry the sprite's origin and the colour bytes its size, both
+// as breaking::stage_light packs them.
+@fragment fn fs_energy_swirl(in: Out) -> @location(0) vec4<f32> {
+    let bytes = round(in.color * 255.0);
+    let size = vec2(bytes.x + bytes.y * 256.0, bytes.z + bytes.w * 256.0) / 65535.0;
+    let color = textureSample(atlas, atlas_sampler, crumbling_uv(in.uv, in.wrap, size, textureDimensions(atlas)));
+    if color.a < 0.1 { discard; }
+    let f = max(linear_fog(in.spherical, globals.fog.x, globals.fog.y),
+                linear_fog(in.cylindrical, globals.fog.z, globals.fog.w));
+    return vec4(mix(color.rgb * (128.0 / 255.0), globals.fog_color.rgb, f * globals.fog_color.a), color.a);
 }
 
 // RenderPipelines.WATER_MASK: depth only (the pipeline masks the colour off).
