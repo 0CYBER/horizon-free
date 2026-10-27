@@ -1235,6 +1235,15 @@ fn hand_base(
         0.0
     };
     let mut t = part_matrix(model, base, poses, arm, offset)?;
+    if m.species() == Species::Vex {
+        // `VexModel.translateToHand`: the held item is drawn at 0.55 scale.
+        t *= glam::Mat4::from_scale(glam::Vec3::splat(0.55));
+        t *= glam::Mat4::from_translation(glam::Vec3::new(
+            if left { -0.046_875 } else { 0.046_875 },
+            -0.156_25,
+            0.078_125,
+        ));
+    }
     let (ox, oy, oz) = if m.is_baby() {
         (0.0, 1.0, -4.5)
     } else {
