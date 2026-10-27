@@ -65,7 +65,7 @@ pub fn data_home() -> Option<PathBuf> {
 }
 
 /// Quotes a path for an `Exec` key: inside double quotes, `"`, `` ` ``, `$` and `\` are escaped.
-fn quote(path: &Path) -> String {
+pub(crate) fn quote(path: &Path) -> String {
     let mut out = String::from("\"");
     for c in path.to_string_lossy().chars() {
         if matches!(c, '"' | '`' | '$' | '\\') {
@@ -215,7 +215,7 @@ pub fn needs_repair_in(data: &Path, path: Option<&OsStr>) -> bool {
 
 /// What the entry starts: a distributor's wrapper (`HORIZON_LAUNCHER_DESKTOP_EXEC`) when one is
 /// configured, else the binary at `exe`.
-fn target(exe: &Path) -> PathBuf {
+pub(crate) fn target(exe: &Path) -> PathBuf {
     std::env::var_os("HORIZON_LAUNCHER_DESKTOP_EXEC")
         .filter(|path| !path.is_empty())
         .map_or_else(|| exe.to_path_buf(), PathBuf::from)
