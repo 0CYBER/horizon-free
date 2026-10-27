@@ -275,16 +275,15 @@ fn terrain(name: Option<&str>) -> TerrainAdjustment {
         _ => TerrainAdjustment::None,
     }
 }
-fn pair(value: Option<&Value>, a: &str, b: &str, default: i32) -> [i32; 2] {
+/// A jigsaw field given as one number or as an object of two. In the object a
+/// missing `a` is 0 and a missing `b` is `missing_b` (`JigsawStructure.MaxDistance`
+/// and `DimensionPadding` default their second value, not copy the first).
+fn pair(value: Option<&Value>, a: &str, b: &str, default: i32, missing_b: i32) -> [i32; 2] {
     match value {
         Some(Value::Number(n)) => [n.as_i64().unwrap_or(0) as i32; 2],
         Some(Value::Object(o)) => {
-            let get = |k: &str| o.get(k).and_then(Value::as_i64).unwrap_or(0) as i32;
-            let first = get(a);
-            [
-                first,
-                o.get(b).and_then(Value::as_i64).map_or(first, |v| v as i32),
-            ]
+            let get = |k: &str| o.get(k).and_then(Value::as_i64).map(|v| v as i32);
+            [get(a).unwrap_or(0), get(b).unwrap_or(missing_b)]
         }
         _ => [default; 2],
     }
@@ -326,9 +325,11 @@ impl StructureRegistry {
                         "horizontal",
                         "vertical",
                         80,
+                        // DimensionType.Y_SIZE.
+                        4064,
                     ),
                     aliases: v["pool_aliases"].as_array().cloned().unwrap_or_default(),
-                    padding: pair(v.get("dimension_padding"), "bottom", "top", 0),
+                    padding: pair(v.get("dimension_padding"), "bottom", "top", 0, 0),
                     waterlogging: v["liquid_settings"].as_str() != Some("ignore_waterlogging"),
                     checks: super::start_checks::StartChecks::decode(v.get("horizon:start_checks")),
                     piece_limited: v

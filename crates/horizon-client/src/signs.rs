@@ -147,10 +147,10 @@ fn component_text(tag: &Tag) -> String {
                 _ => s,
             }
         }
-        Tag::Compound(_) => match tag.get("text") {
-            Some(Tag::String(t)) => t.to_string_lossy(),
-            _ => String::new(),
-        },
+        // Component.getString: translations and key binds resolved.
+        Tag::Compound(_) => {
+            crate::scoreboard::comp_text(&crate::scoreboard::tag_to_json(tag)).plain()
+        }
         _ => String::new(),
     }
 }
