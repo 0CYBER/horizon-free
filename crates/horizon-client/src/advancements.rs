@@ -444,6 +444,8 @@ pub struct EntityView {
     pub gamemode: Option<String>,
     /// Lightning: entities it struck.
     pub struck: Vec<EntityView>,
+    /// Lightning: blocks it set on fire (`LightningBolt.blocksSetOnFire`).
+    pub blocks_set_on_fire: i32,
     pub fishing_open_water: Option<bool>,
     pub variant: Option<String>,
     /// The data components the entity reports (`Entity.get`): id and value.
@@ -734,7 +736,7 @@ pub fn entity(v: &Value, e: &EntityView, w: &dyn World, origin: [f64; 3]) -> boo
                         .is_some_and(|t| entity(&p["looking_at"], t, w, origin)))
             }
             "minecraft:type_specific/lightning" => {
-                range_i(&p["blocks_set_on_fire"], 0)
+                range_i(&p["blocks_set_on_fire"], i64::from(e.blocks_set_on_fire))
                     && (p["entity_struck"].is_null()
                         || e.struck
                             .iter()

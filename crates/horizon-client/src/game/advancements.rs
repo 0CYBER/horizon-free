@@ -1007,6 +1007,64 @@ impl Game<'_> {
             adv::conditions(&c["location"], &ctx, w)
         });
     }
+    /// `LightningStrikeTrigger`: the bolt, and the mobs around it that it did
+    /// not hit (`bystander`), each tested from this player's position.
+    pub(super) fn trigger_lightning_strike(&mut self, bolt: &EntityView, viewers: &[EntityView]) {
+        let me = self.player_entity();
+        let (bolt, viewers) = (bolt.clone(), viewers.to_vec());
+        self.trigger("minecraft:lightning_strike", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let bctx = adv::Entities {
+                this: Some(&bolt),
+                ..pctx
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::conditions(&c["lightning"], &bctx, w)
+                && (c["bystander"].is_null()
+                    || viewers.iter().any(|v| {
+                        adv::conditions(
+                            &c["bystander"],
+                            &adv::Entities {
+                                this: Some(v),
+                                ..pctx
+                            },
+                            w,
+                        )
+                    }))
+        });
+    }
+    /// `ChanneledLightningTrigger`: each victim condition matched by some
+    /// mob the bolt hit, from the player who channelled it.
+    pub(super) fn trigger_channeled_lightning(&mut self, victims: &[EntityView]) {
+        let me = self.player_entity();
+        let victims = victims.to_vec();
+        self.trigger("minecraft:channeled_lightning", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && c["victims"].as_array().into_iter().flatten().all(|want| {
+                    victims.iter().any(|v| {
+                        adv::conditions(
+                            want,
+                            &adv::Entities {
+                                this: Some(v),
+                                ..pctx
+                            },
+                            w,
+                        )
+                    })
+                })
+        });
+    }
     /// A trigger with only the player condition (slept_in_bed, started_riding).
     pub(super) fn trigger_player(&mut self, name: &str) {
         let me = self.player_entity();
