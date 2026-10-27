@@ -129,6 +129,7 @@ pub(super) struct Host<'a> {
     banners: &'a horizon_client::banner::Banners,
     sprites: &'a HashMap<String, Rect>,
     skins: &'a RefCell<horizon_client::skins::Downloader>,
+    profiles: &'a RefCell<horizon_client::skins::Resolver>,
 }
 impl SpecialHost for Host<'_> {
     fn banner_texture(&self, pattern: &str) -> Option<String> {
@@ -144,14 +145,14 @@ impl SpecialHost for Host<'_> {
     fn player_skin(&self, profile: &Value) -> Option<String> {
         // SkullBlockRenderer.getPlayerSkin: SkinManager.getInsecureSkinInformation
         // accepts a texture property without a signature, unlike the tab list.
-        let url = horizon_client::skins::profile_skin_url(profile)?;
-        let location =
-            horizon_client::skins::skin_location(&horizon_client::skins::texture_hash(&url)?);
-        let _ = self
-            .skins
-            .borrow_mut()
-            .state(horizon_client::skins::Kind::Skin, &url);
-        self.sprites.contains_key(&location).then_some(location)
+        // A `Dynamic` profile (a name or id only) resolves through the
+        // services (`PlayerSkinRenderCache.getOrDefault`).
+        Some(horizon_client::skins::head_skin(
+            profile,
+            &mut self.profiles.borrow_mut(),
+            &mut self.skins.borrow_mut(),
+            |location| self.sprites.contains_key(location),
+        ))
     }
 }
 
@@ -194,15 +195,34 @@ impl Game<'_> {
             banners: &self.res.stations().banners,
             sprites: &self.gui.atlas.sprites,
             skins: &self.skin_downloads,
+            profiles: &self.skin_profiles,
         }
     }
-    /// The client level as item models read it.
+    /// The client level as item models read it: worked out once a frame (a
+    /// screen of items read the same level, its sky sampled once).
     pub(super) fn item_level(&self) -> LevelState {
         let dimension = match self.dim {
             Dim::Overworld => "minecraft:overworld",
             Dim::Nether => "minecraft:the_nether",
             Dim::End => "minecraft:the_end",
         };
+        let key = (
+            self.frames,
+            self.world.game_time,
+            self.world.day_time,
+            dimension,
+        );
+        let mut cached = self.item_level_cache.borrow_mut();
+        if let Some((at, level)) = cached.as_ref()
+            && *at == key
+        {
+            return level.clone();
+        }
+        let level = self.level_state_now(dimension);
+        *cached = Some((key, level.clone()));
+        level
+    }
+    fn level_state_now(&self, dimension: &'static str) -> LevelState {
         let sky = self
             .dim_environment()
             .sample(self.world.day_time, None, None);

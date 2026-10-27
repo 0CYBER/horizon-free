@@ -21,13 +21,15 @@ Every row has a one-line description and its cost in frame time (none, low, medi
 | Quality | smooth lighting, mipmap levels, biome blend, clouds, cloud distance, weather radius, particles, entity shadows, cutout leaves | `options.txt` |
 | | sky, fog, weather, animated textures | `horizon-graphics.txt` |
 | Display | FOV, max framerate, VSync, fullscreen, GUI scale | `options.txt` |
-| | resolution scale, anti-aliasing (FXAA), present mode, frame pacing | `horizon-graphics.txt` |
+| | resolution scale, anti-aliasing (FXAA), HDR, paper white, peak brightness, present mode, frame pacing | `horizon-graphics.txt` |
 | Performance | battery mode, worker threads, upload budget per frame | `horizon-graphics.txt` |
 | Overlay | performance overlay: FPS, frame/CPU/GPU times, frame-time graph | `horizon-graphics.txt` |
 
-`options.txt` keeps exactly vanilla's keys and values, so the options harness still compares it with vanilla; Horizon's settings live in `horizon-graphics.txt` beside it. Their defaults render as vanilla does: cave culling on, no upload budgets, sky, fog and weather on, 100% resolution, no FXAA, the present mode following VSync. VSync on always waits for the display (Fifo), in a window and in fullscreen, as in vanilla; the present mode setting chooses how frames are shown only while VSync is off. Frame pacing defaults to Efficient: the limiter sleeps through the last half millisecond where vanilla spins, which changes timing, not pixels.
+`options.txt` keeps exactly vanilla's keys and values, so the options harness still compares it with vanilla; Horizon's settings live in `horizon-graphics.txt` beside it. Their defaults render as vanilla does: cave culling on, no upload budgets, sky, fog and weather on, 100% resolution, no FXAA, HDR off, the present mode following VSync. VSync on always waits for the display (Fifo), in a window and in fullscreen, as in vanilla; the present mode setting chooses how frames are shown only while VSync is off. Frame pacing defaults to Efficient: the limiter sleeps through the last half millisecond where vanilla spins, which changes timing, not pixels.
 
 **Battery mode** (Performance, off by default) is for laptops and handhelds: at most 60 frames per second in a world, 30 in menus without a world or while another window has focus, and half the automatic worker threads (chunks load slower). It changes only when frames are drawn: what they show and the game's 20 ticks per second stay as they are.
+
+**HDR** (Display, off by default) presents to an HDR10 swapchain (`Rgb10a2Unorm`, BT.2020 with the PQ curve) or, where only that is offered, an scRGB one (`Rgba16Float`, extended linear sRGB), on displays and compositors that offer either; `HORIZON_HDR_OUTPUT=pq` or `scrgb` allows only one. The frame is drawn exactly as in SDR, in vanilla's gamma space, and a last pass (`hdr.wgsl`) decodes it to linear light at the **Paper White** and lifts light sources (blocks that emit light, lava, the sun and the moon) towards the **Peak Brightness**; everything else stays as in SDR. The mesher puts the light a block's face emits in its vertex colour's alpha (`EMISSION_BITS`), the frame's alpha carries the mark, and only pixels that still show the world before the hand and HUD are lifted. On Vulkan, `horizon-hdr` sends HDR metadata (MaxCLL, mastering luminance), which wgpu doesn't: without it a compositor may clip everything above SDR white. KWin maps the content's reference white onto the desktop's SDR brightness, so on Linux the default Paper White matches SDR mode. `HORIZON_HDR_DEBUG=1` paints lifted pixels magenta. Not lifted yet: glowing particles, distant LOD terrain.
 
 Which settings each screen shows, their descriptions and costs are in `crates/horizon-client/src/graphics_ui.rs` (`rows`); `graphics_style.rs` draws them.
 
@@ -45,7 +47,7 @@ Coverage and detail improve progressively; a large selected radius does not mean
 
 Ordinary Overworld atmospheric fog extends with the selected LOD distance. Fog Off disables distance haze at large ranges too; fluid, darkness and boss fog retain their limits.
 
-The setting is stored as `lodDistance` in `horizon-graphics.txt`; `0` disables it. Existing `renderDistance` in `options.txt` keeps its normal meaning for full chunks.
+The setting is stored as `lodDistance` in `horizon-graphics.txt`; `0` disables it. The official Far View mod (`mods/official/far-view`, [mods.md](mods.md)) turns the same distant terrain on from the mod browser, with its own distance and detail; the setting, when on, wins. Existing `renderDistance` in `options.txt` keeps its normal meaning for full chunks.
 
 Not implemented: anisotropic filtering (wgpu needs linear magnification for it, which blurs close blocks), MSAA (FXAA instead) and exclusive fullscreen (fullscreen is borderless).
 

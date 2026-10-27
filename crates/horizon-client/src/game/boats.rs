@@ -55,7 +55,7 @@ pub(super) struct Boat {
 /// `ChestBoat.CONTAINER_SIZE`.
 pub(super) const CHEST_SLOTS: usize = 27;
 pub(super) const WIDTH: f64 = 1.375;
-const HEIGHT: f64 = 0.5625;
+pub(super) const HEIGHT: f64 = 0.5625;
 impl Boat {
     pub fn new(id: u32, wood: Arc<str>, position: Vec3, yaw: f32) -> Self {
         Self {
@@ -587,6 +587,9 @@ impl Game<'_> {
     }
     /// The player's tick while riding: steer, tick the boat, sit in it.
     pub(super) fn tick_riding(&mut self, keys: Keys) -> horizon_client::Result<()> {
+        if self.tick_cushion_riding(keys) {
+            return Ok(());
+        }
         let Some(i) = self.boats.iter().position(|b| Some(b.id) == self.riding) else {
             if self.tick_cart_riding(keys) || self.tick_mount_riding(keys) {
                 return Ok(());
@@ -859,7 +862,7 @@ impl Game<'_> {
         let a = alpha as f32;
         let range = super::entity_culling::default_range(
             glam::DVec3::new(WIDTH, HEIGHT, WIDTH),
-            self.settings.entity_distance,
+            self.view_scale(),
         );
         for b in &self.boats {
             let entity_start = out.len();

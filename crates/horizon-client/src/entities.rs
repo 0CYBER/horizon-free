@@ -95,6 +95,15 @@ impl ItemEntity {
                 self.health -= fire_damage as i32;
             }
         }
+        // CactusBlock.entityInside: `entity.hurt(cactus, 1.0)`. An item has no
+        // hurt cooldown, so it loses 1 health every tick it touches a cactus
+        // (5 health: gone in 5 ticks). Fire resistance does not help;
+        // `ItemStack.canBeHurtBy` only skips it for a damage_resistant stack.
+        if crate::motion::environment::cactus_contact(world, registry, self.bounds())
+            && !items.resists_cactus(&self.stack)
+        {
+            self.health -= 1;
+        }
         ItemEnvironmentTick {
             alive: self.health > 0,
             lava_hurt,
@@ -385,8 +394,29 @@ pub struct ExperienceOrb {
     pub value: u32,
     pub age: u32,
     pub on_ground: bool,
+    /// `ExperienceOrb.count`: orbs merged into this one; each pickup gives
+    /// `value` once and takes one off.
+    pub count: u32,
+    /// `Entity.tickCount`, which paces `ExperienceOrb.scanForMerges`.
+    pub ticks: u32,
 }
 impl ExperienceOrb {
+    pub fn bounds(&self) -> Aabb {
+        let h = 0.25;
+        Aabb::new(
+            Vec3::new(self.position.x - h, self.position.y, self.position.z - h),
+            Vec3::new(
+                self.position.x + h,
+                self.position.y + 0.5,
+                self.position.z + h,
+            ),
+        )
+    }
+    /// `ExperienceOrb.canMerge(orb, id, value)` for an orb that is not removed:
+    /// the same value and ids a multiple of 40 apart.
+    pub fn can_merge(&self, id: u32, value: u32) -> bool {
+        self.value == value && (self.id as i32).wrapping_sub(id as i32) % 40 == 0
+    }
     /// ExperienceOrb.getExperienceValue: the largest orb size not above `value`.
     pub fn split(value: u32) -> u32 {
         [2477, 1237, 617, 307, 149, 73, 37, 17, 7, 3, 1]
@@ -416,7 +446,9 @@ impl ExperienceOrb {
         facts: &BlockFacts,
         collision: &BlockCollisionRegistry<'_>,
         player: Option<[f64; 3]>,
+        next_float: &mut dyn FnMut() -> f32,
     ) -> bool {
+        self.ticks += 1;
         self.previous = self.position;
         let block = world.block(
             self.position.x.floor() as i32,
@@ -431,6 +463,14 @@ impl ExperienceOrb {
             );
         } else {
             self.velocity.y -= 0.03;
+        }
+        if facts.get(block).fluid == Fluid::Lava {
+            // ExperienceOrb.tick: lava throws the orb back out.
+            self.velocity = Vec3::new(
+                f64::from((next_float() - next_float()) * 0.2),
+                f64::from(0.2f32),
+                f64::from((next_float() - next_float()) * 0.2),
+            );
         }
         if let Some(p) = player {
             let d = [
@@ -449,15 +489,7 @@ impl ExperienceOrb {
                 );
             }
         }
-        let h = 0.25;
-        let bounds = Aabb::new(
-            Vec3::new(self.position.x - h, self.position.y, self.position.z - h),
-            Vec3::new(
-                self.position.x + h,
-                self.position.y + 0.5,
-                self.position.z + h,
-            ),
-        );
+        let bounds = self.bounds();
         let mut scene = SceneCollisions {
             world,
             binding: collision,
@@ -494,6 +526,31 @@ impl ExperienceOrb {
         self.age < 6000
     }
 }
+/// `ExperienceOrb.scanForMerges`, run by each orb on `tickCount % 20 == 1`:
+/// it absorbs the orbs that `canMerge` within 0.5 blocks of its box,
+/// adding their counts and keeping the smaller age.
+pub fn merge_orbs(orbs: &mut Vec<ExperienceOrb>) {
+    let mut removed = vec![false; orbs.len()];
+    for i in 0..orbs.len() {
+        if removed[i] || orbs[i].ticks % 20 != 1 {
+            continue;
+        }
+        let area = orbs[i].bounds().inflate(Vec3::new(0.5, 0.5, 0.5));
+        for j in 0..orbs.len() {
+            if j != i
+                && !removed[j]
+                && orbs[j].can_merge(orbs[i].id, orbs[i].value)
+                && orbs[j].bounds().intersects(area)
+            {
+                orbs[i].count += orbs[j].count;
+                orbs[i].age = orbs[i].age.min(orbs[j].age);
+                removed[j] = true;
+            }
+        }
+    }
+    let mut removed = removed.into_iter();
+    orbs.retain(|_| !removed.next().unwrap_or(false));
+}
 /// Player experience (Player.giveExperiencePoints / getXpNeededForNextLevel).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Experience {
@@ -525,17 +582,21 @@ impl Experience {
             7 + level * 2
         }
     }
-    /// Returns true when a level was gained.
-    pub fn give(&mut self, points: i32) -> bool {
-        let start = self.level;
+    /// Returns the first multiple of 5 the player reached, where each level
+    /// gained would play the level-up sound (`Player.giveExperienceLevels`).
+    pub fn give(&mut self, points: i32) -> Option<i32> {
+        let mut sound_level = None;
         self.progress += points as f32 / Self::needed(self.level) as f32;
         self.total = self.total.saturating_add(points).max(0);
         while self.progress >= 1.0 {
             self.progress = (self.progress - 1.0) * Self::needed(self.level) as f32;
             self.level += 1;
+            if self.level % 5 == 0 {
+                sound_level.get_or_insert(self.level);
+            }
             self.progress /= Self::needed(self.level) as f32;
         }
-        self.level > start
+        sound_level
     }
 }
 /// A painting (`Painting`, a `HangingEntity`): the block it hangs in, the
@@ -589,6 +650,57 @@ impl Painting {
             std::array::from_fn(|i| c[i] - size[i] / 2.0),
             std::array::from_fn(|i| c[i] + size[i] / 2.0),
         )
+    }
+}
+/// The `DyeColor` ordinal of a colour name (`DyeColor.byName`), white when
+/// the name is unknown.
+pub fn dye_index(name: &str) -> u8 {
+    crate::mobs::render::DYE_NAMES
+        .iter()
+        .position(|n| *n == name)
+        .unwrap_or(0) as u8
+}
+/// A cushion (`Cushion`, a `BlockAttachedEntity`): a 1 x 0.25 block pillow
+/// that seats a player. It sits on the top face of a block, at the clicked
+/// height, and is coloured by its `DyeColor`.
+#[derive(Clone, Debug)]
+pub struct Cushion {
+    pub id: u32,
+    /// `Entity.position`: the bottom centre of the cushion.
+    pub position: Vec3,
+    /// `BlockAttachedEntity.pos` (the saved `block_pos`).
+    pub pos: [i32; 3],
+    pub yaw: f32,
+    /// `DyeColor` ordinal: white 0, orange 1, ..., black 15.
+    pub color: u8,
+    /// BlockAttachedEntity.ticksSinceLastCheck.
+    pub check_interval: u32,
+}
+impl Cushion {
+    /// `Entity.makeBoundingBox`: x and z half a block out, y to y + 0.25.
+    pub fn bounds(&self) -> ([f64; 3], [f64; 3]) {
+        let p = self.position;
+        (
+            [p.x - 0.5, p.y, p.z - 0.5],
+            [p.x + 0.5, p.y + 0.25, p.z + 0.5],
+        )
+    }
+    /// The `DyeColor` name of the cushion.
+    pub fn color_name(&self) -> &'static str {
+        crate::mobs::render::DYE_NAMES[usize::from(self.color.min(15))]
+    }
+    /// `Cushion.getCushionItemStackWithData`: the matching coloured item.
+    pub fn item(&self) -> String {
+        format!("minecraft:{}_cushion", self.color_name())
+    }
+    /// `Cushion.interact`'s seat: the vehicle's PASSENGER attachment
+    /// `(0, 0.25, 0)` less the player's `(0, 0.6, 0)`.
+    pub fn seat(&self) -> Vec3 {
+        Vec3::new(self.position.x, self.position.y - 0.35, self.position.z)
+    }
+    /// `Entity.getDismountLocationForPassenger`: on top of the cushion.
+    pub fn dismount(&self) -> Vec3 {
+        Vec3::new(self.position.x, self.position.y + 0.25, self.position.z)
     }
 }
 /// An item frame or glow item frame (`ItemFrame`).

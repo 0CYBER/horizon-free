@@ -487,6 +487,17 @@ public final class VanillaProtocolClient {
         long deadCommandAt = 0;
         // When the client last sent where it is.
         long positionAt = 0;
+        // Chat lines and furnace slot changes received, and how many there were when the current step sent
+        // its command or click: a step goes on once the server answered, not after a fixed time (a busy
+        // server answers seconds late, and a click sent before the last one's reply carries a stale state id).
+        int replies = 0;
+        int repliesBefore = 0;
+        // A shift-click changes two slots, each its own packet, which a busy server can send ticks apart: a furnace
+        // step waits for both. A full resend of the menu counts as both.
+        int furnaceReplies = 0;
+        int furnaceBefore = 0;
+        // The furnace's lit and cooking totals received: the server sends them a tick after what changed them.
+        int furnaceData = 0;
         while (System.currentTimeMillis() < deadline) {
             Received r;
             try {
@@ -501,7 +512,7 @@ public final class VanillaProtocolClient {
                 if (entities != null && !entities.acceptSelf(packet) && step >= ENTITIES) entities.accept(packet);
                 if (r.type.equals("minecraft:chunk_batch_start")) ordered = false;
                 if (respawning && !respawned) {
-                    String line = respawnLine(r);
+                    String line = respawnLine(r, playerId);
                     // PlayerList.respawn ends with initInventoryMenu: what follows is the
                     // next ticks' (health, entity data, chunks), in each server's own order.
                     respawned = r.type.equals("minecraft:container_set_content") && respawnAt != null;
@@ -558,15 +569,18 @@ public final class VanillaProtocolClient {
                 } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundContainerSetContentPacket p
                     && furnaceWindow > 0 && p.containerId() == furnaceWindow) {
                     furnaceState = p.stateId();
+                    furnaceReplies += 2;
                     record("play-furnace", "content " + p.items() + " carried " + p.carriedItem());
                 } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundContainerSetSlotPacket p
                     && furnaceWindow > 0 && p.getContainerId() == furnaceWindow) {
                     furnaceState = p.getStateId();
+                    furnaceReplies++;
                     record("play-furnace", "slot " + p.getSlot() + " " + p.getItem());
                     if (p.getSlot() == 2 && !p.getItem().isEmpty() && smeltedAt == 0) smeltedAt = now;
                 } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundContainerSetDataPacket p
                     && furnaceWindow > 0 && p.getContainerId() == furnaceWindow && (p.getId() == 1 || p.getId() == 3)) {
                     // Lit total and cooking total; the time left and the cooking timer follow the ticks.
+                    furnaceData++;
                     record("play-furnace", "data " + p.getId() + " " + p.getValue());
                 } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundEntityEventPacket p
                     && step == 5 + REPLIES.length && (int) (byte) field(p, "eventId") == 28) {
@@ -583,13 +597,16 @@ public final class VanillaProtocolClient {
                     record("play-death", "command reply " + json(p.content()));
                     respawning = respawn();
                 } else if (packet instanceof ClientboundSystemChatPacket p && step > 0 && step < 5 + REPLIES.length) {
+                    replies++;
                     record("play-chat", "system " + p.overlay() + " " + json(p.content()));
                 } else if (packet instanceof ClientboundPlayerChatPacket p && step > 0 && step < 5 + REPLIES.length) {
+                    replies++;
                     record("play-chat", "player " + p.sender() + " " + p.index() + " " + p.body().content() + " " + p.signature().isPresent()
                         + " " + p.unsignedContent().map(VanillaProtocolClient::json) + " " + text(p.filterMask()) + " "
                         + p.chatType().chatType().getRegisteredName() + " " + json(p.chatType().name()) + " "
                         + p.chatType().targetName().map(VanillaProtocolClient::json));
                 } else if (packet instanceof ClientboundDisguisedChatPacket p && step > 0 && step < 5 + REPLIES.length) {
+                    replies++;
                     record("play-chat", "disguised " + json(p.message()) + " " + p.chatType().chatType().getRegisteredName());
                 } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundAddEntityPacket p
                     && p.getType() == net.minecraft.world.entity.EntityTypes.SNOWBALL) {
@@ -679,20 +696,24 @@ public final class VanillaProtocolClient {
                 record("play-light-layers", inner.size() + " " + inner);
                 step = 1;
                 stepAt = now;
+                repliesBefore = replies;
                 send(new ServerboundChatPacket("hello from the parity client", Instant.now(), 0L, Optional.empty(),
                     new LastSeenMessages.Update(0, new BitSet(), (byte) 0)));
-            } else if (step == 1 && now - stepAt > 1500) {
+            } else if (step == 1 && answered(replies, repliesBefore, stepAt, now)) {
                 step = 2;
                 stepAt = now;
+                repliesBefore = replies;
                 send(new ServerboundChatCommandPacket("list"));
-            } else if (step >= 2 && step < 2 + REPLIES.length && now - stepAt > 1500) {
+            } else if (step >= 2 && step < 2 + REPLIES.length && answered(replies, repliesBefore, stepAt, now)) {
                 // Commands a player without operator rights may run, whose
                 // replies (a failure, a syntax error with its context, a
                 // failure with an argument) are compared component by component.
                 send(new ServerboundChatCommandPacket(REPLIES[step - 2]));
                 step++;
                 stepAt = now;
-            } else if (step == 2 + REPLIES.length && now - stepAt > 1500 && (villager >= 0 || now - stepAt > PATIENCE)) {
+                repliesBefore = replies;
+            } else if (step == 2 + REPLIES.length && answered(replies, repliesBefore, stepAt, now)
+                && (villager >= 0 || now - stepAt > PATIENCE)) {
                 // Right-click the villager (once the server sent it): the trading screen and its offers.
                 record("play-trade", "villager " + (villager >= 0));
                 if (villager >= 0) {
@@ -739,9 +760,13 @@ public final class VanillaProtocolClient {
                 send(new net.minecraft.network.protocol.game.ServerboundUseItemOnPacket(net.minecraft.world.InteractionHand.MAIN_HAND,
                     new net.minecraft.world.phys.BlockHitResult(net.minecraft.world.phys.Vec3.atCenterOf(furnace),
                         net.minecraft.core.Direction.NORTH, furnace, false), 1));
+                furnaceBefore = furnaceReplies;
                 step++;
                 stepAt = now;
-            } else if (step >= 8 + REPLIES.length && step <= 10 + REPLIES.length && furnaceWindow > 0 && now - stepAt > 1500
+            } else if (step >= 8 + REPLIES.length && step <= 10 + REPLIES.length && furnaceWindow > 0
+                && answered(furnaceReplies, furnaceBefore + 1, stepAt, now)
+                // Both totals with the window, then the cooking total the ore set, then the lit total the coal set.
+                && (furnaceData >= step - 6 - REPLIES.length || now - stepAt > PATIENCE)
                 // The ingot out once the furnace made it (200 ticks), and its tick's other changes came.
                 && (step < 10 + REPLIES.length || smeltedAt > 0 && now - smeltedAt > 1000 || now - stepAt > 10_000 + PATIENCE)) {
                 // Shift-click the ore (hotbar 0) into the input, the coal (hotbar 1) into the
@@ -752,9 +777,10 @@ public final class VanillaProtocolClient {
                 send(new net.minecraft.network.protocol.game.ServerboundContainerClickPacket(furnaceWindow, furnaceState, (short) slot,
                     (byte) 0, net.minecraft.world.inventory.ContainerInput.QUICK_MOVE,
                     new it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap<>(), net.minecraft.network.HashedStack.EMPTY));
+                furnaceBefore = furnaceReplies;
                 step++;
                 stepAt = now;
-            } else if (step == 11 + REPLIES.length && now - stepAt > 1500) {
+            } else if (step == 11 + REPLIES.length && answered(furnaceReplies, furnaceBefore + 1, stepAt, now)) {
                 send(new net.minecraft.network.protocol.game.ServerboundContainerClosePacket(furnaceWindow));
                 record("play-furnace", "closed");
                 step++;
@@ -816,6 +842,11 @@ public final class VanillaProtocolClient {
         record("error", "timed out in play, step " + step + ", chunks " + chunks.size());
     }
 
+    /** The server answered the step's command or click (at least 1.5 s after it, as before), or had all the time. */
+    private static boolean answered(int count, int before, long sent, long now) {
+        return now - sent > 1500 && (count > before || now - sent > PATIENCE);
+    }
+
     /**
      * A right click's snowballs are counted: once the first came and a second could have come with it
      * (the server spawns each in the tick it handles the click), or once the server had all the time.
@@ -857,8 +888,12 @@ public final class VanillaProtocolClient {
      * packets (time, keep-alive, chunk data and light, whose batching follows each server's
      * timing) left out; null to skip it.
      */
-    private String respawnLine(Received r) {
+    private String respawnLine(Received r, int playerId) {
         String t = r.type;
+        // Other entities (a squid's swim event, a mob coming into view) land in the window as each server's
+        // ticks fall: only the player's own are PlayerList.respawn's.
+        Integer entity = entityOf(r.packet);
+        if (entity != null && entity != playerId) return null;
         // Entities moving, blocks the world's ticks change (a lava fall flows again once the game
         // runs) and the dead player's health land in the window between the death and the respawn
         // as each server's ticks fall: left out.
@@ -889,6 +924,21 @@ public final class VanillaProtocolClient {
             return t + " " + text(r.packet);
         }
         return t;
+    }
+
+    /** The entity a packet is about, for the packets that name one; null for the rest. */
+    private static Integer entityOf(Packet<?> packet) {
+        if (packet instanceof net.minecraft.network.protocol.game.ClientboundAddEntityPacket p) return p.getId();
+        if (packet instanceof net.minecraft.network.protocol.game.ClientboundUpdateAttributesPacket p) return p.getEntityId();
+        if (packet instanceof net.minecraft.network.protocol.game.ClientboundEntityEventPacket p) return (int) field(p, "entityId");
+        if (packet instanceof net.minecraft.network.protocol.game.ClientboundSetEquipmentPacket p) return p.getEntity();
+        if (packet instanceof net.minecraft.network.protocol.game.ClientboundAnimatePacket p) return p.getId();
+        if (packet instanceof net.minecraft.network.protocol.game.ClientboundHurtAnimationPacket p) return p.id();
+        if (packet instanceof net.minecraft.network.protocol.game.ClientboundDamageEventPacket p) return p.entityId();
+        if (packet instanceof net.minecraft.network.protocol.game.ClientboundUpdateMobEffectPacket p) return p.getEntityId();
+        if (packet instanceof net.minecraft.network.protocol.game.ClientboundRemoveMobEffectPacket p) return p.entityId();
+        if (packet instanceof net.minecraft.network.protocol.game.ClientboundSoundEntityPacket p) return p.getId();
+        return null;
     }
 
     /**
