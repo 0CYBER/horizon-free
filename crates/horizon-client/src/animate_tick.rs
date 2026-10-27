@@ -35,8 +35,9 @@ enum Animate {
     Campfire {
         spawn_particles: bool,
     },
-    /// Leaves: optional falling-leaf particle and chance, tinted by foliage.
-    Leaves(Option<(T, f32)>),
+    /// Leaves: optional falling-leaf particle and chance; a tinted leaf takes
+    /// the biome foliage colour unless a fixed colour is given (azalea).
+    Leaves(Option<(T, f32)>, Option<u32>),
     NetherPortal,
     EnchantingTable,
     EndRod([i32; 3]),
@@ -49,6 +50,8 @@ enum Animate {
     EnderChest,
     /// FallingBlock with its dust colour.
     Falling(u32),
+    /// A beehive or bee nest full of honey (`BeehiveBlock.animateTick`).
+    Beehive,
     RedstoneOre,
     RedstoneWire {
         power: u8,
@@ -58,7 +61,10 @@ enum Animate {
     BubbleColumn {
         drag: bool,
     },
-    Fire,
+    /// `BaseFireBlock` (`SoulFireBlock.canBurn` is always true).
+    Fire {
+        soul: bool,
+    },
     /// An active sculk sensor.
     SculkSensor,
     /// Potent sulfur that is not dry.
@@ -67,6 +73,8 @@ enum Animate {
         waterlogged: bool,
     },
     EndPortal,
+    /// `WetSpongeBlock.animateTick`.
+    WetSponge,
 }
 fn step(facing: &str) -> [i32; 3] {
     match facing {
@@ -101,10 +109,17 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Animate {
             spawn_particles: false,
         },
         "oak_leaves" | "birch_leaves" | "jungle_leaves" | "acacia_leaves" | "dark_oak_leaves"
-        | "mangrove_leaves" => Animate::Leaves(Some((T::TintedLeaves, 0.01))),
-        "cherry_leaves" => Animate::Leaves(Some((T::CherryLeaves, 0.1))),
-        "pale_oak_leaves" => Animate::Leaves(Some((T::PaleOakLeaves, 0.02))),
-        "spruce_leaves" | "azalea_leaves" | "flowering_azalea_leaves" => Animate::Leaves(None),
+        | "mangrove_leaves" => Animate::Leaves(Some((T::TintedLeaves, 0.01)), None),
+        "cherry_leaves" => Animate::Leaves(Some((T::CherryLeaves, 0.1)), None),
+        "pale_oak_leaves" => Animate::Leaves(Some((T::PaleOakLeaves, 0.02)), None),
+        "red_poplar_leaves" => Animate::Leaves(Some((T::RedPoplarLeaves, 0.01)), None),
+        "orange_poplar_leaves" => Animate::Leaves(Some((T::OrangePoplarLeaves, 0.01)), None),
+        "yellow_poplar_leaves" => Animate::Leaves(Some((T::YellowPoplarLeaves, 0.01)), None),
+        // The azalea blocks drop tinted leaves of the fixed colour -9399763.
+        "azalea_leaves" | "flowering_azalea_leaves" => {
+            Animate::Leaves(Some((T::TintedLeaves, 0.01)), Some(0x0070_922D))
+        }
+        "spruce_leaves" => Animate::Leaves(None, None),
         "nether_portal" => Animate::NetherPortal,
         "enchanting_table" => Animate::EnchantingTable,
         "end_rod" => Animate::EndRod(facing()),
@@ -116,6 +131,14 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Animate {
         "sand" => Animate::Falling(0xDBD3A0),
         "red_sand" => Animate::Falling(0xA95821),
         "gravel" => Animate::Falling(0x807C7B),
+        // AnvilBlock/ConcretePowderBlock.getDustColor is the map colour;
+        // DragonEggBlock's is black.
+        "anvil" | "chipped_anvil" | "damaged_anvil" => Animate::Falling(0xA7A7A7),
+        "dragon_egg" => Animate::Falling(0x000000),
+        _ if name.ends_with("_concrete_powder") => Animate::Falling(concrete_powder_color(
+            name.trim_end_matches("_concrete_powder"),
+        )),
+        "beehive" | "bee_nest" if prop("honey_level").as_deref() == Some("5") => Animate::Beehive,
         "redstone_ore" | "deepslate_redstone_ore" if lit => Animate::RedstoneOre,
         "redstone_wire" => {
             let power = prop("power").and_then(|p| p.parse().ok()).unwrap_or(0);
@@ -140,11 +163,16 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Animate {
         "bubble_column" => Animate::BubbleColumn {
             drag: prop("drag").as_deref() == Some("true"),
         },
-        "fire" | "soul_fire" => Animate::Fire,
+        "fire" => Animate::Fire { soul: false },
+        "soul_fire" => Animate::Fire { soul: true },
         "dried_ghast" => Animate::DriedGhast {
             waterlogged: prop("waterlogged").as_deref() == Some("true"),
         },
         "end_portal" => Animate::EndPortal,
+        "wet_sponge" => Animate::WetSponge,
+        // BrushableBlock has no dust colour of its own, so the dust is the map colour.
+        "suspicious_sand" => Animate::Falling(0xF7E9A3),
+        "suspicious_gravel" => Animate::Falling(0x707070),
         "sculk_sensor" | "calibrated_sculk_sensor"
             if prop("sculk_sensor_phase").as_deref() == Some("active") =>
         {
@@ -155,6 +183,27 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Animate {
             Animate::Candles(prop("candles").and_then(|c| c.parse().ok()).unwrap_or(1))
         }
         _ => Animate::None,
+    }
+}
+/// `DyeColor.getMapColor` of a concrete powder colour.
+fn concrete_powder_color(dye: &str) -> u32 {
+    match dye {
+        "white" => 0xFFFFFF,
+        "orange" => 0xD87F33,
+        "magenta" => 0xB24CD8,
+        "light_blue" => 0x6699D8,
+        "yellow" => 0xE5E533,
+        "lime" => 0x7FCC19,
+        "pink" => 0xF27FA5,
+        "gray" => 0x4C4C4C,
+        "light_gray" => 0x999999,
+        "cyan" => 0x4C7F99,
+        "purple" => 0x7F3FB2,
+        "blue" => 0x334CB2,
+        "brown" => 0x664C33,
+        "green" => 0x667F33,
+        "red" => 0x993333,
+        _ => 0x191919,
     }
 }
 /// `RedstoneWireBlock.COLORS`.
@@ -190,6 +239,8 @@ pub struct AnimateTables {
     power_transmitter: Vec<bool>,
     /// `#triggers_ambient_dried_ghast_block_sounds` (soul sand, soul soil).
     dried_ghast_sounds: Vec<bool>,
+    /// `FireBlock.canBurn`: states with ignite odds above zero (none waterlogged).
+    burnable: Vec<bool>,
     /// Biome id -> ambient particles and probabilities (`minecraft:visual/ambient_particles`).
     ambient: Vec<Vec<(T, f32)>>,
 }
@@ -220,6 +271,21 @@ impl AnimateTables {
                 })
                 .collect()
         };
+        let behaviour: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.join("block-behaviours.json"))?)?;
+        let ignite_odds = behaviour["fire"]["igniteOdds"].as_object();
+        let burnable = (0..registry.len() as u32)
+            .map(|id| {
+                // FireBlock.getIgniteOdds: a waterlogged state never burns.
+                registry.state(BlockStateId(id)).is_some_and(|s| {
+                    s.properties.get("waterlogged").map(String::as_str) != Some("true")
+                        && ignite_odds
+                            .and_then(|m| m.get(s.name.as_str()))
+                            .and_then(serde_json::Value::as_i64)
+                            .is_some_and(|odds| odds > 0)
+                })
+            })
+            .collect();
         let mut ambient = vec![Vec::new(); biomes.list.len()];
         for (name, &id) in &biomes.index {
             let path = root.join(format!(
@@ -248,6 +314,7 @@ impl AnimateTables {
             power_provider: by_state("minecraft:enchantment_power_provider"),
             power_transmitter: by_state("minecraft:enchantment_power_transmitter"),
             dried_ghast_sounds: by_state("minecraft:triggers_ambient_dried_ghast_block_sounds"),
+            burnable,
             ambient,
         })
     }
@@ -482,6 +549,53 @@ fn try_spawn_drip(
         }
     }
 }
+/// `BeehiveBlock.trySpawnDripParticles`.
+fn beehive_drip(
+    tables: &AnimateTables,
+    engine: &mut ParticleEngine,
+    ctx: &AnimateContext,
+    state: BlockStateId,
+    pos: [i32; 3],
+) {
+    if ctx.facts.get(state).fluid != Fluid::None || engine.random().next_float() < 0.3 {
+        return;
+    }
+    let Some((bottom, top, bounds)) = ctx.shape_y(pos) else {
+        return;
+    };
+    if top < 1.0
+        || tables
+            .impermeable
+            .get(state.0 as usize)
+            .copied()
+            .unwrap_or(false)
+    {
+        return;
+    }
+    let y = if bottom > 0.0 {
+        f64::from(pos[1]) + bottom - 0.05
+    } else {
+        let below = [pos[0], pos[1] - 1, pos[2]];
+        let below_top = ctx.shape_y(below).map_or(1.0, |s| s.1);
+        // `belowTop < 1 || !isCollisionShapeFullBlock` and no fluid below.
+        if (below_top < 1.0 || !ctx.sturdy(below))
+            && ctx.facts.get(ctx.state(below)).fluid == Fluid::None
+        {
+            f64::from(pos[1]) - 0.05
+        } else {
+            return;
+        }
+    };
+    let r = engine.random();
+    let (a, b) = (r.next_double(), r.next_double());
+    let (fx, fz) = (f64::from(pos[0]), f64::from(pos[2]));
+    let p = [
+        fx + bounds[0] + (bounds[1] - bounds[0]) * a,
+        y,
+        fz + bounds[2] + (bounds[3] - bounds[2]) * b,
+    ];
+    add(engine, T::DrippingHoney, p, [0.0; 3]);
+}
 /// `WaterFluid.animateTick` / `LavaFluid.animateTick`.
 fn fluid_animate_tick(
     engine: &mut ParticleEngine,
@@ -663,7 +777,7 @@ fn block_animate_tick(
                 }
             }
         }
-        Animate::Leaves(falling) => {
+        Animate::Leaves(falling, fixed_tint) => {
             let below = [pos[0], pos[1] - 1, pos[2]];
             // LeavesBlock.makeDrippingWaterParticles.
             if (ctx.raining_at)([pos[0], pos[1] + 1, pos[2]]) && next_int(engine.random(), 15) == 1
@@ -683,7 +797,7 @@ fn block_animate_tick(
                 let r = engine.random();
                 let p = [fx + r.next_double(), fy - 0.05, fz + r.next_double()];
                 let options = if ty == T::TintedLeaves {
-                    let c = ctx.foliage(pos);
+                    let c = fixed_tint.unwrap_or_else(|| ctx.foliage(pos));
                     let f = |s: u32| ((c >> s) & 255) as f32 / 255.0;
                     ParticleOptions::colored(ty, [f(16), f(8), f(0), 1.0])
                 } else {
@@ -855,6 +969,36 @@ fn block_animate_tick(
                 }
             }
         }
+        Animate::WetSponge => {
+            // Direction.getRandom: DOWN, UP, NORTH, SOUTH, WEST, EAST.
+            const DIRECTIONS: [[i32; 3]; 6] = [
+                [0, -1, 0],
+                [0, 1, 0],
+                [0, 0, -1],
+                [0, 0, 1],
+                [-1, 0, 0],
+                [1, 0, 0],
+            ];
+            let d = DIRECTIONS[next_int(engine.random(), 6) as usize];
+            // The sponge occludes, so only a sturdy neighbour face hides the drip.
+            if d != [0, 1, 0] && !ctx.sturdy([pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]]) {
+                let r = engine.random();
+                let p = match d {
+                    [0, -1, 0] => [fx + r.next_double(), fy - 0.05, fz + r.next_double()],
+                    [dx, _, 0] => {
+                        let y = fy + r.next_double() * 0.8;
+                        let z = fz + r.next_double();
+                        [fx + if dx > 0 { 1.1 } else { 0.05 }, y, z]
+                    }
+                    [_, _, dz] => {
+                        let y = fy + r.next_double() * 0.8;
+                        let x = fx + r.next_double();
+                        [x, y, fz + if dz > 0 { 1.1 } else { 0.05 }]
+                    }
+                };
+                add(engine, T::DrippingWater, p, [0.0; 3]);
+            }
+        }
         Animate::Mycelium => {
             let r = engine.random();
             if next_int(r, 10) == 0 {
@@ -953,6 +1097,13 @@ fn block_animate_tick(
                         [0.0; 3],
                     );
                 }
+            }
+        }
+        Animate::Beehive => {
+            // BeehiveBlock.animateTick: nextInt(1) + 1 attempts.
+            let attempts = next_int(engine.random(), 1) + 1;
+            for _ in 0..attempts {
+                beehive_drip(tables, engine, ctx, state, pos);
             }
         }
         Animate::RedstoneOre => {
@@ -1103,7 +1254,7 @@ fn block_animate_tick(
                 }
             }
         }
-        Animate::Fire => {
+        Animate::Fire { soul } => {
             let r = engine.random();
             if next_int(r, 24) == 0 {
                 let (volume, pitch) = (1.0 + r.next_float(), r.next_float() * 0.7 + 0.3);
@@ -1114,6 +1265,55 @@ fn block_animate_tick(
                     volume,
                     pitch,
                 );
+            }
+            // BaseFireBlock.animateTick: three large smoke above the fire, or
+            // two at each burnable neighbour's face when nothing burnable or
+            // sturdy supports it (SoulFireBlock.canBurn is always true).
+            let can_burn = |p: [i32; 3]| {
+                soul || tables
+                    .burnable
+                    .get(ctx.state(p).0 as usize)
+                    .copied()
+                    .unwrap_or(false)
+            };
+            let below = [pos[0], pos[1] - 1, pos[2]];
+            let sturdy = ctx.facts.get(ctx.state(below)).sturdy_full & (1 << 1) != 0;
+            if !can_burn(below) && !sturdy {
+                // (neighbour, coordinate axis, face at the axis' high end): the
+                // west, east, north, south and above faces, in vanilla order.
+                for (at, axis, high) in [
+                    ([pos[0] - 1, pos[1], pos[2]], 0usize, false),
+                    ([pos[0] + 1, pos[1], pos[2]], 0, true),
+                    ([pos[0], pos[1], pos[2] - 1], 2, false),
+                    ([pos[0], pos[1], pos[2] + 1], 2, true),
+                    ([pos[0], pos[1] + 1, pos[2]], 1, true),
+                ] {
+                    if !can_burn(at) {
+                        continue;
+                    }
+                    for _ in 0..2 {
+                        let r = engine.random();
+                        let d = [r.next_double(), r.next_double(), r.next_double()];
+                        let mut p = [fx + d[0], fy + d[1], fz + d[2]];
+                        // The face coordinate hugs the edge: `* 0.1F` (float).
+                        p[axis] = if high {
+                            f64::from(pos[axis]) + 1.0 - d[axis] * f64::from(0.1f32)
+                        } else {
+                            f64::from(pos[axis]) + d[axis] * f64::from(0.1f32)
+                        };
+                        add(engine, T::LargeSmoke, p, [0.0; 3]);
+                    }
+                }
+            } else {
+                for _ in 0..3 {
+                    let r = engine.random();
+                    let p = [
+                        fx + r.next_double(),
+                        fy + r.next_double() * 0.5 + 0.5,
+                        fz + r.next_double(),
+                    ];
+                    add(engine, T::LargeSmoke, p, [0.0; 3]);
+                }
             }
         }
     }
@@ -1138,32 +1338,71 @@ fn candle(engine: &mut ParticleEngine, p: [f64; 3]) {
     }
     add(engine, T::SmallFlame, p, [0.0; 3]);
 }
-/// `CampfireBlockEntity.particleTick` for every lit campfire (no cooking items).
+/// `CampfireBlockEntity.particleTick` for every lit campfire; `cooking` says
+/// which of a campfire's four slots hold an item.
 pub fn campfire_particles<'a>(
     tables: &AnimateTables,
     engine: &mut ParticleEngine,
     ctx: &AnimateContext,
     blocks: impl Iterator<Item = &'a ([i32; 3], u32)>,
+    cooking: &dyn Fn([i32; 3]) -> [bool; 4],
 ) {
     for &(pos, state) in blocks {
         if !tables.is_lit_campfire(state) {
             continue;
         }
-        let signal = ctx
+        let properties = ctx
             .registry
             .state(BlockStateId(state))
-            .is_some_and(|s| s.properties.get("signal_fire").map(String::as_str) == Some("true"));
+            .map(|s| &s.properties);
+        let prop = |k: &str| properties.and_then(|p| p.get(k)).map(String::as_str);
+        let signal = prop("signal_fire") == Some("true");
+        // Direction.get2DDataValue: south, west, north, east.
+        let rotation = match prop("facing") {
+            Some("west") => 1,
+            Some("north") => 2,
+            Some("east") => 3,
+            _ => 0,
+        };
         let r = engine.random();
         if r.next_float() < 0.11 {
             let count = next_int(r, 2) + 2;
             for _ in 0..count {
-                make_campfire_smoke(engine, pos, signal);
+                make_campfire_smoke(engine, pos, signal, false);
+            }
+        }
+        // The smoke over each cooking item, at the slot's corner of the fire.
+        let occupied = cooking(pos);
+        for (slot, _) in occupied.iter().enumerate().filter(|(_, held)| **held) {
+            if engine.random().next_float() >= 0.2 {
+                continue;
+            }
+            // Direction.from2DDataValue((slot + rotation) % 4) and its clockwise side.
+            let (step, clockwise) = match (slot + rotation) % 4 {
+                0 => ([0.0, 1.0], [-1.0, 0.0]),
+                1 => ([-1.0, 0.0], [0.0, -1.0]),
+                2 => ([0.0, -1.0], [1.0, 0.0]),
+                _ => ([1.0, 0.0], [0.0, 1.0]),
+            };
+            let at = [
+                f64::from(pos[0]) + 0.5 - step[0] * 0.3125 + clockwise[0] * 0.3125,
+                f64::from(pos[1]) + 0.5,
+                f64::from(pos[2]) + 0.5 - step[1] * 0.3125 + clockwise[1] * 0.3125,
+            ];
+            for _ in 0..4 {
+                add(engine, T::Smoke, at, [0.0, 5.0e-4, 0.0]);
             }
         }
     }
 }
-/// `CampfireBlock.makeParticles` (always visible, overriding the limiter).
-pub fn make_campfire_smoke(engine: &mut ParticleEngine, pos: [i32; 3], signal: bool) {
+/// `CampfireBlock.makeParticles` (always visible, overriding the limiter);
+/// `smoking` adds the plain smoke puff at the logs.
+pub fn make_campfire_smoke(
+    engine: &mut ParticleEngine,
+    pos: [i32; 3],
+    signal: bool,
+    smoking: bool,
+) {
     let r = engine.random();
     let sign = |r: &mut LegacyRandom| if r.next_boolean() { 1.0 } else { -1.0 };
     let dx = r.next_double() / 3.0;
@@ -1177,6 +1416,17 @@ pub fn make_campfire_smoke(engine: &mut ParticleEngine, pos: [i32; 3], signal: b
         T::CampfireCosySmoke
     };
     engine.create(&ParticleOptions::simple(ty), [x, y, z], [0.0, 0.07, 0.0]);
+    if smoking {
+        let r = engine.random();
+        let dx = r.next_double() / 4.0 * sign(r);
+        let dz = r.next_double() / 4.0 * sign(r);
+        let at = [
+            f64::from(pos[0]) + 0.5 + dx,
+            f64::from(pos[1]) + 0.4,
+            f64::from(pos[2]) + 0.5 + dz,
+        ];
+        engine.create(&ParticleOptions::simple(T::Smoke), at, [0.0, 0.005, 0.0]);
+    }
 }
 
 #[cfg(test)]

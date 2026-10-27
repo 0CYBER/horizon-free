@@ -11,24 +11,38 @@ use horizon_client::{
         chunks::ChunkEncoder,
         data::SyncData,
         entity::{EntityState, States},
-        hub::{HostEvent, HostState, Hub, HubConfig, TickCtx},
+        hub::{BodyFlags, HostEvent, HostState, Hub, HubConfig, TickCtx},
         playerdata,
     },
-    mobs::{Mob, leash::Holder},
+    mobs::{Mob, Who, leash::Holder},
     text::Text,
 };
 use horizon_core::geometry::Vec3;
 use horizon_protocol::{
     crypto::offline_uuid,
     entity_data::{Value, serializer},
+    packets::play::{self, Clientbound as C},
 };
 use std::{
     collections::HashMap,
-    sync::{Arc, OnceLock},
+    sync::{Arc, Mutex},
 };
 
 /// The registries and tags are the same for every world: load them once.
-static SYNC: OnceLock<std::result::Result<Arc<SyncData>, String>> = OnceLock::new();
+static SYNC: Mutex<Option<std::result::Result<Arc<SyncData>, String>>> = Mutex::new(None);
+
+/// The registries and tags a server sends, loaded from `root` the first time.
+pub(super) fn sync_data(root: &std::path::Path) -> std::result::Result<Arc<SyncData>, String> {
+    let mut sync = SYNC.lock().unwrap_or_else(|e| e.into_inner());
+    sync.get_or_insert_with(|| SyncData::load(root).map(Arc::new))
+        .clone()
+}
+
+/// Let go of what `sync_data` loaded: for a preload no world used
+/// (game/world_loading.rs).
+pub(super) fn forget_sync_data() {
+    *SYNC.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
 
 /// The settings of the open world (WorldOptionsScreen's multiplayer section).
 #[derive(Clone, Copy, Debug)]
@@ -147,6 +161,7 @@ pub(super) fn baby_index(kind: &str) -> Option<u8> {
 fn mob_meta(
     m: &Mob,
     hub: &Hub,
+    player_entity: Option<i32>,
     meta: &mut Vec<(u8, i32, Value)>,
     defaults: &mut Vec<(u8, i32, Value)>,
 ) {
@@ -177,6 +192,17 @@ fn mob_meta(
         meta.push((9, serializer::FLOAT, Value::Float(health)));
     }
     defaults.push((9, serializer::FLOAT, Value::Float(1.0)));
+    // LivingEntity.DATA_EFFECT_PARTICLES and DATA_EFFECT_AMBIENCE_ID: the
+    // swirls of its effects (the ones a mob has are visible, not ambient).
+    meta.extend(
+        hub.effect_meta(
+            (m.extra.effects.iter())
+                .filter(|e| !m.extra.hidden_effects.contains(&e.0))
+                .map(|e| (e.0, false)),
+        ),
+    );
+    defaults.push((10, serializer::PARTICLES, Value::Particles(Vec::new())));
+    defaults.push((11, serializer::BOOLEAN, Value::Bool(false)));
     // Mob.DATA_MOB_FLAGS_ID: no AI 1, left-handed 2, aggressive 4 (what
     // draws a vindicator's axe, a skeleton's drawn bow, a piglin's raised
     // weapon).
@@ -196,12 +222,52 @@ fn mob_meta(
     let e = &m.extra;
     let id = |registry: &str, name: &str| hub.registry_id(registry, &format!("minecraft:{name}"));
     match kind {
+        "minecraft:guardian" | "minecraft:elder_guardian" => {
+            // Guardian.DATA_ID_MOVING and DATA_ID_ATTACK_TARGET.
+            if e.flag2 {
+                meta.push((16, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            let target = if e.flag {
+                m.ai.target.and_then(|who| match who {
+                    Who::Player => player_entity,
+                    Who::Mob(id) => Some(id as i32),
+                })
+            } else {
+                None
+            };
+            if let Some(target) = target {
+                meta.push((17, serializer::INT, Value::Int(target)));
+            }
+            defaults.push((16, serializer::BOOLEAN, Value::Bool(false)));
+            defaults.push((17, serializer::INT, Value::Int(0)));
+        }
         // Bat.DATA_ID_FLAGS: resting in bit 0, flying by default.
         "minecraft:bat" => {
             if e.flag {
                 meta.push((16, serializer::BYTE, Value::Byte(1)));
             }
             defaults.push((16, serializer::BYTE, Value::Byte(0)));
+        }
+        // SnowGolem.DATA_PUMPKIN_ID: 16 while the pumpkin is on (the default).
+        "minecraft:snow_golem" => {
+            if e.sheared {
+                meta.push((16, serializer::BYTE, Value::Byte(0)));
+            }
+            defaults.push((16, serializer::BYTE, Value::Byte(16)));
+        }
+        // MushroomCow.DATA_TYPE: 0 red, 1 brown.
+        "minecraft:mooshroom" => {
+            if e.variant == 1 {
+                meta.push((17, serializer::INT, Value::Int(1)));
+            }
+            defaults.push((17, serializer::INT, Value::Int(0)));
+        }
+        // Piglin.DATA_IS_DANCING (after the baby flag and the crossbow charge).
+        "minecraft:piglin" => {
+            if e.scratch[0] > 0 {
+                meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((19, serializer::BOOLEAN, Value::Bool(false)));
         }
         // Sheep.DATA_WOOL_ID: the colour in the low nibble, 16 when sheared.
         "minecraft:sheep" => {
@@ -317,6 +383,14 @@ fn mob_meta(
             }
             defaults.push((17, serializer::BOOLEAN, Value::Bool(false)));
         }
+        // PolarBear.DATA_STANDING_ID (after AgeableMob's two): the bear
+        // rears up; the client animates it.
+        "minecraft:polar_bear" => {
+            if e.flag {
+                meta.push((18, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((18, serializer::BOOLEAN, Value::Bool(false)));
+        }
         // SpellcasterIllager.DATA_SPELL_CASTING_ID: the casting pose.
         "minecraft:evoker" | "minecraft:illusioner" => {
             if e.variant2 != 0 {
@@ -338,6 +412,26 @@ fn mob_meta(
     }
 }
 
+/// What a client shakes a mob by: Entity.DATA_TICKS_FROZEN (7), whose full
+/// count is `isFullyFrozen`, and Strider.DATA_SUFFOCATING (19, after
+/// AgeableMob's two and DATA_BOOST_TIME).
+fn mob_freeze_meta(
+    m: &Mob,
+    meta: &mut Vec<(u8, i32, Value)>,
+    defaults: &mut Vec<(u8, i32, Value)>,
+) {
+    if m.ticks_frozen > 0 {
+        meta.push((7, serializer::INT, Value::Int(m.ticks_frozen)));
+    }
+    defaults.push((7, serializer::INT, Value::Int(0)));
+    if m.kind.id == "minecraft:strider" {
+        if m.extra.flag {
+            meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+        }
+        defaults.push((19, serializer::BOOLEAN, Value::Bool(false)));
+    }
+}
+
 /// The equipment a mob shows (ClientboundSetEquipmentPacket slots: main hand,
 /// off hand, feet, legs, chest, head, body, saddle).
 fn mob_equipment(
@@ -346,13 +440,16 @@ fn mob_equipment(
     out: &mut Vec<(u8, Option<horizon_protocol::item::Stack>)>,
 ) {
     let e = &m.extra;
+    // A horse's armour, a llama's carpet, a harness: Horizon keeps the body
+    // slot's item (6) in `head`.
+    let body = horizon_client::mobs::drops::head_is_body(m.species());
     let slots = [
         (0u8, &e.main_hand),
         (1, &e.off_hand),
         (2, &e.feet),
         (3, &e.legs),
         (4, &e.chest),
-        (5, &e.head),
+        (if body { 6 } else { 5 }, &e.head),
     ];
     for (slot, item) in slots {
         if let Some(item) = item {
@@ -542,10 +639,7 @@ impl Game<'_> {
         config: HubConfig,
         host: Option<u128>,
     ) -> Result<()> {
-        let root = self.options.resources.clone();
-        let sync = SYNC
-            .get_or_init(|| SyncData::load(&root).map(Arc::new))
-            .clone()?;
+        let sync = sync_data(&self.options.resources)?;
         let biome_names: Vec<String> = self
             .res
             .biomes()
@@ -646,6 +740,7 @@ impl Game<'_> {
         self.audio.capture = None;
         self.lan_events.clear();
         self.lan_critical_hits.clear();
+        self.lan_cushion_breaks.clear();
         self.streaming.extra.clear();
         if announce {
             self.system_message(Text::translate(
@@ -816,6 +911,16 @@ impl Game<'_> {
             living_flags: living_flags(self.using)
                 | if p.auto_spin_attack_ticks > 0 { 4 } else { 0 },
             bed: self.sleeping,
+            body: BodyFlags {
+                gliding: p.fall_flying,
+                swimming: p.swimming,
+                crawling: p.pose == horizon_client::pose::Pose::Swimming && !p.swimming,
+                crouching: p.pose == horizon_client::pose::Pose::Crouching,
+                spin_attack: p.auto_spin_attack_ticks > 0,
+                on_fire: p.fire_ticks > 0,
+                invisible: self.potions.effects.get("invisibility").is_some(),
+                glowing: self.potions.effects.get("glowing").is_some(),
+            },
         })
     }
 
@@ -832,12 +937,13 @@ impl Game<'_> {
         for m in self.mobs.iter().filter(|m| !m.removed) {
             // The lead's holder: the player the mob sees (a guest, else the
             // host) or another mob. A fence knot isn't an entity here.
+            let player_entity = mob_players
+                .get(&m.id)
+                .and_then(|conn| hub.guest(*conn))
+                .map(|g| g.entity_id)
+                .or(host_entity);
             let leash = m.extra.leash.and_then(|h| match h {
-                Holder::Player => mob_players
-                    .get(&m.id)
-                    .and_then(|conn| hub.guest(*conn))
-                    .map(|g| g.entity_id)
-                    .or(host_entity),
+                Holder::Player => player_entity,
                 Holder::Mob(id) => Some(id as i32),
                 Holder::Knot(_) => None,
             });
@@ -847,7 +953,8 @@ impl Game<'_> {
             e.on_ground = m.on_ground;
             e.velocity = [m.velocity.x, m.velocity.y, m.velocity.z];
             e.needs_sync = m.needs_sync;
-            mob_meta(m, hub, &mut e.meta, &mut e.defaults);
+            mob_meta(m, hub, player_entity, &mut e.meta, &mut e.defaults);
+            mob_freeze_meta(m, &mut e.meta, &mut e.defaults);
             mob_equipment(m, hub, &mut e.equipment);
             self.mob_attributes(m, &mut e.attributes);
             e.leash = leash;
@@ -924,7 +1031,27 @@ impl Game<'_> {
             for m in &mut self.mobs {
                 m.needs_sync = false;
             }
+            for p in &mut self.creatures.projectiles {
+                p.needs_sync = false;
+            }
+            // `runBlockEvents`' broadcast precedes the tick's block changes
+            // (`ChunkHolder.broadcastChanges` in `tick_level` below): the
+            // guest re-runs a piston's `triggerEvent` while its level still
+            // has the blocks as they were before the move.
+            for (pos, b0, b1, state) in std::mem::take(&mut self.lan_block_events) {
+                host.hub.block_event(pos, b0, b1, state);
+            }
             let entities = states.as_slice();
+            // An entity that left the level since the last tick (a snowball
+            // that hit) is dropped by the tracker below: its event goes out
+            // first, as `Level.broadcastEntityEvent` precedes the discard.
+            let (gone, later): (Vec<_>, Vec<_>) = std::mem::take(&mut self.lan_entity_events)
+                .into_iter()
+                .partition(|(id, ..)| !entities.iter().any(|e| e.id == *id));
+            self.lan_entity_events = later;
+            for (id, event, at) in gone {
+                host.hub.entity_event(id, event, at);
+            }
             let spawn = self.spawn.map_or([0.5, 80.0, 0.5], |s| [s.x, s.y, s.z]);
             let events = {
                 let clock_rate = self.network_clock_rate();
@@ -971,6 +1098,9 @@ impl Game<'_> {
                 match event {
                     event @ (HostEvent::Chat { .. } | HostEvent::Warn(_) | HostEvent::Error(_)) => {
                         self.lan_log_event(event);
+                    }
+                    HostEvent::PlayerChat { sender, text } => {
+                        self.mod_player_chat(super::server_mods::Who::Uuid(sender), &text);
                     }
                     HostEvent::Joined(conn) => {
                         self.lan_guest_joined(&mut host, conn, state.as_ref(), entities, spawn);
@@ -1064,8 +1194,11 @@ impl Game<'_> {
         drop(holding);
         lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
         self.lan = Some(host);
-        // A mace's wind burst from a guest's attack.
+        // A blast from a guest's attack, and a mace's wind burst.
+        self.flush_lan_explosions();
         let _ = self.flush_wind_bursts();
+        // Particles a guest's turn sent (sweep attack, damage indicator, a hook's splashes).
+        self.flush_lan_particles();
     }
 
     fn lan_guest_joined(
@@ -1098,8 +1231,17 @@ impl Game<'_> {
             g.game_mode = default_mode;
         }
         if !known {
-            g.position = spawn;
-            g.previous_position = spawn;
+            // ServerPlayer.adjustSpawnLocation: a player new to the world
+            // stands where PlayerSpawnFinder puts them, not all on one spot
+            // (it reads the loaded level, which holds the spawn when it is
+            // the overworld).
+            let feet = if self.dim == super::Dim::Overworld {
+                self.server_player_spawn(spawn)
+            } else {
+                spawn
+            };
+            g.position = feet;
+            g.previous_position = feet;
             g.health = 20.0;
             g.food = 20;
             g.dimension = super::Dim::Overworld.id().to_owned();
@@ -1154,17 +1296,30 @@ impl Game<'_> {
             return;
         }
         for e in events {
-            if let horizon_world::level::LevelEvent::LevelEvent { id, pos, data } = e {
-                // The acting guest does not predict the egg's teleport
-                // particles, bone meal's growth, or anvil result sounds
-                // (these levelEvent calls name no excluded player).
-                let except = if matches!(*id, 2015 | 1505 | 1029 | 1030) {
-                    None
-                } else {
-                    self.lan_acting
-                };
-                self.lan_events
-                    .push((*id, [pos.x, pos.y, pos.z], *data, except));
+            match e {
+                horizon_world::level::LevelEvent::LevelEvent { id, pos, data } => {
+                    // The acting guest does not predict the egg's teleport
+                    // particles, bone meal's growth, or anvil result sounds
+                    // (these levelEvent calls name no excluded player), nor
+                    // the digger's own crack and hit sound (2019, 2020).
+                    let except = if matches!(*id, 2015 | 1505 | 1029 | 1030 | 2019 | 2020) {
+                        None
+                    } else {
+                        self.lan_acting
+                    };
+                    self.lan_events
+                        .push((*id, [pos.x, pos.y, pos.z], *data, except));
+                }
+                // `ServerLevel.runBlockEvents` broadcasts a handled block
+                // event (`ClientboundBlockEventPacket`): the guest re-runs
+                // the block's `triggerEvent` — a piston's `moveBlocks` is
+                // what animates the move there. `state` is the block the
+                // event named, read before it ran (the packet's `block`).
+                horizon_world::level::LevelEvent::BlockEntityEvent { pos, state, a, b } => {
+                    self.lan_block_events
+                        .push(([pos.x, pos.y, pos.z], *a, *b, state.0));
+                }
+                _ => {}
             }
         }
     }
@@ -1182,8 +1337,9 @@ impl Game<'_> {
             self.lan_entity_events.push((id, event, at));
         }
     }
-    /// `ServerPlayer.crit`: this window's emitter, and an animation for the
-    /// attacker's client and observers once the hub is back in place.
+    /// `ServerPlayer.crit` (or `magicCrit` when `magic`): this window's
+    /// emitter, and an animation for the attacker's client and observers once
+    /// the hub is back in place.
     pub(super) fn critical_hit(
         &mut self,
         attacker: Option<u32>,
@@ -1191,21 +1347,50 @@ impl Game<'_> {
         feet: [f64; 3],
         width: f64,
         height: f64,
+        magic: bool,
     ) {
         use horizon_client::particles::{ParticleOptions, ParticleType};
-        self.particles.tracking_emitter(
-            ParticleOptions::simple(ParticleType::Crit),
-            feet,
-            width,
-            height,
-        );
+        let particle = if magic {
+            ParticleType::EnchantedHit
+        } else {
+            ParticleType::Crit
+        };
+        self.particles
+            .tracking_emitter(ParticleOptions::simple(particle), feet, width, height);
         if self.audio.capture.is_some() {
-            self.lan_critical_hits.push((attacker, id));
+            self.lan_critical_hits.push((attacker, id, magic));
         }
     }
     /// Send the tick's level events, sounds and mob animations.
     fn lan_flush_effects(&mut self, host: &mut LanHost) {
         let critical_hits = std::mem::take(&mut self.lan_critical_hits);
+        for (state, at) in std::mem::take(&mut self.lan_cushion_breaks) {
+            if let Some(id) = host
+                .hub
+                .registry_id("minecraft:particle_type", "minecraft:block")
+            {
+                host.hub.broadcast_near(
+                    at,
+                    32.0,
+                    &C::LevelParticles(play::LevelParticles {
+                        particle: horizon_protocol::entity_data::Particle {
+                            id,
+                            data: Some(horizon_protocol::entity_data::ParticleData::State(
+                                state.0 as i32,
+                            )),
+                        },
+                        override_limiter: false,
+                        always_show: false,
+                        pos: at,
+                        dist: [0.25, 0.0625, 0.25],
+                        max_speed: [0.05; 3],
+                        count: 10,
+                        randomization: 0,
+                    }),
+                    None,
+                );
+            }
+        }
         for (kind, pos, data, acting) in std::mem::take(&mut self.lan_events) {
             if kind == 2001 {
                 host.broken
@@ -1278,13 +1463,13 @@ impl Game<'_> {
             seen.insert(m.id, (m.hurt_time, dead, swing));
         }
         host.mob_state.insert(self.dim, seen);
-        for (attacker, target) in critical_hits {
+        for (attacker, target, magic) in critical_hits {
             let Some(attacker) = attacker.map_or(Some(host.host_entity), |conn| {
                 host.hub.guest(conn).map(|g| g.entity_id)
             }) else {
                 continue;
             };
-            host.hub.critical_hit(attacker, target);
+            host.hub.critical_hit(attacker, target, magic);
         }
     }
 
@@ -1367,6 +1552,14 @@ impl Game<'_> {
                 .each_ref()
                 .map(|s| s.as_ref().map(|s| s.item.clone()));
             m.extra.crouching = g.sneaking;
+            m.extra.avatar_pose = g.pose();
+            m.extra.sprinting = g.sprinting;
+            // LivingEntity.DATA_EFFECT_PARTICLES: the swirls of its visible effects.
+            let visible = || g.effects.list.iter().filter(|e| e.visible);
+            m.extra.effect_particles = visible()
+                .filter_map(|e| super::client_ambient::effect_particle(e.id, e.ambient))
+                .collect();
+            m.extra.effect_ambient = visible().all(|e| e.ambient);
             // Lying in its bed (LivingEntity.getBedOrientation).
             m.extra.ints[1] = g.bed.map_or(0, |b| self.bed_facing(b));
             // LivingEntity.updateSwingTime: the arm swing lan_swings started.
