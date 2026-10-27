@@ -203,7 +203,7 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
     // lit texture, then the lightmap, then the glint and fog.
     color = vec4(mix(in.overlay_color.rgb, color.rgb, in.overlay_color.a), color.a);
     color *= in.light_color;
-    if in.overlay == 7u || in.overlay == 8u {
+    if in.overlay == 7u || in.overlay == 8u || in.overlay == 33u {
         // Enchantment glint (overlay 7, 8 with the hurt tint): the purple
         // enchanted_glint sheen drifting diagonally over the item's shape.
         let px = in.uv * vec2<f32>(textureDimensions(atlas));
@@ -217,6 +217,13 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
     let f = max(linear_fog(in.spherical, globals.fog.x, globals.fog.y),
                 linear_fog(in.cylindrical, globals.fog.z, globals.fog.w));
     return vec4(mix(color.rgb, globals.fog_color.rgb, f * globals.fog_color.a), color.a);
+}
+
+// rendertype_outline.fsh: the vertex colour (the team colour; outline vertices carry no
+// normal, so no cardinal light) wherever the texture is not fully clear.
+@fragment fn fs_outline(in: Out) -> @location(0) vec4<f32> {
+    if textureSample(atlas, atlas_sampler, in.uv).a == 0.0 { discard; }
+    return vec4(in.color.rgb, 1.0);
 }
 
 fn celestial_color(in: Out) -> vec4<f32> {

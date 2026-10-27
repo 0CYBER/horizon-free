@@ -177,8 +177,71 @@ pub fn body(m: &Mob) -> (String, String) {
             "frog#main".into(),
             format!("entity/frog/frog_{}", climate(m)),
         ),
-        S::Rabbit => (
-            baby_or(m, "rabbit#main", "rabbit_baby#main"),
+        // RabbitRenderer.getTextureLocation: the Toast name tag, else the
+        // variant (the killer bunny's id is 99).
+        S::Rabbit => {
+            let name = if m.custom_name.as_deref() == Some("Toast") {
+                "toast"
+            } else {
+                match m.extra.variant {
+                    1 => "white",
+                    2 => "black",
+                    3 => "white_splotched",
+                    4 => "gold",
+                    5 => "salt",
+                    99 => "caerbannog",
+                    _ => "brown",
+                }
+            };
+            (
+                baby_or(m, "rabbit#main", "rabbit_baby#main"),
+                b(&format!("entity/rabbit/rabbit_{name}")),
+            )
+        }
+        // ParrotRenderer.getVariantTexture.
+        S::Parrot => {
+            let name = ["red_blue", "blue", "green", "yellow_blue", "grey"]
+                [usize::from(m.extra.variant).min(4)];
+            (m.kind.model_key(), format!("entity/parrot/parrot_{name}"))
+        }
+        // AxolotlRenderer.getTextureLocation.
+        S::Axolotl => {
+            let name =
+                ["lucy", "wild", "gold", "cyan", "blue"][usize::from(m.extra.variant).min(4)];
+            (
+                baby_or(m, "axolotl#main", "axolotl_baby#main"),
+                b(&format!("entity/axolotl/axolotl_{name}")),
+            )
+        }
+        // SalmonRenderer.submit: the model of the salmon's size.
+        S::Salmon => {
+            let model = match m.extra.variant {
+                0 => "salmon_small#main",
+                2 => "salmon_large#main",
+                _ => "salmon#main",
+            };
+            (model.into(), "entity/fish/salmon".into())
+        }
+        // The baby models and textures of AgeableMobRenderer's other
+        // subclasses.
+        S::Goat => (
+            baby_or(m, "goat#main", "goat_baby#main"),
+            b(&m.kind.texture),
+        ),
+        S::PolarBear => (
+            baby_or(m, "polar_bear#main", "polar_bear_baby#main"),
+            b(&m.kind.texture),
+        ),
+        S::Ocelot => (
+            baby_or(m, "ocelot#main", "ocelot_baby#main"),
+            b(&m.kind.texture),
+        ),
+        S::Turtle => (
+            baby_or(m, "turtle#main", "turtle_baby#main"),
+            b(&m.kind.texture),
+        ),
+        S::Armadillo => (
+            baby_or(m, "armadillo#main", "armadillo_baby#main"),
             b(&m.kind.texture),
         ),
         S::Pig => {
@@ -241,7 +304,7 @@ pub fn body(m: &Mob) -> (String, String) {
         ),
         S::ZombieVillager => (
             baby_or(m, "zombie_villager#main", "zombie_villager_baby#main"),
-            "entity/zombie_villager/zombie_villager".into(),
+            b("entity/zombie_villager/zombie_villager"),
         ),
         S::Villager => (
             baby_or(m, "villager#main", "villager_baby#main"),
@@ -765,7 +828,14 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
     let rotation = match sleep {
         // setupRotations for Pose.SLEEPING, with the head moved toward the pillow.
         Some((angle, step)) => {
-            let head = (m.eye_y() - m.position.y) as f32 - 0.1;
+            // The eye height of the standing pose (LivingEntityRenderer
+            // extracts `getEyeHeight(Pose.STANDING)` for a bed).
+            let eye = if avatar(m) {
+                m.kind.eye_height as f32
+            } else {
+                (m.eye_y() - m.position.y) as f32
+            };
+            let head = eye - 0.1;
             glam::Mat4::from_translation(glam::Vec3::new(-step[0] * head, 0.0, -step[1] * head))
                 * glam::Mat4::from_rotation_y(angle.to_radians())
                 * glam::Mat4::from_rotation_z(90.0_f32.to_radians())
