@@ -59,6 +59,14 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
                 };
                 slots
             }
+            // `TypedEntityData`: a block item's block entity, which the op
+            // warning and a spawner's tooltip read.
+            Component::Raw(bytes) if *kind == component::BLOCK_ENTITY_DATA => {
+                let Some(data) = block_entity_data_tag(bytes, builtin) else {
+                    continue;
+                };
+                data
+            }
             // Read past, not decoded: the item keeps its prototype's value.
             Component::Raw(_) => continue,
             // Trim materials and patterns are synced registries, as enchantments are.
@@ -216,6 +224,19 @@ fn template_tag(t: &Stack, builtin: &Builtin, synced: &Dynamic) -> Tag {
         entries.push(("components", c));
     }
     Tag::compound(entries)
+}
+
+/// `TypedEntityData.streamCodec` of a block entity: its type's registry id,
+/// then its data without the id, which the saved component keeps.
+fn block_entity_data_tag(bytes: &[u8], builtin: &Builtin) -> Option<Tag> {
+    let mut r = Reader::new(bytes);
+    let id = r.varint().ok()?;
+    let kind = builtin.get("minecraft:block_entity_type")?.name(id)?;
+    let Tag::Compound(mut data) = r.nbt().ok()? else {
+        return None;
+    };
+    data.insert("id".into(), Tag::String(kind.into()));
+    Some(Tag::Compound(data))
 }
 
 /// `ItemContainerContents.STREAM_CODEC`, one optional template per slot, as

@@ -44,6 +44,7 @@ pub mod component {
     pub const LODESTONE_TRACKER: i32 = 69;
     pub const FIREWORK_EXPLOSION: i32 = 70;
     pub const FIREWORKS: i32 = 71;
+    pub const BLOCK_ENTITY_DATA: i32 = 62;
     pub const CONTAINER: i32 = 77;
 }
 
