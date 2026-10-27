@@ -133,6 +133,7 @@ mod persist;
 mod perspective;
 mod pickups;
 mod piglins;
+mod piston_push;
 mod player_equip;
 mod postprocess;
 mod potions;
@@ -2984,20 +2985,29 @@ impl Game<'_> {
             b.run_block_events(level, ticks);
             b.tick_block_entities(level, ticks);
         });
+        // `PistonMovingBlockEntity.tick` pushes what its block just ran into,
+        // with the progress it is about to take.
+        let pushes = std::mem::take(&mut self.block_ticks.piston_pushes);
+        self.push_piston_entities(pushes);
+        self.process_level_events()?;
         self.sync_moving_pistons();
-        self.process_level_events()
+        Ok(())
     }
     /// Copies the moving-piston block entities into the world, where the
     /// collision queries and the renderer read them.
     fn sync_moving_pistons(&mut self) {
-        let pistons = &mut self.world.moving_pistons;
-        pistons.clear();
-        pistons.extend(
-            self.block_ticks
-                .moving_pistons
-                .iter()
-                .map(|(p, piston)| ([p.x, p.y, p.z], piston.shape_state())),
-        );
+        let previous = std::mem::take(&mut self.world.moving_pistons);
+        let current: Vec<_> = self
+            .block_ticks
+            .moving_pistons
+            .iter()
+            .map(|(p, piston)| ([p.x, p.y, p.z], piston.shape_state()))
+            .collect();
+        self.world.moving_piston_fallback = previous
+            .into_iter()
+            .filter(|(pos, _)| !current.iter().any(|(next, _)| next == pos))
+            .collect();
+        self.world.moving_pistons = current;
     }
     /// `ServerLevel.tick`'s scheduled block then fluid ticks, one at a time:
     /// the side effects of each (a shrieker summoning a warden, drops, game
