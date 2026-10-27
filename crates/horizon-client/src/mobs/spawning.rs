@@ -39,6 +39,8 @@ pub struct LocalDifficulty {
     pub normal: bool,
     /// The world difficulty is hard.
     pub hard: bool,
+    /// `Difficulty.getId`: 0 peaceful to 3 hard.
+    pub id: u8,
 }
 /// `DimensionType.MOON_BRIGHTNESS_PER_PHASE`.
 pub const MOON_BRIGHTNESS: [f32; 8] = [1.0, 0.75, 0.5, 0.25, 0.0, 0.25, 0.5, 0.75];
@@ -53,6 +55,7 @@ impl LocalDifficulty {
                 effective: 0.0,
                 normal,
                 hard,
+                id: base,
             };
         }
         let global = ((total as f32 - 72000.0) / 1_440_000.0).clamp(0.0, 1.0) * 0.25;
@@ -66,6 +69,7 @@ impl LocalDifficulty {
             effective: f32::from(base) * (0.75 + global + local),
             normal,
             hard,
+            id: base,
         }
     }
     /// `getSpecialMultiplier`.

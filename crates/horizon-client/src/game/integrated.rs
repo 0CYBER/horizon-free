@@ -420,6 +420,8 @@ impl Game<'_> {
             s.flags.published.store(0, Ordering::Relaxed);
         }
         if let Some(mut host) = self.lan.take() {
+            // PlayerList.removeAll: the owner and every guest leave the game.
+            host.award_leave_game_to_all();
             for g in &host.hub.guests {
                 self.save_guest(&host, g);
             }
