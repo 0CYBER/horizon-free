@@ -1,6 +1,7 @@
 //! `BundleContents.Mutable`: what a bundle takes in and gives back, by
 //! weight. The menus (`menu`, `lan::menu`) run `BundleItem`'s click
 //! overrides on it.
+use crate::item_data::BundleSelected;
 use crate::items::{ItemStack, Items};
 use horizon_world::nbt::Tag;
 
@@ -97,6 +98,8 @@ pub fn can_be_in_bundle(stack: &ItemStack) -> bool {
 pub struct Contents {
     items: Vec<ItemStack>,
     weight: Weight,
+    /// `selectedItem`: an index into `items`, -1 for none.
+    selected: i32,
 }
 
 impl Contents {
@@ -104,9 +107,11 @@ impl Contents {
     pub fn of(items: &Items, stack: &ItemStack) -> Option<Self> {
         let inside = contents_of(items, stack)?.to_vec();
         let weight = contents_weight(items, &inside);
+        let selected = stack.data().map_or(-1, |d| d.bundle_selected.0);
         Some(Self {
             items: inside,
             weight,
+            selected,
         })
     }
 
@@ -154,16 +159,24 @@ impl Contents {
         amount
     }
 
-    /// `removeOne`: the first stack (Horizon keeps no selected item).
+    /// `removeOne`: the selected stack, else the first; nothing is selected after.
     pub fn remove_one(&mut self, items: &Items) -> Option<ItemStack> {
         if self.items.is_empty() {
             return None;
         }
-        let stack = self.items.remove(0);
+        let at =
+            usize::try_from(self.selected).map_or(0, |i| if i < self.items.len() { i } else { 0 });
+        let stack = self.items.remove(at);
         self.weight = self
             .weight
             .sub(item_weight(items, &stack).times(stack.count));
+        self.selected = -1;
         Some(stack)
+    }
+
+    /// `getSelectedItemIndex`.
+    pub fn selected(&self) -> i32 {
+        self.selected
     }
 
     /// The stacks inside, in display order (the first is the next out).
@@ -200,9 +213,26 @@ impl Contents {
 
     /// `toImmutable`, written back into the bundle's component.
     pub fn store(self, bundle: &mut ItemStack) {
-        bundle.data_mut().bundle_contents = self.items;
+        let data = bundle.data_mut();
+        data.bundle_contents = self.items;
+        data.bundle_selected = BundleSelected(self.selected);
         bundle.tidy();
     }
+}
+
+/// `BundleItem.toggleSelectedItem`: select `index`, or nothing when it is the
+/// selected one already or outside the contents.
+pub fn toggle_selected(bundle: &mut ItemStack, index: i32) {
+    let Some(data) = bundle.extra.as_deref_mut() else {
+        return;
+    };
+    let inside = (0..data.bundle_contents.len() as i32).contains(&index);
+    let selected = if data.bundle_selected.0 != index && inside {
+        index
+    } else {
+        -1
+    };
+    data.bundle_selected = BundleSelected(selected);
 }
 
 #[cfg(test)]
@@ -232,8 +262,10 @@ pub struct TooltipLayout {
     /// The component's own width (96) and height, the text's excluded.
     pub width: f32,
     pub height: f32,
-    /// Each slot's top-left and the stack in it, in reading order.
+    /// Each slot's top-left and the stack in it, in drawing order.
     pub slots: Vec<([f32; 2], ItemStack)>,
+    /// The position in `slots` of the selected item, which is drawn highlighted.
+    pub selected: Option<usize>,
     /// The `+N` of the items past the grid: its top-left and the count.
     pub overflow: Option<([f32; 2], u32)>,
     /// The progress bar's top-left, its fill's width out of 94, and whether
@@ -266,6 +298,7 @@ pub fn tooltip_layout(
             width: 96.0,
             height: description_height + 13.0 + 8.0,
             slots: Vec::new(),
+            selected: None,
             overflow: None,
             bar: [x + offset, y + description_height + 4.0],
             fill: 0.0,
@@ -282,6 +315,7 @@ pub fn tooltip_layout(
     let x_start = x + offset + 96.0;
     let y_start = y + grid_height;
     let mut slots = Vec::with_capacity(shown.len());
+    let mut selected = None;
     let mut overflow = None;
     // Rows fill bottom-up and columns right-to-left, as vanilla draws them.
     let mut slot = 0;
@@ -290,8 +324,13 @@ pub fn tooltip_layout(
             let at = [x_start - column as f32 * 24.0, y_start - row as f32 * 24.0];
             if hidden > 0 && row == 1 && column == 1 {
                 overflow = Some((at, hidden));
-            } else if let Some(stack) = shown.get(slot) {
-                slots.push((at, stack.clone()));
+            } else if slot < shown.len() {
+                // `extractSlot`: the cell of slot number n holds item `size - n`.
+                let index = shown.len() - 1 - slot;
+                if usize::try_from(contents.selected()) == Ok(index) {
+                    selected = Some(slots.len());
+                }
+                slots.push((at, shown[index].clone()));
                 slot += 1;
             }
         }
@@ -301,6 +340,7 @@ pub fn tooltip_layout(
         width: 96.0,
         height: grid_height + 13.0 + 8.0,
         slots,
+        selected,
         overflow,
         bar: [x + offset, y + grid_height + 4.0],
         // `Mth.mulAndTruncate(weight, 94)`, kept within the bar.
@@ -349,8 +389,8 @@ mod tooltip_tests {
         assert_eq!(layout.slots.len(), 12);
         assert_eq!(layout.overflow, None);
         assert_eq!(layout.height, 3.0 * 24.0 + 13.0 + 8.0);
-        // Rows fill bottom-up and columns right-to-left: the first item is in
-        // the bottom-right cell, the twelfth in the top-left.
+        // Rows fill bottom-up and columns right-to-left: the twelfth item is in
+        // the bottom-right cell, the first in the top-left.
         assert_eq!(layout.slots[0].0, [96.0 - 24.0, 3.0 * 24.0 - 24.0]);
         assert_eq!(&*layout.slots[0].1.item, "minecraft:stone");
         assert_eq!(layout.slots[11].0, [0.0, 0.0]);

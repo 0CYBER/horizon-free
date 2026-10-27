@@ -64,6 +64,25 @@ impl Game<'_> {
                     pos: BlockPos::new(pos[0], pos[1], pos[2]),
                     data: 0,
                 });
+            } else if self
+                .res
+                .facts()
+                .get(block.state)
+                .name
+                .starts_with("minecraft:suspicious_")
+            {
+                // BrushableBlock.onBrokenAfterFall.
+                let at = BlockPos::new(pos[0], pos[1], pos[2]);
+                self.level_events.push(LevelEvent::LevelEvent {
+                    id: 2001,
+                    pos: at,
+                    data: block.state.0 as i32,
+                });
+                self.level_events.push(LevelEvent::GameEvent {
+                    pos: at,
+                    event: "minecraft:block_destroy",
+                    state: None,
+                });
             }
             return;
         }
