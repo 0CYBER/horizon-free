@@ -1,9 +1,14 @@
 //! Creative inventory (CreativeModeInventoryScreen): vanilla's tabs and their
 //! contents as built by the game's own display generators
 //! (`creative-inventory.json`), a 9x5 scrolling grid and the search tab.
-use crate::{Result, items::ItemStack};
+use crate::{Result, items::ItemStack, ui::EditBox};
 use serde_json::Value;
-use std::{collections::HashMap, fs, path::Path};
+use std::{
+    collections::HashMap,
+    fs,
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 #[derive(Clone, Debug)]
 pub struct Tab {
@@ -35,13 +40,22 @@ pub struct Creative {
     pub scroll: f32,
     /// The scrollbar is held (scrolling): dragging moves it.
     pub scrolling: bool,
-    pub search: String,
-    /// When the search box took the focus (`EditBox.setFocused`): its
-    /// cursor blinks from then.
-    pub search_focused: std::time::Instant,
+    /// CreativeModeInventoryScreen's search box: an unbordered `EditBox` of 50.
+    pub search: EditBox,
     /// The search tab's stacks, in its display order.
     search_items: Vec<ItemStack>,
     search_index: Vec<SearchEntry>,
+    /// ItemPickerMenu.items: what the grid shows, filled when the tab or the
+    /// search changes (selectTab, refreshSearchResults), not on every frame.
+    shown: Mutex<Option<Shown>>,
+}
+/// The grid's stacks for one tab, search text and language.
+struct Shown {
+    tab: usize,
+    search: String,
+    /// A display name, so a language change refills the search results.
+    language: String,
+    items: Arc<[ItemStack]>,
 }
 /// Display names from the pinned en_us language file.
 #[derive(Default)]
@@ -284,10 +298,16 @@ impl Creative {
             selected: 0,
             scroll: 0.0,
             scrolling: false,
-            search: String::new(),
-            search_focused: std::time::Instant::now(),
+            search: {
+                let mut search = EditBox::new(0.0, 0.0, 80.0, 9.0);
+                search.bordered = false;
+                search.max_length = 50;
+                search.text_color = u32::MAX;
+                search
+            },
             search_items,
             search_index,
+            shown: Mutex::new(None),
         }
     }
     /// Where a stack comes in the creative tabs (the search tab lists them
@@ -300,18 +320,35 @@ impl Creative {
             .position(|s| s.same_item_same_components(stack))
             .or_else(|| items.iter().position(|s| s.item == stack.item))
     }
+    /// The tabs without their stacks: what the screen draws of them each frame.
+    pub fn tab_headers(&self) -> Vec<Tab> {
+        self.tabs
+            .iter()
+            .map(|t| Tab {
+                id: t.id.clone(),
+                title: t.title.clone(),
+                icon: t.icon.clone(),
+                items: Vec::new(),
+                top: t.top,
+                column: t.column,
+                search: t.search,
+                inventory: t.inventory,
+            })
+            .collect()
+    }
     pub fn tab(&self) -> &Tab {
         &self.tabs[self.selected.min(self.tabs.len() - 1)]
     }
     /// selectTab: a different tab empties the search box; the scrollbar goes to the top.
     pub fn select(&mut self, tab: usize) {
         if tab != self.selected {
-            self.search.clear();
+            self.search.set_value("");
         }
         self.selected = tab;
         self.scroll = 0.0;
         if self.tab().search {
-            self.search_focused = std::time::Instant::now();
+            self.search.focused = true;
+            self.search.reset_blink();
         }
     }
     /// The search tab's stacks.
@@ -380,17 +417,44 @@ impl Creative {
         })
         .collect()
     }
-    /// Items shown by the selected tab (the search tab filters by `search`).
-    pub fn items(&self, names: &Names) -> Vec<ItemStack> {
-        let tab = self.tab();
-        if tab.search {
-            return self
-                .search_results(&self.search, names)
+    /// Items shown by the selected tab (the search tab filters by `search`),
+    /// worked out again only when the tab, the search or the language changed.
+    pub fn items(&self, names: &Names) -> Arc<[ItemStack]> {
+        let tab = self.selected.min(self.tabs.len() - 1);
+        let search = if self.tab().search {
+            self.search.value.as_str()
+        } else {
+            ""
+        };
+        let language = names.display_get("itemGroup.search").unwrap_or_default();
+        let mut shown = self.shown.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(s) = shown.as_ref()
+            && s.tab == tab
+            && s.search == search
+            && s.language == language
+        {
+            return s.items.clone();
+        }
+        let items: Arc<[ItemStack]> = if self.tab().search {
+            self.search_results(search, names)
                 .into_iter()
                 .map(|i| self.search_items[i].clone())
-                .collect();
-        }
-        tab.items.clone()
+                .collect()
+        } else {
+            self.tab().items.as_slice().into()
+        };
+        *shown = Some(Shown {
+            tab,
+            search: search.to_owned(),
+            language,
+            items: items.clone(),
+        });
+        items
+    }
+    /// Drop the shown items, so the next `items` works them out again: a
+    /// reload can rename items without changing the Search label.
+    pub fn forget_items(&self) {
+        *self.shown.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
     pub fn rows(&self, names: &Names) -> usize {
         self.items(names).len().div_ceil(9)
@@ -754,13 +818,13 @@ mod tests {
             (1, false, true),
             (2, true, false),
         ] {
-            c.search = "anvil".into();
+            c.search.set_value("anvil");
             c.scroll = 0.5;
             c.select(selected);
             assert_eq!(c.selected, selected);
             assert_eq!(c.tab().inventory, inventory);
             assert_eq!(c.tab().search, search);
-            assert!(c.search.is_empty());
+            assert!(c.search.value.is_empty());
             assert_eq!(c.scroll, 0.0);
         }
     }
@@ -780,12 +844,12 @@ mod tests {
         assert_eq!(c.tabs[0].items[0].item.as_ref(), "minecraft:anvil");
         let mut c = c;
         c.select(1);
-        c.search = "anvil".into();
+        c.search.set_value("anvil");
         c.scroll = 0.5;
         c.select(1);
-        assert_eq!((c.search.as_str(), c.scroll), ("anvil", 0.0));
+        assert_eq!((c.search.value.as_str(), c.scroll), ("anvil", 0.0));
         c.select(0);
-        assert_eq!(c.search, "");
+        assert_eq!(c.search.value, "");
     }
 
     #[test]
@@ -898,5 +962,26 @@ mod tests {
         assert_eq!(c.scroller_offset(), 0.0);
         c.scroll = 1.0;
         assert_eq!(c.scroller_offset(), 95.0);
+    }
+
+    #[test]
+    fn search_edits_at_its_cursor() {
+        use winit::keyboard::KeyCode;
+        let mut c = creative(0);
+        c.select(1);
+        c.search.insert_text("hello world");
+        for _ in 0..5 {
+            assert!(c.search.key(KeyCode::ArrowLeft, false, false));
+        }
+        c.search.insert_text("X");
+        assert_eq!(c.search.value, "hello Xworld");
+        c.search.key(KeyCode::Home, false, true);
+        c.search.insert_text("Y");
+        assert_eq!(c.search.value, "Yworld");
+        // Ctrl+Left jumps a word; one step right and Backspace deletes before the cursor.
+        c.search.key(KeyCode::ArrowLeft, true, false);
+        c.search.key(KeyCode::ArrowRight, false, false);
+        c.search.key(KeyCode::Backspace, false, false);
+        assert_eq!(c.search.value, "world");
     }
 }

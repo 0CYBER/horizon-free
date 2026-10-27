@@ -77,6 +77,10 @@ pub(super) struct GuestPlay {
     last_inventory: u64,
     /// `Entity.portalProcess` and `portalCooldown` (game/server_travel.rs).
     pub(super) portal: horizon_client::nether_portal::PortalState,
+    /// `ServerPlayer.wonGame`: the End poem is showing, the player waits for
+    /// its client's PERFORM_RESPAWN (`respawn_requested`).
+    pub(super) won_game: bool,
+    pub(super) respawn_requested: bool,
     /// `Player.takeXpDelay`: ticks until the next orb can be taken.
     xp_delay: u32,
     /// What last killed the guest outright (`/kill`): the death message's key.
@@ -94,11 +98,14 @@ pub(super) struct GuestPlay {
 
 /// A guest's command waiting for the hub (`LanHost::commands`).
 pub(super) struct GuestCommand {
-    conn: u32,
-    command: String,
-    permission: u8,
+    pub(super) conn: u32,
+    pub(super) command: String,
+    pub(super) permission: u8,
     /// An integrated server's: no level teleports (yet).
-    integrated: bool,
+    pub(super) integrated: bool,
+    /// A mod's quiet command (game/lan_quiet.rs): its output suppressed, as
+    /// `CommandSourceStack.withSuppressedOutput` does.
+    pub(super) quiet: bool,
 }
 
 /// The game's own state while a guest's is swapped in (`enter_guest`), and
@@ -879,7 +886,11 @@ impl Game<'_> {
             .filter(|g| host.hub.here(g))
             .filter(|g| {
                 g.menu.as_ref().is_some_and(|m| {
-                    m.slots.valid(&self.world) && !m.slots.still_valid(&self.world, g, m.pos)
+                    (m.slots.valid(&self.world) && !m.slots.still_valid(&self.world, g, m.pos))
+                        || m.pos.is_some_and(|k| {
+                            k.1 == super::minecarts::CART_KEY_Y
+                                && !self.chest_vehicle_still_valid(k.2, g)
+                        })
                 })
             })
             .map(|g| g.conn)
@@ -891,6 +902,35 @@ impl Game<'_> {
                 self.guest_carried_back(host, gi);
             }
         }
+    }
+
+    /// `ContainerEntity.isChestVehicleStillValid`: the chest minecart or chest
+    /// boat is still there and within the guest's entity interaction range
+    /// plus 4 of its box.
+    fn chest_vehicle_still_valid(&self, id: i32, g: &horizon_client::lan::guest::Guest) -> bool {
+        let bounds = self
+            .carts
+            .iter()
+            .find(|c| c.id as i32 == id)
+            .map(|c| c.bounds())
+            .or_else(|| {
+                self.boats
+                    .iter()
+                    .find(|b| b.id as i32 == id)
+                    .map(|b| b.bounds())
+            });
+        let Some(b) = bounds else {
+            return false;
+        };
+        let eye = [g.position[0], g.position[1] + g.eye_height(), g.position[2]];
+        let (lo, hi) = (b.min_position(), b.max_position());
+        let d = [
+            eye[0] - eye[0].clamp(lo.x, hi.x),
+            eye[1] - eye[1].clamp(lo.y, hi.y),
+            eye[2] - eye[2].clamp(lo.z, hi.z),
+        ];
+        let range = if g.creative() { 5.0 } else { 3.0 } + 4.0;
+        d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < range * range
     }
 
     /// A packet from a guest that the hub does not handle itself.
@@ -1183,6 +1223,12 @@ impl Game<'_> {
             {
                 self.guest_carried_back(host, gi);
             }
+            S::SelectBundleItem(p) => {
+                if !spectator && let Ok(slot) = usize::try_from(p.slot) {
+                    host.hub
+                        .select_bundle_item(conn, slot, p.index, &mut self.world);
+                }
+            }
             S::ContainerClick(p) => {
                 let rules = ItemRules(self.res.items());
                 let slots = host.hub.guests[gi]
@@ -1217,6 +1263,9 @@ impl Game<'_> {
                 self.guest_carried_back(host, gi);
             }
             S::ChatCommand(c) => self.guest_chat_command(host, conn, &c.command),
+            S::CustomPayload(p) if p.channel == horizon_protocol::quiet::CHANNEL => {
+                self.guest_quiet_commands(host, conn, &p.data)
+            }
             S::ChatCommandSigned(p) => self.guest_signed_command(host, conn, p),
             S::ChangeDifficulty(p) if host.hub.guests[gi].permission >= 2 => {
                 if !self.level.difficulty_locked && (0..=3).contains(&p.difficulty) {
@@ -1315,6 +1364,13 @@ impl Game<'_> {
                 self.guest_suggestions(host, conn, &payload);
             }
             S::PlaceRecipe(p) => self.lan_place_recipe(host, conn, &p),
+            // handleClientCommand: PERFORM_RESPAWN after the poem leaves the End
+            // (the next server tick sends the player on).
+            S::ClientCommand(c)
+                if c.action == 0 && host.play.get(&conn).is_some_and(|p| p.won_game) =>
+            {
+                host.play.entry(conn).or_default().respawn_requested = true;
+            }
             S::ClientCommand(c) if c.action == 0 => self.guest_respawn(host, conn),
             // ServerStatsCounter.sendStats.
             S::ClientCommand(c) if c.action == 1 => {
@@ -1540,6 +1596,10 @@ impl Game<'_> {
             );
             return;
         }
+        // A server mod's command, for every player whatever their level.
+        if self.guest_server_mod_command(host, conn, command.trim_start_matches('/')) {
+            return;
+        }
         // An integrated server runs every player's commands at their own
         // permission level (`CommandSourceStack.permissions`); a LAN world
         // follows its Allow Commands, and a dedicated server leaves it to
@@ -1566,6 +1626,7 @@ impl Game<'_> {
             command: command.trim_start_matches('/').to_owned(),
             permission,
             integrated,
+            quiet: false,
         });
     }
 
@@ -1580,39 +1641,52 @@ impl Game<'_> {
                 return;
             }
             let c = host.commands.remove(0);
-            let mut host = self.lan.take().expect("checked above");
-            let Some(swap) = self.enter_guest(&mut host, c.conn) else {
-                self.lan = Some(host);
-                continue;
-            };
-            self.lan = Some(host);
-            self.chat_capture = Some(Vec::new());
-            let level = std::mem::replace(&mut self.ui.registries.permission, c.permission);
-            self.run_command(&c.command);
-            self.ui.registries.permission = level;
-            let lines = self.chat_capture.take().unwrap_or_default();
-            let mut host = self.lan.take().expect("a command puts the hub back");
-            self.leave_guest(&mut host, swap);
-            host.hub.sync_all_effects();
-            if !c.integrated {
-                // A teleport into another level happens before its feedback is sent.
-                self.run_level_teleports(&mut host);
-            }
-            // What the command earned is announced before its feedback.
-            self.announce_guest_advancements(&mut host);
-            for line in lines {
-                host.hub.send_to(
-                    c.conn,
-                    &C::SystemChat(play::SystemChat {
-                        content: horizon_client::lan::data::component_nbt(&line.component()),
-                        overlay: false,
-                    }),
-                );
-            }
-            // The other operators hear of it; never the player whose command it was.
-            self.send_admin_feedback(&mut host, Some(c.conn));
-            self.lan = Some(host);
+            self.run_guest_command(c);
         }
+    }
+
+    /// One guest's command as that guest, its feedback sent to them; false
+    /// when it failed (or the guest is gone).
+    pub(super) fn run_guest_command(&mut self, c: GuestCommand) -> bool {
+        let Some(mut host) = self.lan.take() else {
+            return false;
+        };
+        let Some(swap) = self.enter_guest(&mut host, c.conn) else {
+            self.lan = Some(host);
+            return false;
+        };
+        self.lan = Some(host);
+        self.chat_capture = Some(Vec::new());
+        let level = std::mem::replace(&mut self.ui.registries.permission, c.permission);
+        let ok = if c.quiet {
+            self.run_command_quietly(&c.command)
+        } else {
+            self.run_command(&c.command)
+        };
+        self.ui.registries.permission = level;
+        let lines = self.chat_capture.take().unwrap_or_default();
+        let mut host = self.lan.take().expect("a command puts the hub back");
+        self.leave_guest(&mut host, swap);
+        host.hub.sync_all_effects();
+        if !c.integrated {
+            // A teleport into another level happens before its feedback is sent.
+            self.run_level_teleports(&mut host);
+        }
+        // What the command earned is announced before its feedback.
+        self.announce_guest_advancements(&mut host);
+        for line in lines {
+            host.hub.send_to(
+                c.conn,
+                &C::SystemChat(play::SystemChat {
+                    content: horizon_client::lan::data::component_nbt(&line.component()),
+                    overlay: false,
+                }),
+            );
+        }
+        // The other operators hear of it; never the player whose command it was.
+        self.send_admin_feedback(&mut host, Some(c.conn));
+        self.lan = Some(host);
+        ok
     }
 
     /// The `broadcastToAdmins` lines a command queued (`source`: the guest
@@ -2122,6 +2196,7 @@ impl Game<'_> {
         let in_wall = !g.sleeping && self.in_wall(g.position, g.eye_height());
         let at = g.position;
         let sneaking = g.sneaking;
+        let mut soul = None;
         let events = self.as_guest(host, conn, |game| {
             let (rules, motion) = (game.world.health_rules, game.motion);
             let health = &motion.health;
@@ -2191,6 +2266,7 @@ impl Game<'_> {
             w.player.shift_key_down = sneaking;
             w.player.freeze_immune = freeze_immune;
             let _ = w.server_block_damage(start);
+            let _ = w.update_soul_speed_block();
             let _ = w.tick_environment_damage();
             let _ = w.apply_fire_contact();
             let _ = w.server_hazards_tick(in_wall);
@@ -2218,6 +2294,9 @@ impl Game<'_> {
             // LivingEntity.baseTick: outside the world border, then tickEffects.
             game.border_damage();
             game.tick_mob_effects();
+            // Soul Speed's effects (LivingEntity.baseTick's location_changed
+            // and tick effects); its particle goes to the players around.
+            soul = game.tick_soul_speed();
             let Some(player) = game.player.as_mut() else {
                 return (Vec::new(), None);
             };
@@ -2240,16 +2319,48 @@ impl Game<'_> {
             let marked = std::mem::take(&mut player.health.sync_velocity);
             let velocity = marked.then_some(player.velocity);
             game.record_combat(&events);
+            game.wear_armor(&events);
             (events, velocity)
         });
         let Some((events, marked)) = events else {
             return;
         };
+        if let Some((at, velocity)) = soul {
+            super::lan_particles::send_soul_particle(host, at, velocity);
+        }
         self.as_guest(host, conn, |game| game.tick_player_sculk_events());
         for event in events {
             match event {
                 MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, at),
+                // LivingEntity.checkFallDamage: the crumbs reach every player.
+                MotionEvent::Fall(horizon_client::landing::FallEvent::Particles {
+                    state,
+                    position,
+                    count,
+                    speed,
+                }) => self.landing_dust(Some(host), state, position, count, speed),
                 MotionEvent::Fall(event) => self.landing_block_updates(&event),
+                // HoneyBlock.maybeDoSlideEffects: the sound reaches the
+                // others (Player.playSound excludes the player, whose client
+                // plays it), the entity event 53 everyone around.
+                MotionEvent::HoneySlide {
+                    sound, particles, ..
+                } => {
+                    let Some((id, at)) = host.hub.guest(conn).map(|g| (g.entity_id, g.position))
+                    else {
+                        continue;
+                    };
+                    if sound {
+                        let name = "minecraft:block.honey_block.slide";
+                        let source = horizon_client::settings::sound_source(name) as i32;
+                        self.audio.play_unshared(name, Some(at), 1.0, 1.0);
+                        host.hub.sound(name, at, 1.0, 1.0, source, Some(conn));
+                    }
+                    if particles {
+                        self.honey_slide_particles(at);
+                        host.hub.entity_event(id, 53, at);
+                    }
+                }
                 _ => {}
             }
         }
@@ -2333,9 +2444,13 @@ impl Game<'_> {
             }
             if (next / 10) % 2 == 0
                 && !creative
-                && let Some(elytra) = game.armor[1].as_mut()
+                && let Some(stack) = game.armor[1].clone()
             {
-                elytra.damage += 1;
+                // `ItemStack.hurtAndBreak`: Unbreaking can save the wear.
+                let loss = game.durability_loss(&stack, 1);
+                if let Some(elytra) = game.armor[1].as_mut() {
+                    elytra.damage += loss;
+                }
             }
             let ctx = game.player_context(None);
             game.post_game_event("minecraft:elytra_glide", at, ctx);
@@ -2598,7 +2713,13 @@ impl Game<'_> {
             .random
             .next_int_bound(touching.len() as i32)
             .unwrap_or(0) as usize;
-        let orb = self.orbs.remove(touching[pick]);
+        // A merged orb gives its value once per count and goes at zero.
+        let orb = self.orbs[touching[pick]].clone();
+        if orb.count <= 1 {
+            self.orbs.remove(touching[pick]);
+        } else {
+            self.orbs[touching[pick]].count -= 1;
+        }
         play.xp_delay = 2;
         host.hub.take_item(orb.id as i32, id, 1, at);
         // ClientPacketListener.handleTakeItemEntity's sound, at the orb.

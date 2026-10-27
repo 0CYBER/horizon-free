@@ -34,8 +34,14 @@ fn reads_the_sample_and_keeps_unknown_kinds() {
         [Capability::GameRead, Capability::Hud, Capability::Chat]
     );
     // What CI writes reads back the same.
-    let again = Index::parse(&serde_json::to_string(&index).unwrap()).unwrap();
+    let text = serde_json::to_string(&index).unwrap();
+    let again = Index::parse(&text).unwrap();
     assert_eq!(again, index);
+    // Download counts: the publish job adds them; none is left out.
+    assert_eq!(hud.downloads, 0);
+    assert!(!text.contains("downloads"));
+    let counted = text.replacen("\"versions\"", "\"downloads\":12345,\"versions\"", 1);
+    assert_eq!(Index::parse(&counted).unwrap().projects[0].downloads, 12345);
 }
 
 #[test]

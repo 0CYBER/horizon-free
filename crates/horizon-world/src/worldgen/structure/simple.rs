@@ -18,10 +18,21 @@ fn empty_processors() -> Arc<ProcessorList> {
 #[derive(Debug)]
 pub struct BuriedTreasurePiece {
     pub position: [i32; 3],
+    /// Where the chest went: the box vanilla saves once placed.
+    pub found: Mutex<Option<[i32; 3]>>,
 }
 impl LegacyPiece for BuriedTreasurePiece {
     fn bounding_box(&self) -> BoundingBox {
         BoundingBox::new(self.position, self.position)
+    }
+    fn save(&self) -> Option<crate::nbt::Compound> {
+        let at = self.found.lock().unwrap().unwrap_or(self.position);
+        Some(super::legacy::piece_tag(
+            "minecraft:btp",
+            BoundingBox::new(at, at),
+            None,
+            0,
+        ))
     }
     fn type_name(&self) -> &'static str {
         "minecraft:btp"
@@ -58,6 +69,7 @@ impl LegacyPiece for BuriedTreasurePiece {
                         }
                     }
                 }
+                *self.found.lock().unwrap() = Some(pos);
                 create_chest(c, pos, "minecraft:chests/buried_treasure", None)?;
                 return Ok(());
             }
@@ -193,9 +205,86 @@ pub fn shipwreck_too_big(template: &StructureTemplate) -> bool {
     template.size[0] > 32 || template.size[1] > 32
 }
 
+impl TemplatePiece {
+    /// `TemplateStructurePiece.addAdditionalSaveData` and its subclasses',
+    /// with the height a shipwreck settled on once placed.
+    pub fn saved(&self) -> crate::nbt::Compound {
+        use crate::nbt::Tag;
+        let flag = |b: bool| Tag::Byte(i8::from(b));
+        let adjusted = match self.handler {
+            TemplateHandler::Shipwreck { .. }
+            | TemplateHandler::OceanRuin { .. }
+            | TemplateHandler::Igloo => *self.state.lock().unwrap(),
+            _ => None,
+        };
+        let dy = adjusted.map_or(0, |y| y - self.position[1]);
+        let template_dy = if matches!(self.handler, TemplateHandler::Igloo) {
+            0
+        } else {
+            dy
+        };
+        let mut tag = super::legacy::piece_tag(
+            self.type_name,
+            self.bounding_box.moved([0, dy, 0]),
+            Some(Direction::North),
+            0,
+        );
+        // Mansion and End City pieces keep the name inside their folder.
+        let name = self
+            .template_name
+            .strip_prefix("minecraft:woodland_mansion/")
+            .or_else(|| self.template_name.strip_prefix("minecraft:end_city/"))
+            .unwrap_or(&self.template_name);
+        let rotation = || Tag::String(self.rotation.saved_name().into());
+        let mut entries = vec![
+            ("TPX", Tag::Int(self.position[0])),
+            ("TPY", Tag::Int(self.position[1] + template_dy)),
+            ("TPZ", Tag::Int(self.position[2])),
+            ("Template", Tag::String(name.into())),
+        ];
+        match self.handler {
+            TemplateHandler::Igloo => entries.push(("Rot", rotation())),
+            TemplateHandler::Shipwreck { beached } => entries.extend([
+                ("isBeached", flag(beached)),
+                ("Rot", rotation()),
+                ("height_adjusted", flag(adjusted.is_some())),
+            ]),
+            TemplateHandler::OceanRuin {
+                warm,
+                large,
+                integrity,
+            } => entries.extend([
+                ("Rot", rotation()),
+                ("Integrity", Tag::Float(integrity.to_bits())),
+                (
+                    "BiomeType",
+                    Tag::String(if warm { "WARM" } else { "COLD" }.into()),
+                ),
+                ("IsLarge", flag(large)),
+            ]),
+            TemplateHandler::RuinedPortal(props) => {
+                entries.push(("Rotation", rotation()));
+                entries.push(("Mirror", Tag::String(self.mirror.saved_name().into())));
+                entries.extend(props.save());
+            }
+            TemplateHandler::Mansion => entries.extend([
+                ("Rot", rotation()),
+                ("Mi", Tag::String(self.mirror.saved_name().into())),
+            ]),
+            TemplateHandler::Plain => entries.push(("Rot", rotation())),
+        }
+        for (key, value) in entries {
+            tag.insert(key.into(), value);
+        }
+        tag
+    }
+}
 impl LegacyPiece for TemplatePiece {
     fn bounding_box(&self) -> BoundingBox {
         self.bounding_box
+    }
+    fn save(&self) -> Option<crate::nbt::Compound> {
+        Some(self.saved())
     }
     fn after_place(&self, c: &mut PieceContext<'_>, pieces: &[BoundingBox]) -> Result<()> {
         match self.handler {
@@ -232,6 +321,8 @@ impl LegacyPiece for TemplatePiece {
                     self.position[1] + height - 90 - 1,
                     self.position[2],
                 ];
+                // The box stays moved; templatePosition goes back after placing.
+                *self.state.lock().unwrap() = Some(position[1]);
                 if let Some(markers) = self.place_at(c, position, &[])? {
                     for (marker, pos) in markers {
                         if marker == "chest" {
@@ -362,6 +453,21 @@ impl Scattered {
     pub fn frame(&self) -> PieceFrame {
         *self.frame.lock().unwrap()
     }
+    /// `ScatteredFeaturePiece`'s tag: the box and the height it settled on.
+    pub fn saved(&self, id: &str) -> crate::nbt::Compound {
+        use crate::nbt::Tag;
+        let f = self.frame();
+        let mut tag = super::legacy::piece_tag(id, f.bounding_box, f.orientation, 0);
+        for (key, value) in [
+            ("Width", self.width),
+            ("Height", self.height),
+            ("Depth", self.depth),
+            ("HPos", *self.height_position.lock().unwrap()),
+        ] {
+            tag.insert(key.into(), Tag::Int(value));
+        }
+        tag
+    }
     /// updateAverageGroundHeight over the part of the box inside the chunk.
     pub fn average_ground(&self, c: &mut PieceContext<'_>, offset: i32) -> Result<bool> {
         if *self.height_position.lock().unwrap() >= 0 {
@@ -419,18 +525,28 @@ impl Scattered {
 #[derive(Debug)]
 pub struct SwampHutPiece {
     pub base: Scattered,
+    /// spawnedWitch and spawnedCat: both spawn in the same chunk.
+    spawned: Mutex<bool>,
 }
 impl SwampHutPiece {
     pub fn new(random: &mut impl RandomSource, west: i32, north: i32) -> Self {
         let direction = random_horizontal(random);
         Self {
             base: Scattered::new(west, 64, north, 7, 7, 9, direction),
+            spawned: Mutex::new(false),
         }
     }
 }
 impl LegacyPiece for SwampHutPiece {
     fn bounding_box(&self) -> BoundingBox {
         self.base.frame().bounding_box
+    }
+    fn save(&self) -> Option<crate::nbt::Compound> {
+        let mut tag = self.base.saved("minecraft:tesh");
+        let spawned = crate::nbt::Tag::Byte(i8::from(*self.spawned.lock().unwrap()));
+        tag.insert("Witch".into(), spawned.clone());
+        tag.insert("Cat".into(), spawned);
+        Some(tag)
     }
     fn type_name(&self) -> &'static str {
         "minecraft:tesh"
@@ -500,6 +616,7 @@ impl LegacyPiece for SwampHutPiece {
                 c.world
                     .entity(super::legacy::spawn_nbt(id, pos, true, true))?;
             }
+            *self.spawned.lock().unwrap() = true;
         }
         Ok(())
     }
