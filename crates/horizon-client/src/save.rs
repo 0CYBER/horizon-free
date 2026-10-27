@@ -339,7 +339,7 @@ impl SaveTables {
     }
 }
 
-pub use crate::chunk::{ChunkExtras, RolledLoot};
+pub use crate::chunk::{ChunkExtras, RolledLoot, SavedProto};
 
 fn tick_list(ticks: &[SavedTick], name: impl Fn(u32) -> Option<String>) -> Tag {
     Tag::List(
@@ -547,6 +547,11 @@ pub fn encode_block_entity(
             }
         }
         BlockEntity::Sculk(s) => entries.extend(s.to_nbt()),
+        // ChiseledBookShelfBlockEntity.saveAdditional.
+        BlockEntity::ChiseledBookshelf(b) => {
+            entries.push(("Items", encode_items(&b.items)));
+            entries.push(("last_interacted_slot", Tag::Int(b.last_slot)));
+        }
         // CampfireBlockEntity.saveAdditional.
         BlockEntity::Campfire(c) => {
             entries.push(("Items", encode_items(&c.items)));
@@ -785,6 +790,13 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         }
         BlockEntity::Sign(sign) => sign.decode(tag),
         BlockEntity::Sculk(s) => s.load(tag),
+        // ChiseledBookShelfBlockEntity.loadAdditional.
+        BlockEntity::ChiseledBookshelf(b) => {
+            for (slot, item) in decode_items(tag.get("Items"), 6).into_iter().enumerate() {
+                b.items[slot] = item;
+            }
+            b.last_slot = int("last_interacted_slot").unwrap_or(-1);
+        }
         // CampfireBlockEntity.loadAdditional: missing time arrays stay zeros.
         BlockEntity::Campfire(c) => {
             for (slot, item) in decode_items(tag.get("Items"), 4).into_iter().enumerate() {
@@ -1500,21 +1512,6 @@ fn decode_column(
     Some(chunk)
 }
 
-/// A proto chunk saved before it became final. Decoration writes into a
-/// chunk's neighbours, and decorated chunks wait for theirs, so the chunks
-/// past the finished ones hold writes that generating them again would lose
-/// (whole structure pieces, trees, ores). Vanilla saves its proto chunks too.
-pub struct SavedProto {
-    /// Blocks, scheduled ticks (in `saved`) and post-processing marks.
-    pub column: Chunk,
-    /// Decorated itself (`features`), not only written to by its neighbours
-    /// (`terrain`).
-    pub decorated: bool,
-    /// Block entity data in placement order, with `x`, `y` and `z`.
-    pub block_entities: Vec<Tag>,
-    /// Entities placed by structures, with absolute `Pos`.
-    pub entities: Vec<Tag>,
-}
 pub fn encode_proto(
     proto: &SavedProto,
     registry: &BlockRegistry,

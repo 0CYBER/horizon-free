@@ -4,7 +4,7 @@
 //! conditions advancements use).
 use serde_json::Value;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::Path,
 };
 
@@ -437,6 +437,8 @@ pub struct EntityView {
     /// mainhand, offhand, head, chest, legs, feet, body.
     pub equipment: [Option<ItemView>; 7],
     pub vehicle: Option<Box<EntityView>>,
+    /// Player: what it looks at within 100 blocks (`PlayerPredicate.lookingAt`).
+    pub looking_at: Option<Box<EntityView>>,
     pub effects: Vec<(String, i32, i32)>,
     /// Player: game mode name.
     pub gamemode: Option<String>,
@@ -659,6 +661,18 @@ fn components(expected: &Value, have: &[(String, String)]) -> bool {
         })
     })
 }
+/// `DistancePredicate.matches` between two points.
+pub fn distance(v: &Value, a: [f64; 3], b: [f64; 3]) -> bool {
+    let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    range_f(&v["x"], d[0].abs())
+        && range_f(&v["y"], d[1].abs())
+        && range_f(&v["z"], d[2].abs())
+        && range_f(&v["horizontal"], (d[0] * d[0] + d[2] * d[2]).sqrt())
+        && range_f(
+            &v["absolute"],
+            (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt(),
+        )
+}
 /// `EntityPredicate` (26.x keyed sub-predicates).
 pub fn entity(v: &Value, e: &EntityView, w: &dyn World, origin: [f64; 3]) -> bool {
     if v.is_null() {
@@ -674,21 +688,7 @@ pub fn entity(v: &Value, e: &EntityView, w: &dyn World, origin: [f64; 3]) -> boo
             "minecraft:stepping_on" => {
                 location(p, [e.position[0], e.position[1] - 0.5, e.position[2]], w)
             }
-            "minecraft:distance" | "distance" => {
-                let d = [
-                    e.position[0] - origin[0],
-                    e.position[1] - origin[1],
-                    e.position[2] - origin[2],
-                ];
-                range_f(&p["x"], d[0].abs())
-                    && range_f(&p["y"], d[1].abs())
-                    && range_f(&p["z"], d[2].abs())
-                    && range_f(&p["horizontal"], (d[0] * d[0] + d[2] * d[2]).sqrt())
-                    && range_f(
-                        &p["absolute"],
-                        (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt(),
-                    )
-            }
+            "minecraft:distance" | "distance" => distance(p, e.position, origin),
             "minecraft:flags" | "flags" => {
                 let f = |k: &str, have: bool| p[k].as_bool().is_none_or(|want| want == have);
                 f("is_on_fire", e.on_fire)
@@ -723,11 +723,16 @@ pub fn entity(v: &Value, e: &EntityView, w: &dyn World, origin: [f64; 3]) -> boo
                     })
                 })
             }),
-            "minecraft:type_specific/player" => p["gamemode"].as_array().is_none_or(|modes| {
-                e.gamemode
-                    .as_deref()
-                    .is_some_and(|g| modes.iter().any(|m| m.as_str() == Some(g)))
-            }),
+            "minecraft:type_specific/player" => {
+                p["gamemode"].as_array().is_none_or(|modes| {
+                    e.gamemode
+                        .as_deref()
+                        .is_some_and(|g| modes.iter().any(|m| m.as_str() == Some(g)))
+                }) && (p["looking_at"].is_null()
+                    || e.looking_at
+                        .as_ref()
+                        .is_some_and(|t| entity(&p["looking_at"], t, w, origin)))
+            }
             "minecraft:type_specific/lightning" => {
                 range_i(&p["blocks_set_on_fire"], 0)
                     && (p["entity_struck"].is_null()
@@ -747,6 +752,41 @@ pub fn entity(v: &Value, e: &EntityView, w: &dyn World, origin: [f64; 3]) -> boo
         }
     }
     true
+}
+/// `KilledByArrowTrigger.TriggerInstance.matches`: the weapon, each listed
+/// victim condition matched by a distinct victim, and the count of entity types.
+pub fn killed_by_arrow(
+    c: &Value,
+    me: &EntityView,
+    victims: &[EntityView],
+    weapon: Option<&ItemView>,
+    w: &dyn World,
+) -> bool {
+    fn ctx<'a>(e: &'a EntityView, me: &EntityView) -> Entities<'a> {
+        Entities {
+            this: Some(e),
+            origin: me.position,
+            tool: None,
+            block_pos: None,
+        }
+    }
+    if !conditions(&c["player"], &ctx(me, me), w) {
+        return false;
+    }
+    if !c["fired_from_weapon"].is_null()
+        && !weapon.is_some_and(|it| item(&c["fired_from_weapon"], it, w))
+    {
+        return false;
+    }
+    let mut left: Vec<&EntityView> = victims.iter().collect();
+    for want in c["victims"].as_array().into_iter().flatten() {
+        let Some(i) = left.iter().position(|e| conditions(want, &ctx(e, me), w)) else {
+            return false;
+        };
+        left.remove(i);
+    }
+    let kinds: BTreeSet<&str> = victims.iter().map(|e| e.kind.as_str()).collect();
+    range_i(&c["unique_entity_types"], kinds.len() as i64)
 }
 /// A damage event as `DamagePredicate` sees it.
 #[derive(Clone, Debug, Default)]

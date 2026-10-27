@@ -14,6 +14,12 @@ use std::f32::consts::PI;
 /// A texture lookup into the shared atlas (name without namespace -> uv rect).
 pub type Atlas<'a> = &'a dyn Fn(&str) -> Option<[f32; 4]>;
 
+/// The overlay code of an enchanted armour layer's glint. 7 and 8 are the
+/// item glint and 9 to 12 Horizon's End-portal and breaking overlays, so 13
+/// marks the `ARMOR_ENTITY_GLINT_TEXTURING` sample: entity.wgsl transforms
+/// the model UV and reads `enchanted_glint_armor`.
+pub const ARMOR_GLINT: u32 = 13;
+
 /// One draw of a model with a texture.
 pub struct Layer {
     pub model: String,
@@ -137,6 +143,10 @@ pub fn body(m: &Mob) -> (String, String) {
             baby_or(m, "wolf#main", "wolf_baby#main"),
             super::tame::texture(m),
         ),
+        S::Panda => (
+            baby_or(m, "panda#main", "panda_baby#main"),
+            super::panda::texture(m),
+        ),
         S::HappyGhast => (
             baby_or(m, "happy_ghast#main", "happy_ghast_baby#main"),
             if baby {
@@ -243,6 +253,20 @@ pub fn body(m: &Mob) -> (String, String) {
         S::Armadillo => (
             baby_or(m, "armadillo#main", "armadillo_baby#main"),
             b(&m.kind.texture),
+        ),
+        // FoxRenderer.getTextureLocation: snow variant, sleeping, baby.
+        S::Fox => (
+            baby_or(m, "fox#main", "fox_baby#main"),
+            format!(
+                "entity/fox/fox{}{}{}",
+                if m.extra.variant == 0 { "" } else { "_snow" },
+                if super::fox::flag(m, super::fox::SLEEPING) {
+                    "_sleep"
+                } else {
+                    ""
+                },
+                if baby { "_baby" } else { "" },
+            ),
         ),
         S::Pig => {
             let model = if baby {
@@ -921,7 +945,13 @@ fn flip_degrees(m: &Mob) -> f32 {
 fn species_rotations(m: &Mob, alpha: f32) -> glam::Mat4 {
     match m.species() {
         Species::Cat => super::tame::cat_rotations(m, alpha),
+        Species::Panda => super::panda::rotations(m, alpha),
         Species::Shulker => super::shulker::rotations(m),
+        // FoxRenderer.setupRotations: the body follows a pounce's pitch.
+        Species::Fox if super::fox::flag(m, super::fox::POUNCING | super::fox::FACEPLANTED) => {
+            let pitch = m.previous_head_pitch + (m.head_pitch - m.previous_head_pitch) * alpha;
+            glam::Mat4::from_rotation_x((-pitch).to_radians())
+        }
         _ => glam::Mat4::IDENTITY,
     }
 }
@@ -1025,6 +1055,13 @@ fn draw_normals(
             let normal = poly.vertex_normal(normals);
             for v in poly.vertices {
                 let pos = m.transform_point3(glam::Vec3::new(v[0], v[1], v[2]) / 16.0);
+                // The armour glint scrolls the layer's model UV in the shader;
+                // the item path already passed its transformed UV.
+                let glint_uv = if overlay == ARMOR_GLINT {
+                    [v[3], v[4]]
+                } else {
+                    [0.0, 0.0]
+                };
                 out.push(Vertex {
                     normal,
                     pos: pos.to_array(),
@@ -1035,6 +1072,7 @@ fn draw_normals(
                     layer: overlay,
                     color,
                     light,
+                    glint_uv,
                 });
             }
         }
@@ -1195,9 +1233,9 @@ fn render_visible(
             light
         };
         // EquipmentLayerRenderer draws armour with OverlayTexture.NO_OVERLAY: never
-        // the hurt tint, the glint (7) when enchanted.
+        // the hurt tint, the armour glint (13) when enchanted.
         let overlay = match armor_slot(&layer.model) {
-            Some(slot) if super::gear::enchanted(m, slot) => 7,
+            Some(slot) if super::gear::enchanted(m, slot) => ARMOR_GLINT,
             Some(_) => 0,
             None => overlay,
         };
@@ -1395,6 +1433,12 @@ pub fn held_item_transform(
     data: &MobData,
     left: bool,
 ) -> Option<glam::Mat4> {
+    // PandaHoldsItemLayer: the main hand's item in its mouth.
+    if m.species() == Species::Panda {
+        return super::panda::item_offset(m, alpha)
+            .filter(|_| !left)
+            .map(|offset| base_transform(m, alpha, camera) * offset);
+    }
     if !super::illager::shows_item(m) {
         return None;
     }

@@ -149,6 +149,8 @@ pub fn draw_part(
                 layer: 0,
                 color,
                 light,
+
+                glint_uv: [0.0, 0.0],
             });
         }
     }
@@ -650,6 +652,8 @@ fn draw_text(scene: &Scene, call: &TextCall, out: &mut Vec<Vertex>) {
                         layer: 0,
                         color: c,
                         light: call.light,
+
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             }
@@ -933,6 +937,30 @@ impl BlockEntityRenderer {
         let kind = self.kind(state);
         let lights = diffuse_lights(scene.nether);
         self.render_one(scene, pos, kind, base, packed, lights, false, false, out);
+    }
+    /// `TheEndGatewayBlockEntity.shouldRenderFace` for each face of the gateway
+    /// at `pos`: the faces its portal is drawn on.
+    pub fn gateway_faces(
+        &self,
+        world: &World,
+        state: BlockStateId,
+        pos: [i32; 3],
+    ) -> Vec<Direction> {
+        Direction::ALL
+            .into_iter()
+            .filter(|&d| {
+                let [dx, dy, dz] = d.normal();
+                let neighbor = world.block(pos[0] + dx, pos[1] + dy, pos[2] + dz);
+                self.visibility.as_ref().is_none_or(|v| {
+                    v.lock()
+                        .map(|mut v| {
+                            v.should_render_face(state, neighbor, d, true)
+                                .unwrap_or(true)
+                        })
+                        .unwrap_or(true)
+                })
+            })
+            .collect()
     }
     /// Whether this block state has a block-entity renderer here.
     pub fn renders(&self, state: u32) -> bool {
@@ -1435,22 +1463,8 @@ impl BlockEntityRenderer {
                         out,
                     );
                 }
-                // AbstractEndPortalRenderer.extractRenderState: TheEndGatewayBlockEntity.shouldRenderFace.
-                let faces: Vec<Direction> = Direction::ALL
-                    .into_iter()
-                    .filter(|&d| {
-                        let [dx, dy, dz] = d.normal();
-                        let neighbor = scene.world.block(pos[0] + dx, pos[1] + dy, pos[2] + dz);
-                        self.visibility.as_ref().is_none_or(|v| {
-                            v.lock()
-                                .map(|mut v| {
-                                    v.should_render_face(BlockStateId(*state), neighbor, d, true)
-                                        .unwrap_or(true)
-                                })
-                                .unwrap_or(true)
-                        })
-                    })
-                    .collect();
+                // AbstractEndPortalRenderer.extractRenderState.
+                let faces = self.gateway_faces(scene.world, BlockStateId(*state), pos);
                 portal_cube(base, &faces, END_GATEWAY_LAYER, out);
             }
             Kind::Conduit => {
@@ -1717,6 +1731,8 @@ impl BeamPart {
                     layer: 6,
                     color,
                     light: self.wrap,
+
+                    glint_uv: [0.0, 0.0],
                 });
             }
         }
@@ -1787,6 +1803,7 @@ fn portal_cube(m: Mat4, faces: &[Direction], layer: u32, out: &mut Vec<Vertex>) 
                 layer,
                 color: 0,
                 light: 0,
+                glint_uv: [0.0, 0.0],
             });
         }
     }
