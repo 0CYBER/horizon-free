@@ -1123,7 +1123,14 @@ impl Renderer {
                 ));
             }
             surface.configure(&device, &config);
-            (config, caps.present_modes.clone(), hdr::output(&caps))
+            let hdr_output = hdr::output(&caps);
+            if previous.is_none() {
+                log::info!(
+                    "Horizon renderer: HDR output {}",
+                    hdr_output.map_or("not offered by this display", hdr::Output::name)
+                );
+            }
+            (config, caps.present_modes.clone(), hdr_output)
         } else {
             let format = wgpu::TextureFormat::Bgra8Unorm;
             let config = wgpu::SurfaceConfiguration {
@@ -3204,10 +3211,7 @@ impl Renderer {
         match &self.hdr {
             Some(hdr) => format!(
                 "HDR: {}, {}/{} nits",
-                match hdr.output {
-                    hdr::Output::Pq => "HDR10 (PQ)",
-                    hdr::Output::ScRgb => "scRGB",
-                },
+                hdr.output.name(),
                 hdr.paper_white.round(),
                 hdr.peak.round()
             ),
@@ -3222,6 +3226,14 @@ impl Renderer {
             let format = self.config.format.remove_srgb_suffix();
             self.hdr = output.map(|output| hdr::Hdr::new(&self.device, format, output));
             self.configure_surface();
+            match output {
+                Some(output) => log::info!(
+                    "Horizon renderer: HDR on: {} ({:?}), {paper_white}/{peak} nits",
+                    output.name(),
+                    output.format()
+                ),
+                None => log::info!("Horizon renderer: HDR off"),
+            }
         }
         if let Some(hdr) = &mut self.hdr
             && (hdr.paper_white, hdr.peak) != (paper_white, peak)
