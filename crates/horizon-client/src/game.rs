@@ -3047,11 +3047,9 @@ impl Game<'_> {
                         drop_item: true,
                         fall_distance: 0.0,
                         stuck: Vec3::ZERO,
-                        damage: if self.res.facts().get(state).name.ends_with("anvil") {
-                            horizon_client::falling_block::Damage::anvil()
-                        } else {
-                            Default::default()
-                        },
+                        damage: horizon_client::falling_block::Damage::falling(
+                            &self.res.facts().get(state).name,
+                        ),
                         saved: None,
                     });
                 }
