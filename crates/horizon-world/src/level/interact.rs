@@ -24,6 +24,44 @@ impl InteractionResult {
     }
 }
 
+/// `SelectableSlotContainer.getHitSlot`: the slot of a block with `rows` by
+/// `columns` slots on its front face (the way it `facing`) that the click at
+/// `hit` on `face` of the block at `pos` lands in, if it is the front face.
+pub fn hit_slot(
+    facing: Direction,
+    face: Direction,
+    pos: BlockPos,
+    hit: Vec3,
+    rows: i32,
+    columns: i32,
+) -> Option<usize> {
+    if facing != face {
+        return None;
+    }
+    // The location relative to the block in front of the face, which only
+    // moves the axis the face points along: the others are the block's own.
+    let (dx, dy, dz) = (
+        hit.x - f64::from(pos.x),
+        hit.y - f64::from(pos.y),
+        hit.z - f64::from(pos.z),
+    );
+    let (x, y) = match face {
+        Direction::North => ((1.0 - dx) as f32, dy as f32),
+        Direction::South => (dx as f32, dy as f32),
+        Direction::West => (dz as f32, dy as f32),
+        Direction::East => ((1.0 - dz) as f32, dy as f32),
+        Direction::Down | Direction::Up => return None,
+    };
+    // getSection
+    let section = |relative: f32, sections: i32| {
+        let size = 16.0f32 / sections as f32;
+        ((relative * 16.0f32 / size).floor() as i32).clamp(0, sections - 1)
+    };
+    let row = section(1.0 - y, rows);
+    let column = section(x, columns);
+    Some((column + row * columns) as usize)
+}
+
 /// The interacting player, as far as block behaviour needs it.
 #[derive(Clone, Copy, Debug)]
 pub struct PlayerContext {
@@ -321,6 +359,27 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 Class::Light => {
                     if player.game_master {
                         self.set_block(pos, table.cycle(state, p.level), 2);
+                        Success
+                    } else {
+                        Consume
+                    }
+                }
+                Class::ChiseledBookShelf => {
+                    // useItemOn and useWithoutItem agree on what a click takes: no
+                    // slot under it passes, an empty slot consumes it, a book in
+                    // it comes out (the block entity is the game's).
+                    let Some(slot) = hit_slot(b.facing(state), face, pos, hit, 2, 3) else {
+                        return Pass;
+                    };
+                    let occupied = [
+                        p.slot_0_occupied,
+                        p.slot_1_occupied,
+                        p.slot_2_occupied,
+                        p.slot_3_occupied,
+                        p.slot_4_occupied,
+                        p.slot_5_occupied,
+                    ];
+                    if table.bool(state, occupied[slot]) {
                         Success
                     } else {
                         Consume

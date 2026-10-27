@@ -41,6 +41,8 @@ enum Kind {
     Crafter,
     /// `BrewingStandBlockEntity` (a `WorldlyContainer`).
     Brewing,
+    /// `ChiseledBookShelfBlockEntity`: books only, one to a slot.
+    Bookshelf,
     /// `ComposterBlock.getContainer` at this level (a `WorldlyContainerHolder`
     /// without a block entity): input below 7, empty at 7, bone meal at 8.
     Composter(i32),
@@ -82,7 +84,7 @@ impl View {
     }
 }
 
-fn dir_from_name(name: &str) -> Option<Direction> {
+pub(super) fn dir_from_name(name: &str) -> Option<Direction> {
     Some(match name {
         "down" => Direction::Down,
         "up" => Direction::Up,
@@ -169,6 +171,7 @@ impl Containers<'_> {
             (BlockEntity::Furnace(_), _) => Kind::Furnace,
             (BlockEntity::Crafter(_), _) => Kind::Crafter,
             (BlockEntity::Brewing(_), _) => Kind::Brewing,
+            (BlockEntity::ChiseledBookshelf(_), _) => Kind::Bookshelf,
             (_, "minecraft:hopper") => Kind::Hopper,
             _ => Kind::Generic,
         };
@@ -249,6 +252,16 @@ impl Containers<'_> {
                 }
                 _ => false,
             };
+        }
+        if view.kind == Kind::Bookshelf {
+            // ListBackedContainer.canPlaceItem: `acceptsItemType` (the books)
+            // and a free slot, as `getMaxStackSize` is 1.
+            return self
+                .items
+                .item_tags
+                .get("minecraft:bookshelf_books")
+                .is_some_and(|m| m.contains(&*stack.item))
+                && self.get(view, slot).is_none();
         }
         if view.kind == Kind::Brewing {
             // BrewingStandBlockEntity.canPlaceItem
@@ -399,6 +412,45 @@ pub(super) fn container_signal(
         .map_or(0, |v| c.signal(&v))
 }
 
+/// `ChiseledBookShelfBlock.getAnalogOutputSignal` and
+/// `ShelfBlock.getAnalogOutputSignal`, from the block entity Horizon keeps as
+/// it was loaded; `None` for any other block. `direction` points from the
+/// block to the comparator.
+pub(super) fn shelf_signal(
+    world: &World,
+    registry: &'static horizon_world::registry::BlockRegistry,
+    state: BlockStateId,
+    pos: BlockPos,
+    direction: Direction,
+) -> Option<i32> {
+    let info = registry.state(state)?;
+    let chiseled = info.name == "minecraft:chiseled_bookshelf";
+    if !chiseled && !info.name.ends_with("_shelf") {
+        return None;
+    }
+    if chiseled {
+        // The last slot touched, plus one (`lastInteractedSlot` starts at -1).
+        return Some(match world.block_entities.get(&(pos.x, pos.y, pos.z)) {
+            Some(BlockEntity::ChiseledBookshelf(b)) => b.last_slot + 1,
+            _ => 0,
+        });
+    }
+    let tag = super::spill::saved_entity(world, [pos.x, pos.y, pos.z]);
+    // Only read from the back: a bit for each of the three slots in use.
+    let facing = info.properties.get("facing").and_then(|f| dir_from_name(f));
+    if facing.map(Direction::opposite) != Some(direction) {
+        return Some(0);
+    }
+    let items = horizon_client::save::decode_items(tag.as_ref().and_then(|t| t.get("Items")), 3);
+    Some(
+        items
+            .iter()
+            .enumerate()
+            .map(|(slot, item)| i32::from(item.is_some()) << slot)
+            .sum(),
+    )
+}
+
 impl Game<'_> {
     fn containers(&self) -> Containers<'_> {
         Containers {
@@ -433,6 +485,7 @@ impl Game<'_> {
         if pos.1 == super::minecarts::CART_KEY_Y {
             return;
         }
+        self.chiseled_bookshelf_synced(pos);
         // A double chest's other half changes with it.
         let halves: Vec<Pos> = std::iter::once(pos)
             .chain(self.chest_other_half(pos))

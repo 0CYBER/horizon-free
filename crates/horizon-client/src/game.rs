@@ -24,6 +24,7 @@ mod campfire_douse;
 mod cartography;
 mod cat_spawner;
 mod chat;
+mod chiseled_bookshelf;
 mod client_ambient;
 mod clipboard;
 mod combat;
@@ -742,7 +743,7 @@ impl LevelAccess for GameLevel<'_> {
         &self,
         pos: BlockPos,
         state: BlockStateId,
-        _direction: Direction,
+        direction: Direction,
     ) -> i32 {
         if let Some(s) = self.registry.state(state)
             && s.name == "minecraft:detector_rail"
@@ -773,6 +774,11 @@ impl LevelAccess for GameLevel<'_> {
             };
         }
         if let Some(signal) = books::lectern_signal(self.world, pos) {
+            return signal;
+        }
+        if let Some(signal) =
+            machines::shelf_signal(self.world, self.registry, state, pos, direction)
+        {
             return signal;
         }
         machines::container_signal(self.world, self.behaviours, self.items, self.registry, pos)
@@ -3994,6 +4000,12 @@ impl Game<'_> {
                 self.swing_arm();
                 return Ok(true);
             }
+            if let Some(swings) = self.use_chiseled_bookshelf(hit, held.as_ref()) {
+                if swings {
+                    self.swing_arm();
+                }
+                return Ok(true);
+            }
             if self.use_composter(hit.pos, held.as_ref()) {
                 self.swing_arm();
                 return Ok(true);
@@ -5877,7 +5889,8 @@ impl Game<'_> {
                 | BlockEntity::EndGateway(_)
                 | BlockEntity::Skull(_)
                 | BlockEntity::DaylightDetector
-                | BlockEntity::Campfire(_),
+                | BlockEntity::Campfire(_)
+                | BlockEntity::ChiseledBookshelf(_),
             ) => {}
             None => {
                 v.extend((0..self.craft_size * self.craft_size).map(|i| 100 + i));
@@ -6150,7 +6163,8 @@ impl Game<'_> {
                     | BlockEntity::EndGateway(_)
                     | BlockEntity::Skull(_)
                     | BlockEntity::DaylightDetector
-                    | BlockEntity::Campfire(_),
+                    | BlockEntity::Campfire(_)
+                    | BlockEntity::ChiseledBookshelf(_),
                 ) => {}
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
