@@ -89,9 +89,10 @@ fn progress_aabb(direction: u8, from: f64, to: f64, pos: Vec3) -> Aabb {
         ))
         .move_by(pos)
 }
-/// `Level.noCollision(entity, aabb)`: no block collision under the empty
-/// context, and no entity `m` can be collided with overlaps (other mobs,
-/// and the player when they are not a spectator).
+/// `Level.noCollision(shulker, aabb)`: no block collision under the empty
+/// context, and none of the entities a shulker collides with overlaps
+/// (`canBeCollidedWith`: living shulkers and adult happy ghasts; players
+/// and other mobs never block it).
 fn no_collision(m: &Mob, w: &MobWorld, bounds: Aabb) -> bool {
     let mut scene = crate::collisions::SceneCollisions {
         world: w.world,
@@ -102,15 +103,12 @@ fn no_collision(m: &Mob, w: &MobWorld, bounds: Aabb) -> bool {
         return false;
     }
     let grown = bounds.inflate(Vec3::new(1.0e-7, 1.0e-7, 1.0e-7));
-    if let Some(p) = &w.player
-        && p.alive
-        && !p.spectator
-        && p.bounds.intersects(grown)
-    {
-        return false;
-    }
-    !w.others_near(grown)
-        .any(|s| s.id != m.id && s.alive && s.bounds.intersects(grown))
+    !w.others_near(grown).any(|s| {
+        s.id != m.id
+            && s.alive
+            && (s.species == Species::Shulker || (s.species == Species::HappyGhast && !s.baby))
+            && s.bounds.intersects(grown)
+    })
 }
 /// `Shulker.canStayAt`: an empty spot against a sturdy face, with room
 /// for the fully opened shell (`canStayAt`).
