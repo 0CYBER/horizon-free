@@ -32,9 +32,9 @@ pub(super) fn ago(when: std::time::SystemTime) -> String {
     let when: chrono::DateTime<chrono::Local> = when.into();
     let days = (chrono::Local::now().date_naive() - when.date_naive()).num_days();
     match days {
-        ..=0 => "today".into(),
-        1 => "yesterday".into(),
-        2..=13 => format!("{days} days ago"),
+        ..=0 => tr("today").into(),
+        1 => tr("yesterday").into(),
+        2..=13 => trf("{days} days ago", &[("days", &days.to_string())]),
         _ => when.format("%Y-%m-%d").to_string(),
     }
 }

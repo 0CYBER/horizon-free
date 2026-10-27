@@ -412,6 +412,23 @@ interface render {
     /// own frame budget; hidden, they are dropped. One map shows at a time:
     /// the first loaded mod's.
     set-minimap: func(minimap: option<minimap>);
+    record far-terrain {
+        /// How far the distant terrain reaches, in chunks: 64 to 1024. On
+        /// integrated graphics other than Apple's the game caps it lower.
+        distance: u32,
+        /// Coarser far tiles, as the Far Detail setting's Reduced: 2 to 4 ms
+        /// less GPU time per frame on integrated graphics.
+        reduced: bool,
+    }
+    /// Draws the world beyond the render distance as distant terrain, out to
+    /// `distance` chunks, until the next call (none ends it). The game builds
+    /// it on its own workers, from the chunks already loaded or saved and,
+    /// where nobody has been, from the world's generator; the simulation
+    /// distance doesn't change. Only worlds whose generator the game has
+    /// (single player and a LAN world you host) show it. The player's own LOD
+    /// Distance setting, when on, wins. One far terrain shows at a time: the
+    /// first loaded mod's.
+    set-far-terrain: func(far-terrain: option<far-terrain>);
 }
 
 /// What the game calls. Only the hooks `init` asks for are ever called.

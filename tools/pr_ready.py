@@ -290,6 +290,14 @@ def mod_features(crates):
     return f" --features {','.join(features)}" if features else ""
 
 
+# What horizon-client's full content-root tests load (mod_content_tests.rs). They take minutes on prepared data, so
+# they are #[ignore]d and run here only when one of these changes.
+CONTENT_ROOT = ("crates/horizon-client/src/mod_content", "crates/horizon-client/src/assets.rs",
+                "crates/horizon-client/src/blocks.rs", "crates/horizon-client/src/items.rs", "crates/horizon-items/",
+                "crates/horizon-mods/", "crates/horizon-assets/")
+CONTENT_ROOT_TESTS = "cargo test --locked -p horizon-client --features horizon-client/mods --lib mod_content::tests:: -- --ignored"
+
+
 def plan(args, base, changed, crates_of, libraries, dependencies):
     """The checks for these changed files, in the order they run."""
     rust = any(workspace_rust(path) for path in changed)
@@ -323,6 +331,9 @@ def plan(args, base, changed, crates_of, libraries, dependencies):
              skip=test_skip, summary=tests_passed),
         Step("doc tests", f"cargo test --locked {doc_selection} --doc",
              skip=test_skip or (None if doc_crates else "no library touched"), summary=tests_passed),
+        Step("content root tests", CONTENT_ROOT_TESTS, summary=tests_passed,
+             skip=None if crates is None or any(p.startswith(CONTENT_ROOT) for p in changed)
+             else "content root untouched"),
         Step("tokens.css up to date", "cargo test --locked -p horizon-theme --lib tokens_css_is_up_to_date",
              skip=None if any(p.startswith(("crates/horizon-theme/", "xtask/")) for p in changed)
              else "theme untouched"),

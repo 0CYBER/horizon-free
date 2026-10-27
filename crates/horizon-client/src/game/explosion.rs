@@ -307,6 +307,12 @@ impl Game<'_> {
                 )
             {
                 outcome = o;
+                // dealDefaultKnockback's `indicateDamage` points at the blast
+                // (the source position), not the no-direction fallback.
+                if o.knockback && o.blocked <= 0.0 {
+                    p.health
+                        .indicate_damage(center[0] - feet[0], center[2] - feet[2], p.yaw);
+                }
             }
             if !spectator && !(creative && flying) {
                 p.velocity = Vec3::new(
@@ -497,6 +503,15 @@ impl Game<'_> {
             );
         }
     }
+    /// Runs an explosion whose source empties the hives it destroys
+    /// (`BeehiveBlock.getDrops`: primed TNT, creeper, wither skull, wither,
+    /// TNT minecart).
+    pub(super) fn with_hive_emptying_blast<R>(&mut self, blast: impl FnOnce(&mut Self) -> R) -> R {
+        self.combat.hive_emptying_blast = true;
+        let result = blast(self);
+        self.combat.hive_emptying_blast = false;
+        result
+    }
     /// `Level.explode` on the server: positions, entities, blocks, fire; then
     /// the client's explosion sound.
     pub(super) fn server_explode(
@@ -613,6 +628,22 @@ impl Game<'_> {
         // Block.onExplosionHit: the drops copy from the block entity, which
         // then spills its contents as the block turns to air.
         let key = (pos[0], pos[1], pos[2]);
+        let is_hive = matches!(&*name, "minecraft:beehive" | "minecraft:bee_nest");
+        // BeehiveBlock.getDrops: the bees of a hive blown up by TNT, a
+        // creeper, a wither skull, a wither or a TNT minecart come out.
+        if is_hive && self.combat.hive_emptying_blast {
+            let facing = self
+                .pack
+                .assets
+                .registry
+                .state(state)
+                .and_then(|s| s.properties.get("facing").cloned());
+            self.empty_hive(
+                pos,
+                horizon_client::beehive::facing_step(facing.as_deref()),
+                horizon_client::beehive::Release::Emergency,
+            );
+        }
         if let Some(entity) = self.world.block_entities.get(&key).cloned() {
             let custom = self.world.block_names.get(&key).cloned();
             self.pending.record(pos, &entity, &name, custom);
@@ -645,6 +676,10 @@ impl Game<'_> {
         }
         self.pending.clear(pos);
         self.level_set(pos, self.world.air)?;
+        // BeehiveBlock.onExplosionHit: the bees about turn on the player.
+        if is_hive {
+            self.anger_nearby_bees(pos);
+        }
         // TntBlock.wasExploded: new PrimedTnt (its push drawn first), then
         // getRandomShortFuse(80); no game event.
         if is_tnt && self.ui.rules.bool("tnt_explodes") {

@@ -173,7 +173,7 @@ impl Game<'_> {
             self.note_attacker("minecraft:explosion", id);
         }
         self.combat.explosion_owner = owner;
-        let result = self.explode(at, 1.0);
+        let result = self.with_hive_emptying_blast(|g| g.explode(at, 1.0));
         self.combat.explosion_owner = None;
         result
     }
