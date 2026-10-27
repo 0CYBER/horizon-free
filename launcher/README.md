@@ -92,6 +92,14 @@ The opening, then Play ([clip](docs/opening.webm)):
   a world goes without `playerdata/`, `stats/` and `advancements/`, and its level.dat without the
   player's UUID. `horizon-launcher instance export [<instance>] [--format mrpack|zip] [--world
   <w>]… [--out <file>]`.
+- **Import by dropping a file**: a file dropped anywhere on the window is imported for what it is
+  (`horizon_launcher::import`). A shared instance (a `.mrpack` that needs no mod loader, such as
+  Export writes, or a game folder `.zip`) becomes a new instance, opened on Home. Its `.mrpack`
+  downloads come from Modrinth with their SHA-512 checked, and only what an instance keeps is
+  taken, inside its folder. A Java modpack goes to the Modpacks import, and a resource or shader
+  pack into the selected instance. A data pack is pointed at the world rows, and the Packs section
+  and the world rows keep taking their own drops. A note in the corner says what happened.
+  `horizon-launcher instance import <file>`.
 - **Worlds**: Home lists the selected instance's worlds (picture, mode, version, last played,
   size). **Back up** zips one into the instance's `backups/` as the game's Make Backup does
   (`<date>_<time>_<folder>.zip`); **Copy** puts "<name> (1)" beside it; **Delete** moves it to the

@@ -99,6 +99,8 @@ impl Launcher {
             .drag_over::<ExternalPaths>(move |s, _, _, _| s.border_color(t.accent))
             .on_drop(cx.listener(move |this, paths: &ExternalPaths, _, cx| {
                 this.add_world_packs(path.clone(), paths.paths().to_vec());
+                // Not the window's import as well.
+                cx.stop_propagation();
                 cx.notify();
             }))
             .child(row)
