@@ -1113,7 +1113,8 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     }
 }
 fn sun_burn_tick(m: &mut Mob, w: &MobWorld) -> bool {
-    if !w.daylight || w.nether {
+    // Mob.isSunBurnTick: the monsters_burn attribute, not the sky darkness.
+    if !w.monsters_burn {
         return false;
     }
     let (x, y, z) = (
