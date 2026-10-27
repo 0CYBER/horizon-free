@@ -1702,7 +1702,7 @@ impl Launcher {
 
     /// The sidebar: Horizon and the imported modpacks, the player's servers, then the
     /// launcher's own update, the community links and its version.
-    fn sidebar(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn sidebar(&mut self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let t = self.theme;
         self.load_packs();
         let heading = |label: String| {
@@ -1751,12 +1751,14 @@ impl Launcher {
                 this.open_instance_dialog(None);
                 cx.notify();
             }));
+        let items = self.instance_items(heading, cx);
+        let mut rows = items.len();
         let list = div()
             .flex()
             .flex_col()
             .gap(px(4.))
             .child(heading(tr("INSTANCES").into()).child(add))
-            .children(self.instance_items(heading, cx));
+            .children(items);
         let servers: Vec<_> = self
             .servers
             .sidebar_list()
@@ -1766,6 +1768,8 @@ impl Launcher {
         if !servers.is_empty() {
             list = list.child(heading(tr("SERVERS").into()));
         }
+        rows += servers.len();
+        let headings = 1 + usize::from(!servers.is_empty());
         for e in servers {
             let up = self.servers.is_up(&e.dir);
             let open = self.page == Page::Servers && self.servers.open.as_ref() == Some(&e.dir);
@@ -1855,12 +1859,20 @@ impl Launcher {
             }
             _ => {}
         }
-        // Sculk's banner, small, above the links: seen without scrolling, on every page but Servers, which
-        // shows it large. After a while on screen a "Hide" beside its label puts it away for good.
+        // Sculk's card above the links: seen without scrolling, on every page but Servers, which shows
+        // its wide banner. Tall where the sidebar has the height for it besides its rows (about 60
+        // high each, under headings of about 40) and the links, compact otherwise. After a while on
+        // screen a "Hide" beside its label puts it away for good.
         if self.page != Page::Servers && !self.settings.partner_hidden {
-            let mut side = div().relative().mb(px(8.)).child(partner::banner(
+            let free = f32::from(window.viewport_size().height)
+                - theme::TOPBAR
+                - 40. * headings as f32
+                - 60. * rows as f32
+                - 110.;
+            let mut side = div().relative().mb(px(8.)).child(partner::card(
                 "partner-side",
                 theme::SIDEBAR - 20.,
+                free < partner::TALL_HEIGHT,
                 &t,
             ));
             if self.settings.partner_seen_secs >= partner::SEEN_BEFORE_HIDE {
@@ -3659,7 +3671,7 @@ impl Render for Launcher {
         }
         let stone = self.art.stone(t.page_rgb, t.dark, window.scale_factor());
         let topbar = self.topbar(window, cx);
-        let sidebar = self.sidebar(cx);
+        let sidebar = self.sidebar(window, cx);
         let mut root = div()
             .id("root")
             .track_focus(&self.root_focus)
