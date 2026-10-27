@@ -8,6 +8,7 @@ hosts: the guest always uses the server-player path.
 import json
 import math
 import subprocess
+import threading
 
 import lab
 import lan_e2e as lan
@@ -43,17 +44,29 @@ def check_walk(host, guest, out, role):
         until(host, lambda: phase(host), lambda s: 'sculk_sensor_phase=inactive' in s)
         player.wait(10)
         assert 'sculk_sensor_phase=inactive' in phase(host), 'setup activated the sensor'
-        player.raw('key', 'w', 'down')
+        # The sensor stays active 30 ticks. Each client samples it every tick from inside one ctl script, so a
+        # runner that answers control requests slowly (frames drawn on the CPU) can't miss that window between
+        # separate requests; the other client samples alongside the walk.
+        probe = f'getblock {sensor[0]} {sensor[1]} {sensor[2]}'
+        other = guest if player is host else host
+        seen = {}
+
+        def watch(viewer, lines):
+            seen[viewer.name] = [r['block'] for r in viewer.script(lines, every=True) if 'block' in r]
+        watcher = threading.Thread(target=watch, args=(other, ['wait 1', probe] * 100))
+        watcher.start()
         try:
-            player.wait(15)
+            watch(player, ['key w down', *['wait 1', probe] * 15, 'key w up', *['wait 1', probe] * 85])
         finally:
             player.raw('key', 'w', 'up')
+            watcher.join()
         moved = {'client': math.dist(lan.pos_of(player), start),
                  'server': math.dist(lan.server_player(host, player)['position'], start)}
         assert all(d > 1 for d in moved.values()), moved
-        for viewer in (host, guest):
-            until(viewer, lambda: phase(viewer), lambda s: 'sculk_sensor_phase=active' in s, ticks=85)
-        return {'moved': moved, 'phase': phase(host)}
+        active = {name: next((i for i, s in enumerate(states) if 'sculk_sensor_phase=active' in s), None)
+                  for name, states in seen.items()}
+        assert len(active) == 2 and all(i is not None for i in active.values()), f'sensor never active: {seen}'
+        return {'moved': moved, 'first_active_sample': active}
     finally:
         player.raw('key', 'w', 'up')
         host('command', command=f'fill {x - 2} {y} {z - 2} {x + 5} {y + 3} {z + 5} minecraft:air')
