@@ -4230,9 +4230,26 @@ impl Game<'_> {
                 respawn_anchor::AnchorUse::Pass => anchor_passed = true,
                 respawn_anchor::AnchorUse::Other => {}
             }
+            // CeilingHangingSignBlock.useItemOn: a hanging sign aimed at the
+            // underside passes, so the next sign chains below instead of
+            // opening the editor (signs here carry no click commands).
+            let chains_sign = hit.face == [0, -1, 0]
+                && held
+                    .as_ref()
+                    .is_some_and(|s| s.item.ends_with("_hanging_sign"))
+                && {
+                    let name = &self.res.facts().get(self.world.block(hit.pos[0], hit.pos[1], hit.pos[2])).name;
+                    name.ends_with("_hanging_sign") && !name.contains("_wall_")
+                }
+                && matches!(
+                    self.world
+                        .block_entities
+                        .get(&(hit.pos[0], hit.pos[1], hit.pos[2])),
+                    Some(BlockEntity::Sign(_))
+                );
             // TRY_WITH_EMPTY_HAND: only the main hand's turn uses the block
             // itself (useWithoutItem).
-            if !anchor_passed && self.hand == Hand::Main {
+            if !anchor_passed && !chains_sign && self.hand == Hand::Main {
                 let face = match hit.face {
                     [0, 1, 0] => Direction::Up,
                     [0, -1, 0] => Direction::Down,
