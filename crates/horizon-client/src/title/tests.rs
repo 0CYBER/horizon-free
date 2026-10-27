@@ -31,6 +31,7 @@ impl Fixture {
                     "Data",
                     Tag::compound([
                         ("LevelName", Tag::String(name.into())),
+                        ("DataVersion", Tag::Int(horizon_world::DATA_VERSION)),
                         ("GameType", Tag::Int(1)),
                         ("allowCommands", Tag::Byte(1)),
                         (
