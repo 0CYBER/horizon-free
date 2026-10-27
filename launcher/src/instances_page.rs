@@ -541,7 +541,8 @@ impl Launcher {
         )
     }
 
-    /// The Play page's row for the selected instance: its folder, and changing or copying it.
+    /// The Play page's row for the selected instance: its folder, and changing, copying or
+    /// exporting it.
     pub(super) fn instance_row(&mut self, n: usize, cx: &mut Context<Self>) -> Option<Div> {
         let t = self.theme;
         let instance = self.selected_instance()?.clone();
@@ -572,6 +573,22 @@ impl Launcher {
                         cx.notify();
                     },
                 )),
+            )
+            .child(
+                button(
+                    "instance-export",
+                    if self.export.is_some() {
+                        "Close export"
+                    } else {
+                        "Export…"
+                    },
+                    Kind::Ghost,
+                    &t,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.toggle_export();
+                    cx.notify();
+                })),
             )
             .child(
                 button("instance-folder", "Open folder", Kind::Ghost, &t).on_click(

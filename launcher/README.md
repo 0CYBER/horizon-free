@@ -83,6 +83,15 @@ The opening, then Play ([clip](docs/opening.webm)):
   instance plays the launcher's version, which follows updates, unless the Play page's version
   picker keeps it on another installed one (to keep an old world on the version it was made
   with); picking the version marked "follows updates" lets it follow again.
+- **Export**: Home's Instance row has **Export…**: the selected instance (or a port) as a `.mrpack`
+  (Modrinth's modpack format: resource packs the browser installed from Modrinth are listed by
+  their download, the rest is in `overrides/`) or a `.zip` of the game folder's layout, with the
+  worlds switched on. It is written to `exports/` in the launcher's data folder (**Show in
+  folder**). Only settings (options.txt, horizon-*.txt, servers.dat), resource and shader packs,
+  `horizon-mods/` and `config/` go in: never logs, screenshots, backups, caches or account files;
+  a world goes without `playerdata/`, `stats/` and `advancements/`, and its level.dat without the
+  player's UUID. `horizon-launcher instance export [<instance>] [--format mrpack|zip] [--world
+  <w>]… [--out <file>]`.
 - **Worlds**: Home lists the selected instance's worlds (picture, mode, version, last played,
   size). **Back up** zips one into the instance's `backups/` as the game's Make Backup does
   (`<date>_<time>_<folder>.zip`); **Copy** puts "<name> (1)" beside it; **Delete** moves it to the
