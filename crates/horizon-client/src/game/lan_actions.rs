@@ -2138,7 +2138,7 @@ impl Game<'_> {
         let g = &mut host.hub.guests[gi];
         if g.health <= 0.0 && !g.dead {
             g.dead = true;
-            g.last_death = Some(g.position.map(|v| v.floor() as i32));
+            g.last_death = Some((g.dimension.clone(), g.position.map(|v| v.floor() as i32)));
             let (id, at) = (g.entity_id, g.position);
             let reward = Experience {
                 level: g.xp_level,

@@ -250,6 +250,11 @@ impl Game<'_> {
         owner.main_arm_left = self.settings.main_hand_left;
         owner.is_local_player = true;
         owner.is_view_entity = true;
+        owner.last_death_location = self
+            .level
+            .last_death
+            .clone()
+            .map(|(dimension, pos)| GlobalPos { dimension, pos });
         if let (Some((slot, ticks)), Some(stack)) = (self.using, stack)
             && self.stack_in(slot) == Some(stack)
         {
