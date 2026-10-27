@@ -10,6 +10,7 @@ pub mod export;
 #[cfg(unix)]
 pub mod game_app;
 pub mod heads;
+pub mod import;
 pub mod instances;
 pub mod modpacks;
 pub mod mojang;

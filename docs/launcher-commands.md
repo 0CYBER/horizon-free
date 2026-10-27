@@ -344,6 +344,17 @@ Export an instance (or a port) to share: its settings, packs, Horizon mods and t
 
 MCP: `instance_export`.
 
+## `horizon-launcher instance import`
+
+Import what a file is, as dropping it on the window does: a shared instance (a .mrpack without mod loaders, such as `instance export` writes, or a game folder zip) becomes a new instance; a Java modpack goes to the Modpacks import; a resource or shader pack into the instance (default: the selected one).
+
+    horizon-launcher instance import <FILE>
+
+- `FILE`
+- `--instance`: The instance a pack goes into
+
+MCP: `instance_import`.
+
 ## `horizon-launcher worlds list`
 
 The worlds: name, mode, version, last played and size (the default).

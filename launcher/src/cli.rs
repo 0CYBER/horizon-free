@@ -198,6 +198,16 @@ enum InstanceCmd {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Import what a file is, as dropping it on the window does: a shared instance (a .mrpack
+    /// without mod loaders, such as `instance export` writes, or a game folder zip) becomes a
+    /// new instance; a Java modpack goes to the Modpacks import; a resource or shader pack into
+    /// the instance (default: the selected one)
+    Import {
+        file: PathBuf,
+        /// The instance a pack goes into
+        #[arg(long)]
+        instance: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -1764,6 +1774,51 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                 tag => Some(backend::resolve_version(Some(tag))?),
             };
             changed(instances::edit(&instance, |m| m.version = pin)?)
+        }
+        InstanceCmd::Import { file, instance } => {
+            use horizon_launcher::import::{self, Dropped};
+            use horizon_launcher::modpacks;
+            match import::what(&file)? {
+                Dropped::Instance => {
+                    let i = import::import_instance(&file, &|line, _| eprintln!("{line}"))?;
+                    if as_json {
+                        json(value(&i, false));
+                    } else {
+                        println!(
+                            "Made the instance {} in {}: horizon-launcher instance select \"{}\"",
+                            i.name,
+                            i.home.display(),
+                            i.name
+                        );
+                    }
+                }
+                Dropped::Modpack => {
+                    let pack = modpacks::import(&file, &|line: String| eprintln!("{line}"))?;
+                    println!("{} ({})", modpacks::outcome(&pack), pack.summary());
+                    println!(
+                        "Port and play it: horizon-launcher modpack port {}",
+                        pack.slug
+                    );
+                }
+                Dropped::Pack(_) => {
+                    let i = match instance {
+                        Some(name) => instances::find(&name)?,
+                        None => instances::selected(),
+                    };
+                    let p = horizon_launcher::packs::add(&i.home, &file)?;
+                    println!(
+                        "Added {} to {}: turn it on with horizon-launcher packs on",
+                        p.title, i.name
+                    );
+                }
+                Dropped::DataPack => {
+                    return Err(format!(
+                        "{} is a data pack: put it into a world with horizon-launcher worlds \
+                         datapack-add <world> <file>",
+                        file.display()
+                    ))
+                }
+            }
         }
         InstanceCmd::Export {
             instance,
