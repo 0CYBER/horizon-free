@@ -4229,6 +4229,7 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::Magic => "minecraft:magic",
         K::Sting => "minecraft:sting",
         K::Cactus => "minecraft:cactus",
+        K::SweetBerryBush => "minecraft:sweet_berry_bush",
         K::Generic => "minecraft:generic",
         K::InWall => "minecraft:in_wall",
         K::Thorns => "minecraft:thorns",

@@ -530,6 +530,8 @@ pub enum DamageKind {
     Magic,
     Sting,
     Cactus,
+    /// `sweet_berry_bush`.
+    SweetBerryBush,
     Generic,
     InWall,
     Thorns,
@@ -592,6 +594,7 @@ impl Damage {
                 | DamageKind::DryOut
                 | DamageKind::Generic
                 | DamageKind::InWall
+                | DamageKind::SweetBerryBush
         )
     }
     /// DamageTypeTags.BYPASSES_ARMOR
@@ -628,6 +631,7 @@ impl Damage {
                 | DamageKind::DryOut
                 | DamageKind::Magic
                 | DamageKind::Cactus
+                | DamageKind::SweetBerryBush
                 | DamageKind::Generic
                 | DamageKind::InWall
                 | DamageKind::Freeze
@@ -862,6 +866,8 @@ pub struct Mob {
     pub previous_swell: i32,
     pub ambient_timer: i32,
     pub fall_distance: f64,
+    /// `Entity.stuckSpeedMultiplier`: the next move is scaled by it.
+    pub stuck_multiplier: Vec3,
     /// `Entity.pistonDeltas` and `pistonDeltasGameTime`: how far a moving
     /// block has pushed this mob this tick (0.51 at most on any axis).
     pub piston: horizon_world::piston_movement::PistonMovement,
@@ -1794,6 +1800,7 @@ impl Mob {
             // Mob.ambientSoundTime starts at 0.
             ambient_timer: 0,
             fall_distance: 0.0,
+            stuck_multiplier: Vec3::ZERO,
             piston: Default::default(),
             persistent: false,
             random,
@@ -1866,13 +1873,17 @@ impl Mob {
         }
     }
     pub fn bounds(&self) -> Aabb {
+        self.bounds_at(self.position)
+    }
+    /// `Entity.makeBoundingBox(position)`.
+    pub fn bounds_at(&self, position: Vec3) -> Aabb {
         let w = f64::from(self.width()) / 2.0;
         Aabb::new(
-            Vec3::new(self.position.x - w, self.position.y, self.position.z - w),
+            Vec3::new(position.x - w, position.y, position.z - w),
             Vec3::new(
-                self.position.x + w,
-                self.position.y + f64::from(self.height()),
-                self.position.z + w,
+                position.x + w,
+                position.y + f64::from(self.height()),
+                position.z + w,
             ),
         )
     }
