@@ -493,8 +493,14 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             } else if result < 15 && self.is_redstone_conductor(target_state, target) {
                 let further = rel(target, facing);
                 let further_state = self.state(further);
-                if b.has_flag(further_state, state_flags::ANALOG_OUTPUT) {
-                    result = self.analog_output(further_state, further, facing.opposite());
+                let block = b
+                    .has_flag(further_state, state_flags::ANALOG_OUTPUT)
+                    .then(|| self.analog_output(further_state, further, facing.opposite()));
+                // ComparatorBlock.getInputSignal: an item frame behind the
+                // conductor counts too, the larger signal winning.
+                let frame = self.level.item_frame_analog_output(further, facing);
+                if let Some(signal) = frame.into_iter().chain(block).max() {
+                    result = signal;
                 }
             }
         }

@@ -380,6 +380,12 @@ pub trait LevelAccess {
     ) -> i32 {
         0
     }
+    /// `ItemFrame.getAnalogOutput` of the one item frame in the block at
+    /// `pos` that faces `facing` (`ComparatorBlock.getItemFrame`), or None when
+    /// there is not exactly one.
+    fn item_frame_analog_output(&self, _pos: BlockPos, _facing: Direction) -> Option<i32> {
+        None
+    }
     /// `ContainerOpenersCounter.recheckOpenCount` for the chest or ender chest
     /// block entity at `pos`: recounts its openers and returns the previous
     /// and new counts (the caller plays open/close effects when they change),
