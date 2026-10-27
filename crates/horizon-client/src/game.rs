@@ -5152,8 +5152,10 @@ impl Game<'_> {
         if self.lan_acting.is_some() {
             return;
         }
-        // MouseHandler.grabMouse never captures an inactive window.
-        if capture && !self.focused {
+        // MouseHandler.grabMouse never captures an inactive window, and vanilla
+        // grabs only on `setScreen(null)`: the pack prompt and server dialogs
+        // are screens over the world that keep the pointer.
+        if capture && (!self.focused || self.server_packs.prompt.is_some() || self.dialog_open()) {
             return;
         }
         // The container screen's press state belongs to the screen: a screen
