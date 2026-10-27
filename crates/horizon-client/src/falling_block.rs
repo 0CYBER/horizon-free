@@ -35,6 +35,18 @@ impl Damage {
             ..Self::default()
         }
     }
+    /// A block that starts to fall: anvils hurt, and a brushable block
+    /// breaks where it lands (BrushableBlock.tick: disableDrop).
+    pub fn falling(block: &str) -> Self {
+        if block.ends_with("anvil") {
+            Self::anvil()
+        } else {
+            Self {
+                cancel_drop: block.starts_with("minecraft:suspicious_"),
+                ..Self::default()
+            }
+        }
+    }
     pub fn from_nbt(tag: &Tag, anvil: bool) -> Self {
         Self {
             hurt_entities: number(tag.get("HurtEntities")).map_or(anvil, |v| v != 0),
@@ -181,6 +193,14 @@ pub fn hurt_mobs(mobs: &mut [Mob], position: Vec3, amount: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_brushable_blocks_break_where_they_land() {
+        assert!(Damage::falling("minecraft:suspicious_gravel").cancel_drop);
+        assert!(Damage::falling("minecraft:suspicious_sand").cancel_drop);
+        assert!(!Damage::falling("minecraft:gravel").cancel_drop);
+        assert!(Damage::falling("minecraft:chipped_anvil").hurt_entities);
+    }
+
     #[test]
     fn impact_uses_ceil_distance_capped_damage_and_positive_damage_wear() {
         let damage = Damage::anvil();

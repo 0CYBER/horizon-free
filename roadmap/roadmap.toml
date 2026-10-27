@@ -273,7 +273,7 @@ mods, scripted server events (#1837); the content template and the guides are me
 docs/api/stability.md). Left: templates for hud, server and machine mods, typed wrappers in the SDK, a \
 frozen 0.1 compatibility mod that every runtime must load, a CI check that fails when a stable reference \
 entry is removed without a new major version, and the SDK on crates.io once the API is stable."""
-links = ["#1816", "#1837", "docs/api/stability.md", "website/docs/test-a-mod.md"]
+links = ["#1816", "#1837", "docs/api/stability.md", "https://playhorizon.dev/docs/test-a-mod"]
 
 [[item]]
 id = "pregen"
@@ -391,7 +391,7 @@ dev = """Partly done: an opt-in 60 FPS cap with fewer workers on battery, Far De
 animated textures on the GPU (both shipped). Left: measured targets and fixes per class of machine (memory \
 use, worker counts, startup) on a Steam Deck, old Intel and Apple Silicon Macs and 8 GB computers, reported \
 on the Benchmarks page."""
-links = ["docs/benchmark.md", "website/docs/performance.md"]
+links = ["docs/benchmark.md", "https://playhorizon.dev/docs/performance"]
 
 [[item]]
 id = "upscaling"
@@ -661,9 +661,9 @@ plain = """You can port a mod to Horizon with your own AI agent on your own comp
 you the tools, but provides no hosted agents."""
 dev = """A player runs their own agent locally with `horizon-ctl` and the MCP servers (docs/agent-control.md), `cargo \
 horizon-mod`, `horizon-port-pack` and the parity harnesses as the check. Horizon writes the guide \
-(website/docs/agents.md, docs/modpacks.md) and runs no agents, accounts or keys for players. The No AI \
+(playhorizon.dev/docs/agents, docs/modpacks.md) and runs no agents, accounts or keys for players. The No AI \
 switch turns all of it off."""
-links = ["website/docs/agents.md", "docs/modpacks.md", "docs/agent-control.md"]
+links = ["https://playhorizon.dev/docs/agents", "docs/modpacks.md", "docs/agent-control.md"]
 
 [[item]]
 id = "x-account"
@@ -1011,9 +1011,9 @@ area = "performance"
 plain = """Run Horizon's built-in benchmark and share the report: every new computer makes the performance work \
 more accurate. No coding needed."""
 dev = """`horizon-launcher play --arg=--benchmark --arg=standard` writes a JSON report; `horizon-launcher data \
-benchmark <report>` shows what would be sent and uploads it (website/docs/performance.md). Results from three \
+benchmark <report>` shows what would be sent and uploads it (playhorizon.dev/docs/performance). Results from three \
 installs with the same hardware appear on the Benchmarks page. Example: #1711."""
-links = ["website/docs/performance.md", "#1711"]
+links = ["https://playhorizon.dev/docs/performance", "#1711"]
 
 [[item]]
 id = "end-city-banners"
