@@ -81,6 +81,11 @@ The opening, then Play ([clip](docs/opening.webm)):
   Open folder. Each instance plays the launcher's version, which follows updates, unless the Play
   page's version picker keeps it on another installed one (to keep an old world on the version
   it was made with); picking the version marked "follows updates" lets it follow again.
+- **Worlds**: Home lists the selected instance's worlds (picture, mode, version, last played,
+  size). **Back up** zips one into the instance's `backups/` as the game's Make Backup does
+  (`<date>_<time>_<folder>.zip`); **Copy** puts "<name> (1)" beside it; **Delete** moves it to the
+  system's trash after a confirmation; **Open folder**. The same from the command line:
+  `horizon-launcher worlds [list|backup|copy|delete] [--instance <name>]`.
 - **Patch notes**: each release's notes, newest first, with a link to GitHub Sponsors. Quiet "Discord" and "Website" links sit in the footer.
 
 Data lives in the platform's data directory (`~/.local/share/horizon-launcher` on Linux,
@@ -181,6 +186,8 @@ and don't set `%ERRORLEVEL%` / `$LASTEXITCODE`. Scripts that need the exit code 
     horizon-launcher instance rename|icon|group <instance> <value>  icon: a block or item name, #rrggbb or none
     horizon-launcher instance select <instance>     make Play start it
     horizon-launcher instance version <instance> <tag|latest>   keep it on one installed version, or follow updates
+    horizon-launcher worlds [list] [--instance <name>]        an instance's worlds
+    horizon-launcher worlds backup|copy|delete <world> [--instance <name>]   delete moves it to the trash
     horizon-launcher modpack [list]                 the imported packs and their coverage
     horizon-launcher modpack import <pack>          a .mrpack, CurseForge zip or instance folder
     horizon-launcher modpack port <pack> [--from <dir>] [--version <tag>]   get the jars and carry them over

@@ -25,6 +25,7 @@ mod scrollbar;
 mod servers_page;
 mod theme;
 mod titlebar;
+mod worlds_page;
 
 use gpui::{
     actions, div, ease_out_quint, prelude::*, px, relative, size, Animation, AnimationExt,
@@ -226,6 +227,8 @@ struct Launcher {
     mods: mods_page::Mods,
     /// The instances, for the sidebar and Play, and their dialog (`instances_page.rs`).
     instances: instances_page::Instances,
+    /// Home's Worlds section, of the selected instance (`worlds_page.rs`).
+    worlds: worlds_page::Worlds,
     /// The name the game made up for an offline player (`horizon-player.txt`), for the top bar.
     offline_name: Option<String>,
     /// The player's servers, for the sidebar until the Servers page has read them.
@@ -383,6 +386,7 @@ impl Launcher {
             starting_pack: None,
             mods: mods_page::Mods::new(cx),
             instances: instances_page::Instances::default(),
+            worlds: worlds_page::Worlds::default(),
             offline_name: offline_name(),
             side_servers: horizon_launcher::servers::list(),
             art: art::Art::default(),
@@ -677,6 +681,8 @@ impl Launcher {
                         }
                         Job::Client => {
                             self.client = None;
+                            // The game saved: last played, sizes and pictures changed.
+                            self.worlds.stale();
                             // The run's own game folder: an instance's or a pack's keeps its reports.
                             let home = self.client_home.clone().unwrap_or_else(backend::game_home);
                             let report = self
@@ -2157,6 +2163,9 @@ impl Launcher {
             page = page.child(notice(e, &t));
         }
         page = page.child(rows);
+        if let Some(worlds) = self.worlds_section(cx) {
+            page = page.child(worlds);
+        }
         if let Some(e) = self.client_error.clone() {
             page = page.child(notice(e, &t));
         }
