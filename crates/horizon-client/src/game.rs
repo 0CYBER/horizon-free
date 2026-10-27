@@ -12026,13 +12026,16 @@ impl ApplicationHandler for Game<'_> {
                         self.left = false;
                         self.right = false;
                         self.capture(false);
-                        // Screens (books, signs) stay open instead of pausing.
+                        // Gui.setPauseScreen: an open screen (books, signs, the
+                        // pack prompt, a server dialog) stays instead of pausing.
                         if self.screen == Screen::Playing
                             && self.player.is_some()
                             && !self.options.no_pause
                             && self.settings.file.bool("pauseOnLostFocus")
                             && self.book.is_none()
                             && self.sign_edit.is_none()
+                            && self.server_packs.prompt.is_none()
+                            && !self.dialog_open()
                         {
                             self.screen = Screen::Paused;
                         }
