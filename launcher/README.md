@@ -69,6 +69,14 @@ The opening, then Play ([clip](docs/opening.webm)):
   access controls, one click changes them so friends you share with reach only the server's
   port (Remove the limit undoes it); custom access controls are never rewritten, the page gives
   the rule to add instead. Horizon never turns on Funnel.
+- **Instances**: separate game folders, each with its own worlds, options and packs. The game's
+  folder stays the first one, "Horizon", exactly where it was; imported and registry modpacks are
+  instances too, in their own folders as before; new ones go to `instances/<name>/` in the game's
+  folder, empty but for the player's options and name, or a copy of another instance (never its
+  sign-in sessions, logs or data collection state). Names, icons (a block or item texture from the
+  player's prepared files, or a colour) and groups are kept in `instances.json` in the launcher's
+  data folder, so renaming moves nothing. Every instance follows the launcher's data collection
+  answer and No AI.
 - **Patch notes**: each release's notes, newest first, with a link to GitHub Sponsors. Quiet "Discord" and "Website" links sit in the footer.
 
 Data lives in the platform's data directory (`~/.local/share/horizon-launcher` on Linux,
@@ -152,7 +160,7 @@ and don't set `%ERRORLEVEL%` / `$LASTEXITCODE`. Scripts that need the exit code 
     horizon-launcher install <tag|latest>
     horizon-launcher remove <tag>
     horizon-launcher prepare [--minecraft <dir>] [--version <tag>]
-    horizon-launcher play [--version <tag>] [--arg <ARG>]...   start the client; --arg passes an extra argument through (repeatable)
+    horizon-launcher play [--version <tag>] [--instance <name>] [--arg <ARG>]...   start the client; --arg passes an extra argument through (repeatable)
     horizon-launcher server [--dir <dir>] [--version <tag>] [--accept-eula]
     horizon-launcher notes [<tag>]                  patch notes as plain text
     horizon-launcher links                          the Discord, sponsor and website links
@@ -164,6 +172,10 @@ and don't set `%ERRORLEVEL%` / `$LASTEXITCODE`. Scripts that need the exit code 
     horizon-launcher account sign-out <name>
     horizon-launcher account select <name>          play as this account
     horizon-launcher account offline                play without an account
+    horizon-launcher instance [list]                the instances and their game folders (* = Play starts it)
+    horizon-launcher instance create <name> [--copy <instance>]   empty, or a copy of one's worlds, options and packs
+    horizon-launcher instance rename|icon|group <instance> <value>  icon: a block or item name, #rrggbb or none
+    horizon-launcher instance select <instance>     make Play start it
     horizon-launcher modpack [list]                 the imported packs and their coverage
     horizon-launcher modpack import <pack>          a .mrpack, CurseForge zip or instance folder
     horizon-launcher modpack port <pack> [--from <dir>] [--version <tag>]   get the jars and carry them over
