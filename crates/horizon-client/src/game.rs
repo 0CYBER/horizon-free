@@ -584,6 +584,11 @@ struct GameLevel<'w> {
     arrow_boxes: Vec<([f64; 3], [f64; 3])>,
     /// The other entities that keep blocks from being placed into them.
     blockers: Blockers<'w>,
+    /// Item entities, experience orbs and projectiles, which trigger plates and
+    /// tripwires but never keep a block from being placed.
+    dropped: &'w [ItemEntity],
+    orbs: &'w [ExperienceOrb],
+    projectiles: &'w [horizon_client::projectiles::Projectile],
     biomes: &'w Biomes,
     seed: i64,
     behaviours: &'w Behaviours,
@@ -658,6 +663,53 @@ impl EntityObstructionWorld for BuildingObstruction {
     }
 }
 impl GameLevel<'_> {
+    /// The mobs that trigger plates and tripwires: living entities that don't
+    /// ignore block triggers (`Entity.isIgnoringBlockTriggers`: bats; armor
+    /// stands are not in `mobs`).
+    fn mob_trigger_boxes(&self) -> impl Iterator<Item = Aabb> + '_ {
+        self.blockers
+            .mobs
+            .iter()
+            .filter(|m| !m.removed && m.species() != horizon_client::mobs::Species::Bat)
+            .map(Mob::bounds)
+    }
+    /// The non-living entities that trigger plates and tripwires (boats,
+    /// crystals, primed TNT, falling blocks, item entities, experience orbs and
+    /// projectiles).
+    fn other_trigger_boxes(&self) -> impl Iterator<Item = Aabb> + '_ {
+        let b = self.blockers;
+        let square = |p: Vec3, size: f64| {
+            Aabb::new(
+                Vec3::new(p.x - size / 2.0, p.y, p.z - size / 2.0),
+                Vec3::new(p.x + size / 2.0, p.y + size, p.z + size / 2.0),
+            )
+        };
+        b.boats
+            .iter()
+            .map(boats::Boat::bounds)
+            .chain(b.crystals.iter().map(|c| {
+                // EntityType.END_CRYSTAL: 2 x 2.
+                let p = c.position;
+                Aabb::new(
+                    Vec3::new(p.x - 1.0, p.y, p.z - 1.0),
+                    Vec3::new(p.x + 1.0, p.y + 2.0, p.z + 1.0),
+                )
+            }))
+            .chain(b.tnts.iter().map(tnt::PrimedTnt::bounds))
+            .chain(
+                b.falling
+                    .iter()
+                    .map(|f| horizon_client::falling_block::bounds(f.position)),
+            )
+            .chain(self.dropped.iter().map(ItemEntity::bounds))
+            // EntityType.EXPERIENCE_ORB: 0.5 x 0.5.
+            .chain(self.orbs.iter().map(move |o| square(o.position, 0.5)))
+            .chain(
+                self.projectiles
+                    .iter()
+                    .map(move |p| square(p.position, p.kind.size())),
+            )
+    }
     /// `DetectorRailBlock.getAnalogOutputSignal`: a powered rail reads the
     /// minecart on it, a command block cart first (its success count, which
     /// is 0 here), else the first container cart's fullness.
@@ -958,8 +1010,9 @@ impl LevelAccess for GameLevel<'_> {
         self.tickets.block_ticking(chunk.x, chunk.z) && ticking_chunk(self.world, chunk.x, chunk.z)
     }
     /// Entities that trigger pressure plates, tripwires, detector rails and
-    /// wooden buttons: the players (the host and the LAN guests, mobs) and
-    /// the minecarts, and for `EntityQuery::Arrows` the arrows.
+    /// wooden buttons: the players (the host and the LAN guests), the mobs,
+    /// the minecarts and the other entities that don't ignore block triggers,
+    /// and for `EntityQuery::Arrows` the arrows.
     fn count_entities(&self, area: Aabb, query: EntityQuery) -> usize {
         let hit = |(lo, hi): &([f64; 3], [f64; 3])| {
             area.intersects(Aabb::new(
@@ -968,6 +1021,16 @@ impl LevelAccess for GameLevel<'_> {
             ))
         };
         let carts = || self.cart_boxes.iter().filter(|b| hit(b)).count();
+        let mobs = || {
+            self.mob_trigger_boxes()
+                .filter(|b| area.intersects(*b))
+                .count()
+        };
+        let others = || {
+            self.other_trigger_boxes()
+                .filter(|b| area.intersects(*b))
+                .count()
+        };
         let arrows = || self.arrow_boxes.iter().filter(|b| hit(b)).count();
         let players = || {
             self.player_box
@@ -979,8 +1042,8 @@ impl LevelAccess for GameLevel<'_> {
         match query {
             EntityQuery::Minecart => carts(),
             EntityQuery::Arrows => arrows(),
-            EntityQuery::Mobs => players(),
-            EntityQuery::Everything => players() + carts(),
+            EntityQuery::Mobs => players() + mobs(),
+            EntityQuery::Everything => players() + carts() + mobs() + others(),
         }
     }
     fn emit(&mut self, event: LevelEvent) {
@@ -2775,6 +2838,9 @@ impl Game<'_> {
             cart_signals,
             arrow_boxes,
             blockers,
+            dropped: &self.dropped,
+            orbs: &self.orbs,
+            projectiles: &self.creatures.projectiles,
             world: &mut self.world,
             facts: self.res.facts(),
             collision: self.collision,
@@ -2918,7 +2984,8 @@ impl Game<'_> {
             .collect();
         // Entity.checkInsideBlocks for the plates, tripwires, detector rails and
         // buttons under the players (the host and the LAN guests), the minecarts
-        // and the arrows.
+        // and the arrows (the mobs and other entities are added in `with_level`
+        // below).
         let mut inside = Vec::new();
         let guests = self.lan_block_trigger_boxes();
         let boxes = self
@@ -2997,7 +3064,21 @@ impl Game<'_> {
             }
         }
         self.with_level(|b, level, ticks| {
-            for pos in inside {
+            // The mobs and the other entities (items, orbs, projectiles...) too.
+            let mut touched: Vec<BlockPos> = Vec::new();
+            for bounds in level.mob_trigger_boxes().chain(level.other_trigger_boxes()) {
+                let (lo, hi) = (bounds.min_position(), bounds.max_position());
+                for x in (lo.x + 1e-7).floor() as i32..=(hi.x - 1e-7).floor() as i32 {
+                    for y in (lo.y + 1e-7).floor() as i32..=(hi.y - 1e-7).floor() as i32 {
+                        for z in (lo.z + 1e-7).floor() as i32..=(hi.z - 1e-7).floor() as i32 {
+                            touched.push(BlockPos::new(x, y, z));
+                        }
+                    }
+                }
+            }
+            touched.sort_unstable_by_key(|p| (p.x, p.y, p.z));
+            touched.dedup();
+            for pos in inside.into_iter().chain(touched) {
                 b.entity_inside(level, ticks, pos);
             }
             for (pos, on_ground, feet_y) in standing {
