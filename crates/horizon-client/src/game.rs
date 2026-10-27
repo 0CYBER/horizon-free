@@ -102,7 +102,12 @@ mod maps;
 mod minecarts;
 mod mob_blocks;
 mod mob_gear;
+mod mod_browser;
+#[cfg(feature = "mods")]
+mod mod_browser_recipes;
 mod mod_input;
+#[cfg(feature = "mods")]
+mod mod_recipes;
 mod mod_render;
 mod mods;
 mod mount_menu;
@@ -4515,6 +4520,22 @@ impl Game<'_> {
         };
         self.eye += (camera_eye.unwrap_or(eye_height) - self.eye) * 0.5;
         let crouching = player.pose == horizon_client::pose::Pose::Crouching;
+        // `LivingEntity.baseTick` (Soul Speed) comes before `aiStep` (the
+        // glide's wear): both draw from the level random.
+        if let Some((at, velocity)) = self.tick_soul_speed() {
+            self.particles.send_particles(
+                &horizon_client::particles::ParticleOptions::simple(
+                    horizon_client::particles::ParticleType::Soul,
+                ),
+                at,
+                velocity,
+                1.0,
+                0,
+            );
+            if let Some(host) = self.lan.as_ref() {
+                lan_particles::send_soul_particle(host, at, velocity);
+            }
+        }
         // `ItemStack.hurtAndBreak` for the glide: Unbreaking can save the wear.
         if glider_wear > 0
             && !self.creative
@@ -5404,6 +5425,7 @@ impl Game<'_> {
             Screen::CommandBlock => self.draw_command_block(&mut batch),
             Screen::Inventory => {
                 self.draw_inventory(&mut batch);
+                self.draw_mod_browser(&mut batch);
             }
             Screen::Creative => {
                 self.draw_creative(&mut batch);
@@ -5796,6 +5818,7 @@ impl Game<'_> {
         self.last_inv_click = None;
     }
     pub(super) fn close_container(&mut self) {
+        self.mod_browser_closed();
         self.reset_inventory_clicks();
         self.close_station();
         self.mount_closed();
@@ -6523,6 +6546,9 @@ impl Game<'_> {
     fn inventory_press(&mut self, right: bool) {
         use horizon_client::container_screen::Target;
         use horizon_client::menu::Input;
+        if self.mod_browser_press(right) {
+            return;
+        }
         if !right && self.sort_press() {
             return;
         }
@@ -6706,24 +6732,8 @@ impl Game<'_> {
     }
     /// `hasClickedOutside` of the open screen at the cursor.
     fn clicked_outside(&self, batch: &HudBatch) -> bool {
-        use horizon_client::container_screen::{Book, Image, clicked_outside};
-        let (ox, oy) = self.inventory_origin(batch);
-        let (shift, width, height) = if self.screen == Screen::Creative {
-            (0.0, Creative::WIDTH as i32, Creative::HEIGHT as i32)
-        } else {
-            let (shift, width) = match self.station.as_ref().map(|s| s.kind) {
-                Some(stations::Kind::Merchant) => (-50.0, 276),
-                Some(stations::Kind::Beacon) => (beacon::SHIFT, 230),
-                _ => (0.0, 176),
-            };
-            (shift, width, self.screen_height() as i32)
-        };
-        let image = Image {
-            left: (ox + shift) as i32,
-            top: oy as i32,
-            width,
-            height,
-        };
+        use horizon_client::container_screen::{Book, clicked_outside};
+        let image = self.container_image(batch);
         let book = self
             .recipe_book_area(batch)
             .map(|(visible, tab_hovered)| Book {
@@ -6736,6 +6746,26 @@ impl Game<'_> {
             image,
             book,
         )
+    }
+    /// The open container screen's window: its place and size.
+    fn container_image(&self, batch: &HudBatch) -> horizon_client::container_screen::Image {
+        let (ox, oy) = self.inventory_origin(batch);
+        let (shift, width, height) = if self.screen == Screen::Creative {
+            (0.0, Creative::WIDTH as i32, Creative::HEIGHT as i32)
+        } else {
+            let (shift, width) = match self.station.as_ref().map(|s| s.kind) {
+                Some(stations::Kind::Merchant) => (-50.0, 276),
+                Some(stations::Kind::Beacon) => (beacon::SHIFT, 230),
+                _ => (0.0, 176),
+            };
+            (shift, width, self.screen_height() as i32)
+        };
+        horizon_client::container_screen::Image {
+            left: (ox + shift) as i32,
+            top: oy as i32,
+            width,
+            height,
+        }
     }
     /// A click outside the window (slot id -999): `THROW` does nothing; a
     /// `PICKUP` drops the carried stack (left) or one of it (right), thrown
@@ -6897,7 +6927,7 @@ impl Game<'_> {
         }
     }
     fn click_inventory(&mut self, right: bool) {
-        if self.mount_click(right) {
+        if self.mod_browser_press(right) || self.mount_click(right) {
             return;
         }
         if self.recipe_book_click(right) {
@@ -8069,6 +8099,7 @@ impl Game<'_> {
         creative: bool,
         create: Option<&horizon_client::title::WorldOptions>,
     ) -> Result<()> {
+        world_loading::world_data_used();
         if self.defer_world_entry(PendingWorldEntry::Local {
             folder: folder.to_owned(),
             name: name.map(str::to_owned),
@@ -12118,6 +12149,14 @@ impl ApplicationHandler for Game<'_> {
                     self.recipe_key(&event);
                 }
                 WindowEvent::KeyboardInput { event, .. }
+                    if self.mod_browser_typing()
+                        && event.state == ElementState::Pressed
+                        && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
+                {
+                    // A mod's item panel's search box, as the recipe book's.
+                    self.mod_browser_key(&event);
+                }
+                WindowEvent::KeyboardInput { event, .. }
                     if self.station_typing()
                         && event.state == ElementState::Pressed
                         && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
@@ -13025,6 +13064,17 @@ impl Game<'_> {
         if self.rest_loader.is_some() {
             return Ok(());
         }
+        let on_world_screens = self.title.as_ref().is_some_and(|title| {
+            !matches!(
+                title.mode,
+                horizon_client::title::Mode::Main | horizon_client::title::Mode::Multiplayer(_)
+            )
+        });
+        world_loading::preload_world_data(
+            on_world_screens,
+            &self.options.resources,
+            self.pack.assets.registry,
+        );
         if std::mem::take(&mut self.pending_pack_reload) {
             self.reload_packs();
         }

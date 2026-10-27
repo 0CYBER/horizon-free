@@ -3010,6 +3010,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "recipes"
+version = "1.0.0"
+dependencies = [
+ "horizon-mod-sdk",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

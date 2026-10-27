@@ -333,15 +333,23 @@ impl VanillaTerrain {
         u64::try_from(self.created.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 }
+static SHARED_DATA: std::sync::Mutex<Vec<(std::path::PathBuf, Arc<GeneratorData>)>> =
+    std::sync::Mutex::new(Vec::new());
+/// Let go of the bundles `shared_data` loaded: for a preload no world used
+/// (game/world_loading.rs). A generator that holds one keeps it.
+pub fn forget_shared_data() {
+    SHARED_DATA
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
+}
 /// The worldgen bundle at `dir`, loaded once and shared by every generator
 /// and by live feature placement (sapling growth, bone meal).
 pub fn shared_data(
     dir: &Path,
     registry: &'static BlockRegistry,
 ) -> crate::Result<Arc<GeneratorData>> {
-    static CACHE: std::sync::Mutex<Vec<(std::path::PathBuf, Arc<GeneratorData>)>> =
-        std::sync::Mutex::new(Vec::new());
-    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut cache = SHARED_DATA.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((_, data)) = cache.iter().find(|(path, _)| path == dir) {
         return Ok(data.clone());
     }
