@@ -74,7 +74,8 @@ one is selected. "Sign out" deletes the account's secrets from the keychain.
 - Secrets (the Microsoft refresh token, the Minecraft access token and its expiry) go to the OS
   keychain, one item per account: Keychain on macOS, Credential Manager on Windows, the Secret
   Service (GNOME Keyring, KWallet) on Linux. Service name `dev.playhorizon.launcher`, account = the
-  Minecraft UUID.
+  Minecraft UUID. Credential Manager takes at most 2560 bytes per item, which the secrets of a sign-in
+  exceed: on macOS and Windows a longer secret is split over the items `<uuid>`, `<uuid>.1`, `<uuid>.2`...
 - `accounts.json` in the launcher's data folder keeps only public data: UUID, name, skin URL, which
   account is selected. Never a token.
 - No keychain available (a Linux box without a Secret Service, a locked keychain): sign-in still

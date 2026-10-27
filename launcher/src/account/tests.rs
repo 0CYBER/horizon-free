@@ -372,6 +372,36 @@ fn accounts_keep_secrets_in_the_store_only() {
     assert!(!store.persistent());
 }
 
+/// The OS keychain itself: Credential Manager and the Keychain take one secret per item, and a
+/// sign-in's secrets are longer than one item holds. Ignored by default: it writes to the keychain
+/// (a test key, removed again).
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[test]
+#[ignore = "writes to the OS keychain"]
+fn system_keychain_keeps_long_secrets() {
+    let key = "test-long-secret";
+    let secret = format!("{{\"refresh_token\":\"{}\"}}", "r".repeat(3000));
+    SystemStore.set(key, &secret).unwrap();
+    assert_eq!(SystemStore.get(key).unwrap(), Some(secret.clone()));
+    SystemStore.delete(key).unwrap();
+    assert_eq!(SystemStore.get(key).unwrap(), None);
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[test]
+fn long_secrets_split_into_keychain_sized_pieces() {
+    // Mixed 1-, 2- and 4-byte characters, so the cuts land inside some of them.
+    let secret = "aé🔑".repeat(300);
+    let pieces = split_secret(&secret);
+    assert!(pieces.len() > 1);
+    assert_eq!(pieces.concat(), secret);
+    for piece in &pieces {
+        assert!(piece.len() <= PIECE);
+        assert!(piece.encode_utf16().count() * 2 <= 2560);
+    }
+    assert_eq!(split_secret("short"), vec!["short"]);
+}
+
 #[test]
 fn session_files_are_private_and_complete() {
     let dir = std::env::temp_dir().join(format!("horizon-launcher-session-{}", std::process::id()));
