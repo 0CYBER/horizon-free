@@ -2106,6 +2106,20 @@ impl Hub {
                 S::Chat(c) => self.handle_chat(i, c, events),
                 S::ChatAck(p) => self.chat_ack(i, p.offset, events),
                 S::ChatSessionUpdate(p) => self.chat_session_update(i, p, events),
+                // handlePlayerAction (a dig starting, stopping or finishing) is the
+                // game's, run after this pass. A move queued behind it is checked
+                // against the block the player just broke and falls through, so it
+                // would be sent back; it waits for the next tick, when the block is
+                // gone, as vanilla handles the two packets in order.
+                S::PlayerAction(p) if p.action <= 3 => {
+                    events.push(HostEvent::Packet(conn, Box::new(S::PlayerAction(p))));
+                    if matches!(
+                        self.guests[i].inbox.front(),
+                        Some(S::MovePlayerPos(_) | S::MovePlayerPosRot(_))
+                    ) {
+                        break;
+                    }
+                }
                 other => events.push(HostEvent::Packet(conn, Box::new(other))),
             }
         }
