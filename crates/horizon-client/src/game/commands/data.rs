@@ -136,6 +136,16 @@ impl Game<'_> {
                 entity_nbt::arrow_to_nbt(p, random_uuid(), owner, in_block, None)
                     .or_else(|| entity_nbt::fireball_to_nbt(p, random_uuid(), owner, None))?
             }
+            Target::Crystal(id) => {
+                let c = self.crystals.iter().find(|c| c.id == id)?;
+                let (uuid, raw) = self.persist_anon("minecraft:end_crystal", c.position);
+                c.to_nbt(uuid.unwrap_or_else(random_uuid), raw)
+            }
+            Target::Dragon(id) => {
+                let d = self.dragon.as_ref().filter(|d| d.id == id)?;
+                let (uuid, raw) = self.persist_anon("minecraft:ender_dragon", d.position);
+                d.to_nbt(uuid.unwrap_or_else(random_uuid), raw)
+            }
         })
     }
     /// `Entity.load` of new data (`EntityDataAccessor.setData`): the entity is

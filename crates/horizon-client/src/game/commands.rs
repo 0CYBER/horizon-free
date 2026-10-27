@@ -54,6 +54,10 @@ pub(super) enum Target {
     /// An entity of a type Horizon does not simulate (markers, displays,
     /// interactions...): kept as its saved data at a position.
     Other(u32),
+    /// An End crystal, by its entity id (`minecraft:end_crystal`).
+    Crystal(u32),
+    /// The Ender Dragon, by its entity id (`minecraft:ender_dragon`).
+    Dragon(u32),
 }
 /// An entity of a type Horizon does not simulate: its compound lives in the
 /// entity memory (`persist.raw`), its position and rotation here.
@@ -388,6 +392,16 @@ impl Game<'_> {
                 .iter()
                 .find(|o| o.id == id)
                 .map(|o| [o.position.x, o.position.y, o.position.z]),
+            Target::Crystal(id) => self
+                .crystals
+                .iter()
+                .find(|c| c.id == id)
+                .map(|c| [c.position.x, c.position.y, c.position.z]),
+            Target::Dragon(id) => self
+                .dragon
+                .as_ref()
+                .filter(|d| d.id == id)
+                .map(|d| [d.position.x, d.position.y, d.position.z]),
         }
     }
     pub(super) fn target_type(&self, t: Target) -> String {
@@ -432,6 +446,8 @@ impl Game<'_> {
                 .iter()
                 .find(|o| o.id == id)
                 .map_or_else(String::new, |o| o.kind.clone()),
+            Target::Crystal(_) => "minecraft:end_crystal".into(),
+            Target::Dragon(_) => "minecraft:ender_dragon".into(),
         }
     }
     /// The name of the player the game acts for: a guest's own while their
@@ -684,6 +700,12 @@ impl Game<'_> {
         candidates.extend(self.boats.iter().map(|b| Target::Boat(b.id)));
         candidates.extend(self.carts.iter().map(|c| Target::Cart(c.id)));
         candidates.extend(self.others.iter().map(|o| Target::Other(o.id)));
+        // The End crystals and the dragon (EndCrystal and EnderDragon
+        // are entities of their own).
+        candidates.extend(self.crystals.iter().map(|c| Target::Crystal(c.id)));
+        if let Some(d) = &self.dragon {
+            candidates.push(Target::Dragon(d.id));
+        }
         candidates
     }
     /// The loaded levels, in the order the server holds them: the
@@ -713,6 +735,8 @@ impl Game<'_> {
             Target::Boat(id) => self.boats.iter().any(|b| b.id == id),
             Target::Cart(id) => self.carts.iter().any(|c| c.id == id),
             Target::Other(id) => self.others.iter().any(|o| o.id == id),
+            Target::Crystal(id) => self.crystals.iter().any(|c| c.id == id),
+            Target::Dragon(id) => self.dragon.as_ref().is_some_and(|d| d.id == id),
         }
     }
     /// Run `f` with the level that holds the entity a target names in place
@@ -1300,6 +1324,17 @@ impl Game<'_> {
                     }
                 }
             }
+            Target::Crystal(id) => {
+                if let Some(c) = self.crystals.iter_mut().find(|c| c.id == id) {
+                    c.position = v;
+                }
+            }
+            Target::Dragon(id) => {
+                if let Some(d) = self.dragon.as_mut().filter(|d| d.id == id) {
+                    d.position = v;
+                    d.previous = v;
+                }
+            }
             // Wall-mounted entities do not move.
             Target::Frame(_) | Target::Painting(_) => {}
         }
@@ -1696,6 +1731,8 @@ impl Game<'_> {
             Target::Boat(id) => self.boats.retain(|b| b.id != id),
             Target::Cart(id) => self.carts.retain(|c| c.id != id),
             Target::Other(id) => self.others.retain(|o| o.id != id),
+            Target::Crystal(id) => self.kill_crystal(id),
+            Target::Dragon(id) => self.kill_dragon(id),
         }
         // The orbs marked for removal are gone (Entity.kill removes them).
         self.orbs.retain(|o| o.age < u32::MAX / 2);
@@ -1808,6 +1845,20 @@ impl Game<'_> {
                 "lightning_bolt" => {
                     self.spawn_bolt(pos, false);
                     name = Text::translate("entity.minecraft.lightning_bolt", &[]);
+                }
+                "end_crystal" => {
+                    // EndCrystal's constructor takes an id from the entity
+                    // counter, and the crystal is shown with its base.
+                    self.next_entity += 1;
+                    self.crystals.push(super::dragon::Crystal {
+                        id: self.next_entity,
+                        position: Vec3::new(pos[0], pos[1], pos[2]),
+                        show_bottom: true,
+                        time: self.world.random.next_int_bound(100_000).unwrap_or(0),
+                        beam: None,
+                        invulnerable: false,
+                    });
+                    name = Text::translate("entity.minecraft.end_crystal", &[]);
                 }
                 k if super::minecarts::CartKind::from_id(&kind).is_some() => {
                     let cart_kind = super::minecarts::CartKind::from_id(&kind)
