@@ -22,6 +22,9 @@ pub(super) struct Toast {
     frame: Frame,
     title: Text,
     slide: Slide,
+    /// `ToastInstance.firstSlotIndex`: the 32-pixel slot it stacks in once it
+    /// leaves the queue.
+    slot: Option<usize>,
     /// A `RecipeToast`: the crafting station and result of each display
     /// unlocked while it lasts (`recipeItems`); empty for an advancement.
     recipes: Vec<(String, ItemStack)>,
@@ -37,6 +40,7 @@ impl Toast {
             frame: Frame::Task,
             title: Text::literal(""),
             slide: Slide::default(),
+            slot: None,
             recipes: items,
             changed: true,
             last_changed: 0,
@@ -535,6 +539,7 @@ impl Game<'_> {
                     frame: d.frame,
                     title: text_of(&d.title),
                     slide: Slide::default(),
+                    slot: None,
                     recipes: Vec::new(),
                     changed: false,
                     last_changed: 0,
@@ -1022,58 +1027,105 @@ impl Game<'_> {
             c["from"].as_str().is_none_or(|f| f == from) && c["to"].as_str().is_none_or(|t| t == to)
         });
     }
-    /// `ToastManager` with the `AdvancementToast` and the `RecipeToast`,
-    /// one at a time.
-    pub(super) fn draw_toasts(&mut self, batch: &mut HudBatch) {
+    /// `ToastManager.SLOT_COUNT`.
+    pub(super) const TOAST_SLOTS: usize = 5;
+    /// `ToastManager.update` and `extractRenderState` for the `AdvancementToast`s and
+    /// `RecipeToast`s: up to five stack in 32-pixel slots, the rest queue. `hidden` (F1)
+    /// keeps them timing out without drawing them.
+    pub(super) fn draw_toasts(&mut self, batch: &mut HudBatch, hidden: bool) {
         let multiplier = f64::from(self.settings.notification_display_time);
-        let Some(t) = self.adv.toasts.front_mut() else {
-            return;
-        };
-        let first = t.slide.origin.is_none();
-        let origin = *t.slide.origin.get_or_insert_with(Instant::now);
-        let now = origin.elapsed().as_millis() as i64;
-        let mut slide = std::mem::take(&mut t.slide);
-        let (sound, finished) = slide.update(now, |fully| t.wants_show(fully, multiplier));
-        t.slide = slide;
-        if finished {
-            self.adv.toasts.pop_front();
+        let mut sound_played = false;
+        let mut i = 0;
+        while i < self.adv.toasts.len() {
+            let t = &mut self.adv.toasts[i];
+            if t.slot.is_none() {
+                i += 1;
+                continue;
+            }
+            let origin = *t.slide.origin.get_or_insert_with(Instant::now);
+            let now = origin.elapsed().as_millis() as i64;
+            let mut slide = std::mem::take(&mut t.slide);
+            let (sound, finished) = slide.update(now, |fully| t.wants_show(fully, multiplier));
+            t.slide = slide;
+            if finished {
+                self.adv.toasts.remove(i);
+                continue;
+            }
+            // Only the first visibility change of an update plays its sound.
+            if let Some(show) = sound
+                && !std::mem::replace(&mut sound_played, true)
+            {
+                let event = if show { "ui.toast.in" } else { "ui.toast.out" };
+                self.audio
+                    .play(&format!("minecraft:{event}"), None, 1.0, 1.0);
+            }
+            i += 1;
+        }
+        // The queued toasts take the free slots in order; a challenge's own sound
+        // plays once as it leaves the queue.
+        let mut used = self.toast_slots_used();
+        let mut challenge_sound = false;
+        for t in &mut self.adv.toasts {
+            if t.slot.is_some() {
+                continue;
+            }
+            let Some(slot) = (0..Self::TOAST_SLOTS).find(|s| used & (1 << s) == 0) else {
+                break;
+            };
+            used |= 1 << slot;
+            t.slot = Some(slot);
+            challenge_sound |= !t.is_recipe() && t.frame == Frame::Challenge;
+        }
+        if challenge_sound {
+            self.audio
+                .play("minecraft:ui.toast.challenge_complete", None, 1.0, 1.0);
+        }
+        if hidden {
             return;
         }
+        for i in 0..self.adv.toasts.len() {
+            if let Some(slot) = self.adv.toasts[i].slot {
+                self.draw_toast(batch, i, 32.0 * slot as f32, multiplier);
+            }
+        }
+    }
+    /// The slots held by shown advancement, recipe and pack toasts, as bits.
+    pub(super) fn toast_slots_used(&self) -> u32 {
+        let packs = self.server_packs.toast_slots();
+        self.adv
+            .toasts
+            .iter()
+            .filter_map(|t| t.slot)
+            .chain(packs)
+            .fold(0, |used, slot| used | 1 << slot)
+    }
+    /// The `AdvancementToast` or `RecipeToast` at `index` in its slot at `y`.
+    fn draw_toast(&mut self, batch: &mut HudBatch, index: usize, y: f32, multiplier: f64) {
+        let t = &self.adv.toasts[index];
         let x = batch.width - 160.0 * t.slide.portion;
         let fully_for = t.slide.fully_for;
         let (title, frame, icon) = (t.title.clone(), t.frame, t.icon.clone());
         let recipe = t
             .is_recipe()
             .then(|| t.recipes[t.displayed_recipe(fully_for, multiplier)].clone());
-        // ToastManager.update: the sound of the new visibility, and a
-        // challenge's own sound as it leaves the queue.
-        if let Some(show) = sound {
-            let event = if show { "ui.toast.in" } else { "ui.toast.out" };
-            self.audio
-                .play(&format!("minecraft:{event}"), None, 1.0, 1.0);
-        }
-        if first && recipe.is_none() && frame == Frame::Challenge {
-            self.audio
-                .play("minecraft:ui.toast.challenge_complete", None, 1.0, 1.0);
-        }
         if let Some((station, item)) = recipe {
             // RecipeToast: black description under a purple title, the
             // station at 0.6 scale in the corner over the cycling result.
             let atlas = &self.gui.atlas;
-            batch.sprite(atlas, "gui/sprites/toast/recipe", x, 0.0);
+            batch.sprite(atlas, "gui/sprites/toast/recipe", x, y);
             let title = self.translate("recipe.toast.title", "New Recipe(s) Unlocked!");
             let description = self.translate("recipe.toast.description", "Check your recipe book");
             let atlas = &self.gui.atlas;
-            batch.text(atlas, &title, x + 30.0, 7.0, 0xFF50_0050, false);
-            batch.text(atlas, &description, x + 30.0, 18.0, 0xFF00_0000, false);
+            batch.text(atlas, &title, x + 30.0, y + 7.0, 0xFF50_0050, false);
+            batch.text(atlas, &description, x + 30.0, y + 18.0, 0xFF00_0000, false);
             let start = batch.vertices.len();
-            self.draw_item_model(batch, &ItemStack::new(&station, 1), x + 3.0, 3.0);
-            batch.scale_since(start, x, 0.0, 0.6, 0.6);
-            self.draw_item_model(batch, &item, x + 8.0, 8.0);
+            self.draw_item_model(batch, &ItemStack::new(&station, 1), x + 3.0, y + 3.0);
+            batch.scale_since(start, x, y, 0.6, 0.6);
+            self.draw_item_model(batch, &item, x + 8.0, y + 8.0);
             return;
         }
         let atlas = &self.gui.atlas;
-        batch.sprite(atlas, "gui/sprites/toast/advancement", x, 0.0);
+        batch.sprite(atlas, "gui/sprites/toast/advancement", x, y);
         let (key, color) = match frame {
             Frame::Task => ("advancements.toast.task", 0xFF00_FFFF),
             Frame::Goal => ("advancements.toast.goal", 0xFF00_FFFF),
@@ -1083,12 +1135,12 @@ impl Game<'_> {
             atlas,
             &Text::translate(key, &[]),
             x + 30.0,
-            7.0,
+            y + 7.0,
             color,
             false,
         );
-        batch.text_styled(atlas, &title, x + 30.0, 18.0, u32::MAX, false);
-        self.draw_item(batch, &ItemStack::new(&icon, 1), x + 8.0, 8.0);
+        batch.text_styled(atlas, &title, x + 30.0, y + 18.0, u32::MAX, false);
+        self.draw_item(batch, &ItemStack::new(&icon, 1), x + 8.0, y + 8.0);
     }
 }
 /// `Advancement.name`: the bracketed title in the frame's colour, with the
@@ -1269,6 +1321,7 @@ impl Game<'_> {
                     frame: d.frame,
                     title: text_of(&d.title),
                     slide: Slide::default(),
+                    slot: None,
                     recipes: Vec::new(),
                     changed: false,
                     last_changed: 0,
