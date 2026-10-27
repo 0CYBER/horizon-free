@@ -663,50 +663,6 @@ impl Game<'_> {
             g.server_explode(at, power, BlockInteraction::Destroy, false)
         });
     }
-    /// `MinecartHopper.suckInItems`: items above, into the five slots.
-    fn hopper_cart_pickup(&mut self, c: &mut Minecart) {
-        if !c.enabled {
-            return;
-        }
-        let p = c.position;
-        let zone = Aabb::new(
-            Vec3::new(p.x - 0.5, p.y - 0.5 + 0.0, p.z - 0.5),
-            Vec3::new(p.x + 0.5, p.y + 1.5, p.z + 0.5),
-        );
-        let mut i = 0;
-        while i < self.dropped.len() {
-            let e = &self.dropped[i];
-            if e.pickup_delay > 0 || !zone.contains(e.position) {
-                i += 1;
-                continue;
-            }
-            let mut stack = e.stack.clone();
-            for slot in c.items.iter_mut() {
-                match slot {
-                    None => {
-                        *slot = Some(stack.clone());
-                        stack.count = 0;
-                    }
-                    Some(s) if s.same_item_same_components(&stack) => {
-                        let max = self.res.items().get(&s.item).map_or(64, |i| i.max_stack);
-                        let moved = stack.count.min(max.saturating_sub(s.count));
-                        s.count += moved;
-                        stack.count -= moved;
-                    }
-                    _ => {}
-                }
-                if stack.count == 0 {
-                    break;
-                }
-            }
-            if stack.count == 0 {
-                self.dropped.remove(i);
-            } else {
-                self.dropped[i].stack = stack;
-                i += 1;
-            }
-        }
-    }
     /// `AbstractMinecart.push` from each player walking into a cart
     /// (`LivingEntity.pushEntities`): the window's player and every server
     /// player (single player's own on its server thread, LAN guests). A
@@ -839,8 +795,8 @@ impl Game<'_> {
             }
             let mut c = self.carts[i].clone();
             let alive = self.tick_cart(&mut c, [0.0; 2]);
-            if c.kind == CartKind::Hopper {
-                self.hopper_cart_pickup(&mut c);
+            if c.kind == CartKind::Hopper && c.enabled {
+                self.hopper_cart_suck(&mut c);
             }
             let Some(i) = self.carts.iter().position(|c| c.id == id) else {
                 continue;
