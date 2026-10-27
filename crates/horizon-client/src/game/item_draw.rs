@@ -407,7 +407,12 @@ impl Game<'_> {
             ) {
                 self.submit_item_world(&state, copy, vertex_light(packed), out);
             }
-            self.cull_entity_vertices(out, entity_start);
+            if self.entity_glowing(item.id) {
+                let rgb = super::glowing::team_color(self.mob_team(item.id));
+                self.mark_outline(&out[entity_start..], rgb);
+            } else {
+                self.cull_entity_vertices(out, entity_start);
+            }
         }
     }
 }
