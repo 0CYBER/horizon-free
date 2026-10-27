@@ -26,27 +26,28 @@ pub(super) fn player_for(
     guests: &GuestViews,
     bound: Option<u32>,
 ) -> Option<u32> {
-    // A tame parrot sees its owner (`TamableAnimal.getOwner`), while they
-    // are in play, whoever is nearer.
-    if m.species() == Species::Parrot
+    // A tame cat reads its owner wherever they are while they sleep, or just
+    // woke up (`CatRelaxOnOwnerGoal` uses `getOwner`, not the nearest player).
+    if m.species() == Species::Cat
         && m.extra.tame
         && let Some(owner) = m.extra.owner
     {
-        if host.is_some_and(|v| v.alive && v.uuid == owner) {
+        let asleep = |v: &PlayerView| v.uuid == owner && (v.sleeping || v.sleep_timer > 0);
+        if host.is_some_and(asleep) {
             return None;
         }
-        if let Some((conn, _)) = guests.iter().find(|(_, v)| v.alive && v.uuid == owner) {
+        if let Some((conn, _)) = guests.iter().find(|(_, v)| asleep(v)) {
             return Some(*conn);
         }
     }
     let targeting = m.ai.target == Some(Who::Player)
         || m.ai.last_hurt_by == Some(Who::Player) && m.age as i32 - m.ai.last_hurt_by_time <= 100;
-    // A tame wolf or cat sees its owner (`TamableAnimal.getOwner`), while they
+    // A tame wolf, cat or parrot sees its owner (`TamableAnimal.getOwner`), while they
     // are in play, whoever is nearer. Not while it targets or was just hurt by
     // a player: then `Who::Player` is that attacker, whoever it is, and the
     // owner goals ignore it until the wolf lets go.
     if !targeting
-        && matches!(m.species(), Species::Wolf | Species::Cat)
+        && matches!(m.species(), Species::Wolf | Species::Cat | Species::Parrot)
         && m.extra.tame
         && let Some(owner) = m.extra.owner
     {
@@ -412,6 +413,8 @@ mod tests {
             uuid: [0; 4],
             allies: Default::default(),
             remote: false,
+            sleeping: false,
+            sleep_timer: 0,
             passenger: false,
         }
     }

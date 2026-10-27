@@ -373,14 +373,7 @@ mod tooltip_tests {
     /// The prepared resources, when they are on this machine: the tooltip
     /// asks the item registry whether a stack is a bundle.
     fn items() -> Option<Items> {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.local/horizon-client/26.3");
-        if !root.join("items.json").exists() {
-            return None;
-        }
-        let assets = crate::assets::Assets::load(&root).ok()?;
-        let facts = crate::blocks::BlockFacts::load(&root, assets.registry).ok()?;
-        Items::load(&root, assets.registry, &facts).ok()
+        crate::items::prepared_items()
     }
 
     fn bundle_with(counts: &[(&str, u32)]) -> ItemStack {
