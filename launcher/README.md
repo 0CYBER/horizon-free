@@ -76,7 +76,9 @@ The opening, then Play ([clip](docs/opening.webm)):
   sign-in sessions, logs or data collection state). Names, icons (a block or item texture from the
   player's prepared files, or a colour) and groups are kept in `instances.json` in the launcher's
   data folder, so renaming moves nothing. Every instance follows the launcher's data collection
-  answer and No AI.
+  answer and No AI. In the window, **+** beside Instances makes one, the sidebar lists them by
+  group (click one to play it), and Home's Instance row has Edit (name, group, icon), Copy and
+  Open folder.
 - **Patch notes**: each release's notes, newest first, with a link to GitHub Sponsors. Quiet "Discord" and "Website" links sit in the footer.
 
 Data lives in the platform's data directory (`~/.local/share/horizon-launcher` on Linux,
