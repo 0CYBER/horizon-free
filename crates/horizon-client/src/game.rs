@@ -7552,8 +7552,21 @@ impl Game<'_> {
             p.position.z + f64::from(trig::cos(yaw)),
         ])
     }
-    /// The visual and sound part of `Player.doSweepAttack` after a successful hit.
-    pub(super) fn sweep_attack(&mut self, at: [f64; 3], from: Option<[f64; 3]>) {
+    /// `Player.doSweepAttack` after a successful hit, in vanilla's order: the
+    /// sweep sound, the victims around `target` (its box, and the mob that
+    /// was hit, when there is one) and then the arc.
+    pub(super) fn sweep_attack(
+        &mut self,
+        at: [f64; 3],
+        from: Option<[f64; 3]>,
+        target: Option<(Aabb, Option<u32>)>,
+        scale: f32,
+    ) {
+        self.audio
+            .play("minecraft:entity.player.attack.sweep", from, 1.0, 1.0);
+        if let Some((area, mob)) = target {
+            self.sweep_damage(area, mob, scale);
+        }
         self.particles.add(
             &horizon_client::particles::ParticleOptions::simple(
                 horizon_client::particles::ParticleType::SweepAttack,
@@ -7577,13 +7590,12 @@ impl Game<'_> {
                 ],
             );
         }
-        self.audio
-            .play("minecraft:entity.player.attack.sweep", from, 1.0, 1.0);
     }
     /// `Player.attack`'s sounds when a vehicle takes the hit (it always does,
     /// and can't be hit critically): knockback when sprinting at full
-    /// strength, then strong or weak. Before `swing_arm` resets the charge.
-    pub(super) fn vehicle_attack_sounds(&mut self) {
+    /// strength, then strong or weak, or the sweep around the vehicle's
+    /// box `area`. Before `swing_arm` resets the charge.
+    pub(super) fn vehicle_attack_sounds(&mut self, area: Aabb) {
         let full = self.attack_strength_scale() > 0.9;
         let player = self.player.as_ref();
         let from = player.map(|p| [p.position.x, p.position.y, p.position.z]);
@@ -7596,8 +7608,9 @@ impl Game<'_> {
         } else {
             "minecraft:entity.player.attack.weak"
         };
-        if let Some(at) = self.sweep_attack_position(self.attack_strength_scale(), false) {
-            self.sweep_attack(at, from);
+        let scale = self.attack_strength_scale();
+        if let Some(at) = self.sweep_attack_position(scale, false) {
+            self.sweep_attack(at, from, Some((area, None)), scale);
         } else {
             self.audio.play(sound, from, 1.0, 1.0);
         }
@@ -7752,8 +7765,8 @@ impl Game<'_> {
             };
             // Player.playServerSideSound: at the player.
             if let Some(at) = sweep {
-                self.sweep_damage(index, scale);
-                self.sweep_attack(at, from);
+                let target = (self.mobs[index].bounds(), Some(self.mobs[index].id));
+                self.sweep_attack(at, from, Some(target), scale);
             } else {
                 self.audio.play(sound, from, 1.0, 1.0);
             }

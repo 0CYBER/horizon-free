@@ -85,6 +85,29 @@ impl Game<'_> {
             0.0,
         )
     }
+    /// `Player.getEnchantedDamage`: `base` run through the held weapon's
+    /// damage effects against a mob type.
+    pub(super) fn enchanted_damage(&mut self, target: &str, base: f32) -> f32 {
+        let Some(held) = self.inventory[self.selected].clone() else {
+            return base;
+        };
+        let ctx = EffectContext {
+            this: Some(target),
+            attacker: Some("minecraft:player"),
+            direct_attacker: Some("minecraft:player"),
+            is_direct: true,
+            damage_type: Some("minecraft:player_attack"),
+            items: Some(self.res.items()),
+            ..Default::default()
+        };
+        self.res.stations().enchantments.modify_value(
+            Some(&held),
+            "minecraft:damage",
+            &ctx,
+            &mut self.world.random,
+            base,
+        )
+    }
     /// Strength / weakness on the attack damage attribute.
     pub(super) fn effect_attack_bonus(&self) -> f32 {
         let fx = &self.potions.effects;

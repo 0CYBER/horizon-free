@@ -9,7 +9,11 @@ use horizon_client::{
     mobs::{Damage, Mob, Species},
     particles::{ParticleOptions, ParticleType},
 };
-use horizon_core::{geometry::Vec3, position::BlockPos, random::RandomSource};
+use horizon_core::{
+    geometry::{Aabb, Vec3},
+    position::BlockPos,
+    random::RandomSource,
+};
 use horizon_world::registry::BlockStateId;
 
 /// `MaceItem.SMASH_ATTACK_FALL_THRESHOLD`.
@@ -274,21 +278,25 @@ impl Game<'_> {
             push(s.position, &mut s.velocity, 0.0);
         }
     }
-    /// `Player.attack`'s sweep: every other living mob in the target's box
-    /// inflated by (1, 0.25, 1) and under three blocks from the player takes
+    /// `Player.doSweepAttack`'s victims: every other living mob and every
+    /// armor stand (but a marker one) in `target`'s box inflated by
+    /// (1, 0.25, 1) and under three blocks from the player takes
     /// `getEnchantedDamage(1 + sweeping ratio * attack damage) * strength`,
     /// knocked back 0.4 along the player's yaw. The player's allies and the
-    /// target are spared.
-    pub(super) fn sweep_damage(&mut self, index: usize, scale: f32) {
+    /// target (`exclude_mob`) are spared.
+    pub(super) fn sweep_damage(&mut self, target: Aabb, exclude_mob: Option<u32>, scale: f32) {
         let Some(player) = self.player.as_ref() else {
             return;
         };
         let from = [player.position.x, player.position.y, player.position.z];
-        let target = &self.mobs[index];
-        let (target_id, area) = (
-            target.id,
-            target.bounds().inflate(Vec3::new(1.0, 0.25, 1.0)),
-        );
+        let (target_id, area) = (exclude_mob, target.inflate(Vec3::new(1.0, 0.25, 1.0)));
+        let near = |at: Vec3| {
+            (0..3)
+                .map(|a| [at.x, at.y, at.z][a] - from[a])
+                .map(|d| d * d)
+                .sum::<f64>()
+                < 9.0
+        };
         // SweepingEdgeEnchantment.getSweepingDamageRatio: level / (level + 1).
         let level = self.inventory[self.selected].as_ref().map_or(0, |held| {
             held.enchantments()
@@ -314,23 +322,28 @@ impl Game<'_> {
             .iter()
             .enumerate()
             .filter(|(_, m)| {
-                m.id != target_id
+                Some(m.id) != target_id
                     && m.alive()
                     && !m.removed
                     && !ally_of_player(m, uuid)
                     && m.bounds().intersects(area)
-                    && (0..3)
-                        .map(|a| [m.position.x, m.position.y, m.position.z][a] - from[a])
-                        .map(|d| d * d)
-                        .sum::<f64>()
-                        < 9.0
+                    && near(m.position)
             })
             .map(|(i, _)| i)
+            .collect();
+        // The armor stands in reach, highest index first (a hit may remove one).
+        let stands: Vec<usize> = self
+            .armor_stands
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !s.marker && s.bounds().intersects(area) && near(s.position))
+            .map(|(i, _)| i)
+            .rev()
             .collect();
         for i in victims {
             let kind = self.mobs[i].kind.id.clone();
             let kind = format!("minecraft:{}", kind.trim_start_matches("minecraft:"));
-            let amount = (base + self.enchant_damage_bonus(&kind)) * scale;
+            let amount = self.enchanted_damage(&kind, base) * scale;
             let source = self.attack_source(from);
             // hurtServer first; the knockback and post-attack effects follow
             // only when it landed.
@@ -340,6 +353,9 @@ impl Game<'_> {
                     .insert(self.mobs[i].id, self.lan_acting);
                 self.post_attack(i);
             }
+        }
+        for i in stands {
+            self.punch_armor_stand(i);
         }
     }
     /// `ServerPlayer.checkFallDamage` after a smash on a grounded target:

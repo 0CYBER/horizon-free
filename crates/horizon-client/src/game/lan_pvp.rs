@@ -279,7 +279,7 @@ impl Game<'_> {
             (true, false, false) => "minecraft:entity.player.attack.weak",
         };
         if let Some(at) = s.sweep.filter(|_| hurt) {
-            self.sweep_attack(at, Some(s.from));
+            self.sweep_attack(at, Some(s.from), None, s.scale);
         } else {
             self.audio.play(sound, Some(s.from), 1.0, 1.0);
         }

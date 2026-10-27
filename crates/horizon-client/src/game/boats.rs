@@ -818,7 +818,7 @@ impl Game<'_> {
         if !self.before_block(d) || self.mob_hit().is_some_and(|m| m.1 < d) {
             return false;
         }
-        self.vehicle_attack_sounds();
+        self.vehicle_attack_sounds(self.boats[i].bounds());
         self.hurt_boat(i, damage, self.creative);
         self.swing_arm();
         true
