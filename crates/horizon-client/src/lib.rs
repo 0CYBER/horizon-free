@@ -158,6 +158,7 @@ pub mod spans;
 pub mod spear;
 pub mod spectator_menu;
 pub mod sprint;
+mod sprite_cache;
 pub mod sprites;
 pub mod stations;
 pub mod stopwatches;

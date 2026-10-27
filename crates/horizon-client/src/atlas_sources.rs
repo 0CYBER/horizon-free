@@ -187,7 +187,14 @@ pub fn list_textures(root: &Path) -> Vec<String> {
             };
             for e in entries.flatten() {
                 let p = e.path();
-                if p.is_dir() {
+                // `file_type` comes with the listing; `Path::is_dir` is a stat per
+                // entry, kept for links (which it follows).
+                let dir = match e.file_type() {
+                    Ok(t) if t.is_symlink() => p.is_dir(),
+                    Ok(t) => t.is_dir(),
+                    Err(_) => p.is_dir(),
+                };
+                if dir {
                     stack.push(p);
                 } else if p.extension().is_some_and(|x| x == "png")
                     && let Ok(rel) = p.strip_prefix(&base)
