@@ -3,12 +3,16 @@
 //! jar, this system's libraries and the assets (the sounds), each checked against its sha1,
 //! in the official launcher's layout in the launcher's data folder. sources.rs then finds them
 //! there like any launcher's. Nothing of Mojang's is part of Horizon.
+//!
+//! Each file is checked against the size and sha1 Mojang lists, and written whole. A download
+//! stopped half way (cancelled, no network) keeps the files it finished: the next one fetches
+//! only the rest.
 
-use crate::sources::{fetch_checked, fetch_manifest, sha1_file, write_file, Fetch, Pins};
+use crate::sources::{fetch_checked, fetch_manifest, sha1_file, sha1_hex, write_file, Fetch, Pins};
 use serde_json::Value;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -16,22 +20,38 @@ const OBJECTS: &str = "https://resources.download.minecraft.net";
 /// The index of Mojang's Java runtimes, the one the official launcher reads.
 const JAVA_RUNTIMES: &str = "https://launchermeta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json";
 
-/// One file to download.
+/// Set to stop the download under way (the window's Cancel); cleared when a preparation starts.
+pub static CANCEL: AtomicBool = AtomicBool::new(false);
+/// The download under way: files done, of how many (0 when none runs).
+static DONE: AtomicUsize = AtomicUsize::new(0);
+static TOTAL: AtomicUsize = AtomicUsize::new(0);
+
+/// How far the download under way is, files done of how many; none when none runs.
+pub fn progress() -> Option<(usize, usize)> {
+    let total = TOTAL.load(Relaxed);
+    (total > 0).then(|| (DONE.load(Relaxed).min(total), total))
+}
+
+const CANCELLED: &str = "Download cancelled. Download again to go on where it stopped.";
+
+/// One file to download, with the size Mojang lists for it when it lists one.
 struct File {
     url: String,
     sha1: String,
+    size: Option<u64>,
     path: PathBuf,
 }
 
 /// Downloads the pinned version into `dir`, `jobs` files at a time; files already there and
 /// whole are kept. An asset that fails is a line in the log (the game is then partly silent),
-/// anything else an error.
+/// anything else an error. `cancel` stops it between files.
 pub fn download(
     pins: &Pins,
     dir: &Path,
     os: &str,
     jobs: usize,
     fetch: Fetch,
+    cancel: &AtomicBool,
     log: &dyn Fn(String),
 ) -> Result<(), String> {
     let v = &pins.version;
@@ -43,6 +63,7 @@ pub fn download(
     let mut game = vec![File {
         url: text(client, "url")?,
         sha1: pins.client_sha1.clone(),
+        size: client["size"].as_u64(),
         path: versions.join(format!("{v}.jar")),
     }];
     let libraries = manifest["libraries"]
@@ -56,6 +77,7 @@ pub fn download(
         game.push(File {
             url: text(artifact, "url")?,
             sha1: text(artifact, "sha1")?,
+            size: artifact["size"].as_u64(),
             path: dir
                 .join("libraries")
                 .join(relative(&text(artifact, "path")?)?),
@@ -65,23 +87,26 @@ pub fn download(
         "Downloading Minecraft {v} from Mojang: the game and {} libraries",
         game.len() - 1
     ));
-    fetch_all(&game, jobs, fetch, log)?;
+    fetch_all(&game, jobs, fetch, cancel, log)?;
     let index = &manifest["assetIndex"];
     let index = File {
         url: text(index, "url")?,
         sha1: text(index, "sha1")?,
+        size: index["size"].as_u64(),
         path: dir
             .join("assets/indexes")
             .join(relative(&format!("{}.json", text(index, "id")?))?),
     };
-    let assets = fetch_all(std::slice::from_ref(&index), 1, fetch, log)
+    let assets = fetch_all(std::slice::from_ref(&index), 1, fetch, cancel, log)
         .and_then(|_| objects(&read_json(&index.path)?, dir))
         .and_then(|objects| {
             log(format!("Downloading the sounds ({} files)", objects.len()));
-            fetch_all(&objects, jobs, fetch, log)
+            fetch_all(&objects, jobs, fetch, cancel, log)
         });
-    if let Err(e) = assets {
-        log(format!("The sounds could not all be downloaded: {e}"));
+    match assets {
+        Err(e) if e == CANCELLED => return Err(e),
+        Err(e) => log(format!("The sounds could not all be downloaded: {e}")),
+        Ok(()) => {}
     }
     Ok(())
 }
@@ -110,6 +135,7 @@ pub fn java_runtime(
     runtime: &Path,
     jobs: usize,
     fetch: Fetch,
+    cancel: &AtomicBool,
     log: &dyn Fn(String),
 ) -> Result<PathBuf, String> {
     let platform = java_platform().ok_or("Mojang has no Java for this system")?;
@@ -144,6 +170,7 @@ pub fn java_runtime(
                 downloads.push(File {
                     url: text(raw, "url")?,
                     sha1: text(raw, "sha1")?,
+                    size: raw["size"].as_u64(),
                     path,
                 });
             }
@@ -156,7 +183,7 @@ pub fn java_runtime(
         "Downloading Minecraft's Java {name} from Mojang ({} files)",
         downloads.len()
     ));
-    fetch_all(&downloads, jobs, fetch, log)?;
+    fetch_all(&downloads, jobs, fetch, cancel, log)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -243,6 +270,10 @@ fn objects(index: &Value, dir: &Path) -> Result<Vec<File>, String> {
     let objects = index["objects"]
         .as_object()
         .ok_or("The asset index has no objects")?;
+    let sizes: std::collections::HashMap<&str, u64> = objects
+        .values()
+        .filter_map(|o| Some((o["hash"].as_str()?, o["size"].as_u64()?)))
+        .collect();
     let mut hashes: Vec<&str> = objects
         .values()
         .filter_map(|o| o["hash"].as_str())
@@ -259,23 +290,42 @@ fn objects(index: &Value, dir: &Path) -> Result<Vec<File>, String> {
             Ok(File {
                 url: format!("{OBJECTS}/{path}"),
                 sha1: hash.to_string(),
+                size: sizes.get(hash).copied(),
                 path: dir.join("assets/objects").join(path),
             })
         })
         .collect()
 }
 
-/// Downloads the files not already there, `jobs` at a time, with a line every few seconds;
-/// stops at the first error.
+/// One file from Mojang, refused unless it has the size and sha1 Mojang lists.
+fn fetch_file(fetch: Fetch, file: &File) -> Result<Vec<u8>, String> {
+    let body = fetch(&file.url)?;
+    if let Some(size) = file.size.filter(|&size| size != body.len() as u64) {
+        return Err(format!(
+            "is {} bytes, not the {size} Mojang lists",
+            body.len()
+        ));
+    }
+    match sha1_hex(&body) {
+        actual if actual == file.sha1 => Ok(body),
+        actual => Err(format!("is not the one Horizon pins (sha1 {actual})")),
+    }
+}
+
+/// Downloads the files not already there, `jobs` at a time, with a line every second; stops at
+/// the first error, or between files once `cancel` is set.
 fn fetch_all(
     files: &[File],
     jobs: usize,
     fetch: Fetch,
+    cancel: &AtomicBool,
     log: &dyn Fn(String),
 ) -> Result<(), String> {
     let next = AtomicUsize::new(0);
     let done = AtomicUsize::new(0);
     let failed = Mutex::new(None);
+    DONE.store(0, Relaxed);
+    TOTAL.store(files.len(), Relaxed);
     std::thread::scope(|scope| {
         let workers: Vec<_> = (0..jobs.clamp(1, files.len().max(1)))
             .map(|_| {
@@ -284,15 +334,19 @@ fn fetch_all(
                         if failed.lock().unwrap().is_some() {
                             break;
                         }
+                        if cancel.load(Relaxed) {
+                            failed.lock().unwrap().get_or_insert(CANCELLED.to_string());
+                            break;
+                        }
                         if sha1_file(&file.path).as_ref() != Some(&file.sha1) {
-                            let got = fetch_checked(fetch, &file.url, &file.sha1)
+                            let got = fetch_file(fetch, file)
                                 .map_err(|e| format!("{} {e}", file.url))
                                 .and_then(|body| write_file(&file.path, &body));
                             if let Err(e) = got {
                                 failed.lock().unwrap().get_or_insert(e);
                             }
                         }
-                        done.fetch_add(1, Relaxed);
+                        DONE.store(done.fetch_add(1, Relaxed) + 1, Relaxed);
                     }
                 })
             })
@@ -301,11 +355,12 @@ fn fetch_all(
         while !workers.iter().all(|w| w.is_finished()) {
             std::thread::sleep(Duration::from_millis(100));
             waited += 1;
-            if waited % 50 == 0 {
+            if waited % 10 == 0 {
                 log(format!("{} of {} files", done.load(Relaxed), files.len()));
             }
         }
     });
+    TOTAL.store(0, Relaxed);
     failed.into_inner().unwrap().map_or(Ok(()), Err)
 }
 

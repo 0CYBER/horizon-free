@@ -99,7 +99,7 @@ impl Default for Config {
             hub_keep_days: 90,
             hub_token: None,
             github_token: None,
-            github_repo: "ludovic111/horizon".into(),
+            github_repo: "horizon-rust/horizon".into(),
         }
     }
 }

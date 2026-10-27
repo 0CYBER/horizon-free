@@ -160,13 +160,7 @@ pub(crate) fn nbt_text(tag: Option<&horizon_world::nbt::Tag>) -> Option<String> 
     }
 }
 
-/// `Either<String, UUID>`: the key a `Dynamic` `ResolvableProfile` resolves
-/// by (`ResolvableProfile.nameOrId`).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum NameOrId {
-    Name(String),
-    Id(u128),
-}
+pub use crate::chunk::block_entity::NameOrId;
 
 /// `GameProfile` as `fetchProfile` returns it: the account's id, name and
 /// property map (its `textures` property is the skin).

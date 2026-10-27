@@ -159,6 +159,8 @@ pub struct ArrowState {
     pub pickup: Pickup,
     /// `pickupItemStack`: what picking the arrow up gives.
     pub pickup_item: crate::items::ItemStack,
+    /// `AbstractArrow.firedFromWeapon`: the crossbow or bow it was shot from.
+    pub fired_from_weapon: Option<crate::items::ItemStack>,
     pub no_physics: bool,
     /// `AbstractArrow.getPierceLevel`.
     pub pierce: u8,
@@ -208,6 +210,7 @@ impl ArrowState {
             last_state: None,
             pickup: Pickup::Disallowed,
             pickup_item: crate::items::ItemStack::new("minecraft:arrow", 1),
+            fired_from_weapon: None,
             no_physics: false,
             pierce: 0,
             pierced: Vec::new(),
