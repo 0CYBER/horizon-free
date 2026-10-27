@@ -1,8 +1,9 @@
-//! InWorldGameRulesScreen (AbstractGameRulesScreen), opened from World
-//! Options: the rules by category under a search box, a switch or a number
-//! box each, and Done sending the changed ones (ServerboundSetGameRulePacket).
-//! Leaving with changes asks first (ConfirmScreen).
-use horizon_client::{
+//! AbstractGameRulesScreen: the rules by category under a search box, a
+//! switch or a number box each. InWorldGameRulesScreen, opened from World
+//! Options, sends the changed ones on Done (ServerboundSetGameRulePacket) and
+//! asks before leaving with changes (ConfirmScreen); WorldCreationGameRulesScreen,
+//! opened from Create New World, hands them back and leaves without asking.
+use crate::{
     confirm_screen::Confirm,
     font::Font,
     gamerules::{self, GameRules, RULES, Rule, Value},
@@ -32,14 +33,14 @@ enum Row {
 
 /// What a click or Escape asks of World Options.
 #[derive(Debug, PartialEq)]
-pub(super) enum Exit {
+pub enum Exit {
     /// Done: the rules that changed.
     Apply(Vec<(&'static str, Value)>),
     /// Cancel, or discarding the changes.
     Discard,
 }
 
-pub(super) struct RulesScreen {
+pub struct RulesScreen {
     search: EditBox,
     values: GameRules,
     initial: GameRules,
@@ -49,6 +50,8 @@ pub(super) struct RulesScreen {
     scroll: ui::Scroll,
     /// ConfirmScreen "Game Rule Changes" in its place.
     confirm: bool,
+    /// InWorldGameRulesScreen rather than WorldCreationGameRulesScreen.
+    in_world: bool,
 }
 
 fn name_key(r: &Rule) -> String {
@@ -102,7 +105,15 @@ fn confirm(font: &Font, size: (f32, f32)) -> Confirm {
 }
 
 impl RulesScreen {
-    pub(super) fn new(rules: &GameRules) -> Self {
+    /// InWorldGameRulesScreen over the world's rules.
+    pub fn new(rules: &GameRules) -> Self {
+        Self::build(rules, true)
+    }
+    /// WorldCreationGameRulesScreen over the new world's rules.
+    pub fn for_creation(rules: &GameRules) -> Self {
+        Self::build(rules, false)
+    }
+    fn build(rules: &GameRules, in_world: bool) -> Self {
         // setInitialFocus: the search box.
         let search = EditBox::new(0.0, 0.0, SEARCH_WIDTH, 15.0);
         let numbers = RULES
@@ -123,6 +134,7 @@ impl RulesScreen {
             numbers,
             scroll: ui::Scroll::default(),
             confirm: false,
+            in_world,
         }
     }
 
@@ -197,9 +209,10 @@ impl RulesScreen {
             })
             .collect()
     }
-    /// InWorldGameRulesScreen.onClose: pending changes ask first.
+    /// InWorldGameRulesScreen.onClose: pending changes ask first;
+    /// WorldCreationGameRulesScreen.onClose discards them.
     fn close(&mut self) -> Option<Exit> {
-        if self.changes().is_empty() {
+        if !self.in_world || self.changes().is_empty() {
             Some(Exit::Discard)
         } else {
             self.confirm = true;
@@ -207,7 +220,7 @@ impl RulesScreen {
         }
     }
     /// Escape: ConfirmScreen answers no; the rules close.
-    pub(super) fn escape(&mut self) -> Option<Exit> {
+    pub fn escape(&mut self) -> Option<Exit> {
         if self.confirm {
             self.confirm = false;
             None
@@ -216,7 +229,7 @@ impl RulesScreen {
         }
     }
     /// The mouse wheel (AbstractSelectionList: half an entry a step).
-    pub(super) fn wheel(&mut self, delta: f32, h: f32) {
+    pub fn wheel(&mut self, delta: f32, h: f32) {
         if !self.confirm {
             let content = self.content();
             self.scroll
@@ -224,20 +237,20 @@ impl RulesScreen {
         }
     }
     /// A press on the scrollbar holds it (AbstractSelectionList.updateScrolling).
-    pub(super) fn press_scrollbar(&mut self, cursor: (f32, f32), (w, h): (f32, f32)) -> bool {
+    pub fn press_scrollbar(&mut self, cursor: (f32, f32), (w, h): (f32, f32)) -> bool {
         let content = self.content();
         self.scroll
             .press(cursor, Self::bar(w), HEADER, h - FOOTER, content)
     }
     /// The pointer moved while the scrollbar is held.
-    pub(super) fn drag(&mut self, y: f32, h: f32) {
+    pub fn drag(&mut self, y: f32, h: f32) {
         if self.scroll.held() {
             let content = self.content();
             self.scroll.drag(y, HEADER, h - FOOTER, content);
         }
     }
     /// The button came up: the scrollbar lets go.
-    pub(super) fn release(&mut self) {
+    pub fn release(&mut self) {
         self.scroll.release();
     }
     fn focused(&mut self) -> Option<(Option<&'static str>, &mut EditBox)> {
@@ -272,7 +285,7 @@ impl RulesScreen {
         }
     }
     /// Run an edit on the focused box, then its responder.
-    pub(super) fn edit(&mut self, f: impl FnOnce(&mut EditBox)) {
+    pub fn edit(&mut self, f: impl FnOnce(&mut EditBox)) {
         let Some((rule, b)) = self.focused() else {
             return;
         };
@@ -282,12 +295,12 @@ impl RulesScreen {
             self.edited(rule);
         }
     }
-    pub(super) fn typing(&self) -> bool {
+    pub fn typing(&self) -> bool {
         !self.confirm && (self.search.focused || self.numbers.iter().any(|(_, b)| b.focused))
     }
 
     /// A left click; Some when the screen closes.
-    pub(super) fn click(
+    pub fn click(
         &mut self,
         atlas: &HudAtlas,
         cursor: (f32, f32),
@@ -355,12 +368,7 @@ impl RulesScreen {
         }
     }
     /// Whether a click lands on a button (for its sound).
-    pub(super) fn clicks_button(
-        &self,
-        atlas: &HudAtlas,
-        cursor: (f32, f32),
-        size: (f32, f32),
-    ) -> bool {
+    pub fn clicks_button(&self, atlas: &HudAtlas, cursor: (f32, f32), size: (f32, f32)) -> bool {
         let (w, h) = size;
         let on = |(x, y): (f32, f32)| ui::hovered(cursor, x, y, 150.0, 20.0);
         if self.confirm {
@@ -377,9 +385,9 @@ impl RulesScreen {
         })
     }
 
-    pub(super) fn draw(&mut self, batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) {
+    pub fn draw(&mut self, batch: &mut HudBatch, atlas: &HudAtlas, cursor: (f32, f32)) {
         let (w, h) = (batch.width, batch.height);
-        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
+        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, self.in_world);
         if self.confirm {
             let labels = [
                 Text::translate("gui.yes", &[]),
@@ -393,7 +401,7 @@ impl RulesScreen {
         self.scroll.clamp(HEADER, h - FOOTER, content);
         // RuleList: the in-world list background, its entries clipped to it,
         // then the separators and scrollbar.
-        ui::list_background(batch, atlas, HEADER, h - FOOTER, true);
+        ui::list_background(batch, atlas, HEADER, h - FOOTER, self.in_world);
         let first = batch.vertices.len();
         let hovered = self.hovered(rows.len(), cursor, (w, h));
         let (left, x) = (row_left(w), control_x(w));
@@ -450,7 +458,7 @@ impl RulesScreen {
             }
         }
         batch.clip_since(first, 0.0, HEADER, w, h - FOOTER);
-        ui::separators(batch, atlas, HEADER, h - FOOTER, true);
+        ui::separators(batch, atlas, HEADER, h - FOOTER, self.in_world);
         ui::scrollbar(
             batch,
             atlas,
@@ -526,8 +534,8 @@ mod tests {
 
     #[test]
     fn box_colours_are_vanillas() {
-        assert_eq!(VALID, horizon_client::hud::rgba(224, 224, 224, 255));
-        assert_eq!(INVALID, horizon_client::hud::rgba(255, 0, 0, 255));
+        assert_eq!(VALID, crate::hud::rgba(224, 224, 224, 255));
+        assert_eq!(INVALID, crate::hud::rgba(255, 0, 0, 255));
     }
 
     #[test]

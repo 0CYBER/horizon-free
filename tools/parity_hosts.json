@@ -40,6 +40,12 @@
   "save_roundtrip": "runs the game on a virtual screen (vscreen) with a null ALSA device, or offscreen in the logged-in macOS session"
  },
  "linux_only": {},
+ "solo": {
+  "remote_fireball": "two game windows (lan_e2e); on 4 CPUs beside other harnesses, screenshots and control requests take ticks the check needs",
+  "remote_fireworks": "two game windows (lan_e2e); a screenshot took ~1.5 s beside 3 other harnesses on playhorizon's runner, past the sparks' life (2026-10-27)",
+  "server_player_sculk": "two game windows (lan_e2e); failed on playhorizon's runner beside other harnesses, passes alone (2026-10-27)",
+  "world_reopen": "a game window reopening a world: failed on playhorizon's runner beside other harnesses (2026-10-27)"
+ },
  "named_only": {
   "lan_integration": "the whole lan_e2e suite: ~40 min a run on a loaded runner, and single checks flake under load; run it by name, or tools/lan_e2e.py"
  },

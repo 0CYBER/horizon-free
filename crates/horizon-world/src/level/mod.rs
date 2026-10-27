@@ -137,7 +137,7 @@ mod tests;
 pub use buckets::BucketContent;
 pub use data::{BlockData, ItemBinding, ItemKind, Named, Props, PushReaction, StateFacts, Tags};
 pub use falling::Landing;
-pub use interact::{InteractionResult, PlayerContext, PlayerEffect};
+pub use interact::{InteractionResult, PlayerContext, PlayerEffect, hit_slot};
 pub use pistons::{BlockEventData, MovingPiston};
 pub use place::{PlaceContext, PlaceOutcome};
 pub use states::{BlockId, PropKey, StateTable};
