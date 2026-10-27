@@ -473,6 +473,51 @@ pub fn id_matches(v: &Value, registry: &str, id: &str, w: &dyn World) -> bool {
         _ => false,
     }
 }
+/// `PotionsPredicate`: the potion in a `HolderSet`, plus a `CollectionPredicate`
+/// over the potion's effects (`contains`, `count`, `size`).
+pub fn potions(v: &Value, potion: Option<&str>, w: &dyn World) -> bool {
+    if v.is_null() {
+        return true;
+    }
+    if !v["potions"].is_null() && !potion.is_some_and(|p| id_matches(&v["potions"], "potion", p, w))
+    {
+        return false;
+    }
+    let c = &v["effects"];
+    if c.is_null() {
+        return true;
+    }
+    let effects: Vec<(String, i32, i32)> = potion
+        .and_then(crate::brewing::potion)
+        .map(|d| {
+            d.effects
+                .iter()
+                .map(|(id, dur, amp)| (format!("minecraft:{id}"), *amp, *dur))
+                .collect()
+        })
+        .unwrap_or_default();
+    // `MobEffectsPredicate.test`: the one listed effect, amplifier and duration.
+    let test = |pred: &Value, e: &(String, i32, i32)| {
+        pred.as_object().is_some_and(|m| {
+            m.get(&e.0).is_some_and(|want| {
+                range_i(&want["amplifier"], i64::from(e.1))
+                    && range_i(&want["duration"], i64::from(e.2))
+                    && want["ambient"].as_bool().is_none_or(|b| !b)
+                    && want["visible"].as_bool().is_none_or(|b| b)
+            })
+        })
+    };
+    c["contains"]
+        .as_array()
+        .is_none_or(|l| l.iter().all(|p| effects.iter().any(|e| test(p, e))))
+        && c["count"].as_array().is_none_or(|l| {
+            l.iter().all(|entry| {
+                let n = effects.iter().filter(|e| test(&entry["test"], e)).count();
+                range_i(&entry["count"], n as i64)
+            })
+        })
+        && range_i(&c["size"], effects.len() as i64)
+}
 /// `ItemPredicate`.
 pub fn item(v: &Value, it: &ItemView, w: &dyn World) -> bool {
     if v.is_null() {

@@ -779,6 +779,22 @@ impl Game<'_> {
         let it = item_view(stack);
         self.trigger(name, |c, w| adv::item_entity(c, &me, target, &it, w));
     }
+    /// `BrewedPotionTrigger`: the potion contents of a stack taken from a
+    /// brewing stand.
+    pub(super) fn trigger_brewed_potion(&mut self, stack: &ItemStack) {
+        let me = self.player_entity();
+        let potion = stack.potion().map(str::to_owned);
+        self.trigger("minecraft:brewed_potion", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::potions(&c["potion"], potion.as_deref(), w)
+        });
+    }
     /// `TradeTrigger`: the villager and the item the trade gave.
     pub(super) fn trigger_trade(&mut self, villager: &EntityView, stack: &ItemStack) {
         let me = self.player_entity();
