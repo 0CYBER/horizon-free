@@ -1053,6 +1053,7 @@ impl Game<'_> {
 impl Game<'_> {
     /// The player's profile id as `UUID.toString()`: the saved id, else the
     /// offline id of the player's name.
+    #[cfg_attr(not(feature = "mods"), allow(dead_code))]
     pub(in crate::game) fn player_uuid_string(&self) -> String {
         let id = self.level.player_uuid.map_or_else(
             || horizon_protocol::crypto::offline_uuid(super::super::chat::PLAYER_NAME),
