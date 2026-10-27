@@ -66,6 +66,13 @@ impl BiomeInfo {
         }
         .height_adjusted(pos, sea_level)
     }
+    /// `Biome.getPrecipitationAt` in the Overworld (sea level 63): None
+    /// without precipitation, else whether it falls as snow
+    /// (`getHeightAdjustedTemperature` below 0.15).
+    pub fn snows_at(&self, x: i32, y: i32, z: i32) -> Option<bool> {
+        self.precipitation
+            .then(|| self.temperature_at(BlockPos::new(x, y, z), 63) < 0.15)
+    }
 }
 pub struct Biomes {
     pub list: Vec<BiomeInfo>,

@@ -36,11 +36,15 @@ pub struct Vertex {
     pub color: u32,
     /// Smooth light, 16x fixed point: sky in bits 0..8, block in bits 8..16.
     pub light: u32,
-    /// RGBA8_SNORM face normal; w = -127 for two-sided lighting, 0 to keep baked/unlit colour.
+    /// RGBA8_SNORM face normal; w = -127 for two-sided lighting, 0 to keep baked/unlit colour,
+    /// [`CULL_BACK`] to keep it and also drop back-facing pixels.
     pub normal: [i8; 4],
     /// The `GLINT_TEXTURING` atlas UV for a foil item quad; zero elsewhere.
     pub glint_uv: [f32; 2],
 }
+/// `Vertex::normal` of a baked-colour quad of an `entitySolid` model: the render type culls
+/// back faces, which the entity pipelines here do not, so `entity.wgsl` discards them.
+pub const CULL_BACK: [i8; 4] = [0, 0, 0, 1];
 /// A section vertex: vanilla's `DefaultVertexFormat.BLOCK` (position, colour,
 /// UV0, UV2) with the sprite's array layer beside the light, in 24 bytes
 /// rather than vanilla's 28: the UV is fixed point, which holds model UVs
@@ -57,7 +61,7 @@ pub struct TerrainVertex {
     /// UV within the sprite, `UV_STEPS` per unit (`TerrainVertex::new`,
     /// `terrain.wgsl`'s `terrain_uv`).
     pub(crate) uv: [u16; 2],
-    /// Sprite array layer, with `OPAQUE_LAYER` for opaque leaves.
+    /// Sprite array layer, with `OPAQUE_LAYER` for opaque leaves and quads over opaque texels.
     pub layer: u16,
     /// Smooth light, 16x fixed point: sky in the low byte, block in the high one.
     pub light: u16,
@@ -892,8 +896,9 @@ impl Mesher<'_> {
             target.push(TerrainVertex::new(
                 [p[0] + origin[0], p[1] + origin[1], p[2] + origin[2]],
                 q.uv[i],
-                // Opaque leaves (forceOpaque) draw in the solid layer: no alpha cutout.
-                if !self.cutout_leaves && state.leaves {
+                // Opaque leaves (forceOpaque) and quads over opaque texels draw in the
+                // solid layer: no alpha cutout (a dirt path's side skips its clear top row).
+                if face.opaque && !face.translucent || !self.cutout_leaves && state.leaves {
                     face.layer as u16 | OPAQUE_LAYER
                 } else {
                     face.layer as u16

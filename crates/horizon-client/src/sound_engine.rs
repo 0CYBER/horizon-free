@@ -53,6 +53,11 @@ pub enum Ticking {
     Minecart { cart: u32 },
     /// `RidingMinecartSoundInstance` for the player riding a minecart.
     RidingMinecart { cart: u32, underwater: bool },
+    /// `BeeFlyingSoundInstance`, or `BeeAggressiveSoundInstance` when
+    /// `aggressive`.
+    Bee { bee: u32, aggressive: bool },
+    /// `GuardianAttackSoundInstance`.
+    GuardianAttack { guardian: u32 },
 }
 /// What a minecart's sound instances read about it.
 #[derive(Clone, Copy, Debug)]
@@ -61,6 +66,21 @@ pub struct CartSound {
     pub position: [f64; 3],
     /// `getDeltaMovement().horizontalDistance()`.
     pub speed: f64,
+}
+/// What a bee's or a guardian's sound instance reads about it.
+#[derive(Clone, Copy, Debug)]
+pub struct MobSound {
+    pub id: u32,
+    pub position: [f64; 3],
+    /// `getDeltaMovement().horizontalDistance()`.
+    pub speed: f64,
+    pub baby: bool,
+    /// `Bee.isAngry`.
+    pub angry: bool,
+    /// `isSilent`.
+    pub silent: bool,
+    /// `Guardian.getAttackAnimationScale(0)`.
+    pub attack_scale: f32,
 }
 /// What tickable instances read about the player and the entities they follow.
 #[derive(Clone, Debug, Default)]
@@ -71,6 +91,8 @@ pub struct TickContext {
     pub vehicle: Option<u32>,
     /// The minecarts in the level (a missing one has been removed).
     pub carts: Vec<CartSound>,
+    /// The bees and guardians in the level (a missing one has been removed).
+    pub mobs: Vec<MobSound>,
     /// `!tickRateManager().runsNormally()`.
     pub frozen: bool,
 }
@@ -315,6 +337,59 @@ impl SoundInstance {
         };
         s
     }
+    /// `new BeeFlyingSoundInstance(bee)` (or `BeeAggressiveSoundInstance`):
+    /// silent until the bee moves.
+    pub fn bee(bee: &MobSound, aggressive: bool, random: LegacyRandom) -> Self {
+        let id = if aggressive {
+            "minecraft:entity.bee.loop_aggressive"
+        } else {
+            "minecraft:entity.bee.loop"
+        };
+        let [x, y, z] = bee.position;
+        let mut s = Self::new(
+            id,
+            NEUTRAL,
+            0.0,
+            1.0,
+            random,
+            true,
+            0,
+            Attenuation::Linear,
+            [
+                f64::from(x as f32),
+                f64::from(y as f32),
+                f64::from(z as f32),
+            ],
+            false,
+        );
+        s.can_start_silent = true;
+        s.ticking = Ticking::Bee {
+            bee: bee.id,
+            aggressive,
+        };
+        s
+    }
+    /// `new GuardianAttackSoundInstance(guardian)`: the guardian's own volume
+    /// and pitch until its first tick, heard everywhere.
+    pub fn guardian_attack(guardian: &MobSound, random: LegacyRandom) -> Self {
+        let id = "minecraft:entity.guardian.attack";
+        let mut s = Self::new(
+            id,
+            crate::settings::sound_source(id),
+            1.0,
+            1.0,
+            random,
+            true,
+            0,
+            Attenuation::None,
+            guardian.position,
+            false,
+        );
+        s.ticking = Ticking::GuardianAttack {
+            guardian: guardian.id,
+        };
+        s
+    }
     pub fn tickable(&self) -> bool {
         self.ticking != Ticking::No
     }
@@ -388,6 +463,54 @@ impl SoundInstance {
                 } else {
                     0.0
                 };
+            }
+            Ticking::Bee { bee, aggressive } => {
+                let (id, aggressive) = (*bee, *aggressive);
+                // canPlaySound, then shouldSwitchSounds: the other kind of
+                // instance is started in this one's place.
+                let Some(bee) = ctx
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)
+                    .filter(|m| !m.silent && m.angry == aggressive)
+                else {
+                    self.stop();
+                    return;
+                };
+                let [x, y, z] = bee.position;
+                self.position = [
+                    f64::from(x as f32),
+                    f64::from(y as f32),
+                    f64::from(z as f32),
+                ];
+                let (min, max) = if bee.baby { (1.1, 1.5) } else { (0.7, 1.1) };
+                let speed = bee.speed as f32;
+                if speed >= 0.01 {
+                    // Mth.lerp(Mth.clamp(speed, min, max), min, max).
+                    self.pitch = min + speed.clamp(min, max) * (max - min);
+                    self.volume = speed.clamp(0.0, 0.5) * 1.2;
+                } else {
+                    self.pitch = 0.0;
+                    self.volume = 0.0;
+                }
+            }
+            Ticking::GuardianAttack { guardian } => {
+                let id = *guardian;
+                // The client's guardian never has a target of its own, so
+                // only its removal or silence ends the loop.
+                let Some(guardian) = ctx.mobs.iter().find(|m| m.id == id && !m.silent) else {
+                    self.stop();
+                    return;
+                };
+                let [x, y, z] = guardian.position;
+                self.position = [
+                    f64::from(x as f32),
+                    f64::from(y as f32),
+                    f64::from(z as f32),
+                ];
+                let scale = guardian.attack_scale;
+                self.volume = 0.0 + 1.0 * scale * scale;
+                self.pitch = 0.7 + 0.5 * scale;
             }
             Ticking::RidingMinecart { cart, underwater } => {
                 let (id, underwater) = (*cart, *underwater);

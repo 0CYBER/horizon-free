@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const REPO: &str = "ludovic111/horizon";
+const REPO: &str = "horizon-rust/horizon";
 /// The release archives for this computer, most specific first: on Linux the server build (no ALSA or
 /// udev), else the full game (releases before the server build).
 const ASSETS: &[&str] = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {

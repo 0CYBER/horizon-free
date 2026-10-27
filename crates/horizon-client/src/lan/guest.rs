@@ -215,7 +215,7 @@ pub struct Guest {
     /// last sent about itself.
     pub sent_shared: i8,
     /// Where the player last died (Player.lastDeathLocation), sent with the respawn.
-    pub last_death: Option<[i32; 3]>,
+    pub last_death: Option<(String, [i32; 3])>,
     /// The last action sequence to acknowledge at the next tick (-1: none).
     pub ack_up_to: std::cell::Cell<i32>,
     pub sent_selected: usize,
