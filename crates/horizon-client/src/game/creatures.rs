@@ -199,6 +199,7 @@ impl Game<'_> {
             off_hand: None,
             head: self.armor[0].as_ref().map(|s| s.item.clone()),
             armor_cover: self.armor.iter().filter(|a| a.is_some()).count() as f32 / 4.0,
+            invisible: self.potions.effects.get("invisibility").is_some(),
             spectator: self.spectator(),
             gold_armor: self.wearing_gold(),
             hurt_by: self.player_hurt_by(),
