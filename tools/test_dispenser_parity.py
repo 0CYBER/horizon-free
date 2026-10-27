@@ -417,9 +417,9 @@ def main():
          '-cp', dependencies, '-d', str(classes), str(java_root / 'dev/horizonlab/parity/VanillaDispenserOracle.java')])
     run(['java', '-Xmx3G', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.VanillaDispenserOracle',
          str(resources), str(work / 'cases.jsonl'), str(work / 'native.txt')])
-    run(['cargo', 'build', '-q', '--release', '-p', 'horizon-client', '--bin', 'horizon-client'], cwd=lab.ROOT,
+    run(['cargo', 'build', '-q', '--profile', 'fast', '-p', 'horizon-client', '--bin', 'horizon-client'], cwd=lab.ROOT,
         env={**os.environ, 'CARGO_BUILD_JOBS': os.environ.get('CARGO_BUILD_JOBS', '3')})
-    run([str(lab.cargo_target() / 'release/horizon-client'), '--resources', str(resources)], cwd=work,
+    run([str(lab.cargo_target() / 'fast/horizon-client'), '--resources', str(resources)], cwd=work,
         env=lab.game_env(HORIZON_DISPENSE_FIXTURE=f'{work / "cases.jsonl"},{work / "rust.txt"}'))
     # Loot table names (D) are vanilla's bookkeeping; the drops themselves are compared.
     ignore = tuple(prefix + ' ' for prefix in args.ignore.split(',') if prefix) + ('D ',)

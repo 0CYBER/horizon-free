@@ -53,7 +53,7 @@ pub struct World {
     pub chunks: crate::chunk_map::ChunkMap,
     pub random: LegacyRandom,
     pub revision: u64,
-    pub health_rules: crate::health::HealthRules,
+    pub health_rules: HealthRules,
     pub air: BlockStateId,
     /// Sections whose geometry changed and need remeshing.
     pub dirty_sections: DirtySections,
@@ -92,12 +92,14 @@ pub struct World {
     /// (`ChunkHolder.sectionLightChanged`).
     pub light_log: Option<crate::fast_hash::FxHashMap<(i32, i32), u32>>,
     /// The villager POIs of each section (`PoiManager`'s sections).
-    pub pois: crate::poi_sections::PoiSections<crate::mobs::villager_brain::Poi>,
+    pub pois: crate::poi_sections::PoiSections<crate::poi_sections::Poi>,
+    /// Moving-piston states removed during the last tick; retained until the
+    /// final block mesh is visible.
+    pub moving_piston_fallback: Vec<([i32; 3], horizon_world::piston_shape::MovingPistonState)>,
     /// The moving-piston block entities of the level, by position, copied
     /// from the block ticks after each tick: collision and rendering read them.
     pub moving_pistons: Vec<([i32; 3], horizon_world::piston_shape::MovingPistonState)>,
 }
-/// ServerLevel weather state (advanceWeatherCycle).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Weather {
     pub clear_time: i32,
@@ -168,7 +170,7 @@ impl World {
             chunks: Default::default(),
             random: LegacyRandom::new(seed),
             revision: 0,
-            health_rules: crate::health::HealthRules::default(),
+            health_rules: HealthRules::default(),
             air,
             fast_lava: false,
             dirty_sections: Default::default(),
@@ -187,6 +189,7 @@ impl World {
             weather: Weather::default(),
             block_log: None,
             light_log: None,
+            moving_piston_fallback: Vec::new(),
             moving_pistons: Vec::new(),
             pois: Default::default(),
         }
@@ -371,6 +374,32 @@ impl World {
     }
     pub fn loaded(&self, x: i32, z: i32) -> bool {
         self.chunks.contains_key(&(x >> 4, z >> 4))
+    }
+}
+
+/// The game rules and difficulty a player's health reads (`Player.isInvulnerableTo`,
+/// natural regeneration), kept with the world they belong to.
+#[derive(Clone, Copy, Debug)]
+pub struct HealthRules {
+    pub difficulty: horizon_world::food::Difficulty,
+    pub natural_regeneration: bool,
+    /// The `drowning_damage`, `fall_damage`, `fire_damage` and
+    /// `freeze_damage` rules `Player.isInvulnerableTo` reads.
+    pub drowning_damage: bool,
+    pub fall_damage: bool,
+    pub fire_damage: bool,
+    pub freeze_damage: bool,
+}
+impl Default for HealthRules {
+    fn default() -> Self {
+        Self {
+            difficulty: horizon_world::food::Difficulty::Normal,
+            natural_regeneration: true,
+            drowning_damage: true,
+            fall_damage: true,
+            fire_damage: true,
+            freeze_damage: true,
+        }
     }
 }
 
