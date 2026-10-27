@@ -816,7 +816,6 @@ fn age_boundary_reached(m: &mut Mob) {
         _ => {}
     }
 }
-/// `setBaby`: AgeableMob through its age, zombies, piglins and zoglins.
 /// `SpawnEggItem.spawnsEntity`: the spawn egg is for the mob's own kind, so
 /// it is used on it (`Mob.checkAndHandleImportantInteractions`).
 pub fn spawn_egg_is_for(egg: &str, kind: &str) -> bool {
@@ -833,6 +832,7 @@ pub fn spawn_egg_offspring(child: &mut Mob, species: Species, variant: u8, color
         child.extra.color = color;
     }
 }
+/// `setBaby`: AgeableMob through its age, zombies, piglins and zoglins.
 pub fn set_baby(m: &mut Mob, baby: bool) {
     let s = m.species();
     if ageable(s) {
