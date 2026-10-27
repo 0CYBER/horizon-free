@@ -1193,7 +1193,8 @@ impl Game<'_> {
         drop(holding);
         lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
         self.lan = Some(host);
-        // A mace's wind burst from a guest's attack.
+        // A blast from a guest's attack, and a mace's wind burst.
+        self.flush_lan_explosions();
         let _ = self.flush_wind_bursts();
     }
 
