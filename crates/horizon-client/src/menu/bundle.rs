@@ -1,7 +1,7 @@
 //! `BundleItem`'s click overrides in a PICKUP click
 //! (`tryItemClickBehaviourOverride`).
 use super::{Env, Menu, tidy};
-use crate::bundle::{Contents, INSERT, INSERT_FAIL, REMOVE_ONE, can_be_in_bundle};
+use crate::bundle::{Contents, INSERT, INSERT_FAIL, REMOVE_ONE, can_be_in_bundle, toggle_selected};
 
 impl Menu {
     /// The carried stack's `overrideStackedOnOther`, then the clicked
@@ -88,8 +88,11 @@ impl Menu {
                 }
             }
             (carried, _) => {
-                // toggleSelectedItem(-1): Horizon keeps no selected item.
+                // toggleSelectedItem(-1), then the click goes on.
                 self.carried = carried;
+                toggle_selected(&mut bundle, -1);
+                let slot = self.slots[s];
+                self.containers[slot.container][slot.index] = Some(bundle);
                 return false;
             }
         }
