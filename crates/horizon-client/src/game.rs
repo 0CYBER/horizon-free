@@ -12530,6 +12530,11 @@ impl ApplicationHandler for Game<'_> {
                                 }
                                 self.save_title_options();
                             }
+                            PhysicalKey::Code(KeyCode::F5) => {
+                                if let Some(t) = self.title.as_mut() {
+                                    t.refresh_servers();
+                                }
+                            }
                             _ => self.title_edit(event.text.as_deref(), false),
                         }
                     }
