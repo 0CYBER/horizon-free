@@ -430,6 +430,12 @@ impl Game<'_> {
             ),
         }
     }
+    /// What the generator finalizes this level's structure mobs with.
+    pub(super) fn share_spawn_conditions(&self) {
+        if let Some(terrain) = self.end.locator() {
+            terrain.set_spawn_conditions(self.difficulty_id() as u8, self.world.day_time);
+        }
+    }
     /// `ServerLevel.getCurrentDifficultyAt`.
     pub(super) fn local_difficulty(&self, at: [f64; 3]) -> spawning::LocalDifficulty {
         use horizon_world::food::Difficulty;

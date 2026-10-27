@@ -357,7 +357,8 @@ impl Game<'_> {
     pub(super) fn load_mob(&mut self, tag: Tag, mount: Option<u32>) -> Option<u32> {
         self.next_entity += 1;
         let uuid = entity_nbt::uuid(&tag);
-        // Structure entities placed with finalizeEntities.
+        // Structure mobs that generation left to finish: saves from before
+        // they were finalized at placement, or a placement that could not.
         let mut tag = tag;
         let mut finalize = false;
         if let Tag::Compound(c) = &mut tag {
@@ -449,7 +450,8 @@ impl Game<'_> {
         }
     }
     /// An entity of a type Horizon does not simulate, kept as its compound.
-    fn load_other(&mut self, tag: Tag, kind: &str) -> Option<u32> {
+    fn load_other(&mut self, mut tag: Tag, kind: &str) -> Option<u32> {
+        strip_finalize(&mut tag);
         let position = entity_nbt::position(&tag)?;
         let rotation = match tag.get("Rotation") {
             Some(Tag::List(l)) => {
@@ -1012,5 +1014,11 @@ impl Game<'_> {
         let chunks = self.entity_chunks(&keys, true);
         self.persist = EntityMemory::default();
         self.save.save_entities(chunks)
+    }
+}
+/// Only a mob is finalized; another entity drops the request.
+fn strip_finalize(tag: &mut Tag) {
+    if let Tag::Compound(c) = tag {
+        c.remove(&"horizon:finalize".into());
     }
 }
