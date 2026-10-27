@@ -85,7 +85,7 @@ def run(bin_dir, resources, in_frame):
                     f'execute in minecraft:the_end run summon minecraft:cow {x}.5 {y}.5 {z}.5 {{NoAI:1b}}'))
                 cli('command', command=(
                     f'execute in minecraft:the_end run summon minecraft:item {x}.5 {y}.5 {z}.5 '
-                    f'{{Item:{{id:"minecraft:diamond",count:{DIAMONDS}}}}}}'))
+                    f'{{Item:{{id:"minecraft:diamond",count:{DIAMONDS}}}}}'))
                 # The gateway takes the cow, and the stack 40 ticks later.
                 cli('wait', ticks=200)
                 cow = numbers(data_get(cli, '@e[type=minecraft:cow,limit=1]', 'Pos'))
