@@ -542,6 +542,8 @@ impl Game<'_> {
         }
         self.clear_waypoints();
         self.boss_overlay.reset();
+        // A world is leaving either way: its icon attempt goes with it.
+        self.world_icon = None;
         if let Some(mut r) = self.remote.take() {
             r.session.disconnect();
         }

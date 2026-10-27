@@ -11,7 +11,7 @@
 //! escape hatch. LAN guests and dedicated servers use the same code either
 //! way.
 use super::{
-    Game, Options, PackResources, Resources, UiResources,
+    Game, Options, PackResources, Resources, UiResources, WorldIcon,
     execution_role::ExecutionRole,
     lan::{LanSettings, Owner},
     world_loading::WorldRequest,
@@ -282,6 +282,15 @@ impl Game<'_> {
             Err(_) => return Err("the integrated server stopped".into()),
         };
         self.connect_local(pipe, &player)?;
+        // IntegratedServer.getWorldScreenshotFile: the client grabs the frame
+        // the Select World list shows, and needs the save folder for it.
+        self.world_icon = Some(WorldIcon {
+            path: std::env::current_dir()?
+                .join("saves")
+                .join(folder)
+                .join("icon.png"),
+            last_attempt: None,
+        });
         self.integrated = Some(handle);
         Ok(())
     }

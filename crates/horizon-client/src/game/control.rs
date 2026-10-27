@@ -585,7 +585,10 @@ impl Game<'_> {
                 arg(1)?;
                 // The rest of the line: a path may hold spaces.
                 let path = line.trim_start().strip_prefix("screenshot").unwrap_or("");
-                renderer.screenshot = Some(path.trim().into());
+                renderer.screenshot = Some(horizon_client::gfx::ScreenshotRequest {
+                    path: path.trim().into(),
+                    size: None,
+                });
                 self.pending_screenshot = Some(reply.clone());
                 Ok(None)
             }

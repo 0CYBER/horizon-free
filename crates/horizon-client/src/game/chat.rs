@@ -1139,7 +1139,10 @@ impl Game<'_> {
             return;
         };
         let path = dir.join(name);
-        renderer.screenshot = Some(path.clone());
+        renderer.screenshot = Some(horizon_client::gfx::ScreenshotRequest {
+            path: path.clone(),
+            size: None,
+        });
         self.ui.screenshot_message = Some(path);
     }
     /// After a frame: report a finished F2 screenshot in chat.
