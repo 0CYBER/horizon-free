@@ -447,6 +447,9 @@ comment on any issue or pull request (`.github/workflows/nightly-command.yml`, `
   Equal inputs give the same commit, so an unchanged set and main publish nothing new. On a conflict the build
   stops and answers which two pull requests conflict and where; a reviewer can then open an integration pull
   request from their fork that combines them, and pick that one instead.
+- **Old builds.** The scheduled run deletes the `nightly/build-*` branches older than 7 days (Ludovic,
+  2026-10-27), and lists each in its summary. It never deletes the newest build, a build a published `nightly` or
+  `nightly-<date>` release points to, or any other branch (`nightly.py prune-builds`).
 - **Refused.** A pull request that changes a path CODEOWNERS gives to Ludovic (`.github/`, `tools/ci/`, the
   signing and update code, `launcher/src/backend.rs`, `launcher/links.json`…), more than 30 in a set, and more than
   6 builds a day (the scheduled one always runs).
