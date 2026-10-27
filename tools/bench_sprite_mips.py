@@ -52,7 +52,9 @@ def main():
     baseline = subprocess.check_output(['git', 'show', '89b58991bbc02eb79b6965fc4ca56357fe2297d9:crates/horizon-client/src/gfx.rs'], cwd=ROOT, text=True)
     code += '\n' + function(baseline, 'animate_sprites').replace('fn animate_sprites(', 'fn reference_animate_sprites(', 1)
     if args.test:
-        code += '\n' + function(source, 'sprite_mipmap_limit')
+        # sprites.rs holds it since the gfx -> sprites cut; older refs kept it in gfx.rs.
+        code += '\n' + (function(source, 'sprite_mipmap_limit') if 'fn sprite_mipmap_limit' in source
+                         else 'use sprites::sprite_mipmap_limit;')
         code += '\n' + source[source.index('#[cfg(test)]\nmod sprite_upload_tests'):]
     modules = '\n'.join(f'#[path = {json.dumps(str(ROOT / "crates/horizon-client/src" / (name + ".rs")))}] mod {name};'
                         for name in ('mipmap', 'sprites', 'fast_hash'))
