@@ -46,6 +46,9 @@ pub(super) struct Creatures {
     pub projectiles: Vec<Projectile>,
     /// Wind bursts from a guest's turn, waiting for it to end (game/wind.rs).
     pub wind_bursts: Vec<super::wind::Burst>,
+    /// Sweep attacks from a guest's turn, waiting for it to end
+    /// (game/lan_pvp.rs).
+    pub sweeps: Vec<super::lan_pvp::Sweep>,
     /// Ticks left of the elder guardian's apparition (MobAppearanceParticle).
     pub elder_apparition: i32,
     /// The wandering trader spawner's clock.

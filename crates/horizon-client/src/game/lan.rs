@@ -1166,6 +1166,8 @@ impl Game<'_> {
         self.lan = Some(host);
         // A mace's wind burst from a guest's attack.
         let _ = self.flush_wind_bursts();
+        // A sweep attack's reach to the other players from a guest's attack.
+        self.flush_sweeps();
     }
 
     fn lan_guest_joined(
