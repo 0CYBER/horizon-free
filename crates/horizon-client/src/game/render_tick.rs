@@ -7,6 +7,7 @@ use horizon_client::{
     biome::Biomes,
     blocks::{BlockFacts, Fluid},
     chunk::{HEIGHT, MIN_Y},
+    containers::BlockEntity,
     particles::{ParticleLevel, ParticleOptions, ParticleType},
     world::World,
 };
@@ -288,10 +289,11 @@ impl Game<'_> {
                 e[2].floor() as i32,
             ];
             animate_tick(self.res.animate(), &mut self.particles, &ctx, block);
-            if rain > 0.0 {
-                // ClientLevel.tickWeatherEffects: rain splashes (weather radius 10).
+            // The Horizon Weather option off means no rain visuals at all.
+            if rain > 0.0 && self.settings.horizon.weather {
+                // ClientLevel.tickWeatherEffects: rain splashes within the weather radius.
                 let mut random = LegacyRandom::new(self.world.game_time.wrapping_mul(312_987_231));
-                let radius = 10;
+                let radius = self.settings.weather_radius;
                 let diameter = 2 * radius + 1;
                 let count = (0.225 * (diameter * diameter) as f32 * rain * rain) as i32
                     / if self.settings.particles == 1 { 2 } else { 1 };
@@ -350,6 +352,10 @@ impl Game<'_> {
                 &mut self.particles,
                 &ctx,
                 r.block_entities(),
+                &|pos| match self.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
+                    Some(BlockEntity::Campfire(c)) => c.items.each_ref().map(Option::is_some),
+                    _ => [false; 4],
+                },
             );
         }
         let level = ParticleLevel {

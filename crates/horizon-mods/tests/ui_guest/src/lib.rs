@@ -10,7 +10,11 @@
 //! counts what `recipes` reads; `/recipes ID` describes that recipe.
 //! `/browser ID...` fills `browser`'s panel (`/browser N`: the first N
 //! items, `/browser` alone empties it) and registers the keys `recipe` (R)
-//! and `uses` (U); `/browser_poll` says what the player did on it.
+//! and `uses` (U); `/browser_poll` says what the player did on it;
+//! `/browser_recipes ID` shows the recipes making ID (`/browser_recipes`
+//! alone: the items again). `/recipe_place ID [all]` places that recipe
+//! with `recipes.place`; `/recipe_give ITEM [COUNT]` gives with
+//! `recipes.give`.
 use horizon_mod_sdk::{
     Mod, Registration, browser, chat, command, game,
     input::{self, Event},
@@ -67,7 +71,11 @@ fn shapes() -> Vec<Shape> {
     ]
 }
 
-struct Guest;
+struct Guest {
+    /// `/recipe_place ID [all] later`: placed on the first tick a crafting
+    /// screen is open.
+    pending: Option<(i32, bool, String)>,
+}
 
 fn widgets() -> Vec<Widget> {
     vec![
@@ -104,18 +112,23 @@ impl Mod for Guest {
             "input_wheel",
             "zoom",
             "minimap",
+            "far_terrain",
             "raycast",
             "quiet",
             "quiet_many",
             "recipes",
             "browser",
             "browser_poll",
+            "browser_recipes",
+            "recipe_place",
+            "recipe_give",
             "corner",
             "readings",
         ]
         .into_iter()
-        .fold(Registration::new(), Registration::command);
-        Ok((Guest, hooks))
+        .fold(Registration::new(), Registration::command)
+        .on_tick();
+        Ok((Guest { pending: None }, hooks))
     }
     fn command(&mut self, name: &str, args: &str) -> Result<Option<String>, String> {
         match name {
@@ -230,6 +243,15 @@ impl Mod for Guest {
                 });
                 render::set_minimap(map);
             }
+            // `far_terrain off`, or `far_terrain DISTANCE REDUCED`.
+            "far_terrain" => {
+                let words: Vec<&str> = args.split(' ').collect();
+                let far = (args != "off").then(|| render::FarTerrain {
+                    distance: words.first().and_then(|w| w.parse().ok()).unwrap_or(0),
+                    reduced: words.get(1) == Some(&"1"),
+                });
+                render::set_far_terrain(far);
+            }
             "quiet" => command::run_quiet(&args.split(';').map(str::to_owned).collect::<Vec<_>>()),
             "quiet_many" => {
                 let n: usize = args.parse().unwrap_or(0);
@@ -310,6 +332,116 @@ impl Mod for Guest {
                 input::register_key("uses", "Show uses", "key.keyboard.u")?;
                 chat::show(&format!("panel of {}", items.len()));
             }
+            "browser_recipes" => {
+                let items = recipes::items();
+                let id = |i: u32| {
+                    items
+                        .get(i as usize)
+                        .map_or(String::new(), |x| x.id.clone())
+                };
+                let stack = |s: &recipes::Stack| browser::Stack {
+                    item: id(s.item),
+                    count: s.count,
+                    components: s.components.clone(),
+                };
+                let views: Vec<browser::RecipeView> = recipes::all()
+                    .iter()
+                    .filter(|r| !args.is_empty() && r.results.iter().any(|s| id(s.item) == args))
+                    .map(|r| {
+                        use recipes::Kind;
+                        let crafting =
+                            matches!(r.kind, Kind::CraftingShaped | Kind::CraftingShapeless);
+                        let shapeless = (r.slots.len() as u32).clamp(1, 3);
+                        browser::RecipeView {
+                            layout: match r.kind {
+                                Kind::CraftingShaped | Kind::CraftingShapeless => {
+                                    browser::Layout::Grid
+                                }
+                                Kind::Stonecutting => browser::Layout::Single,
+                                Kind::Smithing => browser::Layout::Smithing,
+                                Kind::Brewing => browser::Layout::Brewing,
+                                _ => browser::Layout::Cooking,
+                            },
+                            width: if r.width == 0 { shapeless } else { r.width },
+                            height: if r.height == 0 {
+                                (r.slots.len() as u32).div_ceil(3).max(1)
+                            } else {
+                                r.height
+                            },
+                            slots: r
+                                .slots
+                                .iter()
+                                .map(|s| s.iter().map(stack).collect())
+                                .collect(),
+                            results: r.results.iter().map(stack).collect(),
+                            note: if r.cooking_time > 0 {
+                                format!("{} ticks", r.cooking_time)
+                            } else {
+                                String::new()
+                            },
+                            action: crafting.then_some(r.kind == Kind::CraftingShaped),
+                        }
+                    })
+                    .collect();
+                // A tab per layout shown, the first selected.
+                let mut tabs: Vec<browser::Stack> = Vec::new();
+                for v in &views {
+                    let icon = match v.layout {
+                        browser::Layout::Grid => "minecraft:crafting_table",
+                        browser::Layout::Cooking => "minecraft:furnace",
+                        browser::Layout::Single => "minecraft:stonecutter",
+                        browser::Layout::Smithing => "minecraft:smithing_table",
+                        browser::Layout::Brewing => "minecraft:brewing_stand",
+                    };
+                    if !tabs.iter().any(|t| t.item == icon) {
+                        tabs.push(browser::Stack {
+                            item: icon.into(),
+                            count: 1,
+                            components: String::new(),
+                        });
+                    }
+                }
+                browser::set_recipes(&format!("Recipes for {args}"), &tabs, 0, &views);
+                chat::show(&format!("recipes shown: {}", views.len()));
+            }
+            "recipe_place" => {
+                let mut words = args.split_whitespace();
+                let id = words.next().unwrap_or_default();
+                let rest: Vec<&str> = words.collect();
+                let all = rest.contains(&"all");
+                let book = recipes::all()
+                    .iter()
+                    .find(|r| r.id == id)
+                    .map(|r| r.book_id);
+                if let Some(b) = book.filter(|_| rest.contains(&"later")) {
+                    self.pending = Some((b, all, id.to_owned()));
+                    chat::show(&format!("place {id}: waiting"));
+                    return Ok(None);
+                }
+                chat::show(&match book.map(|b| recipes::place(b, all)) {
+                    Some(Ok(())) => format!("place {id}: ok"),
+                    Some(Err(e)) => format!("place {id}: {e}"),
+                    None => format!("place {id}: no such recipe"),
+                });
+            }
+            "recipe_give" => {
+                let mut words = args.split_whitespace();
+                let id = words.next().unwrap_or_default();
+                let count = words.next().and_then(|c| c.parse().ok()).unwrap_or(1);
+                let item = recipes::items().iter().position(|i| i.id == id);
+                let result = item.map(|i| {
+                    recipes::give(&recipes::Stack {
+                        item: i as u32,
+                        count,
+                        components: String::new(),
+                    })
+                });
+                chat::show(&match result {
+                    Some(Ok(())) => format!("give {id}: ok"),
+                    Some(Err(e)) => format!("give {id}: {e}"),
+                    None => format!("give {id}: no such item"),
+                });
+            }
             "browser_poll" => {
                 let stack = |s: &browser::Stack| format!("{} x{}{}", s.item, s.count, s.components);
                 // A hook shows at most 8 chat lines: the count, then the first 7.
@@ -332,6 +464,7 @@ impl Mod for Guest {
                         browser::Event::Action(i) => format!("action {i}"),
                         browser::Event::Page(first) => format!("page {first}"),
                         browser::Event::Back => "back".into(),
+                        browser::Event::Tab(i) => format!("tab {i}"),
                     });
                 }
             }
@@ -344,6 +477,15 @@ impl Mod for Guest {
             _ => {}
         }
         Ok(None)
+    }
+    fn tick(&mut self, _tick: u64) {
+        if let Some((book, all, id)) = self.pending.take() {
+            match recipes::place(book, all) {
+                Err(e) if e.starts_with("no screen") => self.pending = Some((book, all, id)),
+                Ok(()) => chat::show(&format!("place {id}: ok")),
+                Err(e) => chat::show(&format!("place {id}: {e}")),
+            }
+        }
     }
     fn ui_select(&mut self, id: u32, row: u32) {
         chat::show(&format!("selected {id}:{row}"));

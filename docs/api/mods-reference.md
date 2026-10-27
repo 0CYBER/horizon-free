@@ -18,7 +18,7 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `input` | [`input`](#input) | see the keys you hold and your clicks, take over the use button on its own items and the mouse wheel, and add keys |
 | `players` | [`players`](#players) | see who is on the server and message them |
 | `world` | [`world`](#world) | read and change the world's blocks |
-| `recipes` | [`recipes`](#recipes) | read the game's recipes and items, and which recipes you know |
+| `recipes` | [`recipes`](#recipes) | read the game's recipes and items and which recipes you know, place recipes in your crafting grid and, in creative mode, give you items |
 
 ## World `horizon-mod`
 
@@ -435,6 +435,13 @@ Any four-cornered shape (a wheel's segment, an arrow): the corners in order roun
 | `rotate` | `bool` | The map turns with the player, who faces up, and an N on its rim marks north. Otherwise north is up and the player's arrow turns. |
 | `round` | `bool` | Round, the corners left clear; otherwise square. |
 
+### record `far-terrain`
+
+| Field | Type | |
+| --- | --- | --- |
+| `distance` | `u32` | How far the distant terrain reaches, in chunks: 64 to 1024. On integrated graphics other than Apple's the game caps it lower. |
+| `reduced` | `bool` | Coarser far tiles, as the Far Detail setting's Reduced: 2 to 4 ms less GPU time per frame on integrated graphics. |
+
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `set-hud` | `func(shapes: list<shape>)` | Replaces the mod's HUD shapes: up to 1024, drawn every frame in order over the HUD (after the hotbar, under chat and screens), hidden with the HUD (F1). An empty list removes them. |
@@ -446,6 +453,7 @@ Any four-cornered shape (a wheel's segment, an arrow): the corners in order roun
 | `frame-stats` | `func() -> frame-rate` | The game's frame counter, recomputed twice a second. |
 | `set-zoom` | `func(zoom: zoom)` | Zooms the camera until the next call (`factor` 1 ends it), only while playing: a screen opening or the spyglass's own view (which wins) leave the camera vanilla's. With several mods, the strongest zoom counts. |
 | `set-minimap` | `func(minimap: option<minimap>)` | Shows a map of the world around the player in `corner`, stacked with the game's overlays and the mods' panels, until the next call (none hides it). It looks like a map item: vanilla's map colours with their height shading and water depth, and the player's arrow. Underground, under a roof and in the Nether it maps the floor around the player's height. The game keeps the map's tiles and refreshes them within its own frame budget; hidden, they are dropped. One map shows at a time: the first loaded mod's. |
+| `set-far-terrain` | `func(far-terrain: option<far-terrain>)` | Draws the world beyond the render distance as distant terrain, out to `distance` chunks, until the next call (none ends it). The game builds it on its own workers, from the chunks already loaded or saved and, where nobody has been, from the world's generator; the simulation distance doesn't change. Only worlds whose generator the game has (single player and a LAN world you host) show it. The player's own LOD Distance setting, when on, wins. One far terrain shows at a time: the first loaded mod's. |
 
 ## `events`
 
@@ -531,6 +539,8 @@ The station a recipe is made at.
 | `items` | `func() -> list<item>` | Every item, in the registry's order: `stack.item` indexes this list. |
 | `all` | `func() -> list<recipe>` | Every recipe: the book's in its order, then campfire, stonecutting, smithing and brewing. They don't change while a world is open. |
 | `known` | `func() -> list<s32>` | The `book-id`s of the recipes the player's recipe book holds now. |
+| `place` | `func(book-id: s32, all: bool) -> result<_, string>` | Places a recipe in the open screen's grid as a click in the recipe book does (`ServerboundPlaceRecipePacket`): the inventory's grid or a crafting table. `all` places as many as the items allow, as with Shift. Refused while no such screen is open, for a recipe the player's book doesn't hold and for one that can't be placed; one missing items shows as a ghost in the grid, as in the book. |
+| `give` | `func(stack: stack) -> result<_, string>` | Creative mode only: gives the player the stack, as taking it from the creative inventory does (`ServerboundSetCreativeModeSlot`): the selected slot first, then the hotbar, then the inventory. The count is cut to one stack of the item (64, 16 or 1). |
 
 ## `browser`
 
@@ -588,10 +598,38 @@ A click on a slot of a recipe the panel shows (`set-recipes`).
 | `action` | `u32` | The action button of the recipe at this index in `set-recipes`'s list. |
 | `page` | `u32` | The player turned the recipes' page (`set-recipes`): the index of the first recipe now shown. |
 | `back` |  | The back button of `set-recipes`. |
+| `tab` | `u32` | The player picked the tab at this index of `set-recipes`' tabs. |
+
+### enum `layout`
+
+How the game lays out a recipe of `set-recipes`.
+
+| Case | |
+| --- | --- |
+| `grid` | A crafting grid of `width` x `height` slots, an arrow and the result. |
+| `cooking` | One input over a flame, an arrow and the result (furnaces, smokers, campfires). |
+| `single` | One input, an arrow and the result (the stonecutter). |
+| `smithing` | Template, base and addition, an arrow and the result. |
+| `brewing` | A potion and an ingredient, an arrow and the result. |
+
+### record `recipe-view`
+
+A recipe to show. Each slot, and the result, cycles through its stacks, one a second; an empty slot shows nothing.
+
+| Field | Type | |
+| --- | --- | --- |
+| `layout` | `layout` |  |
+| `width` | `u32` | The grid's size (`grid` only), at most 3 x 3. |
+| `height` | `u32` |  |
+| `slots` | `list<list<stack>>` |  |
+| `results` | `list<stack>` |  |
+| `note` | `string` | A short line under the recipe (a cooking time), or "". |
+| `action` | `option<bool>` | The action button beside it: none, enabled, or shown greyed. |
 
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `set-items` | `func(items: list<stack>)` | The panel's items, at most 8192 (an empty list hides the panel). |
+| `set-recipes` | `func(title: string, tabs: list<stack>, tab: u32, recipes: list<recipe-view>)` | Shows these recipes in the panel instead of its items, as many as fit a page, under `title` and a back button, with a row of `tabs` (each an icon; `tab` is the selected one) between them; an empty list of recipes shows the items again. At most 256 recipes and 16 tabs. |
 | `poll` | `func() -> list<event>` | What the player did on the panel since the last poll, at most 256 kept. |
 
 ## `players`
@@ -659,16 +697,6 @@ What the server calls in a server mod (manifest `api = "0.3"`, experimental). On
 
 `type player = player`
 
-### record `registration`
-
-| Field | Type | |
-| --- | --- | --- |
-| `commands` | `list<string>` | Commands players may type, without the slash. A name vanilla already uses is refused (vanilla's command runs). |
-| `tick` | `bool` | Call `tick` every server tick (20 per second). |
-| `joins` | `bool` | Call `player-joined` and `player-left`. |
-| `chat` | `bool` | Call `chat` for each chat message a player sends. |
-| `blocks` | `bool` | Call `block-broken` and `block-placed`. |
-
 ### record `block-pos`
 
 | Field | Type | |
@@ -677,6 +705,59 @@ What the server calls in a server mod (manifest `api = "0.3"`, experimental). On
 | `y` | `s32` |  |
 | `z` | `s32` |  |
 
+### variant `argument-kind`
+
+What an argument of a command takes. The server sends each command and its arguments to players' games, whose chat box completes and colours them as vanilla's; the server parses them before the mod's `command` hook gets their values.
+
+| Case | Payload | |
+| --- | --- | --- |
+| `word` |  | One word: letters, digits and `_ - . +`. |
+| `text` |  | The rest of the line, spaces included: only last. |
+| `integer` | `tuple<option<s32>, option<s32>>` | A whole number, within the bounds given. |
+| `number` |  | A number with or without decimals. |
+| `boolean` |  | `true` or `false`. |
+| `player` |  | One online player: a name, or `@s` or `@p` (whoever typed it, as vanilla picks for a player). |
+| `block-pos` |  | A block position: three whole numbers, each one also `~` or `~n`, relative to whoever typed it. |
+
+### record `argument`
+
+| Field | Type | |
+| --- | --- | --- |
+| `name` | `string` | Shown in the chat box's hint (`<height>`) and the key of its value. |
+| `kind` | `argument-kind` |  |
+| `optional` | `bool` | Optional arguments come after every required one. |
+
+### record `server-command`
+
+| Field | Type | |
+| --- | --- | --- |
+| `name` | `string` | Without the slash. A name vanilla already uses is refused (vanilla's command runs). |
+| `arguments` | `list<argument>` | In order; none: the command takes nothing after its name. Free text is one optional `text` argument. |
+
+### variant `argument-value`
+
+An argument's value, parsed as its kind says.
+
+| Case | Payload | |
+| --- | --- | --- |
+| `word` | `string` |  |
+| `text` | `string` |  |
+| `integer` | `s32` |  |
+| `number` | `f64` |  |
+| `boolean` | `bool` |  |
+| `player` | `player` |  |
+| `block-pos` | `block-pos` |  |
+
+### record `registration`
+
+| Field | Type | |
+| --- | --- | --- |
+| `commands` | `list<server-command>` | Commands players may type. |
+| `tick` | `bool` | Call `tick` every server tick (20 per second). |
+| `joins` | `bool` | Call `player-joined` and `player-left`. |
+| `chat` | `bool` | Call `chat` for each chat message a player sends. |
+| `blocks` | `bool` | Call `block-broken` and `block-placed`. |
+
 | Function | Signature | What it does |
 | --- | --- | --- |
 | `init` | `func() -> result<registration, string>` | Once, after loading. An error keeps the mod off and is logged. |
@@ -684,6 +765,6 @@ What the server calls in a server mod (manifest `api = "0.3"`, experimental). On
 | `player-joined` | `func(player: player)` | A player joined the server; they are in `players.online` already. |
 | `player-left` | `func(player: player)` | A player left the server; they are no longer in `players.online`. |
 | `chat` | `func(player: player, text: string)` | A chat message a player sent, as plain text. |
-| `command` | `func(player: player, name: string, args: string) -> result<option<string>, string>` | `/name args` typed by `player`: ok(some(text)) is their feedback, err(text) their error in red. |
+| `command` | `func(player: player, name: string, args: string, values: list<tuple<string, argument-value>>) -> result<option<string>, string>` | `/name args` typed by `player`: ok(some(text)) is their feedback, err(text) their error in red. `values` holds each argument given, by name, in order (an optional one left out isn't there); a line that doesn't parse never reaches the mod: the player gets vanilla's error. |
 | `block-broken` | `func(player: player, pos: block-pos, state: string)` | A player broke the block at `pos` in their dimension: `state` is what was there, as `minecraft:oak_log[axis=y]`. |
 | `block-placed` | `func(player: player, pos: block-pos, state: string)` | A player placed `state` at `pos` in their dimension. |

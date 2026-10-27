@@ -179,13 +179,14 @@ impl PlayerEffects {
         self.list.clear();
     }
     /// The effects of a saved player (`Player.active_effects`: id,
-    /// duration, amplifier, ambient, visible).
+    /// duration, amplifier, ambient, particles visible).
     pub fn from_saved(saved: &[(String, i32, i32, bool, bool)]) -> Self {
         let mut effects = Self::default();
-        for (id, duration, amplifier, ambient, _) in saved {
+        for (id, duration, amplifier, ambient, particles) in saved {
             if let Some(def) = brewing::effect(id) {
                 let mut e = EffectInstance::new(def.id, *duration, *amplifier);
                 e.ambient = *ambient;
+                e.visible = *particles;
                 effects.add(e);
             }
         }
