@@ -1090,6 +1090,13 @@ pub enum MobEvent {
         mob: u32,
         target: Who,
     },
+    /// `StartHuntingHoglin` for a nearby adult piglin: it takes the hoglin as
+    /// its anger target (when it has none) and starts its `HUNTED_RECENTLY` wait.
+    HuntHoglin {
+        mob: u32,
+        target: u32,
+        ticks: i32,
+    },
     Projectile(crate::projectiles::Projectile),
     /// Spawn a new mob (breeding, slime splitting, chicken eggs...).
     Spawn(Box<Mob>),
@@ -1426,6 +1433,8 @@ pub struct Seen {
     pub knockback_resistance: f64,
     /// The active effects, without namespace (`slowness`, `poison`...).
     pub effects: Vec<&'static str>,
+    /// A piglin's `HUNTED_RECENTLY` memory.
+    pub hunted_recently: bool,
 }
 impl Seen {
     /// `LivingEntity.hasEffect`, by id without namespace.
@@ -1519,6 +1528,7 @@ impl Mob {
                 .iter()
                 .map(|e| e.0.trim_start_matches("minecraft:"))
                 .collect(),
+            hunted_recently: m.species() == Species::Piglin && m.extra.ints[0] > 0,
         }
     }
     /// `EntityType.getCategory`'s name.
