@@ -478,8 +478,10 @@ impl Game<'_> {
         }
         // The omens act from inside the effect tick (BadOmenMobEffect,
         // RaidOmenMobEffect).
+        let absorption_empty = player.health.absorption() <= 0.0;
         let mut effects = std::mem::take(&mut self.potions.effects);
-        let (actions, raid_omen_added) = effects.tick_with(&mut |e| self.omen_tick(e));
+        let (actions, raid_omen_added) =
+            effects.tick_with(&mut |e| self.omen_tick(e), absorption_empty);
         self.potions.effects = effects;
         if raid_omen_added {
             self.raid_omen_added();
