@@ -183,6 +183,7 @@ pub struct GameRules {
     pub spawn_monsters: bool,
     /// `fire_spread_radius_around_player`: -1 spreads everywhere.
     pub fire_spread_radius_around_player: i32,
+    pub spread_vines: bool,
 }
 impl Default for GameRules {
     fn default() -> Self {
@@ -196,6 +197,7 @@ impl Default for GameRules {
             spawn_mobs: true,
             spawn_monsters: true,
             fire_spread_radius_around_player: 128,
+            spread_vines: true,
         }
     }
 }

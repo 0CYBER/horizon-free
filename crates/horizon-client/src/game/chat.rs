@@ -992,6 +992,7 @@ impl Game<'_> {
             spawn_mobs: r.bool("spawn_mobs"),
             spawn_monsters: r.bool("spawn_monsters"),
             fire_spread_radius_around_player: r.int("fire_spread_radius_around_player"),
+            spread_vines: r.bool("spread_vines"),
         }
     }
     /// Apply rules mirrored in other state (natural regeneration, difficulty).
