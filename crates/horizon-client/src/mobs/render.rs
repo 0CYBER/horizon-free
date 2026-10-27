@@ -14,6 +14,12 @@ use std::f32::consts::PI;
 /// A texture lookup into the shared atlas (name without namespace -> uv rect).
 pub type Atlas<'a> = &'a dyn Fn(&str) -> Option<[f32; 4]>;
 
+/// The overlay code of an enchanted armour layer's glint. 7 and 8 are the
+/// item glint and 9 to 12 Horizon's End-portal and breaking overlays, so 13
+/// marks the `ARMOR_ENTITY_GLINT_TEXTURING` sample: entity.wgsl transforms
+/// the model UV and reads `enchanted_glint_armor`.
+pub const ARMOR_GLINT: u32 = 13;
+
 /// One draw of a model with a texture.
 pub struct Layer {
     pub model: String,
@@ -958,6 +964,13 @@ fn draw_normals(
             let normal = poly.vertex_normal(normals);
             for v in poly.vertices {
                 let pos = m.transform_point3(glam::Vec3::new(v[0], v[1], v[2]) / 16.0);
+                // The armour glint scrolls the layer's model UV in the shader;
+                // the item path already passed its transformed UV.
+                let glint_uv = if overlay == ARMOR_GLINT {
+                    [v[3], v[4]]
+                } else {
+                    [0.0, 0.0]
+                };
                 out.push(Vertex {
                     normal,
                     pos: pos.to_array(),
@@ -968,6 +981,7 @@ fn draw_normals(
                     layer: overlay,
                     color,
                     light,
+                    glint_uv,
                 });
             }
         }
@@ -1128,9 +1142,9 @@ fn render_visible(
             light
         };
         // EquipmentLayerRenderer draws armour with OverlayTexture.NO_OVERLAY: never
-        // the hurt tint, the glint (7) when enchanted.
+        // the hurt tint, the armour glint (13) when enchanted.
         let overlay = match armor_slot(&layer.model) {
-            Some(slot) if super::gear::enchanted(m, slot) => 7,
+            Some(slot) if super::gear::enchanted(m, slot) => ARMOR_GLINT,
             Some(_) => 0,
             None => overlay,
         };

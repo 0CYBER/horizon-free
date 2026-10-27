@@ -2485,6 +2485,8 @@ impl Game<'_> {
                         layer: 2,
                         color: c,
                         light: 0,
+
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             }
@@ -2550,6 +2552,8 @@ impl Game<'_> {
                     layer: 6,
                     color: c,
                     light: wrap_light,
+
+                    glint_uv: [0.0, 0.0],
                 });
             }
             (last_sin, last_cos, last_u) = (sin, cos, uu);
@@ -2595,6 +2599,8 @@ impl Game<'_> {
                     layer: 0,
                     color: 0xFFFF_FFFF,
                     light: 240 | 240 << 8,
+
+                    glint_uv: [0.0, 0.0],
                 });
             }
         }

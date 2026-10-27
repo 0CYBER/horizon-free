@@ -710,6 +710,8 @@ mod preview_tests {
                     color: u32::MAX,
                     light: 0,
                     normal: [0; 4],
+
+                    glint_uv: [0.0, 0.0],
                 })
         };
         // A shield and arm can intersect: neither average depth orders both ends.
