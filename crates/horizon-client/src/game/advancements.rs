@@ -719,6 +719,32 @@ impl Game<'_> {
             adv::conditions(&c["player"], &pctx, w) && adv::conditions(&c[&key], &ectx, w)
         });
     }
+    /// `KilledTrigger` (`player_killed_entity`): the entity killed and the
+    /// killing blow's damage source (none: any `killing_blow` fails).
+    pub(super) fn trigger_killed(&mut self, target: &EntityView, blow: Option<&adv::DamageView>) {
+        let me = self.player_entity();
+        let target = target.clone();
+        let blow = blow.cloned();
+        self.trigger("minecraft:player_killed_entity", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let ectx = adv::Entities {
+                this: Some(&target),
+                ..pctx
+            };
+            let blow_ok = c["killing_blow"].is_null()
+                || blow
+                    .as_ref()
+                    .is_some_and(|d| adv::damage_source(&c["killing_blow"], d, w, me.position));
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::conditions(&c["entity"], &ectx, w)
+                && blow_ok
+        });
+    }
     /// `KilledByArrowTrigger`: what the arrow killed and the weapon it came from.
     pub(super) fn trigger_killed_by_arrow(
         &mut self,

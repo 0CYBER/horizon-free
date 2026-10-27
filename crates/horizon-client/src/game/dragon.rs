@@ -1083,7 +1083,7 @@ impl Game<'_> {
         self.stats.add("killed", "minecraft:ender_dragon", 1);
         self.stats.custom("mob_kills", 1);
         self.score_player_killed(super::commands::Target::Mob(id));
-        self.trigger_entity("minecraft:player_killed_entity", "entity", view);
+        self.trigger_killed(view, None);
     }
     /// Player melee on the dragon's parts or a crystal under the crosshair.
     /// The dragon part under the crosshair within reach: its id and distance.

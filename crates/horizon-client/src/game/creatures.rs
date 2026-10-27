@@ -856,7 +856,42 @@ impl Game<'_> {
         self.stats.custom("mob_kills", 1);
         self.score_player_killed(super::commands::Target::Mob(m.id));
         let view = self.mob_entity(m);
-        self.trigger_entity("minecraft:player_killed_entity", "entity", &view);
+        let blow = m.last_damage.map(|(d, _)| self.damage_view(d));
+        self.trigger_killed(&view, blow.as_ref());
+    }
+    /// A mob's damage source as advancement predicates see it: its type, the
+    /// causing entity, and the projectile when one dealt it.
+    fn damage_view(&self, d: Damage) -> horizon_client::advancements::DamageView {
+        let source = match d.attacker {
+            Some(Who::Player) => Some(self.player_entity()),
+            Some(Who::Mob(id)) => self
+                .mobs
+                .iter()
+                .find(|o| o.id == id)
+                .map(|o| self.mob_entity(o)),
+            None => None,
+        };
+        let projectile = match d.kind {
+            DamageKind::Arrow => Some("minecraft:arrow"),
+            DamageKind::Fireball => Some("minecraft:fireball"),
+            _ => None,
+        };
+        let direct = match projectile {
+            Some(kind) => Some(horizon_client::advancements::EntityView {
+                kind: kind.into(),
+                position: d.from.unwrap_or_default(),
+                ..Default::default()
+            }),
+            None => source.clone(),
+        };
+        horizon_client::advancements::DamageView {
+            kind: damage_type(d.kind, matches!(d.attacker, Some(Who::Player))).to_owned(),
+            // DamageSource.isDirect: the causing entity is the direct one.
+            is_direct: projectile.is_none(),
+            direct,
+            source,
+            ..Default::default()
+        }
     }
     /// `dropAllDeathLoot` through `mobs::drops`: the entity loot table from the
     /// world's random sequence, equipment by drop chance, species extras and
