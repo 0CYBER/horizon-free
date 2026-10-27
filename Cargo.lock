@@ -1363,7 +1363,6 @@ name = "horizon-client"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
- "arboard",
  "bytemuck",
  "chrono",
  "cpal",
@@ -1373,6 +1372,7 @@ dependencies = [
  "horizon-assets",
  "horizon-bench",
  "horizon-client-core",
+ "horizon-client-input",
  "horizon-command",
  "horizon-core",
  "horizon-dualsense",
@@ -1411,6 +1411,18 @@ version = "0.1.0"
 dependencies = [
  "horizon-world",
  "serde_json",
+]
+
+[[package]]
+name = "horizon-client-input"
+version = "0.1.0"
+dependencies = [
+ "arboard",
+ "horizon-client-core",
+ "horizon-dualsense",
+ "horizon-theme",
+ "png",
+ "winit",
 ]
 
 [[package]]
