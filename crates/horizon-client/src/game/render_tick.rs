@@ -19,10 +19,29 @@ use horizon_core::random::{LegacyRandom, RandomSource};
 
 /// The first motion-blocking block at or below `from` (Heightmap MOTION_BLOCKING), plus one.
 fn motion_blocking(world: &World, facts: &BlockFacts, x: i32, z: i32, from: i32) -> i32 {
+    motion_blocking_leaves(world, facts, x, z, from, true)
+}
+/// `motion_blocking` where leaves count only for MOTION_BLOCKING, not for
+/// MOTION_BLOCKING_NO_LEAVES.
+fn motion_blocking_leaves(
+    world: &World,
+    facts: &BlockFacts,
+    x: i32,
+    z: i32,
+    from: i32,
+    leaves: bool,
+) -> i32 {
     let mut y = from.min(MIN_Y + HEIGHT - 1);
     while y > MIN_Y {
         let f = facts.get(world.block(x, y, z));
-        if f.full_collision || f.fluid != Fluid::None || f.name.contains("leaves") {
+        // #minecraft:leaves block motion, but MOTION_BLOCKING_NO_LEAVES skips them
+        // (their water still counts).
+        let blocks = if f.name.ends_with("_leaves") {
+            leaves
+        } else {
+            f.full_collision
+        };
+        if blocks || f.fluid != Fluid::None {
             return y + 1;
         }
         y -= 1;
@@ -34,16 +53,7 @@ fn rains_at(world: &World, biomes: &Biomes, x: i32, y: i32, z: i32) -> bool {
     let Some(chunk) = world.chunks.get(&(x >> 4, z >> 4)) else {
         return false;
     };
-    let b = biomes.get(chunk.biome(x, y, z));
-    if !b.precipitation {
-        return false;
-    }
-    let t = if y > 80 {
-        b.temperature - (y - 80) as f32 * 0.05 / 40.0
-    } else {
-        b.temperature
-    };
-    t >= 0.15
+    biomes.get(chunk.biome(x, y, z)).snows_at(x, y, z) == Some(false)
 }
 
 impl Game<'_> {
@@ -293,6 +303,11 @@ impl Game<'_> {
                 && motion_blocking(world, facts, p[0], p[2], p[1] + 64) <= p[1]
                 && rains_at(world, biomes, p[0], p[1], p[2])
         };
+        let height_no_leaves =
+            |p: [i32; 3]| motion_blocking_leaves(world, facts, p[0], p[2], i32::MAX, false);
+        // The day timeline: firefly bush sounds from 12600 to 23400.
+        let firefly_bush_sounds = self.dim == Dim::Overworld
+            && (12600..23401).contains(&self.world.day_time.rem_euclid(24000));
         let tables = &self.pack.context.tables;
         let model_offset = |state, x, z| tables.offset(state, x, z);
         let gateway_particles = |state, p| {
@@ -310,6 +325,9 @@ impl Game<'_> {
             biomes,
             registry: self.pack.assets.registry,
             raining_at: &raining_at,
+            height_no_leaves: &height_no_leaves,
+            firefly_bush_sounds,
+            sky_darken: self.sky_darken(),
             marker: marker.map(|name| (name, &marker_options as &dyn Fn(_) -> _)),
             model_offset: &model_offset,
             gateway_particles: &gateway_particles,

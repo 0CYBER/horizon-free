@@ -6,6 +6,7 @@
 use super::Game;
 use horizon_client::{
     enchant::EffectContext,
+    items::ItemStack,
     mobs::{Damage, Mob, Species},
     particles::{ParticleOptions, ParticleType},
 };
@@ -135,7 +136,7 @@ impl Game<'_> {
     /// `LivingEntity.hurtServer` of the mob at `index` by the player's hit:
     /// the weapon's `armor_effectiveness` enchantments (Breach) thin its armor.
     pub(super) fn hurt_by_player(&mut self, index: usize, amount: f32, source: Damage) -> bool {
-        let held = self.inventory[self.selected].clone();
+        let held = self.held().cloned();
         let kind = self.mobs[index].kind.id.clone();
         let ctx = EffectContext {
             this: Some(&kind),
@@ -144,6 +145,7 @@ impl Game<'_> {
             is_direct: true,
             damage_type: Some(match source.kind {
                 horizon_client::mobs::DamageKind::MaceSmash => "minecraft:mace_smash",
+                horizon_client::mobs::DamageKind::Spear => "minecraft:spear",
                 _ => "minecraft:player_attack",
             }),
             items: Some(self.res.items()),
@@ -173,7 +175,7 @@ impl Game<'_> {
     /// the post-attack enchantments, then `postHurtEnemy` with the weapon's
     /// wear.
     pub(super) fn weapon_hit(&mut self, index: usize) {
-        let Some(stack) = self.inventory[self.selected].clone() else {
+        let Some(stack) = self.held().cloned() else {
             return;
         };
         let weapon = self
@@ -193,16 +195,26 @@ impl Game<'_> {
         if smash && let Some(p) = self.player.as_mut() {
             p.fall_distance = 0.0;
         }
-        // ItemStack.postHurtEnemy: hurtAndBreak(weapon.itemDamagePerAttack).
+        self.weapon_wear(&stack);
+    }
+    /// `ItemStack.postHurtEnemy`: `hurtAndBreak(weapon.itemDamagePerAttack)` of
+    /// the weapon in the acting hand.
+    pub(super) fn weapon_wear(&mut self, stack: &ItemStack) {
+        let weapon = self
+            .res
+            .items()
+            .get(&stack.item)
+            .and_then(|i| i.weapon_damage.map(|d| (d, i.max_damage)));
         if let Some((per_attack, max)) = weapon
             && max > 0
             && !self.creative
         {
-            let loss = self.durability_loss(&stack, per_attack);
-            if let Some(held) = self.inventory[self.selected].as_mut() {
+            let loss = self.durability_loss(stack, per_attack);
+            let cell = self.held_mut();
+            if let Some(held) = cell.as_mut() {
                 held.damage += loss;
                 if held.damage >= max {
-                    self.inventory[self.selected] = None;
+                    *cell = None;
                 }
             }
         }
@@ -216,6 +228,9 @@ impl Game<'_> {
             return;
         };
         p.velocity = Vec3::new(p.velocity.x, f64::from(0.01f32), p.velocity.z);
+        // A server player's client is told (ClientboundSetEntityMotionPacket): it moves by
+        // itself, so without it a Wind Burst's push would add to the speed of the fall.
+        p.health.sync_velocity = true;
         // calculateImpactPosition: an earlier impact below the player stays.
         let impact = match p.impulse.impact_position {
             Some(at) if at.y <= p.position.y => at,

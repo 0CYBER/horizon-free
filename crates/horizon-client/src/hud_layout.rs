@@ -490,6 +490,11 @@ pub struct HealthHud {
     /// above them.
     pub left_height: i32,
     pub right_height: i32,
+    /// `Hud.lastBubblePopSoundPlayed`.
+    pub last_bubble_pop_sound: i32,
+    /// The `ui.hud.bubble_pop` volume and pitch `playAirBubblePoppedSound`
+    /// asked for this frame; the caller plays it and clears it.
+    pub bubble_pop_sound: Option<(f32, f32)>,
 }
 
 pub struct HealthInputs {
@@ -761,12 +766,22 @@ impl HealthHud {
             let popping = bubble(0);
             let delay = i32::from(air != 0 && i.under_water);
             let empty = 10 - bubble(delay);
+            if !i.under_water {
+                self.last_bubble_pop_sound = 0;
+            }
             for b in 1..=10 {
                 let x = x_right - (b - 1) * 8 - 9;
                 if b <= full {
                     out.push(sprite("hud/air", x, y, 9, 9));
                 } else if full != popping && b == popping && i.under_water {
                     out.push(sprite("hud/air_bursting", x, y, 9, 9));
+                    // Hud.playAirBubblePoppedSound.
+                    if self.last_bubble_pop_sound != b {
+                        let volume = 0.5 + 0.1 * (empty - 3 + 1).max(0) as f32;
+                        let pitch = 1.0 + 0.1 * (empty - 5 + 1).max(0) as f32;
+                        self.bubble_pop_sound = Some((volume, pitch));
+                        self.last_bubble_pop_sound = b;
+                    }
                 } else if b > 10 - empty {
                     let wobble = if empty == 10 && i.tick % 2 == 0 {
                         next(2)
