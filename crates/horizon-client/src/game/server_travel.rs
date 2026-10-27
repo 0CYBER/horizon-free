@@ -423,6 +423,9 @@ impl Game<'_> {
                 let suggestion =
                     [trip.target.x, trip.target.y, trip.target.z].map(|v| v.floor() as i32);
                 match self.search_spawn(suggestion, &mut trip.finder) {
+                    // The respawn already put the player on this column:
+                    // vanilla teleports once, so no second move.
+                    Ok(at) if host.hub.guests[i].position == [at.x, at.y, at.z] => continue,
                     Ok(at) => (at, yaw),
                     Err(chunk) => {
                         self.spawn_wait.push(chunk);
