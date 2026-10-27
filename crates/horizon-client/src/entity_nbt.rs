@@ -180,13 +180,32 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         ("Silent", m.silent),
         ("NoGravity", m.no_gravity),
         ("Glowing", m.glowing),
-        ("Invulnerable", m.invulnerable_flag),
     ] {
         if on {
             map.insert(key.into(), Tag::Byte(1));
         } else {
             map.remove(&horizon_world::nbt::JavaString::from(key));
         }
+    }
+    map.insert(
+        "Invulnerable".into(),
+        Tag::Byte(i8::from(m.invulnerable_flag)),
+    );
+    map.insert(
+        "LeftHanded".into(),
+        Tag::Byte(i8::from(m.extra.left_handed)),
+    );
+    // Keys of older formats that structure templates still carry.
+    for key in [
+        "HandItems",
+        "ArmorItems",
+        "HandDropChances",
+        "ArmorDropChances",
+        "Dimension",
+        "HurtByTimestamp",
+        "Leashed",
+    ] {
+        map.remove(&horizon_world::nbt::JavaString::from(key));
     }
     if m.ticks_frozen > 0 {
         map.insert("TicksFrozen".into(), Tag::Int(m.ticks_frozen));
@@ -197,7 +216,7 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         ("AbsorptionAmount", Tag::Float(0)),
         ("FallFlying", Tag::Byte(0)),
         ("CanPickUpLoot", Tag::Byte(i8::from(m.can_pick_up_loot()))),
-        ("LeftHanded", Tag::Byte(0)),
+        ("current_impulse_context_reset_grace_time", Tag::Int(0)),
         (
             "Brain",
             Tag::compound([("memories", Tag::Compound(Compound::new()))]),
@@ -209,7 +228,7 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     // Only breedable animals have an age; a loaded creature that was saved without
     // one (a frog) stays without.
     let aged = raw.is_none_or(|r| r.get("Age").is_some());
-    if m.kind.category == "creature" && aged {
+    if (m.kind.category == "creature" || m.species() == crate::mobs::Species::Hoglin) && aged {
         map.insert("Age".into(), Tag::Int(m.extra.age));
         map.insert("AgeLocked".into(), Tag::Byte(i8::from(m.extra.age_locked)));
         map.insert("ForcedAge".into(), Tag::Int(m.extra.forced_age));
@@ -260,6 +279,10 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 .or_insert_with(|| string("minecraft:classic"));
         }
         "minecraft:piglin" | "minecraft:piglin_brute" | "minecraft:hoglin" => {
+            // Only Piglin.addAdditionalSaveData writes CannotHunt.
+            if id == "minecraft:piglin_brute" {
+                map.remove(&"CannotHunt".into());
+            }
             map.insert(
                 "IsImmuneToZombification".into(),
                 Tag::Byte(i8::from(m.extra.flag2)),
@@ -498,8 +521,7 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 )])
             });
         }
-        "minecraft:zombie" => {
-            map.insert("IsBaby".into(), Tag::Byte(i8::from(m.is_baby())));
+        "minecraft:zombie" | "minecraft:husk" | "minecraft:drowned" => {
             for (key, value) in [
                 ("DrownedConversionTime", Tag::Int(-1)),
                 ("InWaterTime", Tag::Int(-1)),
@@ -531,6 +553,21 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             "CanBreakDoors".into(),
             Tag::Byte(i8::from(m.extra.can_break_doors)),
         );
+    }
+    if matches!(
+        id,
+        "minecraft:zombie"
+            | "minecraft:husk"
+            | "minecraft:drowned"
+            | "minecraft:zombie_villager"
+            | "minecraft:zombified_piglin"
+            | "minecraft:piglin"
+            | "minecraft:zoglin"
+    ) {
+        map.insert("IsBaby".into(), Tag::Byte(i8::from(m.is_baby())));
+    }
+    if let Some(a) = m.extra.attributes.as_deref() {
+        put_attributes(map, m, a);
     }
     crate::mobs::raider::write_nbt(m, map);
     crate::mobs::riders::write_nbt(m, map);
@@ -614,6 +651,89 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     }
     tag
 }
+/// `AttributeMap.pack` for the attributes with a base or permanent modifier
+/// finalizeSpawn set, over the saved list.
+fn put_attributes(map: &mut Compound, m: &Mob, a: &crate::mobs::finalize::Attributes) {
+    use crate::mobs::finalize::{self, Attr, Op};
+    let mut list = match map.get(&"attributes".into()) {
+        Some(Tag::List(l)) => l.clone(),
+        _ => Vec::new(),
+    };
+    for attr in Attr::ALL {
+        let modifiers: Vec<Tag> = a
+            .modifiers
+            .iter()
+            .filter(|x| x.attr == attr)
+            .map(|x| {
+                let op = match x.op {
+                    Op::AddValue => "add_value",
+                    Op::AddMultipliedBase => "add_multiplied_base",
+                    Op::AddMultipliedTotal => "add_multiplied_total",
+                };
+                Tag::compound([
+                    ("id", string(x.id)),
+                    ("amount", Tag::Double(x.amount.to_bits())),
+                    ("operation", string(op)),
+                ])
+            })
+            .collect();
+        if modifiers.is_empty() && !a.bases.iter().any(|(b, _)| *b == attr) {
+            continue;
+        }
+        let id = format!("minecraft:{}", attr.name());
+        let mut entry = vec![
+            ("id", string(&id)),
+            ("base", Tag::Double(finalize::base_value(m, attr).to_bits())),
+        ];
+        if !modifiers.is_empty() {
+            entry.push(("modifiers", Tag::List(modifiers)));
+        }
+        let entry = Tag::compound(entry);
+        match list
+            .iter_mut()
+            .find(|t| text(t.get("id")).as_deref() == Some(id.as_str()))
+        {
+            Some(t) => *t = entry,
+            None => list.push(entry),
+        }
+    }
+    map.insert("attributes".into(), Tag::List(list));
+}
+/// `Brain.Packed`: the memories finalizeSpawn set, over the saved ones.
+pub fn put_brain(map: &mut Compound, m: &Mob, dimension: &str) {
+    if m.extra.memories.is_empty() {
+        return;
+    }
+    let mut memories = match map.get(&"Brain".into()).and_then(|b| b.get("memories")) {
+        Some(Tag::Compound(c)) => c.clone(),
+        _ => Compound::new(),
+    };
+    for &(name, value, ttl) in &m.extra.memories {
+        let value = match name {
+            "hunted_recently" => Tag::Byte(value as i8),
+            "home" => match m.extra.home {
+                Some(p) => Tag::compound([
+                    ("dimension", string(dimension)),
+                    ("pos", Tag::IntArray(p.to_vec())),
+                ]),
+                None => continue,
+            },
+            _ => Tag::Int(value as i32),
+        };
+        let mut memory = vec![("value", value)];
+        if ttl != i64::MAX {
+            memory.push(("ttl", Tag::Long(ttl)));
+        }
+        memories.insert(
+            format!("minecraft:{name}").as_str().into(),
+            Tag::compound(memory),
+        );
+    }
+    map.insert(
+        "Brain".into(),
+        Tag::compound([("memories", Tag::Compound(memories))]),
+    );
+}
 /// `CustomName`: a text component saved as a string or a `{text: ..}` compound.
 fn custom_name(tag: &Tag) -> Option<String> {
     match tag.get("CustomName")? {
@@ -632,6 +752,22 @@ pub fn name_text(tag: &Tag) -> Text {
         Tag::String(s) => Text::legacy(&s.to_string_lossy()),
         t => crate::scoreboard::comp_text(&crate::scoreboard::tag_to_json(t)),
     }
+}
+/// Mob.finalizeSpawn's follow range bonus in the saved attributes.
+pub(crate) fn spawn_bonus(tag: &Tag) -> Option<f64> {
+    let Some(Tag::List(attrs)) = tag.get("attributes") else {
+        return None;
+    };
+    let range = attrs
+        .iter()
+        .find(|a| text(a.get("id")).as_deref() == Some("minecraft:follow_range"))?;
+    let Some(Tag::List(modifiers)) = range.get("modifiers") else {
+        return None;
+    };
+    let bonus = modifiers
+        .iter()
+        .find(|x| text(x.get("id")).as_deref() == Some("minecraft:random_spawn_bonus"))?;
+    float(bonus.get("amount"))
 }
 pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -> Option<Mob> {
     let kind = types.get(&self::kind(tag)?)?.clone();
@@ -657,6 +793,11 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
                 _ => {}
             }
         }
+    }
+    if let Some(bonus) = spawn_bonus(tag) {
+        use crate::mobs::finalize::{Attr, Op, add_modifier};
+        let id = "minecraft:random_spawn_bonus";
+        add_modifier(&mut m, Attr::FollowRange, id, bonus, Op::AddMultipliedBase);
     }
     m.health = float(tag.get("Health")).map_or(m.attrs.max_health, |h| h as f32);
     m.hurt_time = number(tag.get("HurtTime")).unwrap_or(0) as i32;
@@ -699,7 +840,8 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.extra.pick_up_loot = flag(tag, "CanPickUpLoot");
     m.custom_name = custom_name(tag);
     m.custom_name_text = tag.get("CustomName").map(name_text);
-    if m.kind.category == "creature" {
+    m.extra.left_handed = flag(tag, "LeftHanded");
+    if m.kind.category == "creature" || m.species() == crate::mobs::Species::Hoglin {
         m.extra.age = number(tag.get("Age")).unwrap_or(0) as i32;
         m.extra.forced_age = number(tag.get("ForcedAge")).unwrap_or(0) as i32;
         m.extra.age_locked = flag(tag, "AgeLocked");

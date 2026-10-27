@@ -28,8 +28,8 @@ The opening, then Play ([clip](docs/opening.webm)):
   packs and modpacks, each marked Works, Partly or Doesn't run in
   Horizon; Java mod jars are never offered. Install puts a pack and what it needs in
   `resourcepacks/` only after its SHA-512 matches, and a
-  modpack goes to the Modpacks page; installed packs show their source and checksum, with Update
-  and Remove ([docs/mod-browser.md](../docs/mod-browser.md)).
+  modpack goes to the Modpacks page; installed packs show their source and checksum, with Update,
+  **Update all** and Remove ([docs/mod-browser.md](../docs/mod-browser.md)).
 - **Modpacks**: import a Java modpack (a Modrinth `.mrpack`, a CurseForge zip, or a Prism,
   MultiMC or CurseForge instance folder) and see its coverage report: per mod, ported, partial,
   not yet or not needed, with the reason ([docs/modpacks.md](../docs/modpacks.md)). **Port**
@@ -69,6 +69,74 @@ The opening, then Play ([clip](docs/opening.webm)):
   access controls, one click changes them so friends you share with reach only the server's
   port (Remove the limit undoes it); custom access controls are never rewritten, the page gives
   the rule to add instead. Horizon never turns on Funnel.
+- **Instances**: separate game folders, each with its own worlds, options and packs. The game's
+  folder stays the first one, "Horizon", exactly where it was; imported and registry modpacks are
+  instances too, in their own folders as before; new ones go to `instances/<name>/` in the game's
+  folder, empty but for the player's options and name, or a copy of another instance (never its
+  sign-in sessions, logs or data collection state). Names, icons (a block or item texture from the
+  player's prepared files, or a colour) and groups are kept in `instances.json` in the launcher's
+  data folder, so renaming moves nothing. Every instance follows the launcher's data collection
+  answer and No AI. In the window, **+** beside Instances makes one, the sidebar lists them by
+  group (click one to play it), and Home's Instance row has Edit (name, group, icon), Copy and
+  Open folder. The Instance row shows its play time and when it was last played: every run started
+  from the window or `horizon-launcher play` adds to it (`instance list` shows it too). Each
+  instance plays the launcher's version, which follows updates, unless the Play page's version
+  picker keeps it on another installed one (to keep an old world on the version it was made
+  with); picking the version marked "follows updates" lets it follow again.
+- **Export**: Home's Instance row has **Export…**: the selected instance (or a port) as a `.mrpack`
+  (Modrinth's modpack format: resource packs the browser installed from Modrinth are listed by
+  their download, the rest is in `overrides/`) or a `.zip` of the game folder's layout, with the
+  worlds switched on. It is written to `exports/` in the launcher's data folder (**Show in
+  folder**). Only settings (options.txt, horizon-*.txt, servers.dat), resource and shader packs,
+  `horizon-mods/` and `config/` go in: never logs, screenshots, backups, caches or account files;
+  a world goes without `playerdata/`, `stats/` and `advancements/`, and its level.dat without the
+  player's UUID. `horizon-launcher instance export [<instance>] [--format mrpack|zip] [--world
+  <w>]… [--out <file>]`.
+- **Import by dropping a file**: a file dropped anywhere on the window is imported for what it is
+  (`horizon_launcher::import`). A shared instance (a `.mrpack` that needs no mod loader, such as
+  Export writes, or a game folder `.zip`) becomes a new instance, opened on Home. Its `.mrpack`
+  downloads come from Modrinth with their SHA-512 checked, and only what an instance keeps is
+  taken, inside its folder. A Java modpack goes to the Modpacks import, and a resource or shader
+  pack into the selected instance. A data pack is pointed at the world rows, and the Packs section
+  and the world rows keep taking their own drops. A note in the corner says what happened.
+  `horizon-launcher instance import <file>`.
+- **Console**: Home's Console shows the game's output of this run as it comes: a search (every
+  word, any case), Follow to keep the newest line in view, Copy, and Open logs folder. Warnings
+  and errors stand out. **Share log…** uploads the log to [mclo.gs](https://mclo.gs), a paste
+  service for Minecraft logs, only after the player confirms; the home folder, the user name and
+  the account names are taken out first (`horizon_launcher::game_log`), and **Delete it** removes
+  the paste. `horizon-launcher share-log [--instance]` and `unshare-log <id:token>`;
+  `HORIZON_LAUNCHER_PASTE_URL` points it at a test server.
+- **Worlds**: Home lists the selected instance's worlds (picture, mode, version, last played,
+  size). **Back up** zips one into the instance's `backups/` as the game's Make Backup does
+  (`<date>_<time>_<folder>.zip`); **Copy** puts "<name> (1)" beside it; **Delete** moves it to the
+  system's trash after a confirmation; **Open folder**. The same from the command line:
+  `horizon-launcher worlds [list|backup|copy|delete] [--instance <name>]`.
+  **Play** on a world starts the game straight into it. **Data packs** opens the world's
+  `datapacks/` under its row: what is there (and which the game has turned off), **Add data pack…**,
+  and **Remove** (to the trash); a data pack `.zip` dropped on a world goes into it. The game turns
+  a new one on when the world opens. From the command line: `horizon-launcher worlds
+  datapack-list|datapack-add|datapack-remove <world> …`. The Mods page's **Data packs** tab finds
+  them on Modrinth and installs one into the world picked there (`mods search --kind datapack`,
+  `mods install <pack> --world <world>`), saying what of it runs in Horizon.
+- **Packs**: Home lists the selected instance's resource packs and shader packs, each with a switch.
+  The choice is the game's own: `resourcePacks` in options.txt (a pack turned on goes on top, as
+  the game's Resource Packs screen does) and `pickedShaderPack` in `horizon-graphics.txt` (one shader
+  pack at a time). **Add pack…** or a `.zip` / `.hshader` dropped on the section copies it into the
+  right folder; **Remove** turns it off and moves it to the trash after a confirmation. From the
+  command line: `horizon-launcher packs [list|add|on|off|remove] [--kind resource|shader]
+  [--instance <name>]`.
+- **Screenshots**: Home shows the selected instance's newest screenshots (what F2 saves in its
+  `screenshots/` folder) and all of them on request. Clicking one opens it over the window (← and →
+  step through) with **Copy** (the picture, to the clipboard), **Open**, **Show in folder** and
+  **Delete** (to the trash, after a confirmation). From the command line:
+  `horizon-launcher screenshots [list|delete] [--instance <name>]`.
+- **Multiplayer**: Home lists the selected instance's servers, the game's own Multiplayer list
+  (`servers.dat`, each with the picture the game last saw). **Join** starts the game straight into
+  one; **Add server** and **Remove** (after a confirmation) change the file the game reads,
+  keeping every field the launcher doesn't show and the servers joined with Direct Connection. The
+  same from the command line: `horizon-launcher multiplayer [list|add|remove] [--instance <name>]`
+  and `horizon-launcher play --server <address or name>`.
 - **Patch notes**: each release's notes, newest first, with a link to GitHub Sponsors. Quiet "Discord" and "Website" links sit in the footer.
 
 Data lives in the platform's data directory (`~/.local/share/horizon-launcher` on Linux,
@@ -152,7 +220,7 @@ and don't set `%ERRORLEVEL%` / `$LASTEXITCODE`. Scripts that need the exit code 
     horizon-launcher install <tag|latest>
     horizon-launcher remove <tag>
     horizon-launcher prepare [--minecraft <dir>] [--version <tag>]
-    horizon-launcher play [--version <tag>] [--arg <ARG>]...   start the client; --arg passes an extra argument through (repeatable)
+    horizon-launcher play [--version <tag>] [--instance <name>] [--arg <ARG>]...   start the client; --arg passes an extra argument through (repeatable)
     horizon-launcher server [--dir <dir>] [--version <tag>] [--accept-eula]
     horizon-launcher notes [<tag>]                  patch notes as plain text
     horizon-launcher links                          the Discord, sponsor and website links
@@ -164,6 +232,19 @@ and don't set `%ERRORLEVEL%` / `$LASTEXITCODE`. Scripts that need the exit code 
     horizon-launcher account sign-out <name>
     horizon-launcher account select <name>          play as this account
     horizon-launcher account offline                play without an account
+    horizon-launcher instance [list]                the instances and their game folders (* = Play starts it)
+    horizon-launcher instance create <name> [--copy <instance>]   empty, or a copy of one's worlds, options and packs
+    horizon-launcher instance rename|icon|group <instance> <value>  icon: a block or item name, #rrggbb or none
+    horizon-launcher instance select <instance>     make Play start it
+    horizon-launcher instance version <instance> <tag|latest>   keep it on one installed version, or follow updates
+    horizon-launcher worlds [list] [--instance <name>]        an instance's worlds
+    horizon-launcher worlds backup|copy|delete <world> [--instance <name>]   delete moves it to the trash
+    horizon-launcher packs [list] [--kind resource|shader] [--instance <name>]   resource and shader packs, on or off
+    horizon-launcher packs add <file> | on|off|remove <pack> [--kind shader]
+    horizon-launcher screenshots [list] [--instance <name>]   an instance's screenshots, the newest first
+    horizon-launcher screenshots delete <name> [--instance <name>]   moves it to the trash
+    horizon-launcher multiplayer [list] [--instance <name>]   the servers in an instance's Multiplayer list
+    horizon-launcher multiplayer add <address> [--name <name>] | remove <server>
     horizon-launcher modpack [list]                 the imported packs and their coverage
     horizon-launcher modpack import <pack>          a .mrpack, CurseForge zip or instance folder
     horizon-launcher modpack port <pack> [--from <dir>] [--version <tag>]   get the jars and carry them over
@@ -191,7 +272,10 @@ and don't set `%ERRORLEVEL%` / `$LASTEXITCODE`. Scripts that need the exit code 
 `--json` prints JSON where there is something to report (`versions`, `install`, `notes`,
 `next`, `links`, `game-args`, `update --check`, `logs`, `account`, `benchmark`, `data`, `modpack`). Errors go to stderr with exit code 1. `server` runs in the terminal,
 so lines you type reach its console. `HORIZON_LAUNCHER_HOME` replaces the data folder (for
-scripts and tests).
+scripts and tests). Test runs also set `HORIZON_LAUNCHER_TRASH=<folder>` and
+`HORIZON_LAUNCHER_CLIPBOARD=<file>` inside their scratch folders: what Delete would move to the
+system's trash goes into that folder, and what Copy would put on the clipboard is written to that
+file, so a test never touches the real trash or clipboard.
 
 ## AI agents (MCP)
 
