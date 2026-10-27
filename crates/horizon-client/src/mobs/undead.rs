@@ -1,7 +1,8 @@
 //! Zombies (zombie, husk, drowned, zombie villager) and skeletons (skeleton,
 //! stray, bogged, wither skeleton): goals, bow attacks, water conversion.
 use super::{
-    Mob, MobEvent, Species, Who,
+    Damage, Mob, MobEvent, Species, Who,
+    doors::BreakDoor,
     goals::{
         Avoid, AvoidEntity, Cx, FleeSun, Goal, HurtByTarget, LOOK, LookAtPlayer, MOVE, MeleeAttack,
         NearestTarget, RandomLookAround, RestrictSun, Stroll, goal_clone,
@@ -10,11 +11,22 @@ use super::{
 use crate::projectiles::{Projectile, ProjectileKind};
 use horizon_core::{geometry::Vec3, random::RandomSource};
 
+/// `Zombie.hurtServer`, once the hit landed: a zombie with a target (its own,
+/// else a living attacker) asks the game to try calling a reinforcement; the
+/// difficulty, chance and spawn tests are the game's (`call_reinforcements`).
+pub fn after_hurt(m: &mut Mob, source: &Damage) {
+    if let Some(target) = m.ai.target.or(source.attacker) {
+        m.outbox
+            .push(MobEvent::Reinforcements { mob: m.id, target });
+    }
+}
+
 pub fn register(m: &mut Mob) {
     use Species as S;
     match m.species() {
         S::Zombie | S::Husk | S::ZombieVillager => {
             let g = &mut m.ai.goals;
+            g.add(1, BreakDoor::zombie());
             g.add(4, AttackTurtleEgg::default());
             g.add(8, LookAtPlayer::new(8.0));
             g.add(8, RandomLookAround::default());
@@ -42,6 +54,7 @@ pub fn register(m: &mut Mob) {
         S::ZombifiedPiglin => {
             // ZombifiedPiglin.addBehaviourGoals: neutral until provoked.
             let g = &mut m.ai.goals;
+            g.add(1, BreakDoor::zombie());
             g.add(8, LookAtPlayer::new(8.0));
             g.add(8, RandomLookAround::default());
             g.add(2, MeleeAttack::new(1.0, false).zombie());
@@ -58,6 +71,7 @@ pub fn register(m: &mut Mob) {
         S::Drowned => {
             // Zombie.registerGoals, then Drowned.addBehaviourGoals.
             let g = &mut m.ai.goals;
+            g.add(1, BreakDoor::zombie());
             g.add(4, AttackTurtleEgg::default());
             g.add(8, LookAtPlayer::new(8.0));
             g.add(8, RandomLookAround::default());
@@ -218,8 +232,10 @@ pub fn drowned_travel(
     m.velocity = Vec3::new(m.velocity.x * 0.9, m.velocity.y * 0.9, m.velocity.z * 0.9);
     true
 }
-/// The trident throw of `Drowned.performRangedAttack`, until thrown tridents
-/// exist: an arrow-like shot with the trident's damage.
+/// The trident throw of `Drowned.performRangedAttack`: a `ThrownTrident` of
+/// the held trident (a plain one when it holds none), owned by the drowned,
+/// which cannot be picked up and does not return (`AbstractArrow` constructor:
+/// only a player's projectile is `Pickup.ALLOWED`).
 fn drowned_throw(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
     let Some(t) = cx.w.target_info(who) else {
         return;
@@ -229,15 +245,18 @@ fn drowned_throw(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
     let yd = t.position.y + (t.bounds.max_position().y - t.bounds.min_position().y) / 3.0 - start.y;
     let zd = t.position.z - m.position.z;
     let dist = (xd * xd + zd * zd).sqrt();
-    let mut p = Projectile::new(
-        ProjectileKind::Arrow {
-            base_damage: 8.0,
-            critical: false,
-            effect: None,
-        },
-        start,
-        Some(Who::Mob(m.id)),
-    );
+    let mut trident = crate::items::ItemStack::new("minecraft:trident", 1);
+    if m.extra.main_hand.as_deref() == Some("minecraft:trident")
+        && let Some(g) = super::gear::gear(m)
+    {
+        for (e, l) in &g.slots[super::gear::MAIN] {
+            trident.enchant(e, *l);
+        }
+    }
+    let mut p = Projectile::new(ProjectileKind::Trident, start, Some(Who::Mob(m.id)));
+    if let Some(a) = p.arrow.as_mut() {
+        a.set_item(&trident);
+    }
     p.shoot(
         &mut crate::projectiles::own_random(m),
         [xd, yd + dist * f64::from(0.2_f32), zd],
@@ -479,15 +498,77 @@ fn zombified_piglin_step(m: &mut Mob, cx: &mut Cx) {
         }
     }
 }
+/// `Entity.isInPowderSnow`: the mob's box, shrunk by `1.0E-5` as in
+/// `checkInsideBlocks`, touches powder snow.
+fn in_powder_snow(m: &Mob, w: &super::MobWorld) -> bool {
+    let b = m.bounds().deflate(Vec3::new(1e-5, 1e-5, 1e-5));
+    let (min, max) = (b.min_position(), b.max_position());
+    for x in min.x.floor() as i32..=max.x.floor() as i32 {
+        for y in min.y.floor() as i32..=max.y.floor() as i32 {
+            for z in min.z.floor() as i32..=max.z.floor() as i32 {
+                if &*w.facts.get(w.world.block(x, y, z)).name == "minecraft:powder_snow" {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+/// `Skeleton.freezingTracker` (`ConversionTracker.tick`): 140 ticks in
+/// powder snow start a conversion into a stray that takes 300 more; leaving
+/// the snow stops it. `counter` is the affliction time (-1 outside the snow)
+/// and `counter2` the conversion time plus one while converting, so that
+/// reaching 0 is vanilla's `conversionTime < 0`.
+fn skeleton_freezing(m: &mut Mob, cx: &mut Cx) {
+    if !in_powder_snow(m, cx.w) {
+        m.extra.counter = -1;
+        m.extra.counter2 = 0;
+    } else if m.extra.counter2 > 0 {
+        m.extra.counter2 -= 1;
+        if m.extra.counter2 == 0 {
+            // levelEvent 1048: the conversion sound at the stray.
+            let pitch = (m.random.next_float() - m.random.next_float()) * 0.2 + 1.0;
+            cx.events.push(MobEvent::Sound(
+                "entity.skeleton.converted_to_stray",
+                m.center(),
+                2.0,
+                pitch,
+            ));
+            cx.events.push(MobEvent::SpawnKind {
+                kind: "minecraft:stray".into(),
+                at: [m.position.x, m.position.y, m.position.z],
+                setup: super::SpawnSetup {
+                    yaw: m.yaw,
+                    persistent: m.persistent,
+                    ..Default::default()
+                },
+            });
+            m.removed = true;
+        }
+    } else {
+        m.extra.counter += 1;
+        if m.extra.counter >= 140 {
+            m.extra.counter2 = 301;
+        }
+    }
+}
 pub fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
     if m.species() == Species::ZombieVillager {
         super::zombie_villager::step(m, cx);
+    }
+    if m.species() == Species::Skeleton && m.alive() && !m.no_ai {
+        skeleton_freezing(m, cx);
     }
     if m.species() == Species::ZombifiedPiglin {
         return zombified_piglin_step(m, cx);
     }
     if matches!(m.species(), Species::Zombie | Species::Husk) && m.alive() {
-        if m.extra.counter2 > 0 {
+        if m.extra.counter2 > 0 && !m.fluids.eye_in_water {
+            // ConversionTracker.tick: leaving the water ends a started
+            // conversion too.
+            m.extra.counter = -1;
+            m.extra.counter2 = 0;
+        } else if m.extra.counter2 > 0 {
             m.extra.counter2 -= 1;
             if m.extra.counter2 == 0 {
                 let (kind, sound) = if m.species() == Species::Husk {

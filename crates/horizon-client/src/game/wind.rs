@@ -68,7 +68,7 @@ impl Game<'_> {
             velocity,
             on_ground,
         );
-        self.creatures.projectiles.push(proj);
+        self.add_projectile(proj);
         let pitch = 0.4 / (self.world.random.next_float() * 0.4 + 0.8);
         self.audio
             .play("minecraft:entity.wind_charge.throw", Some(eye), 0.5, pitch);
@@ -470,6 +470,7 @@ impl Game<'_> {
     }
     /// The bursts guests' turns put off.
     pub(super) fn flush_wind_bursts(&mut self) -> Result<()> {
+        self.flush_smash_pushes();
         for b in std::mem::take(&mut self.creatures.wind_bursts) {
             self.wind_burst(b.center, b.radius, b.multiplier, b.breeze, b.wind_charge)?;
         }

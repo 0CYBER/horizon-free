@@ -26,7 +26,7 @@ class RemoteMiningTests(unittest.TestCase):
 struct Hit { pos: [i32; 3], face: u8 }
 struct Mining { pos: [i32; 3], progress: f32, ticks: u32 }
 #[derive(Default)]
-struct Remote { destroy_delay: u32, destroying: Option<([i32; 3], u8, f32)> }
+struct Remote { destroy_delay: u32, destroying: Option<([i32; 3], u8, f32)>, destroying_item: String }
 struct Ground { on_ground: bool }
 struct Player { ground: Ground }
 #[derive(Clone)]
@@ -70,6 +70,8 @@ struct Game {
     hit: Hit, sequence: i32, packets: Vec<play::PlayerAction>,
 }
 impl Game {
+    fn main_hand_key(&self) -> String { String::new() }
+    fn reset_attack_strength(&mut self) {}
     fn new(hardness: f32, speed: f32, creative: bool) -> Self {
         Self {
             remote: Some(Remote::default()), mining: None, creative,
@@ -90,6 +92,7 @@ impl Game {
     fn predict_break(&mut self, pos: [i32; 3], _: u32, _: i32) { self.world.broken.push(pos); }
     fn send(&mut self, S::PlayerAction(packet): S) { self.packets.push(packet); }
     fn crack_particle(&mut self, _: [i32; 3], _: u8, _: u32) {}
+    fn breaking_block_effects(&mut self, _: [i32; 3], _: u8, _: bool) {}
 METHOD
 }
 fn main() {

@@ -12,13 +12,31 @@ use horizon_client::{
 
 impl Game<'_> {
     /// `Hud.extractOverlayMessage` and `extractTitle`.
-    pub(super) fn draw_titles(&self, batch: &mut HudBatch) {
+    pub(super) fn draw_titles(&self, batch: &mut HudBatch, bar_height: i32) {
         let (w, h) = (batch.width as i32, batch.height as i32);
         let partial = self.clock.fraction() as f32;
         let background = self.settings.text_background(0.0);
         let font = &self.gui.atlas.font;
-        let mut draws = self.titles.overlay_message(w, h, partial, font, background);
+        let mut draws = self
+            .titles
+            .overlay_message(w, h, bar_height, partial, font, background);
         draws.extend(self.titles.title(w, h, partial, font, background));
+        hud_layout::paint(batch, &self.gui.atlas, &draws);
+    }
+    /// `Hud.extractSavingIndicator`, under the screens: the option, then the
+    /// fading "Saving world" text.
+    pub(super) fn draw_saving_indicator(&self, batch: &mut HudBatch) {
+        if !self.settings.autosave_indicator {
+            return;
+        }
+        let draws = self.saving_indicator.draw(
+            batch.width as i32,
+            batch.height as i32,
+            self.clock.fraction() as f32,
+            &self.gui.atlas.font,
+            Text::literal(self.translate("menu.savingLevel", "Saving world")),
+            self.settings.text_background(0.0),
+        );
         hud_layout::paint(batch, &self.gui.atlas, &draws);
     }
     /// The selected stack as `Hud.tick` compares it for the name highlight.
@@ -44,15 +62,23 @@ impl Game<'_> {
     /// The title, action bar and selected-item parts of `Hud.tick`.
     pub(super) fn tick_hud(&mut self) {
         self.titles.tick();
+        self.tick_in_bed_chat();
+        // `MinecraftServer.isCurrentlySaving` of single player's server.
+        let saving = self
+            .integrated
+            .as_ref()
+            .map_or(self.autosaving, |server| server.is_saving());
+        self.saving_indicator.tick(saving);
         let held = self.held_name();
         self.tool_highlight
             .tick(held, f64::from(self.settings.notification_display_time));
     }
     /// `Hud.extractSelectedItemName`.
-    pub(super) fn draw_selected_name(&self, batch: &mut HudBatch, can_hurt: bool) {
+    pub(super) fn draw_selected_name(&self, batch: &mut HudBatch, bar_height: i32, can_hurt: bool) {
         let draws = self.tool_highlight.draw(
             batch.width as i32,
             batch.height as i32,
+            bar_height,
             can_hurt,
             &self.gui.atlas.font,
             self.settings.text_background(0.0),
