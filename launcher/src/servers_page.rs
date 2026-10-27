@@ -2368,13 +2368,13 @@ impl Launcher {
             && self.servers.queued.is_empty()
             && self.servers.service == Some(false);
         let hint = if status.running() {
-            "Stop the server before deleting it."
+            Some("Stop the server before deleting it.")
         } else if self.servers.service == Some(true) {
-            "Turn off running in the background before deleting it."
+            Some("Turn off running in the background before deleting it.")
         } else if !ready {
-            "Wait for the current operation to finish."
+            Some("Wait for the current operation to finish.")
         } else {
-            "You’ll be asked to confirm before anything is moved."
+            None
         };
         let about = div().flex().flex_col().flex_1().min_w_0().gap(px(8.))
             .child(text(theme::HEADING).text_color(t.danger).child("Delete server"))
@@ -2453,6 +2453,15 @@ impl Launcher {
             };
             controls = controls.child(delete);
         }
+        if let Some(hint) = hint {
+            controls = controls.child(
+                text(theme::CAPTION)
+                    .text_color(t.muted)
+                    .w(px(260.))
+                    .text_align(gpui::TextAlign::Right)
+                    .child(hint),
+            );
+        }
         div()
             .flex()
             .items_start()
@@ -2462,15 +2471,7 @@ impl Launcher {
             .border_t_1()
             .border_color(t.rule)
             .child(about)
-            .child(
-                controls.child(
-                    text(theme::CAPTION)
-                        .text_color(t.muted)
-                        .w(px(260.))
-                        .text_align(gpui::TextAlign::Right)
-                        .child(hint),
-                ),
-            )
+            .child(controls)
     }
 
     fn background_row(&mut self, cx: &mut Context<Self>) -> Div {
