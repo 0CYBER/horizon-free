@@ -570,6 +570,10 @@ fn player_damage(e: &MobEvent) -> f32 {
         MobEvent::AttackPlayer(amount, _)
         | MobEvent::AttackPlayerWithEffect { amount, .. }
         | MobEvent::DamagePlayer { amount, .. } => *amount,
+        MobEvent::SonicBoom {
+            target: Who::Player,
+            ..
+        } => 10.0,
         _ => 0.0,
     }
 }
@@ -583,6 +587,10 @@ fn player_hurt(player: Option<&PlayerView>, e: &MobEvent) -> bool {
         MobEvent::AttackPlayer(amount, _)
         | MobEvent::AttackPlayerWithEffect { amount, .. }
         | MobEvent::DamagePlayer { amount, .. } => *amount > 0.0,
+        MobEvent::SonicBoom {
+            target: Who::Player,
+            ..
+        } => true,
         // ServerExplosion.hurtEntities: within twice the radius every hit does damage.
         MobEvent::Explode(at, radius, _) => {
             let d = Vec3::new(at[0], at[1], at[2])

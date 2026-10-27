@@ -119,6 +119,22 @@ fn mob_can_be_affected(
             || (effect != "regeneration" && effect != "poison")
     }
 }
+/// `ThrownSplashPotion.onHitAsPotion`: the squared distance from the potion's
+/// box at the hit point to an entity's box grown by the hit margin
+/// (`ProjectileUtil.computeMargin`), for entities that meet the potion's box
+/// grown by (4, 2, 4); none when it is 16 or more.
+fn splash_distance_sqr(at: Vec3, age: u32, bounds: Aabb) -> Option<f64> {
+    let potion = Aabb::new(
+        Vec3::new(at.x - 0.125, at.y, at.z - 0.125),
+        Vec3::new(at.x + 0.125, at.y + 0.25, at.z + 0.125),
+    );
+    if !potion.inflate(Vec3::new(4.0, 2.0, 4.0)).intersects(bounds) {
+        return None;
+    }
+    let margin = ((f64::from(age) - 2.0) / 20.0).clamp(0.0, 0.3);
+    let d2 = potion.distance_squared_to_box(bounds.inflate(Vec3::new(margin, margin, margin)));
+    (d2 < 16.0).then_some(d2)
+}
 impl Game<'_> {
     /// `LivingEntity.triggerOnDeathMobEffects` (`onMobRemoved` with the reason
     /// KILLED) for what Oozing, Weaving and Wind Charged do when their bearer
@@ -804,15 +820,15 @@ impl Game<'_> {
                 }
             }
             if let Some((p, mob)) = hit {
-                landed.push((t.stack.clone(), p, mob, t.owner.clone()));
+                landed.push((t.stack.clone(), p, mob, t.age, t.owner.clone()));
                 return false;
             }
             t.position = next;
             t.age < 1200 && t.position.y > -128.0
         });
         self.potions.thrown = thrown;
-        for (stack, at, mob, owner) in landed {
-            self.splash(&stack, at, mob, owner);
+        for (stack, at, mob, age, owner) in landed {
+            self.splash(&stack, at, mob, age, owner);
         }
     }
     /// `AreaEffectCloud.tick` for the lingering potions' clouds: the client
@@ -1079,17 +1095,20 @@ impl Game<'_> {
         &mut self,
         effects: &'static [(&'static str, i32, i32)],
         at: Vec3,
+        age: u32,
         source: &Text,
     ) {
         if let Some(p) = self.player.as_ref() {
-            let center = Vec3::new(
-                p.position.x,
-                p.position.y + f64::from(p.dimensions.height) / 2.0,
-                p.position.z,
+            let w = f64::from(p.dimensions.width) / 2.0;
+            let bounds = Aabb::new(
+                Vec3::new(p.position.x - w, p.position.y, p.position.z - w),
+                Vec3::new(
+                    p.position.x + w,
+                    p.position.y + f64::from(p.dimensions.height),
+                    p.position.z + w,
+                ),
             );
-            let d2 =
-                (center.x - at.x).powi(2) + (center.y - at.y).powi(2) + (center.z - at.z).powi(2);
-            if d2 < 16.0 && (center.y - at.y).abs() <= 2.0 + f64::from(p.dimensions.height) {
+            if let Some(d2) = splash_distance_sqr(at, age, bounds) {
                 let intensity = 1.0 - d2.sqrt() / 4.0;
                 for (id, duration, amp) in effects {
                     let instant = brewing::effect(id).is_some_and(|e| e.instant);
@@ -1110,8 +1129,15 @@ impl Game<'_> {
         }
     }
     /// `ThrownSplashPotion.onHitAsPotion`, or `ThrownLingeringPotion.onHitAsPotion`
-    /// for a lingering potion; `mob` is where it hit a mob.
-    fn splash(&mut self, stack: &ItemStack, at: Vec3, mob: Option<Vec3>, owner: Option<Text>) {
+    /// for a lingering potion; `mob` is where it hit a mob, `age` its age.
+    fn splash(
+        &mut self,
+        stack: &ItemStack,
+        at: Vec3,
+        mob: Option<Vec3>,
+        age: u32,
+        owner: Option<Text>,
+    ) {
         let block = [at.x, at.y, at.z].map(|v| v.floor() as i32);
         if &*stack.item == "minecraft:experience_bottle" {
             // ThrownExperienceBottle.onHit: the water-coloured splash (level
@@ -1169,15 +1195,14 @@ impl Game<'_> {
         // message names by the owner, else by the potion.
         let source =
             owner.unwrap_or_else(|| Text::translate("entity.minecraft.splash_potion", &[]));
-        self.for_each_player(|g| g.splash_on_player(def.effects, at, &source));
+        self.for_each_player(|g| g.splash_on_player(def.effects, at, age, &source));
         // Mobs take the instant effects (undead invert healing and harming).
         let undead = &self.res.stations().enchantments.entity_tags;
         let mut hits = Vec::new();
         for (i, m) in self.mobs.iter().enumerate() {
-            let d2 = (m.position.x - at.x).powi(2)
-                + (m.position.y + m.kind.height / 2.0 - at.y).powi(2)
-                + (m.position.z - at.z).powi(2);
-            if m.alive() && d2 < 16.0 {
+            if m.alive()
+                && let Some(d2) = splash_distance_sqr(at, age, m.bounds())
+            {
                 let inverted = undead
                     .get("minecraft:inverted_healing_and_harm")
                     .is_some_and(|t| t.contains(&m.kind.id));
@@ -1204,12 +1229,12 @@ impl Game<'_> {
                 let m = &mut self.mobs[i];
                 if harm {
                     m.hurt(
-                        (intensity * f64::from(6 << amp)) as i32 as f32,
+                        (intensity * f64::from(6 << amp) + 0.5) as i32 as f32,
                         Some([at.x, at.y, at.z]),
                         &mut self.world.random,
                     );
                 } else {
-                    m.health = (m.health + (intensity * f64::from(4 << amp)) as i32 as f32)
+                    m.health = (m.health + (intensity * f64::from(4 << amp) + 0.5) as i32 as f32)
                         .min(m.kind.max_health);
                 }
             }

@@ -505,7 +505,14 @@ impl Mob {
     /// Entity.move with block collisions and step-up; updates collision flags
     /// and fall distance (Entity.checkFallDamage).
     pub fn do_move(&mut self, w: &MobWorld, events: &mut Vec<MobEvent>) {
-        let wanted = self.velocity;
+        let mut wanted = self.velocity;
+        // Entity.move: a block the mob is stuck in (sweet berry bush) scales
+        // this move once and stops it.
+        if self.stuck_multiplier.length_squared() > 1.0e-7 {
+            wanted = wanted.multiply(self.stuck_multiplier);
+            self.stuck_multiplier = Vec3::ZERO;
+            self.velocity = Vec3::ZERO;
+        }
         let step = self.kind.step_height as f32;
         let mut scene = SceneCollisions {
             world: w.world,
@@ -990,8 +997,14 @@ impl Mob {
             movement.y = 0.2;
         }
         let mut y = movement.y;
-        if self.extra.levitation > 0 {
-            y += (0.05 * 1.0 - movement.y) * 0.2;
+        // LivingEntity.travelInAir: levitation lifts by its amplifier.
+        if let Some(&(_, _, amp)) = self
+            .extra
+            .effects
+            .iter()
+            .find(|e| e.0 == "minecraft:levitation")
+        {
+            y += (0.05 * f64::from(amp + 1) - movement.y) * 0.2;
         } else {
             y -= self.gravity();
         }
