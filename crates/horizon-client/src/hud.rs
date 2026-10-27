@@ -2,6 +2,7 @@
 //! textures, and a batch of textured quads in GUI pixels (vanilla's automatic
 //! GUI scale is applied when drawing).
 use crate::Result;
+use horizon_assets::animation::AnimationMetadata;
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -145,6 +146,21 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 /// A packed atlas image: sprite name, size and RGBA pixels.
 type PackedImage = (String, u32, u32, Vec<u8>);
+/// A frame of an animated strip at `x, y`, nearest-resampled to the longer
+/// side of the frame: array layers are square, as `Sprites::load` keeps them
+/// for the world's sprite arrays.
+fn strip_frame(pixels: &[u8], stride: u32, x: u32, y: u32, w: u32, h: u32) -> Vec<u8> {
+    let side = w.max(h);
+    let mut out = Vec::with_capacity((side * side * 4) as usize);
+    for row in 0..side {
+        let source_row = y + row * h / side;
+        for column in 0..side {
+            let at = ((source_row * stride + x + column * w / side) * 4) as usize;
+            out.extend_from_slice(&pixels[at..at + 4]);
+        }
+    }
+    out
+}
 /// `image` inside a one-texel border copied from its opposite edges, the
 /// texels repeat addressing reads past each edge.
 fn wrap_border((name, w, h, data): &PackedImage) -> PackedImage {
@@ -384,12 +400,35 @@ impl HudAtlas {
                 .with_extension("")
                 .to_string_lossy()
                 .replace('\\', "/");
-            let (w, mut h, pixels) = decode(path).ok()?;
-            // Animated strips keep their first frame.
+            let (mut w, mut h, pixels) = decode(path).ok()?;
+            let mcmeta = fs::read_to_string(path.with_extension("png.mcmeta")).ok();
+            let animation = mcmeta
+                .as_deref()
+                .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+                .and_then(|meta| {
+                    meta.get("animation")
+                        .and_then(|section| AnimationMetadata::from_json(&section.to_string()).ok())
+                });
+            // An animated strip keeps its first frame: the region the mcmeta's
+            // frame size picks (`AnimationMetadataSection.frameSize`), which is
+            // the top-left square unless it names other dimensions or the
+            // frames run along a row.
             let frames = name.starts_with("block/") || name.starts_with("item/");
-            let pixels = if frames && h > w {
-                h = w;
-                pixels[..(w * w * 4) as usize].to_vec()
+            let pixels = if frames {
+                let stride = w;
+                let [fw, fh] = animation.as_ref().map_or([w.min(h) as i32; 2], |meta| {
+                    meta.frame_size(w as i32, h as i32)
+                });
+                match (u32::try_from(fw), u32::try_from(fh)) {
+                    (Ok(fw), Ok(fh))
+                        if fw > 0 && fh > 0 && w % fw == 0 && h % fh == 0 && (fw, fh) != (w, h) =>
+                    {
+                        let side = fw.max(fh);
+                        (w, h) = (side, side);
+                        strip_frame(&pixels, stride, 0, 0, fw, fh)
+                    }
+                    _ => pixels,
+                }
             } else {
                 pixels
             };
@@ -397,16 +436,13 @@ impl HudAtlas {
             let gui_size = default_textures
                 .as_ref()
                 .and_then(|d| png_size(&d.join(format!("{name}.png"))))
-                .map(|(dw, dh)| (dw, if frames { dh.min(dw) } else { dh }))
+                .map(|(dw, dh)| {
+                    let side = dw.min(dh);
+                    if frames { (side, side) } else { (dw, dh) }
+                })
                 .filter(|&size| size != (w, h));
-            let mcmeta = fs::read_to_string(path.with_extension("png.mcmeta")).ok();
             let flags = mcmeta.as_deref().and_then(TextureFlags::from_mcmeta);
-            let animated = frames
-                && mcmeta.as_deref().is_some_and(|json| {
-                    serde_json::from_str::<serde_json::Value>(json)
-                        .ok()
-                        .is_some_and(|meta| meta.get("animation").is_some())
-                });
+            let animated = frames && animation.is_some();
             let (gw, gh) = gui_size.unwrap_or((w, h));
             (gw <= 1024 && (gh <= 512 || name.starts_with("font/"))).then_some((
                 (name, w, h, pixels),
@@ -1469,6 +1505,80 @@ impl HudRenderer {
 mod tests {
     use super::*;
 
+    /// Write a PNG `width x height` whose `frames` stacked rows are solid
+    /// colours, then its mcmeta beside it.
+    fn write_strip(path: &Path, width: u32, height: u32, frames: &[[u8; 4]], mcmeta: Option<&str>) {
+        let file = std::io::BufWriter::new(fs::File::create(path).unwrap());
+        let mut encoder = png::Encoder::new(file, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().unwrap();
+        let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+        for frame in frames {
+            let rows = height / frames.len() as u32;
+            pixels.extend((0..width * rows).flat_map(|_| *frame));
+        }
+        writer.write_image_data(&pixels).unwrap();
+        writer.finish().unwrap();
+        if let Some(mcmeta) = mcmeta {
+            let meta = path.with_extension("png.mcmeta");
+            fs::write(meta, mcmeta).unwrap();
+        }
+    }
+    /// A resource root holding one animated block texture: a strip of two
+    /// 16x16 frames, red then blue, whose mcmeta starts on the blue one.
+    fn animated_root() -> PathBuf {
+        let root = std::env::temp_dir().join(format!("horizon-atlas-anim-{}", std::process::id()));
+        let block = root.join("assets/minecraft/textures/block");
+        fs::create_dir_all(&block).unwrap();
+        write_strip(
+            &block.join("test_anim.png"),
+            16,
+            32,
+            &[[255, 0, 0, 255], [0, 0, 255, 255]],
+            Some(r#"{"animation": {"frames": [1, 0]}}"#),
+        );
+        root
+    }
+    fn texel_at(atlas: &HudAtlas, rect: Rect, x: u32, y: u32) -> [u8; 4] {
+        let px = (rect.u0 * atlas.width as f32).round() as u32 + x;
+        let py = (rect.v0 * atlas.height as f32).round() as u32 + y;
+        let at = ((py * atlas.width + px) * 4) as usize;
+        atlas.pixels[at..at + 4].try_into().unwrap()
+    }
+    #[test]
+    fn animated_block_sprites_register_and_pack_their_first_mcmeta_frame() {
+        let root = animated_root();
+        let atlas = HudAtlas::build(&root).unwrap();
+        let (rect, animation) = atlas
+            .sprite_animations
+            .iter()
+            .find(|(_, animation)| animation.frame_count() == 2)
+            .expect("the animated block sprite");
+        // The mcmeta's list starts on the strip's second (blue) frame.
+        assert_eq!(animation.frame(0), 1);
+        assert_eq!(rect.texels((atlas.width, atlas.height)), (16, 16));
+        assert_eq!(texel_at(&atlas, *rect, 0, 0), [0, 0, 255, 255]);
+        assert_eq!(texel_at(&atlas, *rect, 15, 15), [0, 0, 255, 255]);
+    }
+    #[test]
+    fn a_strip_frames_size_comes_from_its_mcmeta() {
+        let root = animated_root();
+        let block = root.join("assets/minecraft/textures/block");
+        // A row of two frames with the animation's own frame size.
+        write_strip(
+            &block.join("test_row.png"),
+            32,
+            16,
+            &[[0, 255, 0, 255], [255, 255, 0, 255]],
+            Some(r#"{"animation": {"width": 16, "height": 16}}"#),
+        );
+        let atlas = HudAtlas::build(&root).unwrap();
+        let rect = atlas.sprites["block/test_row"];
+        // The first frame is the left 16x16, not the whole row.
+        assert_eq!(rect.texels((atlas.width, atlas.height)), (16, 16));
+        assert_eq!(texel_at(&atlas, rect, 0, 0), [0, 255, 0, 255]);
+    }
     /// `count` images of `w x h`; layout reads only their sizes.
     fn sized(count: usize, w: u32, h: u32) -> Vec<PackedImage> {
         (0..count)
