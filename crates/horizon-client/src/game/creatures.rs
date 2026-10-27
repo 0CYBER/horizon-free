@@ -4224,6 +4224,18 @@ impl Game<'_> {
                 &armor,
                 out,
             );
+            if &*mob.kind.id == "minecraft:player" {
+                // PlayerRenderer's WingsLayer and SpinAttackEffectLayer.
+                self.player_elytra_geometry(
+                    mob,
+                    mob.extra.chest.as_deref(),
+                    camera,
+                    alpha as f32,
+                    packed,
+                    out,
+                );
+                self.spin_attack_geometry(mob, camera, alpha as f32, packed, out);
+            }
             self.mob_block_geometry(mob, camera, alpha, packed, out);
             if let Some(rgb) = outline {
                 self.mark_outline(&out[entity_start..], rgb);

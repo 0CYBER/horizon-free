@@ -1990,6 +1990,27 @@ impl Game<'_> {
             m.extra.crouching = g.sneaking;
             m.extra.avatar_pose = g.pose();
             m.extra.sprinting = g.sprinting;
+            // Entity.DATA_POSE and the shared and living flags the others
+            // get (hub::guest_body): gliding, swimming, Riptide's spin.
+            let body = lan::hub::guest_body(g);
+            m.extra.fall_flying = body.gliding;
+            m.extra.synced_pose = if body.swimming || body.crawling { 3 } else { 0 };
+            m.extra.auto_spin_attack = body.spin_attack;
+            m.velocity = g
+                .motion
+                .as_ref()
+                .map_or(Vec3::new(dx, dy, dz), |motion| motion.velocity);
+            m.tick_avatar_pose(
+                g.motion
+                    .as_ref()
+                    .is_some_and(|motion| motion.fluids.was_touching_water),
+            );
+            // CrossbowItem.isCharged: the held crossbow's projectiles.
+            m.extra.charged = g
+                .inventory
+                .get(g.selected)
+                .and_then(|s| s.as_ref())
+                .is_some_and(|s| s.data().is_some_and(|d| !d.charged.is_empty()));
             // LivingEntity.DATA_EFFECT_PARTICLES: the swirls of its visible effects.
             let visible = || g.effects.list.iter().filter(|e| e.visible);
             m.extra.effect_particles = visible()
@@ -2064,6 +2085,15 @@ impl Game<'_> {
                 ),
                 out,
             );
+            self.player_elytra_geometry(
+                m,
+                m.extra.chest.as_deref(),
+                camera,
+                alpha as f32,
+                packed,
+                out,
+            );
+            self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
             self.held_item_geometry(m, camera, alpha, packed, true, out);
             // LivingEntity.isCurrentlyGlowing: the guest's Glowing effect.
             let guest = host.hub.guest(*conn);
