@@ -2806,7 +2806,7 @@ impl Game<'_> {
             }
             // AbstractArrow.onHitBlock plays its sound itself (ArrowEvent).
             (ProjectileKind::Trident, Hit::Block { .. }) => {}
-            (ProjectileKind::Arrow { effect, .. }, Hit::Entity { who, .. }) => {
+            (ProjectileKind::Arrow { .. }, Hit::Entity { who, .. }) => {
                 let mut arrow = p.clone();
                 let amount = arrow_damage(&mut arrow, &mut self.world.random) + p.bonus.damage;
                 let player_fire = self.player.as_ref().map(|pl| pl.fire_ticks);
@@ -2824,9 +2824,6 @@ impl Game<'_> {
                             [p.previous.x, p.previous.y, p.previous.z],
                             "minecraft:arrow",
                         );
-                        if hurt && let Some((e, t)) = effect {
-                            self.give_player_effect(e, *t, 0);
-                        }
                         hurt
                     }
                     Who::Mob(id) => {
@@ -2892,6 +2889,9 @@ impl Game<'_> {
                         target: who,
                         velocity: [p.velocity.x * k, 0.1, p.velocity.z * k],
                     }])?;
+                }
+                if hurt {
+                    self.arrow_post_hurt_effects(p, who);
                 }
                 match (hurt, who) {
                     (true, _) => self.finish_arrow_hit(arrow, EntityHit::Hurt),

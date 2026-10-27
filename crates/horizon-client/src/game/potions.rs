@@ -17,7 +17,9 @@ use horizon_client::{
     hud_layout, hud_overlays, inventory_effects,
     items::ItemStack,
     mesher::Vertex,
+    mobs::{Damage, DamageKind, Who},
     particles::{ParticleOptions, ParticleType},
+    projectiles::{Projectile, ProjectileKind},
     text::Text,
 };
 use horizon_core::{
@@ -90,7 +92,7 @@ pub(super) fn mob_effect_id(id: &str) -> Option<&'static str> {
 /// `WitherSkeleton` shrug off wither, `Spider` and `AbstractNautilus` poison,
 /// `Parched` weakness): the immune-to-infested and immune-to-oozing tags
 /// decide first, then the tag of mobs that ignore poison and regeneration.
-fn mob_can_be_affected(
+pub(super) fn mob_can_be_affected(
     tags: &std::collections::HashMap<String, std::collections::HashSet<String>>,
     kind: &str,
     effect: &str,
@@ -580,6 +582,81 @@ impl Game<'_> {
             }
         }
         true
+    }
+    /// `Arrow.doPostHurtEffects` and `SpectralArrow.doPostHurtEffects`: the
+    /// arrow's item gives its target Glowing (spectral) or its potion contents
+    /// at the stack's duration scale (a tipped arrow's default is an eighth);
+    /// a mob's arrow without such an item (a stray's) carries its own effect.
+    /// Instant effects act at once: harming hurts and healing heals, the
+    /// other way round for the undead.
+    pub(super) fn arrow_post_hurt_effects(&mut self, p: &Projectile, who: Who) {
+        let from_item = p.arrow.as_ref().map(|a| &a.pickup_item);
+        let mut effects: Vec<(&'static str, i32, i32)> = match from_item {
+            Some(s) if &*s.item == "minecraft:spectral_arrow" => vec![("glowing", 200, 0)],
+            Some(s) => {
+                let scale = s.potion_duration_scale();
+                brewing::contents_effects(s)
+                    .into_iter()
+                    .map(|(id, d, amp)| (id, horizon_client::effects::scaled_duration(d, scale), amp))
+                    .collect()
+            }
+            None => Vec::new(),
+        };
+        if effects.is_empty()
+            && let ProjectileKind::Arrow {
+                effect: Some((id, ticks)),
+                ..
+            } = p.kind
+            && let Some(e) = brewing::effect(id)
+        {
+            effects.push((e.id, ticks, 0));
+        }
+        if effects.is_empty() {
+            return;
+        }
+        match who {
+            Who::Player => {
+                for (id, duration, amp) in effects {
+                    if brewing::effect(id).is_some_and(|e| e.instant) {
+                        if let Some(a) = horizon_client::effects::instant(id, amp, 1.0) {
+                            self.apply_effect_action(a);
+                        }
+                    } else {
+                        self.add_player_effect(EffectInstance::new(id, duration, amp));
+                    }
+                }
+            }
+            Who::Mob(id) => {
+                let tags = &self.res.stations().enchantments.entity_tags;
+                let Some(m) = self.mobs.iter_mut().find(|m| m.id == id && m.alive()) else {
+                    return;
+                };
+                let inverted = tags
+                    .get("minecraft:inverted_healing_and_harm")
+                    .is_some_and(|t| t.contains(&m.kind.id));
+                for (effect, duration, amp) in effects {
+                    match effect {
+                        "instant_damage" | "instant_health" => {
+                            // `LivingEntity.addEffect` refuses nothing here; the
+                            // tick hurts with magic (6 << amp) or heals (4 << amp).
+                            if (effect == "instant_damage") != inverted {
+                                m.damage((6 << amp.min(30)) as f32, Damage::of(DamageKind::Magic));
+                            } else {
+                                m.health =
+                                    (m.health + (4 << amp.min(30)) as f32).min(m.kind.max_health);
+                            }
+                        }
+                        _ => {
+                            if mob_can_be_affected(tags, &m.kind.id, effect)
+                                && let Some(name) = mob_effect_id(effect)
+                            {
+                                m.add_effect(name, duration, amp);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     pub(super) fn apply_effect_action(&mut self, action: EffectAction) {
         let creative = self.creative;
