@@ -20,6 +20,7 @@ mod instances_page;
 mod internet;
 mod language_page;
 mod launch_page;
+mod line_edit;
 mod markdown;
 mod mcp;
 mod modpacks_page;
@@ -212,7 +213,7 @@ struct Launcher {
     /// The instance the running game plays and when it started: its play time grows on exit.
     client_run: Option<(String, Instant)>,
     /// Settings' Game arguments field: the line, whether it has focus, and its focus handle.
-    args_input: String,
+    args_input: line_edit::LineEdit,
     args_focused: bool,
     args_focus: FocusHandle,
     /// Settings' Proxy field, the same way (`proxy`).
@@ -377,7 +378,7 @@ impl Launcher {
             account_menu: false,
             skin: None,
             background_error: None,
-            args_input: settings.game_args.clone(),
+            args_input: line_edit::LineEdit::new(settings.game_args.clone(), 1024, 38),
             args_focused: false,
             args_focus: cx.focus_handle(),
             proxy_input: settings.proxy.clone().unwrap_or_default(),
@@ -2840,46 +2841,32 @@ impl Launcher {
             .font_family(theme::MONO)
             .text_size(px(12.))
             .cursor_text()
-            .child(if self.args_input.is_empty() && !focused {
-                div()
-                    .text_color(t.muted)
-                    .child("For example --server-thread")
-            } else {
-                // The end of a long line stays in view while typing.
-                let chars: Vec<char> = self.args_input.chars().collect();
-                let shown: String = chars[chars.len().saturating_sub(44)..].iter().collect();
-                div().text_color(t.ink).child(shown)
-            })
-            .when(focused, |d| d.child(div().w(px(1.)).h(px(14.)).bg(t.ink)))
+            .child(line_edit::content(
+                &self.args_input,
+                &t,
+                focused,
+                false,
+                false,
+                "For example --server-thread",
+            ))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 window.focus(&this.args_focus);
                 cx.notify();
             }))
-            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
-                let k = &ev.keystroke;
-                let paste = k.key == "v" && (k.modifiers.control || k.modifiers.platform);
-                match k.key.as_str() {
-                    "backspace" => {
-                        this.args_input.pop();
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                match line_edit::handle(&mut this.args_input, ev, cx) {
+                    line_edit::Key::Pass => return,
+                    line_edit::Key::Escape => window.blur(),
+                    line_edit::Key::Edited => {
+                        this.settings.game_args = this.args_input.text().to_string();
+                        this.settings.save();
                     }
-                    _ if paste => {
-                        if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                            this.args_input.push_str(text.trim());
-                        }
-                    }
-                    _ if !k.modifiers.control && !k.modifiers.platform => {
-                        if let Some(ch) = &k.key_char {
-                            this.args_input.push_str(ch);
-                        }
-                    }
-                    _ => return,
+                    _ => {}
                 }
-                this.args_input.truncate(1024);
-                this.settings.game_args = this.args_input.clone();
-                this.settings.save();
                 cx.stop_propagation();
                 cx.notify();
             }));
+        let field = line_edit::mouse(field, cx, |this| &mut this.args_input);
         index_row(
             n,
             "Game arguments",

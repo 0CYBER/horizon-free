@@ -2165,10 +2165,12 @@ impl Game<'_> {
                     c.at[1],
                     c.at[2] + f64::from(a.sin() * d),
                 ];
-                self.particles.add(
+                self.particles.add_with(
                     &ParticleOptions::simple(ParticleType::DragonBreath),
                     at,
                     [0.0, 0.0, 0.0],
+                    false,
+                    true,
                 );
             }
             // AreaEffectCloud: after its 20-tick wait, every 20 ticks per entity.
@@ -2537,6 +2539,8 @@ impl Game<'_> {
                         layer: 2,
                         color: c,
                         light: 0,
+
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             }
@@ -2602,6 +2606,8 @@ impl Game<'_> {
                     layer: 6,
                     color: c,
                     light: wrap_light,
+
+                    glint_uv: [0.0, 0.0],
                 });
             }
             (last_sin, last_cos, last_u) = (sin, cos, uu);
@@ -2647,6 +2653,8 @@ impl Game<'_> {
                     layer: 0,
                     color: 0xFFFF_FFFF,
                     light: 240 | 240 << 8,
+
+                    glint_uv: [0.0, 0.0],
                 });
             }
         }
