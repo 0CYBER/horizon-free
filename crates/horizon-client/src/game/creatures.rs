@@ -18,6 +18,7 @@ use horizon_client::{
         spawning::{self, BiomeFacts},
     },
     projectiles::{Hit, Projectile, ProjectileKind, ProjectileWorld},
+    text::Text,
 };
 use horizon_core::{
     geometry::{Aabb, Vec3, traverse_blocks},
@@ -1680,11 +1681,33 @@ impl Game<'_> {
     pub(super) fn mob_hits_player_kind(&mut self, amount: f32, from: [f64; 3], kind: &str) {
         self.mob_hits_player(amount, from, kind);
     }
+    /// Damage whose causing mob is known (`cause`, or none): not guessed
+    /// from the mob nearest to `from`.
+    pub(super) fn mob_hits_player_caused(
+        &mut self,
+        amount: f32,
+        from: [f64; 3],
+        kind: &str,
+        cause: Option<u32>,
+    ) {
+        self.hit_player(amount, from, kind, Some(cause));
+    }
     pub(super) fn mob_hits_player(
         &mut self,
         amount: f32,
         from: [f64; 3],
         damage_type: &str,
+    ) -> bool {
+        self.hit_player(amount, from, damage_type, None)
+    }
+    /// `known_cause` is the source's causing mob when the caller knows it
+    /// (`Some(None)`: none); `None` takes the mob nearest to `from`.
+    fn hit_player(
+        &mut self,
+        amount: f32,
+        from: [f64; 3],
+        damage_type: &str,
+        known_cause: Option<Option<u32>>,
     ) -> bool {
         // ServerPlayer.canHarmPlayer refused another player's projectile.
         if self.creative || self.combat.refuse_player_hit {
@@ -1700,20 +1723,22 @@ impl Game<'_> {
         let blocking = self.player_blocking(Some(from), damage_type, false);
         let raised = blocking.is_some();
         // Melee: the attacker stands at `from` (another player's hit has no mob behind it).
-        let attacker = (!projectile && damage_type != "minecraft:player_attack")
-            .then(|| {
-                self.mobs
-                    .iter()
-                    .filter(|m| m.alive())
-                    .min_by(|a, b| {
-                        let d = |m: &horizon_client::mobs::Mob| {
-                            (m.position.x - from[0]).powi(2) + (m.position.z - from[2]).powi(2)
-                        };
-                        d(a).total_cmp(&d(b))
-                    })
-                    .map(|m| m.id)
-            })
-            .flatten();
+        let attacker = known_cause.unwrap_or_else(|| {
+            (!projectile && damage_type != "minecraft:player_attack")
+                .then(|| {
+                    self.mobs
+                        .iter()
+                        .filter(|m| m.alive())
+                        .min_by(|a, b| {
+                            let d = |m: &horizon_client::mobs::Mob| {
+                                (m.position.x - from[0]).powi(2) + (m.position.z - from[2]).powi(2)
+                            };
+                            d(a).total_cmp(&d(b))
+                        })
+                        .map(|m| m.id)
+                })
+                .flatten()
+        });
         // The causing entity for the death message.
         let owner = self.combat.projectile_owner.take();
         if let Some(a) = attacker.or(owner) {
@@ -2596,14 +2621,30 @@ impl Game<'_> {
                     if d2 < 16.0 && !self.creative {
                         let scale = 1.0 - d2.sqrt() / 4.0;
                         let t = (f64::from(*ticks) * scale + 0.5) as i32;
-                        if let Some(owner) = self.combat.projectile_owner {
-                            self.note_attacker("minecraft:indirect_magic", owner);
-                        }
                         match *effect {
-                            "minecraft:instant_damage" => self.hurt_player_by(
-                                "minecraft:indirect_magic",
-                                6.0 * (1 << *amplifier) as f32 * scale as f32,
-                            ),
+                            "minecraft:instant_damage" => {
+                                // indirectMagic(potion, owner), built where the
+                                // hurt happens: the thrower, or the potion
+                                // itself when it has none. A status effect
+                                // deals no damage, so it records no source.
+                                let owner = self
+                                    .combat
+                                    .projectile_owner
+                                    .filter(|id| self.mob_display_name(*id).is_some());
+                                match owner {
+                                    Some(owner) => {
+                                        self.note_attacker("minecraft:indirect_magic", owner)
+                                    }
+                                    None => self.note_direct_entity(
+                                        "minecraft:indirect_magic",
+                                        Text::translate("entity.minecraft.splash_potion", &[]),
+                                    ),
+                                }
+                                self.hurt_player_by(
+                                    "minecraft:indirect_magic",
+                                    6.0 * (1 << *amplifier) as f32 * scale as f32,
+                                )
+                            }
                             e if t > 20 => self.give_player_effect(e, t, *amplifier),
                             _ => {}
                         }

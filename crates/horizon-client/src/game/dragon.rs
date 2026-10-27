@@ -2157,11 +2157,14 @@ impl Game<'_> {
     }
     /// Damage from the dragon, which is its causing entity
     /// (`DamageSources.mobAttack(dragon)`, `indirectMagic(cloud, dragon)`): the
-    /// death message names it.
+    /// death message names it, or the cloud once the dragon is gone.
     fn dragon_hurts_player(&mut self, damage_type: &str, amount: f32) {
         if let Some(id) = self.dragon.as_ref().map(|d| d.id) {
             let name = Text::translate("entity.minecraft.ender_dragon", &[]);
             self.note_named_attacker(damage_type, id, name);
+        } else if damage_type == "minecraft:indirect_magic" {
+            let name = Text::translate("entity.minecraft.area_effect_cloud", &[]);
+            self.note_direct_entity(damage_type, name);
         }
         self.hurt_player_by(damage_type, amount);
     }
