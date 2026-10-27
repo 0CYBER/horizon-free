@@ -177,6 +177,10 @@ pub fn creeper_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
     if m.swell >= 30 {
         m.swell = 30;
         let radius = if m.extra.charged { 6.0 } else { 3.0 };
+        events.push(MobEvent::ExplosionSource {
+            mob: m.id,
+            charged: m.extra.charged,
+        });
         events.push(MobEvent::Explode(
             [m.position.x, m.position.y, m.position.z],
             radius,

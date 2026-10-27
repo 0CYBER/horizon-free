@@ -448,6 +448,24 @@ impl Ext {
         }
         (stack.count > 0).then_some(stack)
     }
+    /// `SimpleContainer.removeItemType`: take up to `count` of the item from
+    /// the first stacks that hold it.
+    pub fn remove_item(&mut self, item: &str, mut count: u32) {
+        let mut slot = 0;
+        while slot < self.inventory.len() && count > 0 {
+            let s = &mut self.inventory[slot];
+            if &*s.item == item {
+                let n = s.count.min(count);
+                s.count -= n;
+                count -= n;
+                if s.count == 0 {
+                    self.inventory.remove(slot);
+                    continue;
+                }
+            }
+            slot += 1;
+        }
+    }
     pub fn count_item(&self, item: &str) -> u32 {
         self.inventory
             .iter()
@@ -753,30 +771,6 @@ pub fn finalize_summoned_golem(m: &mut Mob, random: &mut impl RandomSource) {
         );
     }
     m.extra.left_handed = random.next_float() < 0.05;
-}
-/// `PoiManager.take(HOME, ..., 48)`: the nearest bed head not `claimed`
-/// (`free_head`: a bed head that is not occupied).
-pub fn take_vacant_bed(
-    claimed: &[[i32; 3]],
-    from: [i32; 3],
-    mut free_head: impl FnMut(i32, i32, i32) -> bool,
-) -> Option<[i32; 3]> {
-    let mut best: Option<(i32, [i32; 3])> = None;
-    for y in from[1] - 8..=from[1] + 8 {
-        for z in from[2] - 48..=from[2] + 48 {
-            for x in from[0] - 48..=from[0] + 48 {
-                let d = (x - from[0]).pow(2) + (y - from[1]).pow(2) + (z - from[2]).pow(2);
-                if d <= 48 * 48
-                    && best.is_none_or(|(b, _)| d < b)
-                    && free_head(x, y, z)
-                    && !claimed.contains(&[x, y, z])
-                {
-                    best = Some((d, [x, y, z]));
-                }
-            }
-        }
-    }
-    best.map(|(_, p)| p)
 }
 /// `Villager.canBreed`: enough food, awake and an adult.
 pub fn can_breed(m: &Mob) -> bool {
