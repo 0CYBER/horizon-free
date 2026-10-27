@@ -89,6 +89,13 @@ The opening, then Play ([clip](docs/opening.webm)):
   system's trash after a confirmation; **Open folder**. The same from the command line:
   `horizon-launcher worlds [list|backup|copy|delete] [--instance <name>]`.
   **Play** on a world starts the game straight into it.
+- **Packs**: Home lists the selected instance's resource packs and shader packs, each with a switch.
+  The choice is the game's own: `resourcePacks` in options.txt (a pack turned on goes on top, as
+  the game's Resource Packs screen does) and `pickedShaderPack` in `horizon-graphics.txt` (one shader
+  pack at a time). **Add pack…** or a `.zip` / `.hshader` dropped on the section copies it into the
+  right folder; **Remove** turns it off and moves it to the trash after a confirmation. From the
+  command line: `horizon-launcher packs [list|add|on|off|remove] [--kind resource|shader]
+  [--instance <name>]`.
 - **Screenshots**: Home shows the selected instance's newest screenshots (what F2 saves in its
   `screenshots/` folder) and all of them on request. Clicking one opens it over the window (← and →
   step through) with **Copy** (the picture, to the clipboard), **Open**, **Show in folder** and
@@ -202,6 +209,8 @@ and don't set `%ERRORLEVEL%` / `$LASTEXITCODE`. Scripts that need the exit code 
     horizon-launcher instance version <instance> <tag|latest>   keep it on one installed version, or follow updates
     horizon-launcher worlds [list] [--instance <name>]        an instance's worlds
     horizon-launcher worlds backup|copy|delete <world> [--instance <name>]   delete moves it to the trash
+    horizon-launcher packs [list] [--kind resource|shader] [--instance <name>]   resource and shader packs, on or off
+    horizon-launcher packs add <file> | on|off|remove <pack> [--kind shader]
     horizon-launcher screenshots [list] [--instance <name>]   an instance's screenshots, the newest first
     horizon-launcher screenshots delete <name> [--instance <name>]   moves it to the trash
     horizon-launcher multiplayer [list] [--instance <name>]   the servers in an instance's Multiplayer list
@@ -233,7 +242,10 @@ and don't set `%ERRORLEVEL%` / `$LASTEXITCODE`. Scripts that need the exit code 
 `--json` prints JSON where there is something to report (`versions`, `install`, `notes`,
 `next`, `links`, `game-args`, `update --check`, `logs`, `account`, `benchmark`, `data`, `modpack`). Errors go to stderr with exit code 1. `server` runs in the terminal,
 so lines you type reach its console. `HORIZON_LAUNCHER_HOME` replaces the data folder (for
-scripts and tests).
+scripts and tests). Test runs also set `HORIZON_LAUNCHER_TRASH=<folder>` and
+`HORIZON_LAUNCHER_CLIPBOARD=<file>` inside their scratch folders: what Delete would move to the
+system's trash goes into that folder, and what Copy would put on the clipboard is written to that
+file, so a test never touches the real trash or clipboard.
 
 ## AI agents (MCP)
 

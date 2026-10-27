@@ -147,6 +147,15 @@ impl Game<'_> {
         };
         let hurt = match target {
             Target::Player => {
+                // `DamageSource(type, by)`: the death message names `by`.
+                match by {
+                    Some(Target::Mob(i)) => self.note_attacker(&ty, i),
+                    Some(t @ (Target::Player | Target::Guest(_))) => {
+                        let name = self.target_name(t);
+                        self.note_direct_entity(&ty, name);
+                    }
+                    _ => {}
+                }
                 if self.creative || self.spectator() {
                     false
                 } else if let Some(player) = self.player.as_mut() {
@@ -302,9 +311,18 @@ impl Game<'_> {
             float("minVolume", 0.0),
         );
         let range = if volume > 1.0 { 16.0 * volume } else { 16.0 };
+        // PlaySoundCommand: one seed for every player.
+        let seed = self.world.random.next_long();
+        let here = self.dim.id();
         let mut tracker = Tracker::default();
         for t in targets {
-            if t != Target::Player {
+            if !matches!(t, Target::Player | Target::Guest(_)) {
+                continue;
+            }
+            // Only players in the source's level hear it.
+            if let Target::Guest(conn) = t
+                && self.command_guest(conn).is_none_or(|g| g.dimension != here)
+            {
                 continue;
             }
             let Some(p) = self.target_position(t) else {
@@ -328,8 +346,26 @@ impl Game<'_> {
             } else {
                 (pos, volume)
             };
-            self.audio.play_on(source, &sound, Some(at), v, pitch);
-            tracker.mark(&holder(Text::literal(self.acting_player_name())));
+            // The connection is sent the sound; the window's own player
+            // plays it.
+            let guest = match t {
+                Target::Guest(conn) => Some(conn),
+                _ => self.lan_acting,
+            };
+            match guest.and_then(|conn| Some((conn, self.lan.as_ref()?))) {
+                Some((conn, host)) => {
+                    let packet = host
+                        .hub
+                        .sound_packet(&sound, at, v, pitch, source as i32, seed);
+                    if t == Target::Player {
+                        self.guest_packets.push(packet);
+                    } else {
+                        host.hub.send_to(conn, &packet);
+                    }
+                }
+                None => self.audio.play_on(source, &sound, Some(at), v, pitch),
+            }
+            tracker.mark(&holder(self.target_name(t)));
         }
         let name = Text::literal(sound.clone());
         let (message, total) = tracker.message(
@@ -606,8 +642,10 @@ impl Game<'_> {
         let reached = reached.len() as i32;
         if !local {
         } else if count <= 0 {
-            // No count: one particle with the delta as velocity.
-            self.particles.create(&options, pos, delta);
+            // handleParticleEvent, count 0: one particle, the speed times
+            // the delta as velocity (both sent as floats, multiplied as floats).
+            self.particles
+                .create(&options, pos, delta.map(|d| f64::from(speed * d as f32)));
         } else {
             for _ in 0..count {
                 let r = self.particles.random();

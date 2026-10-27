@@ -374,6 +374,64 @@ Move a world to the system's trash.
 
 MCP: `worlds_delete`, needs `confirm: true`.
 
+## `horizon-launcher packs list`
+
+The resource and shader packs, and which are on (the default).
+
+    horizon-launcher packs list
+
+- `--kind` (resource, shader): Only this kind
+- `--instance`: The instance (default: the selected one)
+
+MCP: `packs_list`.
+
+## `horizon-launcher packs add`
+
+Copy a pack file in: a resource pack .zip, a shader pack .zip or a .hshader.
+
+    horizon-launcher packs add <FILE>
+
+- `FILE`
+- `--instance`
+
+MCP: `packs_add`.
+
+## `horizon-launcher packs on`
+
+Turn a pack on (a resource pack goes on top; a shader pack replaces the one that was on).
+
+    horizon-launcher packs on <PACK>
+
+- `PACK`: Its file name or title
+- `--kind` (resource, shader)
+- `--instance`
+
+MCP: `packs_on`.
+
+## `horizon-launcher packs off`
+
+Turn a pack off.
+
+    horizon-launcher packs off <PACK>
+
+- `PACK`
+- `--kind` (resource, shader)
+- `--instance`
+
+MCP: `packs_off`.
+
+## `horizon-launcher packs remove`
+
+Turn a pack off and move it to the system's trash.
+
+    horizon-launcher packs remove <PACK>
+
+- `PACK`
+- `--kind` (resource, shader)
+- `--instance`
+
+MCP: `packs_remove`, needs `confirm: true`.
+
 ## `horizon-launcher screenshots list`
 
 The screenshots, the newest first, with their files (the default).

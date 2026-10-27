@@ -50,6 +50,7 @@ pub mod nether;
 pub mod path;
 pub mod phantom;
 pub mod piglin;
+pub mod polar_bear;
 pub mod rabbit;
 pub mod raider;
 pub mod ravager;
@@ -645,6 +646,8 @@ pub struct Attrs {
 pub struct Extra {
     /// Players: crouching and riding (HumanoidModel's poses).
     pub crouching: bool,
+    /// Players: sprinting (`Entity.DATA_SHARED_FLAGS_ID`), for the dust they raise.
+    pub sprinting: bool,
     pub passenger: bool,
     /// AgeableMob.age: negative while a baby (a tadpole counts up to 24000).
     pub age: i32,
@@ -737,6 +740,8 @@ pub struct Extra {
     /// the spin the rope's torque gives it.
     pub leash: Option<leash::Holder>,
     pub leash_pending: Option<leash::Pending>,
+    /// The UUID of the player behind `Holder::Player` (host or guest).
+    pub leash_player: Option<[i32; 4]>,
     pub leash_spin: f64,
     /// More species scratch values.
     pub scratch: [i32; 4],
@@ -1959,8 +1964,15 @@ impl Mob {
     }
     pub fn add_effect(&mut self, effect: &'static str, ticks: i32, amplifier: i32) {
         if let Some(e) = self.extra.effects.iter_mut().find(|e| e.0 == effect) {
-            e.1 = e.1.max(ticks);
-            e.2 = e.2.max(amplifier);
+            // MobEffectInstance.update: a stronger effect replaces the old one
+            // with its own duration, an equal one keeps the longer duration,
+            // and a weaker one never changes the active effect.
+            if amplifier > e.2 {
+                e.1 = ticks;
+                e.2 = amplifier;
+            } else if amplifier == e.2 {
+                e.1 = e.1.max(ticks);
+            }
         } else {
             self.extra.effects.push((effect, ticks, amplifier));
         }

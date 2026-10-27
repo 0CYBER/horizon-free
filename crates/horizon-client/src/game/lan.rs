@@ -11,7 +11,7 @@ use horizon_client::{
         chunks::ChunkEncoder,
         data::SyncData,
         entity::{EntityState, States},
-        hub::{HostEvent, HostState, Hub, HubConfig, TickCtx},
+        hub::{BodyFlags, HostEvent, HostState, Hub, HubConfig, TickCtx},
         playerdata,
     },
     mobs::{Mob, Who, leash::Holder},
@@ -236,6 +236,20 @@ fn mob_meta(
             }
             defaults.push((16, serializer::BYTE, Value::Byte(0)));
         }
+        // SnowGolem.DATA_PUMPKIN_ID: 16 while the pumpkin is on (the default).
+        "minecraft:snow_golem" => {
+            if e.sheared {
+                meta.push((16, serializer::BYTE, Value::Byte(0)));
+            }
+            defaults.push((16, serializer::BYTE, Value::Byte(16)));
+        }
+        // MushroomCow.DATA_TYPE: 0 red, 1 brown.
+        "minecraft:mooshroom" => {
+            if e.variant == 1 {
+                meta.push((17, serializer::INT, Value::Int(1)));
+            }
+            defaults.push((17, serializer::INT, Value::Int(0)));
+        }
         // Sheep.DATA_WOOL_ID: the colour in the low nibble, 16 when sheared.
         "minecraft:sheep" => {
             let value = (e.color & 15) | if e.sheared { 16 } else { 0 };
@@ -349,6 +363,14 @@ fn mob_meta(
                 meta.push((17, serializer::BOOLEAN, Value::Bool(true)));
             }
             defaults.push((17, serializer::BOOLEAN, Value::Bool(false)));
+        }
+        // PolarBear.DATA_STANDING_ID (after AgeableMob's two): the bear
+        // rears up; the client animates it.
+        "minecraft:polar_bear" => {
+            if e.flag {
+                meta.push((18, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((18, serializer::BOOLEAN, Value::Bool(false)));
         }
         // SpellcasterIllager.DATA_SPELL_CASTING_ID: the casting pose.
         "minecraft:evoker" | "minecraft:illusioner" => {
@@ -845,6 +867,16 @@ impl Game<'_> {
             living_flags: living_flags(self.using)
                 | if p.auto_spin_attack_ticks > 0 { 4 } else { 0 },
             bed: self.sleeping,
+            body: BodyFlags {
+                gliding: p.fall_flying,
+                swimming: p.swimming,
+                crawling: p.pose == horizon_client::pose::Pose::Swimming && !p.swimming,
+                crouching: p.pose == horizon_client::pose::Pose::Crouching,
+                spin_attack: p.auto_spin_attack_ticks > 0,
+                on_fire: p.fire_ticks > 0,
+                invisible: self.potions.effects.get("invisibility").is_some(),
+                glowing: self.potions.effects.get("glowing").is_some(),
+            },
         })
     }
 
@@ -962,6 +994,16 @@ impl Game<'_> {
                 host.hub.block_event(pos, b0, b1, state);
             }
             let entities = states.as_slice();
+            // An entity that left the level since the last tick (a snowball
+            // that hit) is dropped by the tracker below: its event goes out
+            // first, as `Level.broadcastEntityEvent` precedes the discard.
+            let (gone, later): (Vec<_>, Vec<_>) = std::mem::take(&mut self.lan_entity_events)
+                .into_iter()
+                .partition(|(id, ..)| !entities.iter().any(|e| e.id == *id));
+            self.lan_entity_events = later;
+            for (id, event, at) in gone {
+                host.hub.entity_event(id, event, at);
+            }
             let spawn = self.spawn.map_or([0.5, 80.0, 0.5], |s| [s.x, s.y, s.z]);
             let events = {
                 let clock_rate = self.network_clock_rate();
@@ -1243,8 +1285,9 @@ impl Game<'_> {
             self.lan_entity_events.push((id, event, at));
         }
     }
-    /// `ServerPlayer.crit`: this window's emitter, and an animation for the
-    /// attacker's client and observers once the hub is back in place.
+    /// `ServerPlayer.crit` (or `magicCrit` when `magic`): this window's
+    /// emitter, and an animation for the attacker's client and observers once
+    /// the hub is back in place.
     pub(super) fn critical_hit(
         &mut self,
         attacker: Option<u32>,
@@ -1252,16 +1295,18 @@ impl Game<'_> {
         feet: [f64; 3],
         width: f64,
         height: f64,
+        magic: bool,
     ) {
         use horizon_client::particles::{ParticleOptions, ParticleType};
-        self.particles.tracking_emitter(
-            ParticleOptions::simple(ParticleType::Crit),
-            feet,
-            width,
-            height,
-        );
+        let particle = if magic {
+            ParticleType::EnchantedHit
+        } else {
+            ParticleType::Crit
+        };
+        self.particles
+            .tracking_emitter(ParticleOptions::simple(particle), feet, width, height);
         if self.audio.capture.is_some() {
-            self.lan_critical_hits.push((attacker, id));
+            self.lan_critical_hits.push((attacker, id, magic));
         }
     }
     /// Send the tick's level events, sounds and mob animations.
@@ -1339,13 +1384,13 @@ impl Game<'_> {
             seen.insert(m.id, (m.hurt_time, dead, swing));
         }
         host.mob_state.insert(self.dim, seen);
-        for (attacker, target) in critical_hits {
+        for (attacker, target, magic) in critical_hits {
             let Some(attacker) = attacker.map_or(Some(host.host_entity), |conn| {
                 host.hub.guest(conn).map(|g| g.entity_id)
             }) else {
                 continue;
             };
-            host.hub.critical_hit(attacker, target);
+            host.hub.critical_hit(attacker, target, magic);
         }
     }
 
@@ -1428,6 +1473,7 @@ impl Game<'_> {
                 .each_ref()
                 .map(|s| s.as_ref().map(|s| s.item.clone()));
             m.extra.crouching = g.sneaking;
+            m.extra.sprinting = g.sprinting;
             // Lying in its bed (LivingEntity.getBedOrientation).
             m.extra.ints[1] = g.bed.map_or(0, |b| self.bed_facing(b));
             // LivingEntity.updateSwingTime: the arm swing lan_swings started.

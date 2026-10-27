@@ -106,6 +106,7 @@ pub enum Family {
     Strider,
     Bat,
     Bee,
+    PolarBear,
 }
 pub fn family(s: Species) -> Family {
     use Species as S;
@@ -167,6 +168,7 @@ pub fn family(s: Species) -> Family {
         S::Strider => Family::Strider,
         S::Bat => Family::Bat,
         S::Bee => Family::Bee,
+        S::PolarBear => Family::PolarBear,
         _ => Family::Generic,
     }
 }
@@ -227,6 +229,7 @@ pub fn register(m: &mut Mob) {
         Family::Strider => super::strider::register(m),
         Family::Bat => super::bat::register(m),
         Family::Bee => super::bee::register(m),
+        Family::PolarBear => super::polar_bear::register(m),
     }
     // FloatGoal's constructor lets the navigation float, as do the
     // constructors of these brain-driven and flying mobs. A floater rises
@@ -416,6 +419,7 @@ pub fn tick(
     super::axolotl::tick_animation(m);
     m.anim.end_tick(m.ai.swinging);
     tick_swing(m);
+    flower_contact_effects(m, w);
     if m.species() == Species::CopperGolem {
         // CopperGolem.tick: updateWeathering after the living tick.
         super::copper_golem::update_weathering(m, w, level_random, events);
@@ -674,7 +678,7 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
     }
     // AbstractHorse.aiStep: the tail swishes now and then (moveTail).
     if super::equine::is_equine(m.species()) {
-        let _ = m.random.next_int_bound(200);
+        super::equine::tail_tick(m);
     }
     // Monster.aiStep: updateNoActionTime (Raider: always +2).
     if is_monster(m.species())
@@ -1025,6 +1029,7 @@ fn species_ai_step(
         Species::Wither => super::wither::ai_step(m, w, events),
         Species::Allay => super::allay::ai_step(m),
         Species::Bee => super::bee::ai_step(m, w),
+        Species::PolarBear => super::polar_bear::ai_step(m, w),
         Species::Breeze => super::breeze::ai_step(m),
         Species::Sniffer => super::sniffer::ai_step(m, events),
         Species::HappyGhast => super::happy_ghast::ai_step(m, w),
@@ -1514,6 +1519,56 @@ pub fn custom_travel(m: &mut Mob, w: &MobWorld, input: Vec3, events: &mut Vec<Mo
         Family::Vex => super::vex::travel(m),
         Family::Nautilus => super::nautilus::travel(m, w, input, events),
         _ => false,
+    }
+}
+
+/// `Entity.applyEffectsFromBlocks` for the flowers that give an effect:
+/// `WitherRoseBlock.entityInside` (wither for 40 ticks on a living mob that
+/// can take it, not in peaceful) and `EyeblossomBlock.entityInside` (poison
+/// for 25 ticks on a bee, when the open flower attracts bees). The blocks
+/// are those the mob's box touches where it started the tick and where it
+/// ended.
+fn flower_contact_effects(m: &mut Mob, w: &MobWorld) {
+    if !m.alive() || w.difficulty.effective == 0.0 {
+        return;
+    }
+    let half = f64::from(m.width()) / 2.0 - 1.0e-5;
+    let height = f64::from(m.height()) - 1.0e-5;
+    let mut visited: Vec<[i32; 3]> = Vec::new();
+    for at in [m.previous, m.position] {
+        let cells = |lo: f64, hi: f64| lo.floor() as i32..=hi.floor() as i32;
+        for x in cells(at.x - half, at.x + half) {
+            for y in cells(at.y + 1.0e-5, at.y + height) {
+                for z in cells(at.z - half, at.z + half) {
+                    let p = [x, y, z];
+                    if visited.contains(&p) {
+                        continue;
+                    }
+                    match w.block_name(x, y, z) {
+                        "minecraft:wither_rose" => {
+                            // isInvulnerableTo(wither): the invulnerable time
+                            // after a hit; WitherBoss and WitherSkeleton
+                            // refuse the effect (`canBeAffected`).
+                            if m.invulnerable <= 0
+                                && !m.invulnerable_flag
+                                && !matches!(m.species(), Species::Wither | Species::WitherSkeleton)
+                            {
+                                m.add_effect("minecraft:wither", 40, 0);
+                            }
+                        }
+                        "minecraft:open_eyeblossom"
+                            if m.species() == Species::Bee
+                                && super::bee::attracts_bees(w, p)
+                                && !m.has_effect("minecraft:poison") =>
+                        {
+                            m.add_effect("minecraft:poison", 25, 0);
+                        }
+                        _ => continue,
+                    }
+                    visited.push(p);
+                }
+            }
+        }
     }
 }
 

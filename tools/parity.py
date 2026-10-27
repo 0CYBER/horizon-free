@@ -48,6 +48,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -1134,6 +1135,14 @@ def run(selected, state, hasher, environment_digest, executors, reuse_oracles, r
     return results, time.monotonic() - started_all
 
 
+def exit_on_termination():
+    """SIGTERM and SIGHUP (a cancelled CI job, a dropped ssh) end this process through its finally blocks, which stop
+    the running harnesses. Each runs in its own session, so without that they, and the vanilla servers they started,
+    outlive it (orphans of days were found on the Mac mini's runners, 2026-10-26)."""
+    for number in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(number, lambda received, _frame: sys.exit(128 + received))
+
+
 def worker_main(shared_local):
     """`parity.py --worker SHARED_LOCAL`: run harnesses sent as JSON lines on stdin, answer on stdout."""
     import queue as queues
@@ -1169,13 +1178,20 @@ def worker_main(shared_local):
     built, errors = prebuild(first["prebuild"], default_build_jobs()) if first["prebuild"] else (True, "")
     executor = LocalExecutor(MACHINE_JOBS, int(memory_available() * 0.75), first["timeout"])
     send({"hello": {"jobs": MACHINE_JOBS, "memory": executor.memory_budget, "built": built, "errors": errors[-4000:]}})
+    try:
+        return serve(executor, inbox, queues.Empty, send, state, hasher)
+    finally:
+        executor.stop()
+
+
+def serve(executor, inbox, empty, send, state, hasher):
+    """The worker's loop: start what the coordinating runner sends, report what finished, until its stdin ends."""
     while True:
         try:
             message = inbox.get(timeout=0.2)
-        except queues.Empty:
+        except empty:
             message = False
         if message is None:
-            executor.stop()
             save_state(state)
             return 0
         if message:
@@ -1479,6 +1495,7 @@ def finished_run(failed):
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--trace":
         return trace_main(sys.argv[2], sys.argv[3], sys.argv[4:])
+    exit_on_termination()
     if len(sys.argv) > 1 and sys.argv[1] == "--worker":
         return worker_main(sys.argv[2])
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1608,6 +1625,7 @@ def main():
         jobs = 1  # harnesses that can only run here still need a slot
     remotes = [RemoteExecutor(host, config["hosts"][host], artifacts, config.get("local_only", {}), args.timeout)
                for host in hosts]
+    local = None
     try:
         if jobs:
             print("Building probes...", flush=True)
@@ -1620,12 +1638,12 @@ def main():
         where = "".join(f", plus {host}" for host in hosts)
         print(f"Running {len(selected)} harnesses, {jobs} at a time here{where}...", flush=True)
         reuse_oracles = not (args.fresh or args.all)
-        executors = [*remotes, LocalExecutor(jobs, int(memory_available() * 0.75), args.timeout,
-                                             REMOTE_LOCAL_PEAK if remotes and args.jobs is None else None)]
-        results, elapsed = run(selected, state, hasher, environment_key(hasher), executors, reuse_oracles, rounds,
-                               known_flaky(config))
+        local = LocalExecutor(jobs, int(memory_available() * 0.75), args.timeout,
+                              REMOTE_LOCAL_PEAK if remotes and args.jobs is None else None)
+        results, elapsed = run(selected, state, hasher, environment_key(hasher), [*remotes, local], reuse_oracles,
+                               rounds, known_flaky(config))
     finally:
-        for executor in remotes:
+        for executor in [*remotes, *([local] if local else [])]:
             executor.stop()
     save_state(state)
     failed = sorted(name for name, record in results.items() if record["status"] != "pass")

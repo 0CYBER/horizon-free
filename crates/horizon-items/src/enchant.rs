@@ -545,6 +545,32 @@ impl Enchantments {
         }
         out
     }
+    /// `EnchantmentHelper.forEachModifier` as an item's tooltip lists them: the
+    /// `minecraft:attributes` effects of `stack`'s enchantments as rows of
+    /// (attribute, id, amount, operation, slot group), one per slot group the
+    /// enchantment lists.
+    pub fn modifier_rows(&self, stack: &ItemStack) -> Vec<(String, String, f64, String, String)> {
+        let mut rows = Vec::new();
+        for (id, level) in stack.enchantments() {
+            let Some(e) = self.get(id) else { continue };
+            for a in e.effects["minecraft:attributes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
+                for slot in &e.slots {
+                    rows.push((
+                        a["attribute"].as_str().unwrap_or("").to_owned(),
+                        a["id"].as_str().unwrap_or("").to_owned(),
+                        f64::from(level_value(&a["amount"], *level)),
+                        a["operation"].as_str().unwrap_or("add_value").to_owned(),
+                        slot.clone(),
+                    ));
+                }
+            }
+        }
+        rows
+    }
     /// Sum of `add_value` amounts of one attribute from enchantments on `stack`.
     pub fn attribute_add(&self, stack: Option<&ItemStack>, attribute: &str) -> f64 {
         stack.map_or(0.0, |s| {

@@ -4,12 +4,14 @@ pub mod agents;
 pub mod backend;
 pub mod browser;
 pub mod desktop;
+pub mod desktop_seams;
 #[cfg(unix)]
 pub mod game_app;
 pub mod heads;
 pub mod instances;
 pub mod modpacks;
 pub mod mojang;
+pub mod packs;
 pub mod process;
 pub mod proxy;
 pub mod screenshots;
