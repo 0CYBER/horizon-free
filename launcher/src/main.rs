@@ -481,8 +481,10 @@ impl Launcher {
     }
 
     fn go(&mut self, page: Page) {
-        // The game may have made up a name since: read it again (a small file, once a switch).
+        // The game may have made up a name since, and the CLI or another window may have
+        // changed the accounts: read them again (small files, once a switch).
         self.offline_name = offline_name();
+        self.accounts = Accounts::load();
         if page != self.page {
             self.page = page;
             self.switches += 1;
@@ -1692,6 +1694,10 @@ impl Launcher {
             )
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.account_menu = !this.account_menu;
+                if this.account_menu {
+                    // Who can play may have changed elsewhere since the window opened.
+                    this.accounts = Accounts::load();
+                }
                 cx.notify();
             }));
         let account = div()
