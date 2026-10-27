@@ -100,11 +100,13 @@ impl Opt {
                 | Opt::MonochromeLogo
                 | Opt::RotateWithMinecarts
                 | Opt::HighContrastBlockOutlines
-                // Saved, but no Horizon system reads them yet: no Realms and
-                // no friends list.
+                // Saved, but no Horizon system reads them yet: no Realms, no
+                // friends list, no directional audio, no now-playing toast.
                 | Opt::RealmsNotifications
                 | Opt::InGameNotification
                 | Opt::SharePresence
+                | Opt::DirectionalAudio
+                | Opt::MusicToast
                 // Saved, but nothing in rendering reads them yet.
                 | Opt::ChunkFade
                 | Opt::ImprovedTransparency
@@ -138,6 +140,8 @@ impl Opt {
             Opt::RealmsNotifications => "realmsNotifications",
             Opt::InGameNotification => "inGameNotification",
             Opt::SharePresence => "sharePresence",
+            Opt::DirectionalAudio => "directionalAudio",
+            Opt::MusicToast => "musicToast",
             _ => return None,
         })
     }
@@ -247,6 +251,8 @@ impl Opt {
             Opt::RealmsNotifications => "options.realmsNotifications.button",
             Opt::InGameNotification => "options.inGameNotification",
             Opt::SharePresence => "options.sharePresence",
+            Opt::DirectionalAudio => "options.directionalAudio",
+            Opt::MusicToast => "options.musicToast",
         }
     }
     pub(crate) fn kind(self, s: &Settings) -> Kind {
@@ -488,7 +494,8 @@ impl Opt {
             | Opt::ModelPart(_)
             | Opt::AllowServerListing
             | Opt::RealmsNotifications
-            | Opt::InGameNotification => on_off(s.file.bool(self.file_key().unwrap())),
+            | Opt::InGameNotification
+            | Opt::DirectionalAudio => on_off(s.file.bool(self.file_key().unwrap())),
             Opt::MainHand => tr(if s.main_hand_left {
                 "options.mainHand.left"
             } else {
@@ -499,6 +506,11 @@ impl Opt {
                 "options.sharePresence.limited",
                 "options.sharePresence.all",
             ][s.file.int("sharePresence").clamp(0, 2) as usize]),
+            Opt::MusicToast => tr([
+                "options.musicToast.never",
+                "options.musicToast.pauseMenu",
+                "options.musicToast.pauseMenuAndToast",
+            ][s.file.int("musicToast").clamp(0, 2) as usize]),
             Opt::NarratorHotkey => on_off(s.file.bool("narratorHotkey")),
             Opt::RotateWithMinecarts => on_off(s.file.bool("rotateWithMinecart")),
             Opt::HighContrastBlockOutlines => on_off(s.file.bool("highContrastBlockOutline")),
@@ -706,7 +718,8 @@ impl Opt {
             | Opt::ModelPart(_)
             | Opt::AllowServerListing
             | Opt::RealmsNotifications
-            | Opt::InGameNotification => {
+            | Opt::InGameNotification
+            | Opt::DirectionalAudio => {
                 let key = self.file_key().unwrap();
                 s.file
                     .set(key, crate::options_file::V::Bool(!s.file.bool(key)));
@@ -758,6 +771,11 @@ impl Opt {
                 let n = next(s.file.int("sharePresence").clamp(0, 2) as u8, 3);
                 s.file
                     .set("sharePresence", crate::options_file::V::Int(i32::from(n)));
+            }
+            Opt::MusicToast => {
+                let n = next(s.file.int("musicToast").clamp(0, 2) as u8, 3);
+                s.file
+                    .set("musicToast", crate::options_file::V::Int(i32::from(n)));
             }
             Opt::ForceUnicode => s.force_unicode = !s.force_unicode,
             Opt::JapaneseGlyphs => s.japanese_glyphs = !s.japanese_glyphs,
@@ -1426,13 +1444,13 @@ impl OptionsUi {
                 self.filter_option_rows(rows)
             }
             Page::Sound => {
+                // SoundOptionsScreen, without Audio Device: Horizon opens the
+                // output device itself and cannot switch it.
                 let mut rows = vec![Row::Big(Opt::Volume(0))];
                 let others: Vec<Opt> = (1..SOUND_SOURCES.len()).map(Opt::Volume).collect();
                 rows.extend(pairs(&others));
-                rows.extend(pairs(&[Opt::ShowSubtitles]));
-                // SoundOptionsScreen: Music Frequency starts the next row (with
-                // Music Toast, not in Horizon yet).
-                rows.extend(pairs(&[Opt::MusicFrequency]));
+                rows.extend(pairs(&[Opt::ShowSubtitles, Opt::DirectionalAudio]));
+                rows.extend(pairs(&[Opt::MusicFrequency, Opt::MusicToast]));
                 rows
             }
             Page::Skin => {

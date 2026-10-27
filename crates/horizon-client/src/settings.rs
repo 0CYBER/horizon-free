@@ -717,6 +717,8 @@ pub enum Opt {
     RealmsNotifications,
     InGameNotification,
     SharePresence,
+    DirectionalAudio,
+    MusicToast,
 }
 
 #[cfg(test)]
