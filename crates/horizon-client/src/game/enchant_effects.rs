@@ -69,7 +69,7 @@ impl Game<'_> {
     }
     /// `getEnchantedDamage - base`: damage bonus of the held weapon against a mob type.
     pub(super) fn enchant_damage_bonus(&mut self, target: &str) -> f32 {
-        let Some(held) = self.inventory[self.selected].clone() else {
+        let Some(held) = self.held().cloned() else {
             return 0.0;
         };
         let ctx = EffectContext {
@@ -102,7 +102,7 @@ impl Game<'_> {
     /// whether the hit is that knockback attack.
     pub(super) fn extra_knockback(&mut self, target_kind: &str, scale: f32) -> (f32, bool) {
         let knockback_attack = scale > 0.9 && self.player.as_ref().is_some_and(|p| p.sprinting);
-        let enchanted = match self.inventory[self.selected].clone() {
+        let enchanted = match self.held().cloned() {
             Some(held) => {
                 let ctx = EffectContext {
                     this: Some(target_kind),
@@ -144,7 +144,7 @@ impl Game<'_> {
     }
     /// After a successful melee hit: fire aspect and wind burst.
     pub(super) fn post_attack(&mut self, mob: usize) {
-        let Some(held) = self.inventory[self.selected].clone() else {
+        let Some(held) = self.held().cloned() else {
             return;
         };
         let Some(m) = self.mobs.get(mob) else { return };

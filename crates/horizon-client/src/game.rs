@@ -165,6 +165,7 @@ mod shield;
 mod sign_edit;
 mod sniffers;
 mod spawner;
+mod spear;
 mod spill;
 mod startup_menu;
 mod station_control;
@@ -1681,6 +1682,18 @@ struct Game<'a> {
     lan_entity_events: Vec<(i32, i8, [f64; 3])>,
     /// Successful crits (attacking guest, hit entity), queued while the hub is taken.
     lan_critical_hits: Vec<(Option<u32>, i32, bool)>,
+    /// Spear stabs that landed (the stabbing guest), queued while the hub is
+    /// taken: `broadcastEntityEvent(player, 2)`.
+    lan_kinetic_hits: Vec<Option<u32>>,
+    /// `LivingEntity.recentKineticEnemies`: when each player (a guest, or the
+    /// window's own) last stabbed each entity this use.
+    stabbed: HashMap<(Option<u32>, u32), i64>,
+    /// The movement a guest's client reported this tick
+    /// (`ServerPlayer.getKnownMovement`), for their turn.
+    known_movement: Vec3,
+    /// `LivingEntity.lastKineticHitFeedbackTime` of the entities that felt a
+    /// spear's hit (`spear::OWN` is this window's player), in game time.
+    kinetic_feedback: HashMap<i32, i64>,
     /// Global level events for every guest (`ServerLevel.globalLevelEvent`).
     lan_global_events: Vec<(i32, [i32; 3], i32)>,
     /// `ContainerOpenersCounter`: how many players (the host and the guests)
@@ -3926,6 +3939,7 @@ impl Game<'_> {
                 || self.use_fishing_rod(&stack)
             || self.use_crossbow(&stack)
             || self.use_trident(&stack)
+            || self.use_spear(&stack)
             || self.boost_firework(&stack)
             || self.use_empty_map(&stack)
                 || self.use_book(&stack)
@@ -4196,6 +4210,12 @@ impl Game<'_> {
             return;
         }
         if &*stack.item == "minecraft:trident" {
+            self.using = Some((slot, ticks + 1));
+            return;
+        }
+        // ItemStack.onUseTick: a spear stabs what its speed allows, until released.
+        if horizon_client::spear::Kinetic::of(&stack.item).is_some() {
+            self.spear_tick(&stack, ticks);
             self.using = Some((slot, ticks + 1));
             return;
         }
@@ -9953,7 +9973,17 @@ impl Game<'_> {
             let ticks_used =
                 owner.use_duration as f32 - (owner.use_item_remaining_ticks as f32 - a + 1.0);
             use horizon_client::first_person::ItemPose;
+            // ItemUseAnimation.SPEAR.
+            let spear = using
+                .then(|| horizon_client::spear::Kinetic::of(&stack.item))
+                .flatten()
+                .map(|kinetic| ItemPose::Spear {
+                    kinetic,
+                    time_held: ticks_used,
+                    ticks_since_hit: self.kinetic_hit_ticks(a),
+                });
             let pose = match &*stack.item {
+                _ if let Some(pose) = spear => pose,
                 "minecraft:bow" if using => ItemPose::Bow { ticks_used },
                 "minecraft:crossbow" => {
                     let charged = stack.data().is_some_and(|d| !d.charged.is_empty());
@@ -13096,6 +13126,10 @@ impl<'a> Game<'a> {
             lan_block_events: Vec::new(),
             lan_entity_events: Vec::new(),
             lan_critical_hits: Vec::new(),
+            lan_kinetic_hits: Vec::new(),
+            stabbed: HashMap::new(),
+            known_movement: Vec3::ZERO,
+            kinetic_feedback: HashMap::new(),
             lan_global_events: Vec::new(),
             lid_openers: HashMap::new(),
             lan_acting: None,

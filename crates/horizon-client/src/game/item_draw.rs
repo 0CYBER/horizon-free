@@ -170,6 +170,9 @@ fn use_duration(components: &Components) -> i32 {
         let seconds = c["consume_seconds"].as_f64().unwrap_or(1.6);
         return (seconds * 20.0) as i32;
     }
+    if components.get("minecraft:kinetic_weapon").is_some() {
+        return 72_000;
+    }
     let item_model = components
         .get("minecraft:item_model")
         .and_then(Value::as_str)

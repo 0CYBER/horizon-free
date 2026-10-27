@@ -1292,7 +1292,23 @@ pub fn held_item_transform(
         .unwrap_or_else(|| m.kind.model.clone());
     let mut poses = Poses::new(&model);
     anim::setup(m, &s, &mut poses, &data.animations);
-    hand_base(m, &model, base, &poses, left)
+    let mut t = hand_base(m, &model, base, &poses, left)?;
+    // ItemInHandLayer: a spear in use (ArmPose.SPEAR's animateUseItem).
+    let off_hand = left != m.main_arm_left();
+    if m.extra.using_item > 0
+        && m.extra.using_off_hand == off_hand
+        && let Some(kinetic) = (if off_hand {
+            &m.extra.off_hand
+        } else {
+            &m.extra.main_hand
+        })
+        .as_deref()
+        .and_then(crate::spear::Kinetic::of)
+    {
+        let time_held = m.extra.using_item as f32 + s.partial;
+        t *= crate::spear::third_person_use_item(&kinetic, time_held, s.swing, 0.0, !left);
+    }
+    Some(t)
 }
 
 #[cfg(test)]

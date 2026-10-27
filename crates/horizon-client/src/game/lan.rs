@@ -1330,6 +1330,7 @@ impl Game<'_> {
     /// Send the tick's level events, sounds and mob animations.
     fn lan_flush_effects(&mut self, host: &mut LanHost) {
         let critical_hits = std::mem::take(&mut self.lan_critical_hits);
+        let kinetic_hits = std::mem::take(&mut self.lan_kinetic_hits);
         for (kind, pos, data, acting) in std::mem::take(&mut self.lan_events) {
             if kind == 2001 {
                 host.broken
@@ -1381,7 +1382,12 @@ impl Game<'_> {
                 // A projectile is the direct entity of its hit: not tracked here.
                 let melee = matches!(
                     source.kind,
-                    K::PlayerAttack | K::MaceSmash | K::MobAttack | K::Sting | K::SonicBoom
+                    K::PlayerAttack
+                        | K::MaceSmash
+                        | K::Spear
+                        | K::MobAttack
+                        | K::Sting
+                        | K::SonicBoom
                 );
                 let direct = cause.filter(|_| melee);
                 host.hub.damage_event(m.id as i32, kind, cause, direct, at);
@@ -1402,6 +1408,19 @@ impl Game<'_> {
             seen.insert(m.id, (m.hurt_time, dead, swing));
         }
         host.mob_state.insert(self.dim, seen);
+        // Level.broadcastEntityEvent(player, 2) of a spear's stab.
+        for attacker in kinetic_hits {
+            let hit = match attacker {
+                None => self
+                    .player
+                    .as_ref()
+                    .map(|p| (host.host_entity, [p.position.x, p.position.y, p.position.z])),
+                Some(conn) => host.hub.guest(conn).map(|g| (g.entity_id, g.position)),
+            };
+            if let Some((id, at)) = hit {
+                host.hub.entity_event(id, 2, at);
+            }
+        }
         for (attacker, target, magic) in critical_hits {
             let Some(attacker) = attacker.map_or(Some(host.host_entity), |conn| {
                 host.hub.guest(conn).map(|g| g.entity_id)
