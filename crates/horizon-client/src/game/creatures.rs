@@ -3715,6 +3715,7 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::InWall => "minecraft:in_wall",
         K::Thorns => "minecraft:thorns",
         K::SonicBoom => "minecraft:sonic_boom",
+        K::Freeze => "minecraft:freeze",
         K::OutOfWorld => "minecraft:out_of_world",
     }
 }

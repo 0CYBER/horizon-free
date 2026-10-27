@@ -465,6 +465,26 @@ fn mob_meta(
     }
 }
 
+/// What a client shakes a mob by: Entity.DATA_TICKS_FROZEN (7), whose full
+/// count is `isFullyFrozen`, and Strider.DATA_SUFFOCATING (19, after
+/// AgeableMob's two and DATA_BOOST_TIME).
+fn mob_freeze_meta(
+    m: &Mob,
+    meta: &mut Vec<(u8, i32, Value)>,
+    defaults: &mut Vec<(u8, i32, Value)>,
+) {
+    if m.ticks_frozen > 0 {
+        meta.push((7, serializer::INT, Value::Int(m.ticks_frozen)));
+    }
+    defaults.push((7, serializer::INT, Value::Int(0)));
+    if m.kind.id == "minecraft:strider" {
+        if m.extra.flag {
+            meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+        }
+        defaults.push((19, serializer::BOOLEAN, Value::Bool(false)));
+    }
+}
+
 /// The equipment a mob shows (ClientboundSetEquipmentPacket slots: main hand,
 /// off hand, feet, legs, chest, head, body, saddle).
 fn mob_equipment(
@@ -989,6 +1009,7 @@ impl Game<'_> {
                 &mut e.meta,
                 &mut e.defaults,
             );
+            mob_freeze_meta(m, &mut e.meta, &mut e.defaults);
             mob_equipment(m, hub, &mut e.equipment);
             self.mob_attributes(m, &mut e.attributes);
             e.leash = leash;
