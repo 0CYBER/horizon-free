@@ -8309,8 +8309,7 @@ impl Game<'_> {
     }
     /// `Player.getAttackStrengthScale(0.5)`.
     fn attack_strength_scale(&self) -> f32 {
-        let speed = self.attack_item_info().map_or(0.0, |i| i.attack_speed);
-        let delay = 20.0 / (4.0 + speed).max(0.1);
+        let delay = horizon_client::attack_strength::delay(self.main_hand_attack_speed());
         ((self.attack_ticks as f32 + 0.5) / delay).clamp(0.0, 1.0)
     }
     /// `Player.isSweepAttack`: a charged, grounded sword hit below the movement limit.
