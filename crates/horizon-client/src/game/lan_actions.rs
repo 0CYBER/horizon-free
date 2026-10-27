@@ -2872,7 +2872,8 @@ impl Game<'_> {
                 let packet = swing_packet(id, c.hand, c.animation);
                 host.hub.broadcast_near(at, 128.0, &packet, Some(conn));
                 if let Some(m) = host.models.get_mut(&conn) {
-                    m.swing();
+                    // The duration already counts the guest's haste or fatigue.
+                    m.swing_hand(c.hand == Hand::Off, c.duration_ticks);
                 }
             }
             play.swing.tick();

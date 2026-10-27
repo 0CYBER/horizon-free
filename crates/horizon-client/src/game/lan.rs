@@ -1492,6 +1492,8 @@ impl Game<'_> {
                 .map(|s| s.as_ref().map(|s| s.item.clone()));
             m.extra.crouching = g.sneaking;
             m.extra.sprinting = g.sprinting;
+            // ClientInformation.mainHand (HumanoidArm: 0 left, 1 right).
+            m.extra.main_hand_left = g.info.main_hand == 0;
             // LivingEntity.DATA_EFFECT_PARTICLES: the swirls of its visible effects.
             let visible = || g.effects.list.iter().filter(|e| e.visible);
             m.extra.effect_particles = visible()
