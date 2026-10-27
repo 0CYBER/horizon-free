@@ -2,11 +2,53 @@
 //! its boss bar, and its skulls hitting and exploding.
 use super::Game;
 use horizon_client::{
+    items::ItemStack,
     mobs::{Damage, DamageKind, Species, Who},
     projectiles::{Projectile, ProjectileKind},
 };
+use horizon_core::position::BlockPos;
 
 impl Game<'_> {
+    /// `LivingEntity.createWitherRose`: a mob a wither killed leaves a wither
+    /// rose where it stood (with mobGriefing, on air that can hold it), else
+    /// drops one.
+    pub(super) fn create_wither_rose(&mut self, m: &horizon_client::mobs::Mob) {
+        // getKillCredit: the player who last hurt it, else the last mob (kept
+        // for 100 ticks).
+        let by_wither = m.ai.last_hurt_by_player <= 0
+            && m.age as i32 - m.ai.last_hurt_by_time <= 100
+            && matches!(m.ai.last_hurt_by, Some(Who::Mob(id))
+                if self.mobs.iter().any(|o| o.id == id && o.alive() && o.species() == Species::Wither));
+        if !by_wither {
+            return;
+        }
+        let pos = [
+            m.position.x.floor() as i32,
+            m.position.y.floor() as i32,
+            m.position.z.floor() as i32,
+        ];
+        let registry = self.pack.assets.registry;
+        let rose = registry.default_state("minecraft:wither_rose");
+        if self.ui.rules.bool("mob_griefing")
+            && let Some(rose) = rose
+            && self
+                .res
+                .facts()
+                .is_air(self.world.block(pos[0], pos[1], pos[2]))
+            && self.with_level(|b, level, ticks| {
+                b.can_survive(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]), rose)
+            })
+        {
+            let _ = self.level_set(pos, rose);
+            return;
+        }
+        self.spawn_item(
+            ItemStack::new("minecraft:wither_rose", 1),
+            [m.position.x, m.position.y, m.position.z],
+            super::dispenser::new_item_motion(),
+            0,
+        );
+    }
     fn is_wither_skull(&self, p: [i32; 3]) -> bool {
         let name = &*self
             .res
@@ -29,7 +71,8 @@ impl Game<'_> {
     /// After a wither skeleton skull is placed: the T of soul sand (or soul
     /// soil) under three skulls, upright along X or Z, becomes a wither.
     pub(super) fn check_wither_spawn(&mut self, placed: [i32; 3]) -> horizon_client::Result<()> {
-        if !self.is_wither_skull(placed) {
+        // Nothing is built in Peaceful (`level.getDifficulty() != PEACEFUL`).
+        if self.ui.difficulty == 0 || !self.is_wither_skull(placed) {
             return Ok(());
         }
         // Pattern rows top to bottom: "^^^", "###", "~#~" ('~' air).
@@ -130,7 +173,10 @@ impl Game<'_> {
         if let Some(id) = owner {
             self.note_attacker("minecraft:explosion", id);
         }
-        self.explode(at, 1.0)
+        self.combat.explosion_owner = owner;
+        let result = self.with_hive_emptying_blast(|g| g.explode(at, 1.0));
+        self.combat.explosion_owner = None;
+        result
     }
 }
 /// Wither skulls drawn as the skull model, blue when dangerous.

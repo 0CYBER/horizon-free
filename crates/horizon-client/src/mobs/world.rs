@@ -25,6 +25,8 @@ pub struct TargetInfo {
     pub can_be_seen_as_enemy: bool,
     pub is_player: bool,
     pub creative: bool,
+    /// `isPassenger`.
+    pub passenger: bool,
 }
 impl MobWorld<'_> {
     /// The biome's base temperature at a position.
@@ -249,6 +251,7 @@ impl MobWorld<'_> {
                 can_be_seen_as_enemy: true,
                 is_player: true,
                 creative: p.creative,
+                passenger: p.passenger,
             }),
             Who::Mob(id) => self.seen(id).map(|s| TargetInfo {
                 position: s.position,
@@ -258,6 +261,7 @@ impl MobWorld<'_> {
                 can_be_seen_as_enemy: !s.playing_dead,
                 is_player: false,
                 creative: false,
+                passenger: s.passenger,
             }),
         }
     }

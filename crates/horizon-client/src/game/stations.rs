@@ -779,6 +779,7 @@ impl Game<'_> {
             return;
         };
         let pos = s.pos;
+        let enchanted_item = enchanted.clone();
         // Player.onEnchantmentPerformed
         self.give_levels(-(lapis_needed as i32));
         self.level.xp_seed = self.world.random.next_int();
@@ -795,6 +796,7 @@ impl Game<'_> {
         }
         let pitch = self.world.random.next_float() * 0.1 + 0.9;
         self.stats.custom("enchant_item", 1);
+        self.trigger_enchanted_item(&enchanted_item, lapis_needed as i32);
         self.play_at("minecraft:block.enchantment_table.use", pos, 1.0, pitch);
         self.station_changed();
     }
@@ -1768,6 +1770,11 @@ impl Game<'_> {
         };
         let gray = rgba(170, 170, 170, 255);
         let item_info = self.res.items().get(&stack.item);
+        // SmithingTemplateItem.appendHoverText: `Item.appendHoverText` comes
+        // before the components.
+        for (text, c) in horizon_client::item_tooltip::smithing_template_lines(stack, &translate) {
+            push(&mut lines, text, c);
+        }
         // InstrumentComponent.addToTooltip.
         if let Some(text) =
             horizon_client::item_tooltip::instrument_line(stack, &display, &translate)
@@ -2023,15 +2030,19 @@ impl Game<'_> {
             && stack.damage > 0
             && advanced
         {
-            push(
-                &mut lines,
-                format!(
-                    "Durability: {} / {}",
-                    info.max_damage - stack.damage,
-                    info.max_damage
+            // `item.durability`, in the selected language.
+            lines.push((
+                horizon_client::text::Text::translate(
+                    "item.durability",
+                    &[
+                        horizon_client::text::Text::literal(
+                            (info.max_damage - stack.damage).to_string(),
+                        ),
+                        horizon_client::text::Text::literal(info.max_damage.to_string()),
+                    ],
                 ),
                 u32::MAX,
-            );
+            ));
         }
         // ItemStack.addDetailsToTooltipTail: with advanced tooltips the item id
         // and how many components the stack has.

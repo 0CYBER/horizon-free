@@ -9,8 +9,8 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
-pub const REPO: &str = "ludovic111/horizon";
-pub const README_URL: &str = "https://github.com/ludovic111/horizon/blob/main/launcher/README.md";
+pub const REPO: &str = "horizon-rust/horizon";
+pub const README_URL: &str = "https://github.com/horizon-rust/horizon/blob/main/launcher/README.md";
 /// The players' page on connecting an AI agent (the website's docs/agents.md).
 pub const AGENT_DOCS_URL: &str = "https://playhorizon.dev/docs/agents";
 /// This launcher's version: the release workflow sets `HORIZON_LAUNCHER_VERSION` from the
@@ -90,7 +90,7 @@ fn agent(url: &str) -> ureq::Agent {
     .build()
 }
 
-fn get(url: &str) -> Result<ureq::Response, String> {
+pub(crate) fn get(url: &str) -> Result<ureq::Response, String> {
     let mut request = agent(url).get(url);
     // CI runners share addresses and hit GitHub's anonymous rate limit; they pass their own token.
     if let Some(token) = std::env::var("HORIZON_GITHUB_TOKEN")
@@ -239,7 +239,7 @@ fn release_list() -> Result<serde_json::Value, String> {
 }
 
 /// The releases in `list` whose tag passes `keep`, newest first, with the asset named `asset`.
-fn parse_releases(
+pub(crate) fn parse_releases(
     list: &serde_json::Value,
     asset: Option<&str>,
     keep: fn(&str) -> bool,
@@ -475,7 +475,7 @@ fn installed_in(versions: &Path) -> Vec<String> {
 }
 
 /// A small release file (its checksums or their signature), whole; None when it has none.
-fn fetch_small(url: &str) -> Result<Option<Vec<u8>>, String> {
+pub(crate) fn fetch_small(url: &str) -> Result<Option<Vec<u8>>, String> {
     let response = match get(url) {
         Ok(response) => response,
         Err(e) if e.ends_with("answered 404") => return Ok(None),
@@ -550,17 +550,28 @@ pub fn install(release: &Release, progress: impl Fn(f32)) -> Result<(), String> 
     if !is_game_tag(tag) {
         return Err(format!("{tag} is not a Horizon release."));
     }
+    let sha256 = signed_digest(tag, ASSET.unwrap_or_default())?;
+    install_as(release, tag, &sha256, progress)
+}
+
+/// Downloads `release`'s archive for this platform, checks it against `sha256` (its signed
+/// checksum), and unpacks it as the installed version `tag`.
+pub(crate) fn install_as(
+    release: &Release,
+    tag: &str,
+    sha256: &str,
+    progress: impl Fn(f32),
+) -> Result<(), String> {
     let (url, size) = release
         .asset
         .clone()
         .ok_or_else(|| format!("{tag} has no build for this platform."))?;
-    let sha256 = signed_digest(tag, ASSET.unwrap_or_default())?;
     let root = versions_dir();
     let partial = root.join(format!(".{tag}.partial"));
     let _ = fs::remove_dir_all(&partial);
     fs::create_dir_all(&partial).map_err(|e| e.to_string())?;
     let archive = partial.join("download");
-    download(&url, size, &sha256, &archive, &progress)?;
+    download(&url, size, sha256, &archive, &progress)?;
     let unpacked = partial.join("unpacked");
     unpack(&archive, &url, &unpacked)?;
     progress(0.97);
@@ -1184,7 +1195,7 @@ fn preparer_binary(dir: &Path) -> Option<PathBuf> {
     binary.is_file().then_some(binary)
 }
 
-/// Downloads the pinned version from Mojang into `dir` when the signed-in account owns
+/// Downloads the pinned version from Mojang into `dir` when an account in the launcher owns
 /// Minecraft (asked again now), else says what signing in would do, as the last line of the
 /// not-found error.
 fn download_for_owner(
@@ -1194,17 +1205,20 @@ fn download_for_owner(
     log: &dyn Fn(String),
 ) -> Result<(), String> {
     let v = &pins.version;
-    let owner = (|| -> Result<Option<(String, bool)>, String> {
-        let ep = account::Endpoints::live();
-        let mut accounts = account::Accounts::load();
-        let Some((a, secrets)) = account::session_for_launch(&ep, account::store(), &mut accounts)?
-        else {
-            return Ok(None);
-        };
-        Ok(Some((a.name, account::owns_minecraft(&ep, &secrets)?)))
-    })();
-    match owner {
-        Ok(Some((name, true))) => {
+    let mut accounts = account::Accounts::load();
+    let pass = account::launch(
+        &account::Endpoints::live(),
+        account::client_id().as_deref(),
+        account::store(),
+        &mut accounts,
+    );
+    let _ = accounts.save();
+    match pass {
+        Ok(account::Launch {
+            owner: Some((owner, _)),
+            ..
+        }) => {
+            let name = owner.name;
             log(format!(
                 "{name} owns Minecraft: downloading {v} from Mojang"
             ));
@@ -1213,21 +1227,23 @@ fn download_for_owner(
                 sources::Os::MacOs => "osx",
                 sources::Os::Windows => "windows",
             };
-            mojang::download(pins, dir, os, 8, fetch, log).map_err(|e| {
+            mojang::download(pins, dir, os, 8, fetch, &mojang::CANCEL, log).map_err(|e| {
                 format!("\n  • Horizon tried to download {v} from Mojang for {name}, but: {e}")
             })
         }
-        Ok(Some((name, false))) => Err(format!(
-            "\n  • {name}, the signed-in account, doesn't own Minecraft: Java Edition, so Horizon \
-             can't download it."
+        // An owner by its last answer, who can't be asked now.
+        Ok(pass) => Err(format!(
+            "\n  • Downloading {v} from Mojang needs your Microsoft account, which could not be \
+             checked: {}",
+            pass.offline.unwrap_or_default()
         )),
-        Ok(None) => Err(format!(
+        Err(_) if !accounts.accounts.is_empty() => Err(
+            "\n  • No signed-in account owns Minecraft: Java Edition, so Horizon can't download it."
+                .into(),
+        ),
+        Err(_) => Err(format!(
             "\n  • Or sign in with the Microsoft account that owns Minecraft: Horizon then \
              downloads {v} from Mojang itself."
-        )),
-        Err(e) => Err(format!(
-            "\n  • Downloading {v} from Mojang needs your Microsoft account, which could not be \
-             checked: {e}"
         )),
     }
 }
@@ -1283,7 +1299,8 @@ fn java(
         Ok(body)
     };
     let runtime = data_dir().join("minecraft").join("runtime");
-    let home = mojang::java_runtime(&component, &runtime, 8, &fetch, log).map_err(|e| {
+    let home = mojang::java_runtime(&component, &runtime, 8, &fetch, &mojang::CANCEL, log)
+        .map_err(|e| {
         format!("{missing}\n  • Horizon also tried to download Minecraft's own Java from Mojang, but: {e}")
     })?;
     find(major, &[home]).map(|jdk| jdk.home())
@@ -1335,6 +1352,16 @@ fn assets_folder(
     }
 }
 
+/// Where the preparation takes Minecraft's files from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MinecraftFrom {
+    /// The player's own install (any launcher's); Mojang only when none has the version and an
+    /// account that owns the game is signed in.
+    Install,
+    /// Mojang, for the signed-in account that owns the game ("Download and prepare").
+    Mojang,
+}
+
 /// Checks what the preparation needs and picks how to run it. PLAY.txt describes the same
 /// steps: the player's own launcher install, the server jar from that version's own json, and
 /// Java (and Python, for versions before horizon-prepare). Also returns the Minecraft folder
@@ -1343,6 +1370,7 @@ fn assets_folder(
 pub fn preparer(
     tag: &str,
     minecraft: &Path,
+    from: MinecraftFrom,
     log: &dyn Fn(String),
 ) -> Result<(Preparer, PathBuf), String> {
     let version = game_version(tag);
@@ -1370,16 +1398,23 @@ pub fn preparer(
             Ok(body)
         };
         let linked = data_dir().join("linked-minecraft");
-        let resolved = sources::resolve(minecraft, &pins, &known, &linked, &fetch, log);
-        if reused {
-            assets_folder(resolved, &chosen, &version, log)
+        if from == MinecraftFrom::Mojang {
+            // Straight from Mojang (what is already there and whole is kept), for an owner only.
+            download_for_owner(&pins, &own, &fetch, log)
+                .map_err(|e| e.trim_start_matches("\n  • ").to_string())?;
+            own
         } else {
-            match resolved? {
-                sources::Resolved::Folder(dir) => dir,
-                sources::Resolved::NotFound(checked) => {
-                    let not_found = sources::not_found(&version, &checked, minecraft);
-                    download_for_owner(&pins, &own, &fetch, log).map_err(|e| not_found + &e)?;
-                    own
+            let resolved = sources::resolve(minecraft, &pins, &known, &linked, &fetch, log);
+            if reused {
+                assets_folder(resolved, &chosen, &version, log)
+            } else {
+                match resolved? {
+                    sources::Resolved::Folder(dir) => dir,
+                    sources::Resolved::NotFound(checked) => {
+                        let not_found = sources::not_found(&version, &checked, minecraft);
+                        download_for_owner(&pins, &own, &fetch, log).map_err(|e| not_found + &e)?;
+                        own
+                    }
                 }
             }
         }
@@ -1875,14 +1910,20 @@ pub fn need_prepared(tag: &str) -> Result<(), String> {
     }
 }
 
-/// The client's command, once its resources are prepared.
+/// The client's command, once the owner gate lets it start and its resources are prepared. Past
+/// the gate, a sign-in that can't be renewed (no network, expired) still lets the game start,
+/// offline.
 pub fn client(tag: &str) -> Result<Command, String> {
+    let (session, offline) = account::session_for_game(&game_home())
+        .map_err(|refused| format!("{refused} Sign in with `horizon-launcher account sign-in`."))?;
     need_prepared(tag)?;
     complete_assets(tag);
     crate::browser::horizon::before_play(&game_home());
     let mut cmd = client_command(tag);
-    // A sign-in that can't be renewed (no network, expired) still lets the game start, offline.
-    if let Err(e) = crate::account::attach_session(&mut cmd, &game_home()) {
+    if let Some(file) = session {
+        cmd.arg("--session-file").arg(file);
+    }
+    if let Some(e) = offline {
         eprintln!("Playing offline: {e}");
     }
     append_game_args(&mut cmd);
@@ -2430,15 +2471,21 @@ pub enum Msg {
     Reused(Vec<(String, String)>),
     /// Whether secrets are kept in the OS keychain (else only until the launcher closes).
     Keychain(bool),
-    /// The selected account's session file for the game about to start (none = offline), or
-    /// why it could not be renewed.
-    Session(Result<Option<PathBuf>, String>),
+    /// Whether an account in the launcher owned the game at its last check (the owner gate).
+    Owner(bool),
+    /// The owner gate's answer for the game about to start: the selected account's session
+    /// file (none = offline) and why it plays offline, if it does.
+    Session(Result<(Option<PathBuf>, Option<String>), crate::account::NoOwner>),
     /// A modpack step's line (`modpacks`).
     PackLine(String),
     /// A modpack step ended: the pack as it now is.
     PackDone(Result<Box<crate::modpacks::Imported>, String>),
     /// How many play Horizon now, or none when the server can't be reached (`telemetry`).
     Playing(Option<u64>),
+    /// The nightly being installed, done this far (`nightly`).
+    NightlyProgress(f32),
+    /// A nightly check ended: the version installed (None: already up to date), or why not.
+    Nightly(Result<Option<String>, String>),
 }
 
 /// A running process; its output arrives as `Msg::Line`, its end as `Msg::Exit`.
@@ -2597,6 +2644,10 @@ pub struct Settings {
     /// first-run question, or on the Play page once if they answered that before it existed.
     #[serde(default)]
     pub ping_notice_seen: bool,
+    /// The player without an account that owns the game has read, once, why the launcher needs
+    /// one now (the owner gate's screen).
+    #[serde(default)]
+    pub owner_notice_seen: bool,
     /// Seconds the sidebar's partner banner has been on screen, over every start, up to
     /// `partner::SEEN_BEFORE_HIDE`: only then can the player hide it.
     #[serde(default)]
@@ -2617,6 +2668,10 @@ pub struct Settings {
     /// The window's language. Unset follows the system's (`i18n::Language::system`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<crate::i18n::Language>,
+    /// The player turned Nightly on (`nightly`): the nightly build installs and updates in its own
+    /// instance. Off by default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub nightly: bool,
 }
 
 impl Settings {

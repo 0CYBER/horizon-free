@@ -146,26 +146,22 @@ impl Goal for Spell {
     }
 }
 
+/// `Entity.isInvisible` of an illusioner on a client: the shared flag stands
+/// in for the effect the server holds, which draws the mirror images.
+pub fn set_invisible(m: &mut Mob, on: bool) {
+    m.extra.effects.retain(|e| e.0 != INVISIBILITY);
+    if on {
+        m.extra.effects.push((INVISIBILITY, i32::MAX, 0));
+    }
+}
+
 /// The client-side half of `Illusioner.aiStep`: new image offsets when
 /// hurt and once a minute, with a puff of cloud and a sound.
 pub fn tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
     if !m.has_effect(INVISIBILITY) {
         return;
     }
-    let hurt = m.hurt_time;
-    let age = m.age;
-    let mut il = m.extra.illusions.take().unwrap_or_default();
-    il.ticks = (il.ticks - 1).max(0);
-    if hurt == 1 || age.is_multiple_of(1200) {
-        il.ticks = 3;
-        for i in 0..COPIES {
-            il.offsets[0][i] = il.offsets[1][i];
-            let r = &mut m.random;
-            let x = (-6 + r.next_int_bound(13).unwrap_or(0)) as f64 * 0.5;
-            let y = (r.next_int_bound(6).unwrap_or(0) - 4).max(0) as f64;
-            let z = (-6 + r.next_int_bound(13).unwrap_or(0)) as f64 * 0.5;
-            il.offsets[1][i] = [x, y, z];
-        }
+    if step(m) {
         events.push(MobEvent::Particles {
             kind: "minecraft:cloud",
             at: [m.position.x, m.position.y + 0.9, m.position.z],
@@ -177,6 +173,47 @@ pub fn tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
             1.0,
             1.0,
         ));
+    }
+}
+
+/// `Illusioner.aiStep` on a client of a server: invisible is the synched
+/// shared flag. The puff is drawn here exactly (sixteen `addParticle`s); the
+/// sound comes from the server.
+pub fn client_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    if !m.invisible || !step(m) {
+        return;
+    }
+    let (w, h) = (f64::from(m.width()), f64::from(m.height()));
+    for _ in 0..16 {
+        // getRandomX(0.5), getRandomY() and getZ(0.5), which is not random.
+        let x = m.position.x + w * (2.0 * m.random.next_double() - 1.0) * 0.5;
+        let y = m.position.y + h * m.random.next_double();
+        events.push(MobEvent::ParticleAt {
+            kind: "cloud",
+            at: [x, y, m.position.z + w * 0.5],
+            velocity: [0.0; 3],
+        });
+    }
+}
+
+/// The image offsets' clock of an invisible illusioner. True when the images
+/// jumped to new offsets (hurt, or once a minute), which the puff goes with.
+fn step(m: &mut Mob) -> bool {
+    let hurt = m.hurt_time;
+    let age = m.age;
+    let mut il = m.extra.illusions.take().unwrap_or_default();
+    il.ticks = (il.ticks - 1).max(0);
+    let jumped = hurt == 1 || age.is_multiple_of(1200);
+    if jumped {
+        il.ticks = 3;
+        for i in 0..COPIES {
+            il.offsets[0][i] = il.offsets[1][i];
+            let r = &mut m.random;
+            let x = (-6 + r.next_int_bound(13).unwrap_or(0)) as f64 * 0.5;
+            let y = (r.next_int_bound(6).unwrap_or(0) - 4).max(0) as f64;
+            let z = (-6 + r.next_int_bound(13).unwrap_or(0)) as f64 * 0.5;
+            il.offsets[1][i] = [x, y, z];
+        }
     } else if hurt == 9 {
         il.ticks = 3;
         for i in 0..COPIES {
@@ -185,6 +222,7 @@ pub fn tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
         }
     }
     m.extra.illusions = Some(il);
+    jumped
 }
 
 /// `Illusioner.getIllusionOffsets`.
