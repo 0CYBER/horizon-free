@@ -542,6 +542,8 @@ pub enum DamageKind {
     Cramming,
     /// `lightning_bolt`: a strike (`Entity.thunderHit`).
     LightningBolt,
+    /// `campfire`: standing in a lit campfire.
+    Campfire,
 }
 /// A damage source: its type, the attacking entity and where it came from.
 #[derive(Clone, Copy, Debug)]
@@ -606,6 +608,7 @@ impl Damage {
                 | DamageKind::InWall
                 | DamageKind::SweetBerryBush
                 | DamageKind::Cramming
+                | DamageKind::Campfire
         )
     }
     /// DamageTypeTags.BYPASSES_ARMOR
@@ -627,7 +630,11 @@ impl Damage {
     pub fn is_fire(&self) -> bool {
         matches!(
             self.kind,
-            DamageKind::OnFire | DamageKind::InFire | DamageKind::Lava | DamageKind::Fireball
+            DamageKind::OnFire
+                | DamageKind::InFire
+                | DamageKind::Campfire
+                | DamageKind::Lava
+                | DamageKind::Fireball
         )
     }
     /// DamageTypeTags.NO_KNOCKBACK
@@ -650,6 +657,7 @@ impl Damage {
                 | DamageKind::OutOfWorld
                 | DamageKind::Cramming
                 | DamageKind::LightningBolt
+                | DamageKind::Campfire
         )
     }
     pub fn is_projectile(&self) -> bool {

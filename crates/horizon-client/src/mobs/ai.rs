@@ -533,7 +533,8 @@ pub fn tick(
     true
 }
 /// `LivingEntity.aiStep` -> `Entity.applyEffectsFromBlocks` for the blocks
-/// that hurt or hold a mob: the cactus (`CactusBlock.entityInside`, 1) and the
+/// that hurt or hold a mob: the cactus (`CactusBlock.entityInside`, 1), a lit
+/// campfire (`CampfireBlock.entityInside`) and the
 /// sweet berry bush (`SweetBerryBushBlock.entityInside`: stuck at 0.8, 0.75,
 /// 0.8, and a grown bush pricks for 1 when the mob moved at least 0.003 on X
 /// or Z this tick). The blocks are those the mob's box touches anywhere along
@@ -561,6 +562,14 @@ fn effects_from_blocks(m: &mut Mob, w: &MobWorld) {
                     match w.block_name(x, y, z) {
                         "minecraft:cactus" => {
                             m.damage(1.0, Damage::of(DamageKind::Cactus));
+                        }
+                        // CampfireBlock.entityInside: a lit one hurts by its
+                        // fireDamage (1, 2 for a soul campfire).
+                        name @ ("minecraft:campfire" | "minecraft:soul_campfire") => {
+                            if w.prop(x, y, z, "lit") == Some("true") {
+                                let fire = if name == "minecraft:campfire" { 1.0 } else { 2.0 };
+                                m.damage(fire, Damage::of(DamageKind::Campfire));
+                            }
                         }
                         "minecraft:sweet_berry_bush"
                             if !matches!(m.species(), Species::Fox | Species::Bee) =>
