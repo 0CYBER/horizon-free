@@ -800,6 +800,35 @@ impl Game<'_> {
                 && adv::item(&c["item"], &it, w)
         });
     }
+    /// `FishingRodHookedTrigger`: the rod, what the hook is in (or the hook)
+    /// and the items it caught.
+    pub(super) fn trigger_fishing_rod_hooked(
+        &mut self,
+        rod: &ItemStack,
+        hooked: &EntityView,
+        items: &[ItemStack],
+    ) {
+        let me = self.player_entity();
+        let rod = item_view(rod);
+        let hooked = hooked.clone();
+        let items: Vec<ItemView> = items.iter().map(item_view).collect();
+        self.trigger("minecraft:fishing_rod_hooked", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let ectx = adv::Entities {
+                this: Some(&hooked),
+                ..pctx
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::item(&c["rod"], &rod, w)
+                && adv::conditions(&c["entity"], &ectx, w)
+                && (c["item"].is_null() || items.iter().any(|i| adv::item(&c["item"], i, w)))
+        });
+    }
     /// `EnterBlockTrigger`: the block, its state properties and the player.
     pub(super) fn trigger_enter_block(&mut self, state: horizon_world::registry::BlockStateId) {
         let Some(definition) = self.pack.assets.registry.state(state).cloned() else {
