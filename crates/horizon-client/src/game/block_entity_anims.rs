@@ -547,7 +547,7 @@ impl Game<'_> {
         });
     }
     /// `Entity.isInRain`: rain at the block position or at the top of the box.
-    fn in_rain(&mut self, at: Vec3, top: f64) -> bool {
+    pub(super) fn in_rain(&mut self, at: Vec3, top: f64) -> bool {
         let p = BlockPos::new(
             at.x.floor() as i32,
             at.y.floor() as i32,

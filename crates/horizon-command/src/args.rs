@@ -367,6 +367,14 @@ impl Selector {
     pub fn single(&self) -> bool {
         self.limit <= 1
     }
+    /// `EntitySelectorParser.setWorldLimited`: a selector with a spatial
+    /// constraint (`distance` or a position) reaches the level the command
+    /// runs in only; an unbounded one reaches every loaded level.
+    pub fn world_limited(&self) -> bool {
+        self.distance.is_some()
+            || self.pos.iter().any(Option::is_some)
+            || self.delta.iter().any(Option::is_some)
+    }
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct BlockInput {
