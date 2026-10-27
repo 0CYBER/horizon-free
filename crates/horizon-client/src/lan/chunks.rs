@@ -824,6 +824,7 @@ impl ChunkEncoder {
                     tag: block_entities
                         .get(&pos)
                         .and_then(entity_tag)
+                        .or_else(|| pot_tag(chunk, pos))
                         .unwrap_or(Tag::End),
                 });
             }
@@ -982,6 +983,22 @@ pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
         )])),
         _ => None,
     }
+}
+
+/// The update tag of the decorated pot at `pos` (DecoratedPotBlockEntity.getUpdateTag,
+/// saveCustomOnly). A pot is not a block entity here: its tag is the chunk's saved one.
+pub fn pot_tag(chunk: &Chunk, pos: (i32, i32, i32)) -> Option<Tag> {
+    let at = chunk.saved.as_ref()?.block_entities.iter().find(|t| {
+        t.get("id") == Some(&Tag::String("minecraft:decorated_pot".into()))
+            && t.get("x") == Some(&Tag::Int(pos.0))
+            && t.get("y") == Some(&Tag::Int(pos.1))
+            && t.get("z") == Some(&Tag::Int(pos.2))
+    })?;
+    let entries: Vec<_> = ["sherds", "LootTable", "LootTableSeed", "item"]
+        .into_iter()
+        .filter_map(|k| Some((k, at.get(k)?.clone())))
+        .collect();
+    (!entries.is_empty()).then(|| Tag::compound(entries))
 }
 
 /// Light sections run from one below the world to one above it. A layer
