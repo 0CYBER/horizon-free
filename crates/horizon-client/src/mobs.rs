@@ -977,6 +977,11 @@ pub enum MobEvent {
         mob: u32,
         hive: [i32; 3],
     },
+    /// `LandOnOwnersShoulderGoal`: a tame parrot touched its owner and sits
+    /// on their shoulder (the host stores its tag and discards it).
+    ParrotToShoulder {
+        mob: u32,
+    },
     /// `CopperGolem.turnToStatue`.
     BecomeStatue {
         mob: u32,

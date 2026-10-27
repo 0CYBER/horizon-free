@@ -170,6 +170,7 @@ mod server_packs;
 mod server_travel;
 mod shader_packs;
 mod shield;
+mod shoulders;
 mod sign_edit;
 mod sniffers;
 mod spawner;
@@ -5238,6 +5239,7 @@ impl Game<'_> {
             self.location_changed_effects(before.2, before.0);
         }
         self.tick_totem();
+        self.handle_shoulder_entities();
         let Some(player) = self.player.as_mut() else {
             return Ok(());
         };

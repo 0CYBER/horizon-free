@@ -59,6 +59,8 @@ pub(super) struct Creatures {
     pub elder_apparition: i32,
     /// The wandering trader spawner's clock.
     pub trader: super::wandering_trader::Spawner,
+    /// When each player last put a parrot on a shoulder (`timeEntitySatOnShoulder`).
+    pub shoulder_time: std::collections::HashMap<[i32; 4], i64>,
     /// The cat spawner's countdown (`CatSpawner.nextTick`).
     pub cat_tick: i32,
     /// Particles from a guest's turn, waiting for it to end
@@ -1278,6 +1280,7 @@ impl Game<'_> {
                 }
                 MobEvent::BecomeStatue { mob } => self.golem_become_statue(mob),
                 MobEvent::EnterHive { mob, hive } => self.bee_enter_hive(mob, hive),
+                MobEvent::ParrotToShoulder { mob } => self.parrot_to_shoulder(mob),
                 MobEvent::Infested { mob } => self.mob_infested(mob),
                 MobEvent::Gift { target, item } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == target)
@@ -3327,6 +3330,12 @@ impl Game<'_> {
             .items()
             .get(&item)
             .is_some_and(|i| i.max_damage > 0);
+        let parrot_poisonous = self
+            .res
+            .items()
+            .item_tags
+            .get("minecraft:parrot_poisonous_food")
+            .is_some_and(|t| t.contains(&*item));
         let acting = self.acting_player_uuid();
         let sneaking = self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)
             || self.keys.contains(&winit::keyboard::KeyCode::ShiftRight);
@@ -3598,6 +3607,15 @@ impl Game<'_> {
                     && m.extra.owner == Some(acting)
                     && !(is_food && m.extra.age == 0 && m.extra.in_love <= 0) =>
             {
+                m.extra.sitting = !m.extra.sitting;
+                self.world.modified.insert((
+                    m.position.x.floor() as i32 >> 4,
+                    m.position.z.floor() as i32 >> 4,
+                ));
+            }
+            // Parrot.mobInteract: the owner makes a tame parrot on the ground
+            // sit or stand (poisonous food is handled apart).
+            Species::Parrot if m.extra.tame && m.on_ground && !parrot_poisonous => {
                 m.extra.sitting = !m.extra.sitting;
                 self.world.modified.insert((
                     m.position.x.floor() as i32 >> 4,
