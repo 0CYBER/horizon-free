@@ -1034,7 +1034,7 @@ impl Game<'_> {
         // A dragon part is no LivingEntity: `canCriticalAttack` is false.
         let (amount, _, _, _) = self.melee_damage("minecraft:ender_dragon", false);
         self.swing_arm();
-        // The part's box (a part is no living entity: no critical sound).
+        // The part's box.
         let area = self
             .special_targets()
             .into_iter()

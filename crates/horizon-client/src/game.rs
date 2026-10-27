@@ -7566,21 +7566,16 @@ impl Game<'_> {
         if let Some((area, mob)) = target {
             self.sweep_damage(area, mob, scale);
         }
-        self.particles.add(
-            &horizon_client::particles::ParticleOptions::simple(
-                horizon_client::particles::ParticleType::SweepAttack,
-            ),
-            at,
-            [0.0; 3],
+        let arc = horizon_client::particles::ParticleOptions::simple(
+            horizon_client::particles::ParticleType::SweepAttack,
         );
+        self.particles.add(&arc, at, [0.0; 3]);
         // ServerLevel.sendParticles: the arc's offset is its direction (the
         // particle's extra argument, which the packet carries for the
         // clients of a server).
         if let Some(p) = self.player.as_ref() {
             self.lan_particle(
-                &horizon_client::particles::ParticleOptions::simple(
-                    horizon_client::particles::ParticleType::SweepAttack,
-                ),
+                &arc,
                 at,
                 [
                     (at[0] - p.position.x) as f32,
@@ -7625,15 +7620,7 @@ impl Game<'_> {
             self.audio
                 .play("minecraft:entity.player.attack.crit", from, 1.0, 1.0);
             if let Some(id) = living {
-                let (feet, size) = (area.bottom_center(), area.size());
-                self.critical_hit(
-                    self.lan_acting,
-                    id,
-                    [feet.x, feet.y, feet.z],
-                    size.x,
-                    size.y,
-                    1,
-                );
+                self.area_critical_hit(id, area, 1);
             }
         } else if sweep.is_none() {
             let sound = if full {
@@ -7645,16 +7632,21 @@ impl Game<'_> {
         }
         // Player.magicCrit: the enchantments added damage.
         if let Some(id) = magic {
-            let (feet, size) = (area.bottom_center(), area.size());
-            self.critical_hit(
-                self.lan_acting,
-                id,
-                [feet.x, feet.y, feet.z],
-                size.x,
-                size.y,
-                2,
-            );
+            self.area_critical_hit(id, area, 2);
         }
+    }
+    /// `critical_hit` around the box `area` of entity `id` (`action`: 1 crit,
+    /// 2 enchanted hit).
+    fn area_critical_hit(&mut self, id: i32, area: Aabb, action: u8) {
+        let (feet, size) = (area.bottom_center(), area.size());
+        self.critical_hit(
+            self.lan_acting,
+            id,
+            [feet.x, feet.y, feet.z],
+            size.x,
+            size.y,
+            action,
+        );
     }
     /// `Player.canCriticalAttack` for a living target at attack strength
     /// `scale`: falling, off the ground, not in water, not blind (mobility
