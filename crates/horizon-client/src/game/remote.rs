@@ -4588,6 +4588,13 @@ impl Game<'_> {
             .and_then(|h| self.res.items().get(&h.item))
             .is_some_and(|i| i.block.is_some());
         if let Some(hit) = self.pick() {
+            // ShelfBlock.useItemOn consumes a nonempty main-hand click client-side
+            // without predicting the inventory swap or swinging.
+            let shelf_reacts = hand == Hand::Main
+                && held.is_some()
+                && !(self.keys.contains(&KeyCode::ShiftLeft)
+                    && (self.stack_in(self.selected).is_some() || self.offhand.is_some()))
+                && self.shelf_hit(&hit).is_some();
             let (reacts, changes) = if hand == Hand::Main {
                 self.remote_block_reacts(&hit, held.as_ref())
             } else {
@@ -4613,6 +4620,9 @@ impl Game<'_> {
             // places nothing (BlockItem.place is where the sound comes from).
             if let Some(r) = self.remote.as_mut() {
                 r.use_target = Some(hit.pos);
+            }
+            if shelf_reacts {
+                return true;
             }
             if reacts {
                 self.predict_use(&changes, seq);

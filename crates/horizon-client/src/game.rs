@@ -4185,6 +4185,14 @@ impl Game<'_> {
                 self.swing_arm();
                 return Ok(true);
             }
+            if let Some(swings) = self.use_shelf(hit) {
+                let used = held.unwrap_or_else(|| ItemStack::new("minecraft:air", 0));
+                self.trigger_block("minecraft:item_used_on_block", hit.pos, &used);
+                if swings {
+                    self.swing_arm();
+                }
+                return Ok(true);
+            }
             if let Some(swings) = self.use_chiseled_bookshelf(hit, held.as_ref()) {
                 if swings {
                     self.swing_arm();
