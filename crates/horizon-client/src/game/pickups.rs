@@ -155,6 +155,8 @@ mod tests {
             value: 1,
             age: 0,
             on_ground: false,
+            count: 1,
+            ticks: 0,
         }))
     }
 
