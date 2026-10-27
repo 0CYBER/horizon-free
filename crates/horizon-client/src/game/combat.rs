@@ -1,7 +1,16 @@
 //! The player's `CombatTracker`: the damage taken lately, who dealt it and
 //! where the player fell from, turned into the vanilla death message.
 use super::{Game, chat::PLAYER_NAME};
-use horizon_client::{health::HealthEvent, motion::MotionEvent, text::Text};
+use horizon_client::{
+    health::HealthEvent,
+    motion::MotionEvent,
+    particles::{ParticleOptions, ParticleType},
+    text::Text,
+};
+use horizon_core::random::RandomSource;
+
+/// `EntityEvent.DROWN_PARTICLES`: broadcast with the drowning damage.
+pub(super) const DROWN_EVENT: i8 = 67;
 
 struct Entry {
     damage_type: String,
@@ -10,6 +19,9 @@ struct Entry {
     fall_distance: f32,
     /// The causing entity: its id (for comparisons) and display name.
     attacker: Option<(u32, Text)>,
+    /// The direct entity's display name when no entity caused the damage
+    /// (`DamageSource.directEntity`: a potion with no thrower, a cloud).
+    direct: Option<Text>,
 }
 #[derive(Default)]
 pub(super) struct CombatTracker {
@@ -19,6 +31,8 @@ pub(super) struct CombatTracker {
     /// Attackers of damage dealt this tick, claimed by the matching
     /// `RecordedDamage` event.
     pending: Vec<(String, (u32, Text))>,
+    /// `pending` for a direct entity with no causing entity: only its name.
+    pending_direct: Vec<(String, Text)>,
     /// `LivingEntity.lastHurtByMob` and its timestamp (the kill credit).
     last_hurt_by: Option<((u32, Text), i64)>,
     /// The mob the player last hurt (`getLastHurtMob`) and when.
@@ -31,11 +45,47 @@ pub(super) struct CombatTracker {
     /// The mob exploding now (`ServerExplosion.source`): its team's friendly
     /// fire decides whom the blast may hurt.
     pub(super) explosion_source: Option<u32>,
+    /// Charged creepers whose blast just went off and that have not dropped
+    /// a head yet (`Creeper.droppedSkulls`): they are gone from the mob list,
+    /// but the mobs they killed still ask for their loot.
+    pub(super) charged_exploders: Vec<u32>,
     /// The player's fall distance before this tick's movement (as of the
     /// end of the last one).
     fall_before: f64,
 }
 impl Game<'_> {
+    /// `LivingEntity.makeDrownParticles`: eight bubbles around the entity,
+    /// moving with it.
+    pub(super) fn drown_particles(&mut self, at: [f64; 3], velocity: [f64; 3]) {
+        let bubble = ParticleOptions::simple(ParticleType::Bubble);
+        for _ in 0..8 {
+            let mut triangle = || {
+                let r = self.particles.random();
+                r.next_double() - r.next_double()
+            };
+            let p = [at[0] + triangle(), at[1] + triangle(), at[2] + triangle()];
+            self.particles.add(&bubble, p, velocity);
+        }
+    }
+    /// Entity event 67 from a server, for this client's own player or an
+    /// entity it draws.
+    pub(super) fn remote_drown(&mut self, id: i32) {
+        let own = self.remote.as_ref().is_some_and(|r| r.entity_id == id);
+        let body = if own {
+            self.player.as_ref().map(|p| {
+                let (at, v) = (p.position, p.velocity);
+                ([at.x, at.y, at.z], [v.x, v.y, v.z])
+            })
+        } else {
+            self.mobs.iter().find(|m| m.id == id as u32).map(|m| {
+                let (at, v) = (m.position, m.velocity);
+                ([at.x, at.y, at.z], [v.x, v.y, v.z])
+            })
+        };
+        if let Some((at, v)) = body {
+            self.drown_particles(at, v);
+        }
+    }
     /// The display name of a mob: its custom name or its type's name.
     pub(super) fn mob_display_name(&self, id: u32) -> Option<Text> {
         let m = self.mobs.iter().find(|m| m.id == id)?;
@@ -62,11 +112,19 @@ impl Game<'_> {
             .pending
             .push((damage_type.to_owned(), (id, name)));
     }
+    /// The `DamageSource.directEntity` of the next `damage_type` damage when
+    /// nothing caused it (a splash potion nobody threw): the death message
+    /// names it instead (`getLocalizedDeathMessage`). It is no kill credit.
+    pub(super) fn note_direct_entity(&mut self, damage_type: &str, name: Text) {
+        self.combat
+            .pending_direct
+            .push((damage_type.to_owned(), name));
+    }
     /// `LivingEntity.handleDamageEvent` for the player: the hurt sound of the
     /// source's `DamageEffects` (`Player.getHurtSound`).
     pub(super) fn player_hurt_sound(&mut self, sound: &str, at: [f64; 3]) {
-        let pitch = self.audio.hurt_pitch();
-        self.audio.play(sound, Some(at), 1.0, pitch);
+        // Player.getVoicePitch: always 1.0.
+        self.audio.play(sound, Some(at), 1.0, 1.0);
     }
     /// `CombatTracker.recordDamage` for the motion events of this tick.
     pub(super) fn record_combat(&mut self, events: &[MotionEvent]) {
@@ -90,6 +148,15 @@ impl Game<'_> {
                 .iter()
                 .position(|(t, _)| *t == name)
                 .map(|i| self.combat.pending.remove(i).1);
+            let direct = match attacker {
+                Some(_) => None,
+                None => self
+                    .combat
+                    .pending_direct
+                    .iter()
+                    .position(|(t, _)| *t == name)
+                    .map(|i| self.combat.pending_direct.remove(i).1),
+            };
             let (fall_location, fall_distance) = self.fall_location();
             let now = self.world.game_time;
             if let Some(a) = &attacker {
@@ -107,10 +174,12 @@ impl Game<'_> {
                 fall_location,
                 fall_distance,
                 attacker,
+                direct,
             });
             self.combat.last_damage = now;
         }
         self.combat.pending.clear();
+        self.combat.pending_direct.clear();
         self.combat.fall_before = self.player.as_ref().map_or(0.0, |p| p.fall_distance);
     }
     /// `FallLocation.getCurrentFallLocation` and the fall distance so far.
@@ -220,6 +289,7 @@ impl Game<'_> {
         let entries = std::mem::take(&mut self.combat.entries);
         let killing = entries.last().expect("checked above");
         let killer = killing.attacker.clone();
+        let direct = killing.direct.clone();
         if def.1 == "fall_variants"
             && let Some(knock) = knock.and_then(|i| entries.get(i))
         {
@@ -244,7 +314,12 @@ impl Game<'_> {
                 .append(Text::literal("]"));
             return Text::translate(&format!("{key}.message"), &[me, link]);
         }
+        // `getLocalizedDeathMessage`: the causing entity's name, or the
+        // direct entity's when nothing caused the damage.
         if let Some((_, name)) = killer {
+            return Text::translate(&key, &[me, name]);
+        }
+        if let Some(name) = direct {
             return Text::translate(&key, &[me, name]);
         }
         // getKillCredit: the last mob that hurt the player in the past 100 ticks.
@@ -253,6 +328,8 @@ impl Game<'_> {
         {
             return Text::translate(&format!("{key}.player"), &[me, name.clone()]);
         }
+        // No entity at all: the one-argument message, as vanilla sends it (a
+        // template that names a killer then shows as written).
         Text::translate(&key, &[me])
     }
 }

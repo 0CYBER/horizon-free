@@ -9,7 +9,14 @@ use crate::{
 };
 use horizon_core::{
     geometry::{Aabb, Vec3, trig},
+    position::BlockPos,
     random::RandomSource,
+};
+use horizon_world::{
+    entity_fluid::{CurrentAccumulator, CurrentTarget},
+    fluid::{FluidKind, FluidState},
+    fluid_flow::{FluidFlowWorld, flow_at},
+    registry::BlockStateId,
 };
 
 /// `Entity.moveDist`, `flyDist` and `nextStep`.
@@ -35,6 +42,50 @@ pub struct Fluids {
     pub in_water: bool,
     pub in_lava: bool,
     pub eye_in_water: bool,
+}
+/// `FluidFlowWorld` over the mob's scene: the neighbours a flow vector reads.
+struct FlowScene<'a, 'w>(&'a MobWorld<'w>);
+impl FluidFlowWorld for FlowScene<'_, '_> {
+    type Error = std::convert::Infallible;
+    type Block = BlockStateId;
+    fn fluid(&mut self, p: BlockPos) -> Result<FluidState, Self::Error> {
+        Ok(self.0.fluid_tables.fluid(self.0.world.block(p.x, p.y, p.z)))
+    }
+    fn block(&mut self, p: BlockPos) -> Result<BlockStateId, Self::Error> {
+        Ok(self.0.world.block(p.x, p.y, p.z))
+    }
+    fn blocks_fluid_flow(&self, s: BlockStateId) -> bool {
+        self.0.fluid_tables.blocks_flow(s)
+    }
+    fn is_ice_class(&self, s: BlockStateId) -> bool {
+        self.0.fluid_tables.ice(s)
+    }
+    fn is_face_sturdy(
+        &mut self,
+        s: BlockStateId,
+        _: BlockPos,
+        d: horizon_core::geometry::Direction,
+    ) -> Result<bool, Self::Error> {
+        Ok(self.0.fluid_tables.sturdy(s, d))
+    }
+}
+/// The mob's velocity, for `CurrentAccumulator::apply_to`.
+struct Pushed<'a>(&'a mut Vec3);
+impl CurrentTarget for Pushed<'_> {
+    type Error = std::convert::Infallible;
+    fn is_player_class(&self) -> bool {
+        false
+    }
+    fn velocity(&mut self) -> Result<Vec3, Self::Error> {
+        Ok(*self.0)
+    }
+    fn add_delta_movement(&mut self, delta: Vec3) -> Result<(), Self::Error> {
+        let sum = Vec3::new(self.0.x + delta.x, self.0.y + delta.y, self.0.z + delta.z);
+        if delta.is_finite() && sum.is_finite() {
+            *self.0 = sum;
+        }
+        Ok(())
+    }
 }
 pub fn wrap(a: f32) -> f32 {
     let mut a = a % 360.0;
@@ -140,6 +191,40 @@ impl MobWorld<'_> {
         }
         out
     }
+    /// Entity.updateFluidHeightAndDoFluidPushing's currents over the deflated
+    /// box: the flow of every water and lava block it touches, summed (a thin
+    /// fluid layer scales its flow down), as (water, lava).
+    fn fluid_currents(&self, bounds: Aabb) -> (CurrentAccumulator, CurrentAccumulator) {
+        let base_y = bounds.min_position().y;
+        let b = bounds.deflate(Vec3::new(0.001, 0.001, 0.001));
+        let (lo, hi) = (b.min_position(), b.max_position());
+        let mut scene = FlowScene(self);
+        let (mut water, mut lava) = (CurrentAccumulator::default(), CurrentAccumulator::default());
+        for x in lo.x.floor() as i32..=(hi.x.ceil() as i32 - 1) {
+            for y in lo.y.floor() as i32..=(hi.y.ceil() as i32 - 1) {
+                for z in lo.z.floor() as i32..=(hi.z.ceil() as i32 - 1) {
+                    let p = BlockPos::new(x, y, z);
+                    let state = self.fluid_tables.fluid(self.world.block(x, y, z));
+                    let current = match state.kind() {
+                        FluidKind::Empty => continue,
+                        FluidKind::Water | FluidKind::FlowingWater => &mut water,
+                        FluidKind::Lava | FluidKind::FlowingLava => &mut lava,
+                    };
+                    let surface = f64::from(y) + self.fluid_height(x, y, z).1;
+                    if surface < lo.y {
+                        continue;
+                    }
+                    current.height = current.height.max(surface - base_y);
+                    let mut flow = flow_at(&mut scene, state, p).unwrap_or(Vec3::ZERO);
+                    if current.height < 0.4 {
+                        flow = flow.scale(current.height);
+                    }
+                    current.accumulate(flow);
+                }
+            }
+        }
+        (water, lava)
+    }
     /// `BlockState.getCollisionShape(level, pos)` (the empty collision
     /// context) as boxes in the world.
     pub fn block_collision_boxes(&self, x: i32, y: i32, z: i32) -> Vec<Aabb> {
@@ -235,6 +320,26 @@ impl MobWorld<'_> {
         };
         scene.unobstructed(b).unwrap_or(false)
     }
+    /// `LevelReader.containsAnyLiquid`: the blocks from the box's minimum
+    /// corner to the block holding its maximum corner.
+    pub fn contains_any_liquid(&self, b: Aabb) -> bool {
+        let (lo, hi) = (b.min_position(), b.max_position());
+        let (x0, y0, z0) = (
+            lo.x.floor() as i32,
+            lo.y.floor() as i32,
+            lo.z.floor() as i32,
+        );
+        let (x1, y1, z1) = (
+            hi.x.floor() as i32,
+            hi.y.floor() as i32,
+            hi.z.floor() as i32,
+        );
+        (x0..=x1).any(|x| {
+            (y0..=y1).any(|y| {
+                (z0..=z1).any(|z| self.facts.get(self.world.block(x, y, z)).fluid != Fluid::None)
+            })
+        })
+    }
 }
 impl Mob {
     /// `Entity.refreshDimensions` after growing from `old_w` by `old_h`:
@@ -281,6 +386,15 @@ impl Mob {
             return (f64::from(0.2_f32), f64::from(0.2_f32), f64::from(0.2_f32));
         }
         let k = &self.kind;
+        // Avatar.POSES: a player's or mannequin's box follows its pose.
+        if matches!(&*k.id, "minecraft:player" | "minecraft:mannequin") {
+            let d = self.extra.avatar_pose.dimensions(1.0);
+            return (
+                f64::from(d.width),
+                f64::from(d.height),
+                f64::from(d.eye_height),
+            );
+        }
         let (mut w, mut h, mut e) = (k.width as f32, k.height as f32, k.eye_height as f32);
         // Sniffer.DIGGING_DIMENSIONS: 0.4 lower, its eyes at 0.81.
         if k.species == super::Species::Sniffer && super::sniffer::digging(self) {
@@ -333,6 +447,27 @@ impl Mob {
     }
     pub fn is_in_liquid(&self) -> bool {
         self.fluids.in_water || self.fluids.in_lava
+    }
+    /// `Entity.isPushedByFluid`: water animals, turtles, axolotls, frogs and
+    /// nautiluses keep their own course.
+    fn pushed_by_fluid(&self) -> bool {
+        use super::Species as S;
+        !matches!(
+            self.species(),
+            S::Tadpole
+                | S::Cod
+                | S::Salmon
+                | S::TropicalFish
+                | S::Pufferfish
+                | S::Squid
+                | S::GlowSquid
+                | S::Dolphin
+                | S::Turtle
+                | S::Axolotl
+                | S::Frog
+                | S::Nautilus
+                | S::ZombieNautilus
+        )
     }
     fn affected_by_fluids(&self) -> bool {
         true
@@ -450,6 +585,22 @@ impl Mob {
     pub(super) fn update_fluids(&mut self, w: &MobWorld, events: &mut Vec<MobEvent>) {
         let was_touching_water = self.fluids.in_water;
         self.fluids = w.fluids(self.bounds(), self.eye_y());
+        // EntityFluidInteraction.applyCurrentTo: the flow pushes the mob.
+        if (self.fluids.in_water || self.fluids.in_lava) && self.pushed_by_fluid() {
+            let (water, lava) = w.fluid_currents(self.bounds());
+            let lava_scale = if w.nether {
+                0.007
+            } else {
+                0.0023333333333333335
+            };
+            let mut pushed = Pushed(&mut self.velocity);
+            if water.height > 0.0 {
+                let _ = water.apply_to(&mut pushed, 0.014);
+            }
+            if lava.height > 0.0 {
+                let _ = lava.apply_to(&mut pushed, lava_scale);
+            }
+        }
         if self.fluids.in_water {
             self.fall_distance = 0.0;
             if !was_touching_water && !self.first_tick {
@@ -529,13 +680,15 @@ impl Mob {
         }
     }
     /// `Entity.nextStep`: the next whole metre walked; a warden's steps come
-    /// every 0.55, a strider's every 0.6.
+    /// every 0.55, a strider's every 0.6, a turtle's every 0.15.
     fn next_step(&self) -> f32 {
         let walked = self.ai.steps.move_dist;
         if self.kind.species == super::Species::Warden {
             walked + 0.55
         } else if self.kind.species == super::Species::Strider {
             walked + 0.6
+        } else if self.kind.species == super::Species::Turtle {
+            walked + 0.15
         } else {
             (walked as i32).wrapping_add(1) as f32
         }
@@ -629,7 +782,11 @@ impl Mob {
             return;
         }
         let power = self.fall_distance + 1.0e-6 - self.kind.safe_fall_distance;
-        let damage = (power * self.kind.fall_damage_multiplier).floor();
+        let mut damage = (power * self.kind.fall_damage_multiplier).floor();
+        // Frog.calculateFallDamage: five points less than the base damage.
+        if self.species() == super::Species::Frog {
+            damage -= 5.0;
+        }
         if damage > 0.0 {
             let at = [self.position.x, self.position.y, self.position.z];
             let sound = if damage > 4.0 {
@@ -813,14 +970,24 @@ impl Mob {
                 self.velocity.y -= gravity / 4.0;
             }
         }
-        // jumpOutOfFluid
+        // jumpOutOfFluid: Entity.isFree wants the box dry and clear of the
+        // entities a mob collides with (canBeCollidedWith: living shulkers).
         let m = self.velocity;
+        let ahead = self.bounds().move_by(Vec3::new(
+            m.x,
+            m.y + f64::from(0.6_f32) - self.position.y + old_y,
+            m.z,
+        ));
+        let wide = ahead.inflate(Vec3::new(1.0e-7, 1.0e-7, 1.0e-7));
         if self.horizontal_collision
-            && w.no_collision(self.bounds().move_by(Vec3::new(
-                m.x,
-                m.y + f64::from(0.6_f32) - self.position.y + old_y,
-                m.z,
-            )))
+            && w.no_collision(ahead)
+            && !w.contains_any_liquid(ahead)
+            && !w.others_near(wide).any(|s| {
+                s.id != self.id
+                    && s.alive
+                    && s.species == super::Species::Shulker
+                    && s.bounds.intersects(wide)
+            })
         {
             self.velocity.y = f64::from(0.3_f32);
         }
@@ -908,7 +1075,7 @@ impl Mob {
                 (distance * 4.0).min(1.0)
             };
             self.limb_speed += (target - self.limb_speed) * 0.4;
-            self.limb_position += self.limb_speed * if self.is_baby() { 3.0 } else { 1.0 };
+            self.limb_position += self.limb_speed;
         } else {
             self.limb_speed = 0.0;
         }

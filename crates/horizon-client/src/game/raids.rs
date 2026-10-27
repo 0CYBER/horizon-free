@@ -235,7 +235,7 @@ impl Game<'_> {
         }
         out
     }
-    fn difficulty_id(&self) -> i32 {
+    pub(super) fn difficulty_id(&self) -> i32 {
         use horizon_world::food::Difficulty;
         match self.world.health_rules.difficulty {
             Difficulty::Peaceful => 0,
@@ -796,6 +796,8 @@ impl Game<'_> {
             let s = m.extra.raider.get_or_insert_with(Box::default);
             s.rider = has_rider;
             s.in_village = in_village;
+            // Vindicator.customServerAiStep: `ServerLevel.isRaided`.
+            s.raided = species == Species::Vindicator && raids.nearby(block).is_some();
             if s.raid_id.is_some_and(|id| raids.get(id).is_none()) {
                 s.raid_id = None;
                 s.ticks_outside_raid = 0;
@@ -1034,6 +1036,7 @@ impl Game<'_> {
     /// read it).
     fn sync_villager_raids(&mut self, infos: &HashMap<i32, Vec<RaiderInfo>>) {
         let raids = &self.raiding.raids;
+        let mut ongoing = Vec::new();
         for m in &mut self.mobs {
             if m.species() != Species::Villager {
                 continue;
@@ -1059,7 +1062,27 @@ impl Game<'_> {
             let ext = mobs_villager::ext_mut(m);
             ext.raid = status;
             ext.raid_wave = wave;
+            if !m.no_ai && matches!(status, mobs_villager::PRE_RAID | mobs_villager::RAID) {
+                ongoing.push(m.id);
+            }
         }
+        // Villager.customServerAiStep: a 1 in 100 chance each tick, in an
+        // ongoing raid, of entity event 42 (`handleEntityEvent` splashes).
+        for id in ongoing {
+            if self.particles.random().next_int_bound(100) == Ok(0) {
+                self.mob_raid_splash(id);
+            }
+        }
+    }
+    /// Entity event 42 for villager `id`: the guests get the byte, and this
+    /// game draws `AbstractVillager.addParticlesAroundSelf(SPLASH)` itself.
+    fn mob_raid_splash(&mut self, id: u32) {
+        let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
+            return;
+        };
+        let at = [m.position.x, m.position.y, m.position.z];
+        self.lan_entity_event(id as i32, 42, at);
+        self.particles_around_mob(id, "splash", horizon_client::particles::Burst::VILLAGER);
     }
 
     /// The raid bar a living player at `at` is in (`Raid.getPlayers`): red,

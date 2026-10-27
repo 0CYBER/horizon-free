@@ -137,6 +137,24 @@ def guest_pos(host, name):
     return next(g['position'] for g in guests if g['name'] == name)
 
 
+def open_ground(host, guest, name):
+    """Puts the guest on a cleared, flat floor beside the host and returns where it stands.
+
+    A player new to the world spawns at a random free spot near the world spawn, as in vanilla
+    (`PlayerSpawnFinder`), often against a hill: walking and aiming need known, open ground.
+    Commands, not the control socket: the server has the last word on where the guest stands.
+    """
+    hp = host('status')['player']['position']
+    x, y, z = math.floor(hp[0]) - 6, math.floor(hp[1]), math.floor(hp[2])
+    host(f'command fill {x - 2} {y - 1} {z - 2} {x + 4} {y - 1} {z + 8} minecraft:stone')
+    host(f'command fill {x - 2} {y} {z - 2} {x + 4} {y + 3} {z + 8} minecraft:air')
+    spot = [x + 0.5, float(y), z + 0.5]
+    host(f'command tp {name} {spot[0]} {spot[1]} {spot[2]} 0 0')
+    guest.wait('status', lambda v: math.dist(v['player']['position'], spot) < 0.01 and v['player']['on_ground'], 20,
+               'the guest on its ground')
+    return spot
+
+
 def play_together(host, guest, name, round_index):
     """Chat, movement and blocks seen from both sides."""
     host.wait('lan status', lambda v: any(g['name'] == name and g['placed'] for g in v['guests']), 60,
@@ -150,6 +168,7 @@ def play_together(host, guest, name, round_index):
     guest.wait('status', lambda v: any(f'hello from the host {round_index}' in l for l in v['server']['chat']), 30,
                'host chat on the guest')
     # The guest walks; the host sees it move.
+    open_ground(host, guest, name)
     before = guest_pos(host, name)
     guest('look 0 0')
     guest('key w down')
@@ -167,7 +186,8 @@ def play_together(host, guest, name, round_index):
     guest.wait('status', lambda v: any(math.dist(p, target) < 0.6 for p in v['server']['player_positions']), 20,
                'host movement on the guest')
     # A block the host places, which the guest sees and then breaks.
-    gp = guest('status')['player']['position']
+    gp = guest.wait('status', lambda v: v['player']['on_ground'] and math.hypot(v['player']['velocity'][0],
+                    v['player']['velocity'][2]) < 1e-3, 10, 'the guest standing still')['player']['position']
     feet = [math.floor(gp[0]), math.floor(gp[1]), math.floor(gp[2])]
     block = [feet[0] + 2, feet[1] + 1, feet[2]]
     # Clear the line of sight (the test terrain has hills), then the block at eye level.
