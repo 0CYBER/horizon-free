@@ -176,18 +176,30 @@ impl Game<'_> {
         if projectile {
             return;
         }
-        let Some(id) = attacker else { return };
+        let Some(id) = attacker else {
+            // Another player's melee hit has no mob behind it.
+            if let Some((from, disable)) = self.combat.player_attacker {
+                let fully = outcome.blocked >= damage;
+                self.blocked_by_attacker(&component, [from[0], from[2]], fully, disable, at);
+            }
+            return;
+        };
         let fully = outcome.blocked >= damage;
         let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
             return;
         };
         let (mx, mz) = (m.position.x, m.position.z);
-        let disable = m
-            .extra
-            .main_hand
-            .as_deref()
-            .and_then(|item| self.res.items().get(item))
-            .map_or(0.0, |i| i.disable_blocking_seconds);
+        // LivingEntity.getSecondsToDisableBlocking: the held weapon's value;
+        // Warden overrides it with a flat 5 seconds.
+        let disable = if m.species() == horizon_client::mobs::Species::Warden {
+            5.0
+        } else {
+            m.extra
+                .main_hand
+                .as_deref()
+                .and_then(|item| self.res.items().get(item))
+                .map_or(0.0, |i| i.disable_blocking_seconds)
+        };
         // Ravager.blockedByItem: stunned half the time (the defender pushed
         // apart), else the defender flung away; no roar in progress.
         if m.species() == horizon_client::mobs::Species::Ravager {
@@ -214,6 +226,21 @@ impl Game<'_> {
             let _ = self.handle_mob_events(events);
             return;
         }
+        self.blocked_by_attacker(&component, [mx, mz], fully, disable, at);
+    }
+
+    /// What a blocked melee hit does to the defender once the shield took
+    /// it: `LivingEntity.blockedByItem` knocks them back unless fully
+    /// blocked, then `Player.blockUsingItem` disables the shield.
+    fn blocked_by_attacker(
+        &mut self,
+        component: &horizon_client::items::BlocksAttacks,
+        attacker: [f64; 2],
+        fully: bool,
+        disable: f32,
+        at: Option<[f64; 3]>,
+    ) {
+        let [mx, mz] = attacker;
         // LivingEntity.blockedByItem: defender.knockback(0.5, defender - attacker),
         // which moves the defender along -(xd, zd).
         if !fully && let Some(p) = self.player.as_mut() {

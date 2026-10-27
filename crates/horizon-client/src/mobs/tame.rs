@@ -2,7 +2,7 @@
 //! sitting, following and defending the owner, begging, anger and shaking
 //! off water (`Wolf`, `WolfModel`).
 use super::{
-    Damage, Mob, MobEvent, MobWorld, Species, Who,
+    Damage, Mob, MobEvent, MobWorld, PlayerView, Species, Who,
     anim::{Poses, State},
     goals::{
         Breed, Cx, Float, Goal, HurtByTarget, JUMP, LOOK, LeapAtTarget, LookAtPlayer, MOVE,
@@ -124,17 +124,23 @@ pub fn set_tame(m: &mut Mob, tame: bool) {
         m.attrs.max_health = 8.0;
     }
 }
-/// The owner (the local player) when tame.
-fn owner(m: &Mob, w: &MobWorld) -> Option<(Vec3, f64, bool)> {
+/// `TamableAnimal.getOwner`: the player the saved owner UUID names, when it
+/// is the one this mob sees; anyone else nearby is not its owner.
+fn owner_view<'a>(m: &Mob, w: &'a MobWorld) -> Option<&'a PlayerView> {
     if !m.extra.tame {
         return None;
     }
     let p = w.player.as_ref()?;
+    (m.extra.owner == Some(p.uuid)).then_some(p)
+}
+/// The owner's position, eye height and spectator flag when tame.
+fn owner(m: &Mob, w: &MobWorld) -> Option<(Vec3, f64, bool)> {
+    let p = owner_view(m, w)?;
     Some((p.position, p.eye[1], p.spectator))
 }
 /// `TamableAnimal.unableToMoveToOwner`.
 fn unable_to_move_to_owner(m: &Mob, w: &MobWorld) -> bool {
-    m.extra.sitting || w.player.as_ref().is_some_and(|p| p.spectator)
+    m.extra.sitting || owner_view(m, w).is_some_and(|p| p.spectator)
 }
 /// `TamableAnimal.tryToTeleportToOwner`: ten tries around the owner.
 fn teleport_to_owner(m: &mut Mob, w: &MobWorld) {
@@ -240,7 +246,7 @@ impl Goal for SitWhenOrdered {
         match owner_distance_sqr(m, cx.w) {
             None => true,
             Some(d) => {
-                let attacked = cx.w.player.as_ref().is_some_and(|p| p.hurt_by.is_some());
+                let attacked = owner_view(m, cx.w).is_some_and(|p| p.hurt_by.is_some());
                 !(d < 144.0 && attacked) && m.extra.sitting
             }
         }
@@ -360,7 +366,7 @@ impl Goal for FollowOwner {
         };
         let far = m.distance_sqr(at) >= 144.0;
         if !far {
-            let max = max_head_x_rot(m);
+            let max = m.max_head_x_rot();
             m.look_at_speed([at.x, eye, at.z], 10.0, max);
         }
         self.recalc -= 1;
@@ -388,7 +394,7 @@ impl Goal for OwnerHurtBy {
         if !m.extra.tame || m.extra.sitting {
             return false;
         }
-        let Some((who, at)) = cx.w.player.as_ref().and_then(|p| p.hurt_by) else {
+        let Some((who, at)) = owner_view(m, cx.w).and_then(|p| p.hurt_by) else {
             return false;
         };
         at != self.timestamp && wants_to_attack(m, cx.w, who)
@@ -399,7 +405,7 @@ impl Goal for OwnerHurtBy {
             .is_some_and(|t| t.alive)
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        if let Some((who, at)) = cx.w.player.as_ref().and_then(|p| p.hurt_by) {
+        if let Some((who, at)) = owner_view(m, cx.w).and_then(|p| p.hurt_by) {
             m.ai.target = Some(who);
             self.timestamp = at;
         }
@@ -422,7 +428,7 @@ impl Goal for OwnerHurt {
         if !m.extra.tame || m.extra.sitting {
             return false;
         }
-        let Some((who, at)) = cx.w.player.as_ref().and_then(|p| p.last_hurt) else {
+        let Some((who, at)) = owner_view(m, cx.w).and_then(|p| p.last_hurt) else {
             return false;
         };
         at != self.timestamp && wants_to_attack(m, cx.w, who)
@@ -433,7 +439,7 @@ impl Goal for OwnerHurt {
             .is_some_and(|t| t.alive)
     }
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
-        if let Some((who, at)) = cx.w.player.as_ref().and_then(|p| p.last_hurt) {
+        if let Some((who, at)) = owner_view(m, cx.w).and_then(|p| p.last_hurt) {
             m.ai.target = Some(who);
             self.timestamp = at;
         }
@@ -507,7 +513,7 @@ impl Goal for Beg {
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         if let Some(p) = &cx.w.player {
-            let max = max_head_x_rot(m);
+            let max = m.max_head_x_rot();
             m.look_at_speed([p.position.x, p.eye[1], p.position.z], 10.0, max);
         }
         self.ticks -= 1;
@@ -529,12 +535,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     let v = &mut m.anim.v;
     v[INTEREST] += (goal - v[INTEREST]) * 0.4;
     // isWet (extra.flag2), isShaking (counter2 > 0).
-    let rain = w.raining
-        && w.can_see_sky(
-            m.position.x.floor() as i32,
-            (m.position.y + f64::from(m.height())).floor() as i32,
-            m.position.z.floor() as i32,
-        );
+    let rain = super::ai::in_rain(m, w);
     let shaking = m.extra.counter2 > 0;
     if m.fluids.in_water || rain {
         m.extra.flag2 = true;
@@ -683,14 +684,6 @@ pub fn texture(m: &Mob) -> String {
     let baby = if m.is_baby() { "_baby" } else { "" };
     format!("entity/wolf/{file}{state}{baby}")
 }
-/// `Wolf.getMaxHeadXRot`: 20 degrees while sitting.
-fn max_head_x_rot(m: &Mob) -> f32 {
-    if m.extra.sitting {
-        20.0
-    } else {
-        m.kind.max_head_x_rot
-    }
-}
 
 /// Cat variants (`CatVariants`): registry name, texture file.
 pub const CAT_VARIANTS: [&str; 11] = [
@@ -835,7 +828,7 @@ impl Goal for CatLieOnBlock {
         m.extra.flag = self.0.reached;
     }
 }
-/// `CatSitOnBlockGoal`: chests, lit furnaces and beds.
+/// `CatSitOnBlockGoal`: unopened chests, lit furnaces and the foot of beds.
 #[derive(Clone, Debug)]
 struct CatSitOnBlock(super::goals::MoveToBlock);
 fn can_sit_on(w: &MobWorld, p: [i32; 3]) -> bool {
@@ -846,7 +839,15 @@ fn can_sit_on(w: &MobWorld, p: [i32; 3]) -> bool {
     match f.name.as_ref() {
         // The lit state is the only light source a furnace has.
         "minecraft:furnace" => f.emission > 0,
-        _ => true,
+        // `ChestBlockEntity.getOpenCount(level, pos) < 1`: players' openers
+        // and the copper golems' own count.
+        "minecraft:chest" => {
+            let key = (p[0], p[1], p[2]);
+            !w.lid_openers.contains_key(&key)
+                && w.world.chest_openers.get(&key).is_none_or(|o| o.0 < 1)
+        }
+        // A bed's foot only (`BedBlock.PART != HEAD`).
+        _ => w.prop(p[0], p[1], p[2], "part") != Some("head"),
     }
 }
 impl Goal for CatSitOnBlock {

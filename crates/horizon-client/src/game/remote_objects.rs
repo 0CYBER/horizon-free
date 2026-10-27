@@ -1,9 +1,10 @@
-//! Boats, minecarts, armor stands, item frames and paintings on a server's
+//! Boats, minecarts, armor stands, item frames, paintings and fence knots on a server's
 //! client (`ClientPacketListener.handleAddEntity`, `handleSetEntityData`,
 //! `handleSetEquipment`): the server simulates them, the client places them
 //! where it says and interpolates their moves like a mob's.
 use super::Game;
 use horizon_client::entities::{ArmorStand, Cushion, ItemFrame, Painting};
+use horizon_client::mobs::leash::Holder;
 use horizon_core::geometry::Vec3;
 use horizon_protocol::entity_data::Value;
 use std::sync::Arc;
@@ -24,7 +25,17 @@ impl Game<'_> {
         let at = Vec3::new(position[0], position[1], position[2]);
         let block = position.map(|v| v.floor() as i32);
         self.remove_remote_object(id);
-        if kind == "minecraft:text_display" {
+        if kind == "minecraft:leash_knot" {
+            // A lead that came before its knot waits as a mob holder with the
+            // knot's id (handleEntityLinkPacket's delayed holder); now it can
+            // be tied to the fence.
+            self.remote_knots.insert(id, block);
+            for m in &mut self.mobs {
+                if m.extra.leash == Some(Holder::Mob(id)) {
+                    m.extra.leash = Some(Holder::Knot(block));
+                }
+            }
+        } else if kind == "minecraft:text_display" {
             self.text_displays.insert(
                 id as i32,
                 super::text_displays::RemoteTextDisplay::new(position, yaw),
@@ -153,6 +164,10 @@ impl Game<'_> {
                     }
                     (3, Value::Bool(visible)) => a.name_visible = *visible,
                     (9, Value::Float(health)) => a.health = *health,
+                    // ArmorStand.DATA_HEAD_POSE to DATA_RIGHT_LEG_POSE.
+                    (16..=21, Value::Floats(r)) if r.len() == 3 => {
+                        a.pose[usize::from(index - 16)] = [r[0], r[1], r[2]];
+                    }
                     // ArmorStand.DATA_CLIENT_FLAGS.
                     (15, Value::Byte(flags)) => {
                         a.small = flags & 1 != 0;
@@ -304,6 +319,7 @@ impl Game<'_> {
     /// Every object a server sent (a new connection, level or dimension).
     pub(super) fn clear_remote_objects(&mut self) {
         self.text_displays.clear();
+        self.remote_knots.clear();
         self.carts.clear();
         self.boats.clear();
         self.armor_stands.clear();
@@ -314,6 +330,7 @@ impl Game<'_> {
 
     pub(super) fn remove_remote_object(&mut self, id: u32) {
         self.text_displays.remove(&(id as i32));
+        self.remote_knots.remove(&id);
         self.carts.retain(|c| c.id != id);
         self.boats.retain(|b| b.id != id);
         self.armor_stands.retain(|a| a.id != id);

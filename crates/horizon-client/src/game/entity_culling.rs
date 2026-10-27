@@ -60,12 +60,27 @@ impl Game<'_> {
     }
 }
 
+impl Game<'_> {
+    /// Entity.setViewScale (LevelExtractor.extractVisibleEntities): the entity
+    /// distance option times the render distance's boost — 1 at 8 chunks, 2.5
+    /// at 20 or more. The render distance is the client setting, capped by
+    /// the server's view distance when connected
+    /// (Options.getEffectiveRenderDistance).
+    pub(super) fn view_scale(&self) -> f64 {
+        let distance = match &self.remote {
+            Some(r) => self.settings.render_distance.min(r.view_distance),
+            None => self.settings.render_distance,
+        };
+        (f64::from(distance) / 8.0).clamp(1.0, 2.5) * f64::from(self.settings.entity_distance)
+    }
+}
+
 /// Entity.shouldRenderAtSqrDistance's default range: 64 times the bounding
-/// box's mean edge, scaled by the entity distance option.
-pub(super) fn default_range(size: glam::DVec3, view_scale: f32) -> f64 {
+/// box's mean edge, scaled by the view scale.
+pub(super) fn default_range(size: glam::DVec3, view_scale: f64) -> f64 {
     let edge = (size.x + size.y + size.z) / 3.0;
     let edge = if edge.is_nan() { 1.0 } else { edge };
-    edge * 64.0 * f64::from(view_scale)
+    edge * 64.0 * view_scale
 }
 
 impl Game<'_> {

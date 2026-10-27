@@ -17,8 +17,10 @@ impl Game<'_> {
             return;
         }
         let mut events = Vec::new();
+        let random = self.particles.level_random();
         for m in self.mobs.iter_mut().filter(|m| !m.removed) {
             ambient::client_ai_step(m, &mut events);
+            ambient::client_particles(m, random, &mut events);
         }
         for event in events {
             match event {
@@ -37,6 +39,7 @@ impl Game<'_> {
             }
         }
         self.eye_particles();
+        self.panda_effects();
         self.sprint_dust();
         self.effect_swirls();
     }

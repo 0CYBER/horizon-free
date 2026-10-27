@@ -1508,7 +1508,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
     }
     fn sound(&mut self, m: &mut Mob, registry: fn(&SpawnRegistries) -> &VariantRegistry) {
         let r = registry(self.data.registries);
-        m.extra.sound_variant = r.random(self.random) as u8;
+        m.extra.sound_variant = Some(r.random(self.random) as u8);
     }
 
     /// `finalizeSpawn` of the mob's class.
@@ -1691,13 +1691,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 let hidden = panda_gene(self.int(16));
                 m.extra.variant = main;
                 m.extra.variant2 = hidden;
-                let shown = panda_variant(main, hidden);
-                if shown == 5 {
-                    set_base(m, Attr::MaxHealth, 10.0);
-                }
-                if shown == 1 {
-                    set_base(m, Attr::MovementSpeed, f64::from(0.07f32));
-                }
+                super::panda::set_attributes(m);
                 self.ageable(m, g.or(Some(Group::Ageable(Ageable::chance(0.2)))))
             }
             S::PolarBear | S::Ocelot => {
@@ -1950,7 +1944,7 @@ fn set_memory(m: &mut Mob, name: &'static str, value: i64, ttl: i64) {
 }
 /// `Panda.Gene.getRandom` (enum order: normal, lazy, worried, playful,
 /// brown, weak, aggressive).
-fn panda_gene(roll: i32) -> u8 {
+pub fn panda_gene(roll: i32) -> u8 {
     match roll {
         0 => 1,
         1 => 2,
@@ -2013,6 +2007,17 @@ pub fn species_variant_component(s: Species, variant: u8) -> Option<(&'static st
         _ => return None,
     };
     Some((component, format!("minecraft:{}", variant_name(s, variant))))
+}
+/// The `*_sound_variant` registry of a species, in registry order.
+pub fn sound_variants(s: Species) -> &'static [&'static str] {
+    match s {
+        Species::Pig => &["big", "classic", "mini"],
+        Species::Cow => &["classic", "moody"],
+        Species::Chicken => &["classic", "picky"],
+        Species::Cat => &["classic", "royal"],
+        Species::Wolf => &["angry", "big", "classic", "cute", "grumpy", "puglin", "sad"],
+        _ => &[],
+    }
 }
 /// The registry name of the game's variant index.
 pub fn variant_name(s: Species, index: u8) -> &'static str {
