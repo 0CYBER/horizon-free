@@ -143,6 +143,9 @@ pub struct WrittenBook {
     pub author: String,
     pub generation: u8,
     pub pages: Vec<String>,
+    /// Each page's component when it is not a plain string, so that its
+    /// click events survive; empty or one per page.
+    pub page_tags: Vec<Tag>,
 }
 impl StackData {
     pub fn is_empty(&self) -> bool {
@@ -322,6 +325,21 @@ fn read_levels(t: Option<&Tag>) -> Levels {
 }
 /// A text component as stored by vanilla: a plain string or `{"text": ...}`.
 /// A `Filterable<String/Component>`: the value itself or `{raw: value}`.
+/// `ComponentSerialization.CODEC`'s short form: a plain text component with
+/// no style and no siblings is written as its string.
+fn plain_component(t: &Tag) -> Tag {
+    if let Tag::Compound(c) = t
+        && let Some(text @ Tag::String(_)) = c.get(&"text".into())
+        && c.iter().all(|(k, v)| {
+            k.to_string_lossy() == "text"
+                || (k.to_string_lossy() == "type"
+                    && matches!(v, Tag::String(s) if s.to_string_lossy() == "text"))
+        })
+    {
+        return text.clone();
+    }
+    t.clone()
+}
 fn filterable_text(t: &Tag) -> Option<String> {
     match t.get("raw") {
         Some(raw) => read_text(raw),
@@ -555,11 +573,14 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
             ));
         }
         if let Some(w) = &d.written {
-            let pages = w
-                .pages
-                .iter()
-                .map(|p| raw(Tag::String(p.as_str().into())))
-                .collect();
+            let pages = if w.page_tags.len() == w.pages.len() {
+                w.page_tags.iter().cloned().map(raw).collect()
+            } else {
+                w.pages
+                    .iter()
+                    .map(|p| raw(Tag::String(p.as_str().into())))
+                    .collect()
+            };
             entries.push((
                 "minecraft:written_book_content",
                 Tag::compound({
@@ -738,6 +759,13 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
                 generation: b.get("generation").and_then(int).unwrap_or(0).clamp(0, 3) as u8,
                 pages: match b.get("pages") {
                     Some(Tag::List(pages)) => pages.iter().filter_map(filterable_text).collect(),
+                    _ => Vec::new(),
+                },
+                page_tags: match b.get("pages") {
+                    Some(Tag::List(pages)) => pages
+                        .iter()
+                        .map(|p| plain_component(p.get("raw").unwrap_or(p)))
+                        .collect(),
                     _ => Vec::new(),
                 },
             }),

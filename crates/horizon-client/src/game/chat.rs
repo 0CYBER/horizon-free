@@ -695,12 +695,78 @@ impl Game<'_> {
             Some(ClickEvent::OpenFile(path)) => {
                 super::packs::open_folder(std::path::Path::new(&path));
             }
+            Some(ClickEvent::OpenUrl(url)) => self.click_url(url),
             Some(ClickEvent::SuggestCommand(command)) => {
                 if let Some(screen) = self.ui.chat_screen.as_mut() {
                     screen.suggest_command(&m, &c, &command);
                 }
             }
-            None => {}
+            // Screen.defaultHandleClickEvent: a page link means nothing in chat.
+            Some(ClickEvent::ChangePage(_)) | None => {}
+        }
+    }
+    /// `Screen.clickUrlAction`: nothing with Web Links off, else the link
+    /// opens, after the confirmation unless Prompt on Links is off.
+    pub(super) fn click_url(&mut self, url: String) {
+        if !self.settings.chat_links {
+            return;
+        }
+        if self.settings.file.bool("chatLinksPrompt") {
+            self.link_prompt = Some(url);
+        } else {
+            super::packs::open_uri(&url);
+        }
+    }
+    /// `ConfirmLinkScreen` (untrusted): the link and its warning over the
+    /// chat, answered yes to open it.
+    fn link_prompt_layout(
+        &self,
+        url: &str,
+        size: (f32, f32),
+    ) -> horizon_client::confirm_screen::Confirm {
+        let warning = Text::translate("chat.link.warning", &[]).with_color(0xFF_CCCC);
+        let message = Text::literal(url)
+            .append(Text::literal("\n"))
+            .append(warning);
+        horizon_client::confirm_screen::Confirm::new(
+            &self.gui.atlas.font,
+            size,
+            &Text::translate("chat.link.confirm", &[]),
+            &message,
+        )
+    }
+    pub(super) fn draw_link_prompt(&self, batch: &mut HudBatch) {
+        let Some(url) = &self.link_prompt else {
+            return;
+        };
+        let atlas = &self.gui.atlas;
+        let (w, h) = (batch.width, batch.height);
+        horizon_client::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
+        let (yes, no) = (
+            Text::translate("gui.yes", &[]),
+            Text::translate("gui.no", &[]),
+        );
+        self.link_prompt_layout(url, (w, h))
+            .draw(batch, atlas, self.cursor, [&yes, &no]);
+    }
+    /// The prompt's answer: the link opens on yes; either way the chat is back.
+    pub(super) fn answer_link_prompt(&mut self, yes: bool) {
+        if let Some(url) = self.link_prompt.take()
+            && yes
+        {
+            super::packs::open_uri(&url);
+        }
+    }
+    pub(super) fn link_prompt_click(&mut self) {
+        let Some(url) = &self.link_prompt else {
+            return;
+        };
+        let answer = self
+            .link_prompt_layout(url, self.gui_size())
+            .answer_at(self.cursor);
+        if let Some(yes) = answer {
+            self.audio.play_button_click();
+            self.answer_link_prompt(yes);
         }
     }
     /// Chat lines over the HUD (focused while the chat screen is open).

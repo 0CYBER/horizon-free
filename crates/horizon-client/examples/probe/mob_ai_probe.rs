@@ -1072,6 +1072,8 @@ pub fn main() -> horizon_client::Result<()> {
         for (i, m) in mobs.iter().enumerate() {
             print(&mut out, 0, i, m, s.creative, world.game_time);
         }
+        // No player has a chest open in the scenarios.
+        let lid_openers = std::collections::HashMap::new();
         // The MobWorld every step sees, over a snapshot of the mobs.
         macro_rules! mob_world {
             ($snapshot:expr) => {
@@ -1108,6 +1110,7 @@ pub fn main() -> horizon_client::Result<()> {
                     // FlatLevelSource.getSeaLevel.
                     sea_level: -63,
                     items: Some(&items),
+                    lid_openers: &lid_openers,
                 }
             };
         }
