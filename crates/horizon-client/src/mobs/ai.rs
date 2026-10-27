@@ -1419,6 +1419,7 @@ pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
     let mut amount = m.attrs.attack_damage;
     let from = [m.position.x, m.position.y, m.position.z];
     let source = Damage::mob(m.id, from);
+    let first_event = cx.events.len();
     match m.species() {
         // Difficulty NORMAL: cave spiders poison for 7 seconds.
         Species::CaveSpider if who == Who::Player => cx.events.push(MobEvent::EffectPlayer {
@@ -1480,7 +1481,28 @@ pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
         });
     }
     match who {
-        Who::Player => cx.events.push(MobEvent::AttackPlayer(amount, from)),
+        // The effect picked above goes with the hit: it applies only when
+        // the player takes damage (a shield-blocked hit gives none).
+        Who::Player => {
+            let effect = cx.events[first_event..]
+                .iter()
+                .position(|e| matches!(e, MobEvent::EffectPlayer { .. }))
+                .map(|k| cx.events.remove(first_event + k));
+            cx.events.push(match effect {
+                Some(MobEvent::EffectPlayer {
+                    effect,
+                    ticks,
+                    amplifier,
+                }) => MobEvent::AttackPlayerWithEffect {
+                    amount,
+                    from,
+                    effect,
+                    ticks,
+                    amplifier,
+                },
+                _ => MobEvent::AttackPlayer(amount, from),
+            });
+        }
         Who::Mob(id) => cx.events.push(MobEvent::AttackMob {
             target: id,
             amount,

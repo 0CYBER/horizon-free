@@ -244,11 +244,10 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
                     && m.ai.no_action_time % 10 == 0
                 {
                     let amount = 1.0 + m.extra.size as f32;
-                    events.push(MobEvent::AttackPlayer(
+                    // Only when the sting hurt the player.
+                    events.push(MobEvent::AttackPlayerWithEffect {
                         amount,
-                        [m.position.x, m.position.y, m.position.z],
-                    ));
-                    events.push(MobEvent::EffectPlayer {
+                        from: [m.position.x, m.position.y, m.position.z],
                         effect: "minecraft:poison",
                         ticks: 60 * m.extra.size,
                         amplifier: 0,

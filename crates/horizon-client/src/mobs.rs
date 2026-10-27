@@ -968,6 +968,16 @@ pub enum MobEvent {
         state: horizon_world::registry::BlockStateId,
     },
     AttackPlayer(f32, [f64; 3]),
+    /// A melee hit whose effect comes only if the hit lands (husk hunger,
+    /// cave spider poison, wither skeleton wither, bee and pufferfish
+    /// poison): a shield-blocked hit gives nothing.
+    AttackPlayerWithEffect {
+        amount: f32,
+        from: [f64; 3],
+        effect: &'static str,
+        ticks: i32,
+        amplifier: i32,
+    },
     /// Damage of a given type to the player (guardian lasers, thorns).
     DamagePlayer {
         amount: f32,
