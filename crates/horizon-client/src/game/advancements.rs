@@ -1020,6 +1020,22 @@ impl Game<'_> {
             adv::conditions(&c["player"], &pctx, w)
         });
     }
+    /// `LootTableTrigger`: a container's loot table unpacked for this player
+    /// (`RandomizableContainer.unpackLootTable`).
+    pub(super) fn trigger_loot_table(&mut self, table: &str) {
+        let me = self.player_entity();
+        let table = table.to_owned();
+        self.trigger("minecraft:player_generates_container_loot", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::id_matches(&c["loot_tables"], "loot_table", &table, w)
+        });
+    }
     /// `BredAnimalsTrigger`.
     pub(super) fn trigger_bred(
         &mut self,
