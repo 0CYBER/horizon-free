@@ -1661,6 +1661,12 @@ impl Def {
             | S::Camel
             | S::CamelHusk => 400,
             S::Ocelot => 900,
+            // Guardian.getAmbientSoundInterval (the elder too).
+            S::Guardian | S::ElderGuardian => 160,
+            // Hoglin extends Animal; Shulker extends AbstractGolem.
+            S::Hoglin | S::Shulker => 120,
+            // Allay is a PathfinderMob: the Mob default.
+            S::Allay => 80,
             S::Squid
             | S::GlowSquid
             | S::Cod
@@ -1693,10 +1699,15 @@ impl Def {
     }
 }
 /// Mobs whose `body` equipment slot Horizon keeps in `Extra::head` (a
-/// happy ghast's harness, nautilus armour, a sulfur cube's swallowed block).
+/// happy ghast's harness, nautilus armour, a sulfur cube's swallowed block,
+/// a wolf's armor).
 pub fn body_slot(s: Species) -> bool {
     matches!(
         s,
-        Species::HappyGhast | Species::Nautilus | Species::ZombieNautilus | Species::SulfurCube
+        Species::HappyGhast
+            | Species::Nautilus
+            | Species::ZombieNautilus
+            | Species::SulfurCube
+            | Species::Wolf
     )
 }

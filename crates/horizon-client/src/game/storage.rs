@@ -3,6 +3,7 @@
 //! player's `PlayerEnderChestContainer`, saved as `EnderItems`).
 use super::Game;
 use horizon_client::{containers::BlockEntity, items::ItemStack, text::Text};
+use horizon_core::random::RandomSource;
 
 pub(super) fn is_shulker_box(name: &str) -> bool {
     name.ends_with("shulker_box")
@@ -155,6 +156,79 @@ impl Game<'_> {
                 Some(BlockEntity::Chest(items)) if items.len() == 27
             );
         paired.then_some((other, kind == "right"))
+    }
+    /// The open or close sound of a container block (`ChestBlockEntity.playSound`,
+    /// `BarrelBlockEntity.playSound`, `ShulkerBoxBlockEntity.startOpen`): volume
+    /// 0.5 and pitch 0.9 to 1.0. A double chest sounds once from the middle of
+    /// both halves, a barrel from the face it opens on.
+    pub(super) fn container_sound(&mut self, sound: &str, key: (i32, i32, i32), name: &str) {
+        let mut at = [
+            f64::from(key.0) + 0.5,
+            f64::from(key.1) + 0.5,
+            f64::from(key.2) + 0.5,
+        ];
+        if let Some((other, _)) = self.chest_partner(key) {
+            at[0] = f64::from(key.0 + other.0) / 2.0 + 0.5;
+            at[2] = f64::from(key.2 + other.2) / 2.0 + 0.5;
+        } else if name == "minecraft:barrel"
+            && let Some(state) = self
+                .pack
+                .assets
+                .registry
+                .state(self.world.block(key.0, key.1, key.2))
+            && let Some(facing) = state.properties.get("facing")
+        {
+            let (dx, dy, dz) = match facing.as_str() {
+                "up" => (0.0, 0.5, 0.0),
+                "down" => (0.0, -0.5, 0.0),
+                f => {
+                    let (x, z) = facing_step(f);
+                    (f64::from(x) / 2.0, 0.0, f64::from(z) / 2.0)
+                }
+            };
+            at = [at[0] + dx, at[1] + dy, at[2] + dz];
+        }
+        let pitch = self.world.random.next_float() * 0.1 + 0.9;
+        self.audio.play(sound, Some(at), 0.5, pitch);
+    }
+    /// The open or close sound of the container block at `key`, if it has one.
+    /// Callers play it only when the opener count crosses zero
+    /// (`ContainerOpenersCounter.onOpen` / `onClose`).
+    pub(super) fn container_edge_sound(&mut self, key: (i32, i32, i32), open: bool) {
+        let name = self
+            .res
+            .facts()
+            .get(self.world.block(key.0, key.1, key.2))
+            .name
+            .clone();
+        let sound = if is_shulker_box(&name) {
+            if open {
+                "minecraft:block.shulker_box.open"
+            } else {
+                "minecraft:block.shulker_box.close"
+            }
+        } else if &*name == "minecraft:ender_chest" {
+            if open {
+                "minecraft:block.ender_chest.open"
+            } else {
+                "minecraft:block.ender_chest.close"
+            }
+        } else if name.contains("chest") {
+            if open {
+                "minecraft:block.chest.open"
+            } else {
+                "minecraft:block.chest.close"
+            }
+        } else if &*name == "minecraft:barrel" {
+            if open {
+                "minecraft:block.barrel.open"
+            } else {
+                "minecraft:block.barrel.close"
+            }
+        } else {
+            return;
+        };
+        self.container_sound(sound, key, &name);
     }
     /// The other half of a double chest at `key`, for neighbour updates.
     pub(super) fn chest_other_half(&self, key: (i32, i32, i32)) -> Option<(i32, i32, i32)> {

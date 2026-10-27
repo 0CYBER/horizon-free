@@ -2046,6 +2046,7 @@ impl Codec<TrackedWaypoint> for TrackedWaypoint {
 
 packet!(AcceptTeleportation { id: i32 => VarInt, x: f64 => Double, y: f64 => Double, z: f64 => Double, yaw: f32 => Float, pitch: f32 => Float });
 packet!(Attack { id: i32 => VarInt });
+packet!(TeleportToEntity { uuid: u128 => Uuid });
 packet!(
     /// GameType ids: 0 survival, 1 creative, 2 adventure, 3 spectator.
     ChangeGameMode { mode: i32 => VarInt }
@@ -2243,6 +2244,7 @@ packet!(
     PaddleBoat { left: bool => Bool, right: bool => Bool }
 );
 packet!(PickItemFromBlock { pos: [i32; 3] => Pos, include_data: bool => Bool });
+packet!(PickItemFromEntity { id: i32 => VarInt, include_data: bool => Bool });
 packet!(
     /// ServerboundPlayerActionPacket.Action: 0 start destroy, 1 change destroy
     /// direction, 2 abort, 3 stop destroy, 4 drop all, 5 drop item, 6 release
@@ -2292,6 +2294,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     SetGameRule(SetGameRule) = SET_GAME_RULE,
     AcceptTeleportation(AcceptTeleportation) = ACCEPT_TELEPORTATION,
     Attack(Attack) = ATTACK,
+    TeleportToEntity(TeleportToEntity) = TELEPORT_TO_ENTITY,
     ChangeGameMode(ChangeGameMode) = CHANGE_GAME_MODE,
     Chat(Chat) = CHAT,
     ChatAck(ChatAck) = CHAT_ACK,
@@ -2321,6 +2324,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     MoveVehicle(MoveVehicleRequest) = MOVE_VEHICLE,
     PaddleBoat(PaddleBoat) = PADDLE_BOAT,
     PickItemFromBlock(PickItemFromBlock) = PICK_ITEM_FROM_BLOCK,
+    PickItemFromEntity(PickItemFromEntity) = PICK_ITEM_FROM_ENTITY,
     PingRequest(crate::packets::status::Ping) = PING_REQUEST,
     PlayerAbilities(PlayerAbilitiesRequest) = PLAYER_ABILITIES,
     PlayerAction(PlayerAction) = PLAYER_ACTION,

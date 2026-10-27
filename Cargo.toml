@@ -10,6 +10,7 @@ members = [
     "crates/horizon-client-core",
     "crates/horizon-client-input",
     "crates/horizon-command",
+    "crates/horizon-items",
     "crates/horizon-server-files",
     "crates/horizon-server",
     "crates/horizon-bots",

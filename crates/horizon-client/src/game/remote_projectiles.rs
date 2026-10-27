@@ -3,8 +3,11 @@
 //! and `handleSetEntityData`): the server simulates them, the client draws
 //! them where it says and interpolates their moves.
 use super::{FallStep, FallingBlock, Game, fireworks::fireworks_of, view_vector};
-use horizon_client::particles::{ParticleOptions, ParticleType};
 use horizon_client::projectiles::{Hit, Projectile, ProjectileKind, ProjectileWorld};
+use horizon_client::{
+    collisions::SceneCollisions,
+    particles::{ParticleOptions, ParticleType},
+};
 use horizon_core::{geometry::Vec3, position::BlockPos, random::RandomSource};
 use horizon_protocol::entity_data::Value;
 use horizon_world::registry::BlockStateId;
@@ -71,7 +74,8 @@ pub(super) fn cloud_client_tick(
             ];
             (particle.clone(), v)
         };
-        particles.add(&options, at, velocity);
+        // `addAlwaysVisibleParticle`.
+        particles.add_with(&options, at, velocity, false, true);
     }
 }
 
@@ -203,6 +207,8 @@ impl Game<'_> {
             "minecraft:trident" => {
                 let mut t = super::trident::ThrownTrident::remote(id, at, yaw, pitch);
                 t.velocity = velocity;
+                // Projectile.getAddEntityPacket: the owner's id is the data.
+                t.owner = data as u32;
                 self.tridents.push(t);
             }
             "minecraft:firework_rocket" => {
@@ -346,6 +352,15 @@ impl Game<'_> {
                     (9, Value::Bool(show)) => c.show_bottom = *show,
                     _ => {}
                 }
+            } else if let Some(t) = self.tridents.iter_mut().find(|t| t.id == id) {
+                // AbstractArrow.ID_FLAGS (no physics) and IN_GROUND, and
+                // ThrownTrident.ID_LOYALTY.
+                match (index, value) {
+                    (8, Value::Byte(flags)) => t.no_physics = flags & 2 != 0,
+                    (10, Value::Bool(in_ground)) => t.in_ground = *in_ground,
+                    (11, Value::Byte(loyalty)) => t.loyalty = u32::from(*loyalty as u8),
+                    _ => {}
+                }
             } else if let Some(p) = self.creatures.projectiles.iter_mut().find(|p| p.id == id) {
                 match (&mut p.kind, index, value) {
                     // AbstractArrow.ID_FLAGS (critical) and IN_GROUND.
@@ -377,6 +392,25 @@ impl Game<'_> {
             t.yaw = yaw;
             t.pitch = pitch;
         }
+    }
+
+    /// `Entity.getEyePosition` of a projectile's owner: this game's player or
+    /// another player the server sent.
+    fn remote_eye(&self, id: u32) -> Option<Vec3> {
+        let me = self
+            .remote
+            .as_ref()
+            .and_then(|r| u32::try_from(r.entity_id).ok());
+        if me == Some(id) {
+            let eye = self.eye_position()?;
+            return Some(Vec3::new(eye[0], eye[1], eye[2]));
+        }
+        let m = self.mobs.iter().find(|m| m.id == id)?;
+        Some(Vec3::new(
+            m.position.x,
+            m.position.y + m.eye_height(),
+            m.position.z,
+        ))
     }
 
     /// One tick of interpolation, as `tick_remote_objects`.
@@ -412,6 +446,7 @@ impl Game<'_> {
         // updates (10 to 20 ticks apart); a block stops them there, and only
         // the server decides what they hit.
         let mut projectiles = std::mem::take(&mut self.creatures.projectiles);
+        let mut tridents = std::mem::take(&mut self.tridents);
         {
             let w = self.mob_world_base(&[]);
             let world = super::creatures::ProjWorld {
@@ -430,8 +465,12 @@ impl Game<'_> {
                     _ => remote_projectile_tick(p, &world),
                 }
             }
+            for t in &mut tridents {
+                t.remote_tick(&world, self.remote_eye(t.owner));
+            }
         }
         self.creatures.projectiles = projectiles;
+        self.tridents = tridents;
         let trails: Vec<Vec3> = self
             .creatures
             .projectiles
@@ -440,35 +479,58 @@ impl Game<'_> {
             .map(|p| p.position)
             .collect();
         self.smoke_trails(trails);
-        for t in &mut self.tridents {
-            let id = t.id;
-            t.remote_step(|at| step(id, at));
-        }
-        // FireworkRocketEntity.tick: a rocket attached to the gliding local
-        // player boosts it client-side too (attachedToEntity.isFallFlying).
+        // FireworkRocketEntity.tick: a rocket attached to an entity follows it
+        // and boosts it client-side too (attachedToEntity.isFallFlying), and
+        // every rocket leaves its spark trail on a client.
         let me = self
             .remote
             .as_ref()
             .and_then(|r| u32::try_from(r.entity_id).ok());
-        for r in &mut self.rockets {
-            let id = r.id;
-            r.remote_step(|at| step(id, at));
-            if me.is_some()
-                && r.attached_to == me
-                && let Some(p) = self.player.as_mut()
-                && p.fall_flying
-            {
-                let look = view_vector(self.yaw, self.pitch);
-                let m = p.velocity;
-                p.velocity = Vec3::new(
-                    m.x + look[0] * 0.1 + (look[0] * 1.5 - m.x) * 0.5,
-                    m.y + look[1] * 0.1 + (look[1] * 1.5 - m.y) * 0.5,
-                    m.z + look[2] * 0.1 + (look[2] * 1.5 - m.z) * 0.5,
-                );
-                r.position = p.position;
-                r.velocity = p.velocity;
+        let mut rockets = std::mem::take(&mut self.rockets);
+        for r in &mut rockets {
+            r.remote_step(&mut SceneCollisions {
+                world: &self.world,
+                binding: self.collision,
+                subject: None,
+            });
+            if let Some(target) = r.attached_to {
+                if me == Some(target) {
+                    if let Some(p) = self.player.as_mut() {
+                        if p.fall_flying {
+                            let look = view_vector(self.yaw, self.pitch);
+                            let m = p.velocity;
+                            p.velocity = Vec3::new(
+                                m.x + look[0] * 0.1 + (look[0] * 1.5 - m.x) * 0.5,
+                                m.y + look[1] * 0.1 + (look[1] * 1.5 - m.y) * 0.5,
+                                m.z + look[2] * 0.1 + (look[2] * 1.5 - m.z) * 0.5,
+                            );
+                        }
+                        r.position = p.position;
+                        r.velocity = p.velocity;
+                    }
+                } else if let Some(m) = self.mobs.iter().find(|m| m.id == target) {
+                    // Another player's motion is not known here: its step.
+                    r.velocity = Vec3::new(
+                        m.position.x - r.previous.x,
+                        m.position.y - r.previous.y,
+                        m.position.z - r.previous.z,
+                    );
+                    r.position = m.position;
+                }
             }
+            let g = |g: &mut horizon_core::random::LegacyRandom| g.next_gaussian() * 0.05;
+            let v = [
+                g(&mut self.world.random),
+                -r.velocity.y * 0.5,
+                g(&mut self.world.random),
+            ];
+            self.particles.add(
+                &ParticleOptions::simple(ParticleType::Firework),
+                [r.position.x, r.position.y, r.position.z],
+                v,
+            );
         }
+        self.rockets = rockets;
         for c in &mut self.crystals {
             c.time += 1;
             c.position = step(c.id, c.position);

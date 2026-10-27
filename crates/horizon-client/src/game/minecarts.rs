@@ -73,7 +73,7 @@ pub(super) struct Minecart {
     pub yaw: f32,
     pub previous_yaw: f32,
     pub flipped: bool,
-    on_ground: bool,
+    pub(super) on_ground: bool,
     horizontal_collision: bool,
     fall_distance: f64,
     pub hurt_time: i32,
@@ -558,7 +558,6 @@ impl Game<'_> {
         // applyGravity
         c.velocity.y -= if self.cart_in_water(c) { 0.005 } else { 0.04 };
         let pos = self.rail_block(c.position);
-        let fall_speed = c.velocity;
         if let Some(rail) = self.rail(pos[0], pos[1], pos[2]) {
             self.move_along_track(c, pos, &rail, intent);
             if &*rail.name == "minecraft:activator_rail" {
@@ -600,21 +599,25 @@ impl Game<'_> {
                 }
             }
             CartKind::Tnt => {
-                let speed = fall_speed.x * fall_speed.x + fall_speed.z * fall_speed.z;
+                // MinecartTNT.tick: the fuse and the collision check are separate.
                 if c.fuse > 0 {
                     c.fuse -= 1;
                     let at = [c.position.x, c.position.y + 0.5, c.position.z];
                     self.particles
                         .add(&ParticleOptions::simple(ParticleType::Smoke), at, [0.0; 3]);
-                } else if c.fuse == 0 || (c.horizontal_collision && speed >= 0.01) {
+                } else if c.fuse == 0 {
+                    // explode(horizontalDistanceSqr()): a rising cart's
+                    // vertical speed adds nothing.
                     let speed = c.velocity.x * c.velocity.x + c.velocity.z * c.velocity.z;
-                    let speed = if c.fuse == 0 && c.velocity.y > 0.0 {
-                        c.velocity.y * c.velocity.y
-                    } else {
-                        speed
-                    };
                     self.explode_cart(c, speed);
                     return false;
+                }
+                if c.horizontal_collision {
+                    let speed = c.velocity.x * c.velocity.x + c.velocity.z * c.velocity.z;
+                    if speed >= f64::from(0.01_f32) {
+                        self.explode_cart(c, speed);
+                        return false;
+                    }
                 }
             }
             _ => {}
@@ -659,51 +662,9 @@ impl Game<'_> {
         // The cart is the explosion's source: it is gone before the blast
         // looks for entities, so it can't hit itself.
         self.carts.retain(|x| x.id != c.id);
-        let _ = self.server_explode(at, power, BlockInteraction::Destroy, false);
-    }
-    /// `MinecartHopper.suckInItems`: items above, into the five slots.
-    fn hopper_cart_pickup(&mut self, c: &mut Minecart) {
-        if !c.enabled {
-            return;
-        }
-        let p = c.position;
-        let zone = Aabb::new(
-            Vec3::new(p.x - 0.5, p.y - 0.5 + 0.0, p.z - 0.5),
-            Vec3::new(p.x + 0.5, p.y + 1.5, p.z + 0.5),
-        );
-        let mut i = 0;
-        while i < self.dropped.len() {
-            let e = &self.dropped[i];
-            if e.pickup_delay > 0 || !zone.contains(e.position) {
-                i += 1;
-                continue;
-            }
-            let mut stack = e.stack.clone();
-            for slot in c.items.iter_mut() {
-                match slot {
-                    None => {
-                        *slot = Some(stack.clone());
-                        stack.count = 0;
-                    }
-                    Some(s) if s.same_item_same_components(&stack) => {
-                        let max = self.res.items().get(&s.item).map_or(64, |i| i.max_stack);
-                        let moved = stack.count.min(max.saturating_sub(s.count));
-                        s.count += moved;
-                        stack.count -= moved;
-                    }
-                    _ => {}
-                }
-                if stack.count == 0 {
-                    break;
-                }
-            }
-            if stack.count == 0 {
-                self.dropped.remove(i);
-            } else {
-                self.dropped[i].stack = stack;
-                i += 1;
-            }
-        }
+        let _ = self.with_hive_emptying_blast(|g| {
+            g.server_explode(at, power, BlockInteraction::Destroy, false)
+        });
     }
     /// `AbstractMinecart.push` from each player walking into a cart
     /// (`LivingEntity.pushEntities`): the window's player and every server
@@ -837,8 +798,8 @@ impl Game<'_> {
             }
             let mut c = self.carts[i].clone();
             let alive = self.tick_cart(&mut c, [0.0; 2]);
-            if c.kind == CartKind::Hopper {
-                self.hopper_cart_pickup(&mut c);
+            if c.kind == CartKind::Hopper && c.enabled {
+                self.hopper_cart_suck(&mut c);
             }
             let Some(i) = self.carts.iter().position(|c| c.id == id) else {
                 continue;
@@ -1329,6 +1290,7 @@ impl Game<'_> {
                         layer: 0,
                         color,
                         light,
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             }

@@ -1454,11 +1454,13 @@ def affected_harnesses(found, records, changed, reach=True, base=None):
     return affected
 
 
-def platform_skips(config):
-    """Harnesses tools/parity_hosts.json marks as giving different results on this platform: {name: reason}."""
-    if sys.platform == "linux":
-        return {}
-    return dict(config.get("linux_only", {}))
+def platform_skips(config, host=None):
+    """Harnesses tools/parity_hosts.json marks as giving different results on this platform, and those this host's
+    entry excludes (playhorizon's CI runner runs its own pull request jobs here, not only workers sent to it):
+    {name: reason}."""
+    skips = {} if sys.platform == "linux" else dict(config.get("linux_only", {}))
+    skips.update(config.get("hosts", {}).get(HOST if host is None else host, {}).get("exclude", {}))
+    return skips
 
 
 def known_flaky(config):
@@ -1593,7 +1595,7 @@ def main():
         chosen = [name for name in found if stale(name, state, hasher, environment)]
     skips = platform_skips(host_config())
     for name in [name for name in chosen if base_name(name) in skips and not args.names]:
-        print(f"skipped on {sys.platform}: {name}: {skips[base_name(name)]}", flush=True)
+        print(f"skipped on {HOST} ({sys.platform}): {name}: {skips[base_name(name)]}", flush=True)
         chosen.remove(name)
     manual = {} if args.names or args.all else named_only(host_config())
     for name in [name for name in chosen if base_name(name) in manual]:

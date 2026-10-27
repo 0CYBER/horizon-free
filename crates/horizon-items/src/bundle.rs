@@ -211,6 +211,17 @@ impl Contents {
         self.weight.n >= self.weight.d
     }
 
+    /// `BundleItem.isBarVisible`, `getBarWidth` and `getBarColor`: the fullness bar
+    /// (width, RGB), blue until the bundle is full, then red.
+    pub fn bar(&self) -> Option<(i32, u32)> {
+        if self.weight.n <= 0 {
+            return None;
+        }
+        let width = (1 + self.weight.n * 12 / self.weight.d).min(13) as i32;
+        let color = if self.is_full() { 0xFF5454 } else { 0x7087FF };
+        Some((width, color))
+    }
+
     /// `toImmutable`, written back into the bundle's component.
     pub fn store(self, bundle: &mut ItemStack) {
         let data = bundle.data_mut();
@@ -362,14 +373,7 @@ mod tooltip_tests {
     /// The prepared resources, when they are on this machine: the tooltip
     /// asks the item registry whether a stack is a bundle.
     fn items() -> Option<Items> {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.local/horizon-client/26.3");
-        if !root.join("items.json").exists() {
-            return None;
-        }
-        let assets = crate::assets::Assets::load(&root).ok()?;
-        let facts = crate::blocks::BlockFacts::load(&root, assets.registry).ok()?;
-        Items::load(&root, assets.registry, &facts).ok()
+        crate::items::prepared_items()
     }
 
     fn bundle_with(counts: &[(&str, u32)]) -> ItemStack {
