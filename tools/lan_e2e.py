@@ -4795,9 +4795,17 @@ def run(ctl, out, resources, checks):
     host, guest = Game('host', ctl, resources), Game('guest', ctl, resources)
     # Either way explicitly: the game's default is the server thread.
     host.d.env['HORIZON_SERVER_THREAD'] = '1' if SERVER_THREAD else '0'
+    # A headless run (HORIZON_E2E_HEADLESS) has no focused window to draw in: the games render
+    # offscreen and never pause on the focus loss, or the world would stand still.
+    headless = bool(os.environ.get('HORIZON_E2E_HEADLESS'))
+    launch = ['launch']
+    if headless or sys.platform == 'darwin':
+        launch.append('--offscreen')
+    if headless:
+        launch.append('--no-pause')
     results = {}
     try:
-        host.pid = host('launch', wait=False, offscreen=sys.platform == 'darwin')['pid']
+        host.pid = host.raw(*launch)['pid']
         # Guests' commands need the world's Allow Commands as well as the LAN's (#372): a creative
         # world has them; everyone plays in survival.
         host.raw('open', 'Lan', 5, 'creative')
@@ -4811,7 +4819,7 @@ def run(ctl, out, resources, checks):
         host('command', command='gamerule spawn_mobs false')
         port = host.raw('lan', 'open', 0, 'commands')['port']
         host.player = host.raw('lan', 'status').get('host', 'Player')  # the host's profile name
-        guest.pid = guest('launch', wait=False, offscreen=sys.platform == 'darwin')['pid']
+        guest.pid = guest.raw(*launch)['pid']
         guest.raw('connect', f'127.0.0.1:{port}', GUEST_NAME)
         guest.raw('wait-for', 'loaded', '--timeout', 300)
         guest.wait(40)
