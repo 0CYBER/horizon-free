@@ -49,6 +49,8 @@ pub fn geometry(
                     color: 0xffff_ffff,
                     light: stage_light(stage),
                     normal: [0; 4],
+
+                    glint_uv: [0.0, 0.0],
                 });
             }
         }

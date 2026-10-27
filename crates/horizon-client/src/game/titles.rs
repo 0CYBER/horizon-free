@@ -21,6 +21,22 @@ impl Game<'_> {
         draws.extend(self.titles.title(w, h, partial, font, background));
         hud_layout::paint(batch, &self.gui.atlas, &draws);
     }
+    /// `Hud.extractSavingIndicator`, under the screens: the option, then the
+    /// fading "Saving world" text.
+    pub(super) fn draw_saving_indicator(&self, batch: &mut HudBatch) {
+        if !self.settings.autosave_indicator {
+            return;
+        }
+        let draws = self.saving_indicator.draw(
+            batch.width as i32,
+            batch.height as i32,
+            self.clock.fraction() as f32,
+            &self.gui.atlas.font,
+            Text::literal(self.translate("menu.savingLevel", "Saving world")),
+            self.settings.text_background(0.0),
+        );
+        hud_layout::paint(batch, &self.gui.atlas, &draws);
+    }
     /// The selected stack as `Hud.tick` compares it for the name highlight.
     fn held_name(&self) -> Option<HeldName> {
         let stack = self.inventory.get(self.selected)?.as_ref()?;
@@ -44,6 +60,12 @@ impl Game<'_> {
     /// The title, action bar and selected-item parts of `Hud.tick`.
     pub(super) fn tick_hud(&mut self) {
         self.titles.tick();
+        // `MinecraftServer.isCurrentlySaving` of single player's server.
+        let saving = self
+            .integrated
+            .as_ref()
+            .map_or(self.autosaving, |server| server.is_saving());
+        self.saving_indicator.tick(saving);
         let held = self.held_name();
         self.tool_highlight
             .tick(held, f64::from(self.settings.notification_display_time));

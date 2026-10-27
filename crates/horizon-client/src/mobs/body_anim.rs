@@ -959,7 +959,7 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, a: &Animations) -> bool {
     let st = &m.anim.states;
     match m.species() {
         Species::Goat => goat(p, s, &Goat::from_mob(m)),
-        Species::PolarBear => polar_bear(p, s, 0.0),
+        Species::PolarBear => polar_bear(p, s, super::polar_bear::standing_scale(m, s.partial)),
         Species::Panda => panda(p, s, &Panda::default()),
         Species::Llama | Species::TraderLlama => {
             llama(p, s, m.extra.chested && !s.baby);
@@ -969,8 +969,8 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, a: &Animations) -> bool {
             s,
             &Turtle {
                 on_land: !m.fluids.in_water && m.on_ground,
-                laying_egg: false,
-                has_egg: false,
+                laying_egg: m.extra.flag2,
+                has_egg: m.extra.flag,
             },
         ),
         Species::Strider => strider(p, s, m.rider.is_some()),
@@ -980,11 +980,12 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses, a: &Animations) -> bool {
         Species::Parrot => {
             let flap = m.anim.flap_o + (m.anim.flap - m.anim.flap_o) * s.partial;
             let speed = m.anim.flap_speed_o + (m.anim.flap_speed - m.anim.flap_speed_o) * s.partial;
+            // `Parrot.isFlying` is `!onGround`, in water too.
             let pose = if m.extra.party_jukebox.is_some() {
                 ParrotPose::Party
             } else if m.extra.sitting {
                 ParrotPose::Sitting
-            } else if !m.on_ground && !m.fluids.in_water {
+            } else if !m.on_ground {
                 ParrotPose::Flying
             } else {
                 ParrotPose::Standing

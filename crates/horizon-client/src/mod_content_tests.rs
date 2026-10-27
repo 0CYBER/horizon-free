@@ -114,6 +114,7 @@ fn ruby_mod(dir: &Path) -> ContentMod {
 /// new blocks behave like their templates with the overrides, and vanilla's
 /// states are where they were.
 #[test]
+#[ignore = "full content root: CI and pr_ready run it"]
 fn content_root_loads_with_every_table() {
     let Some(base) = prepared() else {
         return;
@@ -352,6 +353,7 @@ fn no_content_keeps_the_base_root() {
 use horizon_world::registry::BlockStateId;
 
 #[test]
+#[ignore = "full content root: CI and pr_ready run it"]
 fn shared_behaviour_document_matches_independent_loaders() {
     let Some(root) = prepared() else { return };
     let assets = Assets::load(&root).expect("assets");
@@ -414,6 +416,7 @@ fn shared_behaviour_document_matches_independent_loaders() {
 
 #[cfg(unix)]
 #[test]
+#[ignore = "full content root: CI and pr_ready run it"]
 fn independent_reloads_read_changed_behaviour_json_and_report_invalid_files() {
     let Some(base) = prepared() else { return };
     let scratch = std::env::temp_dir().join(format!("horizon-json-reloads-{}", std::process::id()));
@@ -535,6 +538,7 @@ fn independent_reloads_read_changed_behaviour_json_and_report_invalid_files() {
 /// A built root is kept for later starts, and built again when a mod's
 /// files change.
 #[test]
+#[ignore = "full content root: CI and pr_ready run it"]
 fn content_root_is_reused_until_a_mod_changes() {
     let Some(base) = prepared() else {
         return;
@@ -571,6 +575,7 @@ fn content_root_is_reused_until_a_mod_changes() {
 /// set, pool and templates join the bundles, and its biome tag keeps only
 /// what the loader knows.
 #[test]
+#[ignore = "full content root: CI and pr_ready run it"]
 fn content_root_carries_a_structure_mod() {
     let Some(base) = prepared() else {
         return;

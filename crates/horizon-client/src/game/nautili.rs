@@ -85,13 +85,8 @@ impl Game<'_> {
                     m.ai.target = None;
                 }
                 let sound = nautilus::eat_sound(m);
-                let kind = if tamed { "heart" } else { "smoke" };
                 // TamableAnimal.spawnTamingParticles (entity event 7 or 6).
-                self.particles_around_mob(
-                    self.mobs[index].id,
-                    kind,
-                    horizon_client::particles::Burst::TAMING,
-                );
+                self.mob_event_particles(self.mobs[index].id, if tamed { 7 } else { 6 });
                 self.nautilus_sound(index, sound);
                 if tamed {
                     let view = self.mob_entity(&self.mobs[index]);
@@ -145,6 +140,8 @@ impl Game<'_> {
             let sound = nautilus::eat_sound(m);
             self.use_nautilus_food(item);
             self.nautilus_sound(index, sound);
+            // Animal.setInLove: entity event 18.
+            self.mob_event_particles(self.mobs[index].id, 18);
             return true;
         }
         false
