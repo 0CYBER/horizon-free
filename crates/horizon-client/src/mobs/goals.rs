@@ -654,12 +654,15 @@ impl Goal for Float {
 #[derive(Clone, Debug)]
 pub struct Panic {
     pub speed: f64,
+    /// Only the damage of `#panic_environmental_causes` (an armadillo).
+    pub environmental: bool,
     pos: [f64; 3],
 }
 impl Panic {
     pub fn new(speed: f64) -> Self {
         Self {
             speed,
+            environmental: false,
             pos: [0.0; 3],
         }
     }
@@ -675,7 +678,14 @@ impl Goal for Panic {
         MOVE
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        if !should_panic(m) {
+        let wanted = if self.environmental {
+            m.last_damage.is_some_and(|(d, t)| {
+                super::armadillo::environmental(d.kind) && i64::from(m.age) - t <= 40
+            }) || m.fire_ticks > 0 && !m.kind.flags.fire_immune
+        } else {
+            should_panic(m)
+        };
+        if !wanted {
             return false;
         }
         if m.fire_ticks > 0 {
@@ -1600,6 +1610,10 @@ pub struct AvoidEntity {
     pub sprint: f64,
     /// Extra condition on the avoider (e.g. untamed cats only).
     pub when: Option<fn(&Mob) -> bool>,
+    /// Extra condition on the player or mob avoided (`AvoidEntityGoal`'s
+    /// predicate: a sneaking player, a tame wolf).
+    pub player_when: Option<fn(&super::PlayerView) -> bool>,
+    pub seen_when: Option<fn(&Seen) -> bool>,
     from: Vec3,
     /// The mob being avoided (`toAvoid`), when it is one.
     pub found: Option<u32>,
@@ -1612,12 +1626,22 @@ impl AvoidEntity {
             walk,
             sprint,
             when: None,
+            player_when: None,
+            seen_when: None,
             from: Vec3::ZERO,
             found: None,
         }
     }
     pub fn when(mut self, f: fn(&Mob) -> bool) -> Self {
         self.when = Some(f);
+        self
+    }
+    pub fn player_when(mut self, f: fn(&super::PlayerView) -> bool) -> Self {
+        self.player_when = Some(f);
+        self
+    }
+    pub fn seen_when(mut self, f: fn(&Seen) -> bool) -> Self {
+        self.seen_when = Some(f);
         self
     }
 }
@@ -1640,6 +1664,7 @@ impl Goal for AvoidEntity {
                     .filter(|p| {
                         p.alive
                             && !p.creative
+                            && self.player_when.is_none_or(|f| f(p))
                             && m.distance_sqr(p.position) <= max * max
                             && (p.position.y - m.position.y).abs() <= max + 3.0
                     })
@@ -1648,10 +1673,12 @@ impl Goal for AvoidEntity {
             Avoid::Species(list) => {
                 let id = m.id;
                 let y = m.position.y;
+                let seen_when = self.seen_when;
                 let hit =
                     cx.w.nearby(m.position, max, move |s| {
                         s.id != id
                             && list.contains(&s.species)
+                            && seen_when.is_none_or(|f| f(s))
                             && (s.position.y - y).abs() <= 3.0 + max
                     })
                     .map(|s| (s.id, s.position))
@@ -2030,6 +2057,30 @@ impl Goal for RestrictSun {
         m.ai.nav.avoid_sun = false;
     }
 }
+/// `FleeSunGoal.getHidePos`: a spot within 10 blocks that the sky does not
+/// see and the mob likes.
+pub fn hide_pos(m: &mut Mob, w: &MobWorld) -> Option<[f64; 3]> {
+    let (bx, by, bz) = (
+        m.position.x.floor() as i32,
+        m.position.y.floor() as i32,
+        m.position.z.floor() as i32,
+    );
+    for _ in 0..10 {
+        let p = [
+            bx + m.random.next_int_bound(20).unwrap_or(0) - 10,
+            by + m.random.next_int_bound(6).unwrap_or(0) - 3,
+            bz + m.random.next_int_bound(20).unwrap_or(0) - 10,
+        ];
+        if !w.can_see_sky(p[0], p[1], p[2]) && m.walk_target_value(w, p) < 0.0 {
+            return Some([
+                f64::from(p[0]) + 0.5,
+                f64::from(p[1]),
+                f64::from(p[2]) + 0.5,
+            ]);
+        }
+    }
+    None
+}
 /// FleeSunGoal: find shade while burning.
 #[derive(Clone, Debug)]
 pub struct FleeSun {
@@ -2061,22 +2112,13 @@ impl Goal for FleeSun {
         if !cx.w.can_see_sky(bx, by, bz) {
             return false;
         }
-        for _ in 0..10 {
-            let p = [
-                bx + m.random.next_int_bound(20).unwrap_or(0) - 10,
-                by + m.random.next_int_bound(6).unwrap_or(0) - 3,
-                bz + m.random.next_int_bound(20).unwrap_or(0) - 10,
-            ];
-            if !cx.w.can_see_sky(p[0], p[1], p[2]) && m.walk_target_value(cx.w, p) < 0.0 {
-                self.wanted = [
-                    f64::from(p[0]) + 0.5,
-                    f64::from(p[1]),
-                    f64::from(p[2]) + 0.5,
-                ];
-                return true;
+        match hide_pos(m, cx.w) {
+            Some(at) => {
+                self.wanted = at;
+                true
             }
+            None => false,
         }
-        false
     }
     fn can_continue(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
         !m.ai.nav.is_done()

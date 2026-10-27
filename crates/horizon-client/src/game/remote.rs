@@ -1926,6 +1926,22 @@ impl Game<'_> {
                         }
                     }
                 }
+                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
+                    for (index, _, value) in &p.values {
+                        match (index, value) {
+                            // Entity.DATA_TICKS_FROZEN: isFullyFrozen shakes it.
+                            (7, Value::Int(ticks)) => m.ticks_frozen = *ticks,
+                            // Strider.DATA_SUFFOCATING (after AgeableMob's two
+                            // and DATA_BOOST_TIME): a cold strider shakes.
+                            (19, Value::Bool(cold))
+                                if m.species() == horizon_client::mobs::Species::Strider =>
+                            {
+                                m.extra.flag = *cold;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 // LivingEntity.DATA_LIVING_ENTITY_FLAGS: for another player
                 // too, remote_mob_data's apply reads index 8 above.
                 let mannequin = self
@@ -2147,6 +2163,10 @@ impl Game<'_> {
                 {
                     m.health = 0.0;
                 }
+                // The events that start a mob's animation (the warden's).
+                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
+                    horizon_client::mobs::sync::entity_event(m, p.event as u8);
+                }
                 // LivingEntity.handleEntityEvent 60: the poof as the dead body goes.
                 if p.event == 60
                     && let Some(m) = self.mobs.iter().find(|m| m.id == p.id as u32)
@@ -2156,6 +2176,9 @@ impl Game<'_> {
                 }
                 if p.event == super::totem::TOTEM_EVENT {
                     self.remote_totem(p.id);
+                }
+                if p.event == super::combat::DROWN_EVENT {
+                    self.remote_drown(p.id);
                 }
                 // Entity event 53: the honey slide particles of a player
                 // sliding down a honey block (HoneyBlock.showSlideParticles).
@@ -3216,6 +3239,7 @@ impl Game<'_> {
         self.border.tick();
         self.player_border();
         self.tick_remote_entities(running);
+        self.tick_remote_guardian_eyes(running);
         // ClientLevel.tickBlockEntities: chest lids, shulker boxes, bells,
         // and the moving pistons a block event's client-side moveBlocks made
         // (their progress advances between the server's block updates).
@@ -3510,6 +3534,43 @@ impl Game<'_> {
     }
     /// ClientLevel.tickEntities; a frozen level only ticks the players
     /// (`TickRateManager.isEntityFrozen`).
+    /// `GuardianRenderer.getEntityToLookAt`: a guardian's eye follows its
+    /// synched attack target, else the camera.
+    fn tick_remote_guardian_eyes(&mut self, running: bool) {
+        use horizon_client::mobs::{Species, Who, guardian};
+        if !running {
+            return;
+        }
+        let camera = self.player.as_ref().map(|p| {
+            [
+                p.position.x,
+                p.position.y + f64::from(p.dimensions.eye_height),
+                p.position.z,
+            ]
+        });
+        let looks: Vec<_> = self
+            .mobs
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| {
+                matches!(m.species(), Species::Guardian | Species::ElderGuardian) && m.alive()
+            })
+            .filter_map(|(i, m)| {
+                let look = match m.ai.target.filter(|_| m.extra.flag) {
+                    Some(Who::Mob(id)) => self
+                        .mobs
+                        .iter()
+                        .find(|t| t.id == id)
+                        .map(|t| [t.position.x, t.eye_y(), t.position.z]),
+                    _ => camera,
+                };
+                look.map(|look| (i, look))
+            })
+            .collect();
+        for (i, look) in looks {
+            guardian::look_at(&mut self.mobs[i], look);
+        }
+    }
     fn tick_remote_entities(&mut self, running: bool) {
         if running {
             self.tick_text_displays();
@@ -3536,6 +3597,7 @@ impl Game<'_> {
                 m.fluids = fluids;
             }
         }
+        let game_time = self.world.game_time;
         let Some(r) = self.remote.as_mut() else {
             return;
         };
@@ -3606,6 +3668,10 @@ impl Game<'_> {
                 m.head_yaw += wrap_degrees(*yaw - m.head_yaw) / *steps as f32;
                 *steps -= 1;
             }
+            // Fox.tick: the head tilt and crouch follow the synched flags.
+            if m.species() == horizon_client::mobs::Species::Fox {
+                horizon_client::mobs::fox::client_tick(m);
+            }
             // Chicken.aiStep: the wings follow the server's on-ground flag.
             if m.species() == horizon_client::mobs::Species::Chicken {
                 horizon_client::mobs::farm::chicken_flap(m);
@@ -3655,6 +3721,8 @@ impl Game<'_> {
             if m.species() == horizon_client::mobs::Species::Bat {
                 horizon_client::mobs::bat::setup_animation_states(m);
             }
+            // The animation states a server computes in its own `ai_step`.
+            horizon_client::mobs::sync::client_tick(m, game_time);
             if m.species() == horizon_client::mobs::Species::Panda {
                 horizon_client::mobs::panda::client_tick(m, thundering);
             }

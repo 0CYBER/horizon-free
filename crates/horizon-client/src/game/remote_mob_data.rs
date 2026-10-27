@@ -4,7 +4,9 @@
 //! own simulation, which a client of a server doesn't run.
 use super::Game;
 use horizon_client::mobs::render::{PROFESSIONS, VILLAGER_TYPES};
-use horizon_client::mobs::{Mob, Species, Who, bat, panda, tame};
+use horizon_client::mobs::{
+    Mob, Species, Who, armadillo, bat, camel, creaking, panda, sniffer, sync, tame,
+};
 use horizon_client::particles::{ParticleOptions, ParticleType};
 use horizon_protocol::entity_data::{Particle, ParticleData, Value};
 use horizon_protocol::registry::Builtin;
@@ -21,6 +23,8 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             // client, which draws the flames. A client doesn't count the
             // fire down: the flag goes off when the server's fire is out.
             (0, Value::Byte(flags)) => m.fire_ticks = i32::from(flags & 1),
+            // Entity.DATA_POSE: the pose the species animates by.
+            (6, Value::Id(pose)) => sync::set_pose(m, (*pose).clamp(0, 17) as u8),
             // LivingEntity.DATA_LIVING_ENTITY_FLAGS: using an item 1, in the
             // off hand 2. The flag starts and stops the use; the client ticks
             // the count itself (a bow's pull follows it).
@@ -76,6 +80,11 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             (Species::PolarBear, 18, Value::Bool(standing)) => m.extra.flag = *standing,
             // Bat.DATA_ID_FLAGS: resting in bit 0.
             (Species::Bat, 16, Value::Byte(flags)) => bat::set_resting(m, flags & 1 != 0),
+            // Fox.DATA_TYPE_ID and DATA_FLAGS_ID.
+            (Species::Fox, 18, Value::Int(variant)) => {
+                m.extra.variant = (*variant).clamp(0, 1) as u8
+            }
+            (Species::Fox, 19, Value::Byte(flags)) => m.extra.ints[0] = i32::from(*flags as u8),
             // Sheep.DATA_WOOL_ID: the colour in the low nibble, 16 sheared.
             (Species::Sheep, 18, Value::Byte(wool)) => {
                 m.extra.color = (*wool & 15) as u8;
@@ -101,6 +110,55 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             // AbstractCubeMob.ID_SIZE: its size and box (refreshDimensions).
             (Species::Slime | Species::MagmaCube, 18, Value::Int(size)) => {
                 m.extra.size = (*size).clamp(1, 127);
+            }
+            // Warden.CLIENT_ANGER_LEVEL: the heartbeat's pace.
+            (Species::Warden, 16, Value::Int(anger)) => {
+                if let Some(st) = m.extra.warden.as_mut() {
+                    st.client_anger = *anger;
+                }
+            }
+            // Sniffer.DATA_STATE (after AgeableMob's two): the animation
+            // follows it in `sync::client_tick`.
+            (Species::Sniffer, 18, Value::Id(state)) => {
+                sniffer::set_state(m, (*state).clamp(0, 6) as u8);
+            }
+            // Armadillo.ARMADILLO_STATE (after AgeableMob's two): the shell and
+            // its animations follow it in `sync::client_tick`.
+            (Species::Armadillo, 18, Value::Id(state)) => {
+                armadillo::set_state(m, (*state).clamp(0, 3) as u8);
+            }
+            // Goat.DATA_HAS_LEFT_HORN and DATA_HAS_RIGHT_HORN: the model hides
+            // a horn the goat lost.
+            (Species::Goat, 19, Value::Bool(has)) => m.extra.lost_horns[0] = !*has,
+            (Species::Goat, 20, Value::Bool(has)) => m.extra.lost_horns[1] = !*has,
+            // Shulker.DATA_ATTACH_FACE_ID, DATA_PEEK_ID and DATA_COLOR_ID.
+            (Species::Shulker, 16, Value::Id(face)) => m.extra.variant3 = (*face).clamp(0, 5) as u8,
+            (Species::Shulker, 17, Value::Byte(peek)) => m.extra.counter = i32::from(*peek),
+            (Species::Shulker, 18, Value::Byte(color)) => m.extra.color = *color as u8,
+            // Camel.DASH and LAST_POSE_CHANGE_TICK (after AbstractHorse's
+            // flags).
+            (Species::Camel | Species::CamelHusk, 19, Value::Bool(dashing)) => {
+                camel::set_dashing(m, *dashing);
+            }
+            (Species::Camel | Species::CamelHusk, 20, Value::Long(tick)) => {
+                camel::set_synced_pose_tick(m, *tick);
+            }
+            // Vex.DATA_FLAGS_ID: charging in bit 0.
+            (Species::Vex, 16, Value::Byte(flags)) => m.extra.flag = flags & 1 != 0,
+            // Creaking.CAN_MOVE, IS_ACTIVE and IS_TEARING_DOWN.
+            (Species::Creaking, 16, Value::Bool(can_move)) => m.extra.flag2 = !*can_move,
+            (Species::Creaking, 17, Value::Bool(active)) => m.extra.flag = *active,
+            (Species::Creaking, 18, Value::Bool(true)) => creaking::set_tearing_down(m),
+            // Allay.DATA_DANCING and DATA_CAN_DUPLICATE (a cooldown running
+            // is any non-zero `egg_time`).
+            (Species::Allay, 16, Value::Bool(dancing)) => m.extra.flag = *dancing,
+            (Species::Allay, 17, Value::Bool(can)) => m.extra.egg_time = i32::from(!*can),
+            // Axolotl.DATA_PLAYING_DEAD (after DATA_VARIANT): the factors
+            // ease in `sync::client_tick`.
+            (Species::Axolotl, 19, Value::Bool(dead)) => m.extra.axolotl.playing_dead = *dead,
+            // CopperGolem.COPPER_GOLEM_STATE (after DATA_WEATHER_STATE).
+            (Species::CopperGolem, 17, Value::Id(state)) => {
+                m.extra.variant3 = (*state).clamp(0, 4) as u8;
             }
             // Pillager.IS_CHARGING_CROSSBOW: the charge pose (Raider's
             // IS_CELEBRATING takes 16).

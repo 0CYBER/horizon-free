@@ -185,6 +185,20 @@ pub fn body(m: &Mob) -> (String, String) {
             baby_or(m, "rabbit#main", "rabbit_baby#main"),
             b(&m.kind.texture),
         ),
+        // FoxRenderer.getTextureLocation: snow variant, sleeping, baby.
+        S::Fox => (
+            baby_or(m, "fox#main", "fox_baby#main"),
+            format!(
+                "entity/fox/fox{}{}{}",
+                if m.extra.variant == 0 { "" } else { "_snow" },
+                if super::fox::flag(m, super::fox::SLEEPING) {
+                    "_sleep"
+                } else {
+                    ""
+                },
+                if baby { "_baby" } else { "" },
+            ),
+        ),
         S::Pig => {
             let model = if baby {
                 "pig_baby#main".into()
@@ -837,10 +851,15 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
     base *= species_scale(m, alpha);
     base * glam::Mat4::from_translation(glam::Vec3::new(0.0, -1.501, 0.0))
 }
-/// `LivingEntityRenderer.isShaking`: converting zombies, piglins and
-/// hoglins, and a zombie villager being cured.
+/// `LivingEntityRenderer.isShaking`: a fully frozen mob (the skeleton's own
+/// `isShaking` is its stray conversion only), converting zombies, piglins
+/// and hoglins, a zombie villager being cured and a cold strider.
 fn shaking(m: &Mob) -> bool {
+    if m.is_fully_frozen() && m.species() != Species::Skeleton {
+        return true;
+    }
     match m.species() {
+        Species::Strider => super::strider::suffocating(m),
         Species::ZombieVillager => super::zombie_villager::is_converting(m),
         Species::Zombie | Species::Husk => m.extra.counter2 > 0,
         Species::Piglin | Species::PiglinBrute | Species::Hoglin => {
@@ -860,6 +879,11 @@ fn species_rotations(m: &Mob, alpha: f32) -> glam::Mat4 {
         Species::Cat => super::tame::cat_rotations(m, alpha),
         Species::Panda => super::panda::rotations(m, alpha),
         Species::Shulker => super::shulker::rotations(m),
+        // FoxRenderer.setupRotations: the body follows a pounce's pitch.
+        Species::Fox if super::fox::flag(m, super::fox::POUNCING | super::fox::FACEPLANTED) => {
+            let pitch = m.previous_head_pitch + (m.head_pitch - m.previous_head_pitch) * alpha;
+            glam::Mat4::from_rotation_x((-pitch).to_radians())
+        }
         _ => glam::Mat4::IDENTITY,
     }
 }
