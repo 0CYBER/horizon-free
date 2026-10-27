@@ -623,7 +623,10 @@ impl Game<'_> {
             return;
         }
         if let Some(command) = message.strip_prefix('/') {
-            self.run_command(command);
+            // A client mod's command first, then a server mod's, as on a server.
+            if !self.mod_command(command) && !self.local_server_mod_command(command) {
+                self.run_command(command);
+            }
         } else {
             let line = Text::translate(
                 "chat.type.text",
@@ -643,6 +646,7 @@ impl Game<'_> {
                 self.mods_chat(&line);
             }
             self.lan_host_chat(message);
+            self.mod_player_chat(super::server_mods::Who::Local, message);
         }
     }
     pub(super) fn chat_scroll(&mut self, amount: f32) {
@@ -778,6 +782,7 @@ impl Game<'_> {
             max_snow_accumulation_height: r.int("max_snow_accumulation_height"),
             spawn_mobs: r.bool("spawn_mobs"),
             spawn_monsters: r.bool("spawn_monsters"),
+            fire_spread_radius_around_player: r.int("fire_spread_radius_around_player"),
         }
     }
     /// Apply rules mirrored in other state (natural regeneration, difficulty).

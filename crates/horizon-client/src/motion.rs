@@ -50,6 +50,10 @@ pub struct MotionResources {
     pub attributes: Arc<Catalog>,
     pub blocks: BoundMovementProperties,
     pub climbable: BTreeSet<String>,
+    /// `BlockTags.CAN_GLIDE_THROUGH`: climbable blocks a gliding player passes.
+    pub glide_through: BTreeSet<String>,
+    /// `BlockTags.SOUL_SPEED_BLOCKS`: what Soul Speed's effects look for.
+    pub soul_speed_blocks: BTreeSet<String>,
     pub fall_reset: BTreeSet<String>,
     pub landing: BlockLandingRegistry,
     pub health: crate::health::HealthResources,
@@ -108,9 +112,28 @@ impl MotionResources {
                 suppresses_bounce: tag("minecraft:suppresses_bounce")?,
             })?,
             climbable: tag("minecraft:climbable")?,
+            glide_through: tag("minecraft:can_glide_through")?,
+            soul_speed_blocks: tag("minecraft:soul_speed_blocks")?,
             fall_reset: tag("minecraft:fall_damage_resetting")?,
         })
     }
+}
+
+/// What the `location_changed` enchantment effects (Soul Speed) need to know
+/// between ticks.
+#[derive(Clone, Debug, Default)]
+pub struct LocationEffects {
+    /// `MovementAffectedByPredicate`: the block under the player
+    /// (`getBlockPosBelowThatAffectsMyMovement`) is in `#minecraft:soul_speed_blocks`.
+    pub on_soul_speed_block: bool,
+    /// `LivingEntity.lastPos`: the block the player was in last tick.
+    pub block: Option<BlockPos>,
+    /// A landing ran `onChangedBlock` (`LivingEntity.checkFallDamage`).
+    pub landed: bool,
+    /// The Soul Speed level of the boots seen last tick (0: none).
+    pub boots_level: u32,
+    /// The Soul Speed level whose attribute modifiers are on the player (0: none).
+    pub applied_level: u32,
 }
 
 /// Ordered requests and phase records for world/audio/network consumers. Landing
@@ -203,6 +226,14 @@ pub enum MotionEvent {
         bubble: bool,
         position: Vec3,
     },
+    /// `HoneyBlock.maybeDoSlideEffects` for a player sliding down the side of
+    /// the honey block at `pos`: its slide sound, and the server's entity
+    /// event 53 (the five block particles at the player).
+    HoneySlide {
+        pos: BlockPos,
+        sound: bool,
+        particles: bool,
+    },
     /// Entity event 67 (`LivingEntity.makeDrownParticles`): eight bubbles
     /// around a drowning player.
     Drown,
@@ -255,6 +286,8 @@ pub struct PlayerMotion {
     pub glide_ending: bool,
     /// Glider durability to take this tick (updateFallFlying).
     pub glider_wear: u32,
+    /// Soul Speed's `location_changed` bookkeeping.
+    pub location_effects: LocationEffects,
     /// `LivingEntity.autoSpinAttackTicks` and `autoSpinAttackDmg`: Riptide's
     /// spin. The damage stays until the game has dealt the hit.
     pub auto_spin_attack_ticks: i32,
@@ -308,6 +341,9 @@ pub struct PlayerMotion {
     /// it travels on the server: `isLocalInstanceAuthoritative` is false, so
     /// its moves check no fall damage.
     pub server_copy: bool,
+    /// The span of `events` a wall hit on the server's copy pushed (sound and
+    /// damage): `server_travel` keeps them while it drops the simulated moves.
+    pub wall_hit_events: Option<std::ops::Range<usize>>,
     /// A client's copy of its own player (`Level.isClientSide`): only the
     /// server hurts it (`Entity.hurt` does nothing on a client) and ticks its
     /// food (`ServerPlayer.tick`). Its hurt animation comes from the server.
@@ -443,6 +479,7 @@ impl PlayerMotion {
             fall_fly_ticks: 0,
             glide_ending: false,
             glider_wear: 0,
+            location_effects: LocationEffects::default(),
             auto_spin_attack_ticks: 0,
             auto_spin_attack_dmg: 0.0,
             spin_targets: Vec::new(),
@@ -477,6 +514,7 @@ impl PlayerMotion {
             freeze_immune: false,
             old_position: position,
             server_copy: false,
+            wall_hit_events: None,
             client_side: false,
             block_effects: true,
             powder_snow_entered: Vec::new(),
@@ -765,6 +803,10 @@ impl MotionWorld<'_, '_, '_> {
             .state(self.block(p))
             .ok_or("missing scene state")?
             .name;
+        // A gliding player passes through vines (`CAN_GLIDE_THROUGH`).
+        if self.player.fall_flying && self.resources.glide_through.contains(name) {
+            return Ok(false);
+        }
         let climbable = self.resources.climbable.contains(name);
         if climbable {
             self.player.last_climbable = Some(p);
@@ -834,9 +876,17 @@ impl MotionWorld<'_, '_, '_> {
         let can_glide = self.player.glider
             && !self.player.ground.on_ground
             && !self.player.flying
+            && self.player.status.levitation.is_none()
             && !self.player.fluids.was_touching_water
             && !self.player.is_in_lava();
-        if jumping && !toggled && !was_jumping && !self.player.fall_flying && can_glide {
+        // LocalPlayer.aiStep: `!onClimbable()` before tryToStartFallFlying.
+        if jumping
+            && !toggled
+            && !was_jumping
+            && !self.climbable()?
+            && !self.player.fall_flying
+            && can_glide
+        {
             self.player.fall_flying = true;
         }
         // LivingEntity.tick fallFlyTicks, then updateFallFlying.
@@ -848,8 +898,11 @@ impl MotionWorld<'_, '_, '_> {
                 self.player.fall_distance = 1.0;
             }
             self.player.fall_fly_ticks += 1;
-            // canGlide alone: water and lava don't end a glide.
-            let still = self.player.glider && !self.player.ground.on_ground && !self.player.flying;
+            // canGlide alone: water and lava don't end a glide, levitation does.
+            let still = self.player.glider
+                && !self.player.ground.on_ground
+                && !self.player.flying
+                && self.player.status.levitation.is_none();
             if !still {
                 self.player.glide_ending = true;
             } else if (self.player.fall_fly_ticks + 1) % 10 == 0
@@ -984,6 +1037,7 @@ impl MotionWorld<'_, '_, '_> {
             )
         });
         self.player.try_add_frost(on_air)?;
+        self.update_soul_speed_block()?;
         if self.player.health.tick_count % 40 == 0
             && self.player.is_fully_frozen()
             && self.player.can_freeze()
@@ -995,6 +1049,22 @@ impl MotionWorld<'_, '_, '_> {
             self.check_auto_spin_attack(before_travel);
         }
         Ok(())
+    }
+    /// Refresh whether the player stands on a soul speed block, for the
+    /// `location_changed` enchantment effects (a server's player too, whose
+    /// client does the walking).
+    pub fn update_soul_speed_block(&mut self) -> Result<()> {
+        self.player.location_effects.on_soul_speed_block = self.on_soul_speed_block()?;
+        Ok(())
+    }
+    /// `MovementAffectedByPredicate` for `#minecraft:soul_speed_blocks`.
+    fn on_soul_speed_block(&mut self) -> Result<bool> {
+        let on = self.support(movement_support::MOVEMENT_SUPPORT_OFFSET)?;
+        Ok(self
+            .assets
+            .registry
+            .state(self.block(on))
+            .is_some_and(|s| self.resources.soul_speed_blocks.contains(&s.name)))
     }
     /// Player.travel: swim steering, then LivingEntity.travel (fluids first,
     /// then gliding, then air), keeping 0.6 of the vertical speed while flying.
@@ -1021,7 +1091,14 @@ impl MotionWorld<'_, '_, '_> {
         {
             horizon_world::living_fluid::travel_in_fluid(self, input)?;
         } else if self.player.fall_flying {
-            self.travel_fall_flying()?;
+            // LivingEntity.travelFallFlying: on a climbable the glide ends and
+            // the player moves like in the air.
+            if self.climbable()? {
+                self.travel_in_air(input)?;
+                self.player.fall_flying = false;
+            } else {
+                self.travel_fall_flying()?;
+            }
         } else {
             self.travel_in_air(input)?;
         }
@@ -1048,7 +1125,14 @@ impl MotionWorld<'_, '_, '_> {
         p.server_copy = false;
         (p.position, p.ground, p.collision) = (position, ground, collision);
         (p.history, p.fall_distance, p.steps) = (history, fall_distance, steps);
+        // The wall hit is the server's own: its sound and damage events stay.
+        let kept: Vec<_> = p
+            .wall_hit_events
+            .take()
+            .map(|span| p.events.drain(span).collect())
+            .unwrap_or_default();
         p.events.truncate(events);
+        p.events.extend(kept);
         travelled
     }
     /// `LivingEntity.checkAutoSpinAttack`: the first living entity in the
@@ -1083,7 +1167,7 @@ impl MotionWorld<'_, '_, '_> {
     /// `Entity.applyEffectsFromBlocks` for the blocks Horizon's player reacts
     /// to inside its movement path: powder snow (`PowderSnowBlock.entityInside`
     /// and the FREEZE / EXTINGUISH effects), cobwebs, sweet berry bushes,
-    /// cactus and lit campfires, and the magma block it stands on
+    /// cactus and lit campfires, and the magma and slime blocks it stands on
     /// (`stepOn`). Pressure plates, tripwires and rails are the world tick's
     /// scan.
     pub fn apply_effects_from_blocks(&mut self) -> Result<()> {
@@ -1141,13 +1225,21 @@ impl MotionWorld<'_, '_, '_> {
         // MagmaBlock's hot floor hurts unless it steps carefully (sneaks).
         if self.player.ground.on_ground {
             let on = self.legacy_on_position()?;
-            let magma = self
-                .assets
-                .registry
-                .state(self.block(on))
-                .is_some_and(|s| s.name == "minecraft:magma_block");
+            let under = self.assets.registry.state(self.block(on));
+            let magma = under.is_some_and(|s| s.name == "minecraft:magma_block");
+            let slime = under.is_some_and(|s| s.name == "minecraft:slime_block");
             if magma && !self.player.shift_key_down {
                 self.environment_hurt("minecraft:hot_floor", 1.0)?;
+            }
+            // SlimeBlock.stepOn: a slow walk on slime drags the horizontal
+            // speed (the client moves its own player, so not the server's copy).
+            if slime && !damage_only && !self.player.shift_key_down {
+                let abs_delta_y = self.player.velocity.y.abs();
+                if abs_delta_y < 0.1 {
+                    let scale = 0.4 + abs_delta_y * 0.2;
+                    self.player.velocity.x *= scale;
+                    self.player.velocity.z *= scale;
+                }
             }
         }
         let mut visited = std::collections::HashSet::new();
@@ -1365,6 +1457,9 @@ impl MotionWorld<'_, '_, '_> {
                     "minecraft:sweet_berry_bush" if damage_only => {
                         self.sweet_berry_bush_damage(state)?;
                     }
+                    // HoneyBlock.entityInside: a server's player slides too, so
+                    // its fall distance resets (its client moves it).
+                    "minecraft:honey_block" => self.honey_block_inside(p)?,
                     // PowderSnowBlock.entityInside's FREEZE.
                     "minecraft:powder_snow" if damage_only => entered.push((step, p)),
                     _ => {}
@@ -1394,6 +1489,50 @@ impl MotionWorld<'_, '_, '_> {
             }
         }
         Ok(iterations + 1)
+    }
+    /// `HoneyBlock.entityInside`: a falling player touching a side of the block
+    /// slides down it (`isSlidingDown`, `doSlideMovement`, `maybeDoSlideEffects`).
+    fn honey_block_inside(&mut self, pos: BlockPos) -> Result<()> {
+        let old_delta_y = |dy: f64| dy / f64::from(0.98_f32) + 0.08;
+        let new_delta_y = |dy: f64| (dy - 0.08) * f64::from(0.98_f32);
+        let position = self.player.position;
+        let velocity = self.player.velocity;
+        if self.player.ground.on_ground
+            || position.y > f64::from(pos.y) + 0.9375 - 1.0e-7
+            || old_delta_y(velocity.y) >= -0.08
+        {
+            return Ok(());
+        }
+        let dx = (f64::from(pos.x) + 0.5 - position.x).abs();
+        let dz = (f64::from(pos.z) + 0.5 - position.z).abs();
+        let overlap = 0.4375 + f64::from(self.player.dimensions.width / 2.0);
+        if !(dx + 1.0e-7 > overlap || dz + 1.0e-7 > overlap) {
+            return Ok(());
+        }
+        // doSlideMovement
+        let old = old_delta_y(velocity.y);
+        if old < -0.13 {
+            let factor = -0.05 / old;
+            self.player.velocity =
+                Vec3::new(velocity.x * factor, new_delta_y(-0.05), velocity.z * factor);
+        } else {
+            self.player.velocity = Vec3::new(velocity.x, new_delta_y(-0.05), velocity.z);
+        }
+        self.player.fall_distance = 0.0;
+        // maybeDoSlideEffects: the sound, then the server's event 53.
+        let random = &mut self.scene.random;
+        let sound = random.next_int_bound(5).map_err(|e| format!("{e:?}"))? == 0;
+        // Only the server broadcasts event 53 (`!level.isClientSide()`).
+        let particles = !self.player.client_side
+            && random.next_int_bound(5).map_err(|e| format!("{e:?}"))? == 0;
+        if sound || particles {
+            self.player.events.push(MotionEvent::HoneySlide {
+                pos,
+                sound,
+                particles,
+            });
+        }
+        Ok(())
     }
     /// `Player.makeStuckInBlock`: the next move is scaled by `multiplier`
     /// (and the fall forgotten) unless flying; the impulse context resets
@@ -1528,7 +1667,7 @@ impl MotionWorld<'_, '_, '_> {
         let lean = pitch;
         let look_h = (look.x * look.x + look.z * look.z).sqrt();
         let move_h = (v.x * v.x + v.z * v.z).sqrt();
-        let gravity = 0.08;
+        let gravity = living_motion::effective_gravity(self)?;
         let lift = f64::from(lean.cos()).powi(2);
         let mut m = Vec3::new(v.x, v.y + gravity * (-1.0 + lift * 0.75), v.z);
         if m.y < 0.0 && look_h > 0.0 {
@@ -1556,7 +1695,44 @@ impl MotionWorld<'_, '_, '_> {
         }
         self.player.velocity = Vec3::new(m.x * 0.99, m.y * 0.98, m.z * 0.99);
         let movement = self.player.velocity;
-        self.move_self(movement)
+        self.move_self(movement)?;
+        // LivingEntity.handleFallFlyingCollisions: only the server hurts.
+        if !self.player.client_side && self.player.collision.horizontal {
+            let new_h = {
+                let v = self.player.velocity;
+                (v.x * v.x + v.z * v.z).sqrt()
+            };
+            let dmg = ((move_h - new_h) * 10.0 - 3.0) as f32;
+            if dmg > 0.0 {
+                let first = self.player.events.len();
+                // getFallDamageSound((int) dmg)
+                let sound = if dmg as i32 > 4 {
+                    crate::landing::SceneSound::BigFall
+                } else {
+                    crate::landing::SceneSound::SmallFall
+                };
+                self.player
+                    .events
+                    .push(MotionEvent::Fall(crate::landing::FallEvent::Sound {
+                        sound,
+                        position: None,
+                        volume: 1.0,
+                        pitch: 1.0,
+                    }));
+                let id = self
+                    .resources
+                    .health
+                    .damage
+                    .id("minecraft:fly_into_wall")
+                    .ok_or("missing fly_into_wall damage type")?;
+                let rules = self.scene.health_rules;
+                self.player.hurt(&self.resources.health, rules, id, dmg)?;
+                if self.player.server_copy {
+                    self.player.wall_hit_events = Some(first..self.player.events.len());
+                }
+            }
+        }
+        Ok(())
     }
     /// `LocalPlayer.move`: the move, then `updateAutoJump` with the float
     /// horizontal displacement.
@@ -1833,6 +2009,10 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         // distance every tick, so landing under either does not hurt.
         if self.player.status.slow_falling || self.player.status.levitation.is_some() {
             self.player.fall_distance = 0.0;
+        }
+        // LivingEntity.checkFallDamage: a landing runs onChangedBlock.
+        if grounded && self.player.fall_distance > 0.0 {
+            self.player.location_effects.landed = true;
         }
         if self.player.spawn_extra_particles_on_fall && grounded && self.player.fall_distance > 0.0
         {
