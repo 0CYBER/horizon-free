@@ -3796,7 +3796,7 @@ impl Game<'_> {
                     S::Slime | S::MagmaCube | S::SulfurCube => cube::client_tick(m, &mut mob_fx),
                     S::Nautilus | S::ZombieNautilus => nautilus::client_tick(m, &mut mob_fx),
                     S::Illusioner => illusioner::client_tick(m, &mut mob_fx),
-                    S::Wither => wither::client_tick(m, &mut mob_fx),
+                    S::Wither => wither::client_smoke(m, &mut mob_fx),
                     _ => {}
                 }
             }

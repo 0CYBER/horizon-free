@@ -173,7 +173,7 @@ fn target_pos(w: &MobWorld, id: i32) -> Option<([f64; 3], f64, bool)> {
 /// (`radius` 0.3 of the wither's scale, which is 1 here). The heads' turning
 /// and the coloured particles need the server's targets and invulnerable
 /// ticks, which a client is not sent.
-pub fn client_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
+pub fn client_smoke(m: &mut Mob, events: &mut Vec<MobEvent>) {
     for i in 0..3 {
         let h = head_pos(m, i);
         let r = &mut m.random;
