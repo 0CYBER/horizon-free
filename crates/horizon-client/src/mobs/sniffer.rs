@@ -94,6 +94,7 @@ pub fn ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
     if current == DIGGING && now(m) == m.extra.ints[3] {
         let h = head_block(m);
         events.push(MobEvent::GiftLoot {
+            mob: m.id,
             table: "minecraft:gameplay/sniffer_digging",
             at: [f64::from(h[0]), f64::from(h[1]), f64::from(h[2])],
         });

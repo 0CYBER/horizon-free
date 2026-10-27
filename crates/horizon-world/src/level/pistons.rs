@@ -182,7 +182,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             self.neighbor_changed_at(pos, block);
         }
     }
-    /// `PistonMovingBlockEntity.tick` (entity pushing excluded).
+    /// `PistonMovingBlockEntity.tick`. A piston that is still moving reports
+    /// the push `moveCollidedEntities` would do at its new progress; the caller
+    /// moves the entities, because `Ticks` has none (`piston_pushes`).
     fn moving_piston_tick(&mut self, pos: BlockPos) {
         let Some(mut piston) = self.moving_piston(pos) else {
             return;
@@ -227,14 +229,20 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 }
             }
         } else {
-            piston.progress = (piston.progress + 0.5).min(1.0);
-            if let Some(entry) = self
+            // moveCollidedEntities and moveStuckEntities run with the new
+            // progress but read the old one off the entity (their delta),
+            // so the push carries the piston as it was before the advance.
+            let old = piston;
+            let new_progress = (old.progress + 0.5).min(1.0);
+            let current = self
                 .ticks
                 .moving_pistons
                 .iter_mut()
-                .find(|(p, _)| *p == pos)
-            {
+                .find(|(p, _)| *p == pos);
+            if let Some(entry) = current {
+                piston.progress = new_progress;
                 entry.1 = piston;
+                self.ticks.piston_pushes.push((pos, old, new_progress));
             }
         }
     }

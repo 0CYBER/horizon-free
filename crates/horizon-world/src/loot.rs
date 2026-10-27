@@ -154,6 +154,8 @@ pub struct LootEntity {
     pub captain: Option<bool>,
     /// A frog's variant id (`minecraft:warm`).
     pub frog_variant: Option<String>,
+    /// A chicken's variant id (`minecraft:warm`).
+    pub chicken_variant: Option<String>,
     /// A charged creeper (`Creeper.isPowered`).
     pub powered: bool,
     /// Worn and held items by `EquipmentSlot` name (mainhand, offhand,
@@ -861,6 +863,9 @@ impl<R: RandomSource> Context<'_, R> {
                     .is_some_and(|(color, _)| want.as_str() == Some(color)),
                 "minecraft:frog/variant" => {
                     e.frog_variant.is_some() && want.as_str() == e.frog_variant.as_deref()
+                }
+                "minecraft:chicken/variant" => {
+                    e.chicken_variant.is_some() && want.as_str() == e.chicken_variant.as_deref()
                 }
                 _ => false,
             }),
