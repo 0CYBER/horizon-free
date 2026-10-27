@@ -244,7 +244,13 @@ pub fn slot_item(m: &Mob, slot: &str) -> Option<LootStack> {
         }
         _ => (None, None),
     };
-    let mut stack = loot_stack(item?, 1);
+    // A panda keeps the whole stack it picked up in its mouth.
+    let count = if slot == "mainhand" && m.species() == Species::Panda {
+        super::panda::held_count(m)
+    } else {
+        1
+    };
+    let mut stack = loot_stack(item?, count as i32);
     if slot == "body" && m.species() == Species::Wolf {
         stack.damage = m.extra.body_damage;
     }
@@ -310,6 +316,7 @@ fn loot_stack(item: &str, count: i32) -> LootStack {
         exploration: None,
         ominous_amplifier: None,
         stew_effects: Vec::new(),
+        names: Vec::new(),
     }
 }
 /// `Mob.dropChances.byEquipment(slot)`: the recorded chance, or the one the
@@ -509,13 +516,7 @@ pub fn die(m: &mut Mob, d: &Death, sequences: &mut RandomSequences) -> (Vec<Drop
         }
     }
     // dropExperience.
-    let drops_experience = match s {
-        Species::Tadpole => false,
-        Species::Hoglin => true,
-        s if is_monster(s) => true,
-        _ => !m.is_baby(),
-    };
-    if killed_by_player && drops_experience && d.mob_drops {
+    if killed_by_player && drops_experience(m) && d.mob_drops {
         let mut amount = base_experience(m);
         while amount > 0 {
             let value = orb_value(amount);
@@ -537,6 +538,16 @@ fn roll(
             d.loot.roll_entity(table, random, params)
         }
         None => Vec::new(),
+    }
+}
+/// `LivingEntity.shouldDropExperience`: babies drop none, except monsters and
+/// hoglins; tadpoles never do.
+pub fn drops_experience(m: &Mob) -> bool {
+    match m.species() {
+        Species::Tadpole => false,
+        Species::Hoglin => true,
+        s if is_monster(s) => true,
+        _ => !m.is_baby(),
     }
 }
 /// `getBaseExperienceReward` (no vanilla enchantment changes mob experience).

@@ -721,6 +721,93 @@ impl Game<'_> {
         self.swing_arm();
         true
     }
+    /// `CompassItem.useOn`: a compass used on a lodestone locks onto it (a
+    /// single one in survival changes in place, else one is split off).
+    pub(super) fn use_lodestone_compass(&mut self, hit: &super::Hit, stack: &ItemStack) -> bool {
+        if &*stack.item != "minecraft:compass" {
+            return false;
+        }
+        let [x, y, z] = hit.pos;
+        if self
+            .res
+            .facts()
+            .get(self.world.block(x, y, z))
+            .name
+            .as_ref()
+            != "minecraft:lodestone"
+        {
+            return false;
+        }
+        let at = [x, y, z].map(|v| f64::from(v) + 0.5);
+        self.audio
+            .play("minecraft:item.lodestone_compass.lock", Some(at), 1.0, 1.0);
+        let target = Tag::compound([(
+            "target",
+            Tag::compound([
+                ("dimension", Tag::String(self.dimension_id().into())),
+                ("pos", Tag::IntArray(vec![x, y, z])),
+            ]),
+        )]);
+        if !self.creative && stack.count == 1 {
+            if let Some(held) = self.held_mut() {
+                held.data_mut()
+                    .set_other("minecraft:lodestone_tracker", Some(target));
+            }
+        } else {
+            let mut locked = stack.clone();
+            locked.count = 1;
+            locked
+                .data_mut()
+                .set_other("minecraft:lodestone_tracker", Some(target));
+            self.consume_held();
+            self.give_or_drop_stack(locked);
+        }
+        self.stats.add("used", &stack.item, 1);
+        self.swing_arm();
+        true
+    }
+    /// `CompassItem.inventoryTick` / `LodestoneTracker.tick`: a compass whose
+    /// lodestone is gone loses its target. A target in an unloaded chunk waits.
+    pub(super) fn tick_lodestone_compasses(&mut self) {
+        let dim = self.dimension_id();
+        let gone = |game: &Self, stack: &ItemStack| -> bool {
+            let Some(tracker) = stack
+                .data()
+                .and_then(|d| d.other("minecraft:lodestone_tracker"))
+            else {
+                return false;
+            };
+            let (Some(target), true) = (
+                tracker.get("target"),
+                horizon_client::save::number(tracker.get("tracked")).is_none_or(|v| v != 0),
+            ) else {
+                return false;
+            };
+            let Some(Tag::IntArray(pos)) = target.get("pos") else {
+                return false;
+            };
+            let [x, y, z] = [pos[0], pos[1], pos[2]];
+            horizon_client::save::text(target.get("dimension")).as_deref() == Some(dim)
+                && game.world.chunks.contains_key(&(x >> 4, z >> 4))
+                && game
+                    .res
+                    .facts()
+                    .get(game.world.block(x, y, z))
+                    .name
+                    .as_ref()
+                    != "minecraft:lodestone"
+        };
+        for slot in (0..self.inventory.len()).chain([super::shield::OFFHAND_SLOT]) {
+            if self.stack_in(slot).is_some_and(|s| gone(self, s))
+                && let Some(s) = self.stack_in_mut(slot)
+            {
+                s.data_mut().set_other(
+                    "minecraft:lodestone_tracker",
+                    Some(Tag::Compound(Default::default())),
+                );
+            }
+        }
+    }
     fn give_or_drop_stack(&mut self, stack: ItemStack) {
         if let Some(rest) = self.give(stack)
             && let Some(eye) = self.eye_position()
@@ -781,9 +868,8 @@ impl Game<'_> {
                         (d * 2.0 + 0.5) as i8
                     }
                 };
-                let y = f64::from(yaw);
-                let adjusted = if y < 0.0 { y - 8.0 } else { y + 8.0 };
-                let rot = ((adjusted * 16.0 / 360.0) as i32 & 15) as u8;
+                // calculateRotation: the arrow spins in the Nether.
+                let rot = decoration_rotation(nether, game_time, f64::from(yaw));
                 let sprite = if inside {
                     Some("map/decorations/player")
                 } else if dx.abs() < 320.0 && dz.abs() < 320.0 {
