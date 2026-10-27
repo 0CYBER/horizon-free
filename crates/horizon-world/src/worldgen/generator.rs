@@ -2137,7 +2137,8 @@ where
             return Err(resource("far sample dimensions"));
         }
         let mut geometry = Vec::with_capacity(side * side);
-        let mut context = SamplerContext::sparse();
+        // The coarse and band passes below share the 2D (x/z-only) parts.
+        let mut context = SamplerContext::sparse().with_planes();
         let (min, height) = (self.settings.noise_min_y, self.settings.noise_height);
         let step_xz = width.max(4);
         let ox = x.div_euclid(4) * 4;
@@ -2151,12 +2152,55 @@ where
             32..128 => 16,
             _ => 32,
         };
-        let ny = (height + step_y - 1) / step_y + 1;
-        let volume = DensityVolume::new([nx, ny, nz], [ox, min, oz], [step_xz, step_y, step_xz])
+        // Far tiles show the surface: find its band on a coarse lattice (its
+        // points are the fine lattice's), then sample the fine lattice only
+        // inside it. Most of a tall world's column is sky or deep rock. Parts
+        // thinner than the coarse step above an air sample (floating
+        // islands, overhang lips) can be missed; below the band, a column is
+        // one span of the default block.
+        const COARSE: i32 = 64;
+        let final_density = self.router.get(RouterField::FinalDensity);
+        let coarse_layers = (height + COARSE - 1) / COARSE + 1;
+        let coarse = DensityVolume::new(
+            [nx, coarse_layers, nz],
+            [ox, min, oz],
+            [step_xz, COARSE, step_xz],
+        )
+        .map_err(stage("far density"))?;
+        let mut coarse_densities = vec![0.; coarse.size()];
+        final_density
+            .sample_volume(&mut context, &mut coarse_densities, coarse)
             .map_err(stage("far density"))?;
+        let (mut lowest, mut highest) = (i32::MAX, i32::MIN);
+        for iz in 0..nz as usize {
+            for ix in 0..nx as usize {
+                let solid = (0..coarse_layers as usize)
+                    .rev()
+                    .find(|&iy| coarse_densities[coarse.index([ix, iy, iz]).unwrap()] > 0.);
+                if let Some(iy) = solid {
+                    let y = min + iy as i32 * COARSE;
+                    lowest = lowest.min(y - COARSE);
+                    highest = highest.max(y + 2 * COARSE);
+                }
+            }
+        }
+        let (band_min, band_max) = if lowest > highest {
+            (min, min + height)
+        } else {
+            let lowest = lowest.max(min);
+            (
+                min + (lowest - min) / step_y * step_y,
+                highest
+                    .max(self.settings.sea_level + COARSE)
+                    .min(min + height),
+            )
+        };
+        let ny = (band_max - band_min + step_y - 1) / step_y + 1;
+        let volume =
+            DensityVolume::new([nx, ny, nz], [ox, band_min, oz], [step_xz, step_y, step_xz])
+                .map_err(stage("far density"))?;
         let mut densities = vec![0.; volume.size()];
-        self.router
-            .get(RouterField::FinalDensity)
+        final_density
             .sample_volume(&mut context, &mut densities, volume)
             .map_err(stage("far density"))?;
         let aquifer = DisabledAquifer::new(
@@ -2208,9 +2252,9 @@ where
                 for (iy, density) in profile.iter_mut().enumerate() {
                     *density = value(wx, iy, wz);
                 }
-                for y in (min..min + height).rev() {
-                    let iy = ((y - min) / step_y) as usize;
-                    let alpha = ((y - min) % step_y) as f32 / step_y as f32;
+                for y in (band_min..band_max).rev() {
+                    let iy = ((y - band_min) / step_y) as usize;
+                    let alpha = ((y - band_min) % step_y) as f32 / step_y as f32;
                     let density = profile[iy] + (profile[iy + 1] - profile[iy]) * alpha;
                     let state = aquifer
                         .compute_substance([wx, y, wz], f64::from(density))
@@ -2239,6 +2283,16 @@ where
                             top.get_or_insert((y + 1, state));
                             below += 1;
                         }
+                    }
+                }
+                if band_min > min {
+                    let fill = self.settings.default_block;
+                    if top.is_some() && !complete {
+                        below += band_min - min;
+                    }
+                    match spans.last_mut() {
+                        Some((low, _, state)) if *low == band_min && *state == fill => *low = min,
+                        _ => spans.push((min, band_min, fill)),
                     }
                 }
                 let biome = if let Some((height, _)) = top {
