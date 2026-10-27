@@ -44,10 +44,12 @@ pub(super) enum Field {
     PreLaunch,
     Wrapper,
     LaunchEnv,
+    /// Settings' new offline name (`switch_page.rs`).
+    OfflineName,
 }
 
 impl Field {
-    const ALL: [Field; 17] = [
+    const ALL: [Field; 18] = [
         Field::Name,
         Field::Seed,
         Field::Players,
@@ -65,6 +67,7 @@ impl Field {
         Field::PreLaunch,
         Field::Wrapper,
         Field::LaunchEnv,
+        Field::OfflineName,
     ];
 }
 
@@ -1043,6 +1046,7 @@ impl Launcher {
             Field::Email => self.invite_friend(),
             Field::InstanceName | Field::InstanceGroup | Field::ConsoleSearch => {}
             Field::PreLaunch | Field::Wrapper | Field::LaunchEnv => self.save_launch(),
+            Field::OfflineName => self.offline_name_enter(),
             Field::ServerName | Field::ServerAddress => self.add_server(),
         }
     }

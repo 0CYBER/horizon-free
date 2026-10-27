@@ -122,6 +122,13 @@ The opening, then Play ([clip](docs/opening.webm)):
   (`horizon_launcher::shortcut`). **Remove shortcut** moves it to the trash; it is found by the
   instance id inside it, so a rename doesn't lose it. `horizon-launcher instance shortcut
   [instance] [--remove]`; `HORIZON_LAUNCHER_DESKTOP` points it at another folder.
+- **Accounts and quick switch**: the top bar's account chip opens a menu of everyone who can play:
+  each signed-in Microsoft account, the offline names the player keeps, and the name the game
+  made up (`horizon-player.txt`). Picking one plays as it from the next Play. Settings > Account
+  adds offline names (3 to 16 letters, digits or `_`; the game gets `--name`) and forgets them;
+  the Console's Share log takes them out of the log too. `horizon-launcher account offline
+  [NAME]`, `account select <name>` (an account or an offline name), `account forget-offline
+  <name>`.
 - **Console**: Home's Console shows the game's output of this run as it comes: a search (every
   word, any case), Follow to keep the newest line in view, Copy, and Open logs folder. Warnings
   and errors stand out. **Share log…** uploads the log to [mclo.gs](https://mclo.gs), a paste

@@ -86,10 +86,13 @@ enum AccountCmd {
         /// Its name or UUID
         who: String,
     },
-    /// Play as this account
+    /// Play as this account, or as one of your offline names
     Select { who: String },
-    /// Play offline, without an account
-    Offline,
+    /// Play offline, without an account: as NAME (kept to switch back to; 3 to 16 letters,
+    /// digits or _), or as the name the game made up
+    Offline { name: Option<String> },
+    /// Forget one of your offline names
+    ForgetOffline { name: String },
 }
 
 #[derive(Subcommand)]
@@ -960,6 +963,9 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             }
             cmd.args(arg);
             let started = std::time::Instant::now();
+            if let Some(name) = Accounts::load().name_arg() {
+                cmd.arg("--name").arg(name);
+            }
             let played = attached(horizon_launcher::launch::wrap(cmd, &instance.launch));
             if let Err(e) = instances::record_play(&instance.id, started.elapsed()) {
                 eprintln!("Play time not saved: {e}");
@@ -1245,9 +1251,13 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                         "name": a.name, "uuid": a.uuid,
                         "selected": accounts.selected.as_ref() == Some(&a.uuid),
                     })).collect::<Vec<_>>(),
+                    "offline": accounts.offline.iter().map(|n| serde_json::json!({
+                        "name": n,
+                        "selected": accounts.player() == account::Player::Offline(n.clone()),
+                    })).collect::<Vec<_>>(),
                     "sign_in_configured": account::client_id().is_some(),
                 }));
-            } else if accounts.accounts.is_empty() {
+            } else if accounts.accounts.is_empty() && accounts.offline.is_empty() {
                 println!("No Microsoft account signed in: the game plays offline.");
             } else {
                 for a in &accounts.accounts {
@@ -1258,8 +1268,14 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
                     };
                     println!("{mark} {}  {}", a.name, a.uuid);
                 }
-                if accounts.selected().is_none() {
-                    println!("Playing offline (`account select NAME` to play as one).");
+                for n in &accounts.offline {
+                    let on = accounts.player() == account::Player::Offline(n.clone());
+                    println!("{} {n}  offline", if on { "*" } else { " " });
+                }
+                if accounts.player() == account::Player::GameName {
+                    println!(
+                        "Playing offline as the game's own name (`account select NAME` to switch)."
+                    );
                 }
             }
         }
@@ -1287,15 +1303,39 @@ fn account_command(action: AccountCmd, as_json: bool) -> Result<(), String> {
             println!("Signed out {}.", a.name);
         }
         AccountCmd::Select { who } => {
-            let a = find(&accounts, &who)?;
-            accounts.selected = Some(a.uuid);
+            let offline = accounts
+                .offline
+                .iter()
+                .find(|n| n.eq_ignore_ascii_case(&who))
+                .cloned();
+            let (player, name) = match (accounts.find(&who).cloned(), offline) {
+                (Some(a), _) => (account::Player::Microsoft(a.uuid), a.name),
+                (None, Some(n)) => (
+                    account::Player::Offline(n.clone()),
+                    format!("{n} (offline)"),
+                ),
+                (None, None) => return Err(find(&accounts, &who).unwrap_err()),
+            };
+            accounts.play_as(player)?;
             accounts.save()?;
-            println!("The game plays as {}.", a.name);
+            println!("The game plays as {name}.");
         }
-        AccountCmd::Offline => {
-            accounts.selected = None;
+        AccountCmd::Offline { name } => {
+            let player = match name {
+                Some(n) => account::Player::Offline(n),
+                None => account::Player::GameName,
+            };
+            accounts.play_as(player)?;
             accounts.save()?;
-            println!("The game plays offline.");
+            match accounts.name_arg() {
+                Some(n) => println!("The game plays offline as {n}."),
+                None => println!("The game plays offline, as the name it made up."),
+            }
+        }
+        AccountCmd::ForgetOffline { name } => {
+            accounts.remove_offline(&name)?;
+            accounts.save()?;
+            println!("Forgot the offline name {name}.");
         }
     }
     Ok(())

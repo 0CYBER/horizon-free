@@ -116,7 +116,7 @@ MCP: `account_sign_out`, needs `confirm: true`.
 
 ## `horizon-launcher account select`
 
-Play as this account.
+Play as this account, or as one of your offline names.
 
     horizon-launcher account select <WHO>
 
@@ -126,11 +126,23 @@ MCP: `account_select`.
 
 ## `horizon-launcher account offline`
 
-Play offline, without an account.
+Play offline, without an account: as NAME (kept to switch back to; 3 to 16 letters, digits or _), or as the name the game made up.
 
-    horizon-launcher account offline
+    horizon-launcher account offline [NAME]
+
+- `NAME`
 
 MCP: `account_offline`.
+
+## `horizon-launcher account forget-offline`
+
+Forget one of your offline names.
+
+    horizon-launcher account forget-offline <NAME>
+
+- `NAME`
+
+MCP: `account_forget_offline`.
 
 ## `horizon-launcher settings`
 
