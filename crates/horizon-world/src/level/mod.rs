@@ -80,7 +80,7 @@
 //! behaviours.place_block(&mut level, &mut ticks, &PlaceContext { clicked_pos, face, hit, inside: false,
 //!     yaw, pitch, sneaking, item: "minecraft:oak_stairs".into(), can_use_game_master_blocks: false });
 //! behaviours.use_without_item(&mut level, &mut ticks, pos, face, hit, player_context);
-//! behaviours.player_destroy_block(&mut level, &mut ticks, pos, creative);
+//! behaviours.player_destroy_block(&mut level, &mut ticks, pos, creative, correct_tool);
 //! // Falling-block entity landed:
 //! behaviours.falling_block_landed(&mut level, &mut ticks, landing_pos, carried_state, false);
 //! ```
@@ -657,8 +657,9 @@ impl Behaviours {
         ticks: &mut Ticks,
         pos: BlockPos,
         creative: bool,
+        correct_tool: bool,
     ) -> bool {
-        self.sim(level, ticks).player_destroy(pos, creative)
+        self.sim(level, ticks).player_destroy(pos, creative, correct_tool)
     }
     /// `IceBlock.playerDestroy` after the drops: mined ice melts into water
     /// unless the tool prevents ice melting (silk touch). `destroyed` is the
