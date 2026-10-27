@@ -11258,8 +11258,11 @@ impl Game<'_> {
         horizon_client::environment::apply_weather(&mut sky, rain, thunder);
         self.end_flash_sky(&mut sky, alpha);
         if self.flash > 0 && !self.settings.file.bool("hideLightningFlashes") {
-            // Lightning flash brightens the sky (LevelRenderer skyFlashTime).
-            sky.sky_color = [0.9, 0.9, 1.0];
+            // ClientLevel's flash layer while skyFlashTime > 0: the sky colour
+            // moves 22% of the way to (0.8, 0.8, 1.0).
+            let flash = [0.8, 0.8, 1.0];
+            sky.sky_color =
+                std::array::from_fn(|i| sky.sky_color[i] + (flash[i] - sky.sky_color[i]) * 0.22);
             sky.sky_light_factor = 1.0;
         }
         // FishingHookRenderer's line, then DebugRenderer: chunk borders and
