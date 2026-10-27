@@ -12707,7 +12707,14 @@ impl<'a> Game<'a> {
             level,
             session_lock: None,
             audio,
-            music: Default::default(),
+            music: {
+                // The manager starts with the saved option (MusicManager's constructor).
+                let mut music = horizon_client::music::MusicManager::default();
+                music.frequency = horizon_client::music::MusicFrequency::parse(
+                    &settings.file.name("musicFrequency"),
+                );
+                music
+            },
             ambience: Default::default(),
             sound_paused: false,
             cart_sounds: HashSet::new(),
