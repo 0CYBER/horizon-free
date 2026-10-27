@@ -1741,7 +1741,17 @@ impl Game<'_> {
                         f64::from(p.y) / 8.0,
                         f64::from(p.z) / 8.0,
                     ];
-                    self.audio.play(&name, Some(at), p.volume, p.pitch);
+                    // ClientPacketListener.handleSoundEvent plays with packet.getSource().
+                    match usize::try_from(p.source)
+                        .ok()
+                        .filter(|s| *s < horizon_client::settings::SOUND_SOURCES.len())
+                    {
+                        Some(source) => {
+                            self.audio
+                                .play_on(source, &name, Some(at), p.volume, p.pitch)
+                        }
+                        None => self.audio.play(&name, Some(at), p.volume, p.pitch),
+                    }
                 }
             }
             C::StopSound(p) => self
@@ -3542,6 +3552,16 @@ impl Game<'_> {
             if m.species() == horizon_client::mobs::Species::Rabbit {
                 horizon_client::mobs::rabbit::base_tick(m);
             }
+            if matches!(
+                m.species(),
+                horizon_client::mobs::Species::Horse
+                    | horizon_client::mobs::Species::Donkey
+                    | horizon_client::mobs::Species::Mule
+                    | horizon_client::mobs::Species::SkeletonHorse
+                    | horizon_client::mobs::Species::ZombieHorse
+            ) {
+                horizon_client::mobs::equine::tail_tick(m);
+            }
             if m.species() == horizon_client::mobs::Species::Creeper {
                 horizon_client::mobs::hostile::creeper_client_tick(m);
             }
@@ -3551,6 +3571,10 @@ impl Game<'_> {
                     | horizon_client::mobs::Species::ElderGuardian
             ) {
                 horizon_client::mobs::guardian::client_tick(m);
+            }
+            // PolarBear.tick: the stand animation follows the synched flag.
+            if m.species() == horizon_client::mobs::Species::PolarBear {
+                horizon_client::mobs::polar_bear::client_tick(m);
             }
             if m.hurt_time > 0 {
                 m.hurt_time -= 1;
@@ -4826,26 +4850,6 @@ impl Game<'_> {
                 carried,
             }));
         }
-    }
-    /// A `ContainerClick` on game slot `internal` of the server's open menu
-    /// (`input` is the ContainerInput ordinal). False when the menu has no
-    /// such slot.
-    pub(super) fn remote_slot_click(&mut self, internal: usize, button: i8, input: i32) -> bool {
-        let (container, menu) = self.remote_menu();
-        let slot = Self::menu_slot_index(&menu, internal);
-        let Some(slot) = slot else { return false };
-        let carried = self.to_network(&self.carried).map(|s| Hashed::of(&s));
-        let state = self.remote.as_ref().map_or(0, |r| r.state_id);
-        self.send(S::ContainerClick(play::ContainerClick {
-            container,
-            state,
-            slot: slot as i16,
-            button,
-            input,
-            changed: Vec::new(),
-            carried,
-        }));
-        true
     }
     /// The server's open menu is the inventory or a chest-like container
     /// (chests, barrels, ender chests: `generic_9xN`; shulker boxes).

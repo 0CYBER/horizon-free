@@ -20,6 +20,7 @@ mod modpacks_page;
 mod mods_page;
 mod mods_project;
 mod multiplayer_page;
+mod packs_page;
 mod partner;
 mod perf;
 mod screenshots_page;
@@ -237,6 +238,7 @@ struct Launcher {
     worlds: worlds_page::Worlds,
     multiplayer: multiplayer_page::Multiplayer,
     screenshots: screenshots_page::Screenshots,
+    game_packs: packs_page::Packs,
     /// The name the game made up for an offline player (`horizon-player.txt`), for the top bar.
     offline_name: Option<String>,
     /// The player's servers, for the sidebar until the Servers page has read them.
@@ -399,6 +401,7 @@ impl Launcher {
             worlds: worlds_page::Worlds::default(),
             multiplayer: multiplayer_page::Multiplayer::default(),
             screenshots: screenshots_page::Screenshots::default(),
+            game_packs: packs_page::Packs::default(),
             offline_name: offline_name(),
             side_servers: horizon_launcher::servers::list(),
             art: art::Art::default(),
@@ -712,6 +715,7 @@ impl Launcher {
                             self.worlds.stale();
                             self.multiplayer.stale();
                             self.screenshots.stale();
+                            self.game_packs.stale();
                             if let Some((id, started)) = self.client_run.take() {
                                 if let Err(e) = instances::record_play(&id, started.elapsed()) {
                                     eprintln!("Play time not saved: {e}");
@@ -1188,11 +1192,28 @@ fn button(
     keyboard(track_hover(base, id), &t).active(|s| s.opacity(theme::PRESSED).top(px(1.)))
 }
 
+/// Copies to the clipboard, or into `HORIZON_LAUNCHER_CLIPBOARD` when a test run sets it
+/// (`horizon_launcher::desktop_seams`).
+fn copy_to_clipboard(cx: &mut App, item: gpui::ClipboardItem) {
+    let Some(file) = horizon_launcher::desktop_seams::clipboard_file() else {
+        cx.write_to_clipboard(item);
+        return;
+    };
+    let bytes = match item.entries().first() {
+        Some(gpui::ClipboardEntry::Image(image)) => image.bytes.clone(),
+        _ => item.text().unwrap_or_default().into_bytes(),
+    };
+    if let Err(e) = std::fs::write(&file, bytes) {
+        eprintln!("{}: {e}", file.display());
+    }
+}
+
 /// An on/off switch: a square knob sliding in a sunk track that turns violet when on.
-fn switch(id: &'static str, on: bool, t: &Theme) -> Stateful<Div> {
+fn switch(id: impl Into<SharedString>, on: bool, t: &Theme) -> Stateful<Div> {
     let t = *t;
+    let id: SharedString = id.into();
     let knob = if on { t.on_face } else { t.muted };
-    keyboard(div().id(id), &t)
+    keyboard(div().id(id.clone()), &t)
         .relative()
         .flex_none()
         .w(px(44.))
@@ -2204,6 +2225,9 @@ impl Launcher {
         if let Some(servers) = self.multiplayer_section(cx) {
             page = page.child(servers);
         }
+        if let Some(packs) = self.packs_section(cx) {
+            page = page.child(packs);
+        }
         if let Some(shots) = self.screenshots_section(cx) {
             page = page.child(shots);
         }
@@ -2243,7 +2267,7 @@ impl Launcher {
                     .on_click(cx.listener(
                         move |this, _: &ClickEvent, _, cx| {
                             if let Ok(text) = std::fs::read_to_string(&report) {
-                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                                copy_to_clipboard(cx, gpui::ClipboardItem::new_string(text));
                                 if let Some(c) = &mut this.crash {
                                     c.copied = true;
                                 }
@@ -2960,9 +2984,10 @@ impl Launcher {
                     .child(
                         button("sign-in-copy", "Copy code", Kind::Secondary, &t).on_click(
                             move |_, _, cx| {
-                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                    user_code.clone(),
-                                ))
+                                copy_to_clipboard(
+                                    cx,
+                                    gpui::ClipboardItem::new_string(user_code.clone()),
+                                )
                             },
                         ),
                     )

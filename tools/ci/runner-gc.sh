@@ -9,6 +9,10 @@
 #     the shared vanilla data) that nothing touched for STALE_DAYS go; a harness that runs again rebuilds its own.
 #     .local/parity-runner (run state, oracle cache) stays.
 #   - The shared prepared resources keep their KEEP_PREPARED newest preparations, only while no runner works.
+#   - Java processes harnesses left behind (vanilla servers, oracles) go once ORPHAN_HOURS old: those whose parent
+#     is gone (adopted by launchd, init or systemd --user) and whose command line names a runner's checkout or a
+#     worktree's .local/. A job cancelled while it ran left such servers for days (2026-10-26); tools/parity.py now
+#     stops its harnesses on SIGTERM, and this catches what it can't (SIGKILL, a harness run by hand).
 set -euo pipefail
 root=${RUNNERS:-$HOME/.actions-runners}
 max_kb=$(( ${MAX_TARGET_GB:-12} * 1024 * 1024 ))
@@ -40,6 +44,25 @@ for runner in "$root"/horizon "$root"/horizon-[0-9]*; do
     rm -rf "${targets[@]}"
     echo "$(basename "$runner"): removed ${#targets[@]} build folders ($(( size / 1024 / 1024 )) GB)"
   fi
+done
+
+# [[dd-]hh:]mm:ss, as ps prints a process's age, in minutes.
+minutes() {
+  local t=$1 d=0 h=0 m a b c
+  if [[ $t == *-* ]]; then d=${t%%-*}; t=${t#*-}; fi
+  IFS=: read -r a b c <<< "$t"
+  if [ -n "$c" ]; then h=$a m=$b; else m=$a; fi
+  echo $(( 10#$d * 1440 + 10#$h * 60 + 10#$m ))
+}
+orphan_min=$(( ${ORPHAN_HOURS:-3} * 60 ))
+ps -A -o pid=,ppid=,etime=,command= | while read -r pid ppid etime command; do
+  case "$command" in *java*) ;; *) continue ;; esac
+  case "$command" in *"$root"/*/_work/*|*/.claude/worktrees/*/.local/*|*/code/horizon/.local/*) ;; *) continue ;; esac
+  [ "$(minutes "$etime")" -ge "$orphan_min" ] || continue
+  if [ "$ppid" != 1 ]; then
+    case "$(ps -o command= -p "$ppid" 2>/dev/null)" in *"systemd --user"*) ;; *) continue ;; esac
+  fi
+  if kill "$pid" 2>/dev/null; then echo "orphaned java $pid ($etime old) stopped: ${command:0:160}"; fi
 done
 
 prepared="$root/horizon/_work/horizon/shared-local/prepared"

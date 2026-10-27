@@ -329,7 +329,7 @@ pub fn remove(home: &Path, pack: &Pack) -> Result<(), String> {
     if pack.enabled {
         set_enabled(home, pack, false)?;
     }
-    crate::worlds::to_trash(&pack.path)
+    crate::desktop_seams::to_trash(&pack.path)
         .map_err(|e| format!("Could not move {} to the trash: {e}", pack.file))
 }
 

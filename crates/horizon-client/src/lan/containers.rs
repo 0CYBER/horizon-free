@@ -36,6 +36,30 @@ impl Hub {
 
     /// ClientboundSoundPacket for a sound event name (an inline event when
     /// the registry does not know it).
+    pub fn sound_packet(
+        &self,
+        name: &str,
+        at: [f64; 3],
+        volume: f32,
+        pitch: f32,
+        source: i32,
+        seed: i64,
+    ) -> C {
+        let sound = match self.sync.id("minecraft:sound_event", name) {
+            Some(id) => (id, None),
+            None => (-1, Some((name.to_owned(), None))),
+        };
+        C::Sound(play::Sound {
+            sound,
+            source,
+            x: (at[0] * 8.0) as i32,
+            y: (at[1] * 8.0) as i32,
+            z: (at[2] * 8.0) as i32,
+            volume,
+            pitch,
+            seed,
+        })
+    }
     pub fn sound(
         &self,
         name: &str,
@@ -45,20 +69,7 @@ impl Hub {
         source: i32,
         except: Option<u32>,
     ) {
-        let sound = match self.sync.id("minecraft:sound_event", name) {
-            Some(id) => (id, None),
-            None => (-1, Some((name.to_owned(), None))),
-        };
-        let packet = C::Sound(play::Sound {
-            sound,
-            source,
-            x: (at[0] * 8.0) as i32,
-            y: (at[1] * 8.0) as i32,
-            z: (at[2] * 8.0) as i32,
-            volume,
-            pitch,
-            seed: self.ticks as i64,
-        });
+        let packet = self.sound_packet(name, at, volume, pitch, source, self.ticks as i64);
         self.broadcast_near(at, f64::from(volume.max(1.0)) * 16.0, &packet, except);
     }
 

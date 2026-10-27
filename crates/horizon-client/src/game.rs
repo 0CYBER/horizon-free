@@ -1445,6 +1445,10 @@ struct Game<'a> {
     titles: titles::Titles,
     /// `Hud.toolHighlightTimer`: the selected item name.
     tool_highlight: horizon_client::hud_overlays::ToolHighlight,
+    /// `Hud.autosaveIndicatorValue`.
+    saving_indicator: horizon_client::hud_overlays::SavingIndicator,
+    /// This game's world is autosaving this tick (`MinecraftServer.isSaving`).
+    autosaving: bool,
     applied_modifiers: Vec<(String, String)>,
     experience: Experience,
     orbs: Vec<ExperienceOrb>,
@@ -1824,9 +1828,46 @@ impl Game<'_> {
     fn reach(&self) -> f64 {
         if self.creative { 5.0 } else { 4.5 }
     }
+    /// Outline shapes that depend on more than the block state, as one box
+    /// in block space: `LightBlock` and `ScaffoldingBlock.getShape` are a full
+    /// block while the main hand holds the block's own item
+    /// (`CollisionContext.isHoldingItem`), and `ShulkerBoxBlock.getShape`
+    /// grows with the lid (`ShulkerBoxBlockEntity.getBoundingBox`).
+    fn context_outline(&self, pos: [i32; 3], state: BlockStateId) -> Option<[f64; 6]> {
+        let name = &self.res.facts().get(state).name;
+        if matches!(&**name, "minecraft:light" | "minecraft:scaffolding") {
+            return self
+                .held()
+                .is_some_and(|s| *s.item == **name)
+                .then_some([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
+        }
+        if !name.ends_with("shulker_box") {
+            return None;
+        }
+        let progress = self.be_anims.shulkers.get(&pos).map_or(0.0, |s| s.progress);
+        let facing = self
+            .pack
+            .assets
+            .registry
+            .state(state)
+            .and_then(|s| s.properties.get("facing").cloned());
+        let d = facing_offset(facing.as_deref().unwrap_or("up"));
+        let mut b = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        for a in 0..3 {
+            match d[a] {
+                1 => b[a + 3] += 0.5 * f64::from(progress),
+                -1 => b[a] -= 0.5 * f64::from(progress),
+                _ => {}
+            }
+        }
+        Some(b)
+    }
     /// A block's outline boxes in world space (`getShape` plus the random offset).
     fn outline_boxes(&self, pos: [i32; 3]) -> Vec<[f64; 6]> {
         let state = self.world.block(pos[0], pos[1], pos[2]);
+        if let Some(b) = self.context_outline(pos, state) {
+            return vec![std::array::from_fn(|i| f64::from(pos[i % 3]) + b[i])];
+        }
         let f = self.res.facts().get(state);
         let o = if f.outline_offset {
             self.pack
@@ -2365,9 +2406,16 @@ impl Game<'_> {
             yaw.cos() * pitch.cos() * 0.3 + spread.sin() * strength,
         ];
         self.spawn_item(thrown, [eye[0], eye[1] - 0.3, eye[2]], v, 40);
-        if thrown_from_hand && self.lan_acting.is_none() {
-            let uuid = self.level.ensure_player_uuid();
+        if thrown_from_hand {
+            let uuid = self.acting_player_uuid();
             self.dropped.last_mut().unwrap().thrower = Some(uuid);
+        }
+    }
+    /// The UUID of the player acting: the guest whose turn it is, else the host.
+    pub(super) fn acting_player_uuid(&mut self) -> [i32; 4] {
+        match self.lan_acting_uuid {
+            Some(guest) => horizon_client::lan::playerdata::uuid_ints(guest),
+            None => self.level.ensure_player_uuid(),
         }
     }
     fn tick_items(&mut self) {
@@ -4387,6 +4435,12 @@ impl Game<'_> {
                 // The world's spawn from the start, not only once saved: a bed set
                 // before the first save must not become it.
                 self.level.world_spawn.get_or_insert([x, y, z]);
+                // The "Bonus Chest" create-world option, placed once with the spawn.
+                if horizon_client::save::WorldGen::read(&self.world_root)
+                    .is_some_and(|g| g.bonus_chest)
+                {
+                    self.place_bonus_chest([x, y, z])?;
+                }
             }
             let s = self
                 .level
@@ -4490,7 +4544,11 @@ impl Game<'_> {
             self.world.weather.tick_levels();
             self.tick_weather_effects();
         }
-        if self.ticks.is_multiple_of(6000) {
+        self.autosaving = self.ticks.is_multiple_of(6000);
+        if let Some(serving) = &self.serving {
+            serving.set_saving(self.autosaving);
+        }
+        if self.autosaving {
             self.save_game_with(false)?;
         }
         if running {
@@ -5535,6 +5593,7 @@ impl Game<'_> {
             Screen::Mod => self.draw_mod_screen(&mut batch),
             Screen::Playing | Screen::Options | Screen::Win => {}
         }
+        self.draw_saving_indicator(&mut batch);
         self.draw_toasts(&mut batch);
         self.draw_pack_toasts(&mut batch);
         self.remote_hud(&mut batch);
@@ -7366,7 +7425,12 @@ impl Game<'_> {
         self.see_through_vertices = see_through;
         // Entity shadows (EntityRenderer.extractShadow).
         self.mark_translucent_entity(out.len(), "minecraft:entity_shadow");
-        if let Some(sprite) = self.gui.atlas.sprites.get("misc/shadow").copied() {
+        let shadow_sprite = self
+            .settings
+            .entity_shadows
+            .then(|| self.gui.atlas.sprites.get("misc/shadow").copied())
+            .flatten();
+        if let Some(sprite) = shadow_sprite {
             let ambient = if self.dim == Dim::Nether { 0.1 } else { 0.0 };
             let darken = self.sky_darken();
             let a = alpha;
@@ -10909,6 +10973,17 @@ impl Game<'_> {
                         [0.0; 3]
                     };
                     let p = h.pos.map(f64::from);
+                    if let Some(b) = self.context_outline(h.pos, state) {
+                        return horizon_client::blocks::cube_edges()
+                            .iter()
+                            .map(|e| {
+                                std::array::from_fn(|i| {
+                                    let k = i % 3;
+                                    p[k] + b[k] + e[i] * (b[k + 3] - b[k])
+                                })
+                            })
+                            .collect();
+                    }
                     f.outline_edges
                         .iter()
                         .map(|e| std::array::from_fn(|i| p[i % 3] + o[i % 3] + e[i]))
@@ -12872,6 +12947,8 @@ impl<'a> Game<'a> {
             command_source: None,
             titles: Default::default(),
             tool_highlight: Default::default(),
+            saving_indicator: Default::default(),
+            autosaving: false,
             applied_modifiers: Vec::new(),
             experience: Experience::default(),
             orbs: Vec::new(),
