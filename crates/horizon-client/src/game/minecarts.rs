@@ -1340,9 +1340,8 @@ impl Game<'_> {
             return;
         };
         // Entity.shouldRenderAtSqrDistance: 64 times the bounding box's mean
-        // edge, scaled by the entity distance option.
-        let range =
-            (WIDTH + HEIGHT + WIDTH) / 3.0 * 64.0 * f64::from(self.settings.entity_distance);
+        // edge, scaled by the view scale.
+        let range = (WIDTH + HEIGHT + WIDTH) / 3.0 * 64.0 * self.view_scale();
         for c in &self.carts {
             let entity_start = out.len();
             let Some(model) = self.cart_models.models.get(&c.kind) else {

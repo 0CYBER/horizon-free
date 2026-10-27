@@ -453,8 +453,7 @@ impl Game<'_> {
                 glam::DVec3::new(lo.x, lo.y, lo.z),
                 glam::DVec3::new(hi.x, hi.y, hi.z),
             );
-            let range =
-                super::entity_culling::default_range(hi - lo, self.settings.entity_distance);
+            let range = super::entity_culling::default_range(hi - lo, self.view_scale());
             if !self.entity_in_view(camera, (lo + hi) / 2.0, range, lo, hi) {
                 continue;
             }
