@@ -259,7 +259,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         }
         S::Dolphin => {
             // Dolphin.tick: moisture out of water, hop on land.
-            if m.fluids.in_water || w.raining {
+            if m.fluids.in_water || super::ai::in_rain(m, w) {
                 m.extra.counter = 2400;
             } else {
                 m.extra.counter -= 1;
