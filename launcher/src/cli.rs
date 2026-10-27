@@ -740,7 +740,12 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 cmd.arg("--creative");
             }
             cmd.args(arg);
-            attached(cmd)?
+            let started = std::time::Instant::now();
+            let played = attached(cmd);
+            if let Err(e) = instances::record_play(&instance.id, started.elapsed()) {
+                eprintln!("Play time not saved: {e}");
+            }
+            played?
         }
         Cmd::Server {
             dir,
@@ -1470,7 +1475,8 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
         serde_json::json!({
             "id": i.id, "name": i.name, "kind": format!("{:?}", i.kind).to_lowercase(),
             "home": i.home, "icon": i.icon, "group": i.group, "selected": selected,
-            "version": i.version,
+            "version": i.version, "played_secs": i.played.as_secs(),
+            "last_played_ms": i.last_played.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64),
         })
     };
     let line = |i: &instances::Instance, selected: bool| {
@@ -1485,8 +1491,12 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             .as_ref()
             .map(|v| format!("  {v}"))
             .unwrap_or_default();
+        let played = match i.last_played {
+            Some(_) => format!("  {} played", instances::play_time(i.played)),
+            None => String::new(),
+        };
         println!(
-            "{mark} {} ({}){pinned}{group}\n    {}",
+            "{mark} {} ({}){pinned}{group}{played}\n    {}",
             i.name,
             i.id,
             i.home.display()

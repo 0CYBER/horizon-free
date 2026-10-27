@@ -189,6 +189,8 @@ struct Launcher {
     joining: Option<String>,
     /// Where the next start goes at once: `--world <folder>` or `--server <address>`.
     quick_play: Option<(&'static str, String)>,
+    /// The instance the running game plays and when it started: its play time grows on exit.
+    client_run: Option<(String, Instant)>,
     /// Settings' Game arguments field: the line, whether it has focus, and its focus handle.
     args_input: String,
     args_focused: bool,
@@ -369,6 +371,7 @@ impl Launcher {
             friend_focus: cx.focus_handle(),
             joining: None,
             quick_play: None,
+            client_run: None,
             collection: collection::Collection::load(),
             agents: agents_page::AgentsUi::default(),
             playing: None,
@@ -552,11 +555,20 @@ impl Launcher {
                         }
                         self.accounts = Accounts::load();
                         // A pack's Play button plays that pack; Play plays the selected instance.
-                        let profile = match self.starting_pack.take() {
+                        let (profile, run) = match self.starting_pack.take() {
                             Some(work) => {
-                                horizon_launcher::modpacks::apply_profile(&mut cmd, &work)
+                                let id = instances::list()
+                                    .into_iter()
+                                    .find(|i| i.work == work)
+                                    .map(|i| i.id);
+                                let applied =
+                                    horizon_launcher::modpacks::apply_profile(&mut cmd, &work);
+                                (applied, id)
                             }
-                            None => instances::apply(&mut cmd, &instances::selected()),
+                            None => {
+                                let instance = instances::selected();
+                                (instances::apply(&mut cmd, &instance), Some(instance.id))
+                            }
                         };
                         if let Err(e) = profile {
                             self.client_error = Some(e);
@@ -573,7 +585,10 @@ impl Launcher {
                         backend::append_game_args(&mut cmd);
                         self.client_home = cmd.get_current_dir().map(|d| d.to_path_buf());
                         match backend::spawn(Job::Client, cmd, self.tx.clone()) {
-                            Ok(r) => self.client = Some(r),
+                            Ok(r) => {
+                                self.client = Some(r);
+                                self.client_run = run.map(|id| (id, Instant::now()));
+                            }
                             Err(e) => self.client_error = Some(e),
                         }
                     }
@@ -693,6 +708,12 @@ impl Launcher {
                             // The game saved: last played, sizes and pictures changed.
                             self.worlds.stale();
                             self.multiplayer.stale();
+                            if let Some((id, started)) = self.client_run.take() {
+                                if let Err(e) = instances::record_play(&id, started.elapsed()) {
+                                    eprintln!("Play time not saved: {e}");
+                                }
+                                self.reload_instances();
+                            }
                             // The run's own game folder: an instance's or a pack's keeps its reports.
                             let home = self.client_home.clone().unwrap_or_else(backend::game_home);
                             let report = self

@@ -28,7 +28,7 @@ impl Worlds {
 }
 
 /// "today", "yesterday", "3 days ago", else the date.
-fn ago(when: std::time::SystemTime) -> String {
+pub(super) fn ago(when: std::time::SystemTime) -> String {
     let when: chrono::DateTime<chrono::Local> = when.into();
     let days = (chrono::Local::now().date_naive() - when.date_naive()).num_days();
     match days {

@@ -224,3 +224,37 @@ fn an_instance_keeps_its_own_version_until_it_follows_updates_again() {
     assert_eq!(follows.version, None);
     fs::remove_dir_all(&root).unwrap();
 }
+
+#[test]
+fn play_time_adds_up_per_instance_and_survives_a_rename() {
+    let root = scratch("play-time");
+    let (home, data) = (root.join("home"), root.join("data"));
+    fs::create_dir_all(home.join(OWN).join("skyblock")).unwrap();
+    let ended = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+    record_play_in(&data, "skyblock", Duration::from_secs(25 * 60 + 10), ended).unwrap();
+    edit_in(&home, &data, "skyblock", |m| m.name = Some("Sky".into())).unwrap();
+    let later = ended + Duration::from_secs(3600);
+    record_play_in(&data, "skyblock", Duration::from_secs(40 * 60), later).unwrap();
+    let all = list_in(&home, &data);
+    let sky = find_in(&all, "Sky").unwrap();
+    assert_eq!(sky.played, Duration::from_secs(65 * 60 + 10));
+    assert_eq!(sky.last_played, Some(later));
+    let default = find_in(&all, DEFAULT).unwrap();
+    assert_eq!(
+        (default.played, default.last_played),
+        (Duration::ZERO, None)
+    );
+    // Never played: nothing written for it.
+    let text = fs::read_to_string(data.join(FILE)).unwrap();
+    assert!(!text.contains("horizon"), "{text}");
+    fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn play_time_reads_as_minutes_then_hours() {
+    let t = |s| play_time(Duration::from_secs(s));
+    assert_eq!(t(59), "under a minute");
+    assert_eq!(t(12 * 60 + 59), "12 min");
+    assert_eq!(t(3 * 3600 + 5 * 60), "3 h 05 min");
+    assert_eq!(t(140 * 3600 + 7 * 60), "140 h");
+}

@@ -584,10 +584,34 @@ impl Launcher {
         Some(index_row(
             n,
             "Instance",
-            Some(div().child(instance.name.clone()).into_any_element()),
+            Some(
+                div()
+                    .flex()
+                    .items_baseline()
+                    .gap(px(10.))
+                    .child(instance.name.clone())
+                    .child(
+                        text(theme::CAPTION)
+                            .text_color(t.muted)
+                            .child(played_line(&instance)),
+                    )
+                    .into_any_element(),
+            ),
             Some(actions.into_any_element()),
             &t,
         ))
+    }
+}
+
+/// "3 h 05 min in total · last played today", or "Not played yet".
+fn played_line(instance: &Instance) -> String {
+    match instance.last_played {
+        Some(when) => format!(
+            "{} in total · last played {}",
+            instances::play_time(instance.played),
+            worlds_page::ago(when)
+        ),
+        None => "Not played yet".into(),
     }
 }
 

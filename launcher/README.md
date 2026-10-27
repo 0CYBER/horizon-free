@@ -78,9 +78,11 @@ The opening, then Play ([clip](docs/opening.webm)):
   data folder, so renaming moves nothing. Every instance follows the launcher's data collection
   answer and No AI. In the window, **+** beside Instances makes one, the sidebar lists them by
   group (click one to play it), and Home's Instance row has Edit (name, group, icon), Copy and
-  Open folder. Each instance plays the launcher's version, which follows updates, unless the Play
-  page's version picker keeps it on another installed one (to keep an old world on the version
-  it was made with); picking the version marked "follows updates" lets it follow again.
+  Open folder. The Instance row shows its play time and when it was last played: every run started
+  from the window or `horizon-launcher play` adds to it (`instance list` shows it too). Each
+  instance plays the launcher's version, which follows updates, unless the Play page's version
+  picker keeps it on another installed one (to keep an old world on the version it was made
+  with); picking the version marked "follows updates" lets it follow again.
 - **Worlds**: Home lists the selected instance's worlds (picture, mode, version, last played,
   size). **Back up** zips one into the instance's `backups/` as the game's Make Backup does
   (`<date>_<time>_<folder>.zip`); **Copy** puts "<name> (1)" beside it; **Delete** moves it to the
