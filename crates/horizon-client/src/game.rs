@@ -5259,8 +5259,13 @@ impl Game<'_> {
                 MotionEvent::Snowflake { position, velocity } => self.snowflake(position, velocity),
                 MotionEvent::EnterBlock { state } => self.trigger_enter_block(state),
                 MotionEvent::HoneySlide {
-                    sound, particles, ..
+                    pos,
+                    sound,
+                    particles,
                 } => {
+                    if self.world.game_time % 20 == 0 {
+                        self.trigger_honey_slide([pos.x, pos.y, pos.z]);
+                    }
                     if sound {
                         self.audio
                             .play("minecraft:block.honey_block.slide", Some(feet), 1.0, 1.0);

@@ -2706,8 +2706,15 @@ impl Game<'_> {
                 // others (Player.playSound excludes the player, whose client
                 // plays it), the entity event 53 everyone around.
                 MotionEvent::HoneySlide {
-                    sound, particles, ..
+                    pos,
+                    sound,
+                    particles,
                 } => {
+                    if self.world.game_time % 20 == 0 {
+                        self.as_guest(host, conn, |game| {
+                            game.trigger_honey_slide([pos.x, pos.y, pos.z])
+                        });
+                    }
                     let Some((id, at)) = host.hub.guest(conn).map(|g| (g.entity_id, g.position))
                     else {
                         continue;
