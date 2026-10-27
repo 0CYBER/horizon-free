@@ -912,6 +912,8 @@ impl HudBatch {
         // StringDecomposer.iterateFormatted inside Font.drawInternal:
         // `§` codes inside a span restyle what follows and are not drawn.
         let text = text.resolved();
+        // Language.getVisualOrder: shaped and reordered for right-to-left text.
+        let text = crate::bidi::visual(&text);
         let font = &atlas.font;
         let alpha = (color >> 24) as u8;
         let mut glyphs = Vec::new();

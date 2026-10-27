@@ -24,12 +24,13 @@ pub fn register(m: &mut Mob) {
     m.extra.tame = true;
     let tempt = m.kind.tempt.clone();
     let g = &mut m.ai.goals;
+    // CamelAi speed modifiers (times the 0.09 movement speed attribute).
     g.add(0, Float);
-    g.add(1, CamelPanic(Panic::new(4.0 * 0.25)));
+    g.add(1, CamelPanic(Panic::new(4.0)));
     g.add(2, Breed::new(1.0));
-    g.add(3, Tempt::new(2.5 * 0.25, tempt, false));
-    g.add(4, FollowParent::new(2.5 * 0.25));
-    g.add(5, Stroll::new(2.0 * 0.25));
+    g.add(3, Tempt::new(2.5, tempt, false));
+    g.add(4, FollowParent::new(2.5));
+    g.add(5, Stroll::new(2.0));
     g.add(5, RandomSitting);
     g.add(6, LookAtPlayer::new(6.0));
     g.add(7, RandomLookAround::default());

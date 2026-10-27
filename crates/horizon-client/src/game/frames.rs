@@ -311,8 +311,9 @@ impl Game<'_> {
         let sprites = &self.gui.atlas.sprites;
         let mut maps: Vec<(i32, glam::Mat4, u32)> = Vec::new();
         let mut items: Vec<(ItemStack, u32, glam::Mat4, u8)> = Vec::new();
-        // ItemFrame.shouldRenderAtSqrDistance: 1024 blocks at 100%.
-        let range = 16.0 * 64.0 * f64::from(self.settings.entity_distance);
+        // ItemFrame.shouldRenderAtSqrDistance: 1024 blocks at a view scale
+        // of 1.
+        let range = 16.0 * 64.0 * self.view_scale();
         for f in &self.item_frames {
             let entity_start = out.len();
             let map = f.item.as_ref().and_then(super::maps::map_id);
@@ -456,7 +457,7 @@ impl Game<'_> {
         }
         for (id, m, light) in maps {
             let entity_start = out.len();
-            self.map_vertices(id, m, light, out);
+            self.map_vertices(id, true, m, light, out);
             self.cull_entity_vertices(out, entity_start);
         }
     }

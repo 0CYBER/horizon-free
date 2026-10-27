@@ -1,11 +1,10 @@
 //! `/effect` (EffectCommands) and `/enchant` (EnchantCommand).
 use super::{Arg, Context, Game, R, Target, err, texts};
 use horizon_client::{
-    brewing,
+    brewing::{self, namespaced},
     effects::EffectInstance,
     text::{self, Style, Text},
 };
-use std::{collections::HashMap, sync::OnceLock};
 
 /// `CommandResponseTracker` over targets: elements with a non-zero result.
 #[derive(Default)]
@@ -20,24 +19,6 @@ impl Tracker {
             self.changed.push(t);
         }
     }
-}
-/// Namespaced effect ids for mob effect storage.
-fn namespaced(id: &'static str) -> &'static str {
-    static IDS: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
-    IDS.get_or_init(|| {
-        brewing::EFFECTS
-            .iter()
-            .map(|e| {
-                (
-                    e.id,
-                    &*Box::leak(format!("minecraft:{}", e.id).into_boxed_str()),
-                )
-            })
-            .collect()
-    })
-    .get(id)
-    .copied()
-    .unwrap_or(id)
 }
 fn effect_name(id: &str) -> Text {
     Text::translate(&format!("effect.minecraft.{id}"), &[])

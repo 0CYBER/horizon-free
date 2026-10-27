@@ -423,3 +423,43 @@ fn client_id_is_configuration() {
     );
     std::env::remove_var("HORIZON_MSA_CLIENT_ID");
 }
+
+#[test]
+fn offline_names_switch_with_accounts() {
+    let mut a = Accounts {
+        accounts: vec![Account {
+            uuid: "abc".into(),
+            name: "Ludo".into(),
+            skin: None,
+            cape: None,
+        }],
+        selected: Some("abc".into()),
+        ..Accounts::default()
+    };
+    assert_eq!(a.player(), Player::Microsoft("abc".into()));
+    assert_eq!(a.name_arg(), None);
+    a.play_as(Player::Offline("Builder_1".into())).unwrap();
+    assert_eq!(a.player(), Player::Offline("Builder_1".into()));
+    assert_eq!(a.name_arg(), Some("Builder_1"));
+    // Kept once, as first written, whatever the case.
+    a.play_as(Player::Offline("builder_1".into())).unwrap();
+    assert_eq!(a.offline, ["Builder_1"]);
+    assert_eq!(a.name_arg(), Some("Builder_1"));
+    assert!(a.add_offline("no spaces").is_err());
+    assert!(a.add_offline("ab").is_err());
+    assert!(a.add_offline("seventeen_letters").is_err());
+    a.play_as(Player::Microsoft("abc".into())).unwrap();
+    assert_eq!(a.name_arg(), None, "an account plays with its own name");
+    assert!(a.play_as(Player::Microsoft("zzz".into())).is_err());
+    a.play_as(Player::Offline("Builder_1".into())).unwrap();
+    a.remove_offline("BUILDER_1").unwrap();
+    assert_eq!(a.player(), Player::GameName);
+    assert!(a.remove_offline("Builder_1").is_err());
+    // An accounts.json from before offline names reads as it was, and writes nothing new.
+    let old: Accounts = serde_json::from_str(r#"{"accounts":[],"selected":null}"#).unwrap();
+    assert_eq!(old.player(), Player::GameName);
+    assert_eq!(
+        serde_json::to_string(&old).unwrap(),
+        r#"{"accounts":[],"selected":null}"#
+    );
+}
