@@ -358,6 +358,7 @@ mod tests {
             off_hand: None,
             head: None,
             armor_cover: 0.0,
+            invisible: false,
             spectator: false,
             gold_armor: false,
             hurt_by: None,
@@ -369,6 +370,7 @@ mod tests {
             uuid: [0; 4],
             allies: Default::default(),
             remote: false,
+            passenger: false,
         }
     }
 

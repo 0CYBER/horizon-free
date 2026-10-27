@@ -588,7 +588,7 @@ fn player_hurt(player: Option<&PlayerView>, e: &MobEvent) -> bool {
     match e {
         MobEvent::AttackPlayer(amount, _) | MobEvent::DamagePlayer { amount, .. } => *amount > 0.0,
         // ServerExplosion.hurtEntities: within twice the radius every hit does damage.
-        MobEvent::Explode(at, radius) => {
+        MobEvent::Explode(at, radius, _) => {
             let d = Vec3::new(at[0], at[1], at[2])
                 .distance_squared(p.position)
                 .sqrt();
@@ -1058,6 +1058,7 @@ pub fn main() -> horizon_client::Result<()> {
                 off_hand: None,
                 head: None,
                 armor_cover: 0.0,
+                invisible: false,
                 spectator: false,
                 gold_armor: false,
                 hurt_by: None,
@@ -1069,6 +1070,7 @@ pub fn main() -> horizon_client::Result<()> {
                 uuid: PLAYER_UUID,
                 allies: Default::default(),
                 remote: false,
+                passenger: false,
             }
         });
         let mut scratch = LegacyRandom::new(0);
@@ -1089,6 +1091,7 @@ pub fn main() -> horizon_client::Result<()> {
                     world: &world,
                     registry,
                     facts: &facts,
+                    fluid_tables: &motion.fluids,
                     movement: &motion.blocks,
                     collision: &collision,
                     data: &data,
@@ -1106,6 +1109,7 @@ pub fn main() -> horizon_client::Result<()> {
                     block_tags: &items.block_tags,
                     biomes: &biomes,
                     mob_griefing: true,
+                    mob_drops: true,
                     difficulty: LocalDifficulty::new(s.difficulty, world.day_time, 0, 0.0),
                     end: false,
                     world_seed: 0,

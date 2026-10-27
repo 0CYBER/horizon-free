@@ -185,6 +185,18 @@ pub fn register(m: &mut Mob) {
             if m.species() == Species::Rabbit {
                 super::rabbit::register(m);
             }
+            if m.species() == Species::Frog {
+                // `Frog()`: SmoothSwimmingMoveControl(85, 10, 0.02, 0.1, true).
+                // The speed attribute is 1.0, so the controller's scaling is
+                // what keeps a frog at a walking pace on land.
+                m.ai.mov.kind = super::control::MoveKind::SmoothSwimming {
+                    max_turn_x: 85.0,
+                    max_turn_y: 10.0,
+                    in_water: 0.02,
+                    outside: 0.1,
+                    gravity: true,
+                };
+            }
             if m.species() == Species::Turtle {
                 super::turtle::register(m);
             }
@@ -321,12 +333,30 @@ fn generic(m: &mut Mob) {
         m.ai.targets.add(1, HurtByTarget::new());
         m.ai.targets.add(2, NearestTarget::player(true));
     } else {
+        if m.kind.species == Species::Goat {
+            // GoatAi's idle and core behaviours (the ram and long jump
+            // activities are not here): panic 2.0, AnimalMakeLove, tempting
+            // with goat_food and baby follow at 1.25, then stroll.
+            g.add(0, Float);
+            g.add(1, Panic::new(2.0));
+            g.add(2, Breed::new(1.0));
+            g.add(3, Tempt::new(1.25, m.kind.food.clone(), false));
+            g.add(4, FollowParent::new(1.25));
+            g.add(5, Stroll::avoiding_water(1.0));
+            g.add(6, LookAtPlayer::new(6.0));
+            g.add(7, RandomLookAround::default());
+            return;
+        }
         g.add(0, Float);
         let rabbit = m.kind.species == Species::Rabbit;
         g.add(1, Panic::new(if rabbit { 2.2 } else { 1.25 }));
         g.add(5, Stroll::avoiding_water(if rabbit { 0.6 } else { 1.0 }));
         g.add(6, LookAtPlayer::new(6.0));
         g.add(7, RandomLookAround::default());
+        if m.kind.species == Species::Armadillo {
+            // Armadillo's constructor: pickNextScuteDropTime.
+            m.extra.egg_time = next_scute_time(m);
+        }
     }
 }
 /// Subclasses of `net.minecraft.world.entity.monster.Monster`.
@@ -609,7 +639,7 @@ fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         let t = m.ambient_timer;
         m.ambient_timer += 1;
         if roll < t {
-            m.ambient_timer = -m.kind.ambient_interval;
+            m.ambient_timer = -m.ambient_interval();
             play_ambient(m, w, events);
         }
     }
@@ -1055,9 +1085,31 @@ fn server_ai_step(
     }
     m.jump_control_tick();
 }
+/// `Armadillo.pickNextScuteDropTime`: 5 to 10 minutes.
+fn next_scute_time(m: &mut Mob) -> i32 {
+    m.random.next_int_bound(20 * 60 * 5).unwrap_or(0) + 20 * 60 * 5
+}
+/// `Armadillo.customServerAiStep`: the scute timer keeps counting down and is
+/// only reset once `shouldDropLoot` (not a baby, `mob_drops` on) lets it shed.
+fn armadillo_server_ai_step(m: &mut Mob, mob_drops: bool, events: &mut Vec<MobEvent>) {
+    if !m.alive() {
+        return;
+    }
+    m.extra.egg_time -= 1;
+    if m.extra.egg_time <= 0 && !m.is_baby() && mob_drops {
+        let pitch = (m.random.next_float() - m.random.next_float()) * 0.2 + 1.0;
+        events.push(MobEvent::ShedScute {
+            mob: m.id,
+            at: [m.position.x, m.position.y, m.position.z],
+            pitch,
+        });
+        m.extra.egg_time = next_scute_time(m);
+    }
+}
 fn custom_server_ai_step(m: &mut Mob, cx: &mut Cx) {
     match m.species() {
         Species::Rabbit => super::rabbit::server_ai_step(m),
+        Species::Armadillo => armadillo_server_ai_step(m, cx.w.mob_drops, cx.events),
         Species::Sheep => {}
         Species::Zombie
         | Species::Husk
@@ -1663,25 +1715,31 @@ fn tick_effects(m: &mut Mob) {
     let mut effects = std::mem::take(&mut m.extra.effects);
     for (effect, ticks, amp) in &mut effects {
         let interval = |base: i32| (base >> (*amp).max(0)).max(1);
+        // MobEffectInstance.tickServer: an infinite (-1) effect times its
+        // ticks by the mob's tickCount and never counts down.
+        let infinite = *ticks == -1;
+        let count = if infinite { m.age as i32 } else { *ticks };
         match *effect {
             "minecraft:poison"
-                if *ticks % interval(25) == 0 && !m.kind.flags.undead && m.health > 1.0 =>
+                if count % interval(25) == 0 && !m.kind.flags.undead && m.health > 1.0 =>
             {
                 m.damage(1.0, Damage::of(DamageKind::Magic));
             }
-            "minecraft:wither" if *ticks % interval(40) == 0 => {
+            "minecraft:wither" if count % interval(40) == 0 => {
                 m.damage(1.0, Damage::of(DamageKind::Magic));
             }
             "minecraft:regeneration"
-                if *ticks % interval(50) == 0 && !m.kind.flags.undead && m.alive() =>
+                if count % interval(50) == 0 && !m.kind.flags.undead && m.alive() =>
             {
                 m.health = (m.health + 1.0).min(m.attrs.max_health);
             }
             _ => {}
         }
-        *ticks -= 1;
+        if !infinite {
+            *ticks -= 1;
+        }
     }
-    effects.retain(|e| e.1 > 0);
+    effects.retain(|e| e.1 > 0 || e.1 == -1);
     m.extra
         .hidden_effects
         .retain(|h| effects.iter().any(|e| e.0 == *h));
