@@ -984,6 +984,12 @@ pub enum MobEvent {
         target: Who,
         velocity: [f64; 3],
     },
+    /// `Entity.move(MoverType.SHULKER, delta)`: shift a target's position
+    /// (an opening shulker lifts what stands on its shell).
+    Shift {
+        target: Who,
+        delta: [f64; 3],
+    },
     /// `EvokerWololoSpellGoal`: a blue sheep turns red.
     Wololo {
         mob: u32,
