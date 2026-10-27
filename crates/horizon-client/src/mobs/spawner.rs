@@ -111,22 +111,7 @@ impl SpawnData {
     }
 }
 
-/// `Identifier.CODEC` parsing an entity id: lowercase namespace and path
-/// characters, `minecraft` when the namespace is left out.
-pub fn normalize_id(s: &str) -> Option<String> {
-    let (ns, path) = match s.split_once(':') {
-        Some((ns, path)) => (if ns.is_empty() { "minecraft" } else { ns }, path),
-        None => ("minecraft", s),
-    };
-    let ok = |c: char, slash: bool| {
-        c.is_ascii_lowercase()
-            || c.is_ascii_digit()
-            || matches!(c, '_' | '-' | '.')
-            || slash && c == '/'
-    };
-    (ns.chars().all(|c| ok(c, false)) && path.chars().all(|c| ok(c, true)))
-        .then(|| format!("{ns}:{path}"))
-}
+pub use horizon_client_core::identifier::normalize_id;
 
 /// How much a slime's or magma cube's box is scaled by the size its data
 /// loads (`Slime.readAdditionalSaveData`: Size + 1, kept in 1..=127), which

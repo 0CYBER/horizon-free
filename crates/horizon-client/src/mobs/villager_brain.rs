@@ -790,20 +790,6 @@ pub fn golem_detected(m: &mut Mob, now: i64) {
 // ---- Behaviours ---------------------------------------------------------
 
 pub use crate::poi_sections::Poi;
-impl Poi {
-    fn max_tickets(self) -> usize {
-        match self {
-            Poi::Meeting => 32,
-            _ => 1,
-        }
-    }
-    fn valid_range(self) -> i32 {
-        match self {
-            Poi::Meeting => 6,
-            _ => 1,
-        }
-    }
-}
 /// The POI a block state is (`PoiTypes`): job site blocks, bed heads, bells.
 pub fn poi_at(w: &MobWorld, x: i32, y: i32, z: i32) -> Option<Poi> {
     poi_of_state(w, w.world.block(x, y, z))

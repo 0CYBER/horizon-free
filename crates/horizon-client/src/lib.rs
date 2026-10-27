@@ -133,6 +133,7 @@ pub mod portal_sections;
 pub mod pose;
 pub mod pregen;
 pub mod projectiles;
+pub mod providers;
 pub mod raid;
 pub mod random_tick_sections;
 pub mod recipe_book;

@@ -2,8 +2,9 @@
 //! count comparators read, the output it keeps, and the powered, automatic
 //! and condition flags `CommandBlock.tick` runs on.
 pub use crate::chunk::block_entity::CommandBlock;
-use crate::{
-    save::{number, text},
+use horizon_client_core::{
+    nbt_value::{number, text},
+    scoreboard,
     text::Text,
 };
 use horizon_world::nbt::Tag;
@@ -108,7 +109,7 @@ impl CommandBlock {
             last_output: track_output
                 .then(|| tag.get("LastOutput"))
                 .flatten()
-                .map(|t| crate::scoreboard::comp_text(&crate::scoreboard::tag_to_json(t))),
+                .map(|t| scoreboard::comp_text(&scoreboard::tag_to_json(t))),
             update_last_execution,
             last_execution: if update_last_execution {
                 number(tag.get("LastExecution")).unwrap_or(-1)
@@ -164,7 +165,7 @@ impl CommandBlock {
     pub fn name(&self) -> Text {
         self.custom_name.as_ref().map_or_else(
             || Text::literal("@"),
-            |t| crate::scoreboard::comp_text(&crate::scoreboard::tag_to_json(t)),
+            |t| scoreboard::comp_text(&scoreboard::tag_to_json(t)),
         )
     }
 }
