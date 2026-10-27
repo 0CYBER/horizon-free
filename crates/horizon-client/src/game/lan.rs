@@ -14,7 +14,7 @@ use horizon_client::{
         hub::{BodyFlags, HostEvent, HostState, Hub, HubConfig, TickCtx},
         playerdata,
     },
-    mobs::{Mob, Who, leash::Holder},
+    mobs::{Mob, Species, Who, leash::Holder},
     text::Text,
 };
 use horizon_core::geometry::Vec3;
@@ -168,6 +168,7 @@ pub(super) fn baby_index(kind: &str) -> Option<u8> {
         | "minecraft:zombie_villager"
         | "minecraft:zombified_piglin"
         | "minecraft:hoglin"
+        | "minecraft:zoglin"
         | "minecraft:goat"
         | "minecraft:ocelot"
         | "minecraft:turtle"
@@ -324,9 +325,13 @@ fn mob_meta(
     defaults: &mut Vec<(u8, i32, Value)>,
 ) {
     let kind = m.kind.id.as_str();
-    // Entity.DATA_SHARED_FLAGS_ID: on fire 0x01, glowing 0x40
-    // (LivingEntity.updateGlowingStatus).
-    let shared = i8::from(m.fire_ticks > 0) | i8::from(m.is_currently_glowing()) << 6;
+    // Entity.DATA_SHARED_FLAGS_ID: on fire 0x01, swimming 0x10 (a drowned
+    // under water, `Drowned.setSwimming`), invisible 0x20 (the effect's flag)
+    // and glowing 0x40 (LivingEntity.updateGlowingStatus).
+    let shared = i8::from(m.fire_ticks > 0)
+        | i8::from(m.species() == Species::Drowned && m.extra.flag) << 4
+        | i8::from(m.invisible || horizon_client::mobs::trader::is_invisible(m)) << 5
+        | i8::from(m.is_currently_glowing()) << 6;
     if shared != 0 {
         meta.push((0, serializer::BYTE, Value::Byte(shared)));
     }
@@ -335,6 +340,12 @@ fn mob_meta(
     let pose = horizon_client::mobs::sync::pose_id(m);
     if pose != 0 {
         meta.push((6, serializer::POSE, Value::Id(i32::from(pose))));
+    }
+    // LivingEntity.DATA_SLEEPING_POS_ID: the bed a sleeping villager lies in.
+    if horizon_client::mobs::villager::sleeping(m)
+        && let Some(bed) = m.extra.bed
+    {
+        meta.push((14, serializer::OPTIONAL_BLOCK_POS, Value::OptPos(Some(bed))));
     }
     if let Some(name) = &m.custom_name {
         meta.push((
@@ -430,8 +441,14 @@ fn mob_meta(
             }
             defaults.push((17, serializer::INT, Value::Int(0)));
         }
-        // Piglin.DATA_IS_DANCING (after the baby flag and the crossbow charge).
+        // AbstractPiglin.DATA_IMMUNE_TO_ZOMBIFICATION (16: with the dimension it
+        // makes it shake) and Piglin.DATA_IS_DANCING (after the baby flag and
+        // the crossbow charge).
         "minecraft:piglin" => {
+            if e.flag2 {
+                meta.push((16, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((16, serializer::BOOLEAN, Value::Bool(false)));
             if e.scratch[0] > 0 {
                 meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
             }
@@ -518,10 +535,16 @@ fn mob_meta(
         | "minecraft:skeleton_horse"
         | "minecraft:zombie_horse"
         | "minecraft:camel" => {
-            // AbstractHorse.DATA_ID_FLAGS: tame 2.
-            if e.tame {
-                meta.push((18, serializer::BYTE, Value::Byte(2)));
+            // AbstractHorse.DATA_ID_FLAGS: tame 2, eating 16 (grazing), standing
+            // 32 (rearing).
+            let grazes = horizon_client::mobs::equine::grazes(m.species());
+            let flags = if e.tame { 2 } else { 0 }
+                | if grazes && e.flag { 16 } else { 0 }
+                | if grazes && e.counter > 0 { 32 } else { 0 };
+            if flags != 0 {
+                meta.push((18, serializer::BYTE, Value::Byte(flags)));
             }
+            defaults.push((18, serializer::BYTE, Value::Byte(0)));
             if kind == "minecraft:horse" {
                 let v = i32::from(e.variant) | i32::from(e.variant2) << 8;
                 if v != 0 {
@@ -554,6 +577,15 @@ fn mob_meta(
         // Villager.DATA_VILLAGER_DATA and ZombieVillager's (after Zombie's three).
         "minecraft:villager" | "minecraft:zombie_villager" => {
             use horizon_client::mobs::render::{PROFESSIONS, VILLAGER_TYPES};
+            if kind == "minecraft:villager" {
+                unhappy_counter(m, meta, defaults);
+            } else {
+                // ZombieVillager.DATA_CONVERTING_ID: the cure's shaking.
+                if horizon_client::mobs::zombie_villager::is_converting(m) {
+                    meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+                }
+                defaults.push((19, serializer::BOOLEAN, Value::Bool(false)));
+            }
             let villager_type = VILLAGER_TYPES[e.variant as usize % VILLAGER_TYPES.len()];
             let profession = PROFESSIONS[e.variant2 as usize % PROFESSIONS.len()];
             if let (Some(t), Some(p)) = (
@@ -761,6 +793,60 @@ fn mob_meta(
                 meta.push((17, serializer::BOOLEAN, Value::Bool(true)));
             }
             defaults.push((17, serializer::BOOLEAN, Value::Bool(false)));
+            defaults.push((16, serializer::OPTIONAL_BLOCK_STATE, Value::Id(0)));
+        }
+        // Zombie.DATA_DROWNED_CONVERSION_ID (after DATA_BABY_ID and
+        // DATA_SPECIAL_TYPE_ID): the shaking of the conversion under water.
+        "minecraft:zombie" | "minecraft:husk" => {
+            if e.counter2 > 0 {
+                meta.push((18, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((18, serializer::BOOLEAN, Value::Bool(false)));
+        }
+        // AbstractVillager.DATA_UNHAPPY_COUNTER (after AgeableMob's two).
+        "minecraft:wandering_trader" => unhappy_counter(m, meta, defaults),
+        // Hoglin.DATA_IMMUNE_TO_ZOMBIFICATION (after AgeableMob's two) and
+        // AbstractPiglin's, the first entry of its subclasses (the piglin's is
+        // in its own arm): with the dimension it makes them shake.
+        "minecraft:hoglin" | "minecraft:piglin_brute" => {
+            let index = if kind == "minecraft:hoglin" { 18 } else { 16 };
+            if e.flag2 {
+                meta.push((index, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((index, serializer::BOOLEAN, Value::Bool(false)));
+        }
+        // Blaze.DATA_FLAGS_ID: charged 1, which makes it burn.
+        "minecraft:blaze" => {
+            if e.flag {
+                meta.push((16, serializer::BYTE, Value::Byte(1)));
+            }
+            defaults.push((16, serializer::BYTE, Value::Byte(0)));
+        }
+        // Turtle.HAS_EGG and LAYING_EGG (after AgeableMob's two).
+        "minecraft:turtle" => {
+            if e.flag {
+                meta.push((18, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            if e.flag2 {
+                meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((18, serializer::BOOLEAN, Value::Bool(false)));
+            defaults.push((19, serializer::BOOLEAN, Value::Bool(false)));
+        }
+        // WitherBoss.DATA_TARGET_B and DATA_TARGET_C (after DATA_TARGET_A, the
+        // main target): the entities the side heads look at, by id.
+        "minecraft:wither" => {
+            for (k, index) in [(0, 17), (1, 18)] {
+                let target = match e.ints[k] {
+                    0 => None,
+                    -1 => player_entity,
+                    id => Some(id),
+                };
+                if let Some(target) = target {
+                    meta.push((index, serializer::INT, Value::Int(target)));
+                }
+                defaults.push((index, serializer::INT, Value::Int(0)));
+            }
         }
         _ => {}
     }
@@ -776,6 +862,19 @@ fn mob_meta(
         }
         defaults.push((20, serializer::LONG, Value::Long(0)));
     }
+}
+
+/// AbstractVillager.DATA_UNHAPPY_COUNTER (after AgeableMob's two): the head
+/// shake of a villager saying no counts it down from 40.
+fn unhappy_counter(
+    m: &Mob,
+    meta: &mut Vec<(u8, i32, Value)>,
+    defaults: &mut Vec<(u8, i32, Value)>,
+) {
+    if m.extra.ints[0] > 0 {
+        meta.push((18, serializer::INT, Value::Int(m.extra.ints[0])));
+    }
+    defaults.push((18, serializer::INT, Value::Int(0)));
 }
 
 /// What a client shakes a mob by: Entity.DATA_TICKS_FROZEN (7), whose full

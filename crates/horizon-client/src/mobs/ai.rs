@@ -635,6 +635,9 @@ fn axolotl_air_supply(m: &mut Mob, w: &MobWorld) {
 fn base_tick(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     m.was_eye_in_water = m.fluids.eye_in_water;
     m.update_fluids(w, events);
+    if m.species() == Species::Drowned {
+        super::undead::drowned_update_swimming(m, w);
+    }
     let fire = crate::motion::environment::fire_contact(w.world, w.registry, m.bounds());
     if fire > 0.0 {
         m.ticks_frozen = 0;
