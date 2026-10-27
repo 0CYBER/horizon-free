@@ -28,7 +28,7 @@ const KNOCKBACK_POWER: f32 = 0.7;
 /// `Entity.isAlliedTo` between the player (`player` its UUID) and a mob
 /// without teams: `TamableAnimal.considersEntityAsAlly` (a pet it tamed) and
 /// `Allay.considersEntityAsAlly` (an allay that likes it).
-fn ally_of_player(m: &Mob, player: Option<[i32; 4]>) -> bool {
+pub(super) fn ally_of_player(m: &Mob, player: Option<[i32; 4]>) -> bool {
     let tamable = matches!(
         m.species(),
         Species::Wolf
@@ -52,19 +52,44 @@ pub(super) enum Spared {
     Player(i32),
 }
 
-/// `SweepingEdgeEnchantment.getSweepingDamageRatio` (the enchantment's
-/// `fraction` attribute): level / (level + 1), none without the enchantment.
-fn sweeping_ratio(level: u32) -> f32 {
-    if level > 0 {
-        level as f32 / (level as f32 + 1.0)
-    } else {
-        0.0
-    }
-}
 /// `Player.doSweepAttack`'s `1 + ratio * f`, where `f` is the attack damage
 /// after `baseDamageScaleFactor` (0.2 + strength^2 * 0.8).
 fn sweep_base_damage(ratio: f32, attack_damage: f32, scale: f32) -> f32 {
     1.0 + ratio * attack_damage * (0.2 + scale * scale * 0.8)
+}
+/// A smash's knockback on the players, put off while a guest's turn holds
+/// the other players.
+pub(super) struct SmashPush {
+    center: Vec3,
+    heavy: f64,
+    attacker: Option<u32>,
+    team: Option<horizon_client::scoreboard::Team>,
+}
+/// `MaceItem.getKnockbackPower` and the push of one entity at `at`, `heavy`
+/// being 2 after a fall of more than five blocks.
+fn smash_push(center: Vec3, heavy: f64, at: Vec3, velocity: &mut Vec3, resistance: f64) {
+    let d = [at.x - center.x, at.y - center.y, at.z - center.z];
+    let distance_sqr = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    if distance_sqr > KNOCKBACK_RADIUS.powi(2) {
+        return;
+    }
+    let length = distance_sqr.sqrt();
+    let power =
+        (KNOCKBACK_RADIUS - length) * f64::from(KNOCKBACK_POWER) * heavy * (1.0 - resistance);
+    if power <= 0.0 {
+        return;
+    }
+    // Vec3.normalize: a vector shorter than 1e-5 has no direction.
+    let (x, z) = if length < f64::from(1.0e-5f32) {
+        (0.0, 0.0)
+    } else {
+        (d[0] / length * power, d[2] / length * power)
+    };
+    *velocity = Vec3::new(
+        velocity.x + x,
+        velocity.y + f64::from(KNOCKBACK_POWER),
+        velocity.z + z,
+    );
 }
 
 impl Game<'_> {
@@ -250,44 +275,75 @@ impl Game<'_> {
         ];
         self.level_event_at(2013, on_pos, 750);
         let heavy = if fall > HEAVY_THRESHOLD { 2.0 } else { 1.0 };
-        // getKnockbackPower and the push of one entity at `at`.
-        let push = |at: Vec3, velocity: &mut Vec3, resistance: f64| {
-            let d = [at.x - center.x, at.y - center.y, at.z - center.z];
-            let distance_sqr = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-            if distance_sqr > KNOCKBACK_RADIUS.powi(2) {
-                return;
-            }
-            let length = distance_sqr.sqrt();
-            let power = (KNOCKBACK_RADIUS - length)
-                * f64::from(KNOCKBACK_POWER)
-                * heavy
-                * (1.0 - resistance);
-            if power <= 0.0 {
-                return;
-            }
-            // Vec3.normalize: a vector shorter than 1e-5 has no direction.
-            let (x, z) = if length < f64::from(1.0e-5f32) {
-                (0.0, 0.0)
-            } else {
-                (d[0] / length * power, d[2] / length * power)
-            };
-            *velocity = Vec3::new(
-                velocity.x + x,
-                velocity.y + f64::from(KNOCKBACK_POWER),
-                velocity.z + z,
-            );
-        };
         let player = self.level.player_uuid.or(Some([0, 0, 0, 1]));
         for m in self
             .mobs
             .iter_mut()
             .filter(|m| m.id != id && m.alive() && !m.removed && !ally_of_player(m, player))
         {
-            push(m.position, &mut m.velocity, m.attrs.knockback_resistance);
+            smash_push(
+                center,
+                heavy,
+                m.position,
+                &mut m.velocity,
+                m.attrs.knockback_resistance,
+            );
         }
         for s in self.armor_stands.iter_mut().filter(|s| !s.marker) {
-            push(s.position, &mut s.velocity, 0.0);
+            smash_push(center, heavy, s.position, &mut s.velocity, 0.0);
         }
+        // The host and the LAN guests are living entities too. A guest's turn
+        // holds the other players (`as_guest`): the push waits for it to end.
+        let push = SmashPush {
+            center,
+            heavy,
+            attacker: self.lan_acting,
+            team: self.player_team().cloned(),
+        };
+        if self.lan_acting.is_some() {
+            self.creatures.smash_pushes.push(push);
+        } else {
+            self.smash_push_players(&push);
+        }
+    }
+    /// `MaceItem.knockback` on the players but the attacker: the host unless
+    /// it attacked, and every guest but the attacker.
+    fn smash_push_players(&mut self, push: &SmashPush) {
+        if push.attacker.is_some() {
+            self.smash_push_player(push);
+        }
+        self.each_guest_hit_except(push.attacker, |g| g.smash_push_player(push));
+    }
+    /// The pushes guests' smashes put off.
+    pub(super) fn flush_smash_pushes(&mut self) {
+        for push in std::mem::take(&mut self.creatures.smash_pushes) {
+            self.smash_push_players(&push);
+        }
+    }
+    /// `MaceItem.knockback` on the player here (the host, or the guest swapped
+    /// in): not a spectator, an ally of the attacker (`isAlliedTo`: the same
+    /// team) or a creative player flying.
+    fn smash_push_player(&mut self, push: &SmashPush) {
+        if self.spectator()
+            || horizon_client::scoreboard::teams_allied(push.team.as_ref(), self.player_team())
+        {
+            return;
+        }
+        let creative = self.creative;
+        let Some(p) = self.player.as_mut() else {
+            return;
+        };
+        if creative && p.flying {
+            return;
+        }
+        let resistance = p.attribute("minecraft:knockback_resistance").unwrap_or(0.0);
+        smash_push(
+            push.center,
+            push.heavy,
+            p.position,
+            &mut p.velocity,
+            resistance,
+        );
     }
     /// `Player.doSweepAttack`'s victims: every other living mob and every
     /// armor stand (but a marker one) in `target`'s box inflated by
@@ -308,14 +364,17 @@ impl Game<'_> {
                 .sum::<f64>()
                 < 9.0
         };
-        // SweepingEdgeEnchantment.getSweepingDamageRatio: level / (level + 1).
-        let level = self.inventory[self.selected].as_ref().map_or(0, |held| {
-            held.enchantments()
-                .iter()
-                .find(|(id, _)| &**id == "minecraft:sweeping_edge")
-                .map_or(0, |(_, level)| *level)
-        });
-        let ratio = sweeping_ratio(level);
+        // The enchantment's `sweeping_damage_ratio` attribute modifier (level /
+        // (level + 1)) on the attribute's 0 to 1 range.
+        let ratio = self
+            .res
+            .stations()
+            .enchantments
+            .attribute_add(
+                self.inventory[self.selected].as_ref(),
+                "minecraft:sweeping_damage_ratio",
+            )
+            .clamp(0.0, 1.0) as f32;
         // `f` of doSweepAttack: the attack damage attribute after
         // baseDamageScaleFactor (a sweep is never a smash or a critical hit).
         let spin = self.player.as_ref().map_or(0.0, |p| p.auto_spin_attack_dmg);
@@ -328,6 +387,7 @@ impl Game<'_> {
         let base = sweep_base_damage(ratio, attribute, scale);
         let (xd, zd) = self.extra_knockback_direction();
         let uuid = self.level.player_uuid.or(Some([0, 0, 0, 1]));
+        let allies = self.player_allies();
         // getEntitiesOfClass walks the entity sections (x, then z, then y)
         // under the box, each in the order its entities were added.
         let section = |at: Vec3| {
@@ -342,6 +402,7 @@ impl Game<'_> {
             if spared != Spared::Mob(m.id)
                 && m.alive()
                 && !m.removed
+                && !allies.contains(&m.id)
                 && !ally_of_player(m, uuid)
                 && m.bounds().intersects(area)
                 && near(m.position)
@@ -404,21 +465,6 @@ impl Game<'_> {
                     .insert(self.mobs[i].id, self.lan_acting);
                 self.post_attack(i);
             }
-        }
-        // The players among the victims need the hub, which is out while a
-        // guest acts: queued for `sweep_players`.
-        if self.audio.capture.is_some() {
-            let amount = self.enchanted_damage("minecraft:player", base) * scale;
-            let team = self.player_team().cloned();
-            self.lan_sweeps.push(super::lan_pvp::SweepStrike {
-                attacker: self.lan_acting,
-                from,
-                area,
-                spared,
-                amount,
-                knockback: (xd, zd),
-                team,
-            });
         }
     }
     /// `ServerPlayer.checkFallDamage` after a smash on a grounded target:
@@ -494,14 +540,6 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn sweeping_edge_ratio_is_level_over_level_plus_one() {
-        assert_eq!(sweeping_ratio(0), 0.0);
-        assert_eq!(sweeping_ratio(1), 0.5);
-        assert!((sweeping_ratio(2) - 2.0 / 3.0).abs() < 1e-6);
-        assert_eq!(sweeping_ratio(3), 0.75);
-    }
 
     #[test]
     fn sweep_damage_is_one_without_the_enchantment() {

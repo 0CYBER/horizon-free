@@ -823,7 +823,7 @@ impl Game<'_> {
         let (kind, id) = (self.boats[i].entity_type(), self.boats[i].id as i32);
         let (damage, _, _, magic) = self.melee_damage(&kind, false);
         self.hurt_boat(i, damage, self.creative);
-        self.vehicle_attack_sounds(area, (magic > 0.0).then_some(id));
+        self.vehicle_attack_sounds(area, magic.then_some(id));
         self.swing_arm();
         true
     }
@@ -866,7 +866,7 @@ impl Game<'_> {
         let a = alpha as f32;
         let range = super::entity_culling::default_range(
             glam::DVec3::new(WIDTH, HEIGHT, WIDTH),
-            self.settings.entity_distance,
+            self.view_scale(),
         );
         for b in &self.boats {
             let entity_start = out.len();

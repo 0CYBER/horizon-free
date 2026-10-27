@@ -251,7 +251,7 @@ GENERATORS = [
     ("lan_command_order", ["crates/horizon-client/src/lan/command_order.rs"],
      lambda root, version, store, build: [python(), "tools/generate_lan_command_order.py"]),
     ("command_suggestions", ["crates/horizon-client/src/lan/command_suggestions.rs"], gen_suggestions),
-    ("vanilla_command_order", ["crates/horizon-client/src/command/vanilla_order.rs"], gen_vanilla_order),
+    ("vanilla_command_order", ["crates/horizon-command/src/vanilla_order.rs"], gen_vanilla_order),
 ]
 
 

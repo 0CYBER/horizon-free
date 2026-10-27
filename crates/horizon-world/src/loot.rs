@@ -31,6 +31,11 @@ pub struct LootStack {
     pub exploration: Option<Box<ExplorationMap>>,
     /// Set by set_ominous_bottle_amplifier.
     pub ominous_amplifier: Option<i32>,
+    /// Added by set_stew_effect (the `suspicious_stew_effects` component):
+    /// (effect id, duration in ticks).
+    pub stew_effects: Vec<(String, i32)>,
+    /// Set by set_name: (`custom_name` or `item_name`, the text component).
+    pub names: Vec<(String, Value)>,
 }
 /// `ExplorationMapFunction`'s settings.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,6 +79,8 @@ impl LootStack {
             map: false,
             exploration: None,
             ominous_amplifier: None,
+            stew_effects: Vec::new(),
+            names: Vec::new(),
         }
     }
     pub fn is_empty(&self) -> bool {
@@ -150,6 +157,8 @@ pub struct LootEntity {
     pub captain: Option<bool>,
     /// A frog's variant id (`minecraft:warm`).
     pub frog_variant: Option<String>,
+    /// A chicken's variant id (`minecraft:warm`).
+    pub chicken_variant: Option<String>,
     /// A charged creeper (`Creeper.isPowered`).
     pub powered: bool,
     /// Worn and held items by `EquipmentSlot` name (mainhand, offhand,
@@ -678,6 +687,13 @@ impl LootData {
     }
 }
 
+/// `MobEffect.isInstantaneous`.
+fn is_instantaneous(effect: &str) -> bool {
+    matches!(
+        effect,
+        "minecraft:saturation" | "minecraft:instant_health" | "minecraft:instant_damage"
+    )
+}
 /// The level of one enchantment on a stack (its `enchantments` component).
 fn item_level(stack: &LootStack, enchantment: &str) -> i32 {
     stack
@@ -850,6 +866,9 @@ impl<R: RandomSource> Context<'_, R> {
                     .is_some_and(|(color, _)| want.as_str() == Some(color)),
                 "minecraft:frog/variant" => {
                     e.frog_variant.is_some() && want.as_str() == e.frog_variant.as_deref()
+                }
+                "minecraft:chicken/variant" => {
+                    e.chicken_variant.is_some() && want.as_str() == e.chicken_variant.as_deref()
                 }
                 _ => false,
             }),
@@ -1134,7 +1153,14 @@ impl<R: RandomSource> Context<'_, R> {
                         .random
                         .next_int_bound(effects.len() as i32)
                         .unwrap_or(0) as usize;
-                    self.int(&effects[pick]["duration"]);
+                    let effect = effects[pick]["type"].as_str().unwrap_or("");
+                    let mut duration = self.int(&effects[pick]["duration"]);
+                    // Seconds, unless the effect is instantaneous.
+                    if !is_instantaneous(effect) {
+                        duration *= 20;
+                    }
+                    // SuspiciousStewEffects.withEffectAdded
+                    stack.stew_effects.push((effect.to_owned(), duration));
                 }
             }
             "minecraft:set_ominous_bottle_amplifier" => {
@@ -1201,7 +1227,16 @@ impl<R: RandomSource> Context<'_, R> {
                     stack = smelted;
                 }
             }
-            // Names, lore, components and other data without random draws.
+            // SetNameFunction: the component the target names (custom_name by
+            // default). The entity-resolved selectors and scores are not
+            // modelled; no table uses `entity`.
+            "minecraft:set_name" if !f["name"].is_null() => {
+                let target = f["target"].as_str().unwrap_or("custom_name");
+                let id = format!("minecraft:{target}");
+                stack.names.retain(|(k, _)| *k != id);
+                stack.names.push((id, f["name"].clone()));
+            }
+            // Lore, components and other data without random draws.
             _ => {}
         }
         stack

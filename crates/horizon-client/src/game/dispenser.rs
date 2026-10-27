@@ -982,7 +982,7 @@ impl Game<'_> {
             | "minecraft:lingering_potion" => {
                 let mut shot = Projectile::new(ProjectileKind::Snowball, at, None);
                 shot.shoot(&mut own, dir, power, uncertainty);
-                self.launch_thrown(one, at, shot.velocity);
+                self.launch_thrown(one, at, shot.velocity, None);
             }
             "minecraft:firework_rocket" => {
                 let mut shot = Projectile::new(ProjectileKind::Snowball, at, None);
@@ -1034,7 +1034,7 @@ impl Game<'_> {
                     a.pickup = horizon_client::arrows::Pickup::Allowed;
                 }
                 shot.shoot(&mut own, dir, power, uncertainty);
-                self.creatures.projectiles.push(shot);
+                self.add_projectile(shot);
             }
         }
     }
@@ -1548,6 +1548,7 @@ impl Game<'_> {
             return Ok((Some(stack), FAIL));
         };
         let target = (placed.x, placed.y, placed.z);
+        let state = self.apply_item_block_state([target.0, target.1, target.2], state, &stack)?;
         if let Some(entity) = BlockEntity::for_block(&self.res.facts().get(state).name) {
             self.world.block_entities.insert(target, entity);
             self.apply_placed_item([target.0, target.1, target.2], &stack, false);
