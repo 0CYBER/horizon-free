@@ -1822,7 +1822,8 @@ impl Game<'_> {
                         r.level_players.remove(&p.id);
                     }
                 }
-                // Entity.getTeam: a mob is on a team by its UUID.
+                // Entity.getTeam: a mob is on a team by its UUID, a player by
+                // its profile name (`Game::scoreboard_name`).
                 self.persist.uuids.insert(
                     p.id as u32,
                     horizon_client::lan::playerdata::uuid_ints(p.uuid),
@@ -5540,6 +5541,15 @@ impl Game<'_> {
     pub(super) fn remote_glowing(&self, id: u32) -> Option<bool> {
         let r = self.remote.as_ref()?;
         Some(r.glowing.contains(&(id as i32)))
+    }
+    /// The profile name of another player the server sent, by entity id.
+    pub(super) fn remote_player_name(&self, id: u32) -> Option<&str> {
+        let r = self.remote.as_ref()?;
+        let uuid = r.level_players.get(&(id as i32))?;
+        if *uuid == r.profile {
+            return None;
+        }
+        r.players.get(uuid).map(String::as_str)
     }
     /// Status for `horizon-ctl status`.
     /// The other players' entities in the level and their names (from the

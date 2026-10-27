@@ -7850,5 +7850,41 @@ CHECKS += ['dig_stop']
 CHECK_FNS['dig_stop'] = check_dig_stop
 
 
+def check_team_push(host, guest, out):
+    """Another player's LivingEntity.pushEntities on the guest's screen: EntitySelector.pushableBy reads the
+    pusher's team, which for a player goes by its profile name (Player.getScoreboardName), not its UUID. The
+    host 0.3 east of the guest pushes it west, unless the host's team has collisionRule never."""
+    for g in (host, guest):
+        g('command', command='gamemode survival')
+    x, y, z = pos_of(guest)
+    x, z = x // 1 + 0.5, z // 1 + 0.5
+    seen = {}
+    try:
+        for case in ('no team', 'never'):
+            if case == 'never':
+                host('command', command='team add parity_ghosts')
+                host('command', command='team modify parity_ghosts collisionRule never')
+                host('command', command=f'team join parity_ghosts {host.player}')
+            guest('command', command=f'tp @s {x} {y:.4f} {z}')
+            host('command', command=f'tp @s {x + 0.3} {y:.4f} {z}')
+            guest.wait(40)
+            nx, _, nz = pos_of(guest)
+            guest.shot(out, 'team-push-' + case.replace(' ', '-'))
+            seen[case] = {'dx': round(nx - x, 3), 'dz': round(nz - z, 3)}
+            # Apart again before the next case.
+            host('command', command=f'tp @s {x + 3} {y:.4f} {z}')
+            guest.wait(10)
+    finally:
+        host('command', command='team remove parity_ghosts')
+    assert seen['no team']['dx'] < -0.05, f'the host did not push the guest west: {seen}'
+    assert abs(seen['never']['dx']) < 0.01 and abs(seen['never']['dz']) < 0.01, \
+        f'a host on a collisionRule never team still pushed the guest: {seen}'
+    return seen
+
+
+CHECKS += ['team-push']
+CHECK_FNS['team-push'] = check_team_push
+
+
 if __name__ == '__main__':
     main()
