@@ -78,6 +78,10 @@ pub fn main() -> Result<()> {
             firefly_bush_sounds: false,
             sky_darken: 0,
             marker: target.map(|name| (name, &options as &dyn Fn(_) -> _)),
+            model_offset: &|_, _, _| None,
+            gateway_particles: &|_, _| 0,
+            thundering: false,
+            ultrawarm: false,
         };
         engine.seed_randoms(1057, 0, 0);
         engine.requested = Some(Vec::new());
