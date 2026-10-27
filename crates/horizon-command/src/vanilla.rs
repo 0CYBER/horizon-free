@@ -5,7 +5,7 @@ use super::{
     Dispatcher,
     args::{ArgType, Resource, integer},
 };
-use crate::gamerules::{RULES, Value};
+use horizon_client_core::gamerules::{RULES, Value};
 
 /// Permission levels (Commands.LEVEL_*).
 pub const ALL: u8 = 0;

@@ -89,6 +89,15 @@ pub(super) struct ModsState {
     /// The HUD font's advances for `render.text-width`, made once.
     #[cfg(feature = "mods")]
     font_widths: std::sync::Arc<[f32]>,
+    /// Capability `recipes`'s tables, made once a mod reads them.
+    #[cfg(feature = "mods")]
+    pub(super) recipes: Option<std::sync::Arc<horizon_mods::Recipes>>,
+    /// The recipe book's known displays, and the book's version they are of.
+    #[cfg(feature = "mods")]
+    pub(super) known_recipes: (Option<u64>, std::sync::Arc<[i32]>),
+    /// Capability `ui`'s item panel beside container screens.
+    #[cfg(feature = "mods")]
+    pub(super) browser: super::mod_browser::Browser,
     /// Extras that are official mods now, being installed.
     #[cfg(feature = "mods")]
     pub(super) moved: super::moved_extras::MovedState,
@@ -301,6 +310,8 @@ impl Game<'_> {
         self.mods.mods.set_bindings(|id| chosen.keys_of(id));
         // Entries were replaced wholesale: a screen's owner index is stale.
         self.mods.screen = None;
+        // Content mods may have changed the items: remade on the next read.
+        self.mods.recipes = None;
         self.list_mods();
         self.sync_mod_commands();
         self.show_mod_output();
@@ -452,6 +463,7 @@ impl Game<'_> {
                 .map(|c| char::from_u32(c).map_or(6.0, |c| atlas.glyph_cell(c).1))
                 .collect();
         }
+        let (recipes, known_recipes) = self.mod_recipes();
         Snapshot {
             player,
             clock,
@@ -463,6 +475,10 @@ impl Game<'_> {
             font_widths: self.mods.font_widths.clone(),
             players,
             view_hit: self.mod_view_hit(),
+            recipes,
+            known_recipes,
+            placing: self.mod_recipe_screen(),
+            creative: self.creative,
         }
     }
     /// The first block along the player's view within
@@ -698,6 +714,18 @@ impl Game<'_> {
                 }
                 Output::Shake { strength, seconds } => {
                     self.mods.shake.add(strength, seconds);
+                    continue;
+                }
+                Output::PlaceRecipe { book_id, all } => {
+                    self.mod_place_recipe(book_id, all);
+                    continue;
+                }
+                Output::Give {
+                    item,
+                    count,
+                    components,
+                } => {
+                    self.mod_give(&item, count, &components);
                     continue;
                 }
                 Output::CloseScreen { owner } => {

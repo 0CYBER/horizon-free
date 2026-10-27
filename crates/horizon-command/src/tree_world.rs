@@ -7,7 +7,7 @@ use super::{
     args::{ArgType, integer},
     vanilla::{ENTITIES, ENTITY, GAMEMASTERS, PLAYERS},
 };
-use crate::settings::SOUND_SOURCES;
+use horizon_client_core::sound_source::SOUND_SOURCES;
 
 fn float(min: f32) -> ArgType {
     ArgType::Float { min, max: f32::MAX }

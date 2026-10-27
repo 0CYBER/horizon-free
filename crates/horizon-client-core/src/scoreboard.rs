@@ -2,9 +2,9 @@
 //! `ObjectiveCriteria`, `NumberFormat`) and its saved data
 //! (`data/minecraft/scoreboard.dat`, `ScoreboardSaveData.Packed`).
 use crate::{
-    command::Registries,
     component,
     fastutil_order::{HashSetOrder, OpenOrder},
+    registries::Registries,
     text::{self, Style, Text},
 };
 use horizon_world::nbt::Tag;
@@ -1266,7 +1266,7 @@ fn entity_uuids(tag: &mut Tag) {
                             })
                             .collect::<Option<Vec<i32>>>(),
                         Tag::String(s) => {
-                            crate::save::uuid_from_text(&s.to_string_lossy()).map(Vec::from)
+                            crate::uuid::uuid_from_text(&s.to_string_lossy()).map(Vec::from)
                         }
                         _ => None,
                     };

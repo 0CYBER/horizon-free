@@ -15,6 +15,7 @@
 # toolchains, a virtual screen and scratch homes for the game and launcher. .local/ links to the host's vanilla
 # data; a command that runs harnesses (it names parity, lan_e2e or horizon-prepare) also gets .local/horizon-client,
 # prepared as CI prepares it (tools/ci/vanilla-data.sh). Output streams back and is kept in ~/remote-work/<name>.logs/.
+# What the command leaves running is stopped when it ends; stopping this script stops the command on the host.
 # The exit status is the command's.
 #
 # The host is lent by a partner who keeps hypervisor access: never send secrets, tokens or credentials there,
@@ -96,9 +97,22 @@ export HORIZON_HOME=$scratch/game HORIZON_LAUNCHER_HOME=$scratch/launcher XDG_DA
 mkdir -p "$HORIZON_HOME" "$HORIZON_LAUNCHER_HOME" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" ../"$name.logs"
 log=../"$name.logs/$(date -u +%Y%m%dT%H%M%SZ)-${sha:0:9}.log"
 echo "remote.sh: $(hostname) at ${sha:0:9} in ~/remote-work/$name, CPUs $cpus, -j $jobs; log ~/remote-work/${log#../}" >&2
+# The command runs in a scope of its own, stopped with everything in it once the command is done (a game or a
+# daemon it left behind), when the caller goes away first (the ssh session ends), and before the next run here.
+unit=remote-$name.scope
+systemctl --user stop "$unit" 2>/dev/null || true
+session=$PPID
+( while kill -0 "$session" 2>/dev/null; do sleep 2; done; systemctl --user stop "$unit" 2>/dev/null ) \
+  < /dev/null > /dev/null 2>&1 9>&- &
+watcher=$!
 status=0
-systemd-run --user --scope --quiet --slice=horizon-ci.slice --unit="remote-$name-$$" \
+systemd-run --user --scope --quiet --slice=horizon-ci.slice --unit="$unit" \
   "${pin[@]}" nice -n 10 bash -c "$command" 2>&1 < /dev/null 9>&- | tee "$log" || status=${PIPESTATUS[0]}
+kill "$watcher" 2>/dev/null || true
+systemctl --user stop "$unit" 2>/dev/null || true
 exit "$status"
 REMOTE
-} | ssh -o BatchMode=yes "ludovic@$host" bash -s
+} | ssh -o BatchMode=yes "ludovic@$host" bash -s &
+# Stopping this script ends the session, and the host then stops the command (above).
+trap 'kill $! 2>/dev/null' INT TERM HUP
+wait $!

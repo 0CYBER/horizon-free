@@ -18,6 +18,7 @@ The contract between Horizon and its mods: the WIT package `horizon:mods@0.1.0`,
 | `input` | [`input`](#input) | see the keys you hold and your clicks, take over the use button on its own items and the mouse wheel, and add keys |
 | `players` | [`players`](#players) | see who is on the server and message them |
 | `world` | [`world`](#world) | read and change the world's blocks |
+| `recipes` | [`recipes`](#recipes) | read the game's recipes and items and which recipes you know, place recipes in your crafting grid and, in creative mode, give you items |
 
 ## World `horizon-mod`
 
@@ -37,7 +38,7 @@ A server mod (manifest `side = "server"`, `api = "0.3"`, experimental): runs whe
 
 A mod with widgets (capability `ui`): the SDK builds every mod against this world. Mods built for `horizon-mod` alone (no `ui-events` export) still load and simply hear nothing of their widgets.
 
-- Imports (what the game offers): `ui`, `render`, `input`, `log`, `game`, `chat`, `hud`, `storage`, `command`
+- Imports (what the game offers): `ui`, `render`, `input`, `recipes`, `browser`, `log`, `game`, `chat`, `hud`, `storage`, `command`
 - Exports (what the mod provides): `ui-events`, `events`
 
 ## World `ui-host`
@@ -52,6 +53,13 @@ The game's side of `horizon-ui-mod` beyond `horizon-mod`.
 The game's side of capability `render` (imports only).
 
 - Imports (what the game offers): `render`, `input`
+- Exports (what the mod provides): 
+
+## World `recipes-host`
+
+The game's side of capability `recipes` (imports only).
+
+- Imports (what the game offers): `recipes`, `browser`
 - Exports (what the mod provides): 
 
 ## `log`
@@ -461,6 +469,160 @@ What the game calls. Only the hooks `init` asks for are ever called.
 | `frame` | `func(seconds: f32)` | Each rendered frame, with the seconds since the last one. |
 | `command` | `func(name: string, args: string) -> result<option<string>, string>` | `/name args`: ok(some(text)) is shown as feedback, err(text) in red. |
 | `chat` | `func(text: string)` | Each chat line the player receives, as plain text. |
+
+## `recipes`
+
+Access: capability `recipes`.
+
+Capability `recipes` (experimental): the recipes and items the game knows, for recipe viewers. In single player and on Horizon's servers they are the world's; on any other server they are vanilla 26.3's (a client is sent no others), while `known` follows that server's book.
+
+### record `stack`
+
+An item of `items`, by its index there, with a count and the components it has beyond the item's own, in vanilla's item syntax (`[potion_contents={potion:"minecraft:swiftness"}]`), or "".
+
+| Field | Type | |
+| --- | --- | --- |
+| `item` | `u32` |  |
+| `count` | `u32` |  |
+| `components` | `string` |  |
+
+### enum `kind`
+
+The station a recipe is made at.
+
+| Case | |
+| --- | --- |
+| `crafting-shaped` |  |
+| `crafting-shapeless` |  |
+| `smelting` |  |
+| `blasting` |  |
+| `smoking` |  |
+| `campfire` |  |
+| `stonecutting` |  |
+| `smithing` |  |
+| `brewing` |  |
+
+### record `recipe`
+
+| Field | Type | |
+| --- | --- | --- |
+| `id` | `string` | `minecraft:oak_planks`. |
+| `kind` | `kind` |  |
+| `category` | `string` | The recipe book's tab (`crafting_building_blocks`, `furnace_food`), or "". |
+| `group` | `string` | Recipes the book shows on one button share a group, or "". |
+| `width` | `u32` | A shaped recipe's grid: `slots` holds its cells row by row. 0 for the other kinds. |
+| `height` | `u32` |  |
+| `slots` | `list<list<stack>>` | Each slot's stacks, any one of which fits; an empty list is an empty cell. Cooking and stonecutting: the input. Smithing: the template, the base, the addition. Brewing: the bottle, the reagent. |
+| `results` | `list<stack>` | What it makes; several when that varies (a trim on any armour). |
+| `cooking-time` | `u32` | Cooking: game ticks and experience; 0 for the other kinds. |
+| `experience` | `f32` |  |
+| `book-id` | `s32` | The recipe book's id for it (one per way the book shows it), as `known` lists them; -1 for the kinds the book doesn't show (campfire, stonecutting, smithing, brewing). |
+
+### record `item`
+
+| Field | Type | |
+| --- | --- | --- |
+| `id` | `string` | `minecraft:diamond`, `<mod>:<path>`. |
+| `name` | `string` | In the player's language. |
+| `tags` | `list<string>` | Its item tags, without the `#`. |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `items` | `func() -> list<item>` | Every item, in the registry's order: `stack.item` indexes this list. |
+| `all` | `func() -> list<recipe>` | Every recipe: the book's in its order, then campfire, stonecutting, smithing and brewing. They don't change while a world is open. |
+| `known` | `func() -> list<s32>` | The `book-id`s of the recipes the player's recipe book holds now. |
+| `place` | `func(book-id: s32, all: bool) -> result<_, string>` | Places a recipe in the open screen's grid as a click in the recipe book does (`ServerboundPlaceRecipePacket`): the inventory's grid or a crafting table. `all` places as many as the items allow, as with Shift. Refused while no such screen is open, for a recipe the player's book doesn't hold and for one that can't be placed; one missing items shows as a ghost in the grid, as in the book. |
+| `give` | `func(stack: stack) -> result<_, string>` | Creative mode only: gives the player the stack, as taking it from the creative inventory does (`ServerboundSetCreativeModeSlot`): the selected slot first, then the hotbar, then the inventory. The count is cut to one stack of the item (64, 16 or 1). |
+
+## `browser`
+
+Access: not granted by any capability.
+
+Capability `ui` (experimental): a recipe viewer's panel beside the game's inventory and container screens (not the creative inventory), on the right of the screen. The game draws it with its own widgets and slots, pages it and keeps its search box; the mod says what it holds. The first loaded mod with a panel shows.
+
+### record `stack`
+
+An item to show: its id, a count (1 draws none) and its components beyond the item's own, in vanilla's item syntax, or "".
+
+| Field | Type | |
+| --- | --- | --- |
+| `item` | `string` |  |
+| `count` | `u32` |  |
+| `components` | `string` |  |
+
+### record `click`
+
+A click on an item of the panel, by its index in `set-items`'s list.
+
+| Field | Type | |
+| --- | --- | --- |
+| `index` | `u32` |  |
+| `right` | `bool` |  |
+
+### record `item-key`
+
+A key the mod registered (`input.register-key`) went down while the pointer was on an item: a slot of the screen's, or the panel's.
+
+| Field | Type | |
+| --- | --- | --- |
+| `key` | `string` |  |
+| `stack` | `stack` |  |
+
+### record `slot-click`
+
+A click on a slot of a recipe the panel shows (`set-recipes`).
+
+| Field | Type | |
+| --- | --- | --- |
+| `recipe` | `u32` | The recipe's index in `set-recipes`'s list and the slot's in it; the results come after the slots. |
+| `slot` | `u32` |  |
+| `stack` | `stack` | The stack the slot showed at that moment. |
+| `right` | `bool` |  |
+
+### variant `event`
+
+| Case | Payload | |
+| --- | --- | --- |
+| `clicked` | `click` |  |
+| `search` | `string` | The search box's text, each time the player changes it. |
+| `key` | `item-key` |  |
+| `slot-clicked` | `slot-click` |  |
+| `action` | `u32` | The action button of the recipe at this index in `set-recipes`'s list. |
+| `page` | `u32` | The player turned the recipes' page (`set-recipes`): the index of the first recipe now shown. |
+| `back` |  | The back button of `set-recipes`. |
+| `tab` | `u32` | The player picked the tab at this index of `set-recipes`' tabs. |
+
+### enum `layout`
+
+How the game lays out a recipe of `set-recipes`.
+
+| Case | |
+| --- | --- |
+| `grid` | A crafting grid of `width` x `height` slots, an arrow and the result. |
+| `cooking` | One input over a flame, an arrow and the result (furnaces, smokers, campfires). |
+| `single` | One input, an arrow and the result (the stonecutter). |
+| `smithing` | Template, base and addition, an arrow and the result. |
+| `brewing` | A potion and an ingredient, an arrow and the result. |
+
+### record `recipe-view`
+
+A recipe to show. Each slot, and the result, cycles through its stacks, one a second; an empty slot shows nothing.
+
+| Field | Type | |
+| --- | --- | --- |
+| `layout` | `layout` |  |
+| `width` | `u32` | The grid's size (`grid` only), at most 3 x 3. |
+| `height` | `u32` |  |
+| `slots` | `list<list<stack>>` |  |
+| `results` | `list<stack>` |  |
+| `note` | `string` | A short line under the recipe (a cooking time), or "". |
+| `action` | `option<bool>` | The action button beside it: none, enabled, or shown greyed. |
+
+| Function | Signature | What it does |
+| --- | --- | --- |
+| `set-items` | `func(items: list<stack>)` | The panel's items, at most 8192 (an empty list hides the panel). |
+| `set-recipes` | `func(title: string, tabs: list<stack>, tab: u32, recipes: list<recipe-view>)` | Shows these recipes in the panel instead of its items, as many as fit a page, under `title` and a back button, with a row of `tabs` (each an icon; `tab` is the selected one) between them; an empty list of recipes shows the items again. At most 256 recipes and 16 tabs. |
+| `poll` | `func() -> list<event>` | What the player did on the panel since the last poll, at most 256 kept. |
 
 ## `players`
 
