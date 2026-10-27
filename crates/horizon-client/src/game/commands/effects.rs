@@ -1,11 +1,10 @@
 //! `/effect` (EffectCommands) and `/enchant` (EnchantCommand).
 use super::{Arg, Context, Game, R, Target, err, texts};
 use horizon_client::{
-    brewing,
+    brewing::{self, namespaced},
     effects::EffectInstance,
     text::{self, Style, Text},
 };
-use std::{collections::HashMap, sync::OnceLock};
 
 /// `CommandResponseTracker` over targets: elements with a non-zero result.
 #[derive(Default)]
@@ -20,24 +19,6 @@ impl Tracker {
             self.changed.push(t);
         }
     }
-}
-/// Namespaced effect ids for mob effect storage.
-fn namespaced(id: &'static str) -> &'static str {
-    static IDS: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
-    IDS.get_or_init(|| {
-        brewing::EFFECTS
-            .iter()
-            .map(|e| {
-                (
-                    e.id,
-                    &*Box::leak(format!("minecraft:{}", e.id).into_boxed_str()),
-                )
-            })
-            .collect()
-    })
-    .get(id)
-    .copied()
-    .unwrap_or(id)
 }
 fn effect_name(id: &str) -> Text {
     Text::translate(&format!("effect.minecraft.{id}"), &[])
@@ -91,7 +72,12 @@ impl Game<'_> {
                 }
                 Target::Mob(id) => match self.mobs.iter_mut().find(|m| m.id == id) {
                     Some(m) => {
-                        m.add_effect(namespaced(effect.id), duration, amplifier);
+                        let name = namespaced(effect.id);
+                        m.add_effect(name, duration, amplifier);
+                        m.extra.hidden_effects.retain(|h| *h != name);
+                        if !particles {
+                            m.extra.hidden_effects.push(name);
+                        }
                         true
                     }
                     None => false,
@@ -154,6 +140,10 @@ impl Game<'_> {
                         m.extra
                             .effects
                             .retain(|x| e.is_some_and(|e| x.0 != namespaced(e.id)));
+                        let left = &m.extra.effects;
+                        m.extra
+                            .hidden_effects
+                            .retain(|h| left.iter().any(|x| x.0 == *h));
                         m.extra.effects.len() != before
                     }
                     None => false,
