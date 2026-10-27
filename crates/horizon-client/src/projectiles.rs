@@ -66,6 +66,23 @@ pub enum ProjectileKind {
     },
 }
 impl ProjectileKind {
+    /// The width and height of its entity type's `sized(...)`.
+    pub fn size(&self) -> f64 {
+        match self {
+            Self::Arrow { .. } | Self::Trident => 0.5,
+            Self::Snowball
+            | Self::Egg
+            | Self::EnderPearl
+            | Self::LlamaSpit
+            | Self::Potion { .. } => 0.25,
+            Self::SmallFireball
+            | Self::WindCharge
+            | Self::BreezeWindCharge
+            | Self::ShulkerBullet { .. }
+            | Self::WitherSkull { .. } => 0.3125,
+            Self::LargeFireball { .. } => 1.0,
+        }
+    }
     /// Its entity type.
     pub fn id(&self) -> &'static str {
         match self {
@@ -109,6 +126,9 @@ pub struct Projectile {
     pub arrow: Option<Box<crate::arrows::ArrowState>>,
     /// `AbstractHurtingProjectile.accelerationPower`.
     pub acceleration: f64,
+    /// `Entity.needsSync`: a server tells its clients about the change this
+    /// tick instead of at the next update interval.
+    pub needs_sync: bool,
 }
 /// What a projectile struck this tick.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -173,6 +193,7 @@ impl Projectile {
             left_owner: false,
             bonus: Default::default(),
             acceleration: 0.1,
+            needs_sync: false,
             arrow: kind_is_arrow.then(|| {
                 // Entity.random: seeded unpredictably, the position stands in.
                 Box::new(crate::arrows::ArrowState::new(

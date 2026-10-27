@@ -48,6 +48,8 @@ pub fn flames(
                 color: 0xffff_ffff,
                 light: 0xf000 | (u32::from(scene_light >> 4) * 16),
                 normal: [0; 4],
+
+                glint_uv: [0.0, 0.0],
             });
         }
         remaining -= 0.45;

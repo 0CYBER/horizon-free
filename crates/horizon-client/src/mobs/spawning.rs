@@ -34,11 +34,15 @@ pub fn placement_ok(species: Species, w: &MobWorld, x: i32, y: i32, z: i32) -> b
 /// `DifficultyInstance`: the local difficulty at a position.
 #[derive(Clone, Copy, Debug)]
 pub struct LocalDifficulty {
+    /// The world difficulty id, 0 peaceful to 3 hard.
+    pub base: u8,
     pub effective: f32,
     /// The world difficulty is normal.
     pub normal: bool,
     /// The world difficulty is hard.
     pub hard: bool,
+    /// `Difficulty.getId`: 0 peaceful to 3 hard.
+    pub id: u8,
 }
 /// `DimensionType.MOON_BRIGHTNESS_PER_PHASE`.
 pub const MOON_BRIGHTNESS: [f32; 8] = [1.0, 0.75, 0.5, 0.25, 0.0, 0.25, 0.5, 0.75];
@@ -50,9 +54,11 @@ impl LocalDifficulty {
         let normal = base == 2;
         if base == 0 {
             return Self {
+                base,
                 effective: 0.0,
                 normal,
                 hard,
+                id: base,
             };
         }
         let global = ((total as f32 - 72000.0) / 1_440_000.0).clamp(0.0, 1.0) * 0.25;
@@ -63,9 +69,11 @@ impl LocalDifficulty {
             local *= 0.5;
         }
         Self {
+            base,
             effective: f32::from(base) * (0.75 + global + local),
             normal,
             hard,
+            id: base,
         }
     }
     /// `getSpecialMultiplier`.
@@ -100,6 +108,19 @@ pub fn armor_stats(item: &str) -> (f32, f32) {
         _ => return (0.0, 0.0),
     };
     (points[slot], toughness)
+}
+/// The armour and toughness a horse armor item adds in the body slot
+/// (`ArmorMaterial.createAttributes(ArmorType.BODY)`).
+pub fn horse_armor_stats(item: &str) -> (f32, f32) {
+    match item.strip_prefix("minecraft:") {
+        Some("leather_horse_armor") => (3.0, 0.0),
+        Some("copper_horse_armor") => (4.0, 0.0),
+        Some("iron_horse_armor") => (5.0, 0.0),
+        Some("golden_horse_armor") => (7.0, 0.0),
+        Some("diamond_horse_armor") => (11.0, 2.0),
+        Some("netherite_horse_armor") => (19.0, 3.0),
+        _ => (0.0, 0.0),
+    }
 }
 /// `Mob.populateDefaultEquipmentSlots`: sometimes a set of armour, from the
 /// head down, of one random material.

@@ -3,6 +3,7 @@ use super::{Game, Screen};
 use horizon_client::{
     Result,
     command::args::GameMode,
+    confirm_screen::Confirm,
     hud::{HudBatch, rgba},
     text::{self, Text},
     ui,
@@ -103,6 +104,14 @@ fn pause_icons(w: f32, h: f32, links: bool) -> [(f32, f32, &'static str); 4] {
     ]
 }
 /// DeathScreen.init: a hardcore player can only spectate.
+/// `DeathScreen.TitleConfirmScreen`: its title and the yes and no labels.
+fn death_confirm_texts() -> (Text, [Text; 2]) {
+    let t = |key: &str| Text::translate(key, &[]);
+    (
+        t("deathScreen.quit.confirm"),
+        [t("deathScreen.titleScreen"), t("deathScreen.respawn")],
+    )
+}
 fn death_buttons(w: f32, h: f32, hardcore: bool) -> [(f32, f32, &'static str, u8); 2] {
     let respawn = if hardcore {
         "deathScreen.spectate"
@@ -267,6 +276,20 @@ impl Game<'_> {
                 ),
             );
         }
+        // DeathScreen.handleExitToTitleScreen: the TitleConfirmScreen takes the
+        // screen over, on the same background.
+        if let Some(opened) = self.ui.death_confirm {
+            let (title, labels) = death_confirm_texts();
+            let size = self.gui_size();
+            Confirm::new(&atlas.font, size, &title, &Text::literal("")).draw_active(
+                batch,
+                atlas,
+                self.cursor,
+                [&labels[0], &labels[1]],
+                opened.elapsed().as_millis() >= 1000,
+            );
+            return;
+        }
         let title = if self.level.hardcore {
             "deathScreen.title.hardcore"
         } else {
@@ -322,12 +345,81 @@ impl Game<'_> {
             );
         }
     }
+    /// LocalPlayer.respawn: the player comes back (the death screen's
+    /// button, or at once with `immediate_respawn`).
+    pub(super) fn respawn_player(&mut self) -> Result<()> {
+        if self.remote.is_none() {
+            // PlayerList.respawn removes the dead player, and Player.remove's
+            // inventoryMenu.removed drops what the cursor held, whatever
+            // keep_inventory says (the 20-tick branch handles a later respawn).
+            if let Some(stack) = self.carried.take()
+                && let Some(eye) = self.eye_position()
+            {
+                self.throw_from_eyes(stack, eye, false);
+            }
+            let keep = self.ui.rules.bool("keep_inventory") || self.spectator();
+            self.experience.respawn(keep);
+            // The guests are sent the respawned host as a new entity, not the dead body.
+            if let Some(host) = self.lan.as_mut() {
+                let id = host.host_entity;
+                host.hub.respawned(id);
+            }
+            // Autosaves keep a login position; death must resolve the respawn point instead.
+            self.level.position = None;
+        }
+        if self.remote.is_some() {
+            self.ui.death_text = None;
+            self.toggles.respawn();
+            self.remote_respawn();
+        } else if self.respawn_config.is_some() {
+            // LocalPlayer.respawn: KeyMapping.resetToggleKeys.
+            self.toggles.respawn();
+            // PlayerList.respawn at the respawn anchor, once it is loaded.
+            self.begin_anchor_respawn()?;
+            self.screen = Screen::Playing;
+            self.ui.death_text = None;
+            self.spawn_player()?;
+            self.capture(true);
+        } else {
+            // LocalPlayer.respawn: KeyMapping.resetToggleKeys.
+            self.toggles.respawn();
+            self.respawn_out_of_end()?;
+            self.player = None;
+            self.screen = Screen::Playing;
+            self.ui.death_text = None;
+            self.spawn_player()?;
+            self.capture(true);
+        }
+        // ServerGamePacketListenerImpl.handleClientCommand: a hardcore world's
+        // respawned player only watches.
+        if self.remote.is_none() && self.level.hardcore {
+            self.set_mode(GameMode::Spectator);
+        }
+        Ok(())
+    }
     pub(super) fn death_click(&mut self) -> Result<()> {
         if self
             .ui
             .died_at
             .is_some_and(|t| t.elapsed().as_millis() < 1000)
         {
+            return Ok(());
+        }
+        if let Some(opened) = self.ui.death_confirm {
+            // ConfirmScreen.setDelay: both buttons wait 20 ticks.
+            if opened.elapsed().as_millis() < 1000 {
+                return Ok(());
+            }
+            let (title, _) = death_confirm_texts();
+            let confirm = Confirm::new(
+                &self.gui.atlas.font,
+                self.gui_size(),
+                &title,
+                &Text::literal(""),
+            );
+            if let Some(yes) = confirm.answer_at(self.cursor) {
+                self.death_confirm_answer(yes)?;
+            }
             return Ok(());
         }
         let size = self
@@ -339,50 +431,31 @@ impl Game<'_> {
             .into_iter()
             .find(|d| ui::hovered(self.cursor, d.0, d.1, 200.0, 20.0))
             .map(|d| d.3);
-        if hit == Some(0) && self.remote.is_none() {
-            let keep = self.ui.rules.bool("keep_inventory") || self.spectator();
-            self.experience.respawn(keep);
-            // The guests are sent the respawned host as a new entity, not the dead body.
-            if let Some(host) = self.lan.as_mut() {
-                let id = host.host_entity;
-                host.hub.respawned(id);
-            }
-            // Autosaves keep a login position; death must resolve the respawn point instead.
-            self.level.position = None;
+        // handleExitToTitleScreen: outside hardcore, Title Screen asks first.
+        if hit == Some(1) && !self.level.hardcore {
+            self.ui.death_confirm = Some(std::time::Instant::now());
+            self.audio.play_button_click();
+            return Ok(());
         }
+        self.death_action(hit)
+    }
+    /// The confirm screen's answer: yes leaves the world, no respawns
+    /// (`DeathScreen.handleExitToTitleScreen`'s callback).
+    pub(super) fn death_confirm_answer(&mut self, yes: bool) -> Result<()> {
+        self.ui.death_confirm = None;
+        if yes {
+            self.audio.play_button_click();
+            self.close_world()
+        } else {
+            self.death_action(Some(0))
+        }
+    }
+    /// A death screen button: 0 respawns (or spectates in hardcore), 1 leaves.
+    fn death_action(&mut self, hit: Option<u8>) -> Result<()> {
         match hit {
-            Some(0) if self.remote.is_some() => {
-                self.ui.death_text = None;
-                self.toggles.respawn();
-                self.remote_respawn();
-            }
-            Some(0) if self.respawn_config.is_some() => {
-                // LocalPlayer.respawn: KeyMapping.resetToggleKeys.
-                self.toggles.respawn();
-                // PlayerList.respawn at the respawn anchor, once it is loaded.
-                self.begin_anchor_respawn()?;
-                self.screen = Screen::Playing;
-                self.ui.death_text = None;
-                self.spawn_player()?;
-                self.capture(true);
-            }
-            Some(0) => {
-                // LocalPlayer.respawn: KeyMapping.resetToggleKeys.
-                self.toggles.respawn();
-                self.respawn_out_of_end()?;
-                self.player = None;
-                self.screen = Screen::Playing;
-                self.ui.death_text = None;
-                self.spawn_player()?;
-                self.capture(true);
-            }
+            Some(0) => self.respawn_player()?,
             Some(1) => self.close_world()?,
             _ => {}
-        }
-        // ServerGamePacketListenerImpl.handleClientCommand: a hardcore world's
-        // respawned player only watches.
-        if hit == Some(0) && self.remote.is_none() && self.level.hardcore {
-            self.set_mode(GameMode::Spectator);
         }
         if hit.is_some() {
             self.audio.play_button_click();

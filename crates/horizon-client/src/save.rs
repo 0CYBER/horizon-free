@@ -104,27 +104,8 @@ pub fn chunks_with_block_entities<'a>(
         .collect()
 }
 
-fn string(s: &str) -> Tag {
-    Tag::String(s.into())
-}
-pub fn text(tag: Option<&Tag>) -> Option<String> {
-    match tag {
-        Some(Tag::String(s)) => Some(s.to_string_lossy()),
-        _ => None,
-    }
-}
-/// Any numeric tag as i64 (vanilla's `getIntOr` etc. accept every number type).
-pub fn number(tag: Option<&Tag>) -> Option<i64> {
-    Some(match tag? {
-        Tag::Byte(v) => i64::from(*v),
-        Tag::Short(v) => i64::from(*v),
-        Tag::Int(v) => i64::from(*v),
-        Tag::Long(v) => *v,
-        Tag::Float(b) => f32::from_bits(*b) as i64,
-        Tag::Double(b) => f64::from_bits(*b) as i64,
-        _ => return None,
-    })
-}
+use horizon_client_core::nbt_value::string;
+pub use horizon_client_core::nbt_value::{number, text};
 pub(crate) fn float(tag: Option<&Tag>) -> Option<f64> {
     Some(match tag? {
         Tag::Float(b) => f64::from(f32::from_bits(*b)),
@@ -339,59 +320,7 @@ impl SaveTables {
     }
 }
 
-/// A container's loot table and what Horizon rolled from it. Vanilla keeps
-/// `LootTable` and `LootTableSeed` until the container is first opened;
-/// Horizon rolls when it generates or loads the chunk, and saves the table
-/// again while the container still holds exactly the rolled items.
-#[derive(Clone, Debug, PartialEq)]
-pub struct RolledLoot {
-    pub pos: (i32, i32, i32),
-    pub table: String,
-    /// The saved `LootTableSeed`, written back unless 0 (trySaveLootTable).
-    pub seed: Option<i64>,
-    /// The rolled `Items`.
-    pub items: Tag,
-}
-impl RolledLoot {
-    /// Puts the loot table back in place of `Items` while they are still the
-    /// roll; false once the container holds anything else.
-    pub fn restore(&self, map: &mut Compound) -> bool {
-        if map.get(&"Items".into()) != Some(&self.items) {
-            return false;
-        }
-        map.remove(&"Items".into());
-        map.insert("LootTable".into(), string(&self.table));
-        if let Some(seed) = self.seed.filter(|s| *s != 0) {
-            map.insert("LootTableSeed".into(), Tag::Long(seed));
-        }
-        true
-    }
-}
-
-/// Save data loaded with a chunk that Horizon keeps but does not simulate.
-#[derive(Clone, Debug, Default)]
-pub struct ChunkExtras {
-    /// Chunk root keys written back as loaded (structures, PostProcessing,
-    /// InhabitedTime, blending data, ...).
-    pub root: Compound,
-    /// Block entities Horizon does not model.
-    pub block_entities: Vec<Tag>,
-    /// The NBT of the modelled block entities as loaded, to restore the fields and
-    /// detail Horizon does not model when it saves them (`block_entity_nbt::overlay`).
-    pub block_entity_sources: Vec<((i32, i32, i32), Tag)>,
-    /// Every saved block entity's position in the order of the save's list,
-    /// the order `SerializableChunkData` puts them in the chunk's maps.
-    pub block_entity_order: Vec<(i32, i32, i32)>,
-    /// Scheduled ticks (`block_ticks`/`fluid_ticks`): delays relative to the
-    /// save time. Registered with the level's tick scheduler on arrival and
-    /// replaced with the scheduler's pending ticks when saving.
-    pub block_ticks: Vec<SavedTick>,
-    pub fluid_ticks: Vec<SavedTick>,
-    /// Game time written as `LastUpdate`.
-    pub last_update: i64,
-    /// Containers still holding their loot table's roll.
-    pub rolled_loot: Vec<RolledLoot>,
-}
+pub use crate::chunk::{ChunkExtras, RolledLoot, SavedProto};
 
 fn tick_list(ticks: &[SavedTick], name: impl Fn(u32) -> Option<String>) -> Tag {
     Tag::List(
@@ -464,62 +393,9 @@ fn fluid_id(name: &str) -> Option<u32> {
     } as u32)
 }
 
-fn encode_item(stack: &crate::items::ItemStack) -> Vec<(&'static str, Tag)> {
-    let mut entries = vec![
-        ("id", string(&stack.item)),
-        ("count", Tag::Int(stack.count as i32)),
-    ];
-    if let Some(components) = crate::item_data::encode_components(stack) {
-        entries.push(("components", components));
-    }
-    entries
-}
-/// ItemStack.CODEC (id, count, components).
-pub fn item_to_nbt(stack: &crate::items::ItemStack) -> Tag {
-    Tag::compound(encode_item(stack))
-}
-pub fn item_from_nbt(tag: &Tag) -> Option<crate::items::ItemStack> {
-    let id = text(tag.get("id"))?;
-    if id == "minecraft:air" {
-        return None;
-    }
-    let count = number(tag.get("count"))
-        .or_else(|| number(tag.get("Count")))
-        .unwrap_or(1)
-        .max(1) as u32;
-    let (damage, extra) = crate::item_data::decode_components(tag.get("components"));
-    Some(crate::items::ItemStack {
-        item: Arc::from(id.as_str()),
-        count,
-        damage,
-        extra,
-    })
-}
-pub fn encode_items(slots: &[Option<crate::items::ItemStack>]) -> Tag {
-    Tag::List(
-        slots
-            .iter()
-            .enumerate()
-            .filter_map(|(i, s)| {
-                let mut entries = vec![("Slot", Tag::Byte(i as i8))];
-                entries.extend(encode_item(s.as_ref()?));
-                Some(Tag::compound(entries))
-            })
-            .collect(),
-    )
-}
-pub fn decode_items(tag: Option<&Tag>, size: usize) -> Vec<Option<crate::items::ItemStack>> {
-    let mut slots = vec![None; size];
-    if let Some(Tag::List(items)) = tag {
-        for it in items {
-            let slot = number(it.get("Slot")).unwrap_or(0) as u8 as usize;
-            if let Some(cell) = slots.get_mut(slot) {
-                *cell = item_from_nbt(it);
-            }
-        }
-    }
-    slots
-}
+pub use horizon_items::item_nbt::{
+    decode_items, encode_item, encode_items, item_from_nbt, item_to_nbt,
+};
 /// The block entity type ID for the block it sits in (a chest-like container
 /// is a chest, trapped chest or barrel).
 fn block_entity_id(e: &crate::containers::BlockEntity, block: &str) -> String {
@@ -599,6 +475,11 @@ pub fn encode_block_entity(
             }
         }
         BlockEntity::Sculk(s) => entries.extend(s.to_nbt()),
+        // ChiseledBookShelfBlockEntity.saveAdditional.
+        BlockEntity::ChiseledBookshelf(b) => {
+            entries.push(("Items", encode_items(&b.items)));
+            entries.push(("last_interacted_slot", Tag::Int(b.last_slot)));
+        }
         // CampfireBlockEntity.saveAdditional.
         BlockEntity::Campfire(c) => {
             entries.push(("Items", encode_items(&c.items)));
@@ -641,6 +522,16 @@ pub fn encode_block_entity(
             }
             if let Some(name) = &s.custom_name {
                 entries.push(("custom_name", name.clone()));
+            }
+        }
+        // TheEndGatewayBlockEntity.saveAdditional.
+        BlockEntity::EndGateway(g) => {
+            entries.push(("Age", Tag::Long(g.age)));
+            if let Some(exit) = g.exit_portal {
+                entries.push(("exit_portal", Tag::IntArray(exit.to_vec())));
+            }
+            if g.exact_teleport {
+                entries.push(("ExactTeleport", Tag::Byte(1)));
             }
         }
         BlockEntity::Spawner(s) => entries.extend(s.save()),
@@ -702,11 +593,24 @@ fn roll_loaded_loot(
         biome,
     ))
 }
+/// `TheEndGatewayBlockEntity.loadAdditional`.
+pub fn decode_end_gateway(tag: &Tag) -> crate::containers::EndGateway {
+    crate::containers::EndGateway {
+        age: number(tag.get("Age")).unwrap_or(0),
+        exit_portal: tag
+            .get("exit_portal")
+            .and_then(crate::block_entity_nbt::gateway_exit),
+        exact_teleport: number(tag.get("ExactTeleport")).unwrap_or(0) != 0,
+    }
+}
 pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::containers::BlockEntity)> {
     use crate::containers::BlockEntity;
     let int = |k: &str| number(tag.get(k)).map(|v| v as i32);
     let id = text(tag.get("id"))?;
     let pos = (int("x")?, int("y")?, int("z")?);
+    if id == "minecraft:end_gateway" {
+        return Some((pos, BlockEntity::EndGateway(decode_end_gateway(tag))));
+    }
     if id == "minecraft:jukebox" {
         let record = tag.get("RecordItem").and_then(item_from_nbt);
         let ticks = number(tag.get("ticks_since_song_started")).unwrap_or(0);
@@ -814,6 +718,13 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         }
         BlockEntity::Sign(sign) => sign.decode(tag),
         BlockEntity::Sculk(s) => s.load(tag),
+        // ChiseledBookShelfBlockEntity.loadAdditional.
+        BlockEntity::ChiseledBookshelf(b) => {
+            for (slot, item) in decode_items(tag.get("Items"), 6).into_iter().enumerate() {
+                b.items[slot] = item;
+            }
+            b.last_slot = int("last_interacted_slot").unwrap_or(-1);
+        }
         // CampfireBlockEntity.loadAdditional: missing time arrays stay zeros.
         BlockEntity::Campfire(c) => {
             for (slot, item) in decode_items(tag.get("Items"), 4).into_iter().enumerate() {
@@ -846,6 +757,7 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         | BlockEntity::Lectern(_)
         | BlockEntity::Banner(_)
         | BlockEntity::CreakingHeart(_)
+        | BlockEntity::EndGateway(_)
         | BlockEntity::Skull(_)
         | BlockEntity::DaylightDetector => {}
         BlockEntity::Spawner(s) => **s = crate::mobs::spawner::Spawner::load(tag),
@@ -1528,21 +1440,6 @@ fn decode_column(
     Some(chunk)
 }
 
-/// A proto chunk saved before it became final. Decoration writes into a
-/// chunk's neighbours, and decorated chunks wait for theirs, so the chunks
-/// past the finished ones hold writes that generating them again would lose
-/// (whole structure pieces, trees, ores). Vanilla saves its proto chunks too.
-pub struct SavedProto {
-    /// Blocks, scheduled ticks (in `saved`) and post-processing marks.
-    pub column: Chunk,
-    /// Decorated itself (`features`), not only written to by its neighbours
-    /// (`terrain`).
-    pub decorated: bool,
-    /// Block entity data in placement order, with `x`, `y` and `z`.
-    pub block_entities: Vec<Tag>,
-    /// Entities placed by structures, with absolute `Pos`.
-    pub entities: Vec<Tag>,
-}
 pub fn encode_proto(
     proto: &SavedProto,
     registry: &BlockRegistry,
@@ -2742,6 +2639,8 @@ pub struct Level {
     pub xp_seed: i32,
     /// ServerPlayer.seenCredits: the end poem has been shown.
     pub seen_credits: bool,
+    /// Player.lastDeathLocation: the dimension and block of the last death.
+    pub last_death: Option<(String, [i32; 3])>,
     /// Player.active_effects: (id, duration, amplifier, ambient, show_particles).
     pub active_effects: Vec<(String, i32, i32, bool, bool)>,
     /// Player.EnderItems: the ender chest inventory (27 slots).
@@ -2942,6 +2841,15 @@ impl Level {
         self.fall_distance = f("fall_distance").unwrap_or(0.0);
         self.on_ground = n("OnGround").unwrap_or(0) != 0;
         self.seen_credits = n("seenCredits").unwrap_or(0) != 0;
+        self.last_death = p.get("LastDeathLocation").and_then(|d| {
+            let Some(Tag::IntArray(pos)) = d.get("pos") else {
+                return None;
+            };
+            Some((
+                text(d.get("dimension"))?,
+                [*pos.first()?, *pos.get(1)?, *pos.get(2)?],
+            ))
+        });
         if let Some(mode) = n("playerGameType") {
             self.creative = mode == 1;
             self.game_mode = mode as i32;
@@ -3042,6 +2950,7 @@ impl Level {
                 "Pos",
                 "respawn",
                 "recipeBook",
+                "LastDeathLocation",
             ] {
                 map.remove(&JavaString::from(key));
             }
@@ -3168,6 +3077,15 @@ impl Level {
             entries.push(("Pos", doubles(&pos)));
         }
         entries.push(("seenCredits", Tag::Byte(i8::from(self.seen_credits))));
+        if let Some((dimension, pos)) = &self.last_death {
+            entries.push((
+                "LastDeathLocation",
+                Tag::compound([
+                    ("dimension", string(dimension)),
+                    ("pos", Tag::IntArray(pos.to_vec())),
+                ]),
+            ));
+        }
         // A respawn point other than the world spawn: an anchor elsewhere, or a bed.
         if let Some((dimension, block, yaw, forced)) = &self.respawn_elsewhere {
             let mut respawn = vec![
@@ -4641,6 +4559,79 @@ mod tests {
         assert_eq!(back.components, banner.components);
     }
     use super::*;
+
+    #[test]
+    fn end_gateway_block_entity_round_trips() {
+        use crate::containers::{BlockEntity, EndGateway};
+        let plain = BlockEntity::for_block("minecraft:end_gateway").expect("gateway");
+        assert!(matches!(&plain, BlockEntity::EndGateway(g) if *g == EndGateway::default()));
+        for exit in [None, Some([8, 100, 0])] {
+            for exact in [false, true] {
+                let gateway = EndGateway {
+                    age: 201,
+                    exit_portal: exit,
+                    exact_teleport: exact,
+                };
+                let tag = encode_block_entity(
+                    (702, 100, 0),
+                    &BlockEntity::EndGateway(gateway.clone()),
+                    "minecraft:end_gateway",
+                );
+                assert_eq!(
+                    text(tag.get("id")).as_deref(),
+                    Some("minecraft:end_gateway")
+                );
+                assert_eq!(tag.get("Age"), Some(&Tag::Long(201)));
+                assert_eq!(
+                    tag.get("exit_portal"),
+                    exit.map(|p| Tag::IntArray(p.to_vec())).as_ref()
+                );
+                assert_eq!(
+                    tag.get("ExactTeleport"),
+                    exact.then_some(Tag::Byte(1)).as_ref()
+                );
+                let (pos, back) = decode_block_entity(&tag).expect("gateway");
+                assert_eq!(pos, (702, 100, 0));
+                assert!(matches!(back, BlockEntity::EndGateway(g) if g == gateway));
+            }
+        }
+    }
+
+    #[test]
+    fn end_gateway_exit_requires_spawnable_bounds() {
+        for (exit, valid) in [
+            (vec![-30_000_000, -20_000_000, -30_000_000], true),
+            (vec![29_999_999, 19_999_999, 29_999_999], true),
+            (vec![30_000_000, 0, 0], false),
+            (vec![0, 0, 30_000_000], false),
+            (vec![-30_000_001, 0, 0], false),
+            (vec![0, 0, -30_000_001], false),
+            (vec![0, 20_000_000, 0], false),
+            (vec![0, -20_000_001, 0], false),
+            (vec![i32::MIN, 0, 0], false),
+            (vec![0, 100], false),
+        ] {
+            let tag = Tag::compound([
+                ("id", string("minecraft:end_gateway")),
+                ("x", Tag::Int(702)),
+                ("y", Tag::Int(100)),
+                ("z", Tag::Int(0)),
+                ("exit_portal", Tag::IntArray(exit)),
+            ]);
+            let (_, crate::containers::BlockEntity::EndGateway(g)) =
+                decode_block_entity(&tag).unwrap()
+            else {
+                panic!("gateway");
+            };
+            assert_eq!(g.exit_portal.is_some(), valid);
+            let canonical = crate::block_entity_nbt::canonical(&tag).expect("gateway NBT");
+            assert_eq!(canonical.get("exit_portal").is_some(), valid);
+        }
+        assert_eq!(
+            decode_end_gateway(&Tag::Compound(Compound::new())),
+            crate::containers::EndGateway::default()
+        );
+    }
 
     #[test]
     fn skull_block_entity_keeps_its_profile() {
