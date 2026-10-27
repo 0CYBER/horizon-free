@@ -845,14 +845,12 @@ impl Mob {
         if self.horizontal_collision
             && w.no_collision(ahead)
             && !w.contains_any_liquid(ahead)
-            && !w
-                .others_near(wide)
-                .any(|s| {
-                    s.id != self.id
-                        && s.alive
-                        && s.species == super::Species::Shulker
-                        && s.bounds.intersects(wide)
-                })
+            && !w.others_near(wide).any(|s| {
+                s.id != self.id
+                    && s.alive
+                    && s.species == super::Species::Shulker
+                    && s.bounds.intersects(wide)
+            })
         {
             self.velocity.y = f64::from(0.3_f32);
         }
