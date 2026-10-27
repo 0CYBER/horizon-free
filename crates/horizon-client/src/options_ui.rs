@@ -45,6 +45,16 @@ pub(crate) enum Kind {
     Slider(f32),
     Cycle,
 }
+/// `PlayerModelPart` keys, in vanilla's bit order (`modelPart_*` in options.txt).
+const MODEL_PART_KEYS: [&str; 7] = [
+    "modelPart_cape",
+    "modelPart_jacket",
+    "modelPart_left_sleeve",
+    "modelPart_right_sleeve",
+    "modelPart_left_pants_leg",
+    "modelPart_right_pants_leg",
+    "modelPart_hat",
+];
 /// The Accessibility Settings page:
 /// `AccessibilityOptionsScreen.options`, with the Controls link inserted separately.
 pub(crate) const ACCESSIBILITY_OPTIONS: &[Opt] = &[
@@ -118,6 +128,7 @@ impl Opt {
             Opt::RotateWithMinecarts => "rotateWithMinecart",
             Opt::HighContrastBlockOutlines => "highContrastBlockOutline",
             Opt::MusicFrequency => "musicFrequency",
+            Opt::ModelPart(i) => MODEL_PART_KEYS[i],
             _ => return None,
         })
     }
@@ -213,6 +224,16 @@ impl Opt {
             Opt::PadGlyphs => "horizon.options.button_glyphs",
             Opt::PadMenuNav => "horizon.options.menu_navigation",
             Opt::PadKeyboard => "horizon.options.on_screen_keyboard",
+            Opt::ModelPart(i) => [
+                "options.modelPart.cape",
+                "options.modelPart.jacket",
+                "options.modelPart.left_sleeve",
+                "options.modelPart.right_sleeve",
+                "options.modelPart.left_pants_leg",
+                "options.modelPart.right_pants_leg",
+                "options.modelPart.hat",
+            ][i],
+            Opt::MainHand => "options.mainHand",
         }
     }
     pub(crate) fn kind(self, s: &Settings) -> Kind {
@@ -448,9 +469,15 @@ impl Opt {
             Opt::HideLightningFlashes => on_off(s.file.bool("hideLightningFlashes")),
             Opt::MonochromeLogo => on_off(s.file.bool("darkMojangStudiosBackground")),
             Opt::HideSplashTexts => on_off(s.file.bool("hideSplashTexts")),
-            Opt::HideMatchedNames | Opt::OnlySecureChat | Opt::SaveChatDrafts => {
-                on_off(s.file.bool(self.file_key().unwrap()))
-            }
+            Opt::HideMatchedNames
+            | Opt::OnlySecureChat
+            | Opt::SaveChatDrafts
+            | Opt::ModelPart(_) => on_off(s.file.bool(self.file_key().unwrap())),
+            Opt::MainHand => tr(if s.main_hand_left {
+                "options.mainHand.left"
+            } else {
+                "options.mainHand.right"
+            }),
             Opt::NarratorHotkey => on_off(s.file.bool("narratorHotkey")),
             Opt::RotateWithMinecarts => on_off(s.file.bool("rotateWithMinecart")),
             Opt::HighContrastBlockOutlines => on_off(s.file.bool("highContrastBlockOutline")),
@@ -654,7 +681,8 @@ impl Opt {
             | Opt::HideSplashTexts
             | Opt::HideMatchedNames
             | Opt::OnlySecureChat
-            | Opt::SaveChatDrafts => {
+            | Opt::SaveChatDrafts
+            | Opt::ModelPart(_) => {
                 let key = self.file_key().unwrap();
                 s.file
                     .set(key, crate::options_file::V::Bool(!s.file.bool(key)));
@@ -701,6 +729,7 @@ impl Opt {
                 s.file
                     .set("musicFrequency", crate::options_file::V::Int(i32::from(n)));
             }
+            Opt::MainHand => s.main_hand_left = !s.main_hand_left,
             Opt::ForceUnicode => s.force_unicode = !s.force_unicode,
             Opt::JapaneseGlyphs => s.japanese_glyphs = !s.japanese_glyphs,
             Opt::PadEnabled => s.controller.enabled = !s.controller.enabled,
@@ -833,6 +862,8 @@ pub enum Page {
     Horizon,
     /// AI Agent: agent control on or off, whether an agent is connected, the connection details.
     Agent,
+    /// SkinCustomizationScreen: the skin layers and Main Hand.
+    Skin,
 }
 #[derive(Clone, Debug, PartialEq)]
 enum Act {
@@ -1141,6 +1172,7 @@ impl OptionsUi {
             Page::Main => "options.title",
             Page::Video => "options.videoTitle",
             Page::Sound => "options.sounds.title",
+            Page::Skin => "options.skinCustomisation.title",
             Page::Controls => "controls.title",
             Page::KeyBinds => "controls.keybinds.title",
             Page::Mouse => "options.mouse_settings.title",
@@ -1371,6 +1403,12 @@ impl OptionsUi {
                 rows.extend(pairs(&[Opt::MusicFrequency]));
                 rows
             }
+            Page::Skin => {
+                // SkinCustomizationScreen: the seven layers, then Main Hand.
+                let mut opts: Vec<Opt> = (0..MODEL_PART_KEYS.len()).map(Opt::ModelPart).collect();
+                opts.push(Opt::MainHand);
+                pairs(&opts)
+            }
             Page::Controls => {
                 let mut rows = vec![Row::Buttons(
                     button(
@@ -1575,7 +1613,7 @@ impl OptionsUi {
                     Act::None,
                 )));
                 let entries = [
-                    ("options.skinCustomisation", None),
+                    ("options.skinCustomisation", Some(Page::Skin)),
                     ("options.sounds", Some(Page::Sound)),
                     ("options.video", Some(Page::Video)),
                     ("options.controls", Some(Page::Controls)),
