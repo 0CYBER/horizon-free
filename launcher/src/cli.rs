@@ -564,6 +564,16 @@ enum Cmd {
         #[arg(allow_hyphen_values = true)]
         args: Option<String>,
     },
+    /// Upload an instance's latest.log to mclo.gs (a paste service for Minecraft logs) and print
+    /// its link, for a bug report: only when the player asks. The home folder, the user name and
+    /// the account names are taken out first; the link expires after 90 days unread
+    ShareLog {
+        /// The instance (default: the selected one)
+        #[arg(long)]
+        instance: Option<String>,
+    },
+    /// Delete a log shared with share-log: the "<id>:<token>" it printed
+    UnshareLog { shared: String },
     /// Print the end of the game's log (logs/latest.log in the game folder), or its newest crash
     /// report
     Logs {
@@ -1055,6 +1065,41 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             } else {
                 println!("Game arguments: {line}");
             }
+        }
+        Cmd::ShareLog { instance } => {
+            use horizon_launcher::game_log;
+            let i = match instance {
+                Some(name) => instances::find(&name)?,
+                None => instances::selected(),
+            };
+            let path = i.home.join("logs/latest.log");
+            let text =
+                std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let names = game_log::names(&[&i.home, &backend::game_home()]);
+            let text = game_log::private(&text, dirs::home_dir().as_deref(), &names);
+            let shared = game_log::share(&text)?;
+            if as_json {
+                json(serde_json::json!({
+                    "url": shared.url, "delete": format!("{}:{}", shared.id, shared.token),
+                }));
+            } else {
+                println!("{}", shared.url);
+                println!(
+                    "Delete it: horizon-launcher unshare-log {}:{}",
+                    shared.id, shared.token
+                );
+            }
+        }
+        Cmd::UnshareLog { shared } => {
+            let (id, token) = shared
+                .split_once(':')
+                .ok_or("Give the \"<id>:<token>\" share-log printed.")?;
+            horizon_launcher::game_log::unshare(&horizon_launcher::game_log::Shared {
+                url: String::new(),
+                id: id.into(),
+                token: token.into(),
+            })?;
+            println!("Deleted the shared log {id}.");
         }
         Cmd::Logs { lines, crash } => {
             let (path, text) = backend::read_logs(lines, crash)?;

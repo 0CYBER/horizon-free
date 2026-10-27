@@ -38,10 +38,12 @@ pub(super) enum Field {
     /// Home's Multiplayer section's (`multiplayer_page.rs`).
     ServerName,
     ServerAddress,
+    /// Home's Console's search (`console_page.rs`).
+    ConsoleSearch,
 }
 
 impl Field {
-    const ALL: [Field; 13] = [
+    const ALL: [Field; 14] = [
         Field::Name,
         Field::Seed,
         Field::Players,
@@ -55,6 +57,7 @@ impl Field {
         Field::InstanceGroup,
         Field::ServerName,
         Field::ServerAddress,
+        Field::ConsoleSearch,
     ];
 }
 
@@ -1031,7 +1034,7 @@ impl Launcher {
             Field::Port => self.save_port(),
             Field::Token => self.save_token(),
             Field::Email => self.invite_friend(),
-            Field::InstanceName | Field::InstanceGroup => {}
+            Field::InstanceName | Field::InstanceGroup | Field::ConsoleSearch => {}
             Field::ServerName | Field::ServerAddress => self.add_server(),
         }
     }

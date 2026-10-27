@@ -153,6 +153,26 @@ Show or set the extra arguments the game starts with (for example --server-threa
 
 MCP: `game_args`.
 
+## `horizon-launcher share-log`
+
+Upload an instance's latest.log to mclo.gs (a paste service for Minecraft logs) and print its link, for a bug report: only when the player asks. The home folder, the user name and the account names are taken out first; the link expires after 90 days unread.
+
+    horizon-launcher share-log
+
+- `--instance`: The instance (default: the selected one)
+
+MCP: `share_log`, only when the player asks.
+
+## `horizon-launcher unshare-log`
+
+Delete a log shared with share-log: the "<id>:<token>" it printed.
+
+    horizon-launcher unshare-log <SHARED>
+
+- `SHARED`
+
+MCP: `unshare_log`, needs `confirm: true`.
+
 ## `horizon-launcher logs`
 
 Print the end of the game's log (logs/latest.log in the game folder), or its newest crash report.

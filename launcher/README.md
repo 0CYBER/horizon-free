@@ -100,6 +100,13 @@ The opening, then Play ([clip](docs/opening.webm)):
   pack into the selected instance. A data pack is pointed at the world rows, and the Packs section
   and the world rows keep taking their own drops. A note in the corner says what happened.
   `horizon-launcher instance import <file>`.
+- **Console**: Home's Console shows the game's output of this run as it comes: a search (every
+  word, any case), Follow to keep the newest line in view, Copy, and Open logs folder. Warnings
+  and errors stand out. **Share log…** uploads the log to [mclo.gs](https://mclo.gs), a paste
+  service for Minecraft logs, only after the player confirms; the home folder, the user name and
+  the account names are taken out first (`horizon_launcher::game_log`), and **Delete it** removes
+  the paste. `horizon-launcher share-log [--instance]` and `unshare-log <id:token>`;
+  `HORIZON_LAUNCHER_PASTE_URL` points it at a test server.
 - **Worlds**: Home lists the selected instance's worlds (picture, mode, version, last played,
   size). **Back up** zips one into the instance's `backups/` as the game's Make Backup does
   (`<date>_<time>_<folder>.zip`); **Copy** puts "<name> (1)" beside it; **Delete** moves it to the
