@@ -126,6 +126,19 @@ impl Game<'_> {
         if !equine::is_equine(species) || !m.alive() || Some(m.id) == self.riding {
             return false;
         }
+        // AbstractHorse.mobInteract: a horse a mob rides (`isVehicle`) has no
+        // seat, inventory or feeding to give. Camels seat two and check their
+        // passengers themselves.
+        let id = m.id;
+        if !matches!(species, Species::Camel | Species::CamelHusk)
+            && self
+                .mobs
+                .iter()
+                .any(|p| p.extra.mount == Some(id) && !p.removed && p.alive())
+        {
+            return false;
+        }
+        let m = &self.mobs[index];
         // AbstractHorse.mobInteract: shift + use opens a tamed adult's inventory.
         if !m.is_baby()
             && m.extra.tame
@@ -215,10 +228,12 @@ impl Game<'_> {
             return false;
         }
         let mut used = false;
+        let mut loved = false;
         if love && m.extra.tame && m.extra.age == 0 && m.extra.in_love <= 0 {
             m.extra.in_love = 600;
             m.extra.love_player = true;
             used = true;
+            loved = true;
         }
         if m.health < m.attrs.max_health && heal > 0.0 {
             m.health = (m.health + heal).min(m.attrs.max_health);
@@ -238,6 +253,7 @@ impl Game<'_> {
         // eating(): the mouth opens and the horse eats.
         m.anim.v[2] = 1.0;
         let at = m.center();
+        let id = m.id;
         let sound = match m.species() {
             Species::Camel => "minecraft:entity.camel.eat",
             Species::CamelHusk => "minecraft:entity.camel_husk.eat",
@@ -247,16 +263,17 @@ impl Game<'_> {
         };
         let pitch = (self.world.random.next_float() - self.world.random.next_float()) * 0.2 + 1.0;
         self.audio.play(sound, Some(at), 1.0, pitch);
+        // Animal.setInLove: entity event 18.
+        if loved {
+            self.mob_event_particles(id, 18);
+        }
         self.consume_held();
         true
     }
     /// `LocalPlayer.aiStep`'s riding jump: the bar charges while jump is
     /// held; on release, the jump's strength (0 when there is none).
     pub(super) fn charge_mount_jump(&mut self, i: usize, keys: Keys) -> f32 {
-        // PlayerRideableJumping: horses, camels and nautili (the dash).
-        let saddled = self.mobs[i].extra.saddled
-            && (equine::is_equine(self.mobs[i].species())
-                || horizon_client::mobs::nautilus::is_nautilus(self.mobs[i].species()));
+        let saddled = self.mobs[i].extra.saddled && Self::jumps(self.mobs[i].species());
         let mut jump = 0.0;
         if saddled {
             let st = &mut self.mount;
@@ -452,21 +469,28 @@ impl Game<'_> {
                     m.extra.owner = owner;
                     m.persistent = true;
                     // AbstractHorse.tameWithName: entity event 7, spawnTamingParticles(true).
-                    self.particles_around_mob(
-                        mob,
-                        "heart",
-                        horizon_client::particles::Burst::TAMING,
-                    );
+                    self.mob_event_particles(mob, 7);
                 }
             }
-            MobEvent::Buck { mob } if self.riding == Some(mob) => self.dismount_mount(),
+            MobEvent::Buck { mob } => {
+                if self.riding == Some(mob) {
+                    self.dismount_mount();
+                }
+                // RunAroundLikeCrazyGoal.tick: entity event 6, smoke.
+                self.mob_event_particles(mob, 6);
+            }
             _ => {}
         }
     }
-    /// `Player.jumpableVehicle`: a saddled mount that jumps.
+    /// `PlayerRideableJumping`: horses, camels and nautili (the dash).
+    fn jumps(species: Species) -> bool {
+        equine::is_equine(species) || horizon_client::mobs::nautilus::is_nautilus(species)
+    }
+    /// `Player.jumpableVehicle`: a saddled mount that jumps (not a pig or a
+    /// strider, which a saddle only steers).
     pub(super) fn jumpable_mount(&self) -> bool {
         self.mount_index()
-            .is_some_and(|i| self.mobs[i].extra.saddled)
+            .is_some_and(|i| self.mobs[i].extra.saddled && Self::jumps(self.mobs[i].species()))
     }
     /// `willPrioritizeJumpInfo`: charging a jump or recharging.
     pub(super) fn mount_jumping(&self) -> bool {
@@ -491,8 +515,13 @@ impl Game<'_> {
         let draws = horizon_client::hud_layout::vehicle_health(w, h, hearts, m.health);
         horizon_client::hud_layout::paint(batch, atlas, &draws);
         if jump_bar {
-            // JumpableVehicleBar: the cooldown shows while the jump recharges.
-            let cooldown = i32::from(self.mount.jump_ticks < 0);
+            // JumpableVehicleBar: `getJumpCooldown`, which only the camel's and
+            // the nautilus' dash have; a horse always shows the progress.
+            let cooldown = i32::from(
+                self.mount.jump_ticks < 0
+                    && (matches!(m.species(), Species::Camel | Species::CamelHusk)
+                        || horizon_client::mobs::nautilus::is_nautilus(m.species())),
+            );
             let draws =
                 horizon_client::hud_overlays::jump_bar(w, h, cooldown, self.mount.jump_scale);
             horizon_client::hud_layout::paint(batch, atlas, &draws);

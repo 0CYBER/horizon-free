@@ -433,6 +433,29 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         self.game_event(pos, "minecraft:block_destroy");
         self.remove_block(pos, false)
     }
+    /// `IceBlock.playerDestroy` (after the drops): mined ice turns into water
+    /// when it sits over a solid block or a liquid, unless the tool prevents
+    /// ice melting (silk touch). In the nether, where water evaporates, the
+    /// block stays air.
+    pub(crate) fn ice_destroyed_by_player(
+        &mut self,
+        pos: BlockPos,
+        destroyed: BlockStateId,
+        prevents_melting: bool,
+    ) {
+        let b = self.b;
+        if !b.data(destroyed).is(Class::Ice)
+            || prevents_melting
+            || self.level.dimension() == super::Dimension::Nether
+        {
+            return;
+        }
+        let below = self.below_state(pos);
+        if b.in_set(below, &b.tags.blocks_motion) || b.liquid(below) {
+            let water = b.default_of(b.named.water);
+            self.set_block_and_update(pos, water);
+        }
+    }
     /// `entityInside` for entity-sensing blocks.
     pub(crate) fn entity_inside(&mut self, pos: BlockPos) {
         let b = self.b;
@@ -446,6 +469,13 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         } else if data.is(Class::DetectorRail) {
             if !b.table.bool(state, b.props.powered) {
                 self.detector_rail_check_pressed(pos, state);
+            }
+        } else if data.is(Class::Button) {
+            // ButtonBlock.entityInside: a wooden button an arrow is inside.
+            if data.set_type.as_ref().is_some_and(|s| s.arrows)
+                && !b.table.bool(state, b.props.powered)
+            {
+                self.button_check_pressed(pos, state);
             }
         } else if data.is(Class::TripWire)
             && !b.table.bool(state, b.props.powered)

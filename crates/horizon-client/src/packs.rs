@@ -4,9 +4,9 @@
 //! and an overlay resource root that layers the enabled packs over the
 //! vanilla resources (later packs win), so every loader sees one tree.
 mod cache;
-pub mod pattern;
 use crate::text::Style;
 use crate::{text::Text, zip::Zip};
+pub use horizon_client_core::pattern;
 use pattern::Pattern;
 use std::{
     collections::{BTreeMap, BTreeSet},

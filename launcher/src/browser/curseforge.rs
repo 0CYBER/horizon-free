@@ -25,6 +25,7 @@ fn class(kind: Kind) -> u64 {
         Kind::Modpack => 4471,
         Kind::Mod => 6,
         Kind::Shader => 6552,
+        Kind::DataPack => 6945,
     }
 }
 

@@ -52,6 +52,8 @@ pub struct StackData {
     pub pot_decorations: Option<Box<[Option<ItemStack>; 4]>>,
     /// `minecraft:bundle_contents`.
     pub bundle_contents: Vec<ItemStack>,
+    /// `BundleContents.selectedItem`: runtime only, never saved or sent.
+    pub bundle_selected: BundleSelected,
     /// `minecraft:suspicious_stew_effects`: (effect id, duration).
     pub stew_effects: Vec<(Arc<str>, i32)>,
     /// `minecraft:map_post_processing`: 0 lock, 1 scale.
@@ -59,6 +61,20 @@ pub struct StackData {
     /// Components Horizon does not model (lore, custom data, item name,
     /// max stack size...), kept as their saved values in key order.
     pub other: Vec<(String, Tag)>,
+}
+/// A bundle's selected item index (-1: none). Like vanilla's
+/// `BundleContents.equals` it is left out when stacks are compared.
+#[derive(Clone, Copy, Debug)]
+pub struct BundleSelected(pub i32);
+impl Default for BundleSelected {
+    fn default() -> Self {
+        Self(-1)
+    }
+}
+impl PartialEq for BundleSelected {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 /// The components `components_tag` writes from modelled fields.
 const MODELLED: &[&str] = &[
@@ -89,6 +105,16 @@ impl StackData {
     /// An unmodelled component's saved value.
     pub fn other(&self, id: &str) -> Option<&Tag> {
         self.other.iter().find(|(k, _)| k == id).map(|(_, v)| v)
+    }
+    /// `SetNameFunction.run`: a loot text component stored as `custom_name`
+    /// (plain text, as modelled) or as the unmodelled `item_name`.
+    pub fn set_loot_name(&mut self, id: &str, text: &serde_json::Value) {
+        let tag = crate::scoreboard::json_to_tag(text);
+        if id == "minecraft:custom_name" {
+            self.custom_name = read_text(&tag);
+        } else {
+            self.set_other(id, Some(tag));
+        }
     }
     /// Set (or with None remove) an unmodelled component.
     pub fn set_other(&mut self, id: &str, value: Option<Tag>) {
@@ -127,6 +153,9 @@ pub struct WrittenBook {
     pub author: String,
     pub generation: u8,
     pub pages: Vec<String>,
+    /// Each page's component when it is not a plain string, so that its
+    /// click events survive; empty or one per page.
+    pub page_tags: Vec<Tag>,
 }
 impl StackData {
     pub fn is_empty(&self) -> bool {
@@ -197,6 +226,19 @@ impl ItemStack {
     }
     pub fn has_any_enchantments(&self) -> bool {
         !self.enchantments().is_empty() || !self.stored_enchantments().is_empty()
+    }
+    /// `ItemStack.hasFoil`: an explicit `minecraft:enchantment_glint_override`
+    /// component wins, then the item's default override (`item_glint`), then a
+    /// non-empty `minecraft:enchantments` component (`Item.isFoil` is
+    /// `ItemStack.isEnchanted`; stored book enchantments do not count).
+    pub fn has_foil(&self, item_glint: bool) -> bool {
+        if let Some(Tag::Byte(flag)) = self
+            .data()
+            .and_then(|d| d.other("minecraft:enchantment_glint_override"))
+        {
+            return *flag != 0;
+        }
+        item_glint || !self.enchantments().is_empty()
     }
     pub fn repair_cost(&self) -> u32 {
         self.data().map_or(0, |d| d.repair_cost)
@@ -293,6 +335,21 @@ fn read_levels(t: Option<&Tag>) -> Levels {
 }
 /// A text component as stored by vanilla: a plain string or `{"text": ...}`.
 /// A `Filterable<String/Component>`: the value itself or `{raw: value}`.
+/// `ComponentSerialization.CODEC`'s short form: a plain text component with
+/// no style and no siblings is written as its string.
+fn plain_component(t: &Tag) -> Tag {
+    if let Tag::Compound(c) = t
+        && let Some(text @ Tag::String(_)) = c.get(&"text".into())
+        && c.iter().all(|(k, v)| {
+            k.to_string_lossy() == "text"
+                || (k.to_string_lossy() == "type"
+                    && matches!(v, Tag::String(s) if s.to_string_lossy() == "text"))
+        })
+    {
+        return text.clone();
+    }
+    t.clone()
+}
 fn filterable_text(t: &Tag) -> Option<String> {
     match t.get("raw") {
         Some(raw) => read_text(raw),
@@ -305,7 +362,9 @@ fn read_text(t: &Tag) -> Option<String> {
         // A component's root `text` may be empty with the visible words in
         // `extra` (every legacy display name ViaVersion produces looks like
         // this), so flatten the whole component instead of reading one key.
-        Tag::Compound(_) => Some(crate::entity_nbt::name_text(t).plain()),
+        // ComponentSerialization.CODEC also takes a list (its first element
+        // styling the rest), as servers behind ViaVersion send book pages.
+        Tag::Compound(_) | Tag::List(_) => Some(crate::entity_nbt::name_text(t).plain()),
         _ => None,
     }
 }
@@ -522,11 +581,14 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
             ));
         }
         if let Some(w) = &d.written {
-            let pages = w
-                .pages
-                .iter()
-                .map(|p| raw(Tag::String(p.as_str().into())))
-                .collect();
+            let pages = if w.page_tags.len() == w.pages.len() {
+                w.page_tags.iter().cloned().map(raw).collect()
+            } else {
+                w.pages
+                    .iter()
+                    .map(|p| raw(Tag::String(p.as_str().into())))
+                    .collect()
+            };
             entries.push((
                 "minecraft:written_book_content",
                 Tag::compound({
@@ -707,6 +769,13 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
                     Some(Tag::List(pages)) => pages.iter().filter_map(filterable_text).collect(),
                     _ => Vec::new(),
                 },
+                page_tags: match b.get("pages") {
+                    Some(Tag::List(pages)) => pages
+                        .iter()
+                        .map(|p| plain_component(p.get("raw").unwrap_or(p)))
+                        .collect(),
+                    _ => Vec::new(),
+                },
             }),
         fireworks: c
             .get("minecraft:fireworks")
@@ -791,6 +860,7 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
                 Arc::from(t.get("pattern").and_then(string)?.as_str()),
             ))
         }),
+        bundle_selected: BundleSelected::default(),
         other: Vec::new(),
     };
     let mut data = data;
@@ -896,6 +966,37 @@ mod tests {
         assert_eq!(
             extra.and_then(|d| d.custom_name.clone()).as_deref(),
             Some("Games Right click")
+        );
+    }
+
+    #[test]
+    fn written_book_pages_may_be_component_lists() {
+        // A page as Hypixel sends it through ViaVersion: a list, not a compound.
+        let page = Tag::List(vec![
+            Tag::compound([("text", Tag::String("".into()))]),
+            Tag::compound([("text", Tag::String("Please read ".into()))]),
+            Tag::compound([("text", Tag::String("the rules".into()))]),
+        ]);
+        let book = Tag::compound([
+            (
+                "title",
+                Tag::compound([("raw", Tag::String("Rules".into()))]),
+            ),
+            ("author", Tag::String("Server".into())),
+            (
+                "pages",
+                Tag::List(vec![
+                    page,
+                    Tag::compound([("raw", Tag::String("Two".into()))]),
+                ]),
+            ),
+        ]);
+        let components = Tag::compound([("minecraft:written_book_content", book)]);
+        let (_, extra) = decode_components(Some(&components));
+        let pages = extra.and_then(|d| d.written.clone()).map(|w| w.pages);
+        assert_eq!(
+            pages,
+            Some(vec!["Please read the rules".to_owned(), "Two".to_owned()])
         );
     }
 
