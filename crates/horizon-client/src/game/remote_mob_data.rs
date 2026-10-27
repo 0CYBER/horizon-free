@@ -4,8 +4,9 @@
 //! own simulation, which a client of a server doesn't run.
 use super::Game;
 use horizon_client::mobs::render::{PROFESSIONS, VILLAGER_TYPES};
-use horizon_client::mobs::{Mob, Species, Who, bat, tame};
-use horizon_protocol::entity_data::Value;
+use horizon_client::mobs::{Mob, Species, Who, bat, camel, sniffer, sync, tame};
+use horizon_client::particles::{ParticleOptions, ParticleType};
+use horizon_protocol::entity_data::{Particle, ParticleData, Value};
 use horizon_protocol::registry::Builtin;
 
 /// The values `apply` takes from one SetEntityData packet, by vanilla's entry
@@ -16,10 +17,18 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
     let baby = super::lan::baby_index(&m.kind.id);
     for (index, _, value) in values {
         match (*index, value) {
+            // Entity.DATA_POSE: a player's or mannequin's box follows it.
+            (6, Value::Id(pose))
+                if matches!(&*m.kind.id, "minecraft:player" | "minecraft:mannequin") =>
+            {
+                m.extra.avatar_pose = horizon_client::pose::Pose::from_id(*pose);
+            }
             // Entity.DATA_SHARED_FLAGS_ID's FLAG_ONFIRE: Entity.isOnFire on a
             // client, which draws the flames. A client doesn't count the
             // fire down: the flag goes off when the server's fire is out.
             (0, Value::Byte(flags)) => m.fire_ticks = i32::from(flags & 1),
+            // Entity.DATA_POSE: the pose the species animates by.
+            (6, Value::Id(pose)) => sync::set_pose(m, (*pose).clamp(0, 17) as u8),
             // LivingEntity.DATA_LIVING_ENTITY_FLAGS: using an item 1, in the
             // off hand 2. The flag starts and stops the use; the client ticks
             // the count itself (a bow's pull follows it).
@@ -34,6 +43,10 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             // LivingEntity.DATA_HEALTH_ID: the boss bars and the death
             // animation follow it.
             (9, Value::Float(health)) => m.health = *health,
+            // LivingEntity.DATA_EFFECT_PARTICLES and DATA_EFFECT_AMBIENCE_ID:
+            // the swirls of its effects (`tickEffects` draws them).
+            (10, Value::Particles(list)) => m.extra.effect_particles = swirls(list, builtin),
+            (11, Value::Bool(ambient)) => m.extra.effect_ambient = *ambient,
             // Mob.DATA_MOB_FLAGS_ID: no AI 1, left-handed 2, aggressive 4.
             // Mob.isAggressive draws the illagers' and skeletons' attack
             // poses and the vindicator's axe.
@@ -59,6 +72,8 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
                     Who::Mob(*target as u32)
                 });
             }
+            // PolarBear.DATA_STANDING_ID: the client animates the rearing.
+            (Species::PolarBear, 18, Value::Bool(standing)) => m.extra.flag = *standing,
             // Bat.DATA_ID_FLAGS: resting in bit 0.
             (Species::Bat, 16, Value::Byte(flags)) => bat::set_resting(m, flags & 1 != 0),
             // Sheep.DATA_WOOL_ID: the colour in the low nibble, 16 sheared.
@@ -66,6 +81,14 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
                 m.extra.color = (*wool & 15) as u8;
                 m.extra.sheared = wool & 16 != 0;
             }
+            // SnowGolem.DATA_PUMPKIN_ID: 16 while the pumpkin is on.
+            (Species::SnowGolem, 16, Value::Byte(flags)) => m.extra.sheared = flags & 16 == 0,
+            // MushroomCow.DATA_TYPE: 0 red, 1 brown.
+            (Species::Mooshroom, 17, Value::Int(variant)) => {
+                m.extra.variant = (*variant == 1) as u8
+            }
+            // Piglin.DATA_IS_DANCING: the dance pose.
+            (Species::Piglin, 19, Value::Bool(dancing)) => m.extra.scratch[0] = i32::from(*dancing),
             // TamableAnimal.DATA_FLAGS_ID: sitting 1, tame 4.
             (Species::Wolf | Species::Cat | Species::Parrot, 18, Value::Byte(flags)) => {
                 m.extra.sitting = flags & 1 != 0;
@@ -78,6 +101,29 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             // AbstractCubeMob.ID_SIZE: its size and box (refreshDimensions).
             (Species::Slime | Species::MagmaCube, 18, Value::Int(size)) => {
                 m.extra.size = (*size).clamp(1, 127);
+            }
+            // Warden.CLIENT_ANGER_LEVEL: the heartbeat's pace.
+            (Species::Warden, 16, Value::Int(anger)) => {
+                if let Some(st) = m.extra.warden.as_mut() {
+                    st.client_anger = *anger;
+                }
+            }
+            // Sniffer.DATA_STATE (after AgeableMob's two): the animation
+            // follows it in `sync::client_tick`.
+            (Species::Sniffer, 18, Value::Id(state)) => {
+                sniffer::set_state(m, (*state).clamp(0, 6) as u8);
+            }
+            // Shulker.DATA_ATTACH_FACE_ID, DATA_PEEK_ID and DATA_COLOR_ID.
+            (Species::Shulker, 16, Value::Id(face)) => m.extra.variant3 = (*face).clamp(0, 5) as u8,
+            (Species::Shulker, 17, Value::Byte(peek)) => m.extra.counter = i32::from(*peek),
+            (Species::Shulker, 18, Value::Byte(color)) => m.extra.color = *color as u8,
+            // Camel.DASH and LAST_POSE_CHANGE_TICK (after AbstractHorse's
+            // flags).
+            (Species::Camel | Species::CamelHusk, 19, Value::Bool(dashing)) => {
+                camel::set_dashing(m, *dashing);
+            }
+            (Species::Camel | Species::CamelHusk, 20, Value::Long(tick)) => {
+                camel::set_synced_pose_tick(m, *tick);
             }
             // Pillager.IS_CHARGING_CROSSBOW: the charge pose (Raider's
             // IS_CELEBRATING takes 16).
@@ -98,6 +144,30 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             _ => {}
         }
     }
+}
+
+/// The options of a synched particle list: an entity effect carries its ARGB
+/// colour, the omens none.
+fn swirls(list: &[Particle], builtin: &Builtin) -> Vec<ParticleOptions> {
+    let channel = |argb: i32, shift: u32| ((argb >> shift) & 255) as f32 / 255.0;
+    list.iter()
+        .filter_map(|p| {
+            let name = builtin.get("minecraft:particle_type")?.name(p.id)?;
+            let ty = ParticleType::from_name(name)?;
+            Some(match p.data {
+                Some(ParticleData::Color(argb)) => ParticleOptions::colored(
+                    ty,
+                    [
+                        channel(argb, 16),
+                        channel(argb, 8),
+                        channel(argb, 0),
+                        channel(argb, 24),
+                    ],
+                ),
+                _ => ParticleOptions::simple(ty),
+            })
+        })
+        .collect()
 }
 
 /// VillagerData as the network sends it: the type and the profession by

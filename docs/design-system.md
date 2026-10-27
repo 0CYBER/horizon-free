@@ -170,9 +170,12 @@ of the main action. The game's menus keep `LIGHT` and `DARK`.
   all rights reserved, so it is not shown.
 - **Partner banner**: the one exception to shipping no third-party pictures. Sculk, a server host,
   sponsors Horizon: its banner (`launcher/assets/sculk-banner.webp`, `launcher/src/partner.rs`) sits
-  under a muted mono "Partner" label at the end of the Servers page and of Home, below Play, and opens
-  Sculk's page in the browser. The website shows the same banner the same way on Home and the hosting
-  docs, as a `rel="sponsored"` link.
+  under a muted mono "Partner" label at the end of the Servers page and opens Sculk's page in the
+  browser. The sidebar of the other pages shows a card made for its width instead: Sculk's characters
+  and logo cropped from the same banner, and the text drawn by the launcher in its language, so it
+  stays readable; it keeps Sculk's dark card, cyan and rounded corners in both themes, as an ad does,
+  and turns compact (characters beside the text) when the window is too short. The website shows the
+  banner the same way on Home and the hosting docs, as a `rel="sponsored"` link.
 - **Pixel art drawn in code.** The stone behind the pages is close shades of the page colour
   (`TILE_SHADES`), never Minecraft's stone; the landscape is a banded sky, a sun cut in slices like
   the mark, hills and square trees (a sunset in dark, a dawn in light). The launcher bakes them in
