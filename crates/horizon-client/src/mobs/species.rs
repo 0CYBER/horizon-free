@@ -1447,7 +1447,6 @@ impl Def {
                     | S::IronGolem
                     | S::Cat
                     | S::Ocelot
-                    | S::Frog
                     | S::Slime
                     | S::MagmaCube
                     | S::Wither
