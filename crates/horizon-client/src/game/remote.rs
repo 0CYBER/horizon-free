@@ -119,7 +119,7 @@ pub(super) struct Remote {
     pub(super) entity_id: i32,
     /// The item the player's use began with (`LivingEntity.useItem`).
     pub(super) use_item: Option<Arc<str>>,
-    dimension: DimensionType,
+    pub(super) dimension: DimensionType,
     /// What chunk packets decode with (the dimension's height and sky, the
     /// biome registry); replaced whenever one of them changes.
     pub(super) chunk_format: Arc<ChunkFormat>,
@@ -202,6 +202,8 @@ pub(super) struct Remote {
     pub(super) pending_keys: Vec<KeyCode>,
     stop_mining: bool,
     placing: Option<([i32; 3], u64)>,
+    /// `CommonPlayerSpawnInfo.isFlat`: the level is a superflat one.
+    pub(super) flat: bool,
     death_message: Option<String>,
     /// `LocalPlayer.showDeathScreen`: off with `immediate_respawn`.
     show_death_screen: bool,
@@ -497,6 +499,7 @@ impl Game<'_> {
             pending_keys: Vec::new(),
             stop_mining: false,
             placing: None,
+            flat: false,
             death_message: None,
             show_death_screen: true,
             player_type,
@@ -1018,6 +1021,7 @@ impl Game<'_> {
         r.chunk_format = Arc::new(r.chunk_format.with_dimension(&dimension));
         r.dimension = dimension;
         r.game_mode = spawn.game_type;
+        r.flat = spawn.flat;
         r.loaded_sent = false;
         // A replacement LocalPlayer has a fresh sendPosition baseline.
         r.position_sender = Default::default();

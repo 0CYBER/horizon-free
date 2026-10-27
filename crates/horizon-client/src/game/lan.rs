@@ -1014,7 +1014,8 @@ impl Game<'_> {
         let host_uuid = host.unwrap_or(0);
         self.next_entity += 1;
         let host_entity = self.next_entity as i32;
-        let hub = Hub::new(lan, sync, encoder, config);
+        let mut hub = Hub::new(lan, sync, encoder, config);
+        hub.flat_world = self.world_flat;
         let port = hub.lan.port;
         self.world.block_log = Some(Vec::new());
         self.world.light_log = Some(Default::default());

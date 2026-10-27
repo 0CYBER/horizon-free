@@ -92,9 +92,8 @@ impl Game<'_> {
                 distant_terrain: self.lod.is_some(),
                 cloud_range_chunks: self.settings.cloud_range,
                 camera_y: camera.y,
-                // level.getMinY(): the Nether and the End start at y 0.
-                min_y: if self.dim == Dim::Overworld { MIN_Y } else { 0 },
-                flat: false,
+                min_y: self.level_min_y(),
+                flat: self.level_flat(),
                 forward: forward.map(|c| c as f32),
                 rain,
                 thunder,
@@ -108,9 +107,30 @@ impl Game<'_> {
             },
         )
     }
-    /// `SkyRenderer.shouldRenderDarkDisc`: eye below the horizon (y 63) and not under water.
+    /// `ClientLevelData.isFlat`: on the server thread, the world-wide flag.
+    fn level_flat(&self) -> bool {
+        match self.remote.as_ref() {
+            Some(r) => r.flat,
+            None => self.world_flat,
+        }
+    }
+    /// `Level.getMinY`: the current dimension type's minimum y.
+    fn level_min_y(&self) -> i32 {
+        match self.remote.as_ref() {
+            Some(r) => r.dimension.min_y,
+            None => self.dim.min_y(),
+        }
+    }
+    /// `SkyRenderer.shouldRenderDarkDisc`: eye below the horizon and not under
+    /// water. `ClientLevelData.getHorizonHeight`: the bottom of a flat world,
+    /// otherwise y 63.
     pub(super) fn dark_disc(&self, camera: glam::DVec3) -> bool {
-        camera.y < 63.0
+        let horizon = if self.level_flat() {
+            f64::from(self.level_min_y())
+        } else {
+            63.0
+        };
+        camera.y < horizon
             && fog_type(
                 &self.world,
                 self.res.facts(),
