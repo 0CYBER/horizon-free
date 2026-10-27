@@ -93,6 +93,11 @@ impl Game<'_> {
     /// `BookViewScreen.mouseClicked`: the click event of the text under the
     /// cursor on the page.
     fn book_link_at(&self, page: &Text, left: f32) -> Option<horizon_client::text::ClickEvent> {
+        self.book_style_at(page, left)?.click
+    }
+    /// `ActiveTextCollector` over the page: the style of the character
+    /// under the cursor, for its click and hover events.
+    fn book_style_at(&self, page: &Text, left: f32) -> Option<horizon_client::text::Style> {
         let (mx, my) = self.cursor;
         let row = ((my - 32.0) / 9.0).floor();
         if row < 0.0 || row >= LINES as f32 {
@@ -107,7 +112,7 @@ impl Game<'_> {
         for (c, style) in line.chars() {
             x -= self.gui.atlas.font.advance(c, style);
             if x < 0.0 {
-                return style.click.clone();
+                return Some(style.clone());
             }
         }
         None
@@ -137,7 +142,20 @@ impl Game<'_> {
                 }
             }
             ClickEvent::OpenUrl(url) => self.click_url(url),
-            _ => {}
+            // closeContainerOnServer, then clickCommandAction with no screen
+            // after the command: the book closes and the command runs.
+            ClickEvent::RunCommand(command) => {
+                self.close_book();
+                self.click_command(&command);
+            }
+            // Screen.defaultHandleClickEvent: copied, the book stays open.
+            ClickEvent::CopyToClipboard(value) => {
+                use horizon_client::clipboard::Clipboard;
+                self.clipboard.set(&value);
+            }
+            // SuggestCommand's insertText does nothing on a book; a server's
+            // text never opens a file.
+            ClickEvent::SuggestCommand(_) | ClickEvent::OpenFile(_) => {}
         }
     }
     /// `WritableBookItem.use` / `WrittenBookItem.use` (`Player.openItemGui`).
@@ -1296,6 +1314,16 @@ impl Game<'_> {
                         &tr("gui.done", "Done"),
                         true,
                     );
+                }
+                // HoveredTextEffects.TOOLTIP_AND_CURSOR: the hovered words'
+                // show_text hover event, as the chat shows it.
+                if let Some(hover) = pages
+                    .get(*page)
+                    .and_then(|t| self.book_style_at(t, left))
+                    .and_then(|s| s.hover)
+                {
+                    let lines = self.wrapped_rows(&hover, (w as i32 / 2).max(200));
+                    self.draw_tooltip_lines(batch, &lines, mx, my);
                 }
             }
         }
