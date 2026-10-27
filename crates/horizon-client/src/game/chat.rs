@@ -106,6 +106,18 @@ pub struct UiState {
     pub death_time: u32,
 }
 
+impl UiState {
+    /// The state a window starts with: the chat remembers the commands kept
+    /// in the game folder (`ChatComponent`'s constructor).
+    pub fn new() -> Self {
+        let mut ui = Self::default();
+        if let Ok(dir) = std::env::current_dir() {
+            ui.chat.load_history(&dir);
+        }
+        ui
+    }
+}
+
 impl Game<'_> {
     /// `PlayerList.isOp` for the single-player owner: the world's Allow Commands.
     pub(super) fn allow_commands(&self) -> bool {
