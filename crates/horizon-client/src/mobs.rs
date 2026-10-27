@@ -2080,6 +2080,7 @@ pub fn render_model(
                     layer: overlay,
                     color: 0xFFFF_FFFF,
                     light,
+                    glint_uv: [0.0, 0.0],
                 });
             }
         }
@@ -2214,7 +2215,7 @@ mod lighting_tests {
     #[test]
     fn packed_normal_uses_native_snorm_bytes_without_changing_vertex_offsets() {
         assert_eq!(std::mem::offset_of!(Vertex, normal), 32);
-        assert_eq!(std::mem::size_of::<Vertex>(), 36);
+        assert_eq!(std::mem::size_of::<Vertex>(), 44);
         let part = plane([0.0, 1.0, 0.0]);
         assert_eq!(
             part.polygons[0].vertex_normal(ModelNormals::new(Mat4::from_scale(Vec3::ZERO))),

@@ -332,6 +332,8 @@ impl Game<'_> {
                         layer: if lit { 5 } else { 0 },
                         color,
                         light: packed,
+
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             }

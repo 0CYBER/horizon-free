@@ -296,7 +296,31 @@ impl Game<'_> {
             x,
             y,
             self.started.elapsed().as_secs_f32(),
+            self.settings.file.double("glintSpeed") as f32,
+            self.settings.file.double("glintStrength") as f32,
         );
+    }
+    /// The `GLINT_TEXTURING` inputs the atlas and options provide.
+    pub(super) fn glint(&self) -> Option<item_render::Glint> {
+        self.gui
+            .atlas
+            .sprites
+            .get("misc/enchanted_glint_item")
+            .copied()
+            .map(|_| item_render::Glint {
+                speed: self.settings.file.double("glintSpeed") as f32,
+                alpha: self.settings.file.double("glintStrength") as f32,
+                millis: self.started.elapsed().as_secs_f32() * 1000.0,
+                scale: 0.5,
+            })
+    }
+    /// The glint scroll phase shared by world items and armour
+    /// (`item_render::Glint::scroll_ticks`).
+    pub(super) fn glint_ticks(&self) -> f32 {
+        item_render::Glint::scroll_ticks(
+            self.started.elapsed().as_secs_f32() * 1000.0,
+            self.settings.file.double("glintSpeed") as f32,
+        )
     }
     /// Submit a resolved item under `pose` (camera-relative) at `light`
     /// (packed lightmap coordinates).
@@ -311,6 +335,7 @@ impl Game<'_> {
             out,
             light,
             lights: Some(diffuse_lights(self.dim == Dim::Nether)),
+            glint: self.glint(),
         };
         state.submit(
             &self.pack.item_renderer,
@@ -332,6 +357,7 @@ impl Game<'_> {
             out,
             light,
             lights: None,
+            glint: self.glint(),
         };
         state.submit(
             &self.pack.item_renderer,

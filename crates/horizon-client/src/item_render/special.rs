@@ -115,6 +115,7 @@ fn draw(
                     sprite.v0 + (sprite.v1 - sprite.v0) * v[4],
                 ]
             }),
+            foil_uv: poly.map(|v| [v[3], v[4]]),
             normal,
             color,
             foil,
