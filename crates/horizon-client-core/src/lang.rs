@@ -4,7 +4,10 @@
 //! language used by every screen.
 use std::{
     collections::{BTreeMap, HashMap},
-    sync::{Arc, RwLock},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -23,11 +26,16 @@ impl LanguageInfo {
 #[derive(Default)]
 pub struct Language {
     pub code: String,
+    /// `LanguageInfo.bidirectional`: text without a strong character reads
+    /// right to left (`ClientLanguage.defaultRightToLeft`).
+    bidirectional: bool,
     map: HashMap<String, String>,
 }
 pub const DEFAULT: &str = "en_us";
 
 static CURRENT: RwLock<Option<Arc<Language>>> = RwLock::new(None);
+/// The current language's `bidirectional`, read for every drawn string.
+static BIDIRECTIONAL: AtomicBool = AtomicBool::new(false);
 
 /// A source of resource files: the prepared root plus packs, highest priority last.
 pub trait ResourceSource {
@@ -134,8 +142,12 @@ impl Language {
         {
             apply_deprecated(&mut map, &bytes);
         }
+        let bidirectional = available(sources)
+            .iter()
+            .any(|info| info.code == code && info.bidirectional);
         Self {
             code: code.to_owned(),
+            bidirectional,
             map,
         }
     }
@@ -197,10 +209,15 @@ pub fn available(sources: &[&dyn ResourceSource]) -> Vec<LanguageInfo> {
 }
 
 pub fn set(language: Language) {
+    BIDIRECTIONAL.store(language.bidirectional, Ordering::Relaxed);
     *CURRENT.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(language));
 }
 pub fn current() -> Option<Arc<Language>> {
     CURRENT.read().unwrap_or_else(|e| e.into_inner()).clone()
+}
+/// `ClientLanguage.defaultRightToLeft` of the current language.
+pub fn bidirectional() -> bool {
+    BIDIRECTIONAL.load(Ordering::Relaxed)
 }
 pub fn code() -> String {
     current().map_or_else(|| DEFAULT.to_owned(), |l| l.code.clone())

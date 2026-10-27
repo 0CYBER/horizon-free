@@ -378,6 +378,7 @@ mod tests {
             foil: Foil::None,
             light_emission: 0,
             cull_back: false,
+            translucent: false,
         }
     }
 

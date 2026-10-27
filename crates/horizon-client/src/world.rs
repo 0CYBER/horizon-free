@@ -92,12 +92,14 @@ pub struct World {
     /// (`ChunkHolder.sectionLightChanged`).
     pub light_log: Option<crate::fast_hash::FxHashMap<(i32, i32), u32>>,
     /// The villager POIs of each section (`PoiManager`'s sections).
-    pub pois: crate::poi_sections::PoiSections<crate::mobs::villager_brain::Poi>,
+    pub pois: crate::poi_sections::PoiSections<crate::poi_sections::Poi>,
+    /// Moving-piston states removed during the last tick; retained until the
+    /// final block mesh is visible.
+    pub moving_piston_fallback: Vec<([i32; 3], horizon_world::piston_shape::MovingPistonState)>,
     /// The moving-piston block entities of the level, by position, copied
     /// from the block ticks after each tick: collision and rendering read them.
     pub moving_pistons: Vec<([i32; 3], horizon_world::piston_shape::MovingPistonState)>,
 }
-/// ServerLevel weather state (advanceWeatherCycle).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Weather {
     pub clear_time: i32,
@@ -187,6 +189,7 @@ impl World {
             weather: Weather::default(),
             block_log: None,
             light_log: None,
+            moving_piston_fallback: Vec::new(),
             moving_pistons: Vec::new(),
             pois: Default::default(),
         }
