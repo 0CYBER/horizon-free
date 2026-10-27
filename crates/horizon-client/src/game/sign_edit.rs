@@ -87,12 +87,14 @@ impl Game<'_> {
             return;
         };
         if sign.waxed {
-            self.audio.play(
-                "minecraft:block.sign.waxed_interact_fail",
-                Some(pos.map(|v| f64::from(v) + 0.5)),
-                1.0,
-                1.0,
-            );
+            // `getSignInteractionFailedSoundEvent`: a hanging sign has its own.
+            let sound = if sign.hanging {
+                "minecraft:block.hanging_sign.waxed_interact_fail"
+            } else {
+                "minecraft:block.sign.waxed_interact_fail"
+            };
+            self.audio
+                .play(sound, Some(pos.map(|v| f64::from(v) + 0.5)), 1.0, 1.0);
         } else if self.may_build() {
             let front = self.facing_sign_front(key);
             self.open_sign_editor(key, front);
