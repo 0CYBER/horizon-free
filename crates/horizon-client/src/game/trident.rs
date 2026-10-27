@@ -1,16 +1,19 @@
 //! Tridents: `TridentItem.releaseUsing` (throw after 10 ticks, or Riptide in
 //! water or rain) and `ThrownTrident` (arrow flight with 0.99 water inertia,
 //! 8 damage plus Impaling, the reversed bounce off a hit, sticking, Loyalty's
-//! return to the owner, pickup) with `ThrownTridentRenderer`.
+//! return to the owner, pickup) with `ThrownTridentRenderer`, and Channeling's
+//! lightning on a hit (`channeling.json`).
 use super::{Game, view_vector};
 use horizon_client::{
     collisions::SceneCollisions,
+    enchant::EffectContext,
     items::ItemStack,
     mesher::Vertex,
     mobs::{Damage, DamageKind, Who, anim::Poses},
 };
 use horizon_core::{
-    geometry::{Aabb, Vec3},
+    geometry::{Aabb, Vec3, traverse_blocks},
+    position::BlockPos,
     random::RandomSource,
 };
 
@@ -19,7 +22,7 @@ pub(super) struct ThrownTrident {
     pub id: u32,
     pub(super) stack: ItemStack,
     pub(super) position: Vec3,
-    previous: Vec3,
+    pub(super) previous: Vec3,
     pub(super) velocity: Vec3,
     pub(super) yaw: f32,
     pub(super) pitch: f32,
@@ -30,6 +33,8 @@ pub(super) struct ThrownTrident {
     pub(super) no_physics: bool,
     returning: u32,
     creative_only: bool,
+    /// The guest that threw it (`Projectile.getOwner`); `None` for the host.
+    guest: Option<u32>,
 }
 impl ThrownTrident {
     /// A trident a server sent (`handleAddEntity`): placed and moved by it.
@@ -49,6 +54,7 @@ impl ThrownTrident {
             no_physics: false,
             returning: 0,
             creative_only: false,
+            guest: None,
         }
     }
     /// One tick of a server's client: the previous position, then `step`.
@@ -110,7 +116,7 @@ impl Game<'_> {
         }
         true
     }
-    fn in_water_or_rain(&self) -> bool {
+    fn in_water_or_rain(&mut self) -> bool {
         let Some(p) = &self.player else { return false };
         let (x, y, z) = (
             p.position.x.floor() as i32,
@@ -119,8 +125,8 @@ impl Game<'_> {
         );
         let water = self.res.facts().get(self.world.block(x, y, z)).fluid
             == horizon_client::blocks::Fluid::Water;
-        let sky = self.world.light(x, y + 1, z) >> 4 == 15;
-        water || (self.world.weather.raining && sky)
+        let (at, top) = (p.position, p.bounds().max_position().y);
+        water || self.in_rain(at, top)
     }
     /// The living entities a spinning player can touch this tick, for
     /// `LivingEntity.checkAutoSpinAttack` (none when not spinning).
@@ -154,6 +160,69 @@ impl Game<'_> {
             p.auto_spin_attack_dmg = 0.0;
         }
     }
+    /// The `summon_entity` and `play_sound` effects of `channeling.json`: in a
+    /// thunderstorm (`weather_check`) a spot that sees the sky (`can_see_sky`)
+    /// gets a lightning bolt and the thunder sound.
+    fn channel_lightning(&mut self, at: [f64; 3]) {
+        // Level.isThundering: the thunder level, in dimensions with weather.
+        if self.dim != super::Dim::Overworld || self.world.weather.levels(1.0).1 <= 0.9 {
+            return;
+        }
+        // BlockAndLightGetter.canSeeSky: full sky light.
+        let (x, y, z) = (
+            at[0].floor() as i32,
+            at[1].floor() as i32,
+            at[2].floor() as i32,
+        );
+        if self.world.light(x, y, z) >> 4 != 15 {
+            return;
+        }
+        self.spawn_bolt(at, false);
+        self.audio
+            .play("minecraft:item.trident.thunder", Some(at), 5.0, 1.0);
+    }
+    /// `minecraft:hit_block` of Channeling (`AbstractArrow.hitBlockEnchantmentEffects`):
+    /// the block the trident's path first hits, if it is a lightning rod, with
+    /// the hit location clamped into the block (`BlockPos.clampLocationWithin`).
+    fn channel_rod_hit(&mut self, from: Vec3, velocity: Vec3) {
+        let to = Vec3::new(
+            from.x + velocity.x,
+            from.y + velocity.y,
+            from.z + velocity.z,
+        );
+        let mut scene = SceneCollisions {
+            world: &self.world,
+            binding: self.collision,
+            subject: None,
+        };
+        // ClipContext.Block.COLLIDER with Fluid.NONE.
+        let hit = traverse_blocks(from, to, 1024, |p: BlockPos| {
+            let state = self.world.block(p.x, p.y, p.z);
+            if self.res.facts().is_air(state) {
+                return None;
+            }
+            let shape = self
+                .collision
+                .collision_shape(&mut scene, state, [p.x, p.y, p.z])
+                .ok()?;
+            shape.clip(from, to, p)
+        });
+        let Some(hit) = hit.ok().flatten() else {
+            return;
+        };
+        let state = self.world.block(hit.block.x, hit.block.y, hit.block.z);
+        if !self.res.facts().get(state).name.ends_with("lightning_rod") {
+            return;
+        }
+        let edge = f64::from(1.0e-5f32);
+        let clamp =
+            |v: f64, origin: i32| v.clamp(f64::from(origin) + edge, f64::from(origin) + 1.0 - edge);
+        self.channel_lightning([
+            clamp(hit.location.x, hit.block.x),
+            clamp(hit.location.y, hit.block.y),
+            clamp(hit.location.z, hit.block.z),
+        ]);
+    }
     /// `TridentItem.releaseUsing`.
     pub(super) fn release_trident(&mut self, ticks: u32) {
         if ticks < 10 {
@@ -171,10 +240,11 @@ impl Game<'_> {
             .as_ref()
             .map(|p| [p.position.x, p.position.y, p.position.z]);
         if riptide > 0 {
-            if !self.in_water_or_rain() {
+            // `isInWaterOrRain() && !isPassenger()`.
+            if !self.in_water_or_rain() || self.riding.is_some() {
                 return;
             }
-            self.damage_held(1);
+            self.hurt_held_without_breaking(1);
             // trident_spin_attack_strength: 1.5 + 0.75 per level above the first.
             let strength = 1.5 + 0.75 * (riptide as f32 - 1.0);
             let d = view_vector(self.yaw, self.pitch);
@@ -195,12 +265,8 @@ impl Game<'_> {
             self.audio.play(&sound, at, 1.0, 1.0);
             return;
         }
-        // hurtWithoutBreaking, then the thrown copy.
-        if !self.creative
-            && let Some(s) = self.held_mut().as_mut()
-        {
-            s.damage += 1;
-        }
+        // hurtWithoutBreaking (Unbreaking applies), then the thrown copy.
+        self.hurt_held_without_breaking(1);
         let thrown = self.held().cloned().unwrap_or(stack);
         if !self.creative {
             *self.held_mut() = None;
@@ -240,10 +306,32 @@ impl Game<'_> {
             no_physics: false,
             returning: 0,
             creative_only: self.creative,
+            guest: self.lan_acting,
         });
         self.player_projectile_shot();
         self.audio
             .play("minecraft:item.trident.throw", at, 1.0, 1.0);
+    }
+    /// The thrower's `PLAYER_HURT_ENTITY` for a trident hit: run as the
+    /// guest that threw it, and not at all once they have left.
+    fn thrower_hit(
+        &mut self,
+        guest: Option<u32>,
+        victim: &horizon_client::advancements::EntityView,
+        direct: horizon_client::advancements::EntityView,
+        damage: f32,
+    ) {
+        let Some(conn) = guest.filter(|c| self.lan_acting != Some(*c)) else {
+            self.player_hit(victim, "minecraft:trident", Some(direct), damage);
+            return;
+        };
+        let Some(mut host) = self.lan.take() else {
+            return;
+        };
+        self.as_guest(&mut host, conn, |g| {
+            g.player_hit(victim, "minecraft:trident", Some(direct), damage)
+        });
+        self.lan = Some(host);
     }
     pub(super) fn tick_tridents(&mut self) {
         let Some(eye) = self.eye_position() else {
@@ -305,15 +393,34 @@ impl Game<'_> {
                     }
                 }
                 if let Some((id, _)) = hit_mob {
-                    let impaling = t.stack.enchantment_level("minecraft:impaling") as f32;
-                    let aquatic = self.mobs.iter().find(|m| m.id == id).is_some_and(|m| {
-                        m.kind.flags.aquatic_swimmer || m.kind.flags.breathes_water
-                    });
-                    let damage = 8.0 + if aquatic { 2.5 * impaling } else { 0.0 };
+                    // ThrownTrident.getDamage: `EnchantmentHelper.modifyDamage` on 8
+                    // (impaling hits `#sensitive_to_impaling`, the aquatic tag).
+                    let victim = self
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == id)
+                        .map(|m| m.kind.id.clone());
+                    let ctx = EffectContext {
+                        this: victim.as_deref(),
+                        attacker: Some("minecraft:player"),
+                        direct_attacker: Some("minecraft:trident"),
+                        is_direct: true,
+                        damage_type: Some("minecraft:trident"),
+                        items: Some(self.res.items()),
+                        ..Default::default()
+                    };
+                    let damage = self.res.stations().enchantments.modify_value(
+                        Some(&t.stack),
+                        "minecraft:damage",
+                        &ctx,
+                        &mut self.world.random,
+                        8.0,
+                    );
                     t.dealt_damage = true;
+                    let mut hurt_at = None;
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
                         let from = Some([t.position.x, t.position.y, t.position.z]);
-                        m.damage(
+                        let hurt = m.damage(
                             damage,
                             Damage {
                                 kind: DamageKind::Arrow,
@@ -321,6 +428,27 @@ impl Game<'_> {
                                 from,
                             },
                         );
+                        if hurt {
+                            hurt_at = Some([m.position.x, m.position.y, m.position.z]);
+                        }
+                    }
+                    // `minecraft:post_attack` of Channeling, on the victim.
+                    if let Some(at) = hurt_at
+                        && t.stack.enchantment_level("minecraft:channeling") > 0
+                    {
+                        self.channel_lightning(at);
+                    }
+                    if hurt_at.is_some()
+                        && let Some(m) = self.mobs.iter().find(|m| m.id == id)
+                    {
+                        // LivingEntity.hurtServer: PLAYER_HURT_ENTITY.
+                        let victim = self.mob_entity(m);
+                        let direct = horizon_client::advancements::EntityView {
+                            kind: "minecraft:trident".into(),
+                            position: [t.position.x, t.position.y, t.position.z],
+                            ..Default::default()
+                        };
+                        self.thrower_hit(t.guest, &victim, direct, damage);
                     }
                     self.audio.play(
                         "minecraft:item.trident.hit",
@@ -341,6 +469,7 @@ impl Game<'_> {
                         subject: None,
                     };
                     if let Ok(moved) = scene.resolve(bounds(t.position), t.velocity, 0.0, false) {
+                        let (from, flight) = (t.position, t.velocity);
                         let blocked = (moved.x - t.velocity.x).abs() > 1e-7
                             || (moved.y - t.velocity.y).abs() > 1e-7
                             || (moved.z - t.velocity.z).abs() > 1e-7;
@@ -350,6 +479,9 @@ impl Game<'_> {
                             t.position.z + moved.z,
                         );
                         if blocked {
+                            if t.stack.enchantment_level("minecraft:channeling") > 0 {
+                                self.channel_rod_hit(from, flight);
+                            }
                             t.in_ground = true;
                             t.velocity = Vec3::ZERO;
                             self.audio.play(
@@ -419,7 +551,7 @@ impl Game<'_> {
         let range = 10.0
             * super::entity_culling::default_range(
                 glam::DVec3::splat(2.0 * HALF),
-                self.settings.entity_distance,
+                self.view_scale(),
             );
         for t in &self.tridents {
             // EntityRenderer.shouldRender; ThrownTridentRenderer grows the box by 1.5.

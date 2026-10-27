@@ -648,6 +648,61 @@ impl Conduit {
     }
 }
 
+/// What `ConduitBlockEntity.serverTick`'s 40-tick check decided.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ConduitCheck {
+    /// The shape changed: `CONDUIT_ACTIVATE` (true) or `CONDUIT_DEACTIVATE`.
+    pub toggled: Option<bool>,
+    /// The frame blocks counted, while the conduit is active: `applyEffects`
+    /// and `updateAndAttackTarget` follow (the attack needs 42 or more).
+    pub frames: Option<usize>,
+}
+
+/// `ConduitBlockEntity` (server side): what `serverTick` keeps between ticks.
+#[derive(Clone, Debug, Default)]
+pub struct ConduitServer {
+    shape: Conduit,
+    /// `destroyTarget`: the mob id of the enemy being struck.
+    pub target: Option<u32>,
+    next_ambient_sound: i64,
+}
+
+impl ConduitServer {
+    /// The `gameTime % 40` part of `serverTick`: the shape is checked again.
+    pub fn check(
+        &mut self,
+        pos: [i32; 3],
+        game_time: i64,
+        is_water: impl Fn([i32; 3]) -> bool,
+        is_frame: impl Fn([i32; 3]) -> bool,
+    ) -> Option<ConduitCheck> {
+        if game_time % 40 != 0 {
+            return None;
+        }
+        let active = self.shape.update_shape(pos, &is_water, &is_frame);
+        let toggled = (active != self.shape.is_active).then_some(active);
+        self.shape.is_active = active;
+        Some(ConduitCheck {
+            toggled,
+            frames: active.then_some(self.shape.effect_blocks.len()),
+        })
+    }
+    /// The sounds of an active conduit at the end of `serverTick`: whether
+    /// `CONDUIT_AMBIENT` (every 80 ticks) and `CONDUIT_AMBIENT_SHORT` (every
+    /// 60 to 99 ticks) play.
+    pub fn ambient(&mut self, game_time: i64, random: &mut impl RandomSource) -> (bool, bool) {
+        if !self.shape.is_active {
+            return (false, false);
+        }
+        let short = game_time > self.next_ambient_sound;
+        if short {
+            self.next_ambient_sound =
+                game_time + 60 + i64::from(random.next_int_bound(40).unwrap_or(0));
+        }
+        (game_time % 80 == 0, short)
+    }
+}
+
 /// `SkullBlockEntity` animation (client ticker of dragon and piglin heads).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Skull {
@@ -832,6 +887,8 @@ pub struct BlockEntityAnims {
     pub gateways: FxHashMap<[i32; 3], EndGateway>,
     /// The integrated server's copies of the gateways (`portalTick`).
     pub gateway_servers: FxHashMap<[i32; 3], EndGateway>,
+    /// The integrated server's copies of the conduits (`serverTick`).
+    pub conduit_servers: FxHashMap<[i32; 3], ConduitServer>,
     /// The client level's random (conduit particles).
     pub random: LegacyRandom,
     /// [`Ticker`] by block state id (see [`BlockEntityAnims::classify`]).
@@ -854,6 +911,7 @@ impl Default for BlockEntityAnims {
             pots: FxHashMap::default(),
             gateways: FxHashMap::default(),
             gateway_servers: FxHashMap::default(),
+            conduit_servers: FxHashMap::default(),
             random: LegacyRandom::new(0x6c6576656c),
             kinds: Vec::new(),
             present: Vec::new(),
@@ -909,6 +967,7 @@ impl BlockEntityAnims {
         self.pots.retain(|p, _| keep(*p));
         self.gateways.retain(|p, _| keep(*p));
         self.gateway_servers.retain(|p, _| keep(*p));
+        self.conduit_servers.retain(|p, _| keep(*p));
     }
     /// `getOpenNess(partial)` of the chest or ender chest at `pos`.
     pub fn lid(&self, pos: [i32; 3], partial: f32) -> f32 {
