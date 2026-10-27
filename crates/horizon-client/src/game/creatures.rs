@@ -528,6 +528,7 @@ impl Game<'_> {
         let mut events = Vec::new();
         let mut mobs = std::mem::take(&mut self.mobs);
         let mut dead = Vec::new();
+        let mut corpses = Vec::new();
         let mut died = std::mem::take(&mut self.died);
         let ticking = self.entity_ticking_area();
         // With guests on, each mob sees its nearest player (game/lan_mobs.rs).
@@ -622,6 +623,11 @@ impl Game<'_> {
                 horizon_client::mobs::apply_mob_pushes(m, &mut pushes);
                 let from = events.len();
                 let kept = m.tick(&w, &mut scratch, &mut events);
+                // A killed mob's body is removed: its effects that act on
+                // death run (`LivingEntity.remove` with KILLED).
+                if !kept && !m.alive() && !m.removed && !m.extra.effects.is_empty() {
+                    corpses.push(m.clone());
+                }
                 horizon_client::mobs::take_mob_pushes(&mut events, from, &mut pushes);
                 // LivingEntity.tickDeath: after twenty ticks the body is removed.
                 if !kept && !m.removed && !m.alive() && m.death_time >= 20 {
@@ -701,6 +707,16 @@ impl Game<'_> {
         self.villager_pickups();
         for m in dead {
             self.mob_died(&m);
+        }
+        for mut m in corpses {
+            let names: Vec<&'static str> = m
+                .extra
+                .effects
+                .iter()
+                .map(|e| e.0.trim_start_matches("minecraft:"))
+                .collect();
+            let bounds = m.bounds();
+            self.effects_on_death(&names, bounds, false, Some(m.id), Some(&mut m.random));
         }
         self.handle_mob_events(events)?;
         self.lan_guest_mob_events(guest_events);
@@ -904,6 +920,18 @@ impl Game<'_> {
             }
         }
     }
+    /// `InfestedMobEffect.onMobHurt` for a mob: silverfish from half its height up.
+    pub(super) fn mob_infested(&mut self, mob: u32) {
+        if let Some(m) = self.mobs.iter().find(|m| m.id == mob) {
+            let at = [
+                m.position.x,
+                m.position.y + f64::from(m.height()) / 2.0,
+                m.position.z,
+            ];
+            let look = m.view_vector();
+            self.infested_hurt(at, look, Some(mob));
+        }
+    }
     /// `LivingEntity.dropFromGiftLootTable`: the gift table from its random
     /// sequence with the mob as `this` (a chicken's egg depends on its
     /// variant); the loot data of the game's resources decides, and without it
@@ -1086,6 +1114,7 @@ impl Game<'_> {
                 } => {
                     let mut killed = false;
                     let mut hurt = false;
+                    let mut infested = false;
                     if let Some(t) = self.mobs.iter_mut().find(|m| m.id == target) {
                         let hit = t.damage(amount, source);
                         hurt = hit;
@@ -1094,19 +1123,26 @@ impl Game<'_> {
                             // The hurt or death sound the mob raised.
                             let center = t.center();
                             for event in std::mem::take(&mut t.outbox) {
-                                if let MobEvent::Sound(s, _, volume, pitch) = event {
-                                    self.audio.play(
-                                        &format!("minecraft:{s}"),
-                                        Some(center),
-                                        volume,
-                                        pitch,
-                                    );
-                                } else {
-                                    // Left for the end of the tick.
-                                    t.outbox.push(event);
+                                match event {
+                                    MobEvent::Sound(s, _, volume, pitch) => {
+                                        self.audio.play(
+                                            &format!("minecraft:{s}"),
+                                            Some(center),
+                                            volume,
+                                            pitch,
+                                        );
+                                    }
+                                    MobEvent::Infested { .. } => infested = true,
+                                    other => {
+                                        // Left for the end of the tick.
+                                        t.outbox.push(other);
+                                    }
                                 }
                             }
                         }
+                    }
+                    if infested {
+                        self.mob_infested(target);
                     }
                     if hurt
                         && let Some(Who::Mob(attacker)) = source.attacker
@@ -1153,6 +1189,7 @@ impl Game<'_> {
                 }
                 MobEvent::BecomeStatue { mob } => self.golem_become_statue(mob),
                 MobEvent::EnterHive { mob, hive } => self.bee_enter_hive(mob, hive),
+                MobEvent::Infested { mob } => self.mob_infested(mob),
                 MobEvent::Gift { target, item } => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == target)
                         && m.saddle_item().is_none()
