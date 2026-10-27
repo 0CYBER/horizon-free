@@ -734,6 +734,8 @@ pub struct Stroll {
     pub water_avoiding: Option<f32>,
     /// RandomSwimmingGoal: BehaviorUtils.getRandomSwimmablePos.
     pub swim: bool,
+    /// WaterAvoidingRandomFlyingGoal: a hover spot, else an air or water pos.
+    pub flying: bool,
     pub force: bool,
     wanted: [f64; 3],
 }
@@ -745,6 +747,7 @@ impl Stroll {
             check_no_action: true,
             water_avoiding: None,
             swim: false,
+            flying: false,
             force: false,
             wanted: [0.0; 3],
         }
@@ -761,7 +764,10 @@ impl Stroll {
     }
     /// WaterAvoidingRandomFlyingGoal (a nearby air position).
     pub fn flying(speed: f64) -> Self {
-        Self::new(speed)
+        Self {
+            flying: true,
+            ..Self::new(speed)
+        }
     }
     /// RandomSwimmingGoal(speed, interval)
     pub fn swimming(speed: f64, interval: i32) -> Self {
@@ -821,6 +827,21 @@ impl Goal for Stroll {
                     p = m.default_random_pos(cx.w, 10, 7);
                 }
                 p
+            }
+            None if self.flying => {
+                // WaterAvoidingRandomFlyingGoal.getPosition.
+                let [xd, _, zd] = m.view_vector();
+                m.hover_random_pos(
+                    cx.w,
+                    8,
+                    7,
+                    xd,
+                    zd,
+                    f64::from(std::f32::consts::FRAC_PI_2),
+                    3,
+                    1,
+                )
+                .or_else(|| m.air_and_water_random_pos(cx.w, 8, 4, -2, xd, zd))
             }
             None => m.default_random_pos(cx.w, 10, 7),
         };
