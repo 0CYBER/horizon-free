@@ -28,6 +28,10 @@ pub enum ProjectileKind {
         critical: bool,
         effect: Option<(&'static str, i32)>,
     },
+    /// `ThrownTrident` of a mob (a drowned's): flies and sticks with
+    /// `AbstractArrow`'s tick; the trident itself is the arrow state's
+    /// `pickup_item`.
+    Trident,
     Snowball,
     Egg,
     EnderPearl,
@@ -66,6 +70,7 @@ impl ProjectileKind {
     pub fn id(&self) -> &'static str {
         match self {
             Self::Arrow { .. } => "minecraft:arrow",
+            Self::Trident => "minecraft:trident",
             Self::Snowball => "minecraft:snowball",
             Self::Egg => "minecraft:egg",
             Self::EnderPearl => "minecraft:ender_pearl",
@@ -152,7 +157,7 @@ fn axis_of(d: u8) -> u8 {
 }
 impl Projectile {
     pub fn new(kind: ProjectileKind, position: Vec3, owner: Option<Who>) -> Self {
-        let kind_is_arrow = matches!(kind, ProjectileKind::Arrow { .. });
+        let kind_is_arrow = matches!(kind, ProjectileKind::Arrow { .. } | ProjectileKind::Trident);
         Self {
             id: 0,
             kind,
@@ -253,7 +258,7 @@ impl Projectile {
     }
     fn gravity(&self) -> f64 {
         match self.kind {
-            ProjectileKind::Arrow { .. } => 0.05,
+            ProjectileKind::Arrow { .. } | ProjectileKind::Trident => 0.05,
             ProjectileKind::SmallFireball
             | ProjectileKind::LargeFireball { .. }
             | ProjectileKind::WitherSkull { .. } => 0.0,
@@ -604,8 +609,8 @@ impl Projectile {
             | ProjectileKind::WitherSkull { .. } => {
                 self.apply_hurting_inertia(water);
             }
-            // Arrows tick with `arrows::tick`.
-            ProjectileKind::Arrow { .. } => {}
+            // Arrows and tridents tick with `arrows::tick`.
+            ProjectileKind::Arrow { .. } | ProjectileKind::Trident => {}
             ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge => {}
             // LlamaSpit.tick: gone in water; drag and gravity follow the move.
             ProjectileKind::LlamaSpit => {
@@ -746,7 +751,8 @@ impl Projectile {
             ProjectileKind::WindCharge | ProjectileKind::BreezeWindCharge => return None,
             ProjectileKind::WitherSkull { dangerous: false } => "entity/wither/wither",
             ProjectileKind::WitherSkull { dangerous: true } => "entity/wither/wither_invulnerable",
-            ProjectileKind::Arrow { .. } => return None,
+            // Drawn as their models by the game.
+            ProjectileKind::Arrow { .. } | ProjectileKind::Trident => return None,
         })
     }
     /// Render scale of the item billboard (fireball renderers).

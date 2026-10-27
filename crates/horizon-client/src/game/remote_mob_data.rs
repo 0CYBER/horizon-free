@@ -59,12 +59,20 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
                     Who::Mob(*target as u32)
                 });
             }
+            // PolarBear.DATA_STANDING_ID: the client animates the rearing.
+            (Species::PolarBear, 18, Value::Bool(standing)) => m.extra.flag = *standing,
             // Bat.DATA_ID_FLAGS: resting in bit 0.
             (Species::Bat, 16, Value::Byte(flags)) => bat::set_resting(m, flags & 1 != 0),
             // Sheep.DATA_WOOL_ID: the colour in the low nibble, 16 sheared.
             (Species::Sheep, 18, Value::Byte(wool)) => {
                 m.extra.color = (*wool & 15) as u8;
                 m.extra.sheared = wool & 16 != 0;
+            }
+            // SnowGolem.DATA_PUMPKIN_ID: 16 while the pumpkin is on.
+            (Species::SnowGolem, 16, Value::Byte(flags)) => m.extra.sheared = flags & 16 == 0,
+            // MushroomCow.DATA_TYPE: 0 red, 1 brown.
+            (Species::Mooshroom, 17, Value::Int(variant)) => {
+                m.extra.variant = (*variant == 1) as u8
             }
             // Piglin.DATA_IS_DANCING: the dance pose.
             (Species::Piglin, 19, Value::Bool(dancing)) => m.extra.scratch[0] = i32::from(*dancing),

@@ -37,6 +37,8 @@ pub(super) struct Strike {
     amount: f32,
     scale: f32,
     crit: bool,
+    /// `Player.attack`'s `magicBoost > 0`: the enchantments added damage.
+    magic: bool,
     from: [f64; 3],
     sweep: Option<[f64; 3]>,
     /// `causeExtraKnockback`: its strength and direction (the attacker's
@@ -109,7 +111,7 @@ impl Game<'_> {
     pub(super) fn pvp_strike(&mut self) -> Option<Strike> {
         let p = self.player.as_ref()?;
         let from = [p.position.x, p.position.y, p.position.z];
-        let (amount, scale, crit) = self.melee_damage("minecraft:player");
+        let (amount, scale, crit, magic) = self.melee_damage("minecraft:player");
         let sweep = self.sweep_attack_position(scale, crit);
         let (strength, knockback_attack) = self.extra_knockback("minecraft:player", scale);
         let (xd, zd) = self.extra_knockback_direction();
@@ -125,6 +127,7 @@ impl Game<'_> {
             amount,
             scale,
             crit,
+            magic,
             from,
             sweep,
             knockback: (strength, xd, zd),
@@ -257,7 +260,7 @@ impl Game<'_> {
         } else {
             Default::default()
         };
-        if hurt && s.crit {
+        if hurt && (s.crit || s.magic) {
             let target = match victim {
                 Victim::Host => self.player.as_ref().map(|p| (host.host_entity, p)),
                 Victim::Guest(conn) => host
@@ -267,13 +270,17 @@ impl Game<'_> {
             };
             if let Some((id, p)) = target {
                 let d = p.dimensions;
-                self.critical_hit(
-                    s.attacker,
-                    id,
+                let (feet, width, height) = (
                     [p.position.x, p.position.y, p.position.z],
                     f64::from(d.width),
                     f64::from(d.height),
                 );
+                if s.crit {
+                    self.critical_hit(s.attacker, id, feet, width, height, false);
+                }
+                if s.magic {
+                    self.critical_hit(s.attacker, id, feet, width, height, true);
+                }
             }
         }
         // `Enchantment.doPostAttack`: thorns hurt the attacking player.

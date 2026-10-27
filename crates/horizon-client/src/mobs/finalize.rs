@@ -663,7 +663,7 @@ pub fn zombie_attributes(m: &mut Mob, special: f32, reason: Reason) {
         ) {
             m.health = max_health(m);
         }
-        m.extra.can_break_doors = true;
+        super::doors::set_can_break_doors(m, true);
     }
 }
 pub fn max_health(m: &Mob) -> f32 {
@@ -1213,7 +1213,8 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                     }
                 }
             }
-            m.extra.can_break_doors = self.float() < special * 0.1;
+            let can_break_doors = self.float() < special * 0.1;
+            super::doors::set_can_break_doors(m, can_break_doors);
             if reason != Reason::Conversion {
                 self.populate(m);
                 self.enchant(m);

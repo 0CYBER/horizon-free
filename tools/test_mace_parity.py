@@ -167,9 +167,9 @@ def main():
            '-cp', dependencies, '-d', str(classes), str(java_root / 'dev/horizonlab/parity/VanillaDispenserOracle.java')])
     d.run(['java', '-Xmx3G', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.VanillaDispenserOracle',
            str(resources), str(work / 'cases.jsonl'), str(work / 'native.txt')])
-    d.run(['cargo', 'build', '-q', '--release', '-p', 'horizon-client', '--bin', 'horizon-client'], cwd=lab.ROOT,
+    d.run(['cargo', 'build', '-q', '--profile', 'fast', '-p', 'horizon-client', '--bin', 'horizon-client'], cwd=lab.ROOT,
           env={**os.environ, 'CARGO_BUILD_JOBS': os.environ.get('CARGO_BUILD_JOBS', '3')})
-    d.run([str(lab.cargo_target() / 'release/horizon-client'), '--resources', str(resources)], cwd=work,
+    d.run([str(lab.cargo_target() / 'fast/horizon-client'), '--resources', str(resources)], cwd=work,
           env=lab.game_env(HORIZON_DISPENSE_FIXTURE=f'{work / "cases.jsonl"},{work / "rust.txt"}'))
     ignore = tuple(prefix + ' ' for prefix in args.ignore.split(',') if prefix) + ('D ',)
     native = h.split_cases((work / 'native.txt').read_text(), ignore)
