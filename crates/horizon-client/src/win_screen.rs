@@ -309,11 +309,12 @@ mod tests {
     /// A resource root with only the credits texts: every glyph is the
     /// missing one, 6 pixels wide.
     fn screen(poem: bool, end: &str, credits: &str, post: &str) -> WinScreen {
-        let root = std::env::temp_dir().join(format!(
-            "horizon-win-screen-{}-{poem}-{}",
-            std::process::id(),
-            end.len()
-        ));
+        // One directory per call: tests run in parallel, and two of them with
+        // the same arguments used to remove each other's files.
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("horizon-win-screen-{}-{n}", std::process::id()));
         let texts = root.join("assets/minecraft/texts");
         std::fs::create_dir_all(&texts).unwrap();
         std::fs::write(texts.join("end.txt"), end).unwrap();
