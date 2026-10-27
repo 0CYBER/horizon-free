@@ -374,6 +374,27 @@ Move a world to the system's trash.
 
 MCP: `worlds_delete`, needs `confirm: true`.
 
+## `horizon-launcher screenshots list`
+
+The screenshots, the newest first, with their files (the default).
+
+    horizon-launcher screenshots list
+
+- `--instance`: The instance (default: the selected one)
+
+MCP: `screenshots_list`.
+
+## `horizon-launcher screenshots delete`
+
+Move a screenshot to the system's trash.
+
+    horizon-launcher screenshots delete <SCREENSHOT>
+
+- `SCREENSHOT`: Its file name, with or without .png
+- `--instance`
+
+MCP: `screenshots_delete`, needs `confirm: true`.
+
 ## `horizon-launcher multiplayer list`
 
 The servers of the game's Multiplayer screen (the default).

@@ -89,6 +89,11 @@ The opening, then Play ([clip](docs/opening.webm)):
   system's trash after a confirmation; **Open folder**. The same from the command line:
   `horizon-launcher worlds [list|backup|copy|delete] [--instance <name>]`.
   **Play** on a world starts the game straight into it.
+- **Screenshots**: Home shows the selected instance's newest screenshots (what F2 saves in its
+  `screenshots/` folder) and all of them on request. Clicking one opens it over the window (← and →
+  step through) with **Copy** (the picture, to the clipboard), **Open**, **Show in folder** and
+  **Delete** (to the trash, after a confirmation). From the command line:
+  `horizon-launcher screenshots [list|delete] [--instance <name>]`.
 - **Multiplayer**: Home lists the selected instance's servers, the game's own Multiplayer list
   (`servers.dat`, each with the picture the game last saw). **Join** starts the game straight into
   one; **Add server** and **Remove** (after a confirmation) change the file the game reads,
@@ -197,6 +202,8 @@ and don't set `%ERRORLEVEL%` / `$LASTEXITCODE`. Scripts that need the exit code 
     horizon-launcher instance version <instance> <tag|latest>   keep it on one installed version, or follow updates
     horizon-launcher worlds [list] [--instance <name>]        an instance's worlds
     horizon-launcher worlds backup|copy|delete <world> [--instance <name>]   delete moves it to the trash
+    horizon-launcher screenshots [list] [--instance <name>]   an instance's screenshots, the newest first
+    horizon-launcher screenshots delete <name> [--instance <name>]   moves it to the trash
     horizon-launcher multiplayer [list] [--instance <name>]   the servers in an instance's Multiplayer list
     horizon-launcher multiplayer add <address> [--name <name>] | remove <server>
     horizon-launcher modpack [list]                 the imported packs and their coverage

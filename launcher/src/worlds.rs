@@ -251,6 +251,11 @@ fn rename_level(world: &Path, name: &str) -> std::io::Result<()> {
 
 /// Moves the world to the system's trash, where the player can still get it back.
 pub fn delete(world: &World) -> Result<(), String> {
+    to_trash(&world.path).map_err(|e| format!("Could not move {} to the trash: {e}", world.name))
+}
+
+/// Moves a file or folder to the system's trash.
+pub(crate) fn to_trash(path: &Path) -> Result<(), trash::Error> {
     #[allow(unused_mut)]
     let mut trash = trash::TrashContext::default();
     // The crate's default on macOS asks Finder through AppleScript, which needs the player to
@@ -260,9 +265,7 @@ pub fn delete(world: &World) -> Result<(), String> {
         &mut trash,
         trash::macos::DeleteMethod::NsFileManager,
     );
-    trash
-        .delete(&world.path)
-        .map_err(|e| format!("Could not move {} to the trash: {e}", world.name))
+    trash.delete(path)
 }
 
 #[cfg(test)]
