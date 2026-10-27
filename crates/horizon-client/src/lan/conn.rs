@@ -677,9 +677,16 @@ fn serve_login(
         _ => return Err("expected a login hello".into()),
     };
     if !valid_name(&hello.name) {
+        // handleHello's validState throws; Connection.exceptionCaught sends the
+        // exception as the login disconnect.
         login_disconnect(
             &mut c,
-            &translatable("multiplayer.disconnect.invalid_name", &[]),
+            &translatable(
+                "disconnect.genericReason",
+                &[
+                    "Internal Exception: java.lang.IllegalStateException: Invalid characters in username",
+                ],
+            ),
         );
         return Ok(());
     }
