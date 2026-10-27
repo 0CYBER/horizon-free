@@ -4811,7 +4811,9 @@ impl Game<'_> {
         // only on the server) until the server's USE_ITEM_COMPLETE.
         let remaining = consumable.ticks() - ticks as i32;
         if consumable.particles && consumable.should_emit(remaining) {
-            self.eat_particles(&stack, 5);
+            // `emit_consume` spawns the bites and plays the eat sound, as
+            // `tick_used_item` does on the player's own server.
+            self.emit_consume(&consumable, &stack, 5);
         }
         self.using = Some((slot, ticks + 1));
     }
