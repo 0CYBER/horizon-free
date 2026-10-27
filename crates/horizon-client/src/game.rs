@@ -3776,6 +3776,21 @@ impl Game<'_> {
                 {
                     self.hive_broken_by_player(pos, hive, honey, facing);
                 }
+                // InfestedBlock.spawnAfterBreak: its silverfish comes out unless the
+                // tool has silk touch (#prevents_infested_spawns) or blocks don't drop.
+                if facts.name.starts_with("minecraft:infested_")
+                    && !silk
+                    && self.ui.rules.bool("block_drops")
+                {
+                    let at = [
+                        f64::from(pos[0]) + 0.5,
+                        f64::from(pos[1]),
+                        f64::from(pos[2]) + 0.5,
+                    ];
+                    if let Some(id) = self.spawn_mob("minecraft:silverfish", at, false) {
+                        self.mob_poof(id);
+                    }
+                }
                 // SpawnerBlock.spawnAfterBreak pops its experience whatever the tool.
                 let xp = if silk && &*facts.name != "minecraft:spawner" {
                     0
