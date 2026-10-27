@@ -480,6 +480,7 @@ impl Game<'_> {
         if self.ui.rules.bool("spawn_mobs") {
             self.tick_wandering_trader();
             self.tick_patrol_spawner();
+            self.tick_village_siege();
         }
         self.tick_raids();
         self.tick_creature_entities()

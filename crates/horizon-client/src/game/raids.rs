@@ -23,6 +23,7 @@ use std::collections::{HashMap, HashSet};
 #[derive(Default)]
 pub(super) struct Raiding {
     patrol: PatrolSpawner,
+    siege: Siege,
     /// The raids of the dimension the player is in, and that dimension.
     raids: Raids,
     loaded: Option<Dim>,
@@ -36,6 +37,17 @@ pub(super) struct Raiding {
     /// Beds near each raid's centre, rescanned now and then (`HOME` points
     /// of interest for `RaiderMoveThroughVillageGoal`).
     homes: HashMap<i32, (i64, std::sync::Arc<Vec<[i32; 3]>>)>,
+}
+
+/// `VillageSiege`: whether tonight is a siege, whether the spot is chosen,
+/// and the zombies still to spawn there.
+#[derive(Default)]
+struct Siege {
+    tonight: bool,
+    set_up: bool,
+    zombies_to_spawn: i32,
+    next_spawn_time: i32,
+    spot: [i32; 3],
 }
 
 impl Raiding {
@@ -1186,6 +1198,140 @@ impl Game<'_> {
             ];
             self.spawn_event_mob("minecraft:pillager", at, m.leader, raider::Reason::Patrol);
         }
+    }
+    /// `VillageSiege.tick`: at midnight one night in ten, 20 zombies spawn
+    /// two ticks apart near a village 32 blocks from a player standing in it.
+    pub(super) fn tick_village_siege(&mut self) {
+        if self.dim != Dim::Overworld {
+            return;
+        }
+        let enemies = self.ui.rules.bool("spawn_mobs") && self.ui.rules.bool("spawn_monsters");
+        if self.sky_darken() < 4 || !enemies {
+            self.raiding.siege.tonight = false;
+            self.raiding.siege.set_up = false;
+            return;
+        }
+        // ClockTimeMarkers.ROLL_VILLAGE_SIEGE: tick 18000 of the 24000 tick day.
+        if self.world.day_time.rem_euclid(24000) == 18000 {
+            self.raiding.siege.tonight = self.world.random.next_int_bound(10).unwrap_or(1) == 0;
+        }
+        if !self.raiding.siege.tonight {
+            return;
+        }
+        if !self.raiding.siege.set_up {
+            if !self.try_to_setup_siege() {
+                return;
+            }
+            self.raiding.siege.set_up = true;
+        }
+        if self.raiding.siege.next_spawn_time > 0 {
+            self.raiding.siege.next_spawn_time -= 1;
+            return;
+        }
+        self.raiding.siege.next_spawn_time = 2;
+        if self.raiding.siege.zombies_to_spawn > 0 {
+            self.try_spawn_siege_zombie();
+            self.raiding.siege.zombies_to_spawn -= 1;
+        } else {
+            self.raiding.siege.tonight = false;
+        }
+    }
+    /// `ServerLevel.isVillage`: within one section of a village.
+    fn is_village(centers: &HashSet<(i32, i32, i32)>, pos: [i32; 3]) -> bool {
+        sections_to_village(centers, section(pos)) <= 1
+    }
+    /// `VillageSiege.tryToSetupSiege`: the first player standing in a village
+    /// picks a spot 32 blocks away (ten tries); true when one stood in a
+    /// village, even if no spot was found.
+    fn try_to_setup_siege(&mut self) -> bool {
+        let centers = self.village_centers();
+        for player in self.level_players() {
+            if player.spectator {
+                continue;
+            }
+            let center = block_of(player.position);
+            if !Self::is_village(&centers, center)
+                || self.natural_level().biome_tag(
+                    "minecraft:without_zombie_sieges",
+                    center[0],
+                    center[1],
+                    center[2],
+                )
+            {
+                continue;
+            }
+            for _ in 0..10 {
+                let angle = self.world.random.next_float() * std::f32::consts::TAU;
+                let spot = [
+                    center[0] + (angle.cos() * 32.0).floor() as i32,
+                    center[1],
+                    center[2] + (angle.sin() * 32.0).floor() as i32,
+                ];
+                if self.find_siege_spawn_pos(&centers, spot).is_some() {
+                    self.raiding.siege.spot = spot;
+                    self.raiding.siege.next_spawn_time = 0;
+                    self.raiding.siege.zombies_to_spawn = 20;
+                    break;
+                }
+            }
+            return true;
+        }
+        false
+    }
+    /// `VillageSiege.trySpawn`: one zombie, in a random yaw.
+    fn try_spawn_siege_zombie(&mut self) {
+        let centers = self.village_centers();
+        let spot = self.raiding.siege.spot;
+        let Some(at) = self.find_siege_spawn_pos(&centers, spot) else {
+            return;
+        };
+        let Some(id) = self.spawn_event_mob("minecraft:zombie", at, false, raider::Reason::Event)
+        else {
+            return;
+        };
+        let yaw = self.world.random.next_float() * 360.0;
+        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+            (m.yaw, m.previous_yaw, m.body_yaw, m.previous_body_yaw) = (yaw, yaw, yaw, yaw);
+            (m.head_yaw, m.previous_head_yaw) = (yaw, yaw);
+        }
+        self.spawn_jockeys(id, false);
+    }
+    /// `VillageSiege.findRandomSpawnPos`: ten tries within 8 blocks of the
+    /// spot for a village column where a zombie may spawn.
+    fn find_siege_spawn_pos(
+        &mut self,
+        centers: &HashSet<(i32, i32, i32)>,
+        spot: [i32; 3],
+    ) -> Option<[f64; 3]> {
+        let mut random = std::mem::replace(
+            &mut self.world.random,
+            horizon_core::random::LegacyRandom::new(0),
+        );
+        let mut found = None;
+        for _ in 0..10 {
+            let x = spot[0] + random.next_int_bound(16).unwrap_or(0) - 8;
+            let z = spot[2] + random.next_int_bound(16).unwrap_or(0) - 8;
+            if !self.world.chunks.contains_key(&(x >> 4, z >> 4)) {
+                continue;
+            }
+            let y = self.surface_height(x, z);
+            if Self::is_village(centers, [x, y, z])
+                && spawn_rules::check_spawn_rules(
+                    Species::Zombie,
+                    &self.natural_level(),
+                    spawn_rules::Reason::Event,
+                    &mut random,
+                    x,
+                    y,
+                    z,
+                )
+            {
+                found = Some([f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5]);
+                break;
+            }
+        }
+        self.world.random = random;
+        found
     }
     /// A raider's ominous banner (drop chance 2.0: always dropped) and a
     /// patrol captain's ominous bottle (`entities/pillager`).
