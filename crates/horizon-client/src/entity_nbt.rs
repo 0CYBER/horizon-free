@@ -907,6 +907,16 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             .get("mainhand")
             .and_then(|i| text(i.get("id")))
             .map(Into::into);
+        // The custom name of the main hand item (`ItemStack.hasCustomName`).
+        m.extra.main_hand_name = eq
+            .get("mainhand")
+            .and_then(|i| i.get("components"))
+            .and_then(|c| c.get("minecraft:custom_name"))
+            .map(|t| {
+                horizon_client_core::scoreboard::comp_text(
+                    &horizon_client_core::scoreboard::tag_to_json(t),
+                )
+            });
         m.extra.off_hand = eq
             .get("offhand")
             .and_then(|i| text(i.get("id")))
