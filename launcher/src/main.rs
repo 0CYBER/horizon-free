@@ -30,6 +30,7 @@ mod perf;
 mod screenshots_page;
 mod scrollbar;
 mod servers_page;
+mod shortcut_page;
 mod theme;
 mod titlebar;
 mod while_playing;
@@ -250,6 +251,8 @@ struct Launcher {
     console: console_page::Console,
     /// What the window did when the game started (`while_playing.rs`).
     aside: while_playing::Aside,
+    /// The selected instance's desktop shortcut (`shortcut_page.rs`).
+    shortcuts: shortcut_page::Shortcuts,
     /// The name the game made up for an offline player (`horizon-player.txt`), for the top bar.
     offline_name: Option<String>,
     /// The player's servers, for the sidebar until the Servers page has read them.
@@ -418,6 +421,7 @@ impl Launcher {
             importing: Default::default(),
             console: Default::default(),
             aside: while_playing::Aside::new(window.window_handle()),
+            shortcuts: Default::default(),
             offline_name: offline_name(),
             side_servers: horizon_launcher::servers::list(),
             art: art::Art::default(),

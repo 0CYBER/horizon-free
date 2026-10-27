@@ -100,6 +100,13 @@ The opening, then Play ([clip](docs/opening.webm)):
   pack into the selected instance. A data pack is pointed at the world rows, and the Packs section
   and the world rows keep taking their own drops. A note in the corner says what happened.
   `horizon-launcher instance import <file>`.
+- **Desktop shortcut**: Home's Instance row has **Shortcut**: a shortcut on the desktop that plays
+  the selected instance without opening the launcher (`horizon-launcher play --instance <id>`).
+  A `.desktop` file on Linux (also put in the applications menu, and marked trusted with `gio`
+  where it exists), a small app with Horizon's icon on macOS, a `.lnk` on Windows
+  (`horizon_launcher::shortcut`). **Remove shortcut** moves it to the trash; it is found by the
+  instance id inside it, so a rename doesn't lose it. `horizon-launcher instance shortcut
+  [instance] [--remove]`; `HORIZON_LAUNCHER_DESKTOP` points it at another folder.
 - **Console**: Home's Console shows the game's output of this run as it comes: a search (every
   word, any case), Follow to keep the newest line in view, Copy, and Open logs folder. Warnings
   and errors stand out. **Share log…** uploads the log to [mclo.gs](https://mclo.gs), a paste

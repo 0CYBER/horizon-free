@@ -198,6 +198,15 @@ enum InstanceCmd {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Put a shortcut on the desktop that plays an instance (`play --instance`): a .desktop
+    /// file (also in the applications menu) on Linux, an app on macOS, a .lnk on Windows
+    Shortcut {
+        /// The instance (default: the selected one)
+        instance: Option<String>,
+        /// Move the instance's shortcuts to the trash instead
+        #[arg(long)]
+        remove: bool,
+    },
     /// Import what a file is, as dropping it on the window does: a shared instance (a .mrpack
     /// without mod loaders, such as `instance export` writes, or a game folder zip) becomes a
     /// new instance; a Java modpack goes to the Modpacks import; a resource or shader pack into
@@ -1826,6 +1835,27 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                 tag => Some(backend::resolve_version(Some(tag))?),
             };
             changed(instances::edit(&instance, |m| m.version = pin)?)
+        }
+        InstanceCmd::Shortcut { instance, remove } => {
+            use horizon_launcher::shortcut;
+            let i = match instance {
+                Some(name) => instances::find(&name)?,
+                None => instances::selected(),
+            };
+            let paths = match remove {
+                false => shortcut::make(backend::exe_path(), &i.id, &i.name)?,
+                true => shortcut::remove(&i.id)?,
+            };
+            if as_json {
+                json(serde_json::json!({ "instance": i.id, "paths": paths }));
+            } else if remove && paths.is_empty() {
+                println!("{} has no shortcut.", i.name);
+            } else {
+                let did = if remove { "Moved to the trash" } else { "Made" };
+                for path in paths {
+                    println!("{did}: {}", path.display());
+                }
+            }
         }
         InstanceCmd::Import { file, instance } => {
             use horizon_launcher::import::{self, Dropped};
