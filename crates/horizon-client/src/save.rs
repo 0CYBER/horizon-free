@@ -2435,28 +2435,7 @@ fn write_saved_data(world: &Path, name: &str, data: Tag) -> Result<()> {
         Tag::compound([("data", data), ("DataVersion", Tag::Int(DATA_VERSION))]),
     )
 }
-pub fn uuid_text(u: [i32; 4]) -> String {
-    let hex: String = u.iter().map(|v| format!("{:08x}", *v as u32)).collect();
-    format!(
-        "{}-{}-{}-{}-{}",
-        &hex[0..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..32]
-    )
-}
-pub fn uuid_from_text(s: &str) -> Option<[i32; 4]> {
-    let hex: String = s.chars().filter(|c| *c != '-').collect();
-    if hex.len() != 32 {
-        return None;
-    }
-    let mut out = [0i32; 4];
-    for (i, v) in out.iter_mut().enumerate() {
-        *v = u32::from_str_radix(&hex[i * 8..i * 8 + 8], 16).ok()? as i32;
-    }
-    Some(out)
-}
+pub use horizon_client_core::uuid::{uuid_from_text, uuid_text};
 /// A random (version 4) UUID as vanilla's four-int form.
 pub fn random_uuid() -> [i32; 4] {
     let t = std::time::SystemTime::now()
@@ -5124,6 +5103,30 @@ mod tests {
             panic!("a furnace back");
         };
         assert_eq!(back.recipes_used.get("minecraft:cooked_porkchop"), Some(&3));
+    }
+    /// The world's save (Level.write) writes the rules as they are now, and a
+    /// world opened again reads them back (#74).
+    #[test]
+    fn level_save_keeps_changed_rules() {
+        use crate::gamerules::{GameRules, Value};
+        let dir =
+            std::env::temp_dir().join(format!("horizon-gamerules-level-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut level = super::Level::default();
+        level.write(&dir).unwrap();
+        // Rules changed while playing, then saved and loaded again.
+        let mut rules = GameRules::load(&dir);
+        assert_eq!(rules, GameRules::default());
+        assert!(rules.set("advance_time", Value::Bool(false)));
+        assert!(rules.set("advance_weather", Value::Bool(false)));
+        assert!(rules.set("random_tick_speed", Value::Int(0)));
+        level.game_rules = rules.by_name();
+        level.write(&dir).unwrap();
+        assert_eq!(GameRules::load(&dir), rules);
+        let read = super::Level::read(&dir).unwrap();
+        assert_eq!(read.game_rules, rules.by_name());
+        assert_eq!(read.game_rule("advance_time"), 0);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// A save written before the key was namespaced holds an id twice, once bare: vanilla
