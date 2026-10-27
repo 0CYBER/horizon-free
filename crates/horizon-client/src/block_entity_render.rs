@@ -562,12 +562,11 @@ fn frac(x: f32) -> f32 {
 /// `StringSplitter.splitLines(...).get(0)` for plain text: the first line,
 /// wrapped at the last space that fits or mid-word when none does.
 fn first_line(line: &str, max_width: f32, advance: &dyn Fn(char) -> f32) -> String {
-    let chars: Vec<char> = line.chars().collect();
     let mut width = 0.0;
     let mut last_space = None;
-    for (i, &c) in chars.iter().enumerate() {
+    for (i, c) in line.char_indices() {
         if c == '\n' {
-            return chars[..i].iter().collect();
+            return line[..i].to_owned();
         }
         if c == ' ' {
             last_space = Some(i);
@@ -576,9 +575,11 @@ fn first_line(line: &str, max_width: f32, advance: &dyn Fn(char) -> f32) -> Stri
         if width > max_width {
             let end = match last_space {
                 Some(s) if s > 0 => s,
-                _ => i.max(1),
+                _ if i > 0 => i,
+                // The first char alone is too wide: take that one char.
+                _ => c.len_utf8(),
             };
-            return chars[..end].iter().collect();
+            return line[..end].to_owned();
         }
     }
     line.to_owned()
@@ -613,7 +614,9 @@ fn sign_text_calls(
         .iter()
         .enumerate()
         .map(|(i, line)| {
+            // The line that fits, in the order it is drawn (getVisualOrder).
             let shown = first_line(line, data.max_line_width(), &advance);
+            let shown = crate::bidi::visual_str(&shown).into_owned();
             TextCall {
                 matrix: m,
                 x: -((width(&shown) as i32) / 2) as f32,
@@ -2107,5 +2110,14 @@ mod tests {
         assert_eq!(out.len(), 4);
         assert_eq!(out[1].pos, [2.0, 0.0, 0.0]);
         assert_eq!(out[2].uv, [0.5, 0.5]);
+    }
+
+    #[test]
+    fn first_line_wraps_on_bytes_without_splitting_a_char() {
+        let advance = |c: char| if c == ' ' { 4.0 } else { 6.0 };
+        assert_eq!(first_line("ab cd ef", 13.0, &advance), "ab");
+        assert_eq!(first_line("abcdef", 13.0, &advance), "ab");
+        assert_eq!(first_line("\u{6771}", 3.0, &advance), "\u{6771}");
+        assert_eq!(first_line("ab\ncd", 100.0, &advance), "ab");
     }
 }

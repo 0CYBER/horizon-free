@@ -464,7 +464,28 @@ impl Game<'_> {
             return;
         }
         // The Chat option's Hidden level takes the server's messages too.
-        if !self.ui.chat.shows(ChatSource::Server) {
+        self.local_chat_line(text, Some(SYSTEM_INDICATOR), ChatSource::Server);
+    }
+    /// A player's chat line on the window's own chat: a LAN guest's message
+    /// while the host runs in-frame (`HostEvent::Chat`). `ChatListener`
+    /// checks `canReceivePlayerMessages` for these, so Commands Only and
+    /// Hidden drop them; command feedback (`/list`, `/tp`) is a system
+    /// message and takes the system-message permission instead.
+    pub(super) fn player_message(&mut self, text: Text) {
+        if let Some(capture) = self.chat_capture.as_mut() {
+            capture.push(text);
+            return;
+        }
+        // A server's client receives the line as a packet (PlayerChat or
+        // DisguisedChat) and filters it there.
+        if self.remote.is_none() {
+            self.local_chat_line(text, None, ChatSource::Player);
+        }
+    }
+    /// A line on the window's own chat when the Chat option lets `source`
+    /// through; running mods hear it.
+    fn local_chat_line(&mut self, text: Text, indicator: Option<u32>, source: ChatSource) {
+        if !self.ui.chat.shows(source) {
             return;
         }
         let focused = self.screen == Screen::Chat;
@@ -472,8 +493,8 @@ impl Game<'_> {
         self.ui.chat.add(
             &self.gui.atlas,
             text,
-            Some(SYSTEM_INDICATOR),
-            ChatSource::Server,
+            indicator,
+            source,
             self.ticks,
             focused,
         );
@@ -602,7 +623,10 @@ impl Game<'_> {
             return;
         }
         if let Some(command) = message.strip_prefix('/') {
-            self.run_command(command);
+            // A client mod's command first, then a server mod's, as on a server.
+            if !self.mod_command(command) && !self.local_server_mod_command(command) {
+                self.run_command(command);
+            }
         } else {
             let line = Text::translate(
                 "chat.type.text",
@@ -622,6 +646,7 @@ impl Game<'_> {
                 self.mods_chat(&line);
             }
             self.lan_host_chat(message);
+            self.mod_player_chat(super::server_mods::Who::Local, message);
         }
     }
     pub(super) fn chat_scroll(&mut self, amount: f32) {
@@ -757,12 +782,18 @@ impl Game<'_> {
             max_snow_accumulation_height: r.int("max_snow_accumulation_height"),
             spawn_mobs: r.bool("spawn_mobs"),
             spawn_monsters: r.bool("spawn_monsters"),
+            fire_spread_radius_around_player: r.int("fire_spread_radius_around_player"),
         }
     }
     /// Apply rules mirrored in other state (natural regeneration, difficulty).
     pub(super) fn sync_rules(&mut self) {
         self.world.health_rules.natural_regeneration =
             self.ui.rules.bool("natural_health_regeneration");
+        // Player.isInvulnerableTo: the damage-type rules.
+        self.world.health_rules.drowning_damage = self.ui.rules.bool("drowning_damage");
+        self.world.health_rules.fall_damage = self.ui.rules.bool("fall_damage");
+        self.world.health_rules.fire_damage = self.ui.rules.bool("fire_damage");
+        self.world.health_rules.freeze_damage = self.ui.rules.bool("freeze_damage");
         use horizon_world::food::Difficulty;
         self.world.health_rules.difficulty = match self.ui.difficulty {
             0 => Difficulty::Peaceful,
@@ -775,7 +806,11 @@ impl Game<'_> {
     pub(super) fn load_world_state(&mut self) {
         self.ui.rules = GameRules::load(&self.world_root);
         self.ui.clock = WorldClock::default();
-        self.ui.difficulty = read_difficulty(&self.world_root).unwrap_or(2);
+        // PrimaryLevelData: the difficulty comes back from level.dat's difficulty_settings.
+        self.ui.difficulty = horizon_client::title::DIFFICULTIES
+            .iter()
+            .position(|d| *d == self.level.difficulty)
+            .map_or(2, |i| i as u8);
         if let Ok(bytes) = std::fs::read(self.world_root.join("data/minecraft/world_clocks.dat"))
             && let Ok(raw) = horizon_world::compression::Compression::Gzip.decode(&bytes, 1 << 20)
             && let Ok((root, _)) =
@@ -800,9 +835,9 @@ impl Game<'_> {
         self.build_registries();
         self.sync_rules();
     }
-    /// Save the clock and the difficulty beside level.dat (Level.write saves
-    /// the game rules: a second writer of game_rules.dat could leave it with
-    /// the rules loaded when the world opened).
+    /// Save the clock beside level.dat (Level.write saves the game rules: a
+    /// second writer of game_rules.dat could leave it with the rules loaded
+    /// when the world opened).
     pub(super) fn save_world_state(&mut self) {
         if self.world_root.as_os_str().is_empty() {
             return;
@@ -849,9 +884,6 @@ impl Game<'_> {
         ]);
         if let Err(e) = horizon_client::save::write_dat(&path, root) {
             log::warn!("the world clocks were not written: {e}");
-        }
-        if let Err(e) = write_difficulty(&self.world_root, self.ui.difficulty) {
-            log::warn!("the difficulty was not written: {e}");
         }
     }
     /// Death message in chat (CombatTracker.getDeathMessage, as far as the
@@ -961,34 +993,6 @@ pub fn screenshot_name(dir: &std::path::Path) -> String {
         }
         n += 1;
     }
-}
-fn read_difficulty(world: &std::path::Path) -> Option<u8> {
-    let bytes = std::fs::read(world.join("level.dat")).ok()?;
-    let raw = horizon_world::compression::Compression::Gzip
-        .decode(&bytes, 64 << 20)
-        .ok()?;
-    let (root, _) =
-        horizon_world::nbt::read_named(&raw, horizon_world::nbt::Limits::default()).ok()?;
-    match root.tag.get("Data")?.get("Difficulty")? {
-        horizon_world::nbt::Tag::Byte(b) => Some((*b).clamp(0, 3) as u8),
-        _ => None,
-    }
-}
-/// Patch `Data.Difficulty` in level.dat (Level::write stores the default).
-fn write_difficulty(world: &std::path::Path, difficulty: u8) -> horizon_client::Result<()> {
-    use horizon_world::{compression::Compression, nbt};
-    let path = world.join("level.dat");
-    let bytes = std::fs::read(&path)?;
-    let raw = Compression::Gzip.decode(&bytes, 64 << 20)?;
-    let (mut root, _) = nbt::read_named(&raw, nbt::Limits::default()).map_err(|e| e.to_string())?;
-    if let Some(data) = root.tag.get_mut("Data")
-        && let Some(d) = data.get_mut("Difficulty")
-    {
-        *d = nbt::Tag::Byte(difficulty as i8);
-    }
-    let out = nbt::write_named(&root, nbt::Limits::default()).map_err(|e| e.to_string())?;
-    std::fs::write(&path, Compression::Gzip.encode(&out)?)?;
-    Ok(())
 }
 
 /// `IntegratedServer.getProfilePermissions` for the owner: `OWNER` (4) when

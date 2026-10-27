@@ -18,6 +18,11 @@ players made of vanilla's protocol code, joins them both and runs one script on 
   travelled a tick (the mob's hit, then ServerPlayer's travel, then ServerEntity.sendChanges). It is night, so
   that no zombie burns (a burning mob is in its hurt cooldown).
 
+The script waits on the server, not on the wall: `ticks N` is N ticks of its game clock (with a `sync` round trip
+before and after, so each client holds what the server sent), `tickstep` is one `/tick step` that has run, `frozen`
+a frozen game that has stopped, and `hit` a hit that has landed (a frozen server still ticks its players, so a hit
+lands in Alice's next tick). A server that stalls under load gets the same ticks as an idle one.
+
 Each case is compared on its own. KNOWN lists the cases Horizon still gets wrong and why; one that matches
 again is reported, and should leave the list.
 """
@@ -32,15 +37,16 @@ import time
 
 try:
     from . import lab, test_rust_parity as base
-    from .test_dedicated_server_parity import Server, free_port
+    from .test_dedicated_server_parity import Server, free_port, game_time, wait_ticks
     from .test_locator_bar_parity import generate_world, ops_json
 except ImportError:
     import lab
     import test_rust_parity as base
-    from test_dedicated_server_parity import Server, free_port
+    from test_dedicated_server_parity import Server, free_port, game_time, wait_ticks
     from test_locator_bar_parity import generate_world, ops_json
 
 NAME = 'server-knockback-parity'
+PLAYERS = ('Alice', 'Bob')
 PROPERTIES = {
     'online-mode': 'false',
     'white-list': 'false',
@@ -82,18 +88,17 @@ def mob_case(kind, weapon=SWORD, sprint=False, crit=False, air=False):
               f'cmd Alice effect give {mob} minecraft:slowness 100000 127 true']
     lines = ['cmd Alice kill @e[type=!player]', 'cmd Alice gamemode creative', 'cmd Bob gamemode creative',
              f'cmd Alice item replace entity @s weapon.mainhand with {weapon}', 'cmd Alice tp Bob 2.5 -60 12.5',
-             *stand('Alice', A, -90), 'sleep 1.2']
+             *stand('Alice', A, -90), 'ticks 24']
     # In the air: frozen before its first tick, so it has not landed.
-    lines += ['cmd Alice tick freeze', *summon] if air else [*summon, 'sleep 1.5', 'cmd Alice tick freeze']
-    lines += ['sleep 0.3', f'cmd Alice data get entity {mob} Pos']
+    lines += ['cmd Alice tick freeze', 'frozen', *summon] if air else [*summon, 'ticks 30', 'cmd Alice tick freeze', 'frozen']
+    lines += [f'cmd Alice data get entity {mob} Pos']
     if sprint:
         lines.append('sprint Alice on')
     if crit:
         lines += falling(0.8)
-    lines += ['sleep 0.2', f'attack Alice {kind}', 'sleep 0.2', f'cmd Alice data get entity {mob} Motion']
+    lines += [f'hit {kind}', f'cmd Alice data get entity {mob} Motion']
     for _ in range(20):
-        lines += ['cmd Alice tick step 1', 'sleep 0.25', f'cmd Alice data get entity {mob} Pos',
-                  f'cmd Alice data get entity {mob} Motion']
+        lines += ['tickstep', f'cmd Alice data get entity {mob} Pos', f'cmd Alice data get entity {mob} Motion']
     lines += ['cmd Alice tick unfreeze', 'cmd Alice kill @e[type=!player]']
     if sprint:
         lines.append('sprint Alice off')
@@ -114,7 +119,7 @@ def pvp_case(weapon=SWORD, sprint=False, crit=False, shield=False, armour=False,
     if shield:
         # A shield blocks from five ticks after it is raised.
         lines += ['cmd Bob item replace entity @s weapon.mainhand with minecraft:shield', 'use Bob']
-    lines += ['sleep 1.5', *stand('Bob', V, 90, ticks=1)]
+    lines += ['ticks 30', *stand('Bob', V, 90, ticks=1)]
     if sprint:
         lines.append('sprint Alice on')
     if crit:
@@ -124,10 +129,12 @@ def pvp_case(weapon=SWORD, sprint=False, crit=False, shield=False, armour=False,
     if cooldown:
         # A swing at the air first: the hit is weak, and the stronger one four ticks later lands inside Bob's hurt
         # cooldown (LivingEntity.hurtServer: it hurts by the difference, with no knockback and no motion packet).
-        lines += ['sleep 0.2', 'punch Alice', 'attack Alice Bob']
-    lines += ['sleep 0.2', 'attack Alice Bob', 'sleep 0.3']
+        lines += ['ticks 4', 'punch Alice', 'attack Alice Bob']
+    # The gap between those two hits is an upper bound on the server's ticks, so a stalled server (which gets
+    # fewer in a wall's 0.2 s) still lands the second inside the cooldown; the rest is to have the server's ticks.
+    lines += ['sleep 0.2' if cooldown else 'ticks 4', 'attack Alice Bob', 'ticks 6']
     if twice:
-        lines += [*stand('Bob', V, 90, ticks=20), 'sleep 1.5', 'attack Alice Bob', 'sleep 0.3']
+        lines += [*stand('Bob', V, 90, ticks=20), 'ticks 30', 'attack Alice Bob', 'ticks 6']
     if sprint:
         lines.append('sprint Alice off')
     lines += stand('Alice', A, -90)
@@ -144,7 +151,7 @@ def mob_hits_case(kind):
     hit = ['mark Bob', f'cmd Alice summon minecraft:{kind} {V[0] + 1} {V[1]} {V[2]} {{Rotation:[90f,0f]}}',
            f'cmd Alice effect give {mob} minecraft:slowness 100000 127 true', 'await Bob', f'cmd Alice kill {mob}']
     return ['cmd Bob clear @s', 'cmd Bob effect give @s minecraft:resistance 1000 4 true', 'cmd Alice gamemode creative',
-            *stand('Bob', V, 90), *hit, 'sleep 2', *stand('Bob', V, 90), *hit, 'sleep 1',
+            *stand('Bob', V, 90), *hit, 'ticks 40', *stand('Bob', V, 90), *hit, 'ticks 20',
             'cmd Alice kill @e[type=!player]', 'cmd Alice gamemode survival']
 
 
@@ -173,7 +180,20 @@ CASES = {
 }
 SETUP = ['cmd Alice gamerule spawn_mobs false', 'cmd Alice gamerule spawn_monsters false',
          'cmd Alice kill @e[type=!player]', 'cmd Alice gamerule advance_time false', 'cmd Alice time set midnight',
-         f'cmd Alice tp Alice {A[0]} {A[1]} {A[2]} -90 0', f'cmd Alice tp Bob {V[0]} {V[1]} {V[2]} 90 0', 'sleep 2']
+         f'cmd Alice tp Alice {A[0]} {A[1]} {A[2]} -90 0', f'cmd Alice tp Bob {V[0]} {V[1]} {V[2]} 90 0', 'ticks 40']
+
+
+def server_data(server, selector, path, timeout=120):
+    """An entity's data, asked from the console (its reply stays in the server's log, out of the clients')."""
+    deadline = time.time() + timeout
+    start = len(server.lines)
+    server.console(f'data get entity {selector} {path}')
+    while time.time() < deadline:
+        for line in server.lines[start:]:
+            if 'has the following entity data' in line:
+                return line.split('data: ', 1)[-1]
+        time.sleep(0.02)
+    raise AssertionError(f'{server.log_path.name}: no entity data in {timeout} s')
 
 
 def server_dir(directory, world):
@@ -201,29 +221,72 @@ def run_side(label, server_command, client_command, build, world):
         server.wait_for(r'Done \(')
         with (build / f'{label}-client.log').open('w') as log:
             client = subprocess.Popen([*map(str, client_command), '127.0.0.1', str(port), str(out)],
-                                      cwd=lab.ROOT, stdin=subprocess.PIPE, stdout=log, stderr=subprocess.STDOUT,
-                                      text=True)
+                                      cwd=lab.ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                      stderr=subprocess.STDOUT, text=True)
+
+            def sync():
+                """Every script line sent so far has run, and each client holds what its server sent before."""
+                for name in PLAYERS:
+                    client.stdin.write(f'sync {name}\n')
+                client.stdin.flush()
+                for name in PLAYERS:
+                    while (reply := client.stdout.readline()) != f'synced {name}\n':
+                        if not reply:
+                            raise AssertionError(f'{label}: the client exited (see {build}/{label}-client.log)')
+                        log.write(reply)
 
             def send(line):
-                if line.startswith('sleep '):
+                """A script line for the client, or one of ours: the waits are on the server's game clock, not the
+                wall's, so a server that stalls under load still gets the ticks each case needs."""
+                word = line.split()[0]
+                if word == 'sleep':
                     time.sleep(float(line.split()[1]))
+                elif word == 'ticks':
+                    sync()
+                    wait_ticks(server, int(line.split()[1]))
+                    sync()
+                elif word == 'frozen':
+                    # The tick in flight when ticking was frozen has finished: the clock reads the same twice.
+                    sync()
+                    while game_time(server) != game_time(server):
+                        pass
+                elif word == 'hit':
+                    # Alice hits the mob. A frozen server still ticks its players, and the hit lands in Alice's
+                    # next tick, not when the packet arrives: the mob's motion says when it has.
+                    sync()
+                    mob = f'@e[type=minecraft:{line.split()[1]},limit=1]'
+                    before = server_data(server, mob, 'Motion')
+                    client.stdin.write(f'attack Alice {line.split()[1]}\n')
+                    client.stdin.flush()
+                    while server_data(server, mob, 'Motion') == before:
+                        time.sleep(0.05)
+                    sync()
+                elif word == 'tickstep':
+                    # `/tick step 1` answers at once and the tick runs after: the clock says when it has.
+                    sync()
+                    before = game_time(server)
+                    client.stdin.write('cmd Alice tick step 1\n')
+                    client.stdin.flush()
+                    while game_time(server) == before:
+                        time.sleep(0.05)
+                    sync()
                 else:
                     client.stdin.write(line + '\n')
                     client.stdin.flush()
             try:
-                for name in ('Alice', 'Bob'):
+                for name in PLAYERS:
                     send(f'join {name}')
                     server.wait_for(rf'{name} joined the game', timeout=120)
-                    time.sleep(2)
+                    wait_ticks(server, 40)
                 for line in SETUP:
                     send(line)
                 for case, lines in CASES.items():
                     send(f'step {case}')
                     for line in lines:
                         send(line)
-                    time.sleep(0.5)
+                    send('ticks 10')
                 send('end')
-                client.wait(timeout=60)
+                log.write(client.communicate(timeout=60)[0])
             finally:
                 if client.poll() is None:
                     client.kill()
@@ -271,12 +334,12 @@ def main():
     subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none', '-nowarn', '-sourcepath',
                     lab.ROOT / 'mods/horizon/src/test/java', '-cp', dependencies, '-d', classes, oracle],
                    cwd=lab.ROOT, check=True, capture_output=True)
-    subprocess.run(['cargo', 'build', '--release', '-p', 'horizon-client', '--bin', 'horizon-client'], cwd=lab.ROOT,
+    subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-client', '--bin', 'horizon-client'], cwd=lab.ROOT,
                    check=True, capture_output=True)
     import json
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
                                                   cwd=lab.ROOT, text=True))
-    binary = Path(metadata['target_directory']) / 'release' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
+    binary = Path(metadata['target_directory']) / 'fast' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     vanilla_server = ['java', '-Xmx2g', '-Duser.timezone=UTC', '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
     horizon_server = [binary, '--resources', lab.LOCAL / 'horizon-client/26.3', '--dedicated', '--nogui']
     client = ['java', '-Xmx1g', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.KnockbackClient']

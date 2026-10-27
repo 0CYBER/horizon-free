@@ -300,6 +300,8 @@ struct Glide {
 pub(super) struct Agent {
     task: Option<Task>,
     glide: Option<Glide>,
+    /// Control-fixture barrier: hold simulation and packet handling, not transport threads.
+    pub hold_server: bool,
 }
 
 pub(super) enum Handled {
@@ -417,6 +419,9 @@ impl Game<'_> {
             Screen::Advancements => "advancements",
             Screen::WorldOptions => "world-options",
             Screen::Friends => "friends",
+            Screen::ServerLinks => "server-links",
+            Screen::ConfirmLink => "confirm-link",
+            Screen::DialogWarning => "dialog-warning",
             Screen::CommandBlock => "command-block",
             Screen::Win => "win",
             Screen::Mod => "mod",
@@ -479,6 +484,8 @@ impl Game<'_> {
                 "absorption": p.health.absorption(),
                 // The hurt animation's ticks left (the camera's hurt tilt).
                 "hurt_time": p.health.hurt_animation_time,
+                // LivingEntity.deathTime while dead (the camera's death roll).
+                "death_time": self.death_time(),
                 "air": p.air,
                 "food": p.health.food.food,
                 "saturation": p.health.food.saturation,
@@ -667,6 +674,7 @@ impl Game<'_> {
         });
         if let Some(chat) = &self.ui.chat_screen {
             v["chat_input"] = json!(chat.input.value);
+            v["chat_suggestions"] = json!(chat.suggestions_visible());
         }
         if self.title.is_some() {
             v["menu"] = self.title_value();
@@ -702,9 +710,12 @@ impl Game<'_> {
             // the recipe buttons of the page, page arrows, filter and tabs.
             let book = self.recipe_book_targets();
             if !book.is_empty() {
+                let (open, filtering) = self.recipe_book_flags().unwrap_or_default();
                 v["recipe_book"] = json!({
                     "targets": book.iter().map(|t| t.rect).collect::<Vec<_>>(),
                     "known": self.recipe_book_known(),
+                    "open": open,
+                    "filtering": filtering,
                 });
             }
             v["slot_ids"] = json!(

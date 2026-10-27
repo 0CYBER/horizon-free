@@ -171,12 +171,23 @@ fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
     if d >= end { return 1.0; }
     return (d - start) / (end - start);
 }
+// CRUMBLING_UV_BEGIN
+fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>, dimensions: vec2<u32>) -> vec2<f32> {
+    let size = vec2<f32>(dimensions);
+    // Undo stage_light's 16-bit quantization before adding local texels. Otherwise
+    // different stages can fall on opposite sides of a nearest-sampling boundary.
+    let origin = round(packed_origin * size);
+    let extent = max(round(sprite_size * size), vec2(1.0));
+    let local = min(floor(fract(uv) * extent), extent - vec2(1.0));
+    return (origin + local + vec2(0.5)) / size;
+}
+// CRUMBLING_UV_END
 @fragment fn fs_entity(in: Out, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     var uv = in.uv;
     if in.overlay == 6u { uv.y = in.wrap.x + fract(in.uv.y) * in.wrap.y; }
     if in.overlay == 11u || in.overlay == 12u {
         // Each crack's stage sprite origin comes in its light bytes (breaking::stage_light).
-        uv = in.wrap + fract(in.uv) * globals.crumbling_sprite.zw;
+        uv = crumbling_uv(in.uv, in.wrap, globals.crumbling_sprite.zw, textureDimensions(atlas));
     }
     var color = textureSample(atlas, atlas_sampler, uv) * select(in.back_color, in.color, front);
     if in.overlay == 9u || in.overlay == 10u {
@@ -197,7 +208,7 @@ fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
     // lit texture, then the lightmap, then the glint and fog.
     color = vec4(mix(in.overlay_color.rgb, color.rgb, in.overlay_color.a), color.a);
     color *= in.light_color;
-    if in.overlay == 7u || in.overlay == 8u {
+    if in.overlay == 7u || in.overlay == 8u || in.overlay == 33u {
         // Enchantment glint (overlay 7, 8 with the hurt tint): the purple
         // enchanted_glint sheen drifting diagonally over the item's shape.
         let px = in.uv * vec2<f32>(textureDimensions(atlas));
@@ -213,9 +224,22 @@ fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
     return vec4(mix(color.rgb, globals.fog_color.rgb, f * globals.fog_color.a), color.a);
 }
 
+fn celestial_color(in: Out) -> vec4<f32> {
+    return textureSample(atlas, atlas_sampler, in.uv) * in.color * in.light_color;
+}
 @fragment fn fs_celestial(in: Out) -> @location(0) vec4<f32> {
-    let color = textureSample(atlas, atlas_sampler, in.uv) * in.color * in.light_color;
-    return color;
+    return celestial_color(in);
+}
+
+// The sky's celestial pass (sun, moon, the End sky): fs_celestial's light,
+// premultiplied for an additive (one, one) blend, and as alpha how much of it
+// the texel adds, which the blend takes off the frame's alpha. HDR output
+// (hdr.wgsl) lifts only where that left it low: the sun's and moon's discs, not
+// the dark rest of their quads or the dim End sky.
+@fragment fn fs_sky_celestial(in: Out) -> @location(0) vec4<f32> {
+    let color = celestial_color(in);
+    let added = color.rgb * color.a;
+    return vec4(added, smoothstep(0.1, 0.3, max(added.r, max(added.g, added.b))));
 }
 
 // RenderPipelines.WATER_MASK: depth only (the pipeline masks the colour off).

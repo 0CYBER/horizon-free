@@ -131,6 +131,7 @@ fn draw(
             foil,
             light_emission: 0,
             cull_back: false,
+            translucent: false,
         });
     }
     for (child_name, child) in &part.children {

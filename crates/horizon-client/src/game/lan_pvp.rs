@@ -32,9 +32,13 @@ pub(super) enum Victim {
 
 /// The attacker's side of the hit.
 pub(super) struct Strike {
+    /// The attacking guest, kept after their turn through `as_guest` ends.
+    attacker: Option<u32>,
     amount: f32,
     scale: f32,
     crit: bool,
+    /// `Player.attack`'s `magicBoost > 0`: the enchantments added damage.
+    magic: bool,
     from: [f64; 3],
     sweep: Option<[f64; 3]>,
     /// `causeExtraKnockback`: its strength and direction (the attacker's
@@ -82,9 +86,11 @@ impl Game<'_> {
         };
         if let Some(strike) = self.pvp_strike()
             && self.pvp_land(&mut host, Victim::Guest(conn), &strike)
-            && strike.stops_sprint()
         {
-            self.stop_sprint_after_extra_knockback();
+            self.pvp_exhaustion();
+            if strike.stops_sprint() {
+                self.stop_sprint_after_extra_knockback();
+            }
         }
         self.lan = Some(host);
         true
@@ -102,26 +108,33 @@ impl Game<'_> {
             .map(|g| Victim::Guest(g.conn))
     }
 
-    /// The attacker's side of `Player.attack` (the host, or a guest swapped
-    /// in): the damage, the charge reset, the exhaustion and the swing.
-    pub(super) fn pvp_strike(&mut self) -> Option<Strike> {
-        let p = self.player.as_ref()?;
-        let from = [p.position.x, p.position.y, p.position.z];
-        let (amount, scale, crit) = self.melee_damage("minecraft:player");
-        let sweep = self.sweep_attack_position(scale, crit);
-        let (strength, knockback_attack) = self.extra_knockback("minecraft:player", scale);
-        let (xd, zd) = self.extra_knockback_direction();
-        self.attack_ticks = 0;
+    /// `Player.attack`'s `causeFoodExhaustion(0.1F)`, charged to the attacker
+    /// (the host, or a guest swapped in) only once the hit hurt the victim.
+    pub(super) fn pvp_exhaustion(&mut self) {
         if let Some(p) = self.player.as_mut()
             && !self.creative
         {
             p.cause_food_exhaustion(0.1);
         }
+    }
+
+    /// The attacker's side of `Player.attack` (the host, or a guest swapped
+    /// in): the damage, the charge reset and the swing.
+    pub(super) fn pvp_strike(&mut self) -> Option<Strike> {
+        let p = self.player.as_ref()?;
+        let from = [p.position.x, p.position.y, p.position.z];
+        let (amount, scale, crit, magic) = self.melee_damage("minecraft:player");
+        let sweep = self.sweep_attack_position(scale, crit);
+        let (strength, knockback_attack) = self.extra_knockback("minecraft:player", scale);
+        let (xd, zd) = self.extra_knockback_direction();
+        self.attack_ticks = 0;
         self.swing_arm();
         Some(Strike {
+            attacker: self.lan_acting,
             amount,
             scale,
             crit,
+            magic,
             from,
             sweep,
             knockback: (strength, xd, zd),
@@ -242,14 +255,50 @@ impl Game<'_> {
             if hurt && strength > 0.0 {
                 g.knock_back_player(f64::from(strength), xd, zd);
             }
-            hurt
+            // The victim's thorns, dealt to the attacker below.
+            let thorns = if hurt { g.thorns_damage() } else { Vec::new() };
+            (hurt, thorns)
         };
-        let hurt = self.ui.rules.bool("pvp")
-            && harm
-            && match victim {
+        let (hurt, thorns) = if self.ui.rules.bool("pvp") && harm {
+            match victim {
                 Victim::Host => land(self),
-                Victim::Guest(conn) => self.guest_struck_by(host, conn, land).unwrap_or(false),
+                Victim::Guest(conn) => self.guest_struck_by(host, conn, land).unwrap_or_default(),
+            }
+        } else {
+            Default::default()
+        };
+        if hurt && (s.crit || s.magic) {
+            let target = match victim {
+                Victim::Host => self.player.as_ref().map(|p| (host.host_entity, p)),
+                Victim::Guest(conn) => host
+                    .hub
+                    .guest(conn)
+                    .and_then(|g| g.motion.as_deref().map(|p| (g.entity_id, p))),
             };
+            if let Some((id, p)) = target {
+                let d = p.dimensions;
+                let (feet, width, height) = (
+                    [p.position.x, p.position.y, p.position.z],
+                    f64::from(d.width),
+                    f64::from(d.height),
+                );
+                if s.crit {
+                    self.critical_hit(s.attacker, id, feet, width, height, false);
+                }
+                if s.magic {
+                    self.critical_hit(s.attacker, id, feet, width, height, true);
+                }
+            }
+        }
+        // `Enchantment.doPostAttack`: thorns hurt the attacking player.
+        for damage in thorns {
+            match s.attacker {
+                None => self.hurt_player_by("minecraft:thorns", damage),
+                Some(conn) => {
+                    self.guest_hit_by(host, conn, |g| g.hurt_player_by("minecraft:thorns", damage));
+                }
+            }
+        }
         let sound = match (hurt, s.crit, s.scale > 0.9) {
             (false, ..) => "minecraft:entity.player.attack.nodamage",
             (true, true, _) => "minecraft:entity.player.attack.crit",

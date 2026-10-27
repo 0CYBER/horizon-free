@@ -119,7 +119,17 @@ impl Game<'_> {
 
     /// Runs `f` as each guest in play here, for what strikes every player in
     /// an area (`Level.getEntities`), not only the window's own.
-    pub(super) fn each_guest_hit(&mut self, mut f: impl FnMut(&mut Self)) {
+    pub(super) fn each_guest_hit(&mut self, f: impl FnMut(&mut Self)) {
+        self.each_guest_hit_except(None, f);
+    }
+
+    /// [`Self::each_guest_hit`] leaving out the guest `except` (the one a
+    /// firework rocket is attached to, which it hurts on its own).
+    pub(super) fn each_guest_hit_except(
+        &mut self,
+        except: Option<u32>,
+        mut f: impl FnMut(&mut Self),
+    ) {
         let Some(mut host) = self.lan.take() else {
             return;
         };
@@ -127,7 +137,7 @@ impl Game<'_> {
             .hub
             .guests
             .iter()
-            .filter(|g| host.hub.here(g) && g.loaded && !g.dead)
+            .filter(|g| host.hub.here(g) && g.loaded && !g.dead && Some(g.conn) != except)
             .map(|g| g.conn)
             .collect();
         for conn in conns {
@@ -165,9 +175,9 @@ impl Game<'_> {
             .iter()
             .filter(|g| host.hub.here(g) && g.loaded && !g.dead && !g.spectator())
             .map(|g| {
-                let [x, y, z] = g.position;
-                let height = if g.sneaking { 1.5 } else { 1.8 };
-                ([x - 0.3, y, z - 0.3], [x + 0.3, y + height, z + 0.3])
+                let b = g.bounds();
+                let (lo, hi) = (b.min_position(), b.max_position());
+                ([lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z])
             })
             .collect()
     }
@@ -309,7 +319,7 @@ impl Game<'_> {
                     uuid: horizon_client::lan::playerdata::uuid_ints(g.uuid),
                     position: g.position,
                     eye: [x, y + g.eye_height(), z],
-                    height: if g.sneaking { 1.5 } else { 1.8 },
+                    height: g.dimensions().height,
                     creative: g.creative(),
                     spectator: g.spectator(),
                     alive: !g.dead,
@@ -326,14 +336,9 @@ impl Game<'_> {
     }
 }
 
-/// A guest's bounding box (0.6 wide, 1.8 tall, 1.5 crouching).
+/// A guest's bounding box, by its pose (`Avatar.POSES`).
 pub(super) fn guest_bounds(g: &horizon_client::lan::guest::Guest) -> Aabb {
-    let [x, y, z] = g.position;
-    let height = if g.sneaking { 1.5 } else { 1.8 };
-    Aabb::new(
-        Vec3::new(x - 0.3, y, z - 0.3),
-        Vec3::new(x + 0.3, y + height, z + 0.3),
-    )
+    g.bounds()
 }
 
 #[cfg(test)]
@@ -360,6 +365,7 @@ mod tests {
             velocity: Vec3::ZERO,
             yaw: 0.0,
             hero: false,
+            effects: Vec::new(),
             uuid: [0; 4],
             allies: Default::default(),
             remote: false,

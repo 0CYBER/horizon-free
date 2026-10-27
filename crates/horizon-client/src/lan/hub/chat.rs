@@ -219,6 +219,10 @@ impl Hub {
         };
         let line = format!("<{name}> {}", message.content);
         self.broadcast_chat(&message, &bound, line, events);
+        events.push(HostEvent::PlayerChat {
+            sender: uuid,
+            text: message.content,
+        });
     }
 
     /// handleChatSessionUpdate: a new profile key, validated against the

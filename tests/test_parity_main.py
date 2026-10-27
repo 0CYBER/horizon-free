@@ -45,7 +45,7 @@ class ParityMainTests(unittest.TestCase):
             last_run.parent.mkdir(parents=True)
             last_run.write_text('{"failed": ["music"]}')
             real_run = parity_main.subprocess.run
-            for broken_from, blamed in ((None, None), (0, None), (2, "2")):
+            for broken_from, blamed, code in ((None, None, 0), (0, None, 1), (2, "2", 1)):
                 comments = []
                 # git runs for real in the scratch repo; a `gh pr comment` is only recorded, never sent.
                 fake_run = lambda command, **kwargs: (comments.append(command) if command[0] == "gh"
@@ -55,7 +55,8 @@ class ParityMainTests(unittest.TestCase):
                                        and commits.index(git("rev-parse", "HEAD")) >= broken_from), \
                      mock.patch.object(parity_main.subprocess, "run", fake_run), \
                      mock.patch("builtins.print") as printed:
-                    parity_main.bisect(commits[0], 60, comment=True)
+                    self.assertEqual(parity_main.bisect(commits[0], 60, comment=True), code,
+                                     "0 only when the failures pass again at HEAD")
                 if blamed:
                     self.assertEqual([command[3] for command in comments], [blamed])
                 else:

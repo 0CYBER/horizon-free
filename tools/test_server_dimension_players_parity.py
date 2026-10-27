@@ -16,17 +16,16 @@ import platform
 import shutil
 import subprocess
 import sys
-import time
 
 try:
     from . import lab, test_rust_parity as base
     from .test_dedicated_server_parity import Server
-    from .test_locator_bar_parity import generate_world, server_dir
+    from .test_locator_bar_parity import Client, generate_world, server_dir
 except ImportError:
     import lab
     import test_rust_parity as base
     from test_dedicated_server_parity import Server
-    from test_locator_bar_parity import generate_world, server_dir
+    from test_locator_bar_parity import Client, generate_world, server_dir
 
 NAME = 'server-dimension-players-parity'
 NETHER, END, OVERWORLD = 'minecraft:the_nether', 'minecraft:the_end', 'minecraft:overworld'
@@ -41,8 +40,14 @@ SCRIPT = [
     # Through an End portal (Entity.handlePortal), and back by command.
     ('bob-portal', ['cmd Bob setblock 2 101 3 minecraft:end_portal', 'cmd Bob tp @s 2.5 101 3.5']),
     ('bob-portal-back', [f'cmd Bob execute in {OVERWORLD} run tp @s 2.5 100 0.5']),
+    # Sent far into the Nether, then teleported within it before the far chunks load: a portal there
+    # still takes him (the abandoned arrival does not hold him).
+    ('bob-retarget', [f'cmd Bob execute in {NETHER} run tp @s 8192.5 100 0.5', 'cmd Bob tp @s 0.5 100 0.5']),
+    ('bob-retarget-portal', ['cmd Bob setblock 0 101 3 minecraft:end_portal', 'cmd Bob tp @s 0.5 101 3.5']),
+    ('bob-retarget-back', [f'cmd Bob execute in {OVERWORLD} run tp @s 2.5 100 0.5']),
 ]
-STEP_SECONDS = 5.0
+PLAYERS = ('Alice', 'Bob')
+STEP_TICKS = 100
 
 
 def run_side(label, server_command, client_command, build, world):
@@ -54,38 +59,30 @@ def run_side(label, server_command, client_command, build, world):
     try:
         server.wait_for(r'Done \(')
         with (build / f'{label}-client.log').open('w') as log:
-            client = subprocess.Popen([*map(str, client_command), '127.0.0.1', str(port), str(out)],
-                                      cwd=lab.ROOT, stdin=subprocess.PIPE, stdout=log, stderr=subprocess.STDOUT,
-                                      text=True)
-
-            def tell(line):
-                client.stdin.write(line + '\n')
-                client.stdin.flush()
+            client = Client(client_command, port, out, log)
             try:
-                tell('players on')
-                tell('step joins')
-                for name, x in (('Alice', 0.5), ('Bob', 2.5)):
-                    tell(f'join {name}')
+                client.tell('players on')
+                client.tell('step joins')
+                for name, x in zip(PLAYERS, (0.5, 2.5)):
+                    client.tell(f'join {name}')
                     server.wait_for(rf'{name} joined the game', timeout=120)
-                    tell(f'fly {name} on')
-                    tell(f'cmd {name} tp @s {x} 100 0.5')
-                time.sleep(STEP_SECONDS)
+                    client.tell(f'fly {name} on')
+                    client.tell(f'cmd {name} tp @s {x} 100 0.5')
+                client.wait(server, PLAYERS, STEP_TICKS)
                 for step, actions in SCRIPT:
-                    tell(f'step {step}')
+                    client.tell(f'step {step}')
                     for action in actions:
-                        tell(action)
+                        client.tell(action)
                     # Standing still, a client still sends its position every 20 ticks
                     # (LocalPlayer.sendPosition): the server then tracks to it what it has sent the
                     # chunks of since (ChunkMap.move).
-                    time.sleep(STEP_SECONDS / 2)
-                    tell('still Alice')
-                    tell('still Bob')
-                    time.sleep(STEP_SECONDS / 2)
-                tell('end')
-                client.wait(timeout=60)
+                    client.wait(server, PLAYERS, STEP_TICKS // 2)
+                    for name in PLAYERS:
+                        client.tell(f'still {name}')
+                    client.wait(server, PLAYERS, STEP_TICKS // 2)
+                client.end()
             finally:
-                if client.poll() is None:
-                    client.kill()
+                client.kill()
     finally:
         server.stop()
     if not out.exists():
@@ -121,12 +118,12 @@ def main():
     subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none', '-nowarn', '-sourcepath',
                     lab.ROOT / 'mods/horizon/src/test/java', '-cp', dependencies, '-d', classes, oracle],
                    cwd=lab.ROOT, check=True, capture_output=True)
-    subprocess.run(['cargo', 'build', '--release', '-p', 'horizon-client', '--bin', 'horizon-client'], cwd=lab.ROOT,
+    subprocess.run(['cargo', 'build', '--profile', 'fast', '-p', 'horizon-client', '--bin', 'horizon-client'], cwd=lab.ROOT,
                    check=True, capture_output=True)
     import json
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
                                                   cwd=lab.ROOT, text=True))
-    binary = Path(metadata['target_directory']) / 'release' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
+    binary = Path(metadata['target_directory']) / 'fast' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
     vanilla_server = ['java', '-Xmx2g', '-Duser.timezone=UTC', '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
     horizon_server = [binary, '--resources', lab.LOCAL / 'horizon-client/26.3', '--dedicated', '--nogui']
     client = ['java', '-Xmx1g', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.LocatorBarClient']

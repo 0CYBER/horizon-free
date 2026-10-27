@@ -889,12 +889,17 @@ impl Font {
         if s.contains('§') {
             return self.width_text(&Text::legacy(s));
         }
-        s.chars().map(|c| self.glyph(c).advance).sum::<f32>().ceil()
+        crate::bidi::visual_str(s)
+            .chars()
+            .map(|c| self.glyph(c).advance)
+            .sum::<f32>()
+            .ceil()
     }
     /// Font.width of a component: `§` codes in the spans are formatting,
-    /// not glyphs.
+    /// not glyphs. Right-to-left text is measured as it is drawn, shaped.
     pub fn width_text(&self, t: &Text) -> f32 {
-        t.resolved()
+        let t = t.resolved();
+        crate::bidi::visual(&t)
             .chars()
             .map(|(c, s)| self.advance(c, s))
             .sum::<f32>()
@@ -1199,6 +1204,31 @@ mod tests {
         assert_eq!(font.width_text(&text), 10.0);
         assert_eq!(font.random_glyph(&alt, 7.0).advance, 7.0);
         assert!(!font.take_patches().is_empty());
+    }
+
+    /// A renderer rebuilt over the same font (the loading screen's handoff)
+    /// makes its atlas texture from the textures alone, so the glyphs it had
+    /// rasterized into the previous texture must be placed into the new one.
+    #[test]
+    fn a_rebuilt_atlas_gets_its_glyphs_again() {
+        let sheet = png(16, 8, |x, _| x < 2 || (8..14).contains(&x));
+        let default = br#"{"providers":[{"type":"bitmap","file":"minecraft:font/a.png","ascent":7,"chars":["ab"]}]}"#;
+        let root = root(
+            "rebuild",
+            &[
+                ("assets/minecraft/font/default.json", default),
+                ("assets/minecraft/textures/font/a.png", &sheet),
+            ],
+        );
+        let font = load(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        let first = font.glyph('a');
+        assert_eq!(font.take_patches().len(), 1);
+        font.reset_cache();
+        // Nothing is left over: drawing the character again places its pixels.
+        assert!(font.take_patches().is_empty());
+        assert_eq!(font.glyph('a').advance, first.advance);
+        assert_eq!(font.take_patches().len(), 1);
     }
 
     #[test]

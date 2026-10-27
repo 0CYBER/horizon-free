@@ -4,6 +4,7 @@
 //! Mono for text (all bundled, SIL Open Font License).
 use gpui::{rgb, Hsla, WindowAppearance};
 use horizon_launcher::backend::Appearance;
+use horizon_launcher::themes::Accent;
 use horizon_theme as tokens;
 use std::time::Duration;
 
@@ -91,25 +92,18 @@ pub fn pinned_dark(choice: Appearance) -> Option<bool> {
 
 impl Theme {
     /// The pinned look (`pinned_dark`: dark unless the player picked another), the system's when
-    /// they asked to follow it.
-    pub fn for_appearance(choice: Appearance, system: WindowAppearance) -> Self {
+    /// they asked to follow it, in the player's accent.
+    pub fn for_appearance(choice: Appearance, accent: Accent, system: WindowAppearance) -> Self {
         let system_dark = !matches!(
             system,
             WindowAppearance::Light | WindowAppearance::VibrantLight
         );
-        if pinned_dark(choice).unwrap_or(system_dark) {
-            Self::dark()
+        let dark = pinned_dark(choice).unwrap_or(system_dark);
+        Self::from(accent.apply(if dark {
+            tokens::BLOCKS_DARK
         } else {
-            Self::light()
-        }
-    }
-
-    pub fn dark() -> Self {
-        Self::from(tokens::BLOCKS_DARK)
-    }
-
-    pub fn light() -> Self {
-        Self::from(tokens::BLOCKS_LIGHT)
+            tokens::BLOCKS_LIGHT
+        }))
     }
 
     fn from(p: tokens::Blocks) -> Self {
