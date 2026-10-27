@@ -24,6 +24,14 @@ pub struct Cure {
 pub fn cure(m: &Mob) -> Option<&Cure> {
     villager::ext(m).and_then(|e| e.cure.as_ref())
 }
+/// `ZombieVillager.DATA_CONVERTING_ID` on a client: only `is_converting`
+/// (the cure's shaking) reads the cure, so its time does not matter.
+pub fn set_converting(m: &mut Mob, on: bool) {
+    villager::ext_mut(m).cure = on.then_some(Cure {
+        time: 0,
+        starter: None,
+    });
+}
 pub fn is_converting(m: &Mob) -> bool {
     m.species() == Species::ZombieVillager && cure(m).is_some()
 }

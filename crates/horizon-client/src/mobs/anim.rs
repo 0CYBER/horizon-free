@@ -540,6 +540,26 @@ fn rot_lerp_rad(a: f32, from: f32, to: f32) -> f32 {
     }
     from + a * diff
 }
+/// `DrownedModel.setupSwimAnimation`: the arms reach up and sway, the legs
+/// kick and the head lies straight.
+fn drowned_swim(p: &mut Poses, s: &State, amount: f32) {
+    if amount <= 0.0 {
+        return;
+    }
+    let sway = amount * 0.35 * (0.1 * s.age).msin();
+    let kick = amount * 0.55 * (0.1 * s.age).msin();
+    let reach = -PI * 4.0 / 5.0;
+    let (right_x, left_x) = (p.get("right_arm")[3], p.get("left_arm")[3]);
+    let (right_z, left_z) = (p.get("right_arm")[5], p.get("left_arm")[5]);
+    p.xrot("right_arm", rot_lerp_rad(amount, right_x, reach) + sway);
+    p.xrot("left_arm", rot_lerp_rad(amount, left_x, reach) - sway);
+    p.zrot("right_arm", rot_lerp_rad(amount, right_z, -0.15));
+    p.zrot("left_arm", rot_lerp_rad(amount, left_z, 0.15));
+    let (left_leg, right_leg) = (p.get("left_leg")[3], p.get("right_leg")[3]);
+    p.xrot("left_leg", left_leg - kick);
+    p.xrot("right_leg", right_leg + kick);
+    p.xrot("head", 0.0);
+}
 /// `HumanoidModel.setupSwimAnimation`: the stroke of both arms over 26
 /// walk-animation units, the head down and a slow flutter kick. The left arm
 /// eases the short way round, the right one linearly, as in vanilla.
@@ -697,6 +717,9 @@ pub fn setup(
             h.crouching = m.extra.crouching;
             h.passenger = m.extra.passenger;
             humanoid(p, s, &h);
+            if m.kind.anim == Anim::Drowned {
+                drowned_swim(p, s, m.extra.swim.amount(s.partial));
+            }
             if m.kind.anim == Anim::ZombifiedPiglin {
                 super::piglin::ears(p, s);
             }

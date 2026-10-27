@@ -2,6 +2,7 @@
 //! conditions of a stab, `Item.Properties.spear`'s numbers) and
 //! `SpearAnimations` (how the spear is held in first and third person while
 //! it charges).
+use crate::first_person::SwingAnimation;
 use glam::{Mat4, Vec3};
 use horizon_core::{geometry::trig::Mth, jmath::pow};
 use std::f32::consts::PI;
@@ -39,6 +40,10 @@ pub struct Kinetic {
     pub damage_multiplier: f32,
     pub sound: &'static str,
     pub hit_sound: &'static str,
+    /// The `attack_animation` duration, and the `piercing_weapon` sound of a
+    /// jab.
+    pub attack_ticks: i32,
+    pub attack_sound: &'static str,
 }
 
 /// `AttackRange` of a spear: the reach of its stabs.
@@ -62,16 +67,17 @@ pub const REACH: Reach = Reach {
 impl Kinetic {
     /// The `kinetic_weapon` of a spear item (`Item.Properties.spear`).
     pub fn of(item: &str) -> Option<Self> {
-        // (damage multiplier, delay, dismount time and speed, knockback time
-        // and speed, damage time and speed): seconds and blocks per second.
-        let (multiplier, delay, dismount, knockback, damage) = match item {
-            "minecraft:wooden_spear" => (0.7, 0.75, (5.0, 14.0), (10.0, 5.1), (15.0, 4.6)),
-            "minecraft:stone_spear" => (0.82, 0.7, (4.5, 13.0), (9.0, 5.1), (13.75, 4.6)),
-            "minecraft:copper_spear" => (0.82, 0.65, (4.0, 12.0), (8.25, 5.1), (12.5, 4.6)),
-            "minecraft:iron_spear" => (0.95, 0.6, (2.5, 11.0), (6.75, 5.1), (11.25, 4.6)),
-            "minecraft:golden_spear" => (0.7, 0.7, (3.5, 13.0), (8.5, 5.1), (13.75, 4.6)),
-            "minecraft:diamond_spear" => (1.075, 0.5, (3.0, 10.0), (6.5, 5.1), (10.0, 4.6)),
-            "minecraft:netherite_spear" => (1.2, 0.4, (2.5, 9.0), (5.5, 5.1), (8.75, 4.6)),
+        // (attack duration, damage multiplier, delay, dismount time and
+        // speed, knockback time and speed, damage time and speed): seconds
+        // and blocks per second.
+        let (attack, multiplier, delay, dismount, knockback, damage) = match item {
+            "minecraft:wooden_spear" => (0.65, 0.7, 0.75, (5.0, 14.0), (10.0, 5.1), (15.0, 4.6)),
+            "minecraft:stone_spear" => (0.75, 0.82, 0.7, (4.5, 13.0), (9.0, 5.1), (13.75, 4.6)),
+            "minecraft:copper_spear" => (0.85, 0.82, 0.65, (4.0, 12.0), (8.25, 5.1), (12.5, 4.6)),
+            "minecraft:iron_spear" => (0.95, 0.95, 0.6, (2.5, 11.0), (6.75, 5.1), (11.25, 4.6)),
+            "minecraft:golden_spear" => (0.95, 0.7, 0.7, (3.5, 13.0), (8.5, 5.1), (13.75, 4.6)),
+            "minecraft:diamond_spear" => (1.05, 1.075, 0.5, (3.0, 10.0), (6.5, 5.1), (10.0, 4.6)),
+            "minecraft:netherite_spear" => (1.15, 1.2, 0.4, (2.5, 9.0), (5.5, 5.1), (8.75, 4.6)),
             _ => return None,
         };
         let wood = item == "minecraft:wooden_spear";
@@ -107,7 +113,22 @@ impl Kinetic {
             } else {
                 "minecraft:item.spear.hit"
             },
+            attack_ticks: ticks(attack),
+            attack_sound: if wood {
+                "minecraft:item.spear_wood.attack"
+            } else {
+                "minecraft:item.spear.attack"
+            },
         })
+    }
+
+    /// The spear's `attack_animation`: a STAB (`SwingAnimationType` 2) as long
+    /// as its attack duration.
+    pub fn attack_animation(&self) -> SwingAnimation {
+        SwingAnimation {
+            kind: 2,
+            duration: self.attack_ticks,
+        }
     }
 }
 

@@ -471,6 +471,11 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     if m.extra.counter > 0 {
         m.extra.counter -= 1;
     }
+    animate(m);
+}
+/// `AbstractHorse.tick`'s eat, stand and mouth animations, which follow the
+/// eating and standing flags (`flag` and `counter > 0`).
+pub fn animate(m: &mut Mob) {
     let (eating, standing) = (m.extra.flag, m.extra.counter > 0);
     let v = &mut m.anim.v;
     if standing {
@@ -487,6 +492,22 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         v[STAND] = (s + (0.8 * s * s * s - s) * 0.6 - 0.05).max(0.0);
     }
     v[MOUTH] = (v[MOUTH] - v[MOUTH] * 0.7 - 0.05).max(0.0);
+}
+/// `AbstractHorse.tick` on a client that is not the server: the animations
+/// follow the flags of the synched data (`set_flags`).
+pub fn client_tick(m: &mut Mob) {
+    m.anim.vo = m.anim.v;
+    animate(m);
+}
+/// `AbstractHorse.DATA_ID_FLAGS` on a client: eating 16 and standing 32.
+pub fn set_flags(m: &mut Mob, flags: u8) {
+    m.extra.flag = flags & 16 != 0;
+    m.extra.counter = i32::from(flags & 32 != 0);
+}
+/// Whether `ai_step` above runs this species' grazing and rearing, so that
+/// the server's flags 16 and 32 mean eating and standing.
+pub fn grazes(s: Species) -> bool {
+    is_equine(s) && !super::camel::is_camel(s) && !super::llama::is_llama(s)
 }
 /// Body texture and the markings overlay.
 pub fn texture(m: &Mob) -> String {
