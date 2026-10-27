@@ -37,6 +37,10 @@ pub fn scroll_offset(age: f32, speed: f32) -> f32 {
 fn scroll_u(u: f32, scroll: f32) -> f32 {
     if scroll == 0.0 { u } else { (u + scroll) % 1.0 }
 }
+/// How brightly the eyes render type's layers (spiders', endermen's and
+/// phantoms' eyes, the breeze's, the creaking's, the copper golem's) shine in
+/// HDR output, as `mesher::hdr_tier`.
+const EYES_TIER: u8 = crate::mesher::BRIGHT;
 
 /// One draw of a model with a texture.
 pub struct Layer {
@@ -1431,9 +1435,12 @@ fn render_visible(
             overlay,
             out,
         );
+        // The eyes render type's glowing eyes also shine in HDR output, at
+        // `EYES_TIER` in the overlay's high bits (entity.wgsl fs_hdr_mark).
         if layer.full_bright && m.species() != Species::Warden {
             for vertex in &mut out[start..] {
                 vertex.normal = [0; 4];
+                vertex.layer |= u32::from(EYES_TIER) << 16;
             }
         }
     }
