@@ -86,6 +86,13 @@ The opening, then Play ([clip](docs/opening.webm)):
   (`<date>_<time>_<folder>.zip`); **Copy** puts "<name> (1)" beside it; **Delete** moves it to the
   system's trash after a confirmation; **Open folder**. The same from the command line:
   `horizon-launcher worlds [list|backup|copy|delete] [--instance <name>]`.
+  **Play** on a world starts the game straight into it.
+- **Multiplayer**: Home lists the selected instance's servers, the game's own Multiplayer list
+  (`servers.dat`, each with the picture the game last saw). **Join** starts the game straight into
+  one; **Add server** and **Remove** (after a confirmation) change the file the game reads,
+  keeping every field the launcher doesn't show and the servers joined with Direct Connection. The
+  same from the command line: `horizon-launcher multiplayer [list|add|remove] [--instance <name>]`
+  and `horizon-launcher play --server <address or name>`.
 - **Patch notes**: each release's notes, newest first, with a link to GitHub Sponsors. Quiet "Discord" and "Website" links sit in the footer.
 
 Data lives in the platform's data directory (`~/.local/share/horizon-launcher` on Linux,
@@ -188,6 +195,8 @@ and don't set `%ERRORLEVEL%` / `$LASTEXITCODE`. Scripts that need the exit code 
     horizon-launcher instance version <instance> <tag|latest>   keep it on one installed version, or follow updates
     horizon-launcher worlds [list] [--instance <name>]        an instance's worlds
     horizon-launcher worlds backup|copy|delete <world> [--instance <name>]   delete moves it to the trash
+    horizon-launcher multiplayer [list] [--instance <name>]   the servers in an instance's Multiplayer list
+    horizon-launcher multiplayer add <address> [--name <name>] | remove <server>
     horizon-launcher modpack [list]                 the imported packs and their coverage
     horizon-launcher modpack import <pack>          a .mrpack, CurseForge zip or instance folder
     horizon-launcher modpack port <pack> [--from <dir>] [--version <tag>]   get the jars and carry them over

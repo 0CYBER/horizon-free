@@ -235,8 +235,21 @@ impl Launcher {
             actions = actions.child(text(theme::CAPTION).text_color(t.muted).child("Working…"));
         } else {
             let (backup, copy, folder) = (w.clone(), w.clone(), w.path.clone());
-            let delete = w.folder.clone();
+            let (delete, play) = (w.folder.clone(), w.folder.clone());
+            let running = self.client.is_some() || self.starting_client.is_some();
+            let play_button = act("world-play", "Play", Kind::Secondary);
+            let play_button = if running {
+                disabled(play_button)
+            } else {
+                play_button
+            };
             actions = actions
+                .child(
+                    play_button.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.quick_play("--world", play.clone());
+                        cx.notify();
+                    })),
+                )
                 .child(
                     act("world-backup", "Back up", Kind::Ghost).on_click(cx.listener(
                         move |this, _: &ClickEvent, _, cx| {

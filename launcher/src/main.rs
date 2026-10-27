@@ -19,6 +19,7 @@ mod mcp;
 mod modpacks_page;
 mod mods_page;
 mod mods_project;
+mod multiplayer_page;
 mod partner;
 mod perf;
 mod scrollbar;
@@ -186,6 +187,8 @@ struct Launcher {
     friend_focused: bool,
     friend_focus: FocusHandle,
     joining: Option<String>,
+    /// Where the next start goes at once: `--world <folder>` or `--server <address>`.
+    quick_play: Option<(&'static str, String)>,
     /// Settings' Game arguments field: the line, whether it has focus, and its focus handle.
     args_input: String,
     args_focused: bool,
@@ -229,6 +232,7 @@ struct Launcher {
     instances: instances_page::Instances,
     /// Home's Worlds section, of the selected instance (`worlds_page.rs`).
     worlds: worlds_page::Worlds,
+    multiplayer: multiplayer_page::Multiplayer,
     /// The name the game made up for an offline player (`horizon-player.txt`), for the top bar.
     offline_name: Option<String>,
     /// The player's servers, for the sidebar until the Servers page has read them.
@@ -364,6 +368,7 @@ impl Launcher {
             friend_focused: false,
             friend_focus: cx.focus_handle(),
             joining: None,
+            quick_play: None,
             collection: collection::Collection::load(),
             agents: agents_page::AgentsUi::default(),
             playing: None,
@@ -387,6 +392,7 @@ impl Launcher {
             mods: mods_page::Mods::new(cx),
             instances: instances_page::Instances::default(),
             worlds: worlds_page::Worlds::default(),
+            multiplayer: multiplayer_page::Multiplayer::default(),
             offline_name: offline_name(),
             side_servers: horizon_launcher::servers::list(),
             art: art::Art::default(),
@@ -561,6 +567,9 @@ impl Launcher {
                                 self.client_error = Some(e);
                             }
                         }
+                        if let Some((flag, value)) = self.quick_play.take() {
+                            cmd.arg(flag).arg(value);
+                        }
                         backend::append_game_args(&mut cmd);
                         self.client_home = cmd.get_current_dir().map(|d| d.to_path_buf());
                         match backend::spawn(Job::Client, cmd, self.tx.clone()) {
@@ -683,6 +692,7 @@ impl Launcher {
                             self.client = None;
                             // The game saved: last played, sizes and pictures changed.
                             self.worlds.stale();
+                            self.multiplayer.stale();
                             // The run's own game folder: an instance's or a pack's keeps its reports.
                             let home = self.client_home.clone().unwrap_or_else(backend::game_home);
                             let report = self
@@ -2166,6 +2176,9 @@ impl Launcher {
         if let Some(worlds) = self.worlds_section(cx) {
             page = page.child(worlds);
         }
+        if let Some(servers) = self.multiplayer_section(cx) {
+            page = page.child(servers);
+        }
         if let Some(e) = self.client_error.clone() {
             page = page.child(notice(e, &t));
         }
@@ -3061,6 +3074,16 @@ impl Launcher {
             ),
             &t,
         )
+    }
+
+    /// Plays the selected instance straight into a world (`--world`) or a server (`--server`):
+    /// flags every Horizon release takes.
+    pub(crate) fn quick_play(&mut self, flag: &'static str, value: String) {
+        self.quick_play = Some((flag, value));
+        self.play();
+        if self.starting_client.is_none() {
+            self.quick_play = None;
+        }
     }
 
     fn join_friend(&mut self) {

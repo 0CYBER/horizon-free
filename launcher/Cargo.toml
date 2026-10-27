@@ -42,6 +42,7 @@ horizon-world = { path = "../crates/horizon-world" }
 # Deleting a world moves it to the system's trash
 trash = "5"
 # Backup names carry the local time, as vanilla's do
+base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # The session file's random name.
 getrandom = "0.3"

@@ -12,6 +12,7 @@ pub mod modpacks;
 pub mod mojang;
 pub mod process;
 pub mod proxy;
+pub mod server_list;
 pub mod servers;
 pub mod signed;
 pub mod sources;

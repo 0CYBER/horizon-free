@@ -54,6 +54,7 @@ Start the client.
 - `--world`: Open or create this world (a folder under saves) at once
 - `--creative`: Creative mode for a new world
 - `--join`: Join a friend's world with its invite code
+- `--server`: Join this server at once: an address, or a server of the list by name or position
 - `--arg`: An extra argument for the game, passed through as-is (repeatable), for example --server-thread
 
 MCP: `play`, then the `game_*` tools.
@@ -372,6 +373,39 @@ Move a world to the system's trash.
 - `--instance`
 
 MCP: `worlds_delete`, needs `confirm: true`.
+
+## `horizon-launcher multiplayer list`
+
+The servers of the game's Multiplayer screen (the default).
+
+    horizon-launcher multiplayer list
+
+- `--instance`: The instance (default: the selected one)
+
+MCP: `multiplayer_list`.
+
+## `horizon-launcher multiplayer add`
+
+Add a server to the list.
+
+    horizon-launcher multiplayer add <ADDRESS>
+
+- `ADDRESS`: Its address, as in the game's Add Server (host or host:port)
+- `--name`: Its name in the list (default: Minecraft Server)
+- `--instance`
+
+MCP: `multiplayer_add`.
+
+## `horizon-launcher multiplayer remove`
+
+Remove a server from the list: its position from 1, name or address.
+
+    horizon-launcher multiplayer remove <SERVER>
+
+- `SERVER`
+- `--instance`
+
+MCP: `multiplayer_remove`, needs `confirm: true`.
 
 ## `horizon-launcher modpack list`
 

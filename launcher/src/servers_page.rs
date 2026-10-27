@@ -35,10 +35,13 @@ pub(super) enum Field {
     /// The instance dialog's (`instances_page.rs`).
     InstanceName,
     InstanceGroup,
+    /// Home's Multiplayer section's (`multiplayer_page.rs`).
+    ServerName,
+    ServerAddress,
 }
 
 impl Field {
-    const ALL: [Field; 11] = [
+    const ALL: [Field; 13] = [
         Field::Name,
         Field::Seed,
         Field::Players,
@@ -50,6 +53,8 @@ impl Field {
         Field::Email,
         Field::InstanceName,
         Field::InstanceGroup,
+        Field::ServerName,
+        Field::ServerAddress,
     ];
 }
 
@@ -1027,6 +1032,7 @@ impl Launcher {
             Field::Token => self.save_token(),
             Field::Email => self.invite_friend(),
             Field::InstanceName | Field::InstanceGroup => {}
+            Field::ServerName | Field::ServerAddress => self.add_server(),
         }
     }
 
