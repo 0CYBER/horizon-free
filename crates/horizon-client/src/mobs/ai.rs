@@ -1466,6 +1466,18 @@ pub fn voice_sounds(m: &Mob) -> [&'static str; 3] {
             };
             [ambient, m.kind.sounds[1], m.kind.sounds[2]]
         }
+        // Horse.getAmbientSound, getHurtSound and getDeathSound by age.
+        Species::Horse if m.is_baby() => [
+            "entity.baby_horse.ambient",
+            "entity.baby_horse.hurt",
+            "entity.baby_horse.death",
+        ],
+        // SkeletonHorse.getAmbientSound: its own under water.
+        Species::SkeletonHorse if m.fluids.eye_in_water => [
+            "entity.skeleton_horse.ambient_water",
+            m.kind.sounds[1],
+            m.kind.sounds[2],
+        ],
         // The mob's sound variant set, the baby one for a baby.
         Species::Pig | Species::Cow | Species::Chicken | Species::Wolf | Species::Cat => {
             use super::finalize::variant_sound as v;

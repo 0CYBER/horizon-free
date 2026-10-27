@@ -292,13 +292,17 @@ pub fn make_mad(m: &mut Mob, events: &mut Vec<MobEvent>) {
         m.extra.counter = 20;
         m.extra.flag = false;
     }
+    // getAngrySound: null (silent) for the skeleton horse.
     let sound = match m.species() {
+        Species::SkeletonHorse => return,
         Species::Donkey => "entity.donkey.angry",
         Species::Mule => "entity.mule.angry",
+        Species::ZombieHorse => "entity.zombie_horse.angry",
         Species::Llama | Species::TraderLlama => "entity.llama.angry",
+        _ if m.is_baby() => "entity.baby_horse.angry",
         _ => "entity.horse.angry",
     };
-    events.push(MobEvent::Sound(sound, m.center(), 1.0, 1.0));
+    m.voice(sound, events);
 }
 /// `RandomStandGoal`.
 #[derive(Clone, Debug)]
@@ -324,10 +328,11 @@ impl Goal for RandomStand {
     fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
         m.extra.counter = 20;
         m.extra.flag = false;
-        if m.species() == Species::Horse {
-            cx.events
-                .push(MobEvent::Sound("entity.horse.angry", m.center(), 1.0, 1.0));
-        }
+        // playStandSound: getAmbientStandSound is the ambient sound, plain
+        // playSound(sound) at volume and pitch 1.
+        let sound = super::ai::voice_sounds(m)[0];
+        let at = [m.position.x, m.position.y, m.position.z];
+        cx.events.push(MobEvent::Sound(sound, at, 1.0, 1.0));
     }
 }
 /// Horses that step with `AbstractHorse.playStepSound` (llamas and camels
