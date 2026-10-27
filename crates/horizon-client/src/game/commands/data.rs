@@ -31,8 +31,13 @@ fn set_key(tag: &mut Tag, key: &str, value: Tag) {
 impl Game<'_> {
     // ---- entity data ---------------------------------------------------
 
-    /// `NbtPredicate.getEntityTagToCompare`: the entity as saved.
+    /// `NbtPredicate.getEntityTagToCompare`: the entity as saved. An entity
+    /// in another level is read in the level that holds it.
     pub(in crate::game) fn entity_nbt(&mut self, t: Target) -> Option<Tag> {
+        self.in_target_level(t, |g| g.entity_nbt_in_level(t))
+            .flatten()
+    }
+    fn entity_nbt_in_level(&mut self, t: Target) -> Option<Tag> {
         let player_uuid = self.level.player_uuid;
         Some(match t {
             Target::Guest(_) => {
@@ -113,9 +118,11 @@ impl Game<'_> {
                 let o = self.others.iter().find(|o| o.id == id)?.clone();
                 self.other_to_nbt(&o, uuid)
             }
-            Target::Orb(i) => entity_nbt::orb_to_nbt(self.orbs.get(i)?, random_uuid()),
-            Target::Projectile(i) => {
-                let p = self.creatures.projectiles.get(i)?;
+            Target::Orb(id) => {
+                entity_nbt::orb_to_nbt(self.orbs.iter().find(|o| o.id == id)?, random_uuid())
+            }
+            Target::Projectile(id) => {
+                let p = self.creatures.projectiles.iter().find(|p| p.id == id)?;
                 let owner = if p.owner == Some(horizon_client::mobs::Who::Player) {
                     player_uuid
                 } else {
@@ -128,6 +135,16 @@ impl Game<'_> {
                     .map(|s| self.state_to_nbt(s));
                 entity_nbt::arrow_to_nbt(p, random_uuid(), owner, in_block, None)
                     .or_else(|| entity_nbt::fireball_to_nbt(p, random_uuid(), owner, None))?
+            }
+            Target::Crystal(id) => {
+                let c = self.crystals.iter().find(|c| c.id == id)?;
+                let (uuid, raw) = self.persist_anon("minecraft:end_crystal", c.position);
+                c.to_nbt(uuid.unwrap_or_else(random_uuid), raw)
+            }
+            Target::Dragon(id) => {
+                let d = self.dragon.as_ref().filter(|d| d.id == id)?;
+                let (uuid, raw) = self.persist_anon("minecraft:ender_dragon", d.position);
+                d.to_nbt(uuid.unwrap_or_else(random_uuid), raw)
             }
         })
     }
@@ -286,6 +303,7 @@ impl Game<'_> {
                 if let Tag::Compound(c) = &mut tag {
                     c.remove(&"keepPacked".into());
                 }
+                self.restore_loot_table(key, &mut tag);
                 Ok(tag)
             }
             DataRef::Storage(id) => Ok(self.score.storage.get(id)),
@@ -296,7 +314,8 @@ impl Game<'_> {
             DataRef::Entity(t) => self.apply_entity_nbt(*t, tag),
             DataRef::Block(p) => {
                 let key = (p[0], p[1], p[2]);
-                if let Some((_, new)) = save::decode_block_entity(&tag) {
+                if let Some((_, mut new)) = save::decode_block_entity(&tag) {
+                    self.take_loot_table(key, &tag, &mut new);
                     self.world.block_entities.insert(key, new);
                     let state = self.world.block(p[0], p[1], p[2]);
                     // Redraw what shows the block entity (signs, banners).
@@ -395,6 +414,19 @@ impl Game<'_> {
     }
     pub(super) fn cmd_data(&mut self, id: &str, ctx: &Context) -> R<i32> {
         let target = self.data_ref(ctx, 0)?;
+        // An entity in another level is read and written in the level that
+        // holds it.
+        if let DataRef::Entity(t) = &target {
+            let t = *t;
+            let target = target.clone();
+            return match self.in_target_level(t, |g| g.cmd_data_in(id, ctx, target)) {
+                Some(r) => r,
+                None => Err(err("argument.entity.notfound.entity", &[])),
+            };
+        }
+        self.cmd_data_in(id, ctx, target)
+    }
+    fn cmd_data_in(&mut self, id: &str, ctx: &Context, target: DataRef) -> R<i32> {
         match id {
             "data.merge" => {
                 let Some(Arg::Str(nbt)) = ctx.get("nbt") else {

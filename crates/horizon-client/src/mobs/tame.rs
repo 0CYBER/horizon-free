@@ -360,7 +360,7 @@ impl Goal for FollowOwner {
         };
         let far = m.distance_sqr(at) >= 144.0;
         if !far {
-            let max = max_head_x_rot(m);
+            let max = m.max_head_x_rot();
             m.look_at_speed([at.x, eye, at.z], 10.0, max);
         }
         self.recalc -= 1;
@@ -507,7 +507,7 @@ impl Goal for Beg {
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         if let Some(p) = &cx.w.player {
-            let max = max_head_x_rot(m);
+            let max = m.max_head_x_rot();
             m.look_at_speed([p.position.x, p.eye[1], p.position.z], 10.0, max);
         }
         self.ticks -= 1;
@@ -529,12 +529,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     let v = &mut m.anim.v;
     v[INTEREST] += (goal - v[INTEREST]) * 0.4;
     // isWet (extra.flag2), isShaking (counter2 > 0).
-    let rain = w.raining
-        && w.can_see_sky(
-            m.position.x.floor() as i32,
-            (m.position.y + f64::from(m.height())).floor() as i32,
-            m.position.z.floor() as i32,
-        );
+    let rain = super::ai::in_rain(m, w);
     let shaking = m.extra.counter2 > 0;
     if m.fluids.in_water || rain {
         m.extra.flag2 = true;
@@ -682,14 +677,6 @@ pub fn texture(m: &Mob) -> String {
     };
     let baby = if m.is_baby() { "_baby" } else { "" };
     format!("entity/wolf/{file}{state}{baby}")
-}
-/// `Wolf.getMaxHeadXRot`: 20 degrees while sitting.
-fn max_head_x_rot(m: &Mob) -> f32 {
-    if m.extra.sitting {
-        20.0
-    } else {
-        m.kind.max_head_x_rot
-    }
 }
 
 /// Cat variants (`CatVariants`): registry name, texture file.

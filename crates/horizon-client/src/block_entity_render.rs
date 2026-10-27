@@ -610,7 +610,9 @@ fn sign_text_calls(
         .iter()
         .enumerate()
         .map(|(i, line)| {
+            // The line that fits, in the order it is drawn (getVisualOrder).
             let shown = first_line(line, data.max_line_width(), &advance);
+            let shown = crate::bidi::visual_str(&shown).into_owned();
             TextCall {
                 matrix: m,
                 x: -((width(&shown) as i32) / 2) as f32,

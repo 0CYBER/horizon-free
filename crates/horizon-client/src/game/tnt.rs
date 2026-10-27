@@ -252,7 +252,7 @@ impl Game<'_> {
         }
         let range = super::entity_culling::default_range(
             glam::DVec3::splat(PrimedTnt::SIZE),
-            self.settings.entity_distance,
+            self.view_scale(),
         );
         for t in &self.tnts {
             // EntityRenderer.shouldRender.
