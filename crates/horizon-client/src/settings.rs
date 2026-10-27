@@ -5,11 +5,7 @@ use crate::keybinds::KeyBinds;
 use crate::options_file::{OptionsFile, V};
 use std::{fs, path::Path};
 
-/// SoundSource names in vanilla order.
-pub const SOUND_SOURCES: [&str; 11] = [
-    "master", "music", "record", "weather", "block", "hostile", "neutral", "player", "ambient",
-    "voice", "ui",
-];
+pub use horizon_client_core::sound_source::SOUND_SOURCES;
 
 /// Per-source volumes for the mixer (soundCategory_* except master).
 static SOURCE_VOLUMES: std::sync::RwLock<[f32; 11]> = std::sync::RwLock::new([1.0; 11]);
