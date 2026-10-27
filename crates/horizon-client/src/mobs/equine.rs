@@ -28,6 +28,8 @@ pub const MARKINGS: [&str; 5] = ["", "white", "whitefield", "whitedots", "blackd
 pub const EAT: usize = 0;
 pub const STAND: usize = 1;
 pub const MOUTH: usize = 2;
+/// `AbstractHorse.tailCounter`: client-side, it only drives the model.
+pub const TAIL: usize = 3;
 
 /// What a rider asks of its mount this tick.
 #[derive(Clone, Copy, Debug, Default)]
@@ -418,6 +420,20 @@ pub fn ridden_step(m: &mut Mob) {
         }
     }
 }
+/// `AbstractHorse.aiStep`'s `moveTail` (one in 200 ticks) and the counter's
+/// step in `tick` (it runs to 8, then stops). A client runs it on its own
+/// random, as vanilla's client-side `aiStep` does.
+pub fn tail_tick(m: &mut Mob) {
+    if m.random.next_int_bound(200).unwrap_or(1) == 0 {
+        m.anim.v[TAIL] = 1.0;
+    }
+    if m.anim.v[TAIL] > 0.0 {
+        m.anim.v[TAIL] += 1.0;
+        if m.anim.v[TAIL] > 8.0 {
+            m.anim.v[TAIL] = 0.0;
+        }
+    }
+}
 /// `AbstractHorse.aiStep` and `tick`: healing, grazing, the rear and the
 /// eating/standing/mouth animations.
 pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
@@ -603,7 +619,15 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
         t[1] += speed * age;
         t[2] += speed * 2.0 * age;
     }
-    p.yrot("tail", 0.0);
+    // animateTail: the tail swings while the counter runs.
+    p.yrot(
+        "tail",
+        if m.anim.v[TAIL] > 0.0 {
+            (s.age * 0.7).mcos()
+        } else {
+            0.0
+        },
+    );
     if baby && donkey {
         // BabyDonkeyModel overrides the state's pitch with -30 degrees and
         // sets the head parts again.

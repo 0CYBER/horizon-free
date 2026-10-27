@@ -18,6 +18,7 @@ mod boats;
 mod books;
 mod bossbars;
 mod breezes;
+mod bundles;
 mod campfire;
 mod campfire_douse;
 mod cartography;
@@ -375,7 +376,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A Horizon mod (.hmod or folder) to develop: always on, reloaded when rebuilt\n  --in-frame              Run single player's world in the frame, not on its server thread\n  --pregen                Add Horizon's /pregen command (docs/pregeneration.md)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
+                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --quickPlaySingleplayer WORLD  Open this world of saves/ at start, only if it exists (vanilla's)\n  --quickPlayMultiplayer HOST[:PORT]  The same as --server (vanilla's name)\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A Horizon mod (.hmod or folder) to develop: always on, reloaded when rebuilt\n  --in-frame              Run single player's world in the frame, not on its server thread\n  --pregen                Add Horizon's /pregen command (docs/pregeneration.md)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
                         horizon_core::VANILLA_VERSION
                     );
                     return Ok(None);
@@ -430,6 +431,16 @@ impl Options {
                         "--width" => o.window_size[0] = value.parse::<u32>()?.max(1),
                         "--height" => o.window_size[1] = value.parse::<u32>()?.max(1),
                         "--world" => o.world = Some(value),
+                        // Vanilla's quick play (Main, QuickPlay.joinSingleplayerWorld): only a
+                        // world that exists opens; else the title screen. --world also creates one.
+                        "--quickPlaySingleplayer" => {
+                            let folder = std::env::current_dir()?.join("saves").join(&value);
+                            if folder.join("level.dat").is_file() {
+                                o.world = Some(value);
+                            } else {
+                                eprintln!("Quick play: there is no world {value} in saves/");
+                            }
+                        }
                         "--dev-mod" => o.dev_mods.push(std::path::absolute(&value)?),
                         "--benchmark" => {
                             if horizon_client::benchmark::scenes(&value).is_none() {
@@ -440,7 +451,7 @@ impl Options {
                             }
                             o.benchmark = Some(value);
                         }
-                        "--server" => o.server = Some(value),
+                        "--server" | "--quickPlayMultiplayer" => o.server = Some(value),
                         "--name" => o.player_name = Some(value),
                         "--session-file" => session_file = Some(value),
                         "--control-socket" => o.control = Some(value.into()),
@@ -1265,6 +1276,8 @@ struct Game<'a> {
     inv_clicks: horizon_client::container_screen::Clicks,
     /// The Mouse Tweaks extra's drag and wheel (`tweaks`).
     tweaks: tweaks::Tweaks,
+    /// The wheel and hovered slot of `BundleMouseActions`.
+    bundle_mouse: bundles::BundleMouse,
     /// The last inventory click, for the double click that gathers a stack.
     last_inv_click: Option<(std::time::Instant, usize, bool)>,
     /// `lastQuickMoved`: what the last Shift click moved, which a Shift
@@ -1432,6 +1445,10 @@ struct Game<'a> {
     titles: titles::Titles,
     /// `Hud.toolHighlightTimer`: the selected item name.
     tool_highlight: horizon_client::hud_overlays::ToolHighlight,
+    /// `Hud.autosaveIndicatorValue`.
+    saving_indicator: horizon_client::hud_overlays::SavingIndicator,
+    /// This game's world is autosaving this tick (`MinecraftServer.isSaving`).
+    autosaving: bool,
     applied_modifiers: Vec<(String, String)>,
     experience: Experience,
     orbs: Vec<ExperienceOrb>,
@@ -1663,7 +1680,7 @@ struct Game<'a> {
     lan_block_events: Vec<([i32; 3], i32, i32, u32)>,
     lan_entity_events: Vec<(i32, i8, [f64; 3])>,
     /// Successful crits (attacking guest, hit entity), queued while the hub is taken.
-    lan_critical_hits: Vec<(Option<u32>, i32)>,
+    lan_critical_hits: Vec<(Option<u32>, i32, bool)>,
     /// Global level events for every guest (`ServerLevel.globalLevelEvent`).
     lan_global_events: Vec<(i32, [i32; 3], i32)>,
     /// `ContainerOpenersCounter`: how many players (the host and the guests)
@@ -1811,9 +1828,46 @@ impl Game<'_> {
     fn reach(&self) -> f64 {
         if self.creative { 5.0 } else { 4.5 }
     }
+    /// Outline shapes that depend on more than the block state, as one box
+    /// in block space: `LightBlock` and `ScaffoldingBlock.getShape` are a full
+    /// block while the main hand holds the block's own item
+    /// (`CollisionContext.isHoldingItem`), and `ShulkerBoxBlock.getShape`
+    /// grows with the lid (`ShulkerBoxBlockEntity.getBoundingBox`).
+    fn context_outline(&self, pos: [i32; 3], state: BlockStateId) -> Option<[f64; 6]> {
+        let name = &self.res.facts().get(state).name;
+        if matches!(&**name, "minecraft:light" | "minecraft:scaffolding") {
+            return self
+                .held()
+                .is_some_and(|s| *s.item == **name)
+                .then_some([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
+        }
+        if !name.ends_with("shulker_box") {
+            return None;
+        }
+        let progress = self.be_anims.shulkers.get(&pos).map_or(0.0, |s| s.progress);
+        let facing = self
+            .pack
+            .assets
+            .registry
+            .state(state)
+            .and_then(|s| s.properties.get("facing").cloned());
+        let d = facing_offset(facing.as_deref().unwrap_or("up"));
+        let mut b = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        for a in 0..3 {
+            match d[a] {
+                1 => b[a + 3] += 0.5 * f64::from(progress),
+                -1 => b[a] -= 0.5 * f64::from(progress),
+                _ => {}
+            }
+        }
+        Some(b)
+    }
     /// A block's outline boxes in world space (`getShape` plus the random offset).
     fn outline_boxes(&self, pos: [i32; 3]) -> Vec<[f64; 6]> {
         let state = self.world.block(pos[0], pos[1], pos[2]);
+        if let Some(b) = self.context_outline(pos, state) {
+            return vec![std::array::from_fn(|i| f64::from(pos[i % 3]) + b[i])];
+        }
         let f = self.res.facts().get(state);
         let o = if f.outline_offset {
             self.pack
@@ -2108,6 +2162,33 @@ impl Game<'_> {
     }
     /// `TerrainParticle` at `pos`: the model's particle sprite and tint source
     /// 0's `colorAsTerrainParticle` (white when the block has none).
+    /// `HoneyBlock.showSlideParticles` (entity event 53): five honey block
+    /// particles at the entity.
+    fn honey_slide_particles(&mut self, at: [f64; 3]) {
+        use horizon_client::particles::{ParticleOptions, ParticleType};
+        let Some(honey) = self
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:honey_block")
+        else {
+            return;
+        };
+        let block = [
+            at[0].floor() as i32,
+            at[1].floor() as i32,
+            at[2].floor() as i32,
+        ];
+        if let Some((sprite, tint)) = self.particle_sprite(honey, block) {
+            for _ in 0..5 {
+                self.particles.add(
+                    &ParticleOptions::block(ParticleType::Block, sprite.clone(), tint),
+                    at,
+                    [0.0; 3],
+                );
+            }
+        }
+    }
     fn particle_sprite(&self, state: BlockStateId, pos: [i32; 3]) -> Option<(String, u32)> {
         let sprite = Self::block_particle_sprite(&self.pack, state)?;
         let chunks = &self.world.chunks;
@@ -2325,9 +2406,16 @@ impl Game<'_> {
             yaw.cos() * pitch.cos() * 0.3 + spread.sin() * strength,
         ];
         self.spawn_item(thrown, [eye[0], eye[1] - 0.3, eye[2]], v, 40);
-        if thrown_from_hand && self.lan_acting.is_none() {
-            let uuid = self.level.ensure_player_uuid();
+        if thrown_from_hand {
+            let uuid = self.acting_player_uuid();
             self.dropped.last_mut().unwrap().thrower = Some(uuid);
+        }
+    }
+    /// The UUID of the player acting: the guest whose turn it is, else the host.
+    pub(super) fn acting_player_uuid(&mut self) -> [i32; 4] {
+        match self.lan_acting_uuid {
+            Some(guest) => horizon_client::lan::playerdata::uuid_ints(guest),
+            None => self.level.ensure_player_uuid(),
         }
     }
     fn tick_items(&mut self) {
@@ -2934,6 +3022,17 @@ impl Game<'_> {
                     pos,
                     data,
                 } => self.smash_dust(pos, data),
+                // LevelEventHandler 2002 and 2007: a potion's splash.
+                LevelEvent::LevelEvent {
+                    id: 2002,
+                    pos,
+                    data,
+                } => self.potion_splash_particles(pos, data, false),
+                LevelEvent::LevelEvent {
+                    id: 2007,
+                    pos,
+                    data,
+                } => self.potion_splash_particles(pos, data, true),
                 LevelEvent::LevelEvent {
                     id: id @ 3002..=3005,
                     pos,
@@ -2969,6 +3068,8 @@ impl Game<'_> {
                         1044 => Some(("minecraft:block.smithing_table.use", 1.0)),
                         // LevelEvent.SOUND_PAGE_TURN (a lectern's page).
                         1043 => Some(("minecraft:item.book.page_turn", 1.0)),
+                        // LevelEvent.SOUND_SPLASH_POTION and its instant twin.
+                        1053 | 1054 => Some(("minecraft:entity.splash_potion.break", 1.0)),
                         _ => None,
                     };
                     if let Some((name, volume)) = sound {
@@ -2978,7 +3079,7 @@ impl Game<'_> {
                                     - self.world.random.next_float())
                                     * 0.8
                             }
-                            1029 | 1030 | 1042 | 1043 | 1044 => {
+                            1029 | 1030 | 1042 | 1043 | 1044 | 1053 | 1054 => {
                                 self.world.random.next_float() * 0.1 + 0.9
                             }
                             1019 | 1021 => {
@@ -2988,7 +3089,7 @@ impl Game<'_> {
                             }
                             _ => 1.0,
                         };
-                        if matches!(id, 1019 | 1021 | 1029 | 1030) {
+                        if matches!(id, 1019 | 1021 | 1029 | 1030 | 1053 | 1054) {
                             // Clients play the anvil sound from its level event;
                             // capturing it also sends a duplicate sound packet.
                             self.audio.play_unshared(name, c, volume, pitch);
@@ -3037,11 +3138,9 @@ impl Game<'_> {
                         drop_item: true,
                         fall_distance: 0.0,
                         stuck: Vec3::ZERO,
-                        damage: if self.res.facts().get(state).name.ends_with("anvil") {
-                            horizon_client::falling_block::Damage::anvil()
-                        } else {
-                            Default::default()
-                        },
+                        damage: horizon_client::falling_block::Damage::falling(
+                            &self.res.facts().get(state).name,
+                        ),
                         saved: None,
                     });
                 }
@@ -3143,6 +3242,31 @@ impl Game<'_> {
                 } => self.shrieker_block_event(pos, state),
                 LevelEvent::BlockEntityEvent { pos, a, b, .. } => {
                     self.block_entity_event([pos.x, pos.y, pos.z], a, b)
+                }
+                // NoteBlock.triggerEvent: a NOTE particle above, coloured by
+                // the note (`note / 24.0` in the x speed).
+                LevelEvent::BlockEvent {
+                    pos,
+                    state,
+                    kind: "note_particle",
+                } => {
+                    use horizon_client::particles::{ParticleOptions, ParticleType};
+                    let note = self
+                        .pack
+                        .assets
+                        .registry
+                        .state(state)
+                        .and_then(|s| s.properties.get("note")?.parse::<f64>().ok())
+                        .unwrap_or(0.0);
+                    self.particles.add(
+                        &ParticleOptions::simple(ParticleType::Note),
+                        [
+                            f64::from(pos.x) + 0.5,
+                            f64::from(pos.y) + 1.2,
+                            f64::from(pos.z) + 0.5,
+                        ],
+                        [note / 24.0, 0.0, 0.0],
+                    );
                 }
                 LevelEvent::GrowTree { .. }
                 | LevelEvent::PlaceFeature { .. }
@@ -3519,7 +3643,7 @@ impl Game<'_> {
         } else if let Some(tag) = spill::saved_entity(&self.world, pos) {
             self.pending.record_saved(pos, &tag);
         }
-        self.creaking_heart_broken(pos);
+        self.creaking_heart_broken(pos, true);
         let hive = match self.world.block_entities.get(&key) {
             Some(BlockEntity::Beehive(h)) => self.hive_state(pos).map(|s| ((**h).clone(), s)),
             _ => None,
@@ -4311,6 +4435,12 @@ impl Game<'_> {
                 // The world's spawn from the start, not only once saved: a bed set
                 // before the first save must not become it.
                 self.level.world_spawn.get_or_insert([x, y, z]);
+                // The "Bonus Chest" create-world option, placed once with the spawn.
+                if horizon_client::save::WorldGen::read(&self.world_root)
+                    .is_some_and(|g| g.bonus_chest)
+                {
+                    self.place_bonus_chest([x, y, z])?;
+                }
             }
             let s = self
                 .level
@@ -4414,7 +4544,11 @@ impl Game<'_> {
             self.world.weather.tick_levels();
             self.tick_weather_effects();
         }
-        if self.ticks.is_multiple_of(6000) {
+        self.autosaving = self.ticks.is_multiple_of(6000);
+        if let Some(serving) = &self.serving {
+            serving.set_saving(self.autosaving);
+        }
+        if self.autosaving {
             self.save_game_with(false)?;
         }
         if running {
@@ -4625,9 +4759,32 @@ impl Game<'_> {
                     };
                     self.audio.play(name, Some(feet), volume, pitch);
                 }
+                // LivingEntity.checkFallDamage: the block's crumbs where the fall landed.
+                MotionEvent::Fall(horizon_client::landing::FallEvent::Particles {
+                    state,
+                    position,
+                    count,
+                    speed,
+                }) => self.landing_dust(None, state, position, count, speed),
                 MotionEvent::Fall(event) => self.landing_block_updates(&event),
                 MotionEvent::Snowflake { position, velocity } => self.snowflake(position, velocity),
                 MotionEvent::EnterBlock { state } => self.trigger_enter_block(state),
+                MotionEvent::HoneySlide {
+                    sound, particles, ..
+                } => {
+                    if sound {
+                        self.audio
+                            .play("minecraft:block.honey_block.slide", Some(feet), 1.0, 1.0);
+                    }
+                    if particles {
+                        self.honey_slide_particles(feet);
+                        // The server's event 53 reaches the guests too.
+                        let id = self.lan.as_ref().map(|h| h.host_entity);
+                        if let Some(id) = id {
+                            self.lan_entity_event(id, 53, feet);
+                        }
+                    }
+                }
                 MotionEvent::InsidePortal { pos } => self.player_inside_nether_portal(pos),
                 MotionEvent::CauldronExtinguish { pos } => self.cauldron_extinguish(pos),
                 MotionEvent::InsideWitherRose => self.wither_rose_contact(),
@@ -4730,6 +4887,7 @@ impl Game<'_> {
     /// What the tick runs after the local player's own update: effects, the
     /// world's entities and blocks, and the network hub.
     fn tick_world(&mut self, running: bool) -> Result<()> {
+        self.share_spawn_conditions();
         self.update_chunk_tickets();
         horizon_client::spans::time("tick_effects", || self.tick_effects(running));
         // Player.tick's ItemCooldowns.tick for the window's player (a
@@ -4737,6 +4895,7 @@ impl Game<'_> {
         self.shield_cooldown = self.shield_cooldown.saturating_sub(1);
         self.cooldowns.tick();
         horizon_client::spans::time("tick_using", || self.tick_using());
+        self.tick_bundle_hover();
         horizon_client::spans::time("tick_hud", || self.tick_hud());
         // The player's digging comes in with its packets, before the level
         // ticks; ServerLevel.tick then runs the scheduled and random block
@@ -5434,6 +5593,7 @@ impl Game<'_> {
             Screen::Mod => self.draw_mod_screen(&mut batch),
             Screen::Playing | Screen::Options | Screen::Win => {}
         }
+        self.draw_saving_indicator(&mut batch);
         self.draw_toasts(&mut batch);
         self.draw_pack_toasts(&mut batch);
         self.remote_hud(&mut batch);
@@ -5934,6 +6094,12 @@ impl Game<'_> {
     /// Several clicks on one menu instance (a quick craft drag is three).
     fn menu_ops(&mut self, ops: &[(Option<usize>, i32, horizon_client::menu::Input)]) -> bool {
         use horizon_client::menu::Input;
+        // BundleMouseActions.onSlotClicked: a Shift click or a swap clears the bundle's selection.
+        for &(slot, _, input) in ops {
+            if let (Some(slot), Input::QuickMove | Input::Swap) = (slot, input) {
+                self.unselect_bundle(slot);
+            }
+        }
         if self.remote.is_some() && self.screen == Screen::Inventory {
             // On a server the clicks are the server's: predicted and sent.
             return self.remote_menu_ops(ops);
@@ -7259,7 +7425,12 @@ impl Game<'_> {
         self.see_through_vertices = see_through;
         // Entity shadows (EntityRenderer.extractShadow).
         self.mark_translucent_entity(out.len(), "minecraft:entity_shadow");
-        if let Some(sprite) = self.gui.atlas.sprites.get("misc/shadow").copied() {
+        let shadow_sprite = self
+            .settings
+            .entity_shadows
+            .then(|| self.gui.atlas.sprites.get("misc/shadow").copied())
+            .flatten();
+        if let Some(sprite) = shadow_sprite {
             let ambient = if self.dim == Dim::Nether { 0.1 } else { 0.0 };
             let darken = self.sky_darken();
             let a = alpha;
@@ -7658,7 +7829,7 @@ impl Game<'_> {
     /// strength and whether it is a critical hit): the weapon and effects
     /// scaled by the attack strength, a mace's smash, the critical hit, then
     /// enchantments.
-    pub(super) fn melee_damage(&mut self, target_kind: &str) -> (f32, f32, bool) {
+    pub(super) fn melee_damage(&mut self, target_kind: &str) -> (f32, f32, bool, bool) {
         let hand_damage = 1.0 + self.attack_item_info().map_or(0.0, |i| i.attack_damage);
         // Riptide's spin replaces the attack damage attribute.
         let spin = self.player.as_ref().map_or(0.0, |p| p.auto_spin_attack_dmg);
@@ -7686,8 +7857,9 @@ impl Game<'_> {
             amount *= 1.5;
         }
         // Enchantment damage (sharpness, smite, bane) scaled by the attack strength.
-        amount += self.enchant_damage_bonus(target_kind) * scale;
-        (amount, scale, crit)
+        let magic_boost = self.enchant_damage_bonus(target_kind) * scale;
+        amount += magic_boost;
+        (amount, scale, crit, magic_boost > 0.0)
     }
     /// `Player.getAttackStrengthScale(0.5)`.
     fn attack_strength_scale(&self) -> f32 {
@@ -7874,7 +8046,7 @@ impl Game<'_> {
     pub(super) fn attack_mob(&mut self, index: usize) {
         let target_kind = self.mobs[index].kind.id.clone();
         let target_kind = format!("minecraft:{}", target_kind.trim_start_matches("minecraft:"));
-        let (amount, scale, crit) = self.melee_damage(&target_kind);
+        let (amount, scale, crit, magic) = self.melee_damage(&target_kind);
         let sweep = self.sweep_attack_position(scale, crit);
         let (knockback, knockback_attack) = self.extra_knockback(&target_kind, scale);
         self.attack_ticks = 0;
@@ -7937,6 +8109,18 @@ impl Game<'_> {
                     feet,
                     width,
                     height,
+                    false,
+                );
+            }
+            // Player.attackVisualEffects: magicCrit when the enchantments added damage.
+            if magic {
+                self.critical_hit(
+                    self.lan_acting,
+                    self.mobs[index].id as i32,
+                    feet,
+                    width,
+                    height,
+                    true,
                 );
             }
             if actual > 2.0 {
@@ -8165,6 +8349,7 @@ impl Game<'_> {
         );
         self.session_lock = Some(session_lock);
         self.end.set_locator(locator);
+        self.share_spawn_conditions();
         self.score = Default::default();
         self.fns = Default::default();
         self.bosses = Default::default();
@@ -8303,6 +8488,7 @@ impl Game<'_> {
             seed,
         )?;
         self.end.set_locator(locator);
+        self.share_spawn_conditions();
         Ok((streaming, save))
     }
     /// Change dimension through a portal (Entity.changeDimension with
@@ -10787,6 +10973,17 @@ impl Game<'_> {
                         [0.0; 3]
                     };
                     let p = h.pos.map(f64::from);
+                    if let Some(b) = self.context_outline(h.pos, state) {
+                        return horizon_client::blocks::cube_edges()
+                            .iter()
+                            .map(|e| {
+                                std::array::from_fn(|i| {
+                                    let k = i % 3;
+                                    p[k] + b[k] + e[i] * (b[k + 3] - b[k])
+                                })
+                            })
+                            .collect();
+                    }
                     f.outline_edges
                         .iter()
                         .map(|e| std::array::from_fn(|i| p[i % 3] + o[i % 3] + e[i]))
@@ -11847,6 +12044,7 @@ impl ApplicationHandler for Game<'_> {
                     }
                     if self.screen == Screen::Inventory
                         && d != 0.0
+                        && !self.bundle_scroll(scaled(raw_x), scaled(raw_y))
                         && !self.tweak_scroll(d, self.inventory_target().0)
                     {
                         self.station_scroll(d);
@@ -12636,6 +12834,7 @@ impl<'a> Game<'a> {
             craft_table: None,
             inv_drag: None,
             tweaks: Default::default(),
+            bundle_mouse: Default::default(),
             inv_clicks: Default::default(),
             last_inv_click: None,
             last_quick_moved: None,
@@ -12697,7 +12896,14 @@ impl<'a> Game<'a> {
             level,
             session_lock: None,
             audio,
-            music: Default::default(),
+            music: {
+                // The manager starts with the saved option (MusicManager's constructor).
+                let mut music = horizon_client::music::MusicManager::default();
+                music.frequency = horizon_client::music::MusicFrequency::parse(
+                    &settings.file.name("musicFrequency"),
+                );
+                music
+            },
             ambience: Default::default(),
             sound_paused: false,
             cart_sounds: HashSet::new(),
@@ -12741,6 +12947,8 @@ impl<'a> Game<'a> {
             command_source: None,
             titles: Default::default(),
             tool_highlight: Default::default(),
+            saving_indicator: Default::default(),
+            autosaving: false,
             applied_modifiers: Vec::new(),
             experience: Experience::default(),
             orbs: Vec::new(),

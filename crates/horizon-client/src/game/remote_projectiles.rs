@@ -95,6 +95,7 @@ impl Game<'_> {
         let (yaw, pitch) = rotation;
         self.remove_remote_projectile(id);
         match kind {
+            "minecraft:evoker_fangs" => self.insert_fangs(id, position, yaw, 0, 0),
             "minecraft:tnt" => self.tnts.push(super::tnt::PrimedTnt {
                 id,
                 position: at,
@@ -161,6 +162,10 @@ impl Game<'_> {
                 let Some(k) = projectile_kind(kind) else {
                     return false;
                 };
+                if k == ProjectileKind::LlamaSpit {
+                    self.particles
+                        .llama_spit_burst(position, [velocity.x, velocity.y, velocity.z]);
+                }
                 let mut p = Projectile::new(k, at, None);
                 p.id = id;
                 p.velocity = velocity;
@@ -296,6 +301,7 @@ impl Game<'_> {
 
     /// One tick of interpolation, as `tick_remote_objects`.
     pub(super) fn tick_remote_projectiles(&mut self, mut step: impl FnMut(u32, Vec3) -> Vec3) {
+        self.tick_remote_fangs();
         // PrimedTnt.tick runs on a client too: it falls, bounces and burns its
         // fuse down (the swell and flash follow it) between the server's
         // updates (every 10 ticks), and a client discards it when the fuse
@@ -458,6 +464,7 @@ impl Game<'_> {
     }
 
     pub(super) fn remove_remote_projectile(&mut self, id: u32) {
+        self.fangs.list.retain(|f| f.id != id);
         self.tnts.retain(|t| t.id != id);
         self.falling.retain(|f| f.id != id);
         self.creatures.projectiles.retain(|p| p.id != id);
@@ -473,6 +480,7 @@ impl Game<'_> {
 
     /// Every one a server sent (a new connection, level or dimension).
     pub(super) fn clear_remote_projectiles(&mut self) {
+        self.fangs.list.clear();
         self.tnts.clear();
         self.falling.clear();
         self.creatures.projectiles.clear();
@@ -493,6 +501,12 @@ impl Game<'_> {
         use serde_json::json;
         let at = |p: Vec3| [p.x, p.y, p.z];
         let mut out = Vec::new();
+        for f in &self.fangs.list {
+            out.push(
+                json!({"id": f.id, "kind": "minecraft:evoker_fangs", "position": f.pos,
+                "yaw": f.yaw, "started": f.started, "life": f.life}),
+            );
+        }
         for t in &self.tnts {
             out.push(json!({"id": t.id, "kind": "minecraft:tnt", "position": at(t.position), "fuse": t.fuse}));
         }
