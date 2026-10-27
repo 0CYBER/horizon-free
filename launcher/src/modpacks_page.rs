@@ -25,7 +25,7 @@ impl Launcher {
     }
 
     /// Runs a pipeline step on a thread; its lines and its end arrive as messages.
-    fn pack_job(
+    pub(super) fn pack_job(
         &mut self,
         job: impl FnOnce(&dyn Fn(String)) -> Result<Imported, String> + Send + 'static,
     ) {

@@ -96,7 +96,7 @@ impl Launcher {
         }
     }
 
-    fn select_instance(&mut self, instance: &Instance) {
+    pub(super) fn select_instance(&mut self, instance: &Instance) {
         self.settings.instance =
             (instance.kind != InstanceKind::Default).then(|| instance.id.clone());
         self.settings.save();

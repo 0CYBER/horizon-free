@@ -14,6 +14,7 @@ mod cull;
 mod datapacks_page;
 mod export_page;
 mod game_tools;
+mod import_page;
 mod instances_page;
 mod internet;
 mod markdown;
@@ -243,6 +244,7 @@ struct Launcher {
     game_packs: packs_page::Packs,
     world_packs: datapacks_page::WorldPacks,
     export: Option<export_page::ExportPanel>,
+    importing: import_page::Importing,
     /// The name the game made up for an offline player (`horizon-player.txt`), for the top bar.
     offline_name: Option<String>,
     /// The player's servers, for the sidebar until the Servers page has read them.
@@ -408,6 +410,7 @@ impl Launcher {
             game_packs: packs_page::Packs::default(),
             world_packs: datapacks_page::WorldPacks::default(),
             export: None,
+            importing: Default::default(),
             offline_name: offline_name(),
             side_servers: horizon_launcher::servers::list(),
             art: art::Art::default(),
@@ -3649,6 +3652,8 @@ impl Render for Launcher {
                 root = root.child(dialog);
             }
         }
+        root = self.import_drop_target(root, cx);
+        root = root.children(self.import_note(cx));
         if let Some(dialog) = self.instance_dialog(cx) {
             root = root.child(dialog);
         }
