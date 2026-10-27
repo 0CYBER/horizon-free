@@ -580,6 +580,11 @@ impl Mob {
         if self.species() == super::Species::Bee {
             return super::bee::stable_destination(w, p);
         }
+        if self.species() == super::Species::Turtle
+            && let Some(stable) = super::turtle::stable_destination(self, w, p)
+        {
+            return stable;
+        }
         // StriderPathNavigation: lava too.
         if self.kind.flags.lava_walker && w.block_name(p[0], p[1], p[2]) == "minecraft:lava" {
             return true;

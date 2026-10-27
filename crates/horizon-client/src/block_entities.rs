@@ -23,7 +23,7 @@
 //! Which states tick is a table by state id, built by the game from the block
 //! registry; whether a slot is made is decided when the slot is promoted at
 //! the start of the next tick, from the block state then.
-use crate::containers::BlockEntity;
+use crate::chunk::block_entity::BlockEntity;
 use crate::fast_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
 

@@ -104,27 +104,8 @@ pub fn chunks_with_block_entities<'a>(
         .collect()
 }
 
-fn string(s: &str) -> Tag {
-    Tag::String(s.into())
-}
-pub fn text(tag: Option<&Tag>) -> Option<String> {
-    match tag {
-        Some(Tag::String(s)) => Some(s.to_string_lossy()),
-        _ => None,
-    }
-}
-/// Any numeric tag as i64 (vanilla's `getIntOr` etc. accept every number type).
-pub fn number(tag: Option<&Tag>) -> Option<i64> {
-    Some(match tag? {
-        Tag::Byte(v) => i64::from(*v),
-        Tag::Short(v) => i64::from(*v),
-        Tag::Int(v) => i64::from(*v),
-        Tag::Long(v) => *v,
-        Tag::Float(b) => f32::from_bits(*b) as i64,
-        Tag::Double(b) => f64::from_bits(*b) as i64,
-        _ => return None,
-    })
-}
+use horizon_client_core::nbt_value::string;
+pub use horizon_client_core::nbt_value::{number, text};
 pub(crate) fn float(tag: Option<&Tag>) -> Option<f64> {
     Some(match tag? {
         Tag::Float(b) => f64::from(f32::from_bits(*b)),
@@ -339,7 +320,7 @@ impl SaveTables {
     }
 }
 
-pub use crate::chunk::{ChunkExtras, RolledLoot};
+pub use crate::chunk::{ChunkExtras, RolledLoot, SavedProto};
 
 fn tick_list(ticks: &[SavedTick], name: impl Fn(u32) -> Option<String>) -> Tag {
     Tag::List(
@@ -412,62 +393,9 @@ fn fluid_id(name: &str) -> Option<u32> {
     } as u32)
 }
 
-fn encode_item(stack: &crate::items::ItemStack) -> Vec<(&'static str, Tag)> {
-    let mut entries = vec![
-        ("id", string(&stack.item)),
-        ("count", Tag::Int(stack.count as i32)),
-    ];
-    if let Some(components) = crate::item_data::encode_components(stack) {
-        entries.push(("components", components));
-    }
-    entries
-}
-/// ItemStack.CODEC (id, count, components).
-pub fn item_to_nbt(stack: &crate::items::ItemStack) -> Tag {
-    Tag::compound(encode_item(stack))
-}
-pub fn item_from_nbt(tag: &Tag) -> Option<crate::items::ItemStack> {
-    let id = text(tag.get("id"))?;
-    if id == "minecraft:air" {
-        return None;
-    }
-    let count = number(tag.get("count"))
-        .or_else(|| number(tag.get("Count")))
-        .unwrap_or(1)
-        .max(1) as u32;
-    let (damage, extra) = crate::item_data::decode_components(tag.get("components"));
-    Some(crate::items::ItemStack {
-        item: Arc::from(id.as_str()),
-        count,
-        damage,
-        extra,
-    })
-}
-pub fn encode_items(slots: &[Option<crate::items::ItemStack>]) -> Tag {
-    Tag::List(
-        slots
-            .iter()
-            .enumerate()
-            .filter_map(|(i, s)| {
-                let mut entries = vec![("Slot", Tag::Byte(i as i8))];
-                entries.extend(encode_item(s.as_ref()?));
-                Some(Tag::compound(entries))
-            })
-            .collect(),
-    )
-}
-pub fn decode_items(tag: Option<&Tag>, size: usize) -> Vec<Option<crate::items::ItemStack>> {
-    let mut slots = vec![None; size];
-    if let Some(Tag::List(items)) = tag {
-        for it in items {
-            let slot = number(it.get("Slot")).unwrap_or(0) as u8 as usize;
-            if let Some(cell) = slots.get_mut(slot) {
-                *cell = item_from_nbt(it);
-            }
-        }
-    }
-    slots
-}
+pub use horizon_items::item_nbt::{
+    decode_items, encode_item, encode_items, item_from_nbt, item_to_nbt,
+};
 /// The block entity type ID for the block it sits in (a chest-like container
 /// is a chest, trapped chest or barrel).
 fn block_entity_id(e: &crate::containers::BlockEntity, block: &str) -> String {
@@ -547,6 +475,11 @@ pub fn encode_block_entity(
             }
         }
         BlockEntity::Sculk(s) => entries.extend(s.to_nbt()),
+        // ChiseledBookShelfBlockEntity.saveAdditional.
+        BlockEntity::ChiseledBookshelf(b) => {
+            entries.push(("Items", encode_items(&b.items)));
+            entries.push(("last_interacted_slot", Tag::Int(b.last_slot)));
+        }
         // CampfireBlockEntity.saveAdditional.
         BlockEntity::Campfire(c) => {
             entries.push(("Items", encode_items(&c.items)));
@@ -785,6 +718,13 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
         }
         BlockEntity::Sign(sign) => sign.decode(tag),
         BlockEntity::Sculk(s) => s.load(tag),
+        // ChiseledBookShelfBlockEntity.loadAdditional.
+        BlockEntity::ChiseledBookshelf(b) => {
+            for (slot, item) in decode_items(tag.get("Items"), 6).into_iter().enumerate() {
+                b.items[slot] = item;
+            }
+            b.last_slot = int("last_interacted_slot").unwrap_or(-1);
+        }
         // CampfireBlockEntity.loadAdditional: missing time arrays stay zeros.
         BlockEntity::Campfire(c) => {
             for (slot, item) in decode_items(tag.get("Items"), 4).into_iter().enumerate() {
@@ -1500,21 +1440,6 @@ fn decode_column(
     Some(chunk)
 }
 
-/// A proto chunk saved before it became final. Decoration writes into a
-/// chunk's neighbours, and decorated chunks wait for theirs, so the chunks
-/// past the finished ones hold writes that generating them again would lose
-/// (whole structure pieces, trees, ores). Vanilla saves its proto chunks too.
-pub struct SavedProto {
-    /// Blocks, scheduled ticks (in `saved`) and post-processing marks.
-    pub column: Chunk,
-    /// Decorated itself (`features`), not only written to by its neighbours
-    /// (`terrain`).
-    pub decorated: bool,
-    /// Block entity data in placement order, with `x`, `y` and `z`.
-    pub block_entities: Vec<Tag>,
-    /// Entities placed by structures, with absolute `Pos`.
-    pub entities: Vec<Tag>,
-}
 pub fn encode_proto(
     proto: &SavedProto,
     registry: &BlockRegistry,
@@ -2799,6 +2724,8 @@ pub struct Level {
     pub xp_seed: i32,
     /// ServerPlayer.seenCredits: the end poem has been shown.
     pub seen_credits: bool,
+    /// Player.lastDeathLocation: the dimension and block of the last death.
+    pub last_death: Option<(String, [i32; 3])>,
     /// Player.active_effects: (id, duration, amplifier, ambient, show_particles).
     pub active_effects: Vec<(String, i32, i32, bool, bool)>,
     /// Player.EnderItems: the ender chest inventory (27 slots).
@@ -2999,6 +2926,15 @@ impl Level {
         self.fall_distance = f("fall_distance").unwrap_or(0.0);
         self.on_ground = n("OnGround").unwrap_or(0) != 0;
         self.seen_credits = n("seenCredits").unwrap_or(0) != 0;
+        self.last_death = p.get("LastDeathLocation").and_then(|d| {
+            let Some(Tag::IntArray(pos)) = d.get("pos") else {
+                return None;
+            };
+            Some((
+                text(d.get("dimension"))?,
+                [*pos.first()?, *pos.get(1)?, *pos.get(2)?],
+            ))
+        });
         if let Some(mode) = n("playerGameType") {
             self.creative = mode == 1;
             self.game_mode = mode as i32;
@@ -3099,6 +3035,7 @@ impl Level {
                 "Pos",
                 "respawn",
                 "recipeBook",
+                "LastDeathLocation",
             ] {
                 map.remove(&JavaString::from(key));
             }
@@ -3225,6 +3162,15 @@ impl Level {
             entries.push(("Pos", doubles(&pos)));
         }
         entries.push(("seenCredits", Tag::Byte(i8::from(self.seen_credits))));
+        if let Some((dimension, pos)) = &self.last_death {
+            entries.push((
+                "LastDeathLocation",
+                Tag::compound([
+                    ("dimension", string(dimension)),
+                    ("pos", Tag::IntArray(pos.to_vec())),
+                ]),
+            ));
+        }
         // A respawn point other than the world spawn: an anchor elsewhere, or a bed.
         if let Some((dimension, block, yaw, forced)) = &self.respawn_elsewhere {
             let mut respawn = vec![

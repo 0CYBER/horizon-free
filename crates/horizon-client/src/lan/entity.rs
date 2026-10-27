@@ -742,6 +742,24 @@ impl Entities {
                 chunk,
             });
         }
+        // TrackedEntity.getEffectiveRange: a vehicle is tracked as far as its
+        // widest indirect passenger, so a rider never leaves before its mount.
+        for (&vehicle, passengers) in &riding.passengers {
+            let Some(own) = self.states.get(&vehicle).filter(|s| s.seen == now) else {
+                continue;
+            };
+            let (index, mut range) = (own.index, own.range);
+            let mut pending = passengers.clone();
+            while let Some(id) = pending.pop() {
+                if let Some(s) = self.states.get(&id).filter(|s| s.seen == now) {
+                    range = range.max(s.range);
+                }
+                pending.extend_from_slice(riding.passengers(id));
+            }
+            self.probes[index].range = self
+                .range_percent
+                .map_or(range * 16, |p| p * (range * 16) / 100);
+        }
         self.flags.resize_with(viewers.len(), Vec::new);
         self.pairs.clear();
         self.pairs.resize(entities.len(), false);

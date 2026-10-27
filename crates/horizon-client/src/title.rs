@@ -966,6 +966,11 @@ impl Title {
                 }
                 let version = format!("Horizon {} (Rust)", horizon_core::VANILLA_VERSION);
                 batch.text(atlas, &version, 2.0, h - 10.0, u32::MAX, true);
+                // A nightly names its build in the top-left corner, the one spot no button reaches at any GUI
+                // scale, so screenshots and reports say which build they come from.
+                if let Some(nightly) = horizon_core::release::nightly_label() {
+                    batch.text(atlas, &nightly, 2.0, 2.0, u32::MAX, true);
+                }
                 let notice = "Not affiliated with Mojang or Microsoft";
                 let tw = HudBatch::text_width(atlas, notice);
                 batch.text(atlas, notice, w - tw - 2.0, h - 10.0, u32::MAX, true);
