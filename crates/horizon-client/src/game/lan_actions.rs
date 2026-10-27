@@ -2319,6 +2319,13 @@ impl Game<'_> {
         for event in events {
             match event {
                 MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, at),
+                // LivingEntity.checkFallDamage: the crumbs reach every player.
+                MotionEvent::Fall(horizon_client::landing::FallEvent::Particles {
+                    state,
+                    position,
+                    count,
+                    speed,
+                }) => self.landing_dust(Some(host), state, position, count, speed),
                 MotionEvent::Fall(event) => self.landing_block_updates(&event),
                 // HoneyBlock.maybeDoSlideEffects: the sound reaches the
                 // others (Player.playSound excludes the player, whose client
