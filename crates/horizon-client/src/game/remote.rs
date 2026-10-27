@@ -4617,6 +4617,11 @@ impl Game<'_> {
             if reacts {
                 self.predict_use(&changes, seq);
                 self.open_command_block_if_editable((hit.pos[0], hit.pos[1], hit.pos[2]));
+            } else if self.predict_campfire_douse(hit.pos, held.as_ref(), seq) {
+                // CampfireBlock.useItemOn succeeded: this hand swings and the
+                // click ends, so a shield in the other hand is not raised.
+                self.with_hand(hand, Game::swing_arm);
+                return true;
             } else if held.as_ref().is_some_and(|s| &*s.item == "minecraft:brush") {
                 // BrushItem.useOn: brushing starts here (CONSUME, no swing); the
                 // server brushes and the dust is this client's own.
@@ -4803,7 +4808,7 @@ impl Game<'_> {
     /// predicted under the use's sequence until the server acknowledges it
     /// (`BlockStatePredictionHandler.retainKnownServerState`): a use the
     /// server refused goes back.
-    fn predict_blocks(&mut self, changes: &DryChanges, seq: i32) {
+    pub(super) fn predict_blocks(&mut self, changes: &DryChanges, seq: i32) {
         for &(p, state) in changes {
             let pos = [p.x, p.y, p.z];
             let before = self.world.block(p.x, p.y, p.z);
