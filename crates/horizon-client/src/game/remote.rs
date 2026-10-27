@@ -5104,6 +5104,28 @@ impl Game<'_> {
         if self.spectator() {
             return true;
         }
+        // A spear jabs (`MultiPlayerGameMode.piercingAttack`): the server
+        // stabs, this client swings, plays the sound and starts its charge
+        // again.
+        if let Some(kinetic) = self
+            .held()
+            .and_then(|s| horizon_client::spear::Kinetic::of(&s.item))
+        {
+            if self.cannot_attack_with_item(self.hand_strength.ticker, 0) {
+                return false;
+            }
+            // ServerboundPlayerActionPacket.Action.STAB.
+            self.send(S::PlayerAction(play::PlayerAction {
+                action: 8,
+                pos: [0; 3],
+                direction: 0,
+                sequence: 0,
+            }));
+            self.hand_strength.reset_attack();
+            self.swing_hand(Hand::Main, kinetic.attack_animation());
+            self.play_at_feet(kinetic.attack_sound);
+            return true;
+        }
         let mut instant = false;
         // A ghast's fireball or a wind charge nearer than any mob: the
         // server turns it (game/deflect.rs).
@@ -5154,7 +5176,13 @@ impl Game<'_> {
         if !down {
             self.clicks.miss_time = 0;
         }
-        if self.clicks.miss_time > 0 || self.using.is_some() {
+        // A piercing weapon neither breaks blocks nor swings on its own.
+        if self.clicks.miss_time > 0
+            || self.using.is_some()
+            || self
+                .held()
+                .is_some_and(|s| horizon_client::spear::Kinetic::of(&s.item).is_some())
+        {
             return;
         }
         let entity = self.entity_targeted();
