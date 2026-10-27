@@ -303,7 +303,7 @@ SERVER_THREAD = True
 CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'spawned', 'sign', 'damage', 'mobs', 'hazards', 'pvp',
           'arrows', 'kills', 'leave', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles',
           'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing',
-          'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push',
+          'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'sleep-villager', 'predict', 'push',
           'piston-push', 'piston-slime', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles',
           'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects',
           'portals', 'distance', 'growth', 'doors', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands',
@@ -2720,6 +2720,58 @@ def check_sleep(host, guest, out):
     assert lying['host'] and lying['guest'], f'a sleeping player is drawn standing: {detail}'
     assert not lying['after'], f'a player up again is still drawn lying: {detail}'
     return detail
+
+
+def check_sleep_villager(host, guest, out):
+    """AbstractBedBlock.kickVillagerOutOfBed: using a bed a villager sleeps in wakes the villager and
+    leaves the player up; the next use lies down. The sleeper's own body is drawn in its bed, in first
+    person too (LevelExtractor skips the camera entity unless it sleeps)."""
+    guest('command', command='gamemode survival')
+    host('command', command='time set midnight')
+    gx, gy, gz = (int(v // 1) for v in pos_of(guest))
+    x, z = gx, gz + 3
+    guest('command', command=f'fill {x - 3} {gy - 1} {z - 2} {x + 4} {gy - 1} {z + 3} minecraft:stone')
+    guest('command', command=f'fill {x - 3} {gy} {z - 2} {x + 4} {gy + 3} {z + 3} minecraft:air')
+    bed = bed_at(guest, (x, gy, z))
+    guest('command', command=f'summon minecraft:villager {x - 1.5} {gy} {z + 1.5}')
+
+    def villager():
+        found = guest('entities', radius=12, type='villager')['entities']
+        return found[0]['pos'] if found else None
+
+    def in_bed(at):
+        # Lying at the head (setPosToBed), not standing beside it.
+        return at is not None and abs(at[0] - bed[0] - 0.5) < 0.5 and abs(at[2] - bed[2] - 0.5) < 0.5 \
+            and at[1] - gy > 0.4
+    seen = {}
+    try:
+        for _ in range(90):
+            if in_bed(villager()):
+                break
+            guest.wait(20)
+        seen['villager_asleep'] = villager()
+        assert in_bed(seen['villager_asleep']), f'the villager never lay down in the bed: {seen}'
+        guest.raw('interact', *bed)
+        guest.wait(10)
+        seen['villager_kicked'] = villager()
+        seen['up'] = guest('state').get('sleeping')
+        assert not in_bed(seen['villager_kicked']), f'the bed did not wake its villager: {seen}'
+        assert seen['up'] is None, f'the player lay down beside the villager: {seen}'
+        guest.raw('interact', *bed)
+        guest.wait(10)
+        seen['asleep'] = guest('state').get('sleeping')
+        seen['own_body_asleep'] = remote(guest).get('own_body')
+        guest.shot(out, 'sleep-villager')
+        guest.raw('key', 'esc', 'tap')
+        guest.wait(10)
+        seen['own_body_up'] = remote(guest).get('own_body')
+    finally:
+        guest('command', command='kill @e[type=minecraft:villager,distance=..16]')
+        guest('command', command=f'fill {bed[0] - 1} {bed[1]} {bed[2]} {bed[0]} {bed[1]} {bed[2]} minecraft:air')
+        host('command', command='time set day')
+    assert seen['asleep'] == bed, f'the emptied bed did not take the player: {seen}'
+    assert seen['own_body_asleep'] and not seen['own_body_up'], f'the sleeper\'s own body: {seen}'
+    return seen
 def check_predict(host, guest, out):
     # MultiPlayerGameMode.useItemOn under startPrediction (#869): the guest's door opens on its own screen
     # at once, with the host (the server) frozen, and the server's answer later agrees; an iron door
@@ -4960,7 +5012,8 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'cartography': check_cartography, 'hurt': check_hurt, 'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
              'effects': check_effects, 'portals': check_portals, 'distance': check_distance,
-             'clicks': check_clicks, 'sleep': check_sleep, 'push': check_push, 'piston-push': check_piston_push,
+             'clicks': check_clicks, 'sleep': check_sleep, 'sleep-villager': check_sleep_villager,
+             'push': check_push, 'piston-push': check_piston_push,
              'piston-slime': check_piston_slime,
              'eat': check_eat, 'eating': check_eating, 'xp': check_xp,
              'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
