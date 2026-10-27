@@ -3983,6 +3983,17 @@ impl Game<'_> {
         // library: the block entity's side effects (containers spill), neighbour
         // and shape updates, and the destroy event (particles, sound).
         let creative = self.creative;
+        // BeehiveBlock.playerWillDestroy: a creative break still drops the hive
+        // with its bees and honey level.
+        if creative
+            && self.ui.rules.bool("block_drops")
+            && let Some((h, (honey, _))) = &hive
+            && (!h.bees.is_empty() || honey.is_some_and(|l| l > 0))
+            && let Some(stack) = self.picked_stack(pos, true)
+        {
+            let at = pos.map(f64::from);
+            self.spawn_item(stack, at, dispenser::new_item_motion(), 10);
+        }
         let correct_tool = !facts.requires_tool
             || self
                 .res
