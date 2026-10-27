@@ -66,6 +66,7 @@ pub mod spawning;
 pub mod species;
 pub mod strider;
 pub mod sulfur_cube;
+pub mod sync;
 pub mod tame;
 pub mod trader;
 pub mod transport_items;
@@ -802,6 +803,8 @@ pub struct Extra {
     pub memories: Vec<(&'static str, i64, i64)>,
     /// A camel's `LAST_POSE_CHANGE_TICK`.
     pub pose_change_tick: i64,
+    /// `Entity.DATA_POSE` as a mob of a server has it (`sync::pose_id`).
+    pub pose: u8,
     /// The school leader a fish follows, and a tropical fish that swims alone.
     pub leader: Option<u32>,
     pub lone: bool,
@@ -920,6 +923,12 @@ pub enum MobEvent {
         mob: u32,
         at: [f64; 3],
     },
+    /// `Level.broadcastEntityEvent` for a mob: guests run `sync::entity_event`.
+    EntityEvent {
+        mob: u32,
+        event: i8,
+        at: [f64; 3],
+    },
     Sound(&'static str, [f64; 3], f32, f32),
     /// `ChestBlockEntity.startOpen` / `stopOpen` by a copper golem: the
     /// chest's opener count goes up or down (interaction range 3).
@@ -942,6 +951,10 @@ pub enum MobEvent {
         chest: [i32; 3],
         slot: usize,
         stack: Option<crate::items::ItemStack>,
+    },
+    /// `InfestedMobEffect.onMobHurt`: the mob was hurt while infested.
+    Infested {
+        mob: u32,
     },
     /// `OfferFlowerGoal.stop`: the item goes to the target's antenna (saddle)
     /// slot if it is empty, as a guaranteed drop.
@@ -1092,8 +1105,11 @@ pub enum MobEvent {
         at: [f64; 3],
         count: u32,
     },
-    /// Client particles about a mob's box (`particles::around_self`).
+    /// Client particles about a mob's box (`particles::around_self`) and the
+    /// entity event `event` that shows them, sent for mob `mob`.
     AroundSelf {
+        mob: u32,
+        event: i8,
         kind: &'static str,
         feet: [f64; 3],
         width: f64,
@@ -1965,6 +1981,9 @@ impl Mob {
                 }
             }
         }
+        if self.has_effect("minecraft:infested") {
+            self.outbox.push(MobEvent::Infested { mob: self.id });
+        }
         // Squid.hurtServer: a squid hurt after a living entity hit it squirts ink.
         if matches!(self.species(), Species::Squid | Species::GlowSquid)
             && self.ai.last_hurt_by.is_some()
@@ -2203,6 +2222,7 @@ pub fn render_model(
                     layer: overlay,
                     color: 0xFFFF_FFFF,
                     light,
+                    glint_uv: [0.0, 0.0],
                 });
             }
         }
@@ -2337,7 +2357,7 @@ mod lighting_tests {
     #[test]
     fn packed_normal_uses_native_snorm_bytes_without_changing_vertex_offsets() {
         assert_eq!(std::mem::offset_of!(Vertex, normal), 32);
-        assert_eq!(std::mem::size_of::<Vertex>(), 36);
+        assert_eq!(std::mem::size_of::<Vertex>(), 44);
         let part = plane([0.0, 1.0, 0.0]);
         assert_eq!(
             part.polygons[0].vertex_normal(ModelNormals::new(Mat4::from_scale(Vec3::ZERO))),

@@ -711,6 +711,20 @@ impl Game<'_> {
                 let color = undyed.map_or(0xFFFF_FFFF, |c| {
                     0xFF00_0000 | (c & 0xFF) << 16 | (c & 0xFF00) | (c >> 16) & 0xFF
                 });
+                // ArmorStandRenderer's HumanoidArmorLayer: the armour glint
+                // when `stack.hasFoil()`, as on a living entity.
+                let item_glint = self
+                    .res
+                    .items()
+                    .enchantments
+                    .props
+                    .get(&stack.item)
+                    .is_some_and(|p| p.glint);
+                let overlay = if stack.has_foil(item_glint) {
+                    horizon_client::mobs::render::ARMOR_GLINT
+                } else {
+                    0
+                };
                 let layer_poses = Poses::new(part);
                 horizon_client::mobs::render::draw(
                     part,
@@ -719,7 +733,7 @@ impl Game<'_> {
                     uv,
                     color,
                     packed,
-                    0,
+                    overlay,
                     out,
                 );
                 // EquipmentLayerRenderer: the trim layer over the armour.
@@ -734,7 +748,7 @@ impl Game<'_> {
                         trim,
                         0xFFFF_FFFF,
                         packed,
-                        0,
+                        overlay,
                         out,
                     );
                 }
@@ -877,6 +891,7 @@ impl Game<'_> {
                 lights: Some(horizon_client::block_entity_render::diffuse_lights(
                     self.dim == super::Dim::Nether,
                 )),
+                glint: self.glint(),
             };
             let profile = stack
                 .extra

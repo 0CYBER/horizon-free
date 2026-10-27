@@ -75,11 +75,11 @@ pub trait ChunkGenerator: Send + Sync + 'static {
     fn light_view(&self, _proto: &Proto) -> Option<Chunk> {
         None
     }
-    fn saved_proto(&self, _proto: &Proto) -> Option<crate::save::SavedProto> {
+    fn saved_proto(&self, _proto: &Proto) -> Option<crate::chunk::SavedProto> {
         None
     }
     /// Put a saved proto chunk's state back onto `proto`, generated again.
-    fn restore_proto(&self, _proto: &mut Proto, _saved: crate::save::SavedProto) {}
+    fn restore_proto(&self, _proto: &mut Proto, _saved: crate::chunk::SavedProto) {}
     /// Save proto chunks decoration wrote to, so that they come back as they
     /// were: generating them again would lose those writes.
     fn save_protos(&self, _protos: &[&Proto]) {}

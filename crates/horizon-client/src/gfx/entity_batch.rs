@@ -144,6 +144,8 @@ mod tests {
                 color: index as u32,
                 light: (index * 3) as u32,
                 normal: [1, 2, 3, 4],
+
+                glint_uv: [0.0, 0.0],
             })
             .collect()
     }

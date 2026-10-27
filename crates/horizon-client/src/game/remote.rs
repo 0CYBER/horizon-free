@@ -2239,6 +2239,10 @@ impl Game<'_> {
                 {
                     m.health = 0.0;
                 }
+                // The events that start a mob's animation (the warden's).
+                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
+                    horizon_client::mobs::sync::entity_event(m, p.event as u8);
+                }
                 // LivingEntity.handleEntityEvent 60: the poof as the dead body goes.
                 if p.event == 60
                     && let Some(m) = self.mobs.iter().find(|m| m.id == p.id as u32)
@@ -2248,6 +2252,37 @@ impl Game<'_> {
                 }
                 if p.event == super::totem::TOTEM_EVENT {
                     self.remote_totem(p.id);
+                }
+                // Mob.handleEntityEvent 20: the spawn poof.
+                if p.event == 20 && self.mobs.iter().any(|m| m.id == p.id as u32) {
+                    self.poof_particles(p.id as u32);
+                }
+                // Villager 12, 13 and 14, TamableAnimal and AbstractHorse 6 and
+                // 7, Animal and Allay 18: the particles about the mob.
+                if matches!(p.event, 6 | 7 | 12 | 13 | 14 | 18) {
+                    self.entity_event_particles(p.id as u32, p.event);
+                }
+                // Snowball and ThrownEgg.handleEntityEvent 3: the crumbs where
+                // the projectile is (the server removes it right after).
+                if p.event == 3 {
+                    let crumbs = self
+                        .creatures
+                        .projectiles
+                        .iter()
+                        .find(|pr| pr.id == p.id as u32)
+                        .and_then(|pr| {
+                            let item = match pr.kind {
+                                horizon_client::projectiles::ProjectileKind::Snowball => {
+                                    "minecraft:snowball"
+                                }
+                                horizon_client::projectiles::ProjectileKind::Egg => "minecraft:egg",
+                                _ => return None,
+                            };
+                            Some(([pr.position.x, pr.position.y, pr.position.z], item))
+                        });
+                    if let Some((at, item)) = crumbs {
+                        self.item_burst(at, item);
+                    }
                 }
                 if p.event == super::combat::DROWN_EVENT {
                     self.remote_drown(p.id);
@@ -3682,6 +3717,7 @@ impl Game<'_> {
                 m.fluids = fluids;
             }
         }
+        let game_time = self.world.game_time;
         let Some(r) = self.remote.as_mut() else {
             return;
         };
@@ -3805,6 +3841,8 @@ impl Game<'_> {
             if m.species() == horizon_client::mobs::Species::Bat {
                 horizon_client::mobs::bat::setup_animation_states(m);
             }
+            // The animation states a server computes in its own `ai_step`.
+            horizon_client::mobs::sync::client_tick(m, game_time);
         }
         for o in self.orbs.iter_mut().filter(|_| running) {
             o.previous = o.position;
