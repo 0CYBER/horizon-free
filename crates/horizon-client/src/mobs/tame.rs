@@ -448,7 +448,8 @@ impl Goal for OwnerHurt {
         m.ai.target = None;
     }
 }
-/// `Wolf.wantsToAttack`: never creepers, ghasts or tame wolves and cats.
+/// `Wolf.wantsToAttack`: never creepers, ghasts, tame cats and parrots, or a
+/// tame wolf of the same owner.
 fn wants_to_attack(m: &Mob, w: &MobWorld, who: Who) -> bool {
     let Who::Mob(id) = who else {
         return false;
@@ -461,7 +462,8 @@ fn wants_to_attack(m: &Mob, w: &MobWorld, who: Who) -> bool {
     };
     match s.species {
         Species::Creeper | Species::Ghast => false,
-        Species::Wolf | Species::Cat | Species::Parrot => !s.tame,
+        Species::Wolf => !s.tame || s.owner != m.extra.owner,
+        Species::Cat | Species::Parrot => !s.tame,
         Species::Horse | Species::Donkey | Species::Mule | Species::Llama => !s.tame,
         _ => true,
     }

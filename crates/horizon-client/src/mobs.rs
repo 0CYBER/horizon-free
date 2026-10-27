@@ -1378,6 +1378,8 @@ pub struct Seen {
     pub baby: bool,
     pub in_love: bool,
     pub tame: bool,
+    /// A tamed animal's owner (`getOwner`).
+    pub owner: Option<[i32; 4]>,
     pub hostile: bool,
     pub target: Option<Who>,
     pub health: f32,
@@ -1485,6 +1487,7 @@ impl Mob {
                 m.extra.in_love > 0
             },
             tame: m.extra.tame,
+            owner: m.extra.owner,
             hostile: m.hostile(),
             target: m.ai.target,
             health: m.health,
