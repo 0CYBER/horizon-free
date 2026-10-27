@@ -37,6 +37,41 @@ pub(super) fn ally_of_player(m: &Mob, player: Option<[i32; 4]>) -> bool {
         || m.species() == Species::Allay && m.extra.tame
 }
 
+/// A smash's knockback on the players, put off while a guest's turn holds
+/// the other players.
+pub(super) struct SmashPush {
+    center: Vec3,
+    heavy: f64,
+    attacker: Option<u32>,
+    team: Option<horizon_client::scoreboard::Team>,
+}
+/// `MaceItem.getKnockbackPower` and the push of one entity at `at`, `heavy`
+/// being 2 after a fall of more than five blocks.
+fn smash_push(center: Vec3, heavy: f64, at: Vec3, velocity: &mut Vec3, resistance: f64) {
+    let d = [at.x - center.x, at.y - center.y, at.z - center.z];
+    let distance_sqr = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    if distance_sqr > KNOCKBACK_RADIUS.powi(2) {
+        return;
+    }
+    let length = distance_sqr.sqrt();
+    let power =
+        (KNOCKBACK_RADIUS - length) * f64::from(KNOCKBACK_POWER) * heavy * (1.0 - resistance);
+    if power <= 0.0 {
+        return;
+    }
+    // Vec3.normalize: a vector shorter than 1e-5 has no direction.
+    let (x, z) = if length < f64::from(1.0e-5f32) {
+        (0.0, 0.0)
+    } else {
+        (d[0] / length * power, d[2] / length * power)
+    };
+    *velocity = Vec3::new(
+        velocity.x + x,
+        velocity.y + f64::from(KNOCKBACK_POWER),
+        velocity.z + z,
+    );
+}
+
 impl Game<'_> {
     fn holds_mace(&self) -> bool {
         self.inventory[self.selected]
@@ -220,44 +255,75 @@ impl Game<'_> {
         ];
         self.level_event_at(2013, on_pos, 750);
         let heavy = if fall > HEAVY_THRESHOLD { 2.0 } else { 1.0 };
-        // getKnockbackPower and the push of one entity at `at`.
-        let push = |at: Vec3, velocity: &mut Vec3, resistance: f64| {
-            let d = [at.x - center.x, at.y - center.y, at.z - center.z];
-            let distance_sqr = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-            if distance_sqr > KNOCKBACK_RADIUS.powi(2) {
-                return;
-            }
-            let length = distance_sqr.sqrt();
-            let power = (KNOCKBACK_RADIUS - length)
-                * f64::from(KNOCKBACK_POWER)
-                * heavy
-                * (1.0 - resistance);
-            if power <= 0.0 {
-                return;
-            }
-            // Vec3.normalize: a vector shorter than 1e-5 has no direction.
-            let (x, z) = if length < f64::from(1.0e-5f32) {
-                (0.0, 0.0)
-            } else {
-                (d[0] / length * power, d[2] / length * power)
-            };
-            *velocity = Vec3::new(
-                velocity.x + x,
-                velocity.y + f64::from(KNOCKBACK_POWER),
-                velocity.z + z,
-            );
-        };
         let player = self.level.player_uuid.or(Some([0, 0, 0, 1]));
         for m in self
             .mobs
             .iter_mut()
             .filter(|m| m.id != id && m.alive() && !m.removed && !ally_of_player(m, player))
         {
-            push(m.position, &mut m.velocity, m.attrs.knockback_resistance);
+            smash_push(
+                center,
+                heavy,
+                m.position,
+                &mut m.velocity,
+                m.attrs.knockback_resistance,
+            );
         }
         for s in self.armor_stands.iter_mut().filter(|s| !s.marker) {
-            push(s.position, &mut s.velocity, 0.0);
+            smash_push(center, heavy, s.position, &mut s.velocity, 0.0);
         }
+        // The host and the LAN guests are living entities too. A guest's turn
+        // holds the other players (`as_guest`): the push waits for it to end.
+        let push = SmashPush {
+            center,
+            heavy,
+            attacker: self.lan_acting,
+            team: self.player_team().cloned(),
+        };
+        if self.lan_acting.is_some() {
+            self.creatures.smash_pushes.push(push);
+        } else {
+            self.smash_push_players(&push);
+        }
+    }
+    /// `MaceItem.knockback` on the players but the attacker: the host unless
+    /// it attacked, and every guest but the attacker.
+    fn smash_push_players(&mut self, push: &SmashPush) {
+        if push.attacker.is_some() {
+            self.smash_push_player(push);
+        }
+        self.each_guest_hit_except(push.attacker, |g| g.smash_push_player(push));
+    }
+    /// The pushes guests' smashes put off.
+    pub(super) fn flush_smash_pushes(&mut self) {
+        for push in std::mem::take(&mut self.creatures.smash_pushes) {
+            self.smash_push_players(&push);
+        }
+    }
+    /// `MaceItem.knockback` on the player here (the host, or the guest swapped
+    /// in): not a spectator, an ally of the attacker (`isAlliedTo`: the same
+    /// team) or a creative player flying.
+    fn smash_push_player(&mut self, push: &SmashPush) {
+        if self.spectator()
+            || horizon_client::scoreboard::teams_allied(push.team.as_ref(), self.player_team())
+        {
+            return;
+        }
+        let creative = self.creative;
+        let Some(p) = self.player.as_mut() else {
+            return;
+        };
+        if creative && p.flying {
+            return;
+        }
+        let resistance = p.attribute("minecraft:knockback_resistance").unwrap_or(0.0);
+        smash_push(
+            push.center,
+            push.heavy,
+            p.position,
+            &mut p.velocity,
+            resistance,
+        );
     }
     /// `ServerPlayer.checkFallDamage` after a smash on a grounded target:
     /// the landing block's particles, 50 for every block fallen (200 at most).

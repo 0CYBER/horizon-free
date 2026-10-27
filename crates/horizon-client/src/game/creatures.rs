@@ -46,6 +46,9 @@ pub(super) struct Creatures {
     pub projectiles: Vec<Projectile>,
     /// Wind bursts from a guest's turn, waiting for it to end (game/wind.rs).
     pub wind_bursts: Vec<super::wind::Burst>,
+    /// Mace smash knockback on the other players from a guest's turn, waiting
+    /// for it to end (game/mace.rs).
+    pub smash_pushes: Vec<super::mace::SmashPush>,
     /// Explosion packets from a guest's turn, waiting for it to end
     /// (centre, small, radius, blocks hit; game/lan_particles.rs).
     pub lan_explosions: Vec<([f64; 3], bool, f32, usize)>,
@@ -53,6 +56,8 @@ pub(super) struct Creatures {
     pub elder_apparition: i32,
     /// The wandering trader spawner's clock.
     pub trader: super::wandering_trader::Spawner,
+    /// The cat spawner's countdown (`CatSpawner.nextTick`).
+    pub cat_tick: i32,
     /// Particles from a guest's turn, waiting for it to end
     /// (`lan_send_particles`: options, centre, spread, speed, count).
     pub lan_particles: Vec<(
@@ -499,6 +504,7 @@ impl Game<'_> {
         if self.ui.rules.bool("spawn_mobs") {
             self.tick_wandering_trader();
             self.tick_patrol_spawner();
+            self.tick_cat_spawner();
         }
         self.tick_raids();
         self.tick_creature_entities()
@@ -3166,6 +3172,7 @@ impl Game<'_> {
                     at: pos,
                     setup,
                 }])?;
+                self.damage_held_tool();
             }
             Species::Sheep if item == "minecraft:shears" && !m.extra.sheared && !m.is_baby() => {
                 m.extra.sheared = true;
@@ -3544,23 +3551,9 @@ impl Game<'_> {
         }
         true
     }
+    /// `ItemStack.hurtAndBreak(1, ...)` on the held tool: Unbreaking, break sound and stat.
     pub(super) fn damage_held_tool(&mut self) {
-        if self.creative {
-            return;
-        }
-        let slot = self.held_slot();
-        let max_damage = self
-            .held()
-            .and_then(|s| self.res.items().get(&s.item))
-            .map_or(0, |i| i.max_damage);
-        if max_damage > 0
-            && let Some(stack) = self.stack_in_mut(slot).as_mut()
-        {
-            stack.damage += 1;
-            if stack.damage >= max_damage {
-                *self.stack_in_mut(slot) = None;
-            }
-        }
+        self.damage_held(1);
     }
     /// Throwables and spawn eggs (SnowballItem/EggItem/EnderpearlItem/SpawnEggItem.use).
     pub(super) fn throw_item(&mut self, stack: &ItemStack) -> Result<bool> {

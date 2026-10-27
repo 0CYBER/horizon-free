@@ -351,8 +351,10 @@ impl Game<'_> {
                 continue;
             }
             hits.push(1.0 + self.world.random.next_float() * 4.0);
+            // ChangeItemDamage -> ItemStack.hurtAndBreak: unbreaking applies.
+            let loss = self.durability_loss(&stack, 2);
             if let Some(s) = self.armor[slot].as_mut() {
-                s.damage += 2;
+                s.damage += loss;
                 if self
                     .res
                     .items()
