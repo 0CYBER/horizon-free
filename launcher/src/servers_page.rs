@@ -2407,11 +2407,15 @@ impl Launcher {
                 disabled(confirm)
             };
             section = section
-                .child(
-                    text(theme::UI)
-                        .text_color(t.ink)
-                        .child(format!("Type {name} to confirm.")),
-                )
+                .child(text(theme::UI).text_color(t.ink).child(
+                    gpui::StyledText::new(format!("Type {name} to confirm.")).with_highlights([(
+                        5..5 + name.len(),
+                        gpui::HighlightStyle {
+                            font_weight: Some(FontWeight::BOLD),
+                            ..Default::default()
+                        },
+                    )]),
+                ))
                 .child(field)
                 .child(
                     div()
