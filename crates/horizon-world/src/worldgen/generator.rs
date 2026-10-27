@@ -1551,6 +1551,14 @@ enum Biomes<'a, 'b> {
 /// Resolved biomes by quart (`Biomes::Memo`).
 struct BiomeMemo {
     biomes: HashMap<[i32; 3], BiomeId>,
+    /// Quarts per side of the columns sharing one biome, the first one asked
+    /// (its surface's); 0 for one per quart. Far cells wider than a quart
+    /// don't show a biome change a few blocks down, and climate changes over
+    /// hundreds of blocks: a far tile shares one per 4x4 of its columns, in
+    /// cells up to 64 blocks wide.
+    /// (Painting asks through the biome zoom, which strays into neighbouring
+    /// quarts: per quart, those strays were most of the climate samples.)
+    cell: i32,
 }
 /// The biome at `quart`, resolved once per quart (`Biomes::Memo`).
 fn memo_biome(
@@ -1560,14 +1568,23 @@ fn memo_biome(
     memo: &mut BiomeMemo,
     quart: [i32; 3],
 ) -> Result<BiomeId, MaterialRuleError> {
-    if let Some(&id) = memo.biomes.get(&quart) {
+    let key = if memo.cell > 0 {
+        [
+            quart[0].div_euclid(memo.cell),
+            0,
+            quart[2].div_euclid(memo.cell),
+        ]
+    } else {
+        quart
+    };
+    if let Some(&id) = memo.biomes.get(&key) {
         return Ok(id);
     }
     let name = resolver
         .sample(context, quart)
         .map_err(|_| MaterialRuleError::BiomeQueryFailed)?;
     let id = data.biome_id(name).ok_or(MaterialRuleError::MissingBiome)?;
-    memo.biomes.insert(quart, id);
+    memo.biomes.insert(key, id);
     Ok(id)
 }
 // Lazy equality proofs for the eight quart corners of a block-biome cell.
@@ -2127,8 +2144,15 @@ where
         let oz = z.div_euclid(4) * 4;
         let nx = ((x - ox + (side as i32 - 1) * width + step_xz - 1) / step_xz) + 1;
         let nz = ((z - oz + (side as i32 - 1) * width + step_xz - 1) / step_xz) + 1;
-        let ny = (height + 7) / 8 + 1;
-        let volume = DensityVolume::new([nx, ny, nz], [ox, min, oz], [step_xz, 8, step_xz])
+        // Cells many blocks wide keep their interpolated shape on a coarser
+        // vertical lattice, for a fraction of the density work.
+        let step_y = match width {
+            ..32 => 8,
+            32..128 => 16,
+            _ => 32,
+        };
+        let ny = (height + step_y - 1) / step_y + 1;
+        let volume = DensityVolume::new([nx, ny, nz], [ox, min, oz], [step_xz, step_y, step_xz])
             .map_err(stage("far density"))?;
         let mut densities = vec![0.; volume.size()];
         self.router
@@ -2169,6 +2193,9 @@ where
         let mut biome_context = SamplerContext::cached();
         let mut biome_memo = BiomeMemo {
             biomes: HashMap::new(),
+            // Columns `width` blocks apart are width / 4 quarts apart; cells
+            // stop at 64 blocks (wider ones moved a third of level 6's biomes).
+            cell: if width >= 4 { width.min(16) } else { 0 },
         };
         for dz in 0..side {
             for dx in 0..side {
@@ -2182,8 +2209,8 @@ where
                     *density = value(wx, iy, wz);
                 }
                 for y in (min..min + height).rev() {
-                    let iy = (y - min) as usize / 8;
-                    let alpha = ((y - min) % 8) as f32 / 8.;
+                    let iy = ((y - min) / step_y) as usize;
+                    let alpha = ((y - min) % step_y) as f32 / step_y as f32;
                     let density = profile[iy] + (profile[iy + 1] - profile[iy]) * alpha;
                     let state = aquifer
                         .compute_substance([wx, y, wz], f64::from(density))
