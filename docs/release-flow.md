@@ -119,10 +119,39 @@ ones only there.
 
 ## Merging
 
-Pull requests merge with a merge commit. The orchestrator sessions review a pull request, then turn on
-auto-merge (`gh pr merge <n> --auto --merge`): GitHub merges it once the required checks pass. Branch
-protection on main requires `verify`. Branches don't have to be up to date with main: two sessions merge in
-parallel, and main's own `checks` run catches the rare semantic conflict.
+Pull requests merge with a merge commit, by hand: never `gh pr merge --auto`. Branch protection on main
+requires `verify` for everyone, and Ludovic's review for the files `.github/CODEOWNERS` lists (what builds, signs
+and ships releases). Branches don't have to be up to date with main: main's own `checks` run catches the rare
+semantic conflict.
+
+**Who merges.** The Horizon Team (GitHub team `horizon-team`: kacpherek, levzzz5154, rdbtCVS, Online5277) and
+Ludovic. The orchestrator's agents prove only the risky pull requests (below), so a contributor's ordinary pull
+request doesn't wait for them.
+
+**An ordinary pull request merges on CI.** A Team member:
+
+1. reads the whole diff (for a fork, before adding `run-parity`: that runs the fork's code on a maintainer's machine);
+2. adds `run-parity` to a fork's pull request; our own branches run `parity` by themselves. Since #2448 it tests
+   the pull request merged into main;
+3. merges once `verify` and `parity` pass, nobody's change request is open, and every comment has been read (a
+   "don't merge" from anyone holds it).
+
+Never merge your own pull request: another Team member reviews and merges it. Never force-push or rebase a
+contributor's branch; push a fixup commit, or merge main into it.
+
+**A risky pull request gets the `needs-proof` label** and waits for an agent's local proof (both single-player
+paths, `lan_e2e`, a screenshot for anything visible) before it merges. Risky means any of:
+
+- it changes what is saved or loaded (`save.rs`, `entity_nbt.rs`, `block_entity_nbt.rs`, `region.rs`, `datafix/`):
+  a bug there damages players' worlds;
+- the network or the server thread: `horizon-protocol`, `net.rs`, `remote*.rs`, `lan/`, `lan*.rs`,
+  `integrated.rs`, `levels.rs`, `dedicated*`;
+- world generation (`worldgen/`): seeds must keep generating the same terrain;
+- the launcher's installs and updates, or the mod runtime;
+- the harnesses themselves (`tools/test_*_parity.py`, the Java oracles): a wrong harness hides regressions;
+- over ~500 lines, or `parity` failed, was skipped or ran no harness for gameplay code.
+
+Unsure? Add `needs-proof`: it costs a few hours, a broken release costs more.
 
 `parity` becomes required once it has run green on pull requests for a while (a week without a false failure):
 
@@ -131,7 +160,7 @@ gh api -X POST repos/horizon-rust/horizon/branches/main/protection/required_stat
 ```
 
 A skipped `parity` (a fork's pull request without the label) counts as passed, so requiring it never blocks a
-fork's pull request; the maintainer decides whether to run it.
+fork's pull request: the Team member decides whether to run it, and a skipped run makes the pull request risky.
 
 ## Parity on main
 
@@ -423,7 +452,7 @@ before the gate.
 ### Trusted reviewers
 
 One list, `.github/trusted-reviewers.txt`, governs two things for the people on it (kacpherek, rdbtCVS and
-Online5277 since 2026-10-27) and for Ludovic, with no repository role: `/nightly` (below) and triage by comment.
+Online5277 since 2026-10-27, levzzz5154 since 2026-10-28) and for Ludovic, with no repository role: `/nightly` (below) and triage by comment.
 
 ```text
 /close                    closes an issue as completed; a pull request is closed without merging
@@ -449,7 +478,7 @@ Online5277 since 2026-10-27) and for Ludovic, with no repository role: `/nightly
 ### Trusted reviewers pick the Nightly's pull requests
 
 The Nightly is where contributors test pull requests before the gate. The trusted reviewers listed in
-`.github/trusted-reviewers.txt` (kacpherek, rdbtCVS and Online5277 since 2026-10-27) and Ludovic pick them with a
+`.github/trusted-reviewers.txt` (kacpherek, rdbtCVS and Online5277 since 2026-10-27, levzzz5154 since 2026-10-28) and Ludovic pick them with a
 comment on any issue or pull request (`.github/workflows/nightly-command.yml`, `tools/ci/nightly_set.py`):
 
 ```text
