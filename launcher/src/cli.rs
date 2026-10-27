@@ -548,12 +548,16 @@ enum Cmd {
     Install { tag: String },
     /// Remove an installed version
     Remove { tag: String },
-    /// Prepare a version's resources from your own Minecraft install
+    /// Prepare a version's resources from your own Minecraft install, or from Mojang
     Prepare {
         /// The game folder of the official launcher, Prism Launcher, MultiMC, the Modrinth App,
         /// ATLauncher or GDLauncher (default: the launcher's, then every launcher's default)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "download")]
         minecraft: Option<PathBuf>,
+        /// Download Minecraft from Mojang for the signed-in account that owns it, instead of
+        /// using an install
+        #[arg(long)]
+        download: bool,
         /// The installed version (default: the selected one)
         #[arg(long)]
         version: Option<String>,
@@ -974,11 +978,20 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             backend::remove_version(&tag)?;
             println!("Removed {tag}.");
         }
-        Cmd::Prepare { minecraft, version } => {
+        Cmd::Prepare {
+            minecraft,
+            download,
+            version,
+        } => {
             let tag = backend::resolve_version(version.as_deref())?;
             let minecraft = backend::minecraft_dir(minecraft)?;
+            let from = if download {
+                backend::MinecraftFrom::Mojang
+            } else {
+                backend::MinecraftFrom::Install
+            };
             let (preparer, minecraft) =
-                backend::preparer(&tag, &minecraft, &|line| eprintln!("{line}"))?;
+                backend::preparer(&tag, &minecraft, from, &|line| eprintln!("{line}"))?;
             backend::sounds(&tag, &minecraft, &|line| println!("{line}"));
             match preparer {
                 backend::Preparer::Process(cmd) => attached(cmd)?,

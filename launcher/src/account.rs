@@ -625,28 +625,102 @@ impl SecretStore for SystemStore {
     }
 }
 
-/// Keychain on macOS, Credential Manager on Windows (the keyring crate).
+/// Keychain on macOS, Credential Manager on Windows (the keyring crate). Credential Manager takes at
+/// most 2560 bytes of UTF-16 per item and a sign-in's secrets are longer, so a secret is kept in
+/// pieces: the first under the account's key, the rest under `key.1`, `key.2`...
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub struct SystemStore;
+
+/// Bytes of UTF-8 per keychain item: at most twice as many in UTF-16, well under 2560.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+const PIECE: usize = 1000;
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn piece_key(key: &str, n: usize) -> String {
+    if n == 0 {
+        key.to_string()
+    } else {
+        format!("{key}.{n}")
+    }
+}
+
+/// `secret` cut into pieces of at most `PIECE` bytes, on character boundaries.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn split_secret(mut secret: &str) -> Vec<&str> {
+    let mut pieces = Vec::new();
+    while secret.len() > PIECE {
+        let mut cut = PIECE;
+        while !secret.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let (head, tail) = secret.split_at(cut);
+        pieces.push(head);
+        secret = tail;
+    }
+    pieces.push(secret);
+    pieces
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn read_item(key: &str) -> Result<Option<String>, String> {
+    match keyring::Entry::new(SERVICE, key).and_then(|e| e.get_password()) {
+        Ok(secret) => Ok(Some(secret)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn write_item(key: &str, secret: &str) -> Result<(), String> {
+    keyring::Entry::new(SERVICE, key)
+        .and_then(|e| e.set_password(secret))
+        .map_err(|e| e.to_string())
+}
+
+/// Removes one item; false when there was none.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn remove_item(key: &str) -> Result<bool, String> {
+    match keyring::Entry::new(SERVICE, key).and_then(|e| e.delete_credential()) {
+        Ok(()) => Ok(true),
+        Err(keyring::Error::NoEntry) => Ok(false),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 impl SecretStore for SystemStore {
     fn get(&self, key: &str) -> Result<Option<String>, String> {
-        match keyring::Entry::new(SERVICE, key).and_then(|e| e.get_password()) {
-            Ok(secret) => Ok(Some(secret)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(e.to_string()),
+        let Some(mut secret) = read_item(key)? else {
+            return Ok(None);
+        };
+        for n in 1.. {
+            match read_item(&piece_key(key, n))? {
+                Some(piece) => secret.push_str(&piece),
+                None => break,
+            }
         }
+        Ok(Some(secret))
     }
     fn set(&self, key: &str, secret: &str) -> Result<(), String> {
-        keyring::Entry::new(SERVICE, key)
-            .and_then(|e| e.set_password(secret))
-            .map_err(|e| e.to_string())
+        let pieces = split_secret(secret);
+        for (n, piece) in pieces.iter().enumerate() {
+            write_item(&piece_key(key, n), piece)?;
+        }
+        // Pieces left over from a longer secret would be read back as part of this one.
+        for n in pieces.len().. {
+            if !remove_item(&piece_key(key, n))? {
+                break;
+            }
+        }
+        Ok(())
     }
     fn delete(&self, key: &str) -> Result<(), String> {
-        match keyring::Entry::new(SERVICE, key).and_then(|e| e.delete_credential()) {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(e.to_string()),
+        for n in 0.. {
+            if !remove_item(&piece_key(key, n))? {
+                break;
+            }
         }
+        Ok(())
     }
     fn persistent(&self) -> bool {
         true

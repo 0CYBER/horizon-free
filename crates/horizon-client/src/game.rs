@@ -4339,6 +4339,14 @@ impl Game<'_> {
             self.use_spyglass();
             return Ok(true);
         }
+        // BundleItem.use: startUsingItem, then onUseTick empties it.
+        if !on_block && info.bundle {
+            if self.using.is_none() {
+                self.using = Some((self.held_slot(), 0));
+            }
+            self.swing_arm();
+            return Ok(true);
+        }
         if !on_block && &*stack.item == "minecraft:bow" {
             if self.using.is_none()
                 && (self.creative || self.projectile_slot("minecraft:bow").is_some())
@@ -4623,6 +4631,10 @@ impl Game<'_> {
             self.tick_brush(slot, ticks);
             return;
         }
+        if info.bundle {
+            self.tick_bundle(slot, ticks);
+            return;
+        }
         let Some(consumable) = info.consumable.as_ref() else {
             self.using = None;
             return;
@@ -4644,6 +4656,53 @@ impl Game<'_> {
         } else {
             self.using = Some((slot, ticks));
         }
+    }
+    /// `BundleItem.onUseTick` and `getUseDuration` (200): the first tick and
+    /// then every second tick from the 11th on drop one stack out of the
+    /// bundle in `slot`; the use ends after 200 ticks.
+    fn tick_bundle(&mut self, slot: usize, ticks: u32) {
+        const USE_DURATION: u32 = 200;
+        let remaining = USE_DURATION - ticks.min(USE_DURATION);
+        if ticks == 0 || (remaining < USE_DURATION - 10 && remaining.is_multiple_of(2)) {
+            self.drop_bundle_content(slot);
+        }
+        self.using = (ticks + 1 < USE_DURATION).then_some((slot, ticks + 1));
+    }
+    /// `BundleItem.dropContent`: `removeOneItemFromBundle` and `Player.drop`,
+    /// then the drop sound and the used statistic.
+    fn drop_bundle_content(&mut self, slot: usize) {
+        let items = self.res.items();
+        let Some(mut bundle) = self.stack_in(slot).cloned() else {
+            return;
+        };
+        let Some(mut contents) = horizon_client::bundle::Contents::of(items, &bundle) else {
+            return;
+        };
+        let Some(removed) = contents.remove_one(items) else {
+            return;
+        };
+        contents.store(&mut bundle);
+        let item = Arc::clone(&bundle.item);
+        *self.stack_in_mut(slot) = Some(bundle);
+        let Some(position) = self.player.as_ref().map(|p| p.position) else {
+            return;
+        };
+        let at = [position.x, position.y, position.z];
+        // playRemoveOneSound, then Player.drop and playDropContentsSound at
+        // the player's block.
+        let pitch = 0.8 + self.world.random.next_float() * 0.4;
+        self.audio
+            .play(horizon_client::bundle::REMOVE_ONE, Some(at), 0.8, pitch);
+        self.player_drop(removed);
+        let block = BlockPos::containing(position);
+        let pitch = 0.8 + self.world.random.next_float() * 0.4;
+        self.audio.play(
+            horizon_client::bundle::DROP_CONTENTS,
+            Some([block.x, block.y, block.z].map(|v| f64::from(v) + 0.5)),
+            0.8,
+            pitch,
+        );
+        self.stats.add("used", &item, 1);
     }
     /// `LivingEntity.releaseUsingItem` (`Item.releaseUsing`) for `stack`,
     /// used for `ticks`, its hand acting: a bow or a trident lets go (not
