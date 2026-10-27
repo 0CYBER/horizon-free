@@ -100,6 +100,55 @@ The opening, then Play ([clip](docs/opening.webm)):
   pack into the selected instance. A data pack is pointed at the world rows, and the Packs section
   and the world rows keep taking their own drops. A note in the corner says what happened.
   `horizon-launcher instance import <file>`.
+- **Launch options**: Home's Instance row has **Launch…**: per instance, a shell command run in its
+  folder before the game (the game starts only if it succeeds), a wrapper the game runs through
+  (`nice -n 5`), and environment variables (`NAME=value OTHER="two words"`), kept in
+  `instances.json` (`horizon_launcher::launch`). The game stays one process the launcher follows:
+  on Unix `/bin/sh` runs the command and then `exec`s the wrapper and the game, whose words pass
+  through `"$@"` untouched; on Windows `cmd /C` runs `<command> && <game>`. Both the window's Play
+  and `play` use them. `horizon-launcher instance launch <instance> [--pre-launch …]
+  [--wrapper …] [--env …]` (an MCP agent needs `confirm: true`: it sets commands Play runs).
+  On Linux the panel also has switches for what the computer has: **GameMode** (`gamemoderun`
+  on the PATH), **MangoHud** (`mangohud`), and, with two graphics cards under
+  `/sys/class/drm`, the **dedicated graphics card** (`DRI_PRIME=1`, or NVIDIA's
+  `__NV_PRIME_RENDER_OFFLOAD`, `__VK_LAYER_NV_optimus` and `__GLX_VENDOR_LIBRARY_NAME` when its
+  driver is loaded). A switch whose tool is gone does nothing. `instance launch --gamemode
+  on|off --mangohud on|off --dedicated-gpu on|off`; `HORIZON_LAUNCHER_LINUX_TOOLS` makes any
+  system show them, for tests.
+- **Desktop shortcut**: Home's Instance row has **Shortcut**: a shortcut on the desktop that plays
+  the selected instance without opening the launcher (`horizon-launcher play --instance <id>`).
+  A `.desktop` file on Linux (also put in the applications menu, and marked trusted with `gio`
+  where it exists), a small app with Horizon's icon on macOS, a `.lnk` on Windows
+  (`horizon_launcher::shortcut`). **Remove shortcut** moves it to the trash; it is found by the
+  instance id inside it, so a rename doesn't lose it. `horizon-launcher instance shortcut
+  [instance] [--remove]`; `HORIZON_LAUNCHER_DESKTOP` points it at another folder.
+- **Accounts and quick switch**: the top bar's account chip opens a menu of everyone who can play:
+  each signed-in Microsoft account, the offline names the player keeps, and the name the game
+  made up (`horizon-player.txt`). Picking one plays as it from the next Play. Settings > Account
+  adds offline names (3 to 16 letters, digits or `_`; the game gets `--name`) and forgets them;
+  the Console's Share log takes them out of the log too. `horizon-launcher account offline
+  [NAME]`, `account select <name>` (an account or an offline name), `account forget-offline
+  <name>`.
+- **Accent and Home background**: on top of Dark, Light or System, Settings > Launcher picks an
+  accent (Horizon's violet, blue, teal, green, amber, red or pink) and a picture of the player's
+  own behind Home (PNG, JPEG or WebP, cropped to fill; **Landscape** brings Horizon's back). An
+  accent turns the violet tokens to its hue, then darkens or lightens them just enough to keep
+  white on the Play button at 4.5:1 and the accent at 3:1 on every background (a test holds every
+  accent in both looks to it). The picture is copied into the data folder.
+  `horizon-launcher settings accent NAME`, `settings background PATH|default`.
+- **Language**: English, French and Russian (the languages Horizon's own game menus have).
+  The window follows the system's language unless the player picks one in Settings > Launcher
+  (each named in itself); a string a table lacks shows in English. The tables are
+  `launcher/lang/<code>.json`, English text to its translation, Horizon's own; a test fails when
+  the code asks `tr("…")` for a string a table lacks, or a table keeps one the code dropped.
+  `horizon-launcher settings language system|en|fr|ru`.
+- **Skin and cape**: each offline name's **Skin…** in Settings > Account shows the front of its
+  skin and cape, takes a skin PNG (64×64, or the older 64×32) and a cape PNG (64×32), and picks
+  classic or slim arms. The launcher keeps copies in its `skins/` folder and gives the game
+  `HORIZON_OFFLINE_SKIN`, `HORIZON_OFFLINE_SKIN_MODEL` and `HORIZON_OFFLINE_CAPE` when that name
+  plays; the game draws the default skins until it reads them. A Microsoft account's skin and
+  cape: coming soon, with sign-in. `horizon-launcher account skin <name> [FILE] [--model
+  classic|slim] [--cape FILE] [--no-skin] [--no-cape]`.
 - **Console**: Home's Console shows the game's output of this run as it comes: a search (every
   word, any case), Follow to keep the newest line in view, Copy, and Open logs folder. Warnings
   and errors stand out. **Share log…** uploads the log to [mclo.gs](https://mclo.gs), a paste
@@ -147,8 +196,10 @@ page `servers.json` (the list), `servers/<name>/` (the servers created there) an
 
 - **Settings**: install new Horizon versions automatically (on unless you turn it off; the
   selected version only moves to the new one if you were on the newest), the opening animation,
-  the game's extra command-line arguments, an HTTP proxy for downloads, and the launcher's own
-  version and update state.
+  what the window does while you play (stays by default; Minimise, or Hide on macOS, puts it away
+  when the game starts and brings it back to the front when the game closes; `settings
+  while-playing stay|minimize|hide`), the game's extra command-line arguments, an HTTP proxy for
+  downloads, and the launcher's own version and update state.
 - **Updates**: there is one channel. Every release is published as the release, GitHub's latest,
   once its smoke test passed (docs/release-flow.md), and the launcher installs it. The game
   pre-releases of the old Alpha channel (v0.2.1 on) stay on the Versions page to install

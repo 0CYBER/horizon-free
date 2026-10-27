@@ -22,6 +22,8 @@ tar = { version = "0.4", default-features = false }
 toml = "1.1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 dirs = "5"
+# The system's preferred languages, for the window's language (i18n.rs).
+sys-locale = "0.3"
 self-replace = "1"
 clap = { version = "4", features = ["derive"] }
 horizon-theme = { path = "../crates/horizon-theme" }

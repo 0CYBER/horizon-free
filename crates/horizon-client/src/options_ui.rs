@@ -193,7 +193,6 @@ impl Opt {
             Opt::Narrator => "narrator",
             Opt::TextBackground => "backgroundForChatOnly",
             Opt::ChatDelay => "chatDelay",
-            Opt::ChatLinksPrompt => "chatLinksPrompt",
             Opt::HideMatchedNames => "hideMatchedNames",
             Opt::OnlySecureChat => "onlyShowSecureChat",
             Opt::SaveChatDrafts => "saveChatDrafts",
@@ -541,8 +540,7 @@ impl Opt {
             Opt::HideLightningFlashes => on_off(s.file.bool("hideLightningFlashes")),
             Opt::MonochromeLogo => on_off(s.file.bool("darkMojangStudiosBackground")),
             Opt::HideSplashTexts => on_off(s.file.bool("hideSplashTexts")),
-            Opt::ChatLinksPrompt
-            | Opt::HideMatchedNames
+            Opt::HideMatchedNames
             | Opt::OnlySecureChat
             | Opt::SaveChatDrafts => on_off(s.file.bool(self.file_key().unwrap())),
             Opt::NarratorHotkey => on_off(s.file.bool("narratorHotkey")),
@@ -602,6 +600,7 @@ impl Opt {
             ][usize::from(s.chat_visibility.min(2))]),
             Opt::ChatColors => on_off(s.chat_colors),
             Opt::ChatLinks => on_off(s.chat_links),
+            Opt::ChatLinksPrompt => on_off(s.chat_links_prompt),
             Opt::AutoSuggestions => on_off(s.auto_suggestions),
             Opt::ReducedDebugInfo => on_off(s.reduced_debug_info),
             Opt::HighContrast => on_off(s.high_contrast),
@@ -713,6 +712,7 @@ impl Opt {
                 | Opt::CutoutLeaves
                 | Opt::ImprovedTransparency
                 | Opt::MenuBlur
+                | Opt::ChunkBuilder
         )
     }
     /// Advance a cycle button (CycleButton.cycleValue).
@@ -742,7 +742,6 @@ impl Opt {
             Opt::TextBackground
             | Opt::HideLightningFlashes
             | Opt::HideSplashTexts
-            | Opt::ChatLinksPrompt
             | Opt::HideMatchedNames
             | Opt::OnlySecureChat
             | Opt::SaveChatDrafts => {
@@ -782,6 +781,7 @@ impl Opt {
             Opt::ChatVisibility => s.chat_visibility = next(s.chat_visibility, 3),
             Opt::ChatColors => s.chat_colors = !s.chat_colors,
             Opt::ChatLinks => s.chat_links = !s.chat_links,
+            Opt::ChatLinksPrompt => s.chat_links_prompt = !s.chat_links_prompt,
             Opt::AutoSuggestions => s.auto_suggestions = !s.auto_suggestions,
             Opt::ReducedDebugInfo => s.reduced_debug_info = !s.reduced_debug_info,
             Opt::HighContrast => s.high_contrast = !s.high_contrast,

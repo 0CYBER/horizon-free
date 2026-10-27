@@ -42,9 +42,10 @@ pub(super) enum Target {
     Guest(u32),
     Mob(u32),
     Item(u32),
-    Orb(usize),
-    /// By index in `creatures.projectiles`.
-    Projectile(usize),
+    /// An experience orb, by its entity id.
+    Orb(u32),
+    /// A projectile, by its entity id.
+    Projectile(u32),
     Stand(u32),
     Frame(u32),
     Painting(u32),
@@ -53,6 +54,10 @@ pub(super) enum Target {
     /// An entity of a type Horizon does not simulate (markers, displays,
     /// interactions...): kept as its saved data at a position.
     Other(u32),
+    /// An End crystal, by its entity id (`minecraft:end_crystal`).
+    Crystal(u32),
+    /// The Ender Dragon, by its entity id (`minecraft:ender_dragon`).
+    Dragon(u32),
 }
 /// An entity of a type Horizon does not simulate: its compound lives in the
 /// entity memory (`persist.raw`), its position and rotation here.
@@ -340,14 +345,16 @@ impl Game<'_> {
                 .iter()
                 .find(|i| i.id == id)
                 .map(|i| [i.position.x, i.position.y, i.position.z]),
-            Target::Orb(i) => self
+            Target::Orb(id) => self
                 .orbs
-                .get(i)
+                .iter()
+                .find(|o| o.id == id)
                 .map(|o| [o.position.x, o.position.y, o.position.z]),
-            Target::Projectile(i) => self
+            Target::Projectile(id) => self
                 .creatures
                 .projectiles
-                .get(i)
+                .iter()
+                .find(|a| a.id == id)
                 .map(|a| [a.position.x, a.position.y, a.position.z]),
             Target::Stand(id) => self
                 .armor_stands
@@ -385,6 +392,16 @@ impl Game<'_> {
                 .iter()
                 .find(|o| o.id == id)
                 .map(|o| [o.position.x, o.position.y, o.position.z]),
+            Target::Crystal(id) => self
+                .crystals
+                .iter()
+                .find(|c| c.id == id)
+                .map(|c| [c.position.x, c.position.y, c.position.z]),
+            Target::Dragon(id) => self
+                .dragon
+                .as_ref()
+                .filter(|d| d.id == id)
+                .map(|d| [d.position.x, d.position.y, d.position.z]),
         }
     }
     pub(super) fn target_type(&self, t: Target) -> String {
@@ -399,10 +416,11 @@ impl Game<'_> {
                 }),
             Target::Item(_) => "minecraft:item".into(),
             Target::Orb(_) => "minecraft:experience_orb".into(),
-            Target::Projectile(i) => self
+            Target::Projectile(id) => self
                 .creatures
                 .projectiles
-                .get(i)
+                .iter()
+                .find(|p| p.id == id)
                 .map_or_else(String::new, |p| p.kind.id().into()),
             Target::Stand(_) => "minecraft:armor_stand".into(),
             Target::Frame(id) => {
@@ -428,6 +446,8 @@ impl Game<'_> {
                 .iter()
                 .find(|o| o.id == id)
                 .map_or_else(String::new, |o| o.kind.clone()),
+            Target::Crystal(_) => "minecraft:end_crystal".into(),
+            Target::Dragon(_) => "minecraft:ender_dragon".into(),
         }
     }
     /// The name of the player the game acts for: a guest's own while their
@@ -512,50 +532,72 @@ impl Game<'_> {
                 s.pos[2].unwrap_or(p[2]),
             ]
         };
-        let mut candidates: Vec<Target> = Vec::new();
+        let mut source_candidates: Vec<Target> = Vec::new();
         match (s.kind, self.command_source) {
             // @s: the executing entity (none for a server source).
-            ('s', Some(source)) => candidates.extend(source.entity),
-            ('s', None) => candidates.extend(self.source_entity()),
+            ('s', Some(source)) => source_candidates.extend(source.entity),
+            ('s', None) => source_candidates.extend(self.source_entity()),
             // A guest in place is among the players, in join order.
             _ if self.player.is_some() && self.lan_acting.is_none() => {
-                candidates.push(Target::Player);
+                source_candidates.push(Target::Player);
             }
             _ => {}
         }
         if s.kind != 's' {
-            use horizon_client::projectiles::ProjectileKind as K;
-            candidates.extend(self.player_candidates(s));
-            candidates.extend(
-                self.mobs
-                    .iter()
-                    .filter(|m| m.death_time == 0)
-                    .map(|m| Target::Mob(m.id)),
-            );
-            candidates.extend(self.dropped.iter().map(|i| Target::Item(i.id)));
-            candidates.extend((0..self.orbs.len()).map(Target::Orb));
-            candidates.extend(
-                self.creatures
-                    .projectiles
-                    .iter()
-                    .enumerate()
-                    // The kinds /data can write (entity_nbt).
-                    .filter(|(_, p)| {
-                        p.is_arrow() || matches!(p.kind, K::LargeFireball { .. } | K::SmallFireball)
-                    })
-                    .map(|(i, _)| Target::Projectile(i)),
-            );
-            candidates.extend(self.armor_stands.iter().map(|a| Target::Stand(a.id)));
-            candidates.extend(self.item_frames.iter().map(|f| Target::Frame(f.id)));
-            candidates.extend(self.paintings.iter().map(|p| Target::Painting(p.id)));
-            candidates.extend(self.boats.iter().map(|b| Target::Boat(b.id)));
-            candidates.extend(self.carts.iter().map(|c| Target::Cart(c.id)));
-            candidates.extend(self.others.iter().map(|o| Target::Other(o.id)));
+            source_candidates.extend(self.player_candidates(s));
         }
+        let source_dim = self.dim;
+        // A selector with a spatial constraint reaches the level the command
+        // runs in only; an unbounded one reaches every loaded level
+        // (EntitySelector.findEntities).
+        let dims = if s.world_limited() {
+            vec![source_dim]
+        } else {
+            self.loaded_dims()
+        };
+        let mut out: Vec<(Target, f64)> = Vec::new();
+        for dim in dims {
+            let back = self.enter_command_level(dim);
+            let mut candidates = Vec::new();
+            if dim == source_dim {
+                candidates.append(&mut source_candidates);
+            }
+            if s.kind != 's' {
+                candidates.extend(self.level_candidates());
+            }
+            out.extend(self.select_in_level(candidates, s, origin));
+            if let Some(back) = back {
+                self.enter_command_level(back);
+            }
+        }
+        match s.sort {
+            Sort::Nearest => out.sort_by(|a, b| a.1.total_cmp(&b.1)),
+            Sort::Furthest => out.sort_by(|a, b| b.1.total_cmp(&a.1)),
+            Sort::Random => {
+                for i in (1..out.len()).rev() {
+                    let j = self.world.random.next_int_bound(i as i32 + 1).unwrap_or(0) as usize;
+                    out.swap(i, j);
+                }
+            }
+            Sort::Arbitrary => {}
+        }
+        out.into_iter()
+            .take(s.limit.max(1))
+            .map(|(t, _)| t)
+            .collect()
+    }
+    /// The candidates of the level in place that pass the selector
+    /// (EntitySelector.getPredicate).
+    fn select_in_level(
+        &mut self,
+        candidates: Vec<Target>,
+        s: &Selector,
+        origin: [f64; 3],
+    ) -> Vec<(Target, f64)> {
         let level = self.experience.level;
         let creative = self.creative;
         let passing = self.selector_extra_filter(&candidates, s);
-        let mut out: Vec<(Target, f64)> = candidates
+        candidates
             .into_iter()
             .filter_map(|t| {
                 let p = self.target_position(t)?;
@@ -627,22 +669,101 @@ impl Game<'_> {
                 }
                 Some((t, d2))
             })
-            .collect();
-        match s.sort {
-            Sort::Nearest => out.sort_by(|a, b| a.1.total_cmp(&b.1)),
-            Sort::Furthest => out.sort_by(|a, b| b.1.total_cmp(&a.1)),
-            Sort::Random => {
-                for i in (1..out.len()).rev() {
-                    let j = self.world.random.next_int_bound(i as i32 + 1).unwrap_or(0) as usize;
-                    out.swap(i, j);
-                }
-            }
-            Sort::Arbitrary => {}
-        }
-        out.into_iter()
-            .take(s.limit.max(1))
-            .map(|(t, _)| t)
             .collect()
+    }
+    /// The entities of the level in place a selector can find.
+    fn level_candidates(&self) -> Vec<Target> {
+        use horizon_client::projectiles::ProjectileKind as K;
+        let mut candidates = Vec::new();
+        candidates.extend(
+            self.mobs
+                .iter()
+                .filter(|m| m.death_time == 0)
+                .map(|m| Target::Mob(m.id)),
+        );
+        candidates.extend(self.dropped.iter().map(|i| Target::Item(i.id)));
+        candidates.extend(self.orbs.iter().map(|o| Target::Orb(o.id)));
+        candidates.extend(
+            self.creatures
+                .projectiles
+                .iter()
+                // The kinds /data can write (entity_nbt).
+                .filter(|p| {
+                    p.is_arrow() || matches!(p.kind, K::LargeFireball { .. } | K::SmallFireball)
+                })
+                .map(|p| Target::Projectile(p.id)),
+        );
+        candidates.extend(self.armor_stands.iter().map(|a| Target::Stand(a.id)));
+        candidates.extend(self.item_frames.iter().map(|f| Target::Frame(f.id)));
+        candidates.extend(self.paintings.iter().map(|p| Target::Painting(p.id)));
+        candidates.extend(self.boats.iter().map(|b| Target::Boat(b.id)));
+        candidates.extend(self.carts.iter().map(|c| Target::Cart(c.id)));
+        candidates.extend(self.others.iter().map(|o| Target::Other(o.id)));
+        // The End crystals and the dragon (EndCrystal and EnderDragon
+        // are entities of their own).
+        candidates.extend(self.crystals.iter().map(|c| Target::Crystal(c.id)));
+        if let Some(d) = &self.dragon {
+            candidates.push(Target::Dragon(d.id));
+        }
+        candidates
+    }
+    /// The loaded levels, in the order the server holds them: the
+    /// overworld, the nether, the end (MinecraftServer.getAllLevels).
+    fn loaded_dims(&self) -> Vec<Dim> {
+        let mut dims = vec![self.dim];
+        dims.extend(self.levels.parked_dims());
+        dims.sort_by_key(|d| match d {
+            Dim::Overworld => 0,
+            Dim::Nether => 1,
+            Dim::End => 2,
+        });
+        dims
+    }
+    /// Whether the level in place holds the entity a target names.
+    fn level_holds(&self, t: Target) -> bool {
+        match t {
+            // A player is in no level of its own.
+            Target::Player | Target::Guest(_) => true,
+            Target::Mob(id) => self.mobs.iter().any(|m| m.id == id),
+            Target::Item(id) => self.dropped.iter().any(|i| i.id == id),
+            Target::Orb(id) => self.orbs.iter().any(|o| o.id == id),
+            Target::Projectile(id) => self.creatures.projectiles.iter().any(|p| p.id == id),
+            Target::Stand(id) => self.armor_stands.iter().any(|a| a.id == id),
+            Target::Frame(id) => self.item_frames.iter().any(|f| f.id == id),
+            Target::Painting(id) => self.paintings.iter().any(|p| p.id == id),
+            Target::Boat(id) => self.boats.iter().any(|b| b.id == id),
+            Target::Cart(id) => self.carts.iter().any(|c| c.id == id),
+            Target::Other(id) => self.others.iter().any(|o| o.id == id),
+            Target::Crystal(id) => self.crystals.iter().any(|c| c.id == id),
+            Target::Dragon(id) => self.dragon.as_ref().is_some_and(|d| d.id == id),
+        }
+    }
+    /// Run `f` with the level that holds the entity a target names in place
+    /// (the entity ids are unique across the loaded levels) and put the
+    /// level back afterwards. `f` does not run when no level holds the
+    /// entity.
+    pub(in crate::game) fn in_target_level<R>(
+        &mut self,
+        t: Target,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> Option<R> {
+        if self.level_holds(t) {
+            return Some(f(self));
+        }
+        for dim in self.levels.parked_dims() {
+            let back = self.enter_command_level(dim);
+            if self.level_holds(t) {
+                let r = f(self);
+                if let Some(back) = back {
+                    self.enter_command_level(back);
+                }
+                return Some(r);
+            }
+            if let Some(back) = back {
+                self.enter_command_level(back);
+            }
+        }
+        None
     }
     fn entity_tag_matches(&self, tag: &str, ty: &str) -> bool {
         let path = self.options.resources.join(format!(
@@ -1103,6 +1224,10 @@ impl Game<'_> {
         Ok(targets.len() as i32)
     }
     fn teleport_to(&mut self, t: Target, pos: [f64; 3], rotation: Option<[f32; 2]>) {
+        // An entity in another level is teleported in the level that holds it.
+        let _ = self.in_target_level(t, |g| g.teleport_to_in_level(t, pos, rotation));
+    }
+    fn teleport_to_in_level(&mut self, t: Target, pos: [f64; 3], rotation: Option<[f32; 2]>) {
         let v = Vec3::new(pos[0], pos[1], pos[2]);
         match t {
             Target::Guest(_) => {
@@ -1151,14 +1276,14 @@ impl Game<'_> {
                     i.previous = v;
                 }
             }
-            Target::Orb(i) => {
-                if let Some(o) = self.orbs.get_mut(i) {
+            Target::Orb(id) => {
+                if let Some(o) = self.orbs.iter_mut().find(|o| o.id == id) {
                     o.position = v;
                     o.previous = v;
                 }
             }
-            Target::Projectile(i) => {
-                if let Some(a) = self.creatures.projectiles.get_mut(i) {
+            Target::Projectile(id) => {
+                if let Some(a) = self.creatures.projectiles.iter_mut().find(|a| a.id == id) {
                     a.position = v;
                     a.previous = v;
                 }
@@ -1196,6 +1321,17 @@ impl Game<'_> {
                         o.yaw = yaw;
                         o.pitch = pitch;
                     }
+                }
+            }
+            Target::Crystal(id) => {
+                if let Some(c) = self.crystals.iter_mut().find(|c| c.id == id) {
+                    c.position = v;
+                }
+            }
+            Target::Dragon(id) => {
+                if let Some(d) = self.dragon.as_mut().filter(|d| d.id == id) {
+                    d.position = v;
+                    d.previous = v;
                 }
             }
             // Wall-mounted entities do not move.
@@ -1557,6 +1693,10 @@ impl Game<'_> {
         Ok(duration.unwrap_or(-1))
     }
     fn kill_target(&mut self, t: Target) {
+        // An entity in another level is killed in the level that holds it.
+        let _ = self.in_target_level(t, |g| g.kill_target_in_level(t));
+    }
+    fn kill_target_in_level(&mut self, t: Target) {
         match t {
             Target::Guest(_) => {
                 self.for_player(t, |g| g.kill_target(Target::Player));
@@ -1576,16 +1716,13 @@ impl Game<'_> {
                 }
             }
             Target::Item(id) => self.dropped.retain(|i| i.id != id),
-            Target::Orb(i) => {
-                if i < self.orbs.len() {
-                    self.orbs[i].age = u32::MAX / 2;
+            Target::Orb(id) => {
+                if let Some(o) = self.orbs.iter_mut().find(|o| o.id == id) {
+                    o.age = u32::MAX / 2;
                 }
             }
-            // cmd_kill goes from the highest index down.
-            Target::Projectile(i) => {
-                if i < self.creatures.projectiles.len() {
-                    self.creatures.projectiles.remove(i);
-                }
+            Target::Projectile(id) => {
+                self.creatures.projectiles.retain(|p| p.id != id);
             }
             Target::Stand(id) => self.armor_stands.retain(|a| a.id != id),
             Target::Frame(id) => self.item_frames.retain(|f| f.id != id),
@@ -1593,7 +1730,11 @@ impl Game<'_> {
             Target::Boat(id) => self.boats.retain(|b| b.id != id),
             Target::Cart(id) => self.carts.retain(|c| c.id != id),
             Target::Other(id) => self.others.retain(|o| o.id != id),
+            Target::Crystal(id) => self.kill_crystal(id),
+            Target::Dragon(id) => self.kill_dragon(id),
         }
+        // The orbs marked for removal are gone (Entity.kill removes them).
+        self.orbs.retain(|o| o.age < u32::MAX / 2);
     }
     fn cmd_kill(&mut self, ctx: &Context) -> R<i32> {
         let targets = if ctx.get("targets").is_some() {
@@ -1601,19 +1742,18 @@ impl Game<'_> {
         } else {
             vec![self.implied_player()]
         };
-        let names: Vec<Text> = targets.iter().map(|&t| self.target_name(t)).collect();
-        // Remove indexed entities from the back so earlier indices stay valid.
-        let mut ordered = targets.clone();
-        ordered.sort_by_key(|t| {
-            std::cmp::Reverse(match t {
-                Target::Orb(i) | Target::Projectile(i) => *i,
-                _ => 0,
-            })
-        });
-        for t in ordered {
+        let mut names: Vec<Text> = Vec::new();
+        for &t in &targets {
+            // The name of an entity in another level is read there.
+            let name = match self.in_target_level(t, |g| g.target_name(t)) {
+                Some(name) => name,
+                None => self.target_name(t),
+            };
+            names.push(name);
+        }
+        for &t in &targets {
             self.kill_target(t);
         }
-        self.orbs.retain(|o| o.age < u32::MAX / 2);
         let message = if targets.len() == 1 {
             Text::translate("commands.kill.success.single", &[names[0].clone()])
         } else {
@@ -1704,6 +1844,20 @@ impl Game<'_> {
                 "lightning_bolt" => {
                     self.spawn_bolt(pos, false);
                     name = Text::translate("entity.minecraft.lightning_bolt", &[]);
+                }
+                "end_crystal" => {
+                    // EndCrystal's constructor takes an id from the entity
+                    // counter, and the crystal is shown with its base.
+                    self.next_entity += 1;
+                    self.crystals.push(super::dragon::Crystal {
+                        id: self.next_entity,
+                        position: Vec3::new(pos[0], pos[1], pos[2]),
+                        show_bottom: true,
+                        time: self.world.random.next_int_bound(100_000).unwrap_or(0),
+                        beam: None,
+                        invulnerable: false,
+                    });
+                    name = Text::translate("entity.minecraft.end_crystal", &[]);
                 }
                 k if super::minecarts::CartKind::from_id(&kind).is_some() => {
                     let cart_kind = super::minecarts::CartKind::from_id(&kind)
