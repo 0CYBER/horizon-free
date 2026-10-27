@@ -3,6 +3,7 @@
 //! sky. The dragon fight itself lives in game/dragon.rs: the podium is
 //! inactive until the dragon dies.
 use super::{Dim, Game};
+use horizon_client::nether_portal::ENTITY_DELAY;
 use horizon_client::{
     Result,
     environment::Environment,
@@ -14,9 +15,17 @@ use horizon_client::{
 };
 use horizon_core::{
     geometry::Vec3,
+    position::BlockPos,
     random::{LegacyRandom, RandomSource},
 };
+use horizon_world::nbt::Tag;
+
 use std::{collections::HashMap, sync::Arc};
+
+/// A list of doubles, as an NBT list of them.
+fn doubles(values: [f64; 3]) -> Tag {
+    Tag::List(values.iter().map(|v| Tag::Double(v.to_bits())).collect())
+}
 
 /// ServerLevel.END_SPAWN_POINT.
 pub(super) const END_SPAWN: [i32; 3] = [100, 50, 0];
@@ -35,6 +44,18 @@ pub(super) enum GatewayJob {
     Known { exit: [i32; 3], exact: bool },
 }
 
+/// An entity travelling through an End gateway: its saved compound and the
+/// job that finds where it lands (`TheEndGatewayBlockEntity.getPortalPosition`).
+#[derive(Clone, Debug)]
+struct GatewayArrival {
+    /// The entity's compound, as it waits for the exit's chunks.
+    tag: Tag,
+    /// The gateway's exit, or the search for one.
+    job: GatewayJob,
+    /// The spot to load before the job is resolved.
+    target: Vec3,
+}
+
 #[derive(Default)]
 pub(super) struct EndState {
     /// Gateway position -> (exit, exact teleport); loaded lazily from the save.
@@ -42,6 +63,11 @@ pub(super) struct EndState {
     job: Option<GatewayJob>,
     /// Ticks until the player can use a gateway again (TheEndGatewayBlockEntity cooldown).
     gateway_cooldown: u32,
+    gateways: HashMap<u32, horizon_client::end_gateway::Traveller>,
+    /// The entities that went through a gateway, waiting for its exit.
+    arrivals: Vec<GatewayArrival>,
+    /// The chunks kept loaded for those arrivals.
+    areas: Vec<(i32, i32)>,
     /// The Overworld generator, for stronghold positions (ServerLevel.findNearestMapStructure).
     locator: std::sync::Mutex<Option<Arc<VanillaTerrain>>>,
     /// Thrown eyes of ender in flight.
@@ -877,13 +903,7 @@ impl Game<'_> {
     /// The teleport position of a gateway job, creating the exit gateway (and
     /// an island when the chunk has no landing spot) for new destinations.
     pub(super) fn resolve_gateway(&mut self, job: GatewayJob, target: Vec3) -> Result<Vec3> {
-        let bottom_center = |p: [i32; 3]| {
-            Vec3::new(
-                f64::from(p[0]) + 0.5,
-                f64::from(p[1]),
-                f64::from(p[2]) + 0.5,
-            )
-        };
+        let bottom_center = horizon_client::end_gateway::bottom_center;
         let find_exit = |game: &Self, exit: [i32; 3]| {
             let p = game.tallest_block([exit[0], exit[1] + 2, exit[2]], 5, false);
             [p[0], p[1] + 1, p[2]]
@@ -895,6 +915,16 @@ impl Game<'_> {
                 find_exit(self, exit)
             })),
             GatewayJob::Find { gateway } => {
+                // The player and the entities may resolve the same gateway:
+                // the first one to arrive finds the exit, the others use it.
+                let known = self.gateway_exits().get(&gateway).copied();
+                if let Some((exit, exact)) = known {
+                    return Ok(bottom_center(if exact {
+                        exit
+                    } else {
+                        find_exit(self, exit)
+                    }));
+                }
                 // findExitPortalXZPosTentative over the loaded chunks.
                 let dir = glam::DVec2::new(f64::from(gateway[0]), f64::from(gateway[2]))
                     .normalize_or_zero();
@@ -1250,5 +1280,184 @@ impl Game<'_> {
                 });
             }
         }
+    }
+
+    // ---- End gateway travel for the entities ----
+
+    /// `EndGatewayBlock.entityInside` for the items and mobs in the End: the
+    /// gateway blocks their box swept through. A gateway that is cooling down
+    /// (`TheEndGatewayBlockEntity.triggerCooldown`) takes nobody in.
+    pub(super) fn find_end_gateway_portals(&mut self) {
+        if self.remote.is_some() || self.dim != Dim::End {
+            return;
+        }
+        let items: Vec<(u32, Vec3, f32, f32)> = self
+            .dropped
+            .iter()
+            .map(|e| (e.id, e.position, 0.25, 0.25))
+            .collect();
+        let mobs: Vec<(u32, Vec3, f32, f32)> = self
+            .mobs
+            .iter()
+            .filter(|m| self.mob_can_use_portal(m))
+            .map(|m| (m.id, m.position, m.width(), m.height()))
+            .collect();
+        let mut inside: Vec<(u32, BlockPos)> = Vec::new();
+        for (id, to, width, height) in items.into_iter().chain(mobs) {
+            let from = self.portals.before.get(&id).copied().unwrap_or(to);
+            let found = horizon_client::end_gateway::swept_gateway(from, to, width, height, |p| {
+                &*self.res.facts().get(self.world.block(p.x, p.y, p.z)).name
+                    == "minecraft:end_gateway"
+            });
+            if let Some(pos) = found {
+                inside.push((id, pos));
+            }
+        }
+        for (id, pos) in inside {
+            // One entity at a time: the gateway cools down for 40 ticks.
+            if !self.gateway_enter([pos.x, pos.y, pos.z]) {
+                continue;
+            }
+            self.end.gateways.entry(id).or_default().enter(pos);
+        }
+    }
+
+    /// `Entity.handlePortal` for the entities in an End gateway: they go
+    /// through to the gateway's exit, where they wait for its chunks.
+    pub(super) fn handle_end_gateway_portals(&mut self) {
+        if self.remote.is_some() || self.dim != Dim::End {
+            return;
+        }
+        let ids: Vec<(u32, bool)> = self
+            .dropped
+            .iter()
+            .map(|e| (e.id, true))
+            .chain(self.mobs.iter().map(|m| (m.id, self.mob_can_use_portal(m))))
+            .collect();
+        let present: std::collections::HashSet<u32> = ids.iter().map(|(id, _)| *id).collect();
+        self.end.gateways.retain(|id, _| present.contains(id));
+        let mut leaving: Vec<(u32, BlockPos)> = Vec::new();
+        for (id, allowed) in ids {
+            let Some(state) = self.end.gateways.get_mut(&id) else {
+                continue;
+            };
+            // The End gateway has no transition time (Portal.getPortalTransitionTime).
+            if let Some(entry) = state.travel(allowed) {
+                leaving.push((id, entry));
+            }
+            if state.is_done() {
+                self.end.gateways.remove(&id);
+            }
+        }
+        for (id, entry) in leaving {
+            self.send_through_gateway(id, entry);
+        }
+    }
+
+    /// `Entity.teleportToPortalDestination` for an entity that goes through an
+    /// End gateway: it is saved and waits for the exit's chunks.
+    fn send_through_gateway(&mut self, id: u32, gateway: BlockPos) {
+        let tag = if let Some(i) = self.dropped.iter().position(|e| e.id == id) {
+            let uuid = self.uuid_for(id);
+            let tag = horizon_client::entity_nbt::item_entity_to_nbt(
+                &self.dropped[i],
+                uuid,
+                self.persist_raw(id),
+            );
+            self.dropped.remove(i);
+            self.forget_entity(id);
+            tag
+        } else if let Some(i) = self.mobs.iter().position(|m| m.id == id) {
+            let mut tag = self.mob_tree_nbt(i);
+            // Entity.removeAfterChangingDimensions drops the leash.
+            if let Tag::Compound(c) = &mut tag {
+                c.remove(&"leash".into());
+            }
+            // The mobs riding it travel with it (their tags are in its compound).
+            let mut gone = vec![id];
+            let mut k = 0;
+            while k < gone.len() {
+                let v = gone[k];
+                gone.extend(
+                    self.mobs
+                        .iter()
+                        .filter(|m| m.extra.mount == Some(v))
+                        .map(|m| m.id),
+                );
+                k += 1;
+            }
+            self.mobs.retain(|m| !gone.contains(&m.id));
+            for g in gone {
+                self.forget_entity(g);
+            }
+            tag
+        } else {
+            return;
+        };
+        let (job, target) = self.gateway_job([gateway.x, gateway.y, gateway.z]);
+        self.end.arrivals.push(GatewayArrival { tag, job, target });
+    }
+
+    /// The entities that reached a gateway's exit: they land where the
+    /// gateway leads, once its chunks have loaded.
+    pub(super) fn resolve_end_gateway_arrivals(&mut self) -> Result<()> {
+        if self.remote.is_some() || self.dim != Dim::End {
+            return Ok(());
+        }
+        let mut i = 0;
+        while i < self.end.arrivals.len() {
+            let (cx, cz) = (
+                (self.end.arrivals[i].target.x.floor() as i32) >> 4,
+                (self.end.arrivals[i].target.z.floor() as i32) >> 4,
+            );
+            if !self.world.chunks.contains_key(&(cx, cz)) {
+                i += 1;
+                continue;
+            }
+            let GatewayArrival {
+                job,
+                target,
+                mut tag,
+            } = self.end.arrivals.remove(i);
+            let at = self.resolve_gateway(job, target)?;
+            if let Tag::Compound(c) = &mut tag {
+                c.insert("Pos".into(), doubles([at.x, at.y, at.z]));
+                c.insert("Motion".into(), doubles([0.0, 0.0, 0.0]));
+                // setPortalCooldown before the teleport.
+                c.insert("PortalCooldown".into(), Tag::Int(ENTITY_DELAY));
+            }
+            let key = ((at.x.floor() as i32) >> 4, (at.z.floor() as i32) >> 4);
+            match self
+                .world
+                .loaded_entities
+                .iter_mut()
+                .find(|(k, _)| *k == key)
+            {
+                Some((_, tags)) => tags.push(tag),
+                None => self.world.loaded_entities.push((key, vec![tag])),
+            }
+        }
+        Ok(())
+    }
+
+    /// The chunks the entities waiting to arrive need, kept loaded like the
+    /// areas a server keeps around its players.
+    pub(super) fn keep_gateway_destinations(&mut self) {
+        let areas = &self.end.areas;
+        self.streaming
+            .extra
+            .retain(|&(c, r)| !(r == 1 && areas.contains(&c)));
+        let mut areas = Vec::new();
+        for a in &self.end.arrivals {
+            let c = (
+                (a.target.x.floor() as i32) >> 4,
+                (a.target.z.floor() as i32) >> 4,
+            );
+            if !areas.contains(&c) {
+                areas.push(c);
+                self.streaming.extra.push((c, 1));
+            }
+        }
+        self.end.areas = areas;
     }
 }

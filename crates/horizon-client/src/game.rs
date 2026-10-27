@@ -5124,8 +5124,10 @@ impl Game<'_> {
             });
         }
         if running {
-            horizon_client::spans::time("entity_portals", || self.handle_entity_portals());
-            horizon_client::spans::time("tick_items", || self.tick_items());
+            horizon_client::spans::time("entity_portals", || {
+                self.handle_entity_portals();
+                self.handle_end_gateway_portals();
+            });
             horizon_client::spans::time("touch_arrows", || self.touch_arrows());
         }
         horizon_client::spans::time("spawn_loaded_entities", || self.spawn_loaded_entities());
@@ -5145,6 +5147,11 @@ impl Game<'_> {
         horizon_client::spans::time("tick_portal", || self.tick_nether_portal())?;
         if running {
             horizon_client::spans::time("tick_end", || self.tick_end())?;
+            horizon_client::spans::time("end_gateways", || {
+                self.find_end_gateway_portals();
+                self.resolve_end_gateway_arrivals()
+            })?;
+            self.keep_gateway_destinations();
         }
         if running {
             horizon_client::spans::time("tick_falling", || self.tick_falling())?;
