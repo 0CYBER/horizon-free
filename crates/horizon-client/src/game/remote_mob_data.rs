@@ -79,6 +79,8 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             (Species::Mooshroom, 17, Value::Int(variant)) => {
                 m.extra.variant = (*variant == 1) as u8
             }
+            // Piglin.DATA_IS_DANCING: the dance pose.
+            (Species::Piglin, 19, Value::Bool(dancing)) => m.extra.scratch[0] = i32::from(*dancing),
             // TamableAnimal.DATA_FLAGS_ID: sitting 1, tame 4.
             (Species::Wolf | Species::Cat | Species::Parrot, 18, Value::Byte(flags)) => {
                 m.extra.sitting = flags & 1 != 0;

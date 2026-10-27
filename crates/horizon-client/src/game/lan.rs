@@ -261,6 +261,13 @@ fn mob_meta(
             }
             defaults.push((17, serializer::INT, Value::Int(0)));
         }
+        // Piglin.DATA_IS_DANCING (after the baby flag and the crossbow charge).
+        "minecraft:piglin" => {
+            if e.scratch[0] > 0 {
+                meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((19, serializer::BOOLEAN, Value::Bool(false)));
+        }
         // Sheep.DATA_WOOL_ID: the colour in the low nibble, 16 when sheared.
         "minecraft:sheep" => {
             let value = (e.color & 15) | if e.sheared { 16 } else { 0 };

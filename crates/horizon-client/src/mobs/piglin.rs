@@ -10,7 +10,7 @@ use super::{
     },
 };
 use horizon_core::geometry::{Vec3, trig::Mth};
-use horizon_core::random::RandomSource;
+use horizon_core::random::{LegacyRandom, RandomSource};
 use std::f32::consts::PI;
 
 /// `PiglinAi.ADMIRE_DURATION`.
@@ -20,6 +20,9 @@ pub const ADMIRE: i32 = 119;
 pub const ATE_RECENTLY: i32 = 200;
 /// `AbstractPiglin.CONVERSION_TIME` (and the hoglin's).
 const CONVERSION: i32 = 300;
+/// `PiglinAi.CELEBRATION_TIME`: how long the `CELEBRATE_LOCATION` and
+/// `DANCING` memories last.
+const CELEBRATION: i32 = 300;
 
 fn hostile_to_player(m: &Mob, w: &MobWorld) -> bool {
     if m.is_baby() {
@@ -50,6 +53,7 @@ pub fn register_piglin(m: &mut Mob) {
     g.add(3, MeleeAttack::new(1.0, true));
     g.add(4, PiglinAvoidRepellent);
     g.add(4, GoToWantedItem);
+    g.add(4, Celebrate);
     g.add(5, Stroll::avoiding_water(0.6));
     g.add(6, LookAtPlayer::new(8.0));
     g.add(7, RandomLookAround::default());
@@ -243,6 +247,45 @@ impl Goal for Admire {
         m.nav_stop();
     }
 }
+/// The celebrate activity: `GoToTargetLocation` on the spot a killed target
+/// fell (within 2 blocks, or 4 and slower while dancing).
+#[derive(Clone, Debug)]
+struct Celebrate;
+impl Celebrate {
+    fn walk(m: &mut Mob, cx: &mut Cx) {
+        let Some(at) = m.extra.home else { return };
+        let (close, speed) = if m.extra.scratch[0] > 0 {
+            (4.0, 0.6)
+        } else {
+            (2.0, 1.0)
+        };
+        let center = Vec3::new(
+            f64::from(at[0]) + 0.5,
+            f64::from(at[1]),
+            f64::from(at[2]) + 0.5,
+        );
+        if m.distance_sqr(center) >= close * close {
+            m.nav_move_to(cx.w, [center.x, center.y, center.z], speed);
+        }
+    }
+}
+impl Goal for Celebrate {
+    goal_clone!();
+    fn flags(&self) -> u8 {
+        MOVE
+    }
+    fn can_use(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
+        m.extra.scratch[1] > 0 && m.extra.home.is_some() && m.extra.using_item == 0
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        Self::walk(m, cx);
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        if m.ai.nav.is_done() {
+            Self::walk(m, cx);
+        }
+    }
+}
 /// `GoToWantedItem`: walk to the gold the game spotted.
 #[derive(Clone, Debug)]
 struct GoToWantedItem;
@@ -293,6 +336,54 @@ fn hoglin_repellent(m: &mut Mob, w: &MobWorld) {
         m.extra.ints[0] = 200;
         m.ai.target = None;
     }
+}
+/// `StartCelebratingIfTargetDead` for a piglin (`scratch[0]` dancing,
+/// `scratch[1]` ticks of celebration left, `scratch[2]` the hit seen, `home`
+/// the `CELEBRATE_LOCATION`): a killed target starts a celebration at its
+/// spot, and a hoglin's death makes the piglin dance one time in ten.
+/// `PiglinAi.wasHurtBy` ends both. Runs before the target goals drop the
+/// dead target.
+pub fn celebrate(m: &mut Mob, w: &MobWorld) {
+    if m.extra.scratch[1] > 0 {
+        m.extra.scratch[1] -= 1;
+        if m.extra.scratch[1] == 0 {
+            m.extra.scratch[0] = 0;
+            m.extra.home = None;
+        }
+    }
+    if let Some(by) = m.ai.last_hurt_by
+        && m.ai.last_hurt_by_time != m.extra.scratch[2]
+    {
+        m.extra.scratch[2] = m.ai.last_hurt_by_time;
+        // PiglinAi.wasHurtBy: another piglin's hit ends nothing.
+        let piglin =
+            matches!(by, Who::Mob(id) if w.seen(id).is_some_and(|s| s.species == Species::Piglin));
+        if !piglin {
+            m.extra.scratch[0] = 0;
+            m.extra.scratch[1] = 0;
+            m.extra.home = None;
+        }
+    }
+    if m.extra.scratch[1] > 0 {
+        return;
+    }
+    let Some(target) = m.ai.target else { return };
+    let Some(t) = w.target_info(target).filter(|t| !t.alive) else {
+        return;
+    };
+    let hoglin =
+        matches!(target, Who::Mob(id) if w.seen(id).is_some_and(|s| s.species == Species::Hoglin));
+    // PiglinAi.wantsToDance: a fresh random seeded with the game time, not
+    // the piglin's own.
+    if hoglin && LegacyRandom::new(w.game_time).next_float() < 0.1 {
+        m.extra.scratch[0] = 1;
+    }
+    m.extra.scratch[1] = CELEBRATION;
+    m.extra.home = Some([
+        t.position.x.floor() as i32,
+        t.position.y.floor() as i32,
+        t.position.z.floor() as i32,
+    ]);
 }
 /// Per-tick piglin and hoglin state: admiring, anger, zombification and the
 /// hoglin attack animation. Returns a conversion when it happens.
@@ -420,7 +511,10 @@ pub fn ears(p: &mut Poses, s: &State) {
 /// Piglins' and brutes' ears flap (`AbstractPiglinModel`), arms follow the
 /// arm pose (`PiglinModel`).
 pub fn piglin_anim(m: &Mob, s: &State, p: &mut Poses) {
-    let pose = if m.extra.using_item > 0 {
+    // Piglin.getArmPose: dancing comes first.
+    let pose = if m.extra.scratch[0] > 0 {
+        PiglinPose::Dancing
+    } else if m.extra.using_item > 0 {
         PiglinPose::AdmiringItem
     } else if m.extra.flag {
         PiglinPose::CrossbowCharge
