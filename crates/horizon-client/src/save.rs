@@ -2558,14 +2558,83 @@ const INT_RULES: [&str; 11] = [
     "respawn_radius",
 ];
 
+/// The world presets of 26.3's `worldgen/world_preset` that the create
+/// screen offers, in the order of `WorldPresetTags.NORMAL`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorldPreset {
+    Normal,
+    Flat,
+    LargeBiomes,
+    Amplified,
+    SingleBiomeSurface,
+}
+impl WorldPreset {
+    /// The presets, in the order the world-type button cycles through them.
+    pub const ALL: [Self; 5] = [
+        Self::Normal,
+        Self::Flat,
+        Self::LargeBiomes,
+        Self::Amplified,
+        Self::SingleBiomeSurface,
+    ];
+    /// The preset's registry id (`minecraft:normal`).
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Normal => "minecraft:normal",
+            Self::Flat => "minecraft:flat",
+            Self::LargeBiomes => "minecraft:large_biomes",
+            Self::Amplified => "minecraft:amplified",
+            Self::SingleBiomeSurface => "minecraft:single_biome_surface",
+        }
+    }
+    /// The preset an id names, if it is one of them.
+    pub fn of_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|preset| preset.id() == id)
+    }
+    /// The language key the world-type button shows
+    /// (`Identifier.toLanguageKey("generator")`).
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Normal => "generator.minecraft.normal",
+            Self::Flat => "generator.minecraft.flat",
+            Self::LargeBiomes => "generator.minecraft.large_biomes",
+            Self::Amplified => "generator.minecraft.amplified",
+            Self::SingleBiomeSurface => "generator.minecraft.single_biome_surface",
+        }
+    }
+    /// The preset the world-type button cycles to next.
+    pub fn next(self) -> Self {
+        let index = Self::ALL
+            .iter()
+            .position(|preset| *preset == self)
+            .unwrap_or(0);
+        Self::ALL[(index + 1) % Self::ALL.len()]
+    }
+    /// The preset a saved overworld generator is: the noise settings name
+    /// the preset, and the single-biome preset shares the overworld's noise
+    /// settings, so its fixed biome source tells the two apart.
+    pub fn of_generator(generator: &Tag) -> Self {
+        if text(generator.get("type")).as_deref() == Some("minecraft:flat") {
+            return Self::Flat;
+        }
+        let source = generator.get("biome_source");
+        let fixed = text(source.and_then(|s| s.get("type"))).as_deref() == Some("minecraft:fixed");
+        match text(generator.get("settings")).as_deref() {
+            Some("minecraft:large_biomes") => Self::LargeBiomes,
+            Some("minecraft:amplified") => Self::Amplified,
+            Some("minecraft:overworld") if fixed => Self::SingleBiomeSurface,
+            _ => Self::Normal,
+        }
+    }
+}
 /// World and player state stored in `level.dat`, the saved-data files and
 /// the player file.
 /// The world options CreateWorldScreen sets (`WorldOptions` and the world
 /// preset) that `world_gen_settings` keeps.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WorldGen {
-    /// The `minecraft:flat` preset (Superflat) instead of `normal`.
-    pub flat: bool,
+    /// The world preset the world is created with.
+    pub preset: WorldPreset,
     pub structures: bool,
     pub bonus_chest: bool,
 }
@@ -2579,8 +2648,7 @@ impl WorldGen {
             .and_then(|d| d.get("minecraft:overworld"))
             .and_then(|o| o.get("generator"));
         Some(Self {
-            flat: text(generator.and_then(|g| g.get("type")))
-                .is_some_and(|t| t.trim_start_matches("minecraft:") == "flat"),
+            preset: generator.map_or(WorldPreset::Normal, WorldPreset::of_generator),
             structures: flag("generate_structures", true),
             bonus_chest: flag("bonus_chest", false),
         })
@@ -2589,7 +2657,7 @@ impl WorldGen {
 impl Default for WorldGen {
     fn default() -> Self {
         Self {
-            flat: false,
+            preset: WorldPreset::Normal,
             structures: true,
             bonus_chest: false,
         }
@@ -2664,6 +2732,34 @@ pub fn write_world_gen_settings_with(
             ("preset", string(p)),
         ])
     };
+    // The overworld generator of worldgen/world_preset/<preset>.json: the
+    // noise settings and the biome source each preset uses.
+    let overworld = match options.preset {
+        WorldPreset::Flat => flat,
+        WorldPreset::LargeBiomes => dimension(
+            "minecraft:overworld",
+            "minecraft:large_biomes",
+            preset("minecraft:overworld"),
+        ),
+        WorldPreset::Amplified => dimension(
+            "minecraft:overworld",
+            "minecraft:amplified",
+            preset("minecraft:overworld"),
+        ),
+        WorldPreset::SingleBiomeSurface => dimension(
+            "minecraft:overworld",
+            "minecraft:overworld",
+            Tag::compound([
+                ("type", string("minecraft:fixed")),
+                ("biome", string("minecraft:plains")),
+            ]),
+        ),
+        WorldPreset::Normal => dimension(
+            "minecraft:overworld",
+            "minecraft:overworld",
+            preset("minecraft:overworld"),
+        ),
+    };
     write_saved_data(
         dir,
         "world_gen_settings",
@@ -2677,18 +2773,7 @@ pub fn write_world_gen_settings_with(
             (
                 "dimensions",
                 Tag::compound([
-                    (
-                        "minecraft:overworld",
-                        if options.flat {
-                            flat
-                        } else {
-                            dimension(
-                                "minecraft:overworld",
-                                "minecraft:overworld",
-                                preset("minecraft:overworld"),
-                            )
-                        },
-                    ),
+                    ("minecraft:overworld", overworld),
                     (
                         "minecraft:the_nether",
                         dimension(

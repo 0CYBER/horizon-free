@@ -257,6 +257,7 @@ fn saved_proto_chunks_restore_exactly() {
         &biomes,
         -1860902098141295193,
         "minecraft:the_nether",
+        "minecraft:normal",
     )
     .unwrap();
     let dir = std::env::temp_dir().join(format!("horizon-proto-saves-{}", std::process::id()));
@@ -337,6 +338,7 @@ fn saved_proto_block_entities_keep_their_id() {
         &biomes,
         12345,
         "minecraft:overworld",
+        "minecraft:normal",
     )
     .unwrap();
     let dir = std::env::temp_dir().join(format!("horizon-proto-ids-{}", std::process::id()));

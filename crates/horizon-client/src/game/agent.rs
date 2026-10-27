@@ -561,9 +561,25 @@ impl Game<'_> {
                 "hardcore": options.hardcore,
                 "difficulty": horizon_client::title::DIFFICULTIES[options.difficulty()],
                 "allow_commands": options.commands(*creative),
-                "superflat": options.flat,
+                "world_type": options.world_type.id(),
                 "generate_structures": options.structures,
                 "bonus_chest": options.bonus_chest(),
+            }),
+            Mode::CreateFlat {
+                name,
+                seed,
+                options,
+                flat,
+                ..
+            } => json!({
+                "mode": "customize-flat",
+                "fields": { "name": name, "seed": seed },
+                "superflat": options.world_type == horizon_client::save::WorldPreset::Flat,
+                "biome": flat.settings().biome,
+                "layers": flat.settings().layers.iter().map(|layer| json!({
+                    "block": layer.block,
+                    "height": layer.height,
+                })).collect::<Vec<_>>(),
             }),
             Mode::Edit {
                 world,

@@ -93,7 +93,12 @@ impl WorldRequest {
             level.hardcore = o.hardcore;
             level.difficulty = horizon_client::title::DIFFICULTIES[o.difficulty()].into();
             level.allow_commands = Some(o.commands(creative));
-            horizon_client::save::write_world_gen_settings(&save_root, level.seed, o.world_gen())?;
+            horizon_client::save::write_world_gen_settings_with(
+                &save_root,
+                level.seed,
+                o.world_gen(),
+                o.flat_settings(),
+            )?;
         }
         // Worlds made without the Create New World screen (--world, the
         // control socket) take its default: commands on for Creative only.
@@ -320,10 +325,12 @@ pub(super) fn make_streaming(
             res.threads(),
         )
     } else {
-        // WorldOptions.generateStructures, from the world's settings.
-        let structures =
-            horizon_client::save::WorldGen::read(world_root).is_none_or(|w| w.structures);
-        let inner = Arc::new(VanillaTerrain::for_world(&options.resources.join("worldgen"), pack.assets.registry, res.biomes(), seed, dim.id(), structures).map_err(|e| {
+        // WorldOptions.generateStructures and the world preset, from the
+        // world's settings.
+        let world_gen = horizon_client::save::WorldGen::read(world_root);
+        let structures = world_gen.is_none_or(|w| w.structures);
+        let preset = world_gen.map_or(horizon_client::save::WorldPreset::Normal, |w| w.preset);
+        let inner = Arc::new(VanillaTerrain::for_world(&options.resources.join("worldgen"), pack.assets.registry, res.biomes(), seed, dim.id(), preset.id(), structures).map_err(|e| {
                 format!("{e}\nPrepare the worldgen bundle with the launcher, or: horizon-prepare --prepare")
             })?);
         if dim == Dim::Overworld && structures {
