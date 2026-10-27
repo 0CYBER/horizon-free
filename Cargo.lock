@@ -1372,6 +1372,8 @@ dependencies = [
  "glam",
  "horizon-assets",
  "horizon-bench",
+ "horizon-client-core",
+ "horizon-command",
  "horizon-core",
  "horizon-dualsense",
  "horizon-friends",
@@ -1401,6 +1403,23 @@ dependencies = [
  "winit",
  "winresource",
  "zip",
+]
+
+[[package]]
+name = "horizon-client-core"
+version = "0.1.0"
+dependencies = [
+ "horizon-world",
+ "serde_json",
+]
+
+[[package]]
+name = "horizon-command"
+version = "0.1.0"
+dependencies = [
+ "horizon-client-core",
+ "horizon-protocol",
+ "horizon-world",
 ]
 
 [[package]]

@@ -1,6 +1,7 @@
 //! Blocks mobs carry: block items in a hand (`ItemInHandLayer`) and the
 //! block an enderman holds (`CarriedBlockLayer`), drawn as shaded cubes like
-//! dropped block items.
+//! dropped block items. Also the block models mobs wear (`SnowGolemHeadLayer`,
+//! `MushroomCowMushroomLayer`).
 use super::Game;
 use horizon_client::{
     items::ItemStack,
@@ -218,6 +219,7 @@ impl Game<'_> {
     ) {
         self.captain_banner_geometry(mob, camera, alpha, light, out);
         self.held_item_geometry(mob, camera, alpha, light, true, out);
+        self.worn_block_geometry(mob, camera, alpha, light, out);
         if mob.species() == Species::Enderman
             && let Some(state) = mob.extra.carried
             && let Some((sprite, tint)) = self.block_face_sprite(state)
@@ -242,6 +244,76 @@ impl Game<'_> {
                 0,
                 out,
             );
+        }
+    }
+    /// `SnowGolemHeadLayer` and `MushroomCowMushroomLayer`: the carved pumpkin
+    /// on a snow golem's head, and the mushrooms on an adult mooshroom's back
+    /// and head, as baked block models.
+    fn worn_block_geometry(
+        &self,
+        mob: &Mob,
+        camera: glam::DVec3,
+        alpha: f64,
+        light: u32,
+        out: &mut Vec<Vertex>,
+    ) {
+        use glam::{Mat4, Vec3};
+        let species = mob.species();
+        let on_head = match species {
+            Species::SnowGolem => !mob.extra.sheared,
+            Species::Mooshroom => !mob.is_baby(),
+            _ => false,
+        };
+        // The layers draw nothing on an invisible mob (the glow outline is not drawn).
+        if !on_head || horizon_client::mobs::trader::is_invisible(mob) {
+            return;
+        }
+        let registry = &self.pack.assets.registry;
+        let block = match species {
+            Species::SnowGolem => "minecraft:carved_pumpkin",
+            _ if mob.extra.variant == 1 => "minecraft:brown_mushroom",
+            _ => "minecraft:red_mushroom",
+        };
+        let Some(state) = registry.default_state(block) else {
+            return;
+        };
+        let alpha = alpha as f32;
+        let Some(head) = render::part_transform(mob, alpha, camera, self.res.mob_data(), "head")
+        else {
+            return;
+        };
+        let unit = Mat4::from_translation(Vec3::splat(-0.5));
+        let flip = Mat4::from_scale(Vec3::new(-1.0, -1.0, 1.0));
+        let at = |x: f32, y: f32, z: f32| Mat4::from_translation(Vec3::new(x, y, z));
+        let spin = |degrees: f32| Mat4::from_rotation_y(degrees.to_radians());
+        let transforms = if species == Species::SnowGolem {
+            vec![
+                head * at(0.0, -0.34375, 0.0)
+                    * spin(180.0)
+                    * Mat4::from_scale(Vec3::new(0.625, -0.625, -0.625))
+                    * unit,
+            ]
+        } else {
+            let base = render::base_transform(mob, alpha, camera);
+            vec![
+                base * at(0.2, -0.35, 0.5) * spin(-48.0) * flip * unit,
+                base * at(0.2, -0.35, 0.5)
+                    * spin(42.0)
+                    * at(0.1, 0.0, -0.6)
+                    * spin(-48.0)
+                    * flip
+                    * unit,
+                head * at(0.0, -0.7, -0.2) * spin(-78.0) * flip * unit,
+            ]
+        };
+        // The hurt tint reaches these blocks as it does the body.
+        let overlay = horizon_client::overlay::living(0.0, mob.hurt_time > 0 || mob.death_time > 0);
+        for t in transforms {
+            let start = out.len();
+            self.block_model_vertices(state, 0, t, light, true, out);
+            for vertex in &mut out[start..] {
+                vertex.layer = overlay;
+            }
         }
     }
     /// `ItemInHandLayer`: both hands through the item model pipeline; `lit`
