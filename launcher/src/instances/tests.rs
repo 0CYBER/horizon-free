@@ -149,6 +149,18 @@ fn names_stay_unique_and_packs_are_not_copied() {
     // An empty group is no group.
     let grouped = edit_in(&home, &data, "Survival", |m| m.group = Some(" ".into())).unwrap();
     assert_eq!(grouped.group, None);
+    // An import named like an instance: both can still change everything but their names.
+    let mut store = Store::load(&data);
+    store.instances.entry(port.id.clone()).or_default().name = Some("Survival".into());
+    store.save(&data).unwrap();
+    let launched = edit_in(&home, &data, "survival", |m| {
+        m.launch.wrapper = "nice".into()
+    })
+    .unwrap();
+    assert_eq!(launched.launch.wrapper, "nice");
+    assert!(edit_in(&home, &data, "survival-2", |m| m.name =
+        Some("survival".into()))
+    .is_err());
     fs::remove_dir_all(&root).unwrap();
 }
 

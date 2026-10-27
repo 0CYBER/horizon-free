@@ -198,6 +198,18 @@ enum InstanceCmd {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Show or set what runs around an instance's game: a shell command before it (the game
+    /// starts only if it succeeds), a wrapper it runs through (`nice -n 5`), and environment
+    /// variables ("NAME=value NAME2=value"). An empty value clears one
+    Launch {
+        instance: String,
+        #[arg(long)]
+        pre_launch: Option<String>,
+        #[arg(long)]
+        wrapper: Option<String>,
+        #[arg(long)]
+        env: Option<String>,
+    },
     /// Put a shortcut on the desktop that plays an instance (`play --instance`): a .desktop
     /// file (also in the applications menu) on Linux, an app on macOS, a .lnk on Windows
     Shortcut {
@@ -938,7 +950,7 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             }
             cmd.args(arg);
             let started = std::time::Instant::now();
-            let played = attached(cmd);
+            let played = attached(horizon_launcher::launch::wrap(cmd, &instance.launch));
             if let Err(e) = instances::record_play(&instance.id, started.elapsed()) {
                 eprintln!("Play time not saved: {e}");
             }
@@ -1835,6 +1847,45 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                 tag => Some(backend::resolve_version(Some(tag))?),
             };
             changed(instances::edit(&instance, |m| m.version = pin)?)
+        }
+        InstanceCmd::Launch {
+            instance,
+            pre_launch,
+            wrapper,
+            env,
+        } => {
+            use horizon_launcher::launch;
+            let env = env.as_deref().map(launch::parse_env).transpose()?;
+            let changing = pre_launch.is_some() || wrapper.is_some() || env.is_some();
+            let i = match changing {
+                false => instances::find(&instance)?,
+                true => instances::edit(&instance, |m| {
+                    if let Some(p) = pre_launch {
+                        m.launch.pre_launch = p.trim().to_string();
+                    }
+                    if let Some(w) = wrapper {
+                        m.launch.wrapper = w.trim().to_string();
+                    }
+                    if let Some(e) = env {
+                        m.launch.env = e;
+                    }
+                })?,
+            };
+            let l = &i.launch;
+            if as_json {
+                json(serde_json::json!({
+                    "instance": i.id, "pre_launch": l.pre_launch, "wrapper": l.wrapper, "env": l.env,
+                }));
+            } else {
+                println!(
+                    "{}: {}",
+                    i.name,
+                    l.summary().unwrap_or("nothing around the game".into())
+                );
+                println!("  pre-launch: {}", l.pre_launch);
+                println!("  wrapper:    {}", l.wrapper);
+                println!("  env:        {}", launch::env_line(&l.env));
+            }
         }
         InstanceCmd::Shortcut { instance, remove } => {
             use horizon_launcher::shortcut;

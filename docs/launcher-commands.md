@@ -364,6 +364,19 @@ Export an instance (or a port) to share: its settings, packs, Horizon mods and t
 
 MCP: `instance_export`.
 
+## `horizon-launcher instance launch`
+
+Show or set what runs around an instance's game: a shell command before it (the game starts only if it succeeds), a wrapper it runs through (`nice -n 5`), and environment variables ("NAME=value NAME2=value"). An empty value clears one.
+
+    horizon-launcher instance launch <INSTANCE>
+
+- `INSTANCE`
+- `--pre-launch`
+- `--wrapper`
+- `--env`
+
+MCP: `instance_launch`, needs `confirm: true`.
+
 ## `horizon-launcher instance shortcut`
 
 Put a shortcut on the desktop that plays an instance (`play --instance`): a .desktop file (also in the applications menu) on Linux, an app on macOS, a .lnk on Windows.
