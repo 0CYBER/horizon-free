@@ -174,8 +174,8 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Animate {
         "end_portal" => Animate::EndPortal,
         "wet_sponge" => Animate::WetSponge,
         // BrushableBlock has no dust colour of its own, so the dust is the map colour.
-        "suspicious_sand" => Animate::Falling(0xF7E9A3),
-        "suspicious_gravel" => Animate::Falling(0x707070),
+        "suspicious_sand" => Animate::Falling(0xF7E9A3, false),
+        "suspicious_gravel" => Animate::Falling(0x707070, false),
         "sculk_sensor" | "calibrated_sculk_sensor"
             if prop("sculk_sensor_phase").as_deref() == Some("active") =>
         {
