@@ -194,6 +194,8 @@ pub(super) struct Remote {
     /// The local player's profile name: its score holder and team member.
     pub(super) profile_name: String,
     destroying: Option<([i32; 3], u8, f32)>,
+    /// `MultiPlayerGameMode.destroyingItem`: the held item key the break began with.
+    destroying_item: String,
     destroy_delay: u32,
     input: horizon_client::interaction_input::InteractionInput,
     /// Keys whose presses send a packet (swap hands, drop, a mount's
@@ -494,6 +496,7 @@ impl Game<'_> {
             profile: 0,
             profile_name: String::new(),
             destroying: None,
+            destroying_item: String::new(),
             destroy_delay: 0,
             input: Default::default(),
             pending_keys: Vec::new(),
@@ -4152,6 +4155,8 @@ impl Game<'_> {
         }
     }
 
+    /// `MultiPlayerGameMode.stopDestroyBlock`: aborts the break and starts
+    /// the attack strength again.
     pub(super) fn stop_remote_mining(&mut self) {
         if let Some((pos, _, _)) = self.remote.as_mut().and_then(|r| r.destroying.take()) {
             self.send(S::PlayerAction(play::PlayerAction {
@@ -4160,6 +4165,7 @@ impl Game<'_> {
                 direction: 0,
                 sequence: 0,
             }));
+            self.reset_attack_strength();
         }
     }
 
@@ -4213,11 +4219,11 @@ impl Game<'_> {
         } else {
             self.destroy_progress(hit.pos)
         };
-        let same = self
-            .remote
-            .as_ref()
-            .and_then(|r| r.destroying)
-            .is_some_and(|(p, _, _)| p == hit.pos);
+        // sameDestroyTarget: the same block and still the item the break began with.
+        let held = self.main_hand_key();
+        let same = self.remote.as_ref().is_some_and(|r| {
+            r.destroying.is_some_and(|(p, _, _)| p == hit.pos) && r.destroying_item == held
+        });
         if start && same {
             return;
         }
@@ -4244,6 +4250,7 @@ impl Game<'_> {
             }
             if let Some(r) = self.remote.as_mut() {
                 r.destroying = Some((hit.pos, face, 0.0));
+                r.destroying_item = held;
             }
             // startDestroyBlock plays the first hit and crack itself; the
             // server's level events 2019 and 2020 do the rest.
