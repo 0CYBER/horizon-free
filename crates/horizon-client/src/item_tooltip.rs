@@ -108,6 +108,32 @@ fn modifier_line(
     )
 }
 
+/// `Attribute.getStyle`: the colour of a line for an attribute whose value
+/// rises or falls. Gravity, scale and the waypoint ranges are neutral, burning
+/// time and fall damage are negative, every other attribute is positive.
+fn attribute_color(attribute: &str, rises: bool) -> u32 {
+    let (blue, red) = (rgba(85, 85, 255, 255), rgba(255, 85, 85, 255));
+    match attribute {
+        "burning_time" | "fall_damage_multiplier" => {
+            if rises {
+                red
+            } else {
+                blue
+            }
+        }
+        "gravity" | "scale" | "waypoint_transmit_range" | "waypoint_receive_range" => {
+            rgba(170, 170, 170, 255)
+        }
+        _ => {
+            if rises {
+                blue
+            } else {
+                red
+            }
+        }
+    }
+}
+
 /// `ItemStack.addAttributeTooltips`: slot groups, colors and optional player
 /// attack damage/speed bases. Recipe search has no player context.
 pub fn attribute_lines(
@@ -150,10 +176,8 @@ pub fn attribute_lines(
             ) {
                 let (line, color) = if base.is_some() {
                     (format!(" {line}"), rgba(0, 170, 0, 255))
-                } else if *amount > 0.0 {
-                    (line, rgba(85, 85, 255, 255))
                 } else {
-                    (line, rgba(255, 85, 85, 255))
+                    (line, attribute_color(path, *amount > 0.0))
                 };
                 lines.push((line, color));
             }
@@ -231,6 +255,235 @@ pub fn rarity<'a>(stack: &ItemStack, default: &'a str) -> &'a str {
     }
 }
 
+fn is_beehive(path: &str) -> bool {
+    matches!(path, "beehive" | "bee_nest")
+}
+
+/// `InstrumentComponent.addToTooltip`: the instrument's description. A goat
+/// horn without the component has the item's default, the ponder horn.
+pub fn instrument_line(
+    stack: &ItemStack,
+    display: &TooltipDisplay,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    if !display.shows("minecraft:instrument") {
+        return None;
+    }
+    let id = match stack.data().and_then(|d| d.other("minecraft:instrument")) {
+        Some(Tag::String(id)) => id.to_string_lossy(),
+        // An inline instrument carries its own description.
+        Some(inline) => {
+            return inline
+                .get("description")
+                .map(|d| crate::entity_nbt::name_text(d).plain());
+        }
+        None if &*stack.item == "minecraft:goat_horn" => "minecraft:ponder_goat_horn".to_owned(),
+        None => return None,
+    };
+    let key = format!("instrument.{}", id.replacen(':', ".", 1));
+    Some(translate(&key).unwrap_or(key))
+}
+
+/// `Bees.addToTooltip`: how many bees a hive item holds (a hive item without
+/// the component has the item's default, none).
+pub fn bees_line(
+    stack: &ItemStack,
+    display: &TooltipDisplay,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    if !display.shows("minecraft:bees") {
+        return None;
+    }
+    let bees = match stack.data().and_then(|d| d.other("minecraft:bees")) {
+        Some(Tag::List(bees)) => bees.len(),
+        Some(_) => return None,
+        None if is_beehive(stack.item.trim_start_matches("minecraft:")) => 0,
+        None => return None,
+    };
+    let text =
+        translate("container.beehive.bees").unwrap_or_else(|| "container.beehive.bees".into());
+    Some(
+        text.replacen("%s", &bees.to_string(), 1)
+            .replacen("%s", "3", 1),
+    )
+}
+
+/// `BlockItemStateProperties.addToTooltip`: a hive item's honey level (a hive
+/// item without the component has the item's default, 0).
+pub fn honey_line(
+    stack: &ItemStack,
+    display: &TooltipDisplay,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    if !display.shows("minecraft:block_state") {
+        return None;
+    }
+    let level = match stack.data().and_then(|d| d.other("minecraft:block_state")) {
+        Some(Tag::Compound(state)) => {
+            match state.get(&horizon_world::nbt::JavaString::from("honey_level")) {
+                Some(Tag::String(level)) => level.to_string_lossy().parse::<u32>().ok()?,
+                _ => return None,
+            }
+        }
+        Some(_) => return None,
+        None if is_beehive(stack.item.trim_start_matches("minecraft:")) => 0,
+        None => return None,
+    };
+    let text =
+        translate("container.beehive.honey").unwrap_or_else(|| "container.beehive.honey".into());
+    Some(
+        text.replacen("%s", &level.to_string(), 1)
+            .replacen("%s", "5", 1),
+    )
+}
+
+/// `WrittenBookContent.addToTooltip`: "by <author>" and the generation.
+pub fn written_book_lines(
+    stack: &ItemStack,
+    display: &TooltipDisplay,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    let text = |key: &str| translate(key).unwrap_or_else(|| key.to_owned());
+    let Some(book) = stack
+        .data()
+        .and_then(|d| d.written.as_ref())
+        .filter(|_| display.shows("minecraft:written_book_content"))
+    else {
+        return Vec::new();
+    };
+    let mut lines = Vec::new();
+    if !book.author.trim().is_empty() {
+        lines.push(
+            crate::text::format_translation(
+                &text("book.byAuthor"),
+                &[crate::text::Text::literal(&book.author)],
+            )
+            .plain(),
+        );
+    }
+    lines.push(text(&format!("book.generation.{}", book.generation)));
+    lines
+}
+
+/// `JukeboxPlayable.addToTooltip`: the song's description.
+pub fn jukebox_line(
+    stack: &ItemStack,
+    info: Option<&ItemInfo>,
+    display: &TooltipDisplay,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    if !display.shows("minecraft:jukebox_playable") {
+        return None;
+    }
+    let song = match stack
+        .data()
+        .and_then(|d| d.other("minecraft:jukebox_playable"))
+    {
+        Some(Tag::String(song)) => song.to_string_lossy(),
+        // An inline song carries its own description.
+        Some(inline) => {
+            return inline
+                .get("description")
+                .map(|d| crate::entity_nbt::name_text(d).plain());
+        }
+        None => info?.jukebox_song.clone()?,
+    };
+    let key = format!("jukebox_song.{}", song.replacen(':', ".", 1));
+    Some(translate(&key).unwrap_or(key))
+}
+
+/// `DyedItemColor.addToTooltip`: "Dyed" (italic, the flag), or with advanced
+/// tooltips the colour's hex code.
+pub fn dyed_line(
+    stack: &ItemStack,
+    display: &TooltipDisplay,
+    advanced: bool,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Option<(String, bool)> {
+    let rgb = stack.data()?.dyed_color?;
+    if !display.shows("minecraft:dyed_color") {
+        return None;
+    }
+    let text = |key: &str| translate(key).unwrap_or_else(|| key.to_owned());
+    Some(if advanced {
+        let hex = format!("#{:06X}", rgb & 0xFF_FFFF);
+        (text("item.color").replacen("%s", &hex, 1), false)
+    } else {
+        (text("item.dyed"), true)
+    })
+}
+
+/// `ItemStack.UNBREAKABLE_TOOLTIP`.
+pub fn unbreakable_line(
+    stack: &ItemStack,
+    display: &TooltipDisplay,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    (stack.data()?.other("minecraft:unbreakable").is_some()
+        && display.shows("minecraft:unbreakable"))
+    .then(|| translate("item.unbreakable").unwrap_or_else(|| "item.unbreakable".into()))
+}
+
+/// `PotionContents.addPotionTooltip`'s attribute block: an empty line, "When
+/// Applied:" and the modifiers of the potion's effects (blue for a gain, red
+/// for a loss); nothing for a potion whose effects add none.
+pub fn potion_modifier_lines(
+    stack: &ItemStack,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Vec<(String, u32)> {
+    if !is_potion_item(&stack.item) {
+        return Vec::new();
+    }
+    let applied: Vec<(String, u32)> = stack
+        .potion()
+        .and_then(crate::brewing::potion)
+        .into_iter()
+        .flat_map(|p| p.effects.iter())
+        .filter_map(|(effect, _, amplifier)| {
+            let (attribute, amount, operation) = effect_modifier(effect)?;
+            let amount = amount * (*amplifier + 1) as f64;
+            let line = modifier_line(translate, attribute, amount, operation, false)?;
+            let color = if amount > 0.0 {
+                rgba(85, 85, 255, 255)
+            } else {
+                rgba(255, 85, 85, 255)
+            };
+            Some((line, color))
+        })
+        .collect();
+    if applied.is_empty() {
+        return applied;
+    }
+    let mut lines = vec![
+        (String::new(), u32::MAX),
+        (
+            translate("potion.whenDrank").unwrap_or_else(|| "potion.whenDrank".into()),
+            rgba(170, 0, 170, 255),
+        ),
+    ];
+    lines.extend(applied);
+    lines
+}
+
+/// `ItemStack.components.size()`: the item's default components with the
+/// stack's own changes applied.
+pub fn component_count(stack: &ItemStack, info: Option<&ItemInfo>) -> usize {
+    let mut keys: std::collections::HashSet<String> = info
+        .map(|i| i.components.iter().cloned().collect())
+        .unwrap_or_default();
+    if let Some(Tag::Compound(patch)) = crate::item_data::components_tag(stack.damage, stack.data())
+    {
+        for key in patch.keys() {
+            let key = key.to_string_lossy();
+            match key.strip_prefix('!') {
+                Some(removed) => keys.remove(removed),
+                None => keys.insert(key),
+            };
+        }
+    }
+    keys.len()
+}
+
 /// The lines of `stack` below its name that its components give, in
 /// `ItemStack.addDetailsToTooltip` order.
 pub fn detail_lines(
@@ -265,19 +518,9 @@ pub fn detail_lines(
             ))
         ));
     }
-    // BeehiveBlock: the block state components of the item.
-    if path == "beehive" {
-        lines.push(
-            text("container.beehive.bees")
-                .replacen("%s", "0", 1)
-                .replacen("%s", "3", 1),
-        );
-        lines.push(
-            text("container.beehive.honey")
-                .replacen("%s", "0", 1)
-                .replacen("%s", "5", 1),
-        );
-    }
+    let display = TooltipDisplay::for_stack(stack);
+    lines.extend(bees_line(stack, &display, translate));
+    lines.extend(honey_line(stack, &display, translate));
     let data = stack.data();
     // PotDecorations.addToTooltip.
     if let Some(sherds) = data
@@ -303,32 +546,13 @@ pub fn detail_lines(
                 .into_iter()
                 .map(|l| l.0),
         );
-        let applied: Vec<String> = stack
-            .potion()
-            .and_then(crate::brewing::potion)
-            .into_iter()
-            .flat_map(|p| p.effects.iter())
-            .filter_map(|(effect, _, amplifier)| {
-                let (attribute, amount, operation) = effect_modifier(effect)?;
-                modifier_line(
-                    translate,
-                    attribute,
-                    amount * (*amplifier + 1) as f64,
-                    operation,
-                    false,
-                )
-            })
-            .collect();
-        if !applied.is_empty() {
-            lines.push(String::new());
-            lines.push(text("potion.whenDrank"));
-            lines.extend(applied);
-        }
+        lines.extend(
+            potion_modifier_lines(stack, translate)
+                .into_iter()
+                .map(|l| l.0),
+        );
     }
-    // JukeboxPlayable.addToTooltip: the song's description.
-    if path.starts_with("music_disc_") {
-        lines.push(text(&format!("item.minecraft.{path}.desc")));
-    }
+    lines.extend(jukebox_line(stack, info, &display, translate));
     // Trim.addToTooltip.
     if let Some((material, pattern)) = data.and_then(|d| d.trim.as_ref()) {
         let short = |s: &str| s.trim_start_matches("minecraft:").to_owned();
@@ -342,10 +566,7 @@ pub fn detail_lines(
             text(&format!("trim_material.minecraft.{}", short(material)))
         ));
     }
-    // DyedItemColor.addToTooltip (without advanced tooltips).
-    if data.is_some_and(|d| d.dyed_color.is_some()) {
-        lines.push(text("item.dyed"));
-    }
+    lines.extend(dyed_line(stack, &display, false, translate).map(|l| l.0));
     if let Some(info) = info {
         lines.extend(
             attribute_lines(&info.modifiers, None, translate)
