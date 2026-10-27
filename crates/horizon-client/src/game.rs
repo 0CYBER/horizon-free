@@ -18,6 +18,7 @@ mod boats;
 mod books;
 mod bossbars;
 mod breezes;
+mod bundles;
 mod campfire;
 mod campfire_douse;
 mod cartography;
@@ -1275,6 +1276,8 @@ struct Game<'a> {
     inv_clicks: horizon_client::container_screen::Clicks,
     /// The Mouse Tweaks extra's drag and wheel (`tweaks`).
     tweaks: tweaks::Tweaks,
+    /// The wheel and hovered slot of `BundleMouseActions`.
+    bundle_mouse: bundles::BundleMouse,
     /// The last inventory click, for the double click that gathers a stack.
     last_inv_click: Option<(std::time::Instant, usize, bool)>,
     /// `lastQuickMoved`: what the last Shift click moved, which a Shift
@@ -4834,6 +4837,7 @@ impl Game<'_> {
         self.shield_cooldown = self.shield_cooldown.saturating_sub(1);
         self.cooldowns.tick();
         horizon_client::spans::time("tick_using", || self.tick_using());
+        self.tick_bundle_hover();
         horizon_client::spans::time("tick_hud", || self.tick_hud());
         // The player's digging comes in with its packets, before the level
         // ticks; ServerLevel.tick then runs the scheduled and random block
@@ -6031,6 +6035,12 @@ impl Game<'_> {
     /// Several clicks on one menu instance (a quick craft drag is three).
     fn menu_ops(&mut self, ops: &[(Option<usize>, i32, horizon_client::menu::Input)]) -> bool {
         use horizon_client::menu::Input;
+        // BundleMouseActions.onSlotClicked: a Shift click or a swap clears the bundle's selection.
+        for &(slot, _, input) in ops {
+            if let (Some(slot), Input::QuickMove | Input::Swap) = (slot, input) {
+                self.unselect_bundle(slot);
+            }
+        }
         if self.remote.is_some() && self.screen == Screen::Inventory {
             // On a server the clicks are the server's: predicted and sent.
             return self.remote_menu_ops(ops);
@@ -11946,6 +11956,7 @@ impl ApplicationHandler for Game<'_> {
                     }
                     if self.screen == Screen::Inventory
                         && d != 0.0
+                        && !self.bundle_scroll(scaled(raw_x), scaled(raw_y))
                         && !self.tweak_scroll(d, self.inventory_target().0)
                     {
                         self.station_scroll(d);
@@ -12735,6 +12746,7 @@ impl<'a> Game<'a> {
             craft_table: None,
             inv_drag: None,
             tweaks: Default::default(),
+            bundle_mouse: Default::default(),
             inv_clicks: Default::default(),
             last_inv_click: None,
             last_quick_moved: None,

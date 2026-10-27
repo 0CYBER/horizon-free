@@ -2252,12 +2252,18 @@ impl Game<'_> {
         batch: &mut HudBatch,
         layout: &horizon_client::bundle::TooltipLayout,
     ) {
-        for (at, stack) in &layout.slots {
+        for (i, (at, stack)) in layout.slots.iter().enumerate() {
+            let selected = layout.selected == Some(i);
+            let sprite = |name: &str| format!("gui/sprites/container/bundle/{name}");
             // Each draw takes the atlas on its own: the item's needs `&mut self`.
             horizon_client::ui::nine_slice(
                 batch,
                 &self.gui.atlas,
-                "gui/sprites/container/bundle/slot_background",
+                &sprite(if selected {
+                    "slot_highlight_back"
+                } else {
+                    "slot_background"
+                }),
                 at[0],
                 at[1],
                 24.0,
@@ -2267,6 +2273,18 @@ impl Game<'_> {
             let stack = stack.clone();
             let [x, y] = *at;
             self.draw_item(batch, &stack, x + 4.0, y + 4.0);
+            if selected {
+                horizon_client::ui::nine_slice(
+                    batch,
+                    &self.gui.atlas,
+                    &sprite("slot_highlight_front"),
+                    x,
+                    y,
+                    24.0,
+                    24.0,
+                    u32::MAX,
+                );
+            }
         }
         let atlas = &self.gui.atlas;
         if let Some((at, hidden)) = layout.overflow {

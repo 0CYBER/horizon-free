@@ -1216,6 +1216,12 @@ impl Game<'_> {
             {
                 self.guest_carried_back(host, gi);
             }
+            S::SelectBundleItem(p) => {
+                if !spectator && let Ok(slot) = usize::try_from(p.slot) {
+                    host.hub
+                        .select_bundle_item(conn, slot, p.index, &mut self.world);
+                }
+            }
             S::ContainerClick(p) => {
                 let rules = ItemRules(self.res.items());
                 let slots = host.hub.guests[gi]
