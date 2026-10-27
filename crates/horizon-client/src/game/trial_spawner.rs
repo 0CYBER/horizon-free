@@ -163,7 +163,7 @@ impl Game<'_> {
             let mut spawn = |l: &GameLevel, r: &SpawnerSpawn| {
                 let added = l.game.plan_spawner_mob(l, r, &mut planned)?;
                 let uuid = match planned.last_mut() {
-                    Some(Planned::Loaded(Tag::Compound(tag))) => {
+                    Some(Planned::Loaded(Tag::Compound(tag), _)) => {
                         let tag_uuid =
                             horizon_client::entity_nbt::uuid(&Tag::Compound(tag.clone()));
                         tag_uuid.unwrap_or_else(|| {

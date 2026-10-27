@@ -26,6 +26,13 @@ pub enum ItemPose {
     Bow {
         ticks_used: f32,
     },
+    /// A spear being charged (`ItemUseAnimation.SPEAR`): the time held and
+    /// the ticks since its last hit's feedback.
+    Spear {
+        kinetic: crate::spear::Kinetic,
+        time_held: f32,
+        ticks_since_hit: f32,
+    },
     Crossbow {
         ticks_used: Option<f32>,
         charge_duration: f32,
@@ -68,6 +75,16 @@ pub fn item_pose(left: bool, inverse_height: f32, attack: f32, pose: ItemPose) -
     }
     if matches!(pose, ItemPose::Using) {
         return m;
+    }
+    // The spear's own place in the hand, without the equip height.
+    if let ItemPose::Spear {
+        kinetic,
+        time_held,
+        ticks_since_hit,
+    } = pose
+    {
+        return Mat4::from_translation(Vec3::new(invert * 0.56, -0.52, -0.72))
+            * crate::spear::first_person_use(&kinetic, ticks_since_hit, time_held, !left);
     }
     if matches!(pose, ItemPose::SpinAttack) {
         return m
@@ -426,18 +443,7 @@ impl UseResult {
         matches!(self, Self::Success { swing: true }) && before == after
     }
 }
-pub fn consumable_animation(v: &serde_json::Value) -> horizon_world::consumable::UseAnimation {
-    use horizon_world::consumable::UseAnimation;
-    match v
-        .get("animation")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("eat")
-    {
-        "eat" => UseAnimation::Eat,
-        "drink" => UseAnimation::Drink,
-        _ => UseAnimation::None,
-    }
-}
+pub use horizon_items::use_animation::consumable_animation;
 /// What the click handling reads and does in the world.
 pub trait HandWorld {
     fn hit(&mut self) -> Hit;

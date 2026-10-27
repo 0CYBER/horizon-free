@@ -9,6 +9,7 @@ use horizon_client::{
     text::{self, Style, Text},
     toasts::Slide,
 };
+use horizon_core::geometry::Vec3;
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -21,6 +22,9 @@ pub(super) struct Toast {
     frame: Frame,
     title: Text,
     slide: Slide,
+    /// `ToastInstance.firstSlotIndex`: the 32-pixel slot it stacks in once it
+    /// leaves the queue.
+    slot: Option<usize>,
     /// A `RecipeToast`: the crafting station and result of each display
     /// unlocked while it lasts (`recipeItems`); empty for an advancement.
     recipes: Vec<(String, ItemStack)>,
@@ -36,6 +40,7 @@ impl Toast {
             frame: Frame::Task,
             title: Text::literal(""),
             slide: Slide::default(),
+            slot: None,
             recipes: items,
             changed: true,
             last_changed: 0,
@@ -82,6 +87,8 @@ pub(super) struct AdvState {
     pub(super) quiet: bool,
     /// The inventory last seen by `inventory_changed`.
     pub(super) last_inventory: u64,
+    /// `ServerPlayer.levitationStartPos` and `levitationStartTime`.
+    pub(super) levitation: Option<([f64; 3], u64)>,
     /// While the game acts for a network player (`as_guest`): the
     /// advancements whose progress changed (`progressChanged`), the recipes
     /// unlocked and the announcements, for their client and everyone's.
@@ -180,6 +187,14 @@ impl adv::World for View<'_, '_> {
             "block" => items.block_tags.get(tag).is_some_and(|t| t.contains(id)),
             "entity_type" => self.0.res.mob_data().entity_has(tag, id),
             "worldgen/biome" => self.0.res.mob_data().biome_has(tag, id),
+            "damage_type" => self
+                .0
+                .res
+                .stations()
+                .enchantments
+                .damage_tags
+                .get(tag)
+                .is_some_and(|t| t.contains(id)),
             _ => false,
         }
     }
@@ -524,6 +539,7 @@ impl Game<'_> {
                     frame: d.frame,
                     title: text_of(&d.title),
                     slide: Slide::default(),
+                    slot: None,
                     recipes: Vec::new(),
                     changed: false,
                     last_changed: 0,
@@ -647,6 +663,28 @@ impl Game<'_> {
             };
             adv::conditions(&c["player"], &ctx, w)
         });
+        // ServerPlayer.onEffectAdded and onEffectsRemoved keep the start of a
+        // levitation; tick fires LEVITATION while there is one.
+        let levitating = self
+            .potions
+            .effects
+            .list
+            .iter()
+            .any(|e| e.id == "levitation");
+        match (levitating, self.adv.levitation) {
+            (true, None) => {
+                let at = self
+                    .player
+                    .as_ref()
+                    .map(|p| [p.position.x, p.position.y, p.position.z]);
+                self.adv.levitation = at.map(|at| (at, self.ticks));
+            }
+            (false, Some(_)) => self.adv.levitation = None,
+            _ => {}
+        }
+        if let Some((start, since)) = self.adv.levitation {
+            self.trigger_levitation(start, (self.ticks - since) as i64);
+        }
         if self.ticks.is_multiple_of(20) {
             let me = self.player_entity();
             self.trigger("minecraft:location", |c, w| {
@@ -681,6 +719,136 @@ impl Game<'_> {
             adv::conditions(&c["player"], &pctx, w) && adv::conditions(&c[&key], &ectx, w)
         });
     }
+    /// `KilledByArrowTrigger`: what the arrow killed and the weapon it came from.
+    pub(super) fn trigger_killed_by_arrow(
+        &mut self,
+        victims: &[EntityView],
+        weapon: Option<&ItemStack>,
+    ) {
+        let me = self.player_entity();
+        let victims = victims.to_vec();
+        let weapon = weapon.map(item_view);
+        self.trigger("minecraft:killed_by_arrow", move |c, w| {
+            adv::killed_by_arrow(c, &me, &victims, weapon.as_ref(), w)
+        });
+    }
+    /// `LevitationTrigger`: how far the player rose from where it started
+    /// levitating, and for how long.
+    fn trigger_levitation(&mut self, start: [f64; 3], duration: i64) {
+        let me = self.player_entity();
+        self.trigger("minecraft:levitation", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && (c["distance"].is_null() || adv::distance(&c["distance"], start, me.position))
+                && adv::range_i(&c["duration"], duration)
+        });
+    }
+    /// `ServerPlayer.updateUsingItem`: USING_ITEM for the item in use, with
+    /// what the player looks at (`PlayerPredicate.lookingAt`).
+    pub(super) fn trigger_using_item(&mut self, stack: &ItemStack) {
+        if self.remote.is_some() || self.no_player_here() {
+            return;
+        }
+        let mut me = self.player_entity();
+        me.looking_at = self.looking_at_entity().map(Box::new);
+        let it = item_view(stack);
+        self.trigger("minecraft:using_item", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w) && adv::item(&c["item"], &it, w)
+        });
+    }
+    /// The mob a 100 block ray from the eyes meets first, if no block is in
+    /// the way (`ProjectileUtil.getEntityHitResult` and `hasLineOfSight`).
+    fn looking_at_entity(&self) -> Option<EntityView> {
+        let eye = self.eye_position()?;
+        let dir = super::view_vector(self.yaw, self.pitch);
+        let (m, _) = self
+            .mobs
+            .iter()
+            .filter(|m| m.alive())
+            .filter_map(|m| Some((m, super::ray_box(eye, dir, 100.0, m.bounds())?)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))?;
+        // `LivingEntity.hasLineOfSight`: eye to the target's eye height,
+        // `ClipContext.Block.COLLIDER`, no fluids, within 128 blocks.
+        let from = Vec3::new(eye[0], eye[1], eye[2]);
+        let to = Vec3::new(m.position.x, m.eye_y(), m.position.z);
+        let world = self.mob_world_base(&[]);
+        let clear = to.distance(from) <= 128.0 && world.clear_between(from, to, false);
+        clear.then(|| self.mob_entity(m))
+    }
+    /// `PlayerHurtEntityTrigger`: the player, the damage and the victim.
+    pub(super) fn trigger_player_hurt_entity(
+        &mut self,
+        victim: &EntityView,
+        damage: &adv::DamageView,
+    ) {
+        let me = self.player_entity();
+        let (victim, damage) = (victim.clone(), damage.clone());
+        self.trigger("minecraft:player_hurt_entity", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let vctx = adv::Entities {
+                this: Some(&victim),
+                ..pctx
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::damage(&c["damage"], &damage, w, me.position)
+                && adv::conditions(&c["entity"], &vctx, w)
+        });
+    }
+    /// The player's hit on `victim` as `LivingEntity.hurtServer` reports it:
+    /// `kind` damage of `amount` from `direct` (the player's own hand when
+    /// `None`), nothing blocked.
+    pub(super) fn player_hit(
+        &mut self,
+        victim: &EntityView,
+        kind: &str,
+        direct: Option<EntityView>,
+        amount: f32,
+    ) {
+        let me = self.player_entity();
+        self.trigger_player_hurt_entity(
+            victim,
+            &adv::DamageView {
+                kind: kind.to_owned(),
+                is_direct: direct.is_none(),
+                direct: direct.or_else(|| Some(me.clone())),
+                source: Some(me),
+                original: amount,
+                actual: amount,
+                blocked: false,
+            },
+        );
+    }
+    /// `EntityHurtPlayerTrigger`: the player and the damage it took.
+    pub(super) fn trigger_entity_hurt_player(&mut self, damage: &adv::DamageView) {
+        let me = self.player_entity();
+        let damage = damage.clone();
+        self.trigger("minecraft:entity_hurt_player", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::damage(&c["damage"], &damage, w, me.position)
+        });
+    }
     /// A player condition plus one item (`item` key).
     pub(super) fn trigger_item(&mut self, name: &str, stack: &ItemStack) {
         let me = self.player_entity();
@@ -707,6 +875,101 @@ impl Game<'_> {
         let me = self.player_entity();
         let it = item_view(stack);
         self.trigger(name, |c, w| adv::item_entity(c, &me, target, &it, w));
+    }
+    /// `ConstructBeaconTrigger`: the pyramid levels of the new beacon.
+    pub(super) fn trigger_construct_beacon(&mut self, levels: i32) {
+        let me = self.player_entity();
+        self.trigger("minecraft:construct_beacon", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w) && adv::range_i(&c["level"], i64::from(levels))
+        });
+    }
+    /// `EnchantedItemTrigger`: the enchanted item and the levels it cost.
+    pub(super) fn trigger_enchanted_item(&mut self, stack: &ItemStack, levels: i32) {
+        let me = self.player_entity();
+        let it = item_view(stack);
+        self.trigger("minecraft:enchanted_item", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::item(&c["item"], &it, w)
+                && adv::range_i(&c["levels"], i64::from(levels))
+        });
+    }
+    /// `BrewedPotionTrigger`: the potion contents of a stack taken from a
+    /// brewing stand.
+    pub(super) fn trigger_brewed_potion(&mut self, stack: &ItemStack) {
+        let me = self.player_entity();
+        let potion = stack.potion().map(str::to_owned);
+        self.trigger("minecraft:brewed_potion", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::potions(&c["potion"], potion.as_deref(), w)
+        });
+    }
+    /// `TradeTrigger`: the villager and the item the trade gave.
+    pub(super) fn trigger_trade(&mut self, villager: &EntityView, stack: &ItemStack) {
+        let me = self.player_entity();
+        let villager = villager.clone();
+        let it = item_view(stack);
+        self.trigger("minecraft:villager_trade", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let vctx = adv::Entities {
+                this: Some(&villager),
+                ..pctx
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::conditions(&c["villager"], &vctx, w)
+                && adv::item(&c["item"], &it, w)
+        });
+    }
+    /// `FishingRodHookedTrigger`: the rod, what the hook is in (or the hook)
+    /// and the items it caught.
+    pub(super) fn trigger_fishing_rod_hooked(
+        &mut self,
+        rod: &ItemStack,
+        hooked: &EntityView,
+        items: &[ItemStack],
+    ) {
+        let me = self.player_entity();
+        let rod = item_view(rod);
+        let hooked = hooked.clone();
+        let items: Vec<ItemView> = items.iter().map(item_view).collect();
+        self.trigger("minecraft:fishing_rod_hooked", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let ectx = adv::Entities {
+                this: Some(&hooked),
+                ..pctx
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::item(&c["rod"], &rod, w)
+                && adv::conditions(&c["entity"], &ectx, w)
+                && (c["item"].is_null() || items.iter().any(|i| adv::item(&c["item"], i, w)))
+        });
     }
     /// `EnterBlockTrigger`: the block, its state properties and the player.
     pub(super) fn trigger_enter_block(&mut self, state: horizon_world::registry::BlockStateId) {
@@ -806,58 +1069,105 @@ impl Game<'_> {
             c["from"].as_str().is_none_or(|f| f == from) && c["to"].as_str().is_none_or(|t| t == to)
         });
     }
-    /// `ToastManager` with the `AdvancementToast` and the `RecipeToast`,
-    /// one at a time.
-    pub(super) fn draw_toasts(&mut self, batch: &mut HudBatch) {
+    /// `ToastManager.SLOT_COUNT`.
+    pub(super) const TOAST_SLOTS: usize = 5;
+    /// `ToastManager.update` and `extractRenderState` for the `AdvancementToast`s and
+    /// `RecipeToast`s: up to five stack in 32-pixel slots, the rest queue. `hidden` (F1)
+    /// keeps them timing out without drawing them.
+    pub(super) fn draw_toasts(&mut self, batch: &mut HudBatch, hidden: bool) {
         let multiplier = f64::from(self.settings.notification_display_time);
-        let Some(t) = self.adv.toasts.front_mut() else {
-            return;
-        };
-        let first = t.slide.origin.is_none();
-        let origin = *t.slide.origin.get_or_insert_with(Instant::now);
-        let now = origin.elapsed().as_millis() as i64;
-        let mut slide = std::mem::take(&mut t.slide);
-        let (sound, finished) = slide.update(now, |fully| t.wants_show(fully, multiplier));
-        t.slide = slide;
-        if finished {
-            self.adv.toasts.pop_front();
+        let mut sound_played = false;
+        let mut i = 0;
+        while i < self.adv.toasts.len() {
+            let t = &mut self.adv.toasts[i];
+            if t.slot.is_none() {
+                i += 1;
+                continue;
+            }
+            let origin = *t.slide.origin.get_or_insert_with(Instant::now);
+            let now = origin.elapsed().as_millis() as i64;
+            let mut slide = std::mem::take(&mut t.slide);
+            let (sound, finished) = slide.update(now, |fully| t.wants_show(fully, multiplier));
+            t.slide = slide;
+            if finished {
+                self.adv.toasts.remove(i);
+                continue;
+            }
+            // Only the first visibility change of an update plays its sound.
+            if let Some(show) = sound
+                && !std::mem::replace(&mut sound_played, true)
+            {
+                let event = if show { "ui.toast.in" } else { "ui.toast.out" };
+                self.audio
+                    .play(&format!("minecraft:{event}"), None, 1.0, 1.0);
+            }
+            i += 1;
+        }
+        // The queued toasts take the free slots in order; a challenge's own sound
+        // plays once as it leaves the queue.
+        let mut used = self.toast_slots_used();
+        let mut challenge_sound = false;
+        for t in &mut self.adv.toasts {
+            if t.slot.is_some() {
+                continue;
+            }
+            let Some(slot) = (0..Self::TOAST_SLOTS).find(|s| used & (1 << s) == 0) else {
+                break;
+            };
+            used |= 1 << slot;
+            t.slot = Some(slot);
+            challenge_sound |= !t.is_recipe() && t.frame == Frame::Challenge;
+        }
+        if challenge_sound {
+            self.audio
+                .play("minecraft:ui.toast.challenge_complete", None, 1.0, 1.0);
+        }
+        if hidden {
             return;
         }
+        for i in 0..self.adv.toasts.len() {
+            if let Some(slot) = self.adv.toasts[i].slot {
+                self.draw_toast(batch, i, 32.0 * slot as f32, multiplier);
+            }
+        }
+    }
+    /// The slots held by shown advancement, recipe and pack toasts, as bits.
+    pub(super) fn toast_slots_used(&self) -> u32 {
+        let packs = self.server_packs.toast_slots();
+        self.adv
+            .toasts
+            .iter()
+            .filter_map(|t| t.slot)
+            .chain(packs)
+            .fold(0, |used, slot| used | 1 << slot)
+    }
+    /// The `AdvancementToast` or `RecipeToast` at `index` in its slot at `y`.
+    fn draw_toast(&mut self, batch: &mut HudBatch, index: usize, y: f32, multiplier: f64) {
+        let t = &self.adv.toasts[index];
         let x = batch.width - 160.0 * t.slide.portion;
         let fully_for = t.slide.fully_for;
         let (title, frame, icon) = (t.title.clone(), t.frame, t.icon.clone());
         let recipe = t
             .is_recipe()
             .then(|| t.recipes[t.displayed_recipe(fully_for, multiplier)].clone());
-        // ToastManager.update: the sound of the new visibility, and a
-        // challenge's own sound as it leaves the queue.
-        if let Some(show) = sound {
-            let event = if show { "ui.toast.in" } else { "ui.toast.out" };
-            self.audio
-                .play(&format!("minecraft:{event}"), None, 1.0, 1.0);
-        }
-        if first && recipe.is_none() && frame == Frame::Challenge {
-            self.audio
-                .play("minecraft:ui.toast.challenge_complete", None, 1.0, 1.0);
-        }
         if let Some((station, item)) = recipe {
             // RecipeToast: black description under a purple title, the
             // station at 0.6 scale in the corner over the cycling result.
             let atlas = &self.gui.atlas;
-            batch.sprite(atlas, "gui/sprites/toast/recipe", x, 0.0);
+            batch.sprite(atlas, "gui/sprites/toast/recipe", x, y);
             let title = self.translate("recipe.toast.title", "New Recipe(s) Unlocked!");
             let description = self.translate("recipe.toast.description", "Check your recipe book");
             let atlas = &self.gui.atlas;
-            batch.text(atlas, &title, x + 30.0, 7.0, 0xFF50_0050, false);
-            batch.text(atlas, &description, x + 30.0, 18.0, 0xFF00_0000, false);
+            batch.text(atlas, &title, x + 30.0, y + 7.0, 0xFF50_0050, false);
+            batch.text(atlas, &description, x + 30.0, y + 18.0, 0xFF00_0000, false);
             let start = batch.vertices.len();
-            self.draw_item_model(batch, &ItemStack::new(&station, 1), x + 3.0, 3.0);
-            batch.scale_since(start, x, 0.0, 0.6, 0.6);
-            self.draw_item_model(batch, &item, x + 8.0, 8.0);
+            self.draw_item_model(batch, &ItemStack::new(&station, 1), x + 3.0, y + 3.0);
+            batch.scale_since(start, x, y, 0.6, 0.6);
+            self.draw_item_model(batch, &item, x + 8.0, y + 8.0);
             return;
         }
         let atlas = &self.gui.atlas;
-        batch.sprite(atlas, "gui/sprites/toast/advancement", x, 0.0);
+        batch.sprite(atlas, "gui/sprites/toast/advancement", x, y);
         let (key, color) = match frame {
             Frame::Task => ("advancements.toast.task", 0xFF00_FFFF),
             Frame::Goal => ("advancements.toast.goal", 0xFF00_FFFF),
@@ -867,12 +1177,12 @@ impl Game<'_> {
             atlas,
             &Text::translate(key, &[]),
             x + 30.0,
-            7.0,
+            y + 7.0,
             color,
             false,
         );
-        batch.text_styled(atlas, &title, x + 30.0, 18.0, u32::MAX, false);
-        self.draw_item(batch, &ItemStack::new(&icon, 1), x + 8.0, 8.0);
+        batch.text_styled(atlas, &title, x + 30.0, y + 18.0, u32::MAX, false);
+        self.draw_item(batch, &ItemStack::new(&icon, 1), x + 8.0, y + 8.0);
     }
 }
 /// `Advancement.name`: the bracketed title in the frame's colour, with the
@@ -1053,6 +1363,7 @@ impl Game<'_> {
                     frame: d.frame,
                     title: text_of(&d.title),
                     slide: Slide::default(),
+                    slot: None,
                     recipes: Vec::new(),
                     changed: false,
                     last_changed: 0,

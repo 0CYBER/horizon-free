@@ -105,6 +105,7 @@ impl Game<'_> {
         match ty.trim_start_matches("minecraft:") {
             "player_attack" => DamageKind::PlayerAttack,
             "mace_smash" => DamageKind::MaceSmash,
+            "spear" => DamageKind::Spear,
             "mob_attack" | "mob_attack_no_aggro" => DamageKind::MobAttack,
             "arrow" => DamageKind::Arrow,
             "thrown" | "trident" | "mob_projectile" => DamageKind::Thrown,
@@ -115,9 +116,12 @@ impl Game<'_> {
             "in_fire" | "campfire" | "hot_floor" => DamageKind::InFire,
             "lava" => DamageKind::Lava,
             "drown" => DamageKind::Drown,
+            "dry_out" => DamageKind::DryOut,
             "magic" | "indirect_magic" | "dragon_breath" => DamageKind::Magic,
             "sting" => DamageKind::Sting,
-            "cactus" | "sweet_berry_bush" => DamageKind::Cactus,
+            "cactus" => DamageKind::Cactus,
+            "sweet_berry_bush" => DamageKind::SweetBerryBush,
+            "freeze" => DamageKind::Freeze,
             "in_wall" => DamageKind::InWall,
             "thorns" => DamageKind::Thorns,
             _ => DamageKind::Generic,
@@ -140,27 +144,37 @@ impl Game<'_> {
             Some(Arg::Entity(_)) => self.entities(ctx, "entity", false)?.first().copied(),
             _ => None,
         };
+        let cause = match ctx.get("cause") {
+            Some(Arg::Entity(_)) => self.entities(ctx, "cause", false)?.first().copied(),
+            _ => None,
+        };
         let from = match ctx.get("location") {
             Some(Arg::Coords(_)) => self.position_arg(ctx, "location"),
             _ => by.and_then(|t| self.target_position(t)),
         };
         let hurt = match target {
+            // The causing mob is the one the hit is credited to and thorns
+            // answer; the source position gives the knockback its direction.
             Target::Player => {
-                if self.creative || self.spectator() {
+                // `DamageSource(type, cause, by)`: the death message names the
+                // causing entity, else the direct one. A mob is noted by
+                // `hurt_player_from`, a player here.
+                if let Some(t @ (Target::Player | Target::Guest(_))) = cause.or(by) {
+                    let name = self.target_name(t);
+                    self.note_direct_entity(&ty, name);
+                }
+                if self.spectator() {
                     false
-                } else if let Some(player) = self.player.as_mut() {
-                    match self.motion.health.damage.id(&ty) {
-                        Some(id) => player
-                            .hurt(&self.motion.health, self.world.health_rules, id, amount)
-                            .unwrap_or(false),
-                        None => false,
-                    }
                 } else {
-                    false
+                    let attacker = match cause.or(by) {
+                        Some(Target::Mob(i)) => Some(Some(i)),
+                        _ => Some(None),
+                    };
+                    self.hurt_player_from(amount, from, &ty, attacker)
                 }
             }
             Target::Mob(id) => {
-                let attacker = by.and_then(|t| match t {
+                let attacker = cause.or(by).and_then(|t| match t {
                     Target::Player => Some(Who::Player),
                     Target::Mob(i) => Some(Who::Mob(i)),
                     _ => None,
@@ -301,9 +315,18 @@ impl Game<'_> {
             float("minVolume", 0.0),
         );
         let range = if volume > 1.0 { 16.0 * volume } else { 16.0 };
+        // PlaySoundCommand: one seed for every player.
+        let seed = self.world.random.next_long();
+        let here = self.dim.id();
         let mut tracker = Tracker::default();
         for t in targets {
-            if t != Target::Player {
+            if !matches!(t, Target::Player | Target::Guest(_)) {
+                continue;
+            }
+            // Only players in the source's level hear it.
+            if let Target::Guest(conn) = t
+                && self.command_guest(conn).is_none_or(|g| g.dimension != here)
+            {
                 continue;
             }
             let Some(p) = self.target_position(t) else {
@@ -327,8 +350,26 @@ impl Game<'_> {
             } else {
                 (pos, volume)
             };
-            self.audio.play_on(source, &sound, Some(at), v, pitch);
-            tracker.mark(&holder(Text::literal(self.acting_player_name())));
+            // The connection is sent the sound; the window's own player
+            // plays it.
+            let guest = match t {
+                Target::Guest(conn) => Some(conn),
+                _ => self.lan_acting,
+            };
+            match guest.and_then(|conn| Some((conn, self.lan.as_ref()?))) {
+                Some((conn, host)) => {
+                    let packet = host
+                        .hub
+                        .sound_packet(&sound, at, v, pitch, source as i32, seed);
+                    if t == Target::Player {
+                        self.guest_packets.push(packet);
+                    } else {
+                        host.hub.send_to(conn, &packet);
+                    }
+                }
+                None => self.audio.play_on(source, &sound, Some(at), v, pitch),
+            }
+            tracker.mark(&holder(self.target_name(t)));
         }
         let name = Text::literal(sound.clone());
         let (message, total) = tracker.message(
@@ -605,8 +646,10 @@ impl Game<'_> {
         let reached = reached.len() as i32;
         if !local {
         } else if count <= 0 {
-            // No count: one particle with the delta as velocity.
-            self.particles.create(&options, pos, delta);
+            // handleParticleEvent, count 0: one particle, the speed times
+            // the delta as velocity (both sent as floats, multiplied as floats).
+            self.particles
+                .create(&options, pos, delta.map(|d| f64::from(speed * d as f32)));
         } else {
             for _ in 0..count {
                 let r = self.particles.random();
@@ -1178,7 +1221,7 @@ impl Game<'_> {
     /// LivingEntity.stopRiding for a mob: off its vehicle
     /// (Entity.removePassenger), then to where the vehicle lets it out
     /// (LivingEntity.dismountVehicle).
-    fn dismount_mob(&mut self, rider: u32) {
+    pub(in crate::game) fn dismount_mob(&mut self, rider: u32) {
         let Some(i) = self.mobs.iter().position(|m| m.id == rider) else {
             return;
         };

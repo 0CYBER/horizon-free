@@ -74,6 +74,30 @@ pub fn head_block(m: &Mob) -> [i32; 3] {
 /// the dropped seed and the water malus.
 pub fn ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
     use super::path::PathType;
+    let current = state(m);
+    animate(m);
+    if current == DIGGING && now(m) == m.extra.ints[3] {
+        let h = head_block(m);
+        events.push(MobEvent::GiftLoot {
+            mob: m.id,
+            table: "minecraft:gameplay/sniffer_digging",
+            at: [f64::from(h[0]), f64::from(h[1]), f64::from(h[2])],
+        });
+        events.push(MobEvent::Sound(
+            "entity.sniffer.drop_seed",
+            m.center(),
+            1.0,
+            1.0,
+        ));
+    }
+    // The searching sound is the client's (`playSearchingSound`).
+    // onPathfindingStart / Done: water only blocks the way while it is dry.
+    let wet = m.fluids.in_water || m.fire_ticks > 0;
+    m.set_malus(PathType::Water, if wet { 0.0 } else { -1.0 });
+}
+/// `Sniffer.onSyncedDataUpdated(DATA_STATE)`: the animation states of the
+/// state it changed to (on a client, each tick for the state it has).
+pub fn animate(m: &mut Mob) {
     let age = m.age as f32;
     let current = state(m);
     if current != m.extra.scratch[0] as u8 {
@@ -91,23 +115,6 @@ pub fn ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
         }
         m.extra.scratch[0] = i32::from(current);
     }
-    if current == DIGGING && now(m) == m.extra.ints[3] {
-        let h = head_block(m);
-        events.push(MobEvent::GiftLoot {
-            table: "minecraft:gameplay/sniffer_digging",
-            at: [f64::from(h[0]), f64::from(h[1]), f64::from(h[2])],
-        });
-        events.push(MobEvent::Sound(
-            "entity.sniffer.drop_seed",
-            m.center(),
-            1.0,
-            1.0,
-        ));
-    }
-    // The searching sound is the client's (`playSearchingSound`).
-    // onPathfindingStart / Done: water only blocks the way while it is dry.
-    let wet = m.fluids.in_water || m.fire_ticks > 0;
-    m.set_malus(PathType::Water, if wet { 0.0 } else { -1.0 });
 }
 /// The brain memory holding the explored positions
 /// (`SNIFFER_EXPLORED_POSITIONS`).

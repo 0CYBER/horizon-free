@@ -1,7 +1,7 @@
 //! Creepers (swelling, explosions) and spiders (wall climbing, daylight
 //! neutrality, leaping).
 use super::{
-    Mob, MobEvent, MobWorld, Species, Who,
+    Damage, DamageKind, Mob, MobEvent, MobWorld, Species, Who,
     goals::{
         Avoid, AvoidEntity, Cx, Float, Goal, HurtByTarget, LeapAtTarget, LookAtPlayer, MOVE,
         MeleeAttack, NearestTarget, RandomLookAround, Stroll, goal_clone,
@@ -54,7 +54,155 @@ pub fn register(m: &mut Mob) {
             );
             m.ai.nav.kind = super::nav::NavKind::WallClimber;
         }
+        S::Silverfish => {
+            let g = &mut m.ai.goals;
+            g.add(1, Float);
+            g.add(3, SilverfishWakeUpFriends);
+            g.add(4, MeleeAttack::new(1.0, false));
+            g.add(5, SilverfishMergeWithStone::default());
+            m.ai.targets.add(1, HurtByTarget::new().alert());
+            m.ai.targets.add(2, NearestTarget::player(true));
+        }
         _ => {}
+    }
+}
+/// `Silverfish.hurtServer`: a hit by an entity (or magic damage) starts the
+/// countdown of its wake-up goal, kept in `extra.counter`.
+pub fn silverfish_hurt(m: &mut Mob, source: &Damage) {
+    if (source.attacker.is_some() || source.kind == DamageKind::Magic) && m.extra.counter == 0 {
+        m.extra.counter = super::goals::reduced(20);
+    }
+}
+/// `Silverfish.SilverfishWakeUpFriendsGoal`: 20 ticks after being hurt, the
+/// infested blocks within 10 blocks sideways and 5 up or down break (or turn
+/// back into stone with mob griefing off), until a coin flip stops it.
+#[derive(Clone, Debug)]
+struct SilverfishWakeUpFriends;
+impl Goal for SilverfishWakeUpFriends {
+    goal_clone!();
+    fn name(&self) -> &'static str {
+        "SilverfishWakeUpFriendsGoal"
+    }
+    fn flags(&self) -> u8 {
+        0
+    }
+    fn can_use(&mut self, m: &mut Mob, _cx: &mut Cx) -> bool {
+        m.extra.counter > 0
+    }
+    fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
+        m.extra.counter -= 1;
+        if m.extra.counter > 0 {
+            return;
+        }
+        let base = [
+            m.position.x.floor() as i32,
+            m.position.y.floor() as i32,
+            m.position.z.floor() as i32,
+        ];
+        // The loops' offsets go 0, 1, -1, 2, -2 and so on.
+        let offsets = |limit: i32| std::iter::once(0).chain((1..=limit).flat_map(|i| [i, -i]));
+        for y in offsets(5) {
+            for x in offsets(10) {
+                for z in offsets(10) {
+                    let pos = [base[0] + x, base[1] + y, base[2] + z];
+                    if !cx
+                        .w
+                        .block_name(pos[0], pos[1], pos[2])
+                        .starts_with("minecraft:infested_")
+                    {
+                        continue;
+                    }
+                    if cx.w.mob_griefing {
+                        cx.events.push(MobEvent::BreakBlock { pos, drop: true });
+                    } else {
+                        cx.events.push(MobEvent::Infest {
+                            pos,
+                            infested: false,
+                            poof: None,
+                        });
+                    }
+                    if m.random.next_boolean() {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+/// `Silverfish.SilverfishMergeWithStoneGoal`: a stroll that, now and then
+/// with mob griefing on, hides in a stone block next to the silverfish.
+#[derive(Clone, Debug)]
+struct SilverfishMergeWithStone {
+    stroll: Stroll,
+    merge: Option<[i32; 3]>,
+}
+impl Default for SilverfishMergeWithStone {
+    fn default() -> Self {
+        Self {
+            stroll: Stroll::new(1.0).interval(10),
+            merge: None,
+        }
+    }
+}
+impl Goal for SilverfishMergeWithStone {
+    goal_clone!();
+    fn name(&self) -> &'static str {
+        "SilverfishMergeWithStoneGoal"
+    }
+    fn flags(&self) -> u8 {
+        MOVE
+    }
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if m.ai.target.is_some() || !m.ai.nav.is_done() {
+            return false;
+        }
+        if cx.w.mob_griefing
+            && m.random
+                .next_int_bound(super::goals::reduced(10))
+                .unwrap_or(1)
+                == 0
+        {
+            // Direction.getRandom: down, up, north, south, west, east.
+            const DIRECTIONS: [[i32; 3]; 6] = [
+                [0, -1, 0],
+                [0, 1, 0],
+                [0, 0, -1],
+                [0, 0, 1],
+                [-1, 0, 0],
+                [1, 0, 0],
+            ];
+            let d = DIRECTIONS[m.random.next_int_bound(6).unwrap_or(0) as usize];
+            let pos = [
+                m.position.x.floor() as i32 + d[0],
+                (m.position.y + 0.5).floor() as i32 + d[1],
+                m.position.z.floor() as i32 + d[2],
+            ];
+            if super::spawn_selection::infested_host(cx.w.block_name(pos[0], pos[1], pos[2])) {
+                self.merge = Some(pos);
+                return true;
+            }
+        }
+        self.merge = None;
+        self.stroll.can_use(m, cx)
+    }
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        self.merge.is_none() && self.stroll.can_continue(m, cx)
+    }
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let Some(pos) = self.merge else {
+            return self.stroll.start(m, cx);
+        };
+        if super::spawn_selection::infested_host(cx.w.block_name(pos[0], pos[1], pos[2])) {
+            cx.events.push(MobEvent::Infest {
+                pos,
+                infested: true,
+                poof: Some(m.id),
+            });
+            m.removed = true;
+        }
+    }
+    fn stop(&mut self, m: &mut Mob, cx: &mut Cx) {
+        self.stroll.stop(m, cx);
     }
 }
 /// Entity.getLightLevelDependentMagicValue at the eye.
@@ -77,7 +225,8 @@ impl Goal for SpiderAttack {
         self.0.flags()
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
-        self.0.can_use(m, cx)
+        // SpiderAttackGoal.canUse: not while it carries a rider.
+        self.0.can_use(m, cx) && m.extra.rider.is_none()
     }
     fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
         if mob_brightness(m, cx.w) >= 0.5 && m.random.next_int_bound(100).unwrap_or(1) == 0 {
@@ -177,9 +326,14 @@ pub fn creeper_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
     if m.swell >= 30 {
         m.swell = 30;
         let radius = if m.extra.charged { 6.0 } else { 3.0 };
+        events.push(MobEvent::ExplosionSource {
+            mob: m.id,
+            charged: m.extra.charged,
+        });
         events.push(MobEvent::Explode(
             [m.position.x, m.position.y, m.position.z],
             radius,
+            m.species(),
         ));
         m.removed = true;
     }

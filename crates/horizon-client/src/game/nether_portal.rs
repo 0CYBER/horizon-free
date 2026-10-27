@@ -2,7 +2,9 @@
 //! `Entity.setAsInsidePortal` / `handlePortal` with `PortalProcessor`,
 //! `NetherPortalBlock.getPortalTransitionTime` and `getPortalDestination`
 //! (`PortalForcer` through `horizon_world::level::portal_travel`), and
-//! `LocalPlayer.handlePortalTransitionEffect`.
+//! `LocalPlayer.handlePortalTransitionEffect`. Items and mobs also go through
+//! End portals here (`EndPortalBlock.entityInside` / `getPortalDestination`);
+//! the player's End portals are game/end.rs's.
 //!
 //! Only one dimension is loaded at a time. The player's destination is found
 //! once the other dimension has loaded around it. An item or mob that goes
@@ -12,7 +14,7 @@ use super::{Dim, Game, Screen};
 use horizon_client::Result;
 use horizon_client::nether_portal::PortalState;
 use horizon_core::{
-    geometry::{Axis, Vec3},
+    geometry::{Aabb, Axis, Vec3},
     position::BlockPos,
     random::RandomSource,
 };
@@ -40,6 +42,32 @@ pub(super) struct Plan {
     offset: Vec3,
     width: f32,
     height: f32,
+    /// Through an End portal: `approximate` is the End's spawn point, or the
+    /// Overworld's shared spawn.
+    end: bool,
+}
+
+impl Plan {
+    /// `EndPortalBlock.getPortalDestination` for an entity other than a
+    /// player in `from`: the End's spawn point, or out of the End the
+    /// Overworld's shared spawn `world_spawn`.
+    fn end_portal(from: Dim, world_spawn: BlockPos, width: f32, height: f32) -> Self {
+        let (dim, approximate) = if from == Dim::End {
+            (Dim::Overworld, world_spawn)
+        } else {
+            let [x, y, z] = super::end::END_SPAWN;
+            (Dim::End, BlockPos::new(x, y, z))
+        };
+        Self {
+            dim,
+            approximate,
+            entry_x_axis: true,
+            offset: Vec3::ZERO,
+            width,
+            height,
+            end: true,
+        }
+    }
 }
 
 /// An entity on its way to a dimension that isn't loaded.
@@ -80,6 +108,89 @@ fn rotate_y(v: Vec3, degrees: f32) -> Vec3 {
 }
 fn doubles(values: [f64; 3]) -> Tag {
     Tag::List(values.iter().map(|v| Tag::Double(v.to_bits())).collect())
+}
+/// Whether a `width` by `height` box moving from `from` to `to` meets the End
+/// portal at `pos`: `Entity.collidedWithShapeMovingFrom` against its
+/// entity-inside shape, y 6/16..12/16 of the block.
+fn touches_end_portal(from: Vec3, to: Vec3, width: f32, height: f32, pos: BlockPos) -> bool {
+    let half = f64::from(width) / 2.0;
+    let start = Aabb::new(
+        Vec3::new(from.x - half, from.y, from.z - half),
+        Vec3::new(from.x + half, from.y + f64::from(height), from.z + half),
+    );
+    let (x, y, z) = (f64::from(pos.x), f64::from(pos.y), f64::from(pos.z));
+    let shape = Aabb::new(
+        Vec3::new(x, y + 0.375, z),
+        Vec3::new(x + 1.0, y + 0.75, z + 1.0),
+    );
+    start.collided_along_vector(to.subtract(from), &[shape])
+}
+/// `PositionMoveRotation.calculateAbsolute` for an End portal's transition
+/// of an entity facing `[yaw, pitch]`: into the End it faces west and keeps
+/// its pitch (`Relative.X_ROT`); out of it both turn by the world spawn's
+/// angles (`Relative.ROTATION`). The pitch stays within ±90.
+fn end_portal_rotation(into_end: bool, [yaw, pitch]: [f32; 2], spawn: [f32; 2]) -> [f32; 2] {
+    let (yaw, pitch) = if into_end {
+        // Direction.WEST.toYRot().
+        (90.0, pitch)
+    } else {
+        (yaw + spawn[0], pitch + spawn[1])
+    };
+    [yaw, pitch.clamp(-90.0, 90.0)]
+}
+/// A waiting entity as `horizon_portal_arrivals.dat` keeps it.
+fn arrival_tag(a: &Arrival) -> Tag {
+    let p = &a.plan;
+    Tag::compound([
+        ("dimension", Tag::String(p.dim.id().into())),
+        ("x", Tag::Int(p.approximate.x)),
+        ("y", Tag::Int(p.approximate.y)),
+        ("z", Tag::Int(p.approximate.z)),
+        ("x_axis", Tag::Int(i32::from(p.entry_x_axis))),
+        ("right", Tag::Double(p.offset.x.to_bits())),
+        ("up", Tag::Double(p.offset.y.to_bits())),
+        ("forward", Tag::Double(p.offset.z.to_bits())),
+        ("width", Tag::Float(p.width.to_bits())),
+        ("height", Tag::Float(p.height.to_bits())),
+        ("end", Tag::Int(i32::from(p.end))),
+        ("entity", a.tag.clone()),
+    ])
+}
+/// The waiting entity `arrival_tag` wrote.
+fn arrival_from_tag(a: &Tag) -> Option<Arrival> {
+    let int = |k: &str| match a.get(k) {
+        Some(Tag::Int(v)) => Some(*v),
+        _ => None,
+    };
+    let float = |k: &str| match a.get(k) {
+        Some(Tag::Float(v)) => Some(f32::from_bits(*v)),
+        _ => None,
+    };
+    let double = |k: &str| match a.get(k) {
+        Some(Tag::Double(v)) => Some(f64::from_bits(*v)),
+        _ => None,
+    };
+    let dim = Dim::from_id(&horizon_client::save::text(a.get("dimension"))?);
+    let (Some(x), Some(y), Some(z), Some(tag)) = (int("x"), int("y"), int("z"), a.get("entity"))
+    else {
+        return None;
+    };
+    Some(Arrival {
+        plan: Plan {
+            dim,
+            approximate: BlockPos::new(x, y, z),
+            entry_x_axis: int("x_axis").unwrap_or(1) != 0,
+            offset: Vec3::new(
+                double("right").unwrap_or(0.5),
+                double("up").unwrap_or(0.0),
+                double("forward").unwrap_or(0.0),
+            ),
+            width: float("width").unwrap_or(0.25),
+            height: float("height").unwrap_or(0.25),
+            end: int("end").unwrap_or(0) != 0,
+        },
+        tag: tag.clone(),
+    })
 }
 
 impl Game<'_> {
@@ -146,7 +257,54 @@ impl Game<'_> {
             offset,
             width,
             height,
+            end: false,
         }
+    }
+    /// The plan of an item or mob going through the portal block at `entry`:
+    /// an End portal's fixed destination, else the Nether portal's.
+    fn entity_plan(
+        &self,
+        entry: BlockPos,
+        at: Vec3,
+        width: f32,
+        height: f32,
+        reset_forward: bool,
+    ) -> Plan {
+        if !self.is_end_portal(self.world.block(entry.x, entry.y, entry.z)) {
+            return self.portal_plan(entry, at, width, height, reset_forward);
+        }
+        let spawn = self.level.world_spawn.unwrap_or_else(|| {
+            self.spawn.map_or([0, 64, 0], |s| {
+                [s.x.floor() as i32, s.y.floor() as i32, s.z.floor() as i32]
+            })
+        });
+        Plan::end_portal(
+            self.dim,
+            BlockPos::new(spawn[0], spawn[1], spawn[2]),
+            width,
+            height,
+        )
+    }
+    fn is_end_portal(&self, state: horizon_world::registry::BlockStateId) -> bool {
+        &*self.res.facts().get(state).name == "minecraft:end_portal"
+    }
+    /// Where an item or mob through an End portal lands once `plan`'s level
+    /// has loaded around it: the bottom centre of the End's spawn point,
+    /// above the platform built below it (`EndPlatformFeature.createEndPlatform`);
+    /// out of the End, the top of the shared spawn's column
+    /// (`Entity.adjustSpawnLocation`).
+    fn end_portal_exit(&mut self, plan: &Plan) -> Vec3 {
+        let p = plan.approximate;
+        let centre = Vec3::new(f64::from(p.x) + 0.5, f64::from(p.y), f64::from(p.z) + 0.5);
+        if plan.dim == Dim::End {
+            // In the End the arrival only builds the platform: no spawn search.
+            if let Err(e) = self.end_arrival(centre, &mut None) {
+                log::error!("End platform: {e}");
+            }
+            return centre;
+        }
+        let y = self.motion_top(p.x, p.z);
+        Vec3::new(centre.x, f64::from(y), centre.z)
     }
     /// The nether portal blocks of the chunks within `radius` of `center`
     /// (the points of interest `PortalForcer` searches): loaded chunks as
@@ -505,6 +663,17 @@ impl Game<'_> {
             );
         }
     }
+    /// `Entity.setPortalCooldown` on an entity that has just spawned in a
+    /// portal: it stands in the portal for 300 ticks without going through.
+    pub(super) fn set_portal_cooldown(&mut self, id: u32) {
+        self.portals.entities.insert(
+            id,
+            PortalState {
+                cooldown: ENTITY_DELAY,
+                process: None,
+            },
+        );
+    }
     /// `canUsePortal(false)` of a mob: alive, riding nothing, not asleep,
     /// not carrying the player, and not a boss that never travels.
     fn mob_can_use_portal(&self, m: &horizon_client::mobs::Mob) -> bool {
@@ -520,9 +689,10 @@ impl Game<'_> {
             || self.ridden_by_guest(id)
             || self.mobs.iter().any(|m| m.extra.mount == Some(id))
     }
-    /// `NetherPortalBlock.entityInside` for the items, mobs and empty boats
-    /// and minecarts that moved this tick: the portal blocks their box swept
-    /// through.
+    /// `NetherPortalBlock.entityInside` and `EndPortalBlock.entityInside`
+    /// for the items, mobs and empty boats and minecarts that moved this
+    /// tick: the portal blocks their box swept through (an End portal's
+    /// transition time is 0 too).
     pub(super) fn find_entity_portals(&mut self) {
         if self.remote.is_some() {
             return;
@@ -570,7 +740,7 @@ impl Game<'_> {
                 .set_inside(pos, ENTITY_DELAY);
         }
     }
-    /// The first nether portal block an entity box swept through
+    /// The first nether or End portal block an entity box swept through
     /// (`Entity.checkInsideBlocks`, whose first portal sets the entry).
     fn swept_portal(
         &self,
@@ -604,11 +774,9 @@ impl Game<'_> {
             bounds,
             1_000_000,
             |p, _| {
-                if self
-                    .res
-                    .behaviours()
-                    .portal_axis(self.world.block(p.x, p.y, p.z))
-                    .is_some()
+                let state = self.world.block(p.x, p.y, p.z);
+                if self.res.behaviours().portal_axis(state).is_some()
+                    || (self.is_end_portal(state) && touches_end_portal(from, to, width, height, p))
                 {
                     found = Some(p);
                     return false;
@@ -618,8 +786,8 @@ impl Game<'_> {
         );
         found
     }
-    /// Whether a section `reach` touches has a nether portal state in its
-    /// palette: without one, no block there is a portal. Palette answers are
+    /// Whether a section `reach` touches has a nether or End portal state in
+    /// its palette: without one, no block there is a portal. Palette answers are
     /// kept per chunk across ticks (`portal_sections`); a box over many
     /// sections is not checked.
     fn may_hold_portal(
@@ -656,9 +824,8 @@ impl Game<'_> {
             (z0..=z1).any(|cz| {
                 chunks.get(&(cx, cz)).is_some_and(|chunk| {
                     sections.get((cx, cz), chunk, |v| {
-                        behaviours
-                            .portal_axis(horizon_world::registry::BlockStateId(v))
-                            .is_some()
+                        let state = horizon_world::registry::BlockStateId(v);
+                        behaviours.portal_axis(state).is_some() || self.is_end_portal(state)
                     }) & y_mask
                         != 0
                 })
@@ -670,7 +837,7 @@ impl Game<'_> {
     fn send_through_portal(&mut self, id: u32, entry: BlockPos) {
         if let Some(i) = self.dropped.iter().position(|e| e.id == id) {
             let e = &self.dropped[i];
-            let plan = self.portal_plan(entry, e.position, 0.25, 0.25, false);
+            let plan = self.entity_plan(entry, e.position, 0.25, 0.25, false);
             if !self.may_enter(plan.dim) {
                 return;
             }
@@ -686,7 +853,7 @@ impl Game<'_> {
             self.portals.dirty = true;
         } else if let Some(i) = self.mobs.iter().position(|m| m.id == id) {
             let m = &self.mobs[i];
-            let plan = self.portal_plan(entry, m.position, m.width(), m.height(), true);
+            let plan = self.entity_plan(entry, m.position, m.width(), m.height(), true);
             if !self.may_enter(plan.dim) {
                 return;
             }
@@ -716,7 +883,7 @@ impl Game<'_> {
         } else if let Some(i) = self.boats.iter().position(|b| b.id == id) {
             let b = &self.boats[i];
             let (width, height) = (super::boats::WIDTH as f32, super::boats::HEIGHT as f32);
-            let plan = self.portal_plan(entry, b.position, width, height, false);
+            let plan = self.entity_plan(entry, b.position, width, height, false);
             if !self.may_enter(plan.dim) {
                 return;
             }
@@ -741,7 +908,7 @@ impl Game<'_> {
                 super::minecarts::WIDTH as f32,
                 super::minecarts::HEIGHT as f32,
             );
-            let plan = self.portal_plan(entry, c.position, width, height, false);
+            let plan = self.entity_plan(entry, c.position, width, height, false);
             if !self.may_enter(plan.dim) {
                 return;
             }
@@ -754,8 +921,8 @@ impl Game<'_> {
         }
     }
     /// Entities waiting for the loaded dimension whose exit area is loaded:
-    /// their exit portal (found or built), position, turned yaw and motion,
-    /// and portal cooldown; they join the world with the chunk entities.
+    /// their exit portal (found or built) or End destination, position,
+    /// turned yaw and motion, and portal cooldown; they join the world with the chunk entities.
     pub(super) fn resolve_arrivals(&mut self) {
         if self.remote.is_some() {
             return;
@@ -772,21 +939,28 @@ impl Game<'_> {
             }
             let Arrival { plan, mut tag } = self.portals.arrivals.remove(i);
             self.portals.dirty = true;
-            let Some(exit) = self.nether_exit_portal(&plan) else {
-                continue;
-            };
-            let (at, rotation) = self.arrival(&plan, exit);
-            let motion = rotate_y(horizon_client::entity_nbt::motion(&tag), -rotation);
+            let motion = horizon_client::entity_nbt::motion(&tag);
             let [yaw, pitch] = horizon_client::entity_nbt::rotation(&tag);
+            let (at, motion, [yaw, pitch]) = if plan.end {
+                // Relative.DELTA: the motion is kept.
+                let at = self.end_portal_exit(&plan);
+                let into_end = plan.dim == Dim::End;
+                let turn =
+                    end_portal_rotation(into_end, [yaw, pitch], self.level.world_spawn_angle);
+                (at, motion, turn)
+            } else {
+                let Some(exit) = self.nether_exit_portal(&plan) else {
+                    continue;
+                };
+                let (at, rotation) = self.arrival(&plan, exit);
+                (at, rotate_y(motion, -rotation), [yaw + rotation, pitch])
+            };
             if let Tag::Compound(c) = &mut tag {
                 c.insert("Pos".into(), doubles([at.x, at.y, at.z]));
                 c.insert("Motion".into(), doubles([motion.x, motion.y, motion.z]));
                 c.insert(
                     "Rotation".into(),
-                    Tag::List(vec![
-                        Tag::Float((yaw + rotation).to_bits()),
-                        Tag::Float(pitch.to_bits()),
-                    ]),
+                    Tag::List(vec![Tag::Float(yaw.to_bits()), Tag::Float(pitch.to_bits())]),
                 );
                 // setPortalCooldown before the teleport, copied by restoreFrom.
                 c.insert("PortalCooldown".into(), Tag::Int(ENTITY_DELAY));
@@ -823,75 +997,117 @@ impl Game<'_> {
         let Some(Tag::List(list)) = root.get("arrivals") else {
             return;
         };
-        for a in list {
-            let int = |k: &str| match a.get(k) {
-                Some(Tag::Int(v)) => Some(*v),
-                _ => None,
-            };
-            let float = |k: &str| match a.get(k) {
-                Some(Tag::Float(v)) => Some(f32::from_bits(*v)),
-                _ => None,
-            };
-            let double = |k: &str| match a.get(k) {
-                Some(Tag::Double(v)) => Some(f64::from_bits(*v)),
-                _ => None,
-            };
-            let dim = match horizon_client::save::text(a.get("dimension")).as_deref() {
-                Some("minecraft:the_nether") => Dim::Nether,
-                Some(_) => Dim::Overworld,
-                None => continue,
-            };
-            let (Some(x), Some(y), Some(z), Some(tag)) =
-                (int("x"), int("y"), int("z"), a.get("entity"))
-            else {
-                continue;
-            };
-            self.portals.arrivals.push(Arrival {
-                plan: Plan {
-                    dim,
-                    approximate: BlockPos::new(x, y, z),
-                    entry_x_axis: int("x_axis").unwrap_or(1) != 0,
-                    offset: Vec3::new(
-                        double("right").unwrap_or(0.5),
-                        double("up").unwrap_or(0.0),
-                        double("forward").unwrap_or(0.0),
-                    ),
-                    width: float("width").unwrap_or(0.25),
-                    height: float("height").unwrap_or(0.25),
-                },
-                tag: tag.clone(),
-            });
-        }
+        self.portals
+            .arrivals
+            .extend(list.iter().filter_map(arrival_from_tag));
     }
     /// Write the waiting entities when they changed.
     pub(super) fn save_portal_arrivals(&mut self) {
         if !self.portals.dirty || self.remote.is_some() {
             return;
         }
-        let list = self
-            .portals
-            .arrivals
-            .iter()
-            .map(|a| {
-                let p = &a.plan;
-                Tag::compound([
-                    ("dimension", Tag::String(p.dim.id().into())),
-                    ("x", Tag::Int(p.approximate.x)),
-                    ("y", Tag::Int(p.approximate.y)),
-                    ("z", Tag::Int(p.approximate.z)),
-                    ("x_axis", Tag::Int(i32::from(p.entry_x_axis))),
-                    ("right", Tag::Double(p.offset.x.to_bits())),
-                    ("up", Tag::Double(p.offset.y.to_bits())),
-                    ("forward", Tag::Double(p.offset.z.to_bits())),
-                    ("width", Tag::Float(p.width.to_bits())),
-                    ("height", Tag::Float(p.height.to_bits())),
-                    ("entity", a.tag.clone()),
-                ])
-            })
-            .collect();
+        let list = self.portals.arrivals.iter().map(arrival_tag).collect();
         let root = Tag::compound([("arrivals", Tag::List(list))]);
         if horizon_client::save::write_dat(&self.arrivals_path(), root).is_ok() {
             self.portals.dirty = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn end_portals_lead_to_the_end_spawn_and_back_to_the_world_spawn() {
+        let spawn = BlockPos::new(-7, 70, 12);
+        for from in [Dim::Overworld, Dim::Nether] {
+            let plan = Plan::end_portal(from, spawn, 0.9, 1.4);
+            assert_eq!(plan.dim, Dim::End);
+            assert_eq!(plan.approximate, BlockPos::new(100, 50, 0));
+            assert!(plan.end);
+        }
+        let plan = Plan::end_portal(Dim::End, spawn, 0.25, 0.25);
+        assert_eq!(plan.dim, Dim::Overworld);
+        assert_eq!(plan.approximate, spawn);
+    }
+
+    #[test]
+    fn the_end_portal_shape_takes_falling_items_and_standing_mobs() {
+        let portal = BlockPos::new(0, 100, 3);
+        let at = |y| Vec3::new(0.5, y, 3.5);
+        // A dropped item falling through the slab, or in it.
+        assert!(touches_end_portal(
+            at(100.6),
+            at(100.56),
+            0.25,
+            0.25,
+            portal
+        ));
+        // One tick's fall across the whole slab, in it at neither end.
+        assert!(touches_end_portal(at(101.0), at(99.9), 0.25, 0.25, portal));
+        // Resting below the slab (on the floor) or above it.
+        assert!(!touches_end_portal(
+            at(100.0),
+            at(100.0),
+            0.25,
+            0.25,
+            portal
+        ));
+        assert!(!touches_end_portal(
+            at(100.8),
+            at(100.8),
+            0.25,
+            0.25,
+            portal
+        ));
+        // A cow standing in the portal block.
+        assert!(touches_end_portal(at(100.0), at(100.0), 0.9, 1.4, portal));
+        // Beside it.
+        let beside = Vec3::new(2.0, 100.0, 3.5);
+        assert!(!touches_end_portal(beside, beside, 0.9, 1.4, portal));
+    }
+
+    #[test]
+    fn end_portals_turn_entities_like_their_teleport_transition() {
+        // Into the End: facing west, pitch kept.
+        assert_eq!(
+            end_portal_rotation(true, [-30.0, 20.0], [45.0, 10.0]),
+            [90.0, 20.0]
+        );
+        // Out of it: turned by the world spawn's yaw and pitch, pitch clamped.
+        assert_eq!(
+            end_portal_rotation(false, [-30.0, 20.0], [45.0, 10.0]),
+            [15.0, 30.0]
+        );
+        assert_eq!(
+            end_portal_rotation(false, [0.0, 80.0], [0.0, 30.0]),
+            [0.0, 90.0]
+        );
+    }
+
+    #[test]
+    fn waiting_arrivals_keep_their_end_destination_when_saved() {
+        let tag = Tag::compound([("id", Tag::String("minecraft:cow".into()))]);
+        for (from, dim) in [(Dim::Overworld, Dim::End), (Dim::End, Dim::Overworld)] {
+            let arrival = Arrival {
+                plan: Plan::end_portal(from, BlockPos::new(3, 64, -5), 0.9, 1.4),
+                tag: tag.clone(),
+            };
+            let back = arrival_from_tag(&arrival_tag(&arrival)).unwrap();
+            assert_eq!(back.plan.dim, dim);
+            assert_eq!(back.plan.approximate, arrival.plan.approximate);
+            assert!(back.plan.end);
+            assert_eq!(back.tag, tag);
+        }
+        // Arrivals saved before End portals were Nether portal plans.
+        let mut old = arrival_tag(&Arrival {
+            plan: Plan::end_portal(Dim::End, BlockPos::new(0, 64, 0), 0.25, 0.25),
+            tag,
+        });
+        if let Tag::Compound(c) = &mut old {
+            c.remove(&"end".into());
+        }
+        assert!(!arrival_from_tag(&old).unwrap().plan.end);
     }
 }
