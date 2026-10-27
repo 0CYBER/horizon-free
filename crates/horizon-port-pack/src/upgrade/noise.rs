@@ -102,3 +102,11 @@ fn java_sum(values: impl Iterator<Item = f64>) -> f64 {
         tmp
     }
 }
+
+/// A noise holder: an id, or inline parameters to upgrade.
+pub(super) fn noise_holder(v: &Value, report: &mut Report) -> Value {
+    match v {
+        Value::Object(_) => noise(v, report),
+        other => other.clone(),
+    }
+}
