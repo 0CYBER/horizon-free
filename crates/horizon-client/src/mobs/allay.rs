@@ -113,6 +113,18 @@ impl Goal for StayClose {
                 d >= 256.0
             })
     }
+    /// `MoveToTargetSink.reachedTarget`: the walk target it set is reached
+    /// within a Manhattan block distance of 4 (`closeEnough`).
+    fn can_continue(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        m.extra.point.is_none()
+            && deposit(m, cx).is_some_and(|p| {
+                let at = [m.position.x, m.position.y, m.position.z];
+                (0..3)
+                    .map(|i| (p[i].floor() as i32 - at[i].floor() as i32).abs())
+                    .sum::<i32>()
+                    > 4
+            })
+    }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         if let Some(p) = deposit(m, cx)
             && (m.ai.nav.is_done() || m.age.is_multiple_of(10))

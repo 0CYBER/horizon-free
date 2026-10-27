@@ -1859,6 +1859,9 @@ impl Game<'_> {
             && let Some(child) = self.mobs.iter_mut().find(|m| m.id == id)
         {
             child.extra.age = -24000;
+            // getBreedOffspring creates the baby without finalizeSpawn: it keeps
+            // the default (`classic`) sound variant.
+            child.extra.sound_variant = None;
             // A llama's baby was drawn in the parent's tick, with the
             // experience.
             if let Some(o) = llama {
