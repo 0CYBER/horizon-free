@@ -86,9 +86,11 @@ impl Game<'_> {
         };
         if let Some(strike) = self.pvp_strike()
             && self.pvp_land(&mut host, Victim::Guest(conn), &strike)
-            && strike.stops_sprint()
         {
-            self.stop_sprint_after_extra_knockback();
+            self.pvp_exhaustion();
+            if strike.stops_sprint() {
+                self.stop_sprint_after_extra_knockback();
+            }
         }
         self.lan = Some(host);
         true
@@ -106,8 +108,18 @@ impl Game<'_> {
             .map(|g| Victim::Guest(g.conn))
     }
 
+    /// `Player.attack`'s `causeFoodExhaustion(0.1F)`, charged to the attacker
+    /// (the host, or a guest swapped in) only once the hit hurt the victim.
+    pub(super) fn pvp_exhaustion(&mut self) {
+        if let Some(p) = self.player.as_mut()
+            && !self.creative
+        {
+            p.cause_food_exhaustion(0.1);
+        }
+    }
+
     /// The attacker's side of `Player.attack` (the host, or a guest swapped
-    /// in): the damage, the charge reset, the exhaustion and the swing.
+    /// in): the damage, the charge reset and the swing.
     pub(super) fn pvp_strike(&mut self) -> Option<Strike> {
         let p = self.player.as_ref()?;
         let from = [p.position.x, p.position.y, p.position.z];
@@ -116,11 +128,6 @@ impl Game<'_> {
         let (strength, knockback_attack) = self.extra_knockback("minecraft:player", scale);
         let (xd, zd) = self.extra_knockback_direction();
         self.attack_ticks = 0;
-        if let Some(p) = self.player.as_mut()
-            && !self.creative
-        {
-            p.cause_food_exhaustion(0.1);
-        }
         self.swing_arm();
         Some(Strike {
             attacker: self.lan_acting,

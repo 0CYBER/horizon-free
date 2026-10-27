@@ -291,11 +291,11 @@ pub(super) enum FightWho {
 }
 /// A player in the End as the dragon sees it.
 #[derive(Clone, Copy, Debug)]
-struct FightPlayer {
-    who: FightWho,
-    position: Vec3,
-    bounds: Aabb,
-    alive: bool,
+pub(super) struct FightPlayer {
+    pub(super) who: FightWho,
+    pub(super) position: Vec3,
+    pub(super) bounds: Aabb,
+    pub(super) alive: bool,
     creative: bool,
     spectator: bool,
 }
@@ -693,7 +693,7 @@ impl Game<'_> {
     }
     /// The players in the level the dragon sees (`level.players()`): the
     /// window's own, then every guest in the level.
-    fn fight_players(&self) -> Vec<FightPlayer> {
+    pub(super) fn fight_players(&self) -> Vec<FightPlayer> {
         let mut out = Vec::new();
         if let Some(p) = self.player.as_ref() {
             out.push(FightPlayer {
@@ -722,7 +722,7 @@ impl Game<'_> {
     }
     /// Run `f` as the fight's player `who` (a guest's turn, its knockback
     /// sent to its client).
-    fn as_fight_player(&mut self, who: FightWho, f: impl FnOnce(&mut Self)) {
+    pub(super) fn as_fight_player(&mut self, who: FightWho, f: impl FnOnce(&mut Self)) {
         match who {
             FightWho::Host => f(self),
             FightWho::Guest(conn) => {
@@ -1568,6 +1568,7 @@ impl Game<'_> {
                         age: 0,
                         duration: 200,
                         from_dragon: true,
+                        potion: None,
                     });
                 }
             }
@@ -2080,12 +2081,18 @@ impl Game<'_> {
                     age: 0,
                     duration: 600,
                     from_dragon: false,
+                    potion: None,
                 });
-                self.audio.play(
-                    "minecraft:entity.dragon_fireball.explode",
-                    Some([next.x, next.y, next.z]),
-                    1.0,
-                    1.0,
+                // DragonFireball.onHit: level event 2006 (the burst of dragon
+                // breath and the explosion sound) at its block position.
+                self.level_event_at(
+                    2006,
+                    [
+                        next.x.floor() as i32,
+                        next.y.floor() as i32,
+                        next.z.floor() as i32,
+                    ],
+                    1,
                 );
                 return false;
             }
@@ -2112,6 +2119,10 @@ impl Game<'_> {
         let mut harmed: Vec<(FightWho, f32)> = Vec::new();
         let mut clouds = std::mem::take(&mut self.breath_clouds);
         clouds.retain_mut(|c| {
+            // Lingering potions' clouds tick with the potions.
+            if c.potion.is_some() {
+                return true;
+            }
             c.age += 1;
             if c.age >= c.duration {
                 return false;
@@ -2259,8 +2270,22 @@ pub(super) struct Breath {
     pub(super) at: [f64; 3],
     pub(super) radius: f32,
     pub(super) age: i32,
-    duration: i32,
-    from_dragon: bool,
+    pub(super) duration: i32,
+    pub(super) from_dragon: bool,
+    /// A lingering potion's cloud (`ThrownLingeringPotion`): what it applies.
+    pub(super) potion: Option<super::potions::PotionCloud>,
+}
+impl Breath {
+    /// `AreaEffectCloud.isWaiting`: before its wait time (20 ticks, 10 for a
+    /// lingering potion's).
+    pub(super) fn waiting(&self) -> bool {
+        self.age
+            < if self.potion.is_some() {
+                super::potions::LINGERING_WAIT
+            } else {
+                20
+            }
+    }
 }
 impl Game<'_> {
     /// `EnderDragonRenderer` and `EnderDragonModel.setupAnim`.

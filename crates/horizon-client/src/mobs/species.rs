@@ -1447,7 +1447,6 @@ impl Def {
                     | S::IronGolem
                     | S::Cat
                     | S::Ocelot
-                    | S::Frog
                     | S::Slime
                     | S::MagmaCube
                     | S::Wither
@@ -1581,7 +1580,7 @@ impl Def {
             S::Bee => "bee_food",
             S::Turtle => "turtle_food",
             S::Armadillo => "armadillo_food",
-            S::Frog => "frog_food",
+            S::Frog | S::Tadpole => "frog_food",
             S::Axolotl => "axolotl_food",
             S::Hoglin => "hoglin_food",
             S::Strider => "strider_food",

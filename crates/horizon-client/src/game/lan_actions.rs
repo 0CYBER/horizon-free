@@ -267,8 +267,10 @@ impl Game<'_> {
         }
         let mut play = host.play.remove(&conn).unwrap_or_default();
         if fresh {
-            // A new body (joined, respawned, changed level): nothing on it yet.
+            // A new body (joined, respawned, changed level): nothing on it yet,
+            // its effects' modifiers and armor protection included.
             play.equipped = None;
+            play.potions = Default::default();
             play.sculk = Default::default();
         }
         let g = &mut host.hub.guests[i];
@@ -404,6 +406,12 @@ impl Game<'_> {
         if play.equipped.as_ref() != Some(&equipped) {
             self.apply_equipment();
             play.equipped = Some(equipped);
+        }
+        // The player's effects are on the new body before anything it does
+        // (the movement that brought it, a landing): vanilla keeps the same
+        // entity through a level change, with its attributes and effects.
+        if fresh {
+            self.apply_effect_status();
         }
         self.update_totem_ready();
         Some(GuestSwap {
@@ -1541,9 +1549,13 @@ impl Game<'_> {
         if let Some(victim) = Self::pvp_victim(host, conn, id) {
             if let Some(Some(strike)) = self.as_guest(host, conn, |g| g.pvp_strike())
                 && self.pvp_land(host, victim, &strike)
-                && strike.stops_sprint()
             {
-                self.as_guest(host, conn, |g| g.stop_sprint_after_extra_knockback());
+                self.as_guest(host, conn, |g| {
+                    g.pvp_exhaustion();
+                    if strike.stops_sprint() {
+                        g.stop_sprint_after_extra_knockback();
+                    }
+                });
             }
             return;
         }
@@ -1848,10 +1860,6 @@ impl Game<'_> {
         };
         xp.respawn(self.ui.rules.bool("keep_inventory") || g.game_mode == SPECTATOR);
         (g.xp_level, g.xp_progress, g.xp_total) = (xp.level, xp.progress, xp.total);
-        // A new body: nothing given to the old one carries over.
-        if let Some(play) = host.play.get_mut(&conn) {
-            play.potions = Default::default();
-        }
         let clock_rate = self.network_clock_rate();
         let ctx = TickCtx {
             world: &mut self.world,
@@ -2336,6 +2344,13 @@ impl Game<'_> {
             // ServerEntity.sendChanges sends it as it is after this travel.
             let marked = std::mem::take(&mut player.health.sync_velocity);
             let velocity = marked.then_some(player.velocity);
+            // Player.causeFallDamage: a fall of 2 blocks or more counts.
+            for event in &events {
+                if let MotionEvent::Fall(horizon_client::landing::FallEvent::Statistic(cm)) = event
+                {
+                    game.stats.custom("fall_one_cm", *cm);
+                }
+            }
             game.record_combat(&events);
             game.wear_armor(&events);
             (events, velocity)

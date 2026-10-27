@@ -1030,6 +1030,9 @@ impl Game<'_> {
             for m in &mut self.mobs {
                 m.needs_sync = false;
             }
+            for p in &mut self.creatures.projectiles {
+                p.needs_sync = false;
+            }
             // `runBlockEvents`' broadcast precedes the tick's block changes
             // (`ChunkHolder.broadcastChanges` in `tick_level` below): the
             // guest re-runs a piston's `triggerEvent` while its level still
@@ -1190,8 +1193,11 @@ impl Game<'_> {
         drop(holding);
         lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
         self.lan = Some(host);
-        // A mace's wind burst from a guest's attack.
+        // A blast from a guest's attack, and a mace's wind burst.
+        self.flush_lan_explosions();
         let _ = self.flush_wind_bursts();
+        // Particles a guest's turn sent (sweep attack, damage indicator, a hook's splashes).
+        self.flush_lan_particles();
     }
 
     fn lan_guest_joined(

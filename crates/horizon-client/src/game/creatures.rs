@@ -46,10 +46,22 @@ pub(super) struct Creatures {
     pub projectiles: Vec<Projectile>,
     /// Wind bursts from a guest's turn, waiting for it to end (game/wind.rs).
     pub wind_bursts: Vec<super::wind::Burst>,
+    /// Explosion packets from a guest's turn, waiting for it to end
+    /// (centre, small, radius, blocks hit; game/lan_particles.rs).
+    pub lan_explosions: Vec<([f64; 3], bool, f32, usize)>,
     /// Ticks left of the elder guardian's apparition (MobAppearanceParticle).
     pub elder_apparition: i32,
     /// The wandering trader spawner's clock.
     pub trader: super::wandering_trader::Spawner,
+    /// Particles from a guest's turn, waiting for it to end
+    /// (`lan_send_particles`: options, centre, spread, speed, count).
+    pub lan_particles: Vec<(
+        horizon_client::particles::ParticleOptions,
+        [f64; 3],
+        [f64; 3],
+        f64,
+        u32,
+    )>,
 }
 pub(super) struct ProjWorld<'a, 'w> {
     pub w: &'a MobWorld<'w>,
@@ -198,6 +210,7 @@ impl Game<'_> {
             uuid: self.level.player_uuid.unwrap_or_default(),
             allies: std::sync::Arc::new(self.player_allies()),
             remote: false,
+            passenger: self.riding.is_some(),
         })
     }
     /// Biome facts at a position for finalizeSpawn and variant rules.
@@ -2125,6 +2138,7 @@ impl Game<'_> {
                 _ => self.projectile_hit(&p, hit)?,
             }
         }
+        self.flush_lan_explosions();
         self.flush_wind_bursts()
     }
     /// `projectile_hit` for a projectile the guest `conn` shot, run as them;
@@ -2891,6 +2905,14 @@ impl Game<'_> {
             self.swing_arm();
             return Ok(true);
         }
+        if self.interact_armadillo(index, &item) {
+            if let Some(stack) = &held {
+                let target = self.mob_entity(&self.mobs[index]);
+                self.trigger_item_entity("minecraft:player_interacted_with_entity", stack, &target);
+            }
+            self.swing_arm();
+            return Ok(true);
+        }
         if self.interact_copper_golem(index, &item) {
             self.swing_arm();
             return Ok(true);
@@ -2945,6 +2967,16 @@ impl Game<'_> {
                 give = Some("minecraft:milk_bucket");
                 consume = true;
                 sound = Some("entity.cow.milk");
+            }
+            // Goat.mobInteract: a bucket on an adult gives milk.
+            Species::Goat if item == "minecraft:bucket" && !m.is_baby() => {
+                give = Some("minecraft:milk_bucket");
+                consume = true;
+                sound = Some(if m.extra.screaming {
+                    "entity.goat.screaming.milk"
+                } else {
+                    "entity.goat.milk"
+                });
             }
             Species::Mooshroom if item == "minecraft:bowl" && !m.is_baby() => {
                 give = Some("minecraft:mushroom_stew");
@@ -3206,6 +3238,19 @@ impl Game<'_> {
                     self.trigger_entity("minecraft:tame_animal", "entity", &view);
                 }
             }
+            // Tadpole.feed: frog food ages it by a tenth of the time left to
+            // grow into a frog (it grows on its next tick once past 24000).
+            Species::Tadpole if is_food && !m.extra.age_locked => {
+                consume = true;
+                let left = 24_000 - m.extra.age;
+                m.extra.age += ((left / 20) as f32 * 0.1) as i32 * 20;
+                // One happy villager particle at rest about the body.
+                self.particles_around_mob(
+                    self.mobs[index].id,
+                    "happy_villager",
+                    horizon_client::particles::Burst::HORSE_EATING,
+                );
+            }
             // HappyGhast.canFallInLove: never, so only a ghastling takes food.
             _ if is_food
                 && m.kind.flags.animal
@@ -3292,6 +3337,50 @@ impl Game<'_> {
             }
         }
         Ok(true)
+    }
+    /// `Armadillo.mobInteract`: a brush brushes a scute off an adult
+    /// (`brushOffScute`) and loses 16 durability.
+    fn interact_armadillo(&mut self, index: usize, item: &str) -> bool {
+        let m = &self.mobs[index];
+        if item != "minecraft:brush"
+            || m.species() != Species::Armadillo
+            || !m.alive()
+            || m.is_baby()
+        {
+            return false;
+        }
+        let (id, at) = (m.id, m.position);
+        let feet = [at.x, at.y, at.z];
+        let tool = self.held().cloned();
+        let table = "minecraft:brush/armadillo";
+        for d in self.sequence_loot(table, table, tool.as_ref()) {
+            self.spawn_at_location(at, 0.0, d);
+        }
+        self.audio
+            .play("minecraft:entity.armadillo.brush", Some(feet), 1.0, 1.0);
+        let ctx = self.who_context(Some(Who::Mob(id)), None);
+        self.post_game_event("minecraft:entity_interact", feet, ctx);
+        // ItemStack.hurtAndBreak(16).
+        if !self.creative
+            && let Some(stack) = tool
+        {
+            let max = self
+                .res
+                .items()
+                .get(&stack.item)
+                .map_or(0, |i| i.max_damage);
+            if max > 0 {
+                let loss = self.durability_loss(&stack, 16);
+                let slot = self.held_slot();
+                if let Some(held) = self.stack_in_mut(slot).as_mut() {
+                    held.damage += loss;
+                    if held.damage >= max {
+                        *self.stack_in_mut(slot) = None;
+                    }
+                }
+            }
+        }
+        true
     }
     pub(super) fn damage_held_tool(&mut self) {
         if self.creative {

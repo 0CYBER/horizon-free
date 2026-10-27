@@ -185,6 +185,18 @@ pub fn register(m: &mut Mob) {
             if m.species() == Species::Rabbit {
                 super::rabbit::register(m);
             }
+            if m.species() == Species::Frog {
+                // `Frog()`: SmoothSwimmingMoveControl(85, 10, 0.02, 0.1, true).
+                // The speed attribute is 1.0, so the controller's scaling is
+                // what keeps a frog at a walking pace on land.
+                m.ai.mov.kind = super::control::MoveKind::SmoothSwimming {
+                    max_turn_x: 85.0,
+                    max_turn_y: 10.0,
+                    in_water: 0.02,
+                    outside: 0.1,
+                    gravity: true,
+                };
+            }
             if m.species() == Species::Turtle {
                 super::turtle::register(m);
             }
@@ -321,6 +333,20 @@ fn generic(m: &mut Mob) {
         m.ai.targets.add(1, HurtByTarget::new());
         m.ai.targets.add(2, NearestTarget::player(true));
     } else {
+        if m.kind.species == Species::Goat {
+            // GoatAi's idle and core behaviours (the ram and long jump
+            // activities are not here): panic 2.0, AnimalMakeLove, tempting
+            // with goat_food and baby follow at 1.25, then stroll.
+            g.add(0, Float);
+            g.add(1, Panic::new(2.0));
+            g.add(2, Breed::new(1.0));
+            g.add(3, Tempt::new(1.25, m.kind.food.clone(), false));
+            g.add(4, FollowParent::new(1.25));
+            g.add(5, Stroll::avoiding_water(1.0));
+            g.add(6, LookAtPlayer::new(6.0));
+            g.add(7, RandomLookAround::default());
+            return;
+        }
         g.add(0, Float);
         let rabbit = m.kind.species == Species::Rabbit;
         g.add(1, Panic::new(if rabbit { 2.2 } else { 1.25 }));
