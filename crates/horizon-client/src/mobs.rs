@@ -1221,6 +1221,12 @@ pub enum MobEvent {
         table: &'static str,
         at: [f64; 3],
     },
+    /// `Armadillo.customServerAiStep`: the armadillo sheds a scute.
+    ShedScute {
+        mob: u32,
+        at: [f64; 3],
+        pitch: f32,
+    },
     /// A lead snaps or loses its holder: the lead item drops when asked.
     LeashBreak {
         mob: u32,
@@ -1649,6 +1655,8 @@ pub struct MobWorld<'a> {
     pub biomes: &'a crate::biome::Biomes,
     /// The `mob_griefing` game rule.
     pub mob_griefing: bool,
+    /// The `mob_drops` game rule (`shouldDropLoot`).
+    pub mob_drops: bool,
     /// `getCurrentDifficultyAt` near the player.
     pub difficulty: spawning::LocalDifficulty,
     /// The End (its dimension type's monster spawn light rules).

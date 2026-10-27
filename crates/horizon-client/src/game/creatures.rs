@@ -434,6 +434,7 @@ impl Game<'_> {
             block_tags: &self.res.items().block_tags,
             biomes: self.res.biomes(),
             mob_griefing: self.ui.rules.bool("mob_griefing"),
+            mob_drops: self.ui.rules.bool("mob_drops"),
             end: self.dim == Dim::End,
             world_seed: self.level.seed,
             sea_level: if self.dim == Dim::Nether { 32 } else { 63 },
@@ -1427,6 +1428,22 @@ impl Game<'_> {
                         m.ai.target = Some(target);
                         m.ai.aggressive |= aggressive;
                     }
+                }
+                MobEvent::ShedScute { mob, at, pitch } => {
+                    // The mob already checked `shouldDropLoot` (a baby, `mob_drops`).
+                    let table = "minecraft:gameplay/armadillo_shed";
+                    let drops = self.sequence_loot(table, table, None);
+                    for d in drops {
+                        self.spawn_at_location(Vec3::new(at[0], at[1], at[2]), 0.0, d);
+                    }
+                    self.audio.play(
+                        "minecraft:entity.armadillo.scute_drop",
+                        Some(at),
+                        1.0,
+                        pitch,
+                    );
+                    let ctx = self.who_context(Some(Who::Mob(mob)), None);
+                    self.post_game_event("minecraft:entity_place", at, ctx);
                 }
                 MobEvent::GiftLoot { mob, table, at } => {
                     // Turtle.ageBoundaryReached: only with mob loot on.
