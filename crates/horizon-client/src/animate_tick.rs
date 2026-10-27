@@ -1213,7 +1213,6 @@ fn block_animate_tick(
         }
     }
 }
-/// `AbstractCandleBlock.addParticlesAndSound`.
 /// `AmbientLeavesBlockSoundPlayer.playAmbientLeavesSounds` for the poplar leaves:
 /// one log and three leaves of the same kind around the block.
 fn leaves_ambient_sound(
@@ -1299,6 +1298,7 @@ fn sand_sound_nearby(tables: &AnimateTables, ctx: &AnimateContext, pos: [i32; 3]
     }
     false
 }
+/// `AbstractCandleBlock.addParticlesAndSound`.
 fn candle(engine: &mut ParticleEngine, p: [f64; 3]) {
     let r = engine.random();
     let chance = r.next_float();
