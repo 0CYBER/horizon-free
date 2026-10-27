@@ -1643,7 +1643,7 @@ impl Launcher {
                         )
                         .bg(t.plate)
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                            copy_to_clipboard(cx, gpui::ClipboardItem::new_string(
                                 copy_text.clone(),
                             ));
                             this.servers.copied = Some(Instant::now());
