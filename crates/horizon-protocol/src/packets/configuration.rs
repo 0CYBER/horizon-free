@@ -45,6 +45,54 @@ packet!(
 packet!(KnownPack { namespace: String => Str, id: String => Str, version: String => Str });
 packet!(SelectKnownPacks { packs: Vec<KnownPack> => List<KnownPack> });
 packet!(CodeOfConduct { text: String => Str });
+
+/// ServerLinks.UntrustedEntry's `type` (Either<KnownLinkType, Component>): a
+/// known link's id, or a custom label component.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ServerLinkKind {
+    /// ServerLinks.KnownLinkType by id (ByIdMap: unknown ids read as 0).
+    Known(i32),
+    /// A custom label (TRUSTED_CONTEXT_FREE_STREAM_CODEC: a component in NBT).
+    Custom(Tag),
+}
+/// ServerLinks.UntrustedEntry: the label and the unchecked link string (the
+/// client keeps only `http`/`https` URIs, Util.parseAndValidateUntrustedUri).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ServerLink {
+    pub kind: ServerLinkKind,
+    pub link: String,
+}
+impl Codec<ServerLink> for ServerLink {
+    fn read(r: &mut Reader) -> Result<Self> {
+        let kind = if Bool::read(r)? {
+            ServerLinkKind::Known(VarInt::read(r)?)
+        } else {
+            ServerLinkKind::Custom(Nbt::read(r)?)
+        };
+        Ok(Self {
+            kind,
+            link: Str::read(r)?,
+        })
+    }
+    fn write(v: &Self, w: &mut Writer) {
+        match &v.kind {
+            ServerLinkKind::Known(id) => {
+                Bool::write(&true, w);
+                VarInt::write(id, w);
+            }
+            ServerLinkKind::Custom(tag) => {
+                Bool::write(&false, w);
+                Nbt::write(tag, w);
+            }
+        }
+        Str::write(&v.link, w);
+    }
+}
+packet!(
+    /// ClientboundServerLinksPacket (a common packet: configuration and play).
+    /// Links the pause menu's "Server Links..." screen lists.
+    ServerLinks { links: Vec<ServerLink> => List<ServerLink> }
+);
 packet!(
     /// ClientboundShowDialogPacket.CONTEXT_FREE_STREAM_CODEC: the dialog
     /// itself (`Dialog.DIRECT_CODEC` as NBT).
@@ -89,6 +137,7 @@ packet_enum!(Clientbound, crate::ids::configuration::clientbound {
     UpdateTags(UpdateTags) = UPDATE_TAGS,
     SelectKnownPacks(SelectKnownPacks) = SELECT_KNOWN_PACKS,
     ClearDialog(Empty) = CLEAR_DIALOG,
+    ServerLinks(ServerLinks) = SERVER_LINKS,
     ShowDialog(ShowDialog) = SHOW_DIALOG,
     CodeOfConduct(CodeOfConduct) = CODE_OF_CONDUCT,
 });
@@ -235,6 +284,18 @@ mod tests {
             }),
             Clientbound::CodeOfConduct(CodeOfConduct {
                 text: "Be nice".into(),
+            }),
+            Clientbound::ServerLinks(ServerLinks {
+                links: vec![
+                    ServerLink {
+                        kind: ServerLinkKind::Known(0),
+                        link: "https://bugs.example.net".into(),
+                    },
+                    ServerLink {
+                        kind: ServerLinkKind::Custom(crate::text::literal("Custom link")),
+                        link: "https://example.net".into(),
+                    },
+                ],
             }),
             Clientbound::ShowDialog(ShowDialog {
                 dialog: Tag::compound([("type", Tag::String("minecraft:notice".into()))]),

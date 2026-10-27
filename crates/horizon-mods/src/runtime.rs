@@ -78,9 +78,9 @@ use render_bindings::horizon::mods::input;
 pub use render_bindings::horizon::mods::input::{Event as InputEvent, HeldItem, ItemUse};
 /// What capability `render` asks the game to draw (WIT `interface render`).
 pub use render_bindings::horizon::mods::render::{
-    Corner as RenderCorner, FillShape, FrameRate, ItemShape, Minimap as ModMinimap,
-    Point as RenderPoint, QuadShape, Rect as RenderRect, Shape, SpriteShape, TextShape,
-    Zoom as ModZoom,
+    Corner as RenderCorner, FarTerrain as ModFarTerrain, FillShape, FrameRate, ItemShape,
+    Minimap as ModMinimap, Point as RenderPoint, QuadShape, Rect as RenderRect, Shape, SpriteShape,
+    TextShape, Zoom as ModZoom,
 };
 use render_bindings::{RenderHost, horizon::mods::render};
 /// Capability `recipes`'s imports (docs/mods.md): the game's recipes and items.
@@ -414,6 +414,8 @@ struct State {
     zoom: Option<ModZoom>,
     /// Capability `render`'s minimap, when the mod shows one.
     minimap: Option<ModMinimap>,
+    /// Capability `render`'s far terrain, when the mod draws one.
+    far_terrain: Option<ModFarTerrain>,
     input: InputState,
     browser: BrowserState,
     /// Capability `storage`'s folder; made on first `set`.
@@ -616,6 +618,7 @@ impl Mods {
             corner: None,
             zoom: None,
             minimap: None,
+            far_terrain: None,
             input: InputState::default(),
             browser: BrowserState::default(),
             data_dir,
@@ -1170,6 +1173,12 @@ impl Mods {
             .iter()
             .find_map(|e| e.run.as_ref()?.store.data().minimap)
     }
+    /// The far terrain the first running mod draws (capability `render`).
+    pub fn far_terrain(&self) -> Option<ModFarTerrain> {
+        self.entries
+            .iter()
+            .find_map(|e| e.run.as_ref()?.store.data().far_terrain)
+    }
     fn inputs(&self) -> impl Iterator<Item = &InputState> {
         self.entries
             .iter()
@@ -1723,6 +1732,8 @@ const TURN_MIN: f32 = 0.05;
 /// `set-minimap`'s side in GUI pixels and its blocks per map pixel.
 const MINIMAP_SIZE: (f32, f32) = (16.0, 256.0);
 const MINIMAP_SCALE: (f32, f32) = (0.5, 4.0);
+/// `set-far-terrain`'s distance in chunks, as the LOD Distance setting's.
+const FAR_TERRAIN_DISTANCE: (u32, u32) = (64, 1024);
 
 /// A mod's corner panel: shapes in a `width` × `height` box the game
 /// places in `corner`, stacked with the other overlays.
@@ -1810,6 +1821,14 @@ impl render::Host for State {
             size: finite(m.size, MINIMAP_SIZE.0, MINIMAP_SIZE.1),
             blocks_per_pixel: finite(m.blocks_per_pixel, MINIMAP_SCALE.0, MINIMAP_SCALE.1),
             ..m
+        });
+    }
+    fn set_far_terrain(&mut self, far_terrain: Option<ModFarTerrain>) {
+        self.far_terrain = far_terrain.map(|f| ModFarTerrain {
+            distance: f
+                .distance
+                .clamp(FAR_TERRAIN_DISTANCE.0, FAR_TERRAIN_DISTANCE.1),
+            ..f
         });
     }
     fn frame_stats(&mut self) -> FrameRate {

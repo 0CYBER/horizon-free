@@ -24,6 +24,7 @@ use horizon_client::{
 use horizon_protocol::text::translatable;
 use horizon_world::nbt::{JavaString, Tag};
 use std::{
+    io::Write,
     path::PathBuf,
     sync::{Arc, Mutex, OnceLock, mpsc},
     time::{Duration, Instant},
@@ -89,7 +90,9 @@ fn log_from(thread: &str, level: &str, message: &str) {
         }
     });
     // Log4j's %d{HH:mm:ss}: the local time, as in logs/latest.log.
-    println!(
+    // The launcher can close its stdout pipe while the server keeps running.
+    let _ = writeln!(
+        std::io::stdout().lock(),
         "[{}] [{thread}/{level}]: {message}",
         chrono::Local::now().format("%H:%M:%S")
     );
@@ -618,6 +621,22 @@ impl Game<'_> {
                 log_ips: props.log_ips,
             }),
             resource_pack: props.resource_pack.clone(),
+            // DedicatedServer.serverLinks: `bug-report-link` as the only link
+            // (ServerLinks.KnownLinkType.BUG_REPORT is id 0).
+            server_links: if props.bug_report_link.is_empty() {
+                Vec::new()
+            } else if super::server_links::valid_untrusted_uri(&props.bug_report_link) {
+                vec![horizon_protocol::packets::configuration::ServerLink {
+                    kind: horizon_protocol::packets::configuration::ServerLinkKind::Known(0),
+                    link: props.bug_report_link.clone(),
+                }]
+            } else {
+                log(
+                    "WARN",
+                    &format!("Failed to parse bug link {}", props.bug_report_link),
+                );
+                Vec::new()
+            },
         };
         let config = HubConfig {
             default_game_mode: game_mode,
@@ -1310,4 +1329,111 @@ fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
     let w = u32::from_be_bytes(bytes[16..20].try_into().ok()?);
     let h = u32::from_be_bytes(bytes[20..24].try_into().ok()?);
     Some((w, h))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{capture_log, log, log_from};
+    use std::{
+        fs,
+        io::{self, BufRead, BufReader, Read, Write},
+        process::{Command, Stdio},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    const LOGIN: &str = "Player[/127.0.0.1:0] logged in with entity id 2 at (0.5, 115.0, 0.5)";
+    const WARNING: &str = "Authentication warning";
+    const READY: &str = "horizon-console-log-ready\n";
+    const CHILD_HOME: &str = "HORIZON_TEST_CONSOLE_LOG_HOME";
+
+    fn assert_log_lines(text: &str) {
+        let expected = [
+            format!("] [Server thread/INFO]: {LOGIN}"),
+            format!("] [User Authenticator #1/WARN]: {WARNING}"),
+        ];
+        assert_eq!(text.lines().count(), expected.len());
+        for (line, suffix) in text.lines().zip(expected) {
+            assert!(line.starts_with('['));
+            assert!(chrono::NaiveTime::parse_from_str(&line[1..9], "%H:%M:%S").is_ok());
+            assert_eq!(&line[9..], suffix);
+        }
+    }
+
+    #[test]
+    fn console_logging_survives_closed_stdout() {
+        if let Some(home) = std::env::var_os(CHILD_HOME) {
+            horizon_client::logging::init(std::path::Path::new(&home), "Server thread");
+            // Let the parent close the real stdout pipe only after libtest's startup output.
+            io::stdout().write_all(READY.as_bytes()).unwrap();
+            io::stdout().flush().unwrap();
+            io::stdin().read_exact(&mut [0]).unwrap();
+            std::thread::Builder::new()
+                .name("Server thread".into())
+                .spawn(|| {
+                    let captured = capture_log(|| {
+                        log("INFO", LOGIN);
+                        log_from("User Authenticator #1", "WARN", WARNING);
+                    });
+                    assert_eq!(captured, [LOGIN, WARNING]);
+                    horizon_client::logging::flush();
+                })
+                .unwrap()
+                .join()
+                .unwrap();
+            // Libtest's final status also writes to stdout; only the game logger is under test.
+            std::process::exit(0);
+        }
+
+        for closed_stdout in [false, true] {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let home = std::env::temp_dir().join(format!(
+                "horizon-console-log-test-{}-{unique}",
+                std::process::id()
+            ));
+            fs::create_dir(&home).unwrap();
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "game::dedicated::tests::console_logging_survives_closed_stdout",
+                    "--nocapture",
+                ])
+                .env(CHILD_HOME, &home)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let mut stdout = BufReader::new(child.stdout.take().unwrap());
+            loop {
+                let mut line = String::new();
+                assert!(
+                    stdout.read_line(&mut line).unwrap() > 0,
+                    "child was not ready"
+                );
+                if line.ends_with(READY) {
+                    break;
+                }
+            }
+            if closed_stdout {
+                drop(stdout); // No reader remains: the next console write gets EPIPE.
+            } else {
+                child.stdout = Some(stdout.into_inner());
+            }
+            child.stdin.take().unwrap().write_all(&[1]).unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "closed_stdout={closed_stdout}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if !closed_stdout {
+                assert_log_lines(std::str::from_utf8(&output.stdout).unwrap());
+            }
+            assert_log_lines(&fs::read_to_string(home.join("logs/latest.log")).unwrap());
+            fs::remove_dir_all(home).unwrap();
+        }
+    }
 }
