@@ -795,7 +795,7 @@ fn empty_above(w: &MobWorld, p: [i32; 3]) -> bool {
 }
 /// Whether `p` is the player that owns `m` (a cat without a recorded owner
 /// belongs to whoever it sees).
-pub fn is_owner(m: &Mob, p: &super::PlayerView) -> bool {
+pub fn is_owner_of(m: &Mob, p: &super::PlayerView) -> bool {
     m.extra.owner.is_none_or(|o| o == p.uuid)
 }
 /// `Cat.CatRelaxOnOwnerGoal`: while the owner sleeps, the cat lies down beside
@@ -830,7 +830,7 @@ impl CatRelaxOnOwner {
     fn sleeping_owner<'w>(m: &Mob, w: &'w MobWorld) -> Option<&'w super::PlayerView> {
         w.player
             .as_ref()
-            .filter(|p| m.extra.tame && !m.extra.sitting && p.sleeping && is_owner(m, p))
+            .filter(|p| m.extra.tame && !m.extra.sitting && p.sleeping && is_owner_of(m, p))
     }
 }
 impl Goal for CatRelaxOnOwner {
@@ -894,7 +894,7 @@ impl Goal for CatRelaxOnOwner {
             .w
             .player
             .as_ref()
-            .is_some_and(|p| is_owner(m, p) && p.sleep_timer >= 100)
+            .is_some_and(|p| is_owner_of(m, p) && p.sleep_timer >= 100)
             && m.random.next_float() < chance
         {
             give_morning_gift(m, cx);
