@@ -5595,7 +5595,16 @@ impl horizon_client::interaction_input::InteractionWorld for RemoteInputWorld<'_
         self.0.remote_use();
     }
     fn pick(&mut self) {
-        if let Some(hit) = self.0.pick() {
+        // Minecraft.pickBlockOrEntity: an entity before the block is asked
+        // for (`handlePickItemFromEntity`), else the block.
+        if let Some(entity) = self.0.pick_entity_hit() {
+            if let Some(id) = entity {
+                self.0.send(S::PickItemFromEntity(play::PickItemFromEntity {
+                    id,
+                    include_data: self.0.has_control_down(),
+                }));
+            }
+        } else if let Some(hit) = self.0.pick() {
             self.0.send(S::PickItemFromBlock(play::PickItemFromBlock {
                 pos: hit.pos,
                 include_data: self.0.has_control_down(),
