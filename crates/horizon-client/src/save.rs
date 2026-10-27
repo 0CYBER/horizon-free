@@ -2290,7 +2290,10 @@ fn restore_level_dat(dir: &Path) {
         return;
     }
     if path.exists() {
-        let _ = fs::rename(&path, dir.join(format!("level.dat_corrupted_{}", backup_stamp())));
+        let _ = fs::rename(
+            &path,
+            dir.join(format!("level.dat_corrupted_{}", backup_stamp())),
+        );
     }
     let old = dir.join("level.dat_old");
     if read_dat(&old).is_some() {
