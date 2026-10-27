@@ -163,6 +163,7 @@ pub fn environmental(kind: DamageKind) -> bool {
             | DamageKind::InFire
             | DamageKind::Lava
             | DamageKind::LightningBolt
+            | DamageKind::HotFloor
     )
 }
 /// The hurt sound: a ball's is muffled, and it has no ambient sound

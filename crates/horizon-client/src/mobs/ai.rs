@@ -533,13 +533,25 @@ pub fn tick(
     true
 }
 /// `LivingEntity.aiStep` -> `Entity.applyEffectsFromBlocks` for the blocks
-/// that hurt or hold a mob: the cactus (`CactusBlock.entityInside`, 1), a lit
+/// that hurt or hold a mob (and the magma block it stands on): the cactus (`CactusBlock.entityInside`, 1), a lit
 /// campfire (`CampfireBlock.entityInside`) and the
 /// sweet berry bush (`SweetBerryBushBlock.entityInside`: stuck at 0.8, 0.75,
 /// 0.8, and a grown bush pricks for 1 when the mob moved at least 0.003 on X
 /// or Z this tick). The blocks are those the mob's box touches anywhere along
 /// its move this tick, from where it started to where it ended.
 fn effects_from_blocks(m: &mut Mob, w: &MobWorld) {
+    // Block.stepOn for the block under a mob on the ground (`getOnPosLegacy`):
+    // MagmaBlock.stepOn's hot floor, 1 damage (a mob never sneaks).
+    if m.on_ground && m.alive() {
+        let (x, y, z) = (
+            m.position.x.floor() as i32,
+            (m.position.y - f64::from(0.2_f32)).floor() as i32,
+            m.position.z.floor() as i32,
+        );
+        if w.block_name(x, y, z) == "minecraft:magma_block" {
+            m.damage(1.0, Damage::of(DamageKind::HotFloor));
+        }
+    }
     let mut visited: Vec<[i32; 3]> = Vec::new();
     let travel = m.position.subtract(m.previous);
     let longest = travel.x.abs().max(travel.y.abs()).max(travel.z.abs());

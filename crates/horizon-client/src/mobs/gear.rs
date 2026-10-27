@@ -167,6 +167,7 @@ pub fn protection_points(g: &Gear, kind: DamageKind) -> f32 {
         DamageKind::OnFire
             | DamageKind::InFire
             | DamageKind::Campfire
+            | DamageKind::HotFloor
             | DamageKind::Lava
             | DamageKind::Fireball
     );

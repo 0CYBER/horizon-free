@@ -4550,6 +4550,7 @@ pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) 
         K::Cramming => "minecraft:cramming",
         K::LightningBolt => "minecraft:lightning_bolt",
         K::Campfire => "minecraft:campfire",
+        K::HotFloor => "minecraft:hot_floor",
     }
 }
 /// A Horizon item stack as a loot stack (id, count, damage, enchantments).

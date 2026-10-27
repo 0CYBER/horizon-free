@@ -100,6 +100,7 @@ fn environmental_panic(m: &Mob) -> bool {
                     | DamageKind::Lava
                     | DamageKind::Cactus
                     | DamageKind::LightningBolt
+                    | DamageKind::HotFloor
             ) && i64::from(m.age) - t <= 40
         })
 }

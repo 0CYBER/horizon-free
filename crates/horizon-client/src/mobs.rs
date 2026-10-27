@@ -544,6 +544,8 @@ pub enum DamageKind {
     LightningBolt,
     /// `campfire`: standing in a lit campfire.
     Campfire,
+    /// `hot_floor`: stepping on a magma block.
+    HotFloor,
 }
 /// A damage source: its type, the attacking entity and where it came from.
 #[derive(Clone, Copy, Debug)]
@@ -633,6 +635,7 @@ impl Damage {
             DamageKind::OnFire
                 | DamageKind::InFire
                 | DamageKind::Campfire
+                | DamageKind::HotFloor
                 | DamageKind::Lava
                 | DamageKind::Fireball
         )
@@ -658,6 +661,7 @@ impl Damage {
                 | DamageKind::Cramming
                 | DamageKind::LightningBolt
                 | DamageKind::Campfire
+                | DamageKind::HotFloor
         )
     }
     pub fn is_projectile(&self) -> bool {
