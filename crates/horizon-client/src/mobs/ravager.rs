@@ -49,9 +49,14 @@ pub fn register(m: &mut Mob) {
 pub fn immobile(m: &Mob) -> bool {
     m.extra.counter > 0 || m.extra.counter2 > 0 || m.extra.anim_ticks > 0
 }
-/// `Ravager.doHurtTarget`: the bite animation.
+/// `Ravager.doHurtTarget`: the bite animation (entity event 4 for clients).
 pub fn on_attack(m: &mut Mob, events: &mut Vec<MobEvent>) {
     m.extra.counter = 10;
+    events.push(MobEvent::EntityEvent {
+        mob: m.id,
+        event: 4,
+        at: [m.position.x, m.position.y, m.position.z],
+    });
     events.push(MobEvent::Sound(
         "entity.ravager.attack",
         [m.position.x, m.position.y, m.position.z],
@@ -67,6 +72,12 @@ pub fn blocked(m: &mut Mob, events: &mut Vec<MobEvent>) -> bool {
     }
     if m.random.next_double() < 0.5 {
         m.extra.counter2 = 40;
+        // Entity event 39: the stun starts on clients.
+        events.push(MobEvent::EntityEvent {
+            mob: m.id,
+            event: 39,
+            at: [m.position.x, m.position.y, m.position.z],
+        });
         events.push(MobEvent::Sound(
             "entity.ravager.stunned",
             [m.position.x, m.position.y, m.position.z],
@@ -155,6 +166,34 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         }
     }
 }
+/// `Ravager.handleEntityEvent` 4 and 39 on a client.
+pub fn entity_event(m: &mut Mob, event: u8) {
+    match event {
+        4 => m.extra.counter = 10,
+        39 => m.extra.counter2 = 40,
+        _ => {}
+    }
+}
+/// `Ravager.aiStep`'s clocks on a client: the bite and roar run down, and
+/// the end of the stun starts the roar (the sounds, particles and the roar's
+/// damage are the server's).
+pub fn client_tick(m: &mut Mob) {
+    if !m.alive() {
+        return;
+    }
+    if m.extra.anim_ticks > 0 {
+        m.extra.anim_ticks -= 1;
+    }
+    if m.extra.counter > 0 {
+        m.extra.counter -= 1;
+    }
+    if m.extra.counter2 > 0 {
+        m.extra.counter2 -= 1;
+        if m.extra.counter2 == 0 {
+            m.extra.anim_ticks = 20;
+        }
+    }
+}
 /// `Ravager.roar`: 6 damage to everything but illagers within 4 blocks,
 /// and a strong knockback (players too, through the client).
 fn roar(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
@@ -197,7 +236,14 @@ fn roar(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             velocity: fling(s.position),
         });
     }
-    // Entity event 69: a puff of smoke.
+    // Entity event 69: a puff of smoke, and the client's own push. A client
+    // of this server (the window of the server thread) gets the event;
+    // this window draws the puff itself.
+    events.push(MobEvent::EntityEvent {
+        mob: m.id,
+        event: 69,
+        at: from,
+    });
     events.push(MobEvent::Particles {
         kind: "poof",
         at: [

@@ -46,8 +46,12 @@ impl Game<'_> {
             if !self.with_level(|b, level, _| b.is_raining_at(level, p)) {
                 continue;
             }
-            // Skeleton trap: effective difficulty / 100 (regional difficulty approximated).
-            let difficulty = f64::from(self.ui.difficulty) * 0.75;
+            // Skeleton trap: the local effective difficulty / 100
+            // (`getCurrentDifficultyAt(pos)`).
+            let difficulty = f64::from(
+                self.local_difficulty([f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])])
+                    .effective,
+            );
             let below = &self
                 .res
                 .facts()
@@ -278,6 +282,13 @@ impl Game<'_> {
                     }
                     self.strike_rod(b.at);
                 }
+                // LightningBolt.tick runs clearCopperOnLightningStrike for
+                // every server bolt, a skeleton trap's visual one included;
+                // a client's copy of a server bolt (spawn_remote_bolt) only
+                // flashes.
+                if self.remote.is_none() {
+                    self.bolt_clear_copper(b.at);
+                }
             }
             b.life -= 1;
             if b.life < 0 {
@@ -333,6 +344,16 @@ impl Game<'_> {
             };
             self.level_event_at(3002, p, axis);
         }
+    }
+    /// `LightningBolt.clearCopperOnLightningStrike` at the block the bolt struck.
+    fn bolt_clear_copper(&mut self, at: [f64; 3]) {
+        let p = BlockPos::new(
+            at[0].floor() as i32,
+            (at[1] - 1.0e-6).floor() as i32,
+            at[2].floor() as i32,
+        );
+        self.with_level(|b, level, ticks| b.lightning_clear_copper(level, ticks, p));
+        let _ = self.process_level_events();
     }
     /// `thunderHit` for entities within 3 blocks (up to 9 above).
     fn thunder_hit(&mut self, b: &mut Bolt) {

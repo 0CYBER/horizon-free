@@ -10,6 +10,7 @@ use glam::{Vec3, Vec4};
 pub(super) struct Corner {
     pub pos: Vec3,
     pub uv: [f32; 2],
+    pub glint_uv: [f32; 2],
 }
 
 pub(super) struct Face {
@@ -38,6 +39,9 @@ fn split(face: Face, distances: &[f32]) -> (Face, Face) {
             let corner = Corner {
                 pos: a.pos.lerp(b.pos, t),
                 uv: std::array::from_fn(|k| a.uv[k] + (b.uv[k] - a.uv[k]) * t),
+                glint_uv: std::array::from_fn(|k| {
+                    a.glint_uv[k] + (b.glint_uv[k] - a.glint_uv[k]) * t
+                }),
             };
             back.push(corner);
             front.push(corner);
@@ -73,6 +77,7 @@ pub(super) fn sort(quads: &[ItemQuad]) -> Vec<Face> {
                 corners: std::array::from_fn::<_, 4, _>(|k| Corner {
                     pos: q.pos[k],
                     uv: q.uv[k],
+                    glint_uv: q.foil_uv[k],
                 })
                 .to_vec(),
             })

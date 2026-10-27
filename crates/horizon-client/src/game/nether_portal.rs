@@ -297,7 +297,8 @@ impl Game<'_> {
         let p = plan.approximate;
         let centre = Vec3::new(f64::from(p.x) + 0.5, f64::from(p.y), f64::from(p.z) + 0.5);
         if plan.dim == Dim::End {
-            if let Err(e) = self.end_arrival(centre) {
+            // In the End the arrival only builds the platform: no spawn search.
+            if let Err(e) = self.end_arrival(centre, &mut None) {
                 log::error!("End platform: {e}");
             }
             return centre;
@@ -661,6 +662,17 @@ impl Game<'_> {
                 },
             );
         }
+    }
+    /// `Entity.setPortalCooldown` on an entity that has just spawned in a
+    /// portal: it stands in the portal for 300 ticks without going through.
+    pub(super) fn set_portal_cooldown(&mut self, id: u32) {
+        self.portals.entities.insert(
+            id,
+            PortalState {
+                cooldown: ENTITY_DELAY,
+                process: None,
+            },
+        );
     }
     /// `canUsePortal(false)` of a mob: alive, riding nothing, not asleep,
     /// not carrying the player, and not a boss that never travels.

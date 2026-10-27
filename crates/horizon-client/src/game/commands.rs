@@ -1162,6 +1162,17 @@ impl Game<'_> {
         // An air stack is empty: nothing is given (but the message still is).
         let empty = id == "minecraft:air";
         for &t in targets.iter().filter(|_| !empty) {
+            // The player's UUID, which an item they could not hold is set to.
+            let conn = match t {
+                Target::Guest(conn) => Some(conn),
+                _ => self.lan_acting,
+            };
+            let uuid = match conn {
+                Some(conn) => self
+                    .command_guest(conn)
+                    .map(|g| horizon_client::lan::playerdata::uuid_ints(g.uuid)),
+                None => Some(self.level.ensure_player_uuid()),
+            };
             self.for_player(t, |g| {
                 let mut remaining = count;
                 while remaining > 0 {
@@ -1178,8 +1189,19 @@ impl Game<'_> {
                         .target_position(Target::Player)
                         .unwrap_or(g.source_position());
                     if let Some(rest) = left {
-                        // Inventory full: drop the rest at the player's feet without pickup delay.
-                        g.spawn_item(rest, [p[0], p[1] + 1.32, p[2]], [0.0, 0.0, 0.0], 0);
+                        // Inventory full: Player.createItemStackToDrop (thrown from
+                        // the eyes), then setNoPickUpDelay and setTarget(player).
+                        let eye = g.eye_position().unwrap_or([
+                            p[0],
+                            p[1] + g.target_eye_height(Target::Player),
+                            p[2],
+                        ]);
+                        g.throw_from_eyes(rest, eye, false);
+                        if let Some(item) = g.dropped.last_mut() {
+                            item.thrower = None;
+                            item.pickup_delay = 0;
+                            item.target = uuid;
+                        }
                     } else {
                         let r = &mut g.world.random;
                         let pitch = ((r.next_float() - r.next_float()) * 0.7 + 1.0) * 2.0;
@@ -1447,7 +1469,7 @@ impl Game<'_> {
         {
             return Err(err("commands.teleport.invalidPosition", &[]));
         }
-        let mut rotation = match ctx.get("rotation") {
+        let rotation = match ctx.get("rotation") {
             Some(Arg::Coords(c)) => Some(c.rotation(self.source_rotation())),
             _ => None,
         };
@@ -1462,21 +1484,31 @@ impl Game<'_> {
             (Some(f), _) => Some(f),
             (None, Some(_)) => {
                 let e = self.entities(ctx, "facingEntity", false)?[0];
+                // EntityAnchorArgument.Anchor.apply: the feet, or the eyes.
                 let eyes = matches!(ctx.get("facingAnchor"), Some(Arg::Anchor(true)));
+                let eye_height = if eyes { self.target_eye_height(e) } else { 0.0 };
                 self.target_position(e)
-                    .map(|p| [p[0], p[1] + if eyes { 1.62 } else { 0.0 }, p[2]])
+                    .map(|p| [p[0], p[1] + eye_height, p[2]])
             }
             _ => None,
         };
-        if let Some(f) = facing {
-            let eye = pos[1] + 1.62;
+        // Entity.lookAt: from the source's anchor (the feet, unless `anchored
+        // eyes`) on the teleported entity, so the eyes depend on the target.
+        let anchored_eyes = self.command_source.is_some_and(|s| s.eyes);
+        let look_at = |this: &Self, t: Target| {
+            let f = facing?;
+            let eye = if anchored_eyes {
+                pos[1] + this.target_eye_height(t)
+            } else {
+                pos[1]
+            };
             let (dx, dy, dz) = (f[0] - pos[0], f[1] - eye, f[2] - pos[2]);
             let horizontal = (dx * dx + dz * dz).sqrt();
-            rotation = Some([
+            Some([
                 ((dz.atan2(dx).to_degrees()) - 90.0) as f32,
                 (-(dy.atan2(horizontal).to_degrees())) as f32,
-            ]);
-        }
+            ])
+        };
         // A server's player in another level than the source's (`execute
         // in`, the console's Overworld) moves there (ServerPlayer.teleport
         // into another level), after the command.
@@ -1486,6 +1518,7 @@ impl Game<'_> {
             None => self.dim,
         };
         for &t in &targets {
+            let rotation = look_at(self, t).or(rotation);
             if self.teleport_across(t, source_level, pos, rotation) {
                 continue;
             }
@@ -2049,8 +2082,7 @@ impl Game<'_> {
             return false;
         }
         self.world.block_entities.insert(key, new);
-        let state = self.world.block(pos[0], pos[1], pos[2]);
-        let _ = self.world.set(pos[0], pos[1], pos[2], state);
+        self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
         true
     }
     /// RandomizableContainer.tryLoadLootTable for a tag a command gives a
@@ -2211,7 +2243,8 @@ impl Game<'_> {
         let dmax = [dest[0] + size[0], dest[1] + size[1], dest[2] + size[2]];
         let overlap = (0..3).all(|i| dest[i] <= max[i] && dmax[i] >= min[i]);
         let moving = ctx.has("move");
-        if !ctx.has("force") && overlap {
+        // Mode.canOverlap: only the normal mode refuses overlapping regions.
+        if !ctx.has("force") && !moving && overlap {
             return Err(err("commands.clone.overlap", &[]));
         }
         let area = (0..3).map(|i| i64::from(size[i] + 1)).product::<i64>();
@@ -2420,26 +2453,54 @@ impl Game<'_> {
         let levels = ctx.has("levels");
         let unit = if levels { "levels" } else { "points" };
         if ctx.has("query") {
-            let _ = self.entities(ctx, "target", true)?;
-            let e = &self.experience;
-            let value = if levels {
-                e.level
-            } else {
-                (e.progress * horizon_client::entities::Experience::needed(e.level) as f32) as i32
-            };
+            let target = self.entities(ctx, "target", true)?[0];
+            // ExperienceCommand.queryExperience: the target's own level or points.
+            let value = self
+                .for_player(target, |g| {
+                    let e = &g.experience;
+                    if levels {
+                        e.level
+                    } else {
+                        (e.progress * horizon_client::entities::Experience::needed(e.level) as f32)
+                            as i32
+                    }
+                })
+                .unwrap_or(0);
             self.system_message(Text::translate(
                 &format!("commands.experience.query.{unit}"),
-                &[
-                    Text::literal(self.acting_player_name()),
-                    Text::literal(value.to_string()),
-                ],
+                &[self.target_name(target), Text::literal(value.to_string())],
             ));
             return Ok(value);
         }
         let targets = self.entities(ctx, "target", true)?;
         let amount = Self::int(ctx, "amount").unwrap_or(0);
-        let op = if ctx.has("add") { "add" } else { "set" };
-        if op == "add" {
+        let add = ctx.has("add");
+        let op = if add { "add" } else { "set" };
+        // Every target changes (a set of points can be refused for some).
+        let changed: Vec<Target> = targets
+            .iter()
+            .copied()
+            .filter(|&t| {
+                self.for_player(t, |g| g.change_experience(add, levels, amount)) == Some(true)
+            })
+            .collect();
+        if changed.is_empty() {
+            return Err(err("commands.experience.set.points.invalid", &[]));
+        }
+        let (key, who) = match changed[..] {
+            [only] => ("single", self.target_name(only)),
+            _ => ("multiple", Text::literal(changed.len().to_string())),
+        };
+        self.feedback(Text::translate(
+            &format!("commands.experience.{op}.{unit}.success.{key}"),
+            &[Text::literal(amount.to_string()), who],
+        ));
+        Ok(changed.len() as i32)
+    }
+    /// ExperienceCommand's add and set on the player in place: false when
+    /// the points to set do not fit the level.
+    fn change_experience(&mut self, add: bool, levels: bool, amount: i32) -> bool {
+        if add {
             if levels {
                 self.experience.level = (self.experience.level + amount).max(0);
                 if self.experience.level == 0 && amount < 0 {
@@ -2453,26 +2514,11 @@ impl Game<'_> {
         } else {
             let needed = horizon_client::entities::Experience::needed(self.experience.level);
             if amount > needed - 1 {
-                return Err(err("commands.experience.set.points.invalid", &[]));
+                return false;
             }
             self.experience.progress = amount as f32 / needed as f32;
         }
-        let key = format!(
-            "commands.experience.{op}.{unit}.success.{}",
-            if targets.len() == 1 {
-                "single"
-            } else {
-                "multiple"
-            }
-        );
-        self.feedback(Text::translate(
-            &key,
-            &[
-                Text::literal(amount.to_string()),
-                Text::literal(self.acting_player_name()),
-            ],
-        ));
-        Ok(targets.len() as i32)
+        true
     }
     fn cmd_gamerule(&mut self, ctx: &Context) -> R<i32> {
         let Some(name) = ctx.literals.get(1).cloned() else {
@@ -2557,21 +2603,26 @@ impl Game<'_> {
         };
         let yaw = ((rot[0] + 180.0).rem_euclid(360.0)) - 180.0;
         let pitch = rot[1].clamp(-90.0, 90.0);
-        // SetSpawnCommand: a forced point in the source's level.
-        if self.dim == Dim::Overworld {
-            self.spawn = Some(Vec3::new(
-                f64::from(pos[0]) + 0.5,
-                f64::from(pos[1]),
-                f64::from(pos[2]) + 0.5,
-            ));
-            self.respawn_config = None;
-        } else {
-            self.spawn = None;
-            self.respawn_config = Some(super::respawn_anchor::RespawnConfig {
-                dim: self.dim,
-                pos,
-                yaw,
-                forced: true,
+        // SetSpawnCommand: a forced point in the source's level, for each target.
+        let level = self.dim;
+        for &t in &targets {
+            self.for_player(t, |g| {
+                if level == Dim::Overworld {
+                    g.spawn = Some(Vec3::new(
+                        f64::from(pos[0]) + 0.5,
+                        f64::from(pos[1]),
+                        f64::from(pos[2]) + 0.5,
+                    ));
+                    g.respawn_config = None;
+                } else {
+                    g.spawn = None;
+                    g.respawn_config = Some(super::respawn_anchor::RespawnConfig {
+                        dim: level,
+                        pos,
+                        yaw,
+                        forced: true,
+                    });
+                }
             });
         }
         let dim = Text::literal(self.dim.id());
@@ -2752,6 +2803,44 @@ impl Game<'_> {
         };
         let max = Self::int(ctx, "maxCount").unwrap_or(-1);
         let counting = max == 0;
+        // ClearInventoryCommands.clearInventory: each player on their own.
+        let mut removed = 0i32;
+        let mut found = Vec::new();
+        for &t in &targets {
+            let n = self
+                .for_player(t, |g| g.clear_matching(&predicate, max))
+                .unwrap_or(0);
+            removed += n;
+            if n != 0 {
+                found.push(t);
+            }
+        }
+        if removed == 0 {
+            return Err(if targets.len() == 1 {
+                CommandError::new(Text::translate(
+                    "clear.failed.single",
+                    &[self.target_name(targets[0])],
+                ))
+            } else {
+                err("clear.failed.multiple", &[&targets.len()])
+            });
+        }
+        let kind = if counting { "test" } else { "success" };
+        let (key, who) = match found[..] {
+            [only] => ("single", self.target_name(only)),
+            _ => ("multiple", Text::literal(found.len().to_string())),
+        };
+        self.feedback(Text::translate(
+            &format!("commands.clear.{kind}.{key}"),
+            &[Text::literal(removed.to_string()), who],
+        ));
+        Ok(removed)
+    }
+    /// Inventory.clearOrCountMatchingItems for the player in place: `max`
+    /// of the matching items go (all when negative, none and only counted
+    /// when 0). Returns how many matched.
+    fn clear_matching(&mut self, predicate: &ItemInput, max: i32) -> i32 {
+        let counting = max == 0;
         // Inventory slots 0..40: main, armor feet to head, off hand;
         // then clearOrCountMatchingItems visits the crafting grid and carried stack.
         let mut removed = 0i32;
@@ -2766,10 +2855,7 @@ impl Game<'_> {
         };
         let matching: Vec<bool> = all(self)
             .iter()
-            .map(|s| {
-                s.as_ref()
-                    .is_some_and(|s| self.stack_matches(&predicate, s))
-            })
+            .map(|s| s.as_ref().is_some_and(|s| self.stack_matches(predicate, s)))
             .collect();
         let mut slots: Vec<&mut Option<ItemStack>> = Vec::new();
         slots.extend(self.inventory.iter_mut());
@@ -2799,25 +2885,7 @@ impl Game<'_> {
                 }
             }
         }
-        if removed == 0 {
-            return Err(if targets.len() == 1 {
-                CommandError::new(Text::translate(
-                    "clear.failed.single",
-                    &[Text::literal(self.acting_player_name())],
-                ))
-            } else {
-                err("clear.failed.multiple", &[&targets.len()])
-            });
-        }
-        let kind = if counting { "test" } else { "success" };
-        self.feedback(Text::translate(
-            &format!("commands.clear.{kind}.single"),
-            &[
-                Text::literal(removed.to_string()),
-                Text::literal(self.acting_player_name()),
-            ],
-        ));
-        Ok(removed)
+        removed
     }
     /// `PoiTypes`: the point of interest type of a block state.
     fn poi_type(&self, state: horizon_world::registry::BlockStateId) -> Option<&'static str> {

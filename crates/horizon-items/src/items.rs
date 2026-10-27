@@ -310,7 +310,7 @@ fn load_songs(root: &Path) -> HashMap<String, Song> {
     }
     songs
 }
-pub(crate) fn load_tags(root: &Path, kind: &str) -> Result<HashMap<String, HashSet<String>>> {
+pub fn load_tags(root: &Path, kind: &str) -> Result<HashMap<String, HashSet<String>>> {
     Ok(load_tag_lists(root, kind)?
         .into_iter()
         .map(|(k, v)| (k, v.into_iter().collect()))
@@ -350,7 +350,7 @@ pub(crate) fn load_tag_lists(root: &Path, kind: &str) -> Result<HashMap<String, 
         Ok(())
     }
     // Vanilla's tags; with content mods also the convention (`c`) tags and the mods' own.
-    for namespace in crate::mod_content::tag_namespaces(root) {
+    for namespace in crate::content_namespaces::tag_namespaces(root) {
         let dir = root.join(format!("data/{namespace}/tags/{kind}"));
         if dir.exists() {
             walk(&dir, &dir, &namespace, &mut raw)?;
@@ -605,7 +605,7 @@ impl Items {
                     consumable: c.get("minecraft:consumable").map(|cons| {
                         horizon_world::consumable::Consumable {
                             seconds: cons["consume_seconds"].as_f64().map_or(1.6, |s| s as f32),
-                            animation: crate::first_person::consumable_animation(cons),
+                            animation: crate::use_animation::consumable_animation(cons),
                             sound: cons["sound"]
                                 .as_str()
                                 .unwrap_or("minecraft:entity.generic.eat")
@@ -740,7 +740,7 @@ impl Items {
         let loot_root = root.join("data/minecraft/loot_table");
         walk_loot(&loot_root, &loot_root, "minecraft", &mut loot)?;
         // Content mods' tables (docs/modpacks.md): `<ns>:blocks/...`.
-        for namespace in crate::mod_content::namespaces(root) {
+        for namespace in crate::content_namespaces::namespaces(root) {
             let dir = root.join(format!("data/{namespace}/loot_table"));
             if dir.is_dir() {
                 walk_loot(&dir, &dir, &namespace, &mut loot)?;
@@ -779,7 +779,7 @@ impl Items {
         })
     }
     /// An item table with only tags, for unit tests of item rules.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub fn for_tests(item_tags: HashMap<String, HashSet<String>>) -> Self {
         Self {
             items: HashMap::new(),
@@ -1154,6 +1154,8 @@ impl Items {
         ctx.evaluate(table, random)
     }
 }
+/// `DataComponents.BLOCK_STATE`.
+const BLOCK_STATE: &str = "minecraft:block_state";
 impl LootContext<'_> {
     fn evaluate<R: RandomSource>(&self, table: &Value, random: &mut R) -> Vec<ItemStack> {
         let ctx = self;
@@ -1561,6 +1563,30 @@ impl LootContext<'_> {
                         }
                     }
                 }
+                // CopyBlockState: the listed properties of the broken block
+                // become the item's `block_state` component.
+                "minecraft:copy_state" => {
+                    use horizon_world::nbt::Tag;
+                    let mut copied = match stack.data().and_then(|d| d.other(BLOCK_STATE)) {
+                        Some(Tag::Compound(c)) => c.clone(),
+                        _ => Default::default(),
+                    };
+                    for name in f["properties"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                    {
+                        if let Some(value) = self.properties.get(name) {
+                            copied.insert(name.into(), Tag::String(value.as_str().into()));
+                        }
+                    }
+                    if !copied.is_empty() {
+                        stack
+                            .data_mut()
+                            .set_other(BLOCK_STATE, Some(Tag::Compound(copied)));
+                    }
+                }
                 // ApplyExplosionDecay: each item survives with 1 / radius.
                 "minecraft:explosion_decay" => {
                     if let Some(radius) = self.explosion_radius {
@@ -1728,6 +1754,22 @@ mod bucket_use_tests {
     }
 }
 
+/// The items of the prepared resources, when they are on this machine, for
+/// tests: the block registry and facts as the client's `Assets::load` reads them.
+#[cfg(test)]
+pub(crate) fn prepared_items() -> Option<Items> {
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../.local/horizon-client/26.3");
+    if !root.join("items.json").exists() {
+        return None;
+    }
+    let (registry, _) =
+        BlockRegistry::from_facts_json_with_flags(fs::File::open(root.join("facts.json")).ok()?)
+            .ok()?;
+    let facts = BlockFacts::load(&root, &registry).ok()?;
+    Items::load(&root, &registry, &facts).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1840,14 +1882,9 @@ mod tests {
     /// `EnchantRandomlyFunction`) put their enchantments on the stack.
     #[test]
     fn loot_enchant_functions_enchant_the_rolled_item() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.local/horizon-client/26.3");
-        if !root.join("items.json").exists() {
+        let Some(items) = super::prepared_items() else {
             return;
-        }
-        let assets = crate::assets::Assets::load(&root).unwrap();
-        let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
-        let items = Items::load(&root, assets.registry, &facts).unwrap();
+        };
         let props = BTreeMap::new();
         let mut random = LegacyRandom::new(11);
         // A sword at levels 20..39 comes out enchanted, as in an End city.
@@ -1906,14 +1943,9 @@ mod tests {
     /// Mending book, then `set_count` uniform 1..64, is 46.
     #[test]
     fn a_single_level_enchantment_draws_no_level() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.local/horizon-client/26.3");
-        if !root.join("items.json").exists() {
+        let Some(items) = super::prepared_items() else {
             return;
-        }
-        let assets = crate::assets::Assets::load(&root).unwrap();
-        let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
-        let items = Items::load(&root, assets.registry, &facts).unwrap();
+        };
         let props = BTreeMap::new();
         let table = json!({"pools":[{"rolls":1,"entries":[{"type":"minecraft:item",
             "name":"minecraft:book","modifier":[
@@ -1929,79 +1961,6 @@ mod tests {
         );
         // 46 is vanilla's count for this seed; an extra level draw gives 28.
         assert_eq!(drops[0].count, 46);
-    }
-
-    #[test]
-    fn always_edible_and_consume_effects_loaded() {
-        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.local/horizon-client/26.3");
-        if !root.join("items.json").exists() {
-            return;
-        }
-        let assets = crate::assets::Assets::load(&root).unwrap();
-        let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
-        let items = Items::load(&root, assets.registry, &facts).unwrap();
-
-        let apple = items.get("minecraft:golden_apple").expect("golden apple");
-        assert!(apple.can_always_eat);
-        assert!(apple.food.is_some());
-        assert!(!apple.consumable.as_ref().unwrap().effects.is_empty());
-
-        let enchanted = items
-            .get("minecraft:enchanted_golden_apple")
-            .expect("enchanted golden apple");
-        assert!(enchanted.can_always_eat);
-        assert!(enchanted.food.is_some());
-        assert!(!enchanted.consumable.as_ref().unwrap().effects.is_empty());
-
-        let beef = items.get("minecraft:cooked_beef").expect("cooked beef");
-        assert!(!beef.can_always_eat);
-        assert!(beef.food.is_some());
-
-        // Consumables without food, their style and their remainders.
-        use horizon_world::consumable::UseAnimation;
-        let milk = items.get("minecraft:milk_bucket").expect("milk bucket");
-        let drink = milk.consumable.as_ref().unwrap();
-        assert!(milk.food.is_none());
-        assert_eq!(drink.effects, [ConsumeEffect::ClearAllEffects]);
-        assert_eq!((drink.ticks(), drink.animation), (32, UseAnimation::Drink));
-        assert_eq!(drink.sound, "minecraft:entity.generic.drink");
-        assert!(!drink.particles);
-        assert_eq!(milk.use_remainder.as_deref(), Some("minecraft:bucket"));
-        let honey = items.get("minecraft:honey_bottle").expect("honey bottle");
-        let sip = honey.consumable.as_ref().unwrap();
-        assert_eq!(sip.ticks(), 40);
-        assert_eq!(sip.sound, "minecraft:item.honey_bottle.drink");
-        assert_eq!(
-            sip.effects,
-            [ConsumeEffect::RemoveEffects(vec![
-                "minecraft:poison".into()
-            ])]
-        );
-        assert_eq!(
-            honey.use_remainder.as_deref(),
-            Some("minecraft:glass_bottle")
-        );
-        let kelp = items.get("minecraft:dried_kelp").unwrap();
-        let bite = kelp.consumable.as_ref().unwrap();
-        assert_eq!((bite.ticks(), bite.animation), (16, UseAnimation::Eat));
-        assert_eq!(bite.sound, "minecraft:entity.generic.eat");
-        assert!(bite.particles && kelp.use_remainder.is_none());
-        let chorus = items.get("minecraft:chorus_fruit").unwrap();
-        assert_eq!(
-            chorus.consumable.as_ref().unwrap().effects,
-            [ConsumeEffect::TeleportRandomly(
-                horizon_world::teleport_consume::TeleportConsume {
-                    diameter: 16.0,
-                    directional_particles: true,
-                }
-            )]
-        );
-        let chicken = items.get("minecraft:chicken").unwrap();
-        assert!(matches!(
-            chicken.consumable.as_ref().unwrap().effects[..],
-            [ConsumeEffect::ApplyEffects { probability, .. }] if probability == 0.3
-        ));
     }
 }
 

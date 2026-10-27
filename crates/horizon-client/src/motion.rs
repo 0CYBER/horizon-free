@@ -13,6 +13,7 @@ use horizon_world::{
     attributes::{Modifier, Operation, entity::Catalog, live::LiveAttributes},
     block_collision::BlockCollisionRegistry,
     block_landing::BlockLandingRegistry,
+    climbing::{self, ClimbingRegistry, ClimbingWorld},
     collision_context::{CollisionContext, CollisionEntity, CollisionItem},
     edge_backoff::{self, EdgeBackoffInput, EdgeBackoffWorld},
     entity_move::{self, CollisionFlags, EntityMoveWorld, MovementHistory, MoverType},
@@ -44,17 +45,21 @@ use std::{
 
 pub(crate) mod environment;
 mod fluids;
-pub use fluids::{FluidResources, FluidTags, LAVA, PlayerFluids, WATER};
+pub use fluids::{FluidResources, FluidTags, LAVA, PlayerFluids, WATER, bubble_column_push};
 
 pub struct MotionResources {
     pub attributes: Arc<Catalog>,
     pub blocks: BoundMovementProperties,
     pub climbable: BTreeSet<String>,
-    /// `BlockTags.CAN_GLIDE_THROUGH`: climbable blocks a gliding player passes.
-    pub glide_through: BTreeSet<String>,
     /// `BlockTags.SOUL_SPEED_BLOCKS`: what Soul Speed's effects look for.
     pub soul_speed_blocks: BTreeSet<String>,
+    /// `LivingEntity.onClimbable` tags plus open trapdoors above a ladder.
+    pub climbing: ClimbingRegistry<'static>,
     pub fall_reset: BTreeSet<String>,
+    /// `BlockTags.INSIDE_STEP_SOUND_BLOCKS`.
+    pub inside_step_sound: BTreeSet<String>,
+    /// `BlockTags.COMBINATION_STEP_SOUND_BLOCKS`.
+    pub combination_step_sound: BTreeSet<String>,
     /// `BlockTags.CRYSTAL_SOUND_BLOCKS`: blocks that chime under footsteps.
     pub crystal_sound: BTreeSet<String>,
     pub landing: BlockLandingRegistry,
@@ -103,6 +108,12 @@ impl MotionResources {
                 .cloned()
                 .collect())
         };
+        let climbing = ClimbingRegistry::new(
+            assets.registry,
+            &tag("minecraft:trapdoors")?,
+            &tag("minecraft:climbable")?,
+            &tag("minecraft:can_glide_through")?,
+        )?;
         Ok(Self {
             landing: crate::landing::load(root, &properties)?,
             health: crate::health::HealthResources::load(root)?,
@@ -114,9 +125,11 @@ impl MotionResources {
                 suppresses_bounce: tag("minecraft:suppresses_bounce")?,
             })?,
             climbable: tag("minecraft:climbable")?,
-            glide_through: tag("minecraft:can_glide_through")?,
             soul_speed_blocks: tag("minecraft:soul_speed_blocks")?,
+            climbing,
             fall_reset: tag("minecraft:fall_damage_resetting")?,
+            inside_step_sound: tag("minecraft:inside_step_sound_blocks")?,
+            combination_step_sound: tag("minecraft:combination_step_sound_blocks")?,
             crystal_sound: tag("minecraft:crystal_sound_blocks")?,
         })
     }
@@ -162,11 +175,12 @@ pub enum MotionEvent {
         position: BlockPos,
     },
     /// `Entity.walkingStepSound` on this block: `Player.playStepSound`
-    /// muffles it under a swim sound when `in_water`.
+    /// mutes it (`playMuffledStepSound`) under a swim sound in water or
+    /// under a combination block's own step.
     Emission {
         position: BlockPos,
         state: BlockStateId,
-        in_water: bool,
+        muffled: bool,
     },
     /// `Entity.playAmethystStepSound`: `block.amethyst_block.chime`.
     Chime {
@@ -259,6 +273,9 @@ pub struct PlayerMotion {
     pub history: MovementHistory,
     pub fall_distance: f64,
     pub stuck_multiplier: Vec3,
+    /// `Entity.pistonDeltas` and `pistonDeltasGameTime`: how far a moving
+    /// block has pushed this entity this tick (0.51 at most on any axis).
+    pub piston: horizon_world::piston_movement::PistonMovement,
     pub yaw: f32,
     pub head_yaw: f32,
     pub jumping: bool,
@@ -349,6 +366,8 @@ pub struct PlayerMotion {
     pub leather_boots: bool,
     /// An armor piece in `#freeze_immune_wearables` (`LivingEntity.canFreeze`).
     pub freeze_immune: bool,
+    /// A worn enchantment's `damage_immunity` to `#burn_from_stepping` (frost walker).
+    pub burn_from_stepping_immune: bool,
     /// `Entity.oldPosition`: where this tick started.
     pub old_position: Vec3,
     /// The server's copy of a player another client moves (a LAN guest), while
@@ -472,6 +491,7 @@ impl PlayerMotion {
             history: MovementHistory::default(),
             fall_distance: 0.0,
             stuck_multiplier: Vec3::ZERO,
+            piston: Default::default(),
             yaw: 0.0,
             head_yaw: 0.0,
             jumping: false,
@@ -529,6 +549,7 @@ impl PlayerMotion {
             ticks_frozen: 0,
             leather_boots: false,
             freeze_immune: false,
+            burn_from_stepping_immune: false,
             old_position: position,
             server_copy: false,
             wall_hit_events: None,
@@ -808,27 +829,15 @@ impl MotionWorld<'_, '_, '_> {
             supporting_block: self.player.ground.supporting_block,
         }
     }
-    /// `LivingEntity.onClimbable` at the player's feet (it remembers the block).
+    /// `Player.onClimbable` (never while flying) over `LivingEntity.onClimbable`
+    /// at the player's feet: the climbable tag or an open trapdoor above a
+    /// matching ladder. It remembers the block.
     pub fn climbable(&mut self) -> Result<bool> {
-        if self.player.spectator {
+        if self.player.flying {
             return Ok(false);
         }
-        let p = BlockPos::containing(self.player.position);
-        let name = &self
-            .assets
-            .registry
-            .state(self.block(p))
-            .ok_or("missing scene state")?
-            .name;
-        // A gliding player passes through vines (`CAN_GLIDE_THROUGH`).
-        if self.player.fall_flying && self.resources.glide_through.contains(name) {
-            return Ok(false);
-        }
-        let climbable = self.resources.climbable.contains(name);
-        if climbable {
-            self.player.last_climbable = Some(p);
-        }
-        Ok(climbable)
+        let resources = self.resources;
+        climbing::on_climbable(self, &resources.climbing).map_err(|e| e.to_string().into())
     }
     pub fn travel_in_air(&mut self, input: Vec3) -> Result<()> {
         living_air::travel_in_air(self, input)
@@ -1796,6 +1805,30 @@ impl MotionWorld<'_, '_, '_> {
         Ok(())
     }
 }
+impl ClimbingWorld for MotionWorld<'_, '_, '_> {
+    type Error = std::convert::Infallible;
+    fn is_spectator(&mut self) -> std::result::Result<bool, Self::Error> {
+        Ok(self.player.spectator)
+    }
+    fn block_position(&mut self) -> std::result::Result<BlockPos, Self::Error> {
+        Ok(BlockPos::containing(self.player.position))
+    }
+    fn in_block_state(&mut self) -> std::result::Result<BlockStateId, Self::Error> {
+        Ok(self.block(BlockPos::containing(self.player.position)))
+    }
+    fn is_fall_flying(&mut self) -> std::result::Result<bool, Self::Error> {
+        Ok(self.player.fall_flying)
+    }
+    fn block_state(
+        &mut self,
+        position: BlockPos,
+    ) -> std::result::Result<BlockStateId, Self::Error> {
+        Ok(self.block(position))
+    }
+    fn set_last_climbable_position(&mut self, position: BlockPos) {
+        self.player.last_climbable = Some(position);
+    }
+}
 impl crate::auto_jump::AutoJumpWorld for MotionWorld<'_, '_, '_> {
     type Error = Box<dyn std::error::Error>;
     fn collision_shape(&mut self, p: BlockPos) -> Result<horizon_core::geometry::VoxelShape> {
@@ -1907,8 +1940,14 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
     fn set_collision_flags(&mut self, value: CollisionFlags) {
         self.player.collision = value;
     }
-    fn limit_piston_movement(&mut self, _: Vec3) -> Result<Vec3> {
-        Err("piston movement requires a ticking entity runtime".into())
+    /// `Entity.limitPistonMovement`: the per-tick 0.51-block budget shared by
+    /// every move on an axis. A failed game-time read leaves the accumulator
+    /// as it was, as native does.
+    fn limit_piston_movement(&mut self, movement: Vec3) -> Result<Vec3> {
+        let time = self.scene.game_time;
+        self.player
+            .piston
+            .limit(movement, || Ok::<i64, Box<dyn std::error::Error>>(time))
     }
     fn stuck_multiplier(&self) -> Vec3 {
         self.player.stuck_multiplier
@@ -1927,7 +1966,8 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         let input = EdgeBackoffInput {
             movement,
             bounds: self.player.bounds(),
-            flying: false,
+            // Player.maybeBackOffFromEdge: not while flying.
+            flying: self.player.flying,
             self_or_player: matches!(mover, MoverType::SelfMovement | MoverType::Player),
             fall_distance: self.player.fall_distance,
             query_budget: 1_000_000,
@@ -2170,18 +2210,54 @@ impl MovementEmissionWorld for MotionWorld<'_, '_, '_> {
     fn in_water(&mut self) -> Result<bool> {
         Ok(self.player.fluids.was_touching_water)
     }
-    /// `Player.playStepSound`: in water a swim sound, then the step muffled.
+    /// `Player.playStepSound`: in water a swim sound, then the step muffled;
+    /// on land the step of an inside-sound block above the floor, or of a
+    /// combination block above it with the floor's step muffled.
     fn walking_step_sound(&mut self, position: BlockPos, state: BlockStateId) -> Result<()> {
-        let in_water = self.player.fluids.was_touching_water;
-        if in_water {
+        let muffled = self.player.fluids.was_touching_water;
+        let mut stepped = false;
+        if muffled {
             self.water_swim_sound()?;
+        } else {
+            // Entity.getPrimaryStepSoundBlockPos.
+            let above = BlockPos {
+                y: position.y + 1,
+                ..position
+            };
+            let above_state = self.block(above);
+            let name = &self
+                .assets
+                .registry
+                .state(above_state)
+                .ok_or("missing scene state")?
+                .name;
+            let combination = self.resources.combination_step_sound.contains(name);
+            if combination || self.resources.inside_step_sound.contains(name) {
+                self.player.events.push(MotionEvent::Emission {
+                    position: above,
+                    state: above_state,
+                    muffled: false,
+                });
+                if combination {
+                    // Entity.playCombinationStepSounds.
+                    self.player.events.push(MotionEvent::Emission {
+                        position,
+                        state,
+                        muffled: true,
+                    });
+                }
+                stepped = true;
+            }
         }
-        self.player.events.push(MotionEvent::Emission {
-            position,
-            state,
-            in_water,
-        });
-        // Entity.walkingStepSound: the amethyst chime after the step.
+        if !stepped {
+            self.player.events.push(MotionEvent::Emission {
+                position,
+                state,
+                muffled,
+            });
+        }
+        // Entity.walkingStepSound: the amethyst chime after the step, by the
+        // floor's state even when the step sound was the block above's.
         let name = &self
             .assets
             .registry

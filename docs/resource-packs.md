@@ -31,7 +31,7 @@ harness named checks that loader against vanilla).
 | --- | --- | --- | --- |
 | Pack metadata: description, icon, `min_format`/`max_format`, old `supported_formats`, compatibility warning | `pack.mcmeta`, `pack.png` | works | `test_pack_screen_parity`, `test_pack_selection_parity` |
 | Overlays per format | `pack.mcmeta` `overlays` | works | `test_resource_pack_parity` (an overlay for 26.3 applied, an older one not) |
-| Filters | `pack.mcmeta` `filter` | works | `test_resource_pack_parity` (`packs/pattern.rs` regex subset) |
+| Filters | `pack.mcmeta` `filter` | works | `test_resource_pack_parity` (`horizon-client-core/src/pattern.rs` regex subset) |
 | Folder and zip packs, order, built-in packs | `resourcepacks/` | works | `test_resource_pack_parity`, `test_pack_selection_parity` |
 | Server resource packs: the prompt, the server list's Server Resource Packs setting, download (250 MiB, SHA-1, `downloads/` keeps 20), download toasts, a progress screen while the packs reload, applied on top of the player's packs, removed on leaving | the server's `resource_pack_push`/`_pop` | works | `tools/server_pack_e2e.py` (against vanilla's server and Horizon's), unit tests in `server_packs.rs`; `test_server_resource_pack_parity` for Horizon's server |
 | Other namespaces | `assets/<namespace>/` | works | `test_resource_pack_parity` |
@@ -85,12 +85,12 @@ shaders, the missing pieces are missing vanilla features too, and each vanilla p
 | --- | --- | --- |
 | Animation `interpolate` | small | fix PR (`gfx.rs` `animate_sprites`) |
 | GUI scaling `width`/`height`, `stretch_inner`, `tile`, `stretch` | small | next fix PR (`ui.rs`) |
-| Villager hats | small | [#334](https://github.com/ludovic111/horizon/issues/334) |
-| `blur`/`clamp` from packs | small | [#335](https://github.com/ludovic111/horizon/issues/335) |
-| Text component fonts, TrueType fonts | medium | [#336](https://github.com/ludovic111/horizon/issues/336) |
-| Trims on worn armour (paletted textures) | medium | [#337](https://github.com/ludovic111/horizon/issues/337) |
-| Credits and end poem screen | medium | [#338](https://github.com/ludovic111/horizon/issues/338) |
-| Locator bar | medium | [#339](https://github.com/ludovic111/horizon/issues/339) |
+| Villager hats | small | [#334](https://github.com/horizon-rust/horizon/issues/334) |
+| `blur`/`clamp` from packs | small | [#335](https://github.com/horizon-rust/horizon/issues/335) |
+| Text component fonts, TrueType fonts | medium | [#336](https://github.com/horizon-rust/horizon/issues/336) |
+| Trims on worn armour (paletted textures) | medium | [#337](https://github.com/horizon-rust/horizon/issues/337) |
+| Credits and end poem screen | medium | [#338](https://github.com/horizon-rust/horizon/issues/338) |
+| Locator bar | medium | [#339](https://github.com/horizon-rust/horizon/issues/339) |
 | Post effects and core shaders | large | none yet |
 
 ## Testing a pack
