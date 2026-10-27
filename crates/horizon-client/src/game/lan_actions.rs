@@ -1899,6 +1899,10 @@ impl Game<'_> {
             .filter(|g| host.hub.here(g) && g.loaded)
             .map(|g| g.conn)
             .collect();
+        // The players the guests' hooks can catch.
+        if host.play.values().any(|p| p.hook.is_some()) {
+            self.refresh_hook_targets(host);
+        }
         for conn in conns {
             let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
                 continue;

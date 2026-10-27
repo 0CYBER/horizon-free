@@ -46,6 +46,10 @@ pub(super) struct Creatures {
     pub projectiles: Vec<Projectile>,
     /// Wind bursts from a guest's turn, waiting for it to end (game/wind.rs).
     pub wind_bursts: Vec<super::wind::Burst>,
+    /// The players a fishing hook can catch, taken as the hooks tick, and
+    /// the pulls on them waiting for the hub (game/fishing.rs).
+    pub hook_targets: Vec<super::fishing::HookTarget>,
+    pub hook_pulls: Vec<(u32, horizon_core::geometry::Vec3)>,
     /// Ticks left of the elder guardian's apparition (MobAppearanceParticle).
     pub elder_apparition: i32,
     /// The wandering trader spawner's clock.

@@ -1166,6 +1166,8 @@ impl Game<'_> {
         self.lan = Some(host);
         // A mace's wind burst from a guest's attack.
         let _ = self.flush_wind_bursts();
+        // A reeled-in hook pulling a player.
+        self.flush_hook_pulls();
     }
 
     fn lan_guest_joined(
