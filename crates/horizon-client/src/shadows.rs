@@ -30,6 +30,8 @@ pub fn shadow_params(entity: &str) -> (f32, f32) {
         "horse" | "donkey" | "mule" | "skeleton_horse" | "zombie_horse" | "phantom" => 0.75,
         "spider" | "boat" => 0.8,
         "polar_bear" | "panda" | "warden" => 0.9,
+        // GiantMobRenderer: 0.5 times its scale of 6.
+        "giant" => 3.0,
         "wither" => 1.0,
         "sniffer" | "ravager" => 1.1,
         "ghast" => 1.5,
