@@ -1057,7 +1057,7 @@ impl Game<'_> {
                     // still plays a note. The dig is marked begun for tick_mining.
                     let pos = a.pos;
                     self.as_guest(host, conn, |g| {
-                        if g.may_build() && !g.creative {
+                        if !g.block_action_restricted(pos) && !g.creative {
                             let _ = g.attack_block(pos);
                             g.mining = Some(Mining {
                                 pos,

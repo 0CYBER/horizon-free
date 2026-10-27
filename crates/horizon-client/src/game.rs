@@ -3948,6 +3948,10 @@ impl Game<'_> {
         self.with_player_actor(|game| game.break_block_as_player(pos))
     }
     fn break_block_as_player(&mut self, pos: [i32; 3]) -> Result<()> {
+        // ServerPlayerGameMode.destroyBlock.
+        if self.block_action_restricted(pos) {
+            return Ok(());
+        }
         if !self
             .res
             .items()
@@ -4384,7 +4388,7 @@ impl Game<'_> {
         if info.block.is_none() {
             return Ok(false);
         }
-        if !self.may_build() {
+        if !self.may_build() && !self.can_place_on_in_adventure(hit.pos) {
             // ItemStack.useOn passes in adventure mode; useItem eats.
             return Ok(!on_block && self.start_eating(&info));
         }
@@ -4738,8 +4742,9 @@ impl Game<'_> {
             self.mining = None;
             return Ok(());
         };
-        // GameType.isBlockPlacingRestricted: adventure and spectator.
-        if !self.may_build()
+        // Player.blockActionRestricted: spectators, and adventure players
+        // without a matching can_break item.
+        if self.block_action_restricted(hit.pos)
             || !self
                 .res
                 .items()
@@ -11584,10 +11589,19 @@ impl Game<'_> {
         let mut outline_after_terrain = false;
         // GameRenderer.shouldRenderBlockOutline: not with the HUD hidden (F1), and only for a
         // player who may build. Adventure players only get one with a CAN_BREAK or
-        // CAN_PLACE_ON item and spectators with a menu block; Horizon reads neither the
-        // components nor opens menus for spectators, so those never show it.
-        let outline = if self.screen == Screen::Playing && !self.ui.hide_gui && self.may_build() {
+        // CAN_PLACE_ON item matching the block, and spectators with a menu block; Horizon
+        // does not open menus for spectators, so those never show it.
+        let adventure = self.mode == horizon_client::command::args::GameMode::Adventure;
+        let outline = if self.screen == Screen::Playing
+            && !self.ui.hide_gui
+            && (self.may_build() || adventure)
+        {
             self.pick()
+                .filter(|h| {
+                    self.may_build()
+                        || !self.block_action_restricted(h.pos)
+                        || self.can_place_on_in_adventure(h.pos)
+                })
                 .map(|h| {
                     let state = self.world.block(h.pos[0], h.pos[1], h.pos[2]);
                     let f = self.res.facts().get(state);
