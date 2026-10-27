@@ -1706,6 +1706,9 @@ struct Game<'a> {
     /// The acting guest's cooldowns, as (item, ticks): their packet needs the
     /// hub's item registry, which the guest's turn does not hold.
     guest_cooldowns: Vec<(Arc<str>, i32)>,
+    /// The acting guest's own entity events (`ServerPlayer.connection.send`),
+    /// sent with their entity id, which the guest's turn does not hold.
+    guest_entity_events: Vec<i8>,
     /// `broadcastToAdmins` lines a guest's command queued, sent once it
     /// returns: the line, whether operators get it and whether the console
     /// logs it.
@@ -4222,6 +4225,7 @@ impl Game<'_> {
         if &*stack.item == "minecraft:spyglass" {
             // SpyglassItem.USE_DURATION, then finishUsingItem.
             if ticks + 1 >= 1200 {
+                self.send_use_item_complete();
                 self.stop_spyglass();
                 self.using = None;
             } else {
@@ -4243,6 +4247,7 @@ impl Game<'_> {
         }
         if ticks >= duration {
             self.using = None;
+            self.send_use_item_complete();
             // ItemStack.finishUsingItem's applyAfterUseComponentSideEffects.
             self.apply_use_cooldown(&stack);
             self.finish_consuming(&info, consumable, &stack);
@@ -13149,6 +13154,7 @@ impl<'a> Game<'a> {
             lan_acting: None,
             guest_packets: Vec::new(),
             guest_cooldowns: Vec::new(),
+            guest_entity_events: Vec::new(),
             lan_acting_name: None,
             lan_acting_uuid: None,
             chat_capture: None,
