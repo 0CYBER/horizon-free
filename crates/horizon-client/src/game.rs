@@ -1609,6 +1609,12 @@ struct Game<'a> {
     /// Map textures waiting for the next HUD batch to upload them.
     map_patches: Vec<horizon_client::font::Patch>,
     text_displays: std::collections::HashMap<i32, text_displays::RemoteTextDisplay>,
+    /// The fence knots a server tracks to this client, by entity id, at their
+    /// block (`LeashFenceKnotEntity`).
+    remote_knots: HashMap<u32, [i32; 3]>,
+    /// The entity ids a hosted server gives the knots its mobs hang on, by
+    /// block, while a lead is tied there.
+    knot_ids: HashMap<[i32; 3], u32>,
     text_display_vertices: usize,
     /// Player skin downloads, and which skin each atlas skin slot holds
     /// (least recently shown first).
@@ -2517,6 +2523,15 @@ impl Game<'_> {
                 no_physics,
                 &self.res.motion().fluids,
             );
+            // Entity.applyEffectsFromBlocks: bubble columns lift or drag the item.
+            horizon_client::motion::bubble_column_push(
+                &self.world,
+                self.pack.assets.registry,
+                self.res.facts(),
+                self.collision,
+                item.bounds(),
+                &mut item.velocity,
+            );
             cells.moved(i, item.previous, item.position);
             // ItemEntity.tick: merge every 2 ticks while moving between
             // blocks, every 40 otherwise, before the lifetime check.
@@ -2787,9 +2802,13 @@ impl Game<'_> {
         self.process_level_events()
     }
     fn attack_block(&mut self, pos: [i32; 3]) -> Result<()> {
-        self.with_level(|b, level, ticks| {
-            b.attack_block(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]));
+        let note = self.with_level(|b, level, ticks| {
+            b.attack_block(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]))
         });
+        // NoteBlock.attack awards the statistic.
+        if note {
+            self.stats.custom("play_noteblock", 1);
+        }
         self.process_level_events()
     }
     /// Track which chunks are ticking (Ticks needs chunk load/unload).
@@ -3459,15 +3478,9 @@ impl Game<'_> {
             self.open_ender_chest(key);
             // EnderChestBlock.useWithoutItem
             self.stats.custom("open_enderchest", 1);
-            self.container_opener_event(key, true);
-            let at = [
-                f64::from(key.0) + 0.5,
-                f64::from(key.1) + 0.5,
-                f64::from(key.2) + 0.5,
-            ];
-            let pitch = self.world.random.next_float() * 0.1 + 0.9;
-            self.audio
-                .play("minecraft:block.ender_chest.open", Some(at), 0.5, pitch);
+            if self.container_opener_event(key, true) {
+                self.container_edge_sound(key, true);
+            }
         } else if &*name == "minecraft:beacon" && self.open_station(pos, &name) {
             self.world.block_entities.get_or_insert_with(key, || {
                 BlockEntity::for_block(&name).unwrap_or(BlockEntity::Chest(Vec::new()))
@@ -3483,7 +3496,7 @@ impl Game<'_> {
             ];
             self.resolve_container_maps(key, centre);
             self.container = Some(key);
-            self.container_opener_event(key, true);
+            let first = self.container_opener_event(key, true);
             self.post_block_game_event(
                 "minecraft:container_open",
                 [key.0, key.1, key.2],
@@ -3507,26 +3520,8 @@ impl Game<'_> {
             if self.guarded_by_piglins(&name) {
                 self.anger_piglins(true);
             }
-            let sound = if storage::is_shulker_box(&name) {
-                Some("minecraft:block.shulker_box.open")
-            } else if name.contains("chest") {
-                Some("minecraft:block.chest.open")
-            } else if &*name == "minecraft:barrel" {
-                Some("minecraft:block.barrel.open")
-            } else {
-                None
-            };
-            if let Some(sound) = sound {
-                self.audio.play(
-                    sound,
-                    Some([
-                        f64::from(key.0) + 0.5,
-                        f64::from(key.1) + 0.5,
-                        f64::from(key.2) + 0.5,
-                    ]),
-                    0.5,
-                    1.0,
-                );
+            if first {
+                self.container_edge_sound(key, true);
             }
         } else if self.open_station(pos, &name) {
             // Workstation menus: game/stations.rs.
@@ -4007,6 +4002,10 @@ impl Game<'_> {
                 return Ok(true);
             }
             if self.use_pumpkin(hit.pos, hit.face, held.as_ref())? {
+                self.swing_arm();
+                return Ok(true);
+            }
+            if self.use_beehive(hit.pos, held.as_ref())? {
                 self.swing_arm();
                 return Ok(true);
             }
@@ -5858,6 +5857,7 @@ impl Game<'_> {
                 | BlockEntity::Vault(_)
                 | BlockEntity::Beehive(_)
                 | BlockEntity::CommandBlock(_)
+                | BlockEntity::EndGateway(_)
                 | BlockEntity::Skull(_)
                 | BlockEntity::DaylightDetector
                 | BlockEntity::Campfire(_),
@@ -6130,6 +6130,7 @@ impl Game<'_> {
                     | BlockEntity::Vault(_)
                     | BlockEntity::Beehive(_)
                     | BlockEntity::CommandBlock(_)
+                    | BlockEntity::EndGateway(_)
                     | BlockEntity::Skull(_)
                     | BlockEntity::DaylightDetector
                     | BlockEntity::Campfire(_),
@@ -6211,41 +6212,15 @@ impl Game<'_> {
         if let Some(key) = self.container.take() {
             // A cart's or chest boat's items go back to it.
             self.close_cart_container(key);
-            self.container_opener_event(key, false);
+            let last = self.container_opener_event(key, false);
             self.post_block_game_event(
                 "minecraft:container_close",
                 [key.0, key.1, key.2],
                 Some(horizon_client::mobs::Who::Player),
                 None,
             );
-            let name = self
-                .res
-                .facts()
-                .get(self.world.block(key.0, key.1, key.2))
-                .name
-                .clone();
-            let sound = if storage::is_shulker_box(&name) {
-                Some("minecraft:block.shulker_box.close")
-            } else if &*name == "minecraft:ender_chest" {
-                Some("minecraft:block.ender_chest.close")
-            } else if name.contains("chest") {
-                Some("minecraft:block.chest.close")
-            } else if &*name == "minecraft:barrel" {
-                Some("minecraft:block.barrel.close")
-            } else {
-                None
-            };
-            if let Some(sound) = sound {
-                self.audio.play(
-                    sound,
-                    Some([
-                        f64::from(key.0) + 0.5,
-                        f64::from(key.1) + 0.5,
-                        f64::from(key.2) + 0.5,
-                    ]),
-                    0.5,
-                    1.0,
-                );
+            if last {
+                self.container_edge_sound(key, false);
             }
             self.world.modified.insert((key.0 >> 4, key.2 >> 4));
         }
@@ -6765,6 +6740,7 @@ impl Game<'_> {
             self.player_menu_sound(sound);
         }
         let crafted = std::mem::take(&mut menu.crafted);
+        let brewed = std::mem::take(&mut menu.brewed);
         let equipped = std::mem::take(&mut menu.equipped);
         for (i, stack) in after.into_iter().enumerate() {
             if let Some(g) = game_of[i] {
@@ -6780,6 +6756,9 @@ impl Game<'_> {
                 self.player_drop(stack);
             }
             self.award_crafted(&crafted);
+            for stack in &brewed {
+                self.trigger_brewed_potion(stack);
+            }
             if furnace_before > furnace_after
                 && self.remote.is_none()
                 && let (Some(pos), Some(p)) = (self.container, self.player.as_ref())
@@ -8276,6 +8255,15 @@ impl Game<'_> {
             None => horizon_client::mobs::Damage::of(horizon_client::mobs::DamageKind::Generic),
         };
         let landed = self.hurt_by_player(index, amount, source);
+        if landed {
+            let victim = self.mob_entity(&self.mobs[index]);
+            self.player_hit(
+                &victim,
+                creatures::damage_type(source.kind, true),
+                None,
+                amount,
+            );
+        }
         if let Some(p) = self.player.as_mut() {
             if p.attack_log.len() >= 64 {
                 p.attack_log.remove(0);
@@ -8369,14 +8357,23 @@ impl Game<'_> {
             // The hurt or death sound the mob raised (getHurtSound / getDeathSound,
             // its voice pitch from its own random).
             let queued = std::mem::take(&mut self.mobs[index].outbox);
+            let mut infested = false;
             for event in queued {
-                if let horizon_client::mobs::MobEvent::Sound(s, at, volume, pitch) = event {
-                    self.audio
-                        .play(&format!("minecraft:{s}"), Some(at), volume, pitch);
-                } else {
-                    // Left for the end of the tick.
-                    self.mobs[index].outbox.push(event);
+                match event {
+                    horizon_client::mobs::MobEvent::Sound(s, at, volume, pitch) => {
+                        self.audio
+                            .play(&format!("minecraft:{s}"), Some(at), volume, pitch);
+                    }
+                    horizon_client::mobs::MobEvent::Infested { .. } => infested = true,
+                    other => {
+                        // Left for the end of the tick.
+                        self.mobs[index].outbox.push(other);
+                    }
                 }
+            }
+            if infested {
+                let id = self.mobs[index].id;
+                self.mob_infested(id);
             }
             self.weapon_hit(index);
             // Player.attack: causeFoodExhaustion(0.1F) only when the hit hurt
@@ -13348,6 +13345,8 @@ impl<'a> Game<'a> {
             dragon_model: prepared.dragon_model,
             map_patches: Vec::new(),
             text_displays: Default::default(),
+            remote_knots: Default::default(),
+            knot_ids: Default::default(),
             text_display_vertices: 0,
             skin_downloads: RefCell::new(horizon_client::skins::Downloader::new(
                 std::env::current_dir()

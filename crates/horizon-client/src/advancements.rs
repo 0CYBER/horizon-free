@@ -473,6 +473,51 @@ pub fn id_matches(v: &Value, registry: &str, id: &str, w: &dyn World) -> bool {
         _ => false,
     }
 }
+/// `PotionsPredicate`: the potion in a `HolderSet`, plus a `CollectionPredicate`
+/// over the potion's effects (`contains`, `count`, `size`).
+pub fn potions(v: &Value, potion: Option<&str>, w: &dyn World) -> bool {
+    if v.is_null() {
+        return true;
+    }
+    if !v["potions"].is_null() && !potion.is_some_and(|p| id_matches(&v["potions"], "potion", p, w))
+    {
+        return false;
+    }
+    let c = &v["effects"];
+    if c.is_null() {
+        return true;
+    }
+    let effects: Vec<(String, i32, i32)> = potion
+        .and_then(crate::brewing::potion)
+        .map(|d| {
+            d.effects
+                .iter()
+                .map(|(id, dur, amp)| (format!("minecraft:{id}"), *amp, *dur))
+                .collect()
+        })
+        .unwrap_or_default();
+    // `MobEffectsPredicate.test`: the one listed effect, amplifier and duration.
+    let test = |pred: &Value, e: &(String, i32, i32)| {
+        pred.as_object().is_some_and(|m| {
+            m.get(&e.0).is_some_and(|want| {
+                range_i(&want["amplifier"], i64::from(e.1))
+                    && range_i(&want["duration"], i64::from(e.2))
+                    && want["ambient"].as_bool().is_none_or(|b| !b)
+                    && want["visible"].as_bool().is_none_or(|b| b)
+            })
+        })
+    };
+    c["contains"]
+        .as_array()
+        .is_none_or(|l| l.iter().all(|p| effects.iter().any(|e| test(p, e))))
+        && c["count"].as_array().is_none_or(|l| {
+            l.iter().all(|entry| {
+                let n = effects.iter().filter(|e| test(&entry["test"], e)).count();
+                range_i(&entry["count"], n as i64)
+            })
+        })
+        && range_i(&c["size"], effects.len() as i64)
+}
 /// `ItemPredicate`.
 pub fn item(v: &Value, it: &ItemView, w: &dyn World) -> bool {
     if v.is_null() {
@@ -702,6 +747,52 @@ pub fn entity(v: &Value, e: &EntityView, w: &dyn World, origin: [f64; 3]) -> boo
         }
     }
     true
+}
+/// A damage event as `DamagePredicate` sees it.
+#[derive(Clone, Debug, Default)]
+pub struct DamageView {
+    /// The damage type id (`minecraft:arrow`).
+    pub kind: String,
+    /// `DamageSource.getDirectEntity` and `getEntity`.
+    pub direct: Option<EntityView>,
+    pub source: Option<EntityView>,
+    /// `DamageSource.isDirect`: the direct entity is the causing one.
+    pub is_direct: bool,
+    /// The damage before and after the shield took its share.
+    pub original: f32,
+    pub actual: f32,
+    pub blocked: bool,
+}
+/// `DamagePredicate`, with its `DamageSourcePredicate` as `type`.
+pub fn damage(v: &Value, d: &DamageView, w: &dyn World, origin: [f64; 3]) -> bool {
+    if v.is_null() {
+        return true;
+    }
+    let by = |key: &str, e: &Option<EntityView>| {
+        v[key].is_null() || e.as_ref().is_some_and(|e| entity(&v[key], e, w, origin))
+    };
+    if !range_f(&v["dealt"], f64::from(d.original))
+        || !range_f(&v["taken"], f64::from(d.actual))
+        || !by("source_entity", &d.source)
+        || v["blocked"].as_bool().is_some_and(|b| b != d.blocked)
+    {
+        return false;
+    }
+    let ty = &v["type"];
+    let tags_ok = ty["tags"].as_array().into_iter().flatten().all(|t| {
+        let tag = t["id"].as_str().unwrap_or("");
+        let tag = tag.strip_prefix('#').unwrap_or(tag);
+        w.in_tag("damage_type", tag, &d.kind) == t["expected"].as_bool().unwrap_or(true)
+    });
+    let direct_ok = ty["direct_entity"].is_null()
+        || d.direct
+            .as_ref()
+            .is_some_and(|e| entity(&ty["direct_entity"], e, w, origin));
+    let source_ok = ty["source_entity"].is_null()
+        || d.source
+            .as_ref()
+            .is_some_and(|e| entity(&ty["source_entity"], e, w, origin));
+    tags_ok && direct_ok && source_ok && ty["is_direct"].as_bool().is_none_or(|b| b == d.is_direct)
 }
 /// The entities a loot-style condition list may refer to.
 pub struct Entities<'a> {
