@@ -163,6 +163,7 @@ pub mod sound_engine;
 pub mod sound_events;
 pub mod spans;
 pub mod spear;
+pub mod spectator_menu;
 pub mod sprint;
 pub mod sprites;
 pub mod stations;
