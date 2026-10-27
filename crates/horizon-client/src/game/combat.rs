@@ -49,6 +49,9 @@ pub(super) struct CombatTracker {
     /// skull, wither or TNT minecart, the sources that empty a hive they
     /// destroy (`BeehiveBlock.getDrops`).
     pub(super) hive_emptying_blast: bool,
+    /// The mob that owns the projectile exploding now (`getIndirectSourceEntity`):
+    /// the mobs the blast hurts record it as their attacker.
+    pub(super) explosion_owner: Option<u32>,
     /// Charged creepers whose blast just went off and that have not dropped
     /// a head yet (`Creeper.droppedSkulls`): they are gone from the mob list,
     /// but the mobs they killed still ask for their loot.

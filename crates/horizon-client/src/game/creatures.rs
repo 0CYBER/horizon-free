@@ -792,6 +792,7 @@ impl Game<'_> {
         self.villager_murdered(m, by_player);
         let pos = [m.position.x, m.position.y + 0.5, m.position.z];
         self.drop_death_loot(&mut dying, by_player, consumed, pos);
+        self.create_wither_rose(m);
         if m.species() == Species::CopperGolem {
             // CopperGolem.dropEquipment: the preserved equipment too.
             self.golem_drop_equipment(&mut dying);
@@ -2790,7 +2791,10 @@ impl Game<'_> {
                 if let Some(owner) = self.combat.projectile_owner {
                     self.note_attacker("minecraft:explosion", owner);
                 }
-                self.explode(atp, *power as f32)?;
+                self.combat.explosion_owner = self.combat.projectile_owner;
+                let result = self.explode(atp, *power as f32);
+                self.combat.explosion_owner = None;
+                result?;
             }
             (
                 ProjectileKind::Potion {
