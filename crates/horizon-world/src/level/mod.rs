@@ -816,6 +816,22 @@ impl Behaviours {
         self.sim(level, ticks)
             .big_dripleaf_entity_inside(pos, on_ground, feet_y);
     }
+    /// `BellBlock.onProjectileHit` for a projectile that hit `face` of the
+    /// block at `pos` at height `hit_y`. False when the block is not a bell
+    /// or the hit missed the bell proper.
+    pub fn bell_projectile_hit<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+        face: Direction,
+        hit_y: f64,
+    ) -> bool {
+        let mut sim = self.sim(level, ticks);
+        let state = sim.state(pos);
+        self.data(state).is(classes::Class::Bell)
+            && sim.bell_hit(pos, state, face, hit_y - f64::from(pos.y))
+    }
     /// Redstone signal queries (`SignalGetter`).
     pub fn has_neighbor_signal<L: LevelAccess + ?Sized>(
         &self,

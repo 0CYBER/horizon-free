@@ -5,13 +5,13 @@ use super::{
     LevelAccess, LevelEvent, Sim,
     classes::Class,
     data::state_flags,
-    query::{clockwise, counter_clockwise},
+    query::{axis_of, clockwise, counter_clockwise},
     states::BlockId,
     update::{HORIZONTAL, above, below, rel},
 };
 use crate::registry::BlockStateId;
 use horizon_core::{
-    geometry::{Direction, trig},
+    geometry::{Axis, Direction, trig},
     position::BlockPos,
     random::RandomSource,
     ticks::TickPriority,
@@ -1259,6 +1259,31 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             }
             self.set_block_and_update(pos, b.table.set_bool(state, b.props.powered, signal));
         }
+    }
+    /// `BellBlock.onHit` with `requireHitFromCorrectSide`: a hit on `face` at
+    /// height `click_y` in the block rings the bell only when it struck the
+    /// bell proper. False when the hit missed it.
+    pub(crate) fn bell_hit(
+        &mut self,
+        pos: BlockPos,
+        state: BlockStateId,
+        face: Direction,
+        click_y: f64,
+    ) -> bool {
+        let b = self.b;
+        let facing_axis = axis_of(b.facing(state));
+        let proper = axis_of(face) != Axis::Y
+            && click_y <= f64::from(0.8124f32)
+            && match b.table.text(state, b.props.attachment) {
+                "floor" => facing_axis == axis_of(face),
+                "single_wall" | "double_wall" => facing_axis != axis_of(face),
+                "ceiling" => true,
+                _ => false,
+            };
+        if proper {
+            self.bell_ring(pos, state, face);
+        }
+        proper
     }
     /// `BellBlock.attemptToRing`: `BellBlockEntity.onHit` queues block event 1
     /// with the struck direction, then the sound and game event.
