@@ -44,6 +44,9 @@ struct Out {
     // entity.vsh's lightMapColor, multiplied in after the overlay.
     @location(9) light_color: vec4<f32>,
     @location(10) @interpolate(flat) weather_rect: vec4<f32>,
+    // HDR tier of a light-giving particle (mesher::hdr_tier), from the overlay's
+    // high bits (particles.rs): fs_hdr_mark marks the frame with it.
+    @location(11) @interpolate(flat) tier: u32,
 }
 // Shipped light.glsl; normals are already transformed and RGBA8_SNORM packed.
 fn entity_light(normal: vec3<f32>, nether: bool) -> f32 {
@@ -108,7 +111,9 @@ fn entity_vertex(position: vec3<f32>, uv: vec2<f32>,
 }
 @vertex fn vs_entity(@location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
     @location(2) overlay: u32, @location(3) color: vec4<f32>, @location(4) light: vec4<u32>, @location(5) normal: vec4<f32>) -> Out {
-    return entity_vertex(position, uv, overlay, color, light, normal);
+    var out = entity_vertex(position, uv, overlay & 0xffffu, color, light, normal);
+    out.tier = overlay >> 16u;
+    return out;
 }
 // Retained bolt-local geometry, translated using the same f64 camera
 // subtraction as the former CPU path before adding each local f32 position.
@@ -217,6 +222,14 @@ fn crumbling_uv(uv: vec2<f32>, packed_origin: vec2<f32>, sprite_size: vec2<f32>,
     let f = max(linear_fog(in.spherical, globals.fog.x, globals.fog.y),
                 linear_fog(in.cylindrical, globals.fog.z, globals.fog.w));
     return vec4(mix(color.rgb, globals.fog_color.rgb, f * globals.fog_color.a), color.a);
+}
+
+// HDR output: a light-giving particle's pixels marked in the frame's alpha the
+// way terrain.wgsl marks a light source's, drawn again after the entities with
+// only alpha written, so its colour stays as blended.
+@fragment fn fs_hdr_mark(in: Out) -> @location(0) vec4<f32> {
+    if in.tier == 0u || textureSample(atlas, atlas_sampler, in.uv).a < 0.1 { discard; }
+    return vec4(0.0, 0.0, 0.0, 0.7 * f32(4u - min(in.tier, 4u)) / 4.0);
 }
 
 fn celestial_color(in: Out) -> vec4<f32> {
