@@ -200,7 +200,8 @@ enum InstanceCmd {
     },
     /// Show or set what runs around an instance's game: a shell command before it (the game
     /// starts only if it succeeds), a wrapper it runs through (`nice -n 5`), and environment
-    /// variables ("NAME=value NAME2=value"). An empty value clears one
+    /// variables ("NAME=value NAME2=value"). An empty value clears one. On Linux, also GameMode,
+    /// MangoHud and the dedicated graphics card, when the computer has them
     Launch {
         instance: String,
         #[arg(long)]
@@ -209,6 +210,15 @@ enum InstanceCmd {
         wrapper: Option<String>,
         #[arg(long)]
         env: Option<String>,
+        /// Linux: run it through GameMode (gamemoderun), on or off
+        #[arg(long)]
+        gamemode: Option<String>,
+        /// Linux: MangoHud's overlay, on or off
+        #[arg(long)]
+        mangohud: Option<String>,
+        /// Linux: the dedicated graphics card (DRI_PRIME, or NVIDIA's offload), on or off
+        #[arg(long)]
+        dedicated_gpu: Option<String>,
     },
     /// Put a shortcut on the desktop that plays an instance (`play --instance`): a .desktop
     /// file (also in the applications menu) on Linux, an app on macOS, a .lnk on Windows
@@ -1853,10 +1863,37 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
             pre_launch,
             wrapper,
             env,
+            gamemode,
+            mangohud,
+            dedicated_gpu,
         } => {
             use horizon_launcher::launch;
             let env = env.as_deref().map(launch::parse_env).transpose()?;
-            let changing = pre_launch.is_some() || wrapper.is_some() || env.is_some();
+            let [gamemode, mangohud, dedicated_gpu] =
+                [gamemode, mangohud, dedicated_gpu].map(|v| v.as_deref().map(on_off));
+            let [gamemode, mangohud, dedicated_gpu] = [
+                gamemode.transpose()?,
+                mangohud.transpose()?,
+                dedicated_gpu.transpose()?,
+            ];
+            let found = launch::Found::here();
+            for (on, has, name) in [
+                (gamemode, found.gamemode, "GameMode (gamemoderun)"),
+                (mangohud, found.mangohud, "MangoHud"),
+                (dedicated_gpu, found.two_gpus, "A second graphics card"),
+            ] {
+                if on == Some(true) && !has {
+                    eprintln!(
+                        "{name} isn't on this computer: the switch does nothing until it is."
+                    );
+                }
+            }
+            let changing = pre_launch.is_some()
+                || wrapper.is_some()
+                || env.is_some()
+                || gamemode.is_some()
+                || mangohud.is_some()
+                || dedicated_gpu.is_some();
             let i = match changing {
                 false => instances::find(&instance)?,
                 true => instances::edit(&instance, |m| {
@@ -1869,12 +1906,26 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                     if let Some(e) = env {
                         m.launch.env = e;
                     }
+                    if let Some(on) = gamemode {
+                        m.launch.gamemode = on;
+                    }
+                    if let Some(on) = mangohud {
+                        m.launch.mangohud = on;
+                    }
+                    if let Some(on) = dedicated_gpu {
+                        m.launch.dedicated_gpu = on;
+                    }
                 })?,
             };
             let l = &i.launch;
             if as_json {
                 json(serde_json::json!({
                     "instance": i.id, "pre_launch": l.pre_launch, "wrapper": l.wrapper, "env": l.env,
+                    "gamemode": l.gamemode, "mangohud": l.mangohud, "dedicated_gpu": l.dedicated_gpu,
+                    "found": {
+                        "gamemode": found.gamemode, "mangohud": found.mangohud,
+                        "two_gpus": found.two_gpus, "nvidia": found.nvidia,
+                    },
                 }));
             } else {
                 println!(
@@ -1885,6 +1936,15 @@ fn instance(action: InstanceCmd, as_json: bool) -> Result<(), String> {
                 println!("  pre-launch: {}", l.pre_launch);
                 println!("  wrapper:    {}", l.wrapper);
                 println!("  env:        {}", launch::env_line(&l.env));
+                let yes = |b: bool| if b { "on" } else { "off" };
+                for (name, on, has) in [
+                    ("gamemode:", l.gamemode, found.gamemode),
+                    ("mangohud:", l.mangohud, found.mangohud),
+                    ("gpu:", l.dedicated_gpu, found.two_gpus),
+                ] {
+                    let note = if has { "" } else { " (not on this computer)" };
+                    println!("  {name:<11} {}{note}", yes(on));
+                }
             }
         }
         InstanceCmd::Shortcut { instance, remove } => {
