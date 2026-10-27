@@ -95,6 +95,22 @@ fn components_tag(s: &Stack, builtin: &Builtin, synced: &Dynamic) -> Option<Tag>
                 ),
             ]),
             Component::FireworkExplosion(e) => fireworks_tag(e),
+            Component::LodestoneTracker { target, tracked } => {
+                let mut entries = Vec::new();
+                if let Some((dimension, pos)) = target {
+                    entries.push((
+                        "target",
+                        Tag::compound([
+                            ("dimension", Tag::String(dimension.as_str().into())),
+                            ("pos", Tag::IntArray(pos.to_vec())),
+                        ]),
+                    ));
+                }
+                if !tracked {
+                    entries.push(("tracked", Tag::Byte(0)));
+                }
+                Tag::compound(entries)
+            }
             Component::Enchantments(list) => {
                 // Enchantments are a synced (data-driven) registry: the
                 // ids index the server's RegistryData, not the builtin
@@ -228,6 +244,17 @@ fn profile_tag(p: &Profile) -> Tag {
     let mut entries: Vec<(&'static str, Tag)> = Vec::new();
     if let Some(name) = &p.name {
         entries.push(("name", Tag::String(name.as_str().into())));
+    }
+    if let Some(id) = p.id {
+        entries.push((
+            "id",
+            Tag::IntArray(vec![
+                (id >> 96) as i32,
+                (id >> 64) as i32,
+                (id >> 32) as i32,
+                id as i32,
+            ]),
+        ));
     }
     entries.push(("properties", Tag::List(properties)));
     Tag::compound(entries)

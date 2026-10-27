@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate crates/horizon-client/src/command/vanilla_order.rs: the order of
+"""Generate crates/horizon-command/src/vanilla_order.rs: the order of
 the children of each node of vanilla's command tree where Horizon's tree
 registers them in a different order. Brigadier keeps children in
 registration order, and /help (smart usage) lists them that way.
@@ -19,7 +19,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("vanilla", type=Path)
     parser.add_argument("rust", type=Path)
-    parser.add_argument("--out", type=Path, default=ROOT / "crates/horizon-client/src/command/vanilla_order.rs")
+    parser.add_argument("--out", type=Path, default=ROOT / "crates/horizon-command/src/vanilla_order.rs")
     args = parser.parse_args()
     vanilla = json.loads(args.vanilla.read_text())
     rust = json.loads(args.rust.read_text())
