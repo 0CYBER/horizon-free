@@ -4,7 +4,7 @@
 //! conditions advancements use).
 use serde_json::Value;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::Path,
 };
 
@@ -752,6 +752,41 @@ pub fn entity(v: &Value, e: &EntityView, w: &dyn World, origin: [f64; 3]) -> boo
         }
     }
     true
+}
+/// `KilledByArrowTrigger.TriggerInstance.matches`: the weapon, each listed
+/// victim condition matched by a distinct victim, and the count of entity types.
+pub fn killed_by_arrow(
+    c: &Value,
+    me: &EntityView,
+    victims: &[EntityView],
+    weapon: Option<&ItemView>,
+    w: &dyn World,
+) -> bool {
+    fn ctx<'a>(e: &'a EntityView, me: &EntityView) -> Entities<'a> {
+        Entities {
+            this: Some(e),
+            origin: me.position,
+            tool: None,
+            block_pos: None,
+        }
+    }
+    if !conditions(&c["player"], &ctx(me, me), w) {
+        return false;
+    }
+    if !c["fired_from_weapon"].is_null()
+        && !weapon.is_some_and(|it| item(&c["fired_from_weapon"], it, w))
+    {
+        return false;
+    }
+    let mut left: Vec<&EntityView> = victims.iter().collect();
+    for want in c["victims"].as_array().into_iter().flatten() {
+        let Some(i) = left.iter().position(|e| conditions(want, &ctx(e, me), w)) else {
+            return false;
+        };
+        left.remove(i);
+    }
+    let kinds: BTreeSet<&str> = victims.iter().map(|e| e.kind.as_str()).collect();
+    range_i(&c["unique_entity_types"], kinds.len() as i64)
 }
 /// A damage event as `DamagePredicate` sees it.
 #[derive(Clone, Debug, Default)]

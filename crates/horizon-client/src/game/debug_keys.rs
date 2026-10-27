@@ -244,7 +244,8 @@ impl Game<'_> {
                 if on { "visible" } else { "hidden" }
             )
         };
-        let remote = self.remote.is_some();
+        // `DebugScreenOverlay`: the single-player variants for a local server.
+        let remote = !self.has_singleplayer_server();
         let c = &self.debug_charts;
         [
             format!(
@@ -463,7 +464,7 @@ impl Game<'_> {
             height,
             self.settings.max_fps,
             1000.0 / self.clock.rate(),
-            self.remote.is_some(),
+            !self.has_singleplayer_server(),
         );
         draws.push(hud_layout::GuiDraw::Push(vec![hud_layout::PoseOp::Scale(
             scale, scale,
