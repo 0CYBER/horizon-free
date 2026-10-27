@@ -2068,6 +2068,7 @@ impl Hub {
                 | S::PlayerLoaded(_)
                 | S::ChunkBatchReceived(_)
                 | S::ClientInformation(_)
+                | S::RecipeBookChangeSettings(_)
                 | S::ClientTickEnd(_)
                 | S::KeepAlive(_) => false,
                 S::MovePlayerPos(p) => self.moved_far(i, [p.x, p.y, p.z]),
@@ -2134,6 +2135,15 @@ impl Hub {
                     g.max_unacknowledged = 10;
                 }
                 S::ClientTickEnd(_) => self.guests[i].position_this_tick = false,
+                // ServerGamePacketListenerImpl.handleRecipeBookChangeSettingsPacket.
+                S::RecipeBookChangeSettings(p) => {
+                    if let Some(book) = crate::recipe_book::BookType::ALL.get(p.book_type as usize)
+                    {
+                        let settings = &mut self.guests[i].recipe_book;
+                        settings.open[book.index()] = p.open;
+                        settings.filtering[book.index()] = p.filtering;
+                    }
+                }
                 S::ClientInformation(info) => {
                     let g = &mut self.guests[i];
                     g.view_distance =
@@ -2269,11 +2279,16 @@ impl Hub {
                 packets = 1;
             }
             // shouldCheckPlayerMovement (never the single-player owner).
-            // The server holds no velocity for a guest (getDeltaMovement),
-            // so nothing is expected.
             if !owner && check && (!g.fall_flying || elytra_check) {
                 let limit = if g.fall_flying { 300.0 } else { 100.0 };
-                if moved > limit * f64::from(packets) {
+                // `movedDist - expectedDist` (getDeltaMovement): the velocity
+                // the server last simulated for the guest is expected
+                // movement, not a violation — a landing glide keeps its speed.
+                let expected = g.motion.as_ref().map_or(0.0, |m| {
+                    let v = m.velocity;
+                    v.x * v.x + v.y * v.y + v.z * v.z
+                });
+                if moved - expected > limit * f64::from(packets) {
                     events.push(HostEvent::Warn(format!(
                         "{} moved too quickly! {},{},{}",
                         g.name,
@@ -2329,18 +2344,8 @@ impl Hub {
         }
         // getBoundingBox: the box of the body's pose (swimming and crawling
         // are 0.6 tall), so a swimmer under a ceiling isn't sent back.
-        let (half, height) = if g.fall_flying {
-            (0.3, 0.6)
-        } else if let Some(m) = &g.motion {
-            (
-                f64::from(m.dimensions.width) / 2.0,
-                f64::from(m.dimensions.height),
-            )
-        } else if g.sneaking {
-            (0.3, 1.5)
-        } else {
-            (0.3, 1.8)
-        };
+        let d = g.dimensions();
+        let (half, height) = (f64::from(d.width) / 2.0, f64::from(d.height));
         let at = |p: [f64; 3]| {
             Aabb::new(
                 Vec3::new(p[0] - half, p[1], p[2] - half),

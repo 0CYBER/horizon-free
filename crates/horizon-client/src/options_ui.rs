@@ -56,6 +56,7 @@ pub enum Opt {
     ChatVisibility,
     ChatColors,
     ChatLinks,
+    ChatLinksPrompt,
     ChatOpacity,
     TextBackgroundOpacity,
     ChatScale,
@@ -243,6 +244,7 @@ impl Opt {
             Opt::ChatVisibility => "options.chat.visibility",
             Opt::ChatColors => "options.chat.color",
             Opt::ChatLinks => "options.chat.links",
+            Opt::ChatLinksPrompt => "options.chat.links.prompt",
             Opt::ChatOpacity => "options.chat.opacity",
             Opt::TextBackgroundOpacity => "options.accessibility.text_background_opacity",
             Opt::ChatScale => "options.chat.scale",
@@ -581,6 +583,7 @@ impl Opt {
             ][usize::from(s.chat_visibility.min(2))]),
             Opt::ChatColors => on_off(s.chat_colors),
             Opt::ChatLinks => on_off(s.chat_links),
+            Opt::ChatLinksPrompt => on_off(s.chat_links_prompt),
             Opt::AutoSuggestions => on_off(s.auto_suggestions),
             Opt::ReducedDebugInfo => on_off(s.reduced_debug_info),
             Opt::HighContrast => on_off(s.high_contrast),
@@ -692,6 +695,7 @@ impl Opt {
                 | Opt::CutoutLeaves
                 | Opt::ImprovedTransparency
                 | Opt::MenuBlur
+                | Opt::ChunkBuilder
         )
     }
     /// Advance a cycle button (CycleButton.cycleValue).
@@ -755,6 +759,7 @@ impl Opt {
             Opt::ChatVisibility => s.chat_visibility = next(s.chat_visibility, 3),
             Opt::ChatColors => s.chat_colors = !s.chat_colors,
             Opt::ChatLinks => s.chat_links = !s.chat_links,
+            Opt::ChatLinksPrompt => s.chat_links_prompt = !s.chat_links_prompt,
             Opt::AutoSuggestions => s.auto_suggestions = !s.auto_suggestions,
             Opt::ReducedDebugInfo => s.reduced_debug_info = !s.reduced_debug_info,
             Opt::HighContrast => s.high_contrast = !s.high_contrast,
@@ -1507,6 +1512,7 @@ impl OptionsUi {
                 Opt::ChatVisibility,
                 Opt::ChatColors,
                 Opt::ChatLinks,
+                Opt::ChatLinksPrompt,
                 Opt::ChatOpacity,
                 Opt::TextBackgroundOpacity,
                 Opt::ChatScale,

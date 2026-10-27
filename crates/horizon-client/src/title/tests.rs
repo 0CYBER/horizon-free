@@ -770,9 +770,12 @@ fn create_world_tabs_follow_vanilla_and_their_choices_reach_the_action() {
             bonus_chest: true
         }
     );
-    // The More tab's screens don't exist yet.
+    // The More tab's Experiments and Data Packs screens don't exist yet.
     f.title.click(54.0 + 248.0 + 10.0, 10.0, size);
-    assert!(labels(&f)[..3].iter().all(|b| !b.3));
+    assert_eq!(
+        labels(&f)[..3].iter().map(|b| b.3).collect::<Vec<_>>(),
+        [true, false, false]
+    );
 }
 
 #[test]

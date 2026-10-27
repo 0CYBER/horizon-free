@@ -10,6 +10,7 @@ mod cli;
 mod cli_tools;
 mod collection;
 mod console;
+mod console_page;
 mod cull;
 mod datapacks_page;
 mod export_page;
@@ -17,6 +18,8 @@ mod game_tools;
 mod import_page;
 mod instances_page;
 mod internet;
+mod language_page;
+mod launch_page;
 mod markdown;
 mod mcp;
 mod modpacks_page;
@@ -29,8 +32,13 @@ mod perf;
 mod screenshots_page;
 mod scrollbar;
 mod servers_page;
+mod shortcut_page;
+mod skin_page;
+mod switch_page;
 mod theme;
+mod themes_page;
 mod titlebar;
+mod while_playing;
 mod worlds_page;
 
 use gpui::{
@@ -41,6 +49,7 @@ use gpui::{
 };
 use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
+use horizon_launcher::i18n::{self, tr, trf};
 use horizon_launcher::instances;
 use horizon_launcher::telemetry;
 use scrollbar::Scrollbar;
@@ -160,6 +169,12 @@ struct Launcher {
     install_error: Option<(String, String)>,
     confirm_remove: Option<String>,
     picker_open: bool,
+    /// The top bar's quick switch of who plays (`switch_page.rs`).
+    account_menu: bool,
+    /// Settings > Account's skin panel for an offline name (`skin_page.rs`).
+    skin: Option<skin_page::SkinPanel>,
+    /// Why the last picture for Home's background was refused.
+    background_error: Option<String>,
     settings: Settings,
     /// The Discord, sponsor and website links: built in until links.json on main has been read.
     links: backend::Links,
@@ -244,7 +259,13 @@ struct Launcher {
     game_packs: packs_page::Packs,
     world_packs: datapacks_page::WorldPacks,
     export: Option<export_page::ExportPanel>,
+    launch: Option<launch_page::LaunchPanel>,
     importing: import_page::Importing,
+    console: console_page::Console,
+    /// What the window did when the game started (`while_playing.rs`).
+    aside: while_playing::Aside,
+    /// The selected instance's desktop shortcut (`shortcut_page.rs`).
+    shortcuts: shortcut_page::Shortcuts,
     /// The name the game made up for an offline player (`horizon-player.txt`), for the top bar.
     offline_name: Option<String>,
     /// The player's servers, for the sidebar until the Servers page has read them.
@@ -259,7 +280,7 @@ impl Launcher {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (tx, rx) = channel();
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
-            this.theme = Theme::for_appearance(this.settings.appearance, window.appearance());
+            this.theme = this.settings_theme(window);
             cx.notify();
         });
         cx.spawn(async move |this, cx| loop {
@@ -298,6 +319,7 @@ impl Launcher {
         })
         .detach();
         let mut settings = Settings::load();
+        i18n::set(settings.language());
         if settings.minecraft_dir.is_none() {
             settings.minecraft_dir = backend::default_minecraft_dir();
         }
@@ -325,7 +347,7 @@ impl Launcher {
         // `window.appearance()`, so both draw the same look.
         titlebar::apply_appearance(window, settings.appearance);
         let mut this = Self {
-            theme: Theme::for_appearance(settings.appearance, window.appearance()),
+            theme: Theme::for_appearance(settings.appearance, settings.accent, window.appearance()),
             page: Page::from_env(),
             switches: 0,
             content_scroll: Scrollbar::default(),
@@ -352,6 +374,9 @@ impl Launcher {
             install_error: None,
             confirm_remove: None,
             picker_open: false,
+            account_menu: false,
+            skin: None,
+            background_error: None,
             args_input: settings.game_args.clone(),
             args_focused: false,
             args_focus: cx.focus_handle(),
@@ -410,7 +435,11 @@ impl Launcher {
             game_packs: packs_page::Packs::default(),
             world_packs: datapacks_page::WorldPacks::default(),
             export: None,
+            launch: None,
             importing: Default::default(),
+            console: Default::default(),
+            aside: while_playing::Aside::new(window.window_handle()),
+            shortcuts: Default::default(),
             offline_name: offline_name(),
             side_servers: horizon_launcher::servers::list(),
             art: art::Art::default(),
@@ -453,6 +482,7 @@ impl Launcher {
             }
         }
         self.picker_open = false;
+        self.account_menu = false;
     }
 
     fn check_updates(&mut self) {
@@ -569,6 +599,11 @@ impl Launcher {
                             Err(e) => self.client_error = Some(format!("Playing offline: {e}")),
                         }
                         self.accounts = Accounts::load();
+                        // An offline name the player picked (the quick switch).
+                        if let Some(name) = self.accounts.name_arg() {
+                            cmd.arg("--name").arg(name);
+                        }
+                        cmd.envs(self.accounts.look_env());
                         // A pack's Play button plays that pack; Play plays the selected instance.
                         let (profile, run) = match self.starting_pack.take() {
                             Some(work) => {
@@ -598,11 +633,20 @@ impl Launcher {
                             cmd.arg(flag).arg(value);
                         }
                         backend::append_game_args(&mut cmd);
+                        // Last, around every argument: the instance's pre-launch command,
+                        // wrapper and variables.
+                        let launch = run
+                            .as_ref()
+                            .and_then(|id| instances::list().into_iter().find(|i| &i.id == id))
+                            .map(|i| i.launch)
+                            .unwrap_or_default();
+                        let cmd = horizon_launcher::launch::wrap(cmd, &launch);
                         self.client_home = cmd.get_current_dir().map(|d| d.to_path_buf());
                         match backend::spawn(Job::Client, cmd, self.tx.clone()) {
                             Ok(r) => {
                                 self.client = Some(r);
                                 self.client_run = run.map(|id| (id, Instant::now()));
+                                self.step_aside(cx);
                             }
                             Err(e) => self.client_error = Some(e),
                         }
@@ -720,6 +764,7 @@ impl Launcher {
                         }
                         Job::Client => {
                             self.client = None;
+                            self.come_back(cx);
                             // The game saved: last played, sizes and pictures changed.
                             self.worlds.stale();
                             self.multiplayer.stale();
@@ -1153,6 +1198,8 @@ fn button(
     t: &Theme,
 ) -> Stateful<Div> {
     let id: SharedString = id.into();
+    let label: SharedString = label.into();
+    let label = SharedString::from(tr(&label).to_string());
     let t = *t;
     let hover = match kind {
         Kind::Primary => t.on_face.opacity(0.10),
@@ -1196,7 +1243,7 @@ fn button(
             .items_center()
             .gap(px(8.))
             .pb(px(if kind == Kind::Ghost { 0. } else { 2. }))
-            .child(label.into()),
+            .child(label),
     );
     keyboard(track_hover(base, id), &t).active(|s| s.opacity(theme::PRESSED).top(px(1.)))
 }
@@ -1264,7 +1311,7 @@ fn section_title(label: &'static str, icon: &'static str, t: &Theme) -> Div {
         .child(
             blocks::pixel(18., FontWeight::SEMIBOLD)
                 .text_color(t.ink)
-                .child(label),
+                .child(tr(label)),
         )
 }
 
@@ -1310,7 +1357,7 @@ fn segments<T: Copy + PartialEq + 'static>(
                 .when(!active, |d| {
                     d.text_color(t.muted).hover(move |s| s.text_color(t.ink))
                 })
-                .child(div().relative().child(label))
+                .child(div().relative().child(tr(label)))
                 .on_click(move |_: &ClickEvent, window, cx| pick(value, window, cx))
         }))
 }
@@ -1336,13 +1383,13 @@ fn page_header(title: &str, description: &str, t: &Theme) -> Div {
         .child(
             blocks::pixel(36., FontWeight::SEMIBOLD)
                 .text_color(t.ink)
-                .child(title.to_string()),
+                .child(tr(title).to_string()),
         )
         .child(
             text(theme::UI)
                 .max_w(px(520.))
                 .text_color(t.muted)
-                .child(description.to_string()),
+                .child(tr(description).to_string()),
         )
 }
 
@@ -1485,9 +1532,9 @@ fn megabytes(bytes: u64) -> String {
 // ----- Pages -------------------------------------------------------------------------------------
 
 impl Launcher {
-    /// The top bar: the mark and the name over the sidebar (in the title bar on Windows), the
-    /// pages with their icons, then the account playing and the Settings button.
-    fn topbar(&mut self, cx: &mut Context<Self>) -> Div {
+    /// The top bar: the mark and name over the sidebar (in the title bar on Windows and Linux
+    /// client-side decorations), the pages with their icons, then the account and Settings.
+    fn topbar(&mut self, window: &Window, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let mut nav = div().flex().flex_none().h_full().gap(px(2.));
         for (page, label, icon) in Page::ALL {
@@ -1525,7 +1572,7 @@ impl Launcher {
                     blocks::pixel(16., FontWeight::MEDIUM)
                         .relative()
                         .text_color(if active { t.ink } else { t.muted })
-                        .child(label),
+                        .child(tr(label)),
                 )
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.go(page);
@@ -1533,14 +1580,9 @@ impl Launcher {
                 }));
             nav = nav.child(keyboard(track_hover(item, id), &t));
         }
-        // Only a signed-in account says "Microsoft account"; otherwise the name the game made up.
-        let (name, how) = match self.accounts.selected() {
-            Some(a) => (a.name.clone(), "Microsoft account"),
-            None => (
-                self.offline_name.clone().unwrap_or_else(|| "Player".into()),
-                "Offline",
-            ),
-        };
+        // Only a signed-in account says "Microsoft account"; otherwise an offline name, or the
+        // one the game made up.
+        let (name, how) = self.who_plays();
         let account = keyboard(div().id("account"), &t)
             .relative()
             .flex()
@@ -1579,9 +1621,13 @@ impl Launcher {
                     .child(text(theme::CAPTION).text_color(t.muted).child(how)),
             )
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.go(Page::Settings);
+                this.account_menu = !this.account_menu;
                 cx.notify();
             }));
+        let account = div()
+            .relative()
+            .child(account)
+            .children(self.account_menu(cx));
         let settings_open = self.page == Page::Settings;
         let settings = keyboard(div().id("nav-Settings"), &t)
             .relative()
@@ -1624,8 +1670,8 @@ impl Launcher {
             .bg(t.side)
             .border_b_2()
             .border_color(t.outline)
-            // Where the title bar is drawn here (Windows), it carries the mark and the name.
-            .when(!titlebar::DRAWN, |bar| {
+            // Custom title bars carry the mark and name above the sidebar.
+            .when(!titlebar::draws_brand(window), |bar| {
                 bar.child(
                     div()
                         .flex()
@@ -1709,7 +1755,7 @@ impl Launcher {
             .flex()
             .flex_col()
             .gap(px(4.))
-            .child(heading("INSTANCES".into()).child(add))
+            .child(heading(tr("INSTANCES").into()).child(add))
             .children(self.instance_items(heading, cx));
         let servers: Vec<_> = self
             .servers
@@ -1718,7 +1764,7 @@ impl Launcher {
             .unwrap_or_else(|| self.side_servers.clone());
         let mut list = list;
         if !servers.is_empty() {
-            list = list.child(heading("SERVERS".into()));
+            list = list.child(heading(tr("SERVERS").into()));
         }
         for e in servers {
             let up = self.servers.is_up(&e.dir);
@@ -1744,7 +1790,7 @@ impl Launcher {
                             .flex_col()
                             .min_w_0()
                             .child(title(e.name.clone()))
-                            .child(sub(if up { "Running" } else { "Stopped" }.into())),
+                            .child(sub(tr(if up { "Running" } else { "Stopped" }).into())),
                     )
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.servers.open = Some(dir.clone());
@@ -1828,7 +1874,7 @@ impl Launcher {
                         text(theme::MICRO)
                             .text_color(t.muted)
                             .hover(move |s| s.text_color(t.ink))
-                            .child("HIDE"),
+                            .child(tr("HIDE")),
                     )
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.settings.partner_hidden = true;
@@ -1850,7 +1896,7 @@ impl Launcher {
         if !self.links.website.is_empty() {
             foot = foot.child(link(
                 "website",
-                "Website",
+                tr("Website"),
                 "globe",
                 self.links.website.clone(),
             ));
@@ -2015,7 +2061,7 @@ impl Launcher {
                     "Start the game, or run a server for others to join.",
                     &t,
                 ))
-                .child(centered("No version installed yet.", &t).child(
+                .child(centered(tr("No version installed yet."), &t).child(
                     button("go-versions", "Choose a version", Kind::Secondary, &t).on_click(
                         cx.listener(|this, _: &ClickEvent, _, cx| {
                             this.go(Page::Versions);
@@ -2031,10 +2077,12 @@ impl Launcher {
         let hero = self.hero(&tag, &version, prepared, cx);
         let running = self.client.is_some() || self.starting_client.is_some();
         let play_label = if running { "Running" } else { "Play" };
+        // The label clears the icon in every language ("Играть" is wider than "Play").
         let mut play = button("play", play_label, Kind::Primary, &t)
             .min_w(px(200.))
             .h(px(60.))
-            .px(px(28.))
+            .pl(px(60.))
+            .pr(px(28.))
             .text_size(px(28.))
             .font_weight(FontWeight::SEMIBOLD)
             .child(
@@ -2075,7 +2123,7 @@ impl Launcher {
             );
 
         let resources_value = if self.preparing {
-            "Preparing…".to_string()
+            tr("Preparing…").to_string()
         } else {
             backend::resources_summary(prepared, !silent, &version)
         };
@@ -2100,7 +2148,9 @@ impl Launcher {
         let minecraft = self.settings.minecraft_dir.as_deref().map_or_else(
             || {
                 div()
-                    .child("Not found. Choose the folder where your launcher keeps Minecraft.")
+                    .child(tr(
+                        "Not found. Choose the folder where your launcher keeps Minecraft.",
+                    ))
                     .into_any_element()
             },
             |p| {
@@ -2116,16 +2166,17 @@ impl Launcher {
             .child(section_title("Ready to play", "check", &t).mb(px(12.)))
             .children(self.instance_row(1, cx))
             .children(self.export_panel(cx))
+            .children(self.launch_panel(cx))
             .child(index_row(
                 2,
-                "Resources",
+                tr("Resources"),
                 Some(div().child(resources_value).into_any_element()),
                 Some(prepare.into_any_element()),
                 &t,
             ))
             .child(index_row(
                 3,
-                "Minecraft folder",
+                tr("Minecraft folder"),
                 Some(minecraft),
                 Some(
                     button("choose-mc", "Choose…", Kind::Ghost, &t)
@@ -2141,10 +2192,10 @@ impl Launcher {
             if self.accounts.selected().is_none() && account::client_id().is_some() {
                 rows = rows.child(index_row(
                     5,
-                    "Playing offline",
+                    tr("Playing offline"),
                     Some(
                         div()
-                            .child("Online servers need a Microsoft account.")
+                            .child(tr("Online servers need a Microsoft account."))
                             .into_any_element(),
                     ),
                     Some(
@@ -2175,6 +2226,21 @@ impl Launcher {
                     gpui::linear_color_stop(t.page.opacity(to), at),
                 ))
         };
+        let picture = self.home_background();
+        let scene = match picture {
+            Some(path) => gpui::img(path)
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .object_fit(gpui::ObjectFit::Cover),
+            None => gpui::img(scene)
+                .absolute()
+                .bottom_0()
+                .left_0()
+                .w(px(scene_width))
+                .h(px(art::SCENE_HEIGHT as f32 * art::SCENE_TEXEL)),
+        };
         let banner = div()
             .relative()
             .flex()
@@ -2189,14 +2255,7 @@ impl Launcher {
             .bg(gpui::rgb(art::sky_top(t.dark)))
             .border_b_2()
             .border_color(t.outline)
-            .child(
-                gpui::img(scene)
-                    .absolute()
-                    .bottom_0()
-                    .left_0()
-                    .w(px(scene_width))
-                    .h(px(art::SCENE_HEIGHT as f32 * art::SCENE_TEXEL)),
-            )
+            .child(scene)
             .child(veil(90., 0.82, 0., 0.62))
             .child(veil(180., 0., 0.75, 1.))
             .child(div().relative().child(hero))
@@ -2221,7 +2280,7 @@ impl Launcher {
                     .child(
                         text(theme::CAPTION)
                             .text_color(t.muted)
-                            .child("The first preparation takes a few minutes."),
+                            .child(tr("The first preparation takes a few minutes.")),
                     ),
             );
         }
@@ -2229,6 +2288,9 @@ impl Launcher {
             page = page.child(notice(e, &t));
         }
         page = page.child(rows);
+        if let Some(console) = self.console_section(cx) {
+            page = page.child(console);
+        }
         if let Some(worlds) = self.worlds_section(cx) {
             page = page.child(worlds);
         }
@@ -2312,11 +2374,11 @@ impl Launcher {
                 },
             )),
         );
-        let help = if crash.report.is_some() {
+        let help = tr(if crash.report.is_some() {
             "When you report it on Discord, attach the crash report file (or paste it with Copy report) and say what you were doing."
         } else {
             "The game ended without a crash report. When you report it on Discord, attach latest.log from the logs folder and say what you were doing."
-        };
+        });
         let mut body = div()
             .flex_1()
             .min_w_0()
@@ -2326,7 +2388,7 @@ impl Launcher {
             .child(
                 text(theme::HEADING)
                     .text_color(t.ink)
-                    .child("Horizon crashed"),
+                    .child(tr("Horizon crashed")),
             );
         if !crash.summary.is_empty() {
             body = body.child(div().text_color(t.ink_soft).child(crash.summary));
@@ -2402,7 +2464,7 @@ impl Launcher {
                             .child(caps(format!("Minecraft {version}")).text_color(t.ink_soft))
                             .child(div().size(px(4.)).bg(t.muted))
                             .child(
-                                caps(if prepared { "Ready" } else { "Needs preparing" })
+                                caps(tr(if prepared { "Ready" } else { "Needs preparing" }))
                                     .text_color(if prepared { t.success } else { t.warn }),
                             ),
                     )
@@ -2540,10 +2602,10 @@ impl Launcher {
             }),
         );
         let horizon = match (&self.updates.horizon, &self.update_error) {
-            (Some(r), _) => format!("{} available", r.tag),
+            (Some(r), _) => trf("{version} available", &[("version", &r.tag)]),
             (None, Some(e)) => e.clone(),
-            (None, None) if self.checked.is_some() => "Up to date".to_string(),
-            _ => "Checking…".to_string(),
+            (None, None) if self.checked.is_some() => tr("Up to date").to_string(),
+            _ => tr("Checking…").to_string(),
         };
         let horizon_action = self
             .updates
@@ -2560,18 +2622,36 @@ impl Launcher {
             });
         let launcher = match &self.self_update {
             SelfUpdate::Downloading(v, p) => {
-                format!("{}  ·  downloading {v}, {:.0}%", backend::VERSION, p * 100.)
+                let done = format!("{:.0}", p * 100.);
+                let said = trf(
+                    "downloading {version}, {percent}%",
+                    &[("version", v), ("percent", &done)],
+                );
+                format!("{}  ·  {said}", backend::VERSION)
             }
-            SelfUpdate::Ready(v) => format!("Updated to {v}. Restart the launcher to use it."),
-            SelfUpdate::Failed(e) => format!("{}  ·  the update failed: {e}", backend::VERSION),
+            SelfUpdate::Ready(v) => trf(
+                "Updated to {version}. Restart the launcher to use it.",
+                &[("version", v)],
+            ),
+            SelfUpdate::Failed(e) => format!(
+                "{}  ·  {}",
+                backend::VERSION,
+                trf("the update failed: {error}", &[("error", e)])
+            ),
             SelfUpdate::Idle => match &self.updates.launcher {
                 Some(r) => format!(
-                    "{}  ·  {} available",
+                    "{}  ·  {}",
                     backend::VERSION,
-                    backend::launcher_version(&r.tag).unwrap_or_default()
+                    trf(
+                        "{version} available",
+                        &[(
+                            "version",
+                            backend::launcher_version(&r.tag).unwrap_or_default()
+                        )]
+                    )
                 ),
                 None if self.checked.is_some() && self.update_error.is_none() => {
-                    format!("{}  ·  up to date", backend::VERSION)
+                    format!("{}  ·  {}", backend::VERSION, tr("up to date"))
                 }
                 None => backend::VERSION.to_string(),
             },
@@ -2596,8 +2676,9 @@ impl Launcher {
             ),
         };
         let mono = |s: String| div().font_family(theme::MONO).child(s).into_any_element();
-        let plain = |s: &str| div().child(s.to_string()).into_any_element();
+        let plain = |s: &str| div().child(tr(s).to_string()).into_any_element();
         let (accounts, n) = self.account_rows(cx);
+        let (offline, n) = self.offline_rows(n, cx);
         let appearance = segments(
             "appearance",
             &[
@@ -2614,7 +2695,7 @@ impl Launcher {
                         this.settings.appearance = choice;
                         this.settings.save();
                         titlebar::apply_appearance(window, choice);
-                        this.theme = Theme::for_appearance(choice, window.appearance());
+                        this.theme = this.settings_theme(window);
                         cx.notify();
                     });
                 }
@@ -2638,10 +2719,11 @@ impl Launcher {
                     .flex_col()
                     .child(group("Account", "user").mt_0())
                     .child(accounts)
+                    .child(offline)
                     .child(group("Updates", "reload"))
                     .child(index_row(
                         n + 1,
-                        "Install new versions automatically",
+                        tr("Install new versions automatically"),
                         Some(plain(
                             "Your selected version only changes if you were playing the newest one.",
                         )),
@@ -2651,14 +2733,18 @@ impl Launcher {
                     .child(group("Launcher", "monitor"))
                     .child(index_row(
                         n + 3,
-                        "Appearance",
+                        tr("Appearance"),
                         Some(plain("Dark by default. System follows your computer's light or dark.")),
                         Some(appearance.into_any_element()),
                         &t,
                     ))
+                    .child(self.accent_row(cx))
+                    .child(self.home_background_row(cx))
+                    .child(self.language_row(cx))
+                    .child(self.while_playing_row(n + 3, cx))
                     .child(index_row(
                         n + 3,
-                        "Show the opening",
+                        tr("Show the opening"),
                         Some(plain("The wordmark, while the release list loads.")),
                         Some(opening.into_any_element()),
                         &t,
@@ -2673,24 +2759,25 @@ impl Launcher {
                     .child(index_row(n + 7, "Horizon", Some(plain(&horizon)), horizon_action, &t))
                     .child(index_row(
                         n + 8,
-                        "Launcher",
+                        tr("Launcher"),
                         Some(plain(&launcher)),
                         launcher_action,
                         &t,
                     ))
                     .child(index_row(
                         n + 9,
-                        "Data folder",
+                        tr("Data folder"),
                         Some(mono(short(&backend::data_dir()))),
                         None,
                         &t,
                     ))
                     .child(index_row(
                         n + 10,
-                        "Logs",
+                        tr("Logs"),
                         Some(mono(format!(
-                            "{}  ·  crash reports beside it",
-                            short(&backend::logs_dir())
+                            "{}  ·  {}",
+                            short(&backend::logs_dir()),
+                            tr("crash reports beside it")
                         ))),
                         Some(
                             button("open-logs", "Open", Kind::Secondary, &t)
@@ -2706,7 +2793,7 @@ impl Launcher {
                     .when(cfg!(target_os = "linux"), |d| {
                         d.child(index_row(
                             n + 11,
-                            "Applications menu",
+                            tr("Applications menu"),
                             Some(plain(if self.settings.desktop_entry() {
                                 "Horizon and its icon are in your desktop's menu."
                             } else {
@@ -2932,11 +3019,11 @@ impl Launcher {
                 a.name.clone(),
                 Some(
                     div()
-                        .child(if plays {
+                        .child(tr(if plays {
                             "Microsoft account · plays"
                         } else {
                             "Microsoft account · signed in"
-                        })
+                        }))
                         .into_any_element(),
                 ),
                 Some(actions.into_any_element()),
@@ -2949,8 +3036,8 @@ impl Launcher {
             Some(SignInState::Starting | SignInState::Code(_))
         );
         let detail = match &self.sign_in_state {
-            _ if !configured => div().child(account::NOT_CONFIGURED),
-            Some(SignInState::Starting) => div().child("Asking Microsoft…"),
+            _ if !configured => div().child(tr(account::NOT_CONFIGURED)),
+            Some(SignInState::Starting) => div().child(tr("Asking Microsoft…")),
             Some(SignInState::Code(code)) => div()
                 .flex()
                 .flex_col()
@@ -2970,7 +3057,7 @@ impl Launcher {
             None if self.accounts.accounts.is_empty() => div().child(
                 "Sign in to play on online servers with your name and skin. Without an account the game plays offline.",
             ),
-            None => div().child("Add another account."),
+            None => div().child(tr("Add another account.")),
         };
         let detail = if self.keychain || self.accounts.accounts.is_empty() {
             detail
@@ -3041,7 +3128,7 @@ impl Launcher {
         };
         rows = rows.child(index_row(
             n,
-            title,
+            tr(title),
             Some(detail.into_any_element()),
             action,
             &t,
@@ -3070,7 +3157,7 @@ impl Launcher {
             .text_size(px(12.))
             .cursor_text()
             .child(if self.friend_code.is_empty() && !focused {
-                div().text_color(t.muted).child("Paste an invite code")
+                div().text_color(t.muted).child(tr("Paste an invite code"))
             } else {
                 // The end of a long code stays in view while typing.
                 let shown: String = {
@@ -3120,10 +3207,10 @@ impl Launcher {
         }
         index_row(
             4,
-            "Join a friend",
+            tr("Join a friend"),
             Some(
                 div()
-                    .child("Paste the code a friend shows when they invite you.")
+                    .child(tr("Paste the code a friend shows when they invite you."))
                     .into_any_element(),
             ),
             Some(
@@ -3571,7 +3658,7 @@ impl Render for Launcher {
             window.focus(&self.root_focus);
         }
         let stone = self.art.stone(t.page_rgb, t.dark, window.scale_factor());
-        let topbar = self.topbar(cx);
+        let topbar = self.topbar(window, cx);
         let sidebar = self.sidebar(cx);
         let mut root = div()
             .id("root")
@@ -3726,6 +3813,7 @@ impl Render for Launcher {
             .bg(t.side)
             .children(titlebar::render(&t, window))
             .child(root.flex_1().min_h_0())
+            .children(titlebar::resize_handles(window))
     }
 }
 
@@ -3855,6 +3943,8 @@ fn main() {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     window_min_size: Some(size(px(960.), px(600.))),
                     titlebar: Some(titlebar::options()),
+                    #[cfg(target_os = "linux")]
+                    window_decorations: Some(gpui::WindowDecorations::Client),
                     app_id: Some("horizon-launcher".into()),
                     ..Default::default()
                 },

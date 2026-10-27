@@ -142,6 +142,10 @@ pub struct NetConfig {
     /// server.properties `resource-pack`: offered to every player during
     /// configuration (a dedicated server's; MinecraftServer.getServerResourcePack).
     pub resource_pack: Option<crate::server::properties::ResourcePackInfo>,
+    /// MinecraftServer.serverLinks (a dedicated server's `bug-report-link`):
+    /// sent in configuration when non-empty
+    /// (ServerConfigurationPacketListenerImpl.startConfiguration).
+    pub server_links: Vec<horizon_protocol::packets::configuration::ServerLink>,
 }
 impl NetConfig {
     /// MinecraftServer.enforceSecureProfile.
@@ -168,6 +172,7 @@ impl NetConfig {
             online: None,
             log: None,
             resource_pack: None,
+            server_links: Vec::new(),
         }
     }
 }
