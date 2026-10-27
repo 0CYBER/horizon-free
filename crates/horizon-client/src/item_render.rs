@@ -759,6 +759,33 @@ pub fn cluster_poses(state: &ItemRenderState, pose: Mat4, amount: u32, seed: i64
 mod tests {
     use super::*;
 
+    /// A bad item model surfaces only once items.json has loaded, so a broken
+    /// items.json still reports itself first.
+    #[test]
+    fn item_model_errors_wait_for_the_item_definitions() -> crate::Result<()> {
+        let root =
+            std::env::temp_dir().join(format!("horizon-item-model-errors-{}", std::process::id()));
+        let model = root.join("assets/horizon/models/INVALID.json");
+        fs::create_dir_all(model.parent().unwrap())?;
+        fs::write(model, "{}")?;
+        let library = crate::model_library::ParsedModels::load(&root).into_item_library();
+        assert!(library.is_err());
+        fs::write(root.join("items.json"), "{")?;
+        let load = || {
+            ItemRenderer::load_with_library(&root, library.clone())
+                .err()
+                .unwrap()
+                .to_string()
+        };
+        let broken_items = load();
+        fs::write(root.join("items.json"), "{}")?;
+        let bad_model = load();
+        let _ = fs::remove_dir_all(&root);
+        assert!(!broken_items.starts_with("item models:"));
+        assert!(bad_model.starts_with("item models:"));
+        Ok(())
+    }
+
     #[test]
     fn rendered_amounts_follow_the_count_bands() {
         let bands: Vec<u32> = [0, 1, 2, 16, 17, 32, 33, 48, 49, 64]
