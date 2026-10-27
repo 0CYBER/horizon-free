@@ -120,3 +120,39 @@ class UntrustedBuildTests(unittest.TestCase):
         self.assertEqual(self.game.count("HORIZON_NO_SCCACHE: ${{ inputs.trusted && '1' || '' }}"), calls)
         env = (Path(__file__).resolve().parents[1] / "tools/ci/runner-env.sh").read_text()
         self.assertEqual(env.count('-z "${HORIZON_NO_SCCACHE:-}"'), 2)
+
+
+class PruneBuildsTests(unittest.TestCase):
+    TODAY = dt.date(2026, 11, 10)
+
+    def test_only_old_unpublished_builds_go(self):
+        branches = {
+            "nightly/build-2026-10-27-1": "a",   # old: goes
+            "nightly/build-2026-10-27-2": "pub",  # old, but a published nightly-<date> points to it: stays
+            "nightly/build-2026-11-02-1": "c",   # old enough by one day: goes
+            "nightly/build-2026-11-03-1": "d",   # exactly 7 days: stays
+            "nightly/build-2026-11-09-3": "e",   # recent: stays
+        }
+        self.assertEqual(nightly.stale_builds(branches, {"pub"}, self.TODAY, 7),
+                         ["nightly/build-2026-10-27-1", "nightly/build-2026-11-02-1"])
+
+    def test_the_newest_build_always_stays(self):
+        branches = {"nightly/build-2026-10-01-1": "a", "nightly/build-2026-10-01-2": "b"}
+        self.assertEqual(nightly.stale_builds(branches, set(), self.TODAY, 7), ["nightly/build-2026-10-01-1"])
+        self.assertEqual(nightly.stale_builds({"nightly/build-2026-10-01-1": "a"}, set(), self.TODAY, 7), [])
+        # the newest by number, not by text: -10 is newer than -9
+        branches = {"nightly/build-2026-10-01-9": "a", "nightly/build-2026-10-01-10": "b"}
+        self.assertEqual(nightly.stale_builds(branches, set(), self.TODAY, 7), ["nightly/build-2026-10-01-9"])
+
+    def test_nothing_else_is_touched(self):
+        branches = {"nightly-state": "s", "nightly/build-x": "x", "main": "m", "nightly/build-2026-10-01-1-fix": "f",
+                    "feature/nightly/build-2026-10-01-1": "g", "nightly/build-2026-10-02-1": "n"}
+        self.assertEqual(nightly.stale_builds(branches, set(), self.TODAY, 7), [])
+
+    def test_the_workflow_prunes_on_schedule_only(self):
+        build = (WORKFLOWS / "nightly-build.yml").read_text()
+        step = build.split("Old nightly/build-* branches deleted", 1)[1].split("- uses:", 1)[0]
+        self.assertIn("if: github.event_name == 'schedule'", step)
+        self.assertIn("prune-builds --days 7", step)
+        self.assertIn("GITHUB_STEP_SUMMARY", step)
+
