@@ -4,7 +4,7 @@
     nightly_set.py command     one `/nightly …` comment (nightly-command.yml): checks who asked, updates the set,
                                starts the build and answers in the thread
 
-A comment by Ludovic or by a login in .github/nightly-reviewers.txt, on any issue or pull request:
+A comment by Ludovic or by a login in .github/trusted-reviewers.txt, on any issue or pull request:
 
     /nightly 2640 2642     the set becomes these pull requests, merged onto main in this order; builds now
     /nightly add 2650      adds one, or takes its newest head again; builds now
@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Callable
 
 OWNER = "ludovic111"
-REVIEWERS = ".github/nightly-reviewers.txt"
+REVIEWERS = ".github/trusted-reviewers.txt"
 CODEOWNERS = ".github/CODEOWNERS"
 # What CODEOWNERS guards today, refused even if the file moved: what builds, signs and checks releases.
 ALWAYS_GUARDED = ["/.github/", "/tools/ci/", "/crates/horizon-release-sign/", "/crates/horizon-server/src/update.rs",
