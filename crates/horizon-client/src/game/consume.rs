@@ -19,7 +19,17 @@ use std::convert::Infallible;
 
 type ItemConsumable = Consumable<String, ConsumeEffect>;
 
+/// `EntityEvent.USE_ITEM_COMPLETE`: the server finished the player's use.
+pub(super) const USE_ITEM_COMPLETE_EVENT: i8 = 9;
+
 impl Game<'_> {
+    /// `ServerPlayer.completeUsingItem`: the player's own client is told
+    /// first, and completes the use itself (eating the food there too).
+    pub(super) fn send_use_item_complete(&mut self) {
+        if self.lan_acting.is_some() {
+            self.guest_entity_events.push(USE_ITEM_COMPLETE_EVENT);
+        }
+    }
     /// `Consumable.emitParticlesAndSounds(user.getRandom(), user, stack, count)`.
     pub(super) fn emit_consume(
         &mut self,
@@ -56,6 +66,17 @@ impl Game<'_> {
             let pitch = self.world.random.next_float() * (1.0f32 - 0.9f32) + 0.9;
             self.audio
                 .play("minecraft:entity.player.burp", self.feet(), 0.5, pitch);
+        }
+        // SuspiciousStewEffects.onConsume, a ConsumableListener: each entry is
+        // added as a `MobEffectInstance(effect, duration)` (amplifier 0).
+        if let Some(data) = stack.extra.as_deref() {
+            for (id, duration) in &data.stew_effects {
+                if let Some(def) = horizon_client::brewing::effect(id) {
+                    self.add_player_effect(horizon_client::effects::EffectInstance::new(
+                        def.id, *duration, 0,
+                    ));
+                }
+            }
         }
         for effect in &consumable.effects {
             self.apply_consume_effect(effect);

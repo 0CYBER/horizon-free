@@ -10,7 +10,7 @@
 //! (`cargo build --release -p horizon-client --no-default-features`, without sound or controllers)
 //! as horizon-engine, with horizon-prepare and horizon-server from beside it and the same sources.
 //!
-//! `tokens`: writes `website/src/tokens.css`, the design tokens of `crates/horizon-theme` as CSS
+//! `tokens`: writes `crates/horizon-theme/tokens.css`, the design tokens of `crates/horizon-theme` as CSS
 //! custom properties (a horizon-theme test fails when the file is out of date).
 //!
 //! `icons`: renders the icon masters in `docs/media/brand` (with `rsvg-convert`, from librsvg)
@@ -79,9 +79,9 @@ fn git(repo: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
 }
 
 fn tokens() -> Result<(), String> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../website/src/tokens.css");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/horizon-theme/tokens.css");
     fs::write(&path, horizon_theme::css()).map_err(|e| format!("{}: {e}", path.display()))?;
-    println!("wrote website/src/tokens.css");
+    println!("wrote crates/horizon-theme/tokens.css");
     Ok(())
 }
 
@@ -195,7 +195,7 @@ fn icons() -> Result<(), String> {
         &repo.join("crates/horizon-theme/icons/horizon-64.png"),
         &render(&square, (64, 64))?,
     )?;
-    // Avatars and the website's icons.
+    // Avatars, and the website's icons (horizon-site copies docs/media/brand/web/ into its public/).
     let avatar = brand.join("avatar.svg");
     for (svg, size, out) in [
         (
@@ -203,15 +203,15 @@ fn icons() -> Result<(), String> {
             500,
             "docs/media/brand/social/github-avatar-500.png",
         ),
-        (&avatar, 180, "website/public/apple-touch-icon.png"),
-        (&square, 32, "website/public/favicon-32.png"),
+        (&avatar, 180, "docs/media/brand/web/apple-touch-icon.png"),
+        (&square, 32, "docs/media/brand/web/favicon-32.png"),
         (&square, 1024, "docs/media/brand/icon-1024.png"),
         (&macos, 1024, "docs/media/brand/icon-macos-1024.png"),
     ] {
         write(&repo.join(out), &render(svg, (size, size))?)?;
     }
     write(
-        &repo.join("website/public/favicon.svg"),
+        &repo.join("docs/media/brand/web/favicon.svg"),
         &fs::read(&square).map_err(|e| format!("{}: {e}", square.display()))?,
     )?;
     println!("wrote packaging/icons, the window icon, the avatars and the website's icons");

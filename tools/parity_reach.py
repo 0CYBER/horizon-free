@@ -7,8 +7,8 @@ of the workspace's current sources whose nodes are items:
 
 - everything in an entry is reached, and so is everything in a Rust file the module tree doesn't place (an
   `include!`d source);
-- a module is open when it is a crate root, holds reached code, or is named in a path (`name::`, `use ...name`) by
-  reached code while its parent is open;
+- a module is open when it holds reached code, or is named in a path (`name::`, `use ...name`) by reached code while
+  its parent is open; a library's root once reached code names its crate (`horizon_world`);
 - a free item (fn, struct, enum, union, trait, type, const, static, an item-level macro call's items) is reached when
   reached code in its own module or below it mentions its name, or when its module is open and reached code names
   it in a path or an import, or when its module is glob-imported (`use m::*`) and its name is mentioned;
@@ -608,8 +608,8 @@ class SourceGraph:
 
         try:
             for path in universe:
-                if path.endswith("/src/lib.rs") or path in entries or path not in self.parent:
-                    open_module(path, "crate root or entry")
+                if path in entries or path not in self.parent and not path.endswith("/src/lib.rs"):
+                    open_module(path, "entry, or a file no module places")
             for node in seeds:
                 reach(node, "entry" if node[0] in entries else "always counted")
             for path in entries & universe:
@@ -624,6 +624,12 @@ class SourceGraph:
                 label = (item.get("names") or [item["kind"]])[0] if member is None else item["members"][member]["name"]
                 source = sets_of(node, item)
                 why = f"{path} ({label})"
+                # A library's root opens once reached code names the crate (`horizon_world::`, `use horizon_command
+                # as command`): its items are out of reach until then.
+                for word in (source["mentions"] | source["paths"]) & idents.keys():
+                    root = f"crates/{idents[word]}/src/lib.rs"
+                    if root in universe and root not in opened:
+                        open_module(root, f"{why} names {word}")
                 # Plain mentions reach items of this file and of the modules above it.
                 ancestor, new = path, source["mentions"]
                 while ancestor is not None and new:
@@ -709,6 +715,35 @@ def is_workspace_rust(path):
     return path.startswith("crates/") and path.endswith(".rs") and path.count("/") >= 2
 
 
+PATH_DEPENDENCY = re.compile(r'path\s*=\s*"\.\./([\w-]+)"')
+
+
+@functools.cache
+def _path_dependencies(root, crate):
+    manifest = Path(root) / "crates" / crate / "Cargo.toml"
+    text = manifest.read_text(encoding="utf-8") if manifest.is_file() else ""
+    return frozenset(PATH_DEPENDENCY.findall(text))
+
+
+def linked_crates(root, crates):
+    """The workspace crates (folders under crates/) that crates link, themselves included: their path dependencies,
+    transitively. A harness recorded before code moved to a new crate links that crate without naming its files."""
+    found, queue = set(crates), list(crates)
+    while queue:
+        for dependency in _path_dependencies(str(root), queue.pop()):
+            if dependency not in found:
+                found.add(dependency)
+                queue.append(dependency)
+    return found
+
+
+def unrecorded(root, plain, changed):
+    """Changed workspace Rust files of crates a harness's recorded crates link but its record doesn't name."""
+    crates = {crate_of(path) for path in plain if path.startswith("crates/") and path.count("/") >= 2}
+    linked = linked_crates(root, crates) - crates
+    return {path for path in changed if is_workspace_rust(path) and crate_of(path) in linked}
+
+
 DECLARATION_LINE = re.compile(rf"\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+({IDENT})\s*;")
 
 
@@ -758,7 +793,7 @@ def narrow(dependencies, artifacts, graph, changed=(), stop=frozenset()):
     plain = [dependency.split("#keep:")[0] for dependency in dependencies]
     crates = {crate_of(path) for path in plain if path.startswith("crates/") and path.count("/") >= 2}
     rust = {path for path in plain if is_workspace_rust(path)}
-    added = {path for path in changed if is_workspace_rust(path) and crate_of(path) in crates
+    added = {path for path in changed if is_workspace_rust(path) and crate_of(path) in linked_crates(graph.root, crates)
              and path not in rust and (graph.root / path).is_file()}
     entries = graph.entries(artifacts, rust)
     if entries is None:

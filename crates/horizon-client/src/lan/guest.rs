@@ -2,7 +2,12 @@
 //! player state (inventory, health, game mode) that the host's gameplay code
 //! operates on when it acts for them.
 use super::{Joined, PlayerSender, entity::Tracker};
-use crate::{items::ItemStack, motion::PlayerMotion};
+use crate::{
+    items::ItemStack,
+    motion::PlayerMotion,
+    pose::{Dimensions, Pose},
+};
+use horizon_core::geometry::{Aabb, Vec3};
 use horizon_protocol::{
     item::Stack,
     packets::{configuration::ClientInformation, play},
@@ -237,6 +242,8 @@ pub struct Guest {
     pub drag: Option<(u8, Vec<usize>)>,
     /// The compound this player was loaded from, for fields Horizon does not model.
     pub saved: Option<horizon_world::nbt::Tag>,
+    /// `ServerPlayer.seenCredits`: the end poem has been shown.
+    pub seen_credits: bool,
     /// `ServerPlayer.recipeBook`.
     pub recipe_book: crate::recipe_book::Settings,
     /// `PlayerAdvancements`: the criteria obtained, whether they came from
@@ -358,6 +365,7 @@ impl Guest {
             next_window: 0,
             drag: None,
             saved: None,
+            seen_credits: false,
             recipe_book: Default::default(),
             advancements: Default::default(),
             advancements_loaded: false,
@@ -404,8 +412,41 @@ impl Guest {
         }
         f
     }
+    /// `Player.getDesiredPose`: sleeping, gliding, then the body's own pose
+    /// (swimming, crawling, crouching) once its server tick has run.
+    pub fn pose(&self) -> Pose {
+        if self.sleeping {
+            Pose::Sleeping
+        } else if self.fall_flying {
+            Pose::FallFlying
+        } else if let Some(m) = &self.motion {
+            m.pose
+        } else if self.sneaking && !self.flying {
+            Pose::Crouching
+        } else {
+            Pose::Standing
+        }
+    }
+    /// `Avatar.POSES` for the guest's pose, with its scale attribute.
+    pub fn dimensions(&self) -> Dimensions {
+        let pose = self.pose();
+        match &self.motion {
+            Some(m) if m.pose == pose => m.dimensions,
+            _ => pose.dimensions(1.0),
+        }
+    }
+    /// `Entity.getBoundingBox`.
+    pub fn bounds(&self) -> Aabb {
+        let [x, y, z] = self.position;
+        let d = self.dimensions();
+        let half = f64::from(d.width) / 2.0;
+        Aabb::new(
+            Vec3::new(x - half, y, z - half),
+            Vec3::new(x + half, y + f64::from(d.height), z + half),
+        )
+    }
     pub fn eye_height(&self) -> f64 {
-        if self.sneaking { 1.27 } else { 1.62 }
+        f64::from(self.dimensions().eye_height)
     }
     /// `Player.isWithinBlockInteractionRange(pos, buffer)` for the guest:
     /// its block interaction range is 4.5, 5 in creative.
@@ -601,6 +642,18 @@ fn network_stack(
                 horizon_protocol::item::Component::Stacks(charged),
             ));
         }
+        // What a bundle holds, for its tooltip (ClientBundleTooltip).
+        if !d.bundle_contents.is_empty() {
+            let contents = d
+                .bundle_contents
+                .iter()
+                .filter_map(|c| network_stack(item_id, synced_id, &Some(c.clone())))
+                .collect();
+            stack.added.push((
+                horizon_protocol::item::component::BUNDLE_CONTENTS,
+                horizon_protocol::item::Component::Stacks(contents),
+            ));
+        }
         // The books a lectern shows and a guest reads.
         if !d.writable_pages.is_empty() {
             stack.added.push((
@@ -631,6 +684,13 @@ fn network_stack(
         stack.added.push((
             horizon_protocol::item::component::CUSTOM_NAME,
             horizon_protocol::item::Component::Text(horizon_protocol::text::literal(name)),
+        ));
+    }
+    // The component as loaded, so a translatable name stays one.
+    if let Some(name) = s.data().and_then(|d| d.other("minecraft:item_name")) {
+        stack.added.push((
+            horizon_protocol::item::component::ITEM_NAME,
+            horizon_protocol::item::Component::Text(name.clone()),
         ));
     }
     Some(stack)
