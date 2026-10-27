@@ -2239,6 +2239,10 @@ impl Game<'_> {
                 {
                     m.health = 0.0;
                 }
+                // The events that start a mob's animation (the warden's).
+                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
+                    horizon_client::mobs::sync::entity_event(m, p.event as u8);
+                }
                 // LivingEntity.handleEntityEvent 60: the poof as the dead body goes.
                 if p.event == 60
                     && let Some(m) = self.mobs.iter().find(|m| m.id == p.id as u32)
@@ -3713,6 +3717,7 @@ impl Game<'_> {
                 m.fluids = fluids;
             }
         }
+        let game_time = self.world.game_time;
         let Some(r) = self.remote.as_mut() else {
             return;
         };
@@ -3836,6 +3841,8 @@ impl Game<'_> {
             if m.species() == horizon_client::mobs::Species::Bat {
                 horizon_client::mobs::bat::setup_animation_states(m);
             }
+            // The animation states a server computes in its own `ai_step`.
+            horizon_client::mobs::sync::client_tick(m, game_time);
         }
         for o in self.orbs.iter_mut().filter(|_| running) {
             o.previous = o.position;

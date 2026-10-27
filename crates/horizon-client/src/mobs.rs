@@ -66,6 +66,7 @@ pub mod spawning;
 pub mod species;
 pub mod strider;
 pub mod sulfur_cube;
+pub mod sync;
 pub mod tame;
 pub mod trader;
 pub mod transport_items;
@@ -802,6 +803,8 @@ pub struct Extra {
     pub memories: Vec<(&'static str, i64, i64)>,
     /// A camel's `LAST_POSE_CHANGE_TICK`.
     pub pose_change_tick: i64,
+    /// `Entity.DATA_POSE` as a mob of a server has it (`sync::pose_id`).
+    pub pose: u8,
     /// The school leader a fish follows, and a tropical fish that swims alone.
     pub leader: Option<u32>,
     pub lone: bool,
@@ -918,6 +921,12 @@ pub enum MobEvent {
     /// clients' `makeDrownParticles`.
     Drown {
         mob: u32,
+        at: [f64; 3],
+    },
+    /// `Level.broadcastEntityEvent` for a mob: guests run `sync::entity_event`.
+    EntityEvent {
+        mob: u32,
+        event: i8,
         at: [f64; 3],
     },
     Sound(&'static str, [f64; 3], f32, f32),

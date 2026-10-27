@@ -968,6 +968,9 @@ impl Game<'_> {
                         .map_or([0.0; 3], |m| [m.velocity.x, m.velocity.y, m.velocity.z]);
                     self.drown_particles(at, v);
                 }
+                MobEvent::EntityEvent { mob, event, at } => {
+                    self.lan_entity_event(mob as i32, event, at)
+                }
                 MobEvent::Sound(name, at, volume, pitch)
                 | MobEvent::LocalSound(name, at, volume, pitch) => {
                     self.audio
