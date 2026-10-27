@@ -180,7 +180,11 @@ fn tick(remaining: &mut usize) -> Result<(), SurfaceError> {
 /// Apply a compiled top-material rule at one position with a worker the caller
 /// built once. Carvers restore many cells per pass, so the rule is compiled and
 /// the density bindings created once instead of per restored block.
-pub(crate) fn top_material_cell<R: RandomSource, S: MaterialSurfaceQueries, B: TerrainBlockStates>(
+pub(crate) fn top_material_cell<
+    R: RandomSource,
+    S: MaterialSurfaceQueries,
+    B: TerrainBlockStates,
+>(
     worker: &mut MaterialConditions<R, S>,
     chunk: &mut TerrainChunk<'_, B>,
     rule: usize,
@@ -357,15 +361,7 @@ where
             let mut bottom = i32::MAX;
             let mut y = top;
             let mut budget = 1 << 20;
-            let mut column = Column::new(
-                chunk,
-                x,
-                z,
-                write_min_y,
-                write_max_y,
-                top,
-                &mut cache,
-            );
+            let mut column = Column::new(chunk, x, z, write_min_y, write_max_y, top, &mut cache);
             while y >= min {
                 tick(&mut budget)?;
                 let state = column.block(y)?;

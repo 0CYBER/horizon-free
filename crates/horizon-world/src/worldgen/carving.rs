@@ -1,6 +1,8 @@
 //! Apply ordered carving-mask intervals to pre-lighting terrain.
 use super::{
-    material_condition::{MaterialConditions, MaterialDensitySources, MaterialRule, MaterialSurfaceQueries},
+    material_condition::{
+        MaterialConditions, MaterialDensitySources, MaterialRule, MaterialSurfaceQueries,
+    },
     material_stage::{SurfaceError, TopMaterialInputs, top_material_cell},
     terrain::{TerrainAquifer, TerrainBlockStates, TerrainChunk, TerrainError},
 };
@@ -9,10 +11,7 @@ use crate::{
     registry::{BlockRegistry, BlockStateId},
 };
 use horizon_core::{
-    carving::CarvingMask,
-    density::SamplerContext,
-    noise::DensityVolume,
-    position::BlockPos,
+    carving::CarvingMask, density::SamplerContext, noise::DensityVolume, position::BlockPos,
     random::RandomSource,
 };
 use std::collections::BTreeSet;
@@ -84,20 +83,16 @@ where
         preliminary_surface,
         density_context,
     } = inputs;
-    let volume = DensityVolume::new([1; 3], [0; 3], [1; 3])
-        .map_err(|_| SurfaceError::InvalidVolume)?;
+    let volume =
+        DensityVolume::new([1; 3], [0; 3], [1; 3]).map_err(|_| SurfaceError::InvalidVolume)?;
     let sources = MaterialDensitySources::new(
         surface,
         volume,
         preliminary_surface,
         SamplerContext::default(),
     )?;
-    let mut worker = MaterialConditions::<R, _>::with_possible_biomes(
-        generation,
-        root,
-        sources,
-        None,
-    );
+    let mut worker =
+        MaterialConditions::<R, _>::with_possible_biomes(generation, root, sources, None);
     let rule = worker.add_rule(rule)?;
     let cx = chunk.position().x.wrapping_shl(4);
     let cz = chunk.position().z.wrapping_shl(4);

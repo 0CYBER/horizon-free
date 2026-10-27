@@ -531,7 +531,11 @@ pub fn fill_noise<B: TerrainBlockStates>(
     // A non-air, non-fluid default block may be written as a run without asking
     // the aquifer or touching the heightmap below the run's top.
     let solid_runs = default_block != chunk.blocks.air
-        && !chunk.blocks.properties.heightmap_state(default_block).has_fluid();
+        && !chunk
+            .blocks
+            .properties
+            .heightmap_state(default_block)
+            .has_fluid();
     const MAPS: [HeightmapType; 2] = [HeightmapType::OceanFloorWg, HeightmapType::WorldSurfaceWg];
     for z in 0..sz {
         let world_z = bz.wrapping_add(z as i32);
@@ -557,19 +561,15 @@ pub fn fill_noise<B: TerrainBlockStates>(
                 if solid_runs && value > 0.0 {
                     let mut run = 1usize;
                     while run <= y
-                        && density[volume.index([x, y - run, z]).expect("valid density coordinates")]
+                        && density[volume
+                            .index([x, y - run, z])
+                            .expect("valid density coordinates")]
                             > 0.0
                     {
                         run += 1;
                     }
                     aquifer.note_skipped();
-                    chunk.fill_solid_run(
-                        x as i32,
-                        world_y,
-                        z as i32,
-                        run as i32,
-                        default_block,
-                    )?;
+                    chunk.fill_solid_run(x as i32, world_y, z as i32, run as i32, default_block)?;
                     for (kind, settled) in MAPS.into_iter().zip(&mut settled) {
                         if matches!(settled, Ok(bound) if world_y <= *bound) {
                             continue;
