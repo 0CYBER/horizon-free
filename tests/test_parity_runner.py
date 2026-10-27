@@ -145,6 +145,13 @@ class ParityRunnerTests(unittest.TestCase):
         with mock.patch.object(parity.sys, "platform", "darwin"):
             self.assertEqual(parity.platform_skips(config), {"options": "libm"})
 
+    def test_a_hosts_excludes_are_skipped_when_it_runs_parity_itself(self):
+        config = {"hosts": {"playhorizon": {"exclude": {"remote_fireworks": "starved"}}, "macmini": {"exclude": {}}}}
+        with mock.patch.object(parity.sys, "platform", "linux"):
+            self.assertEqual(parity.platform_skips(config, "playhorizon"), {"remote_fireworks": "starved"})
+            self.assertEqual(parity.platform_skips(config, "macmini"), {})
+            self.assertEqual(parity.platform_skips(config, "elsewhere"), {})
+
     def test_named_only_harnesses_are_listed_from_the_host_config(self):
         self.assertEqual(parity.named_only({"named_only": {"lan_integration": "slow"}}), {"lan_integration": "slow"})
         self.assertEqual(parity.named_only({}), {})
@@ -399,5 +406,99 @@ class KnownFlakyTests(unittest.TestCase):
         self.assertTrue(set(flaky) <= {parity.base_name(name) for name in parity.harnesses()})
 
 
+
+class SoloTests(unittest.TestCase):
+    """Harnesses driving game windows run alone on a small machine (playhorizon's 4-CPU runner)."""
+
+    def executor(self, running):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(parity, "STATE_DIR", Path(tmp)):
+            local = parity.LocalExecutor(4, 1 << 40, 60)
+        local.solo = {"remote_fireworks"}
+        local.running = {label: {} for label in running}
+        return local
+
+    def test_a_solo_harness_waits_for_an_empty_machine_and_then_holds_it(self):
+        busy = self.executor(["food"])
+        self.assertFalse(busy.accepts("remote_fireworks"))
+        self.assertTrue(busy.accepts("light"))
+        self.assertEqual(busy.free(), 3)
+        self.assertTrue(self.executor([]).accepts("remote_fireworks"))
+        alone = self.executor(["remote_fireworks~2"])
+        self.assertEqual(alone.free(), 0)
+
+    def test_only_small_machines_and_listed_harnesses(self):
+        config = {"solo": {"remote_fireworks": "two game windows"}}
+        with mock.patch.dict(os.environ, {"PARITY_SOLO": "1"}):
+            self.assertEqual(parity.solo_harnesses(config), {"remote_fireworks"})
+        with mock.patch.dict(os.environ, {"PARITY_SOLO": "0"}):
+            self.assertEqual(parity.solo_harnesses(config), set())
+        with mock.patch.dict(os.environ, {"PARITY_SOLO": ""}), mock.patch.object(parity, "SOLO_CPUS", 10 ** 6):
+            self.assertEqual(parity.solo_harnesses(config), {"remote_fireworks"})
+        solo = parity.host_config().get("solo", {})
+        self.assertTrue(solo and set(solo) <= {parity.base_name(name) for name in parity.harnesses()})
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorkspaceManifestTests(unittest.TestCase):
+    """A crate split's Cargo.toml and Cargo.lock changes don't select every harness; a dependency change still does."""
+    CLIENT = '[package]\nname = "horizon-client"\n\n[dependencies]\nserde = "1"\nwgpu = { version = "27", features = ["x"] }\n'
+    LOCK = ('version = 4\n\n[[package]]\nname = "horizon-client"\nversion = "0.1.0"\ndependencies = [\n "serde",\n]\n\n'
+            '[[package]]\nname = "serde"\nversion = "1.0.1"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n')
+
+    def verdict(self, base, head):
+        """base, head: {path: text or None}; the manifests workspace_only_manifests leaves out."""
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.object(parity, "ROOT", Path(temp)), \
+                mock.patch.object(parity, "git_show", lambda _base, path: base.get(path)):
+            for path, text in head.items():
+                if text is not None:
+                    Path(temp, path).parent.mkdir(parents=True, exist_ok=True)
+                    Path(temp, path).write_text(text)
+            return parity.workspace_only_manifests(set(head) | set(base), "base")
+
+    def test_a_crate_split_is_left_out(self):
+        command = '[package]\nname = "horizon-command"\n\n[dependencies]\nserde = "1"\nhorizon-core = { path = "../horizon-core" }\n'
+        client = self.CLIENT + 'horizon-command = { path = "../horizon-command" }\n'
+        lock = self.LOCK.replace('[[package]]\nname = "serde"', '[[package]]\nname = "horizon-command"\nversion = "0.1.0"\n\n'
+                                 '[[package]]\nname = "serde"')
+        base = {"Cargo.toml": '[workspace]\nmembers = ["crates/horizon-client"]\nresolver = "2"\n',
+                "crates/horizon-client/Cargo.toml": self.CLIENT, "Cargo.lock": self.LOCK}
+        head = {"Cargo.toml": '[workspace]\nmembers = ["crates/horizon-client", "crates/horizon-command"]\nresolver = "2"\n',
+                "crates/horizon-client/Cargo.toml": client, "crates/horizon-command/Cargo.toml": command, "Cargo.lock": lock}
+        self.assertEqual(self.verdict(base, head), set(head))
+
+    def test_a_dependency_change_still_counts(self):
+        base = {"crates/horizon-client/Cargo.toml": self.CLIENT, "Cargo.lock": self.LOCK}
+        bumped = {"crates/horizon-client/Cargo.toml": self.CLIENT, "Cargo.lock": self.LOCK.replace("1.0.1", "1.0.2")}
+        self.assertEqual(self.verdict(base, bumped), set())
+        feature = {"crates/horizon-client/Cargo.toml": self.CLIENT.replace('["x"]', '["x", "y"]')}
+        self.assertEqual(self.verdict({"crates/horizon-client/Cargo.toml": self.CLIENT}, feature), set())
+        resolver = {"Cargo.toml": '[workspace]\nmembers = ["a"]\nresolver = "3"\n'}
+        self.assertEqual(self.verdict({"Cargo.toml": '[workspace]\nmembers = ["a"]\nresolver = "2"\n'}, resolver), set())
+
+    def test_a_feature_of_a_workspace_crate_counts_through_its_sources(self):
+        items = '[package]\nname = "horizon-items"\n\n[features]\ntest-support = []\n'
+        client = self.CLIENT + '\n[dev-dependencies]\nhorizon-items = { path = "../horizon-items", features = ["test-support"] }\n'
+        head = {"crates/horizon-items/Cargo.toml": items, "crates/horizon-client/Cargo.toml": client,
+                "crates/horizon-items/src/lib.rs": '#[cfg(feature = "test-support")]\npub fn for_tests() {}\n'}
+        base = {"crates/horizon-client/Cargo.toml": self.CLIENT}
+        # The new crate's files are all changed, the code the feature gates with them.
+        self.assertEqual(self.verdict(base, head), {"crates/horizon-items/Cargo.toml", "crates/horizon-client/Cargo.toml"})
+        # Turning on a feature of a crate whose gated code didn't change selects as before.
+        world = '[package]\nname = "horizon-world"\n\n[features]\nextra = ["more"]\nmore = []\n'
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity, "ROOT", Path(temp)):
+            Path(temp, "crates/horizon-world/src").mkdir(parents=True)
+            Path(temp, "crates/horizon-world/Cargo.toml").write_text(world)
+            Path(temp, "crates/horizon-world/src/lib.rs").write_text('#[cfg(feature = "more")]\nfn x() {}\n')
+            self.assertFalse(parity.feature_sources_changed("horizon-world", "extra", {"crates/horizon-client/Cargo.toml"}))
+            self.assertTrue(parity.feature_sources_changed("horizon-world", "extra", {"crates/horizon-world/src/lib.rs"}))
+            self.assertFalse(parity.feature_sources_changed("horizon-nothing", "extra", set()))
+        # A feature that reaches an external package counts.
+        optional = {"crates/horizon-client/Cargo.toml": self.CLIENT + '\n[features]\nfast = ["wgpu/x"]\n'}
+        self.assertEqual(self.verdict({"crates/horizon-client/Cargo.toml": self.CLIENT}, optional), set())
+
+    def test_without_a_base_everything_counts(self):
+        self.assertEqual(parity.workspace_only_manifests({"Cargo.lock"}, None), set())

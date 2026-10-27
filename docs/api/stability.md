@@ -38,7 +38,7 @@ don't import it); faster, or fixing behaviour to what the reference already says
 
 A new WIT function doesn't break older mods, but a mod that calls it can't run on a Horizon from before it. So every
 function the game offers mods has an **API level**, the one it arrived at (`crates/horizon-mods/src/api_level.rs`):
-level 0 is the contract of Horizon 0.2.67 to 0.2.69, level 1 adds `render.set-minimap` and server mods' `players`, level 2 `game.raycast`, level 3 `command.run-quiet`, level 4 server mods' `world`. A mod needs the level of
+level 0 is the contract of Horizon 0.2.67 to 0.2.69, level 1 adds `render.set-minimap` and server mods' `players`, level 2 `game.raycast`, level 3 `command.run-quiet`, level 4 server mods' `world`, level 5 `recipes` (`items`, `all`, `known`), level 6 `browser` (`set-items`, `poll`, `set-recipes`) and `recipes.place` and `recipes.give`, level 7 `render.set-far-terrain`. A mod needs the level of
 the newest function it imports (a component imports only the functions it calls). The level is read from the file,
 never declared:
 
@@ -108,7 +108,7 @@ Deprecations and breaking changes are in bold. The release notes of the game rel
 | Mod API: `render` (HUD shapes, camera shake and zoom; drawn by the game, no mod shaders) | experimental | manifest `experimental = ["render"]` |
 | Mod API: `input` (claimed items' use, the mod's keys, the mouse wheel) | experimental | manifest `experimental = ["input"]` |
 | Content mods (`registries`: data-driven blocks and items) | preview | manifest `api = "0.2"` |
-| Server mods: world `horizon-server-mod`, `players`, `server-events` | experimental | manifest `api = "0.3"` |
+| Server mods: world `horizon-server-mod`, `players`, `server-events`, `world`, typed `server-command`s | experimental | manifest `api = "0.3"` |
 | Script mods (Lua run by an interpreter mod, [mods.md](mods.md#ways-in)) | not started | |
 | `cargo horizon-mod` (`new`, `build`, `run`), `horizon-mod-sdk` | preview | 0.1.0 |
 | Shader API | not started | |
@@ -134,3 +134,8 @@ Deprecations and breaking changes are in bold. The release notes of the game rel
   for a map image costs too much through hook calls, so the game keeps the tiles (vanilla's map colours) and the mod
   picks the corner, side, scale and shape. One map shows at a time, the first loaded mod's. It is a new function and a
   new type, so mods built before it keep loading.
+- **`render.set-far-terrain`** turns on the game's own distant terrain, not one a mod builds: sampling the generator
+  and meshing thousands of far tiles runs on the game's workers within its frame and upload budgets, which no hook
+  call could match. The mod picks the distance (64 to 1024 chunks, capped lower on integrated graphics as LOD Distance
+  is) and Far Detail's Reduced. The player's own LOD Distance, when on, wins; one far terrain shows at a time, the
+  first loaded mod's.

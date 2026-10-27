@@ -52,7 +52,9 @@ use bindings::{
     horizon::mods::{chat, command, game, hud, log as mod_log, storage},
 };
 pub use server_bindings::{
-    exports::horizon::mods::server_events::BlockPos,
+    exports::horizon::mods::server_events::{
+        Argument, ArgumentKind, ArgumentValue, BlockPos, ServerCommand,
+    },
     horizon::mods::players::{GameMode, Player as ServerPlayer},
     horizon::mods::world::BlockChange,
 };
@@ -76,11 +78,29 @@ use render_bindings::horizon::mods::input;
 pub use render_bindings::horizon::mods::input::{Event as InputEvent, HeldItem, ItemUse};
 /// What capability `render` asks the game to draw (WIT `interface render`).
 pub use render_bindings::horizon::mods::render::{
-    Corner as RenderCorner, FillShape, FrameRate, ItemShape, Minimap as ModMinimap,
-    Point as RenderPoint, QuadShape, Rect as RenderRect, Shape, SpriteShape, TextShape,
-    Zoom as ModZoom,
+    Corner as RenderCorner, FarTerrain as ModFarTerrain, FillShape, FrameRate, ItemShape,
+    Minimap as ModMinimap, Point as RenderPoint, QuadShape, Rect as RenderRect, Shape, SpriteShape,
+    TextShape, Zoom as ModZoom,
 };
 use render_bindings::{RenderHost, horizon::mods::render};
+/// Capability `recipes`'s imports (docs/mods.md): the game's recipes and items.
+mod recipes_bindings {
+    wasmtime::component::bindgen!({
+        path: "../horizon-mod-sdk/wit",
+        world: "recipes-host",
+    });
+}
+/// Capability `ui`'s recipe viewer panel (WIT `interface browser`).
+pub use recipes_bindings::horizon::mods::browser::{
+    Click as BrowserClick, Event as BrowserEvent, ItemKey as BrowserItemKey,
+    Layout as BrowserLayout, RecipeView as BrowserRecipe, SlotClick as BrowserSlotClick,
+    Stack as BrowserStack,
+};
+/// What capability `recipes` reads (WIT `interface recipes`).
+pub use recipes_bindings::horizon::mods::recipes::{
+    Item as RecipeItem, Kind as RecipeKind, Recipe, Stack as RecipeStack,
+};
+use recipes_bindings::{RecipesHost, horizon::mods::browser, horizon::mods::recipes};
 
 /// A mod's linear memory cap.
 const MEMORY: usize = 64 << 20;
@@ -138,6 +158,23 @@ pub struct Snapshot {
     /// its distance from the eye, for `game.raycast`; the game works it out
     /// only while a mod calls it ([`Mods::wants_raycast`]).
     pub view_hit: Option<(f32, Hit)>,
+    /// Every item and recipe, for capability `recipes`; the game makes them
+    /// once, and only while a mod reads them ([`Mods::wants_recipes`]).
+    pub recipes: Option<Arc<Recipes>>,
+    /// The `book-id`s of the recipes the player's book holds.
+    pub known_recipes: Arc<[i32]>,
+    /// The open screen takes recipes (`recipes.place`).
+    pub placing: bool,
+    /// The player is in creative mode (`recipes.give`).
+    pub creative: bool,
+}
+
+/// Capability `recipes`'s tables: `items` in the registry's order, which
+/// each [`RecipeStack::item`] indexes.
+#[derive(Clone, Debug, Default)]
+pub struct Recipes {
+    pub items: Vec<RecipeItem>,
+    pub recipes: Vec<Recipe>,
 }
 
 /// Which mods a game starts: the window's game the client mods, the game
@@ -201,6 +238,15 @@ pub enum Output {
     CloseScreen { owner: usize },
     /// `render.shake`: strength 0 to 1, fading out over `seconds` (≤ 10).
     Shake { strength: f32, seconds: f32 },
+    /// `recipes.place`: the recipe book's click on this display id, all of
+    /// it when `all`.
+    PlaceRecipe { book_id: i32, all: bool },
+    /// `recipes.give`: a stack for a creative player.
+    Give {
+        item: String,
+        count: u32,
+        components: String,
+    },
 }
 
 /// The game's world as capability `world` reads it during a call: the
@@ -270,6 +316,8 @@ struct Running {
     hooks: Hooks,
     /// It imports `game.raycast`.
     raycasts: bool,
+    /// It imports capability `recipes`.
+    reads_recipes: bool,
 }
 
 /// A running mod's exports and the hooks its `init` asked for.
@@ -290,10 +338,10 @@ impl Hooks {
             Hooks::Client(..) => None,
         }
     }
-    fn commands(&self) -> &[String] {
+    fn commands(&self) -> Vec<&str> {
         match self {
-            Hooks::Client(_, r) => &r.commands,
-            Hooks::Server(_, r) => &r.commands,
+            Hooks::Client(_, r) => r.commands.iter().map(String::as_str).collect(),
+            Hooks::Server(_, r) => r.commands.iter().map(|c| c.name.as_str()).collect(),
         }
     }
 }
@@ -311,6 +359,46 @@ struct UiState {
     close: bool,
 }
 
+/// Capability `ui`'s panel beside container screens (`browser`).
+#[derive(Default)]
+struct BrowserState {
+    items: Vec<BrowserStack>,
+    /// Which `set-items` or `set-recipes` call the panel is from, unique
+    /// across mods and reloads, so the game converts them once.
+    version: u64,
+    /// `set-recipes`' title and recipes, shown instead of the items.
+    recipes: Option<RecipePage>,
+    events: std::collections::VecDeque<BrowserEvent>,
+}
+/// What `browser.set-recipes` shows: a title, tabs (`tab` the selected
+/// one) and the recipes.
+#[derive(Clone, Debug)]
+pub struct RecipePage {
+    pub title: String,
+    pub tabs: Vec<BrowserStack>,
+    pub tab: u32,
+    pub recipes: Vec<BrowserRecipe>,
+}
+static BROWSER_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+/// Items a panel may hold, and events kept for `browser.poll`.
+const BROWSER_ITEMS: usize = 8192;
+/// `recipes.place` and `give` calls a hook call may make.
+const RECIPE_ACTIONS: usize = 36;
+/// Recipes `set-recipes` may show, slots in one, and stacks a slot cycles.
+const BROWSER_RECIPES: usize = 256;
+const RECIPE_SLOTS: usize = 9;
+const RECIPE_TABS: usize = 16;
+const SLOT_STACKS: usize = 64;
+const BROWSER_EVENTS: usize = 256;
+impl BrowserState {
+    fn push(&mut self, event: BrowserEvent) {
+        if self.events.len() == BROWSER_EVENTS {
+            self.events.pop_front();
+        }
+        self.events.push_back(event);
+    }
+}
+
 struct State {
     name: String,
     id: String,
@@ -326,7 +414,10 @@ struct State {
     zoom: Option<ModZoom>,
     /// Capability `render`'s minimap, when the mod shows one.
     minimap: Option<ModMinimap>,
+    /// Capability `render`'s far terrain, when the mod draws one.
+    far_terrain: Option<ModFarTerrain>,
     input: InputState,
+    browser: BrowserState,
     /// Capability `storage`'s folder; made on first `set`.
     data_dir: PathBuf,
     /// Bytes `storage::set` may still write before this hook call ends
@@ -347,9 +438,16 @@ pub struct Mods {
     snapshot: Arc<Snapshot>,
     out: Vec<Output>,
     world: WorldSlot,
+    /// Moves on whenever a mod starts or stops: the game resends the server
+    /// mods' commands to players when it changes.
+    generation: u64,
 }
 
 impl Mods {
+    /// Changes whenever the running mods (so their commands) change.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
     /// Whether a running mod may use capability `world`: only then is a
     /// view worth lending.
     pub fn wants_world(&self) -> bool {
@@ -448,6 +546,8 @@ impl Mods {
                 .map_err(|e| e.to_string())?;
             RenderHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
                 .map_err(|e| e.to_string())?;
+            RecipesHost::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)
+                .map_err(|e| e.to_string())?;
             self.engine = Some((engine, linker));
         }
         Ok(self.engine.as_ref().expect("made above"))
@@ -482,7 +582,8 @@ impl Mods {
             .iter()
             .filter_map(|e| e.run.as_ref())
             .filter(|r| r.hooks.server().is_some() == server)
-            .flat_map(|r| r.hooks.commands().iter().cloned())
+            .flat_map(|r| r.hooks.commands())
+            .map(str::to_owned)
             .collect();
         let snapshot = self.snapshot.clone();
         let world = self.world.clone();
@@ -517,7 +618,9 @@ impl Mods {
             corner: None,
             zoom: None,
             minimap: None,
+            far_terrain: None,
             input: InputState::default(),
+            browser: BrowserState::default(),
             data_dir,
             storage_budget: STORAGE_WRITE_BUDGET,
             limits: StoreLimitsBuilder::new()
@@ -550,23 +653,37 @@ impl Mods {
                 .map_err(|e| reason(&e))??;
             (Hooks::Client(exports, r), ui)
         };
-        let commands = match &mut hooks {
-            Hooks::Client(_, r) => &mut r.commands,
-            Hooks::Server(_, r) => &mut r.commands,
-        };
-        commands.retain(|c| {
-            let free = !reserved(c) && !taken.contains(c);
+        let free = |c: &str| {
+            let free = !reserved(c) && !taken.iter().any(|t| t == c);
             if !free {
                 log::warn!("Horizon: mod {} cannot take /{c}: already a command", m.id);
             }
             free
-        });
+        };
+        match &mut hooks {
+            Hooks::Client(_, r) => r.commands.retain(|c| free(c)),
+            Hooks::Server(_, r) => {
+                r.commands.retain(|c| free(&c.name));
+                for c in &mut r.commands {
+                    if let Err(e) = check_arguments(&c.arguments) {
+                        log::warn!(
+                            "Horizon: mod {}'s /{}: {e}; it takes free text",
+                            m.id,
+                            c.name
+                        );
+                        c.arguments.clear();
+                    }
+                }
+            }
+        }
+        self.generation += 1;
         self.out.append(&mut store.data_mut().out);
         Ok(Some(Running {
             store,
             ui,
             hooks,
             raycasts: functions.iter().any(|f| f == "game.raycast"),
+            reads_recipes: functions.iter().any(|f| f.starts_with("recipes.")),
         }))
     }
 
@@ -677,6 +794,7 @@ impl Mods {
                 });
                 entry.status = Status::Failed(reason);
                 entry.run = None;
+                self.generation += 1;
                 None
             }
         }
@@ -701,7 +819,7 @@ impl Mods {
     fn command_owner(&self, server: bool, name: &str) -> Option<usize> {
         self.entries.iter().position(|e| {
             e.run.as_ref().is_some_and(|r| {
-                r.hooks.server().is_some() == server && r.hooks.commands().iter().any(|c| c == name)
+                r.hooks.server().is_some() == server && r.hooks.commands().contains(&name)
             })
         })
     }
@@ -734,7 +852,7 @@ impl Mods {
             .iter()
             .filter_map(|e| e.run.as_ref())
             .filter(move |r| r.hooks.server().is_some() == server)
-            .flat_map(|r| r.hooks.commands().iter().map(String::as_str))
+            .flat_map(|r| r.hooks.commands())
     }
 
     /// A server tick.
@@ -777,9 +895,13 @@ impl Mods {
             |m, s| m.call_block_placed(s, player, pos, state),
         );
     }
-    /// The commands running server mods own, for the server's command tree.
-    pub fn server_commands(&self) -> impl Iterator<Item = &str> {
-        self.owned_commands(true)
+    /// The commands running server mods own and their arguments, for the
+    /// server's command tree.
+    pub fn server_commands(&self) -> impl Iterator<Item = &ServerCommand> {
+        self.entries
+            .iter()
+            .filter_map(|e| e.run.as_ref()?.hooks.server())
+            .flat_map(|r| r.commands.iter())
     }
     /// Runs `line` (without its slash), typed by `player`, if a server mod
     /// owns its command; its feedback is an [`Output::Reply`]. False when
@@ -789,18 +911,35 @@ impl Mods {
         let Some(i) = self.command_owner(true, name) else {
             return false;
         };
-        let result = self.call(i, FUEL_EVENT, |run| match &run.hooks {
-            Hooks::Server(m, _) => {
-                m.horizon_mods_server_events()
-                    .call_command(&mut run.store, player, name, args)
-            }
-            Hooks::Client(..) => Ok(Ok(None)),
-        });
         let reply = |text, error| Output::Reply {
             player: player.id.clone(),
             text,
             error,
         };
+        let arguments = self.entries[i]
+            .run
+            .as_ref()
+            .and_then(|r| r.hooks.server())
+            .and_then(|r| r.commands.iter().find(|c| c.name == name))
+            .map(|c| c.arguments.as_slice())
+            .unwrap_or_default();
+        let values = match crate::commands::parse(arguments, args, player, &self.snapshot.players) {
+            Ok(values) => values,
+            Err(e) => {
+                self.out.push(reply(e, true));
+                return true;
+            }
+        };
+        let result = self.call(i, FUEL_EVENT, |run| match &run.hooks {
+            Hooks::Server(m, _) => m.horizon_mods_server_events().call_command(
+                &mut run.store,
+                player,
+                name,
+                args,
+                &values,
+            ),
+            Hooks::Client(..) => Ok(Ok(None)),
+        });
         match result {
             Some(Ok(Some(text))) => self.out.push(reply(text, false)),
             Some(Err(text)) => self.out.push(reply(text, true)),
@@ -826,6 +965,58 @@ impl Mods {
         self.entries
             .iter()
             .any(|e| e.run.as_ref().is_some_and(|r| r.raycasts))
+    }
+    /// The panel beside container screens (`browser.set-items`): the first
+    /// running mod with items or recipes, its index, the panel's version and
+    /// the items.
+    pub fn browser_items(&self) -> Option<(usize, u64, &[BrowserStack])> {
+        self.entries.iter().enumerate().find_map(|(i, e)| {
+            let b = &e.run.as_ref()?.store.data().browser;
+            (!b.items.is_empty() || b.recipes.is_some()).then_some((
+                i,
+                b.version,
+                b.items.as_slice(),
+            ))
+        })
+    }
+    /// What mod `owner`'s panel shows instead of its items
+    /// (`browser.set-recipes`).
+    pub fn browser_recipes(&self, owner: usize) -> Option<&RecipePage> {
+        let b = &self.entries.get(owner)?.run.as_ref()?.store.data().browser;
+        b.recipes.as_ref()
+    }
+    /// The player did `event` on mod `owner`'s panel.
+    pub fn browser_event(&mut self, owner: usize, event: BrowserEvent) {
+        if let Some(run) = self.entries.get_mut(owner).and_then(|e| e.run.as_mut()) {
+            run.store.data_mut().browser.push(event);
+        }
+    }
+    /// The key `key` went down with the pointer on `stack` in a container
+    /// screen: each mod with a key on it hears its own name for it.
+    pub fn browser_key(&mut self, key: &str, stack: &BrowserStack) {
+        for run in self.entries.iter_mut().filter_map(|e| e.run.as_mut()) {
+            let data = run.store.data_mut();
+            let names: Vec<String> = data
+                .input
+                .keys
+                .iter()
+                .filter(|k| k.key == key)
+                .map(|k| k.name.clone())
+                .collect();
+            for key in names {
+                data.browser.push(BrowserEvent::Key(BrowserItemKey {
+                    key,
+                    stack: stack.clone(),
+                }));
+            }
+        }
+    }
+    /// Some running mod reads capability `recipes`: the snapshot needs
+    /// [`Snapshot::recipes`] and [`Snapshot::known_recipes`].
+    pub fn wants_recipes(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|e| e.run.as_ref().is_some_and(|r| r.reads_recipes))
     }
     /// Some running mod has a `frame` hook: the game refreshes the snapshot
     /// every frame for it.
@@ -982,6 +1173,12 @@ impl Mods {
             .iter()
             .find_map(|e| e.run.as_ref()?.store.data().minimap)
     }
+    /// The far terrain the first running mod draws (capability `render`).
+    pub fn far_terrain(&self) -> Option<ModFarTerrain> {
+        self.entries
+            .iter()
+            .find_map(|e| e.run.as_ref()?.store.data().far_terrain)
+    }
     fn inputs(&self) -> impl Iterator<Item = &InputState> {
         self.entries
             .iter()
@@ -1074,6 +1271,7 @@ impl Mods {
                 continue;
             }
             any = true;
+            self.generation += 1;
             self.entries[i].modified = now;
             self.entries[i].run = None;
             let path = self.entries[i].path.clone();
@@ -1099,6 +1297,34 @@ impl Mods {
     }
 }
 
+/// A command's arguments are well formed: names given and distinct,
+/// optional ones last, free text only last.
+fn check_arguments(arguments: &[Argument]) -> Result<(), String> {
+    for (i, a) in arguments.iter().enumerate() {
+        if a.name.is_empty()
+            || !a
+                .name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return Err(format!("argument name '{}' isn't [A-Za-z0-9_]+", a.name));
+        }
+        if arguments[..i].iter().any(|b| b.name == a.name) {
+            return Err(format!("two arguments are named {}", a.name));
+        }
+        if i > 0 && arguments[i - 1].optional && !a.optional {
+            return Err(format!("{} is required after an optional argument", a.name));
+        }
+        if a.kind == ArgumentKind::Text && i + 1 < arguments.len() {
+            return Err(format!(
+                "{} takes the rest of the line, so it must be last",
+                a.name
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn modified(path: &Path) -> Option<SystemTime> {
     let meta = std::fs::metadata(path).ok()?;
     if meta.is_dir() {
@@ -1122,7 +1348,10 @@ fn reason(e: &wasmtime::Error) -> String {
 }
 
 fn clip(text: String) -> String {
-    match text.char_indices().nth(LINE_CHARS) {
+    clip_to(text, LINE_CHARS)
+}
+fn clip_to(text: String, chars: usize) -> String {
+    match text.char_indices().nth(chars) {
         Some((at, _)) => text[..at].to_string(),
         None => text,
     }
@@ -1181,6 +1410,125 @@ impl game::Host for State {
         let (at, hit) = self.snapshot.view_hit.as_ref()?;
         // NaN compares false: no hit.
         (*at <= distance.min(RAYCAST_MAX) && !distance.is_nan()).then(|| hit.clone())
+    }
+}
+impl browser::Host for State {
+    fn set_items(&mut self, items: Vec<BrowserStack>) {
+        self.browser.items = items
+            .into_iter()
+            .take(BROWSER_ITEMS)
+            .map(|s| BrowserStack {
+                item: clip(s.item),
+                components: clip_to(s.components, 4096),
+                ..s
+            })
+            .collect();
+        self.browser.version = BROWSER_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    fn set_recipes(
+        &mut self,
+        title: String,
+        tabs: Vec<BrowserStack>,
+        tab: u32,
+        recipes: Vec<BrowserRecipe>,
+    ) {
+        let stack = |s: BrowserStack| BrowserStack {
+            item: clip(s.item),
+            components: clip_to(s.components, 4096),
+            ..s
+        };
+        let cycle = |list: Vec<BrowserStack>| -> Vec<BrowserStack> {
+            list.into_iter().take(SLOT_STACKS).map(stack).collect()
+        };
+        self.browser.recipes = (!recipes.is_empty()).then(|| {
+            let recipes = recipes
+                .into_iter()
+                .take(BROWSER_RECIPES)
+                .map(|r| BrowserRecipe {
+                    width: r.width.clamp(1, 3),
+                    height: r.height.clamp(1, 3),
+                    slots: r.slots.into_iter().take(RECIPE_SLOTS).map(cycle).collect(),
+                    results: cycle(r.results),
+                    note: clip(r.note),
+                    ..r
+                })
+                .collect();
+            RecipePage {
+                title: clip(title),
+                tabs: tabs.into_iter().take(RECIPE_TABS).map(stack).collect(),
+                tab,
+                recipes,
+            }
+        });
+        self.browser.version = BROWSER_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    fn poll(&mut self) -> Vec<BrowserEvent> {
+        self.browser.events.drain(..).collect()
+    }
+}
+impl recipes::Host for State {
+    fn items(&mut self) -> Vec<RecipeItem> {
+        self.snapshot
+            .recipes
+            .as_ref()
+            .map_or_else(Vec::new, |r| r.items.clone())
+    }
+    fn all(&mut self) -> Vec<Recipe> {
+        self.snapshot
+            .recipes
+            .as_ref()
+            .map_or_else(Vec::new, |r| r.recipes.clone())
+    }
+    fn known(&mut self) -> Vec<i32> {
+        self.snapshot.known_recipes.to_vec()
+    }
+    fn place(&mut self, book_id: i32, all: bool) -> Result<(), String> {
+        self.recipe_action()?;
+        if !self.snapshot.placing {
+            return Err("no screen that takes recipes is open".into());
+        }
+        if !self.snapshot.known_recipes.contains(&book_id) {
+            return Err(format!(
+                "recipe {book_id} is not in the player's recipe book"
+            ));
+        }
+        self.out.push(Output::PlaceRecipe { book_id, all });
+        Ok(())
+    }
+    fn give(&mut self, stack: RecipeStack) -> Result<(), String> {
+        self.recipe_action()?;
+        if !self.snapshot.creative {
+            return Err("only in creative mode".into());
+        }
+        let item = self
+            .snapshot
+            .recipes
+            .as_ref()
+            .and_then(|r| r.items.get(stack.item as usize))
+            .ok_or_else(|| format!("no item {}", stack.item))?
+            .id
+            .clone();
+        self.out.push(Output::Give {
+            item,
+            count: stack.count.clamp(1, 99),
+            components: clip_to(stack.components, 4096),
+        });
+        Ok(())
+    }
+}
+impl State {
+    /// `recipes.place` and `give` take at most [`RECIPE_ACTIONS`] a call.
+    fn recipe_action(&self) -> Result<(), String> {
+        let done = self
+            .out
+            .iter()
+            .filter(|o| matches!(o, Output::PlaceRecipe { .. } | Output::Give { .. }))
+            .count();
+        if done < RECIPE_ACTIONS {
+            Ok(())
+        } else {
+            Err(format!("at most {RECIPE_ACTIONS} places and gives a call"))
+        }
     }
 }
 impl State {
@@ -1384,6 +1732,8 @@ const TURN_MIN: f32 = 0.05;
 /// `set-minimap`'s side in GUI pixels and its blocks per map pixel.
 const MINIMAP_SIZE: (f32, f32) = (16.0, 256.0);
 const MINIMAP_SCALE: (f32, f32) = (0.5, 4.0);
+/// `set-far-terrain`'s distance in chunks, as the LOD Distance setting's.
+const FAR_TERRAIN_DISTANCE: (u32, u32) = (64, 1024);
 
 /// A mod's corner panel: shapes in a `width` × `height` box the game
 /// places in `corner`, stacked with the other overlays.
@@ -1471,6 +1821,14 @@ impl render::Host for State {
             size: finite(m.size, MINIMAP_SIZE.0, MINIMAP_SIZE.1),
             blocks_per_pixel: finite(m.blocks_per_pixel, MINIMAP_SCALE.0, MINIMAP_SCALE.1),
             ..m
+        });
+    }
+    fn set_far_terrain(&mut self, far_terrain: Option<ModFarTerrain>) {
+        self.far_terrain = far_terrain.map(|f| ModFarTerrain {
+            distance: f
+                .distance
+                .clamp(FAR_TERRAIN_DISTANCE.0, FAR_TERRAIN_DISTANCE.1),
+            ..f
         });
     }
     fn frame_stats(&mut self) -> FrameRate {

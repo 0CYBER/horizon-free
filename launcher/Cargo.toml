@@ -19,8 +19,11 @@ sha2 = "0.10"
 pulldown-cmark = { version = "0.12", default-features = false }
 flate2 = "1"
 tar = { version = "0.4", default-features = false }
+toml = "1.1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 dirs = "5"
+# The system's preferred languages, for the window's language (i18n.rs).
+sys-locale = "0.3"
 self-replace = "1"
 clap = { version = "4", features = ["derive"] }
 horizon-theme = { path = "../crates/horizon-theme" }
@@ -37,6 +40,13 @@ horizon-mods = { path = "../crates/horizon-mods", features = ["index"] }
 horizon-release-sign = { path = "../crates/horizon-release-sign" }
 # Opt-in data collection: the consent, the outbox and its upload (docs/telemetry.md).
 horizon-telemetry = { path = "../crates/horizon-telemetry" }
+# level.dat and servers.dat (the worlds and server lists of instances)
+horizon-world = { path = "../crates/horizon-world" }
+# Deleting a world moves it to the system's trash
+trash = "5"
+# Backup names carry the local time, as vanilla's do
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # The session file's random name.
 getrandom = "0.3"
 # Players' heads on the Servers page, from the default skins in the player's own game files (already

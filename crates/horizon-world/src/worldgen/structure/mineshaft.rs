@@ -616,6 +616,9 @@ impl MineshaftPiece {
             // A chest minecart with the mineshaft loot table.
             let seed = c.random.long();
             let mut nbt = super::legacy::spawn_nbt("minecraft:chest_minecart", pos, false, false);
+            // As the proto chunk saves the new cart: not ticked, not burning.
+            nbt.insert("HasTicked".into(), Tag::Byte(1));
+            nbt.insert("Fire".into(), Tag::Short(0));
             let p = [
                 f64::from(pos[0]) + 0.5,
                 f64::from(pos[1]) + 0.5,

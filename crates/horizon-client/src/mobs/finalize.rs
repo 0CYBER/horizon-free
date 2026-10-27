@@ -516,9 +516,13 @@ fn effect_modifiers(m: &Mob, a: Attr) -> impl Iterator<Item = (f64, Op)> + '_ {
 }
 /// `AttributeInstance.getValue`: the base, then the modifiers by operation.
 pub fn value(m: &Mob, a: Attr) -> f64 {
-    compute(m, a, true)
+    compute(m, a, true, &[])
 }
-fn compute(m: &Mob, a: Attr, with_transient: bool) -> f64 {
+/// `value` with more modifiers, such as the ones worn equipment grants.
+pub fn value_with(m: &Mob, a: Attr, extra: &[(f64, Op)]) -> f64 {
+    compute(m, a, true, extra)
+}
+fn compute(m: &Mob, a: Attr, with_transient: bool, extra: &[(f64, Op)]) -> f64 {
     let mut base = base_value(m, a);
     let empty = Vec::new();
     let mods = m.extra.attributes.as_ref().map_or(&empty, |s| &s.modifiers);
@@ -531,6 +535,7 @@ fn compute(m: &Mob, a: Attr, with_transient: bool) -> f64 {
         ops.extend(transient(m, a));
         ops.extend(effect_modifiers(m, a));
     }
+    ops.extend(extra.iter().copied());
     for (amount, op) in &ops {
         if *op == Op::AddValue {
             base += amount;
@@ -573,7 +578,7 @@ fn refresh(m: &mut Mob, a: Attr) {
 /// The value without the transient baby modifier (`speed_bonus` applies
 /// that one to movement speed).
 fn base_with_modifiers(m: &Mob, a: Attr) -> f64 {
-    compute(m, a, false)
+    compute(m, a, false, &[])
 }
 /// `AttributeInstance.setBaseValue`.
 pub fn set_base(m: &mut Mob, a: Attr, v: f64) {
@@ -897,6 +902,28 @@ pub fn slot_enchantments(m: &Mob, slot: usize) -> gear::Levels {
 /// Replace the enchantments of what `m` has in `slot` (after `set_item`).
 pub fn set_slot_enchantments(m: &mut Mob, slot: usize, levels: gear::Levels) {
     gear::set(m, gear_slot(slot), levels);
+}
+/// `EquipmentUser.equip` for one rolled stack: `setItemSlot` puts the item in
+/// `slot` with its own enchantments, then the slot's drop chance is stored
+/// when the table names one.
+pub fn equip_stack(
+    m: &mut Mob,
+    slot: usize,
+    stack: &horizon_world::loot::LootStack,
+    drop_chance: Option<f32>,
+) {
+    set_item(m, slot, &stack.item);
+    if slot <= HEAD {
+        let levels = stack
+            .enchantments
+            .iter()
+            .map(|(id, level)| (Arc::from(id.as_str()), (*level).max(0) as u32))
+            .collect();
+        gear::set(m, gear_slot(slot), levels);
+    }
+    if let Some(chance) = drop_chance {
+        set_drop_chance(m, slot, chance);
+    }
 }
 /// `Mob.setDropChance`.
 pub fn set_drop_chance(m: &mut Mob, slot: usize, chance: f32) {
@@ -1508,7 +1535,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
     }
     fn sound(&mut self, m: &mut Mob, registry: fn(&SpawnRegistries) -> &VariantRegistry) {
         let r = registry(self.data.registries);
-        m.extra.sound_variant = r.random(self.random) as u8;
+        m.extra.sound_variant = Some(r.random(self.random) as u8);
     }
 
     /// `finalizeSpawn` of the mob's class.
@@ -1691,13 +1718,7 @@ impl<L: FinalizeLevel + ?Sized, R: RandomSource> Ctx<'_, L, R> {
                 let hidden = panda_gene(self.int(16));
                 m.extra.variant = main;
                 m.extra.variant2 = hidden;
-                let shown = panda_variant(main, hidden);
-                if shown == 5 {
-                    set_base(m, Attr::MaxHealth, 10.0);
-                }
-                if shown == 1 {
-                    set_base(m, Attr::MovementSpeed, f64::from(0.07f32));
-                }
+                super::panda::set_attributes(m);
                 self.ageable(m, g.or(Some(Group::Ageable(Ageable::chance(0.2)))))
             }
             S::PolarBear | S::Ocelot => {
@@ -1950,7 +1971,7 @@ fn set_memory(m: &mut Mob, name: &'static str, value: i64, ttl: i64) {
 }
 /// `Panda.Gene.getRandom` (enum order: normal, lazy, worried, playful,
 /// brown, weak, aggressive).
-fn panda_gene(roll: i32) -> u8 {
+pub fn panda_gene(roll: i32) -> u8 {
     match roll {
         0 => 1,
         1 => 2,
@@ -2013,6 +2034,17 @@ pub fn species_variant_component(s: Species, variant: u8) -> Option<(&'static st
         _ => return None,
     };
     Some((component, format!("minecraft:{}", variant_name(s, variant))))
+}
+/// The `*_sound_variant` registry of a species, in registry order.
+pub fn sound_variants(s: Species) -> &'static [&'static str] {
+    match s {
+        Species::Pig => &["big", "classic", "mini"],
+        Species::Cow => &["classic", "moody"],
+        Species::Chicken => &["classic", "picky"],
+        Species::Cat => &["classic", "royal"],
+        Species::Wolf => &["angry", "big", "classic", "cute", "grumpy", "puglin", "sad"],
+        _ => &[],
+    }
 }
 /// The registry name of the game's variant index.
 pub fn variant_name(s: Species, index: u8) -> &'static str {

@@ -23,212 +23,8 @@ use std::{
     path::Path,
 };
 
-macro_rules! particle_types {
-    ($($variant:ident = $name:literal),* $(,)?) => {
-        /// Vanilla particle types with a client implementation here.
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-        pub enum ParticleType { $($variant),* }
-        impl ParticleType {
-            pub const ALL: &'static [ParticleType] = &[$(ParticleType::$variant),*];
-            /// Registry path (`minecraft:<name>`), also the sprite-set file name.
-            pub fn name(self) -> &'static str {
-                match self { $(ParticleType::$variant => $name),* }
-            }
-            pub fn from_name(name: &str) -> Option<Self> {
-                let name = name.strip_prefix("minecraft:").unwrap_or(name);
-                match name { $($name => Some(ParticleType::$variant),)* _ => None }
-            }
-        }
-    };
-}
-particle_types! {
-    Block = "block",
-    BlockCrumble = "block_crumble",
-    Trail = "trail",
-    DustPillar = "dust_pillar",
-    FallingDust = "falling_dust",
-    Smoke = "smoke",
-    LargeSmoke = "large_smoke",
-    WhiteSmoke = "white_smoke",
-    Flame = "flame",
-    SoulFireFlame = "soul_fire_flame",
-    CopperFireFlame = "copper_fire_flame",
-    SmallFlame = "small_flame",
-    Lava = "lava",
-    DrippingWater = "dripping_water",
-    FallingWater = "falling_water",
-    DrippingLava = "dripping_lava",
-    FallingLava = "falling_lava",
-    LandingLava = "landing_lava",
-    DrippingHoney = "dripping_honey",
-    FallingHoney = "falling_honey",
-    LandingHoney = "landing_honey",
-    FallingNectar = "falling_nectar",
-    FallingSporeBlossom = "falling_spore_blossom",
-    SporeBlossomAir = "spore_blossom_air",
-    DrippingObsidianTear = "dripping_obsidian_tear",
-    FallingObsidianTear = "falling_obsidian_tear",
-    LandingObsidianTear = "landing_obsidian_tear",
-    DrippingDripstoneWater = "dripping_dripstone_water",
-    FallingDripstoneWater = "falling_dripstone_water",
-    DrippingDripstoneLava = "dripping_dripstone_lava",
-    FallingDripstoneLava = "falling_dripstone_lava",
-    Splash = "splash",
-    Rain = "rain",
-    Bubble = "bubble",
-    SulfurBubbles = "sulfur_bubbles",
-    BubblePop = "bubble_pop",
-    BubbleColumnUp = "bubble_column_up",
-    CurrentDown = "current_down",
-    Underwater = "underwater",
-    Portal = "portal",
-    ReversePortal = "reverse_portal",
-    Enchant = "enchant",
-    Nautilus = "nautilus",
-    VaultConnection = "vault_connection",
-    Crit = "crit",
-    EnchantedHit = "enchanted_hit",
-    DamageIndicator = "damage_indicator",
-    Heart = "heart",
-    AngryVillager = "angry_villager",
-    HappyVillager = "happy_villager",
-    Composter = "composter",
-    Mycelium = "mycelium",
-    Dolphin = "dolphin",
-    EggCrack = "egg_crack",
-    Poof = "poof",
-    Explosion = "explosion",
-    ExplosionEmitter = "explosion_emitter",
-    CampfireCosySmoke = "campfire_cosy_smoke",
-    CampfireSignalSmoke = "campfire_signal_smoke",
-    Note = "note",
-    Dust = "dust",
-    TotemOfUndying = "totem_of_undying",
-    Firework = "firework",
-    EndRod = "end_rod",
-    Ash = "ash",
-    WhiteAsh = "white_ash",
-    CrimsonSpore = "crimson_spore",
-    WarpedSpore = "warped_spore",
-    CherryLeaves = "cherry_leaves",
-    PaleOakLeaves = "pale_oak_leaves",
-    TintedLeaves = "tinted_leaves",
-    Effect = "effect",
-    InstantEffect = "instant_effect",
-    EntityEffect = "entity_effect",
-    Witch = "witch",
-    Infested = "infested",
-    Cloud = "cloud",
-    Sneeze = "sneeze",
-    Snowflake = "snowflake",
-    Soul = "soul",
-    SculkSoul = "sculk_soul",
-    DragonBreath = "dragon_breath",
-    Gust = "gust",
-    SmallGust = "small_gust",
-    GustEmitterLarge = "gust_emitter_large",
-    GustEmitterSmall = "gust_emitter_small",
-    DustColorTransition = "dust_color_transition",
-    SculkCharge = "sculk_charge",
-    SculkChargePop = "sculk_charge_pop",
-    Shriek = "shriek",
-    SonicBoom = "sonic_boom",
-    Vibration = "vibration",
-    SweepAttack = "sweep_attack",
-    Glow = "glow",
-    WaxOn = "wax_on",
-    WaxOff = "wax_off",
-    ElectricSpark = "electric_spark",
-    Scrape = "scrape",
-    SquidInk = "squid_ink",
-    GlowSquidInk = "glow_squid_ink",
-    Item = "item",
-    ItemSlime = "item_slime",
-    ItemSnowball = "item_snowball",
-    ItemCobweb = "item_cobweb",
-    SulfurCubeGoo = "sulfur_cube_goo",
-    Flash = "flash",
-    Firefly = "firefly",
-    TrialSpawnerDetection = "trial_spawner_detection",
-    TrialSpawnerDetectionOminous = "trial_spawner_detection_ominous",
-    TrialOmen = "trial_omen",
-    RaidOmen = "raid_omen",
-    OminousSpawning = "ominous_spawning",
-    Spit = "spit",
-    Fishing = "fishing",
-    DustPlume = "dust_plume",
-    RedPoplarLeaves = "red_poplar_leaves",
-    OrangePoplarLeaves = "orange_poplar_leaves",
-    YellowPoplarLeaves = "yellow_poplar_leaves",
-    PauseMobGrowth = "pause_mob_growth",
-    ResetMobGrowth = "reset_mob_growth",
-    BlockMarker = "block_marker",
-}
-impl ParticleType {
-    /// `ParticleType.getOverrideLimiter` (`ParticleTypes.register(name, true)`):
-    /// spawned regardless of distance.
-    pub fn override_limiter(self) -> bool {
-        matches!(
-            self,
-            Self::BlockMarker
-                | Self::DamageIndicator
-                | Self::ExplosionEmitter
-                | Self::Explosion
-                | Self::Gust
-                | Self::GustEmitterLarge
-                | Self::GustEmitterSmall
-                | Self::SonicBoom
-                | Self::SculkCharge
-                | Self::SculkChargePop
-                | Self::Vibration
-                | Self::Poof
-                | Self::Spit
-                | Self::SquidInk
-                | Self::SweepAttack
-                | Self::CampfireCosySmoke
-                | Self::CampfireSignalSmoke
-                | Self::GlowSquidInk
-                | Self::Glow
-                | Self::WaxOn
-                | Self::WaxOff
-                | Self::ElectricSpark
-                | Self::Scrape
-                | Self::TrialSpawnerDetection
-                | Self::TrialSpawnerDetectionOminous
-                | Self::VaultConnection
-                | Self::OminousSpawning
-        )
-    }
-    /// `SingleQuadParticle.Layer.translucent`: types whose vanilla particle class
-    /// hardcodes the translucent layer, drawn after translucent terrain.
-    /// `TerrainParticle`, `BreakingItemParticle` and `BlockMarker` resolve their
-    /// layer from the sprite instead (`Layer.bySprite`); see the `translucent`
-    /// sprite set on the engine.
-    pub fn translucent_layer(self) -> bool {
-        match self {
-            // CampfireSmokeParticle.
-            Self::CampfireCosySmoke | Self::CampfireSignalSmoke
-            // PlayerCloudParticle.
-            | Self::Cloud | Self::Sneeze
-            // SpellParticle.
-            | Self::Effect | Self::InstantEffect | Self::EntityEffect
-            | Self::Witch | Self::Infested | Self::TrialOmen | Self::RaidOmen
-            // EmissiveRisingParticle.
-            | Self::Soul | Self::SculkSoul
-            // SculkChargeParticle, SculkChargePopParticle, ShriekParticle,
-            // VibrationSignalParticle, FireflyParticle, OverlayParticle.
-            | Self::SculkCharge | Self::SculkChargePop | Self::Shriek
-            | Self::Vibration | Self::Firefly | Self::Flash
-            // SimpleAnimatedParticle and its subclasses: EndRodParticle,
-            // SparkParticle (firework), SquidInkParticle, TotemParticle.
-            | Self::EndRod | Self::Firework | Self::SquidInk | Self::GlowSquidInk
-            | Self::TotemOfUndying
-            // FlyTowardsPositionParticle: its LifetimeAlpha(0, 0.6, 0.25, 1) is not opaque.
-            | Self::VaultConnection => true,
-            _ => false,
-        }
-    }
-}
+pub use horizon_client_core::particle_type::ParticleType;
+pub use horizon_items::firework::{DYE_FIREWORK_COLORS, FireworkExplosion, FireworkShape};
 
 /// `ParticleOptions` with the parameters of the option classes used here.
 #[derive(Clone, Debug)]
@@ -751,6 +547,17 @@ fn next_double_between(random: &mut impl RandomSource, min: f64, max: f64) -> f6
 pub fn on_block_faces(
     random: &mut impl RandomSource,
     pos: [i32; 3],
+    emit: impl FnMut([f64; 3], [f64; 3]),
+) {
+    on_block_faces_between(random, pos, 3, 5, emit);
+}
+/// `ParticleUtils.spawnParticlesOnBlockFaces` with `UniformInt.of(min, max)`
+/// particles per face (3009 sniffer egg cracks use 3 to 6).
+pub fn on_block_faces_between(
+    random: &mut impl RandomSource,
+    pos: [i32; 3],
+    min: i32,
+    max: i32,
     mut emit: impl FnMut([f64; 3], [f64; 3]),
 ) {
     const FACES: [[i32; 3]; 6] = [
@@ -762,7 +569,7 @@ pub fn on_block_faces(
         [1, 0, 0],
     ];
     for face in FACES {
-        let count = random.next_int_bound(5 - 3 + 1).unwrap_or(0) + 3;
+        let count = random.next_int_bound(max - min + 1).unwrap_or(0) + min;
         for _ in 0..count {
             // getRandomSpeedRanges, then spawnParticleOnFace with step factor 0.55.
             let speed: [f64; 3] = std::array::from_fn(|_| next_double_between(random, -0.5, 0.5));
@@ -782,15 +589,17 @@ pub fn on_block_faces(
     }
 }
 /// `ParticleUtils.spawnParticlesAlongAxis(axis, level, pos, 0.125, particle,
-/// UniformInt.of(10, 19))` (level event 3002 on a lightning rod): sparks along
-/// the rod, moving along it. `axis` is 0, 1, 2 for X, Y, Z.
+/// UniformInt.of(min, max))` (`count` is the range; level event 3002 on a
+/// lightning rod uses 10 to 19): sparks along the rod, moving along it.
+/// `axis` is 0, 1, 2 for X, Y, Z.
 pub fn along_axis(
     random: &mut impl RandomSource,
     axis: usize,
     pos: [i32; 3],
+    (min, max): (i32, i32),
     mut emit: impl FnMut([f64; 3], [f64; 3]),
 ) {
-    let count = random.next_int_bound(19 - 10 + 1).unwrap_or(0) + 10;
+    let count = random.next_int_bound(max - min + 1).unwrap_or(0) + min;
     for _ in 0..count {
         let p: [f64; 3] = std::array::from_fn(|i| {
             f64::from(pos[i])
@@ -1188,6 +997,8 @@ pub struct ParticleEngine {
     emitters: Vec<(ParticleOptions, [f64; 3], f64, f64, u32)>,
     /// Camera position for the 32-block spawn limiter.
     pub camera: [f64; 3],
+    /// The Particles option (`ParticleStatus`): 0 all, 1 decreased, 2 minimal.
+    pub particle_level: u8,
     /// FireworkParticles.Starter instances.
     starters: Vec<Starter>,
     /// Local sounds requested by particles (dripstone drips): (event, position, volume, pitch).
@@ -1218,6 +1029,7 @@ impl ParticleEngine {
             emitters: Vec::new(),
             starters: Vec::new(),
             camera: [0.0; 3],
+            particle_level: 0,
             sounds: Vec::new(),
             made: Default::default(),
             item_sprites: HashMap::new(),
@@ -1328,30 +1140,48 @@ impl ParticleEngine {
         &mut self.level_random
     }
     /// `ClientLevel.addParticle`: dropped beyond 32 blocks of the camera unless
-    /// the type overrides the limiter.
+    /// the type overrides the limiter, and thinned by the Particles option.
     pub fn add(&mut self, options: &ParticleOptions, p: [f64; 3], v: [f64; 3]) {
+        self.add_with(options, p, v, false, false);
+    }
+    /// `ClientLevel.addParticle(particle, overrideLimiter, alwaysShow, ...)`
+    /// (`doAddParticle`). `always_show` is `addAlwaysVisibleParticle`'s flag.
+    pub fn add_with(
+        &mut self,
+        options: &ParticleOptions,
+        p: [f64; 3],
+        v: [f64; 3],
+        override_limiter: bool,
+        always_show: bool,
+    ) {
         let c = self.camera;
         let d2 = (p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2);
         if let Some(requested) = &mut self.requested {
             requested.push((options.clone(), p, v));
             return;
         }
-        if !options.ty.override_limiter() && d2 > 1024.0 {
-            return;
+        let minimal = self.calculate_particle_level(always_show) == 2;
+        if override_limiter || options.ty.override_limiter() || (d2 <= 1024.0 && !minimal) {
+            self.create(options, p, v);
         }
-        self.create(options, p, v);
+    }
+    /// `ClientLevel.calculateParticleLevel`: minimal still shows one in ten
+    /// always-visible particles as decreased, and decreased drops a third.
+    fn calculate_particle_level(&mut self, always_show: bool) -> u8 {
+        let mut level = self.particle_level.min(2);
+        if always_show && level == 2 && self.level_random.next_int_bound(10).unwrap_or(0) == 0 {
+            level = 1;
+        }
+        if level == 1 && self.level_random.next_int_bound(3).unwrap_or(0) == 0 {
+            level = 2;
+        }
+        level
     }
     /// `LevelEventHandler.singleBlockTeleportationParticles` towards
     /// `BlockUtil.unpackDifferenceInPosition(from, data, radius)`: the dragon
     /// egg's event 2015 packs offsets within (16, 8, 16), a consumable's
     /// teleport (2017) within (127, 127, 127).
-    pub fn block_teleportation(
-        &mut self,
-        from: [i32; 3],
-        data: i32,
-        radius: [i32; 3],
-        particle_level: u8,
-    ) {
+    pub fn block_teleportation(&mut self, from: [i32; 3], data: i32, radius: [i32; 3]) {
         let to = [
             from[0].wrapping_add(((data >> 16) & 255) - radius[0]),
             from[1].wrapping_add(((data >> 8) & 255) - radius[1]),
@@ -1369,6 +1199,35 @@ impl ParticleEngine {
                 to[1] + t * (from[1] - to[1]) + r.next_double() - 0.5,
                 to[2] + t * (from[2] - to[2]) + (r.next_double() - 0.5) + 0.5,
             ];
+            self.add(&options, position, velocity);
+        }
+    }
+    /// `LevelEventHandler.levelEvent` 2018: an enderman's portal trail from
+    /// where it was (`from`) to where it went, which `data` packs within
+    /// (127, 127, 127). 128 portal particles along the way, spread about the
+    /// width and height of an enderman.
+    pub fn enderman_teleportation(&mut self, from: [i32; 3], data: i32, particle_level: u8) {
+        // EntityTypes.ENDERMAN's dimensions.
+        const WIDTH: f64 = 0.6_f32 as f64;
+        const HEIGHT: f64 = 2.9_f32 as f64;
+        let to = [
+            from[0].wrapping_add(((data >> 16) & 255) - 127),
+            from[1].wrapping_add(((data >> 8) & 255) - 127),
+            from[2].wrapping_add((data & 255) - 127),
+        ]
+        .map(f64::from);
+        let from = from.map(f64::from);
+        let options = ParticleOptions::simple(ParticleType::Portal);
+        for _ in 0..128 {
+            let r = &mut self.level_random;
+            let t = r.next_double();
+            let velocity = std::array::from_fn(|_| f64::from((r.next_float() - 0.5) * 0.2));
+            // Mth.lerp(t, to, from).
+            let position = [
+                to[0] + t * (from[0] - to[0]) + (r.next_double() - 0.5) * WIDTH * 2.0,
+                to[1] + t * (from[1] - to[1]) + r.next_double() * HEIGHT,
+                to[2] + t * (from[2] - to[2]) + (r.next_double() - 0.5) * WIDTH * 2.0,
+            ];
             // The option roll shares the level random and precedes the distance check.
             let limited = match particle_level {
                 1 => r.next_int_bound(3).unwrap_or(0) == 0,
@@ -1381,22 +1240,35 @@ impl ParticleEngine {
         }
     }
     /// `ClientPacketListener.handleExplosion` + `ClientExplosionTracker`: the
-    /// explosion particle (emitter for radius >= 2) and up to 512 poof/smoke
-    /// particles thrown from air inside the radius.
+    /// explosion particle (the emitter unless `ServerExplosion.isSmall`) and up
+    /// to 512 poof/smoke particles thrown from air inside the radius.
     pub fn explosion(
         &mut self,
         center: [f64; 3],
-        radius: f32,
+        small: bool,
         block_count: usize,
+        radius: f32,
         is_air: &dyn Fn([i32; 3]) -> bool,
     ) {
-        let ty = if radius < 2.0 {
+        let ty = if small {
             ParticleType::Explosion
         } else {
             ParticleType::ExplosionEmitter
         };
         self.add(&ParticleOptions::simple(ty), center, [1.0, 0.0, 0.0]);
         self.explosion_blocks(center, radius, block_count, is_air);
+    }
+    /// `LlamaSpit.recreateFromPacket`: seven spit particles thrown ahead of a
+    /// new spit, each faster than the last along x and z.
+    pub fn llama_spit_burst(&mut self, at: [f64; 3], movement: [f64; 3]) {
+        for i in 0..7 {
+            let k = 0.4 + 0.1 * f64::from(i);
+            self.add(
+                &ParticleOptions::simple(ParticleType::Spit),
+                at,
+                [movement[0] * k, movement[1], movement[2] * k],
+            );
+        }
     }
     /// `ClientExplosionTracker` with `Level.DEFAULT_EXPLOSION_BLOCK_PARTICLES`.
     pub fn explosion_blocks(
@@ -1406,6 +1278,10 @@ impl ParticleEngine {
         block_count: usize,
         is_air: &dyn Fn([i32; 3]) -> bool,
     ) {
+        // ClientExplosionTracker.tick: only the All option throws the debris.
+        if self.particle_level != 0 {
+            return;
+        }
         for _ in 0..block_count.min(512) {
             let r = &mut self.random;
             let d = Vec3::new(
@@ -3946,6 +3822,8 @@ impl ParticleEngine {
                         },
                         color,
                         light,
+
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             }
@@ -3961,6 +3839,38 @@ fn lifetime_alpha(a: [f32; 4], age: i32, lifetime: i32, partial: f32) -> f32 {
     a[0] + (a[1] - a[0]) * t.clamp(0.0, 1.0)
 }
 
+struct Starter {
+    at: [f64; 3],
+    v: [f64; 3],
+    explosions: Vec<FireworkExplosion>,
+    life: i32,
+    lifetime: i32,
+    twinkle_delay: bool,
+    far: bool,
+}
+const STAR: [[f64; 2]; 6] = [
+    [0.0, 1.0],
+    [0.3455, 0.309],
+    [0.9511, 0.309],
+    [0.379_591_836_734_693_9, -0.126_530_612_244_897_95],
+    [0.612_244_897_959_183_7, -0.804_081_632_653_061_2],
+    [0.0, -0.359_183_673_469_387_73],
+];
+const CREEPER: [[f64; 2]; 12] = [
+    [0.0, 0.2],
+    [0.2, 0.2],
+    [0.2, 0.6],
+    [0.6, 0.6],
+    [0.6, 0.2],
+    [0.2, 0.2],
+    [0.2, 0.0],
+    [0.4, 0.0],
+    [0.4, -0.6],
+    [0.2, -0.6],
+    [0.2, -0.4],
+    [0.0, -0.4],
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3970,7 +3880,7 @@ mod tests {
         let mut engine = ParticleEngine::new(Path::new(""), &HashMap::new(), &HashSet::new());
         engine.seed_randoms(0, 0, 0);
         // Destination offset (-15, 7, 15); the unused top byte is ignored.
-        engine.block_teleportation([4, 12, -5], 0xff01_0f1fu32 as i32, [16, 8, 16], 0);
+        engine.block_teleportation([4, 12, -5], 0xff01_0f1fu32 as i32, [16, 8, 16]);
         assert_eq!(engine.pending.len(), 128);
         assert!(engine.pending.iter().all(|p| p.ty == ParticleType::Portal));
         let first = &engine.pending[0];
@@ -3997,7 +3907,7 @@ mod tests {
         // TeleportRandomlyConsumeEffect: BlockUtil.clampedPackDifferenceInPosition
         // of the move (-7, -3, 9) with radii 127, from (4, 12, -5) to (-3, 9, 4).
         let data = (-7 + 127) << 16 | (-3 + 127) << 8 | (9 + 127);
-        engine.block_teleportation([4, 12, -5], data, [127, 127, 127], 0);
+        engine.block_teleportation([4, 12, -5], data, [127, 127, 127]);
         assert_eq!(engine.pending.len(), 128);
         for p in &engine.pending {
             let [x, y, z] = p.position;
@@ -4023,7 +3933,8 @@ mod tests {
                 if distant {
                     engine.camera = [1000.0; 3];
                 }
-                engine.block_teleportation([4, 12, -5], 0x010f1f, [16, 8, 16], option);
+                engine.particle_level = option;
+                engine.block_teleportation([4, 12, -5], 0x010f1f, [16, 8, 16]);
                 assert_eq!(engine.pending.len(), if distant { 0 } else { count });
                 assert_eq!(engine.level_random.state(), state);
             }
@@ -4147,92 +4058,3 @@ mod tests {
         assert!((lifetime_alpha(a, 40, 40, 0.0) - 0.6).abs() < 1e-6);
     }
 }
-/// FireworkExplosion.Shape.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum FireworkShape {
-    #[default]
-    SmallBall,
-    LargeBall,
-    Star,
-    Creeper,
-    Burst,
-}
-impl FireworkShape {
-    pub fn from_name(name: &str) -> Self {
-        match name {
-            "large_ball" => Self::LargeBall,
-            "star" => Self::Star,
-            "creeper" => Self::Creeper,
-            "burst" => Self::Burst,
-            _ => Self::SmallBall,
-        }
-    }
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::SmallBall => "small_ball",
-            Self::LargeBall => "large_ball",
-            Self::Star => "star",
-            Self::Creeper => "creeper",
-            Self::Burst => "burst",
-        }
-    }
-}
-/// `DyeColor` names and `getFireworkColor`, by dye id (white to black).
-pub const DYE_FIREWORK_COLORS: [(&str, u32); 16] = [
-    ("white", 0xF0F0F0),
-    ("orange", 0xEB8844),
-    ("magenta", 0xC354CD),
-    ("light_blue", 0x6689D3),
-    ("yellow", 0xDECF2A),
-    ("lime", 0x41CD34),
-    ("pink", 0xD88198),
-    ("gray", 0x434343),
-    ("light_gray", 0xABABAB),
-    ("cyan", 0x287697),
-    ("purple", 0x7B2FBE),
-    ("blue", 0x253192),
-    ("brown", 0x51301A),
-    ("green", 0x3B511A),
-    ("red", 0xB3312C),
-    ("black", 0x1E1B1B),
-];
-/// The `firework_explosion` component.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct FireworkExplosion {
-    pub shape: FireworkShape,
-    pub colors: Vec<u32>,
-    pub fade: Vec<u32>,
-    pub trail: bool,
-    pub twinkle: bool,
-}
-struct Starter {
-    at: [f64; 3],
-    v: [f64; 3],
-    explosions: Vec<FireworkExplosion>,
-    life: i32,
-    lifetime: i32,
-    twinkle_delay: bool,
-    far: bool,
-}
-const STAR: [[f64; 2]; 6] = [
-    [0.0, 1.0],
-    [0.3455, 0.309],
-    [0.9511, 0.309],
-    [0.379_591_836_734_693_9, -0.126_530_612_244_897_95],
-    [0.612_244_897_959_183_7, -0.804_081_632_653_061_2],
-    [0.0, -0.359_183_673_469_387_73],
-];
-const CREEPER: [[f64; 2]; 12] = [
-    [0.0, 0.2],
-    [0.2, 0.2],
-    [0.2, 0.6],
-    [0.6, 0.6],
-    [0.6, 0.2],
-    [0.2, 0.2],
-    [0.2, 0.0],
-    [0.4, 0.0],
-    [0.4, -0.6],
-    [0.2, -0.6],
-    [0.2, -0.4],
-    [0.0, -0.4],
-];

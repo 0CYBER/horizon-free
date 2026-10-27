@@ -293,18 +293,27 @@ fn bubbles(m: &mut Mob, events: &mut Vec<MobEvent>) {
         f64::from(yaw.cos() * pitch.cos()),
     ];
     let spread = m.random.next_double() * 0.8 * (1.0 + speed);
-    for _ in 0..3 {
-        let _ = (f64::from(m.random.next_float()) - 0.5) * spread;
-    }
-    events.push(MobEvent::Particles {
+    let velocity = [
+        (f64::from(m.random.next_float()) - 0.5) * spread,
+        (f64::from(m.random.next_float()) - 0.5) * spread,
+        (f64::from(m.random.next_float()) - 0.5) * spread,
+    ];
+    events.push(MobEvent::ParticleAt {
         kind: "bubble",
         at: [
             m.position.x - dir[0] * 1.1,
             m.position.y - dir[1] + 0.25,
             m.position.z - dir[2] * 1.1,
         ],
-        count: 1,
+        velocity,
     });
+}
+/// `AbstractNautilus.tick` on a client of a server: the bubbles of a nautilus
+/// in the water, from the motion the server sent.
+pub fn client_tick(m: &mut Mob, events: &mut Vec<MobEvent>) {
+    if m.fluids.in_water {
+        bubbles(m, events);
+    }
 }
 fn in_water_at(w: &MobWorld, p: Vec3) -> bool {
     w.fluid(p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32) == Fluid::Water

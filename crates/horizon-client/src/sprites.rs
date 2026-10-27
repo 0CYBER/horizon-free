@@ -115,6 +115,29 @@ impl Sprites {
     pub fn count(&self) -> usize {
         self.native.len()
     }
+    /// `SpriteContents.computeTransparency(u0, v0, u1, v1)` is NONE: every texel under
+    /// the quad's UV box is fully opaque in every frame, so the quad needs no alpha test.
+    pub fn region_opaque(&self, layer: u32, uv: &[[f32; 2]; 4]) -> bool {
+        if self.opaque[layer as usize] {
+            return true;
+        }
+        let (side, frames, _) = &self.native[layer as usize];
+        let side = *side as usize;
+        let range = |axis: usize| {
+            let lo = uv.iter().map(|p| p[axis]).fold(f32::INFINITY, f32::min);
+            let hi = uv.iter().map(|p| p[axis]).fold(f32::NEG_INFINITY, f32::max);
+            let clamp = |v: f32| (v.max(0.0) as usize).min(side);
+            clamp((lo * side as f32).floor())..clamp((hi * side as f32).ceil())
+        };
+        let (columns, rows) = (range(0), range(1));
+        frames.iter().all(|frame| {
+            rows.clone().all(|y| {
+                columns
+                    .clone()
+                    .all(|x| frame[(y * side + x) * 4 + 3] == 255)
+            })
+        })
+    }
     /// Lay every layer out at one size: the largest texture's (resource packs
     /// may ship 32x, 64x... textures, like vanilla's stitched atlas), rounded
     /// up to a power of two and limited to [`MAX_ARRAY_BYTES`]. Smaller
@@ -342,9 +365,24 @@ pub(crate) fn test_frames(layer: u32, frames: Vec<Vec<u8>>, metadata: &str) -> S
     }
 }
 
+/// How many reduced copies a sprite atlas keeps: the Mipmap Levels option plus the
+/// resampling-only levels an upscaled pack needs, within what the atlas holds.
+pub(crate) fn sprite_mipmap_limit(requested: u32, size: u32, minimum: u32, available: u32) -> u32 {
+    // Only the atlas native minimum determines how many resampling-only mips to skip.
+    let upscale = (size / minimum.max(1)).max(1).ilog2();
+    requested.saturating_add(upscale).min(available - 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn mipmap_option_keeps_real_16px_reductions() {
+        for levels in 0..=4 {
+            assert_eq!(sprite_mipmap_limit(levels, 32, 16, 6), levels + 1);
+            assert_eq!(sprite_mipmap_limit(levels, 16, 16, 5), levels);
+        }
+    }
     #[test]
     fn identical_still_textures_share_a_layer() {
         let root =
@@ -398,7 +436,7 @@ mod tests {
         assert_eq!((sprites.size, sprites.minimum_size), (32, 32));
         for level in 0..=4 {
             assert_eq!(
-                crate::gfx::sprite_mipmap_limit(level, sprites.size, sprites.minimum_size, 6),
+                sprite_mipmap_limit(level, sprites.size, sprites.minimum_size, 6),
                 level
             );
         }
@@ -408,7 +446,7 @@ mod tests {
         sprites.finish();
         assert_eq!((sprites.size, sprites.minimum_size), (32, 16));
         assert_eq!(
-            crate::gfx::sprite_mipmap_limit(0, sprites.size, sprites.minimum_size, 6),
+            sprite_mipmap_limit(0, sprites.size, sprites.minimum_size, 6),
             1
         );
     }

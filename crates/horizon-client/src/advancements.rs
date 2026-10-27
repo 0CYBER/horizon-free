@@ -4,7 +4,7 @@
 //! conditions advancements use).
 use serde_json::Value;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::Path,
 };
 
@@ -437,6 +437,8 @@ pub struct EntityView {
     /// mainhand, offhand, head, chest, legs, feet, body.
     pub equipment: [Option<ItemView>; 7],
     pub vehicle: Option<Box<EntityView>>,
+    /// Player: what it looks at within 100 blocks (`PlayerPredicate.lookingAt`).
+    pub looking_at: Option<Box<EntityView>>,
     pub effects: Vec<(String, i32, i32)>,
     /// Player: game mode name.
     pub gamemode: Option<String>,
@@ -458,7 +460,7 @@ fn range_f(v: &Value, x: f64) -> bool {
         _ => false,
     }
 }
-fn range_i(v: &Value, x: i64) -> bool {
+pub fn range_i(v: &Value, x: i64) -> bool {
     range_f(v, x as f64)
 }
 /// A registry id, `#tag`, or list matched against one id.
@@ -472,6 +474,51 @@ pub fn id_matches(v: &Value, registry: &str, id: &str, w: &dyn World) -> bool {
         Value::Array(a) => a.iter().any(|x| id_matches(x, registry, id, w)),
         _ => false,
     }
+}
+/// `PotionsPredicate`: the potion in a `HolderSet`, plus a `CollectionPredicate`
+/// over the potion's effects (`contains`, `count`, `size`).
+pub fn potions(v: &Value, potion: Option<&str>, w: &dyn World) -> bool {
+    if v.is_null() {
+        return true;
+    }
+    if !v["potions"].is_null() && !potion.is_some_and(|p| id_matches(&v["potions"], "potion", p, w))
+    {
+        return false;
+    }
+    let c = &v["effects"];
+    if c.is_null() {
+        return true;
+    }
+    let effects: Vec<(String, i32, i32)> = potion
+        .and_then(crate::brewing::potion)
+        .map(|d| {
+            d.effects
+                .iter()
+                .map(|(id, dur, amp)| (format!("minecraft:{id}"), *amp, *dur))
+                .collect()
+        })
+        .unwrap_or_default();
+    // `MobEffectsPredicate.test`: the one listed effect, amplifier and duration.
+    let test = |pred: &Value, e: &(String, i32, i32)| {
+        pred.as_object().is_some_and(|m| {
+            m.get(&e.0).is_some_and(|want| {
+                range_i(&want["amplifier"], i64::from(e.1))
+                    && range_i(&want["duration"], i64::from(e.2))
+                    && want["ambient"].as_bool().is_none_or(|b| !b)
+                    && want["visible"].as_bool().is_none_or(|b| b)
+            })
+        })
+    };
+    c["contains"]
+        .as_array()
+        .is_none_or(|l| l.iter().all(|p| effects.iter().any(|e| test(p, e))))
+        && c["count"].as_array().is_none_or(|l| {
+            l.iter().all(|entry| {
+                let n = effects.iter().filter(|e| test(&entry["test"], e)).count();
+                range_i(&entry["count"], n as i64)
+            })
+        })
+        && range_i(&c["size"], effects.len() as i64)
 }
 /// `ItemPredicate`.
 pub fn item(v: &Value, it: &ItemView, w: &dyn World) -> bool {
@@ -614,6 +661,18 @@ fn components(expected: &Value, have: &[(String, String)]) -> bool {
         })
     })
 }
+/// `DistancePredicate.matches` between two points.
+pub fn distance(v: &Value, a: [f64; 3], b: [f64; 3]) -> bool {
+    let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    range_f(&v["x"], d[0].abs())
+        && range_f(&v["y"], d[1].abs())
+        && range_f(&v["z"], d[2].abs())
+        && range_f(&v["horizontal"], (d[0] * d[0] + d[2] * d[2]).sqrt())
+        && range_f(
+            &v["absolute"],
+            (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt(),
+        )
+}
 /// `EntityPredicate` (26.x keyed sub-predicates).
 pub fn entity(v: &Value, e: &EntityView, w: &dyn World, origin: [f64; 3]) -> bool {
     if v.is_null() {
@@ -629,21 +688,7 @@ pub fn entity(v: &Value, e: &EntityView, w: &dyn World, origin: [f64; 3]) -> boo
             "minecraft:stepping_on" => {
                 location(p, [e.position[0], e.position[1] - 0.5, e.position[2]], w)
             }
-            "minecraft:distance" | "distance" => {
-                let d = [
-                    e.position[0] - origin[0],
-                    e.position[1] - origin[1],
-                    e.position[2] - origin[2],
-                ];
-                range_f(&p["x"], d[0].abs())
-                    && range_f(&p["y"], d[1].abs())
-                    && range_f(&p["z"], d[2].abs())
-                    && range_f(&p["horizontal"], (d[0] * d[0] + d[2] * d[2]).sqrt())
-                    && range_f(
-                        &p["absolute"],
-                        (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt(),
-                    )
-            }
+            "minecraft:distance" | "distance" => distance(p, e.position, origin),
             "minecraft:flags" | "flags" => {
                 let f = |k: &str, have: bool| p[k].as_bool().is_none_or(|want| want == have);
                 f("is_on_fire", e.on_fire)
@@ -678,11 +723,16 @@ pub fn entity(v: &Value, e: &EntityView, w: &dyn World, origin: [f64; 3]) -> boo
                     })
                 })
             }),
-            "minecraft:type_specific/player" => p["gamemode"].as_array().is_none_or(|modes| {
-                e.gamemode
-                    .as_deref()
-                    .is_some_and(|g| modes.iter().any(|m| m.as_str() == Some(g)))
-            }),
+            "minecraft:type_specific/player" => {
+                p["gamemode"].as_array().is_none_or(|modes| {
+                    e.gamemode
+                        .as_deref()
+                        .is_some_and(|g| modes.iter().any(|m| m.as_str() == Some(g)))
+                }) && (p["looking_at"].is_null()
+                    || e.looking_at
+                        .as_ref()
+                        .is_some_and(|t| entity(&p["looking_at"], t, w, origin)))
+            }
             "minecraft:type_specific/lightning" => {
                 range_i(&p["blocks_set_on_fire"], 0)
                     && (p["entity_struck"].is_null()
@@ -702,6 +752,87 @@ pub fn entity(v: &Value, e: &EntityView, w: &dyn World, origin: [f64; 3]) -> boo
         }
     }
     true
+}
+/// `KilledByArrowTrigger.TriggerInstance.matches`: the weapon, each listed
+/// victim condition matched by a distinct victim, and the count of entity types.
+pub fn killed_by_arrow(
+    c: &Value,
+    me: &EntityView,
+    victims: &[EntityView],
+    weapon: Option<&ItemView>,
+    w: &dyn World,
+) -> bool {
+    fn ctx<'a>(e: &'a EntityView, me: &EntityView) -> Entities<'a> {
+        Entities {
+            this: Some(e),
+            origin: me.position,
+            tool: None,
+            block_pos: None,
+        }
+    }
+    if !conditions(&c["player"], &ctx(me, me), w) {
+        return false;
+    }
+    if !c["fired_from_weapon"].is_null()
+        && !weapon.is_some_and(|it| item(&c["fired_from_weapon"], it, w))
+    {
+        return false;
+    }
+    let mut left: Vec<&EntityView> = victims.iter().collect();
+    for want in c["victims"].as_array().into_iter().flatten() {
+        let Some(i) = left.iter().position(|e| conditions(want, &ctx(e, me), w)) else {
+            return false;
+        };
+        left.remove(i);
+    }
+    let kinds: BTreeSet<&str> = victims.iter().map(|e| e.kind.as_str()).collect();
+    range_i(&c["unique_entity_types"], kinds.len() as i64)
+}
+/// A damage event as `DamagePredicate` sees it.
+#[derive(Clone, Debug, Default)]
+pub struct DamageView {
+    /// The damage type id (`minecraft:arrow`).
+    pub kind: String,
+    /// `DamageSource.getDirectEntity` and `getEntity`.
+    pub direct: Option<EntityView>,
+    pub source: Option<EntityView>,
+    /// `DamageSource.isDirect`: the direct entity is the causing one.
+    pub is_direct: bool,
+    /// The damage before and after the shield took its share.
+    pub original: f32,
+    pub actual: f32,
+    pub blocked: bool,
+}
+/// `DamagePredicate`, with its `DamageSourcePredicate` as `type`.
+pub fn damage(v: &Value, d: &DamageView, w: &dyn World, origin: [f64; 3]) -> bool {
+    if v.is_null() {
+        return true;
+    }
+    let by = |key: &str, e: &Option<EntityView>| {
+        v[key].is_null() || e.as_ref().is_some_and(|e| entity(&v[key], e, w, origin))
+    };
+    if !range_f(&v["dealt"], f64::from(d.original))
+        || !range_f(&v["taken"], f64::from(d.actual))
+        || !by("source_entity", &d.source)
+        || v["blocked"].as_bool().is_some_and(|b| b != d.blocked)
+    {
+        return false;
+    }
+    let ty = &v["type"];
+    let tags_ok = ty["tags"].as_array().into_iter().flatten().all(|t| {
+        let tag = t["id"].as_str().unwrap_or("");
+        let tag = tag.strip_prefix('#').unwrap_or(tag);
+        w.in_tag("damage_type", tag, &d.kind) == t["expected"].as_bool().unwrap_or(true)
+    });
+    let direct_ok = ty["direct_entity"].is_null()
+        || d.direct
+            .as_ref()
+            .is_some_and(|e| entity(&ty["direct_entity"], e, w, origin));
+    let source_ok = ty["source_entity"].is_null()
+        || d.source
+            .as_ref()
+            .is_some_and(|e| entity(&ty["source_entity"], e, w, origin));
+    tags_ok && direct_ok && source_ok && ty["is_direct"].as_bool().is_none_or(|b| b == d.is_direct)
 }
 /// The entities a loot-style condition list may refer to.
 pub struct Entities<'a> {

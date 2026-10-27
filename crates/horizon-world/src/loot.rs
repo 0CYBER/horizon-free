@@ -34,6 +34,8 @@ pub struct LootStack {
     /// Added by set_stew_effect (the `suspicious_stew_effects` component):
     /// (effect id, duration in ticks).
     pub stew_effects: Vec<(String, i32)>,
+    /// Set by set_name: (`custom_name` or `item_name`, the text component).
+    pub names: Vec<(String, Value)>,
 }
 /// `ExplorationMapFunction`'s settings.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,6 +80,7 @@ impl LootStack {
             exploration: None,
             ominous_amplifier: None,
             stew_effects: Vec::new(),
+            names: Vec::new(),
         }
     }
     pub fn is_empty(&self) -> bool {
@@ -1224,7 +1227,16 @@ impl<R: RandomSource> Context<'_, R> {
                     stack = smelted;
                 }
             }
-            // Names, lore, components and other data without random draws.
+            // SetNameFunction: the component the target names (custom_name by
+            // default). The entity-resolved selectors and scores are not
+            // modelled; no table uses `entity`.
+            "minecraft:set_name" if !f["name"].is_null() => {
+                let target = f["target"].as_str().unwrap_or("custom_name");
+                let id = format!("minecraft:{target}");
+                stack.names.retain(|(k, _)| *k != id);
+                stack.names.push((id, f["name"].clone()));
+            }
+            // Lore, components and other data without random draws.
             _ => {}
         }
         stack

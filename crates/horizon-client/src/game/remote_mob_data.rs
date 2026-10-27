@@ -4,9 +4,14 @@
 //! own simulation, which a client of a server doesn't run.
 use super::Game;
 use horizon_client::mobs::render::{PROFESSIONS, VILLAGER_TYPES};
-use horizon_client::mobs::{Mob, Species, Who, bat, tame};
-use horizon_protocol::entity_data::Value;
-use horizon_protocol::registry::Builtin;
+use horizon_client::mobs::{
+    Mob, Species, Who, armadillo, bat, bee, camel, creaking, equine, finalize, illusioner, panda,
+    sniffer, sync, tame, zombie_villager,
+};
+use horizon_client::particles::{ParticleOptions, ParticleType};
+use horizon_protocol::entity_data::{Particle, ParticleData, Value};
+use horizon_protocol::registry::{Builtin, Dynamic};
+use horizon_world::registry::BlockStateId;
 
 /// The values `apply` takes from one SetEntityData packet, by vanilla's entry
 /// indices (Entity 0..=7, LivingEntity 8..=14, Mob 15, then the subclasses).
@@ -14,12 +19,37 @@ use horizon_protocol::registry::Builtin;
 fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_entity: i32) {
     let species = m.species();
     let baby = super::lan::baby_index(&m.kind.id);
+    if &*m.kind.id == "minecraft:player" {
+        player_poses(m, values);
+    }
     for (index, _, value) in values {
         match (*index, value) {
+            // Entity.DATA_POSE: a player's or mannequin's box follows it.
+            (6, Value::Id(pose))
+                if matches!(&*m.kind.id, "minecraft:player" | "minecraft:mannequin") =>
+            {
+                m.extra.avatar_pose = horizon_client::pose::Pose::from_id(*pose);
+            }
             // Entity.DATA_SHARED_FLAGS_ID's FLAG_ONFIRE: Entity.isOnFire on a
             // client, which draws the flames. A client doesn't count the
             // fire down: the flag goes off when the server's fire is out.
-            (0, Value::Byte(flags)) => m.fire_ticks = i32::from(flags & 1),
+            (0, Value::Byte(flags)) => {
+                m.fire_ticks = i32::from(flags & 1);
+                // Drowned.setSwimming: the shared flag of swimming.
+                if species == Species::Drowned {
+                    m.extra.flag = flags & 16 != 0;
+                }
+                // The shared flag of invisibility: Entity.isInvisible hides
+                // the model (an illusioner shows its mirror images).
+                let invisible = flags & 32 != 0;
+                if species == Species::Illusioner {
+                    illusioner::set_invisible(m, invisible);
+                } else if &*m.kind.id != "minecraft:player" {
+                    m.invisible = invisible;
+                }
+            }
+            // Entity.DATA_POSE: the pose the species animates by.
+            (6, Value::Id(pose)) => sync::set_pose(m, (*pose).clamp(0, 17) as u8),
             // LivingEntity.DATA_LIVING_ENTITY_FLAGS: using an item 1, in the
             // off hand 2. The flag starts and stops the use; the client ticks
             // the count itself (a bow's pull follows it).
@@ -34,6 +64,10 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             // LivingEntity.DATA_HEALTH_ID: the boss bars and the death
             // animation follow it.
             (9, Value::Float(health)) => m.health = *health,
+            // LivingEntity.DATA_EFFECT_PARTICLES and DATA_EFFECT_AMBIENCE_ID:
+            // the swirls of its effects (`tickEffects` draws them).
+            (10, Value::Particles(list)) => m.extra.effect_particles = swirls(list, builtin),
+            (11, Value::Bool(ambient)) => m.extra.effect_ambient = *ambient,
             // Mob.DATA_MOB_FLAGS_ID: no AI 1, left-handed 2, aggressive 4.
             // Mob.isAggressive draws the illagers' and skeletons' attack
             // poses and the vindicator's axe.
@@ -59,18 +93,44 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
                     Who::Mob(*target as u32)
                 });
             }
+            // Panda: the counters, the two genes and DATA_ID_FLAGS (after
+            // AgeableMob's two entries).
+            (Species::Panda, 18, Value::Int(n)) => panda::set_unhappy(m, *n),
+            (Species::Panda, 19, Value::Int(n)) => panda::set_sneeze(m, *n),
+            (Species::Panda, 20, Value::Int(n)) => panda::set_eat(m, *n),
+            (Species::Panda, 21, Value::Byte(gene)) => m.extra.variant = (*gene).clamp(0, 6) as u8,
+            (Species::Panda, 22, Value::Byte(gene)) => m.extra.variant2 = (*gene).clamp(0, 6) as u8,
+            (Species::Panda, 23, Value::Byte(flags)) => panda::set_flags(m, *flags as u8),
+            // PolarBear.DATA_STANDING_ID: the client animates the rearing.
+            (Species::PolarBear, 18, Value::Bool(standing)) => m.extra.flag = *standing,
             // Bat.DATA_ID_FLAGS: resting in bit 0.
             (Species::Bat, 16, Value::Byte(flags)) => bat::set_resting(m, flags & 1 != 0),
+            // Fox.DATA_TYPE_ID and DATA_FLAGS_ID.
+            (Species::Fox, 18, Value::Int(variant)) => {
+                m.extra.variant = (*variant).clamp(0, 1) as u8
+            }
+            (Species::Fox, 19, Value::Byte(flags)) => m.extra.ints[0] = i32::from(*flags as u8),
             // Sheep.DATA_WOOL_ID: the colour in the low nibble, 16 sheared.
             (Species::Sheep, 18, Value::Byte(wool)) => {
                 m.extra.color = (*wool & 15) as u8;
                 m.extra.sheared = wool & 16 != 0;
             }
+            // SnowGolem.DATA_PUMPKIN_ID: 16 while the pumpkin is on.
+            (Species::SnowGolem, 16, Value::Byte(flags)) => m.extra.sheared = flags & 16 == 0,
+            // MushroomCow.DATA_TYPE: 0 red, 1 brown.
+            (Species::Mooshroom, 17, Value::Int(variant)) => {
+                m.extra.variant = (*variant == 1) as u8
+            }
+            // Piglin.DATA_IS_DANCING: the dance pose.
+            (Species::Piglin, 19, Value::Bool(dancing)) => m.extra.scratch[0] = i32::from(*dancing),
             // TamableAnimal.DATA_FLAGS_ID: sitting 1, tame 4.
             (Species::Wolf | Species::Cat | Species::Parrot, 18, Value::Byte(flags)) => {
                 m.extra.sitting = flags & 1 != 0;
                 m.extra.tame = flags & 4 != 0;
             }
+            // Cat.IS_LYING and RELAX_STATE_ONE.
+            (Species::Cat, 21, Value::Bool(lying)) => m.extra.flag = *lying,
+            (Species::Cat, 22, Value::Bool(relaxing)) => m.extra.relax_one = *relaxing,
             // Wolf.DATA_COLLAR_COLOR and Cat's.
             (Species::Wolf, 21, Value::Int(c)) | (Species::Cat, 23, Value::Int(c)) => {
                 m.extra.color = (*c & 15) as u8;
@@ -79,9 +139,144 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             (Species::Slime | Species::MagmaCube, 18, Value::Int(size)) => {
                 m.extra.size = (*size).clamp(1, 127);
             }
+            // Enderman.DATA_CREEPY (after DATA_CARRY_STATE): the open mouth
+            // and raised head of an angry enderman.
+            (Species::Enderman, 17, Value::Bool(creepy)) => m.extra.flag = *creepy,
+            // Warden.CLIENT_ANGER_LEVEL: the heartbeat's pace.
+            (Species::Warden, 16, Value::Int(anger)) => {
+                if let Some(st) = m.extra.warden.as_mut() {
+                    st.client_anger = *anger;
+                }
+            }
+            // Sniffer.DATA_STATE (after AgeableMob's two): the animation
+            // follows it in `sync::client_tick`.
+            (Species::Sniffer, 18, Value::Id(state)) => {
+                sniffer::set_state(m, (*state).clamp(0, 6) as u8);
+            }
+            // Armadillo.ARMADILLO_STATE (after AgeableMob's two): the shell and
+            // its animations follow it in `sync::client_tick`.
+            (Species::Armadillo, 18, Value::Id(state)) => {
+                armadillo::set_state(m, (*state).clamp(0, 3) as u8);
+            }
+            // Goat.DATA_HAS_LEFT_HORN and DATA_HAS_RIGHT_HORN: the model hides
+            // a horn the goat lost.
+            (Species::Goat, 19, Value::Bool(has)) => m.extra.lost_horns[0] = !*has,
+            (Species::Goat, 20, Value::Bool(has)) => m.extra.lost_horns[1] = !*has,
+            // Shulker.DATA_ATTACH_FACE_ID, DATA_PEEK_ID and DATA_COLOR_ID.
+            (Species::Shulker, 16, Value::Id(face)) => m.extra.variant3 = (*face).clamp(0, 5) as u8,
+            (Species::Shulker, 17, Value::Byte(peek)) => m.extra.counter = i32::from(*peek),
+            (Species::Shulker, 18, Value::Byte(color)) => m.extra.color = *color as u8,
+            // Camel.DASH and LAST_POSE_CHANGE_TICK (after AbstractHorse's
+            // flags).
+            (Species::Camel | Species::CamelHusk, 19, Value::Bool(dashing)) => {
+                camel::set_dashing(m, *dashing);
+            }
+            (Species::Camel | Species::CamelHusk, 20, Value::Long(tick)) => {
+                camel::set_synced_pose_tick(m, *tick);
+            }
+            // Vex.DATA_FLAGS_ID: charging in bit 0.
+            (Species::Vex, 16, Value::Byte(flags)) => m.extra.flag = flags & 1 != 0,
+            // Creaking.CAN_MOVE, IS_ACTIVE and IS_TEARING_DOWN.
+            (Species::Creaking, 16, Value::Bool(can_move)) => m.extra.flag2 = !*can_move,
+            (Species::Creaking, 17, Value::Bool(active)) => m.extra.flag = *active,
+            (Species::Creaking, 18, Value::Bool(true)) => creaking::set_tearing_down(m),
+            // Allay.DATA_DANCING and DATA_CAN_DUPLICATE (a cooldown running
+            // is any non-zero `egg_time`).
+            (Species::Allay, 16, Value::Bool(dancing)) => m.extra.flag = *dancing,
+            (Species::Allay, 17, Value::Bool(can)) => m.extra.egg_time = i32::from(!*can),
+            // Axolotl.DATA_PLAYING_DEAD (after DATA_VARIANT): the factors
+            // ease in `sync::client_tick`.
+            (Species::Axolotl, 19, Value::Bool(dead)) => m.extra.axolotl.playing_dead = *dead,
+            // CopperGolem.COPPER_GOLEM_STATE (after DATA_WEATHER_STATE).
+            (Species::CopperGolem, 17, Value::Id(state)) => {
+                m.extra.variant3 = (*state).clamp(0, 4) as u8;
+            }
+            // AbstractHorse's flags take 18. Horse.DATA_ID_TYPE_VARIANT: the
+            // colour in the low byte, the markings in the next.
+            (Species::Horse, 19, Value::Int(v)) => {
+                m.extra.variant = (v & 0xFF).clamp(0, 6) as u8;
+                m.extra.variant2 = ((v >> 8) & 0xFF).clamp(0, 4) as u8;
+            }
+            // AbstractChestedHorse.DATA_ID_CHEST, then Llama.DATA_STRENGTH_ID
+            // and DATA_VARIANT_ID.
+            (
+                Species::Donkey | Species::Mule | Species::Llama | Species::TraderLlama,
+                19,
+                Value::Bool(chested),
+            ) => m.extra.chested = *chested,
+            (Species::Llama | Species::TraderLlama, 20, Value::Int(strength)) => {
+                m.extra.variant2 = (*strength).clamp(1, 5) as u8;
+            }
+            (Species::Llama | Species::TraderLlama, 21, Value::Int(variant)) => {
+                m.extra.variant = (*variant).clamp(0, 3) as u8;
+            }
+            // Axolotl.DATA_VARIANT (lucy 0 to blue 4) and Parrot.DATA_VARIANT_ID
+            // (after TamableAnimal's flags and owner).
+            (Species::Axolotl, 18, Value::Int(v)) => m.extra.variant = (*v).clamp(0, 4) as u8,
+            (Species::Parrot, 20, Value::Int(v)) => m.extra.variant = (*v).clamp(0, 4) as u8,
+            // Rabbit.DATA_TYPE_ID: the killer bunny's 99 has no model here.
+            (Species::Rabbit, 18, Value::Int(t)) if (0..=5).contains(t) => {
+                m.extra.variant = *t as u8;
+            }
+            // Bee.DATA_FLAGS_ID and DATA_ANGER_END_TIME (after Animal's).
+            (Species::Bee, 18, Value::Byte(flags)) => bee::set_synced(m, Some(*flags as u8), None),
+            (Species::Bee, 19, Value::Long(end)) => bee::set_synced(m, None, Some(*end)),
+            // AbstractFish.FROM_BUCKET takes 16: Salmon.DATA_TYPE (small 0
+            // to large 2), Pufferfish.PUFF_STATE and
+            // TropicalFish.DATA_ID_TYPE_VARIANT.
+            (Species::Salmon, 17, Value::Int(v)) => m.extra.variant = (*v).clamp(0, 2) as u8,
+            (Species::Pufferfish, 17, Value::Int(state)) => m.extra.size = (*state).clamp(0, 2),
+            (Species::TropicalFish, 17, Value::Int(v)) => tropical_fish(m, *v),
+            // Ghast.DATA_IS_CHARGING and WitherBoss.DATA_ID_INV.
+            (Species::Ghast, 16, Value::Bool(charging)) => m.extra.flag = *charging,
+            (Species::Wither, 19, Value::Int(ticks)) => m.extra.counter = (*ticks).max(0),
+            // CopperGolem.DATA_WEATHER_STATE: the oxidation the texture shows.
+            (Species::CopperGolem, 16, Value::Id(state)) => {
+                m.extra.variant = (*state).clamp(0, 3) as u8;
+            }
+            // AbstractHorse.DATA_ID_FLAGS: eating 16 and standing 32 (the
+            // graze and the rear), which `sync::client_tick` animates.
+            (s, 18, Value::Byte(flags)) if equine::grazes(s) => equine::set_flags(m, *flags as u8),
+            // Enderman.DATA_CARRY_STATE (0 for none): the block it holds.
+            (Species::Enderman, 16, Value::Id(state)) => {
+                m.extra.carried = (*state > 0).then_some(BlockStateId(*state as u32));
+            }
+            // Zombie.DATA_DROWNED_CONVERSION_ID (after DATA_BABY_ID and
+            // DATA_SPECIAL_TYPE_ID): the conversion's shaking.
+            (Species::Zombie | Species::Husk, 18, Value::Bool(converting)) => {
+                m.extra.counter2 = i32::from(*converting);
+            }
+            // ZombieVillager.DATA_CONVERTING_ID (before its villager data).
+            (Species::ZombieVillager, 19, Value::Bool(converting)) => {
+                zombie_villager::set_converting(m, *converting);
+            }
+            // AbstractVillager.DATA_UNHAPPY_COUNTER (after AgeableMob's two):
+            // the head shake of `no`, which the server counts down.
+            (Species::Villager | Species::WanderingTrader, 18, Value::Int(ticks)) => {
+                m.extra.ints[0] = *ticks;
+            }
+            // Hoglin.DATA_IMMUNE_TO_ZOMBIFICATION (after AgeableMob's two) and
+            // AbstractPiglin's: `sync`'s conversion shake reads it.
+            (Species::Hoglin, 18, Value::Bool(immune))
+            | (Species::Piglin | Species::PiglinBrute, 16, Value::Bool(immune)) => {
+                m.extra.flag2 = *immune;
+            }
+            // Blaze.DATA_FLAGS_ID: charged 1, which makes it burn.
+            (Species::Blaze, 16, Value::Byte(flags)) => m.extra.flag = flags & 1 != 0,
+            // Turtle.HAS_EGG and LAYING_EGG (after AgeableMob's two).
+            (Species::Turtle, 18, Value::Bool(has_egg)) => m.extra.flag = *has_egg,
+            (Species::Turtle, 19, Value::Bool(laying)) => m.extra.flag2 = *laying,
+            // WitherBoss.DATA_TARGET_B and _C (after DATA_TARGET_A): the
+            // entities the side heads turn toward in `wither::client_tick`.
+            (Species::Wither, 17, Value::Int(id)) => m.extra.ints[0] = *id,
+            (Species::Wither, 18, Value::Int(id)) => m.extra.ints[1] = *id,
             // Pillager.IS_CHARGING_CROSSBOW: the charge pose (Raider's
             // IS_CELEBRATING takes 16).
             (Species::Pillager, 17, Value::Bool(charging)) => m.extra.flag = *charging,
+            // HappyGhast.STAYS_STILL (after AgeableMob's two and IS_LEASH_HOLDER):
+            // `isOnStillTimeout` on a client, which keeps the ghast solid to
+            // the player (`canBeCollidedWith`).
+            (Species::HappyGhast, 19, Value::Bool(still)) => m.extra.counter = i32::from(*still),
             // SpellcasterIllager.DATA_SPELL_CASTING_ID: the casting pose.
             (Species::Evoker | Species::Illusioner, 17, Value::Byte(spell)) => {
                 m.extra.variant2 = (*spell).max(0) as u8;
@@ -98,6 +293,95 @@ fn apply(m: &mut Mob, values: &[(u8, i32, Value)], builtin: &Builtin, local_enti
             _ => {}
         }
     }
+}
+
+/// A tropical fish's packed variant: the pattern's id (the size, then the
+/// index << 8), the base colour << 16 and the pattern colour << 24. Here the
+/// pattern is 0 to 5 for the small ones and 6 to 11 for the large ones.
+fn tropical_fish(m: &mut Mob, packed: i32) {
+    let (size, index) = (packed & 0xFF, (packed >> 8) & 0xFF);
+    // TropicalFish.Pattern.byId: an unknown id is a kob.
+    m.extra.variant = if size <= 1 && index < 6 {
+        (size * 6 + index) as u8
+    } else {
+        0
+    };
+    m.extra.variant2 = ((packed >> 16) & 0xFF) as u8 & 15;
+    m.extra.variant3 = ((packed >> 24) & 0xFF) as u8 & 15;
+}
+
+/// The values of one SetEntityData packet that name an entry of a
+/// synchronized registry (the variants of the cat, wolf, frog, pig, cow,
+/// chicken and zombie nautilus) or count game time (a wolf's anger).
+/// `game_time` is the client level's.
+fn apply_registry_data(
+    m: &mut Mob,
+    values: &[(u8, i32, Value)],
+    registries: &Dynamic,
+    game_time: i64,
+) {
+    let species = m.species();
+    for (index, _, value) in values {
+        let registry = match (species, *index, value) {
+            (Species::Cat, 20, Value::Id(_)) => "minecraft:cat_variant",
+            (Species::Wolf, 23, Value::Id(_)) => "minecraft:wolf_variant",
+            (Species::Frog, 18, Value::Id(_)) => "minecraft:frog_variant",
+            (Species::Pig, 19, Value::Id(_)) => "minecraft:pig_variant",
+            (Species::Cow, 18, Value::Id(_)) => "minecraft:cow_variant",
+            (Species::Chicken, 18, Value::Id(_)) => "minecraft:chicken_variant",
+            (Species::ZombieNautilus, 21, Value::Id(_)) => "minecraft:zombie_nautilus_variant",
+            // Wolf.DATA_ANGER_END_TIME: the angry texture while it lies ahead.
+            (Species::Wolf, 22, Value::Long(end)) => {
+                m.extra.anger = (end - game_time).clamp(0, i64::from(i32::MAX)) as i32;
+                continue;
+            }
+            _ => continue,
+        };
+        if let Value::Id(id) = value
+            && let Some(name) = registries.name(registry, *id)
+        {
+            m.extra.variant = finalize::variant_index(species, name);
+        }
+    }
+}
+
+/// What another player's pose draws from: gliding (Entity.isFallFlying, flag
+/// 0x80 of the shared flags), the pose (swimming), Riptide's spin
+/// (LivingEntity.isAutoSpinAttack, flag 4) and a loaded crossbow in the
+/// hand (the held stack comes with SetEquipment).
+fn player_poses(m: &mut Mob, values: &[(u8, i32, Value)]) {
+    for (index, _, value) in values {
+        match (*index, value) {
+            (0, Value::Byte(flags)) => m.extra.fall_flying = flags & -128 != 0,
+            (6, Value::Id(pose)) => m.extra.synced_pose = (*pose).clamp(0, 17) as u8,
+            (8, Value::Byte(flags)) => m.extra.auto_spin_attack = flags & 4 != 0,
+            _ => {}
+        }
+    }
+}
+
+/// The options of a synched particle list: an entity effect carries its ARGB
+/// colour, the omens none.
+fn swirls(list: &[Particle], builtin: &Builtin) -> Vec<ParticleOptions> {
+    let channel = |argb: i32, shift: u32| ((argb >> shift) & 255) as f32 / 255.0;
+    list.iter()
+        .filter_map(|p| {
+            let name = builtin.get("minecraft:particle_type")?.name(p.id)?;
+            let ty = ParticleType::from_name(name)?;
+            Some(match p.data {
+                Some(ParticleData::Color(argb)) => ParticleOptions::colored(
+                    ty,
+                    [
+                        channel(argb, 16),
+                        channel(argb, 8),
+                        channel(argb, 0),
+                        channel(argb, 24),
+                    ],
+                ),
+                _ => ParticleOptions::simple(ty),
+            })
+        })
+        .collect()
 }
 
 /// VillagerData as the network sends it: the type and the profession by
@@ -128,8 +412,20 @@ impl Game<'_> {
         let Some(r) = &self.remote else {
             return;
         };
+        // LivingEntity.onSyncedDataUpdated(SLEEPING_POS_ID): a villager lies
+        // in its bed the way the bed faces, or gets up.
+        let bed = values.iter().find_map(|v| match v {
+            (14, _, Value::OptPos(bed)) => Some(bed.map_or(0, |b| self.bed_facing(b))),
+            _ => None,
+        });
         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id as u32) {
             apply(m, values, &r.builtin, r.entity_id);
+            apply_registry_data(m, values, &r.registries, self.world.game_time);
+            if let Some(code) = bed
+                && m.species() == Species::Villager
+            {
+                m.extra.ints[1] = code;
+            }
         }
     }
 }
