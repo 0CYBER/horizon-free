@@ -167,7 +167,9 @@ impl Capability {
             }
             Capability::Players => "see who is on the server and message them",
             Capability::World => "read and change the world's blocks",
-            Capability::Recipes => "read the game's recipes and items, and which recipes you know",
+            Capability::Recipes => {
+                "read the game's recipes and items and which recipes you know, place recipes in your crafting grid and, in creative mode, give you items"
+            }
         }
     }
     /// The capability a component import needs, `Ok(None)` for one every
@@ -181,6 +183,10 @@ impl Capability {
         }
         if interface == "log" {
             return Ok(None);
+        }
+        // A recipe viewer's panel is part of capability `ui`.
+        if interface == "browser" {
+            return Ok(Some(Capability::Ui));
         }
         Capability::ALL
             .into_iter()

@@ -24,6 +24,58 @@ const Z_BODY_ROT: usize = 3;
 const TENTACLE_SPEED: usize = 4;
 const ROTATE_SPEED: usize = 5;
 
+/// `Squid.spawnInk`: the squirt sound and 30 ink particles shot from under
+/// the squid, turned by its body rotation.
+pub fn spawn_ink(m: &mut Mob) {
+    let sound = if m.species() == Species::GlowSquid {
+        "entity.glow_squid.squirt"
+    } else {
+        "entity.squid.squirt"
+    };
+    let kind = if m.species() == Species::GlowSquid {
+        "glow_squid_ink"
+    } else {
+        "squid_ink"
+    };
+    // makeSound draws the voice pitch even for a silent squid.
+    let pitch = m.voice_pitch();
+    if !m.silent {
+        let at = [m.position.x, m.position.y, m.position.z];
+        m.outbox.push(MobEvent::Sound(
+            sound,
+            at,
+            super::ai::sound_volume(m),
+            pitch,
+        ));
+    }
+    // rotateVector: xRot(xBodyRotO), then yRot(-yBodyRotO).
+    let to_radians = (std::f64::consts::PI / 180.0) as f32;
+    let (x_rot, y_rot) = (
+        m.anim.vo[X_BODY_ROT] * to_radians,
+        -m.previous_body_yaw * to_radians,
+    );
+    let rotate = |v: Vec3| v.rotate_x(x_rot).rotate_y(y_rot);
+    let pos = rotate(Vec3::new(0.0, -1.0, 0.0)).add_vector(m.position);
+    let offset_scale: f32 = if m.is_baby() { 0.1 } else { 0.3 };
+    for _ in 0..30 {
+        let x = f64::from(m.random.next_float()) * 0.6 - 0.3;
+        let z = f64::from(m.random.next_float()) * 0.6 - 0.3;
+        let dir = rotate(Vec3::new(x, -1.0, z));
+        let d = dir.scale(f64::from(offset_scale + m.random.next_float() * 2.0));
+        // ServerLevel.sendParticles with a count of 0 and speed 0.1: one
+        // particle moving at the float offset times the float speed.
+        let speed = f64::from(0.1f32);
+        m.outbox.push(MobEvent::ParticleAt {
+            kind,
+            at: [pos.x, pos.y + 0.5, pos.z],
+            velocity: [
+                speed * f64::from(d.x as f32),
+                speed * f64::from(d.y as f32),
+                speed * f64::from(d.z as f32),
+            ],
+        });
+    }
+}
 pub fn register(m: &mut Mob) {
     use Species as S;
     match m.species() {
@@ -36,6 +88,7 @@ pub fn register(m: &mut Mob) {
             m.anim.v[TENTACLE_SPEED] = speed;
         }
         S::Axolotl => {
+            m.air = super::axolotl::MAX_AIR;
             // Native controller scaling is essential: the base speed attribute is 1.0.
             m.ai.mov.kind = MoveKind::SmoothSwimming {
                 max_turn_x: 85.0,

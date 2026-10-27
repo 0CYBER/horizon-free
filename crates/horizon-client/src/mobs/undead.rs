@@ -232,8 +232,10 @@ pub fn drowned_travel(
     m.velocity = Vec3::new(m.velocity.x * 0.9, m.velocity.y * 0.9, m.velocity.z * 0.9);
     true
 }
-/// The trident throw of `Drowned.performRangedAttack`, until thrown tridents
-/// exist: an arrow-like shot with the trident's damage.
+/// The trident throw of `Drowned.performRangedAttack`: a `ThrownTrident` of
+/// the held trident (a plain one when it holds none), owned by the drowned,
+/// which cannot be picked up and does not return (`AbstractArrow` constructor:
+/// only a player's projectile is `Pickup.ALLOWED`).
 fn drowned_throw(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
     let Some(t) = cx.w.target_info(who) else {
         return;
@@ -243,15 +245,18 @@ fn drowned_throw(m: &mut Mob, who: Who, _power: f32, cx: &mut Cx) {
     let yd = t.position.y + (t.bounds.max_position().y - t.bounds.min_position().y) / 3.0 - start.y;
     let zd = t.position.z - m.position.z;
     let dist = (xd * xd + zd * zd).sqrt();
-    let mut p = Projectile::new(
-        ProjectileKind::Arrow {
-            base_damage: 8.0,
-            critical: false,
-            effect: None,
-        },
-        start,
-        Some(Who::Mob(m.id)),
-    );
+    let mut trident = crate::items::ItemStack::new("minecraft:trident", 1);
+    if m.extra.main_hand.as_deref() == Some("minecraft:trident")
+        && let Some(g) = super::gear::gear(m)
+    {
+        for (e, l) in &g.slots[super::gear::MAIN] {
+            trident.enchant(e, *l);
+        }
+    }
+    let mut p = Projectile::new(ProjectileKind::Trident, start, Some(Who::Mob(m.id)));
+    if let Some(a) = p.arrow.as_mut() {
+        a.set_item(&trident);
+    }
     p.shoot(
         &mut crate::projectiles::own_random(m),
         [xd, yd + dist * f64::from(0.2_f32), zd],
