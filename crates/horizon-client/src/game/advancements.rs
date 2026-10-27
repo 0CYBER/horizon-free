@@ -74,12 +74,15 @@ impl Toast {
         (fully_for as f64 / (5000.0 * multiplier / n).max(1.0) % n) as usize
     }
 }
-/// Where the player's fall began (`ServerPlayer`'s field of the same name). A
-/// guest keeps their own, as `levitation` does.
+/// Where the player's fall began and the blast that last hit the player
+/// (`ServerPlayer`'s fields of the same names). A guest keeps their own, as
+/// `levitation` does.
 #[derive(Clone, Debug, Default)]
 pub(super) struct TravelMarks {
     /// `startingToFallPosition`.
     pub(super) fall: Option<[f64; 3]>,
+    /// `currentExplosionImpactPos`, and whether a wind charge made the blast.
+    pub(super) blast: Option<([f64; 3], bool)>,
 }
 #[derive(Default)]
 pub(super) struct AdvState {
@@ -96,7 +99,7 @@ pub(super) struct AdvState {
     pub(super) last_inventory: u64,
     /// `ServerPlayer.levitationStartPos` and `levitationStartTime`.
     pub(super) levitation: Option<([f64; 3], u64)>,
-    /// The fall `tick_marks` follows.
+    /// The fall and blast `tick_marks` follows.
     pub(super) marks: TravelMarks,
     /// While the game acts for a network player (`as_guest`): the
     /// advancements whose progress changed (`progressChanged`), the recipes
@@ -759,7 +762,7 @@ impl Game<'_> {
         });
     }
     /// `ServerPlayer.tick`: `trackStartFallingPosition` and the end of a fall
-    /// (`resetFallDistance`).
+    /// (`resetFallDistance`), and the wind charge blast a fall follows.
     fn tick_marks(&mut self) {
         let Some(p) = self.player.as_ref() else {
             return;
@@ -768,7 +771,17 @@ impl Game<'_> {
         let falling = p.fall_distance > 0.0;
         let dead = p.health.dead_or_dying();
         match (falling, self.adv.marks.fall) {
-            (true, None) => self.adv.marks.fall = Some(at),
+            (true, None) => {
+                self.adv.marks.fall = Some(at);
+                // The blast a wind charge made is spent by the fall, and counts
+                // only if the player was above where it hit.
+                if let Some((impact, wind_charge)) = self.adv.marks.blast.take()
+                    && wind_charge
+                    && impact[1] <= at[1]
+                {
+                    self.trigger_fall_after_explosion(impact);
+                }
+            }
             // `resetFallDistance`: a fall ends by landing, climbing or water.
             (false, Some(start)) => {
                 self.adv.marks.fall = None;
@@ -793,6 +806,34 @@ impl Game<'_> {
             adv::conditions(&c["player"], &pctx, w)
                 && adv::location(&c["start_position"], start, w)
                 && (c["distance"].is_null() || adv::distance(&c["distance"], start, me.position))
+        });
+    }
+    /// `FallAfterExplosionTrigger` for a wind charge's blast that hit the
+    /// player at `impact`, measured to where the player is now.
+    fn trigger_fall_after_explosion(&mut self, impact: [f64; 3]) {
+        let me = self.player_entity();
+        let cause = EntityView {
+            kind: "minecraft:wind_charge".into(),
+            position: impact,
+            ..EntityView::default()
+        };
+        self.trigger("minecraft:fall_after_explosion", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            let cctx = adv::Entities {
+                this: Some(&cause),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && adv::location(&c["start_position"], impact, w)
+                && (c["distance"].is_null() || adv::distance(&c["distance"], impact, me.position))
+                && adv::conditions(&c["cause"], &cctx, w)
         });
     }
     /// `ServerPlayer.updateUsingItem`: USING_ITEM for the item in use, with
