@@ -3988,6 +3988,16 @@ impl Game<'_> {
         // library: the block entity's side effects (containers spill), neighbour
         // and shape updates, and the destroy event (particles, sound).
         let creative = self.creative;
+        // TripWireBlock.playerWillDestroy: shears disarm the string first (flags
+        // 260), so taking it down does not trip the hook.
+        if &*facts.name == "minecraft:tripwire"
+            && self.held().is_some_and(|s| &*s.item == "minecraft:shears")
+            && let Some(disarmed) = self.with_props(state, &[("disarmed", "true")])
+        {
+            let at = BlockPos::new(pos[0], pos[1], pos[2]);
+            self.with_level(|b, level, ticks| b.set_block(level, ticks, at, disarmed, 260));
+            self.post_block_game_event("minecraft:shear", pos, self.sculk_actor(), None);
+        }
         // BeehiveBlock.playerWillDestroy: a creative break still drops the hive
         // with its bees and honey level.
         if creative
