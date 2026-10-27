@@ -2717,11 +2717,11 @@ impl B {
                     }
                     // What a friend chases is its INTERACTION_TARGET.
                     let chasing = |who: Who| match who {
-                        Who::Mob(id) => cx
-                            .w
-                            .seen(id)
-                            .and_then(|s| s.villager.as_ref())
-                            .and_then(|v| v.interaction_target),
+                        Who::Mob(id) => {
+                            cx.w.seen(id)
+                                .and_then(|s| s.villager.as_ref())
+                                .and_then(|v| v.interaction_target)
+                        }
                         Who::Player => None,
                     };
                     let me = Who::Mob(m.id);

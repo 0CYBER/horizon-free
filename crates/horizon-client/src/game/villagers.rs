@@ -287,8 +287,8 @@ impl Game<'_> {
                 let wants = villager::food_points(item) > 0
                     || picks_up.as_ref().is_some_and(|t| t.contains(&**item))
                     || requested.contains(&&**item);
-                let fits = villager::ext(m)
-                    .is_none_or(|x| x.can_add(&e.stack, self.item_max_stack(item)));
+                let fits =
+                    villager::ext(m).is_none_or(|x| x.can_add(&e.stack, self.item_max_stack(item)));
                 // ItemEntity's eye height is 0.2125.
                 let at = Vec3::new(e.position.x, e.position.y + 0.2125, e.position.z);
                 if wants && fits && w.line_of_sight(eye, at) {

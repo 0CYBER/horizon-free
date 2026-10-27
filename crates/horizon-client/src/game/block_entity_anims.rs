@@ -50,12 +50,12 @@ impl Game<'_> {
             }
             Some(Ticker::Bell) => {
                 let gathered = self.bell_gather(pos);
-                let rung = self
-                    .be_anims
-                    .bells
-                    .entry(pos)
-                    .or_default()
-                    .trigger_event(a, b, time, || gathered);
+                let rung =
+                    self.be_anims
+                        .bells
+                        .entry(pos)
+                        .or_default()
+                        .trigger_event(a, b, time, || gathered);
                 // The server's copy tells the living entities within 32 blocks.
                 if rung && self.remote.is_none() {
                     self.bell_heard(pos, time);
