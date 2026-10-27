@@ -965,7 +965,8 @@ pub enum MobEvent {
         mob: u32,
         at: [f64; 3],
     },
-    /// `Level.broadcastEntityEvent` for a mob: guests run `sync::entity_event`.
+    /// `Level.broadcastEntityEvent` for a mob: guests run its
+    /// `handleEntityEvent`.
     EntityEvent {
         mob: u32,
         event: i8,

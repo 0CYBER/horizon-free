@@ -1853,6 +1853,11 @@ impl Game<'_> {
         if self.audio.capture.is_some() {
             self.lan_entity_events.push((id, event, at));
         }
+        // Event 21: a window that simulates the world itself is its own
+        // client, and hears the guardian's hum too.
+        if event == 21 && self.options.execution_role.is_client() {
+            self.start_guardian_sound(id as u32);
+        }
     }
     /// `ServerPlayer.crit` (or `magicCrit` when `magic`): this window's
     /// emitter, and an animation for the attacker's client and observers once

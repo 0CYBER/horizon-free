@@ -107,6 +107,7 @@ mod maps;
 mod minecarts;
 mod mob_blocks;
 mod mob_gear;
+mod mob_sounds;
 mod mod_browser;
 #[cfg(feature = "mods")]
 mod mod_browser_recipes;
@@ -1525,6 +1526,10 @@ struct Game<'a> {
     cart_sounds: HashSet<u32>,
     /// The minecart the riding sounds were started for (`LocalPlayer.startRiding`).
     riding_cart_sounds: Option<u32>,
+    /// Bees whose buzz is playing, and whether it is the aggressive one.
+    bee_sounds: HashMap<u32, bool>,
+    /// Guardians whose attack hum is playing.
+    guardian_sounds: HashSet<u32>,
     dropped: Vec<ItemEntity>,
     next_entity: u32,
     particles: horizon_client::particles::ParticleEngine,
@@ -13596,6 +13601,8 @@ impl<'a> Game<'a> {
             sound_paused: false,
             cart_sounds: HashSet::new(),
             riding_cart_sounds: None,
+            bee_sounds: HashMap::new(),
+            guardian_sounds: HashSet::new(),
             dropped: Vec::new(),
             next_entity: 0,
             particles,
