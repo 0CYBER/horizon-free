@@ -67,6 +67,13 @@ impl PackPrompt {
     }
 }
 
+impl ServerPackState {
+    /// The `ToastManager` slots the download toasts hold.
+    pub(super) fn toast_slots(&self) -> impl Iterator<Item = usize> + '_ {
+        self.notifiers.iter().filter_map(|n| n.toast.as_ref()?.slot)
+    }
+}
+
 /// The game's `DownloadedPackSource`.
 #[derive(Default)]
 pub(super) struct ServerPackState {
@@ -503,15 +510,22 @@ impl Game<'_> {
             .layout(atlas, (w, h))
             .draw(batch, atlas, self.cursor, [&yes, &no]);
     }
-    /// The download notifiers' toasts, each in the next 32-pixel slot
-    /// below an advancement or recipe toast (`ToastManager`).
-    pub(super) fn draw_pack_toasts(&mut self, batch: &mut HudBatch) {
+    /// The download notifiers' toasts, each in a free 32-pixel slot of the
+    /// `ToastManager` (`hidden`, F1, keeps them timing out undrawn).
+    pub(super) fn draw_pack_toasts(&mut self, batch: &mut HudBatch, hidden: bool) {
         let multiplier = f64::from(self.settings.notification_display_time);
-        let mut slot = usize::from(!self.adv.toasts.is_empty());
+        let mut used = self.toast_slots_used();
         for notifier in &mut self.server_packs.notifiers {
             let Some(toast) = &mut notifier.toast else {
                 continue;
             };
+            if toast.slot.is_none() {
+                let Some(slot) = (0..Self::TOAST_SLOTS).find(|s| used & (1 << s) == 0) else {
+                    continue;
+                };
+                used |= 1 << slot;
+                toast.slot = Some(slot);
+            }
             let (sound, finished) = toast.update(multiplier);
             if let Some(show) = sound {
                 let event = if show { "ui.toast.in" } else { "ui.toast.out" };
@@ -522,8 +536,9 @@ impl Game<'_> {
                 notifier.toast = None;
                 continue;
             }
-            toast.draw(&self.gui.atlas, batch, 32.0 * slot as f32);
-            slot += 1;
+            if let (false, Some(slot)) = (hidden, toast.slot) {
+                toast.draw(&self.gui.atlas, batch, 32.0 * slot as f32);
+            }
         }
     }
     /// A left click on the prompt: its answer when it hit a button.
