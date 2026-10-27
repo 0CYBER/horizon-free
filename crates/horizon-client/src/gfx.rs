@@ -222,6 +222,9 @@ pub struct Frame<'a> {
     /// The `GameRenderer.bobHurt`/`bobView` pose multiplied into the
     /// projection (`crate::camera::bob_matrix`).
     pub bob: Mat4,
+    /// The spinning effect multiplied into the level's projection only
+    /// (`crate::camera::spinning_effect_matrix`), not the hand's.
+    pub spin: Mat4,
     pub sky: Sky,
     /// Render distance in blocks (fog end).
     pub distance: f32,
@@ -3418,7 +3421,7 @@ impl Renderer {
             frame.fov_degrees,
             frame.yaw,
             frame.pitch,
-            frame.bob,
+            frame.bob * frame.spin,
             frame.depth_far,
         )
     }

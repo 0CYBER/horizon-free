@@ -287,7 +287,8 @@ impl FrameUniforms {
             aspect,
             0.05,
             frame.depth_far,
-        ) * frame.bob;
+        ) * frame.bob
+            * frame.spin;
         let camera = frame.camera.as_vec3();
         let (previous_camera, previous_view, previous_projection) =
             self.previous
