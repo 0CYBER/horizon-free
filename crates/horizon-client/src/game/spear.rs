@@ -193,6 +193,9 @@ impl Game<'_> {
             }
             let who = actor.map_or(OWN, |conn| conn as i32);
             self.kinetic_hit_feedback(who, &kinetic, [feet.x, feet.y, feet.z]);
+            // SPEAR_MOBS_TRIGGER: the living entities stabbed in this use.
+            let stabbed = self.stabbed.keys().filter(|(who, _)| *who == actor).count();
+            self.trigger_spear_mobs(stabbed);
         }
     }
 

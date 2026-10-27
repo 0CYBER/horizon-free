@@ -1065,6 +1065,20 @@ impl Game<'_> {
                 })
         });
     }
+    /// `SpearMobsTrigger`: the living entities the spear stabbed in this use.
+    pub(super) fn trigger_spear_mobs(&mut self, stabbed: usize) {
+        let me = self.player_entity();
+        self.trigger("minecraft:spear_mobs", move |c, w| {
+            let pctx = adv::Entities {
+                this: Some(&me),
+                origin: me.position,
+                tool: None,
+                block_pos: None,
+            };
+            adv::conditions(&c["player"], &pctx, w)
+                && c["count"].as_u64().is_none_or(|n| stabbed as u64 >= n)
+        });
+    }
     /// A trigger with only the player condition (slept_in_bed, started_riding).
     pub(super) fn trigger_player(&mut self, name: &str) {
         let me = self.player_entity();
