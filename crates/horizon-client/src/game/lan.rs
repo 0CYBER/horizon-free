@@ -1963,10 +1963,18 @@ impl Game<'_> {
             m.head_yaw = g.head_yaw;
             m.head_pitch = g.pitch;
             let mut target = m.body_yaw;
-            if dx * dx + dz * dz > 0.002_500_000_2 {
-                target = (dz.atan2(dx) as f32).to_degrees() - 90.0;
-            }
             let wrap = |a: f32| (a + 180.0).rem_euclid(360.0) - 180.0;
+            if dx * dx + dz * dz > 0.002_500_000_2 {
+                // LivingEntity.tick: walking backwards the body faces away
+                // from the walk direction, not along it.
+                let walk = (dz.atan2(dx) as f32).to_degrees() - 90.0;
+                let facing = (wrap(g.yaw) - walk).abs();
+                target = if 95.0 < facing && facing < 265.0 {
+                    walk - 180.0
+                } else {
+                    walk
+                };
+            }
             m.body_yaw += wrap(target - m.body_yaw) * 0.3;
             let diff = wrap(g.yaw - m.body_yaw);
             if diff.abs() > 50.0 {
