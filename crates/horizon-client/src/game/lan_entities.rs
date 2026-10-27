@@ -260,7 +260,13 @@ impl Game<'_> {
         }
         // DATA_ITEM, `ItemStack.EMPTY` by default.
         for o in self.ominous_spawners.iter().filter(|o| o.id != 0) {
-            let mut e = state(o.id, "minecraft:ominous_item_spawner", o.position, 0.0, false);
+            let mut e = state(
+                o.id,
+                "minecraft:ominous_item_spawner",
+                o.position,
+                0.0,
+                false,
+            );
             e.meta.push((
                 8,
                 serializer::ITEM_STACK,
@@ -290,11 +296,18 @@ impl Game<'_> {
         use horizon_client::text_display::{display_data, text_display_data};
         let empty = Tag::Compound(Default::default());
         let (meta, defaults) = match e.kind.as_str() {
-            "minecraft:text_display" => (text_display_data(tag, false), text_display_data(&empty, true)),
+            "minecraft:text_display" => (
+                text_display_data(tag, false),
+                text_display_data(&empty, true),
+            ),
             "minecraft:block_display" => {
                 // DATA_BLOCK_STATE_ID, air by default.
                 let state = |t: Option<BlockStateId>| {
-                    (23, serializer::BLOCK_STATE, Value::Id(t.map_or(0, |s| s.0 as i32)))
+                    (
+                        23,
+                        serializer::BLOCK_STATE,
+                        Value::Id(t.map_or(0, |s| s.0 as i32)),
+                    )
                 };
                 let air = self.pack.assets.registry.default_state("minecraft:air");
                 let shown = tag.get("block_state").and_then(|t| self.state_from_nbt(t));
@@ -302,7 +315,9 @@ impl Game<'_> {
             }
             "minecraft:item_display" => {
                 // DATA_ITEM_STACK and DATA_ITEM_DISPLAY_ID (`ItemDisplayContext`).
-                let item = tag.get("item").and_then(horizon_client::save::item_from_nbt);
+                let item = tag
+                    .get("item")
+                    .and_then(horizon_client::save::item_from_nbt);
                 let context = match tag.get("item_display") {
                     Some(Tag::String(s)) => match s.to_string_lossy().as_str() {
                         "thirdperson_lefthand" => 1,
@@ -375,7 +390,9 @@ impl Game<'_> {
         self.rockets.iter_mut().for_each(|r| give(&mut r.id));
         self.crystals.iter_mut().for_each(|c| give(&mut c.id));
         self.bolts.iter_mut().for_each(|b| give(&mut b.id));
-        self.ominous_spawners.iter_mut().for_each(|o| give(&mut o.id));
+        self.ominous_spawners
+            .iter_mut()
+            .for_each(|o| give(&mut o.id));
         self.potions.thrown_ids().for_each(&mut give);
         self.end.eye_ids().for_each(&mut give);
         self.breath_clouds.iter_mut().for_each(|b| give(&mut b.id));

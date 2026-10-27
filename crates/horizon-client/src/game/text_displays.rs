@@ -201,9 +201,13 @@ impl Game<'_> {
     }
     /// `DisplayRenderer.getBlockLightLevel` and `getSkyLightLevel`: the
     /// brightness override, else the light at the entity.
-    fn display_light(&self, d: &TextDisplayData, position: glam::DVec3) -> u32 {
+    fn display_light(
+        world: &horizon_client::world::World,
+        d: &TextDisplayData,
+        position: glam::DVec3,
+    ) -> u32 {
         if d.brightness == -1 {
-            let world_light = self.world.light(
+            let world_light = world.light(
                 position.x.floor() as i32,
                 position.y.floor() as i32,
                 position.z.floor() as i32,
@@ -249,7 +253,7 @@ impl Game<'_> {
                 if !matrix.is_finite() {
                     continue;
                 }
-                let light = self.display_light(&d, position);
+                let light = Self::display_light(&self.world, &d, position);
                 if let Some(state) = display.block {
                     // BlockModelResolver.update: model seed 42.
                     self.block_model_vertices(state, 42, matrix, light, true, out);
@@ -365,7 +369,7 @@ impl Game<'_> {
                     d.flags & 1 != 0,
                 );
             }
-            let light = self.display_light(&d, position);
+            let light = Self::display_light(&self.world, &d, position);
             let through = d.flags & 2 != 0;
             let out = if through {
                 &mut *see_through

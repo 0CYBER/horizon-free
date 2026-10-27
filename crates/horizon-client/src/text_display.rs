@@ -160,7 +160,14 @@ impl TextDisplayData {
 
 /// One synched data entry: kept when it differs from its default, or always
 /// with `all` (the defaults a client is sent when a value goes back to one).
-fn entry(out: &mut Vec<(u8, i32, Value)>, all: bool, id: u8, kind: i32, value: Value, default: Value) {
+fn entry(
+    out: &mut Vec<(u8, i32, Value)>,
+    all: bool,
+    id: u8,
+    kind: i32,
+    value: Value,
+    default: Value,
+) {
     if all || value != default {
         out.push((id, kind, if all { default } else { value }));
     }
@@ -197,10 +204,30 @@ pub fn display_data(tag: &Tag, all: bool) -> Vec<(u8, i32, Value)> {
         defaults.right_rotation,
     ));
     let parts = [
-        (11, serializer::VECTOR3, translation.to_vec(), defaults.translation.to_vec()),
-        (12, serializer::VECTOR3, scale.to_vec(), defaults.scale.to_vec()),
-        (13, serializer::QUATERNION, left.to_vec(), defaults.left_rotation.to_vec()),
-        (14, serializer::QUATERNION, right.to_vec(), defaults.right_rotation.to_vec()),
+        (
+            11,
+            serializer::VECTOR3,
+            translation.to_vec(),
+            defaults.translation.to_vec(),
+        ),
+        (
+            12,
+            serializer::VECTOR3,
+            scale.to_vec(),
+            defaults.scale.to_vec(),
+        ),
+        (
+            13,
+            serializer::QUATERNION,
+            left.to_vec(),
+            defaults.left_rotation.to_vec(),
+        ),
+        (
+            14,
+            serializer::QUATERNION,
+            right.to_vec(),
+            defaults.right_rotation.to_vec(),
+        ),
     ];
     for (id, kind, value, default) in parts {
         set(id, kind, Value::Floats(value), Value::Floats(default));
@@ -220,7 +247,12 @@ pub fn display_data(tag: &Tag, all: bool) -> Vec<(u8, i32, Value)> {
         let light = |key: &str| number(b.get(key)).filter(|v| (0..=15).contains(v));
         Some((light("block")? as i32) << 4 | (light("sky")? as i32) << 20)
     });
-    set(16, serializer::INT, Value::Int(brightness.unwrap_or(-1)), Value::Int(-1));
+    set(
+        16,
+        serializer::INT,
+        Value::Int(brightness.unwrap_or(-1)),
+        Value::Int(-1),
+    );
     for (id, key, default) in [
         (17, "view_range", 1.0),
         (18, "shadow_radius", 0.0),
@@ -229,7 +261,12 @@ pub fn display_data(tag: &Tag, all: bool) -> Vec<(u8, i32, Value)> {
         (21, "height", 0.0),
     ] {
         let value = real(key).unwrap_or(default);
-        set(id, serializer::FLOAT, Value::Float(value), Value::Float(default));
+        set(
+            id,
+            serializer::FLOAT,
+            Value::Float(value),
+            Value::Float(default),
+        );
     }
     out
 }
@@ -249,13 +286,24 @@ pub fn text_display_data(tag: &Tag, all: bool) -> Vec<(u8, i32, Value)> {
         Value::Text(tag.get("text").unwrap_or(&empty).clone()),
         Value::Text(empty.clone()),
     );
-    set(24, serializer::INT, Value::Int(int("line_width").unwrap_or(200)), Value::Int(200));
+    set(
+        24,
+        serializer::INT,
+        Value::Int(int("line_width").unwrap_or(200)),
+        Value::Int(200),
+    );
     let background = Value::Int(int("background").unwrap_or(0x4000_0000));
     set(25, serializer::INT, background, Value::Int(0x4000_0000));
     let opacity = Value::Byte(int("text_opacity").unwrap_or(-1) as i8);
     set(26, serializer::BYTE, opacity, Value::Byte(-1));
     // Shadow 1, see-through 2, default background 4, then the alignment: left 8, right 16.
-    let flag = |key: &str, bit: i8| if int(key).is_some_and(|v| v != 0) { bit } else { 0 };
+    let flag = |key: &str, bit: i8| {
+        if int(key).is_some_and(|v| v != 0) {
+            bit
+        } else {
+            0
+        }
+    };
     let align = match tag.get("alignment") {
         Some(Tag::String(s)) => match s.to_string_lossy().as_str() {
             "left" => 8,

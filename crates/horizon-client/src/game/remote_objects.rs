@@ -128,10 +128,12 @@ impl Game<'_> {
     pub(super) fn remote_object_data(&mut self, id: i32, values: &[(u8, i32, Value)]) {
         if self.text_displays.contains_key(&id) {
             // ItemDisplay.DATA_ITEM_STACK, read with the server's registries.
-            let item = values.iter().find_map(|(index, _, value)| match (index, value) {
-                (23, Value::Item(stack)) => Some(self.to_stack(stack)),
-                _ => None,
-            });
+            let item = values
+                .iter()
+                .find_map(|(index, _, value)| match (index, value) {
+                    (23, Value::Item(stack)) => Some(self.to_stack(stack)),
+                    _ => None,
+                });
             if let Some(display) = self.text_displays.get_mut(&id) {
                 display.show(values, item);
                 display.metadata(values);
