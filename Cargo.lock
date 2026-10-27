@@ -217,6 +217,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "beacons"
+version = "0.1.0"
+dependencies = [
+ "horizon-mod-sdk",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1365,9 +1372,12 @@ dependencies = [
  "glam",
  "horizon-assets",
  "horizon-bench",
+ "horizon-client-core",
+ "horizon-command",
  "horizon-core",
  "horizon-dualsense",
  "horizon-friends",
+ "horizon-hdr",
  "horizon-mods",
  "horizon-protocol",
  "horizon-server-files",
@@ -1393,6 +1403,23 @@ dependencies = [
  "winit",
  "winresource",
  "zip",
+]
+
+[[package]]
+name = "horizon-client-core"
+version = "0.1.0"
+dependencies = [
+ "horizon-world",
+ "serde_json",
+]
+
+[[package]]
+name = "horizon-command"
+version = "0.1.0"
+dependencies = [
+ "horizon-client-core",
+ "horizon-protocol",
+ "horizon-world",
 ]
 
 [[package]]
@@ -1427,6 +1454,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-hdr"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "wgpu",
+]
+
+[[package]]
 name = "horizon-mod-sdk"
 version = "0.1.0"
 dependencies = [
@@ -1444,6 +1479,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "toml",
+ "wasmparser",
  "wasmtime",
  "wit-component",
  "wit-parser",
@@ -2962,6 +2998,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "recipes"
+version = "1.0.0"
+dependencies = [
+ "horizon-mod-sdk",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4149,6 +4192,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "wast"
+version = "254.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "febc59cde513fc8f39b8ffd487893723c555fdd024e2e3dc7d165181e6397ea0"
+dependencies = [
+ "bumpalo",
+ "leb128fmt",
+ "memchr",
+ "unicode-width",
+ "wasm-encoder",
+]
+
+[[package]]
+name = "wat"
+version = "1.254.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7db96351e51a3a1bbe6812f029e1100b4d9a5e02161fb63104bd2271fc847e7e"
+dependencies = [
+ "wast",
+]
+
+[[package]]
 name = "wayland-backend"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5013,6 +5078,7 @@ dependencies = [
  "wasm-encoder",
  "wasm-metadata",
  "wasmparser",
+ "wat",
  "wit-parser",
 ]
 

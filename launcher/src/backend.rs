@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 pub const REPO: &str = "ludovic111/horizon";
 pub const README_URL: &str = "https://github.com/ludovic111/horizon/blob/main/launcher/README.md";
-/// The players' page on connecting an AI agent (website/docs/agents.md).
+/// The players' page on connecting an AI agent (the website's docs/agents.md).
 pub const AGENT_DOCS_URL: &str = "https://playhorizon.dev/docs/agents";
 /// This launcher's version: the release workflow sets `HORIZON_LAUNCHER_VERSION` from the
 /// tag it builds (no version-bump commits); other builds say Cargo.toml's.
@@ -80,14 +80,18 @@ const CLIENT: &str = if cfg!(windows) {
     "horizon-client"
 };
 
-fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .user_agent(&format!("horizon-launcher/{VERSION}"))
-        .build()
+/// The agent `url` is fetched with: the launcher's own user agent, through the player's proxy when
+/// one is set (`proxy`).
+fn agent(url: &str) -> ureq::Agent {
+    crate::proxy::agent(
+        ureq::AgentBuilder::new().user_agent(&format!("horizon-launcher/{VERSION}")),
+        url,
+    )
+    .build()
 }
 
 fn get(url: &str) -> Result<ureq::Response, String> {
-    let mut request = agent().get(url);
+    let mut request = agent(url).get(url);
     // CI runners share addresses and hit GitHub's anonymous rate limit; they pass their own token.
     if let Some(token) = std::env::var("HORIZON_GITHUB_TOKEN")
         .ok()
@@ -421,6 +425,37 @@ pub fn version_dir(tag: &str) -> PathBuf {
 }
 
 const COMPLETE: &str = ".installed";
+
+/// The mod API level of the game players run: the selected version's, else the newest installed
+/// one's. None with no version installed: the launcher doesn't know yet which game will run mods.
+pub fn game_mod_api_level() -> Option<u32> {
+    let installed = installed();
+    let tag = Settings::load()
+        .selected
+        .filter(|s| installed.contains(s))
+        .or_else(|| installed.into_iter().next())?;
+    Some(mod_api_level(&tag))
+}
+
+/// A game version's mod API level, read once from the mark its program carries
+/// (`horizon_mods::api_level::MARK`). A program from before the mark serves level 0, the
+/// contract of Horizon 0.2.67 and 0.2.68.
+pub fn mod_api_level(tag: &str) -> u32 {
+    static LEVELS: Mutex<Vec<(String, u32)>> = Mutex::new(Vec::new());
+    let mut levels = LEVELS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(&(_, level)) = levels.iter().find(|(t, _)| t == tag) {
+        return level;
+    }
+    let level = program_mod_api_level(&version_dir(tag).join(CLIENT));
+    levels.push((tag.to_owned(), level));
+    level
+}
+
+/// The mod API level in the game program at `path`: its mark's, else 0.
+fn program_mod_api_level(path: &Path) -> u32 {
+    let program = fs::read(path).unwrap_or_default();
+    horizon_mods::api_level::read_mark(&program).unwrap_or(0)
+}
 
 /// Installed versions, newest tag first.
 pub fn installed() -> Vec<String> {
@@ -1550,9 +1585,10 @@ pub fn newest_crash_report() -> Option<PathBuf> {
     crash_reports_in(&crash_reports_dir()).pop()
 }
 
-/// The newest crash report written at or after `since` (one from the run that started then).
-pub fn crash_report_since(since: std::time::SystemTime) -> Option<PathBuf> {
-    crash_report_in_since(&crash_reports_dir(), since)
+/// The newest crash report the game playing in `home` wrote at or after `since` (one from the
+/// run that started then).
+pub fn crash_report_since(home: &Path, since: std::time::SystemTime) -> Option<PathBuf> {
+    crash_report_in_since(&home.join("crash-reports"), since)
 }
 
 fn crash_report_in_since(dir: &Path, since: std::time::SystemTime) -> Option<PathBuf> {
@@ -2479,9 +2515,57 @@ pub enum Appearance {
     System,
 }
 
+/// What the launcher's window does while the game runs, as the player picks it in Settings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WhilePlaying {
+    /// The window stays where it is.
+    #[default]
+    Stay,
+    /// The window goes to the Dock or the taskbar, and comes back when the game closes.
+    Minimize,
+    /// The launcher hides (macOS only: elsewhere it minimises), and comes back when the game
+    /// closes.
+    Hide,
+}
+
+impl WhilePlaying {
+    pub const ALL: [WhilePlaying; 3] = [Self::Stay, Self::Minimize, Self::Hide];
+
+    /// Its name in `settings.json` and on the command line.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Stay => "stay",
+            Self::Minimize => "minimize",
+            Self::Hide => "hide",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        let name = name.trim().to_ascii_lowercase();
+        let name = match name.as_str() {
+            "minimise" => "minimize",
+            "keep" | "open" | "off" => "stay",
+            n => n,
+        };
+        Self::ALL.into_iter().find(|w| w.name() == name)
+    }
+
+    /// What this computer does for it: only macOS can hide a whole app.
+    pub fn here(self) -> Self {
+        match self {
+            Self::Hide if !cfg!(target_os = "macos") => Self::Minimize,
+            w => w,
+        }
+    }
+}
+
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
     pub selected: Option<String>,
+    /// The instance Play starts (`instances`), by id. Unset means Horizon, the game's home.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<String>,
     pub minecraft_dir: Option<PathBuf>,
     pub server_dir: Option<PathBuf>,
     /// Unset means on: only a player who turned it off has `false` here. 0.1.1 wrote its
@@ -2499,6 +2583,10 @@ pub struct Settings {
     /// default. Appended after the launcher's own arguments, so they can add to or override them.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub game_args: String,
+    /// The HTTP proxy every download goes through (`proxy`), such as `http://127.0.0.1:7890`.
+    /// Unset means none: the environment's `HTTPS_PROXY` and `HTTP_PROXY` apply instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
     /// Dark, Light, or the system's: the launcher's look. Dark by default.
     #[serde(default)]
     pub appearance: Appearance,
@@ -2506,6 +2594,16 @@ pub struct Settings {
     /// first-run question, or on the Play page once if they answered that before it existed.
     #[serde(default)]
     pub ping_notice_seen: bool,
+    /// Seconds the sidebar's partner banner has been on screen, over every start, up to
+    /// `partner::SEEN_BEFORE_HIDE`: only then can the player hide it.
+    #[serde(default)]
+    pub partner_seen_secs: u64,
+    /// The player hid the sidebar's partner banner. The Servers page keeps its own.
+    #[serde(default)]
+    pub partner_hidden: bool,
+    /// What the window does while the game runs. Stays by default.
+    #[serde(default)]
+    pub while_playing: WhilePlaying,
 }
 
 impl Settings {
@@ -2523,6 +2621,12 @@ impl Settings {
                 .is_some_and(|a| serde_json::from_value::<Appearance>(a.clone()).is_err())
             {
                 fields.remove("appearance");
+            }
+            if fields
+                .get("while_playing")
+                .is_some_and(|w| serde_json::from_value::<WhilePlaying>(w.clone()).is_err())
+            {
+                fields.remove("while_playing");
             }
         }
         serde_json::from_value(value).unwrap_or_default()
@@ -2556,6 +2660,24 @@ mod java_tests;
 mod tests {
     use super::*;
     use std::cmp::Ordering::*;
+
+    /// The game program's mod API level is its mark's; a program from before the mark (0.2.68
+    /// and older) or none at all serves level 0.
+    #[test]
+    fn a_game_program_says_its_mod_api_level() {
+        let dir = std::env::temp_dir().join(format!("horizon-api-level-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let marked = dir.join("marked");
+        let mut program = b"\x7fELF code code".to_vec();
+        program.extend_from_slice(b"horizon-mod-api-level:0007;");
+        fs::write(&marked, &program).unwrap();
+        let old = dir.join("old");
+        fs::write(&old, b"\x7fELF code without a mark").unwrap();
+        assert_eq!(program_mod_api_level(&marked), 7);
+        assert_eq!(program_mod_api_level(&old), 0);
+        assert_eq!(program_mod_api_level(&dir.join("missing")), 0);
+        fs::remove_dir_all(&dir).unwrap();
+    }
 
     /// A preparation that reuses the imported game files still reads the assets from the
     /// launcher that has them: a Prism Launcher instance's are in the launcher root, linked into
@@ -2817,6 +2939,30 @@ mod tests {
         assert_eq!(offered(before, &["v0.2.0"]), None);
         assert_eq!(offered(before, &["v0.2.12", "v0.2.0"]), None);
         assert_eq!(CHECK_EVERY.as_secs(), 30 * 60);
+    }
+
+    #[test]
+    fn the_window_stays_while_playing_unless_picked() {
+        assert_eq!(Settings::parse("{}").while_playing, WhilePlaying::Stay);
+        let hide = Settings::parse(r#"{"while_playing": "hide", "game_args": "--x"}"#);
+        assert_eq!(hide.while_playing, WhilePlaying::Hide);
+        let future = Settings::parse(r#"{"while_playing": "fade", "game_args": "--x"}"#);
+        assert_eq!(
+            (future.while_playing, future.game_args.as_str()),
+            (WhilePlaying::Stay, "--x")
+        );
+        assert_eq!(
+            WhilePlaying::parse("Minimise"),
+            Some(WhilePlaying::Minimize)
+        );
+        assert_eq!(WhilePlaying::parse("off"), Some(WhilePlaying::Stay));
+        assert_eq!(WhilePlaying::parse("close"), None);
+        for w in WhilePlaying::ALL {
+            let text = serde_json::to_string(&w).unwrap();
+            assert_eq!(text, format!("\"{}\"", w.name()));
+        }
+        let here = WhilePlaying::Hide.here();
+        assert_eq!(here == WhilePlaying::Hide, cfg!(target_os = "macos"));
     }
 
     #[test]

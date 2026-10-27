@@ -37,7 +37,7 @@ pub fn list() -> Vec<Installed> {
     list_in(&packs_dir())
 }
 
-fn list_in(dir: &Path) -> Vec<Installed> {
+pub(crate) fn list_in(dir: &Path) -> Vec<Installed> {
     let mut packs: Vec<Installed> = fs::read_dir(dir)
         .into_iter()
         .flatten()
@@ -84,7 +84,7 @@ fn install_in(
     if p.kind != idx::Kind::Modpack {
         return Err(format!("{} is a {}, not a modpack.", p.name, p.kind.name()));
     }
-    let v = newest(index, p)?;
+    let v = newest(index, p, None)?;
     let work = dir.join(&p.id);
     let fresh = !work.exists();
     let result = install_version_in(index, local, p, v, &work, progress);

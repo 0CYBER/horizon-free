@@ -245,6 +245,16 @@ impl Game<'_> {
             }
             out.push(e);
         }
+        for c in &self.cushions {
+            let p = c.position;
+            let mut e = state(c.id, "minecraft:cushion", [p.x, p.y, p.z], c.yaw, false);
+            // Cushion.DATA_COLOR, set unless it is the default white.
+            if c.color != 0 {
+                e.meta
+                    .push((8, serializer::DYE_COLOR, Value::Id(i32::from(c.color))));
+            }
+            out.push(e);
+        }
         self.lan_projectile_states(host_entity, hub, out);
         for o in &self.others {
             let p = o.position;
@@ -294,6 +304,9 @@ impl Game<'_> {
             None => 0,
         };
         let at = |p: horizon_core::geometry::Vec3| [p.x, p.y, p.z];
+        for f in &self.fangs.list {
+            out.push(state(f.id, "minecraft:evoker_fangs", f.pos, f.yaw, false));
+        }
         // LightningBolt: each client draws and flashes its own.
         for b in self.bolts.iter().filter(|b| b.id != 0) {
             out.push(state(b.id, "minecraft:lightning_bolt", b.at, 0.0, false));
@@ -343,6 +356,20 @@ impl Game<'_> {
                         a.map_or(0, |a| a.pierce),
                         a.is_some_and(|a| a.in_ground) || p.stuck,
                     ));
+                }
+                // ThrownTrident.ID_LOYALTY (none for a mob's) and ID_FOIL, on
+                // AbstractArrow's flags.
+                K::Trident => {
+                    let a = p.arrow.as_deref();
+                    e.meta.extend(arrow_meta(
+                        false,
+                        a.is_some_and(|a| a.no_physics),
+                        0,
+                        a.is_some_and(|a| a.in_ground) || p.stuck,
+                    ));
+                    if a.is_some_and(|a| a.pickup_item.has_any_enchantments()) {
+                        e.meta.push((12, serializer::BOOLEAN, Value::Bool(true)));
+                    }
                 }
                 // WitherSkull.DATA_DANGEROUS.
                 K::WitherSkull { dangerous: true } => {

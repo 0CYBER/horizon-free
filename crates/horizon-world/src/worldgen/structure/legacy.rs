@@ -31,13 +31,18 @@ pub type Markers = Vec<(String, [i32; 3])>;
 pub trait PieceRandom: ProcessorRandom {
     fn boolean(&mut self) -> bool;
     fn double(&mut self) -> f64;
+    /// The concrete random, for callers that need all of `RandomSource`.
+    fn as_any(&mut self) -> &mut dyn std::any::Any;
 }
-impl<R: RandomSource> PieceRandom for R {
+impl<R: RandomSource + 'static> PieceRandom for R {
     fn boolean(&mut self) -> bool {
         self.next_boolean()
     }
     fn double(&mut self) -> f64 {
         self.next_double()
+    }
+    fn as_any(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
 
@@ -282,12 +287,42 @@ pub trait LegacyPiece: std::fmt::Debug + Send + Sync {
     fn bounding_box(&self) -> BoundingBox;
     /// The vanilla StructurePieceType id, for diagnostics and comparisons.
     fn type_name(&self) -> &'static str;
+    /// `StructurePiece.createTag`; None while Horizon cannot save this type,
+    /// and then its start is not saved.
+    fn save(&self) -> Option<Compound> {
+        None
+    }
     fn post_process(&self, context: &mut PieceContext<'_>) -> Result<()>;
     /// Structure.afterPlace, run on the first piece once per chunk after all
     /// pieces were placed, with every piece's current box.
     fn after_place(&self, _context: &mut PieceContext<'_>, _pieces: &[BoundingBox]) -> Result<()> {
         Ok(())
     }
+}
+
+/// `StructurePiece.createTag`'s own fields: the type, `BB`, `O` (the
+/// orientation's 2D data value, -1 for none) and `GD` (genDepth).
+pub fn piece_tag(
+    id: &str,
+    b: BoundingBox,
+    orientation: Option<Direction>,
+    gen_depth: i32,
+) -> Compound {
+    let o = orientation.map_or(-1, crate::level::data_2d);
+    [
+        ("id", Tag::String(id.into())),
+        (
+            "BB",
+            Tag::IntArray(vec![
+                b.min[0], b.min[1], b.min[2], b.max[0], b.max[1], b.max[2],
+            ]),
+        ),
+        ("O", Tag::Int(o)),
+        ("GD", Tag::Int(gen_depth)),
+    ]
+    .into_iter()
+    .map(|(k, v)| (JavaString::from(k), v))
+    .collect()
 }
 
 /// StructurePiece's orientation transform and block helpers.

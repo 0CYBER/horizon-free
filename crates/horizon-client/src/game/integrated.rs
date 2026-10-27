@@ -52,6 +52,8 @@ struct Flags {
     /// server follows while it runs (IntegratedServer.tickServer).
     render_distance: AtomicI32,
     simulation_distance: AtomicI32,
+    /// `MinecraftServer.isCurrentlySaving`: the server is autosaving.
+    saving: AtomicBool,
 }
 
 /// Work the window hands its server thread (`MinecraftServer.execute`).
@@ -68,6 +70,10 @@ pub(super) struct Integrated {
 impl Integrated {
     pub fn smoothed_tick_ms(&self) -> f32 {
         f32::from_bits(self.flags.smoothed_tick_ms.load(Ordering::Relaxed))
+    }
+    /// `MinecraftServer.isCurrentlySaving`.
+    pub fn is_saving(&self) -> bool {
+        self.flags.saving.load(Ordering::Relaxed)
     }
     /// `IntegratedServer.tickServer` skips the world while the game is paused.
     pub fn set_paused(&self, paused: bool) {
@@ -148,6 +154,12 @@ pub(super) struct Serving {
     /// is out of its place: applied after the tick.
     pending: Option<Publish>,
 }
+impl Serving {
+    /// The window reads this as `MinecraftServer.isCurrentlySaving`.
+    pub(super) fn set_saving(&self, saving: bool) {
+        self.flags.saving.store(saving, Ordering::Relaxed);
+    }
+}
 enum Publish {
     Open(TcpListener, LanSettings),
     Close,
@@ -222,7 +234,6 @@ impl Game<'_> {
         options.report = None;
         options.server = None;
         options.world = None;
-        options.dev_mods.clear();
         self.join_world_rest()?;
         let (res, pack, settings) = (self.res.clone(), self.pack.clone(), self.settings.clone());
         let flags = Arc::new(Flags::default());
@@ -292,6 +303,9 @@ impl Game<'_> {
             launch.create.as_ref(),
         )?)?;
         let saved = Box::new(self.level.clone());
+        // IntegratedServer runs the server mods; the window the client mods.
+        self.mods.dev = self.options.dev_mods.clone();
+        self.start_mods();
         // Math.max(2, options.renderDistance): past vanilla's 32 when the
         // window's render distance is (Horizon's options go to 64).
         let view_distance = self.settings.render_distance.max(2);

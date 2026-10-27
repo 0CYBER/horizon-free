@@ -113,6 +113,14 @@ mod vertex_tests {
             assert!((a - b).abs() <= 0.5 / 32768.0, "{a} {b}");
         }
     }
+    #[test]
+    fn emission_keeps_the_colour_and_the_free_bits() {
+        let rgb = super::pack_rgb([0x12, 0x34, 0x56]);
+        assert_eq!(super::emitting(rgb, 0), rgb);
+        assert_eq!(super::emitting(rgb, 9), 0xF656_3412);
+        assert_eq!(super::emitting(rgb, 15), 0xF056_3412);
+        assert_eq!(super::emitting(rgb, 15) | super::EMISSION_BITS, rgb);
+    }
 }
 pub struct SectionMesh {
     pub solid: Vec<TerrainVertex>,
@@ -566,6 +574,14 @@ impl Padded {
 }
 /// Set on a terrain vertex's sprite layer when its texture alpha must be ignored.
 pub const OPAQUE_LAYER: u16 = 1 << 15;
+/// The bits of `TerrainVertex::color`'s alpha byte that hold the light its face emits, for
+/// HDR output's highlights (`gfx/hdr.rs`): 15 minus the level, so the usual 0xFF means none.
+/// The byte's other four bits stay set.
+pub const EMISSION_BITS: u32 = 0x0F00_0000;
+/// `color` marked as emitting light `level` (0 to 15).
+pub fn emitting(color: u32, level: u8) -> u32 {
+    color & !EMISSION_BITS | u32::from(15 - level.min(15)) << 24
+}
 const UNSET: u32 = u32::MAX;
 const NO_BIOME: u16 = u16::MAX;
 /// The `ColorResolver`s `ClientLevel` caches block tints for.
@@ -880,7 +896,7 @@ impl Mesher<'_> {
                 } else {
                     face.layer as u16
                 },
-                pack_rgb(rgb),
+                emitting(pack_rgb(rgb), state.emission.max(q.light_emission)),
                 pack_coords(lighting::with_emission(coords[i], q.light_emission)),
             ));
         }
