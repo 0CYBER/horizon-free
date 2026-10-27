@@ -67,6 +67,29 @@ impl Pose {
         }
     }
 }
+/// `Pose.id` of the poses a warden takes (`sync::pose_id`).
+pub fn pose_id(m: &Mob) -> u8 {
+    match pose(m) {
+        Pose::Standing => 0,
+        Pose::Roaring => 11,
+        Pose::Sniffing => 12,
+        Pose::Emerging => 13,
+        Pose::Digging => 14,
+    }
+}
+/// `Entity.onSyncedDataUpdated(DATA_POSE)` on a client.
+pub(super) fn set_pose_id(m: &mut Mob, id: u8) {
+    set_pose(
+        m,
+        match id {
+            11 => Pose::Roaring,
+            12 => Pose::Sniffing,
+            13 => Pose::Emerging,
+            14 => Pose::Digging,
+            _ => Pose::Standing,
+        },
+    );
+}
 /// The warden's pose (kept in `Extra.counter` so it can be read while the
 /// brain is being ticked).
 pub fn pose(m: &Mob) -> Pose {
@@ -434,6 +457,11 @@ pub fn do_push(m: &mut Mob, w: &MobWorld, who: Who, events: &mut Vec<MobEvent>) 
 pub(super) fn do_hurt_target(m: &mut Mob, target: Who, w: &MobWorld, events: &mut Vec<MobEvent>) {
     m.anim.states[ROAR].stop();
     m.anim.states[ATTACK].start(m.age as f32);
+    events.push(MobEvent::EntityEvent {
+        mob: m.id,
+        event: 4,
+        at: at(m),
+    });
     let pitch = voice_pitch(m);
     sound(m, "entity.warden.attack_impact", 10.0, pitch, events);
     warden_brain::mem(m).sonic_boom_cooldown.set_ttl((), 40);
@@ -546,6 +574,11 @@ fn receive_vibration(m: &mut Mob, w: &MobWorld, info: Info, events: &mut Vec<Mob
     warden_brain::mem(m).vibration_cooldown.set_ttl((), 40);
     // Entity event 61: the tendrils twitch.
     m.anim.v[TENDRIL] = 10.0;
+    events.push(MobEvent::EntityEvent {
+        mob: m.id,
+        event: 61,
+        at: at(m),
+    });
     let pitch = voice_pitch(m);
     sound(m, "entity.warden.tendril_clicks", 5.0, pitch, events);
     let origin = [
@@ -731,13 +764,7 @@ pub(super) fn tick_sonic_boom(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEve
 /// of the warden: a level event sound here), the tendril and heart
 /// animations, digging crumbs, and keyframes that ended.
 pub fn ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
-    let Some(st) = m.extra.warden.as_ref() else {
-        return;
-    };
-    let client_anger = st.client_anger;
-    let delay = heart_beat_delay(client_anger);
-    if i64::from(m.age) % i64::from(delay) == 0 {
-        m.anim.v[HEART] = 10.0;
+    if heartbeat(m) {
         events.push(MobEvent::LevelEventSound {
             sound: "entity.warden.heartbeat",
             at: at(m),
@@ -745,6 +772,30 @@ pub fn ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
             spread: 0.2,
         });
     }
+    animate(m, events);
+}
+/// The heart's beat on its clock, from the client's anger level: whether
+/// this tick has one (its sound is the caller's).
+fn heartbeat(m: &mut Mob) -> bool {
+    let Some(st) = m.extra.warden.as_ref() else {
+        return false;
+    };
+    let delay = heart_beat_delay(st.client_anger);
+    let beat = i64::from(m.age) % i64::from(delay) == 0;
+    if beat {
+        m.anim.v[HEART] = 10.0;
+    }
+    beat
+}
+/// `Warden.tick` on a client that is not the server: the heart and tendril
+/// animations and the keyframes that ended. Its sounds and particles come
+/// from the server.
+pub fn client_tick(m: &mut Mob) {
+    m.anim.vo = m.anim.v;
+    heartbeat(m);
+    animate(m, &mut Vec::new());
+}
+fn animate(m: &mut Mob, events: &mut Vec<MobEvent>) {
     // The animation values count down after the sync of the last tick.
     for slot in [TENDRIL, HEART] {
         if m.anim.v[slot] > 0.0 {

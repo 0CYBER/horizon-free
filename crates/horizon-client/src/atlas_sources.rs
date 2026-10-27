@@ -3,8 +3,8 @@
 //! `filter`, `unstitch` and `paletted_permutations` sources run in order
 //! against the resource tree; a later source replaces an earlier sprite of
 //! the same id and a filter removes the matching ones.
-use crate::packs::pattern::Pattern;
 use horizon_assets::palette::apply_palette;
+use horizon_client_core::pattern::Pattern;
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
