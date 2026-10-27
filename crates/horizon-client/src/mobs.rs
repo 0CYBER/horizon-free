@@ -1607,6 +1607,8 @@ pub struct MobWorld<'a> {
     pub world: &'a World,
     pub registry: &'a horizon_world::registry::BlockRegistry,
     pub facts: &'a BlockFacts,
+    /// Fluid states and flow facts, for the currents that push mobs.
+    pub fluid_tables: &'a crate::motion::FluidResources,
     pub movement: &'a horizon_world::movement_properties::BoundMovementProperties,
     pub collision: &'a BlockCollisionRegistry<'a>,
     pub data: &'a MobData,

@@ -1082,6 +1082,7 @@ pub fn main() -> horizon_client::Result<()> {
                     world: &world,
                     registry,
                     facts: &facts,
+                    fluid_tables: &motion.fluids,
                     movement: &motion.blocks,
                     collision: &collision,
                     data: &data,
