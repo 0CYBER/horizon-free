@@ -2802,9 +2802,13 @@ impl Game<'_> {
         self.process_level_events()
     }
     fn attack_block(&mut self, pos: [i32; 3]) -> Result<()> {
-        self.with_level(|b, level, ticks| {
-            b.attack_block(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]));
+        let note = self.with_level(|b, level, ticks| {
+            b.attack_block(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]))
         });
+        // NoteBlock.attack awards the statistic.
+        if note {
+            self.stats.custom("play_noteblock", 1);
+        }
         self.process_level_events()
     }
     /// Track which chunks are ticking (Ticks needs chunk load/unload).
