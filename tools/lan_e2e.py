@@ -298,7 +298,7 @@ CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sp
           'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'styles',
           'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing',
           'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push',
-          'piston-push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles',
+          'piston-push', 'piston-slime', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles',
           'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects',
           'portals', 'distance', 'growth', 'doors', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands',
           'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption',
@@ -2503,6 +2503,65 @@ def piston_push_at_border(host, guest):
     finally:
         host('command', command='worldborder center 0 0')
         host('command', command='worldborder set 59999968')
+    return results
+
+
+def check_piston_slime(host, guest, out):
+    """A piston pushing a slime block: the block pushes the body in front of
+    it and bounces it (`PistonMovingBlockEntity.moveCollidedEntities`)."""
+    hx, _, hz = pos_of(host)
+    x, y, z = (int(hx // 16) * 16 + 8, 100, int(hz // 16) * 16 + 8)
+    results = {}
+
+    def setup():
+        # The previous case may have left a mob where the body stands.
+        host('command', command='kill @e[type=minecraft:pig]')
+        host('command', command=f'setblock {x} {y} {z} minecraft:air')
+        host.wait(10)
+        host('command', command=f'fill {x-4} {y-1} {z-4} {x+7} {y-1} {z+4} minecraft:stone')
+        host('command', command=f'fill {x-4} {y} {z-4} {x+7} {y+5} {z+4} minecraft:air')
+        host('command', command=f'setblock {x} {y} {z} minecraft:piston[facing=east]')
+        host.wait(5)
+
+    for player, name in ((host, host.player), (guest, GUEST_NAME)):
+        setup()
+        host('command', command=f'setblock {x+1} {y} {z} minecraft:slime_block')
+        host('command', command=f'tp @s {x+5.5} {y} {z+2.5}')
+        host('command', command=f'tp {GUEST_NAME} {x+5.5} {y} {z-1.5}')
+        host('command', command=f'tp {"@s" if player is host else GUEST_NAME} {x+2.5} {y} {z+0.5}')
+        player.wait(15)
+        before = pos_of(player)
+        assert abs(before[0] - (x + 2.5)) < 0.1, f'{name} did not reach the slime: {before}'
+        host('command', command=f'setblock {x-1} {y} {z} minecraft:redstone_block')
+        # The bounce sets the velocity along the push axis; it decays fast, so
+        # sample it while the block is still moving.
+        speed = 0.0
+        for _ in range(6):
+            player.wait(2)
+            speed = max(speed, player('state')['player']['velocity'][0])
+        after = pos_of(player)
+        results[name] = round(after[0] - before[0], 3)
+        # The block pushes the body out of its way, and the bounce launches it.
+        assert results[name] > 1.5, f'the slime block did not push and bounce {name}: {before} -> {after}'
+        assert speed > 0.05, f'the slime block did not bounce {name}: {speed}'
+        host('command', command=f'setblock {x-1} {y} {z} minecraft:air')
+        player.wait(10)
+    # A plain block only pushes: the body is not launched.
+    setup()
+    host('command', command=f'setblock {x+1} {y} {z} minecraft:stone')
+    host('command', command=f'tp @s {x+2.5} {y} {z+0.5}')
+    host.wait(15)
+    before = pos_of(host)
+    host('command', command=f'setblock {x-1} {y} {z} minecraft:redstone_block')
+    speed = 0.0
+    for _ in range(6):
+        host.wait(2)
+        speed = max(speed, host('state')['player']['velocity'][0])
+    after = pos_of(host)
+    results['stone'] = round(after[0] - before[0], 3)
+    assert results['stone'] < 1.5, f'a plain block bounced the player: {before} -> {after}'
+    host('command', command=f'setblock {x-1} {y} {z} minecraft:air')
+    host.wait(10)
     return results
 
 
@@ -4819,6 +4878,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
              'effects': check_effects, 'portals': check_portals, 'distance': check_distance,
              'clicks': check_clicks, 'sleep': check_sleep, 'push': check_push, 'piston-push': check_piston_push,
+             'piston-slime': check_piston_slime,
              'eat': check_eat, 'eating': check_eating, 'xp': check_xp,
              'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
              'light': check_light, 'plates': check_plates, 'swings': check_swings,
