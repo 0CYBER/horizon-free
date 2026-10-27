@@ -5751,7 +5751,18 @@ impl horizon_client::interaction_input::InteractionWorld for RemoteInputWorld<'_
             direction: 0,
             sequence: 0,
         }));
-        self.0.using = None;
+        // MultiPlayerGameMode.releaseUsingItem also runs `Item.releaseUsing` here: the
+        // player moves by itself, so a Riptide launch happens on the client.
+        let hand = self.0.used_hand();
+        if let Some((slot, ticks)) = self.0.using.take()
+            && let Some(hand) = hand
+            && self
+                .0
+                .stack_in(slot)
+                .is_some_and(|s| &*s.item == "minecraft:trident")
+        {
+            self.0.with_hand(hand, |g| g.release_trident(ticks));
+        }
     }
     fn start_attack(&mut self) -> bool {
         self.0.remote_start_attack()

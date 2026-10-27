@@ -240,7 +240,12 @@ impl Game<'_> {
             if !self.in_water_or_rain() || self.riding.is_some() {
                 return;
             }
-            self.hurt_held_without_breaking(1);
+            // `hurtWithoutBreaking` and the sound belong to the server; a server's
+            // client only launches.
+            let server_client = self.remote.is_some();
+            if !server_client {
+                self.hurt_held_without_breaking(1);
+            }
             // trident_spin_attack_strength: 1.5 + 0.75 per level above the first.
             let strength = 1.5 + 0.75 * (riptide as f32 - 1.0);
             let d = view_vector(self.yaw, self.pitch);
@@ -257,8 +262,14 @@ impl Game<'_> {
                     p.position.y += 1.2;
                 }
             }
-            let sound = format!("minecraft:item.trident.riptide_{}", riptide.min(3));
-            self.audio.play(&sound, at, 1.0, 1.0);
+            if !server_client {
+                let sound = format!("minecraft:item.trident.riptide_{}", riptide.min(3));
+                self.audio.play(&sound, at, 1.0, 1.0);
+            }
+            return;
+        }
+        // The server throws the trident.
+        if self.remote.is_some() {
             return;
         }
         // hurtWithoutBreaking (Unbreaking applies), then the thrown copy.
