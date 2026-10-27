@@ -2344,6 +2344,13 @@ impl Game<'_> {
             // ServerEntity.sendChanges sends it as it is after this travel.
             let marked = std::mem::take(&mut player.health.sync_velocity);
             let velocity = marked.then_some(player.velocity);
+            // Player.causeFallDamage: a fall of 2 blocks or more counts.
+            for event in &events {
+                if let MotionEvent::Fall(horizon_client::landing::FallEvent::Statistic(cm)) = event
+                {
+                    game.stats.custom("fall_one_cm", *cm);
+                }
+            }
             game.record_combat(&events);
             game.wear_armor(&events);
             (events, velocity)
