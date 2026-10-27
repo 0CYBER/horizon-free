@@ -253,7 +253,7 @@ impl Game<'_> {
         self.world.modified.insert((key.0 >> 4, key.2 >> 4));
     }
     /// `LivingEntity.makePoofParticles` (entity event 20) for a mob.
-    fn mob_poof(&mut self, id: u32) {
+    pub(super) fn mob_poof(&mut self, id: u32) {
         let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
             return;
         };

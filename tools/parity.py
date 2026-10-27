@@ -800,16 +800,21 @@ class LocalExecutor:
         self.name, self.jobs, self.memory_budget, self.timeout = HOST, jobs, memory_budget, timeout
         self.max_peak = max_peak  # set while other machines can take heavier harnesses
         self.running = {}
+        self.solo = set()  # harnesses that run alone here (solo_harnesses)
         self.dead = False  # this machine never drops out, unlike a remote host
         self.available, self.measured = 0, 0.0
         (STATE_DIR / "logs").mkdir(parents=True, exist_ok=True)
         (STATE_DIR / "traces").mkdir(parents=True, exist_ok=True)
 
     def free(self):
+        if any(harness_of(label) in self.solo for label in self.running):
+            return 0
         return self.jobs - len(self.running)
 
     def accepts(self, name):
-        return True
+        # A solo harness waits until nothing else runs here; the others fill the slots meanwhile, so solo ones
+        # run last, alone.
+        return name not in self.solo or not self.running
 
     def fits(self, expected, only_here=True):
         """Admission by recorded peak, within the budget and leaving MEMORY_RESERVE of what is free now.
@@ -1462,6 +1467,21 @@ def known_flaky(config):
     return dict(config.get("known_flaky", {}))
 
 
+def solo_harnesses(config):
+    """Harnesses tools/parity_hosts.json's "solo" lists ({name: reason}: those driving game windows, whose frames
+    are drawn on the CPU on Linux runners) run alone on a machine with SOLO_CPUS CPUs or fewer for this process
+    (playhorizon's runner has 4): beside other harnesses there they lose ticks between control requests. The set,
+    or an empty one on a bigger machine. PARITY_SOLO=1 or 0 forces it on or off."""
+    forced = os.environ.get("PARITY_SOLO")
+    cpus = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1
+    if forced == "0" or forced != "1" and cpus > SOLO_CPUS:
+        return set()
+    return set(config.get("solo", {}))
+
+
+SOLO_CPUS = 4
+
+
 def named_only(config):
     """Harnesses tools/parity_hosts.json keeps out of every automatic selection (--changed, --failed, the default,
     --flake-check): they run only when named or with --all, the nightly audit. {name: reason}"""
@@ -1640,6 +1660,10 @@ def main():
         reuse_oracles = not (args.fresh or args.all)
         local = LocalExecutor(jobs, int(memory_available() * 0.75), args.timeout,
                               REMOTE_LOCAL_PEAK if remotes and args.jobs is None else None)
+        local.solo = solo_harnesses(config)
+        if local.solo & {harness_of(name) for name in selected}:
+            print(f"Alone on this machine ({SOLO_CPUS} CPUs or fewer), after the others: "
+                  f"{', '.join(sorted(local.solo & {harness_of(name) for name in selected}))}", flush=True)
         results, elapsed = run(selected, state, hasher, environment_key(hasher), [*remotes, local], reuse_oracles,
                                rounds, known_flaky(config))
     finally:

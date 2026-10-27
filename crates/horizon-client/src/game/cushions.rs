@@ -348,11 +348,15 @@ impl Game<'_> {
         let Some(state) = self.pack.assets.registry.default_state(&name) else {
             return;
         };
-        let at = [
-            c.position.x.floor() as i32,
-            c.position.y.floor() as i32,
-            c.position.z.floor() as i32,
-        ];
+        let p = c.position;
+        // Entity.getY(2/3) is relative to the cushion's quarter-block height.
+        let particle_at = [p.x, p.y + 0.25 * (2.0 / 3.0), p.z];
+        // Guest actions temporarily take self.lan; flush once the hub is back.
+        // Queue before resolving a sprite: a dedicated server has no renderer.
+        if self.audio.capture.is_some() {
+            self.lan_cushion_breaks.push((state, particle_at));
+        }
+        let at = [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32];
         let Some((sprite, tint)) = self.particle_sprite(state, at) else {
             return;
         };
@@ -361,14 +365,8 @@ impl Game<'_> {
             sprite,
             tint,
         );
-        let p = c.position;
-        self.particles.send_particles(
-            &options,
-            [p.x, p.y + 0.666_666_7, p.z],
-            [0.25, 0.0625, 0.25],
-            0.05,
-            10,
-        );
+        self.particles
+            .send_particles(&options, particle_at, [0.25, 0.0625, 0.25], 0.05, 10);
     }
 
     /// `BlockAttachedEntity.tick`: survive and burn checks after the post-increment reaches 100.
@@ -455,8 +453,7 @@ impl Game<'_> {
                 glam::DVec3::new(lo.x, lo.y, lo.z),
                 glam::DVec3::new(hi.x, hi.y, hi.z),
             );
-            let range =
-                super::entity_culling::default_range(hi - lo, self.settings.entity_distance);
+            let range = super::entity_culling::default_range(hi - lo, self.view_scale());
             if !self.entity_in_view(camera, (lo + hi) / 2.0, range, lo, hi) {
                 continue;
             }
