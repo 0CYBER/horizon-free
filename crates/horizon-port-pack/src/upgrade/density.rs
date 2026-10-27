@@ -33,6 +33,10 @@ pub(super) struct Context<'a> {
     cells: BTreeMap<String, BTreeSet<(i64, i64)>>,
     /// The cell of every noise settings in the pack.
     all_cells: BTreeSet<(i64, i64)>,
+    /// Named density functions the upgrade adds, by id.
+    pub(super) generated: BTreeMap<String, Value>,
+    /// Material rules the upgrade adds (one per noise settings), by id.
+    pub(super) rules: BTreeMap<String, Value>,
 }
 
 impl<'a> Context<'a> {
@@ -56,6 +60,8 @@ impl<'a> Context<'a> {
             cell: (4, 8),
             cells: BTreeMap::new(),
             all_cells: BTreeSet::new(),
+            generated: BTreeMap::new(),
+            rules: BTreeMap::new(),
         };
         for s in settings {
             let cell = cell_of(s.get("noise").unwrap_or(&Value::Null));
