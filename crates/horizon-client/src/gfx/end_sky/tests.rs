@@ -12,15 +12,15 @@ fn geometry_matches_pre_residency_vertex_snapshots() {
     for (uv, expected) in [
         (
             [0.0, 0.0, 1.0, 1.0],
-            "f7ee23457fc557b33ecf09c9afaf858f3d8907e108abf06055f627523f733536",
+            "82a9be3f3ed1f733017df2c81dc6dff163f67bf739c768e3fd0f90f00c7802f6",
         ),
         (
             [0.125, 0.25, 0.375, 0.5],
-            "f74c4b8d23ec2b7c11b5752821d0733851bf11358f1b26f9448226ff62a6a318",
+            "05a058bd8e70cff900c8e1c81061892ed27866d86498ebe1e8ae5af4c3b770ef",
         ),
         (
             [0.13, 0.27, 0.41, 0.59],
-            "f0aaa39c5b22168bdc7c6c329acb4d3598a2feb61ff7b6f2850b644682749b39",
+            "93064b9fd2e745da46b927b2625edc8a381bb8c6e20b0f0880e816c4c1745ec1",
         ),
     ] {
         let mut mesh = vertices(uv);
@@ -31,10 +31,8 @@ fn geometry_matches_pre_residency_vertex_snapshots() {
                 if n == 0.0 { 0.0 } else { n }
             });
         }
-        assert_eq!(
-            format!("{:x}", Sha256::digest(bytemuck::cast_slice(&mesh))),
-            expected
-        );
+        let hash = format!("{:x}", Sha256::digest(bytemuck::cast_slice(&mesh)));
+        assert_eq!(hash, expected);
     }
 }
 
@@ -95,7 +93,7 @@ fn separate_draws_match_combined_celestial_pixels() {
         label: Some("End sky differential shader"),
         source: wgpu::ShaderSource::Wgsl(crate::gfx::entity_shader().into()),
     });
-    let attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint32,3=>Unorm8x4,4=>Uint8x4,5=>Snorm8x4];
+    let attributes = wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint32,3=>Unorm8x4,4=>Uint8x4,5=>Snorm8x4,6=>Float32x2];
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("End sky differential pipeline"),
         layout: None,
@@ -305,6 +303,8 @@ fn separate_draws_match_combined_celestial_pixels() {
                             color: level * 0x01010101,
                             light: 0,
                             normal: [0; 4],
+
+                            glint_uv: [0.0, 0.0],
                         })
                         .to_vec()
                 };

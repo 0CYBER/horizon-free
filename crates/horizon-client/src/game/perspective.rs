@@ -218,11 +218,20 @@ impl Game<'_> {
                 _ => None,
             })
         });
-        // A living mount at the default scale and camera distance.
+        // Camera.setup: the living mount's scale and camera distance
+        // attributes (the happy ghast's is 8, the default 4).
         let mount = self
             .riding
             .and_then(|id| self.mobs.iter().find(|m| m.id == id))
-            .map(|_| (1.0, 4.0));
+            .map(|m| {
+                let attribute = |name: &str, default: f64| {
+                    m.kind.attributes.get(name).copied().unwrap_or(default)
+                };
+                (
+                    attribute("minecraft:scale", 1.0) as f32,
+                    attribute("minecraft:camera_distance", 4.0),
+                )
+            });
         // AbstractBoat.positionRider turns a passenger by the boat's
         // deltaRotation after its yRotO was saved, and LocalPlayer.getViewYRot
         // interpolates a passenger's yaw: the boat's turn is spread over the
@@ -443,6 +452,7 @@ impl Game<'_> {
         let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
         let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
+        let start = out.len();
         horizon_client::mobs::render::render_with(
             m,
             alpha as f32,
@@ -456,6 +466,15 @@ impl Game<'_> {
         self.player_elytra_geometry(m, camera, alpha as f32, packed, out);
         self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
         self.held_item_geometry(m, camera, alpha, packed, true, out);
+        // LivingEntity.isCurrentlyGlowing: the Glowing effect. A server's client is
+        // in its team by its profile name.
+        if self.potions.effects.get("glowing").is_some() {
+            let team = match &self.remote {
+                Some(r) => self.score.board.players_team(&r.profile_name),
+                None => self.player_team(),
+            };
+            self.mark_outline(&out[start..], super::glowing::team_color(team));
+        }
     }
     /// `extractEntityInInventoryFollowsMouse`: the player in the box
     /// `[x0, x1) x [y0, y1)`, `size` pixels per block, turned toward the
@@ -710,6 +729,8 @@ mod preview_tests {
                     color: u32::MAX,
                     light: 0,
                     normal: [0; 4],
+
+                    glint_uv: [0.0, 0.0],
                 })
         };
         // A shield and arm can intersect: neither average depth orders both ends.

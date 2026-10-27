@@ -182,12 +182,17 @@ impl Game<'_> {
             return;
         };
         let (mx, mz) = (m.position.x, m.position.z);
-        let disable = m
-            .extra
-            .main_hand
-            .as_deref()
-            .and_then(|item| self.res.items().get(item))
-            .map_or(0.0, |i| i.disable_blocking_seconds);
+        // LivingEntity.getSecondsToDisableBlocking: the held weapon's value;
+        // Warden overrides it with a flat 5 seconds.
+        let disable = if m.species() == horizon_client::mobs::Species::Warden {
+            5.0
+        } else {
+            m.extra
+                .main_hand
+                .as_deref()
+                .and_then(|item| self.res.items().get(item))
+                .map_or(0.0, |i| i.disable_blocking_seconds)
+        };
         // Ravager.blockedByItem: stunned half the time (the defender pushed
         // apart), else the defender flung away; no roar in progress.
         if m.species() == horizon_client::mobs::Species::Ravager {
