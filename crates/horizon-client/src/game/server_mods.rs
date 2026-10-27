@@ -47,19 +47,129 @@ impl Game<'_> {
     ) -> bool {
         false
     }
+    pub(super) fn apply_mod_block_writes(&mut self) {}
 }
 
 #[cfg(feature = "mods")]
 mod run {
     use super::{Game, LanHost, ModEvent, Who};
+    use horizon_client::chunk_map::ChunkMap;
     use horizon_client::{
         command::args::GameMode as Mode,
         lan::data::component_nbt,
         text::{self, Text},
     };
-    use horizon_mods::{BlockPos, GameMode, Output, ServerPlayer};
+    use horizon_mods::{
+        ArgumentKind, BlockPos, GameMode, Output, ServerCommand, ServerPlayer, WorldView,
+    };
     use horizon_protocol::packets::play::{self, Clientbound as C};
-    use horizon_world::registry::BlockStateId;
+    use horizon_world::registry::{BlockRegistry, BlockStateId};
+    use serde_json::{Value, json};
+
+    /// Blocks queued for levels that don't tick (another dimension, in-frame)
+    /// are kept up to this many; the oldest go first.
+    const MAX_QUEUED_WRITES: usize = 1 << 16;
+
+    /// Capability `world`'s view during a call: the levels' chunks, moved out
+    /// of the game for the call and back after it (no copy).
+    struct LentWorld {
+        registry: &'static BlockRegistry,
+        biomes: std::sync::Arc<horizon_client::biome::Biomes>,
+        dims: Vec<(&'static str, ChunkMap)>,
+    }
+    impl WorldView for LentWorld {
+        fn block(&self, dimension: &str, x: i32, y: i32, z: i32) -> Option<String> {
+            let (_, chunks) = self.dims.iter().find(|(d, _)| *d == dimension)?;
+            let chunk = chunks.get(&(x >> 4, z >> 4))?;
+            Some(state_string(self.registry, chunk.block(x & 15, y, z & 15)))
+        }
+        fn biome(&self, dimension: &str, x: i32, y: i32, z: i32) -> Option<String> {
+            let (_, chunks) = self.dims.iter().find(|(d, _)| *d == dimension)?;
+            let chunk = chunks.get(&(x >> 4, z >> 4))?;
+            Some(self.biomes.get(chunk.biome(x, y, z)).name.clone())
+        }
+        fn has_dimension(&self, dimension: &str) -> bool {
+            matches!(
+                dimension,
+                "minecraft:overworld" | "minecraft:the_nether" | "minecraft:the_end"
+            )
+        }
+        fn check_state(&self, state: &str) -> Result<(), String> {
+            crate::game::render_control::parse_state(self.registry, state)
+                .map(drop)
+                .map_err(|e| format!("{state}: {e}"))
+        }
+    }
+
+    /// Server mods' commands as a root of the commands report
+    /// (`lan::commands`): a literal per command, then its arguments in a
+    /// chain, each node runnable where only optional arguments follow.
+    fn command_tree<'a>(commands: impl Iterator<Item = &'a ServerCommand>) -> Value {
+        let mut root = serde_json::Map::new();
+        for c in commands {
+            let mut next: Option<(String, Value)> = None;
+            for (i, a) in c.arguments.iter().enumerate().rev() {
+                let executable = c.arguments.get(i + 1).is_none_or(|b| b.optional);
+                let (parser, properties) = match a.kind {
+                    ArgumentKind::Word => ("brigadier:string", json!({"type": "word"})),
+                    ArgumentKind::Text => ("brigadier:string", json!({"type": "greedy"})),
+                    ArgumentKind::Integer((min, max)) => {
+                        let mut p = serde_json::Map::new();
+                        if let Some(min) = min {
+                            p.insert("min".into(), min.into());
+                        }
+                        if let Some(max) = max {
+                            p.insert("max".into(), max.into());
+                        }
+                        ("brigadier:integer", Value::Object(p))
+                    }
+                    ArgumentKind::Number => ("brigadier:double", Value::Null),
+                    ArgumentKind::Boolean => ("brigadier:bool", Value::Null),
+                    ArgumentKind::Player => (
+                        "minecraft:entity",
+                        json!({"amount": "single", "type": "players"}),
+                    ),
+                    ArgumentKind::BlockPos => ("minecraft:block_pos", Value::Null),
+                };
+                let mut node = json!({
+                    "type": "argument",
+                    "parser": parser,
+                    "properties": properties,
+                    "executable": executable,
+                });
+                if let Some((name, child)) = next.take() {
+                    node["children"] = json!({ name: child });
+                }
+                next = Some((a.name.clone(), node));
+            }
+            let executable = c.arguments.first().is_none_or(|a| a.optional);
+            let mut literal = json!({"type": "literal", "executable": executable});
+            if let Some((name, child)) = next {
+                literal["children"] = json!({ name: child });
+            }
+            root.insert(c.name.clone(), literal);
+        }
+        if root.is_empty() {
+            return Value::Null;
+        }
+        json!({"type": "root", "children": root})
+    }
+
+    /// `minecraft:oak_log[axis=y]`.
+    fn state_string(registry: &BlockRegistry, state: BlockStateId) -> String {
+        let Some(s) = registry.state(state) else {
+            return "minecraft:air".into();
+        };
+        if s.properties.is_empty() {
+            return s.name.clone();
+        }
+        let props: Vec<String> = s
+            .properties
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect();
+        format!("{}[{}]", s.name, props.join(","))
+    }
 
     /// `UUID.toString()`.
     fn uuid_string(u: u128) -> String {
@@ -138,12 +248,14 @@ mod run {
                 // A server has no frames to check its dev mods in.
                 self.reload_dev_mods();
             }
+            self.send_server_mod_commands();
             if !self.mods.server {
                 return;
             }
             let players = self.server_players(None);
             let snapshot = self.mod_snapshot_with(players.clone());
             self.mods.mods.set_snapshot(snapshot);
+            self.lend_world();
             let before = std::mem::take(&mut self.mods.players);
             for p in before
                 .iter()
@@ -197,8 +309,94 @@ mod run {
                 }
             }
             self.mods.mods.server_tick(self.ticks);
+            self.return_world();
             self.mods.players = players;
             self.show_mod_output();
+            self.apply_mod_block_writes();
+        }
+
+        /// Players' command trees list the running server mods' commands
+        /// after vanilla's, whenever they change (or a hub opens).
+        fn send_server_mod_commands(&mut self) {
+            let key = self.mods.mods.generation();
+            let Some(host) = self.lan.as_mut() else {
+                return;
+            };
+            if host.hub.mod_commands_key() == Some(key) {
+                return;
+            }
+            let tree = command_tree(self.mods.mods.server_commands());
+            host.hub.set_mod_commands(key, tree);
+        }
+
+        /// Lends the levels' chunks to capability `world` for the calls up to
+        /// [`Game::return_world`], when a running server mod has it.
+        fn lend_world(&mut self) {
+            if !self.mods.world {
+                return;
+            }
+            let mut dims = vec![(self.dim.id(), std::mem::take(&mut self.world.chunks))];
+            for (dim, chunks) in self.levels.parked_chunks() {
+                dims.push((dim.id(), std::mem::take(chunks)));
+            }
+            let registry = self.pack.assets.registry;
+            let biomes = self.res.biomes().clone();
+            self.mods.mods.lend_world(Box::new(LentWorld {
+                registry,
+                biomes,
+                dims,
+            }));
+        }
+
+        /// Puts back the chunks [`Game::lend_world`] lent.
+        fn return_world(&mut self) {
+            let Some(view) = self.mods.mods.take_world() else {
+                return;
+            };
+            let view: Box<dyn std::any::Any> = view;
+            let Ok(lent) = view.downcast::<LentWorld>() else {
+                return;
+            };
+            let mut dims = lent.dims;
+            if let Some(i) = dims.iter().position(|(d, _)| *d == self.dim.id()) {
+                self.world.chunks = dims.swap_remove(i).1;
+            }
+            for (dim, chunks) in self.levels.parked_chunks() {
+                if let Some(i) = dims.iter().position(|(d, _)| *d == dim.id()) {
+                    *chunks = dims.swap_remove(i).1;
+                }
+            }
+        }
+
+        /// Makes the blocks server mods set in the level in place, in order,
+        /// as `/setblock` does. Those of other dimensions wait for their level.
+        pub(in crate::game) fn apply_mod_block_writes(&mut self) {
+            if self.mods.block_writes.is_empty() {
+                return;
+            }
+            let dim = self.dim.id();
+            let (now, later): (Vec<_>, Vec<_>) = std::mem::take(&mut self.mods.block_writes)
+                .into_iter()
+                .partition(|(d, _)| d == dim);
+            self.mods.block_writes = later;
+            let registry = self.pack.assets.registry;
+            for (_, b) in now {
+                let state = match crate::game::render_control::parse_state(registry, &b.state) {
+                    Ok(state) => state,
+                    Err(e) => {
+                        log::warn!("Horizon: a server mod set {}: {e}", b.state);
+                        continue;
+                    }
+                };
+                if let Err(e) = self.place_state([b.x, b.y, b.z], state, false) {
+                    log::debug!(
+                        "Horizon: a server mod's block at {} {} {}: {e:?}",
+                        b.x,
+                        b.y,
+                        b.z
+                    );
+                }
+            }
         }
 
         /// A player broke (or placed) `state` at `pos`: the player acting now.
@@ -240,8 +438,11 @@ mod run {
             };
             let snapshot = self.mod_snapshot_with(players);
             self.mods.mods.set_snapshot(snapshot);
+            self.lend_world();
             let owned = self.mods.mods.server_command(&me, line);
+            self.return_world();
             self.show_mod_output();
+            self.apply_mod_block_writes();
             owned
         }
 
@@ -266,10 +467,14 @@ mod run {
             };
             let snapshot = self.mod_snapshot_with(players);
             self.mods.mods.set_snapshot(snapshot);
-            if !self.mods.mods.server_command(&me, line) {
+            self.lend_world();
+            let owned = self.mods.mods.server_command(&me, line);
+            self.return_world();
+            if !owned {
                 return false;
             }
             self.route_mod_output(Some(host));
+            self.apply_mod_block_writes();
             true
         }
 
@@ -347,6 +552,21 @@ mod run {
                     for p in self.server_players(host.as_deref()) {
                         let line = named(&name, text.clone());
                         self.tell_server_player(host.as_deref_mut(), &p.id, line);
+                    }
+                }
+                Output::SetBlocks {
+                    name,
+                    dimension,
+                    blocks,
+                } => {
+                    let queued = &mut self.mods.block_writes;
+                    queued.extend(blocks.into_iter().map(|b| (dimension.clone(), b)));
+                    if queued.len() > MAX_QUEUED_WRITES {
+                        let over = queued.len() - MAX_QUEUED_WRITES;
+                        queued.drain(..over);
+                        log::warn!(
+                            "Horizon: mod {name} set more blocks than wait for their level: {over} dropped"
+                        );
                     }
                 }
                 _ => {}
