@@ -1031,14 +1031,11 @@ impl Game<'_> {
         if !self.before_block(d) || self.mob_hit().is_some_and(|m| m.1 < d) {
             return false;
         }
-        let modifiers = self
-            .attack_item_info()
-            .map(|i| (i.attack_damage, i.attack_speed))
-            .unwrap_or((0.0, 0.0));
-        let speed = (4.0 + modifiers.1).max(0.1);
-        let scale = ((self.attack_ticks as f32 + 0.5) / (20.0 / speed)).clamp(0.0, 1.0);
+        let hand_damage = self.attack_item_info().map_or(0.0, |i| i.attack_damage);
+        let delay = horizon_client::attack_strength::delay(self.main_hand_attack_speed());
+        let scale = ((self.attack_ticks as f32 + 0.5) / delay).clamp(0.0, 1.0);
         let mut amount =
-            (1.0 + modifiers.0 + self.effect_attack_bonus()) * (0.2 + scale * scale * 0.8);
+            (1.0 + hand_damage + self.effect_attack_bonus()) * (0.2 + scale * scale * 0.8);
         let falling = self
             .player
             .as_ref()
