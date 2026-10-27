@@ -1047,7 +1047,7 @@ impl Game<'_> {
                         self.combat.charged_exploders.push(mob);
                     }
                 }
-                MobEvent::Explode(at, radius) => {
+                MobEvent::Explode(at, radius, species) => {
                     // The exploding mob causes the damage (Creeper.explodeCreeper).
                     let source_mob = self.combat.explosion_source.or_else(|| {
                         self.mobs
@@ -1063,7 +1063,14 @@ impl Game<'_> {
                         self.note_attacker("minecraft:explosion", id);
                     }
                     self.combat.explosion_source = source_mob;
-                    let result = self.explode(at, radius);
+                    // Only a creeper or a wither empties the hives it blows up.
+                    // The creeper is already gone from the list, so the event
+                    // carries its kind.
+                    let result = if matches!(species, Species::Creeper | Species::Wither) {
+                        self.with_hive_emptying_blast(|g| g.explode(at, radius))
+                    } else {
+                        self.explode(at, radius)
+                    };
                     self.combat.explosion_source = None;
                     result?
                 }

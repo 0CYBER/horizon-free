@@ -195,18 +195,33 @@ impl Game<'_> {
         self.anger_nearby_bees(at);
     }
     /// `BeehiveBlock.angerNearbyBees`: bees within 8 blocks (6 up and down)
-    /// without a target go for a player in the same box.
-    fn anger_nearby_bees(&mut self, at: [i32; 3]) {
+    /// without a target go for a random player in the same box, the window's
+    /// own or a guest (`None` is the window's player).
+    pub(super) fn anger_nearby_bees(&mut self, at: [i32; 3]) {
         let min = Vec3::new(
             f64::from(at[0]) - 8.0,
             f64::from(at[1]) - 6.0,
             f64::from(at[2]) - 8.0,
         );
         let area = Aabb::new(min, Vec3::new(min.x + 17.0, min.y + 13.0, min.z + 17.0));
-        if !self
+        let mut players: Vec<Option<u32>> = Vec::new();
+        if self
             .player_view()
             .is_some_and(|p| p.bounds.intersects(area))
         {
+            players.push(None);
+        }
+        if let Some(host) = self.lan.as_ref() {
+            players.extend(
+                host.hub
+                    .guests
+                    .iter()
+                    .filter(|g| host.hub.here(g) && g.loaded && !g.dead)
+                    .filter(|g| super::lan_mobs::guest_bounds(g).intersects(area))
+                    .map(|g| Some(g.conn)),
+            );
+        }
+        if players.is_empty() {
             return;
         }
         let mut bees: Vec<usize> = (0..self.mobs.len())
@@ -219,9 +234,20 @@ impl Game<'_> {
             .collect();
         bees.retain(|&i| self.mobs[i].ai.target.is_none());
         for i in bees {
-            // Util.getRandom over the one player.
-            let _ = self.world.random.next_int_bound(1);
+            // Util.getRandom over the players.
+            let pick = self
+                .world
+                .random
+                .next_int_bound(players.len() as i32)
+                .unwrap_or(0) as usize;
             self.mobs[i].ai.target = Some(Who::Player);
+            // The player a mob sees is its guest binding, else the window's.
+            if let Some(host) = self.lan.as_mut() {
+                match players[pick] {
+                    Some(conn) => host.mob_players.insert(self.mobs[i].id, conn),
+                    None => host.mob_players.remove(&self.mobs[i].id),
+                };
+            }
         }
     }
 }

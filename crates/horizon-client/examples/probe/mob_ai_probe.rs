@@ -580,7 +580,7 @@ fn player_hurt(player: Option<&PlayerView>, e: &MobEvent) -> bool {
     match e {
         MobEvent::AttackPlayer(amount, _) | MobEvent::DamagePlayer { amount, .. } => *amount > 0.0,
         // ServerExplosion.hurtEntities: within twice the radius every hit does damage.
-        MobEvent::Explode(at, radius) => {
+        MobEvent::Explode(at, radius, _) => {
             let d = Vec3::new(at[0], at[1], at[2])
                 .distance_squared(p.position)
                 .sqrt();
