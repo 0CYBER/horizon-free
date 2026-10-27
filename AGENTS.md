@@ -11,7 +11,7 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
 - **Keep your runs away from real player data.** Any game or launcher you start gets fresh `mktemp -d`
   folders in `HORIZON_HOME` (the game's data), `HORIZON_LAUNCHER_HOME`, `XDG_DATA_HOME` and
   `XDG_CONFIG_HOME`, plus `HORIZON_LAUNCHER_NO_SELF_UPDATE=1` and `HORIZON_NO_AUDIO=1`, and, for the
-  launcher, `HORIZON_LAUNCHER_TRASH` and `HORIZON_LAUNCHER_CLIPBOARD` pointing into the scratch home. Never write to
+  launcher, `HORIZON_LAUNCHER_TRASH`, `HORIZON_LAUNCHER_CLIPBOARD` and `HORIZON_LAUNCHER_DESKTOP` pointing into the scratch home. Never write to
   `~/.local/share/{applications,horizon,horizon-launcher}` or `~/.local/bin`.
 - **Mark what an agent posts.** A PR body starts with a line naming whose agent opened it and with what.
   Ludovic's agents write `> 🤖 Opened by Ludovic's AI agent (Claude), not by Ludovic himself.`, and a
@@ -67,6 +67,7 @@ reads `README.md`, `launcher/links.json`, `docs/api/`, `roadmap/roadmap.json` an
 python3 tools/pr_ready.py                  # the self-check: fmt, clippy -D warnings, touched crates' tests, harnesses; paste its block in the PR
 python3 tools/pr_ready.py --quick          # same without harnesses
 cargo test -p horizon-client --lib --bins --tests   # skips the 104 examples (pr_ready does this); `--doc` separately
+cargo test -p horizon-client --features horizon-client/mods --lib mod_content::tests:: -- --ignored   # the 5 slow content-root tests, #[ignore]d; pr_ready runs them when mod content, assets, blocks or items change
 cargo build --profile fast -p horizon-client        # optimized, quick to link: use it to play or run lan_e2e
 python3 tools/parity.py --changed origin/main       # the harnesses your branch can affect (CI's parity job)
 python3 tools/parity.py --changed-files paths.txt --list   # which harnesses cover these files, without running them

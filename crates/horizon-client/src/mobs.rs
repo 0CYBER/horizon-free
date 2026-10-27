@@ -729,6 +729,12 @@ pub struct Extra {
     pub vector: [f64; 3],
     /// Active status effects: (effect id, ticks left, amplifier).
     pub effects: Vec<(&'static str, i32, i32)>,
+    /// The effects above given with `hideParticles`: no swirls for them.
+    pub hidden_effects: Vec<&'static str>,
+    /// `LivingEntity.DATA_EFFECT_PARTICLES` and `DATA_EFFECT_AMBIENCE_ID` as a
+    /// server gave them: the swirls around it, and whether they are all faint.
+    pub effect_particles: Vec<crate::particles::ParticleOptions>,
+    pub effect_ambient: bool,
     /// An invisible illusioner's mirror images.
     pub illusions: Option<illusioner::Illusions>,
     /// A villager's claimed bed head and meeting bell.
@@ -775,8 +781,9 @@ pub struct Extra {
     pub drop_chances: Option<Box<[f32; 8]>>,
     /// `Mob.leftHanded`.
     pub left_handed: bool,
-    /// The sound variant: index in the species' `*_sound_variant` registry.
-    pub sound_variant: u8,
+    /// The sound variant: index in the species' `*_sound_variant` registry
+    /// (`finalize::sound_variants`); None is the default, `classic`.
+    pub sound_variant: Option<u8>,
     /// `Zombie.canBreakDoors`.
     pub can_break_doors: bool,
     /// A goat's `IsScreamingGoat` and the horns it lost (left, right).
@@ -976,6 +983,12 @@ pub enum MobEvent {
     Push {
         target: Who,
         velocity: [f64; 3],
+    },
+    /// `Entity.move(MoverType.SHULKER, delta)`: shift a target's position
+    /// (an opening shulker lifts what stands on its shell).
+    Shift {
+        target: Who,
+        delta: [f64; 3],
     },
     /// `EvokerWololoSpellGoal`: a blue sheep turns red.
     Wololo {

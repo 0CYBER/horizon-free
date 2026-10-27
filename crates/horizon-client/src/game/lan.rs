@@ -21,6 +21,7 @@ use horizon_core::geometry::Vec3;
 use horizon_protocol::{
     crypto::offline_uuid,
     entity_data::{Value, serializer},
+    packets::play::{self, Clientbound as C},
 };
 use std::{
     collections::HashMap,
@@ -191,6 +192,17 @@ fn mob_meta(
         meta.push((9, serializer::FLOAT, Value::Float(health)));
     }
     defaults.push((9, serializer::FLOAT, Value::Float(1.0)));
+    // LivingEntity.DATA_EFFECT_PARTICLES and DATA_EFFECT_AMBIENCE_ID: the
+    // swirls of its effects (the ones a mob has are visible, not ambient).
+    meta.extend(
+        hub.effect_meta(
+            (m.extra.effects.iter())
+                .filter(|e| !m.extra.hidden_effects.contains(&e.0))
+                .map(|e| (e.0, false)),
+        ),
+    );
+    defaults.push((10, serializer::PARTICLES, Value::Particles(Vec::new())));
+    defaults.push((11, serializer::BOOLEAN, Value::Bool(false)));
     // Mob.DATA_MOB_FLAGS_ID: no AI 1, left-handed 2, aggressive 4 (what
     // draws a vindicator's axe, a skeleton's drawn bow, a piglin's raised
     // weapon).
@@ -249,6 +261,13 @@ fn mob_meta(
                 meta.push((17, serializer::INT, Value::Int(1)));
             }
             defaults.push((17, serializer::INT, Value::Int(0)));
+        }
+        // Piglin.DATA_IS_DANCING (after the baby flag and the crossbow charge).
+        "minecraft:piglin" => {
+            if e.scratch[0] > 0 {
+                meta.push((19, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            defaults.push((19, serializer::BOOLEAN, Value::Bool(false)));
         }
         // Sheep.DATA_WOOL_ID: the colour in the low nibble, 16 when sheared.
         "minecraft:sheep" => {
@@ -697,6 +716,7 @@ impl Game<'_> {
         self.audio.capture = None;
         self.lan_events.clear();
         self.lan_critical_hits.clear();
+        self.lan_cushion_breaks.clear();
         self.streaming.extra.clear();
         if announce {
             self.system_message(Text::translate(
@@ -1249,8 +1269,9 @@ impl Game<'_> {
                 horizon_world::level::LevelEvent::LevelEvent { id, pos, data } => {
                     // The acting guest does not predict the egg's teleport
                     // particles, bone meal's growth, or anvil result sounds
-                    // (these levelEvent calls name no excluded player).
-                    let except = if matches!(*id, 2015 | 1505 | 1029 | 1030) {
+                    // (these levelEvent calls name no excluded player), nor
+                    // the digger's own crack and hit sound (2019, 2020).
+                    let except = if matches!(*id, 2015 | 1505 | 1029 | 1030 | 2019 | 2020) {
                         None
                     } else {
                         self.lan_acting
@@ -1312,6 +1333,33 @@ impl Game<'_> {
     /// Send the tick's level events, sounds and mob animations.
     fn lan_flush_effects(&mut self, host: &mut LanHost) {
         let critical_hits = std::mem::take(&mut self.lan_critical_hits);
+        for (state, at) in std::mem::take(&mut self.lan_cushion_breaks) {
+            if let Some(id) = host
+                .hub
+                .registry_id("minecraft:particle_type", "minecraft:block")
+            {
+                host.hub.broadcast_near(
+                    at,
+                    32.0,
+                    &C::LevelParticles(play::LevelParticles {
+                        particle: horizon_protocol::entity_data::Particle {
+                            id,
+                            data: Some(horizon_protocol::entity_data::ParticleData::State(
+                                state.0 as i32,
+                            )),
+                        },
+                        override_limiter: false,
+                        always_show: false,
+                        pos: at,
+                        dist: [0.25, 0.0625, 0.25],
+                        max_speed: [0.05; 3],
+                        count: 10,
+                        randomization: 0,
+                    }),
+                    None,
+                );
+            }
+        }
         for (kind, pos, data, acting) in std::mem::take(&mut self.lan_events) {
             if kind == 2001 {
                 host.broken
@@ -1474,6 +1522,12 @@ impl Game<'_> {
                 .map(|s| s.as_ref().map(|s| s.item.clone()));
             m.extra.crouching = g.sneaking;
             m.extra.sprinting = g.sprinting;
+            // LivingEntity.DATA_EFFECT_PARTICLES: the swirls of its visible effects.
+            let visible = || g.effects.list.iter().filter(|e| e.visible);
+            m.extra.effect_particles = visible()
+                .filter_map(|e| super::client_ambient::effect_particle(e.id, e.ambient))
+                .collect();
+            m.extra.effect_ambient = visible().all(|e| e.ambient);
             // Lying in its bed (LivingEntity.getBedOrientation).
             m.extra.ints[1] = g.bed.map_or(0, |b| self.bed_facing(b));
             // LivingEntity.updateSwingTime: the arm swing lan_swings started.

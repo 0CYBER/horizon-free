@@ -41,6 +41,43 @@ fn favour() -> bool {
     false
 }
 
+/// The CPU time the calling thread has used, where only an OS call gives it
+/// precisely. Windows counts it exactly only in cycles of the time-stamp
+/// counter (`QueryThreadCycleTime`; `GetThreadTimes` moves in scheduler ticks
+/// of ~15.6 ms), so the counter's rate is measured once against the wall
+/// clock and cycles convert to time. `None` elsewhere: unix callers read
+/// `CLOCK_THREAD_CPUTIME_ID` themselves.
+#[cfg(all(windows, target_arch = "x86_64"))]
+pub fn thread_cpu() -> Option<std::time::Duration> {
+    use std::{
+        sync::OnceLock,
+        time::{Duration, Instant},
+    };
+    use windows_sys::Win32::System::{
+        Threading::GetCurrentThread, WindowsProgramming::QueryThreadCycleTime,
+    };
+    // Time-stamp counter cycles per nanosecond.
+    static RATE: OnceLock<f64> = OnceLock::new();
+    let rate = *RATE.get_or_init(|| {
+        // SAFETY: RDTSC has no preconditions on x86_64.
+        let tsc = || unsafe { core::arch::x86_64::_rdtsc() };
+        let (wall, start) = (Instant::now(), tsc());
+        std::thread::sleep(Duration::from_millis(20));
+        (tsc() - start) as f64 / wall.elapsed().as_nanos() as f64
+    });
+    let mut cycles = 0;
+    // SAFETY: GetCurrentThread's pseudo handle needs no closing; a valid out pointer.
+    if unsafe { QueryThreadCycleTime(GetCurrentThread(), &mut cycles) } == 0 {
+        return None;
+    }
+    Some(Duration::from_nanos((cycles as f64 / rate) as u64))
+}
+
+#[cfg(not(all(windows, target_arch = "x86_64")))]
+pub fn thread_cpu() -> Option<std::time::Duration> {
+    None
+}
+
 /// Set once as the game starts, before its helper threads do: they then go
 /// behind the server thread and the render thread (`behind_server`).
 static HELPERS_BEHIND: AtomicBool = AtomicBool::new(false);
