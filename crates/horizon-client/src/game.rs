@@ -13107,7 +13107,7 @@ impl<'a> Game<'a> {
             admin_feedback: Vec::new(),
             console_broadcast: None,
             cmds: Default::default(),
-            ui: Default::default(),
+            ui: chat::UiState::new(),
             combat: Default::default(),
             guest_combat: Default::default(),
             mount: Default::default(),
