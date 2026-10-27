@@ -290,9 +290,6 @@ class OracleReuseTests(unittest.TestCase):
         self.assertEqual(self.output.read_text(), "b")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class LargeOutputTests(unittest.TestCase):
     def test_a_pass_clears_only_its_own_directory(self):
@@ -323,3 +320,146 @@ class LargeOutputTests(unittest.TestCase):
                 listing.write_text(f"{own / 'server.txt'}\n{own / 'client.txt'}\n")
                 parity.clear_large_outputs("state_provider#2", trace)
             self.assertEqual(sorted(path.name for path in own.iterdir()), ["report.json", "server.txt"])
+
+
+class FakeExecutor:
+    """Runs nothing: each start of a harness takes the next status from its script, a list."""
+    name, dead, max_peak = "fake", False, None
+
+    def __init__(self):
+        self.started, self.finished = [], []
+
+    def free(self):
+        return 1
+
+    def accepts(self, name):
+        return True
+
+    def fits(self, expected, only_here=True):
+        return True
+
+    def start(self, label, script, reuse, expected, shard=None):
+        self.started.append((label, reuse))
+        self.finished.append((label, {"status": script.pop(0), "seconds": 1.0, "dependencies": []}))
+        return True
+
+    def poll(self):
+        finished, self.finished = self.finished, []
+        return finished
+
+
+class KnownFlakyTests(unittest.TestCase):
+    def run_harnesses(self, scripts, flaky, rounds=None):
+        executor = FakeExecutor()
+        state = {"harnesses": {name: {"status": "pass", "oracle_reuse": True} for name in scripts}}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.multiple(parity, STATE_DIR=Path(tmp), SHARED=Path(tmp)), \
+                mock.patch.object(parity, "save_state"), mock.patch.object(parity, "time") as clock:
+            clock.monotonic.return_value = 0.0
+            results, _ = parity.run(scripts, state, None, "env", [executor], True, rounds, flaky)
+        return results, executor.started
+
+    def test_a_known_flaky_failure_runs_once_more_from_scratch_and_says_so(self):
+        results, started = self.run_harnesses({"dedicated_server": ["fail", "pass"]}, {"dedicated_server": "timer"})
+        self.assertEqual(results["dedicated_server"]["status"], "pass")
+        self.assertEqual(results["dedicated_server"]["retried"], "known flaky")
+        # The first run reused oracle results; a known flaky harness doesn't lose that by flaking.
+        self.assertTrue(results["dedicated_server"]["oracle_reuse"])
+        self.assertEqual(started, [("dedicated_server", True), ("dedicated_server", False)])
+
+    def test_only_once(self):
+        results, started = self.run_harnesses({"dedicated_server": ["fail", "fail"]}, {"dedicated_server": "timer"})
+        self.assertEqual(results["dedicated_server"]["status"], "fail")
+        self.assertEqual(len(started), 2)
+
+    def test_other_harnesses_keep_only_the_reused_oracle_retry(self):
+        results, started = self.run_harnesses({"food": ["fail", "pass"]}, {"dedicated_server": "timer"})
+        self.assertEqual((results["food"]["status"], results["food"]["retried"]), ("pass", "reused oracle results"))
+        self.assertEqual(started, [("food", True), ("food", False)])
+        self.assertFalse(results["food"]["oracle_reuse"])
+
+    def test_repeated_runs_get_no_retry(self):
+        results, started = self.run_harnesses({"dedicated_server": ["pass", "fail"]}, {"dedicated_server": "timer"},
+                                              rounds={"dedicated_server": 2})
+        self.assertEqual((results["dedicated_server"]["status"], len(started)), ("fail", 2))
+
+    def test_retries_reach_the_job_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = Path(tmp) / "summary.md"
+            with mock.patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": str(summary)}), \
+                    mock.patch("builtins.print"):
+                parity.report_retries({"dedicated_server": {"status": "pass", "retried": "known flaky"},
+                                       "food": {"status": "pass"}}, {"dedicated_server": "timer"})
+            text = summary.read_text()
+        self.assertIn("RETRIED dedicated_server: failed, then passed on its one retry (known flaky: timer", text)
+        self.assertNotIn("food", text)
+
+    def test_the_known_flaky_list_has_a_reason_per_harness(self):
+        flaky = parity.known_flaky(parity.host_config())
+        self.assertTrue(all(isinstance(reason, str) and len(reason) > 20 for reason in flaky.values()))
+        self.assertTrue(set(flaky) <= {parity.base_name(name) for name in parity.harnesses()})
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class WorkspaceManifestTests(unittest.TestCase):
+    """A crate split's Cargo.toml and Cargo.lock changes don't select every harness; a dependency change still does."""
+    CLIENT = '[package]\nname = "horizon-client"\n\n[dependencies]\nserde = "1"\nwgpu = { version = "27", features = ["x"] }\n'
+    LOCK = ('version = 4\n\n[[package]]\nname = "horizon-client"\nversion = "0.1.0"\ndependencies = [\n "serde",\n]\n\n'
+            '[[package]]\nname = "serde"\nversion = "1.0.1"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n')
+
+    def verdict(self, base, head):
+        """base, head: {path: text or None}; the manifests workspace_only_manifests leaves out."""
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch.object(parity, "ROOT", Path(temp)), \
+                mock.patch.object(parity, "git_show", lambda _base, path: base.get(path)):
+            for path, text in head.items():
+                if text is not None:
+                    Path(temp, path).parent.mkdir(parents=True, exist_ok=True)
+                    Path(temp, path).write_text(text)
+            return parity.workspace_only_manifests(set(head) | set(base), "base")
+
+    def test_a_crate_split_is_left_out(self):
+        command = '[package]\nname = "horizon-command"\n\n[dependencies]\nserde = "1"\nhorizon-core = { path = "../horizon-core" }\n'
+        client = self.CLIENT + 'horizon-command = { path = "../horizon-command" }\n'
+        lock = self.LOCK.replace('[[package]]\nname = "serde"', '[[package]]\nname = "horizon-command"\nversion = "0.1.0"\n\n'
+                                 '[[package]]\nname = "serde"')
+        base = {"Cargo.toml": '[workspace]\nmembers = ["crates/horizon-client"]\nresolver = "2"\n',
+                "crates/horizon-client/Cargo.toml": self.CLIENT, "Cargo.lock": self.LOCK}
+        head = {"Cargo.toml": '[workspace]\nmembers = ["crates/horizon-client", "crates/horizon-command"]\nresolver = "2"\n',
+                "crates/horizon-client/Cargo.toml": client, "crates/horizon-command/Cargo.toml": command, "Cargo.lock": lock}
+        self.assertEqual(self.verdict(base, head), set(head))
+
+    def test_a_dependency_change_still_counts(self):
+        base = {"crates/horizon-client/Cargo.toml": self.CLIENT, "Cargo.lock": self.LOCK}
+        bumped = {"crates/horizon-client/Cargo.toml": self.CLIENT, "Cargo.lock": self.LOCK.replace("1.0.1", "1.0.2")}
+        self.assertEqual(self.verdict(base, bumped), set())
+        feature = {"crates/horizon-client/Cargo.toml": self.CLIENT.replace('["x"]', '["x", "y"]')}
+        self.assertEqual(self.verdict({"crates/horizon-client/Cargo.toml": self.CLIENT}, feature), set())
+        resolver = {"Cargo.toml": '[workspace]\nmembers = ["a"]\nresolver = "3"\n'}
+        self.assertEqual(self.verdict({"Cargo.toml": '[workspace]\nmembers = ["a"]\nresolver = "2"\n'}, resolver), set())
+
+    def test_a_feature_of_a_workspace_crate_counts_through_its_sources(self):
+        items = '[package]\nname = "horizon-items"\n\n[features]\ntest-support = []\n'
+        client = self.CLIENT + '\n[dev-dependencies]\nhorizon-items = { path = "../horizon-items", features = ["test-support"] }\n'
+        head = {"crates/horizon-items/Cargo.toml": items, "crates/horizon-client/Cargo.toml": client,
+                "crates/horizon-items/src/lib.rs": '#[cfg(feature = "test-support")]\npub fn for_tests() {}\n'}
+        base = {"crates/horizon-client/Cargo.toml": self.CLIENT}
+        # The new crate's files are all changed, the code the feature gates with them.
+        self.assertEqual(self.verdict(base, head), {"crates/horizon-items/Cargo.toml", "crates/horizon-client/Cargo.toml"})
+        # Turning on a feature of a crate whose gated code didn't change selects as before.
+        world = '[package]\nname = "horizon-world"\n\n[features]\nextra = ["more"]\nmore = []\n'
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(parity, "ROOT", Path(temp)):
+            Path(temp, "crates/horizon-world/src").mkdir(parents=True)
+            Path(temp, "crates/horizon-world/Cargo.toml").write_text(world)
+            Path(temp, "crates/horizon-world/src/lib.rs").write_text('#[cfg(feature = "more")]\nfn x() {}\n')
+            self.assertFalse(parity.feature_sources_changed("horizon-world", "extra", {"crates/horizon-client/Cargo.toml"}))
+            self.assertTrue(parity.feature_sources_changed("horizon-world", "extra", {"crates/horizon-world/src/lib.rs"}))
+            self.assertFalse(parity.feature_sources_changed("horizon-nothing", "extra", set()))
+        # A feature that reaches an external package counts.
+        optional = {"crates/horizon-client/Cargo.toml": self.CLIENT + '\n[features]\nfast = ["wgpu/x"]\n'}
+        self.assertEqual(self.verdict({"crates/horizon-client/Cargo.toml": self.CLIENT}, optional), set())
+
+    def test_without_a_base_everything_counts(self):
+        self.assertEqual(parity.workspace_only_manifests({"Cargo.lock"}, None), set())

@@ -1216,6 +1216,12 @@ impl Game<'_> {
             {
                 self.guest_carried_back(host, gi);
             }
+            S::SelectBundleItem(p) => {
+                if !spectator && let Ok(slot) = usize::try_from(p.slot) {
+                    host.hub
+                        .select_bundle_item(conn, slot, p.index, &mut self.world);
+                }
+            }
             S::ContainerClick(p) => {
                 let rules = ItemRules(self.res.items());
                 let slots = host.hub.guests[gi]
@@ -2183,6 +2189,7 @@ impl Game<'_> {
         let in_wall = !g.sleeping && self.in_wall(g.position, g.eye_height());
         let at = g.position;
         let sneaking = g.sneaking;
+        let mut soul = None;
         let events = self.as_guest(host, conn, |game| {
             let (rules, motion) = (game.world.health_rules, game.motion);
             let health = &motion.health;
@@ -2252,6 +2259,7 @@ impl Game<'_> {
             w.player.shift_key_down = sneaking;
             w.player.freeze_immune = freeze_immune;
             let _ = w.server_block_damage(start);
+            let _ = w.update_soul_speed_block();
             let _ = w.tick_environment_damage();
             let _ = w.apply_fire_contact();
             let _ = w.server_hazards_tick(in_wall);
@@ -2279,6 +2287,9 @@ impl Game<'_> {
             // LivingEntity.baseTick: outside the world border, then tickEffects.
             game.border_damage();
             game.tick_mob_effects();
+            // Soul Speed's effects (LivingEntity.baseTick's location_changed
+            // and tick effects); its particle goes to the players around.
+            soul = game.tick_soul_speed();
             let Some(player) = game.player.as_mut() else {
                 return (Vec::new(), None);
             };
@@ -2307,11 +2318,42 @@ impl Game<'_> {
         let Some((events, marked)) = events else {
             return;
         };
+        if let Some((at, velocity)) = soul {
+            super::lan_particles::send_soul_particle(host, at, velocity);
+        }
         self.as_guest(host, conn, |game| game.tick_player_sculk_events());
         for event in events {
             match event {
                 MotionEvent::HurtSound(sound) => self.player_hurt_sound(sound, at),
+                // LivingEntity.checkFallDamage: the crumbs reach every player.
+                MotionEvent::Fall(horizon_client::landing::FallEvent::Particles {
+                    state,
+                    position,
+                    count,
+                    speed,
+                }) => self.landing_dust(Some(host), state, position, count, speed),
                 MotionEvent::Fall(event) => self.landing_block_updates(&event),
+                // HoneyBlock.maybeDoSlideEffects: the sound reaches the
+                // others (Player.playSound excludes the player, whose client
+                // plays it), the entity event 53 everyone around.
+                MotionEvent::HoneySlide {
+                    sound, particles, ..
+                } => {
+                    let Some((id, at)) = host.hub.guest(conn).map(|g| (g.entity_id, g.position))
+                    else {
+                        continue;
+                    };
+                    if sound {
+                        let name = "minecraft:block.honey_block.slide";
+                        let source = horizon_client::settings::sound_source(name) as i32;
+                        self.audio.play_unshared(name, Some(at), 1.0, 1.0);
+                        host.hub.sound(name, at, 1.0, 1.0, source, Some(conn));
+                    }
+                    if particles {
+                        self.honey_slide_particles(at);
+                        host.hub.entity_event(id, 53, at);
+                    }
+                }
                 _ => {}
             }
         }

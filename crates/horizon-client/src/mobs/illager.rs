@@ -72,6 +72,8 @@ pub fn register_vindicator(m: &mut Mob) {
     let g = &mut m.ai.goals;
     g.add(0, Float);
     g.add(1, avoid_creaking(1.0, 1.2));
+    g.add(2, super::doors::BreakDoor::vindicator());
+    g.add(3, super::doors::RaiderOpenDoor::default());
     g.add(4, super::raider::HoldGroundAttack::new(10.0));
     g.add(5, MeleeAttack::new(1.0, false));
     g.add(8, Stroll::new(0.6));
@@ -85,6 +87,13 @@ pub fn register_vindicator(m: &mut Mob) {
             .interval(0)
             .when(|m, _| m.custom_name.as_deref() == Some("Johnny")),
     );
+}
+/// `Vindicator.customServerAiStep`: its navigation opens doors while a raid
+/// is at its position.
+pub fn vindicator_server_ai_step(m: &mut Mob) {
+    if super::doors::can_navigate_ground(m) {
+        m.ai.nav.can_open_doors = super::raider::state(m).is_some_and(|s| s.raided);
+    }
 }
 // Evoker state: `counter` spellCastingTickCount, `variant2` the spell
 // being cast (0 none, 1 vexes, 2 fangs, 3 wololo), `counter2` the wololo
@@ -672,7 +681,12 @@ pub fn anim_pose(m: &Mob, s: &State, p: &mut Poses, pose: ArmPose) {
                 p.xrot("right_arm", x + a * 1.2 - b * 0.4);
                 p.xrot("left_arm", x + a * 1.2 - b * 0.4);
             } else {
-                // swingWeaponDown (right-handed).
+                // swingWeaponDown: the main arm swings down.
+                let (main, off) = if m.main_arm_left() {
+                    ("left_arm", "right_arm")
+                } else {
+                    ("right_arm", "left_arm")
+                };
                 let swing = s.swing;
                 let a2 = (swing * PI).msin();
                 let a = ((1.0 - (1.0 - swing) * (1.0 - swing)) * PI).msin();
@@ -681,11 +695,11 @@ pub fn anim_pose(m: &Mob, s: &State, p: &mut Poses, pose: ArmPose) {
                 p.yrot("right_arm", PI / 20.0);
                 p.yrot("left_arm", -PI / 20.0);
                 p.xrot(
-                    "right_arm",
+                    main,
                     -1.884_955_8 + (s.age * 0.09).mcos() * 0.15 + (a2 * 2.2 - a * 0.4),
                 );
                 p.xrot(
-                    "left_arm",
+                    off,
                     -0.0 + (s.age * 0.19).mcos() * 0.5 + (a2 * 1.2 - a * 0.4),
                 );
             }

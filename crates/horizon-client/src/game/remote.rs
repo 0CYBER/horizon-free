@@ -1560,7 +1560,7 @@ impl Game<'_> {
         }
     }
     /// Find a game slot in the menu's complete, contiguous slot mapping.
-    fn menu_slot_index(menu: &str, internal: usize) -> Option<usize> {
+    pub(super) fn menu_slot_index(menu: &str, internal: usize) -> Option<usize> {
         (0..)
             .map_while(|slot| Self::menu_slot(menu, slot))
             .position(|slot| slot == internal)
@@ -1741,7 +1741,17 @@ impl Game<'_> {
                         f64::from(p.y) / 8.0,
                         f64::from(p.z) / 8.0,
                     ];
-                    self.audio.play(&name, Some(at), p.volume, p.pitch);
+                    // ClientPacketListener.handleSoundEvent plays with packet.getSource().
+                    match usize::try_from(p.source)
+                        .ok()
+                        .filter(|s| *s < horizon_client::settings::SOUND_SOURCES.len())
+                    {
+                        Some(source) => {
+                            self.audio
+                                .play_on(source, &name, Some(at), p.volume, p.pitch)
+                        }
+                        None => self.audio.play(&name, Some(at), p.volume, p.pitch),
+                    }
                 }
             }
             C::StopSound(p) => self
@@ -1975,9 +1985,9 @@ impl Game<'_> {
                         }
                     }
                 }
-                // Entity.DATA_SHARED_FLAGS_ID's crouching bit: another
-                // player's or a mannequin's crouch (their model and
-                // Entity.isDiscrete's name tag).
+                // Entity.DATA_SHARED_FLAGS_ID's crouching and sprinting bits:
+                // another player's or a mannequin's crouch (their model and
+                // Entity.isDiscrete's name tag), and the dust a runner raises.
                 if (mannequin
                     || self
                         .remote
@@ -1988,6 +1998,7 @@ impl Game<'_> {
                     for (index, _, value) in &p.values {
                         if let (0, Value::Byte(flags)) = (index, value) {
                             m.extra.crouching = flags & 2 != 0;
+                            m.extra.sprinting = flags & 8 != 0;
                         }
                     }
                 }
@@ -2111,6 +2122,7 @@ impl Game<'_> {
                 if p.event == super::fireworks::FIREWORK_EXPLODE_EVENT {
                     self.remote_firework_explosion(p.id);
                 }
+                self.remote_fangs_event(p.id as u32, p.event);
                 // LocalPlayer.setPermissions also refreshes an open World Options screen.
                 if (24..=28).contains(&p.event)
                     && self.remote.as_ref().is_some_and(|r| r.entity_id == p.id)
@@ -2135,8 +2147,32 @@ impl Game<'_> {
                 {
                     m.health = 0.0;
                 }
+                // LivingEntity.handleEntityEvent 60: the poof as the dead body goes.
+                if p.event == 60
+                    && let Some(m) = self.mobs.iter().find(|m| m.id == p.id as u32)
+                {
+                    let (at, w, h) = (m.position, f64::from(m.width()), f64::from(m.height()));
+                    self.death_poof([at.x, at.y, at.z], w, h);
+                }
                 if p.event == super::totem::TOTEM_EVENT {
                     self.remote_totem(p.id);
+                }
+                // Entity event 53: the honey slide particles of a player
+                // sliding down a honey block (HoneyBlock.showSlideParticles).
+                if p.event == 53 {
+                    let at = if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
+                        self.player
+                            .as_ref()
+                            .map(|q| [q.position.x, q.position.y, q.position.z])
+                    } else {
+                        self.mobs
+                            .iter()
+                            .find(|m| m.id == p.id as u32)
+                            .map(|m| [m.position.x, m.position.y, m.position.z])
+                    };
+                    if let Some(at) = at {
+                        self.honey_slide_particles(at);
+                    }
                 }
             }
             C::Animate(p) => self.remote_animate(p.id, p.action),
@@ -3141,6 +3177,8 @@ impl Game<'_> {
         // server says the entry ended. `onCooldownEnded` is the plain
         // ItemCooldowns' no-op on a client.
         self.cooldowns.tick();
+        // Leaving a slot clears its bundle's selection here and on the server.
+        self.tick_bundle_hover();
         // Options.broadcastOptions: a changed render distance or Chat option
         // is sent again.
         let view = client_view_distance(self.settings.render_distance);
@@ -3331,6 +3369,13 @@ impl Game<'_> {
                 horizon_client::motion::MotionEvent::InsidePortal { .. } => {
                     self.client_inside_nether_portal();
                 }
+                // HoneyBlock.maybeDoSlideEffects on the client's own level:
+                // the slide sound, heard here (LocalPlayer.playSound); the
+                // particles come from the server's event 53.
+                horizon_client::motion::MotionEvent::HoneySlide { sound: true, .. } => {
+                    self.audio
+                        .play("minecraft:block.honey_block.slide", Some(feet), 1.0, 1.0);
+                }
                 _ => {}
             }
         }
@@ -3507,6 +3552,16 @@ impl Game<'_> {
             if m.species() == horizon_client::mobs::Species::Rabbit {
                 horizon_client::mobs::rabbit::base_tick(m);
             }
+            if matches!(
+                m.species(),
+                horizon_client::mobs::Species::Horse
+                    | horizon_client::mobs::Species::Donkey
+                    | horizon_client::mobs::Species::Mule
+                    | horizon_client::mobs::Species::SkeletonHorse
+                    | horizon_client::mobs::Species::ZombieHorse
+            ) {
+                horizon_client::mobs::equine::tail_tick(m);
+            }
             if m.species() == horizon_client::mobs::Species::Creeper {
                 horizon_client::mobs::hostile::creeper_client_tick(m);
             }
@@ -3516,6 +3571,10 @@ impl Game<'_> {
                     | horizon_client::mobs::Species::ElderGuardian
             ) {
                 horizon_client::mobs::guardian::client_tick(m);
+            }
+            // PolarBear.tick: the stand animation follows the synched flag.
+            if m.species() == horizon_client::mobs::Species::PolarBear {
+                horizon_client::mobs::polar_bear::client_tick(m);
             }
             if m.hurt_time > 0 {
                 m.hurt_time -= 1;
@@ -4702,7 +4761,7 @@ impl Game<'_> {
     }
     /// The server's open menu: its window id and menu type (0, "inventory"
     /// when none is open).
-    fn remote_menu(&self) -> (i32, String) {
+    pub(super) fn remote_menu(&self) -> (i32, String) {
         match self.remote.as_ref().and_then(|r| r.menu.clone()) {
             Some((id, name)) => (id, name),
             None => (0, "inventory".to_owned()),
@@ -4791,26 +4850,6 @@ impl Game<'_> {
                 carried,
             }));
         }
-    }
-    /// A `ContainerClick` on game slot `internal` of the server's open menu
-    /// (`input` is the ContainerInput ordinal). False when the menu has no
-    /// such slot.
-    pub(super) fn remote_slot_click(&mut self, internal: usize, button: i8, input: i32) -> bool {
-        let (container, menu) = self.remote_menu();
-        let slot = Self::menu_slot_index(&menu, internal);
-        let Some(slot) = slot else { return false };
-        let carried = self.to_network(&self.carried).map(|s| Hashed::of(&s));
-        let state = self.remote.as_ref().map_or(0, |r| r.state_id);
-        self.send(S::ContainerClick(play::ContainerClick {
-            container,
-            state,
-            slot: slot as i16,
-            button,
-            input,
-            changed: Vec::new(),
-            carried,
-        }));
-        true
     }
     /// The server's open menu is the inventory or a chest-like container
     /// (chests, barrels, ender chests: `generic_9xN`; shulker boxes).
