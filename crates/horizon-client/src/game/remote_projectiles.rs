@@ -23,6 +23,58 @@ fn default_cloud_particle() -> ParticleOptions {
     ParticleOptions::colored(ParticleType::EntityEffect, [1.0; 4])
 }
 
+/// `AreaEffectCloud.clientTick`: while waiting, now and then two particles
+/// near the middle; then about one per square block of the disc, drifting
+/// (an entity effect stays still).
+pub(super) fn cloud_client_tick(
+    particles: &mut horizon_client::particles::ParticleEngine,
+    at: [f64; 3],
+    radius: f32,
+    waiting: bool,
+    particle: &ParticleOptions,
+) {
+    if waiting && particles.random().next_boolean() {
+        return;
+    }
+    let (count, spread) = if waiting {
+        (2, 0.2)
+    } else {
+        (
+            (std::f32::consts::PI * radius * radius).ceil() as i32,
+            radius,
+        )
+    };
+    for _ in 0..count {
+        let r = particles.random();
+        let angle = r.next_float() * std::f32::consts::TAU;
+        let distance = r.next_float().sqrt() * spread;
+        let at = [
+            at[0] + f64::from(angle.cos() * distance),
+            at[1],
+            at[2] + f64::from(angle.sin() * distance),
+        ];
+        let (options, velocity) = if particle.ty == ParticleType::EntityEffect {
+            let default = waiting && r.next_boolean();
+            let options = if default {
+                default_cloud_particle()
+            } else {
+                particle.clone()
+            };
+            (options, [0.0; 3])
+        } else if waiting {
+            (particle.clone(), [0.0; 3])
+        } else {
+            let v = [
+                (0.5 - r.next_double()) * 0.15,
+                f64::from(0.01f32),
+                (0.5 - r.next_double()) * 0.15,
+            ];
+            (particle.clone(), v)
+        };
+        particles.add(&options, at, velocity);
+    }
+}
+
 /// The projectile a type id names, as Horizon models it.
 fn projectile_kind(kind: &str) -> Option<ProjectileKind> {
     Some(match kind {
@@ -446,52 +498,10 @@ impl Game<'_> {
         }
     }
 
-    /// `AreaEffectCloud.clientTick`: while waiting, now and then two
-    /// particles near the middle; then about one per square block of the
-    /// disc, drifting (an entity effect stays still).
+    /// `AreaEffectCloud.clientTick` for each cloud a server tracks.
     fn tick_remote_clouds(&mut self) {
         for c in &self.potions.clouds {
-            let r = self.particles.random();
-            if c.waiting && r.next_boolean() {
-                continue;
-            }
-            let (count, spread) = if c.waiting {
-                (2, 0.2)
-            } else {
-                (
-                    (std::f32::consts::PI * c.radius * c.radius).ceil() as i32,
-                    c.radius,
-                )
-            };
-            for _ in 0..count {
-                let r = self.particles.random();
-                let angle = r.next_float() * std::f32::consts::TAU;
-                let distance = r.next_float().sqrt() * spread;
-                let at = [
-                    c.at[0] + f64::from(angle.cos() * distance),
-                    c.at[1],
-                    c.at[2] + f64::from(angle.sin() * distance),
-                ];
-                let (options, velocity) = if c.particle.ty == ParticleType::EntityEffect {
-                    let default = c.waiting && r.next_boolean();
-                    let options = if default {
-                        default_cloud_particle()
-                    } else {
-                        c.particle.clone()
-                    };
-                    (options, [0.0; 3])
-                } else if c.waiting {
-                    (c.particle.clone(), [0.0; 3])
-                } else {
-                    let v = [
-                        (0.5 - r.next_double()) * 0.15,
-                        f64::from(0.01f32),
-                        (0.5 - r.next_double()) * 0.15,
-                    ];
-                    (c.particle.clone(), v)
-                };
-                self.particles.add(&options, at, velocity);
-            }
+            cloud_client_tick(&mut self.particles, c.at, c.radius, c.waiting, &c.particle);
         }
     }
 
