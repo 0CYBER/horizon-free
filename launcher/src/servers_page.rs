@@ -2340,7 +2340,8 @@ impl Launcher {
                 },
                 accounts_switch,
             ))
-            .child(self.background_row(cx));
+            .child(self.background_row(cx))
+            .child(self.delete_server_section(status, cx));
         div()
             .flex()
             .flex_col()
@@ -2350,7 +2351,6 @@ impl Launcher {
                  a restart, and the page says so.",
             ))
             .child(form)
-            .child(self.delete_server_section(status, cx))
     }
 
     fn delete_server_section(&mut self, status: &Status, cx: &mut Context<Self>) -> Div {
@@ -2376,10 +2376,6 @@ impl Launcher {
         } else {
             None
         };
-        let about = div().flex().flex_col().flex_1().min_w_0().gap(px(8.))
-            .child(text(theme::HEADING).text_color(t.danger).child("Delete server"))
-            .child(text(theme::UI).text_color(t.ink_soft)
-                .child("Remove this server from Horizon and move its worlds, settings and backups to the trash."));
         let mut controls = div()
             .flex()
             .flex_col()
@@ -2413,7 +2409,7 @@ impl Launcher {
                 disabled(confirm)
             };
             controls = controls
-                .child(text(theme::UI).text_color(t.ink).child(
+                .child(text(theme::CAPTION).text_color(t.muted).child(
                     gpui::StyledText::new(format!("Type {name} to confirm.")).with_highlights([(
                         5..5 + name.len(),
                         gpui::HighlightStyle {
@@ -2462,16 +2458,11 @@ impl Launcher {
                     .child(hint),
             );
         }
-        div()
-            .flex()
-            .items_start()
-            .gap(px(24.))
-            .mt(px(24.))
-            .pt(px(24.))
-            .border_t_1()
-            .border_color(t.rule)
-            .child(about)
-            .child(controls)
+        self.setting_row(
+            "Delete server",
+            "Remove this server from Horizon and move its worlds, settings and backups to the trash.".into(),
+            controls.into_any_element(),
+        )
     }
 
     fn background_row(&mut self, cx: &mut Context<Self>) -> Div {
