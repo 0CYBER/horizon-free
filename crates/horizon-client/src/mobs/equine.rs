@@ -1,6 +1,7 @@
 //! Horses, donkeys, mules and the undead horses (`AbstractHorse`): random
 //! stats, coat colours and markings, eating, rearing, taming by riding,
 //! the ridden movement and jump, offspring stats and `AbstractEquineModel`.
+use super::finalize::{Attr, set_base};
 use super::{
     Mob, MobEvent, MobWorld, Species,
     anim::{Poses, State},
@@ -115,6 +116,8 @@ pub fn register(m: &mut Mob) {
     }
 }
 /// `generateMaxHealth`, `generateSpeed`, `generateJumpStrength` and the coat.
+/// The health and speed are attribute bases (`setBaseValue`), so the server
+/// syncs them to the clients that draw the mount's hearts.
 pub fn finalize(m: &mut Mob) {
     let r = &mut m.random;
     let health =
@@ -124,15 +127,15 @@ pub fn finalize(m: &mut Mob) {
     let jump = 0.4 + r.next_double() * 0.2 + r.next_double() * 0.2 + r.next_double() * 0.2;
     match m.species() {
         Species::Horse => {
-            m.attrs.max_health = health;
-            m.attrs.speed = speed;
+            set_base(m, Attr::MaxHealth, f64::from(health));
+            set_base(m, Attr::MovementSpeed, speed);
             m.extra.vector[0] = jump;
             m.extra.variant = m.random.next_int_bound(7).unwrap_or(0) as u8;
             m.extra.variant2 = m.random.next_int_bound(5).unwrap_or(0) as u8;
         }
         Species::Donkey | Species::Mule => {
             // AbstractChestedHorse.randomizeAttributes: fixed speed, generated health.
-            m.attrs.max_health = health;
+            set_base(m, Attr::MaxHealth, f64::from(health));
             m.extra.vector[0] = jump;
         }
         _ => m.extra.vector[0] = jump,
@@ -156,16 +159,18 @@ pub fn offspring(a: f64, b: f64, min: f64, max: f64, r: &mut impl RandomSource) 
 }
 /// `AbstractHorse.setOffspringAttributes` from two parents.
 pub fn inherit(child: &mut Mob, a: &Mob, b: &Mob, r: &mut impl RandomSource) {
-    child.attrs.max_health = offspring(
+    let health = offspring(
         f64::from(a.attrs.max_health),
         f64::from(b.attrs.max_health),
         15.0,
         30.0,
         r,
-    ) as f32;
+    );
+    set_base(child, Attr::MaxHealth, f64::from(health as f32));
     child.health = child.attrs.max_health;
     child.extra.vector[0] = offspring(a.extra.vector[0], b.extra.vector[0], 0.4, 1.0, r);
-    child.attrs.speed = offspring(a.attrs.speed, b.attrs.speed, 0.1125, 0.3375, r);
+    let speed = offspring(a.attrs.speed, b.attrs.speed, 0.1125, 0.3375, r);
+    set_base(child, Attr::MovementSpeed, speed);
 }
 /// The rider controls the mount: saddled, with a player on it.
 pub fn controlled(m: &Mob) -> bool {
@@ -659,5 +664,39 @@ pub fn anim(m: &Mob, s: &State, p: &mut Poses) {
             "head_parts",
             standing * (PI / 12.0 + head_x) + eating * (PI / 2.0 + s.age.msin() * 0.05) + base,
         );
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mobs::finalize::base_value;
+    use horizon_core::geometry::Vec3;
+    use std::sync::Arc;
+
+    fn horse(species: Species) -> Mob {
+        let mut kind = crate::mobs::sensor_scan_tests::kind();
+        let k = Arc::make_mut(&mut kind);
+        k.species = species;
+        k.max_health = 53.0;
+        Mob::new(1, kind, Vec3::ZERO, 0.0)
+    }
+
+    /// The rolled health is the attribute's base, which the server syncs: a
+    /// rider's client draws the horse's hearts from it, not the type's 53.
+    #[test]
+    fn rolled_health_and_speed_are_attribute_bases() {
+        for species in [Species::Horse, Species::Donkey, Species::Mule] {
+            let mut m = horse(species);
+            finalize(&mut m);
+            assert!((15.0..=30.0).contains(&m.attrs.max_health));
+            assert_eq!(
+                base_value(&m, Attr::MaxHealth),
+                f64::from(m.attrs.max_health)
+            );
+            assert_eq!(m.health, m.attrs.max_health);
+        }
+        let mut m = horse(Species::Horse);
+        finalize(&mut m);
+        assert_eq!(base_value(&m, Attr::MovementSpeed), m.attrs.speed);
     }
 }
