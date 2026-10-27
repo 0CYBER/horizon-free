@@ -504,7 +504,9 @@ impl<'a> Game<'a> {
                         m.position.z.floor() as i32,
                     ],
                     is_mob: true,
-                    persistent: m.persistent,
+                    // isPersistenceRequired or requiresCustomPersistence
+                    // (a raider in a raid).
+                    persistent: m.persistent || horizon_client::mobs::raider::in_raid(m),
                 })
                 .collect();
             let players = players
