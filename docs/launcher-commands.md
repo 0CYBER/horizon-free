@@ -50,9 +50,11 @@ Start the client.
 
     horizon-launcher play
 
+- `--instance`: The instance to play (its name or id; default: the selected one)
 - `--world`: Open or create this world (a folder under saves) at once
 - `--creative`: Creative mode for a new world
 - `--join`: Join a friend's world with its invite code
+- `--server`: Join this server at once: an address, or a server of the list by name or position
 - `--arg`: An extra argument for the game, passed through as-is (repeatable), for example --server-thread
 
 MCP: `play`, then the `game_*` tools.
@@ -150,6 +152,26 @@ Show or set the extra arguments the game starts with (for example --server-threa
 - `ARGS`: Omit to show the current arguments
 
 MCP: `game_args`.
+
+## `horizon-launcher share-log`
+
+Upload an instance's latest.log to mclo.gs (a paste service for Minecraft logs) and print its link, for a bug report: only when the player asks. The home folder, the user name and the account names are taken out first; the link expires after 90 days unread.
+
+    horizon-launcher share-log
+
+- `--instance`: The instance (default: the selected one)
+
+MCP: `share_log`, only when the player asks.
+
+## `horizon-launcher unshare-log`
+
+Delete a log shared with share-log: the "<id>:<token>" it printed.
+
+    horizon-launcher unshare-log <SHARED>
+
+- `SHARED`
+
+MCP: `unshare_log`, needs `confirm: true`.
 
 ## `horizon-launcher logs`
 
@@ -257,6 +279,292 @@ Upload a benchmark report (docs/benchmark-report.md); it is printed first.
 
 MCP: `data_benchmark`, only when the player asks.
 
+## `horizon-launcher instance list`
+
+The instances, each with its game folder (* = the one Play starts).
+
+    horizon-launcher instance list
+
+MCP: `instance_list`.
+
+## `horizon-launcher instance create`
+
+Make an instance: empty but for your options and name, or a copy of another one's worlds, options and packs.
+
+    horizon-launcher instance create <NAME>
+
+- `NAME`
+- `--copy`: The instance to copy (its name or id)
+
+MCP: `instance_create`.
+
+## `horizon-launcher instance rename`
+
+Rename an instance (its folder stays).
+
+    horizon-launcher instance rename <INSTANCE> <NAME>
+
+- `INSTANCE`
+- `NAME`
+
+MCP: `instance_rename`.
+
+## `horizon-launcher instance icon`
+
+Set an instance's icon: a block or item name from your prepared files (grass_block), a colour (#3fa7d6), or none.
+
+    horizon-launcher instance icon <INSTANCE> <ICON>
+
+- `INSTANCE`
+- `ICON`
+
+MCP: `instance_icon`.
+
+## `horizon-launcher instance group`
+
+Put an instance in a sidebar group, or take it out with no group.
+
+    horizon-launcher instance group <INSTANCE> [GROUP]
+
+- `INSTANCE`
+- `GROUP`
+
+MCP: `instance_group`.
+
+## `horizon-launcher instance select`
+
+Make Play start this instance.
+
+    horizon-launcher instance select <INSTANCE>
+
+- `INSTANCE`
+
+MCP: `instance_select`.
+
+## `horizon-launcher instance version`
+
+Keep an instance on one installed Horizon version, or "latest" to follow updates again.
+
+    horizon-launcher instance version <INSTANCE> <VERSION>
+
+- `INSTANCE`
+
+MCP: `instance_version`.
+
+## `horizon-launcher instance export`
+
+Export an instance (or a port) to share: its settings, packs, Horizon mods and the worlds named, as a .mrpack (resource packs from Modrinth listed by download) or a zip. Never logs, screenshots or account data; worlds go without their per-player files.
+
+    horizon-launcher instance export [INSTANCE]
+
+- `INSTANCE`: The instance (default: the selected one)
+- `--format` (mrpack, zip)
+- `--world`: A world to put in it (its name or folder); repeat for more
+- `--out`: Where to write it (default: "<name>.mrpack" in the current folder)
+
+MCP: `instance_export`.
+
+## `horizon-launcher instance import`
+
+Import what a file is, as dropping it on the window does: a shared instance (a .mrpack without mod loaders, such as `instance export` writes, or a game folder zip) becomes a new instance; a Java modpack goes to the Modpacks import; a resource or shader pack into the instance (default: the selected one).
+
+    horizon-launcher instance import <FILE>
+
+- `FILE`
+- `--instance`: The instance a pack goes into
+
+MCP: `instance_import`.
+
+## `horizon-launcher worlds list`
+
+The worlds: name, mode, version, last played and size (the default).
+
+    horizon-launcher worlds list
+
+- `--instance`: The instance (default: the selected one)
+
+MCP: `worlds_list`.
+
+## `horizon-launcher worlds backup`
+
+Zip a world into the instance's backups/ folder, as the game's Make Backup does.
+
+    horizon-launcher worlds backup <WORLD>
+
+- `WORLD`: Its folder or name
+- `--instance`
+
+MCP: `worlds_backup`.
+
+## `horizon-launcher worlds copy`
+
+Copy a world beside it, as "<name> (1)".
+
+    horizon-launcher worlds copy <WORLD>
+
+- `WORLD`
+- `--instance`
+
+MCP: `worlds_copy`.
+
+## `horizon-launcher worlds delete`
+
+Move a world to the system's trash.
+
+    horizon-launcher worlds delete <WORLD>
+
+- `WORLD`
+- `--instance`
+
+MCP: `worlds_delete`, needs `confirm: true`.
+
+## `horizon-launcher worlds datapack-list`
+
+A world's data packs, and which are on.
+
+    horizon-launcher worlds datapack-list <WORLD>
+
+- `WORLD`
+- `--instance`
+
+MCP: `worlds_datapack_list`.
+
+## `horizon-launcher worlds datapack-add`
+
+Copy a data pack zip into a world (the game turns it on when the world opens).
+
+    horizon-launcher worlds datapack-add <WORLD> <FILE>
+
+- `WORLD`
+- `FILE`
+- `--instance`
+
+MCP: `worlds_datapack_add`.
+
+## `horizon-launcher worlds datapack-remove`
+
+Move a world's data pack to the system's trash.
+
+    horizon-launcher worlds datapack-remove <WORLD> <PACK>
+
+- `WORLD`
+- `PACK`: Its file name, with or without .zip
+- `--instance`
+
+MCP: `worlds_datapack_remove`, needs `confirm: true`.
+
+## `horizon-launcher packs list`
+
+The resource and shader packs, and which are on (the default).
+
+    horizon-launcher packs list
+
+- `--kind` (resource, shader): Only this kind
+- `--instance`: The instance (default: the selected one)
+
+MCP: `packs_list`.
+
+## `horizon-launcher packs add`
+
+Copy a pack file in: a resource pack .zip, a shader pack .zip or a .hshader.
+
+    horizon-launcher packs add <FILE>
+
+- `FILE`
+- `--instance`
+
+MCP: `packs_add`.
+
+## `horizon-launcher packs on`
+
+Turn a pack on (a resource pack goes on top; a shader pack replaces the one that was on).
+
+    horizon-launcher packs on <PACK>
+
+- `PACK`: Its file name or title
+- `--kind` (resource, shader)
+- `--instance`
+
+MCP: `packs_on`.
+
+## `horizon-launcher packs off`
+
+Turn a pack off.
+
+    horizon-launcher packs off <PACK>
+
+- `PACK`
+- `--kind` (resource, shader)
+- `--instance`
+
+MCP: `packs_off`.
+
+## `horizon-launcher packs remove`
+
+Turn a pack off and move it to the system's trash.
+
+    horizon-launcher packs remove <PACK>
+
+- `PACK`
+- `--kind` (resource, shader)
+- `--instance`
+
+MCP: `packs_remove`, needs `confirm: true`.
+
+## `horizon-launcher screenshots list`
+
+The screenshots, the newest first, with their files (the default).
+
+    horizon-launcher screenshots list
+
+- `--instance`: The instance (default: the selected one)
+
+MCP: `screenshots_list`.
+
+## `horizon-launcher screenshots delete`
+
+Move a screenshot to the system's trash.
+
+    horizon-launcher screenshots delete <SCREENSHOT>
+
+- `SCREENSHOT`: Its file name, with or without .png
+- `--instance`
+
+MCP: `screenshots_delete`, needs `confirm: true`.
+
+## `horizon-launcher multiplayer list`
+
+The servers of the game's Multiplayer screen (the default).
+
+    horizon-launcher multiplayer list
+
+- `--instance`: The instance (default: the selected one)
+
+MCP: `multiplayer_list`.
+
+## `horizon-launcher multiplayer add`
+
+Add a server to the list.
+
+    horizon-launcher multiplayer add <ADDRESS>
+
+- `ADDRESS`: Its address, as in the game's Add Server (host or host:port)
+- `--name`: Its name in the list (default: Minecraft Server)
+- `--instance`
+
+MCP: `multiplayer_add`.
+
+## `horizon-launcher multiplayer remove`
+
+Remove a server from the list: its position from 1, name or address.
+
+    horizon-launcher multiplayer remove <SERVER>
+
+- `SERVER`
+- `--instance`
+
+MCP: `multiplayer_remove`, needs `confirm: true`.
+
 ## `horizon-launcher modpack list`
 
 The imported packs and their coverage (the default).
@@ -308,9 +616,11 @@ MCP: `modpack_remove`, needs `confirm: true`.
 
 ## `horizon-launcher mods list`
 
-What the browser installed (the default).
+What the browser installed in an instance (the default).
 
     horizon-launcher mods list
+
+- `--instance`: The instance (default: the selected one)
 
 MCP: `mods_list`.
 
@@ -321,7 +631,7 @@ Search for packs Horizon loads.
     horizon-launcher mods search [TEXT]...
 
 - `TEXT`
-- `--kind` (mod, resource, modpack, shader)
+- `--kind` (mod, resource, modpack, shader, datapack)
 - `--everything`: Also what was made for other versions or runs only partly, each marked
 - `--source` (modrinth, curseforge, horizon)
 
@@ -341,11 +651,13 @@ MCP: `mods_check`.
 
 ## `horizon-launcher mods install`
 
-Install a pack and what it needs, by its id or slug (checksums checked); a Java mod is ported into horizon-mods and turned on; a modpack is imported.
+Install a pack and what it needs into an instance, by its id or slug (checksums checked); a Java mod is ported into horizon-mods and turned on; a modpack is imported as an instance of its own; a data pack goes into the world `--world` names.
 
     horizon-launcher mods install <PROJECT>
 
 - `PROJECT`
+- `--world`: Install the project's data pack into this world of the instance (its name or folder)
+- `--instance`: The instance (default: the selected one)
 - `--everything`: Allow a version made for another Minecraft version
 - `--source` (modrinth, curseforge, horizon)
 
@@ -359,6 +671,7 @@ Update what the browser installed (or one pack).
 
 - `PROJECT`
 - `--check`: Only say what is newer
+- `--instance`: The instance (default: the selected one)
 
 MCP: `mods_update`.
 
@@ -369,6 +682,7 @@ Remove a pack the browser installed.
     horizon-launcher mods remove <PROJECT>
 
 - `PROJECT`
+- `--instance`: The instance (default: the selected one)
 
 MCP: `mods_remove`, needs `confirm: true`.
 
@@ -379,6 +693,7 @@ Turn on a mod the browser installed (horizon-mods.txt, as the game's Options > M
     horizon-launcher mods enable <PROJECT>
 
 - `PROJECT`
+- `--instance`: The instance (default: the selected one)
 
 MCP: `mods_enable`.
 
@@ -389,6 +704,7 @@ Turn off a mod the browser installed; it stays installed.
     horizon-launcher mods disable <PROJECT>
 
 - `PROJECT`
+- `--instance`: The instance (default: the selected one)
 
 MCP: `mods_disable`.
 

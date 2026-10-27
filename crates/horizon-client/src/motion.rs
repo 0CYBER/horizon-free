@@ -226,6 +226,14 @@ pub enum MotionEvent {
         bubble: bool,
         position: Vec3,
     },
+    /// `HoneyBlock.maybeDoSlideEffects` for a player sliding down the side of
+    /// the honey block at `pos`: its slide sound, and the server's entity
+    /// event 53 (the five block particles at the player).
+    HoneySlide {
+        pos: BlockPos,
+        sound: bool,
+        particles: bool,
+    },
     /// Entity event 67 (`LivingEntity.makeDrownParticles`): eight bubbles
     /// around a drowning player.
     Drown,
@@ -1449,6 +1457,9 @@ impl MotionWorld<'_, '_, '_> {
                     "minecraft:sweet_berry_bush" if damage_only => {
                         self.sweet_berry_bush_damage(state)?;
                     }
+                    // HoneyBlock.entityInside: a server's player slides too, so
+                    // its fall distance resets (its client moves it).
+                    "minecraft:honey_block" => self.honey_block_inside(p)?,
                     // PowderSnowBlock.entityInside's FREEZE.
                     "minecraft:powder_snow" if damage_only => entered.push((step, p)),
                     _ => {}
@@ -1478,6 +1489,50 @@ impl MotionWorld<'_, '_, '_> {
             }
         }
         Ok(iterations + 1)
+    }
+    /// `HoneyBlock.entityInside`: a falling player touching a side of the block
+    /// slides down it (`isSlidingDown`, `doSlideMovement`, `maybeDoSlideEffects`).
+    fn honey_block_inside(&mut self, pos: BlockPos) -> Result<()> {
+        let old_delta_y = |dy: f64| dy / f64::from(0.98_f32) + 0.08;
+        let new_delta_y = |dy: f64| (dy - 0.08) * f64::from(0.98_f32);
+        let position = self.player.position;
+        let velocity = self.player.velocity;
+        if self.player.ground.on_ground
+            || position.y > f64::from(pos.y) + 0.9375 - 1.0e-7
+            || old_delta_y(velocity.y) >= -0.08
+        {
+            return Ok(());
+        }
+        let dx = (f64::from(pos.x) + 0.5 - position.x).abs();
+        let dz = (f64::from(pos.z) + 0.5 - position.z).abs();
+        let overlap = 0.4375 + f64::from(self.player.dimensions.width / 2.0);
+        if !(dx + 1.0e-7 > overlap || dz + 1.0e-7 > overlap) {
+            return Ok(());
+        }
+        // doSlideMovement
+        let old = old_delta_y(velocity.y);
+        if old < -0.13 {
+            let factor = -0.05 / old;
+            self.player.velocity =
+                Vec3::new(velocity.x * factor, new_delta_y(-0.05), velocity.z * factor);
+        } else {
+            self.player.velocity = Vec3::new(velocity.x, new_delta_y(-0.05), velocity.z);
+        }
+        self.player.fall_distance = 0.0;
+        // maybeDoSlideEffects: the sound, then the server's event 53.
+        let random = &mut self.scene.random;
+        let sound = random.next_int_bound(5).map_err(|e| format!("{e:?}"))? == 0;
+        // Only the server broadcasts event 53 (`!level.isClientSide()`).
+        let particles = !self.player.client_side
+            && random.next_int_bound(5).map_err(|e| format!("{e:?}"))? == 0;
+        if sound || particles {
+            self.player.events.push(MotionEvent::HoneySlide {
+                pos,
+                sound,
+                particles,
+            });
+        }
+        Ok(())
     }
     /// `Player.makeStuckInBlock`: the next move is scaled by `multiplier`
     /// (and the fall forgotten) unless flying; the impulse context resets
