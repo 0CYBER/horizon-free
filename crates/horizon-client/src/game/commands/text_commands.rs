@@ -189,28 +189,40 @@ impl Game<'_> {
         }
         out
     }
-    fn player_targets(&mut self, ctx: &Context) -> R<usize> {
-        // Only the local player can receive messages and titles.
+    /// The players the command reaches: the window's own and the LAN guests.
+    fn player_targets(&mut self, ctx: &Context) -> R<Vec<Target>> {
         let targets = self.entities(ctx, "targets", true)?;
-        Ok(targets.iter().filter(|t| **t == Target::Player).count())
+        Ok(targets
+            .into_iter()
+            .filter(|t| matches!(t, Target::Player | Target::Guest(_)))
+            .collect())
     }
     pub(super) fn cmd_tellraw(&mut self, ctx: &Context) -> R<i32> {
-        let n = self.player_targets(ctx)?;
+        let players = self.player_targets(ctx)?;
         let message = self.component_arg(ctx, "message")?;
-        if n > 0 {
-            self.system_message(message);
+        // Each player's chat (a guest's through the connection).
+        for &t in &players {
+            self.for_player(t, |g| g.system_message(message.clone()));
         }
-        Ok(n as i32)
+        Ok(players.len() as i32)
     }
     pub(super) fn cmd_title(&mut self, ctx: &Context) -> R<i32> {
-        let n = self.player_targets(ctx)?;
-        let name = self.target_name(Target::Player);
+        let players = self.player_targets(ctx)?;
+        let n = players.len();
+        let name = players
+            .first()
+            .map_or_else(Text::empty, |t| self.target_name(*t));
         let single = n == 1;
         let key = if ctx.has("clear") {
-            self.titles_or_packet(Titles::clear, C::ClearTitles(play::Bool1 { value: false }));
+            self.titles_or_packet(
+                &players,
+                Titles::clear,
+                C::ClearTitles(play::Bool1 { value: false }),
+            );
             "cleared"
         } else if ctx.has("reset") {
             self.titles_or_packet(
+                &players,
                 |t| {
                     t.clear();
                     t.reset_times();
@@ -225,6 +237,7 @@ impl Game<'_> {
             };
             let (fade_in, stay, fade_out) = (get("fadeIn"), get("stay"), get("fadeOut"));
             self.titles_or_packet(
+                &players,
                 |t| t.set_times(fade_in, stay, fade_out),
                 C::SetTitlesAnimation(play::TitlesAnimation {
                     fade_in,
@@ -239,13 +252,17 @@ impl Game<'_> {
                 text: component_nbt(&text.component()),
             };
             if ctx.has("subtitle") {
-                self.titles_or_packet(|t| t.set_subtitle(text), C::SetSubtitleText(sent));
+                self.titles_or_packet(&players, |t| t.set_subtitle(text), C::SetSubtitleText(sent));
                 "show.subtitle"
             } else if ctx.has("actionbar") {
-                self.titles_or_packet(|t| t.set_overlay(text, false), C::SetActionBarText(sent));
+                self.titles_or_packet(
+                    &players,
+                    |t| t.set_overlay(text, false),
+                    C::SetActionBarText(sent),
+                );
                 "show.actionbar"
             } else {
-                self.titles_or_packet(|t| t.set_title(text), C::SetTitleText(sent));
+                self.titles_or_packet(&players, |t| t.set_title(text), C::SetTitleText(sent));
                 "show.title"
             }
         };
@@ -260,13 +277,27 @@ impl Game<'_> {
         self.feedback(message);
         Ok(n as i32)
     }
-    /// The player the title is for: the guest acting now is sent the packet
-    /// (TitleCommand's `connection.send`), the window's own player shows it.
-    fn titles_or_packet(&mut self, local: impl FnOnce(&mut Titles), packet: C) {
-        if self.lan_acting.is_some() {
-            self.guest_packets.push(packet);
-        } else {
-            local(&mut self.titles);
+    /// TitleCommand's `connection.send` for each player: a guest is sent the
+    /// packet, the window's own player shows it.
+    fn titles_or_packet(&mut self, players: &[Target], local: impl FnOnce(&mut Titles), packet: C) {
+        let mut local = Some(local);
+        for &t in players {
+            match t {
+                Target::Player if self.lan_acting.is_some() => {
+                    self.guest_packets.push(packet.clone());
+                }
+                Target::Player => {
+                    if let Some(local) = local.take() {
+                        local(&mut self.titles);
+                    }
+                }
+                Target::Guest(conn) => {
+                    if let Some(host) = self.lan.as_ref() {
+                        host.hub.send_to(conn, &packet);
+                    }
+                }
+                _ => {}
+            }
         }
     }
 }
