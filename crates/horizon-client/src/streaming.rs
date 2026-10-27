@@ -1417,6 +1417,14 @@ impl Streaming {
     pub fn band(&self) -> Option<Band> {
         self.band
     }
+    /// Rank the chunks `/forceload add` over chunks `(x0, z0)..=(x1, z1)`
+    /// decorates in vanilla's order (`forced_order`), after every chunk
+    /// ranked before.
+    pub fn rank_forced(&mut self, x0: i32, z0: i32, x1: i32, z1: i32) {
+        for (x, z) in horizon_world::worldgen::decoration_order::forced_order(x0, z0, x1, z1) {
+            self.decoration_order.rank_or_append(x, z);
+        }
+    }
     /// Generate, light and keep the chunks of `band` (none: stop), and let
     /// go of what earlier bands held as it falls out of range. The chunks a
     /// band reaches are ranked for decoration row by row, as they first come
