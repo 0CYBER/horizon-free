@@ -107,6 +107,7 @@ mod maps;
 mod minecarts;
 mod mob_blocks;
 mod mob_gear;
+mod mob_sounds;
 mod mod_browser;
 #[cfg(feature = "mods")]
 mod mod_browser_recipes;
@@ -176,6 +177,7 @@ mod sign_edit;
 mod sniffers;
 mod spawner;
 mod spear;
+mod spectator;
 mod spill;
 mod startup_menu;
 mod station_control;
@@ -1490,6 +1492,8 @@ struct Game<'a> {
     /// The shader pack's entity and block entity ids, while one draws entities.
     pack_ids: Option<shader_packs::PackIds>,
     started: Instant,
+    /// `SpectatorGui`: the menu a spectator opens with the hotbar keys.
+    spectator_gui: horizon_client::spectator_menu::SpectatorGui,
     previous: Instant,
     /// FramerateLimitTracker.latestInputTime.
     last_input: Instant,
@@ -1525,6 +1529,10 @@ struct Game<'a> {
     cart_sounds: HashSet<u32>,
     /// The minecart the riding sounds were started for (`LocalPlayer.startRiding`).
     riding_cart_sounds: Option<u32>,
+    /// Bees whose buzz is playing, and whether it is the aggressive one.
+    bee_sounds: HashMap<u32, bool>,
+    /// Guardians whose attack hum is playing.
+    guardian_sounds: HashSet<u32>,
     dropped: Vec<ItemEntity>,
     next_entity: u32,
     particles: horizon_client::particles::ParticleEngine,
@@ -4331,6 +4339,14 @@ impl Game<'_> {
             self.use_spyglass();
             return Ok(true);
         }
+        // BundleItem.use: startUsingItem, then onUseTick empties it.
+        if !on_block && info.bundle {
+            if self.using.is_none() {
+                self.using = Some((self.held_slot(), 0));
+            }
+            self.swing_arm();
+            return Ok(true);
+        }
         if !on_block && &*stack.item == "minecraft:bow" {
             if self.using.is_none()
                 && (self.creative || self.projectile_slot("minecraft:bow").is_some())
@@ -4615,6 +4631,10 @@ impl Game<'_> {
             self.tick_brush(slot, ticks);
             return;
         }
+        if info.bundle {
+            self.tick_bundle(slot, ticks);
+            return;
+        }
         let Some(consumable) = info.consumable.as_ref() else {
             self.using = None;
             return;
@@ -4636,6 +4656,53 @@ impl Game<'_> {
         } else {
             self.using = Some((slot, ticks));
         }
+    }
+    /// `BundleItem.onUseTick` and `getUseDuration` (200): the first tick and
+    /// then every second tick from the 11th on drop one stack out of the
+    /// bundle in `slot`; the use ends after 200 ticks.
+    fn tick_bundle(&mut self, slot: usize, ticks: u32) {
+        const USE_DURATION: u32 = 200;
+        let remaining = USE_DURATION - ticks.min(USE_DURATION);
+        if ticks == 0 || (remaining < USE_DURATION - 10 && remaining.is_multiple_of(2)) {
+            self.drop_bundle_content(slot);
+        }
+        self.using = (ticks + 1 < USE_DURATION).then_some((slot, ticks + 1));
+    }
+    /// `BundleItem.dropContent`: `removeOneItemFromBundle` and `Player.drop`,
+    /// then the drop sound and the used statistic.
+    fn drop_bundle_content(&mut self, slot: usize) {
+        let items = self.res.items();
+        let Some(mut bundle) = self.stack_in(slot).cloned() else {
+            return;
+        };
+        let Some(mut contents) = horizon_client::bundle::Contents::of(items, &bundle) else {
+            return;
+        };
+        let Some(removed) = contents.remove_one(items) else {
+            return;
+        };
+        contents.store(&mut bundle);
+        let item = Arc::clone(&bundle.item);
+        *self.stack_in_mut(slot) = Some(bundle);
+        let Some(position) = self.player.as_ref().map(|p| p.position) else {
+            return;
+        };
+        let at = [position.x, position.y, position.z];
+        // playRemoveOneSound, then Player.drop and playDropContentsSound at
+        // the player's block.
+        let pitch = 0.8 + self.world.random.next_float() * 0.4;
+        self.audio
+            .play(horizon_client::bundle::REMOVE_ONE, Some(at), 0.8, pitch);
+        self.player_drop(removed);
+        let block = BlockPos::containing(position);
+        let pitch = 0.8 + self.world.random.next_float() * 0.4;
+        self.audio.play(
+            horizon_client::bundle::DROP_CONTENTS,
+            Some([block.x, block.y, block.z].map(|v| f64::from(v) + 0.5)),
+            0.8,
+            pitch,
+        );
+        self.stats.add("used", &item, 1);
     }
     /// `LivingEntity.releaseUsingItem` (`Item.releaseUsing`) for `stack`,
     /// used for `ticks`, its hand acting: a bow or a trident lets go (not
@@ -5628,17 +5695,22 @@ impl Game<'_> {
     fn apply_cursor_icon(&mut self) {
         use horizon_client::widgets::Cursor;
         let wanted = horizon_client::widgets::take_cursor();
-        if wanted == self.cursor_icon {
+        let effective = if self.settings.allow_cursor_changes {
+            wanted
+        } else {
+            Cursor::Arrow
+        };
+        if effective == self.cursor_icon {
             return;
         }
         if let Some(window) = &self.window {
-            window.set_cursor(match wanted {
+            window.set_cursor(match effective {
                 Cursor::Arrow => winit::window::CursorIcon::Default,
                 Cursor::PointingHand => winit::window::CursorIcon::Pointer,
                 Cursor::NotAllowed => winit::window::CursorIcon::NotAllowed,
             });
         }
-        self.cursor_icon = wanted;
+        self.cursor_icon = effective;
     }
     /// LevelLoadingScreen.onClose -> Gui.setScreen(null) -> grabMouse.
     fn capture_loaded_world(&mut self) {
@@ -5861,7 +5933,9 @@ impl Game<'_> {
                 let draws = hud_layout::crosshair(wi, hi, attack, full);
                 hud_layout::paint(&mut batch, &self.gui.atlas, &draws);
             }
-            if !spectator {
+            if spectator {
+                self.draw_spectator_hotbar(&mut batch);
+            } else {
                 let partial = self.clock.fraction() as f32;
                 let inputs = hud_layout::HotbarInputs {
                     selected: self.selected as i32,
@@ -7775,7 +7849,9 @@ impl Game<'_> {
             self.yaw
         };
         for m in &self.mobs {
-            if m.fire_ticks > 0 && !m.removed {
+            // Blaze.isOnFire: a charged blaze burns.
+            let blazing = m.species() == horizon_client::mobs::Species::Blaze && m.extra.flag;
+            if (m.fire_ticks > 0 || blazing) && !m.removed {
                 let at = m.previous.lerp(m.position, alpha);
                 horizon_client::fire_render::flames(
                     [at.x, at.y, at.z],
@@ -12063,11 +12139,16 @@ impl Game<'_> {
                     KeyCode::Digit8 => 7,
                     _ => 8,
                 };
-                // Minecraft.handleKeybinds: a creative player holding the load
-                // or save toolbar key loads or saves a toolbar instead (load
-                // first when both are held).
+                // Minecraft.handleKeybinds: a spectator's number keys drive
+                // the spectator menu, not the hotbar; a creative player
+                // holding the load or save toolbar key loads or saves a
+                // toolbar instead (load first when both are held).
                 let load = self.mapped_key_down("key.loadToolbarActivator");
-                if self.creative && (load || self.mapped_key_down("key.saveToolbarActivator")) {
+                if self.spectator() {
+                    self.spectator_hotbar_key(slot as i32);
+                } else if self.creative
+                    && (load || self.mapped_key_down("key.saveToolbarActivator"))
+                {
                     self.hotbar_load_or_save(slot, load);
                 } else {
                     self.selected = slot;
@@ -12084,6 +12165,14 @@ impl Game<'_> {
             return Ok(());
         }
         if self.sleeping.is_some() {
+            return Ok(());
+        }
+        // key.spectatorHotbar (the middle button) opens the spectator menu
+        // and uses its selected item.
+        if button == MouseButton::Middle && self.spectator() {
+            if pressed {
+                self.spectator_action_key();
+            }
             return Ok(());
         }
         if self.remote.is_some() {
@@ -12650,7 +12739,9 @@ impl ApplicationHandler for Game<'_> {
                             self.mouse
                                 .on_scroll(raw_x, raw_y, discrete, wheel_sensitivity)
                     {
-                        if self.spectator() {
+                        if self.spectator() && self.spectator_gui.is_menu_active() {
+                            self.spectator_scroll(-wheel);
+                        } else if self.spectator() {
                             if let Some(player) = &mut self.player {
                                 player.flying_speed = horizon_client::mouse::spectator_flying_speed(
                                     player.flying_speed,
@@ -13567,6 +13658,7 @@ impl<'a> Game<'a> {
             pack_ids: None,
             health_hud: hud_layout::HealthHud::default(),
             started: now,
+            spectator_gui: Default::default(),
             previous: now,
             last_input: now,
             pad: Default::default(),
@@ -13595,6 +13687,8 @@ impl<'a> Game<'a> {
             sound_paused: false,
             cart_sounds: HashSet::new(),
             riding_cart_sounds: None,
+            bee_sounds: HashMap::new(),
+            guardian_sounds: HashSet::new(),
             dropped: Vec::new(),
             next_entity: 0,
             particles,

@@ -6,6 +6,8 @@ use horizon_world::nbt::{Compound, Tag};
 use horizon_world::registry::BlockStateId;
 use std::sync::{Arc, OnceLock};
 
+pub mod block_entity;
+
 pub const MIN_Y: i32 = -64;
 pub const HEIGHT: i32 = 384;
 pub const SECTIONS: usize = (HEIGHT / 16) as usize;
@@ -149,7 +151,7 @@ pub struct Chunk {
     /// Newly generated (not loaded from a save): eligible for generation-time spawns.
     pub fresh: bool,
     /// Block entities read from a save, moved into the world on arrival.
-    pub block_entities: Vec<((i32, i32, i32), crate::containers::BlockEntity)>,
+    pub block_entities: Vec<((i32, i32, i32), block_entity::BlockEntity)>,
     /// `CustomName` of the container block entities (shown as the screen title).
     pub block_names: Vec<((i32, i32, i32), String)>,
     /// Generation postprocessing marks (ProtoChunk.postProcessing) as world

@@ -24,6 +24,7 @@ use std::{
 };
 
 pub use horizon_client_core::particle_type::ParticleType;
+pub use horizon_items::firework::{DYE_FIREWORK_COLORS, FireworkExplosion, FireworkShape};
 
 /// `ParticleOptions` with the parameters of the option classes used here.
 #[derive(Clone, Debug)]
@@ -3838,6 +3839,38 @@ fn lifetime_alpha(a: [f32; 4], age: i32, lifetime: i32, partial: f32) -> f32 {
     a[0] + (a[1] - a[0]) * t.clamp(0.0, 1.0)
 }
 
+struct Starter {
+    at: [f64; 3],
+    v: [f64; 3],
+    explosions: Vec<FireworkExplosion>,
+    life: i32,
+    lifetime: i32,
+    twinkle_delay: bool,
+    far: bool,
+}
+const STAR: [[f64; 2]; 6] = [
+    [0.0, 1.0],
+    [0.3455, 0.309],
+    [0.9511, 0.309],
+    [0.379_591_836_734_693_9, -0.126_530_612_244_897_95],
+    [0.612_244_897_959_183_7, -0.804_081_632_653_061_2],
+    [0.0, -0.359_183_673_469_387_73],
+];
+const CREEPER: [[f64; 2]; 12] = [
+    [0.0, 0.2],
+    [0.2, 0.2],
+    [0.2, 0.6],
+    [0.6, 0.6],
+    [0.6, 0.2],
+    [0.2, 0.2],
+    [0.2, 0.0],
+    [0.4, 0.0],
+    [0.4, -0.6],
+    [0.2, -0.6],
+    [0.2, -0.4],
+    [0.0, -0.4],
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4025,92 +4058,3 @@ mod tests {
         assert!((lifetime_alpha(a, 40, 40, 0.0) - 0.6).abs() < 1e-6);
     }
 }
-/// FireworkExplosion.Shape.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum FireworkShape {
-    #[default]
-    SmallBall,
-    LargeBall,
-    Star,
-    Creeper,
-    Burst,
-}
-impl FireworkShape {
-    pub fn from_name(name: &str) -> Self {
-        match name {
-            "large_ball" => Self::LargeBall,
-            "star" => Self::Star,
-            "creeper" => Self::Creeper,
-            "burst" => Self::Burst,
-            _ => Self::SmallBall,
-        }
-    }
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::SmallBall => "small_ball",
-            Self::LargeBall => "large_ball",
-            Self::Star => "star",
-            Self::Creeper => "creeper",
-            Self::Burst => "burst",
-        }
-    }
-}
-/// `DyeColor` names and `getFireworkColor`, by dye id (white to black).
-pub const DYE_FIREWORK_COLORS: [(&str, u32); 16] = [
-    ("white", 0xF0F0F0),
-    ("orange", 0xEB8844),
-    ("magenta", 0xC354CD),
-    ("light_blue", 0x6689D3),
-    ("yellow", 0xDECF2A),
-    ("lime", 0x41CD34),
-    ("pink", 0xD88198),
-    ("gray", 0x434343),
-    ("light_gray", 0xABABAB),
-    ("cyan", 0x287697),
-    ("purple", 0x7B2FBE),
-    ("blue", 0x253192),
-    ("brown", 0x51301A),
-    ("green", 0x3B511A),
-    ("red", 0xB3312C),
-    ("black", 0x1E1B1B),
-];
-/// The `firework_explosion` component.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct FireworkExplosion {
-    pub shape: FireworkShape,
-    pub colors: Vec<u32>,
-    pub fade: Vec<u32>,
-    pub trail: bool,
-    pub twinkle: bool,
-}
-struct Starter {
-    at: [f64; 3],
-    v: [f64; 3],
-    explosions: Vec<FireworkExplosion>,
-    life: i32,
-    lifetime: i32,
-    twinkle_delay: bool,
-    far: bool,
-}
-const STAR: [[f64; 2]; 6] = [
-    [0.0, 1.0],
-    [0.3455, 0.309],
-    [0.9511, 0.309],
-    [0.379_591_836_734_693_9, -0.126_530_612_244_897_95],
-    [0.612_244_897_959_183_7, -0.804_081_632_653_061_2],
-    [0.0, -0.359_183_673_469_387_73],
-];
-const CREEPER: [[f64; 2]; 12] = [
-    [0.0, 0.2],
-    [0.2, 0.2],
-    [0.2, 0.6],
-    [0.6, 0.6],
-    [0.6, 0.2],
-    [0.2, 0.2],
-    [0.2, 0.0],
-    [0.4, 0.0],
-    [0.4, -0.6],
-    [0.2, -0.6],
-    [0.2, -0.4],
-    [0.0, -0.4],
-];

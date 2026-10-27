@@ -5,7 +5,9 @@
 //! blocks, attacking and the commands all behave exactly as they do for the
 //! host, and every world change they cause reaches all players through the
 //! block log, the level events and the entity tracker.
-use super::{Game, GuestUse, Hit, Mining, Screen, lan::LanHost, respawn_anchor::RespawnConfig};
+use super::{
+    Dim, Game, GuestUse, Hit, Mining, Screen, lan::LanHost, respawn_anchor::RespawnConfig,
+};
 use horizon_client::{
     command::vanilla,
     containers::BlockEntity,
@@ -1133,6 +1135,8 @@ impl Game<'_> {
                         g.player_on_equip("mainhand", offhand.as_ref(), main.as_ref());
                     });
                 }
+                // STAB: `PiercingWeapon.attack` of a left click with a spear.
+                8 if !spectator => self.guest_jab(host, conn),
                 _ => {}
             },
             S::SetCarriedItem(p) => {
@@ -1437,6 +1441,9 @@ impl Game<'_> {
                 }
                 self.sync_rules();
             }
+            // handleTeleportToEntityPacket: a spectator goes to the player,
+            // in whichever level they are.
+            S::TeleportToEntity(p) if spectator => self.guest_spectate_teleport(host, gi, p.uuid),
             S::ChangeGameMode(p) if host.hub.guests[gi].permission >= 2 => {
                 if let Some(mode) = usize::try_from(p.mode)
                     .ok()
@@ -1564,6 +1571,51 @@ impl Game<'_> {
     /// and `Player.remove`'s `inventoryMenu.removed` drops what the cursor
     /// held (`dropOrPlaceInInventory` for a removed player). Respawning
     /// sooner removes it too.
+    /// `ServerGamePacketListenerImpl.handleTeleportToEntityPacket` for a
+    /// player: the host's own, or a guest in the world.
+    fn guest_spectate_teleport(&mut self, host: &mut LanHost, gi: usize, uuid: u128) {
+        let own = host.hub.guests[gi].conn;
+        let host_player = self
+            .player
+            .as_ref()
+            .filter(|_| self.options.dedicated.is_none() && uuid == host.host_uuid)
+            .map(|p| {
+                (
+                    [p.position.x, p.position.y, p.position.z],
+                    self.yaw,
+                    self.pitch,
+                    self.dim,
+                )
+            });
+        let target = host_player.or_else(|| {
+            host.hub
+                .guests
+                .iter()
+                .find(|g| g.placed && g.conn != own && g.uuid == uuid)
+                .map(|g| (g.position, g.yaw, g.pitch, Dim::from_id(&g.dimension)))
+        });
+        let Some((at, yaw, pitch, dim)) = target else {
+            return;
+        };
+        if Dim::from_id(&host.hub.guests[gi].dimension) != dim {
+            // Only a dedicated server keeps its players in different levels.
+            if self.options.dedicated.is_some() {
+                self.level_teleports
+                    .push(super::server_travel::LevelTeleport {
+                        conn: own,
+                        dim,
+                        at,
+                        rotation: Some([yaw, pitch]),
+                    });
+            }
+            return;
+        }
+        let g = &mut host.hub.guests[gi];
+        (g.yaw, g.pitch) = (yaw, pitch);
+        // A new body there: no fall distance or motion carried over.
+        g.motion = None;
+        host.hub.teleport(gi, Some(at));
+    }
     fn guest_tick_death(&mut self, host: &mut LanHost, gi: usize) {
         let g = &mut host.hub.guests[gi];
         g.death_time += 1;
@@ -1674,6 +1726,37 @@ impl Game<'_> {
         g.yaw = (-d[0].atan2(d[2])).to_degrees() as f32;
         g.pitch = (-d[1].atan2(horizontal)).to_degrees() as f32;
         Some((centre, eye))
+    }
+
+    /// `ServerGamePacketListenerImpl.handlePlayerAction` for STAB: the spear in
+    /// the guest's main hand jabs once its charge allows it (with five ticks
+    /// of tolerance). The guest's client is sent the dash Lunge gave them.
+    fn guest_jab(&mut self, host: &mut LanHost, conn: u32) {
+        let Some(g) = host.hub.guest(conn) else {
+            return;
+        };
+        let at = g.position;
+        // ServerPlayer.getKnownMovement: the move their client just sent.
+        let movement = g
+            .moves
+            .last()
+            .map_or(Vec3::ZERO, |m| Vec3::new(m.0[0], m.0[1], m.0[2]));
+        let sound = self
+            .guest_hit_by(host, conn, |g| {
+                g.known_movement = movement;
+                if g.cannot_attack_with_item(g.attack_ticks as i32, 5) {
+                    None
+                } else {
+                    g.jab()
+                }
+            })
+            .flatten();
+        // PiercingWeapon.makeSound: `playSound(causer, ...)`, so the guest's
+        // own client plays it.
+        if let Some(name) = sound {
+            let source = horizon_client::settings::sound_source(name) as i32;
+            host.hub.sound(name, at, 1.0, 1.0, source, Some(conn));
+        }
     }
 
     fn guest_attack(&mut self, host: &mut LanHost, conn: u32, id: i32) {
@@ -2081,6 +2164,10 @@ impl Game<'_> {
             .filter(|g| host.hub.here(g) && g.loaded)
             .map(|g| g.conn)
             .collect();
+        // The players the guests' hooks can catch.
+        if host.play.values().any(|p| p.hook.is_some()) {
+            self.refresh_hook_targets(host);
+        }
         for conn in conns {
             let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
                 continue;
@@ -3160,7 +3247,8 @@ impl Game<'_> {
                 let packet = swing_packet(id, c.hand, c.animation);
                 host.hub.broadcast_near(at, 128.0, &packet, Some(conn));
                 if let Some(m) = host.models.get_mut(&conn) {
-                    m.swing();
+                    // The duration already counts the guest's haste or fatigue.
+                    m.swing_hand(c.hand == Hand::Off, c.duration_ticks);
                 }
             }
             play.swing.tick();
