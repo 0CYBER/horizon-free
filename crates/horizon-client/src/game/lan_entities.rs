@@ -342,6 +342,7 @@ impl Game<'_> {
             let mut e = state(p.id, kind, at(p.position), p.yaw, false);
             e.pitch = p.pitch;
             e.velocity = at(p.velocity);
+            e.needs_sync = p.needs_sync;
             // Projectile.getAddEntityPacket: the owner's id.
             e.data = match p.guest.and_then(|conn| hub.guest(conn)) {
                 Some(g) => g.entity_id,
@@ -466,7 +467,7 @@ impl Game<'_> {
             }
             out.push(e);
         }
-        // The dragon's breath clouds (AreaEffectCloud's DATA_RADIUS,
+        // The dragon's breath and lingering potion clouds (AreaEffectCloud's DATA_RADIUS,
         // DATA_WAITING for its 20-tick wait, and DATA_PARTICLE): the
         // client draws them from these (`tick_remote_clouds`).
         let breath = self.network_particle(
@@ -484,10 +485,14 @@ impl Game<'_> {
         for b in self.breath_clouds.iter().filter(|b| b.id != 0) {
             let mut e = state(b.id, "minecraft:area_effect_cloud", b.at, 0.0, false);
             e.meta.push((8, serializer::FLOAT, Value::Float(b.radius)));
-            if b.age < 20 {
+            if b.waiting() {
                 e.meta.push((9, serializer::BOOLEAN, Value::Bool(true)));
             }
-            if let Some(p) = &breath {
+            let particle = match &b.potion {
+                Some(p) => self.network_particle(&p.particle(), None),
+                None => breath.clone(),
+            };
+            if let Some(p) = &particle {
                 e.meta
                     .push((10, serializer::PARTICLE, Value::Particle(p.clone())));
             }

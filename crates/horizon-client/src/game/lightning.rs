@@ -16,7 +16,7 @@ pub(super) struct Bolt {
     flashes: i32,
     seed: i64,
     visual_only: bool,
-    /// Mooshrooms switch colour once per bolt.
+    /// Mooshrooms and copper golems change once per bolt.
     converted: Vec<u32>,
 }
 impl Game<'_> {
@@ -393,6 +393,17 @@ impl Game<'_> {
                     continue;
                 }
                 Species::Creeper => m.extra.charged = true,
+                // CopperGolem.thunderHit (after Entity.thunderHit's fire and
+                // damage): once per bolt, an oxidized golem goes back one step
+                // and its weathering timer (or wax, -2) is reset to -1.
+                Species::CopperGolem if !b.converted.contains(&m.id) => {
+                    b.converted.push(m.id);
+                    if m.extra.variant > 0 {
+                        m.extra.vector[0] = -1.0;
+                        m.extra.variant =
+                            horizon_client::mobs::copper_golem::weather_previous(m.extra.variant);
+                    }
+                }
                 _ => {}
             }
             // Entity.thunderHit: burning (8 seconds) and 5 lightning damage.

@@ -369,6 +369,7 @@ mod tests {
             uuid: [0; 4],
             allies: Default::default(),
             remote: false,
+            passenger: false,
         }
     }
 

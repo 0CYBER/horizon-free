@@ -9,7 +9,7 @@ use horizon_client::{
     blocks::Fluid,
     collisions::SceneCollisions,
     containers::BlockEntity,
-    items::ItemStack,
+    items::{ItemStack, Items},
     mesher::Vertex,
     mobs::{Part, anim::Poses},
     particles::{ParticleOptions, ParticleType},
@@ -200,6 +200,17 @@ impl Minecart {
     }
     fn horizontal(&self) -> f64 {
         self.velocity.x.hypot(self.velocity.z)
+    }
+    /// `AbstractContainerMenu.getRedstoneSignalFromContainer` of `slots`.
+    fn container_signal(slots: &[Option<ItemStack>], items: &Items) -> i32 {
+        let mut total = 0.0f32;
+        for s in slots.iter().flatten() {
+            let max = items.get(&s.item).map_or(64, |i| i.max_stack).min(64);
+            total += s.count as f32 / max as f32;
+        }
+        total /= slots.len().max(1) as f32;
+        // Mth.lerpDiscrete(total, 0, 15)
+        (total * 14.0).floor() as i32 + i32::from(total > 0.0)
     }
 }
 pub(super) struct CartModels {
@@ -945,7 +956,7 @@ impl Game<'_> {
         }
         true
     }
-    /// `getDismountLocationForPassenger`: beside the cart (across its motion), else on top.
+    /// `getDismountLocationForPassenger`: beside the cart (across its facing), else on top.
     pub(super) fn dismount_cart(&mut self, i: usize) {
         self.riding = None;
         let c = &self.carts[i];
@@ -955,17 +966,25 @@ impl Game<'_> {
             c.position.z.floor() as i32,
         );
         let mut target = None;
+        // DismountHelper.offsetsForDirection of the cart's facing
+        // (Direction.fromYRot of its yaw): right, left, back right, back left,
+        // forward right, forward left, back, forward.
+        let step = |q: i32| [(0, 1), (-1, 0), (0, -1), (1, 0)][(q & 3) as usize];
+        let facing = (f64::from(c.yaw) / 90.0 + 0.5).floor() as i32;
+        let (fx, fz) = step(facing);
+        let (rx, rz) = (-fz, fx);
+        let offsets = [
+            (rx, rz),
+            (-rx, -rz),
+            (rx - fx, rz - fz),
+            (-rx - fx, -rz - fz),
+            (fx + rx, fz + rz),
+            (fx - rx, fz - rz),
+            (-fx, -fz),
+            (fx, fz),
+        ];
         'search: for dy in [0, 1, -1] {
-            for (dx, dz) in [
-                (1, 0),
-                (-1, 0),
-                (0, 1),
-                (0, -1),
-                (1, 1),
-                (-1, -1),
-                (1, -1),
-                (-1, 1),
-            ] {
+            for (dx, dz) in offsets {
                 let (x, y, z) = (bx + dx, by + dy, bz + dz);
                 let below = self.res.facts().get(self.world.block(x, y - 1, z));
                 let here = self.res.facts().get(self.world.block(x, y, z));
@@ -1049,6 +1068,22 @@ impl Game<'_> {
         }
         best
     }
+    /// Each cart's kind and comparator signal, for the detector rail
+    /// (`DetectorRailBlock.getAnalogOutputSignal`). A cart whose menu is open
+    /// counts the items in that menu.
+    pub(super) fn cart_signals(&self) -> Vec<(CartKind, i32)> {
+        self.carts
+            .iter()
+            .map(|c| {
+                let key = (i32::MAX - 15, CART_KEY_Y, c.id as i32);
+                let slots = match self.world.block_entities.get(&key) {
+                    Some(BlockEntity::Chest(open)) => open,
+                    _ => &c.items,
+                };
+                (c.kind, Minecart::container_signal(slots, self.res.items()))
+            })
+            .collect()
+    }
     /// `interact`: ride, open, fuel or ignite the cart under the crosshair.
     pub(super) fn interact_cart(&mut self) -> bool {
         let Some((i, d)) = self.cart_hit() else {
@@ -1066,10 +1101,8 @@ impl Game<'_> {
                 }
                 self.riding = Some(self.carts[i].id);
             }
+            // AbstractMinecartContainer.interact: no sneak check.
             CartKind::Chest | CartKind::Hopper => {
-                if sneaking {
-                    return false;
-                }
                 let c = self.carts[i].clone();
                 let key = (i32::MAX - 15, CART_KEY_Y, c.id as i32);
                 self.world
