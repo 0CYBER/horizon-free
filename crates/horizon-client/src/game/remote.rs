@@ -2111,6 +2111,7 @@ impl Game<'_> {
                 if p.event == super::fireworks::FIREWORK_EXPLODE_EVENT {
                     self.remote_firework_explosion(p.id);
                 }
+                self.remote_fangs_event(p.id as u32, p.event);
                 // LocalPlayer.setPermissions also refreshes an open World Options screen.
                 if (24..=28).contains(&p.event)
                     && self.remote.as_ref().is_some_and(|r| r.entity_id == p.id)
