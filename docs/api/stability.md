@@ -108,7 +108,7 @@ Deprecations and breaking changes are in bold. The release notes of the game rel
 | Mod API: `render` (HUD shapes, camera shake and zoom; drawn by the game, no mod shaders) | experimental | manifest `experimental = ["render"]` |
 | Mod API: `input` (claimed items' use, the mod's keys, the mouse wheel) | experimental | manifest `experimental = ["input"]` |
 | Content mods (`registries`: data-driven blocks and items) | preview | manifest `api = "0.2"` |
-| Server mods: world `horizon-server-mod`, `players`, `server-events` | experimental | manifest `api = "0.3"` |
+| Server mods: world `horizon-server-mod`, `players`, `server-events`, `world`, typed `server-command`s | experimental | manifest `api = "0.3"` |
 | Script mods (Lua run by an interpreter mod, [mods.md](mods.md#ways-in)) | not started | |
 | `cargo horizon-mod` (`new`, `build`, `run`), `horizon-mod-sdk` | preview | 0.1.0 |
 | Shader API | not started | |
