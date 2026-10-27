@@ -305,7 +305,7 @@ CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sp
           'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles',
           'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects',
           'portals', 'distance', 'growth', 'doors', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'hands',
-          'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption',
+          'lightning', 'riding', 'occupied_horse', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption',
           'breath', 'lava', 'levels', 'drops', 'underwater', 'fireworks']
 
 
@@ -4243,6 +4243,49 @@ def check_riding(host, guest, out):
     return result
 
 
+def check_occupied_horse(host, guest, out):
+    """#1759: a mob passenger fills a zombie horse's seat, for both real players."""
+    spots = apart(host, guest)
+    result = {}
+    tag = 'occupied_horse'
+    host('command', command='time set midnight')
+    for label, player in (('host', host), ('guest', guest)):
+        x, y, z = spots[label]
+        at = (x + 0.5, y, z + 2.5)
+        player('command', command='gamemode creative')
+        player('command', command='clear @s')
+        result[label] = {}
+        for occupied in (True, False):
+            passengers = ',Passengers:[{id:"minecraft:zombie",NoAI:1b,PersistenceRequired:1b}]' if occupied else ''
+            try:
+                player('command', command=f'summon minecraft:zombie_horse {at[0]} {y} {at[2]} '
+                                         f'{{Tame:1b,NoAI:1b,NoGravity:1b,Tags:["{tag}"]{passengers}}}')
+                player.wait(5)
+                horse = next(m for m in player.raw('mobs', 16)['near']
+                             if m['kind'] == 'minecraft:zombie_horse' and m['health'] > 0
+                             and math.dist(m['pos'], at) < 0.1)
+                if occupied:
+                    # Assert the setup too: a missing passenger would make this a false positive.
+                    passengers_nbt = host('command', command=f'data get entity @e[tag={tag},limit=1] Passengers')
+                    assert 'minecraft:zombie' in json.dumps(passengers_nbt), passengers_nbt
+                player.raw('look-at', at[0], y + 0.8, at[2])
+                player.raw('mouse', 'right', 'click')
+                player.wait(10)
+                riding = player('status').get('riding')
+                expected = None if occupied else horse['id']
+                assert riding == expected, f'{label}: occupied={occupied}, riding={riding}, expected={expected}'
+                result[label]['occupied' if occupied else 'free'] = riding
+                player.shot(out, f'occupied-horse-{label}-{occupied}')
+                if not occupied:
+                    hold(player, 'shift', 5)
+            finally:
+                player('command', command=f'kill @e[tag={tag}]')
+                player('command', command=f'kill @e[type=minecraft:zombie,x={x},y={y},z={z},distance=..6]')
+                player('command', command=f'tp @s {x + 0.5} {y} {z + 0.5} 0 0')
+                player.wait(25)
+    return result
+
+
 # Mount inventories: (kind, summon NBT, what goes in by shift-click and the menu slot it lands
 # in: 700 the saddle, 701 the body armour or carpet, 710 the chest's first slot).
 MOUNT_MENUS = [
@@ -4733,7 +4776,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'barter': check_barter, 'worn': check_worn, 'kills': check_kills,
              'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder,
              'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames, 'hands': check_hands,
-             'lightning': check_lightning, 'riding': check_riding, 'mounts': check_mounts,
+             'lightning': check_lightning, 'riding': check_riding, 'occupied_horse': check_occupied_horse, 'mounts': check_mounts,
              'worldspawn': check_world_spawn, 'beds': check_beds, 'shield': check_shield, 'deathmining': check_death_mining,
              'contacts': check_contacts, 'absorption': check_absorption, 'breath': check_breath,
              'lava': check_lava, 'levels': check_levels, 'drops': check_drops,
