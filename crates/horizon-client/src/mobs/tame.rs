@@ -360,7 +360,7 @@ impl Goal for FollowOwner {
         };
         let far = m.distance_sqr(at) >= 144.0;
         if !far {
-            let max = max_head_x_rot(m);
+            let max = m.max_head_x_rot();
             m.look_at_speed([at.x, eye, at.z], 10.0, max);
         }
         self.recalc -= 1;
@@ -507,7 +507,7 @@ impl Goal for Beg {
     }
     fn tick(&mut self, m: &mut Mob, cx: &mut Cx) {
         if let Some(p) = &cx.w.player {
-            let max = max_head_x_rot(m);
+            let max = m.max_head_x_rot();
             m.look_at_speed([p.position.x, p.eye[1], p.position.z], 10.0, max);
         }
         self.ticks -= 1;
@@ -529,12 +529,7 @@ pub fn ai_step(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
     let v = &mut m.anim.v;
     v[INTEREST] += (goal - v[INTEREST]) * 0.4;
     // isWet (extra.flag2), isShaking (counter2 > 0).
-    let rain = w.raining
-        && w.can_see_sky(
-            m.position.x.floor() as i32,
-            (m.position.y + f64::from(m.height())).floor() as i32,
-            m.position.z.floor() as i32,
-        );
+    let rain = super::ai::in_rain(m, w);
     let shaking = m.extra.counter2 > 0;
     if m.fluids.in_water || rain {
         m.extra.flag2 = true;
@@ -683,14 +678,6 @@ pub fn texture(m: &Mob) -> String {
     let baby = if m.is_baby() { "_baby" } else { "" };
     format!("entity/wolf/{file}{state}{baby}")
 }
-/// `Wolf.getMaxHeadXRot`: 20 degrees while sitting.
-fn max_head_x_rot(m: &Mob) -> f32 {
-    if m.extra.sitting {
-        20.0
-    } else {
-        m.kind.max_head_x_rot
-    }
-}
 
 /// Cat variants (`CatVariants`): registry name, texture file.
 pub const CAT_VARIANTS: [&str; 11] = [
@@ -835,7 +822,7 @@ impl Goal for CatLieOnBlock {
         m.extra.flag = self.0.reached;
     }
 }
-/// `CatSitOnBlockGoal`: chests, lit furnaces and beds.
+/// `CatSitOnBlockGoal`: unopened chests, lit furnaces and the foot of beds.
 #[derive(Clone, Debug)]
 struct CatSitOnBlock(super::goals::MoveToBlock);
 fn can_sit_on(w: &MobWorld, p: [i32; 3]) -> bool {
@@ -846,7 +833,15 @@ fn can_sit_on(w: &MobWorld, p: [i32; 3]) -> bool {
     match f.name.as_ref() {
         // The lit state is the only light source a furnace has.
         "minecraft:furnace" => f.emission > 0,
-        _ => true,
+        // `ChestBlockEntity.getOpenCount(level, pos) < 1`: players' openers
+        // and the copper golems' own count.
+        "minecraft:chest" => {
+            let key = (p[0], p[1], p[2]);
+            !w.lid_openers.contains_key(&key)
+                && w.world.chest_openers.get(&key).is_none_or(|o| o.0 < 1)
+        }
+        // A bed's foot only (`BedBlock.PART != HEAD`).
+        _ => w.prop(p[0], p[1], p[2], "part") != Some("head"),
     }
 }
 impl Goal for CatSitOnBlock {
