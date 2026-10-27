@@ -1267,8 +1267,9 @@ impl Game<'_> {
                 horizon_world::level::LevelEvent::LevelEvent { id, pos, data } => {
                     // The acting guest does not predict the egg's teleport
                     // particles, bone meal's growth, or anvil result sounds
-                    // (these levelEvent calls name no excluded player).
-                    let except = if matches!(*id, 2015 | 1505 | 1029 | 1030) {
+                    // (these levelEvent calls name no excluded player), nor
+                    // the digger's own crack and hit sound (2019, 2020).
+                    let except = if matches!(*id, 2015 | 1505 | 1029 | 1030 | 2019 | 2020) {
                         None
                     } else {
                         self.lan_acting

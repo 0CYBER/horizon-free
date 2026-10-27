@@ -40,10 +40,14 @@ pub(super) enum Field {
     ServerAddress,
     /// Home's Console's search (`console_page.rs`).
     ConsoleSearch,
+    /// The Launch panel's (`launch_page.rs`).
+    PreLaunch,
+    Wrapper,
+    LaunchEnv,
 }
 
 impl Field {
-    const ALL: [Field; 14] = [
+    const ALL: [Field; 17] = [
         Field::Name,
         Field::Seed,
         Field::Players,
@@ -58,6 +62,9 @@ impl Field {
         Field::ServerName,
         Field::ServerAddress,
         Field::ConsoleSearch,
+        Field::PreLaunch,
+        Field::Wrapper,
+        Field::LaunchEnv,
     ];
 }
 
@@ -1035,6 +1042,7 @@ impl Launcher {
             Field::Token => self.save_token(),
             Field::Email => self.invite_friend(),
             Field::InstanceName | Field::InstanceGroup | Field::ConsoleSearch => {}
+            Field::PreLaunch | Field::Wrapper | Field::LaunchEnv => self.save_launch(),
             Field::ServerName | Field::ServerAddress => self.add_server(),
         }
     }

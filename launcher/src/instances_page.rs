@@ -551,9 +551,13 @@ impl Launcher {
             instance.clone(),
             instance.name.clone(),
         );
+        // Under the name, wrapping: six actions don't fit beside it at the window's narrowest.
         let actions = div()
             .flex()
+            .flex_wrap()
             .gap(px(8.))
+            .mt(px(6.))
+            .ml(px(-14.))
             .child(
                 button("instance-edit", "Edit…", Kind::Ghost, &t).on_click(cx.listener(
                     move |this, _: &ClickEvent, _, cx| {
@@ -591,6 +595,23 @@ impl Launcher {
                 })),
             )
             .child(
+                button(
+                    "instance-launch",
+                    if self.launch.is_some() {
+                        "Close launch"
+                    } else {
+                        "Launch…"
+                    },
+                    Kind::Ghost,
+                    &t,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.toggle_launch();
+                    cx.notify();
+                })),
+            )
+            .child(self.shortcut_button(&instance, cx))
+            .child(
                 button("instance-folder", "Open folder", Kind::Ghost, &t).on_click(
                     move |_, _, cx| {
                         let _ = std::fs::create_dir_all(&home);
@@ -604,17 +625,24 @@ impl Launcher {
             Some(
                 div()
                     .flex()
-                    .items_baseline()
-                    .gap(px(10.))
-                    .child(instance.name.clone())
+                    .flex_col()
                     .child(
-                        text(theme::CAPTION)
-                            .text_color(t.muted)
-                            .child(played_line(&instance)),
+                        div()
+                            .flex()
+                            .items_baseline()
+                            .gap(px(10.))
+                            .child(instance.name.clone())
+                            .child(
+                                text(theme::CAPTION)
+                                    .text_color(t.muted)
+                                    .child(played_line(&instance)),
+                            ),
                     )
+                    .children(self.shortcut_note(&instance.id))
+                    .child(actions)
                     .into_any_element(),
             ),
-            Some(actions.into_any_element()),
+            None,
             &t,
         ))
     }

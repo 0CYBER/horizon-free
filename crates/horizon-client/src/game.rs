@@ -2990,6 +2990,16 @@ impl Game<'_> {
                     data,
                 } => self.sculk_charge_event(pos, data),
                 LevelEvent::LevelEvent { id: 3007, pos, .. } => self.shriek_event(pos),
+                // LevelEventHandler 2019 and 2020: the crack on a face of the
+                // block being mined, with its hit sound for 2020.
+                LevelEvent::LevelEvent {
+                    id: id @ (2019 | 2020),
+                    pos,
+                    data,
+                } => {
+                    let face = horizon_core::geometry::Direction::ALL[data.clamp(0, 5) as usize];
+                    self.breaking_block_effects([pos.x, pos.y, pos.z], face.normal(), id == 2020);
+                }
                 LevelEvent::LevelEvent { id: 2004, pos, .. } => {
                     self.spawner_burst([pos.x, pos.y, pos.z])
                 }
@@ -4241,6 +4251,17 @@ impl Game<'_> {
             _ => {}
         }
     }
+    /// `ServerPlayerGameMode.tick` while a player digs: level event 2020 every
+    /// fourth tick since the START (the hit sound), else 2019 (the crack only),
+    /// for everyone around, the digger included (`levelEvent(null, ...)`).
+    fn destroy_progress_event(&mut self, pos: [i32; 3], face: [i32; 3], ticks: u32) {
+        let id = if ticks.is_multiple_of(4) { 2020 } else { 2019 };
+        let direction = horizon_core::geometry::Direction::ALL
+            .iter()
+            .position(|d| d.normal() == face)
+            .unwrap_or(1);
+        self.level_event_at(id, pos, direction as i32);
+    }
     fn tick_mining(&mut self) -> Result<()> {
         if self.destroy_delay > 0 {
             self.destroy_delay -= 1;
@@ -4284,6 +4305,11 @@ impl Game<'_> {
         let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
         let facts = self.res.facts().get(state);
         if facts.hardness < 0.0 {
+            // The server still counts its destroy ticks on an unbreakable block.
+            let m = self.mining.as_mut().ok_or("mining")?;
+            m.ticks += 1;
+            let (pos, ticks) = (m.pos, m.ticks);
+            self.destroy_progress_event(pos, hit.face, ticks);
             return Ok(());
         }
         // Player.getDestroySpeed / BlockBehaviour.getDestroyProgress.
@@ -4314,26 +4340,15 @@ impl Game<'_> {
         } else {
             speed / facts.hardness / if harvest { 30.0 } else { 100.0 }
         };
-        let hit_sound = facts.sounds.clone();
         self.swing_arm();
         let m = self.mining.as_mut().ok_or("mining")?;
         m.progress += progress;
         m.ticks += 1;
-        let crack = (m.pos, hit.face);
-        if m.ticks % 4 == 1 {
-            let c = [
-                f64::from(m.pos[0]) + 0.5,
-                f64::from(m.pos[1]) + 0.5,
-                f64::from(m.pos[2]) + 0.5,
-            ];
-            self.audio.play(
-                &hit_sound.hit,
-                Some(c),
-                (hit_sound.volume + 1.0) / 8.0,
-                hit_sound.pitch * 0.5,
-            );
+        // An instant break at START sends no destroy events.
+        if m.progress < 1.0 || m.ticks > 1 {
+            let (pos, ticks) = (m.pos, m.ticks);
+            self.destroy_progress_event(pos, hit.face, ticks);
         }
-        self.crack_particle(crack.0, crack.1, state);
         let m = self.mining.as_mut().ok_or("mining")?;
         // ServerPlayerGameMode breaks a player's block at once only when it is instant (START's
         // insta-mine); otherwise it waits for the client's STOP_DESTROY_BLOCK

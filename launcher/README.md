@@ -100,6 +100,21 @@ The opening, then Play ([clip](docs/opening.webm)):
   pack into the selected instance. A data pack is pointed at the world rows, and the Packs section
   and the world rows keep taking their own drops. A note in the corner says what happened.
   `horizon-launcher instance import <file>`.
+- **Launch options**: Home's Instance row has **Launch…**: per instance, a shell command run in its
+  folder before the game (the game starts only if it succeeds), a wrapper the game runs through
+  (`nice -n 5`), and environment variables (`NAME=value OTHER="two words"`), kept in
+  `instances.json` (`horizon_launcher::launch`). The game stays one process the launcher follows:
+  on Unix `/bin/sh` runs the command and then `exec`s the wrapper and the game, whose words pass
+  through `"$@"` untouched; on Windows `cmd /C` runs `<command> && <game>`. Both the window's Play
+  and `play` use them. `horizon-launcher instance launch <instance> [--pre-launch …]
+  [--wrapper …] [--env …]` (an MCP agent needs `confirm: true`: it sets commands Play runs).
+- **Desktop shortcut**: Home's Instance row has **Shortcut**: a shortcut on the desktop that plays
+  the selected instance without opening the launcher (`horizon-launcher play --instance <id>`).
+  A `.desktop` file on Linux (also put in the applications menu, and marked trusted with `gio`
+  where it exists), a small app with Horizon's icon on macOS, a `.lnk` on Windows
+  (`horizon_launcher::shortcut`). **Remove shortcut** moves it to the trash; it is found by the
+  instance id inside it, so a rename doesn't lose it. `horizon-launcher instance shortcut
+  [instance] [--remove]`; `HORIZON_LAUNCHER_DESKTOP` points it at another folder.
 - **Console**: Home's Console shows the game's output of this run as it comes: a search (every
   word, any case), Follow to keep the newest line in view, Copy, and Open logs folder. Warnings
   and errors stand out. **Share log…** uploads the log to [mclo.gs](https://mclo.gs), a paste
