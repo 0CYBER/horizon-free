@@ -638,7 +638,9 @@ impl Game<'_> {
                 let scale = s.potion_duration_scale();
                 brewing::contents_effects(s)
                     .into_iter()
-                    .map(|(id, d, amp)| (id, horizon_client::effects::scaled_duration(d, scale), amp))
+                    .map(|(id, d, amp)| {
+                        (id, horizon_client::effects::scaled_duration(d, scale), amp)
+                    })
                     .collect()
             }
             None => Vec::new(),

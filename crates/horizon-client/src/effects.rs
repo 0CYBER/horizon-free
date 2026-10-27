@@ -314,7 +314,9 @@ impl PlayerEffects {
         potion: Option<&str>,
         scale: f32,
     ) -> (Vec<EffectInstance>, Vec<EffectAction>) {
-        let effects = potion.and_then(potions::potion).map_or(&[][..], |d| d.effects);
+        let effects = potion
+            .and_then(potions::potion)
+            .map_or(&[][..], |d| d.effects);
         Self::contents_effects(effects, scale)
     }
     /// `PotionContents.forEachEffect`'s effects, as `potion_effects`.

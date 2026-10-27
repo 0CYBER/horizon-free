@@ -579,7 +579,11 @@ fn effects_from_blocks(m: &mut Mob, w: &MobWorld) {
                         // fireDamage (1, 2 for a soul campfire).
                         name @ ("minecraft:campfire" | "minecraft:soul_campfire") => {
                             if w.prop(x, y, z, "lit") == Some("true") {
-                                let fire = if name == "minecraft:campfire" { 1.0 } else { 2.0 };
+                                let fire = if name == "minecraft:campfire" {
+                                    1.0
+                                } else {
+                                    2.0
+                                };
                                 m.damage(fire, Damage::of(DamageKind::Campfire));
                             }
                         }

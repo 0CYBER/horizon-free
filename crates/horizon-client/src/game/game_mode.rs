@@ -84,7 +84,12 @@ impl Game<'_> {
         };
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let name = &self.res.facts().get(state).name;
-        let properties = self.pack.assets.registry.state(state).map(|s| &s.properties);
+        let properties = self
+            .pack
+            .assets
+            .registry
+            .state(state)
+            .map(|s| &s.properties);
         let matches = |p: &Tag| {
             if p.get("nbt").is_some() || p.get("components").is_some() {
                 return false;
@@ -119,7 +124,8 @@ impl Game<'_> {
                                     _ => false,
                                 })
                             };
-                            in_range(have, bound("min"), true) && in_range(have, bound("max"), false)
+                            in_range(have, bound("min"), true)
+                                && in_range(have, bound("max"), false)
                         }
                         _ => false,
                     }

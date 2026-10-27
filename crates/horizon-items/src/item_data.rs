@@ -282,7 +282,10 @@ impl ItemStack {
     /// `DataComponents.POTION_DURATION_SCALE` with the item's default: 0.125
     /// for a tipped arrow, 0.25 for a lingering potion, else 1.
     pub fn potion_duration_scale(&self) -> f32 {
-        match self.data().and_then(|d| d.other("minecraft:potion_duration_scale")) {
+        match self
+            .data()
+            .and_then(|d| d.other("minecraft:potion_duration_scale"))
+        {
             Some(Tag::Float(bits)) => f32::from_bits(*bits),
             Some(Tag::Double(bits)) => f64::from_bits(*bits) as f32,
             Some(t) if int(t).is_some() => int(t).unwrap_or(1) as f32,
