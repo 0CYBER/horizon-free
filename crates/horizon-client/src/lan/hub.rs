@@ -43,6 +43,7 @@ pub mod game_event {
     pub const RAIN_LEVEL: u8 = 7;
     pub const THUNDER_LEVEL: u8 = 8;
     pub const GUARDIAN_ELDER_EFFECT: u8 = 10;
+    pub const IMMEDIATE_RESPAWN: u8 = 11;
     pub const LEVEL_CHUNKS_LOAD_START: u8 = 13;
 }
 
@@ -172,9 +173,14 @@ pub struct Hub {
     /// The `player_movement_check` and `elytra_movement_check` game rules,
     /// set by the game before each tick.
     pub movement_checks: (bool, bool),
+    /// The `immediate_respawn` game rule, as the players were last told.
+    immediate_respawn: bool,
     /// An integrated server's owner (`MinecraftServer.isSingleplayerOwner`),
     /// whose moves are never checked.
     pub singleplayer_owner: Option<u128>,
+    /// The world is superflat (`ServerLevel.isFlat`, a world-wide flag, sent as
+    /// `CommonPlayerSpawnInfo.isFlat` in every dimension).
+    pub flat_world: bool,
     /// Who rides what, set by the game before each tick.
     pub riding: super::entity::Riding,
     /// The scoreboard's teams, set by the game each tick, for players'
@@ -352,8 +358,10 @@ impl Hub {
             guests: Vec::new(),
             sync,
             ticks: 0,
+            immediate_respawn: false,
             movement_checks: (true, true),
             singleplayer_owner: None,
+            flat_world: false,
             riding: Default::default(),
             last_clock: i64::MIN,
             last_rate: 0.0,
@@ -427,6 +435,17 @@ impl Hub {
         let body = packet.encode();
         for g in self.guests.iter().filter(|g| g.placed) {
             g.sender.send(body.clone());
+        }
+    }
+    /// MinecraftServer.onGameRuleChanged: every player is told when
+    /// `immediate_respawn` changes; a joining player's Login carries it.
+    pub fn set_immediate_respawn(&mut self, on: bool) {
+        if self.immediate_respawn != on {
+            self.immediate_respawn = on;
+            self.broadcast(&C::GameEvent(play::GameEvent {
+                event: game_event::IMMEDIATE_RESPAWN,
+                param: if on { 1.0 } else { 0.0 },
+            }));
         }
     }
     /// PlayerList.setViewDistance: every player is told the new radius,
@@ -602,7 +621,7 @@ impl Hub {
             game_type: game_mode,
             previous_game_type: None,
             debug: false,
-            flat: false,
+            flat: self.flat_world,
             last_death: None,
             portal_cooldown: 0,
             sea_level: 63,
@@ -670,7 +689,7 @@ impl Hub {
             chunk_radius: self.config.view_distance,
             simulation_distance: self.config.simulation_distance,
             reduced_debug_info: false,
-            show_death_screen: true,
+            show_death_screen: !self.immediate_respawn,
             limited_crafting: false,
             spawn: self.spawn_info(mode),
             // MinecraftServer.usesAuthentication, enforceSecureProfile.
@@ -2075,6 +2094,7 @@ impl Hub {
                 | S::PlayerLoaded(_)
                 | S::ChunkBatchReceived(_)
                 | S::ClientInformation(_)
+                | S::RecipeBookChangeSettings(_)
                 | S::ClientTickEnd(_)
                 | S::KeepAlive(_) => false,
                 S::MovePlayerPos(p) => self.moved_far(i, [p.x, p.y, p.z]),
@@ -2141,6 +2161,15 @@ impl Hub {
                     g.max_unacknowledged = 10;
                 }
                 S::ClientTickEnd(_) => self.guests[i].position_this_tick = false,
+                // ServerGamePacketListenerImpl.handleRecipeBookChangeSettingsPacket.
+                S::RecipeBookChangeSettings(p) => {
+                    if let Some(book) = crate::recipe_book::BookType::ALL.get(p.book_type as usize)
+                    {
+                        let settings = &mut self.guests[i].recipe_book;
+                        settings.open[book.index()] = p.open;
+                        settings.filtering[book.index()] = p.filtering;
+                    }
+                }
                 S::ClientInformation(info) => {
                     let g = &mut self.guests[i];
                     g.view_distance =
@@ -2276,11 +2305,16 @@ impl Hub {
                 packets = 1;
             }
             // shouldCheckPlayerMovement (never the single-player owner).
-            // The server holds no velocity for a guest (getDeltaMovement),
-            // so nothing is expected.
             if !owner && check && (!g.fall_flying || elytra_check) {
                 let limit = if g.fall_flying { 300.0 } else { 100.0 };
-                if moved > limit * f64::from(packets) {
+                // `movedDist - expectedDist` (getDeltaMovement): the velocity
+                // the server last simulated for the guest is expected
+                // movement, not a violation — a landing glide keeps its speed.
+                let expected = g.motion.as_ref().map_or(0.0, |m| {
+                    let v = m.velocity;
+                    v.x * v.x + v.y * v.y + v.z * v.z
+                });
+                if moved - expected > limit * f64::from(packets) {
                     events.push(HostEvent::Warn(format!(
                         "{} moved too quickly! {},{},{}",
                         g.name,
@@ -2336,18 +2370,8 @@ impl Hub {
         }
         // getBoundingBox: the box of the body's pose (swimming and crawling
         // are 0.6 tall), so a swimmer under a ceiling isn't sent back.
-        let (half, height) = if g.fall_flying {
-            (0.3, 0.6)
-        } else if let Some(m) = &g.motion {
-            (
-                f64::from(m.dimensions.width) / 2.0,
-                f64::from(m.dimensions.height),
-            )
-        } else if g.sneaking {
-            (0.3, 1.5)
-        } else {
-            (0.3, 1.8)
-        };
+        let d = g.dimensions();
+        let (half, height) = (f64::from(d.width) / 2.0, f64::from(d.height));
         let at = |p: [f64; 3]| {
             Aabb::new(
                 Vec3::new(p[0] - half, p[1], p[2] - half),

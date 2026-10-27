@@ -98,9 +98,34 @@ pub enum BlockEntity {
     Campfire(Box<Campfire>),
     /// `SkullBlockEntity` of every skull and head block.
     Skull(Skull),
+    /// `TheEndGatewayBlockEntity`: its age and configured destination.
+    EndGateway(EndGateway),
     /// `DaylightDetectorBlockEntity`: no data, only the ticker
     /// (`DaylightDetectorBlock.tickEntity`).
     DaylightDetector,
+    /// `ChiseledBookShelfBlockEntity`: a `Container` of six one-book slots.
+    ChiseledBookshelf(Box<ChiseledBookshelf>),
+}
+/// `ChiseledBookShelfBlockEntity`: six slots and `lastInteractedSlot`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChiseledBookshelf {
+    pub items: [Option<ItemStack>; 6],
+    pub last_slot: i32,
+}
+impl Default for ChiseledBookshelf {
+    fn default() -> Self {
+        Self {
+            items: Default::default(),
+            last_slot: -1,
+        }
+    }
+}
+/// `TheEndGatewayBlockEntity`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EndGateway {
+    pub age: i64,
+    pub exit_portal: Option<[i32; 3]>,
+    pub exact_teleport: bool,
 }
 /// `CampfireBlockEntity`: four cooking slots, each with its
 /// `cookingProgress` and `cookingTime` (the recipe's).
@@ -190,6 +215,9 @@ impl Skull {
 #[derive(Clone, Debug)]
 pub struct SkullSkin {
     pub download: Option<(String, String)>,
+    /// `ResolvableProfile.nameOrId` when the profile is `Dynamic` (a name or
+    /// an id only): the key `skins::Resolver` resolves it by.
+    pub dynamic: Option<crate::skins::NameOrId>,
     pub fallback: &'static str,
 }
 impl SkullSkin {
@@ -198,10 +226,21 @@ impl SkullSkin {
             let location = crate::skins::skin_location(&crate::skins::texture_hash(&url)?);
             Some((url, location))
         });
+        // A `Dynamic` profile (a name or id only) resolves through the
+        // services when the skull is drawn.
+        let dynamic = crate::skins::dynamic_nbt(profile);
         // DefaultPlayerSkin.get(id), or getDefaultSkin (slim steve) without an id.
         let fallback = crate::skins::profile_uuid_nbt(profile)
+            .or_else(|| {
+                crate::skins::nbt_text(profile.get("name"))
+                    .map(|name| horizon_protocol::crypto::offline_uuid(&name))
+            })
             .map_or("entity/player/slim/steve", crate::tab_list::default_skin);
-        Self { download, fallback }
+        Self {
+            download,
+            dynamic,
+            fallback,
+        }
     }
 }
 /// The skull and head blocks (`SkullBlock`, `WallSkullBlock`): every
@@ -366,6 +405,9 @@ impl BlockEntity {
         if is_skull(name) {
             return Some(Self::Skull(Skull::default()));
         }
+        if name == "minecraft:end_gateway" {
+            return Some(Self::EndGateway(EndGateway::default()));
+        }
         if name == "minecraft:daylight_detector" {
             return Some(Self::DaylightDetector);
         }
@@ -380,6 +422,9 @@ impl BlockEntity {
         }
         if name == "minecraft:campfire" || name == "minecraft:soul_campfire" {
             return Some(Self::Campfire(Box::default()));
+        }
+        if name == "minecraft:chiseled_bookshelf" {
+            return Some(Self::ChiseledBookshelf(Box::default()));
         }
         let size = match name {
             "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel" => 27,
@@ -418,8 +463,10 @@ impl BlockEntity {
             Self::Beehive(_) => "minecraft:beehive",
             Self::CommandBlock(_) => "minecraft:command_block",
             Self::Skull(_) => "minecraft:skull",
+            Self::EndGateway(_) => "minecraft:end_gateway",
             Self::DaylightDetector => "minecraft:daylight_detector",
             Self::Campfire(_) => "minecraft:campfire",
+            Self::ChiseledBookshelf(_) => "minecraft:chiseled_bookshelf",
         }
     }
     pub fn contents(&self) -> Vec<ItemStack> {
@@ -436,6 +483,7 @@ impl BlockEntity {
             | Self::Vault(_)
             | Self::Beehive(_)
             | Self::CommandBlock(_)
+            | Self::EndGateway(_)
             | Self::Skull(_)
             | Self::DaylightDetector => Vec::new(),
             Self::Lectern(l) => l.book.iter().cloned().collect(),
@@ -443,6 +491,7 @@ impl BlockEntity {
             Self::Banner(_) => Vec::new(),
             Self::Crafter(c) => c.items.iter().flatten().cloned().collect(),
             Self::Campfire(c) => c.items.iter().flatten().cloned().collect(),
+            Self::ChiseledBookshelf(b) => b.items.iter().flatten().cloned().collect(),
         }
     }
     pub fn slots(&self) -> &[Option<ItemStack>] {
@@ -456,9 +505,11 @@ impl BlockEntity {
             | Self::Lectern(_)
             | Self::Sculk(_)
             | Self::Banner(_)
+            | Self::EndGateway(_)
             | Self::Skull(_)
             | Self::DaylightDetector => &[],
             Self::Crafter(c) => &c.items,
+            Self::ChiseledBookshelf(b) => &b.items,
             Self::CreakingHeart(_)
             | Self::Spawner(_)
             | Self::TrialSpawner(_)
@@ -480,9 +531,11 @@ impl BlockEntity {
             | Self::Lectern(_)
             | Self::Sculk(_)
             | Self::Banner(_)
+            | Self::EndGateway(_)
             | Self::Skull(_)
             | Self::DaylightDetector => &mut [],
             Self::Crafter(c) => &mut c.items,
+            Self::ChiseledBookshelf(b) => &mut b.items,
             Self::CreakingHeart(_)
             | Self::Spawner(_)
             | Self::TrialSpawner(_)
@@ -728,6 +781,18 @@ impl Furnace {
                                     .recipes_used
                                     .entry(recipe_used_key(&recipe.id))
                                     .or_insert(0) += 1;
+                                // AbstractFurnaceBlockEntity.burn: drying a wet sponge fills
+                                // the bucket in the fuel slot.
+                                if self.items[0]
+                                    .as_ref()
+                                    .is_some_and(|i| &*i.item == "minecraft:wet_sponge")
+                                    && self.items[1]
+                                        .as_ref()
+                                        .is_some_and(|f| &*f.item == "minecraft:bucket")
+                                {
+                                    self.items[1] =
+                                        Some(ItemStack::new("minecraft:water_bucket", 1));
+                                }
                                 if let Some(i) = self.items[0].as_mut() {
                                     i.count -= 1;
                                     if i.count == 0 {

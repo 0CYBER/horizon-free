@@ -208,7 +208,7 @@ fn snapshot(out: &mut impl Write, player: &PlayerMotion) -> Result<()> {
             )),
             MotionEvent::Emission {
                 state,
-                in_water: true,
+                muffled: true,
                 ..
             } => Some(format!("muffled-step {}", state.0)),
             MotionEvent::BubbleColumnParticle { bubble, position } => Some(format!(
@@ -353,6 +353,7 @@ pub fn main() -> Result<()> {
                             horizon_world::food::Difficulty::Hard,
                         ][op["difficulty"].as_u64().unwrap() as usize],
                         natural_regeneration: op["regenerate"].as_bool().unwrap(),
+                        ..Default::default()
                     };
                 }
                 "food" => {
