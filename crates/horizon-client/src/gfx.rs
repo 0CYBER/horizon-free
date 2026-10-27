@@ -35,10 +35,11 @@ fn entity_shader() -> String {
 #[cfg(test)]
 mod crumbling_tests;
 mod entity_batch;
+mod entity_outline;
 mod weather;
 use entity_batch::EntityBatch;
 pub use entity_batch::{
-    SHADOW_OVERLAY, TRANSLUCENT_GLINT_ITEM_OVERLAY, TRANSLUCENT_ITEM_OVERLAY,
+    ENERGY_SWIRL_OVERLAY, SHADOW_OVERLAY, TRANSLUCENT_GLINT_ITEM_OVERLAY, TRANSLUCENT_ITEM_OVERLAY,
     TRANSLUCENT_PARTICLE_OVERLAY, WATER_MASK_OVERLAY,
 };
 
@@ -265,6 +266,9 @@ pub struct Frame<'a> {
     pub nether_lighting: bool,
     /// Camera-relative entity geometry textured from the shared atlas.
     pub entities: &'a [Vertex],
+    /// The glowing entities' silhouettes in their team colours (`OutlineBufferSource`),
+    /// outlined through walls after the hand.
+    pub glowing: &'a [Vertex],
     /// Runs of `entities` by entity, while a shader pack draws them (`pack_draw::EntitySpan`).
     pub entity_spans: &'a [pack_draw::EntitySpan],
     pub weather: &'a [crate::weather::Vertex],
@@ -407,6 +411,8 @@ pub struct Renderer {
     cloud_uniform: wgpu::Buffer,
     cloud_group: wgpu::BindGroup,
     additive_pipeline: wgpu::RenderPipeline,
+    /// `RenderPipelines.ENERGY_SWIRL`: additive, unlit, the sprite repeated within itself.
+    energy_swirl_pipeline: wgpu::RenderPipeline,
     lightning_pipeline: wgpu::RenderPipeline,
     lightning: lightning::Renderer,
     see_through_pipeline: wgpu::RenderPipeline,
@@ -414,6 +420,8 @@ pub struct Renderer {
     celestial_buffer: wgpu::Buffer,
     end_sky: end_sky::EndSky,
     stars: stars::Stars,
+    /// The glowing entities' outline (`LevelRenderer.entityOutlineTarget`).
+    entity_outline: entity_outline::EntityOutline,
     panorama: panorama::Panorama,
     /// `RenderPipelines.WORLD_BORDER` and its buffers.
     border_pipeline: wgpu::RenderPipeline,
@@ -1893,6 +1901,27 @@ impl Renderer {
             alpha_blend,
             false,
         );
+        // RenderPipelines.ENERGY_SWIRL: BlendFunction.ADDITIVE (one, one), no culling; no depth
+        // writes either: vanilla sorts the quads far to near, so every face passes the test.
+        let one_one = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let energy_swirl_pipeline = entity_pipeline_with(
+            "Energy swirls",
+            None,
+            false,
+            wgpu::CompareFunction::GreaterEqual,
+            Default::default(),
+            wgpu::BlendState {
+                color: one_one,
+                alpha: one_one,
+            },
+            false,
+            "fs_energy_swirl",
+            wgpu::ColorWrites::ALL,
+        );
         let lightning_attributes = wgpu::vertex_attr_array![6=>Float32x3];
         let lightning_vertex = [
             entity_vertex[0].clone(),
@@ -2345,6 +2374,11 @@ impl Renderer {
         let uploads = upload::Uploads::new(&device);
         let section_uploads = upload::Uploads::with_chunk(&device, SECTION_UPLOAD_CHUNK);
         let stars = stars::Stars::new(&device, config.format.remove_srgb_suffix());
+        let entity_outline = entity_outline::EntityOutline::new(
+            &device,
+            (&entity_shader, &entity_layout, &entity_vertex),
+            config.format.remove_srgb_suffix(),
+        );
         let panorama = panorama::Panorama::new(
             &device,
             &queue,
@@ -2410,6 +2444,7 @@ impl Renderer {
             cloud_uniform,
             cloud_group,
             additive_pipeline,
+            energy_swirl_pipeline,
             lightning_pipeline,
             lightning: lightning::Renderer::new(),
             see_through_pipeline,
@@ -2417,6 +2452,7 @@ impl Renderer {
             celestial_buffer,
             end_sky: end_sky::EndSky::default(),
             stars,
+            entity_outline,
             panorama,
             border_pipeline,
             border_group,
@@ -4041,6 +4077,7 @@ impl Renderer {
             crumbling_quads,
             translucent_crumbling_quads,
             water_mask_quads,
+            swirl_quads,
             shadow_quads,
             translucent_particle_quads,
             translucent_item_quads,
@@ -4052,6 +4089,7 @@ impl Renderer {
             + crumbling_quads
             + translucent_crumbling_quads
             + water_mask_quads
+            + swirl_quads
             + shadow_quads
             + translucent_particle_quads
             + translucent_item_quads;
@@ -4115,6 +4153,13 @@ impl Renderer {
                 bytemuck::cast_slice(all_entities),
             );
         }
+        self.entity_outline.prepare(
+            &self.device,
+            &mut self.uploads,
+            &mut encoder,
+            frame.glowing,
+            [self.config.width, self.config.height],
+        );
         if let Some((rotation, brightness)) = frame.stars {
             self.stars.prepare(
                 &mut self.uploads,
@@ -4142,7 +4187,8 @@ impl Renderer {
             } else {
                 lightning::QUADS
             })
-            .max(weather_quads);
+            .max(weather_quads)
+            .max(frame.glowing.len() as u32 / 4);
         if max_quads > self.index_quads {
             self.index_quads = max_quads.next_power_of_two();
             self.indices = Self::quad_indices(&self.device, self.index_quads);
@@ -4633,6 +4679,21 @@ impl Renderer {
                 self.lightning.draw(&mut pass, &frame.lightning);
                 pass.set_bind_group(0, &self.group, &[]);
             }
+            if swirl_quads > 0 {
+                pass.set_pipeline(&self.energy_swirl_pipeline);
+                pass.set_bind_group(0, &self.entity_group, &[]);
+                pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                pass.draw_indexed(
+                    0..swirl_quads * 6,
+                    ((entity_quads
+                        + crumbling_quads
+                        + translucent_crumbling_quads
+                        + water_mask_quads)
+                        * 4) as i32,
+                    0..1,
+                );
+                pass.set_bind_group(0, &self.group, &[]);
+            }
             if additive_quads > 0 {
                 pass.set_pipeline(&self.additive_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
@@ -4884,6 +4945,13 @@ impl Renderer {
                 0..1,
             );
         }
+        // GameRenderer.render: LevelRenderer.blitEntityOutline after the level and the hand.
+        self.entity_outline.draw(
+            &mut encoder,
+            &view_target,
+            &self.entity_group,
+            &self.indices,
+        );
         if !frame.screen.is_empty() {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: &view_target,
@@ -5316,7 +5384,7 @@ mod tests {
         let mut batch = super::EntityBatch::default();
         let counts = batch.update(&entities, &quad(3, 5), &quad(0, 6), &quad(0, 8));
         let vertices = &batch.combined;
-        assert_eq!(counts, [4, 1, 1, 0, 1, 1, 0]);
+        assert_eq!(counts, [4, 1, 1, 0, 0, 1, 1, 0]);
         assert_eq!(
             vertices
                 .as_chunks::<4>()

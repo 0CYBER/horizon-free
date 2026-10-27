@@ -65,6 +65,7 @@ mod functions;
 mod game_mode;
 mod gamemode_switcher;
 mod ghasts;
+mod glowing;
 mod golems;
 mod growth;
 mod hand;
@@ -132,6 +133,7 @@ mod persist;
 mod perspective;
 mod pickups;
 mod piglins;
+mod piston_push;
 mod player_equip;
 mod postprocess;
 mod potions;
@@ -1388,6 +1390,8 @@ struct Game<'a> {
     /// Runs of `entity_vertices` by entity, for a shader pack's per-entity draws; recorded only
     /// while `pack_ids` is set (game/shader_packs.rs).
     entity_spans: std::cell::RefCell<Vec<horizon_client::gfx::pack_draw::EntitySpan>>,
+    /// The glowing entities' silhouettes this frame (game/glowing.rs).
+    glowing_vertices: std::cell::RefCell<Vec<Vertex>>,
     /// The shader pack's entity and block entity ids, while one draws entities.
     pack_ids: Option<shader_packs::PackIds>,
     started: Instant,
@@ -1605,10 +1609,19 @@ struct Game<'a> {
     /// Map textures waiting for the next HUD batch to upload them.
     map_patches: Vec<horizon_client::font::Patch>,
     text_displays: std::collections::HashMap<i32, text_displays::RemoteTextDisplay>,
+    /// The fence knots a server tracks to this client, by entity id, at their
+    /// block (`LeashFenceKnotEntity`).
+    remote_knots: HashMap<u32, [i32; 3]>,
+    /// The entity ids a hosted server gives the knots its mobs hang on, by
+    /// block, while a lead is tied there.
+    knot_ids: HashMap<[i32; 3], u32>,
     text_display_vertices: usize,
     /// Player skin downloads, and which skin each atlas skin slot holds
     /// (least recently shown first).
     skin_downloads: RefCell<horizon_client::skins::Downloader>,
+    /// `ProfileResolver.Cached`: `Dynamic` profiles (name- or id-only heads
+    /// and mannequins) resolve through the services in the background.
+    skin_profiles: RefCell<horizon_client::skins::Resolver>,
     skin_slots: Vec<(String, usize)>,
     /// Atlas trim slots in use: (sprite name, slot), least recently drawn first.
     trim_slots: Vec<(String, usize)>,
@@ -2510,6 +2523,15 @@ impl Game<'_> {
                 no_physics,
                 &self.res.motion().fluids,
             );
+            // Entity.applyEffectsFromBlocks: bubble columns lift or drag the item.
+            horizon_client::motion::bubble_column_push(
+                &self.world,
+                self.pack.assets.registry,
+                self.res.facts(),
+                self.collision,
+                item.bounds(),
+                &mut item.velocity,
+            );
             cells.moved(i, item.previous, item.position);
             // ItemEntity.tick: merge every 2 ticks while moving between
             // blocks, every 40 otherwise, before the lifetime check.
@@ -2780,9 +2802,13 @@ impl Game<'_> {
         self.process_level_events()
     }
     fn attack_block(&mut self, pos: [i32; 3]) -> Result<()> {
-        self.with_level(|b, level, ticks| {
-            b.attack_block(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]));
+        let note = self.with_level(|b, level, ticks| {
+            b.attack_block(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]))
         });
+        // NoteBlock.attack awards the statistic.
+        if note {
+            self.stats.custom("play_noteblock", 1);
+        }
         self.process_level_events()
     }
     /// Track which chunks are ticking (Ticks needs chunk load/unload).
@@ -2978,20 +3004,29 @@ impl Game<'_> {
             b.run_block_events(level, ticks);
             b.tick_block_entities(level, ticks);
         });
+        // `PistonMovingBlockEntity.tick` pushes what its block just ran into,
+        // with the progress it is about to take.
+        let pushes = std::mem::take(&mut self.block_ticks.piston_pushes);
+        self.push_piston_entities(pushes);
+        self.process_level_events()?;
         self.sync_moving_pistons();
-        self.process_level_events()
+        Ok(())
     }
     /// Copies the moving-piston block entities into the world, where the
     /// collision queries and the renderer read them.
     fn sync_moving_pistons(&mut self) {
-        let pistons = &mut self.world.moving_pistons;
-        pistons.clear();
-        pistons.extend(
-            self.block_ticks
-                .moving_pistons
-                .iter()
-                .map(|(p, piston)| ([p.x, p.y, p.z], piston.shape_state())),
-        );
+        let previous = std::mem::take(&mut self.world.moving_pistons);
+        let current: Vec<_> = self
+            .block_ticks
+            .moving_pistons
+            .iter()
+            .map(|(p, piston)| ([p.x, p.y, p.z], piston.shape_state()))
+            .collect();
+        self.world.moving_piston_fallback = previous
+            .into_iter()
+            .filter(|(pos, _)| !current.iter().any(|(next, _)| next == pos))
+            .collect();
+        self.world.moving_pistons = current;
     }
     /// `ServerLevel.tick`'s scheduled block then fluid ticks, one at a time:
     /// the side effects of each (a shrieker summoning a warden, drops, game
@@ -3991,6 +4026,10 @@ impl Game<'_> {
                 return Ok(true);
             }
             if self.use_pumpkin(hit.pos, hit.face, held.as_ref())? {
+                self.swing_arm();
+                return Ok(true);
+            }
+            if self.use_beehive(hit.pos, held.as_ref())? {
                 self.swing_arm();
                 return Ok(true);
             }
@@ -5842,6 +5881,7 @@ impl Game<'_> {
                 | BlockEntity::Vault(_)
                 | BlockEntity::Beehive(_)
                 | BlockEntity::CommandBlock(_)
+                | BlockEntity::EndGateway(_)
                 | BlockEntity::Skull(_)
                 | BlockEntity::DaylightDetector
                 | BlockEntity::Campfire(_),
@@ -6114,6 +6154,7 @@ impl Game<'_> {
                     | BlockEntity::Vault(_)
                     | BlockEntity::Beehive(_)
                     | BlockEntity::CommandBlock(_)
+                    | BlockEntity::EndGateway(_)
                     | BlockEntity::Skull(_)
                     | BlockEntity::DaylightDetector
                     | BlockEntity::Campfire(_),
@@ -8260,6 +8301,15 @@ impl Game<'_> {
             None => horizon_client::mobs::Damage::of(horizon_client::mobs::DamageKind::Generic),
         };
         let landed = self.hurt_by_player(index, amount, source);
+        if landed {
+            let victim = self.mob_entity(&self.mobs[index]);
+            self.player_hit(
+                &victim,
+                creatures::damage_type(source.kind, true),
+                None,
+                amount,
+            );
+        }
         if let Some(p) = self.player.as_mut() {
             if p.attack_log.len() >= 64 {
                 p.attack_log.remove(0);
@@ -11280,6 +11330,7 @@ impl Game<'_> {
         let mut entities = std::mem::take(&mut self.entity_vertices);
         entities.clear();
         self.see_through_vertices.clear();
+        self.glowing_vertices.get_mut().clear();
         if !title {
             entities = horizon_client::spans::time("entity_geometry", || {
                 self.entity_geometry(camera, alpha, entities)
@@ -11347,6 +11398,7 @@ impl Game<'_> {
         // map_patches any earlier leaves them a frame behind.
         hud.patches.append(&mut self.map_patches);
         let entity_spans = std::mem::take(self.entity_spans.get_mut());
+        let glowing = std::mem::take(self.glowing_vertices.get_mut());
         let frame = Frame {
             weather: &weather,
             weather_time: horizon_client::weather::Time::new(self.world.game_time, alpha as f32),
@@ -11413,6 +11465,7 @@ impl Game<'_> {
             }),
             entities: &entities,
             entity_spans: &entity_spans,
+            glowing: &glowing,
             dynamic_lights: &self.dynamic_lights,
             lightning: horizon_client::gfx::lightning::Input {
                 bolts: &bolts,
@@ -11468,6 +11521,7 @@ impl Game<'_> {
         // Restore storage even when rendering fails (for example, a lost surface).
         self.entity_vertices = entities;
         *self.entity_spans.get_mut() = entity_spans;
+        *self.glowing_vertices.get_mut() = glowing;
         self.see_through_vertices = see_through;
         result
     }
@@ -13183,6 +13237,7 @@ impl<'a> Game<'a> {
             luminance: None,
             see_through_vertices: Vec::new(),
             entity_spans: Default::default(),
+            glowing_vertices: Default::default(),
             pack_ids: None,
             health_hud: hud_layout::HealthHud::default(),
             started: now,
@@ -13327,12 +13382,15 @@ impl<'a> Game<'a> {
             dragon_model: prepared.dragon_model,
             map_patches: Vec::new(),
             text_displays: Default::default(),
+            remote_knots: Default::default(),
+            knot_ids: Default::default(),
             text_display_vertices: 0,
             skin_downloads: RefCell::new(horizon_client::skins::Downloader::new(
                 std::env::current_dir()
                     .unwrap_or_default()
                     .join("assets/skins"),
             )),
+            skin_profiles: RefCell::new(horizon_client::skins::Resolver::new()),
             skin_slots: Vec::new(),
             trim_slots: Vec::new(),
             cart_models: prepared.cart_models,
@@ -14176,6 +14234,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         nether_lighting: false,
         entities: &[],
         entity_spans: &[],
+        glowing: &[],
         dynamic_lights: &[],
         clouds: None,
         lightning: Default::default(),
