@@ -151,8 +151,12 @@ pub struct AnvilResult {
     pub repair_item_count_cost: u32,
     pub only_renaming: bool,
 }
+/// `ItemStack.isDamageableItem`: durability, and not `minecraft:unbreakable`.
 pub fn is_damageable(items: &Items, stack: &ItemStack) -> bool {
     items.get(&stack.item).is_some_and(|i| i.max_damage > 0)
+        && stack
+            .data()
+            .is_none_or(|d| d.other("minecraft:unbreakable").is_none())
 }
 fn max_damage(items: &Items, stack: &ItemStack) -> i32 {
     items.get(&stack.item).map_or(0, |i| i.max_damage as i32)

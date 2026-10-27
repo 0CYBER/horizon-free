@@ -76,14 +76,11 @@ impl<'a> IntoIterator for &'a ChunkMap {
     }
 }
 impl crate::light::LightWorld for ChunkMap {
-    fn state(&self, x: i32, y: i32, z: i32) -> Option<u32> {
-        self.columns.state(x, y, z)
+    fn section(&self, cx: i32, s: usize, cz: i32) -> Option<&Arc<crate::chunk::Section>> {
+        self.columns.section(cx, s, cz)
     }
-    fn light(&self, x: i32, y: i32, z: i32) -> Option<u8> {
-        self.columns.light(x, y, z)
-    }
-    fn set_light(&mut self, x: i32, y: i32, z: i32, packed: u8) {
-        self.columns.set_light(x, y, z, packed);
+    fn set_section_light(&mut self, cx: i32, s: usize, cz: i32, light: crate::chunk::Light) {
+        self.columns.set_section_light(cx, s, cz, light);
     }
 }
 
@@ -106,7 +103,13 @@ mod tests {
         for column in map.values_mut() {
             Arc::make_mut(column).light_loaded = true;
         }
-        crate::light::LightWorld::set_light(&mut map, 0, 0, 0, 0);
+        crate::light::LightWorld::set_section_light(
+            &mut map,
+            0,
+            0,
+            0,
+            crate::chunk::Light::Uniform(0),
+        );
         assert_eq!(inserted, map.membership_revision());
         map.remove(&(0, 0));
         map.insert((1, 0), chunk);

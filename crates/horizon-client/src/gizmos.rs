@@ -204,6 +204,19 @@ impl Gizmos {
             position[1] + f64::from(size.1),
             position[2] + half,
         ];
+        self.entity_box(min, max, position, eye_height, living, view);
+    }
+    /// The same for an entity whose box is not centred on its position
+    /// (a painting or an item frame): `min` and `max` are the box.
+    pub fn entity_box(
+        &mut self,
+        min: [f64; 3],
+        max: [f64; 3],
+        position: [f64; 3],
+        eye_height: f32,
+        living: bool,
+        view: (f32, f32),
+    ) {
         self.cuboid(min, max, WHITE, STROKE_WIDTH);
         if living {
             let eye = min[1] + f64::from(eye_height);
