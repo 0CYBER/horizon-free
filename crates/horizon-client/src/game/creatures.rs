@@ -201,6 +201,7 @@ impl Game<'_> {
             // EntitySelector.NO_CREATIVE_OR_SPECTATOR.
             creative: self.creative || self.spectator(),
             sneaking: self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft),
+            swimming: p.swimming,
             look: view_vector(self.yaw, self.pitch),
             main_hand: self.held().map(|s| s.item.clone()),
             off_hand: None,
@@ -213,6 +214,8 @@ impl Game<'_> {
             last_hurt: self.combat.last_hurt_mob.map(|(id, at)| (Who::Mob(id), at)),
             velocity: p.velocity,
             yaw: self.yaw,
+            sprinting: p.sprinting,
+            riding: self.riding.is_some(),
             hero: self.potions.effects.get("hero_of_the_village").is_some(),
             effects: self.potions.effects.list.iter().map(|e| e.id).collect(),
             uuid: self.level.player_uuid.unwrap_or_default(),
@@ -587,6 +590,9 @@ impl Game<'_> {
                     ..base.clone()
                 };
                 let m = &mut mobs[i];
+                // getCurrentDifficultyAt(blockPosition()): the mob's own chunk,
+                // not the local player's (a server thread has no player).
+                w.difficulty = self.local_difficulty([m.position.x, m.position.y, m.position.z]);
                 w.nearest_player = super::natural_spawning::nearest_player(
                     &players,
                     m.position.x,
@@ -732,6 +738,7 @@ impl Game<'_> {
         self.tick_projectiles()?;
         self.tick_fangs();
         self.tick_allays();
+        self.tick_pandas();
         self.tick_breeze_effects();
         self.tick_sniffer_effects();
         self.piglin_pickups();
@@ -766,11 +773,12 @@ impl Game<'_> {
         let by_player = killer.is_some() || m.ai.last_hurt_by_player > 0;
         let mut dying = m.clone();
         // LivingEntity.die: the death is heard, and a sculk catalyst nearby
-        // takes the experience (before the loot is dropped).
+        // takes the experience (before the loot is dropped). It takes what
+        // would drop, whoever killed the mob.
         self.sculk_mob_died(m);
         let consumed =
             self.catalyst_takes_experience([m.position.x, m.position.y, m.position.z], |_| {
-                if by_player {
+                if horizon_client::mobs::drops::drops_experience(&dying) {
                     horizon_client::mobs::drops::base_experience(&mut dying).max(0) as u32
                 } else {
                     0
@@ -1037,6 +1045,18 @@ impl Game<'_> {
                 MobEvent::AttackPlayer(amount, from) => {
                     self.mob_hits_player(amount, from, "minecraft:mob_attack");
                 }
+                // doHurtTarget: the effect only when hurtServer took damage.
+                MobEvent::AttackPlayerWithEffect {
+                    amount,
+                    from,
+                    effect,
+                    ticks,
+                    amplifier,
+                } => {
+                    if self.mob_hits_player(amount, from, "minecraft:mob_attack") {
+                        self.give_player_effect(effect, ticks, amplifier);
+                    }
+                }
                 MobEvent::DamagePlayer { amount, from, kind } => {
                     self.mob_hits_player(amount, from, kind);
                 }
@@ -1056,6 +1076,19 @@ impl Game<'_> {
                         }
                     }
                 }
+                MobEvent::Knockback {
+                    target,
+                    power,
+                    x,
+                    z,
+                } => match target {
+                    Who::Player => self.knock_back_player(power, x, z),
+                    Who::Mob(id) => {
+                        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                            m.knockback(power, x, z);
+                        }
+                    }
+                },
                 MobEvent::Shift { target, delta } => {
                     let d = Vec3::new(delta[0], delta[1], delta[2]);
                     match target {
@@ -1401,6 +1434,27 @@ impl Game<'_> {
                         .list
                         .retain(|e| e.id != "mining_fatigue");
                 }
+                MobEvent::DolphinTreasure { mob } => {
+                    // ServerLevel.findNearestMapStructure(#dolphin_located, 50).
+                    let Some(at) = self.mobs.iter().find(|m| m.id == mob).map(|m| {
+                        [
+                            m.position.x.floor() as i32,
+                            m.position.y.floor() as i32,
+                            m.position.z.floor() as i32,
+                        ]
+                    }) else {
+                        continue;
+                    };
+                    let names = self.structure_tag("minecraft:dolphin_located");
+                    let found = self
+                        .end
+                        .locator()
+                        .filter(|_| !names.is_empty())
+                        .and_then(|t| t.locate(&names, at, 50));
+                    if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
+                        m.extra.home = found.map(|(_, p)| p);
+                    }
+                }
                 MobEvent::EffectPlayer {
                     effect,
                     ticks,
@@ -1484,6 +1538,7 @@ impl Game<'_> {
                         m.ai.aggressive |= aggressive;
                     }
                 }
+                MobEvent::PandaSneezed { mob } => self.panda_sneezed(mob),
                 MobEvent::ShedScute { mob, at, pitch } => {
                     // The mob already checked `shouldDropLoot` (a baby, `mob_drops`).
                     let table = "minecraft:gameplay/armadillo_shed";
@@ -1501,8 +1556,12 @@ impl Game<'_> {
                     self.post_game_event("minecraft:entity_place", at, ctx);
                 }
                 MobEvent::GiftLoot { mob, table, at } => {
-                    // Turtle.ageBoundaryReached: only with mob loot on.
-                    if table == "minecraft:gameplay/turtle_grow" && !self.ui.rules.bool("mob_drops")
+                    // Turtle.ageBoundaryReached and Panda.afterSneeze: only
+                    // with mob loot on.
+                    if matches!(
+                        table,
+                        "minecraft:gameplay/turtle_grow" | "minecraft:gameplay/panda_sneeze"
+                    ) && !self.ui.rules.bool("mob_drops")
                     {
                         continue;
                     }
@@ -1741,6 +1800,13 @@ impl Game<'_> {
                 self.spawn_breeding_orb([p.position.x, p.position.y, p.position.z], xp);
                 return;
             }
+            // Panda.getBreedOffspring: genes from both parents.
+            if p.species() == Species::Panda {
+                horizon_client::mobs::panda::inherit(child, &p, q.as_ref().unwrap_or(&p));
+                let xp = 1 + self.world.random.next_int_bound(7).unwrap_or(0) as u32;
+                self.spawn_breeding_orb([p.position.x, p.position.y, p.position.z], xp);
+                return;
+            }
             // Nautilus.getBreedOffspring: a tame parent's baby is tame too.
             if p.species() == Species::Nautilus && p.extra.tame {
                 child.extra.tame = true;
@@ -1749,6 +1815,10 @@ impl Game<'_> {
             }
             // Offspring inherit a parent's variant (pigs/cows/chickens) or mixed wool.
             child.extra.variant = p.extra.variant;
+            // Fox.getBreedOffspring: either parent's variant.
+            if p.species() == Species::Fox && !coin {
+                child.extra.variant = q.as_ref().map_or(p.extra.variant, |q| q.extra.variant);
+            }
             if p.species() == Species::Sheep {
                 child.extra.color = p.extra.color;
             }
@@ -2625,6 +2695,17 @@ impl Game<'_> {
                                 };
                                 self.player_hit(&victim, "minecraft:arrow", Some(direct), amount);
                             }
+                            // AbstractArrow.onHitEntity: KILLED_BY_ARROW for a kill
+                            // (piercing arrows are not modelled).
+                            if hurt
+                                && let Some(m) = self.mobs.iter().find(|m| m.id == id)
+                                && !m.alive()
+                            {
+                                let victim = self.mob_entity(m);
+                                let weapon =
+                                    p.arrow.as_ref().and_then(|a| a.fired_from_weapon.as_ref());
+                                self.trigger_killed_by_arrow(&[victim], weapon);
+                            }
                         }
                         hurt
                     }
@@ -3053,6 +3134,14 @@ impl Game<'_> {
         let creative = self.creative;
         // The hand's slot (Player.interactOn passes the hand).
         let selected = self.held_slot();
+        // Panda.mobInteract: bamboo, or a click on a panda lying on its back.
+        if self.mobs[index].species() == Species::Panda && self.mobs[index].alive() {
+            let taken = self.interact_panda(index, &item);
+            if taken {
+                self.swing_arm();
+            }
+            return Ok(taken);
+        }
         if self.interact_zombie_villager(index, &item) {
             return Ok(true);
         }
@@ -3107,6 +3196,12 @@ impl Game<'_> {
             .items()
             .item_tags
             .get("minecraft:creeper_igniters")
+            .is_some_and(|t| t.contains(&*item));
+        let fish = self
+            .res
+            .items()
+            .item_tags
+            .get("minecraft:fishes")
             .is_some_and(|t| t.contains(&*item));
         let damageable = self
             .res
@@ -3212,8 +3307,9 @@ impl Game<'_> {
                     .items()
                     .get(&item)
                     .and_then(|i| i.food.as_ref())
-                    .map_or(2.0, |f| f.0 as f32);
-                // TamableAnimal.feed: playEatingSound, which wolves leave empty.
+                    .map_or(2.0, |f| f.0 as f32 * 2.0);
+                // TamableAnimal.feed(.., 2.0F, 2.0F): heals twice the nutrition,
+                // then playEatingSound, which wolves leave empty.
                 m.health = (m.health + heal).min(m.attrs.max_health);
                 consume = true;
             }
@@ -3402,6 +3498,18 @@ impl Game<'_> {
                     self.trigger_entity("minecraft:tame_animal", "entity", &view);
                 }
             }
+            // Dolphin.mobInteract: a fish makes a baby grow by a tenth and an
+            // adult remember it (`gotFish`), to swim to a treasure.
+            Species::Dolphin if fish => {
+                eat = Some(("entity.dolphin.eat", 1.0, 1.0));
+                if m.extra.age < 0 {
+                    let secs = ((-m.extra.age / 20) as f32 * 0.1) as i32;
+                    horizon_client::mobs::ai::age_up(m, secs, true);
+                } else {
+                    m.extra.flag = true;
+                }
+                consume = true;
+            }
             // Tadpole.feed: frog food ages it by a tenth of the time left to
             // grow into a frog (it grows on its next tick once past 24000).
             Species::Tadpole if is_food && !m.extra.age_locked => {
@@ -3414,6 +3522,22 @@ impl Game<'_> {
                     "happy_villager",
                     horizon_client::particles::Burst::HORSE_EATING,
                 );
+            }
+            // Bee.mobInteract: a wither rose or an open eyeblossom is eaten for
+            // its `getBeeInteractionEffect` instead of breeding the bee.
+            Species::Bee
+                if is_food
+                    && matches!(
+                        &*item,
+                        "minecraft:wither_rose" | "minecraft:open_eyeblossom"
+                    ) =>
+            {
+                if &*item == "minecraft:wither_rose" {
+                    m.add_effect("minecraft:wither", 40, 0);
+                } else {
+                    m.add_effect("minecraft:poison", 25, 0);
+                }
+                consume = true;
             }
             // HappyGhast.canFallInLove: never, so only a ghastling takes food.
             _ if is_food
@@ -4129,6 +4253,7 @@ fn to_loot(stack: &ItemStack) -> horizon_world::loot::LootStack {
         exploration: None,
         ominous_amplifier: None,
         stew_effects: Vec::new(),
+        names: Vec::new(),
     }
 }
 /// A generated loot stack as a Horizon item stack.
@@ -4147,6 +4272,9 @@ fn from_loot(stack: &horizon_world::loot::LootStack) -> ItemStack {
     }
     if let Some(amplifier) = stack.ominous_amplifier.filter(|a| *a > 0) {
         item.data_mut().ominous_amplifier = Some(amplifier as u8);
+    }
+    for (id, text) in &stack.names {
+        item.data_mut().set_loot_name(id, text);
     }
     item
 }
@@ -4191,6 +4319,9 @@ impl Game<'_> {
             f64::from(y + 1),
             f64::from(pos[2]) + 0.5,
         ];
-        let _ = self.spawn_mob("minecraft:zombified_piglin", at, false);
+        // setPortalCooldown: the new piglin does not travel at once.
+        if let Some(id) = self.spawn_mob("minecraft:zombified_piglin", at, false) {
+            self.set_portal_cooldown(id);
+        }
     }
 }

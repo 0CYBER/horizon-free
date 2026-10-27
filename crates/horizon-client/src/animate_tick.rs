@@ -8,7 +8,7 @@ use crate::{
     blocks::{BlockFacts, Fluid},
     command::args::GameMode,
     items::ItemStack,
-    particles::{ParticleEngine, ParticleOptions, ParticleType as T},
+    particles::{ParticleEngine, ParticleOptions, ParticleType as T, along_axis},
     world::World,
 };
 use horizon_core::{
@@ -75,6 +75,22 @@ enum Animate {
         waterlogged: bool,
     },
     EndPortal,
+    /// A powered lever: its facing and the direction it is attached toward.
+    Lever {
+        facing: [i32; 3],
+        connected: [i32; 3],
+    },
+    /// A powered repeater.
+    Repeater {
+        facing: [i32; 3],
+        delay: i32,
+    },
+    /// A free-hanging stalactite tip that is not waterlogged.
+    PointedDripstone,
+    WitherRose,
+    EndGateway,
+    /// A lightning rod, by the axis it points along (0, 1, 2 for X, Y, Z).
+    LightningRod(usize),
     /// `WetSpongeBlock.animateTick`.
     WetSponge,
 }
@@ -91,6 +107,7 @@ fn step(facing: &str) -> [i32; 3] {
 fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Animate {
     let name = name.strip_prefix("minecraft:").unwrap_or(name);
     let lit = prop("lit").as_deref() == Some("true");
+    let powered = prop("powered").as_deref() == Some("true");
     let facing = || step(&prop("facing").unwrap_or_default());
     match name {
         "torch" => Animate::Torch(T::Flame),
@@ -172,6 +189,38 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Animate {
             waterlogged: prop("waterlogged").as_deref() == Some("true"),
         },
         "end_portal" => Animate::EndPortal,
+        "lever" if powered => Animate::Lever {
+            facing: facing(),
+            // FaceAttachedHorizontalDirectionalBlock.getConnectedDirection.
+            connected: match prop("face").as_deref() {
+                Some("ceiling") => [0, -1, 0],
+                Some("floor") => [0, 1, 0],
+                _ => facing(),
+            },
+        },
+        "repeater" if powered => Animate::Repeater {
+            facing: facing(),
+            delay: prop("delay").and_then(|d| d.parse().ok()).unwrap_or(1),
+        },
+        "pointed_dripstone"
+            if prop("vertical_direction").as_deref() == Some("down")
+                && prop("thickness").as_deref() == Some("tip")
+                && prop("waterlogged").as_deref() != Some("true") =>
+        {
+            Animate::PointedDripstone
+        }
+        "wither_rose" => Animate::WitherRose,
+        "end_gateway" => Animate::EndGateway,
+        _ if name == "lightning_rod" || name.ends_with("_lightning_rod") => {
+            let [dx, dy, _] = facing();
+            Animate::LightningRod(if dx != 0 {
+                0
+            } else if dy != 0 {
+                1
+            } else {
+                2
+            })
+        }
         "wet_sponge" => Animate::WetSponge,
         // BrushableBlock has no dust colour of its own, so the dust is the map colour.
         "suspicious_sand" => Animate::Falling(0xF7E9A3, false),
@@ -250,6 +299,8 @@ pub struct AnimateTables {
     burnable: Vec<bool>,
     /// Biome id -> ambient particles and probabilities (`minecraft:visual/ambient_particles`).
     ambient: Vec<Vec<(T, f32)>>,
+    /// Per state: 1 for a pointed dripstone, 2 for one whose tip points down.
+    dripstone: Vec<u8>,
 }
 impl AnimateTables {
     pub fn load(root: &Path, registry: &BlockRegistry, biomes: &Biomes) -> crate::Result<Self> {
@@ -315,8 +366,25 @@ impl AnimateTables {
                 }
             }
         }
+        let dripstone = (0..registry.len() as u32)
+            .map(|id| {
+                registry.state(BlockStateId(id)).map_or(0, |s| {
+                    let name = s.name.strip_prefix("minecraft:").unwrap_or(&s.name);
+                    if name != "pointed_dripstone" {
+                        0
+                    } else if s.properties.get("vertical_direction").map(String::as_str)
+                        == Some("down")
+                    {
+                        2
+                    } else {
+                        1
+                    }
+                })
+            })
+            .collect();
         Ok(Self {
             kinds,
+            dripstone,
             impermeable: by_state("minecraft:impermeable"),
             power_provider: by_state("minecraft:enchantment_power_provider"),
             power_transmitter: by_state("minecraft:enchantment_power_transmitter"),
@@ -350,6 +418,14 @@ pub struct AnimateContext<'a> {
     pub raining_at: &'a dyn Fn([i32; 3]) -> bool,
     /// Creative main-hand marker block and a resolver for each placed state's sprite.
     pub marker: Option<(&'a str, &'a dyn Fn(BlockStateId) -> Option<ParticleOptions>)>,
+    /// `BlockState.getOffset` of a state at (x, z), for blocks with a random model offset.
+    pub model_offset: &'a dyn Fn(BlockStateId, i32, i32) -> Option<[f64; 3]>,
+    /// `TheEndGatewayBlockEntity.getParticleAmount` of the gateway state at a position.
+    pub gateway_particles: &'a dyn Fn(BlockStateId, [i32; 3]) -> usize,
+    /// `Level.isThundering`.
+    pub thundering: bool,
+    /// The dimension has `water_evaporates` and drips lava from dripstone (the Nether).
+    pub ultrawarm: bool,
 }
 
 /// `ClientLevel.getMarkerParticleTarget`: only the selected main-hand item counts.
@@ -397,6 +473,9 @@ impl AnimateContext<'_> {
                 shape.max(Axis::Z),
             ],
         ))
+    }
+    fn offset_of(&self, state: BlockStateId, p: [i32; 3]) -> [f64; 3] {
+        (self.model_offset)(state, p[0], p[2]).unwrap_or([0.0; 3])
     }
     fn foliage(&self, p: [i32; 3]) -> u32 {
         let biome = self
@@ -1079,6 +1158,99 @@ fn block_animate_tick(
             let p = [fx + r.next_double(), fy + 0.8, fz + r.next_double()];
             add(engine, T::Smoke, p, [0.0; 3]);
         }
+        Animate::Lever { facing, connected } => {
+            // LeverBlock.animateTick: a powered lever puffs red dust a quarter of the time.
+            if engine.random().next_float() < 0.25 {
+                // LeverBlock.makeParticle with scale 0.5.
+                let at = |base: f64, i: usize| {
+                    base + 0.5 + 0.1 * f64::from(-facing[i]) + 0.2 * f64::from(-connected[i])
+                };
+                let p = [at(fx, 0), at(fy, 1), at(fz, 2)];
+                engine.add(&ParticleOptions::dust([1.0, 0.0, 0.0], 0.5), p, [0.0; 3]);
+            }
+        }
+        Animate::Repeater { facing, delay } => {
+            // RepeaterBlock.animateTick: dust at one of the torches.
+            let r = engine.random();
+            let x = fx + 0.5 + (r.next_double() - 0.5) * 0.2;
+            let y = fy + 0.4 + (r.next_double() - 0.5) * 0.2;
+            let z = fz + 0.5 + (r.next_double() - 0.5) * 0.2;
+            let mut offset = -5.0f32;
+            if r.next_boolean() {
+                offset = (delay * 2 - 1) as f32;
+            }
+            offset /= 16.0;
+            let xo = f64::from(offset * facing[0] as f32);
+            let zo = f64::from(offset * facing[2] as f32);
+            redstone(engine, [x + xo, y, z + zo]);
+        }
+        Animate::PointedDripstone => dripstone_drip(tables, engine, ctx, state, pos),
+        Animate::WitherRose => {
+            // WitherRoseBlock.animateTick: smoke puffs at the centre of the shape.
+            let center = ctx.shape_y(pos).map_or([0.5; 2], |s| {
+                [(s.2[0] + s.2[1]) / 2.0, (s.2[2] + s.2[3]) / 2.0]
+            });
+            let offset = ctx.offset_of(state, pos);
+            let x = fx + center[0] + offset[0];
+            let z = fz + center[1] + offset[2];
+            for _ in 0..3 {
+                let r = engine.random();
+                if r.next_boolean() {
+                    let p = [
+                        x + r.next_double() / 5.0,
+                        fy + (0.5 - r.next_double()),
+                        z + r.next_double() / 5.0,
+                    ];
+                    add(engine, T::Smoke, p, [0.0; 3]);
+                }
+            }
+        }
+        Animate::EndGateway => {
+            // EndGatewayBlock.animateTick: portal particles, one for each visible face.
+            for _ in 0..(ctx.gateway_particles)(state, pos) {
+                let r = engine.random();
+                let mut p = [
+                    fx + r.next_double(),
+                    fy + r.next_double(),
+                    fz + r.next_double(),
+                ];
+                let mut v = [
+                    (r.next_double() - 0.5) * 0.5,
+                    (r.next_double() - 0.5) * 0.5,
+                    (r.next_double() - 0.5) * 0.5,
+                ];
+                let flip = next_int(r, 2) * 2 - 1;
+                if r.next_boolean() {
+                    p[2] = fz + 0.5 + 0.25 * f64::from(flip);
+                    v[2] = f64::from(r.next_float() * 2.0 * flip as f32);
+                } else {
+                    p[0] = fx + 0.5 + 0.25 * f64::from(flip);
+                    v[0] = f64::from(r.next_float() * 2.0 * flip as f32);
+                }
+                add(engine, T::Portal, p, v);
+            }
+        }
+        Animate::LightningRod(axis) => {
+            // LightningRodBlock.animateTick: in a thunderstorm, sparks along the
+            // topmost rod, more often as the game time within 200 ticks grows.
+            if ctx.thundering
+                && i64::from(next_int(engine.level_random(), 200)) <= ctx.world.game_time % 200
+                && pos[1]
+                    == ctx
+                        .world
+                        .world_surface(pos[0], pos[2], |id| ctx.facts.is_air(id))
+                        - 1
+            {
+                let mut sparks = Vec::new();
+                along_axis(engine.level_random(), axis, pos, (1, 2), |p, v| {
+                    sparks.push((p, v));
+                });
+                let options = ParticleOptions::simple(T::ElectricSpark);
+                for (p, v) in sparks {
+                    engine.add(&options, p, v);
+                }
+            }
+        }
         Animate::EnderChest => {
             for _ in 0..3 {
                 let r = engine.random();
@@ -1381,6 +1553,68 @@ fn leaves_ambient_sound(
             return;
         }
     }
+}
+/// `PointedDripstoneBlock.animateTick`: a free-hanging stalactite tip drips the
+/// fluid above the root of its stalactite.
+fn dripstone_drip(
+    tables: &AnimateTables,
+    engine: &mut ParticleEngine,
+    ctx: &AnimateContext,
+    state: BlockStateId,
+    pos: [i32; 3],
+) {
+    let roll = engine.random().next_float();
+    if roll > 0.12 {
+        return;
+    }
+    // getFluidAboveStalactite: findRootBlock climbs at most ten blocks of
+    // stalactite and stops at the first block that is not pointed dripstone.
+    let mut root = None;
+    for step in 1..11 {
+        let p = [pos[0], pos[1] + step, pos[2]];
+        match tables
+            .dripstone
+            .get(ctx.state(p).0 as usize)
+            .copied()
+            .unwrap_or(0)
+        {
+            0 => {
+                root = Some(p);
+                break;
+            }
+            2 => {}
+            _ => return,
+        }
+    }
+    let Some(root) = root else {
+        return;
+    };
+    let above = ctx.facts.get(ctx.state([root[0], root[1] + 1, root[2]]));
+    // Mud above the root counts as a water source unless water evaporates here.
+    let (fluid, source) = if &*above.name == "minecraft:mud" && !ctx.ultrawarm {
+        (Fluid::Water, true)
+    } else {
+        (above.fluid, above.fluid_level >= 8 && !above.fluid_falling)
+    };
+    // canFillCauldron: only a water or lava source passes below a 2% roll.
+    if roll >= 0.02 && !(fluid != Fluid::None && source) {
+        return;
+    }
+    // getDripParticle: no fluid drips what the dimension's default says.
+    let lava = fluid == Fluid::Lava || (fluid == Fluid::None && ctx.ultrawarm);
+    let ty = if lava {
+        T::DrippingDripstoneLava
+    } else {
+        T::DrippingDripstoneWater
+    };
+    let offset = ctx.offset_of(state, pos);
+    // STALACTITE_DRIP_START_PIXEL is the tip's lowest point, 5/16.
+    let p = [
+        f64::from(pos[0]) + 0.5 + offset[0],
+        f64::from(pos[1]) + 0.3125 - 0.0625,
+        f64::from(pos[2]) + 0.5 + offset[2],
+    ];
+    add(engine, ty, p, [0.0; 3]);
 }
 /// `AmbientDesertBlockSoundsPlayer.shouldPlayAmbientSandSound`: sand in the
 /// surface column eight blocks away on all four sides.
