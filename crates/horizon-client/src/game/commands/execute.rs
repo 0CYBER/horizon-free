@@ -663,10 +663,11 @@ impl Game<'_> {
             // TraceableEntity.getOwner: who shot a projectile, who threw an
             // item, who summoned a vex.
             Some("origin") => match entity {
-                Target::Projectile(i) => self
+                Target::Projectile(id) => self
                     .creatures
                     .projectiles
-                    .get(i)
+                    .iter()
+                    .find(|p| p.id == id)
                     .and_then(|p| match (p.owner?, p.guest) {
                         // A guest's shot: `Who::Player` is them.
                         (horizon_client::mobs::Who::Player, Some(conn))

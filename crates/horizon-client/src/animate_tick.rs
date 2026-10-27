@@ -36,8 +36,9 @@ enum Animate {
         spawn_particles: bool,
     },
     /// Leaves: optional falling-leaf particle and chance; a tinted leaf takes
-    /// the biome foliage colour unless a fixed colour is given (azalea).
-    Leaves(Option<(T, f32)>, Option<u32>),
+    /// the biome foliage colour unless a fixed colour is given (azalea); and
+    /// whether they have the poplar ambient sound (`AmbientLeavesBlockSoundPlayer`).
+    Leaves(Option<(T, f32)>, Option<u32>, bool),
     NetherPortal,
     EnchantingTable,
     EndRod([i32; 3]),
@@ -48,8 +49,9 @@ enum Animate {
     CandleCake,
     BrewingStand,
     EnderChest,
-    /// FallingBlock with its dust colour.
-    Falling(u32),
+    /// FallingBlock with its dust colour; sand also has the ambient desert sound
+    /// (`SandBlock.animateTick`).
+    Falling(u32, bool),
     /// A beehive or bee nest full of honey (`BeehiveBlock.animateTick`).
     Beehive,
     RedstoneOre,
@@ -73,6 +75,8 @@ enum Animate {
         waterlogged: bool,
     },
     EndPortal,
+    /// `WetSpongeBlock.animateTick`.
+    WetSponge,
 }
 fn step(facing: &str) -> [i32; 3] {
     match facing {
@@ -107,17 +111,17 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Animate {
             spawn_particles: false,
         },
         "oak_leaves" | "birch_leaves" | "jungle_leaves" | "acacia_leaves" | "dark_oak_leaves"
-        | "mangrove_leaves" => Animate::Leaves(Some((T::TintedLeaves, 0.01)), None),
-        "cherry_leaves" => Animate::Leaves(Some((T::CherryLeaves, 0.1)), None),
-        "pale_oak_leaves" => Animate::Leaves(Some((T::PaleOakLeaves, 0.02)), None),
-        "red_poplar_leaves" => Animate::Leaves(Some((T::RedPoplarLeaves, 0.01)), None),
-        "orange_poplar_leaves" => Animate::Leaves(Some((T::OrangePoplarLeaves, 0.01)), None),
-        "yellow_poplar_leaves" => Animate::Leaves(Some((T::YellowPoplarLeaves, 0.01)), None),
+        | "mangrove_leaves" => Animate::Leaves(Some((T::TintedLeaves, 0.01)), None, false),
+        "cherry_leaves" => Animate::Leaves(Some((T::CherryLeaves, 0.1)), None, false),
+        "pale_oak_leaves" => Animate::Leaves(Some((T::PaleOakLeaves, 0.02)), None, false),
+        "red_poplar_leaves" => Animate::Leaves(Some((T::RedPoplarLeaves, 0.01)), None, true),
+        "orange_poplar_leaves" => Animate::Leaves(Some((T::OrangePoplarLeaves, 0.01)), None, true),
+        "yellow_poplar_leaves" => Animate::Leaves(Some((T::YellowPoplarLeaves, 0.01)), None, true),
         // The azalea blocks drop tinted leaves of the fixed colour -9399763.
         "azalea_leaves" | "flowering_azalea_leaves" => {
-            Animate::Leaves(Some((T::TintedLeaves, 0.01)), Some(0x0070_922D))
+            Animate::Leaves(Some((T::TintedLeaves, 0.01)), Some(0x0070_922D), false)
         }
-        "spruce_leaves" => Animate::Leaves(None, None),
+        "spruce_leaves" => Animate::Leaves(None, None, false),
         "nether_portal" => Animate::NetherPortal,
         "enchanting_table" => Animate::EnchantingTable,
         "end_rod" => Animate::EndRod(facing()),
@@ -126,16 +130,17 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Animate {
         "mycelium" => Animate::Mycelium,
         "brewing_stand" => Animate::BrewingStand,
         "ender_chest" => Animate::EnderChest,
-        "sand" => Animate::Falling(0xDBD3A0),
-        "red_sand" => Animate::Falling(0xA95821),
-        "gravel" => Animate::Falling(0x807C7B),
+        "sand" => Animate::Falling(0xDBD3A0, true),
+        "red_sand" => Animate::Falling(0xA95821, true),
+        "gravel" => Animate::Falling(0x807C7B, false),
         // AnvilBlock/ConcretePowderBlock.getDustColor is the map colour;
         // DragonEggBlock's is black.
-        "anvil" | "chipped_anvil" | "damaged_anvil" => Animate::Falling(0xA7A7A7),
-        "dragon_egg" => Animate::Falling(0x000000),
-        _ if name.ends_with("_concrete_powder") => Animate::Falling(concrete_powder_color(
-            name.trim_end_matches("_concrete_powder"),
-        )),
+        "anvil" | "chipped_anvil" | "damaged_anvil" => Animate::Falling(0xA7A7A7, false),
+        "dragon_egg" => Animate::Falling(0x000000, false),
+        _ if name.ends_with("_concrete_powder") => Animate::Falling(
+            concrete_powder_color(name.trim_end_matches("_concrete_powder")),
+            false,
+        ),
         "beehive" | "bee_nest" if prop("honey_level").as_deref() == Some("5") => Animate::Beehive,
         "redstone_ore" | "deepslate_redstone_ore" if lit => Animate::RedstoneOre,
         "redstone_wire" => {
@@ -167,6 +172,10 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Animate {
             waterlogged: prop("waterlogged").as_deref() == Some("true"),
         },
         "end_portal" => Animate::EndPortal,
+        "wet_sponge" => Animate::WetSponge,
+        // BrushableBlock has no dust colour of its own, so the dust is the map colour.
+        "suspicious_sand" => Animate::Falling(0xF7E9A3, false),
+        "suspicious_gravel" => Animate::Falling(0x707070, false),
         "sculk_sensor" | "calibrated_sculk_sensor"
             if prop("sculk_sensor_phase").as_deref() == Some("active") =>
         {
@@ -233,6 +242,10 @@ pub struct AnimateTables {
     power_transmitter: Vec<bool>,
     /// `#triggers_ambient_dried_ghast_block_sounds` (soul sand, soul soil).
     dried_ghast_sounds: Vec<bool>,
+    /// `#triggers_ambient_desert_sand_block_sounds` (sand, red sand).
+    desert_sand_sounds: Vec<bool>,
+    /// `#required_for_poplar_leaf_ambience` (overworld natural logs).
+    poplar_leaf_logs: Vec<bool>,
     /// `FireBlock.canBurn`: states with ignite odds above zero (none waterlogged).
     burnable: Vec<bool>,
     /// Biome id -> ambient particles and probabilities (`minecraft:visual/ambient_particles`).
@@ -308,6 +321,8 @@ impl AnimateTables {
             power_provider: by_state("minecraft:enchantment_power_provider"),
             power_transmitter: by_state("minecraft:enchantment_power_transmitter"),
             dried_ghast_sounds: by_state("minecraft:triggers_ambient_dried_ghast_block_sounds"),
+            desert_sand_sounds: by_state("minecraft:triggers_ambient_desert_sand_block_sounds"),
+            poplar_leaf_logs: by_state("minecraft:required_for_poplar_leaf_ambience"),
             burnable,
             ambient,
         })
@@ -395,6 +410,10 @@ impl AnimateContext<'_> {
 
 fn add(engine: &mut ParticleEngine, ty: T, p: [f64; 3], v: [f64; 3]) {
     engine.add(&ParticleOptions::simple(ty), p, v);
+}
+/// `Level.addAlwaysVisibleParticle`: still shown under the Minimal option now and then.
+fn add_visible(engine: &mut ParticleEngine, ty: T, p: [f64; 3], v: [f64; 3]) {
+    engine.add_with(&ParticleOptions::simple(ty), p, v, false, true);
 }
 fn sound(engine: &mut ParticleEngine, name: &'static str, p: [f64; 3], volume: f32, pitch: f32) {
     engine.sounds.push((name, p, volume, pitch));
@@ -771,7 +790,7 @@ fn block_animate_tick(
                 }
             }
         }
-        Animate::Leaves(falling, fixed_tint) => {
+        Animate::Leaves(falling, fixed_tint, poplar) => {
             let below = [pos[0], pos[1] - 1, pos[2]];
             // LeavesBlock.makeDrippingWaterParticles.
             if (ctx.raining_at)([pos[0], pos[1] + 1, pos[2]]) && next_int(engine.random(), 15) == 1
@@ -782,6 +801,9 @@ fn block_animate_tick(
                     let p = [fx + r.next_double(), fy - 0.05, fz + r.next_double()];
                     add(engine, T::DrippingWater, p, [0.0; 3]);
                 }
+            }
+            if poplar {
+                leaves_ambient_sound(tables, engine, ctx, state, pos);
             }
             // FallingParticlesLeavesBlock.makeFallingLeavesParticles.
             if let Some((ty, chance)) = falling
@@ -955,12 +977,42 @@ fn block_animate_tick(
                         fy + 1.0 + f64::from(r.next_float()),
                         fz + f64::from(r.next_float()),
                     ];
-                    add(engine, T::SulfurBubbles, p, [0.0; 3]);
+                    add_visible(engine, T::SulfurBubbles, p, [0.0; 3]);
                 }
                 if next_int(engine.random(), 10) == 0 {
                     let name = "minecraft:block.potent_sulfur.noxious_gas";
                     sound(engine, name, [fx, fy, fz], 1.0, 1.0);
                 }
+            }
+        }
+        Animate::WetSponge => {
+            // Direction.getRandom: DOWN, UP, NORTH, SOUTH, WEST, EAST.
+            const DIRECTIONS: [[i32; 3]; 6] = [
+                [0, -1, 0],
+                [0, 1, 0],
+                [0, 0, -1],
+                [0, 0, 1],
+                [-1, 0, 0],
+                [1, 0, 0],
+            ];
+            let d = DIRECTIONS[next_int(engine.random(), 6) as usize];
+            // The sponge occludes, so only a sturdy neighbour face hides the drip.
+            if d != [0, 1, 0] && !ctx.sturdy([pos[0] + d[0], pos[1] + d[1], pos[2] + d[2]]) {
+                let r = engine.random();
+                let p = match d {
+                    [0, -1, 0] => [fx + r.next_double(), fy - 0.05, fz + r.next_double()],
+                    [dx, _, 0] => {
+                        let y = fy + r.next_double() * 0.8;
+                        let z = fz + r.next_double();
+                        [fx + if dx > 0 { 1.1 } else { 0.05 }, y, z]
+                    }
+                    [_, _, dz] => {
+                        let y = fy + r.next_double() * 0.8;
+                        let x = fx + r.next_double();
+                        [x, y, fz + if dz > 0 { 1.1 } else { 0.05 }]
+                    }
+                };
+                add(engine, T::DrippingWater, p, [0.0; 3]);
             }
         }
         Animate::Mycelium => {
@@ -1045,7 +1097,7 @@ fn block_animate_tick(
                 add(engine, T::Portal, p, v);
             }
         }
-        Animate::Falling(color) => {
+        Animate::Falling(color, sand) => {
             if next_int(engine.random(), 16) == 0 {
                 let below = ctx.facts.get(ctx.state([pos[0], pos[1] - 1, pos[2]]));
                 // FallingBlock.isFree: air, fire, liquids or replaceable.
@@ -1061,6 +1113,14 @@ fn block_animate_tick(
                         [0.0; 3],
                     );
                 }
+            }
+            // AmbientDesertBlockSoundsPlayer.playAmbientSandSounds: only for the air block.
+            if sand
+                && ctx.state([pos[0], pos[1] + 1, pos[2]]) == ctx.world.air
+                && next_int(engine.random(), 2100) == 0
+                && sand_sound_nearby(tables, ctx, pos)
+            {
+                sound(engine, "minecraft:block.sand.idle", [fx, fy, fz], 1.0, 1.0);
             }
         }
         Animate::Beehive => {
@@ -1179,7 +1239,7 @@ fn block_animate_tick(
         }
         Animate::BubbleColumn { drag } => {
             if drag {
-                add(engine, T::CurrentDown, [fx + 0.5, fy + 0.8, fz], [0.0; 3]);
+                add_visible(engine, T::CurrentDown, [fx + 0.5, fy + 0.8, fz], [0.0; 3]);
                 let r = engine.random();
                 if next_int(r, 200) == 0 {
                     let (volume, pitch) = (0.2 + r.next_float() * 0.2, 0.9 + r.next_float() * 0.15);
@@ -1192,7 +1252,7 @@ fn block_animate_tick(
                     );
                 }
             } else {
-                add(
+                add_visible(
                     engine,
                     T::BubbleColumnUp,
                     [fx + 0.5, fy, fz + 0.5],
@@ -1204,7 +1264,7 @@ fn block_animate_tick(
                     fy + f64::from(r.next_float()),
                     fz + f64::from(r.next_float()),
                 ];
-                add(engine, T::BubbleColumnUp, p, [0.0, 0.04, 0.0]);
+                add_visible(engine, T::BubbleColumnUp, p, [0.0, 0.04, 0.0]);
                 let r = engine.random();
                 if next_int(r, 200) == 0 {
                     let (volume, pitch) = (0.2 + r.next_float() * 0.2, 0.9 + r.next_float() * 0.15);
@@ -1281,6 +1341,91 @@ fn block_animate_tick(
             }
         }
     }
+}
+/// `AmbientLeavesBlockSoundPlayer.playAmbientLeavesSounds` for the poplar leaves:
+/// one log and three leaves of the same kind around the block.
+fn leaves_ambient_sound(
+    tables: &AnimateTables,
+    engine: &mut ParticleEngine,
+    ctx: &AnimateContext,
+    state: BlockStateId,
+    pos: [i32; 3],
+) {
+    if next_int(engine.random(), 300) != 0 {
+        return;
+    }
+    let Some(name) = ctx.registry.state(state).map(|s| &s.name) else {
+        return;
+    };
+    let (mut logs, mut leaves) = (0, 0);
+    for d in [[0, -1], [1, 0], [0, 1], [-1, 0]] {
+        let neighbor = ctx.state([pos[0] + d[0], pos[1], pos[2] + d[1]]);
+        if tables
+            .poplar_leaf_logs
+            .get(neighbor.0 as usize)
+            .copied()
+            .unwrap_or(false)
+        {
+            logs += 1;
+        }
+        if ctx
+            .registry
+            .state(neighbor)
+            .is_some_and(|s| &s.name == name)
+        {
+            leaves += 1;
+        }
+        if logs == 1 && leaves == 3 {
+            let p = pos.map(f64::from);
+            sound(engine, "minecraft:block.poplar_leaves.ambient", p, 1.0, 1.0);
+            return;
+        }
+    }
+}
+/// `AmbientDesertBlockSoundsPlayer.shouldPlayAmbientSandSound`: sand in the
+/// surface column eight blocks away on all four sides.
+fn sand_sound_nearby(tables: &AnimateTables, ctx: &AnimateContext, pos: [i32; 3]) -> bool {
+    let is_sand = |p: [i32; 3]| {
+        tables
+            .desert_sand_sounds
+            .get(ctx.state(p).0 as usize)
+            .copied()
+            .unwrap_or(false)
+    };
+    let (mut found, mut checked) = (0, 0);
+    for d in [[0, -8], [8, 0], [0, 8], [-8, 0]] {
+        let (x, z) = (pos[0] + d[0], pos[2] + d[1]);
+        // columnContainsTriggeringBlock.
+        let surface = ctx.world.world_surface(x, z, |s| ctx.facts.is_air(s)) - 1;
+        let matches = if (surface - pos[1]).abs() > 5 {
+            let mut y = pos[1] + 6;
+            let mut above_air = ctx.is_air([x, y, z]);
+            y -= 1;
+            let mut hit = false;
+            for _ in 0..10 {
+                if above_air && is_sand([x, y, z]) {
+                    hit = true;
+                    break;
+                }
+                above_air = ctx.is_air([x, y, z]);
+                y -= 1;
+            }
+            hit
+        } else {
+            ctx.is_air([x, surface + 1, z]) && is_sand([x, surface, z])
+        };
+        if matches {
+            found += 1;
+            if found > 3 {
+                return true;
+            }
+        }
+        checked += 1;
+        if 4 - checked + found < 3 {
+            return false;
+        }
+    }
+    false
 }
 /// `AbstractCandleBlock.addParticlesAndSound`.
 fn candle(engine: &mut ParticleEngine, p: [f64; 3]) {

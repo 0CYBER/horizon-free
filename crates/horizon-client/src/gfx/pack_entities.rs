@@ -405,12 +405,12 @@ pub(super) fn quad_indices(device: &wgpu::Device, quads: u32) -> wgpu::Buffer {
 }
 
 /// Whether a run holds only geometry a gbuffers program can draw from the shared atlas: no
-/// celestial body, cloud, beam, End portal or crack (overlay codes Horizon's entity shader
-/// draws in its own way; entity.wgsl).
+/// celestial body, cloud, beam, End portal, crack or energy swirl (overlay codes Horizon's entity
+/// shader draws in its own way; entity.wgsl).
 fn plain(run: &[Vertex]) -> bool {
     run.iter()
         .step_by(4)
-        .all(|v| !matches!(v.layer, 2 | 4 | 6 | 9 | 10 | 11 | 12))
+        .all(|v| !matches!(v.layer, 2 | 4 | 6 | 9 | 10 | 11 | 12 | 34))
 }
 
 /// The programs of entity runs, in the order they draw.

@@ -31,6 +31,28 @@ pub fn pose(m: &Mob) -> u8 {
 pub(super) fn set_pose(m: &mut Mob, pose: u8) {
     m.extra.variant3 = pose;
 }
+/// `Pose.id` of the pose (`sync::pose_id`), and its inverse.
+pub fn pose_id(m: &Mob) -> u8 {
+    match pose(m) {
+        SHOOTING => 16,
+        INHALING => 17,
+        LONG_JUMPING => 6,
+        SLIDING => 15,
+        _ => 0,
+    }
+}
+pub(super) fn set_pose_id(m: &mut Mob, id: u8) {
+    set_pose(
+        m,
+        match id {
+            16 => SHOOTING,
+            17 => INHALING,
+            6 => LONG_JUMPING,
+            15 => SLIDING,
+            _ => STANDING,
+        },
+    );
+}
 /// `Breeze.getFiringYPosition`.
 pub fn firing_y(m: &Mob) -> f64 {
     m.position.y + f64::from(m.height()) / 2.0 + f64::from(0.3_f32)
