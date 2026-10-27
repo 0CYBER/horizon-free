@@ -9757,16 +9757,13 @@ impl Game<'_> {
     /// sound every fifth level (at most every 100 ticks).
     pub(super) fn give_orb_points(&mut self, gained: u32) {
         let at = self.eye_position();
-        if self.experience.give(gained as i32)
-            && self.experience.level % 5 == 0
+        // Player.giveExperienceLevels runs per level, so the first multiple of 5
+        // crossed plays the sound (and starts the cooldown for the rest).
+        if let Some(level) = self.experience.give(gained as i32)
             && self.ticks > self.last_level_up + 100
         {
             self.last_level_up = self.ticks;
-            let volume = if self.experience.level > 30 {
-                1.0
-            } else {
-                self.experience.level as f32 / 30.0
-            };
+            let volume = if level > 30 { 1.0 } else { level as f32 / 30.0 };
             self.audio
                 .play("minecraft:entity.player.levelup", at, volume * 0.75, 1.0);
         }
