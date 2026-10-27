@@ -399,6 +399,45 @@ pub(super) fn container_signal(
         .map_or(0, |v| c.signal(&v))
 }
 
+/// `ChiseledBookShelfBlock.getAnalogOutputSignal` and
+/// `ShelfBlock.getAnalogOutputSignal`, from the block entity Horizon keeps as
+/// it was loaded; `None` for any other block. `direction` points from the
+/// block to the comparator.
+pub(super) fn shelf_signal(
+    world: &World,
+    registry: &'static horizon_world::registry::BlockRegistry,
+    state: BlockStateId,
+    pos: BlockPos,
+    direction: Direction,
+) -> Option<i32> {
+    let info = registry.state(state)?;
+    let chiseled = info.name == "minecraft:chiseled_bookshelf";
+    if !chiseled && !info.name.ends_with("_shelf") {
+        return None;
+    }
+    let tag = super::spill::saved_entity(world, [pos.x, pos.y, pos.z]);
+    if chiseled {
+        // The last slot touched, plus one (`lastInteractedSlot` starts at -1).
+        let last = tag
+            .as_ref()
+            .and_then(|t| horizon_client::save::number(t.get("last_interacted_slot")));
+        return Some(last.map_or(0, |slot| slot as i32 + 1));
+    }
+    // Only read from the back: a bit for each of the three slots in use.
+    let facing = info.properties.get("facing").and_then(|f| dir_from_name(f));
+    if facing.map(Direction::opposite) != Some(direction) {
+        return Some(0);
+    }
+    let items = horizon_client::save::decode_items(tag.as_ref().and_then(|t| t.get("Items")), 3);
+    Some(
+        items
+            .iter()
+            .enumerate()
+            .map(|(slot, item)| i32::from(item.is_some()) << slot)
+            .sum(),
+    )
+}
+
 impl Game<'_> {
     fn containers(&self) -> Containers<'_> {
         Containers {
