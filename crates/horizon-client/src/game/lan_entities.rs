@@ -359,7 +359,12 @@ impl Game<'_> {
         }
         for p in self.creatures.projectiles.iter().filter(|p| p.id != 0) {
             use horizon_client::projectiles::ProjectileKind as K;
-            let kind = p.kind.id();
+            // A spectral arrow is its own entity type.
+            let kind = if p.is_spectral_arrow() {
+                "minecraft:spectral_arrow"
+            } else {
+                p.kind.id()
+            };
             let mut e = state(p.id, kind, at(p.position), p.yaw, false);
             e.pitch = p.pitch;
             e.velocity = at(p.velocity);
@@ -378,6 +383,11 @@ impl Game<'_> {
                         a.map_or(0, |a| a.pierce),
                         a.is_some_and(|a| a.in_ground) || p.stuck,
                     ));
+                    // Arrow.ID_EFFECT_COLOR, -1 by default.
+                    let color = p.arrow_effect_color();
+                    if color != -1 {
+                        e.meta.push((11, serializer::INT, Value::Int(color)));
+                    }
                 }
                 // ThrownTrident.ID_LOYALTY (none for a mob's) and ID_FOIL, on
                 // AbstractArrow's flags.
