@@ -1676,7 +1676,7 @@ struct Game<'a> {
     lan_block_events: Vec<([i32; 3], i32, i32, u32)>,
     lan_entity_events: Vec<(i32, i8, [f64; 3])>,
     /// Successful crits (attacking guest, hit entity), queued while the hub is taken.
-    lan_critical_hits: Vec<(Option<u32>, i32)>,
+    lan_critical_hits: Vec<(Option<u32>, i32, bool)>,
     /// Global level events for every guest (`ServerLevel.globalLevelEvent`).
     lan_global_events: Vec<(i32, [i32; 3], i32)>,
     /// `ContainerOpenersCounter`: how many players (the host and the guests)
@@ -7765,7 +7765,7 @@ impl Game<'_> {
     /// strength and whether it is a critical hit): the weapon and effects
     /// scaled by the attack strength, a mace's smash, the critical hit, then
     /// enchantments.
-    pub(super) fn melee_damage(&mut self, target_kind: &str) -> (f32, f32, bool) {
+    pub(super) fn melee_damage(&mut self, target_kind: &str) -> (f32, f32, bool, bool) {
         let hand_damage = 1.0 + self.attack_item_info().map_or(0.0, |i| i.attack_damage);
         // Riptide's spin replaces the attack damage attribute.
         let spin = self.player.as_ref().map_or(0.0, |p| p.auto_spin_attack_dmg);
@@ -7793,8 +7793,9 @@ impl Game<'_> {
             amount *= 1.5;
         }
         // Enchantment damage (sharpness, smite, bane) scaled by the attack strength.
-        amount += self.enchant_damage_bonus(target_kind) * scale;
-        (amount, scale, crit)
+        let magic_boost = self.enchant_damage_bonus(target_kind) * scale;
+        amount += magic_boost;
+        (amount, scale, crit, magic_boost > 0.0)
     }
     /// `Player.getAttackStrengthScale(0.5)`.
     fn attack_strength_scale(&self) -> f32 {
@@ -7981,7 +7982,7 @@ impl Game<'_> {
     pub(super) fn attack_mob(&mut self, index: usize) {
         let target_kind = self.mobs[index].kind.id.clone();
         let target_kind = format!("minecraft:{}", target_kind.trim_start_matches("minecraft:"));
-        let (amount, scale, crit) = self.melee_damage(&target_kind);
+        let (amount, scale, crit, magic) = self.melee_damage(&target_kind);
         let sweep = self.sweep_attack_position(scale, crit);
         let (knockback, knockback_attack) = self.extra_knockback(&target_kind, scale);
         self.attack_ticks = 0;
@@ -8044,6 +8045,18 @@ impl Game<'_> {
                     feet,
                     width,
                     height,
+                    false,
+                );
+            }
+            // Player.attackVisualEffects: magicCrit when the enchantments added damage.
+            if magic {
+                self.critical_hit(
+                    self.lan_acting,
+                    self.mobs[index].id as i32,
+                    feet,
+                    width,
+                    height,
+                    true,
                 );
             }
             if actual > 2.0 {
