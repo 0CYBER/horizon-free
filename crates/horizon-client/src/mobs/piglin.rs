@@ -431,7 +431,14 @@ pub fn piglin_anim(m: &Mob, s: &State, p: &mut Poses) {
     } else {
         PiglinPose::Default
     };
-    piglin_pose(p, s, pose, 25.0, m.extra.using_item as f32);
+    piglin_pose(
+        p,
+        s,
+        pose,
+        25.0,
+        m.extra.using_item as f32,
+        m.main_arm_left(),
+    );
 }
 /// `PiglinArmPose`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -443,11 +450,19 @@ pub enum PiglinPose {
     CrossbowCharge,
     AdmiringItem,
 }
-/// `PiglinModel.setupAnim` for a piglin facing right-handed.
-pub fn piglin_pose(p: &mut Poses, s: &State, pose: PiglinPose, max_charge: f32, ticks: f32) {
-    use super::anim::{ArmPose, Hum, humanoid};
+/// `PiglinModel.setupAnim`; `left` when the piglin's main arm is the left one.
+pub fn piglin_pose(
+    p: &mut Poses,
+    s: &State,
+    pose: PiglinPose,
+    max_charge: f32,
+    ticks: f32,
+    left: bool,
+) {
+    use super::anim::{ArmPose, Hum, crossbow_charge, crossbow_hold, humanoid};
     let mut h = Hum::new(ArmPose::Empty, ArmPose::Empty);
     h.weapon_swing = pose == PiglinPose::MeleeWeapon;
+    h.left_main = left;
     h.charge = (max_charge, ticks);
     humanoid(p, s, &h);
     ears(p, s);
@@ -474,27 +489,22 @@ pub fn piglin_pose(p: &mut Poses, s: &State, pose: PiglinPose, max_charge: f32, 
             p.get("left_arm")[1] += (dance * 40.0).msin() * 0.5 + 0.5;
             p.get("body")[1] += (dance * 40.0).msin() * 0.35;
         }
-        PiglinPose::MeleeWeapon if s.swing == 0.0 => p.xrot("right_arm", -1.8),
-        PiglinPose::CrossbowHold => {
-            p.yrot("right_arm", -0.3 + hy);
-            p.yrot("left_arm", 0.6 + hy);
-            p.xrot("right_arm", -PI / 2.0 + hx + 0.1);
-            p.xrot("left_arm", -1.5 + hx);
+        // holdWeaponHigh
+        PiglinPose::MeleeWeapon if s.swing == 0.0 => {
+            p.xrot(if left { "left_arm" } else { "right_arm" }, -1.8)
         }
-        PiglinPose::CrossbowCharge => {
-            p.yrot("right_arm", -0.8);
-            p.xrot("right_arm", -0.970_796_35);
-            p.xrot("left_arm", -0.970_796_35);
-            let alpha = ticks.clamp(0.0, max_charge) / max_charge;
-            p.yrot("left_arm", 0.4 + alpha * (0.85 - 0.4));
-            let x = -0.970_796_35 + alpha * (-PI / 2.0 - -0.970_796_35);
-            p.xrot("left_arm", x);
-        }
+        PiglinPose::CrossbowHold => crossbow_hold(p, hx, hy, !left),
+        PiglinPose::CrossbowCharge => crossbow_charge(p, max_charge, ticks, !left),
         PiglinPose::AdmiringItem => {
             p.xrot("head", 0.5);
             p.yrot("head", 0.0);
-            p.yrot("left_arm", 0.5);
-            p.xrot("left_arm", -0.9);
+            if left {
+                p.yrot("right_arm", -0.5);
+                p.xrot("right_arm", -0.9);
+            } else {
+                p.yrot("left_arm", 0.5);
+                p.xrot("left_arm", -0.9);
+            }
         }
         _ => {}
     }
