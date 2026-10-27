@@ -156,7 +156,7 @@ impl Game<'_> {
 
     /// `network_particle` for a hub that is out of `self.lan` meanwhile (a
     /// guest's turn).
-    fn hub_particle(
+    pub(super) fn hub_particle(
         hub: &Hub,
         options: &ParticleOptions,
         state: Option<BlockStateId>,
