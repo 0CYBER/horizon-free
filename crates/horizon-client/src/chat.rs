@@ -16,6 +16,9 @@ use crate::{
 #[path = "chat_tests.rs"]
 mod tests;
 
+/// `CommandHistory.PERSISTED_COMMANDS_FILE_NAME` and its size cap.
+const COMMAND_HISTORY_FILE: &str = "command_history.txt";
+const MAX_PERSISTED_COMMAND_HISTORY: usize = 50;
 /// GuiMessageTag.systemSinglePlayer's indicator colour.
 pub const SYSTEM_INDICATOR: u32 = 0xD0D0D0;
 
@@ -79,6 +82,10 @@ impl ChatAbilities {
             ChatSource::Server => self.receive_system_messages,
             ChatSource::Client => true,
         }
+    }
+    /// `ChatAbilities.hasAnyRestrictions`: the Chat option takes something.
+    pub fn any_restriction(&self) -> bool {
+        *self != Self::new(ChatVisibility::Full)
     }
     /// Whether the chat screen may send `input` (`hasAllowedInput`).
     pub fn allows(&self, input: &str) -> bool {
@@ -185,6 +192,10 @@ pub struct Chat {
     lines: Vec<Line>,
     /// Sent messages and commands (ChatComponent.recentChat).
     pub recent: Vec<String>,
+    /// `CommandHistory`: the last commands, kept in `command_history.txt`
+    /// in the game folder once `load_history` has set it.
+    commands: Vec<String>,
+    history_file: Option<std::path::PathBuf>,
     scroll: usize,
     new_since_scroll: bool,
     pub options: ChatOptions,
@@ -310,12 +321,38 @@ impl Chat {
         self.lines.clear();
         self.scroll = 0;
     }
+    /// `new CommandHistory(gameFolder)`: the commands kept from earlier runs
+    /// start the chat's history (`ChatComponent`'s constructor).
+    pub fn load_history(&mut self, game_folder: &std::path::Path) {
+        let file = game_folder.join(COMMAND_HISTORY_FILE);
+        if let Ok(text) = std::fs::read_to_string(&file) {
+            self.commands = text.lines().map(str::to_owned).collect();
+            self.recent.extend(self.commands.iter().cloned());
+        }
+        self.history_file = Some(file);
+    }
+    /// `ChatComponent.addRecentChat`: a command also goes to the saved history.
     pub fn add_recent(&mut self, message: &str) {
         if self.recent.last().map(String::as_str) != Some(message) {
             if self.recent.len() >= 100 {
                 self.recent.remove(0);
             }
             self.recent.push(message.to_owned());
+        }
+        if message.starts_with('/') && self.commands.last().map(String::as_str) != Some(message) {
+            if self.commands.len() >= MAX_PERSISTED_COMMAND_HISTORY {
+                self.commands.remove(0);
+            }
+            self.commands.push(message.to_owned());
+            if let Some(file) = &self.history_file {
+                let mut text = self.commands.join("\n");
+                text.push('\n');
+                if let Err(e) = std::fs::write(file, text) {
+                    log::error!(
+                        "Failed to write {COMMAND_HISTORY_FILE}, command history will be missing: {e}"
+                    );
+                }
+            }
         }
     }
     pub fn reset_scroll(&mut self) {
@@ -438,10 +475,71 @@ impl Chat {
         out.push(GuiDraw::Pop);
         out
     }
-    /// Draws [`Chat::layout`] into the HUD batch.
+    /// Draws [`Chat::layout`] into the HUD batch, and with the chat screen
+    /// open the restricted prompt above the lines.
     pub fn draw(&self, batch: &mut HudBatch, atlas: &HudAtlas, ticks: u64, focused: bool) {
         let draws = self.layout(batch.height as i32, ticks, focused);
         hud_layout::paint(batch, atlas, &draws);
+        if focused && self.abilities.any_restriction() {
+            let prompt = self.restricted_prompt(&atlas.font, batch.height as i32);
+            hud_layout::paint(batch, atlas, &prompt);
+        }
+    }
+    /// `ChatComponent.extractRenderState` for `FOREGROUND_RESTRICTED`: a
+    /// background row and the red, underlined "Chat is restricted" line in
+    /// the row above the messages, clipped to the chat's width.
+    fn restricted_prompt(&self, font: &crate::font::Font, height: i32) -> Vec<GuiDraw> {
+        let o = &self.options;
+        let scale = o.scale as f32;
+        let max_width = hud_layout::ceil(o.width_px() as f32 / scale);
+        let chat_bottom = hud_layout::floor((height - 40) as f32 / scale);
+        let entry_height = o.line_height();
+        let bottom_to_text =
+            (8.0 * (o.line_spacing + 1.0) - 4.0 * o.line_spacing + 0.5).floor() as i32;
+        let shown = self
+            .lines
+            .len()
+            .saturating_sub(self.scroll)
+            .min(self.lines_per_page(true));
+        let top = chat_bottom - (shown as i32 + 1) * entry_height;
+        let mut prompt = Text::translate("chat_screen.restricted", &[]).with_style(&Style {
+            color: Some(text::RED),
+            underlined: Some(true),
+            ..Style::default()
+        });
+        // ComponentRenderUtils.clipText.
+        let mut width = 0.0;
+        let fits = prompt
+            .chars()
+            .take_while(|(c, style)| {
+                width += font.advance(*c, style);
+                width <= max_width as f32
+            })
+            .count();
+        if fits < prompt.chars().count() {
+            prompt = prompt.slice(0, fits);
+        }
+        vec![
+            GuiDraw::Push(vec![
+                PoseOp::Scale(scale, scale),
+                PoseOp::Translate(4.0, 0.0),
+            ]),
+            hud_layout::fill(
+                -2,
+                top,
+                max_width + 4 + 4,
+                top + entry_height,
+                hud_layout::as8(o.background_opacity as f32) << 24,
+            ),
+            GuiDraw::Text {
+                text: prompt,
+                x: 0,
+                y: top + entry_height - bottom_to_text - 1,
+                color: hud_layout::white(o.opacity as f32 * 0.9 + 0.1),
+                shadow: true,
+            },
+            GuiDraw::Pop,
+        ]
     }
     /// The click action under a GUI-space cursor while chat is focused.
     pub fn click_at(
