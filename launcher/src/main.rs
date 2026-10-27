@@ -52,6 +52,7 @@ use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
 use horizon_launcher::i18n::{self, tr, trf};
 use horizon_launcher::instances;
+use horizon_launcher::nightly;
 use horizon_launcher::telemetry;
 use scrollbar::Scrollbar;
 use std::borrow::Cow;
@@ -168,6 +169,12 @@ struct Launcher {
     /// nothing can launch, select or prepare it, and its row can't install or remove it again.
     removing: Option<String>,
     install_error: Option<(String, String)>,
+    /// Nightly (`horizon_launcher::nightly`): how far the nightly being installed is, and why the
+    /// last check or install failed.
+    nightly_progress: Option<f32>,
+    nightly_error: Option<String>,
+    /// Play the Nightly instance once its first install ends: the player just turned Nightly on.
+    nightly_select: bool,
     confirm_remove: Option<String>,
     picker_open: bool,
     /// The top bar's quick switch of who plays (`switch_page.rs`).
@@ -373,6 +380,9 @@ impl Launcher {
             installing: None,
             removing: None,
             install_error: None,
+            nightly_progress: None,
+            nightly_error: None,
+            nightly_select: false,
             confirm_remove: None,
             picker_open: false,
             account_menu: false,
@@ -531,6 +541,41 @@ impl Launcher {
             backend::select_after_update(self.settings.selected.as_deref(), &self.installed);
         self.update_install = Some((release.tag.clone(), select));
         self.install(&release);
+    }
+
+    /// With Nightly on, installs the current nightly in the Nightly instance if it is new.
+    fn update_nightly(&mut self) {
+        if !self.settings.nightly || self.nightly_progress.is_some() {
+            return;
+        }
+        self.nightly_progress = Some(0.);
+        self.nightly_error = None;
+        let (tx, installed) = (self.tx.clone(), self.installed.clone());
+        std::thread::spawn(move || {
+            let result = nightly::latest().and_then(|latest| {
+                let Some(release) = nightly::update(latest, &installed) else {
+                    return Ok(None);
+                };
+                let progress = |p| {
+                    let _ = tx.send(Msg::NightlyProgress(p));
+                };
+                nightly::install(&release, progress).map(|_| Some(nightly::version_of(&release)))
+            });
+            let _ = tx.send(Msg::Nightly(result));
+        });
+    }
+
+    /// Turns Nightly on (install it, then play its instance) or off (play the release again; the
+    /// Nightly instance and its worlds stay).
+    fn set_nightly(&mut self, on: bool) {
+        self.settings.nightly = on;
+        if on {
+            self.nightly_select = true;
+        } else if self.settings.instance.as_deref() == Some(nightly::INSTANCE) {
+            self.settings.instance = None;
+        }
+        self.settings.save();
+        self.update_nightly();
     }
 
     fn fetch_releases(&mut self) {
@@ -703,8 +748,32 @@ impl Launcher {
                     if let Some(release) = self.updates.launcher.clone() {
                         self.update_launcher(release);
                     }
+                    self.update_nightly();
                 }
                 Msg::Updates(Err(e)) => self.update_error = Some(e),
+                Msg::NightlyProgress(p) => self.nightly_progress = Some(p),
+                Msg::Nightly(result) => {
+                    self.nightly_progress = None;
+                    self.installed = backend::installed();
+                    self.reload_instances();
+                    match result {
+                        Ok(_)
+                            if self.nightly_select
+                                && self.settings.nightly
+                                && self
+                                    .instances
+                                    .list
+                                    .iter()
+                                    .any(|i| i.id == nightly::INSTANCE) =>
+                        {
+                            self.nightly_select = false;
+                            self.settings.instance = Some(nightly::INSTANCE.into());
+                            self.settings.save();
+                        }
+                        Ok(_) => {}
+                        Err(e) => self.nightly_error = Some(e),
+                    }
+                }
                 Msg::LauncherProgress(p) => {
                     if let SelfUpdate::Downloading(_, f) = &mut self.self_update {
                         *f = p;
@@ -2743,6 +2812,7 @@ impl Launcher {
                         Some(toggle.into_any_element()),
                         &t,
                     ))
+                    .child(self.nightly_row(n + 2, cx))
                     .child(group("Launcher", "monitor"))
                     .child(index_row(
                         n + 3,
@@ -2819,6 +2889,55 @@ impl Launcher {
             )
             .child(self.collection_section(cx))
             .children(self.agents_section(cx))
+    }
+
+    /// Settings' Nightly row: off by default; on, the nightly build installs and updates in its
+    /// own instance, and the release stays one click away (the Horizon instance).
+    fn nightly_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let on = self.settings.nightly;
+        let toggle =
+            switch("nightly", on, &t).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.set_nightly(!this.settings.nightly);
+                cx.notify();
+            }));
+        let what = tr("Reviewed fixes not released yet; may break.");
+        let status = match (&self.nightly_progress, &self.nightly_error) {
+            _ if !on => tr("Plays in its own Nightly instance: your worlds and the release stay as they are.")
+                .to_string(),
+            (Some(p), _) => trf(
+                "Installing the nightly, {percent}%",
+                &[("percent", &format!("{:.0}", p * 100.))],
+            ),
+            (None, Some(e)) => trf("The nightly could not be installed: {error}", &[("error", e)]),
+            (None, None) => match self
+                .instances
+                .list
+                .iter()
+                .find(|i| i.id == nightly::INSTANCE)
+                .and_then(|i| i.version.clone())
+            {
+                Some(version) => trf(
+                    "{version} in the Nightly instance. Choose Horizon in the sidebar to play the release.",
+                    &[("version", &version)],
+                ),
+                None => tr("No nightly build yet.").to_string(),
+            },
+        };
+        index_row(
+            n,
+            tr("Nightly builds"),
+            Some(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(what.to_string())
+                    .child(status)
+                    .into_any_element(),
+            ),
+            Some(toggle.into_any_element()),
+            &t,
+        )
     }
 
     /// Settings' Game arguments row: the extra arguments the game starts with, kept in
