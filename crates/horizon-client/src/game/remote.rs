@@ -193,6 +193,10 @@ pub(super) struct Remote {
     destroying: Option<([i32; 3], u8, f32)>,
     destroy_delay: u32,
     input: horizon_client::interaction_input::InteractionInput,
+    /// Keys whose presses send a packet (swap hands, drop, a mount's
+    /// inventory): like the click queue, they wait for the tick's
+    /// `handleKeybinds` phase rather than going out between window events.
+    pub(super) pending_keys: Vec<KeyCode>,
     stop_mining: bool,
     placing: Option<([i32; 3], u64)>,
     death_message: Option<String>,
@@ -481,6 +485,7 @@ impl Game<'_> {
             destroying: None,
             destroy_delay: 0,
             input: Default::default(),
+            pending_keys: Vec::new(),
             stop_mining: false,
             placing: None,
             death_message: None,
@@ -4382,6 +4387,14 @@ impl Game<'_> {
         if self.cooldowns.is_on_cooldown(&group) {
             return false;
         }
+        // Food starts being eaten (Consumable.startConsuming). A food that
+        // can't be eaten (full and not always-edible) fails the use
+        // (InteractionResult.FAIL): startUseItem tries the other hand, and
+        // no cooldown or use animation starts.
+        let eating = self.with_hand(hand, |g| g.start_eating(&info));
+        if info.food.is_some() && !eating {
+            return false;
+        }
         // It runs the use here too: ItemStack.use starts the `use_cooldown`
         // of an item with no use time, and the server's
         // ClientboundCooldownPacket confirms it; one held in use starts it at
@@ -4389,9 +4402,6 @@ impl Game<'_> {
         if !info.consumable.as_ref().is_some_and(|c| c.ticks() > 0) {
             self.apply_use_cooldown(&held);
         }
-        // Food starts being eaten (Consumable.startConsuming), a book and
-        // quill opens.
-        self.with_hand(hand, |g| g.start_eating(&info));
         if self.with_hand(hand, |g| g.remote_use_book(&held)) {
             return true;
         }
@@ -4615,6 +4625,31 @@ impl Game<'_> {
         }
         let (attack, use_item) = (self.left, self.right);
         input.tick(&mut RemoteInputWorld(self), attack, use_item);
+        // handleKeybinds' keybind polls: the queued presses act now, in tick
+        // order, so no packet goes out between CLIENT_TICK_END and a pong.
+        let pending = self
+            .remote
+            .as_mut()
+            .map(|r| std::mem::take(&mut r.pending_keys))
+            .unwrap_or_default();
+        for key in pending {
+            match key {
+                KeyCode::KeyF if !self.spectator() => self.remote_swap_hands(),
+                KeyCode::KeyQ if !self.spectator() => {
+                    let all = self.keys.contains(&KeyCode::ControlLeft);
+                    self.remote_drop(all);
+                }
+                KeyCode::KeyE if self.riding_mount_with_menu() => {
+                    let id = self.remote.as_ref().map_or(0, |r| r.entity_id);
+                    self.send(S::PlayerCommand(play::PlayerCommand {
+                        id,
+                        action: 5,
+                        data: 0,
+                    }));
+                }
+                _ => {}
+            }
+        }
         if self.clicks.miss_time > 0 {
             self.clicks.miss_time -= 1;
         }
@@ -4726,22 +4761,8 @@ impl Game<'_> {
                 if self.spectator() {
                     return Ok(true);
                 }
-                let all = self.keys.contains(&KeyCode::ControlLeft);
-                // MultiPlayerGameMode.dropItem: predict removal before sending
-                // the action, then swing only if a nonempty stack was removed.
-                let dropped = horizon_client::items::take_held_drop(
-                    &mut self.inventory[self.selected],
-                    all,
-                    false,
-                );
-                self.send(S::PlayerAction(play::PlayerAction {
-                    action: if all { 4 } else { 5 },
-                    pos: [0; 3],
-                    direction: 0,
-                    sequence: 0,
-                }));
-                if dropped.is_some() {
-                    self.swing_hand(Hand::Main, SwingAnimation::DEFAULT);
+                if let Some(r) = self.remote.as_mut() {
+                    r.pending_keys.push(key);
                 }
                 Ok(true)
             }
@@ -4749,12 +4770,9 @@ impl Game<'_> {
             // horse or llama, the server opens its inventory
             // (ServerboundPlayerCommandPacket OPEN_INVENTORY).
             KeyCode::KeyE if self.riding_mount_with_menu() => {
-                let id = self.remote.as_ref().map_or(0, |r| r.entity_id);
-                self.send(S::PlayerCommand(play::PlayerCommand {
-                    id,
-                    action: 5,
-                    data: 0,
-                }));
+                if let Some(r) = self.remote.as_mut() {
+                    r.pending_keys.push(key);
+                }
                 Ok(true)
             }
             KeyCode::KeyE => {
@@ -4799,6 +4817,21 @@ impl Game<'_> {
                     checksum: 0,
                 },
             }));
+        }
+    }
+    /// MultiPlayerGameMode.dropItem (key.drop): predict the removal, then send
+    /// the action; swing only if a nonempty stack was removed.
+    fn remote_drop(&mut self, all: bool) {
+        let dropped =
+            horizon_client::items::take_held_drop(&mut self.inventory[self.selected], all, false);
+        self.send(S::PlayerAction(play::PlayerAction {
+            action: if all { 4 } else { 5 },
+            pos: [0; 3],
+            direction: 0,
+            sequence: 0,
+        }));
+        if dropped.is_some() {
+            self.swing_hand(Hand::Main, SwingAnimation::DEFAULT);
         }
     }
     /// Minecraft.handleKeybinds, key.swapOffhand: the server swaps the hands
