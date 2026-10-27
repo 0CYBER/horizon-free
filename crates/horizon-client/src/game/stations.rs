@@ -2023,15 +2023,19 @@ impl Game<'_> {
             && stack.damage > 0
             && advanced
         {
-            push(
-                &mut lines,
-                format!(
-                    "Durability: {} / {}",
-                    info.max_damage - stack.damage,
-                    info.max_damage
+            // `item.durability`, in the selected language.
+            lines.push((
+                horizon_client::text::Text::translate(
+                    "item.durability",
+                    &[
+                        horizon_client::text::Text::literal(
+                            (info.max_damage - stack.damage).to_string(),
+                        ),
+                        horizon_client::text::Text::literal(info.max_damage.to_string()),
+                    ],
                 ),
                 u32::MAX,
-            );
+            ));
         }
         // ItemStack.addDetailsToTooltipTail: with advanced tooltips the item id
         // and how many components the stack has.
