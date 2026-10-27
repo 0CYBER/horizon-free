@@ -222,6 +222,7 @@ use horizon_client::{
     entities::{Experience, ExperienceOrb, ItemEntity},
     environment::Environment,
     first_person::{Hand, SwingAnimation},
+    furnace::FurnaceCooking,
     gfx::{Frame, Renderer},
     hud::{HudAtlas, HudBatch, rgba},
     hud_layout, hud_overlays,
