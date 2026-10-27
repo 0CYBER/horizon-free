@@ -150,6 +150,7 @@ mod recipe_book;
 mod remote;
 mod remote_chunks;
 mod remote_mob_data;
+mod remote_mob_particles;
 mod remote_mob_use;
 mod remote_objects;
 mod remote_projectiles;

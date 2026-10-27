@@ -1072,6 +1072,20 @@ impl Game<'_> {
                 MobEvent::EntityEvent { mob, event, at } => {
                     self.lan_entity_event(mob as i32, event, at)
                 }
+                MobEvent::LevelParticles {
+                    kind,
+                    at,
+                    spread,
+                    speed,
+                    count,
+                } => {
+                    if let Some(ty) = horizon_client::particles::ParticleType::from_name(kind) {
+                        let options = horizon_client::particles::ParticleOptions::simple(ty);
+                        self.particles
+                            .send_particles(&options, at, spread, speed, count);
+                        self.lan_level_particles(&options, at, spread, speed, count);
+                    }
+                }
                 MobEvent::Sound(name, at, volume, pitch)
                 | MobEvent::LocalSound(name, at, volume, pitch) => {
                     self.audio

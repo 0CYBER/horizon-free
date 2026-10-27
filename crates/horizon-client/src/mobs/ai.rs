@@ -902,8 +902,8 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
     if m.kind.flags.climber {
         m.climbing = m.horizontal_collision;
     }
-    // AgeableMob.aiStep: a forced age-up's particles (positions drawn on the
-    // server too), then the age.
+    // AgeableMob.aiStep: a forced age-up's particles (`sendParticles`, so the
+    // players are sent them), then the age.
     if m.extra.forced_age_timer > 0 {
         if m.extra.forced_age_timer % 4 == 0 {
             let (w, h) = (f64::from(m.width()), f64::from(m.height()));
@@ -912,10 +912,12 @@ fn ai_step(m: &mut Mob, w: &MobWorld, level_random: &mut LegacyRandom, events: &
             let y = m.position.y + h * r.next_double() + 0.5;
             let z = m.position.z + w * (2.0 * r.next_double() - 1.0);
             // sendParticles(HAPPY_VILLAGER, x, y, z, 1, 0, 0, 0, 0): exactly there, at rest.
-            events.push(MobEvent::Particles {
+            events.push(MobEvent::LevelParticles {
                 kind: "happy_villager",
                 at: [x, y, z],
-                count: 0,
+                spread: [0.0; 3],
+                speed: 0.0,
+                count: 1,
             });
         }
         m.extra.forced_age_timer -= 1;

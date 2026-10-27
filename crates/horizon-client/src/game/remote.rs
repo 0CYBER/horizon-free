@@ -2293,6 +2293,10 @@ impl Game<'_> {
                     self.ui.registries.permission = (p.event - 24) as u8;
                     self.remote_world_options_permission(p.event >= 26);
                 }
+                // Ravager.handleEntityEvent 69: the roar's puff and push.
+                if p.event == 69 {
+                    self.remote_ravager_roar(p.id);
+                }
                 if p.event == 1
                     && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
                     && m.species() == horizon_client::mobs::Species::Rabbit
@@ -3871,14 +3875,11 @@ impl Game<'_> {
         let head_lerps = &mut r.head_lerps;
         let players = &r.level_players;
         let mut using = Vec::new();
-        let mut wither_heads = Vec::new();
+        let mut mob_fx = Vec::new();
         for m in &mut self.mobs {
             let player = players.contains_key(&(m.id as i32));
             if !running && !player {
                 continue;
-            }
-            if m.species() == horizon_client::mobs::Species::Wither {
-                wither_heads.extend((0..3).map(|i| horizon_client::mobs::wither::head_pos(m, i)));
             }
             m.previous = m.position;
             m.previous_yaw = m.yaw;
@@ -3913,6 +3914,17 @@ impl Game<'_> {
             // PolarBear.tick: the stand animation follows the synched flag.
             if m.species() == horizon_client::mobs::Species::PolarBear {
                 horizon_client::mobs::polar_bear::client_tick(m);
+            }
+            // The particles these mobs' own ticks draw on the client side.
+            {
+                use horizon_client::mobs::{Species as S, cube, illusioner, nautilus, wither};
+                match m.species() {
+                    S::Slime | S::MagmaCube | S::SulfurCube => cube::client_tick(m, &mut mob_fx),
+                    S::Nautilus | S::ZombieNautilus => nautilus::client_tick(m, &mut mob_fx),
+                    S::Illusioner => illusioner::client_tick(m, &mut mob_fx),
+                    S::Wither => wither::client_smoke(m, &mut mob_fx),
+                    _ => {}
+                }
             }
             if m.hurt_time > 0 {
                 m.hurt_time -= 1;
@@ -4019,19 +4031,7 @@ impl Game<'_> {
             d.tick(world, facts, collision, false, &self.res.motion().fluids);
         }
         head_lerps.retain(|_, (_, steps)| *steps > 0);
-        // WitherBoss.aiStep runs on a client too: smoke around each head.
-        let smoke = horizon_client::particles::ParticleOptions::simple(
-            horizon_client::particles::ParticleType::Smoke,
-        );
-        for h in wither_heads {
-            let r = self.particles.random();
-            let at = [
-                h[0] + r.next_gaussian() * 0.3,
-                h[1] + r.next_gaussian() * 0.3,
-                h[2] + r.next_gaussian() * 0.3,
-            ];
-            self.particles.add(&smoke, at, [0.0; 3]);
-        }
+        let _ = self.handle_mob_events(mob_fx);
         for (item, ticks, at, eye, pitch, yaw) in using {
             self.remote_player_eating(&item, ticks, at, eye, pitch, yaw);
         }
