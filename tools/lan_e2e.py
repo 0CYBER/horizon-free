@@ -114,6 +114,10 @@ address. The script then checks, from both sides, what a guest's game used to ge
               use to completion still consumes the item (#1293).
 - eating:    each side sees the other player eat: the item in use (LivingEntity's flags) on the
              player it draws, and no longer once the bread is eaten (#803);
+- eat_full:  holding right click with melon slices until the food bar is full: the guest's own
+             client eats each slice when the server says it is done (entity event 9,
+             USE_ITEM_COMPLETE), so no other bite starts; held on chorus fruit, both fruits are
+             eaten across its cooldown (#2471).
 - xp:        experience orbs 4 blocks away fly to the guest, show on the guest's screen and give the
              guest their points (not the host).
 - objects:   boats, minecarts, armor stands, item frames and paintings the host summons reach the
@@ -2971,13 +2975,15 @@ def check_fireworks(host, guest, out):
         game('command', command=f'tp @s {x + dx + 0.5} {y} {z + 0.5}')
         game.raw('look-at', x + 0.5, y + 1.5, z + 3.5)
 
-    def red(path):
+    def reds(path):
+        """The red pixels' positions, above the hotbar."""
         rows, bpp = png_rows(path)
-        # Exclude the hotbar and chat at the bottom of the view.
-        return sum(row[i] > 80 and row[i] > 2 * row[i + 1] and row[i] > 2 * row[i + 2]
-                   for row in rows[:len(rows) * 3 // 4] for i in range(0, len(row), bpp))
+        return {(y, i) for y, row in enumerate(rows[:len(rows) * 3 // 4]) for i in range(0, len(row), bpp)
+                if row[i] > 80 and row[i] > 2 * row[i + 1] and row[i] > 2 * row[i + 2]}
 
-    baseline = {g.name: red(g.shot(out, 'fireworks-before')) for g in (host, guest)}
+    # Red where the view had none: the setup's own red chat lines (a fill that changed nothing) are in the
+    # baseline, and fade out before the later shots, which a plain count difference would take as missing sparks.
+    baseline = {g.name: reds(g.shot(out, 'fireworks-before')) for g in (host, guest)}
     before = {g.name: made(g, 'flash') for g in (host, guest)}
     host('command', command='item replace entity @s weapon.mainhand with minecraft:firework_rocket'
          '[fireworks={flight_duration:0,explosions:[{shape:"large_ball",colors:[I;16711680],has_trail:true}]}]')
@@ -2990,12 +2996,14 @@ def check_fireworks(host, guest, out):
             break
     flashes = {g.name: made(g, 'flash') - before[g.name] for g in (host, guest)}
     assert all(n == 1 for n in flashes.values()), f'configured burst missing or duplicated: {flashes}'
-    # Capture both views before decoding PNGs: decoding must not consume the sparks' lifetime.
+    # Capture both views before decoding PNGs: decoding must not consume the sparks' lifetime (48-59 ticks). A
+    # screenshot takes ~0.6 s where the frame is drawn on the CPU (lavapipe), so the later shots come 4 ticks after
+    # the burst's, not more: by then the tracked rocket is gone.
     burst_shots = {g.name: g.shot(out, 'fireworks-burst') for g in (host, guest)}
-    host.wait(16)
+    host.wait(4)
     trail_shots = {g.name: g.shot(out, 'fireworks-trail-fade') for g in (host, guest)}
-    burst = {name: red(path) - baseline[name] for name, path in burst_shots.items()}
-    trails = {name: red(path) - baseline[name] for name, path in trail_shots.items()}
+    burst = {name: len(reds(path) - baseline[name]) for name, path in burst_shots.items()}
+    trails = {name: len(reds(path) - baseline[name]) for name, path in trail_shots.items()}
     rockets = {g.name: g('status')['rockets'] for g in (host, guest)}
     assert not any(rockets.values()), f'exploded rocket remains: {rockets}'
     assert all(n > 20 for n in burst.values()), f'no red burst: {burst}'
@@ -5214,6 +5222,64 @@ CHECKS += ['helduse']
 CHECK_FNS.update(helduse=check_held_use)
 
 
+def check_eat_full(host, guest, out):
+    """Holding right click past a full food bar starts no other bite; chorus fruit's cooldown
+    doesn't leave the use stuck (#2471)."""
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    # Full health: natural regeneration at 18 food or more would eat into the bar.
+    guest('command', command='effect give @s minecraft:instant_health 1 10')
+    guest('command', command='effect give @s minecraft:hunger 60 127')
+    for _ in range(400):
+        if remote(guest)['food'] <= 17:
+            break
+        guest.wait(1)
+    guest('command', command='effect clear @s')
+    guest('command', command='give @s minecraft:melon_slice 16')
+    guest.wait(5)
+    guest.raw('select', 'minecraft:melon_slice')
+    hungry = remote(guest)['food']
+    # A slice (2 food) takes 32 ticks (1.6 s): the button stays down well past the slices that fill
+    # the bar, with room for a slow server.
+    slices = -(-(20 - hungry) // 2)
+    hold = threading.Thread(target=guest.raw, args=('use-item', '--hold', slices * 4.0 + 6.0))
+    hold.start()
+    deadline = time.monotonic() + slices * 4.0 + 2.0
+    while remote(guest)['food'] < 20 and time.monotonic() < deadline:
+        time.sleep(0.1)
+    # The bar is full and the button is still down: nothing is in use over the next 20 ticks
+    # (sleeps, as `wait` is refused while the held use-item runs).
+    using = []
+    for _ in range(4):
+        time.sleep(0.25)
+        using.append(guest('state').get('using'))
+    guest.shot(out, 'eat-full')
+    hold.join()
+    guest.wait(10)
+    full = {'hungry': hungry, 'fed': remote(guest)['food'], 'using': using,
+            'eaten': 16 - guest('inventory')['counts'].get('minecraft:melon_slice', 0), 'needed': slices}
+    assert hungry < 20, f'the guest is not hungry: {full}'
+    assert full['fed'] == 20 and full['eaten'] == slices, f'the bar did not fill: {full}'
+    assert using == [None] * 4, f'another bite started with a full food bar: {full}'
+
+    # Chorus fruit can always be eaten, then its group cools down for 20 ticks: the client waits
+    # it out (MultiPlayerGameMode.useItem) and eats the second fruit with the button still held.
+    guest('command', command='clear @s')
+    guest('command', command='give @s minecraft:chorus_fruit 2')
+    guest.wait(5)
+    guest.raw('select', 'minecraft:chorus_fruit')
+    guest.raw('use-item', '--hold', 7.0)
+    guest.wait(10)
+    chorus = {'left': guest('inventory')['counts'].get('minecraft:chorus_fruit', 0),
+              'using': guest('state').get('using')}
+    assert chorus == {'left': 0, 'using': None}, f'the held use did not eat both chorus fruits: {chorus}'
+    return {'full': full, 'chorus': chorus}
+
+
+CHECKS += ['eat_full']
+CHECK_FNS.update(eat_full=check_eat_full)
+
+
 def check_consume_release(host, guest, out):
     """#1293: releasing a consumable in either hand cancels it on client and server, while
     holding it to completion applies its effects and remainder (Consumable.onConsume)."""
@@ -5258,8 +5324,10 @@ def check_consume_release(host, guest, out):
                     assert effects == before, f'{case} applied consumption effects after release: {cancelled}'
                     game.shot(out, f'consume-release-{hand}-{item}')
                     # A sustained press must still consume normally, including the milk's empty bucket.
+                    # The use ends with the server's USE_ITEM_COMPLETE, 32 server ticks after its
+                    # UseItem: room for a busy server before letting go.
                     game.raw('mouse', 'right', 'down')
-                    game.wait(40)
+                    game.wait(50)
                     game.raw('mouse', 'right', 'up')
                     game.wait(10)
                     inventory = game('inventory')
@@ -7147,6 +7215,90 @@ def check_guardian_beams(host, guest, out):
 
 CHECKS += ['guardian-beams']
 CHECK_FNS['guardian-beams'] = check_guardian_beams
+
+
+def check_fangs(host, guest, out):
+    """EvokerFangs: authoritative spawn, event 4, client animation and server removal (#1482)."""
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    tag = 'lan_evoker_fangs'
+    selector = f'@e[type=minecraft:evoker,tag={tag},limit=1]'
+    paths = {g.name: {} for g in (host, guest)}
+    warmup = dict.fromkeys(paths, False)
+    drawn = dict.fromkeys(paths, False)
+    stopped = False
+    photographed = False
+
+    def fangs(status):
+        return [p for p in status['projectiles'] if p['kind'] == 'minecraft:evoker_fangs']
+
+    try:
+        host('command', command='difficulty normal')
+        host('command', command='gamemode creative')
+        guest('command', command='gamemode survival')
+        guest('command', command='effect give @s minecraft:resistance 120 4 true')
+        host('command', command=f'fill {x - 10} {y - 1} {z - 10} {x + 10} {y - 1} {z + 18} minecraft:stone')
+        host('command', command=f'fill {x - 10} {y} {z - 10} {x + 10} {y + 8} {z + 18} minecraft:air')
+        host('command', command=f'tp @s {x + 4.5} {y} {z - 2.5}')
+        guest('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+        guest.wait(10)
+        host('command', command=f'summon minecraft:evoker {x + 0.5} {y} {z + 9.5} '
+                                f'{{PersistenceRequired:1b,Tags:["{tag}"]}}')
+        for game in (host, guest):
+            game.raw('look-at', x + 0.5, y + 0.5, z + 5.5)
+        for _ in range(200):
+            guest.wait(2)
+            statuses = {g.name: g('status') for g in (host, guest)}
+            for name, status in statuses.items():
+                live = fangs(status)
+                ids = [f['id'] for f in live]
+                assert all(ids) and len(ids) == len(set(ids)), f'{name}: invalid fang ids {ids}'
+                warmup[name] |= any(not f['started'] for f in live)
+                drawn[name] |= status['fangs_vertices'] > 0
+                for f in live:
+                    paths[name].setdefault(f['id'], []).append(f)
+            if paths['host'] and not stopped:
+                host('command', command=f'data merge entity {selector} {{NoAI:1b}}')
+                stopped = True
+            if (all(drawn.values()) and not photographed
+                    and any(f['started'] and 8 <= f['life'] <= 16
+                            for f in fangs(statuses['guest']))):
+                host('command', command='tick freeze')
+                try:
+                    for game in (host, guest):
+                        game.raw('key', 'f1', 'tap')
+                        try:
+                            game.shot(out, 'evoker-fangs')
+                        finally:
+                            game.raw('key', 'f1', 'tap')
+                finally:
+                    host('command', command='tick unfreeze')
+                photographed = True
+            if stopped and not any(fangs(s) for s in statuses.values()):
+                break
+        lab.write_json(out / 'evoker-fangs.json', {'paths': paths, 'warmup': warmup, 'drawn': drawn})
+        assert all(warmup.values()), f'fang warmup not received: {warmup}'
+        assert all(drawn.values()), f'fang renderer produced no geometry: {drawn}'
+        assert paths['host'].keys() == paths['guest'].keys(), 'clients received different fang ids'
+        for id, samples in paths['host'].items():
+            other = paths['guest'][id]
+            assert all(f['position'] == samples[0]['position'] for f in samples + other), \
+                f'fang {id} is not at its authoritative position'
+            for name, frames in (('host', samples), ('guest', other)):
+                life = {f['life'] for f in frames if f['started']}
+                assert len(life) > 1, f'{name}: fang {id} did not animate: {frames}'
+        assert not any(fangs(g('status')) for g in (host, guest)), 'fangs survived server removal'
+    finally:
+        host('command', command='tick unfreeze')
+        host('command', command=f'kill @e[tag={tag}]')
+        # The evoker can summon vexes before fangs; killing it leaves those summons alive.
+        host('command', command=f'kill @e[type=minecraft:vex,x={x},y={y},z={z},distance=..32]')
+        guest('command', command='effect clear @s')
+        face_each_other(host, guest)
+    return {'fangs': len(paths['host']), 'warmup': warmup, 'drawn': drawn, 'removed': True}
+
+
+CHECKS += ['fangs']
+CHECK_FNS.update(fangs=check_fangs)
 
 
 def check_sonic(host, guest, out):

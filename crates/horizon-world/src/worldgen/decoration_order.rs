@@ -29,7 +29,7 @@
 //! overlap), so a chunk may be decorated as soon as no lower-ranked chunk
 //! within two of it is still waiting: [`DecorationOrder::blocked`]. Chunks
 //! further apart still decorate in parallel.
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 #[derive(Default)]
 pub struct DecorationOrder {
@@ -121,7 +121,6 @@ fn ticket_hash(x: i32, z: i32) -> u64 {
 /// The chunks decorated around a player at `center`, in vanilla's order.
 pub fn vanilla_order(center: (i32, i32), radius: i32) -> Vec<(i32, i32)> {
     use std::cmp::Reverse;
-    use std::collections::{BinaryHeap, VecDeque};
     let mut tickets: Vec<(i32, i32)> = (-radius..=radius)
         .flat_map(|dx| (-radius..=radius).map(move |dz| (center.0 + dx, center.1 + dz)))
         .collect();
@@ -132,16 +131,31 @@ pub fn vanilla_order(center: (i32, i32), radius: i32) -> Vec<(i32, i32)> {
             Reverse(ticket_hash(x, z) & (TICKET_SET_CAPACITY - 1)),
         )
     });
-    let mut tickets: VecDeque<_> = tickets.into();
     // Every chunk this touches lies within `half` of the centre: tickets
     // reach `LIGHT_LEVEL - TICKET_LEVEL` further, and FULL tasks decorate
-    // one more ring. Dense grids over that square replace hash maps.
+    // one more ring.
+    let half = radius.max(0) + LIGHT_LEVEL - TICKET_LEVEL + 1;
+    ticket_order(
+        tickets.into(),
+        TICKETS_IN_FLIGHT,
+        (center.0 - half, center.1 - half),
+        (2 * half + 1) as usize,
+    )
+}
+
+/// The decoration order of `tickets` (level 31) added in turn, at most
+/// `in_flight` at a time. Dense grids of `side` chunks from `origin` hold
+/// every chunk this touches, in place of hash maps.
+fn ticket_order(
+    mut tickets: VecDeque<(i32, i32)>,
+    in_flight: usize,
+    origin: (i32, i32),
+    side: usize,
+) -> Vec<(i32, i32)> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
     let reach = LIGHT_LEVEL - TICKET_LEVEL;
-    let half = radius.max(0) + reach + 1;
-    let side = (2 * half + 1) as usize;
-    let cell = |(x, z): (i32, i32)| {
-        ((x - center.0 + half) as usize) * side + (z - center.1 + half) as usize
-    };
+    let cell = |(x, z): (i32, i32)| ((x - origin.0) as usize) * side + (z - origin.1) as usize;
     let mut active: Vec<(i32, i32)> = Vec::new();
     // Queued task per chunk (level, sequence), `NONE` when there is none;
     // stale heap entries are skipped.
@@ -177,10 +191,9 @@ pub fn vanilla_order(center: (i32, i32), radius: i32) -> Vec<(i32, i32)> {
             }
         }
     };
-    for _ in 0..TICKETS_IN_FLIGHT {
-        if let Some(t) = tickets.pop_front() {
-            add(t, &mut active, &mut queued, &mut heap, &full);
-        }
+    while active.len() < in_flight {
+        let Some(t) = tickets.pop_front() else { break };
+        add(t, &mut active, &mut queued, &mut heap, &full);
     }
     while let Some(Reverse((l, s, chunk))) = heap.pop() {
         let i = cell(chunk);
@@ -202,7 +215,7 @@ pub fn vanilla_order(center: (i32, i32), radius: i32) -> Vec<(i32, i32)> {
             full[i] = true;
         }
         active.retain(|t| !(-2..=2).all(|dx| (-2..=2).all(|dz| full[cell((t.0 + dx, t.1 + dz))])));
-        while active.len() < TICKETS_IN_FLIGHT {
+        while active.len() < in_flight {
             let Some(t) = tickets.pop_front() else { break };
             add(t, &mut active, &mut queued, &mut heap, &full);
         }
@@ -210,9 +223,35 @@ pub fn vanilla_order(center: (i32, i32), radius: i32) -> Vec<(i32, i32)> {
     order
 }
 
+/// The chunks `/forceload add` over chunks `(x0, z0)..=(x1, z1)` decorates,
+/// in vanilla's order: ForceLoadCommand adds a FORCED ticket (level 31) per
+/// chunk, x-outer, z-inner, all at once.
+pub fn forced_order(x0: i32, z0: i32, x1: i32, z1: i32) -> Vec<(i32, i32)> {
+    let tickets = (x0..=x1)
+        .flat_map(|x| (z0..=z1).map(move |z| (x, z)))
+        .collect();
+    let pad = LIGHT_LEVEL - TICKET_LEVEL + 1;
+    let side = ((x1 - x0).max(z1 - z0) + 2 * pad + 1) as usize;
+    ticket_order(tickets, usize::MAX, (x0 - pad, z0 - pad), side)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Seed 8675309's geodes in chunks (-26, -1) and (14, -20) run into the
+    /// trial chambers of (-26, 0) and (14, -19); vanilla decorates the lower
+    /// z first, wherever the batch lies, so the chambers are drawn over them.
+    #[test]
+    fn forced_chunks_decorate_x_outer_z_inner() {
+        let rank = |order: &[(i32, i32)], c| order.iter().position(|&o| o == c).unwrap();
+        let west = forced_order(-32, -16, -17, -1);
+        assert!(rank(&west, (-26, -1)) < rank(&west, (-26, 0)));
+        let east = forced_order(0, -32, 15, -17);
+        assert!(rank(&east, (14, -20)) < rank(&east, (14, -19)));
+        assert_eq!(west[0], (-33, -17));
+        assert_eq!(west.len(), 22 * 22);
+    }
 
     /// The hash map version this module had before its dense grids.
     fn hashed_order(center: (i32, i32), radius: i32) -> Vec<(i32, i32)> {

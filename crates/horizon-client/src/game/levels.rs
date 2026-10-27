@@ -75,7 +75,7 @@ pub(super) struct Parked {
     lan_events: Vec<(i32, [i32; 3], i32, Option<u32>)>,
     lan_block_events: Vec<([i32; 3], i32, i32, u32)>,
     lan_entity_events: Vec<(i32, i8, [f64; 3])>,
-    lan_critical_hits: Vec<(Option<u32>, i32)>,
+    lan_critical_hits: Vec<(Option<u32>, i32, bool)>,
     /// Only the per-level parts of these are used (`swap_level`).
     anims: BlockEntityAnims,
     raiding: Raiding,
@@ -192,6 +192,7 @@ impl Game<'_> {
         let mut locator = self.end.locator();
         swap(&mut locator, &mut p.locator);
         self.end.set_locator(locator);
+        self.share_spawn_conditions();
         swap(&mut self.save, &mut p.save);
         swap(&mut self.block_ticks, &mut p.block_ticks);
         swap(&mut self.tick_chunks, &mut p.tick_chunks);
@@ -399,7 +400,8 @@ impl Game<'_> {
         }
         *next += self.clock.tick_duration();
         if *next > now {
-            // A `/pregen` task keeps the workers fed until the next tick.
+            // A `/pregen` task or force-loaded chunks keep the workers fed
+            // until the next tick.
             self.pump_pregen(*next);
             let now = Instant::now();
             if *next > now {

@@ -35,10 +35,15 @@ pub(super) enum Field {
     /// The instance dialog's (`instances_page.rs`).
     InstanceName,
     InstanceGroup,
+    /// Home's Multiplayer section's (`multiplayer_page.rs`).
+    ServerName,
+    ServerAddress,
+    /// Home's Console's search (`console_page.rs`).
+    ConsoleSearch,
 }
 
 impl Field {
-    const ALL: [Field; 11] = [
+    const ALL: [Field; 14] = [
         Field::Name,
         Field::Seed,
         Field::Players,
@@ -50,6 +55,9 @@ impl Field {
         Field::Email,
         Field::InstanceName,
         Field::InstanceGroup,
+        Field::ServerName,
+        Field::ServerAddress,
+        Field::ConsoleSearch,
     ];
 }
 
@@ -1026,7 +1034,8 @@ impl Launcher {
             Field::Port => self.save_port(),
             Field::Token => self.save_token(),
             Field::Email => self.invite_friend(),
-            Field::InstanceName | Field::InstanceGroup => {}
+            Field::InstanceName | Field::InstanceGroup | Field::ConsoleSearch => {}
+            Field::ServerName | Field::ServerAddress => self.add_server(),
         }
     }
 
@@ -1637,7 +1646,7 @@ impl Launcher {
                         )
                         .bg(t.plate)
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                            copy_to_clipboard(cx, gpui::ClipboardItem::new_string(
                                 copy_text.clone(),
                             ));
                             this.servers.copied = Some(Instant::now());

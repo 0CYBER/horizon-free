@@ -2515,6 +2515,51 @@ pub enum Appearance {
     System,
 }
 
+/// What the launcher's window does while the game runs, as the player picks it in Settings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WhilePlaying {
+    /// The window stays where it is.
+    #[default]
+    Stay,
+    /// The window goes to the Dock or the taskbar, and comes back when the game closes.
+    Minimize,
+    /// The launcher hides (macOS only: elsewhere it minimises), and comes back when the game
+    /// closes.
+    Hide,
+}
+
+impl WhilePlaying {
+    pub const ALL: [WhilePlaying; 3] = [Self::Stay, Self::Minimize, Self::Hide];
+
+    /// Its name in `settings.json` and on the command line.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Stay => "stay",
+            Self::Minimize => "minimize",
+            Self::Hide => "hide",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        let name = name.trim().to_ascii_lowercase();
+        let name = match name.as_str() {
+            "minimise" => "minimize",
+            "keep" | "open" | "off" => "stay",
+            n => n,
+        };
+        Self::ALL.into_iter().find(|w| w.name() == name)
+    }
+
+    /// What this computer does for it: only macOS can hide a whole app.
+    pub fn here(self) -> Self {
+        match self {
+            Self::Hide if !cfg!(target_os = "macos") => Self::Minimize,
+            w => w,
+        }
+    }
+}
+
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
     pub selected: Option<String>,
@@ -2556,6 +2601,9 @@ pub struct Settings {
     /// The player hid the sidebar's partner banner. The Servers page keeps its own.
     #[serde(default)]
     pub partner_hidden: bool,
+    /// What the window does while the game runs. Stays by default.
+    #[serde(default)]
+    pub while_playing: WhilePlaying,
 }
 
 impl Settings {
@@ -2573,6 +2621,12 @@ impl Settings {
                 .is_some_and(|a| serde_json::from_value::<Appearance>(a.clone()).is_err())
             {
                 fields.remove("appearance");
+            }
+            if fields
+                .get("while_playing")
+                .is_some_and(|w| serde_json::from_value::<WhilePlaying>(w.clone()).is_err())
+            {
+                fields.remove("while_playing");
             }
         }
         serde_json::from_value(value).unwrap_or_default()
@@ -2885,6 +2939,30 @@ mod tests {
         assert_eq!(offered(before, &["v0.2.0"]), None);
         assert_eq!(offered(before, &["v0.2.12", "v0.2.0"]), None);
         assert_eq!(CHECK_EVERY.as_secs(), 30 * 60);
+    }
+
+    #[test]
+    fn the_window_stays_while_playing_unless_picked() {
+        assert_eq!(Settings::parse("{}").while_playing, WhilePlaying::Stay);
+        let hide = Settings::parse(r#"{"while_playing": "hide", "game_args": "--x"}"#);
+        assert_eq!(hide.while_playing, WhilePlaying::Hide);
+        let future = Settings::parse(r#"{"while_playing": "fade", "game_args": "--x"}"#);
+        assert_eq!(
+            (future.while_playing, future.game_args.as_str()),
+            (WhilePlaying::Stay, "--x")
+        );
+        assert_eq!(
+            WhilePlaying::parse("Minimise"),
+            Some(WhilePlaying::Minimize)
+        );
+        assert_eq!(WhilePlaying::parse("off"), Some(WhilePlaying::Stay));
+        assert_eq!(WhilePlaying::parse("close"), None);
+        for w in WhilePlaying::ALL {
+            let text = serde_json::to_string(&w).unwrap();
+            assert_eq!(text, format!("\"{}\"", w.name()));
+        }
+        let here = WhilePlaying::Hide.here();
+        assert_eq!(here == WhilePlaying::Hide, cfg!(target_os = "macos"));
     }
 
     #[test]
