@@ -7,6 +7,7 @@ use horizon_client::{
     biome::Biomes,
     blocks::{BlockFacts, Fluid},
     chunk::{HEIGHT, MIN_Y},
+    containers::BlockEntity,
     particles::{ParticleLevel, ParticleOptions, ParticleType},
     world::World,
 };
@@ -344,6 +345,10 @@ impl Game<'_> {
                 &mut self.particles,
                 &ctx,
                 r.block_entities(),
+                &|pos| match self.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
+                    Some(BlockEntity::Campfire(c)) => c.items.each_ref().map(Option::is_some),
+                    _ => [false; 4],
+                },
             );
         }
         let level = ParticleLevel {
