@@ -92,6 +92,33 @@ pub(super) struct LanHost {
     states: lan::entity::States,
 }
 
+impl LanHost {
+    /// `PlayerList.remove`: `player.awardStat(Stats.LEAVE_GAME)` before the
+    /// player is saved. Once per guest, however often they are saved.
+    pub(super) fn award_leave_game(&mut self, conn: u32) {
+        if let Some(play) = self.play.get_mut(&conn)
+            && !play.left_game
+        {
+            play.left_game = true;
+            play.stats.custom("leave_game", 1);
+        }
+    }
+
+    /// `PlayerList.removeAll`: every player who joined leaves with the world.
+    pub(super) fn award_leave_game_to_all(&mut self) {
+        let conns: Vec<u32> = self
+            .hub
+            .guests
+            .iter()
+            .filter(|g| g.placed)
+            .map(|g| g.conn)
+            .collect();
+        for conn in conns {
+            self.award_leave_game(conn);
+        }
+    }
+}
+
 /// The player who owns an integrated server's world: a guest whose state is
 /// the world's own player (`players/data/<singleplayer_uuid>.dat`), as in
 /// single player.
@@ -731,6 +758,7 @@ impl Game<'_> {
         let Some(mut host) = self.lan.take() else {
             return;
         };
+        host.award_leave_game_to_all();
         for g in &host.hub.guests {
             self.save_guest(&host, g);
         }
@@ -1150,6 +1178,9 @@ impl Game<'_> {
                             }
                         }
                         self.lan_crafting_left(&mut host, &mut guest);
+                        if guest.placed {
+                            host.award_leave_game(guest.conn);
+                        }
                         self.save_guest(&host, &guest);
                         host.models.remove(&guest.conn);
                         host.play.remove(&guest.conn);

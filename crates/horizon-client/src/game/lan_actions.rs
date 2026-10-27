@@ -74,6 +74,9 @@ pub(super) struct GuestPlay {
     potions: super::potions::BodyPotions,
     /// `ServerPlayer.getStats` and the inventory `inventory_changed` last saw.
     pub(super) stats: super::stats::Stats,
+    /// `Stats.LEAVE_GAME` is counted: a guest is saved more than once on the
+    /// way out, the statistic is awarded once (`LanHost::award_leave_game`).
+    pub(super) left_game: bool,
     last_inventory: u64,
     /// `Entity.portalProcess` and `portalCooldown` (game/server_travel.rs).
     pub(super) portal: horizon_client::nether_portal::PortalState,
