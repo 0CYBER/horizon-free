@@ -453,6 +453,11 @@ impl Game<'_> {
         }
         // ArmorStand.swapItem.
         match held {
+            // A player with infinite materials puts a copy of one on an empty
+            // slot and keeps the stack.
+            Some(h) if self.creative && current.is_none() => {
+                self.armor_stands[i].equipment[slot] = Some(ItemStack { count: 1, ..h });
+            }
             Some(h) if h.count > 1 => {
                 if current.is_some() {
                     return true;
@@ -706,6 +711,20 @@ impl Game<'_> {
                 let color = undyed.map_or(0xFFFF_FFFF, |c| {
                     0xFF00_0000 | (c & 0xFF) << 16 | (c & 0xFF00) | (c >> 16) & 0xFF
                 });
+                // ArmorStandRenderer's HumanoidArmorLayer: the armour glint
+                // when `stack.hasFoil()`, as on a living entity.
+                let item_glint = self
+                    .res
+                    .items()
+                    .enchantments
+                    .props
+                    .get(&stack.item)
+                    .is_some_and(|p| p.glint);
+                let overlay = if stack.has_foil(item_glint) {
+                    horizon_client::mobs::render::ARMOR_GLINT
+                } else {
+                    0
+                };
                 let layer_poses = Poses::new(part);
                 horizon_client::mobs::render::draw(
                     part,
@@ -714,7 +733,7 @@ impl Game<'_> {
                     uv,
                     color,
                     packed,
-                    0,
+                    overlay,
                     out,
                 );
                 // EquipmentLayerRenderer: the trim layer over the armour.
@@ -729,7 +748,7 @@ impl Game<'_> {
                         trim,
                         0xFFFF_FFFF,
                         packed,
-                        0,
+                        overlay,
                         out,
                     );
                 }
@@ -872,6 +891,7 @@ impl Game<'_> {
                 lights: Some(horizon_client::block_entity_render::diffuse_lights(
                     self.dim == super::Dim::Nether,
                 )),
+                glint: self.glint(),
             };
             let profile = stack
                 .extra

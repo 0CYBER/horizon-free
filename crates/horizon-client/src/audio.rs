@@ -719,11 +719,6 @@ impl Audio {
         self.play(event, at, volume, pitch);
         self.capture = capture;
     }
-    /// `LivingEntity.handleDamageEvent`'s pitch, `(r - r) * 0.2 + 1`, drawn on the
-    /// client (the entity's own random there, never the server's world random).
-    pub fn hurt_pitch(&mut self) -> f32 {
-        (self.random.next_float() - self.random.next_float()) * 0.2 + 1.0
-    }
     /// `AbstractWidget.playButtonClickSound`: an unseeded, relative UI sound.
     pub fn play_button_click(&mut self) {
         self.play_instance(

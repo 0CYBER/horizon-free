@@ -186,6 +186,7 @@ impl Server {
             attributes: Vec::new(),
             bed: None,
             living_flags: 0,
+            body: Default::default(),
         };
         let mut ctx = TickCtx {
             world: &mut self.world,
@@ -276,6 +277,75 @@ fn run<T: Send + 'static>(
         assert!(start.elapsed() < Duration::from_secs(40), "timed out");
     }
     handle.join().unwrap().unwrap()
+}
+
+#[test]
+fn recipe_settings_packets_update_only_the_players_book_and_survive_save() {
+    let Some(resources) = resources() else {
+        return;
+    };
+    let mut s = server(&resources);
+    let port = s.hub.lan.port;
+    let _bot = run(&mut s, move || connect(port, "RecipeSettings", true));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while s.hub.guests.is_empty() {
+        s.tick(&[]);
+        assert!(Instant::now() < deadline, "guest did not join");
+        thread::yield_now();
+    }
+    for book in 0..4 {
+        for flags in 0..4 {
+            let open = flags & 1 != 0;
+            let filtering = flags & 2 != 0;
+            let before = s.hub.guests[0].recipe_book.clone();
+            // Vanilla's wire payload: RecipeBookType VarInt, open, filtering.
+            let packet = S::decode(
+                horizon_protocol::ids::play::serverbound::RECIPE_BOOK_CHANGE_SETTINGS,
+                &[book, u8::from(open), u8::from(filtering)],
+            )
+            .unwrap();
+            s.hub.guests[0].inbox.push_back(packet);
+            s.tick(&[]);
+            let settings = &s.hub.guests[0].recipe_book;
+            for i in 0..4 {
+                assert_eq!(
+                    settings.open[i],
+                    if i == usize::from(book) {
+                        open
+                    } else {
+                        before.open[i]
+                    }
+                );
+                assert_eq!(
+                    settings.filtering[i],
+                    if i == usize::from(book) {
+                        filtering
+                    } else {
+                        before.filtering[i]
+                    }
+                );
+            }
+            let mut saved = horizon_client::save::Level::default();
+            horizon_client::lan::playerdata::store(&s.hub.guests[0], &mut saved);
+            let mut reopened = horizon_client::save::Level::default();
+            reopened.read_player(&saved.player_tag());
+            assert_eq!(reopened.recipe_book.open, settings.open);
+            assert_eq!(reopened.recipe_book.filtering, settings.filtering);
+        }
+    }
+    for book_type in [-1, 4] {
+        let mut wire = horizon_protocol::buf::Writer::new();
+        wire.varint(book_type);
+        wire.bool(true);
+        wire.bool(true);
+        assert!(
+            S::decode(
+                horizon_protocol::ids::play::serverbound::RECIPE_BOOK_CHANGE_SETTINGS,
+                &wire.data,
+            )
+            .is_err()
+        );
+    }
 }
 
 #[test]
