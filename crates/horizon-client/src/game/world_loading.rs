@@ -93,7 +93,14 @@ impl WorldRequest {
             level.hardcore = o.hardcore;
             level.difficulty = horizon_client::title::DIFFICULTIES[o.difficulty()].into();
             level.allow_commands = Some(o.commands(creative));
-            horizon_client::save::write_world_gen_settings(&save_root, level.seed, o.world_gen())?;
+            horizon_client::save::write_world_gen_settings_with(
+                &save_root,
+                level.seed,
+                o.world_gen(),
+                o.flat_settings(),
+            )?;
+            // WorldCreationUiState.getGameRules, written with the level.
+            level.game_rules = o.rules.by_name();
         }
         // Worlds made without the Create New World screen (--world, the
         // control socket) take its default: commands on for Creative only.

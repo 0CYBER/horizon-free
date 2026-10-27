@@ -338,7 +338,9 @@ impl Game<'_> {
             let (r, u) = (right.as_vec3() * 0.025, up.as_vec3() * 0.025);
             // Text space: x right, y down (scale 0.025, -0.025).
             let at = |x: f32, y: f32| o + r * x - u * y;
-            let chars: Vec<(char, u32)> = text
+            // Component.getVisualOrderText.
+            let shown = horizon_client::bidi::visual(text);
+            let chars: Vec<(char, u32)> = shown
                 .spans
                 .iter()
                 .flat_map(|s| {
@@ -377,6 +379,7 @@ impl Game<'_> {
                         layer,
                         color,
                         light,
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             };

@@ -267,8 +267,7 @@ impl Game<'_> {
             // measured from the box's centre (HangingEntity's position).
             let (lo, hi) = p.bounds();
             let (lo, hi) = (glam::DVec3::from(lo), glam::DVec3::from(hi));
-            let range =
-                super::entity_culling::default_range(hi - lo, self.settings.entity_distance);
+            let range = super::entity_culling::default_range(hi - lo, self.view_scale());
             if !self.entity_in_view(camera, (lo + hi) / 2.0, range, lo, hi) {
                 continue;
             }
@@ -308,6 +307,8 @@ impl Game<'_> {
                         layer: 0,
                         color,
                         light: packed,
+
+                        glint_uv: [0.0, 0.0],
                     });
                 }
             };
