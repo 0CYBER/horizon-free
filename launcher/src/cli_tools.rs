@@ -30,6 +30,7 @@ pub const DESTRUCTIVE: &[&str] = &[
     "multiplayer remove",
     "screenshots delete",
     "packs remove",
+    "worlds datapack-remove",
 ];
 
 /// Commands that send something or reach other people: only when the player asks.

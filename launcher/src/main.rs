@@ -11,6 +11,7 @@ mod cli_tools;
 mod collection;
 mod console;
 mod cull;
+mod datapacks_page;
 mod game_tools;
 mod instances_page;
 mod internet;
@@ -239,6 +240,7 @@ struct Launcher {
     multiplayer: multiplayer_page::Multiplayer,
     screenshots: screenshots_page::Screenshots,
     game_packs: packs_page::Packs,
+    world_packs: datapacks_page::WorldPacks,
     /// The name the game made up for an offline player (`horizon-player.txt`), for the top bar.
     offline_name: Option<String>,
     /// The player's servers, for the sidebar until the Servers page has read them.
@@ -402,6 +404,7 @@ impl Launcher {
             multiplayer: multiplayer_page::Multiplayer::default(),
             screenshots: screenshots_page::Screenshots::default(),
             game_packs: packs_page::Packs::default(),
+            world_packs: datapacks_page::WorldPacks::default(),
             offline_name: offline_name(),
             side_servers: horizon_launcher::servers::list(),
             art: art::Art::default(),
