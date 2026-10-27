@@ -66,8 +66,11 @@ impl Game<'_> {
             | Species::Salmon
             | Species::TropicalFish
             | Species::Pufferfish
-            | Species::Axolotl
-            | Species::Tadpole => item == "minecraft:water_bucket",
+            | Species::Axolotl => item == "minecraft:water_bucket",
+            // Tadpole.mobInteract: frog food, else the bucket.
+            Species::Tadpole => {
+                item == "minecraft:water_bucket" || m.kind.food.iter().any(|f| f.as_str() == item)
+            }
             Species::Armadillo => item == "minecraft:brush",
             // ZombieVillager.mobInteract: CONSUME for a golden apple.
             Species::ZombieVillager => item == "minecraft:golden_apple",

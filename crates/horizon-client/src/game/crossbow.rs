@@ -222,7 +222,7 @@ impl Game<'_> {
                     a.pierce = pierce;
                 }
                 arrow.shoot(&mut self.world.random, dir.to_array(), power, 1.0);
-                self.creatures.projectiles.push(arrow);
+                self.add_projectile(arrow);
             }
             self.player_projectile_shot();
             let pitch = if index == 0 {
