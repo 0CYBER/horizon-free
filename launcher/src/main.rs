@@ -27,6 +27,7 @@ mod modpacks_page;
 mod mods_page;
 mod mods_project;
 mod multiplayer_page;
+mod owner_page;
 mod packs_page;
 mod partner;
 mod perf;
@@ -210,6 +211,8 @@ struct Launcher {
     /// Whether an account here owns the game, by the keychain's last answers (the owner gate);
     /// none until the keychain has been read.
     owner: Option<bool>,
+    /// Play was refused (or Home's Sign in pressed): the owner gate's screen is open.
+    owner_screen_open: bool,
     /// The game is waiting for its session (a token renewal) before it starts.
     starting_client: Option<String>,
     /// Join a friend: the code typed on the Play page, and the one the game
@@ -415,6 +418,7 @@ impl Launcher {
             sign_in_state: None,
             keychain: true,
             owner: None,
+            owner_screen_open: false,
             starting_client: None,
             friend_code: String::new(),
             friend_focused: false,
@@ -648,6 +652,7 @@ impl Launcher {
                             Ok(pass) => pass,
                             Err(account::NoOwner) => {
                                 self.owner = Some(false);
+                                self.owner_screen_open = true;
                                 self.client_error = Some(format!("{}.", tr(account::NEEDS_OWNER)));
                                 self.starting_pack = None;
                                 self.joining = None;
@@ -917,7 +922,12 @@ impl Launcher {
                     self.accounts = Accounts::load();
                     // Sign-in refuses accounts that don't own the game.
                     self.owner = Some(true);
+                    self.owner_screen_open = false;
                     self.client_error = None;
+                    if !self.settings.owner_notice_seen {
+                        self.settings.owner_notice_seen = true;
+                        self.settings.save();
+                    }
                 }
                 self.sign_in_state = Some(state);
                 changed = true;
@@ -1088,7 +1098,7 @@ impl Launcher {
         });
     }
 
-    /// Starts the Microsoft sign-in; Settings shows its code.
+    /// Starts the Microsoft sign-in; Settings and the owner gate's screen show its code.
     fn start_sign_in(&mut self) {
         if let Some(old) = self.sign_in.replace(SignIn::start()) {
             old.cancel();
@@ -2301,8 +2311,7 @@ impl Launcher {
                     Some(
                         button("gate-sign-in", "Sign in", Kind::Primary, &t)
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.start_sign_in();
-                                this.go(Page::Settings);
+                                this.sign_in_to_play();
                                 cx.notify();
                             }))
                             .into_any_element(),
@@ -3201,9 +3210,9 @@ impl Launcher {
                 .flex()
                 .flex_col()
                 .gap(px(6.))
-                .child(format!(
-                    "Open {} in your browser and enter this code:",
-                    code.verification_uri
+                .child(trf(
+                    "Open {link} in your browser and enter this code:",
+                    &[("link", &code.verification_uri)],
                 ))
                 .child(
                     text(theme::HEADING)
@@ -3906,6 +3915,9 @@ impl Render for Launcher {
         }
         if self.asking_consent() {
             root = root.child(self.consent_screen(cx));
+        }
+        if self.asking_owner() {
+            root = root.child(self.owner_screen(cx));
         }
         if let Some(opening) = &self.opening {
             // The wordmark arrives letter by letter, then gives way to the launcher; a click or
