@@ -52,6 +52,49 @@ impl Game<'_> {
         }
     }
 
+    /// `ServerLevel.sendParticles` with no count and no speed: one data-less
+    /// particle at `at` for every connected player, queued until the hub is
+    /// back in place. `dist` is the packet's offset, which the particle reads
+    /// as its extra argument (`Player.doSweepAttack`'s arc direction).
+    pub(super) fn lan_particle(&mut self, options: &ParticleOptions, at: [f64; 3], dist: [f32; 3]) {
+        if self.audio.capture.is_some() {
+            self.lan_particles.push((options.clone(), at, dist));
+        }
+    }
+
+    /// The packet of a queued `lan_particle`, to each player whose block
+    /// centre is strictly within 32 blocks of it.
+    pub(super) fn send_level_particle(
+        &self,
+        host: &crate::game::lan::LanHost,
+        options: &ParticleOptions,
+        at: [f64; 3],
+        dist: [f32; 3],
+    ) {
+        let name = format!("minecraft:{}", options.ty.name());
+        let Some(id) = host.hub.registry_id("minecraft:particle_type", &name) else {
+            return;
+        };
+        let packet = C::LevelParticles(play::LevelParticles {
+            particle: Particle { id, data: None },
+            override_limiter: false,
+            always_show: false,
+            pos: at,
+            dist,
+            max_speed: [0.0; 3],
+            count: 0,
+            randomization: 0,
+        });
+        for g in host.hub.guests.iter().filter(|g| host.hub.here(g)) {
+            let distance: f64 = (0..3)
+                .map(|k| (g.position[k].floor() + 0.5 - at[k]).powi(2))
+                .sum();
+            if distance < 32.0 * 32.0 {
+                g.send(&packet);
+            }
+        }
+    }
+
     /// `ParticleTypes.STREAM_CODEC`'s value for `options`: the type's
     /// network id and the data it carries (`state` for the block particles).
     /// None while not serving, or for a particle whose data isn't sent from

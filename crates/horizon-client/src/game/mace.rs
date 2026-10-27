@@ -37,6 +37,21 @@ fn ally_of_player(m: &Mob, player: Option<[i32; 4]>) -> bool {
         || m.species() == Species::Allay && m.extra.tame
 }
 
+/// `SweepingEdgeEnchantment.getSweepingDamageRatio` (the enchantment's
+/// `fraction` attribute): level / (level + 1), none without the enchantment.
+fn sweeping_ratio(level: u32) -> f32 {
+    if level > 0 {
+        level as f32 / (level as f32 + 1.0)
+    } else {
+        0.0
+    }
+}
+/// `Player.doSweepAttack`'s `1 + ratio * f`, where `f` is the attack damage
+/// after `baseDamageScaleFactor` (0.2 + strength^2 * 0.8).
+fn sweep_base_damage(ratio: f32, attack_damage: f32, scale: f32) -> f32 {
+    1.0 + ratio * attack_damage * (0.2 + scale * scale * 0.8)
+}
+
 impl Game<'_> {
     fn holds_mace(&self) -> bool {
         self.inventory[self.selected]
@@ -259,6 +274,74 @@ impl Game<'_> {
             push(s.position, &mut s.velocity, 0.0);
         }
     }
+    /// `Player.attack`'s sweep: every other living mob in the target's box
+    /// inflated by (1, 0.25, 1) and under three blocks from the player takes
+    /// `getEnchantedDamage(1 + sweeping ratio * attack damage) * strength`,
+    /// knocked back 0.4 along the player's yaw. The player's allies and the
+    /// target are spared.
+    pub(super) fn sweep_damage(&mut self, index: usize, scale: f32) {
+        let Some(player) = self.player.as_ref() else {
+            return;
+        };
+        let from = [player.position.x, player.position.y, player.position.z];
+        let target = &self.mobs[index];
+        let (target_id, area) = (
+            target.id,
+            target.bounds().inflate(Vec3::new(1.0, 0.25, 1.0)),
+        );
+        // SweepingEdgeEnchantment.getSweepingDamageRatio: level / (level + 1).
+        let level = self.inventory[self.selected].as_ref().map_or(0, |held| {
+            held.enchantments()
+                .iter()
+                .find(|(id, _)| &**id == "minecraft:sweeping_edge")
+                .map_or(0, |(_, level)| *level)
+        });
+        let ratio = sweeping_ratio(level);
+        // `f` of doSweepAttack: the attack damage attribute after
+        // baseDamageScaleFactor (a sweep is never a smash or a critical hit).
+        let spin = self.player.as_ref().map_or(0.0, |p| p.auto_spin_attack_dmg);
+        let attribute = if spin > 0.0 {
+            spin
+        } else {
+            1.0 + self.attack_item_info().map_or(0.0, |i| i.attack_damage)
+                + self.effect_attack_bonus()
+        };
+        let base = sweep_base_damage(ratio, attribute, scale);
+        let (xd, zd) = self.extra_knockback_direction();
+        let uuid = self.level.player_uuid.or(Some([0, 0, 0, 1]));
+        let victims: Vec<usize> = self
+            .mobs
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| {
+                m.id != target_id
+                    && m.alive()
+                    && !m.removed
+                    && !ally_of_player(m, uuid)
+                    && m.bounds().intersects(area)
+                    && (0..3)
+                        .map(|a| [m.position.x, m.position.y, m.position.z][a] - from[a])
+                        .map(|d| d * d)
+                        .sum::<f64>()
+                        < 9.0
+            })
+            .map(|(i, _)| i)
+            .collect();
+        for i in victims {
+            let kind = self.mobs[i].kind.id.clone();
+            let kind = format!("minecraft:{}", kind.trim_start_matches("minecraft:"));
+            let amount = (base + self.enchant_damage_bonus(&kind)) * scale;
+            let source = self.attack_source(from);
+            // hurtServer first; the knockback and post-attack effects follow
+            // only when it landed.
+            if self.hurt_by_player(i, amount, source) {
+                self.mobs[i].knockback(0.4, xd, zd);
+                self.last_hurt_by_player
+                    .insert(self.mobs[i].id, self.lan_acting);
+                self.post_attack(i);
+            }
+        }
+    }
     /// `ServerPlayer.checkFallDamage` after a smash on a grounded target:
     /// the landing block's particles, 50 for every block fallen (200 at most).
     pub(super) fn smash_landing_particles(
@@ -326,5 +409,29 @@ impl Game<'_> {
             self.particles.add(&options, [x, center[1], z], v);
             i += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sweeping_edge_ratio_is_level_over_level_plus_one() {
+        assert_eq!(sweeping_ratio(0), 0.0);
+        assert_eq!(sweeping_ratio(1), 0.5);
+        assert!((sweeping_ratio(2) - 2.0 / 3.0).abs() < 1e-6);
+        assert_eq!(sweeping_ratio(3), 0.75);
+    }
+
+    #[test]
+    fn sweep_damage_is_one_without_the_enchantment() {
+        // A fully charged diamond sword (8 attack damage): neighbours take 1.
+        assert_eq!(sweep_base_damage(0.0, 8.0, 1.0), 1.0);
+        // Sweeping Edge III adds the ratio of the (charged) attack damage.
+        assert_eq!(sweep_base_damage(0.75, 8.0, 1.0), 7.0);
+        // baseDamageScaleFactor at 0.95 strength.
+        let scaled = sweep_base_damage(0.5, 8.0, 0.95);
+        assert!((scaled - (1.0 + 0.5 * 8.0 * (0.2 + 0.95 * 0.95 * 0.8))).abs() < 1e-6);
     }
 }

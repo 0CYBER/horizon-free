@@ -1597,6 +1597,13 @@ struct Game<'a> {
     lan_entity_events: Vec<(i32, i8, [f64; 3])>,
     /// Successful crits (attacking guest, hit entity), queued while the hub is taken.
     lan_critical_hits: Vec<(Option<u32>, i32)>,
+    /// Particles `ServerLevel.sendParticles` sends the guests (the particle,
+    /// where, its offset), queued while the hub is taken.
+    lan_particles: Vec<(
+        horizon_client::particles::ParticleOptions,
+        [f64; 3],
+        [f32; 3],
+    )>,
     /// Global level events for every guest (`ServerLevel.globalLevelEvent`).
     lan_global_events: Vec<(i32, [i32; 3], i32)>,
     /// `ContainerOpenersCounter`: how many players (the host and the guests)
@@ -7517,7 +7524,14 @@ impl Game<'_> {
         ((self.attack_ticks as f32 + 0.5) / delay).clamp(0.0, 1.0)
     }
     /// `Player.isSweepAttack`: a charged, grounded sword hit below the movement limit.
-    pub(super) fn sweep_attack_position(&self, scale: f32, crit: bool) -> Option<[f64; 3]> {
+    pub(super) fn sweep_attack_position(&mut self, scale: f32, crit: bool) -> Option<[f64; 3]> {
+        // Player.getSpeed: the movement speed attribute as it is now (the
+        // field is only refreshed by the local movement step, never for a
+        // server's player).
+        let p = self.player.as_mut()?;
+        if let Ok(speed) = p.attribute("minecraft:movement_speed") {
+            p.speed = speed as f32;
+        }
         let p = self.player.as_ref()?;
         let sword = self.held().is_some_and(|s| {
             self.res
@@ -7529,11 +7543,13 @@ impl Game<'_> {
         if !p.is_sweep_attack(scale, crit, sword) {
             return None;
         }
-        let yaw = f64::from(self.yaw.to_radians());
+        // Mth.sin / Mth.cos of yRot * (PI / 180), from its sine table.
+        use horizon_core::geometry::trig;
+        let yaw = f64::from(self.yaw * trig::DEG_TO_RAD);
         Some([
-            p.position.x - yaw.sin(),
+            p.position.x - f64::from(trig::sin(yaw)),
             p.position.y + f64::from(p.dimensions.height) * 0.5,
-            p.position.z + yaw.cos(),
+            p.position.z + f64::from(trig::cos(yaw)),
         ])
     }
     /// The visual and sound part of `Player.doSweepAttack` after a successful hit.
@@ -7545,6 +7561,22 @@ impl Game<'_> {
             at,
             [0.0; 3],
         );
+        // ServerLevel.sendParticles: the arc's offset is its direction (the
+        // particle's extra argument, which the packet carries for the
+        // clients of a server).
+        if let Some(p) = self.player.as_ref() {
+            self.lan_particle(
+                &horizon_client::particles::ParticleOptions::simple(
+                    horizon_client::particles::ParticleType::SweepAttack,
+                ),
+                at,
+                [
+                    (at[0] - p.position.x) as f32,
+                    0.0,
+                    (at[2] - p.position.z) as f32,
+                ],
+            );
+        }
         self.audio
             .play("minecraft:entity.player.attack.sweep", from, 1.0, 1.0);
     }
@@ -7720,6 +7752,7 @@ impl Game<'_> {
             };
             // Player.playServerSideSound: at the player.
             if let Some(at) = sweep {
+                self.sweep_damage(index, scale);
                 self.sweep_attack(at, from);
             } else {
                 self.audio.play(sound, from, 1.0, 1.0);
@@ -12489,6 +12522,7 @@ impl<'a> Game<'a> {
             lan_block_events: Vec::new(),
             lan_entity_events: Vec::new(),
             lan_critical_hits: Vec::new(),
+            lan_particles: Vec::new(),
             lan_global_events: Vec::new(),
             lid_openers: HashMap::new(),
             lan_acting: None,

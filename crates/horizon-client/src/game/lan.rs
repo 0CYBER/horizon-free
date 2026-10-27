@@ -665,6 +665,7 @@ impl Game<'_> {
         self.audio.capture = None;
         self.lan_events.clear();
         self.lan_critical_hits.clear();
+        self.lan_particles.clear();
         self.streaming.extra.clear();
         if announce {
             self.system_message(Text::translate(
@@ -1244,6 +1245,9 @@ impl Game<'_> {
         }
         for (kind, pos, data) in std::mem::take(&mut self.lan_global_events) {
             host.hub.global_level_event(kind, pos, data);
+        }
+        for (options, at, dist) in std::mem::take(&mut self.lan_particles) {
+            self.send_level_particle(host, &options, at, dist);
         }
         self.lan_broadcast_effects(host);
         if host.hub.guests.is_empty() {
