@@ -3658,7 +3658,12 @@ impl Game<'_> {
             }
             // Parrot.mobInteract: the owner makes a tame parrot on the ground
             // sit or stand (poisonous food is handled apart).
-            Species::Parrot if m.extra.tame && m.on_ground && !parrot_poisonous => {
+            Species::Parrot
+                if m.extra.tame
+                    && m.extra.owner == Some(acting)
+                    && m.on_ground
+                    && !parrot_poisonous =>
+            {
                 m.extra.sitting = !m.extra.sitting;
                 self.world.modified.insert((
                     m.position.x.floor() as i32 >> 4,
