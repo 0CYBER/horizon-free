@@ -3211,4 +3211,31 @@ pub(crate) mod tests {
             assert_eq!(menu.slot(0), stack("dirt", 1).as_ref());
         });
     }
+
+    /// #1737: a Shift+Right-Click quick move in a chest (a double chest's
+    /// 54 slots) moves the stack and leaves the menu's state clean, so the
+    /// next quick move still moves its stack and the inventory still
+    /// answers.
+    #[test]
+    fn a_chest_quick_move_keeps_the_next_one_working() {
+        with_menu(Kind::Chest(6), |env, menu| {
+            menu.creative = false;
+            // The hotbar holds two stacks; the chest is empty.
+            menu.set_slot(env, 81, stack("cobblestone", 64));
+            menu.set_slot(env, 82, stack("dirt", 32));
+            // Shift+Right-Click on the hotbar: the stack goes into the chest.
+            menu.click(env, 81, 1, Input::QuickMove).unwrap();
+            assert_eq!(menu.slot(81), None);
+            assert_eq!(menu.slot(0).map(|s| s.count), Some(64));
+            // Nothing is left on the cursor and no quick craft is running.
+            assert_eq!(menu.carried, None);
+            assert_eq!(menu.quick_status, 0);
+            // The next quick move still works.
+            menu.click(env, 82, 1, Input::QuickMove).unwrap();
+            assert_eq!(menu.slot(82), None);
+            assert_eq!(menu.slot(1).map(|s| s.count), Some(32));
+            assert_eq!(menu.carried, None);
+            assert_eq!(menu.quick_status, 0);
+        });
+    }
 }
