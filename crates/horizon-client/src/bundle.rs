@@ -211,6 +211,17 @@ impl Contents {
         self.weight.n >= self.weight.d
     }
 
+    /// `BundleItem.isBarVisible`, `getBarWidth` and `getBarColor`: the fullness bar
+    /// (width, RGB), blue until the bundle is full, then red.
+    pub fn bar(&self) -> Option<(i32, u32)> {
+        if self.weight.n <= 0 {
+            return None;
+        }
+        let width = (1 + self.weight.n * 12 / self.weight.d).min(13) as i32;
+        let color = if self.is_full() { 0xFF5454 } else { 0x7087FF };
+        Some((width, color))
+    }
+
     /// `toImmutable`, written back into the bundle's component.
     pub fn store(self, bundle: &mut ItemStack) {
         let data = bundle.data_mut();

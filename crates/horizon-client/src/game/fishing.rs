@@ -2,6 +2,7 @@
 //! bobbing, lure and bite timers, open water, hooking mobs, retrieving the
 //! `gameplay/fishing` loot) and `FishingHookRenderer` (bobber and line).
 use super::{Game, view_vector};
+use horizon_client::advancements::EntityView;
 use horizon_client::lan::{entity::States, hub::Hub};
 use horizon_client::{
     blocks::Fluid,
@@ -14,6 +15,7 @@ use horizon_client::{
 };
 use horizon_core::{
     geometry::{Aabb, Vec3, trig},
+    position::BlockPos,
     random::RandomSource,
 };
 use horizon_protocol::entity_data::{Value, serializer};
@@ -30,8 +32,8 @@ enum State {
 pub(super) struct Hook {
     /// Its entity id, which a server's players track it under.
     id: u32,
-    position: Vec3,
-    previous: Vec3,
+    pub(super) position: Vec3,
+    pub(super) previous: Vec3,
     velocity: Vec3,
     state: State,
     life: i32,
@@ -77,7 +79,7 @@ impl Game<'_> {
         let at = [p.position.x, p.position.y, p.position.z];
         let pitch = 0.4 / (self.world.random.next_float() * 0.4 + 0.8);
         if self.hook.is_some() {
-            let damage = self.retrieve_hook();
+            let damage = self.retrieve_hook(stack);
             self.damage_held(damage);
             self.audio.play(
                 "minecraft:entity.fishing_bobber.retrieve",
@@ -143,7 +145,7 @@ impl Game<'_> {
         true
     }
     /// `FishingHook.retrieve`: the rod damage it costs.
-    fn retrieve_hook(&mut self) -> u32 {
+    fn retrieve_hook(&mut self, rod: &ItemStack) -> u32 {
         let Some(hook) = self.hook.take() else {
             return 0;
         };
@@ -166,6 +168,15 @@ impl Game<'_> {
             } else if let Some(item) = self.dropped.iter_mut().find(|i| i.id == id) {
                 item.velocity = pulled(item.velocity);
                 hooked_item = true;
+            }
+            // CriteriaTriggers.FISHING_ROD_HOOKED with no items.
+            let hooked = self
+                .mobs
+                .iter()
+                .find(|m| m.id == id)
+                .map(|m| self.mob_entity(m));
+            if let Some(hooked) = hooked {
+                self.trigger_fishing_rod_hooked(rod, &hooked, &[]);
             }
             // `hookedIn instanceof ItemEntity ? 3 : 5`.
             damage = if hooked_item { 3 } else { 5 };
@@ -191,6 +202,7 @@ impl Game<'_> {
                 Some(hook.open_water),
             );
             self.world.random = random;
+            let mut caught = Vec::new();
             for stack in items {
                 // FishingHook.retrieve: fish_caught for each catch in #minecraft:fishes.
                 if self
@@ -222,6 +234,7 @@ impl Game<'_> {
                 if let Some(potion) = &stack.potion {
                     item = item.with_potion(potion);
                 }
+                caught.push(item.clone());
                 let (dx, dy, dz) = (
                     owner.x - hook.position.x,
                     owner.y - hook.position.y,
@@ -236,11 +249,20 @@ impl Game<'_> {
                     item,
                     [hook.position.x, hook.position.y, hook.position.z],
                     v,
-                    10,
+                    0,
                 );
                 let xp = self.world.random.next_int_bound(6).unwrap_or(0) as u32 + 1;
                 self.spawn_orbs([owner.x, owner.y + 0.5, owner.z + 0.5], xp);
             }
+            // CriteriaTriggers.FISHING_ROD_HOOKED: the hook itself is the entity.
+            let bobber = EntityView {
+                kind: "minecraft:fishing_bobber".into(),
+                position: [hook.position.x, hook.position.y, hook.position.z],
+                on_ground: hook.on_ground,
+                fishing_open_water: Some(hook.open_water),
+                ..Default::default()
+            };
+            self.trigger_fishing_rod_hooked(rod, &bobber, &caught);
             damage = 1;
         }
         if hook.on_ground {
@@ -318,9 +340,12 @@ impl Game<'_> {
         let mut speed = 1;
         let above = [b[0], b[1] + 1, b[2]];
         let sky = self.world.light(above[0], above[1], above[2]) >> 4 == 15;
-        let raining = self.world.weather.raining;
-        let r = &mut self.world.random;
-        if r.next_float() < 0.25 && raining && sky {
+        // Level.isRainingAt: rain (not snow) reaches the position.
+        if self.world.random.next_float() < 0.25
+            && self.with_level(|b, level, _| {
+                b.is_raining_at(level, BlockPos::new(above[0], above[1], above[2]))
+            })
+        {
             speed += 1;
         }
         let r = &mut self.world.random;
@@ -433,6 +458,8 @@ impl Game<'_> {
         let options = ParticleOptions::simple(kind);
         self.particles
             .send_particles(&options, at, spread, speed, count);
+        // The players a server serves are sent them too.
+        self.lan_send_particles(&options, at, spread, speed, count);
     }
     /// `FishingHook.tick`.
     pub(super) fn tick_fishing(&mut self) {
@@ -643,6 +670,8 @@ impl Game<'_> {
                     layer: 0,
                     color: 0xFFFF_FFFF,
                     light: packed,
+
+                    glint_uv: [0.0, 0.0],
                 });
             }
         }
@@ -770,8 +799,8 @@ impl Game<'_> {
 pub(super) struct RemoteHook {
     id: u32,
     owner: u32,
-    position: Vec3,
-    previous: Vec3,
+    pub(super) position: Vec3,
+    pub(super) previous: Vec3,
 }
 
 impl Hook {

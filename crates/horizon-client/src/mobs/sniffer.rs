@@ -74,23 +74,8 @@ pub fn head_block(m: &Mob) -> [i32; 3] {
 /// the dropped seed and the water malus.
 pub fn ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
     use super::path::PathType;
-    let age = m.age as f32;
     let current = state(m);
-    if current != m.extra.scratch[0] as u8 {
-        // resetAnimations, then the state's own.
-        for s in &mut m.anim.states[..5] {
-            s.stop();
-        }
-        match current {
-            FEELING_HAPPY => m.anim.states[0].start_if_stopped(age),
-            SCENTING => m.anim.states[1].start_if_stopped(age),
-            SNIFFING => m.anim.states[2].start_if_stopped(age),
-            DIGGING => m.anim.states[3].start_if_stopped(age),
-            RISING => m.anim.states[4].start_if_stopped(age),
-            _ => {}
-        }
-        m.extra.scratch[0] = i32::from(current);
-    }
+    animate(m);
     if current == DIGGING && now(m) == m.extra.ints[3] {
         let h = head_block(m);
         events.push(MobEvent::GiftLoot {
@@ -109,6 +94,27 @@ pub fn ai_step(m: &mut Mob, events: &mut Vec<MobEvent>) {
     // onPathfindingStart / Done: water only blocks the way while it is dry.
     let wet = m.fluids.in_water || m.fire_ticks > 0;
     m.set_malus(PathType::Water, if wet { 0.0 } else { -1.0 });
+}
+/// `Sniffer.onSyncedDataUpdated(DATA_STATE)`: the animation states of the
+/// state it changed to (on a client, each tick for the state it has).
+pub fn animate(m: &mut Mob) {
+    let age = m.age as f32;
+    let current = state(m);
+    if current != m.extra.scratch[0] as u8 {
+        // resetAnimations, then the state's own.
+        for s in &mut m.anim.states[..5] {
+            s.stop();
+        }
+        match current {
+            FEELING_HAPPY => m.anim.states[0].start_if_stopped(age),
+            SCENTING => m.anim.states[1].start_if_stopped(age),
+            SNIFFING => m.anim.states[2].start_if_stopped(age),
+            DIGGING => m.anim.states[3].start_if_stopped(age),
+            RISING => m.anim.states[4].start_if_stopped(age),
+            _ => {}
+        }
+        m.extra.scratch[0] = i32::from(current);
+    }
 }
 /// The brain memory holding the explored positions
 /// (`SNIFFER_EXPLORED_POSITIONS`).

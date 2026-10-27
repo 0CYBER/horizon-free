@@ -862,7 +862,7 @@ impl Game<'_> {
         let a = alpha as f32;
         let range = super::entity_culling::default_range(
             glam::DVec3::new(WIDTH, HEIGHT, WIDTH),
-            self.settings.entity_distance,
+            self.view_scale(),
         );
         for b in &self.boats {
             let entity_start = out.len();
