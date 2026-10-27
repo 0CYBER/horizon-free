@@ -906,6 +906,12 @@ pub enum MobEvent {
         mob: u32,
         at: [f64; 3],
     },
+    /// `LivingEntity.baseTick`'s drowning damage: entity event 67, the
+    /// clients' `makeDrownParticles`.
+    Drown {
+        mob: u32,
+        at: [f64; 3],
+    },
     /// `Level.broadcastEntityEvent` for a mob: guests run `sync::entity_event`.
     EntityEvent {
         mob: u32,

@@ -2161,6 +2161,9 @@ impl Game<'_> {
                 if p.event == super::totem::TOTEM_EVENT {
                     self.remote_totem(p.id);
                 }
+                if p.event == super::combat::DROWN_EVENT {
+                    self.remote_drown(p.id);
+                }
                 // Entity event 53: the honey slide particles of a player
                 // sliding down a honey block (HoneyBlock.showSlideParticles).
                 if p.event == 53 {
