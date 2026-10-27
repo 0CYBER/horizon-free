@@ -491,7 +491,9 @@ impl Game<'_> {
         // The dragon's breath and lingering potion clouds (AreaEffectCloud's DATA_RADIUS,
         // DATA_WAITING for its 20-tick wait, and DATA_PARTICLE): the
         // client draws them from these (`tick_remote_clouds`).
-        let breath = self.network_particle(
+        // The hub is out of `self.lan` meanwhile, so it is passed in.
+        let breath = Self::hub_particle(
+            hub,
             &horizon_client::particles::ParticleOptions::simple(
                 horizon_client::particles::ParticleType::DragonBreath,
             ),
