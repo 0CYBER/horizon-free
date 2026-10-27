@@ -113,6 +113,9 @@ pub struct ItemInfo {
     pub swappable: bool,
     /// `equippable.dispensable` (dispensers may put it on an entity).
     pub equip_dispensable: bool,
+    /// `equippable.damage_on_hurt`: the item wears when its wearer is hurt
+    /// (false for the elytra).
+    pub equip_damage_on_hurt: bool,
     /// `equippable.allowed_entities` resolved to entity type ids; None allows all.
     pub equip_allowed: Option<HashSet<String>>,
     pub equip_sound: Option<String>,
@@ -128,6 +131,8 @@ pub struct ItemInfo {
     pub block_transformer: Option<String>,
     /// Has a default `bundle_contents` (the bundles, `BundleItem`).
     pub bundle: bool,
+    /// The ids of the item's default components (its prototype's keys).
+    pub components: Vec<String>,
 }
 /// `Item.Properties.craftRemainder` (not a data component, so not in the
 /// default-component report): what an item leaves in the grid when crafted with.
@@ -626,6 +631,9 @@ impl Items {
                     equip_dispensable: c["minecraft:equippable"]["dispensable"]
                         .as_bool()
                         .unwrap_or(true),
+                    equip_damage_on_hurt: c["minecraft:equippable"]["damage_on_hurt"]
+                        .as_bool()
+                        .unwrap_or(true),
                     equip_allowed: match &c["minecraft:equippable"]["allowed_entities"] {
                         Value::String(spec) => Some(entity_spec(&entity_tags, spec)),
                         Value::Array(list) => Some(
@@ -644,6 +652,10 @@ impl Items {
                     cushion_color: c["minecraft:cushion/color"].as_str().map(str::to_owned),
                     block_transformer: c["minecraft:block_transformer"].as_str().map(str::to_owned),
                     bundle: c.get("minecraft:bundle_contents").is_some(),
+                    components: c
+                        .as_object()
+                        .map(|c| c.keys().cloned().collect())
+                        .unwrap_or_default(),
                     crafting_remainder: CRAFT_REMAINDERS
                         .iter()
                         .find(|(item, _)| *item == name)
