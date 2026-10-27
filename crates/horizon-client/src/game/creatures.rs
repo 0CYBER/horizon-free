@@ -3254,7 +3254,16 @@ impl Game<'_> {
         }
         {
             let item = self.held().map(|h| h.item.to_string()).unwrap_or_default();
+            let used = self.held().cloned();
             if self.interact_leash(index, &item) {
+                if let Some(stack) = &used {
+                    let target = self.mob_entity(&self.mobs[index]);
+                    self.trigger_item_entity(
+                        "minecraft:player_interacted_with_entity",
+                        stack,
+                        &target,
+                    );
+                }
                 self.swing_arm();
                 return Ok(true);
             }
@@ -3827,6 +3836,11 @@ impl Game<'_> {
         }
         if !handled {
             return Ok(false);
+        }
+        // PlayerInteractTrigger: the item used on the mob, once the interaction took.
+        if let Some(stack) = &held {
+            let target = self.mob_entity(&self.mobs[index]);
+            self.trigger_item_entity("minecraft:player_interacted_with_entity", stack, &target);
         }
         // Turtle.ageBoundaryReached: food that finishes a baby's growth.
         if baby_turtle && !self.mobs[index].is_baby() {

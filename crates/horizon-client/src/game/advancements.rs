@@ -877,9 +877,6 @@ impl Game<'_> {
         stack: &ItemStack,
         target: &EntityView,
     ) {
-        if self.lan_acting.is_some() {
-            return;
-        }
         let me = self.player_entity();
         let it = item_view(stack);
         self.trigger(name, |c, w| adv::item_entity(c, &me, target, &it, w));

@@ -540,6 +540,11 @@ pub fn item(v: &Value, it: &ItemView, w: &dyn World) -> bool {
     {
         return false;
     }
+    if let Some(d) = comps["minecraft:damage"].as_u64()
+        && u64::from(it.damage) != d
+    {
+        return false;
+    }
     let preds = &v["predicates"];
     if let Some(list) = preds["minecraft:enchantments"].as_array() {
         for e in list {
