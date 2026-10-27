@@ -2097,6 +2097,13 @@ impl Game<'_> {
                                 m.extra.ints[1] = code;
                             }
                         }
+                        // Avatar.DATA_PLAYER_MAIN_HAND (HumanoidArm: 0 left, 1
+                        // right): the arm a swing of the main hand moves.
+                        if let (15, Value::Id(arm)) = (index, value)
+                            && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
+                        {
+                            m.extra.main_hand_left = *arm == 0;
+                        }
                     }
                 }
                 // LivingEntity.onSyncedDataUpdated(SLEEPING_POS_ID): this
@@ -2421,7 +2428,7 @@ impl Game<'_> {
                 if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
                     self.swing_hand(hand, animation);
                 } else if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
-                    m.swing();
+                    m.swing_hand_modified(hand == Hand::Off, animation.duration);
                 }
             }
             // The player's own instances: its maximum health (the hearts the
