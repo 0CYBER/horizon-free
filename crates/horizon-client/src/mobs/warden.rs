@@ -730,34 +730,11 @@ pub(super) fn tick_sonic_boom(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEve
         });
     }
     sound(m, "entity.warden.sonic_boom", 3.0, 1.0, events);
-    let from = at(m);
-    // Players and the mobs hit here have no knockback resistance.
-    let resistance = 0.0;
-    match target {
-        Who::Player => events.push(MobEvent::DamagePlayer {
-            amount: 10.0,
-            from,
-            kind: "minecraft:sonic_boom",
-        }),
-        Who::Mob(id) => events.push(MobEvent::AttackMob {
-            target: id,
-            amount: 10.0,
-            source: Damage {
-                kind: DamageKind::SonicBoom,
-                attacker: Some(Who::Mob(m.id)),
-                from: Some(from),
-            },
-        }),
-    }
-    let horizontal = 2.5 * (1.0 - resistance);
-    let vertical = 0.5 * (1.0 - resistance);
-    events.push(MobEvent::Push {
+    events.push(MobEvent::SonicBoom {
         target,
-        velocity: [
-            normal[0] * horizontal,
-            normal[1] * vertical,
-            normal[2] * horizontal,
-        ],
+        attacker: m.id,
+        from: at(m),
+        direction: normal,
     });
 }
 /// `Warden.tick` on the client: the heartbeat (pitched by the client's copy

@@ -1,13 +1,23 @@
 name: nightly build
-# The opt-in Nightly channel (docs/release-flow.md "Nightly"; Ludovic, 2026-10-27). Once a night it builds the newest
-# union branch on origin (union/<agent>-<name>: main plus pull requests the contribution gate proved together), or
-# main when no union is newer, and publishes it as the `nightly` pre-release. Launchers install it only for players
-# who turn Nightly on. The previous nightly stays a week as nightly-<date>.
+run-name: nightly build${{ inputs.request && format(' (request {0})', inputs.request) || '' }}
+# The opt-in Nightly channel (docs/release-flow.md "Nightly"; Ludovic, 2026-10-27). Once a night, and when a trusted
+# reviewer asks (`/nightly 2640 2642`, nightly-command.yml), it builds main plus the pull requests the reviewers
+# picked, merged in order (tools/ci/nightly_set.py). With none picked, it builds the newest union branch on origin
+# (union/<agent>-<name>: main plus pull requests the contribution gate proved together), or main when no union is
+# newer. It publishes the result as the `nightly` pre-release. Launchers install it only for players who turn Nightly
+# on. The previous nightly stays a week as nightly-<date>.
 #
-# Why the signing key never meets the union's code:
+# Why the signing key never meets the pull requests' code:
+# - `pick` merges the picked heads onto main with `git merge-tree --write-tree`: git objects only, no working tree,
+#   so none of their files reaches the disk and no hook, filter or script of theirs runs. It refuses any pull
+#   request that changes a path CODEOWNERS gives to Ludovic (this folder, tools/ci/, the signing and update code),
+#   pushes the merge as nightly/build-<date>-<n> and saves the set on the nightly-state branch.
 # - This file, game-build.yml and every script below run from main's copy: a schedule runs the default branch, and
 #   `uses: ./…` takes the caller's commit. The union's own .github/ is never read.
-# - `build` (game-build.yml) checks out and compiles the union with no secrets: its token reads contents only and
+# - `build` (game-build.yml, `trusted: false`) never reaches a release's tools: its macOS jobs run on the runner
+#   that already runs pull requests' parity jobs, never the release runner; its Rust cache has its own key and is
+#   never saved; and releases don't read the machine's shared sccache.
+# - `build` (game-build.yml) checks out and compiles the merge (or the union) with no secrets: its token reads contents only and
 #   isn't kept in the checkout; the macOS programs are signed ad hoc (Developer ID needs the runner's keychain,
 #   which stays locked for nightlies).
 # - `sign` is the only job with RELEASE_SIGNING_KEY. It checks out nothing but main's tools/ci/sign_release.sh, which
@@ -31,18 +41,37 @@ on:
         description: Build and sign with a throwaway key, publish nothing
         type: boolean
         default: false
+      issue:
+        description: The issue or pull request whose `/nightly` comment asked for this build (answered there)
+        type: string
+        default: ''
+      request:
+        description: The command's id, in the run's name so it can link the run
+        type: string
+        default: ''
+      prs:
+        description: A dry run's own set, `2640@<head> 2642@<head>` (the saved set stays)
+        type: string
+        default: ''
 permissions:
   contents: read
 concurrency:
+  # One build at a time. A newer request replaces one still waiting: it builds the set as it is by then, so no pick
+  # is lost.
   group: nightly-build
   cancel-in-progress: false
 jobs:
   pick:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write       # nightly/build-<date>-<n> and the nightly-state branch (main is protected)
+      issues: write         # says in the thread when the picked pull requests conflict
+      pull-requests: write
     outputs:
       build: ${{ steps.pick.outputs.build }}
       sha: ${{ steps.pick.outputs.sha }}
+      short: ${{ steps.pick.outputs.short }}
       source: ${{ steps.pick.outputs.source }}
       date: ${{ steps.pick.outputs.date }}
       version: ${{ steps.pick.outputs.version }}
@@ -60,9 +89,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           FORCE: ${{ (inputs.force || steps.mode.outputs.dry_run == 'true') && 'yes' || '' }}
+          DRY_RUN: ${{ steps.mode.outputs.dry_run }}
+          NIGHTLY_ISSUE: ${{ inputs.issue }}
+          NIGHTLY_PRS: ${{ inputs.prs }}
         run: |
           python3 tools/ci/nightly.py pick ${FORCE:+--force} | tee -a "$GITHUB_STEP_SUMMARY"
           { echo; cat nightly-notes.md; } >> "$GITHUB_STEP_SUMMARY"
+      - name: Old nightly/build-* branches deleted (scheduled runs only)
+        # Ludovic, 2026-10-27: older than 7 days, but never the newest build or one a published nightly points to;
+        # nothing but nightly/build-* (nightly.py stale_builds, tests/test_nightly.py).
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          { echo "### nightly/build-* branches"; python3 tools/ci/nightly.py prune-builds --days 7; } | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
           name: nightly-notes
@@ -78,6 +118,7 @@ jobs:
       version: ${{ needs.pick.outputs.version }}
       nightly: ${{ needs.pick.outputs.nightly }}
       developer_id: false
+      trusted: false  # it can hold unreviewed pull requests: their own cache key, never saved, not the release runner
 
   sign:
     needs: [pick, build]
@@ -164,3 +205,33 @@ jobs:
         run: |
           echo "Would publish nightly at ${{ needs.pick.outputs.sha }} (${{ needs.pick.outputs.source }})"
           ls -l dist
+
+  answer:
+    # Tells the thread that asked for this build how it ended. A conflict `pick` already explained there.
+    needs: [pick, build, sign, publish]
+    if: always() && inputs.issue != '' && needs.pick.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ inputs.issue }}
+          BUILD: ${{ needs.pick.outputs.build }}
+          PUBLISHED: ${{ needs.publish.result }}
+          DRY_RUN: ${{ needs.pick.outputs.dry_run }}
+          NAME: Nightly ${{ needs.pick.outputs.date }} · ${{ needs.pick.outputs.short }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [[ "$BUILD" != true ]]; then
+            text="nothing new: the published Nightly is already this build."
+          elif [[ "$PUBLISHED" == success && "$DRY_RUN" == true ]]; then
+            text="the dry run built and signed $NAME; nothing was published. $RUN"
+          elif [[ "$PUBLISHED" == success ]]; then
+            text="published $NAME: https://github.com/$GITHUB_REPOSITORY/releases/tag/nightly. Launchers with Nightly on install it at their next start."
+          else
+            text="the build failed, nothing was published: $RUN"
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE/comments" -f body="🤖 Nightly: $text"

@@ -90,6 +90,7 @@ jobs:
     with:
       ref: ${{ needs.decide.outputs.head }}
       version: ${{ needs.decide.outputs.version }}
+      trusted: true  # main: the release runner, the release cache, no shared sccache
 
   sign:
     needs: [decide, build]

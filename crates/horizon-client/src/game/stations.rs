@@ -779,6 +779,7 @@ impl Game<'_> {
             return;
         };
         let pos = s.pos;
+        let enchanted_item = enchanted.clone();
         // Player.onEnchantmentPerformed
         self.give_levels(-(lapis_needed as i32));
         self.level.xp_seed = self.world.random.next_int();
@@ -795,6 +796,7 @@ impl Game<'_> {
         }
         let pitch = self.world.random.next_float() * 0.1 + 0.9;
         self.stats.custom("enchant_item", 1);
+        self.trigger_enchanted_item(&enchanted_item, lapis_needed as i32);
         self.play_at("minecraft:block.enchantment_table.use", pos, 1.0, pitch);
         self.station_changed();
     }

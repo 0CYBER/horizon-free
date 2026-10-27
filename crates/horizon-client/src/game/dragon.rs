@@ -3025,14 +3025,11 @@ impl Game<'_> {
             let (a, b) = (room.min_position(), room.max_position());
             lo.x < b.x && hi.x > a.x && lo.y < b.y && hi.y > a.y && lo.z < b.z && hi.z > a.z
         };
-        let player = self.player.as_ref().is_some_and(|p| {
-            let w = f64::from(p.dimensions.width) / 2.0;
-            let h = f64::from(p.dimensions.height);
-            touches(
-                Vec3::new(p.position.x - w, p.position.y, p.position.z - w),
-                Vec3::new(p.position.x + w, p.position.y + h, p.position.z + w),
-            )
-        });
+        // Level.getEntities: the host's player and every guest in the level.
+        let player = self
+            .fight_players()
+            .iter()
+            .any(|p| !p.spectator && touches(p.bounds.min_position(), p.bounds.max_position()));
         player
             || self.crystals.iter().any(|c| {
                 touches(
