@@ -821,14 +821,11 @@ impl Game<'_> {
             if !alive {
                 continue;
             }
-            // Raider.updateNoActionTime adds two per tick, and a raider
-            // fighting a player or golem in a raid is never idle.
-            if s.raid_id.is_some() {
-                m.ai.no_action_time = if target_player || target_golem {
-                    0
-                } else {
-                    m.ai.no_action_time + 1
-                };
+            // Raider.aiStep: a raider fighting a player or golem in a raid is
+            // never idle. The per-tick growth (+1 serverAiStep, +2
+            // Raider.updateNoActionTime) is added by the mob's own step.
+            if s.raid_id.is_some() && (target_player || target_golem) {
+                m.ai.no_action_time = 0;
             }
             // Raider.aiStep: join the raid the raider stands in.
             if s.raid_id.is_none()

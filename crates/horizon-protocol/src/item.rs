@@ -3,7 +3,7 @@
 //! client sends back in container clicks (HashedStack).
 use crate::{
     Result,
-    buf::{Codec, Reader, Writer},
+    buf::{Codec, Reader, Writer, pack_block_pos, unpack_block_pos},
 };
 use horizon_world::nbt::Tag;
 
@@ -40,6 +40,7 @@ pub mod component {
     pub const WRITABLE_BOOK_CONTENT: i32 = 56;
     pub const WRITTEN_BOOK_CONTENT: i32 = 57;
     pub const TRIM: i32 = 58;
+    pub const LODESTONE_TRACKER: i32 = 69;
     pub const FIREWORK_EXPLOSION: i32 = 70;
     pub const FIREWORKS: i32 = 71;
 }
@@ -99,6 +100,12 @@ pub enum Component {
     },
     /// `FireworkExplosion` (a firework star).
     FireworkExplosion(FireworkExplosion),
+    /// `LodestoneTracker`: the target's dimension and block, and whether it
+    /// follows the lodestone.
+    LodestoneTracker {
+        target: Option<(String, [i32; 3])>,
+        tracked: bool,
+    },
     /// `ArmorTrim` naming its material and pattern by registry id (`trim_material`,
     /// `trim_pattern`); a trim with a direct holder stays [`Component::Raw`].
     Trim {
@@ -316,6 +323,17 @@ impl Component {
                 }
             }
             FIREWORK_EXPLOSION => Self::FireworkExplosion(FireworkExplosion::read(r)?),
+            LODESTONE_TRACKER => {
+                let target = if r.bool()? {
+                    Some((r.string(32767)?, unpack_block_pos(r.i64()?)))
+                } else {
+                    None
+                };
+                Self::LodestoneTracker {
+                    target,
+                    tracked: r.bool()?,
+                }
+            }
             // ArmorTrim.STREAM_CODEC: two holders, each a reference's id plus
             // one. A direct material or pattern has no registry name: read past.
             TRIM => {
@@ -437,6 +455,14 @@ impl Component {
                 explosions.iter().for_each(|e| e.write(w));
             }
             Self::FireworkExplosion(e) => e.write(w),
+            Self::LodestoneTracker { target, tracked } => {
+                w.bool(target.is_some());
+                if let Some((dimension, pos)) = target {
+                    w.string(dimension);
+                    w.i64(pack_block_pos(*pos));
+                }
+                w.bool(*tracked);
+            }
             Self::WritableBook(pages) => {
                 w.varint(pages.len() as i32);
                 for page in pages {
