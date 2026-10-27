@@ -9,7 +9,7 @@ use horizon_client::{
     blocks::Fluid,
     collisions::SceneCollisions,
     containers::BlockEntity,
-    items::ItemStack,
+    items::{ItemStack, Items},
     mesher::Vertex,
     mobs::{Part, anim::Poses},
     particles::{ParticleOptions, ParticleType},
@@ -200,6 +200,17 @@ impl Minecart {
     }
     fn horizontal(&self) -> f64 {
         self.velocity.x.hypot(self.velocity.z)
+    }
+    /// `AbstractContainerMenu.getRedstoneSignalFromContainer` of `slots`.
+    fn container_signal(slots: &[Option<ItemStack>], items: &Items) -> i32 {
+        let mut total = 0.0f32;
+        for s in slots.iter().flatten() {
+            let max = items.get(&s.item).map_or(64, |i| i.max_stack).min(64);
+            total += s.count as f32 / max as f32;
+        }
+        total /= slots.len().max(1) as f32;
+        // Mth.lerpDiscrete(total, 0, 15)
+        (total * 14.0).floor() as i32 + i32::from(total > 0.0)
     }
 }
 pub(super) struct CartModels {
@@ -1056,6 +1067,22 @@ impl Game<'_> {
             }
         }
         best
+    }
+    /// Each cart's kind and comparator signal, for the detector rail
+    /// (`DetectorRailBlock.getAnalogOutputSignal`). A cart whose menu is open
+    /// counts the items in that menu.
+    pub(super) fn cart_signals(&self) -> Vec<(CartKind, i32)> {
+        self.carts
+            .iter()
+            .map(|c| {
+                let key = (i32::MAX - 15, CART_KEY_Y, c.id as i32);
+                let slots = match self.world.block_entities.get(&key) {
+                    Some(BlockEntity::Chest(open)) => open,
+                    _ => &c.items,
+                };
+                (c.kind, Minecart::container_signal(slots, self.res.items()))
+            })
+            .collect()
     }
     /// `interact`: ride, open, fuel or ignite the cart under the crosshair.
     pub(super) fn interact_cart(&mut self) -> bool {

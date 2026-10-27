@@ -570,6 +570,8 @@ struct GameLevel<'w> {
     player_collision: Option<PlayerCollision>,
     /// Minecart boxes (detector rails).
     cart_boxes: Vec<([f64; 3], [f64; 3])>,
+    /// Each minecart's kind and comparator signal, in `cart_boxes` order.
+    cart_signals: Vec<(minecarts::CartKind, i32)>,
     /// Arrow and thrown trident boxes (wooden buttons).
     arrow_boxes: Vec<([f64; 3], [f64; 3])>,
     /// The other entities that keep blocks from being placed into them.
@@ -648,6 +650,37 @@ impl EntityObstructionWorld for BuildingObstruction {
     }
 }
 impl GameLevel<'_> {
+    /// `DetectorRailBlock.getAnalogOutputSignal`: a powered rail reads the
+    /// minecart on it, a command block cart first (its success count, which
+    /// is 0 here), else the first container cart's fullness.
+    fn detector_rail_signal(&self, pos: BlockPos, powered: bool) -> i32 {
+        if !powered {
+            return 0;
+        }
+        let (x, y, z) = (f64::from(pos.x), f64::from(pos.y), f64::from(pos.z));
+        let area = Aabb::new(
+            Vec3::new(x + 0.2, y, z + 0.2),
+            Vec3::new(x + 0.8, y + 0.8, z + 0.8),
+        );
+        let mut container = None;
+        for ((lo, hi), &(kind, signal)) in self.cart_boxes.iter().zip(&self.cart_signals) {
+            let cart = Aabb::new(
+                Vec3::new(lo[0], lo[1], lo[2]),
+                Vec3::new(hi[0], hi[1], hi[2]),
+            );
+            if !area.intersects(cart) {
+                continue;
+            }
+            match kind {
+                minecarts::CartKind::CommandBlock => return 0,
+                minecarts::CartKind::Chest | minecarts::CartKind::Hopper => {
+                    container = container.or(Some(signal));
+                }
+                _ => {}
+            }
+        }
+        container.unwrap_or(0)
+    }
     /// Every entity box that blocks building: the players who aren't
     /// spectators, the minecarts and the `Blockers` (a removed mob or a marker
     /// armor stand, whose box is empty, doesn't).
@@ -708,6 +741,14 @@ impl LevelAccess for GameLevel<'_> {
         state: BlockStateId,
         _direction: Direction,
     ) -> i32 {
+        if let Some(s) = self.registry.state(state)
+            && s.name == "minecraft:detector_rail"
+        {
+            return self.detector_rail_signal(
+                pos,
+                s.properties.get("powered").is_some_and(|v| v == "true"),
+            );
+        }
         if let Some(signal) = command_blocks::analog_signal(self.world, (pos.x, pos.y, pos.z)) {
             return signal;
         }
@@ -2635,6 +2676,7 @@ impl Game<'_> {
                 )
             })
             .collect();
+        let cart_signals = self.cart_signals();
         let arrow_boxes = self
             .creatures
             .projectiles
@@ -2677,6 +2719,7 @@ impl Game<'_> {
         };
         let mut level = GameLevel {
             cart_boxes,
+            cart_signals,
             arrow_boxes,
             blockers,
             world: &mut self.world,
