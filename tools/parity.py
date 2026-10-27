@@ -1248,9 +1248,14 @@ def trace_main(output, script, arguments):
 SHARED_INPUTS = {"research-lock.json", "Cargo.lock"}
 # Manifest sections that say what a crate is and where its targets are, not what it builds with.
 MANIFEST_SECTION_KEPT = re.compile(r"\[\[?(?:package|lib|bin|example|test|bench|lints|badges)\b[^\]]*\]\]?$")
-# A workspace crate named as a dependency (by path, or from the workspace's own table), or listed as a member.
-WORKSPACE_LINE = re.compile(r'(?:horizon[\w-]*|cargo-horizon-mod|xtask)\s*=\s*(?:\{[^}]*\b(?:path|workspace)\s*=[^}]*\}|true)'
-                            r'|(?:horizon[\w-]*|cargo-horizon-mod|xtask)\.workspace\s*=\s*true|"crates/[^"]+",?')
+WORKSPACE_CRATE = r"(horizon[\w-]*|cargo-horizon-mod|xtask)"
+# A workspace crate named as a dependency (by path, or from the workspace's own table) without choosing its features,
+# or listed as a member.
+WORKSPACE_LINE = re.compile(WORKSPACE_CRATE + r'\s*=\s*(?:\{(?![^}]*\bfeatures\b)[^}]*\b(?:path|workspace)\s*=[^}]*\}|true)'
+                            r'|' + WORKSPACE_CRATE + r'\.workspace\s*=\s*true|"crates/[^"]+",?')
+# A workspace crate named as a dependency with some of its features turned on.
+WORKSPACE_FEATURES = re.compile(WORKSPACE_CRATE + r'\s*=\s*\{(?=[^}]*\b(?:path|workspace)\s*=)(?![^}]*default-features)'
+                                r'[^}]*\bfeatures\s*=\s*\[([^\]]*)\][^}]*\}')
 
 
 def git_show(base, path):
@@ -1263,12 +1268,14 @@ def manifest_lines(text):
     """A Cargo.toml's lines that decide what is built: (section, line) pairs, without its package's identity and
     targets, comments, or workspace crates (whose code counts through its own sources)."""
     lines, section = set(), ""
+    name = re.search(r'^\[package\][^\[]*?^name\s*=\s*"([^"]+)"', text or "", re.M | re.S)
     for raw in (text or "").splitlines():
         line = re.sub(r"\s+", " ", raw.split("#", 1)[0]).strip()
         if not line:
             continue
         if line.startswith("["):
-            section = line
+            # A crate's features are its own: the same line in two crates means two things.
+            section = f"[features] of {name.group(1) if name else '?'}" if line == "[features]" else line
             continue
         if MANIFEST_SECTION_KEPT.match(section) or WORKSPACE_LINE.fullmatch(line) or \
                 section == "[workspace]" and (line.startswith("members =") or line.startswith('"') or line == "]"):
@@ -1297,7 +1304,43 @@ def workspace_only_manifests(changed, base):
     before = set().union(*(manifest_lines(git_show(base, path)) for path in tomls)) if tomls else set()
     after = set().union(*(manifest_lines((ROOT / path).read_text(encoding="utf-8") if (ROOT / path).exists() else None)
                           for path in tomls)) if tomls else set()
-    return set(manifests) if before == after else set()
+    # Workspace crates' features that a changed line defines or turns on: they change what compiles of that crate's
+    # sources, which is fine only where every source naming them changed too (a split: the crate's files are new).
+    gated = set()
+    for section, line in before ^ after:
+        wanted = WORKSPACE_FEATURES.fullmatch(line)
+        if wanted:
+            gated |= {(wanted.group(1), feature) for feature in re.findall(r'"([^"]+)"', wanted.group(2))}
+        elif section.startswith("[features] of ") and re.fullmatch(r'[\w-]+ = \[(?: ?"[\w-]+",?)*\s*\]', line):
+            gated.add((section[len("[features] of "):], line.split(" ", 1)[0]))
+        else:
+            return set()  # an external package, a feature reaching one ("dep:", "crate/feature"), a build setting
+    return set(manifests) if all(feature_sources_changed(crate, feature, changed) for crate, feature in gated) else set()
+
+
+def feature_sources_changed(crate, feature, changed):
+    """Whether every Rust source of workspace crate `crate` that names `feature`, or a feature it turns on, is in
+    changed (False where the crate isn't found)."""
+    listed = subprocess.run(["git", "ls-files", "*Cargo.toml"], cwd=ROOT, capture_output=True, text=True)
+    manifests = [ROOT / path for path in listed.stdout.split()] if listed.returncode == 0 else list(ROOT.rglob("Cargo.toml"))
+    for manifest in manifests:
+        text = manifest.read_text(encoding="utf-8") if manifest.exists() else ""
+        if re.search(r'^\[package\][^\[]*?^name\s*=\s*"' + re.escape(crate) + '"', text, re.M | re.S):
+            break
+    else:
+        return False
+    table = re.search(r"^\[features\]\n(.*?)(?=^\[|\Z)", text, re.M | re.S)
+    implies = {name: re.findall(r'"([^"]+)"', value) for name, value in
+               re.findall(r'^([\w-]+)\s*=\s*\[([^\]]*)\]', table.group(1) if table else "", re.M)}
+    names, todo = set(), [feature]
+    while todo:
+        name = todo.pop()
+        if name not in names:
+            names.add(name)
+            todo += [implied for implied in implies.get(name, []) if "/" not in implied and ":" not in implied]
+    named = re.compile(r'feature\s*=\s*"(?:' + "|".join(map(re.escape, sorted(names))) + r')"')
+    return all(path.relative_to(ROOT).as_posix() in changed for path in manifest.parent.rglob("*.rs")
+               if named.search(path.read_text(encoding="utf-8", errors="replace")))
 
 
 def changed_files(ref):
