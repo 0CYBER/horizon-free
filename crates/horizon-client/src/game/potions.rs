@@ -276,7 +276,8 @@ impl Game<'_> {
         } else if let Some(rest) = self.give(filled)
             && let Some(eye) = self.eye_position()
         {
-            self.spawn_item(rest, eye, [0.0, 0.1, 0.0], 40);
+            // `player.drop(stack, false)`.
+            self.throw_from_eyes(rest, eye, false);
         }
     }
     /// Drinking a potion while right-click is held; true when handled.
@@ -400,7 +401,27 @@ impl Game<'_> {
         for action in actions {
             self.apply_effect_action(action);
         }
+        self.turtle_helmet_tick();
         self.apply_effect_status();
+    }
+    /// `Player.tick` -> `turtleHelmetTick`: with a turtle helmet on the head
+    /// and the eyes out of the water, Water Breathing for 200 ticks (no
+    /// particles, an icon).
+    fn turtle_helmet_tick(&mut self) {
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let eye_y = p.position.y + f64::from(p.dimensions.eye_height);
+        if !p.health.dead_or_dying()
+            && self.armor[0]
+                .as_ref()
+                .is_some_and(|s| &*s.item == "minecraft:turtle_helmet")
+            && !self.eye_in_water(p.position.x, eye_y, p.position.z)
+        {
+            let mut effect = EffectInstance::new("water_breathing", 200, 0);
+            effect.visible = false;
+            self.potions.effects.add(effect);
+        }
     }
     /// A client's own effects (`LivingEntity.tickEffects` on the client,
     /// `MobEffectInstance.tickClient`): they count down, and the server
@@ -674,62 +695,31 @@ impl Game<'_> {
     }
     /// `ThrownSplashPotion.onHitAsPotion` (lingering clouds apply as a weaker splash).
     fn splash(&mut self, stack: &ItemStack, at: Vec3) {
+        let block = [at.x, at.y, at.z].map(|v| v.floor() as i32);
         if &*stack.item == "minecraft:experience_bottle" {
             // ThrownExperienceBottle.onHit: the water-coloured splash (level
-            // event 2002) and 3 to 11 experience.
-            let pitch = self.world.random.next_float() * 0.1 + 0.9;
-            self.audio.play(
-                "minecraft:entity.splash_potion.break",
-                Some([at.x, at.y, at.z]),
-                1.0,
-                pitch,
-            );
-            for _ in 0..8 {
-                let v = [
-                    f64::from(self.world.random.next_float() - 0.5) * 0.3,
-                    0.2,
-                    f64::from(self.world.random.next_float() - 0.5) * 0.3,
-                ];
-                let p = horizon_client::particles::Particle::terrain(
-                    &mut self.world.random,
-                    [at.x, at.y, at.z],
-                    v,
-                    "item/splash_potion".into(),
-                    0x38_5DC6,
-                );
-                self.particles.push(p);
-            }
+            // event 2002, its sound 1053) and 3 to 11 experience.
+            self.level_event_at(2002, block, 0xFF38_5DC6u32 as i32);
+            self.level_event_at(1053, block, 0);
             let r = &mut self.world.random;
             let value = 3 + r.next_int_bound(5).unwrap_or(0) + r.next_int_bound(5).unwrap_or(0);
             self.spawn_orbs([at.x, at.y, at.z], value as u32);
             return;
         }
         let lingering = &*stack.item == "minecraft:lingering_potion";
-        let event = if lingering {
-            "minecraft:entity.lingering_potion.break"
-        } else {
-            "minecraft:entity.splash_potion.break"
-        };
-        let pitch = self.world.random.next_float() * 0.1 + 0.9;
-        self.audio.play(event, Some([at.x, at.y, at.z]), 1.0, pitch);
+        // AbstractThrownPotion.onHit: level event 2007 and sound 1054 for a
+        // potion with instant effects, 2002 and 1053 otherwise.
+        let potion = stack.potion().and_then(brewing::potion);
+        let instant = potion.is_some_and(|d| {
+            d.effects
+                .iter()
+                .any(|(id, ..)| brewing::effect(id).is_some_and(|e| e.instant))
+        });
         let color = brewing::potion_color(stack.potion());
-        for _ in 0..8 {
-            let v = [
-                f64::from(self.world.random.next_float() - 0.5) * 0.3,
-                0.2,
-                f64::from(self.world.random.next_float() - 0.5) * 0.3,
-            ];
-            let p = horizon_client::particles::Particle::terrain(
-                &mut self.world.random,
-                [at.x, at.y, at.z],
-                v,
-                "item/splash_potion".into(),
-                color,
-            );
-            self.particles.push(p);
-        }
+        self.level_event_at(if instant { 2007 } else { 2002 }, block, color as i32);
+        self.level_event_at(if instant { 1054 } else { 1053 }, block, 0);
         let scale = if lingering { 0.25 } else { 1.0 };
-        let Some(def) = stack.potion().and_then(brewing::potion) else {
+        let Some(def) = potion else {
             return;
         };
         // Every player in range (`ThrownSplashPotion.applySplash` over

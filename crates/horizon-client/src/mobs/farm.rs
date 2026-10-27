@@ -80,6 +80,7 @@ pub fn chicken_ai_step(m: &mut Mob, _w: &MobWorld, events: &mut Vec<MobEvent>) {
             let at = [m.position.x, m.position.y, m.position.z];
             events.push(MobEvent::Sound("entity.chicken.egg", at, 1.0, pitch));
             events.push(MobEvent::GiftLoot {
+                mob: m.id,
                 table: "minecraft:gameplay/chicken_lay",
                 at,
             });

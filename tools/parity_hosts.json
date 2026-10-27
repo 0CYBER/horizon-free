@@ -42,5 +42,8 @@
  "linux_only": {},
  "named_only": {
   "lan_integration": "the whole lan_e2e suite: ~40 min a run on a loaded runner, and single checks flake under load; run it by name, or tools/lan_e2e.py"
+ },
+ "known_flaky": {
+  "world_reopen": "counted 4 minecarts instead of 3 once on a loaded Mac mini runner, then passed at the same head (10-26)"
  }
 }

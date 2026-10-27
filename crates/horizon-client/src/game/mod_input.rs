@@ -111,6 +111,18 @@ impl Game<'_> {
         if repeat || !self.mods.mods.has_keys() {
             return;
         }
+        // Over an item on a container screen, the mods' keys are `browser`
+        // events (a recipe viewer's R and U).
+        if pressed
+            && self.screen == Screen::Inventory
+            && self.title.is_none()
+            && !self.mod_browser_typing()
+            && let Some(name) = horizon_client::keybinds::key_name(key)
+            && let Some(stack) = self.mod_browser_pointed()
+        {
+            self.mods.mods.browser_key(name, &stack);
+            return;
+        }
         if pressed && (self.screen != Screen::Playing || self.title.is_some()) {
             return;
         }

@@ -50,9 +50,11 @@ Start the client.
 
     horizon-launcher play
 
+- `--instance`: The instance to play (its name or id; default: the selected one)
 - `--world`: Open or create this world (a folder under saves) at once
 - `--creative`: Creative mode for a new world
 - `--join`: Join a friend's world with its invite code
+- `--server`: Join this server at once: an address, or a server of the list by name or position
 - `--arg`: An extra argument for the game, passed through as-is (repeatable), for example --server-thread
 
 MCP: `play`, then the `game_*` tools.
@@ -256,6 +258,233 @@ Upload a benchmark report (docs/benchmark-report.md); it is printed first.
 - `--yes`
 
 MCP: `data_benchmark`, only when the player asks.
+
+## `horizon-launcher instance list`
+
+The instances, each with its game folder (* = the one Play starts).
+
+    horizon-launcher instance list
+
+MCP: `instance_list`.
+
+## `horizon-launcher instance create`
+
+Make an instance: empty but for your options and name, or a copy of another one's worlds, options and packs.
+
+    horizon-launcher instance create <NAME>
+
+- `NAME`
+- `--copy`: The instance to copy (its name or id)
+
+MCP: `instance_create`.
+
+## `horizon-launcher instance rename`
+
+Rename an instance (its folder stays).
+
+    horizon-launcher instance rename <INSTANCE> <NAME>
+
+- `INSTANCE`
+- `NAME`
+
+MCP: `instance_rename`.
+
+## `horizon-launcher instance icon`
+
+Set an instance's icon: a block or item name from your prepared files (grass_block), a colour (#3fa7d6), or none.
+
+    horizon-launcher instance icon <INSTANCE> <ICON>
+
+- `INSTANCE`
+- `ICON`
+
+MCP: `instance_icon`.
+
+## `horizon-launcher instance group`
+
+Put an instance in a sidebar group, or take it out with no group.
+
+    horizon-launcher instance group <INSTANCE> [GROUP]
+
+- `INSTANCE`
+- `GROUP`
+
+MCP: `instance_group`.
+
+## `horizon-launcher instance select`
+
+Make Play start this instance.
+
+    horizon-launcher instance select <INSTANCE>
+
+- `INSTANCE`
+
+MCP: `instance_select`.
+
+## `horizon-launcher instance version`
+
+Keep an instance on one installed Horizon version, or "latest" to follow updates again.
+
+    horizon-launcher instance version <INSTANCE> <VERSION>
+
+- `INSTANCE`
+
+MCP: `instance_version`.
+
+## `horizon-launcher worlds list`
+
+The worlds: name, mode, version, last played and size (the default).
+
+    horizon-launcher worlds list
+
+- `--instance`: The instance (default: the selected one)
+
+MCP: `worlds_list`.
+
+## `horizon-launcher worlds backup`
+
+Zip a world into the instance's backups/ folder, as the game's Make Backup does.
+
+    horizon-launcher worlds backup <WORLD>
+
+- `WORLD`: Its folder or name
+- `--instance`
+
+MCP: `worlds_backup`.
+
+## `horizon-launcher worlds copy`
+
+Copy a world beside it, as "<name> (1)".
+
+    horizon-launcher worlds copy <WORLD>
+
+- `WORLD`
+- `--instance`
+
+MCP: `worlds_copy`.
+
+## `horizon-launcher worlds delete`
+
+Move a world to the system's trash.
+
+    horizon-launcher worlds delete <WORLD>
+
+- `WORLD`
+- `--instance`
+
+MCP: `worlds_delete`, needs `confirm: true`.
+
+## `horizon-launcher packs list`
+
+The resource and shader packs, and which are on (the default).
+
+    horizon-launcher packs list
+
+- `--kind` (resource, shader): Only this kind
+- `--instance`: The instance (default: the selected one)
+
+MCP: `packs_list`.
+
+## `horizon-launcher packs add`
+
+Copy a pack file in: a resource pack .zip, a shader pack .zip or a .hshader.
+
+    horizon-launcher packs add <FILE>
+
+- `FILE`
+- `--instance`
+
+MCP: `packs_add`.
+
+## `horizon-launcher packs on`
+
+Turn a pack on (a resource pack goes on top; a shader pack replaces the one that was on).
+
+    horizon-launcher packs on <PACK>
+
+- `PACK`: Its file name or title
+- `--kind` (resource, shader)
+- `--instance`
+
+MCP: `packs_on`.
+
+## `horizon-launcher packs off`
+
+Turn a pack off.
+
+    horizon-launcher packs off <PACK>
+
+- `PACK`
+- `--kind` (resource, shader)
+- `--instance`
+
+MCP: `packs_off`.
+
+## `horizon-launcher packs remove`
+
+Turn a pack off and move it to the system's trash.
+
+    horizon-launcher packs remove <PACK>
+
+- `PACK`
+- `--kind` (resource, shader)
+- `--instance`
+
+MCP: `packs_remove`, needs `confirm: true`.
+
+## `horizon-launcher screenshots list`
+
+The screenshots, the newest first, with their files (the default).
+
+    horizon-launcher screenshots list
+
+- `--instance`: The instance (default: the selected one)
+
+MCP: `screenshots_list`.
+
+## `horizon-launcher screenshots delete`
+
+Move a screenshot to the system's trash.
+
+    horizon-launcher screenshots delete <SCREENSHOT>
+
+- `SCREENSHOT`: Its file name, with or without .png
+- `--instance`
+
+MCP: `screenshots_delete`, needs `confirm: true`.
+
+## `horizon-launcher multiplayer list`
+
+The servers of the game's Multiplayer screen (the default).
+
+    horizon-launcher multiplayer list
+
+- `--instance`: The instance (default: the selected one)
+
+MCP: `multiplayer_list`.
+
+## `horizon-launcher multiplayer add`
+
+Add a server to the list.
+
+    horizon-launcher multiplayer add <ADDRESS>
+
+- `ADDRESS`: Its address, as in the game's Add Server (host or host:port)
+- `--name`: Its name in the list (default: Minecraft Server)
+- `--instance`
+
+MCP: `multiplayer_add`.
+
+## `horizon-launcher multiplayer remove`
+
+Remove a server from the list: its position from 1, name or address.
+
+    horizon-launcher multiplayer remove <SERVER>
+
+- `SERVER`
+- `--instance`
+
+MCP: `multiplayer_remove`, needs `confirm: true`.
 
 ## `horizon-launcher modpack list`
 
